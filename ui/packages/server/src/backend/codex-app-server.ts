@@ -29,15 +29,15 @@ import { redactCredentialSyntax } from "../credential-redaction.ts"
 // session can accidentally cross this boundary. Context exposes it only behind the explicit env flag.
 export const CODEX_APP_SERVER_FEATURE_FLAG = "FRAY_CODEX_APP_SERVER_BRIDGE"
 export const CODEX_APP_SERVER_PROVIDER = "codex-app-server"
-export const CODEX_APP_SERVER_SUPPORTED_VERSION = "0.144.1"
+export const CODEX_APP_SERVER_SUPPORTED_VERSION = "0.144.6"
 // Upgrade policy: this is an exact protocol pin, never a semver range. Changing it requires a fresh
 // generated-protocol audit plus a source audit at the matching immutable Rust tag/commit, then a new
 // fingerprint and contract fixtures. These coordinates are intentionally runtime-visible diagnostics,
 // but contain no host paths or credentials.
 export const CODEX_APP_SERVER_PROTOCOL_REVISION = Object.freeze({
   packageVersion: CODEX_APP_SERVER_SUPPORTED_VERSION,
-  sourceTag: "rust-v0.144.1",
-  sourceCommit: "44918ea10c0f99151c6710411b4322c2f5c96bea",
+  sourceTag: "rust-v0.144.6",
+  sourceCommit: "5d1fbf26c43abc65a203928b2e31561cb039e06d",
 })
 const PROTOCOL_FINGERPRINT = [
   CODEX_APP_SERVER_PROTOCOL_REVISION.sourceTag,

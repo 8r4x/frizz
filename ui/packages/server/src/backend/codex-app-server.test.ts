@@ -268,9 +268,9 @@ test("bridge is disabled by default and negotiates exact installed protocol over
   assert.deepEqual(h.calls[0]!.args, ["app-server", "--stdio"])
   assert.equal(h.calls[0]!.binary, "/opt/codex")
   assert.deepEqual(CODEX_APP_SERVER_PROTOCOL_REVISION, {
-    packageVersion: "0.144.1",
-    sourceTag: "rust-v0.144.1",
-    sourceCommit: "44918ea10c0f99151c6710411b4322c2f5c96bea",
+    packageVersion: "0.144.6",
+    sourceTag: "rust-v0.144.6",
+    sourceCommit: "5d1fbf26c43abc65a203928b2e31561cb039e06d",
   })
   assert.notEqual(h.calls[0]!.env, process.env, "the child receives a point-in-time environment snapshot")
   for (const key of ["HOME", "PATH", "CODEX_HOME", "OPENAI_API_KEY"] as const) {
