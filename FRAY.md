@@ -32,6 +32,14 @@ clears only when a wrong guess would be both costly and hard to undo.
 Every change you land needs REAL end-to-end verification: exercise the actual behavior in the actual
 runtime, the way it will really run, and observe the real outcome. This is non-negotiable.
 
+- **Testing the real thing is the PRIMARY confidence mechanism — adversarial review is a supplement,
+  never a substitute, and never a reason to reach for a reviewer instead of a test.** If a change CAN
+  be exercised end-to-end, do THAT first; do not dispatch a self-review or a fresh-context reviewer as
+  a headline step in place of actually running it. A review only reasons about the code; a test
+  observes the runtime — and the runtime is the authority. When you catch yourself spinning up an
+  adversarial review of something you could instead just run, STOP and run it. Reserve review for what
+  you genuinely cannot execute yet (e.g. an unbuilt design), and even then treat its findings as
+  hypotheses to VERIFY by testing — not as verification. A reviewed plan is not a tested change.
 - Testing the pieces in isolation is NOT end-to-end. A passing unit test, a mock, a typecheck, or a
   hand-driven PROXY (e.g. invoking a CLI yourself with the flags the server *would* have passed, and
   concluding the server-spawned path works) proves the parts — not the whole. The seam between the
