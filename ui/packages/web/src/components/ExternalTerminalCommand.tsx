@@ -6,26 +6,43 @@ import { createCopyCommandFeedback } from "../lib/copyCommandFeedback.ts"
 import { showToast } from "../store.ts"
 import { Tooltip } from "./Tooltip.tsx"
 
-async function copyText(value: string): Promise<void> {
+// The resume command needs a server round-trip to resolve, but a plain `writeText` AFTER awaiting that
+// RPC loses the click's transient user activation — the write then silently fails (always in Safari;
+// in Chrome once activation expires or the window blurs). So write via the async ClipboardItem form:
+// `clipboard.write` is invoked SYNCHRONOUSLY within the gesture and fed a promise, and the browser
+// keeps activation alive while it resolves. A rejecting item-promise rejects `write` with the SAME
+// error (verified), so the "no resumable session yet" reason still reaches the toast. Older engines
+// without async-ClipboardItem support fall back to fetch-then-writeText.
+async function copyResumeCommand(slug: string): Promise<void> {
+  const commandPromise = rpc.threadTerminalCommand({ slug }).then((result) => {
+    if (!result.command) throw new Error(result.reason ?? "No verified provider session is available to resume")
+    return result.command
+  })
+  if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+    await navigator.clipboard.write([
+      new ClipboardItem({ "text/plain": commandPromise.then((command) => new Blob([command], { type: "text/plain" })) }),
+    ])
+    return
+  }
+  const command = await commandPromise
   if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable; copy the command from a secure Fray page")
-  await navigator.clipboard.writeText(value)
+  await navigator.clipboard.writeText(command)
 }
 
 interface CopyCallbacks {
+  onSuccess?: () => void
   onError?: () => void
 }
 
 export function useCopyTerminalCommand(slug: string): (callbacks?: CopyCallbacks) => void {
   const copy = useMutation({
-    mutationFn: async () => {
-      const result = await rpc.threadTerminalCommand({ slug })
-      if (!result.command) throw new Error(result.reason ?? "No verified provider session is available to resume")
-      const { command } = result
-      await copyText(command)
-    },
+    mutationFn: () => copyResumeCommand(slug),
   })
   return (callbacks) => copy.mutate(undefined, {
-    onSuccess: () => showToast("Provider resume command copied"),
+    onSuccess: () => {
+      callbacks?.onSuccess?.()
+      showToast("Provider resume command copied")
+    },
     onError: (error) => {
       callbacks?.onError?.()
       showToast(error instanceof Error ? `Could not copy provider resume command: ${error.message}` : "Could not copy provider resume command", { duration: 7000 })
@@ -50,9 +67,11 @@ export function CopyTerminalCommandButton({ slug }: { slug: string }) {
 
   useEffect(() => () => feedback.current?.dispose(), [])
 
+  // Acknowledge only once the clipboard write has actually resolved — an optimistic check flashed on
+  // click before the async copy landed, so the user pasted into the race and got nothing. The check
+  // now means the command is genuinely on the clipboard.
   function handleCopy() {
-    const generation = feedback.current!.begin()
-    copy({ onError: () => feedback.current?.fail(generation) })
+    copy({ onSuccess: () => feedback.current?.begin() })
   }
 
   const label = copied ? "Provider resume command copied" : "Copy provider resume command"
@@ -66,7 +85,7 @@ export function CopyTerminalCommandButton({ slug }: { slug: string }) {
         className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
       >
         {copied
-          ? <Check size={14} strokeWidth={2.2} className="text-live" />
+          ? <Check size={14} strokeWidth={2.2} className="text-fg" />
           : <TerminalSquare size={14} strokeWidth={1.8} />}
       </button>
     </Tooltip>
