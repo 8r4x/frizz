@@ -49,9 +49,9 @@ async function get(port: number, path: string, method = "GET") {
   })
 }
 
-async function getBytes(port: number, path: string, headers: Record<string, string> = {}) {
+async function getBytes(port: number, path: string, headers: Record<string, string> = {}, method = "GET") {
   return new Promise<{ status: number; headers: IncomingHttpHeaders; body: Buffer }>((resolve, reject) => {
-    const req = request({ host: "127.0.0.1", port, path, headers }, (res) => {
+    const req = request({ host: "127.0.0.1", port, path, headers, method }, (res) => {
       const chunks: Buffer[] = []
       res.on("data", (chunk: Buffer) => { chunks.push(chunk) })
       res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks) }))
@@ -123,6 +123,11 @@ test("public supervisor serves local images without entering or requiring the di
     assert.equal(served.headers["content-type"], "image/png")
     assert.equal(served.headers["cache-control"], "private, max-age=60")
     assert.deepEqual(served.body, image)
+
+    const head = await getBytes(port, path, { "sec-fetch-site": "same-origin" }, "HEAD")
+    assert.equal(head.status, 200)
+    assert.equal(head.headers["content-length"], String(image.length))
+    assert.equal(head.body.length, 0)
 
     const cors = await getBytes(port, path, { origin: `http://127.0.0.1:${port}` })
     assert.equal(cors.status, 200)

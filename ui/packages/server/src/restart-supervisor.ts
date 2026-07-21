@@ -61,7 +61,8 @@ function isControlRequest(req: IncomingMessage): boolean {
 }
 
 function isLocalImageRequest(req: IncomingMessage): boolean {
-  return req.method === "GET" && new URL(req.url ?? "/", "http://fray.invalid").pathname === "/local-image"
+  return (req.method === "GET" || req.method === "HEAD")
+    && new URL(req.url ?? "/", "http://fray.invalid").pathname === "/local-image"
 }
 
 export class RestartSupervisorProxy {
@@ -201,7 +202,7 @@ export class RestartSupervisorProxy {
       "content-length": result.body.length,
       "cache-control": "private, max-age=60",
     })
-    res.end(result.body)
+    res.end(req.method === "HEAD" ? undefined : result.body)
   }
 
   private handle(req: IncomingMessage, res: ServerResponse): void {
