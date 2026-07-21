@@ -59,10 +59,11 @@ export const ThreadSlugContext = createContext<string | null>(null)
 // A QUEUE card provides this so any in-transcript dismissal control — the ```done fence's Mark-as-done
 // button, the ```awaiting fence's park button — routes its OWN card through the queue's user-initiated
 // exit (fade → auto-scroll the next card to the viewport top) instead of the passive board-departure
-// "hold a neighbour in place" path. It is exactly the card's `onResolve(slug)`, reached without
-// threading it through the fence renderer. Null off the queue (the thread drawer), where there is no
-// queue to scroll — there the fence buttons behave as before (archive/snooze, no scroll).
-export const QueueDismissContext = createContext<(() => void) | null>(null)
+// "hold a neighbour in place" path. `dismiss` is exactly the card's `onResolve(slug)`; `cancel` reinstates
+// an OPTIMISTICALLY dismissed card (its `onUnresolve(slug)`) when the completion RPC declines — reached
+// without threading either through the fence renderer. Null off the queue (the thread drawer), where there
+// is no queue to scroll — there the fence buttons behave as before (archive/snooze, no scroll).
+export const QueueDismissContext = createContext<{ dismiss: () => void; cancel: () => void } | null>(null)
 
 // The default thread surface: the session transcript (parsed server-side from the JSONL) rendered
 // as a conversation — assistant prose as markdown, tool calls as compact one-liners, a spinner
@@ -2385,7 +2386,8 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
             <StateButton
               thread={doneThread}
               className="bg-fg px-2.5 py-1 text-bg hover:opacity-90"
-              onArchived={queueDismiss ?? undefined}
+              onArchived={queueDismiss?.dismiss}
+              onDismissCancel={queueDismiss?.cancel}
             />
           </div>
         )}
@@ -2441,7 +2443,7 @@ function AwaitingParkButton({ thread, hints }: { thread: ThreadViewData; hints: 
       .setThreadSnooze({ slug: thread.id, until })
       .then(() => {
         showToast(`${action.toastVerb} · ${formatSnoozeWake(until)}`)
-        queueDismiss?.()
+        queueDismiss?.dismiss()
       })
       .catch((error) => showToast(`Couldn’t snooze: ${(error as Error).message.slice(0, 80)}`))
       .finally(() => setBusy(false))

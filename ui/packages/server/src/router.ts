@@ -131,6 +131,23 @@ interface RegisteredRuntimeTerminator {
   isLive(slug: string): boolean
 }
 
+// The terminator completeThread runs on. Its standalone liveness check trusts the BATCHED cache (one
+// `list-panes -a` answers every session) for a "live" verdict — the common resting-shell path — instead of
+// the default uncached isLive (a hasSession + paneDead pair, run before AND after the kill). Those stacked
+// sync tmux execs on the request path are exactly what starved the event loop and pushed Mark-as-done
+// latency to seconds while an agent streamed (see tmux.ts liveness cache). A cached "dead" verdict is
+// CONFIRMED with one fresh uncached check before it is trusted: paneMap() caches an all-dead map for its
+// 900ms TTL after a transient `list-panes` throw, and archiving a still-live shell without stopping it
+// would orphan it. So live→fast, dead→verified. killSession invalidates the cache, so the post-kill
+// re-check reads fresh too — the "prove the runtime stopped before recording Done" invariant is preserved.
+// The adoption path (findExpectedAdoptionPane) is unchanged; only the standalone isLive check moves here.
+const cachedLivenessTerminator: RegisteredRuntimeTerminator = {
+  findExpectedAdoptionPane: tmux.findExpectedAdoptionPane,
+  killExpectedAdoptionPane: tmux.killExpectedAdoptionPane,
+  killSession: tmux.killSession,
+  isLive: (slug) => tmux.isLiveCached(slug) || tmux.isLive(slug),
+}
+
 // A finalized cold adoption is permanently bound to one exact tmux generation. Destructive UI
 // actions must never fall back to the reusable session name: another process may already occupy it
 // after the owner exited. Verify token + full tuple, kill that tuple only, then prove it disappeared
@@ -643,7 +660,7 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const row = ctx.storage.getSession(input.slug)
         if (!row) throw new Error(`no session registered for ${input.slug}`)
-        const result = completeRegisteredThread(ctx.storage, row, input.terminateLive, tmux, ctx.tailer.get(input.slug))
+        const result = completeRegisteredThread(ctx.storage, row, input.terminateLive, cachedLivenessTerminator, ctx.tailer.get(input.slug))
         if (!result.needsConfirmation) ctx.board.refresh()
         return result
       },
