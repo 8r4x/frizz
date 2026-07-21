@@ -11,6 +11,7 @@ import * as tmux from "./tmux.ts"
 import { detectClaudePermissionMode } from "./permission-controller.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { normalizeObservedThreadModel, validateThreadProfile } from "./backend/thread-profiles.ts"
+import { classifyLimitRecord } from "./backend/usage-limit.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
 // (~/.claude/projects/<cwdSlug>/<session_id>.jsonl) to derive liveness telemetry — last activity
@@ -329,6 +330,11 @@ interface Record {
   content?: unknown // top-level string on queue-operation records — carries the <task-notification> XML
   promptSource?: string // on user records: typed/queued (human) · "system" (peer msg / task-notification)
   isApiErrorMessage?: boolean // synthetic assistant record claude writes for a provider API error
+  // Structured category claude stamps on that synthetic record: "rate_limit" (subscription window
+  // exhausted) · "server_error" (connectivity/5xx) · "unknown" (everything else). This is what makes
+  // limit detection structural rather than a text guess — see backend/usage-limit.ts.
+  error?: unknown
+  apiErrorStatus?: unknown // HTTP status alongside `error` (429 on a limit stop); absent on some errors
   message?: { stop_reason?: string; content?: unknown; model?: string }
 }
 
@@ -848,6 +854,20 @@ export function applyRecord(state: TailState, rec: Record): void {
     } else if (raw !== undefined) {
       state.authFault = undefined
     }
+    // Subscription usage-limit classifier (auto-resume): the SAME synthetic-record channel, keyed on
+    // the structured `error:"rate_limit"` category rather than any text match. The limit is what cut
+    // this turn off mid-work, so the fault standing on the tail IS "this agent was running when the
+    // window ran dry" — the set the scheduler later continues. A REAL assistant text clears it (the
+    // provider is serving again); a user record clears it below (the human — or our own delivered
+    // "continue" — has already moved the thread on, which is what makes the wake idempotent).
+    if (rec.isApiErrorMessage === true) {
+      const limit = classifyLimitRecord(rec, raw)
+      if (limit && typeof rec.timestamp === "string") {
+        state.limitFault = { window: limit.window, at: rec.timestamp, resetClock: limit.resetClock }
+      }
+    } else if (raw !== undefined) {
+      state.limitFault = undefined
+    }
     if (raw !== undefined) {
       const preview = previewText(raw)
       if (preview !== undefined) state.lastAssistant = preview
@@ -871,6 +891,12 @@ export function applyRecord(state: TailState, rec: Record): void {
     // FINAL message); the NEXT assistant record recomputes them.
     state.lastAssistantHasQuestion = false
     state.lastFence = undefined
+    // Any user record supersedes a usage-limit pause: the conversation has moved past the point where
+    // it was cut off, whether by the human or by the "continue" the wake scheduler delivered. This is
+    // precisely what makes the auto-resume one-shot — the delivered message erases the very fault that
+    // selected the thread. If the window is still dry, the provider simply writes a NEW limit record
+    // (with a NEW, later reset instant), so a re-fire can never tighten into a loop.
+    state.limitFault = undefined
     // `lastUserAt` is the ROW-ORDER key — bump it ONLY for a genuine HUMAN interaction. A tool_result
     // is agent activity (excluded by isRealUserMessage); a system record (peer/notification) is
     // machine motion the human didn't cause — neither may jump the row to the top (the one part of the
@@ -1856,7 +1882,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // an unanswered ```question fence (a user reply clears the flag and flips the turn in-flight).
       const pendingQuestion = s.turn === "idle" && s.lastAssistantHasQuestion
       const nowMs = now()
-      return { turn: s.turn, permPrompt: s.permPrompt, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), bgShells: bgShellViews(s, nowMs), pendingAsk: s.pendingAsk, pendingQuestion, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault }
+      return { turn: s.turn, permPrompt: s.permPrompt, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), bgShells: bgShellViews(s, nowMs), pendingAsk: s.pendingAsk, pendingQuestion, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.

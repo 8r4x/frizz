@@ -1,5 +1,14 @@
-import type { PermissionMode } from "@fray-ui/shared"
+import type { LimitWindow, PermissionMode } from "@fray-ui/shared"
 import type { FenceView, SubAgentView, BgShellView, PendingAskData, TurnState } from "../tailer.ts"
+
+// A turn cut off by an exhausted SUBSCRIPTION window, as a backend's fold observed it. Carries only
+// typed data — which window, when it happened, and the provider's stated reset clock in structured
+// form. The raw error text never leaves the fold, matching the authFault discipline.
+export interface LimitFault {
+  window: LimitWindow
+  at: string // ISO8601 of the limit record — when the agent got cut off
+  resetClock?: { hour: number; minute: number; timeZone: string }
+}
 
 // ---- The agent-backend abstraction (Codex-support epic, Phase 1) ----
 // One interface, one implementation per agent CLI. The server holds an AgentBackend per session and
@@ -71,6 +80,7 @@ export interface NormalizedTail {
   bgShells: BgShellView[] // codex: always []
   pendingAsk?: PendingAskData // codex: undefined
   authFault?: "authentication_rejected" // runtime provider-auth rejection (see FoldState.authFault)
+  limitFault?: LimitFault // subscription window exhausted mid-turn (see FoldState.limitFault)
 }
 
 // The backend-NEUTRAL fold accumulator: the running derivation a backend folds each transcript line
@@ -117,6 +127,11 @@ export interface FoldState {
   // proves the credential works). Only this typed category ever leaves the fold; raw error/pane text
   // stays out of persisted state.
   authFault?: "authentication_rejected"
+  // Subscription usage-limit pause (auto-resume). Set when the backend records a limit stop — for
+  // Claude the synthetic record carrying the structured `error:"rate_limit"` category, never a text
+  // match — and cleared by the next real assistant text OR any user record. That clearing rule is
+  // what makes a delivered "continue" supersede the fault it was fired for.
+  limitFault?: LimitFault
 }
 
 // A file a backend needs on disk BEFORE the detached spawn (e.g. codex's session-scoped AGENTS.md).

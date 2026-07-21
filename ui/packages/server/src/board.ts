@@ -19,6 +19,8 @@ import { effectivePermissionMode, resolveLegacyThreadFile } from "./dispatch.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { listPlanFiles } from "./plan-files.ts"
+import { LIMIT_RESUME_MAX_AGE_MS, textResetInstant } from "./backend/usage-limit.ts"
+import { getSettings } from "./settings.ts"
 
 // The read model is provenance-bound to the durable session registry. A session row exists only after
 // Fray UI dispatches or explicitly adopts a thread, so unrelated legacy `.fray/*.md` files and raw
@@ -153,6 +155,9 @@ export function deriveNeedsYou(
   runtime: RuntimeState,
   hasActionableInteraction = false,
   nowMs = Date.now(),
+  // The RESOLVED pause for this row (resolveLimitPause), not the raw setting — its `autoResume` bit
+  // already folds in staleness, so the queue excusal and the card can never disagree.
+  limitPause: ThreadView["limitPause"] = undefined,
 ): boolean {
   // Snooze is explicit operator lifecycle state. It must be checked before provider/question/crash
   // gates so choosing Snooze from any queue card actually parks that card until its exact deadline.
@@ -191,6 +196,12 @@ export function deriveNeedsYou(
   // child liveness (found 2026-07-21: such a thread silently dangled).
   if (runtime !== "exited" && hasLiveBackgroundWork(tele)) return false
   if (hasParkedExternalWait(tele, nowMs)) return false
+  // A thread parked by an exhausted subscription window is waiting on the clock, not on the human —
+  // exactly like a timer wait — SO LONG AS fray is actually going to continue it. Excusing it keeps a
+  // limit event from dumping the entire running fleet into the queue at once. When auto-resume is off
+  // (or the pause aged out), the promise is gone and it falls through to the ordinary handoff below,
+  // which is the honest place for work only the human will restart.
+  if (limitPause?.autoResume) return false
   // A final ```done fence is a CHECKED completion handoff: show its success card in the queue until the
   // human explicitly Archives the thread. Like a question, merely viewing it does not resolve it. The
   // at-rest gate above prevents a stale fence from carding while a follow-up turn is still running.
@@ -260,6 +271,36 @@ export function resolvePendingPermission(row: Pick<SessionRow, "permission_pendi
   return parsed.success ? parsed.data : undefined
 }
 
+// Project a fold-observed limit fault onto the wire view: which window blew, when, when it comes back,
+// and whether fray will deliver its own "continue". `resumesAt` is present only when the provider's
+// own reset clock resolves it (a weekly clock never does — see textResetInstant); its ABSENCE does not
+// cancel the auto-resume promise, because the scheduler can still resolve a weekly instant from the
+// usage endpoint. The card then says "when the window resets" rather than naming a time known nowhere.
+export function resolveLimitPause(
+  row: Pick<SessionRow, "backend">,
+  tele: Pick<SessionTelemetry, "limitFault"> | undefined,
+  autoResumeEnabled: boolean,
+  nowMs: number,
+): ThreadView["limitPause"] {
+  const fault = tele?.limitFault
+  if (!fault) return undefined
+  const at = Date.parse(fault.at)
+  const stale = Number.isFinite(at) && nowMs - at > LIMIT_RESUME_MAX_AGE_MS
+  // Resolve the clock relative to the FAULT, never to `now`. "resets 5:50pm" means the first 5:50pm
+  // after the provider said it; anchoring on `now` would silently roll the answer to TOMORROW's 5:50pm
+  // the moment the real one passed, so the promised time would run away from the reader forever.
+  const resumesAtMs = fault.resetClock && Number.isFinite(at)
+    ? textResetInstant({ window: fault.window, resetClock: fault.resetClock }, at)
+    : undefined
+  return {
+    backend: row.backend === "codex" ? "codex" : "claude",
+    window: fault.window,
+    at: fault.at,
+    ...(resumesAtMs !== undefined ? { resumesAt: Math.round(resumesAtMs / 1000) } : {}),
+    autoResume: autoResumeEnabled && !stale,
+  }
+}
+
 export function queuedInputCount(value: string | null | undefined): number {
   if (!value) return 0
   try {
@@ -306,6 +347,7 @@ function sessionThreadView(
   registeredLegacyTerminal: boolean,
   interactionPresence: { pending: boolean; needsUser: boolean },
   nowMs: number,
+  autoResumeOnLimit: boolean,
 ): ThreadView {
   // App-server threads write their rollout synchronously at thread/start, so a transient "no transcript
   // yet" must not degrade a healthy headless thread to the "exited"/stalled crash affordance.
@@ -315,7 +357,8 @@ function sessionThreadView(
   )
   const state = effectiveSessionState(row, registeredLegacyTerminal)
   const archived = state === "archived"
-  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs)
+  const limitPause = resolveLimitPause(row, tele, autoResumeOnLimit, nowMs)
+  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause)
   // A pane that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
   // "running" (its parent is gone, so it cannot actually be live) — is a crash/stall, not a clean
   // handoff, so it cards as "stalled" not a bare "rest". Mirrors deriveNeedsYou's surfacing above. (The
@@ -360,6 +403,9 @@ function sessionThreadView(
     providerFault: tele?.authFault
       ? { backend: row.backend === "codex" ? "codex" as const : "claude" as const, category: tele.authFault }
       : undefined,
+    // Subscription window exhausted mid-turn — the credential is fine, so this is a WAIT, not a
+    // sign-in. Drives the pause card and (while an auto-resume is promised) the queue excusal above.
+    limitPause,
     kind: "session",
     foreign: false,
     lastFence: tele?.lastFence,
@@ -506,6 +552,9 @@ export function createBoard(
     // Old/corrupt databases predate the canonical storage guard. Keep such rows inert instead of
     // emitting an invalid board id or allowing it to reach tailer/tmux consumers.
     const rows = storage.allSessions().filter((row) => ThreadSlug.safeParse(row.slug).success)
+    // Read once per snapshot, not once per row: the setting is board-global and every row's limit
+    // pause resolves against the same value.
+    const autoResumeOnLimit = getSettings(storage).autoResumeOnLimit !== false
     const currentInteractionKeys = new Set<string>()
     const out: ThreadView[] = []
     for (const row of rows) {
@@ -542,6 +591,7 @@ export function createBoard(
         legacyTerminalCache.has(row.slug),
         interactionPresence,
         nowMs,
+        autoResumeOnLimit,
       ))
     }
     for (const key of pendingInteractionCache.keys()) {

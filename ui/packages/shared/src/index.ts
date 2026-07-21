@@ -234,6 +234,28 @@ export const PlanView = z.object({
 })
 export type PlanView = z.infer<typeof PlanView>
 
+// ---- Subscription usage-limit pause (auto-resume) ------------------------------------------------
+// Which metered subscription window the provider says is exhausted. "session" is the 5-hour rolling
+// window (Claude's "You've hit your session limit"); "weekly" is the 7-day window; "unknown" is a
+// limit stop whose phrasing we could not attribute — never auto-resumed on a text-derived clock.
+export const LimitWindow = z.enum(["session", "weekly", "unknown"])
+export type LimitWindow = z.infer<typeof LimitWindow>
+
+// A thread whose turn was cut off mid-work by an exhausted subscription window, plus what fray will
+// do about it. `resumesAt` is a unix-seconds instant resolved from the provider's own reset clock (or
+// its usage endpoint) — absent when neither source could supply one, in which case `autoResume` is
+// false and the thread stays a normal human handoff.
+export const LimitPause = z.object({
+  backend: Backend,
+  window: LimitWindow,
+  at: z.string(), // ISO8601 of the limit record — "when the agent got cut off"
+  resumesAt: z.number().optional(), // unix seconds the window rolls
+  // Whether fray intends to deliver its own "continue" once `resumesAt` passes. False when the
+  // setting is off, the instant is unresolvable, or the pause is too old to safely resume.
+  autoResume: z.boolean(),
+})
+export type LimitPause = z.infer<typeof LimitPause>
+
 // One sidebar row: fray board thread + runtime overlay.
 export const ThreadView = z.object({
   id: ThreadSlug, // slug; filename is <slug>.md
@@ -307,6 +329,11 @@ export const ThreadView = z.object({
     backend: z.enum(["claude", "codex"]),
     category: z.enum(["authentication_required", "authentication_rejected"]),
   }).optional(),
+  // The session's turn was cut off by an exhausted SUBSCRIPTION window. Distinct from providerFault:
+  // the credential is fine, the account is simply out of quota until the window rolls, so the recovery
+  // is to WAIT and continue — not to sign in. Same discipline as providerFault: only typed data
+  // travels, never the provider's own error text. Optional so old snapshots/servers parse.
+  limitPause: LimitPause.optional(),
 
   // ---- Session-first fields (ALL optional: absent ⇒ a legacy .fray-file row / pre-restart server;
   // the client treats such rows as Legacy-shelf material). Deliberately not zod-defaulted so server
@@ -537,6 +564,11 @@ export const Settings = z.object({
   // is the differentiator); a project that doesn't want that opinionation flips it off in one click.
   // Optional so an old settings blob parses; absent ⇒ on (defaultSettings pins true).
   runtimeGate: z.boolean().optional(),
+  // When a subscription window runs dry mid-turn, remember every thread it cut off and deliver a
+  // "continue" to each one once the window rolls. ON by default — an interrupted agent that never
+  // gets picked back up is the whole cost of a limit. Flip it off to leave the paused threads in the
+  // queue for a human to restart. Optional so an old settings blob parses; absent ⇒ on.
+  autoResumeOnLimit: z.boolean().optional(),
   // GitHub batch-dispatch prompt templates (the picker's per-item worker prompt). Optional: when
   // unset OR blank the server falls back to its exported DEFAULT_ISSUE_PROMPT / DEFAULT_PR_PROMPT.
   // Substitution tokens the server fills: {repo} {n} {title} {url} {labels} {body}. The leading
