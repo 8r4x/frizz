@@ -292,9 +292,10 @@ function sessionRow(slug: string, sessionId: string, backend = "claude"): Sessio
   }
 }
 
-test("bridge is disabled by default and negotiates exact installed protocol over stdio when explicitly used", async () => {
-  assert.equal(codexAppServerBridgeEnabled({}), false)
-  assert.equal(codexAppServerBridgeEnabled({ FRAY_CODEX_APP_SERVER_BRIDGE: "1" }), true)
+test("bridge is enabled by default (cutover) and negotiates exact installed protocol over stdio", async () => {
+  // Cutover: app-server is the default codex transport. Opt out to legacy tmux with FRAY_CODEX_LEGACY_TMUX=1.
+  assert.equal(codexAppServerBridgeEnabled({}), true)
+  assert.equal(codexAppServerBridgeEnabled({ FRAY_CODEX_LEGACY_TMUX: "1" }), false)
   const h = harness()
   const binding = await h.bridge.startDisposableSession({
     threadSlug: "bridge-thread",

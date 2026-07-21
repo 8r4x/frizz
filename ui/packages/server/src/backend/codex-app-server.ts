@@ -2575,6 +2575,11 @@ export function createCodexAppServerBridge(options: CodexAppServerBridgeOptions)
   return new CodexAppServerBridge(options)
 }
 
+// Cutover: the Codex app-server bridge is the DEFAULT transport for codex threads. Opt OUT to the
+// legacy tmux TUI path with FRAY_CODEX_LEGACY_TMUX=1 (e.g. to ride a codex version that drifted from
+// the pinned protocol, or to debug the old path). If the bridge is enabled but can't service a
+// dispatch, dispatch falls back to tmux per-dispatch anyway, so this is a soft default, not a hard gate.
+export const CODEX_LEGACY_TMUX_FLAG = "FRAY_CODEX_LEGACY_TMUX"
 export function codexAppServerBridgeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env[CODEX_APP_SERVER_FEATURE_FLAG] === "1"
+  return env[CODEX_LEGACY_TMUX_FLAG] !== "1"
 }

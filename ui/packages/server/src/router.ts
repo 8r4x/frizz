@@ -519,6 +519,15 @@ export function createRouter(ctx: AppContext) {
         if (row?.backend === "codex" && row.codex_runtime === "app-server" && ctx.codexAppServer) {
           const bridge = ctx.codexAppServer
           const binding = bridge.binding(input.slug, row.session_id)
+          // Writer-yield: if the rollout shows an in-flight turn the bridge did NOT start (it has no
+          // current turn of its own), someone is driving this thread in their own terminal via
+          // `codex resume`. fray keeps MIRRORING that turn (the tailer follows the same rollout), but it
+          // must not start/steer a second turn on the same session and race two writers. Yield until the
+          // external turn rests; the user can then follow up here, or take back over from their terminal.
+          const turnLive = ctx.tailer.get(input.slug)?.turn === "in-flight"
+          if (turnLive && (!binding || binding.currentTurnId === null)) {
+            throw new Error("This thread is running in your terminal right now — fray is mirroring it live. Wait for that turn to finish, then send your follow-up here.")
+          }
           if (!binding || binding.state !== "active") {
             await bridge.resumeOwnedSession(input.slug, row.session_id)
           }

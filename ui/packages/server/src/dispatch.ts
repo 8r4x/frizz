@@ -810,9 +810,8 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       if (kind === "codex" && deps.codexAppServer) {
         const extraSystemPrompt = [scratchpadOrientation(sessionId, planPath, kind), frayConfigBlock(deps.project.dir)]
           .filter(Boolean).join("\n\n")
-        let spawned: Awaited<ReturnType<CodexAppServerBridge["spawnDispatch"]>>
         try {
-          spawned = await deps.codexAppServer.spawnDispatch({
+          const spawned = await deps.codexAppServer.spawnDispatch({
             threadSlug: slug,
             sessionId,
             cwd: deps.project.dir,
@@ -824,37 +823,44 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             developerInstructions: CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS,
             config: { model_reasoning_summary: "detailed" },
           })
+          deps.storage.upsertSession({
+            slug,
+            session_id: sessionId,
+            tmux_name: tmuxSessionName(slug),
+            spawned_at: new Date().toISOString(),
+            last_read_at: null,
+            unread: 0,
+            exited: 0,
+            archived: 0,
+            rested_at: null,
+            title_auto: input.title?.trim() ? 0 : 1,
+            title: registryTitle,
+            state: "open",
+            meta: null,
+            seen_at: null,
+            plan_path: planPath,
+            transcript_id: null,
+            model: model ?? null,
+            effort: effort ?? null,
+            permission_mode: permissionMode,
+          })
+          deps.storage.setBackend(slug, "codex")
+          // The codex SESSION id (not the thread id) matches the rollout filename the tailer scans for.
+          deps.storage.setAgentSession(slug, spawned.binding.codexSessionId)
+          deps.storage.setCodexRuntime(slug, "app-server")
+          void deps.board.rebuild().catch(() => {})
+          return { slug, sessionId }
         } catch (err) {
-          cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
-          throw err
+          // The app-server bridge couldn't service this dispatch — most likely codex app-server is
+          // unavailable or the installed protocol drifted from the pinned revision. Fall back to the
+          // legacy tmux TUI path so a codex dispatch NEVER hard-fails on the cutover default. Release any
+          // partial bridge binding first (so it can't be orphaned/reconciled), and surface a diagnostic —
+          // the fallback loses the app-server steering elegance, so it must not be silent. No durable row
+          // was written yet, and the scratchpad is reused by the tmux spawn below.
+          try { deps.codexAppServer.releaseSession(slug, sessionId, "session-deleted") } catch { /* best-effort */ }
+          process.stderr.write(`[fray] codex app-server dispatch failed for ${slug}; falling back to tmux: ${(err as Error).message}\n`)
+          // fall through to the tmux buildSpawnCommand path below
         }
-        deps.storage.upsertSession({
-          slug,
-          session_id: sessionId,
-          tmux_name: tmuxSessionName(slug),
-          spawned_at: new Date().toISOString(),
-          last_read_at: null,
-          unread: 0,
-          exited: 0,
-          archived: 0,
-          rested_at: null,
-          title_auto: input.title?.trim() ? 0 : 1,
-          title: registryTitle,
-          state: "open",
-          meta: null,
-          seen_at: null,
-          plan_path: planPath,
-          transcript_id: null,
-          model: model ?? null,
-          effort: effort ?? null,
-          permission_mode: permissionMode,
-        })
-        deps.storage.setBackend(slug, "codex")
-        // The codex SESSION id (not the thread id) matches the rollout filename the tailer scans for.
-        deps.storage.setAgentSession(slug, spawned.binding.codexSessionId)
-        deps.storage.setCodexRuntime(slug, "app-server")
-        void deps.board.rebuild().catch(() => {})
-        return { slug, sessionId }
       }
 
       const built = buildSpawnCommand({
