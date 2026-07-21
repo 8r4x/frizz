@@ -1847,7 +1847,7 @@ export function StickyUserBand({ children, stickyTopPx, sourceId }: { children: 
 // ellipsis) with a soft "there's more" cue; hovering expands it to the full message (up to 85vh, then
 // it scrolls) and leaving re-collapses. Non-sticky (every historical bubble) is the plain, uncapped
 // bubble, unchanged. Its own component so the sticky hover/measure hooks stay out of memoized Message.
-function UserBubble({ text, queued, sticky }: { text: string; queued?: boolean; sticky?: boolean }) {
+function UserBubble({ text, queued, sticky, deliveryUnconfirmed }: { text: string; queued?: boolean; sticky?: boolean; deliveryUnconfirmed?: boolean }) {
   const ref = useRef<HTMLDivElement>(null)
   const [expanded, setExpanded] = useState(false)
   const [overflows, setOverflows] = useState(false)
@@ -1909,6 +1909,12 @@ function UserBubble({ text, queued, sticky }: { text: string; queued?: boolean; 
           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-user-bubble to-transparent" />
         )}
       </div>
+      {/* Delivery-ledger verdict: no JSONL evidence within the confirmation window — the injection
+          likely mutated or never reached the agent. Quiet one-liner (not a modal): the terminal pane
+          is the recovery surface, and the bubble stays gray so the send is still legible above it. */}
+      {deliveryUnconfirmed && (
+        <div className="text-[11px] text-amber-400/80">Delivery unconfirmed — check the terminal</div>
+      )}
     </div>
   )
 }
@@ -1952,7 +1958,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     // Non-matching text (and a parse hiccup → null) falls back to the plain bubble; text is never lost.
     const answers = paired !== undefined ? paired : parseAnswersMessage(text)
     if (answers) return <AnswersCard answers={answers} queued={m.queued} />
-    return <UserBubble text={text} queued={m.queued} sticky={sticky} />
+    return <UserBubble text={text} queued={m.queued} sticky={sticky} deliveryUnconfirmed={m.deliveryState === "unconfirmed"} />
   }
 
   // Build ONE ordered list of block-level children, then interleave with explicit spacers. The

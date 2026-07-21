@@ -61,11 +61,16 @@ export function mergeOptimistic(prev: QueuedMessage[] | undefined, incoming: Que
   // Codex can also materialize several consecutive sends as one user turn joined by blank lines. Consume
   // that whole run only when at least two optimistic texts reconstruct the complete server turn; a lone
   // matching paragraph inside unrelated prose is not delivery proof.
+  // Delivery-ledger consumption — exact and text-independent: the server projects (or tags) the queued
+  // bubble for a tracked send with its deliveryId, so the optimistic copy of that SAME send is accounted
+  // for the moment any incoming message carries the id. The text paths below remain for id-less legacy
+  // flows (answers composed pre-ledger, old servers).
+  const incomingDeliveryIds = new Set(incoming.map((m) => m.deliveryId).filter((id): id is string => Boolean(id)))
   const serverUserTexts = freshServerUserTexts(prev, incoming)
   const consumed = consumedOptimisticIndexes(optimistic, serverUserTexts)
-  const unconsumed = optimistic.filter((_, i) => !consumed.has(i))
+  const unconsumed = optimistic.filter((m, i) => !consumed.has(i) && !(m.deliveryId && incomingDeliveryIds.has(m.deliveryId)))
   if (!unconsumed.length) return incoming
-  const alive = unconsumed.filter((message) => retainOptimistic(message, newestServerAt(incoming)))
+  const alive = unconsumed.filter((message) => retainOptimistic(message, newestServerAt(incoming), newestServerAt(prev)))
   return alive.length ? [...incoming, ...alive] : incoming
 }
 
@@ -97,12 +102,14 @@ function newestServerAt(messages: readonly QueuedMessage[]): number {
   return NaN
 }
 
-function retainOptimistic(message: QueuedMessage, serverNow: number): boolean {
+// `atSend` is the transcript tail the client already held when the bubble was appended — the true
+// send-time anchor, so a ghost retires on the FIRST push that clears the grace rather than the second.
+function retainOptimistic(message: QueuedMessage, serverNow: number, atSend: number): boolean {
   if (!Number.isFinite(serverNow)) return true // no server clock to judge against
   const anchor = ghostAnchor.get(message)
   if (anchor === undefined) {
-    ghostAnchor.set(message, serverNow)
-    return true
+    ghostAnchor.set(message, Number.isFinite(atSend) ? atSend : serverNow)
+    return retainOptimistic(message, serverNow, atSend)
   }
   if (serverNow - anchor <= GHOST_GRACE_MS) return true
   console.warn("[fray] retiring a stranded optimistic send: the transcript advanced past it without ever recording it", {
@@ -111,7 +118,6 @@ function retainOptimistic(message: QueuedMessage, serverNow: number): boolean {
   })
   return false
 }
-
 
 // ── Per-push message identity preservation ─────────────────────────────────────────────────────────────
 // Every transcript push/refetch re-parses the full window, so each message arrives as a NEW object even

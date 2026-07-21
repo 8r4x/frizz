@@ -11,6 +11,7 @@ import * as tmux from "./tmux.ts"
 import { detectClaudePermissionMode } from "./permission-controller.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { normalizeObservedThreadModel, validateThreadProfile } from "./backend/thread-profiles.ts"
+import { parseDeliveryLedger, correlateDeliveryRecord, ageDeliveries, serializeDeliveryLedger, type DeliveryLedgerItem } from "./delivery-ledger.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
 // (~/.claude/projects/<cwdSlug>/<session_id>.jsonl) to derive liveness telemetry — last activity
@@ -284,6 +285,10 @@ export interface TailState extends FoldState {
   nativeSessionId: string
   runtimeGeneration: number
   path: string
+  // The delivery_ledger JSON this tailer last accounted for (pushed a projection for). A ROUTER write
+  // (followUp opening a ledger entry) changes the row without any JSONL advance; this drift check is
+  // what re-projects the transcript to already-subscribed clients within one tick.
+  deliveryLedgerSeen?: string | null
   // A FOREIGN thread (a maintainer terminal discovered from the log dir, no registry row). Structural
   // guarantee that this state can NEVER shell out to tmux — no pane-sniff, no pane-death, no notify /
   // storage write — since no `fray-<slug>` tmux session exists for it. Keyed by session id, not slug.
@@ -1450,10 +1455,48 @@ export function createTailer(deps: TailerDeps): Tailer {
     return dirty
   }
 
+  // Delivery-ledger fold for one registered CLAUDE row's tick: `onLine` correlates each appended JSONL
+  // record against the row's pending follow-ups (delivery-ledger.ts); `finish()` ages the items
+  // (pending→unconfirmed timeout, unconfirmed drop) and persists any transition, returning true so the
+  // caller re-projects the transcript + dirties the board. Codex rows (their queue is codex_input_queue)
+  // and rows with an empty ledger cost one null check.
+  function ledgerFold(
+    row: SessionRow,
+    nowMs: number,
+  ): { onLine?: (line: string) => void; finish: () => { changed: boolean; value: string | null } } {
+    if (row.backend === "codex" || !row.delivery_ledger) {
+      return { finish: () => ({ changed: false, value: null }) }
+    }
+    let items: DeliveryLedgerItem[] = parseDeliveryLedger(row.delivery_ledger)
+    const before = items
+    const nowIso = new Date(nowMs).toISOString()
+    return {
+      onLine: (line: string) => {
+        if (!line.trim() || !items.length) return
+        let rec: unknown
+        try {
+          rec = JSON.parse(line)
+        } catch {
+          return
+        }
+        items = correlateDeliveryRecord(items, rec, nowIso)
+      },
+      finish: () => {
+        items = ageDeliveries(items, nowMs)
+        if (items === before) return { changed: false, value: null }
+        const value = serializeDeliveryLedger(items)
+        deps.storage.setDeliveryLedger(row.slug, value)
+        return { changed: true, value }
+      },
+    }
+  }
+
   // Read whatever has been appended since our last offset, folding each complete line into the
   // derivation. Handles: file-not-yet-created (ENOENT → skip), truncation/rotation (size < offset
   // → re-read from 0), and a trailing partial line (buffered until its newline arrives).
-  function consume(state: TailState, backend: TailBackend): void {
+  // `onLine` (optional) sees each complete appended line AFTER the fold — the delivery-ledger
+  // correlation seam for registered Claude rows; unset everywhere else (zero cost).
+  function consume(state: TailState, backend: TailBackend, onLine?: (line: string) => void): void {
     let size: number
     try {
       size = statSync(state.path).size
@@ -1482,7 +1525,10 @@ export function createTailer(deps: TailerDeps): Tailer {
     }
     const lines = (state.partial + chunk).split("\n")
     state.partial = lines.pop() ?? "" // last element is the (possibly empty) trailing partial
-    for (const line of lines) backend.foldLine(state, line)
+    for (const line of lines) {
+      backend.foldLine(state, line)
+      onLine?.(line)
+    }
   }
 
   // Every OTHER row's pinned + discovered id — the exclude set so discovery never steals a transcript
@@ -1637,7 +1683,11 @@ export function createTailer(deps: TailerDeps): Tailer {
       // exited notifies — those pre-restart events are history, not new activity.
       if (!state.primed) {
         const primeOffset = state.offset
-        consume(state, backend)
+        const primeLedger = ledgerFold(row, nowMs)
+        consume(state, backend, primeLedger.onLine)
+        const primedLedger = primeLedger.finish()
+        state.deliveryLedgerSeen = primedLedger.changed ? primedLedger.value : row.delivery_ledger ?? null
+        if (primedLedger.changed) transcriptDirty.push(row.slug)
         persistCodexAutoTitle(row, state, runtimeGeneration)
         if (state.offset !== primeOffset) transcriptDirty.push(row.slug)
         state.turn = computeTurn(state, nowMs)
@@ -1690,7 +1740,16 @@ export function createTailer(deps: TailerDeps): Tailer {
       // never touches state.turn (computeTurn derives it), so prevTurn === state.turn for claude here:
       // byte-identical. This makes the transition edge backend-agnostic.
       const prevTurn = state.turn
-      consume(state, backend)
+      const rowLedger = row.delivery_ledger ?? null
+      const ledgerDrifted = rowLedger !== (state.deliveryLedgerSeen ?? null) // a router write with no JSONL advance
+      const ledger = ledgerFold(row, nowMs)
+      consume(state, backend, ledger.onLine)
+      const ledgerResult = ledger.finish()
+      state.deliveryLedgerSeen = ledgerResult.changed ? ledgerResult.value : rowLedger
+      if (ledgerDrifted || ledgerResult.changed) {
+        transcriptDirty.push(row.slug) // the ledger projection changed even if no renderable record did
+        dirty = true
+      }
       const profileRecordLanded = (state.profileRevision ?? 0) !== prevProfileRevision
       if (profileRecordLanded && state.model && state.profileAt) {
         const observedAt = Date.parse(state.profileAt)
