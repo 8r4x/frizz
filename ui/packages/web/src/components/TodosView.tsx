@@ -641,22 +641,8 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // The queue card is a simplified thread: by default the most recent messages, with "View more"
   // revealing progressively older ones above. statusText is the fallback before any transcript exists.
   const q = useTranscript(thread.id, { poll: false })
-  // Cards deliberately do NOT hold a socket subscription (a To-dos view can mount dozens; the per-connection
-  // subscription budget is 32) — but poll:false also means NOTHING refreshed a mounted card's transcript,
-  // ever. A card that outlives activity (the 8s reappear guard after a steer, or a needs-you thread the
-  // agent touched from another surface) kept showing the stale copy — a sent follow-up rendered as a gray
-  // "queued" bubble long after the agent had picked it up. Refetch on the thread's own lastActivityAt edge
-  // (delivered over the board-delta channel): one HTTP pull exactly when this thread actually moved.
-  const lastActivityRef = useRef(thread.lastActivityAt)
-  useEffect(() => {
-    if (q.transportFallback) return // typed pause stays manual — mirror useTranscript's own gating
-    if (thread.lastActivityAt !== lastActivityRef.current) {
-      lastActivityRef.current = thread.lastActivityAt
-      void q.refetch()
-    }
-    // q.refetch is stable across renders (react-query); the activity edge is the one meaningful dep.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [thread.lastActivityAt, q.transportFallback])
+  // Freshness (subscription within the socket budget, activity-edge refetch beyond it) is centrally
+  // managed by transcript-live.ts keyed on this hook's cache observer — the card wires nothing itself.
   // Raw server order — each message renders its `parts` in block order (fidelity). Memoized so the
   // windowing/useLiveAnswering below line up on identity.
   const messages = useMemo(() => q.data?.messages ?? [], [q.data])

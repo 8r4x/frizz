@@ -5,6 +5,7 @@ import "./styles.css"
 import { App } from "./App.tsx"
 import { StandaloneThreadPage } from "./components/StandaloneThreadPage.tsx"
 import { connectSync } from "./api/socket.ts"
+import { initTranscriptLive } from "./api/transcript-live.ts"
 import { initFont } from "./lib/font.ts"
 import { installExternalLinkInterceptor } from "./lib/external-links.ts"
 import { installLocalFileLinkInterceptor } from "./lib/local-file-links.ts"
@@ -29,6 +30,10 @@ export const queryClient = new QueryClient({
 // unavailable (a pre-restart server). The socket writes transcript pushes into this queryClient's cache.
 if (!settingsFixture) {
   connectSync(queryClient)
+  // Observer-driven transcript liveness: any mounted surface observing ["transcript", slug] is kept
+  // fresh centrally (socket subscription within budget, activity-edge refetch beyond) — components
+  // never manage subscriptions themselves.
+  initTranscriptLive(queryClient)
   initFont(queryClient)
   installExternalLinkInterceptor()
   installLocalFileLinkInterceptor()

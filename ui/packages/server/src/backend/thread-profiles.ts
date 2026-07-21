@@ -35,6 +35,22 @@ export function validateThreadProfile(backend: unknown, model: string, effort: s
   }
 }
 
+// The LIVE handoff journals the thread's CURRENT pair as its rollback target and RELAUNCHES the worker
+// with it if the target profile fails (resume.ts spawns from `profiles.current`), so that pair must be
+// launchable argv. Claude records a thread's model but frequently never its launch effort, so a known
+// model with an absent/unrecognized effort is a NORMAL state, not corruption — rejecting it outright
+// left such a thread permanently unable to change its model. Reconstruct the missing half from the
+// catalogue's default effort (exactly what a fresh dispatch of that model would use) so the rollback
+// stays launchable. An unknown MODEL still fails closed: there is no entry to rebuild a pair from.
+export function resolveRollbackProfile(backend: unknown, model: string, effort: string): { model: string; effort: string } {
+  const catalogue = threadProfileOptions(backend)
+  const option = catalogue.options.find((candidate) => candidate.model === model)
+  if (!option || !option.efforts.includes(option.defaultEffort)) {
+    throw new Error(`Unsupported ${catalogue.backend} model/effort pair: ${model} / ${effort}`)
+  }
+  return { model: option.model, effort: option.efforts.includes(effort) ? effort : option.defaultEffort }
+}
+
 export function normalizeObservedThreadModel(backend: unknown, model: string): string | undefined {
   const value = model.trim()
   if (backend === "codex") return threadProfileOptions(backend).options.some((option) => option.model === value) ? value : undefined

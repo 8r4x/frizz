@@ -17,8 +17,13 @@ export type ThreadProfileChoice = {
 }
 
 // Exited threads have no live runtime to protect, so a legacy/missing profile may be repaired by
-// selecting a provider-owned model. Live threads stay fail-closed unless their complete current pair
-// is known: otherwise changing either half could silently relabel an unrelated runtime.
+// selecting a provider-owned model. For a LIVE thread the model is authoritative (read from the
+// provider transcript) while the launch effort is frequently never recorded — a Claude thread
+// dispatched without an explicit effort has a known model and an unknown effort as its NORMAL state,
+// not corruption. So the model may be re-selected whenever the model itself is known: every committed
+// grid selection is a complete, catalog-valid pair, so switching models can only send a fully
+// specified profile. Only an unknown model — where we can't identify the runtime we'd relabel — stays
+// fail-closed. Effort-only editing remains gated on the full current pair being known.
 export function threadProfileControlState(
   options: readonly ThreadProfileChoice[],
   currentModel: string | undefined,
@@ -41,7 +46,7 @@ export function threadProfileControlState(
     modelKnown,
     effortKnown,
     profileKnown,
-    modelSelectable: exited || profileKnown,
+    modelSelectable: exited || modelKnown,
     effortSelectable: Boolean(selectedProfile) && (exited || profileKnown),
   }
 }
