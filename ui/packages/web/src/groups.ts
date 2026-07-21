@@ -333,6 +333,11 @@ export function isHeld(t: ThreadView, nowMs = Date.now()): boolean {
   // prompt—not a wait glyph—so a stale awaiting fence cannot demote them out of Queue.
   if (t.needsYou || t.pendingAsk || t.runtime === "perm-prompt") return false
   if (!atRest(t)) return false
+  // A thread a usage limit cut off, which fray is going to continue itself, has the same shape as an
+  // ```awaiting timer: park — parked on the clock with a wake already armed. It belongs in the dimmed
+  // Held band, not in Active pretending to work. Without that auto-resume promise there is no armed
+  // wake, so it is NOT held: it falls through to Queue as work only the human will restart.
+  if (t.limitPause?.autoResume) return true
   const declaredWait = t.lastFence?.kind === "awaiting" && parkedAwaitingHint(t.lastFence.hints, nowMs) !== undefined
   const timedStatus =
     t.status === "blocked" &&

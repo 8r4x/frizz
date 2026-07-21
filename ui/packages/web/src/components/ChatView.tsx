@@ -2561,23 +2561,29 @@ export function LimitPauseCard({ slug, pause }: { slug: string; pause: NonNullab
     onSuccess: () => showToast("Continuing…"),
     onError: (e) => showToast(`Continue failed: ${(e as Error).message.slice(0, 80)}`),
   })
+  // flex-wrap + a 12rem text floor: at a narrow width the button drops to its own line instead of
+  // squeezing the sentence into a 5-line ribbon. items-start pins the glyph to the FIRST line once the
+  // text wraps (centering it against a wrapped block leaves it floating beside line three).
   return (
-    <div data-limit-pause className="flex items-center gap-2.5 rounded-md border border-amber-500/40 bg-panel-2 px-3 py-2 text-[12px]">
-      <Hourglass size={13} className="shrink-0 text-amber-400" />
-      <span className="min-w-0 flex-1 text-fg/90">
-        <span className="font-medium">Paused — {label} {which} reached</span>
+    <div data-limit-pause className="flex flex-wrap items-start gap-x-2.5 gap-y-2 rounded-md border border-amber-500/40 bg-panel-2 px-3 py-2 text-[12px]">
+      <Hourglass size={13} className="mt-[2px] shrink-0 text-amber-400" />
+      {/* The provider's own "You've hit your session limit · resets …" line sits directly above this
+          card (unlike an auth error, it is informative, so transcript.ts keeps its bubble). So this
+          card says only what THAT line cannot: what fray is going to do about it. */}
+      <span className="min-w-[12rem] flex-1 text-fg/90">
+        <span className="font-medium">Paused by the {label} {which}</span>
         {" — "}
         {pause.autoResume
           ? pause.resumesAt
-            ? `this thread continues automatically at ${limitResumeClock(pause.resumesAt)}.`
-            : "this thread continues automatically once the window resets."
+            ? `continuing automatically at ${limitResumeClock(pause.resumesAt)}.`
+            : "continuing automatically once the window resets."
           : "continue it whenever you have capacity again."}
       </span>
       <button
         onClick={() => continueNow.mutate()}
         disabled={continueNow.isPending}
         onMouseDown={(e) => e.preventDefault()}
-        className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-fg/90 transition-colors hover:bg-panel hover:border-border-strong disabled:opacity-60"
+        className="ml-auto shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-fg/90 transition-colors hover:bg-panel hover:border-border-strong disabled:opacity-60"
       >
         Continue now
       </button>

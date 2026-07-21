@@ -496,6 +496,13 @@ function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string |
     //   • an ```awaiting timer:` park / blocked+timer status auto-resumes the agent → "Auto-snoozed until <wake>"
     const snoozedUntil = futureSnoozedUntil(t)
     if (snoozedUntil) return { node: hourglass, tip: formatSnoozedUntil(snoozedUntil) ?? "Snoozed until a scheduled check" }
+    // A usage-limit park is the third member of that same "held on the clock" family — fray resolves
+    // this one too, so it reads as an auto-snooze, named by what actually stopped the work.
+    if (t.limitPause?.autoResume) {
+      const which = t.limitPause.window === "weekly" ? "weekly limit" : "session limit"
+      const at = t.limitPause.resumesAt ? formatAutoSnoozedUntil(new Date(t.limitPause.resumesAt * 1000).toISOString()) : null
+      return { node: hourglass, tip: at ? `${at} — ${which} reached` : `Auto-snoozed until the ${which} resets` }
+    }
     // Canonical blocked+timer status can arrive from an older/pre-session snapshot without a fence.
     if (t.lastFence?.kind !== "awaiting") {
       const timed = typeof t.revalidate === "string" ? formatAutoSnoozedUntil(t.revalidate) : null
