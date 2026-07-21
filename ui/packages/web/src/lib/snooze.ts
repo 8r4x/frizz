@@ -106,11 +106,13 @@ export function formatSnoozedUntil(until: string, nowMs = Date.now()): string | 
   return wake ? `Snoozed until ${wake}` : null
 }
 
-/** A complete WORKER-timer sentence — the agent parked itself with `awaiting timer:` (or the canonical
- *  blocked+timer status) and the scheduler will RESUME it at this instant. The verb is deliberately
- *  distinct from a human snooze: a snooze re-surfaces the card for you; a timer wakes the agent itself. */
-export function formatTimerResume(until: string, nowMs = Date.now()): string | null {
+/** A complete AUTO-SNOOZE sentence. Same concept as a human snooze — park until a wall-clock instant —
+ *  differing only in WHO resolves it at the deadline: a human snooze re-surfaces the card for you to act
+ *  on, while this one (a worker `awaiting timer:` park or the canonical blocked+timer status) auto-
+ *  resolves by resuming the agent. Hence "auto-snoozed": one concept with an `auto` variant, not a
+ *  separate idea. */
+export function formatAutoSnoozedUntil(until: string, nowMs = Date.now()): string | null {
   const wake = wakePhrase(until, nowMs)
-  return wake ? `Resuming ${wake}` : null
+  return wake ? `Auto-snoozed until ${wake}` : null
 }
 import { isValidAwaitingTimer } from "@fray-ui/shared"
