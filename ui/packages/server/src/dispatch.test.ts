@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { buildClaudeCommand, loadWorkerPrompt, composePrompt, resolveWorkerPluginDir, scratchpadOrientation, scratchpadContent, workerPluginDir, frayConfigBlock } from "./dispatch.ts"
+import { parseTranscript } from "./transcript.ts"
 import { CHROME_DEVTOOLS_MCP } from "./backend/types.ts"
 
 // ---- Backend-aware worker contract (worker-contract-backend-aware) ----
@@ -401,6 +402,32 @@ test("composePrompt(claude) keeps the sub-agent blackboard framing; codex drops 
   assert.doesNotMatch(codex, /blackboard/)
   assert.match(codex, /compaction-proof working memory/)
   assert.match(codex, /TASK:\ndo the thing/) // the task still rides through
+})
+
+// ---- composePrompt: the system→human handoff carries a loud demarcation banner ----
+
+test("composePrompt separates fray orientation from the human's prompt with a banner, and the transcript strip still shows only the task", () => {
+  const task = "Fix the thing.\n\nWith a second paragraph."
+  const composed = composePrompt("sid", task, "Always run lint.", "claude")
+
+  // The banner sits between the orientation/instructions and the task, padded by blank lines.
+  const banner = composed.indexOf("YOUR TASK")
+  assert.notEqual(banner, -1)
+  assert.ok(composed.indexOf("PROJECT INSTRUCTIONS") < banner)
+  assert.match(composed, /\n\n\n\n=+\n=+ {4}YOUR TASK {4}=+\n=+\n/)
+  // The machine marker stays IMMEDIATELY before the prompt (the parsers cut on its first occurrence),
+  // and the banner introduces no earlier occurrence of it.
+  assert.ok(composed.endsWith(`\nTASK:\n${task}`))
+  assert.equal(composed.indexOf("\nTASK:\n"), composed.lastIndexOf("\nTASK:\n"))
+
+  // Round-trip through the real parser: the UI's first user message is exactly the human's words.
+  const raw = JSON.stringify({
+    type: "user",
+    timestamp: "2026-07-01T00:00:00.000Z",
+    message: { content: composed },
+  })
+  const [message] = parseTranscript(raw)
+  assert.equal(message.text, task)
 })
 
 // ---- scratchpadOrientation: the SYSTEM-level line is backend-aware ----
