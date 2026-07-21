@@ -3,7 +3,8 @@
 // crash.  This intentionally contains no source-watch logic: stable and legacy launchers can share it.
 import { request as requestHttp, createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http"
 import { connect } from "node:net"
-import { isTrustedLocalHttpRequest } from "./local-origin.ts"
+import { allowedLocalCorsOrigin, isTrustedLocalHttpRequest } from "./local-origin.ts"
+import { resolveLocalImage } from "./local-image.ts"
 
 export const SUPERVISOR_CONTROL_PREFIX = "/_fray/control"
 export const SUPERVISOR_RESTART_PATH = `${SUPERVISOR_CONTROL_PREFIX}/restart`
@@ -57,6 +58,10 @@ function proxyHeaders(req: IncomingMessage, childPort: number): Record<string, s
 function isControlRequest(req: IncomingMessage): boolean {
   const url = new URL(req.url ?? "/", "http://fray.invalid")
   return url.pathname === SUPERVISOR_RESTART_PATH || url.pathname === SUPERVISOR_UPDATE_RESTART_PATH || url.pathname === SUPERVISOR_STATUS_PATH
+}
+
+function isLocalImageRequest(req: IncomingMessage): boolean {
+  return req.method === "GET" && new URL(req.url ?? "/", "http://fray.invalid").pathname === "/local-image"
 }
 
 export class RestartSupervisorProxy {
@@ -167,9 +172,47 @@ export class RestartSupervisorProxy {
     responseJson(res, result.state === "ready" ? 202 : 503, { protocol: SUPERVISOR_CONTROL_PROTOCOL, ...result })
   }
 
+  private handleLocalImage(req: IncomingMessage, res: ServerResponse): void {
+    const allowMissingOrigin = req.headers.origin === undefined && req.headers["sec-fetch-site"] === "same-origin"
+    if (!isTrustedLocalHttpRequest(req.headers, this.options.port, allowMissingOrigin)) {
+      res.writeHead(403, { "content-type": "text/plain; charset=UTF-8" })
+      res.end("Forbidden")
+      return
+    }
+
+    const url = new URL(req.url ?? "/", "http://fray.invalid")
+    const result = resolveLocalImage(url.searchParams.get("path") ?? undefined)
+    const origin = typeof req.headers.origin === "string"
+      ? allowedLocalCorsOrigin(req.headers.origin, this.options.port)
+      : undefined
+    const sharedHeaders = {
+      ...(origin ? { "access-control-allow-origin": origin } : {}),
+      "access-control-expose-headers": "x-fray-boot",
+      vary: "Origin",
+    }
+    if (result.status !== 200) {
+      res.writeHead(result.status, { ...sharedHeaders, "content-type": "text/plain; charset=UTF-8" })
+      res.end(String(result.status))
+      return
+    }
+    res.writeHead(200, {
+      ...sharedHeaders,
+      "content-type": result.contentType,
+      "content-length": result.body.length,
+      "cache-control": "private, max-age=60",
+    })
+    res.end(result.body)
+  }
+
   private handle(req: IncomingMessage, res: ServerResponse): void {
     if (isControlRequest(req)) {
       void this.handleControl(req, res)
+      return
+    }
+    // Keep screenshots responsive even while the disposable child is parsing large transcripts,
+    // restarting, or unavailable. The durable owner applies the same local-origin gate itself.
+    if (isLocalImageRequest(req)) {
+      this.handleLocalImage(req, res)
       return
     }
     const childPort = this.options.childPort()
