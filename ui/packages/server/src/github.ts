@@ -281,8 +281,8 @@ IF BUG:
 2. INVESTIGATE. Trace the cause to concrete code — cite exact file:line for every load-bearing claim
    (an uncited claim is a LEAD, flag it). Read linked issues/PRs and related history when useful.
 3. RECOMMEND. State the smallest correct fix (or the top 2 options with the tradeoff of each), the
-   files it touches, and the risk. Do NOT implement it unasked — surface it as the fix-choice question
-   in your handback (below).
+   files it touches, and the risk. Do NOT implement it unasked — stop at the recommendation and hand
+   off (below).
 
 IF FEATURE:
 1. CLARIFY. Restate the request precisely: what the user wants, the use-case behind it, and any
@@ -290,17 +290,14 @@ IF FEATURE:
 2. IMPACT. Map where it lands in the code — the files/modules a real implementation would touch, the
    public API / UX surface it changes, and the migration / back-compat concerns. Cite file:line.
 3. PLAN. Sketch a concrete implementation plan (smallest viable version first), the risks and open
-   design questions, and a rough effort/size estimate. Do NOT implement it unasked — surface the plan +
-   open design questions as your handback question (below).
+   design questions, and a rough effort/size estimate. Do NOT implement it unasked — stop at the plan
+   and hand off (below).
 
 Post NOTHING to GitHub (no comments, no labels, no close) unless the human explicitly asks — read-only.
 
-Handback: put your findings + recommendation in your FINAL MESSAGE. This investigation is headed for a
-fix, so do NOT mark \`\`\`done\`\`\` (that falsely reads as "complete") and do NOT bury it in a silent
-bare rest. Close with a \`\`\`question\`\`\` that asks which of your ranked options — the fix, or the
-design direction — to action, recommendation marked, so ONE reply rolls straight into implementation.
-When there is a single obvious, low-risk next step, use \`\`\`question approval\`\`\` proposing to implement
-it instead. Only bare-rest if the investigation surfaced no actionable fork for the human to decide.`
+Handback: put your findings + recommendation in your FINAL MESSAGE. This is headed for a fix, so it is
+NOT \`\`\`done\`\`\` — but the other fences are yours: close with a \`\`\`question\`\`\` when there's a fix to
+choose (recommendation marked, so one reply rolls into implementation), or bare-rest.`
 
 // The PR default: an adversarial review/audit before recommending merge. Read-only.
 export const DEFAULT_PR_PROMPT = `You are reviewing an open pull request in {repo}. This is an AUDIT thread: adversarially verify the

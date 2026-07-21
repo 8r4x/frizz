@@ -218,11 +218,11 @@ test("DEFAULT_ISSUE_PROMPT: branches on bug vs feature; DEFAULT_PR_PROMPT is the
   assert.ok(DEFAULT_ISSUE_PROMPT.includes("REPRODUCE"))
   assert.ok(DEFAULT_ISSUE_PROMPT.includes("IMPACT"))
   assert.ok(DEFAULT_ISSUE_PROMPT.includes("read-only"))
-  // Issue investigations are headed for a fix: the handback steers to a fix-choice QUESTION (so one
-  // reply rolls into implementation), NOT a done fence (which falsely reads as "complete") and NOT a
-  // silent bare rest. This is the contract's bug/issue rule (workerPrompt.ts), mirrored in the template.
+  // Issue investigations are headed for a fix: NOT a done fence (that reads as complete), but the other
+  // fences are the worker's to use — the handback nudges toward a question. Mirrors the contract's
+  // bug/issue rule (workerPrompt.ts).
   assert.ok(DEFAULT_ISSUE_PROMPT.includes("```question```"))
-  assert.ok(DEFAULT_ISSUE_PROMPT.includes("do NOT mark ```done```"))
+  assert.ok(DEFAULT_ISSUE_PROMPT.includes("NOT ```done```"))
   // The defaults are TEMPLATES: they carry {token}s and NOT the THREAD tag (the server prepends it).
   assert.ok(DEFAULT_ISSUE_PROMPT.includes("{repo}") && DEFAULT_ISSUE_PROMPT.includes("{n}"))
   assert.ok(!DEFAULT_ISSUE_PROMPT.includes("THREAD:"))

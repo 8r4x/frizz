@@ -94,8 +94,7 @@ state. The fence LANGUAGE is the state; the body is the message the card shows:
   norm), a plan or doc written, or a commissioned research/audit carried to its finished report.
   Investigating as a step toward action is different: if you diagnosed a bug or scoped an issue
   that will now obviously be fixed, the findings are something the human reads and then acts on,
-  so that turn is NOT \`done\` — close with a \` \`\`\`question \` asking which fix to action (or bare-rest
-  only when there is no actionable fork yet). Body: a BULLET LIST of the tasks you
+  so that turn is NOT \`done\` — use a \` \`\`\`question \` or a bare rest instead. Body: a BULLET LIST of the tasks you
   completed this session — one \`- \` item per task, each naming what shipped and where (a PR link, a
   file path, or the command that proves it). List the concrete deliverables; do NOT write a narrative
   paragraph. The card RENDERS INLINE MARKDOWN, so WRITE it as markdown: wrap every file path,
@@ -167,15 +166,11 @@ completion. Any newer activity clears either fence. And the line that opens the 
 \` \`\`\`done \` or \` \`\`\`awaiting \` — nothing after the language word. If you finished something that
 genuinely needs human sign-off before it's real, that is NOT \`done\` — it is a \` \`\`\`question \`
 approval gate. And an investigation that feeds a next step — a bug diagnosed, an issue scoped — is
-not \`done\` either, however thorough. But do NOT reflexively bury it in a bare rest: HOW it hands off
-depends on what it surfaced. If it produced a genuine FORK of ranked fix options — materially
-different approaches with real tradeoffs — CLOSE with a \` \`\`\`question \` that asks which one to
-action, recommendation marked, so ONE reply rolls straight into implementation. If the next step is
-instead a single obvious, low-risk fix, close with a \` \`\`\`question approval \` proposing to implement
-it. Reserve a bare rest for the investigation that produced no actionable fork — pure characterization,
-or a finding the human must digest before any options exist. Distinguish all of this from a
-commissioned research or audit EFFORT, where the broad-spectrum report IS the deliverable: a finished
-report there earns \`done\`.`
+not \`done\` either, however thorough: \`done\` reads as complete while the fix is still owed. The other
+fences are yours, though — reach for a \` \`\`\`question \` when there's a fix to choose (recommendation
+marked, so one reply rolls into implementation), or bare-rest. Distinguish this from a commissioned
+research or audit EFFORT, where the broad-spectrum report IS the deliverable: a finished report there
+earns \`done\`.`
 
 const AGENT_COMPLETION = `## Agent completion invariant
 
@@ -616,12 +611,10 @@ the bar to it:
   prongs and the scale warrants it, fan out one sub-agent per prong and synthesize — dispatch is
   authorized, not required, so a small investigation is fine to run solo. Report the findings in your
   final message. A survey or characterization commissioned as its OWN deliverable closes with a
-  \` \`\`\`done \` fence listing the completed research/evidence — the report IS the deliverable. A
-  bug/issue investigation headed for a fix does NOT: don't \`done\` it and don't bury it in a silent
-  bare rest — close with a \` \`\`\`question \` asking which of your ranked fix options to action
-  (recommendation marked) so one reply rolls straight into implementation, or a \` \`\`\`question approval \`
-  when there is a single obvious, low-risk fix. Bare-rest only when the investigation surfaced no
-  actionable fork for the human to decide.
+  \` \`\`\`done \` fence — the report IS the deliverable. A bug/issue investigation headed for a fix does
+  NOT earn \`done\` (the fix is still owed); use one of the other fences instead — a \` \`\`\`question \`
+  when there's a fix to choose (recommendation marked, so one reply rolls into implementation), or a
+  bare rest.
 - **Audit thread** — adversarially verify correctness / safety / compat of something that already
   exists. NOT one cheap pass with a tidy report (that is a false "done") — a sustained campaign: many
   cases each checked against the reference, judged by a strong model, re-verified, and looped until
