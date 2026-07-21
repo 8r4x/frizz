@@ -20,6 +20,10 @@ export const defaultSettings = (): Settings => ({
   // Runtime release gate ON by default (opt-out) — the browser-QA + screenshot-in-handoff loop is
   // fray's differentiator. A project that doesn't want it flips this off in Settings.
   runtimeGate: true,
+  // Auto-resume limit-paused threads ON by default (opt-out): a fleet cut off mid-work by an
+  // exhausted subscription window should pick itself back up when the window rolls, not sit idle
+  // until the operator happens to notice hours later.
+  autoResumeOnLimit: true,
 })
 
 // Settings persist as one JSON blob under settings['settings']. Read merges over defaults

@@ -5,6 +5,7 @@ import { Bus, Emitter } from "./bus.ts"
 import { resolveProject, type Project } from "./project.ts"
 import { createStorage, type Storage } from "./storage.ts"
 import { getSettings, setSettings, resetSettings } from "./settings.ts"
+import { readQuota } from "./quota.ts"
 import { createBoard, type BoardManager } from "./board.ts"
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
 import { createDispatcher, type Dispatcher } from "./dispatch.ts"
@@ -496,6 +497,12 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   const scheduler = createScheduler({
     storage,
     tailer,
+    // Second wake source: every thread a subscription window cut off mid-turn gets its own "continue"
+    // once that window rolls, over this same delivery path. The quota reader supplies the fallback
+    // instant for a weekly limit, whose message text carries a clock but no date; readQuota memoizes,
+    // so consulting it per tick costs a live request only every few minutes.
+    autoResumeOnLimit: () => getSettings(storage).autoResumeOnLimit !== false,
+    readQuota,
     resume: (slug, message, deliveryId) => {
       const deliveryMessage = `${message}\n\n${wakeDeliveryToken(deliveryId)}`
       const row = storage.getSession(slug)

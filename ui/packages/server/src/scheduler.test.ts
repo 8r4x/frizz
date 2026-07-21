@@ -783,3 +783,201 @@ test("scheduler stop rejects new ticks and drains an in-flight delivery before s
   assert.equal(createWakeDeliveryStore(h.storage.db).list()[0].state, "delivered")
   h.storage.close()
 })
+
+// ---- SOURCE 2: subscription-limit auto-resume ------------------------------------------------------
+// The recorded phrasings/timestamps below are verbatim from real ~/.claude transcripts.
+
+const LA = "America/Los_Angeles"
+// A 15:26-PDT session stop whose window rolls at 17:50 PDT — the 2026-07-21 record.
+const SESSION_FAULT_AT = "2026-07-21T22:26:23.160Z"
+const SESSION_RESET_MS = Date.parse("2026-07-22T00:50:00.000Z")
+
+function limitTele(fault: SessionTelemetry["limitFault"], turn: TurnState = "idle"): SessionTelemetry {
+  return { turn, permPrompt: false, subAgents: [], bgShells: [], pendingQuestion: false, limitFault: fault }
+}
+const sessionFault = () => ({ window: "session" as const, at: SESSION_FAULT_AT, resetClock: { hour: 17, minute: 50, timeZone: LA } })
+
+function limitHarness(): Harness {
+  const h = harness()
+  h.clock.ms = Date.parse(SESSION_FAULT_AT) + 1000
+  return h
+}
+
+test("limit: a paused thread is NOT resumed while the window is still closed", async () => {
+  const h = limitHarness()
+  h.storage.upsertSession(row("a"))
+  h.tele.set("a", limitTele(sessionFault()))
+  const s = h.make()
+  await s.tick()
+  h.clock.ms = SESSION_RESET_MS - 60_000 // one minute short of the stated reset
+  await s.tick()
+  assert.deepEqual(h.resumes, [], "resuming before the provider's own reset just re-hits the wall")
+  h.storage.close()
+})
+
+test("limit: EVERY thread the window cut off is resumed once, with a continue", async () => {
+  const h = limitHarness()
+  for (const slug of ["a", "b", "c"]) {
+    h.storage.upsertSession(row(slug))
+    h.tele.set(slug, limitTele(sessionFault()))
+  }
+  const s = h.make()
+  await s.tick()
+  h.clock.ms = SESSION_RESET_MS + 61_000 // past the reset + the grace
+  await s.tick()
+  assert.deepEqual(h.resumes.map((r) => r.slug).sort(), ["a", "b", "c"], "the whole interrupted fleet picks itself back up")
+  for (const r of h.resumes) assert.match(r.message, /session usage limit that interrupted you has reset\. Continue/)
+  // Idempotence: the fold clears the fault the moment our continue lands, which is what retires it.
+  h.tele.set("a", limitTele(undefined))
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 3, "one wake per interruption, never a second")
+  h.storage.close()
+})
+
+test("limit: a thread already MOVING again is left alone", async () => {
+  const h = limitHarness()
+  h.storage.upsertSession(row("a"))
+  h.tele.set("a", limitTele(sessionFault(), "in-flight"))
+  const s = h.make()
+  await s.tick()
+  h.clock.ms = SESSION_RESET_MS + 61_000
+  await s.tick()
+  assert.deepEqual(h.resumes, [], "something else already resumed it; never step on a live turn")
+  h.storage.close()
+})
+
+test("limit: an ARCHIVED thread is never woken", async () => {
+  const h = limitHarness()
+  h.storage.upsertSession(row("a", { state: "archived", archived: 1 }))
+  h.tele.set("a", limitTele(sessionFault()))
+  const s = h.make()
+  await s.tick()
+  h.clock.ms = SESSION_RESET_MS + 61_000
+  await s.tick()
+  assert.deepEqual(h.resumes, [])
+  h.storage.close()
+})
+
+test("limit: BOOT SAFETY — a stale pause from long ago never mass-fires", async () => {
+  // A server starting days later replays every transcript from byte zero and sees the old faults. That
+  // must not wake a whole fleet at once, long after the operator moved on. The budget runs from when
+  // the window came BACK (5h for a session limit) plus the 36h grace, so three days is well past it.
+  const h = limitHarness()
+  for (const slug of ["a", "b", "c"]) {
+    h.storage.upsertSession(row(slug))
+    h.tele.set(slug, limitTele(sessionFault()))
+  }
+  h.clock.ms = Date.parse(SESSION_FAULT_AT) + 3 * 24 * 60 * 60_000
+  const s = h.make()
+  await s.tick()
+  await s.tick()
+  assert.deepEqual(h.resumes, [], "an aged-out pause is a human handoff, not an auto-resume")
+  h.storage.close()
+})
+
+test("limit: a pause from LAST NIGHT is still picked up (the grace is deliberate, not accidental)", async () => {
+  // The mirror of the boot guard, and the reason the feature exists: hitting the wall at 3pm and
+  // finding the whole fleet still parked next morning is the failure being removed. Asserted so a
+  // future tightening of the age constant cannot quietly reintroduce it.
+  const h = limitHarness()
+  h.storage.upsertSession(row("a"))
+  h.tele.set("a", limitTele(sessionFault()))
+  const s = h.make()
+  await s.tick()
+  h.clock.ms = Date.parse(SESSION_FAULT_AT) + 18 * 60 * 60_000
+  await s.tick()
+  assert.deepEqual(h.resumes.map((r) => r.slug), ["a"])
+  h.storage.close()
+})
+
+test("limit: the setting gates the whole source", async () => {
+  const h = limitHarness()
+  h.storage.upsertSession(row("a"))
+  h.tele.set("a", limitTele(sessionFault()))
+  const s = h.make({ autoResumeOnLimit: () => false })
+  await s.tick()
+  h.clock.ms = SESSION_RESET_MS + 61_000
+  await s.tick()
+  assert.deepEqual(h.resumes, [])
+  h.storage.close()
+})
+
+test("limit: a WEEKLY pause waits for the usage endpoint, and never guesses from its dateless clock", async () => {
+  const h = limitHarness()
+  const day = 24 * 3_600_000
+  const faultAt = "2026-06-24T23:27:13.000Z" // the real weekly stop: 16:27 PDT, reading "resets 4pm"
+  const faultMs = Date.parse(faultAt)
+  h.clock.ms = faultMs + 1000
+  h.storage.upsertSession(row("w"))
+  h.tele.set("w", limitTele({ window: "weekly", at: faultAt, resetClock: { hour: 16, minute: 0, timeZone: LA } }))
+
+  // Still inside the fault's own week: the reported window ends 3 days out, so it began 4 days BEFORE
+  // the fault. Reading that dateless "4pm" as today's would have fired here — into a dry account.
+  let resetsAt = (faultMs + 3 * day) / 1000
+  const s = h.make({ readQuota: async () => ({
+    claude: { status: "ok" as const, windows: [{ key: "weekly", label: "Weekly", usedPercent: 100, resetsAt }] },
+    codex: { status: "unavailable" as const, windows: [] },
+  }) })
+  await s.tick()
+  h.clock.ms = faultMs + day
+  await s.tick()
+  assert.equal(h.resumes.length, 0, "a dateless weekly clock must never be read as same-day")
+
+  // The week rolls: the reported window now begins an hour AFTER the fault.
+  resetsAt = (faultMs + 7 * day + 3_600_000) / 1000
+  h.clock.ms = faultMs + 7 * day
+  await s.tick()
+  assert.deepEqual(h.resumes.map((r) => r.slug), ["w"])
+  assert.match(h.resumes[0].message, /weekly usage limit that interrupted you has reset/)
+  h.storage.close()
+})
+
+test("limit: an unreadable usage endpoint holds the wake rather than guessing", async () => {
+  const h = limitHarness()
+  const faultAt = "2026-06-24T23:27:13.000Z"
+  h.clock.ms = Date.parse(faultAt) + 1000
+  h.storage.upsertSession(row("w"))
+  h.tele.set("w", limitTele({ window: "weekly", at: faultAt }))
+  const s = h.make({ readQuota: async () => { throw new Error("usage endpoint unreachable") } })
+  await s.tick()
+  h.clock.ms = Date.parse(faultAt) + 8 * 24 * 3_600_000
+  await s.tick()
+  assert.deepEqual(h.resumes, [], "indeterminate must never resolve to 'go'")
+  h.storage.close()
+})
+
+test("limit: a session pause never spends a usage-endpoint read", async () => {
+  const h = limitHarness()
+  h.storage.upsertSession(row("a"))
+  h.tele.set("a", limitTele(sessionFault()))
+  let quotaCalls = 0
+  const s = h.make({ readQuota: async () => {
+    quotaCalls++
+    return { claude: { status: "unavailable" as const, windows: [] }, codex: { status: "unavailable" as const, windows: [] } }
+  } })
+  await s.tick()
+  h.clock.ms = SESSION_RESET_MS + 61_000
+  await s.tick()
+  assert.deepEqual(h.resumes.map((r) => r.slug), ["a"])
+  assert.equal(quotaCalls, 0, "the limit message's own clock already answered; don't call the flaky endpoint")
+  h.storage.close()
+})
+
+test("limit: a limit wake and a fence wake for the same session get distinct deliveries", async () => {
+  // Both sources share one outbox. If their identities could collide, arming one would silently
+  // swallow the other's wake for that session.
+  const h = limitHarness()
+  h.storage.upsertSession(row("a"))
+  const target = SESSION_RESET_MS + 5 * 60_000
+  h.tele.set("a", { ...limitTele(sessionFault()), lastFence: awaiting([{ kind: "timer", value: iso(target) }], "re-check") })
+  const s = h.make()
+  await s.tick() // arms the timer (witnessed unmet) and sees the limit still closed
+  h.clock.ms = SESSION_RESET_MS + 61_000
+  await s.tick() // the limit resets first
+  assert.deepEqual(h.resumes.map((r) => r.slug), ["a"])
+  assert.match(h.resumes[0].message, /usage limit/)
+  const ids = createWakeDeliveryStore(h.storage.db).list().map((d) => d.id)
+  assert.equal(new Set(ids).size, ids.length, "no delivery-id collision between the two wake sources")
+  h.storage.close()
+})

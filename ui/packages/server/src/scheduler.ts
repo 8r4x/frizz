@@ -1,10 +1,12 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { isValidAwaitingTimer } from "@fray-ui/shared"
+import { isValidAwaitingTimer, type QuotaSnapshot } from "@fray-ui/shared"
 import type { Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { FenceView } from "./tailer.ts"
+import type { LimitFault } from "./backend/types.ts"
+import { limitPauseIsStale, quotaWindowRecovered, textResetInstant } from "./backend/usage-limit.ts"
 import { createWakeDeliveryStore, type WakeDelivery } from "./wake-store.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
 
@@ -170,6 +172,41 @@ function wakeDeliveryId(slug: string, sessionId: string, fenceId: string): strin
 
 export function wakeDeliveryToken(id: string): string {
   return `<!-- fray-wake:${id} -->`
+}
+
+// ---- SOURCE 2: SUBSCRIPTION-LIMIT AUTO-RESUME -----------------------------------------------------
+// The waker's other wake source. Where the fence source asks "did the wait this agent DECLARED come
+// true?", this one asks "did the wall the provider put in front of this agent come down?" — and the
+// set of agents behind that wall needs no registry, because the tailer's `limitFault` standing on a
+// thread's tail IS the record that this agent was mid-turn when the window ran dry. It clears the
+// instant any user record lands, so the "continue" we deliver erases the very fault that selected the
+// thread: one wake per interruption, with no bookkeeping to drift.
+//
+// Both sources share ONE durable outbox (lease → deliver → ack, backend-aware delivery, retry with
+// exponential backoff, supersession). Only the identity differs, and these two prefixes are what keep
+// a limit wake and a fence wake for the same session from ever colliding on a delivery id.
+const LIMIT_FENCE_PREFIX = "limit"
+const LIMIT_HINT_PREFIX = "limit:"
+// Deliberate slack past the provider's stated reset. Their clock and ours are not the same clock, and
+// resuming a whole fleet one second early just re-hits the wall and burns every thread's wake.
+const LIMIT_RESUME_GRACE_MS = 60_000
+
+// The generation id for one interruption. The limit record's timestamp is what makes it a generation:
+// a thread that resumes and gets cut off AGAIN produces a later `at`, hence a different delivery id,
+// hence its own single wake.
+function limitFenceId(fault: LimitFault): string {
+  return `${LIMIT_FENCE_PREFIX}${fault.at}`
+}
+function isLimitFenceId(fenceId: string): boolean {
+  return fenceId.startsWith(LIMIT_FENCE_PREFIX)
+}
+
+// The message the resumed worker actually receives. Deliberately a plain continue — the agent's own
+// transcript already holds everything it was doing, so the useful thing to add is only WHY it stopped
+// and that it should pick the work back up rather than re-plan or re-report.
+export function limitResumeSteer(window: LimitFault["window"]): string {
+  const which = window === "weekly" ? "weekly usage limit" : window === "session" ? "session usage limit" : "usage limit"
+  return `⏳ The ${which} that interrupted you has reset. Continue exactly where you left off.`
 }
 
 // A single hint's verdict this tick: met? + the steer to send when it fires. `undefined` = indeterminate
@@ -368,6 +405,13 @@ export interface SchedulerDeps {
   // recovery can prove a crash-window delivery before retrying (the production composition does both).
   resume: (slug: string, message: string, deliveryId: string) => void | Promise<void>
   now?: () => number
+  // Whether the limit auto-resume source is armed at all (Settings.autoResumeOnLimit). Read per tick
+  // so flipping it off in the UI takes effect immediately, without a restart. Absent ⇒ on.
+  autoResumeOnLimit?: () => boolean
+  // The provider quota snapshot, used ONLY to decide whether an exhausted window has rolled when the
+  // limit message's own text can't say (every weekly limit, since its clock carries no date). Absent
+  // in tests that exercise the text path; a read that throws is treated as indeterminate.
+  readQuota?: () => Promise<QuotaSnapshot>
   fetchPr?: (ref: PrRef) => Promise<PrStatus | undefined>
   fetchGithubReview?: (ref: PrRef) => Promise<GithubReviewActivity[] | undefined>
   log?: (msg: string) => void
@@ -393,6 +437,7 @@ export interface Scheduler {
 
 export function createScheduler(deps: SchedulerDeps): Scheduler {
   const now = deps.now ?? Date.now
+  const autoResumeOnLimit = deps.autoResumeOnLimit ?? (() => true)
   const fetchPr = deps.fetchPr ?? defaultFetchPr
   const fetchGithubReview = deps.fetchGithubReview ?? defaultFetchGithubReview
   const log = deps.log ?? ((m: string) => console.log(`[fray-ui] ${m}`))
@@ -543,6 +588,16 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     const tele = deps.tailer.get(item.slug)
     if (!tele) return "unknown"
     if (tele.lastUserText?.includes(wakeDeliveryToken(item.id))) return "confirmed"
+    // A limit wake is bound to its interruption, not to a fence: it stays deliverable exactly as long
+    // as THAT limit fault is still the thread's live tail state. The fault clears on the first user
+    // record, so a delivery that crossed tmux before the process died reads as superseded on the next
+    // pass instead of being sent twice — the same supersession safety the fence path gets, obtained
+    // from the fold rather than from anything the scheduler had to persist.
+    if (isLimitFenceId(item.fenceId)) {
+      const fault = tele.limitFault
+      if (!fault || limitFenceId(fault) !== item.fenceId) return "superseded"
+      return tele.turn === "idle" ? "current-idle" : "current-busy"
+    }
     const fence = tele.lastFence
     if (!fence || fence.kind !== "awaiting" || !fence.hints.some(isActionable)) return "superseded"
     if (fenceIdentity(fence.hints, tele.lastActivityAt) !== item.fenceId) return "superseded"
@@ -704,6 +759,90 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   }
 
+  // ---- The limit auto-resume pass ------------------------------------------------------------------
+  // Every non-archived thread whose tail still carries a limit fault and has come to rest. `turn` must
+  // be idle: a thread that has already started moving again was resumed by someone else, and stepping
+  // on a live turn is exactly what the fence path refuses to do too.
+  interface LimitCandidate {
+    slug: string
+    sessionId: string
+    backend: "claude" | "codex"
+    fault: LimitFault
+  }
+  function limitCandidates(nowMs: number): LimitCandidate[] {
+    const out: LimitCandidate[] = []
+    for (const row of deps.storage.allSessions()) {
+      if (row.state === "archived" || row.archived === 1) continue
+      const tele = deps.tailer.get(row.slug)
+      const fault = tele?.limitFault
+      if (!fault || tele?.turn !== "idle") continue
+      // The boot guard, and the same age policy the board renders — so a card never promises a wake
+      // the waker has already written off.
+      if (limitPauseIsStale(fault.window, Date.parse(fault.at), nowMs)) continue
+      out.push({
+        slug: row.slug,
+        sessionId: row.session_id,
+        backend: row.backend === "codex" ? "codex" : "claude",
+        fault,
+      })
+    }
+    return out
+  }
+
+  // Has this fault's window come back? Text first — it is exact, local, and free, and it covers the
+  // 5-hour session limit that is the common case. Only when the text can't say (every weekly limit)
+  // do we spend a usage-endpoint read. `undefined` = indeterminate: wait for a later tick rather than
+  // guessing, since guessing "recovered" resumes the fleet into a wall.
+  function limitRecovered(
+    c: LimitCandidate,
+    quota: QuotaSnapshot | undefined,
+    nowMs: number,
+  ): boolean | undefined {
+    const faultAtMs = Date.parse(c.fault.at)
+    const textAt = c.fault.resetClock
+      ? textResetInstant({ window: c.fault.window, resetClock: c.fault.resetClock }, faultAtMs)
+      : undefined
+    if (textAt !== undefined) return nowMs >= textAt + LIMIT_RESUME_GRACE_MS
+    const provider = quota?.[c.backend]
+    if (!provider || provider.status !== "ok") return undefined
+    const rolled = quotaWindowRecovered(provider.windows, c.fault.window, faultAtMs, nowMs)
+    if (rolled !== true) return rolled
+    return nowMs >= faultAtMs + LIMIT_RESUME_GRACE_MS
+  }
+
+  async function evalLimits(nowMs: number): Promise<void> {
+    if (!autoResumeOnLimit()) return
+    const candidates = limitCandidates(nowMs)
+    if (candidates.length === 0) return
+    // Only pay for a usage-endpoint read when at least one candidate actually needs one — a fleet of
+    // ordinary session limits resolves entirely from its own text.
+    let quota: QuotaSnapshot | undefined
+    if (deps.readQuota && candidates.some((c) => limitRecovered(c, undefined, nowMs) === undefined)) {
+      try {
+        quota = await deps.readQuota()
+      } catch (err) {
+        log(`waker: quota read failed while checking limit resumes: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    for (const c of candidates) {
+      const fenceId = limitFenceId(c.fault)
+      const deliveryId = wakeDeliveryId(c.slug, c.sessionId, fenceId)
+      if (outbox.get(deliveryId)) continue // this interruption already has its one wake
+      if (limitRecovered(c, quota, nowMs) !== true) continue
+      const item = outbox.enqueue({
+        id: deliveryId,
+        slug: c.slug,
+        sessionId: c.sessionId,
+        fenceId,
+        hintKey: `${LIMIT_HINT_PREFIX}${c.fault.window}`,
+        message: limitResumeSteer(c.fault.window),
+        reason: `${c.fault.window} usage limit reset (interrupted ${c.fault.at})`,
+      }, nowMs).delivery
+      log(`waker: queued ${c.slug} — ${item.reason}`)
+      checkpoint("after-enqueue", item)
+    }
+  }
+
   function reconcileOutbox(nowMs: number): void {
     for (const item of outbox.listOpen()) {
       const context = deliveryContext(item)
@@ -830,6 +969,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         forgetRegistration(key)
         threads.delete(slug)
       }
+    }
+    try {
+      await evalLimits(now())
+    } catch (err) {
+      if (err instanceof InjectedSchedulerCrash) throw err
+      log(`waker: limit-resume pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     reconcileOutbox(now())
     await deliverDue()
