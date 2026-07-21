@@ -54,7 +54,15 @@ const CLAUDE_PERMISSION_CONFIRM_POLLS = 3
 // treated as "stale" — a liveness fallback for a completion record we somehow missed (the child
 // died, or the worker session ended before the <task-notification> landed). ~5min: comfortably
 // longer than a child's between-tool quiet gaps, short enough that a dead child clears promptly.
+// AGENTS ONLY: a child appends to its transcript on every step, so silence there really is a
+// liveness signal. A background SHELL has no such property — see bgShellViews.
 const SUBAGENT_STALE_MS = 5 * 60_000
+// The absolute age backstop for a tracked background SHELL (see bgShellViews for why output silence
+// cannot be its liveness signal). A watcher this old that has still produced no terminal signal is
+// presumed lost — the honest read on a session whose transcript we can no longer follow — so the
+// thread stops being excused as "working" and re-enters the queue. Deliberately far longer than any
+// real CI/release watch, so it never fires on a healthy wait.
+const SHELL_MAX_TRACKED_MS = 2 * 60 * 60_000
 // How long the transcript must be silent while a turn still looks in-flight before we spend a
 // tmux capture-pane to sniff for an interactive permission prompt. Keeps us from shelling out
 // every tick for a healthily-streaming turn; a real prompt only appears after a tool_use record
@@ -1210,6 +1218,14 @@ export function createTailer(deps: TailerDeps): Tailer {
     return m === undefined || nowMs - m > SUBAGENT_STALE_MS
   }
 
+  // A tracked SHELL is presumed lost only once it is absurdly old (see SHELL_MAX_TRACKED_MS) — never
+  // for going quiet, which is a watcher's normal state (see bgShellViews). An unparseable startedAt
+  // never ages out: a missing timestamp is not evidence of death.
+  function shellPresumedLost(e: SubAgentEntry, nowMs: number): boolean {
+    const started = Date.parse(e.startedAt)
+    return Number.isFinite(started) && nowMs - started > SHELL_MAX_TRACKED_MS
+  }
+
   // Derive the surfaced view of a session's live SUB-AGENTS (kind "agent"; insertion = dispatch order).
   function subAgentViews(state: TailState, nowMs: number): SubAgentView[] {
     if (state.subAgents.size === 0) return []
@@ -1227,12 +1243,26 @@ export function createTailer(deps: TailerDeps): Tailer {
   // <task-notification>) means every tracked shell died with it: report none rather than leaving them
   // to read as live (the UI would otherwise show them "alive", quietly breathing, forever). The normal
   // path — a shell exiting while the agent lives — still clears via its terminal notification.
+  //
+  // A shell deliberately does NOT use the sub-agent mtime rule, because OUTPUT SILENCE IS A WATCHER'S
+  // NORMAL OPERATING STATE, not evidence of death. The waits the worker contract routes here are
+  // exactly the quiet ones: fray's own `monitors/*.mjs` emit one NDJSON line per state TRANSITION, and
+  // `Monitor` is told to print only meaningful transitions — so a healthy watcher sitting on a 40-minute
+  // CI run writes nothing at all. Judging that by output mtime marked every such watcher "stale" after
+  // five minutes, which dropped it out of hasLiveBackgroundWork (board.ts) and floated a queue card
+  // with nothing to act on — the reported bug, reproduced on the live board 2026-07-21. A `Monitor` was
+  // already immune, but only by accident: its launch ack carries no output path, so entryStale
+  // short-circuits on `!e.outputFile`. This makes background Bash agree with it on purpose.
+  //
+  // Liveness is therefore: still TRACKED (no terminal <task-notification>/TaskStop/non-ack result) and
+  // its pane alive — plus SHELL_MAX_TRACKED_MS as the backstop for the one case neither signal covers,
+  // a session whose transcript we silently stopped following.
   function bgShellViews(state: TailState, nowMs: number): BgShellView[] {
     if (state.subAgents.size === 0 || state.paneDead) return []
     const out: BgShellView[] = []
     for (const e of state.subAgents.values()) {
       if (e.kind !== "shell") continue
-      out.push({ label: e.label, startedAt: e.startedAt, state: entryStale(e, nowMs) ? "stale" : "running" })
+      out.push({ label: e.label, startedAt: e.startedAt, state: shellPresumedLost(e, nowMs) ? "stale" : "running" })
     }
     return out
   }

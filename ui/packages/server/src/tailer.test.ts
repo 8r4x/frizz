@@ -716,6 +716,44 @@ test("tailer: a resolved-but-missing output file (deleted child transcript) degr
   assert.equal(t.get("t")?.subAgents[0].state, "stale")
 })
 
+// A CI watcher writes nothing while it waits — fray's own monitors/*.mjs print one line per state
+// TRANSITION — so output mtime cannot be a shell's liveness signal. It used to be: every quiet watcher
+// went "stale" at 5min, dropped out of hasLiveBackgroundWork, and floated a queue card with nothing to
+// act on (reproduced on the live board 2026-07-21). A shell now ages out only at SHELL_MAX_TRACKED_MS.
+test("tailer: a QUIET background shell stays running past the sub-agent stale window; only absurd age retires it", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  const frozen = Date.parse("2026-07-01T00:00:02.000Z") // neither the watcher nor the child writes again
+  fixture(h.logDir, "sid", [
+    IN_FLIGHT,
+    JSON.stringify(bashBg("toolu_sh", "Watch CI", "node monitors/ci-watch.mjs --repo o/r --pr 1")),
+    JSON.stringify(resultText("toolu_sh", "Command running in background with ID: ba3y11c3t. Output is being written to: /tmp/tasks/ba3y11c3t.output. You will be notified when it completes.")),
+    JSON.stringify(dispatch("toolu_bg", "child")),
+    JSON.stringify(launch("toolu_bg", "/tmp/tasks/abc123.output")),
+  ])
+  const t = makeTailer(h, { mtimeMs: () => frozen })
+
+  h.clock.ms = Date.parse("2026-07-01T00:40:00.000Z") // 40min of silence — a perfectly ordinary CI wait
+  t.tick()
+  assert.deepEqual(t.get("t")?.bgShells, [{ label: "Watch CI", startedAt: "2026-07-01T00:00:01.000Z", state: "running" }])
+  assert.equal(t.get("t")?.subAgents[0].state, "stale", "a SUB-AGENT keeps the mtime rule — its transcript really does advance per step")
+
+  // The absolute backstop still fires, so a shell we lost track of cannot bury its thread forever.
+  // The clock is measured from the shell's own startedAt (00:00:01), not from any output it wrote.
+  h.clock.ms = Date.parse("2026-07-01T02:00:01.000Z")
+  t.tick()
+  assert.equal(t.get("t")?.bgShells[0].state, "running", "exactly at the cap is not yet lost")
+  h.clock.ms = Date.parse("2026-07-01T02:00:01.001Z")
+  t.tick()
+  assert.equal(t.get("t")?.bgShells[0].state, "stale")
+
+  // The real terminal signal is unchanged: the completion notification clears it outright.
+  h.clock.ms = Date.parse("2026-07-01T00:41:00.000Z")
+  appendFileSync(join(h.logDir, "sid.jsonl"), JSON.stringify(taskNotification("toolu_sh", "completed")) + "\n")
+  t.tick()
+  assert.deepEqual(t.get("t")?.bgShells, [])
+})
+
 // ---- derived pending-question detection (chat-only ```question the worker didn't encode as blocked) ----
 
 test("hasQuestionBlock: detects a fenced ```question block; rejects prose and a plain code fence", () => {
