@@ -492,8 +492,16 @@ class JsonlRpcConnection {
       if (!pending) return
       clearTimeout(pending.timer)
       this.pending.delete(message.id)
-      if ("error" in message) pending.reject(new Error("Codex app-server rejected a client request"))
-      else pending.resolve(message.result)
+      if ("error" in message) {
+        // Preserve the server's JSON-RPC error code + message so callers can discriminate expected,
+        // recoverable failures (e.g. a stale `turn/steer` precondition) from real protocol faults.
+        const raw = (message as { error?: unknown }).error
+        const code = typeof (raw as { code?: unknown })?.code === "number" ? (raw as { code: number }).code : -32603
+        const detail = typeof (raw as { message?: unknown })?.message === "string"
+          ? (raw as { message: string }).message
+          : "Codex app-server rejected a client request"
+        pending.reject(new RpcProtocolError(code, detail))
+      } else pending.resolve(message.result)
       return
     }
     if (typeof message.method !== "string") {
@@ -1230,6 +1238,8 @@ const ThreadResponse = z.object({
   }).passthrough(),
 }).passthrough()
 const TurnResponse = z.object({ turn: z.object({ id: Opaque }).passthrough() }).strict()
+// turn/steer returns a FLAT { turnId }, unlike turn/start's nested { turn: { id } }.
+const TurnSteerResponse = z.object({ turnId: Opaque }).passthrough()
 const TurnStarted = z.object({ threadId: Opaque, turn: z.object({ id: Opaque }).passthrough() }).strict()
 const TurnCompleted = z.object({ threadId: Opaque, turn: z.object({ id: Opaque }).passthrough() }).strict()
 const MAX_CORRELATED_FILE_ITEMS = 128
@@ -1334,6 +1344,14 @@ export class CodexAppServerBridge {
         );
         CREATE INDEX IF NOT EXISTS codex_app_server_session_thread
           ON codex_app_server_session (codex_thread_id, state);
+
+        CREATE TABLE IF NOT EXISTS codex_app_server_delivery (
+          delivery_id           TEXT PRIMARY KEY,
+          thread_slug           TEXT NOT NULL,
+          turn_id               TEXT NOT NULL,
+          mode                  TEXT NOT NULL CHECK (mode IN ('steer', 'start')),
+          created_at            TEXT NOT NULL
+        );
       `)
     } catch {
       this.db.close()
@@ -1497,6 +1515,105 @@ export class CodexAppServerBridge {
     } finally {
       this.startingTurns.delete(startKey)
       releaseOperation()
+    }
+  }
+
+  // Inject input into the ACTIVE turn without starting a new one. `expectedTurnId` is a hard
+  // precondition: the server rejects the steer when it does not match the currently-running turn
+  // (e.g. the turn just ended), which lets `followUp` fall back to `startTurn` atomically at the
+  // protocol level rather than racing on our locally-cached `current_turn_id`.
+  async steerTurn(input: StartCodexAppServerTurnInput): Promise<{ turnId: string }> {
+    if (!input.text || Buffer.byteLength(input.text, "utf8") > 64 * 1024) throw new Error("Codex app-server steer text is empty or too large")
+    const releaseOperation = this.beginOperation()
+    try {
+      const connection = await this.ensureConnected()
+      const binding = this.bindingForScope(input.threadSlug, input.sessionId)
+      if (!binding) throw new Error("Codex app-server steer requires a bridge-owned session")
+      if (binding.connection_epoch !== this.connectionEpoch || binding.state !== "active") {
+        throw new Error("Codex app-server session detached; cannot steer")
+      }
+      const expectedTurnId = binding.current_turn_id
+      if (!expectedTurnId) throw new Error("Codex app-server steer requires an active turn")
+      const response = TurnSteerResponse.parse(await connection.request("turn/steer", {
+        threadId: binding.codex_thread_id,
+        clientUserMessageId: this.makeId(),
+        expectedTurnId,
+        input: [{ type: "text", text: input.text, text_elements: [] }],
+      }))
+      return { turnId: response.turnId }
+    } finally {
+      releaseOperation()
+    }
+  }
+
+  // Gracefully cancel the active turn. Returns { interrupted: false } when no turn is running (a
+  // no-op, not an error). The turn ends server-side with status "interrupted"; `current_turn_id` is
+  // cleared by the ensuing turn/completed notification.
+  async interruptTurn(threadSlug: string, sessionId: string): Promise<{ interrupted: boolean }> {
+    const releaseOperation = this.beginOperation()
+    try {
+      const connection = await this.ensureConnected()
+      const binding = this.bindingForScope(threadSlug, sessionId)
+      if (!binding) throw new Error("Codex app-server interrupt requires a bridge-owned session")
+      if (binding.connection_epoch !== this.connectionEpoch || binding.state !== "active") {
+        throw new Error("Codex app-server session detached; cannot interrupt")
+      }
+      const turnId = binding.current_turn_id
+      if (!turnId) return { interrupted: false }
+      await connection.request("turn/interrupt", { threadId: binding.codex_thread_id, turnId })
+      return { interrupted: true }
+    } finally {
+      releaseOperation()
+    }
+  }
+
+  // The single entry point the dispatcher/router uses to deliver a human follow-up. It owns the
+  // steer-vs-start decision ATOMICALLY so callers never race on `current_turn_id`: a live turn is
+  // steered; an idle session starts a fresh turn. A server rejection of the steer (RpcProtocolError —
+  // e.g. the turn ended in the read→RPC window) definitively means "not applied", so we start instead.
+  // `deliveryId` makes redelivery idempotent: a repeat returns the original outcome, never a 2nd turn.
+  async followUp(
+    input: StartCodexAppServerTurnInput & { deliveryId?: string },
+  ): Promise<{ turnId: string; mode: "steer" | "start"; deduped: boolean }> {
+    if (input.deliveryId) {
+      const prior = this.db.prepare<[string], { turn_id: string; mode: string }>(
+        "SELECT turn_id, mode FROM codex_app_server_delivery WHERE delivery_id = ?",
+      ).get(input.deliveryId)
+      if (prior) return { turnId: prior.turn_id, mode: prior.mode === "steer" ? "steer" : "start", deduped: true }
+    }
+    const binding = this.bindingForScope(input.threadSlug, input.sessionId)
+    if (!binding) throw new Error("Codex app-server follow-up requires a bridge-owned session")
+    let result: { turnId: string; mode: "steer" | "start" }
+    if (binding.current_turn_id) {
+      try {
+        result = { turnId: (await this.steerTurn(input)).turnId, mode: "steer" }
+      } catch (error) {
+        // Only a definitive server rejection is safe to convert into a fresh turn. Any ambiguous
+        // failure (timeout / closed connection) might have landed the input, so never auto-start a
+        // second turn on it — propagate and let the operator/UI retry deliberately.
+        if (!(error instanceof RpcProtocolError)) throw error
+        await this.waitForTurnCleared(input.threadSlug, input.sessionId, 8_000)
+        result = { turnId: (await this.startTurn(input)).turnId, mode: "start" }
+      }
+    } else {
+      result = { turnId: (await this.startTurn(input)).turnId, mode: "start" }
+    }
+    if (input.deliveryId) {
+      this.db.prepare(
+        "INSERT OR IGNORE INTO codex_app_server_delivery (delivery_id, thread_slug, turn_id, mode, created_at) VALUES (?, ?, ?, ?, ?)",
+      ).run(input.deliveryId, input.threadSlug, result.turnId, result.mode, this.now().toISOString())
+    }
+    return { ...result, deduped: false }
+  }
+
+  private async waitForTurnCleared(threadSlug: string, sessionId: string, ms: number): Promise<void> {
+    // Real wall-clock on purpose: turn/completed clears current_turn_id asynchronously, and tests
+    // inject a FIXED `this.now()` that would never advance a timeout.
+    const start = Date.now()
+    while (Date.now() - start < ms) {
+      const row = this.bindingForScope(threadSlug, sessionId)
+      if (!row || row.current_turn_id === null) return
+      await new Promise((resolve) => setTimeout(resolve, 100))
     }
   }
 

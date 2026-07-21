@@ -31,6 +31,10 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
   private buffer = ""
   private nextThread = 0
   private nextTurn = 0
+  private activeTurn: { threadId: string; turnId: string } | null = null
+  // When set, a turn/steer completes the turn (turn/completed) then rejects — modelling the turn
+  // ending in the bridge's read→steer window, which must trigger followUp's start-fallback.
+  rejectSteerAsEnded = false
   killed = false
   readonly version: string
   afterInitializeResponse?: () => void
@@ -73,6 +77,16 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
 
   notify(method: string, params: unknown): void {
     this.send({ method, params })
+  }
+
+  // End the active turn the way a real turn/completed would, clearing the bridge's current_turn_id.
+  completeActiveTurn(threadId?: string, turnId?: string): void {
+    const active = this.activeTurn
+    const id = turnId ?? active?.turnId
+    const thread = threadId ?? active?.threadId
+    if (!id || !thread) return
+    this.activeTurn = null
+    this.notify("turn/completed", { threadId: thread, turn: { id } })
   }
 
   private consume(chunk: string): void {
@@ -140,8 +154,32 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
     if (message.method === "turn/start") {
       const params = message.params as { threadId: string }
       const turnId = `codex-turn-${++this.nextTurn}`
+      this.activeTurn = { threadId: params.threadId, turnId }
       this.notify("turn/started", { threadId: params.threadId, turn: { id: turnId } })
       this.send({ id, result: { turn: { id: turnId } } })
+      return
+    }
+    if (message.method === "turn/steer") {
+      const params = message.params as { threadId: string; expectedTurnId: string }
+      if (this.rejectSteerAsEnded) {
+        // Emit turn/completed FIRST (clears the bridge's current_turn_id) then reject the steer.
+        this.completeActiveTurn(params.threadId, params.expectedTurnId)
+        this.send({ id, error: { code: -32602, message: "activeTurnNotSteerable" } })
+        return
+      }
+      // Model the real precondition: steer only lands on the currently-active turn; a stale
+      // expectedTurnId (turn already ended) is rejected — the signal `followUp` falls back on.
+      if (this.activeTurn && this.activeTurn.turnId === params.expectedTurnId) {
+        this.send({ id, result: { turnId: this.activeTurn.turnId } })
+      } else {
+        this.send({ id, error: { code: -32602, message: "activeTurnNotSteerable" } })
+      }
+      return
+    }
+    if (message.method === "turn/interrupt") {
+      const params = message.params as { threadId: string; turnId: string }
+      this.send({ id, result: {} })
+      this.completeActiveTurn(params.threadId, params.turnId)
       return
     }
     this.send({ id, error: { code: -32601, message: "not implemented by fake" } })
@@ -894,6 +932,68 @@ test("only locally witnessed turn ids may own provider requests and notification
   process.request("owned", "item/commandExecution/requestApproval", commandParams(binding.codexThreadId, turnId, { itemId: "owned-item" }))
   const scope = { projectId: "project-1", threadSlug: binding.threadSlug, sessionId: binding.sessionId }
   await waitFor(() => h.interactions.listPending(scope).length === 1, "owned turn request")
+  h.close()
+})
+
+test("steerTurn injects into the active turn; interruptTurn cancels it and is a no-op when idle", async () => {
+  const h = harness()
+  const binding = await h.bridge.startDisposableSession({ threadSlug: "steer-thread", sessionId: "steer-session", cwd: h.dir })
+  const process = h.processes[0]!
+  const { turnId } = await h.bridge.startTurn({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "Start" })
+  await waitFor(() => h.bridge.binding(binding.threadSlug, binding.sessionId)?.currentTurnId === turnId, "turn active")
+
+  const steer = await h.bridge.steerTurn({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "More" })
+  assert.equal(steer.turnId, turnId)
+  const steerReq = process.clientRequests.find((message) => message.method === "turn/steer")!
+  assert.equal((steerReq.params as Message).expectedTurnId, turnId)
+
+  assert.deepEqual(await h.bridge.interruptTurn(binding.threadSlug, binding.sessionId), { interrupted: true })
+  await waitFor(() => h.bridge.binding(binding.threadSlug, binding.sessionId)?.currentTurnId === null, "cleared after interrupt")
+
+  assert.deepEqual(await h.bridge.interruptTurn(binding.threadSlug, binding.sessionId), { interrupted: false })
+  await assert.rejects(
+    h.bridge.steerTurn({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "x" }),
+    /requires an active turn/,
+  )
+  h.close()
+})
+
+test("followUp starts a turn when idle and steers when a turn is live", async () => {
+  const h = harness()
+  const binding = await h.bridge.startDisposableSession({ threadSlug: "fu-thread", sessionId: "fu-session", cwd: h.dir })
+  const idle = await h.bridge.followUp({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "First" })
+  assert.equal(idle.mode, "start")
+  await waitFor(() => h.bridge.binding(binding.threadSlug, binding.sessionId)?.currentTurnId === idle.turnId, "active after start")
+  const live = await h.bridge.followUp({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "Second" })
+  assert.deepEqual(live, { turnId: idle.turnId, mode: "steer", deduped: false })
+  h.close()
+})
+
+test("followUp dedupes a repeated deliveryId — the second delivery never opens a second turn", async () => {
+  const h = harness()
+  const binding = await h.bridge.startDisposableSession({ threadSlug: "fu-dedup", sessionId: "fu-dedup-session", cwd: h.dir })
+  const process = h.processes[0]!
+  const first = await h.bridge.followUp({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "Once", deliveryId: "d1" })
+  const startsBefore = process.clientRequests.filter((message) => message.method === "turn/start").length
+  const dup = await h.bridge.followUp({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "Once", deliveryId: "d1" })
+  assert.deepEqual(dup, { turnId: first.turnId, mode: first.mode, deduped: true })
+  assert.equal(process.clientRequests.filter((message) => message.method === "turn/start").length, startsBefore)
+  h.close()
+})
+
+test("followUp falls back to a fresh turn when the live steer is rejected (turn ended in the window)", async () => {
+  const h = harness(CODEX_APP_SERVER_SUPPORTED_VERSION, (proc) => { proc.rejectSteerAsEnded = true })
+  const binding = await h.bridge.startDisposableSession({ threadSlug: "fu-fallback", sessionId: "fu-fallback-session", cwd: h.dir })
+  const process = h.processes[0]!
+  const first = await h.bridge.followUp({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "First" })
+  assert.equal(first.mode, "start")
+  await waitFor(() => h.bridge.binding(binding.threadSlug, binding.sessionId)?.currentTurnId === first.turnId, "active")
+  // current_turn_id is set, so followUp tries steer; the fake ends the turn + rejects, so it must
+  // recover by STARTING a fresh turn rather than surfacing an error or dropping the message.
+  const recovered = await h.bridge.followUp({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "Second" })
+  assert.equal(recovered.mode, "start")
+  assert.notEqual(recovered.turnId, first.turnId)
+  assert.equal(process.clientRequests.filter((message) => message.method === "turn/steer").length, 1)
   h.close()
 })
 
