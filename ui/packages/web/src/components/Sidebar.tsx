@@ -12,7 +12,7 @@ import { QuotaBar } from "./QuotaBar.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { ProviderMark } from "./ProviderMark.tsx"
 import { STATUS_CHIP } from "../lib/status.ts"
-import { formatSnoozedUntil, formatSnoozeWake } from "../lib/snooze.ts"
+import { formatSnoozedUntil, formatSnoozeWake, formatTimerResume } from "../lib/snooze.ts"
 import { activeSidebarSection, railRevealDelta, type SidebarSectionGeometry } from "../lib/sidebarScrollspy.ts"
 import type { ReactElement, ReactNode } from "react"
 
@@ -488,16 +488,17 @@ function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string |
   if (kind === "stalled") return { node: <StatusBox accent><Glyph ch="!" /></StatusBox>, tip: "Stalled — the agent exited" }
   if (kind === "held") {
     const hourglass = <StatusBox><Hourglass size={9} className="text-muted/70" /></StatusBox>
-    // A single-line held row carries its whole "what it's held for" story HERE, in the tooltip. Every
-    // time-based hold — a user snooze, an ```awaiting timer:` park, or a legacy blocked+timer status —
-    // reads with the SAME "Snoozed until <wake>" phrasing so the two never diverge (the row itself is
-    // now identical for both; this keeps the hover identical too).
+    // A single-line held row carries its whole "what it's held for" story HERE, in the tooltip. The two
+    // time-based holds share the same hourglass + single-line layout but are NOT the same event, so the
+    // verb tells the truth about what happens at the deadline:
+    //   • a user snooze re-surfaces the CARD for you  → "Snoozed until <wake>"  (agent stays put)
+    //   • an ```awaiting timer:` park / blocked+timer status RESUMES THE AGENT → "Resuming <wake>"
     const snoozedUntil = futureSnoozedUntil(t)
     if (snoozedUntil) return { node: hourglass, tip: formatSnoozedUntil(snoozedUntil) ?? "Snoozed until a scheduled check" }
     // Canonical blocked+timer status can arrive from an older/pre-session snapshot without a fence.
     if (t.lastFence?.kind !== "awaiting") {
-      const timed = typeof t.revalidate === "string" ? formatSnoozedUntil(t.revalidate) : null
-      return { node: hourglass, tip: timed ?? "Waiting until a scheduled check" }
+      const timed = typeof t.revalidate === "string" ? formatTimerResume(t.revalidate) : null
+      return { node: hourglass, tip: timed ?? "Resuming at a scheduled check" }
     }
     // Reserve the hourglass for intentional park states: a specific external human gate, a durable
     // GitHub human-review cursor, or a VALID scheduled instant. Legacy/malformed waits stay readable
@@ -505,7 +506,7 @@ function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string |
     const parked = parkedAwaitingHint(t.lastFence.hints)
     if (parked?.kind === "human") return { node: hourglass, tip: "Waiting on a human review or approval" }
     if (parked?.kind === "github-review") return { node: hourglass, tip: "Watching for new non-bot human GitHub review activity" }
-    if (parked?.kind === "timer") return { node: hourglass, tip: formatSnoozedUntil(parked.value) ?? "Waiting until a scheduled check" }
+    if (parked?.kind === "timer") return { node: hourglass, tip: formatTimerResume(parked.value) ?? "Resuming at a scheduled check" }
     const hk = t.lastFence.hints[0]?.kind
     if (hk === "pr") return { node: <StatusBox><Github size={9} className="text-muted/70" /></StatusBox>, tip: "Legacy PR wait — active monitoring is not armed" }
     if (hk === "ci") return { node: <StatusBox><Clock size={9} className="text-muted/70" /></StatusBox>, tip: "Legacy CI wait — active monitoring is not armed" }

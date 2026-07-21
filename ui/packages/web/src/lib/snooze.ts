@@ -90,11 +90,27 @@ export function formatSnoozeWake(until: string, nowMs = Date.now()): string {
   return `${new Intl.DateTimeFormat(undefined, options).format(date)} at ${time}`
 }
 
-/** A complete, user-facing snooze sentence. Invalid scheduler input deliberately has no display value. */
-export function formatSnoozedUntil(until: string, nowMs = Date.now()): string | null {
+/** The lowercased wake phrase ("today at 11:09 PM") that folds into a full held-status sentence. Null
+ *  when the instant is not a valid scheduler timer, so a malformed park has no display value. */
+function wakePhrase(until: string, nowMs: number): string | null {
   if (!isValidAwaitingTimer(until)) return null
   const wake = formatSnoozeWake(until, nowMs)
   if (!wake) return null
-  return `Snoozed until ${wake.replace(/^(Today|Tomorrow)/, (day) => day.toLowerCase())}`
+  return wake.replace(/^(Today|Tomorrow)/, (day) => day.toLowerCase())
+}
+
+/** A complete HUMAN-snooze sentence — the operator deferred the card's presentation until this instant.
+ *  The agent is NOT resumed at the deadline; the card merely re-surfaces in the queue. */
+export function formatSnoozedUntil(until: string, nowMs = Date.now()): string | null {
+  const wake = wakePhrase(until, nowMs)
+  return wake ? `Snoozed until ${wake}` : null
+}
+
+/** A complete WORKER-timer sentence — the agent parked itself with `awaiting timer:` (or the canonical
+ *  blocked+timer status) and the scheduler will RESUME it at this instant. The verb is deliberately
+ *  distinct from a human snooze: a snooze re-surfaces the card for you; a timer wakes the agent itself. */
+export function formatTimerResume(until: string, nowMs = Date.now()): string | null {
+  const wake = wakePhrase(until, nowMs)
+  return wake ? `Resuming ${wake}` : null
 }
 import { isValidAwaitingTimer } from "@fray-ui/shared"

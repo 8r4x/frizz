@@ -5,6 +5,7 @@ import {
   DEFAULT_SNOOZE_PRESET,
   formatSnoozedUntil,
   formatSnoozeWake,
+  formatTimerResume,
   isSnoozePreset,
   localDateTimeInputValue,
   parseLocalSnooze,
@@ -83,6 +84,10 @@ test("wake formatting uses the local calendar and locale-aware times", () => {
     assert.equal(formatSnoozeWake(farDate, now.getTime()), "Jul 21 at 9:00 PM")
     assert.equal(formatSnoozedUntil(wednesday, now.getTime()), "Snoozed until Wednesday at 9:00 PM")
     assert.equal(formatSnoozedUntil("not-a-date", now.getTime()), null)
+    // A worker `timer:` park resumes the AGENT — a distinct verb from a human snooze, same wake phrase.
+    assert.equal(formatTimerResume(today, now.getTime()), "Resuming today at 9:00 AM")
+    assert.equal(formatTimerResume(wednesday, now.getTime()), "Resuming Wednesday at 9:00 PM")
+    assert.equal(formatTimerResume("not-a-date", now.getTime()), null)
   } finally {
     if (previousTz === undefined) delete process.env.TZ
     else process.env.TZ = previousTz
