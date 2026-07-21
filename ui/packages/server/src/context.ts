@@ -487,6 +487,17 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     resume: (slug, message, deliveryId) => {
       const deliveryMessage = `${message}\n\n${wakeDeliveryToken(deliveryId)}`
       const row = storage.getSession(slug)
+      // App-server codex wake: deliver over the bridge (reactivating the persisted thread first),
+      // exactly like the followUp RPC. Never fall through to the tmux resume path.
+      if (row?.backend === "codex" && row.codex_runtime === "app-server" && codexAppServer) {
+        const bridge = codexAppServer
+        void (async () => {
+          const binding = bridge.binding(slug, row.session_id)
+          if (!binding || binding.state !== "active") await bridge.resumeOwnedSession(slug, row.session_id)
+          await bridge.followUp({ threadSlug: slug, sessionId: row.session_id, text: deliveryMessage, deliveryId })
+        })().catch(() => { /* wake delivery is best-effort, mirroring the tmux resume path */ })
+        return
+      }
       if (row?.backend === "codex") {
         const binding = adoptionRuntimeBinding(storage, row)
         const live = binding.kind === "unbound"

@@ -331,6 +331,7 @@ export interface Storage {
   setBackend(slug: string, backend: string): void
   setAgentSession(slug: string, agentSessionId: string): void
   setCodexRuntime(slug: string, runtime: string): void
+  setProfile(slug: string, model: string, effort: string): void
   setPermissionMode(slug: string, permissionMode: string): void
   setPermissionPending(slug: string, permissionMode: string | null): void
   beginRuntimeControl(
@@ -799,6 +800,7 @@ export function createStorage(dbPath: string): Storage {
   const backendStmt = db.prepare("UPDATE session SET backend = ? WHERE slug = ?")
   const agentSessionStmt = db.prepare("UPDATE session SET agent_session_id = ? WHERE slug = ?")
   const codexRuntimeStmt = db.prepare("UPDATE session SET codex_runtime = ? WHERE slug = ?")
+  const profileStmt = db.prepare("UPDATE session SET model = ?, effort = ? WHERE slug = ?")
   const permissionModeStmt = db.prepare("UPDATE session SET permission_mode = ? WHERE slug = ?")
   const permissionPendingStmt = db.prepare("UPDATE session SET permission_pending = ? WHERE slug = ?")
   const beginRuntimeControlStmt = db.prepare(`
@@ -1301,6 +1303,7 @@ export function createStorage(dbPath: string): Storage {
     setBackend: (slug, backend) => void backendStmt.run(backend, slug),
     setAgentSession: (slug, agentSessionId) => void agentSessionStmt.run(agentSessionId, slug),
     setCodexRuntime: (slug, runtime) => void codexRuntimeStmt.run(runtime, slug),
+    setProfile: (slug, model, effort) => void profileStmt.run(model, effort, slug),
     setPermissionMode: (slug, permissionMode) => void permissionModeStmt.run(permissionMode, slug),
     setPermissionPending: (slug, permissionMode) => void permissionPendingStmt.run(permissionMode, slug),
     beginRuntimeControl: (slug, expected, kind) => {

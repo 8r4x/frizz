@@ -505,7 +505,14 @@ export function createRouter(ctx: AppContext) {
           if (!binding || binding.state !== "active") {
             await bridge.resumeOwnedSession(input.slug, row.session_id)
           }
-          await bridge.followUp({ threadSlug: input.slug, sessionId: row.session_id, text: input.message, deliveryId: input.deliveryId })
+          await bridge.followUp({
+            threadSlug: input.slug,
+            sessionId: row.session_id,
+            text: input.message,
+            deliveryId: input.deliveryId,
+            model: row.model ?? undefined,
+            effort: row.effort ?? undefined,
+          })
           ctx.storage.setSnoozedUntil(input.slug, null)
           ctx.board.refresh()
           return
@@ -539,6 +546,14 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const thread = (await ctx.board.snapshot()).threads.find((t) => t.id === input.slug)
         if (!thread || thread.foreign || thread.kind !== "session") throw new Error(`thread ${input.slug} is not editable`)
+        // App-server threads have no tmux pane to reattach — the tmux permission controller would spawn
+        // a duplicate codex process on the same rollout. Persist the sandbox; it applies on the next turn.
+        const permRow = ctx.storage.getSession(input.slug)
+        if (permRow?.codex_runtime === "app-server") {
+          ctx.storage.setPermissionMode(input.slug, input.permissionMode)
+          ctx.board.refresh()
+          return { effect: "next-resume" as const }
+        }
         return ctx.permissionController.request(input.slug, input.permissionMode)
       },
     }),
@@ -559,6 +574,14 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const thread = (await ctx.board.snapshot()).threads.find((candidate) => candidate.id === input.slug)
         if (!thread || thread.foreign || thread.kind !== "session") throw new Error(`thread ${input.slug} is not editable`)
+        // App-server threads take model/effort per turn (turn/start) — no tmux process handoff. Persist
+        // them; the next follow-up turn picks them up. (Avoids the tmux profile controller's reattach.)
+        const profRow = ctx.storage.getSession(input.slug)
+        if (profRow?.codex_runtime === "app-server") {
+          ctx.storage.setProfile(input.slug, input.model, input.effort)
+          ctx.board.refresh()
+          return { effect: "next-resume" as const }
+        }
         if (!ctx.profileController) throw new Error("Runtime profile controls are unavailable; restart Fray and retry")
         return ctx.profileController.request(input.slug, { model: input.model, effort: input.effort })
       },
