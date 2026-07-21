@@ -64,8 +64,54 @@ export function mergeOptimistic(prev: QueuedMessage[] | undefined, incoming: Que
   const serverUserTexts = freshServerUserTexts(prev, incoming)
   const consumed = consumedOptimisticIndexes(optimistic, serverUserTexts)
   const unconsumed = optimistic.filter((_, i) => !consumed.has(i))
-  return unconsumed.length ? [...incoming, ...unconsumed] : incoming
+  if (!unconsumed.length) return incoming
+  const alive = unconsumed.filter((message) => retainOptimistic(message, newestServerAt(incoming)))
+  return alive.length ? [...incoming, ...alive] : incoming
 }
+
+// ── The ghost floor: an optimistic bubble must not outlive the conversation ────────────────────────────
+// Consumption above requires seeing the matching server record arrive FRESH exactly once. Every path that
+// breaks that single chance strands the bubble PERMANENTLY: a steer whose provider delivery failed after
+// the RPC acknowledged durable acceptance (that rollback only runs while the submitting surface is still
+// mounted), a re-send of text the server only ever recorded once, a record that slid out of the 300-message
+// window before any push was observed. The residue renders at 50% opacity pinned to the thread bottom
+// forever and reads as "still pending" — the "random stuck queued message" class.
+//
+// So bound the guess by EVIDENCE, not by a timer: anchor each bubble to the newest SERVER timestamp seen
+// when it first survived a merge, and retire it once the transcript has provably advanced GHOST_GRACE_MS
+// past that anchor while still not accounting for it. Only server clocks are compared — the browser clock
+// never enters, so there is no skew to tune. A quiet thread never advances its anchor, so a genuinely
+// in-flight send is never dropped for being slow; only one the conversation demonstrably moved on past.
+const GHOST_GRACE_MS = 60_000
+const ghostAnchor = new WeakMap<QueuedMessage, number>()
+
+// The newest timestamp in SERVER truth. Client-only bubbles are skipped: they carry no server time, and a
+// merge appends them last, so scanning the tail would otherwise read a bubble instead of the transcript.
+function newestServerAt(messages: readonly QueuedMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (message.queued && !message.sourceId) continue
+    const at = message.at ? Date.parse(message.at) : NaN
+    if (Number.isFinite(at)) return at
+  }
+  return NaN
+}
+
+function retainOptimistic(message: QueuedMessage, serverNow: number): boolean {
+  if (!Number.isFinite(serverNow)) return true // no server clock to judge against
+  const anchor = ghostAnchor.get(message)
+  if (anchor === undefined) {
+    ghostAnchor.set(message, serverNow)
+    return true
+  }
+  if (serverNow - anchor <= GHOST_GRACE_MS) return true
+  console.warn("[fray] retiring a stranded optimistic send: the transcript advanced past it without ever recording it", {
+    text: message.text.slice(0, 120),
+    advancedMs: serverNow - anchor,
+  })
+  return false
+}
+
 
 // ── Per-push message identity preservation ─────────────────────────────────────────────────────────────
 // Every transcript push/refetch re-parses the full window, so each message arrives as a NEW object even

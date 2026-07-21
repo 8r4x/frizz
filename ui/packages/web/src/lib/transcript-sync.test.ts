@@ -132,6 +132,51 @@ test("mergeOptimistic: empty/whitespace optimistic text is ignored", () => {
   assert.equal(mergeOptimistic([user("  ", { queued: true })], incoming), incoming)
 })
 
+// ---- the ghost floor: an optimistic bubble must not outlive the conversation ----
+// Reproduced against the real session JSONL of `this-nub-thread-is-unsteerable-why`: two optimistic
+// "continue" bubbles, ONE server record — the surplus bubble used to survive every later merge forever.
+test("mergeOptimistic: a surplus optimistic bubble is retired once the transcript advances past it", () => {
+  const landed = user("continue", { sourceId: "landed-turn", at: "2026-07-21T22:30:55.878Z" })
+  // The server only ever recorded ONE "continue"; the client is holding two bubbles for it.
+  const first = mergeOptimistic(
+    [user("continue", { queued: true }), user("continue", { queued: true })],
+    [landed],
+  )
+  assert.deepEqual(first.map((message) => message.text), ["continue", "continue"], "one consumed, one anchored")
+  const later = user("later", { sourceId: "later-turn", at: "2026-07-21T22:39:08.806Z" })
+  assert.deepEqual(mergeOptimistic(first, [landed, later]), [landed, later])
+})
+
+test("mergeOptimistic: a bubble is kept while the transcript stays within the grace window", () => {
+  const landed = user("a", { sourceId: "landed-turn", at: "2026-07-21T22:30:00.000Z" })
+  const pending = user("pending", { queued: true })
+  const first = mergeOptimistic([pending], [landed])
+  const soon = user("soon", { sourceId: "soon-turn", at: "2026-07-21T22:30:59.000Z" }) // +59s
+  assert.deepEqual(mergeOptimistic(first, [landed, soon]).map((m) => m.text), ["a", "soon", "pending"])
+})
+
+test("mergeOptimistic: a quiet transcript never advances the anchor, so an in-flight send is never dropped", () => {
+  const landed = user("a", { sourceId: "landed-turn", at: "2026-07-21T22:30:00.000Z" })
+  const pending = user("pending", { queued: true })
+  let merged = mergeOptimistic([pending], [landed])
+  for (let push = 0; push < 50; push++) merged = mergeOptimistic(merged, [landed])
+  assert.deepEqual(merged.map((message) => message.text), ["a", "pending"])
+})
+
+test("mergeOptimistic: timestamp-less server truth cannot retire a bubble", () => {
+  const landed = user("a", { sourceId: "landed-turn" })
+  const pending = user("pending", { queued: true })
+  const first = mergeOptimistic([pending], [landed])
+  assert.deepEqual(mergeOptimistic(first, [landed]).map((message) => message.text), ["a", "pending"])
+})
+
+test("mergeOptimistic: the server's own pending bubble is never retired by the floor", () => {
+  const serverQueued = user("still queued", { queued: true, sourceId: "enqueue-turn", at: "2026-07-21T22:30:00.000Z" })
+  const later = user("later", { sourceId: "later-turn", at: "2026-07-21T23:30:00.000Z" }) // +1h
+  const incoming = [serverQueued, later]
+  assert.equal(mergeOptimistic([serverQueued], incoming), incoming)
+})
+
 // ---- isTranscriptStale (level-triggered watchdog decision) ----
 test("isTranscriptStale: activity leading the rendered tail by > threshold is stale", () => {
   assert.equal(isTranscriptStale("2026-07-01T00:00:10.000Z", "2026-07-01T00:00:00.000Z", 5000), true)
