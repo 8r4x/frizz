@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { canRecoverExistingCodexDraft, threadFollowUpBlocked, threadPermissionBlockedReason, threadPermissionEffectMessage } from "./threadPermissions.ts"
+import { canRecoverExistingCodexDraft, threadComposerStatus, threadFollowUpBlocked, threadPermissionBlockedReason, threadPermissionEffectMessage } from "./threadPermissions.ts"
 
 const state = (over: Partial<Parameters<typeof threadPermissionBlockedReason>[0]> = {}) => ({ ...over })
 
@@ -29,6 +29,28 @@ test("a Codex queue owner keeps only follow-up submission available", () => {
   assert.equal(threadFollowUpBlocked(state({ runtimeControlPending: true, followUpQueueAvailable: true })), false)
   assert.equal(threadFollowUpBlocked(state({ runtimeControlPending: true, followUpQueueAvailable: true, permissionPending: "default" })), true)
   assert.equal(threadFollowUpBlocked(state({ runtimeControlPending: true, followUpQueueAvailable: true, profileChangePending: true })), true)
+})
+
+test("queued input status distinguishes active delivery from a controller blocker", () => {
+  assert.equal(threadComposerStatus(state()), null)
+  assert.deepEqual(threadComposerStatus(state({ queuedInputCount: 1 })), {
+    kind: "queue-sending",
+    message: "Sending queued Codex message…",
+  })
+  assert.deepEqual(threadComposerStatus(state({
+    queuedInputCount: 1,
+    controlError: "Queued Codex message is waiting for an idle or queueable composer",
+  }), "profile lookup failed"), {
+    kind: "queue-blocked",
+    message: "Queued Codex message is waiting for an idle or queueable composer",
+  }, "the actionable queue blocker wins over an ancillary profile-options failure")
+  assert.deepEqual(threadComposerStatus(state({
+    queuedInputCount: 1,
+    controlError: "fray-steer-failed:delivery-id",
+  }), " profile lookup failed "), {
+    kind: "profile-error",
+    message: "Profile controls unavailable: profile lookup failed",
+  }, "the machine-only draft restoration signal is never rendered as status copy")
 })
 
 test("thread permission control: feedback distinguishes a live apply from next resume", () => {

@@ -3,7 +3,7 @@ import type { SocketClientMsg, SocketServerMsg } from "@fray-ui/shared"
 import { store } from "../store.ts"
 import { BoardStream } from "./board-stream.ts"
 import { connectSSE } from "./sse.ts"
-import { mergeOptimistic, type QueuedMessage } from "../lib/transcript-sync.ts"
+import { mergeOptimistic, preserveMessageIdentity, type QueuedMessage } from "../lib/transcript-sync.ts"
 import { reconcileLiveMessages, type PaginatedTranscriptData } from "../lib/transcriptPagination.ts"
 import { invalidateInteractionQueries } from "./interaction-cache.ts"
 
@@ -216,7 +216,12 @@ function handle(msg: SocketServerMsg): boolean {
         const reconciled = reconcileLiveMessages(prev as PaginatedTranscriptData | undefined, msg.messages)
         return {
           ...reconciled,
-          messages: mergeOptimistic(prev?.messages, reconciled.messages as QueuedMessage[]),
+          // preserveMessageIdentity: unchanged messages keep the previous render's object so the
+          // memoized rows bail out — a push re-renders only what actually changed.
+          messages: preserveMessageIdentity(
+            prev?.messages,
+            mergeOptimistic(prev?.messages, reconciled.messages as QueuedMessage[]),
+          ),
         }
       })
       delete store.socketTranscriptFallbacks[msg.slug]

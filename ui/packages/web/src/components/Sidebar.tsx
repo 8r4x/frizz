@@ -272,14 +272,20 @@ export const ThreadRow = memo(function ThreadRow({
   // A thread awaiting its OWN live sub-agent/Monitor is not Held and stays fully active.
   const held = !legacy && isHeld(t)
   const dimLabel = !legacy && titleIsProvisional(t)
-  // An awaiting session row glosses its first machine-wait hint (e.g. "PR owner/repo#12").
+  // Held rows collapse to a SINGLE LINE — no subtitle. The "what it's held for" detail (snooze/timer
+  // wake time, human gate, review watch) lives ENTIRELY in the hourglass indicator's hover tooltip
+  // (see sessionIndicatorFor), so a snooze and a timer-park read identically instead of sprouting two
+  // divergent subtitle styles ("SNOOZED · …" vs "Snoozed until …") on two lines. Only NON-held rows
+  // gloss inline: a legacy pr/ci awaiting fence (stays Active) shows its "PR owner/repo#12" hint.
   const snoozedUntil = !legacy ? futureSnoozedUntil(t) : undefined
-  const gloss = snoozedUntil
-    ? `SNOOZED · ${formatSnoozeWake(snoozedUntil)}`
-    : !legacy && t.lastFence?.kind === "awaiting"
-      ? hintGloss(t.lastFence.hints)
-      : null
-  const hasSubtitle = Boolean(t.activity) || subLabel !== null || gloss !== null
+  const gloss = held
+    ? null
+    : snoozedUntil
+      ? `SNOOZED · ${formatSnoozeWake(snoozedUntil)}`
+      : !legacy && t.lastFence?.kind === "awaiting"
+        ? hintGloss(t.lastFence.hints)
+        : null
+  const hasSubtitle = !held && (Boolean(t.activity) || subLabel !== null || gloss !== null)
   return (
     <div
       data-sidebar-item={t.id}
@@ -481,24 +487,25 @@ function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string |
   if (kind === "done") return { node: <StatusBox><Check size={10} strokeWidth={3} className="text-muted/75" /></StatusBox>, tip: "Done" }
   if (kind === "stalled") return { node: <StatusBox accent><Glyph ch="!" /></StatusBox>, tip: "Stalled — the agent exited" }
   if (kind === "held") {
+    const hourglass = <StatusBox><Hourglass size={9} className="text-muted/70" /></StatusBox>
+    // A single-line held row carries its whole "what it's held for" story HERE, in the tooltip. Every
+    // time-based hold — a user snooze, an ```awaiting timer:` park, or a legacy blocked+timer status —
+    // reads with the SAME "Snoozed until <wake>" phrasing so the two never diverge (the row itself is
+    // now identical for both; this keeps the hover identical too).
     const snoozedUntil = futureSnoozedUntil(t)
-    if (snoozedUntil) {
-      return {
-        node: <StatusBox><Hourglass size={9} className="text-muted/70" /></StatusBox>,
-        tip: `Snoozed until ${formatSnoozeWake(snoozedUntil)}`,
-      }
-    }
+    if (snoozedUntil) return { node: hourglass, tip: formatSnoozedUntil(snoozedUntil) ?? "Snoozed until a scheduled check" }
     // Canonical blocked+timer status can arrive from an older/pre-session snapshot without a fence.
     if (t.lastFence?.kind !== "awaiting") {
-      return { node: <StatusBox><Hourglass size={9} className="text-muted/70" /></StatusBox>, tip: "Waiting until a scheduled check" }
+      const timed = typeof t.revalidate === "string" ? formatSnoozedUntil(t.revalidate) : null
+      return { node: hourglass, tip: timed ?? "Waiting until a scheduled check" }
     }
     // Reserve the hourglass for intentional park states: a specific external human gate, a durable
     // GitHub human-review cursor, or a VALID scheduled instant. Legacy/malformed waits stay readable
     // but do not claim that a working wake is armed.
-    const parked = parkedAwaitingHint(t.lastFence.hints)?.kind
-    if (parked === "human") return { node: <StatusBox><Hourglass size={9} className="text-muted/70" /></StatusBox>, tip: "Waiting on a human review or approval" }
-    if (parked === "github-review") return { node: <StatusBox><Hourglass size={9} className="text-muted/70" /></StatusBox>, tip: "Watching for new non-bot human GitHub review activity" }
-    if (parked === "timer") return { node: <StatusBox><Hourglass size={9} className="text-muted/70" /></StatusBox>, tip: "Waiting until a scheduled check" }
+    const parked = parkedAwaitingHint(t.lastFence.hints)
+    if (parked?.kind === "human") return { node: hourglass, tip: "Waiting on a human review or approval" }
+    if (parked?.kind === "github-review") return { node: hourglass, tip: "Watching for new non-bot human GitHub review activity" }
+    if (parked?.kind === "timer") return { node: hourglass, tip: formatSnoozedUntil(parked.value) ?? "Waiting until a scheduled check" }
     const hk = t.lastFence.hints[0]?.kind
     if (hk === "pr") return { node: <StatusBox><Github size={9} className="text-muted/70" /></StatusBox>, tip: "Legacy PR wait — active monitoring is not armed" }
     if (hk === "ci") return { node: <StatusBox><Clock size={9} className="text-muted/70" /></StatusBox>, tip: "Legacy CI wait — active monitoring is not armed" }

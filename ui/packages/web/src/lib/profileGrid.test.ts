@@ -51,7 +51,7 @@ test("profile grid resolves a radio value only to a complete supported pair", ()
   )
 })
 
-test("profile grid represents recovered, legacy-partial, retired, and pending labels honestly", () => {
+test("profile grid represents recovered, effort-unknown, retired, and pending labels honestly", () => {
   const current = { provider: "claude", model: "sonnet", effort: "high" }
   assert.equal(profileGridSelectionKnown(groups, current), true)
   assert.equal(profileGridDisplayLabel(groups, current), "Sonnet › high")
@@ -59,8 +59,8 @@ test("profile grid represents recovered, legacy-partial, retired, and pending la
   assert.equal(profileGridDisplayLabel(groups, { model: "retired", effort: "max" }), "retired › max")
   assert.equal(
     profileGridDisplayLabel(groups, { model: "sonnet" }),
-    "Sonnet › Legacy profile",
-    "a provider-observed model without launch effort is truthful but not a broken-looking pair",
+    "Sonnet",
+    "a provider-observed model without a launch effort shows the model alone — never a 'Legacy profile' label",
   )
   assert.equal(profileGridDisplayLabel(groups, undefined, "Profile loading…"), "Profile loading…")
   assert.equal(profileGridDisplayLabel(groups, { model: "gpt-5.6-sol", effort: "ultra" }, "Pending profile"), "GPT-5.6 Sol › ultra")

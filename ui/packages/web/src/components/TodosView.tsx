@@ -118,8 +118,8 @@ function resumeNativeAnchoring(): void {
 export function TodosView() {
   const board = useBoard()
   // The queue is EXACTLY the server-derived Needs-you session threads (t.needsYou) — legacy .fray rows
-  // never card anymore. Concrete unresolved asks/crashes lead passive rest/done handoffs, with
-  // interaction recency providing deterministic order inside each priority band.
+  // never card anymore. One strictly time-ordered list (no priority band): every card orders by
+  // last-active alone, FIFO (oldest-first) by default or LIFO per the queueOrder preference.
   const items = orderQueue(asThreads(board?.threads ?? []).filter(queued), useSnapshot(prefs).queueOrder)
   const itemKey = items.map((i) => i.id).join(",")
 
@@ -227,6 +227,12 @@ export function TodosView() {
   // their exit (goneRef) are excluded whether or not the board has caught up — that instant removal is
   // what the neighbour pin compensates. Spliced low-index-first so each stored index still addresses the
   // right slot as the list grows.
+  // Recomputed with `items` itself (NOT the membership-only itemKey it once keyed on): keying on itemKey
+  // froze every card's ThreadView at the last membership change, so field-level board deltas on a mounted
+  // card (lastActivityAt, lastAssistant, statusText) never reached it — the card rendered a stale snapshot
+  // (and its activity-edge transcript refetch below never fired). Recomputing per render is O(queue size)
+  // splice work on a tiny list; the memoized CardSlot/QueueCard boundary (JSON-compare on thread) is what
+  // actually prevents re-render churn, and it only passes threads that genuinely changed.
   const renderItems = useMemo(() => {
     const list = items.filter((it) => !goneRef.current.has(it.id))
     const held = [...departedRef.current.entries()]
@@ -236,7 +242,7 @@ export function TodosView() {
     for (const { view, index } of held) list.splice(Math.min(index, list.length), 0, view)
     return list
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [itemKey, leaving, exitTick])
+  }, [items, leaving, exitTick])
   // Remember this render's exact order (board + held) so the NEXT departure captures a stable slot.
   prevRenderRef.current = renderItems.map((i) => i.id)
 
@@ -386,6 +392,29 @@ export function TodosView() {
     reappearTimersRef.current.set(slug, guard)
   }, [])
 
+  // Undo an OPTIMISTIC dismissal at once — the counterpart to resolve(). A card that faded on click
+  // (Mark-as-done before its RPC returned) calls this when the server declines to complete it (it now
+  // wants a confirmation dialog, or the mutation errored), so the card must snap back into the queue
+  // instead of waiting out resolve()'s 8s reappear guard. Cancels that pending guard AND the pending
+  // finalize (unmount) timer — so if the decline arrives before the card has unmounted, the card and its
+  // (dialog-owning) Mark-as-done button stay mounted rather than being torn down a beat later — then
+  // clears every exit-state bit for the slug (the guard's own un-hide branch, fired immediately).
+  const unresolve = useCallback((slug: string) => {
+    const prior = reappearTimersRef.current.get(slug)
+    if (prior) { clearTimeout(prior); reappearTimersRef.current.delete(slug) }
+    const finalize = finalizeTimersRef.current.get(slug)
+    if (finalize) { clearTimeout(finalize); finalizeTimersRef.current.delete(slug) }
+    goneRef.current.delete(slug)
+    armedRef.current.delete(slug)
+    setLeaving((prev) => {
+      if (!prev.has(slug)) return prev
+      const next = new Set(prev)
+      next.delete(slug)
+      return next
+    })
+    forceExitRender((n) => n + 1)
+  }, [])
+
   // The thread LISTING moved out of this column into the left SIDEBAR (Active / Plans / Inactive
   // sections — see Sidebar.tsx + groups.ts sectionThreads). The queue keeps only the cards + the
   // dispatch box. An empty queue over a populated board just shows the dispatch box (top-anchored).
@@ -415,7 +444,7 @@ export function TodosView() {
         <div className="flex flex-col [&>*:last-child_hr]:hidden">
           {renderItems.map((item) => (
             <CardSlot key={item.id} slug={item.id} leaving={isLeaving(item.id)}>
-              <QueueCard thread={item} leaving={isLeaving(item.id)} onResolve={resolve} />
+              <QueueCard thread={item} leaving={isLeaving(item.id)} onResolve={resolve} onUnresolve={unresolve} />
             </CardSlot>
           ))}
         </div>
@@ -561,7 +590,7 @@ function IntermediateSummary({ toolCount, stepCount, onExpand }: { toolCount: nu
 // changed, instead of every mounted card — and each card's transcript is further guarded by the
 // memoized Message. `onResolve` takes the slug (stable useCallback in TodosView) so this card's props
 // never churn identity render-to-render.
-const QueueCard = memo(function QueueCard({ thread, leaving, onResolve }: { thread: ThreadView; leaving: boolean; onResolve: (slug: string) => void }) {
+const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnresolve }: { thread: ThreadView; leaving: boolean; onResolve: (slug: string) => void; onUnresolve: (slug: string) => void }) {
   const projectDir = useProjectDir()
   const messageKey = draftKey.followUp(projectDir, thread.id, thread.sessionId)
   const [message, setMessage, clearMessage] = useDraft(messageKey)
@@ -612,6 +641,22 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve }: { thre
   // The queue card is a simplified thread: by default the most recent messages, with "View more"
   // revealing progressively older ones above. statusText is the fallback before any transcript exists.
   const q = useTranscript(thread.id, { poll: false })
+  // Cards deliberately do NOT hold a socket subscription (a To-dos view can mount dozens; the per-connection
+  // subscription budget is 32) — but poll:false also means NOTHING refreshed a mounted card's transcript,
+  // ever. A card that outlives activity (the 8s reappear guard after a steer, or a needs-you thread the
+  // agent touched from another surface) kept showing the stale copy — a sent follow-up rendered as a gray
+  // "queued" bubble long after the agent had picked it up. Refetch on the thread's own lastActivityAt edge
+  // (delivered over the board-delta channel): one HTTP pull exactly when this thread actually moved.
+  const lastActivityRef = useRef(thread.lastActivityAt)
+  useEffect(() => {
+    if (q.transportFallback) return // typed pause stays manual — mirror useTranscript's own gating
+    if (thread.lastActivityAt !== lastActivityRef.current) {
+      lastActivityRef.current = thread.lastActivityAt
+      void q.refetch()
+    }
+    // q.refetch is stable across renders (react-query); the activity edge is the one meaningful dep.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [thread.lastActivityAt, q.transportFallback])
   // Raw server order — each message renders its `parts` in block order (fidelity). Memoized so the
   // windowing/useLiveAnswering below line up on identity.
   const messages = useMemo(() => q.data?.messages ?? [], [q.data])
@@ -853,14 +898,18 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve }: { thre
   // Dismiss THIS card through the same user-initiated auto-scroll exit the footer/header/answer paths
   // use, exposed to the in-transcript fence buttons (done Mark-as-done, awaiting park) via context so
   // EVERY card-dismissing control lands the next card at the viewport top — not just the ones that can
-  // reach onResolve directly. Stable identity (onResolve is a []-useCallback, thread.id is fixed per card).
+  // reach onResolve directly. `cancel` reinstates it when an optimistic Mark-as-done is declined by the
+  // server. Stable identity (onResolve/onUnresolve are []-useCallbacks, thread.id is fixed per card) so
+  // the memoized value below never churns and context consumers don't re-render each frame.
   const dismissThisCard = useCallback(() => onResolve(thread.id), [onResolve, thread.id])
+  const cancelThisCard = useCallback(() => onUnresolve(thread.id), [onUnresolve, thread.id])
+  const queueDismiss = useMemo(() => ({ dismiss: dismissThisCard, cancel: cancelThisCard }), [dismissThisCard, cancelThisCard])
 
   return (
     // Provide the thread slug so this card's transcript matches the thread view: sub-agent blocks go
     // live (spinner + drill-in) and a done/awaiting fence card resolves its thread to show the confirm button.
     <ThreadSlugContext.Provider value={thread.id}>
-    <QueueDismissContext.Provider value={dismissThisCard}>
+    <QueueDismissContext.Provider value={queueDismiss}>
     {/* NO overflow-hidden: it would clip the sticky header out of stickiness. The header carries
         rounded-t so the card's top corners still look clipped; the root's rounded-lg handles the bottom. */}
     <div
@@ -1106,6 +1155,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve }: { thre
       <ThreadLifecycleFooter
         thread={thread}
         onArchived={() => onResolve(thread.id)}
+        onDismissCancel={() => onUnresolve(thread.id)}
         onSnoozed={() => onResolve(thread.id)}
       />
     </div>
@@ -1118,8 +1168,8 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve }: { thre
 // mounted (and its draft/collapse/transcript state intact) unless its actual server payload changed.
 // Deltas retain identity for untouched rows, so the JSON path is only the reconnect/keyframe fallback.
 function queueCardPropsEqual(
-  previous: Readonly<{ thread: ThreadView; leaving: boolean; onResolve: (slug: string) => void }>,
-  next: Readonly<{ thread: ThreadView; leaving: boolean; onResolve: (slug: string) => void }>,
+  previous: Readonly<{ thread: ThreadView; leaving: boolean; onResolve: (slug: string) => void; onUnresolve: (slug: string) => void }>,
+  next: Readonly<{ thread: ThreadView; leaving: boolean; onResolve: (slug: string) => void; onUnresolve: (slug: string) => void }>,
 ): boolean {
-  return previous.leaving === next.leaving && previous.onResolve === next.onResolve && (previous.thread === next.thread || JSON.stringify(previous.thread) === JSON.stringify(next.thread))
+  return previous.leaving === next.leaving && previous.onResolve === next.onResolve && previous.onUnresolve === next.onUnresolve && (previous.thread === next.thread || JSON.stringify(previous.thread) === JSON.stringify(next.thread))
 }

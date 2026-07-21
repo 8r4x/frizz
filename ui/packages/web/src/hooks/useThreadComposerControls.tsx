@@ -6,6 +6,7 @@ import { rpc } from "../api/rpc.ts"
 import { PERMISSION_COLOR, permOptionsFor, permValueFor } from "../lib/options.ts"
 import {
   threadFollowUpBlocked,
+  threadComposerStatus,
   threadPermissionBlockedReason,
   threadPermissionEffectMessage,
 } from "../lib/threadPermissions.ts"
@@ -69,6 +70,7 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
     label: backend === "codex" ? "Codex" : "Claude Code",
     options: profileOptions,
   }]
+  const composerStatus = threadComposerStatus(thread, profiles.isError ? (profiles.error as Error).message : undefined)
 
   function changeProfile(target: { model: string; effort: string }) {
     profile.mutate(target, {
@@ -145,12 +147,14 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
         )}
       </div>
     ),
-    status: profiles.isError ? (
-          <div data-thread-control-error className="px-1 pt-1 text-[9.5px] leading-tight text-muted/65">
-            Profile controls unavailable: {(profiles.error as Error).message.slice(0, 160)}
+    status: composerStatus ? (
+          <div
+            data-thread-control-error={composerStatus.kind === "profile-error" ? "" : undefined}
+            data-thread-queue-status={composerStatus.kind === "queue-blocked" ? "blocked" : composerStatus.kind === "queue-sending" ? "sending" : undefined}
+            className={`px-1 pt-1 text-[9.5px] leading-tight ${composerStatus.kind === "queue-sending" ? "text-muted/45" : "text-muted/65"}`}
+          >
+            {composerStatus.message}
           </div>
-        ) : (thread.queuedInputCount ?? 0) > 0 ? (
-          <div className="px-1 pt-1 text-[9.5px] leading-tight text-muted/45">Sending queued Codex message…</div>
         ) : null,
   }
 }

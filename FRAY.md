@@ -32,6 +32,14 @@ clears only when a wrong guess would be both costly and hard to undo.
 Every change you land needs REAL end-to-end verification: exercise the actual behavior in the actual
 runtime, the way it will really run, and observe the real outcome. This is non-negotiable.
 
+- **Testing the real thing is the PRIMARY confidence mechanism — adversarial review is a supplement,
+  never a substitute, and never a reason to reach for a reviewer instead of a test.** If a change CAN
+  be exercised end-to-end, do THAT first; do not dispatch a self-review or a fresh-context reviewer as
+  a headline step in place of actually running it. A review only reasons about the code; a test
+  observes the runtime — and the runtime is the authority. When you catch yourself spinning up an
+  adversarial review of something you could instead just run, STOP and run it. Reserve review for what
+  you genuinely cannot execute yet (e.g. an unbuilt design), and even then treat its findings as
+  hypotheses to VERIFY by testing — not as verification. A reviewed plan is not a tested change.
 - Testing the pieces in isolation is NOT end-to-end. A passing unit test, a mock, a typecheck, or a
   hand-driven PROXY (e.g. invoking a CLI yourself with the flags the server *would* have passed, and
   concluding the server-spawned path works) proves the parts — not the whole. The seam between the
@@ -47,17 +55,32 @@ runtime, the way it will really run, and observe the real outcome. This is non-n
   what you actually exercised and what you could NOT, and why. "It should work" is not "it works" —
   do not claim a thing is verified or done when you have only verified a stand-in for it.
 
-## Commit your work — straight to main, never through a PR
+## Git: land on local `main` — NEVER open a pull request
 
-This overrides fray's default worktree/branch/PR discipline:
+**This repo does NOT use pull requests. At all. Ever.** This section OVERRIDES fray's default
+worktree/branch/PR discipline in full: wherever the base contract tells you to "open a PR and report
+its URL," do the exact opposite — the finished work lands in this machine's local `main`, and it never
+touches GitHub as a PR.
 
-- **Never open a pull request.** Not for a fix, not for significant work — PRs are off right now, no
-  exceptions. Work reaches `main` locally, never through GitHub.
-- The default is to work directly on `main` and commit there.
-- If you want isolation you MAY create a git worktree on a local branch and work there — but then you
-  OWN landing it. When the work is done and you have HIGH CONFIDENCE, report back to the human; once
-  they confirm, merge the branch into `main` locally. Getting it back onto `main` is your
-  responsibility, not the human's — never leave a branch stranded.
+- **NEVER open a pull request. NEVER run `gh pr create` (or any equivalent — the GitHub UI, a push
+  that opens a PR, anything).** Not for a typo, not for a one-line fix, not for a big feature — there
+  is no size threshold and no exception. If you find yourself about to create a PR, STOP: in this repo
+  that is always the wrong move. This is the single most-violated rule here — treat any impulse to
+  "open a PR for review" as a bug in your own plan and correct it before acting.
+- **Don't push a branch to the remote to stage a review either.** The remote plays no part in landing
+  work. Reading GitHub (issues, PRs, CI) is fine; creating or pushing a PR is not.
+- **The default is to work directly on `main` and commit there.** A small, self-contained change needs
+  no branch and no worktree — edit, verify, commit on `main`, done.
+- **Use a git worktree freely whenever you want isolation** — messy in-progress work, isolated and
+  end-to-end testing, spinning up a disposable dev server, anything you'd rather keep off the shared
+  tree. Create it on a local branch (`git worktree add <dir> -b <slug>`), do the work and the testing
+  there, and commit as you go.
+- **A worktree branch is scratch space, not a destination — YOU own landing it.** At the END of the
+  development effort, once the work is done and you hold HIGH CONFIDENCE, merge that branch straight
+  back into local `main` yourself (`git switch main && git merge <slug>`) and remove the worktree.
+  Getting the work onto `main` is your responsibility, not the human's — never leave a branch
+  stranded, and never hand back a branch for the human to merge. If the merge-back is genuinely
+  blocked, say so explicitly in your handoff; an unmerged branch is unfinished work.
 - Commit as you go: small, frequent commits at each coherent checkpoint, not one big commit at the
   end. Committed work can't be clobbered.
 - Always commit your completed work before you rest. Uncommitted work is unfinished work.

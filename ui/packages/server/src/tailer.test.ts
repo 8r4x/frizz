@@ -173,6 +173,14 @@ test("applyEvent: only a GENUINE user-message bumps lastUserAt; a synthetic one 
   assert.equal(s.lastActivityAt, "2026-07-01T00:00:05.000Z") // but activity clock did advance
 })
 
+test("applyEvent: lastUserText and lastUserAt stay paired when a genuine user event has no text", () => {
+  const s = newTailState("t", "s", "/x")
+  applyEvent(s, { kind: "user-message", at: "2026-07-01T00:00:00.000Z", text: "older exact text", synthetic: false })
+  applyEvent(s, { kind: "user-message", at: "2026-07-01T00:00:05.000Z", synthetic: false })
+  assert.equal(s.lastUserAt, "2026-07-01T00:00:05.000Z")
+  assert.equal(s.lastUserText, undefined, "a newer non-text event cannot lend its timestamp to stale matching text")
+})
+
 test("applyEvent: a later user-message clears a prior excusal fence + pending question", () => {
   const s = newTailState("t", "s", "/x")
   applyEvent(s, { kind: "turn-start", at: "2026-07-01T00:00:00.000Z" })

@@ -30,8 +30,8 @@ import { providerResumeCommand, shellQuote } from "./external-terminal.ts"
 
 test("provider resume command is shell-safe", () => {
   assert.equal(shellQuote("fray's socket"), "'fray'\"'\"'s socket'")
-  assert.equal(providerResumeCommand("codex", "/work/it's fray", "session-id"), "cd '/work/it'\"'\"'s fray' && codex resume 'session-id'")
-  assert.equal(providerResumeCommand("claude", "/work/fray", "session-id"), "cd '/work/fray' && claude --resume 'session-id'")
+  assert.equal(providerResumeCommand("codex", "/work/it's fray", "session-id"), "cd '/work/it'\"'\"'s fray' && codex resume 'session-id' --dangerously-bypass-approvals-and-sandbox")
+  assert.equal(providerResumeCommand("claude", "/work/fray", "session-id"), "cd '/work/fray' && claude --resume 'session-id' --dangerously-skip-permissions")
 })
 
 const noopTailer: Tailer = {
@@ -199,7 +199,7 @@ test("threadTerminalCommand offers the verified provider resume command in every
     h.addExitedThread("codex-resume")
     h.snapshot.threads.at(-1)!.backend = "codex"
 
-    const expected = { command: `cd '${h.dir}' && codex resume 'codex-rollout-id'`, mode: "resume", reason: null }
+    const expected = { command: `cd '${h.dir}' && codex resume 'codex-rollout-id' --dangerously-bypass-approvals-and-sandbox`, mode: "resume", reason: null }
 
     h.board.snapshot = async () => {
       throw new Error("the copy path must not rebuild the board")

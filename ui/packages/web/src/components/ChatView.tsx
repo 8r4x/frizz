@@ -3,7 +3,7 @@ import { useSnapshot } from "valtio"
 import * as RadixTabs from "@radix-ui/react-tabs"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight, Clock, FileText, HelpCircle, KeyRound, ListChecks, Loader2, ShieldCheck, Sparkles, X } from "lucide-react"
+import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight, FileText, HelpCircle, KeyRound, ListChecks, Loader2, ShieldCheck, Sparkles, X } from "lucide-react"
 import type { AwaitingHint, NativeInputRequired as NativeInputRequiredData, PendingAsk, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptToolCall } from "@fray-ui/shared"
 import { isValidAwaitingTimer } from "@fray-ui/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, showToast } from "../store.ts"
@@ -20,7 +20,8 @@ import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { messagePresentationText } from "../lib/messagePresentation.ts"
-import { formatSnoozedUntil, snoozePresetInstant, formatSnoozeWake } from "../lib/snooze.ts"
+import { snoozePresetInstant, formatSnoozeWake } from "../lib/snooze.ts"
+import { awaitingHintSentence, awaitingPresentationLine } from "../lib/awaitingPresentation.ts"
 import { prefs } from "../lib/prefs.ts"
 import { canAdoptThread } from "../lib/adoption.ts"
 import { THREAD_TITLE_MAX_LENGTH, aiRenameAvailability, manualThreadTitleSeed, threadTitleToCommit } from "../lib/threadTitle.ts"
@@ -32,7 +33,7 @@ import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { Tooltip } from "./Tooltip.tsx"
 import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
 import { hasRunningToolIndicator, isRunningOperation, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
-import { formatCountdownSeconds, formatElapsedMinutes, formatFixedDuration, formatToolDuration } from "../lib/durationLabels.ts"
+import { formatElapsedMinutes, formatFixedDuration, formatToolDuration } from "../lib/durationLabels.ts"
 import { TRANSCRIPT_META_LABEL_CLASS } from "../lib/transcriptMetaLabels.ts"
 import { InteractionStack } from "./InteractionCards.tsx"
 import { LastActive } from "./LastActive.tsx"
@@ -58,10 +59,11 @@ export const ThreadSlugContext = createContext<string | null>(null)
 // A QUEUE card provides this so any in-transcript dismissal control — the ```done fence's Mark-as-done
 // button, the ```awaiting fence's park button — routes its OWN card through the queue's user-initiated
 // exit (fade → auto-scroll the next card to the viewport top) instead of the passive board-departure
-// "hold a neighbour in place" path. It is exactly the card's `onResolve(slug)`, reached without
-// threading it through the fence renderer. Null off the queue (the thread drawer), where there is no
-// queue to scroll — there the fence buttons behave as before (archive/snooze, no scroll).
-export const QueueDismissContext = createContext<(() => void) | null>(null)
+// "hold a neighbour in place" path. `dismiss` is exactly the card's `onResolve(slug)`; `cancel` reinstates
+// an OPTIMISTICALLY dismissed card (its `onUnresolve(slug)`) when the completion RPC declines — reached
+// without threading either through the fence renderer. Null off the queue (the thread drawer), where there
+// is no queue to scroll — there the fence buttons behave as before (archive/snooze, no scroll).
+export const QueueDismissContext = createContext<{ dismiss: () => void; cancel: () => void } | null>(null)
 
 // The default thread surface: the session transcript (parsed server-side from the JSONL) rendered
 // as a conversation — assistant prose as markdown, tool calls as compact one-liners, a spinner
@@ -114,7 +116,11 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
   const nativeInputRequired = thread?.foreign ? undefined : thread?.nativeInputRequired
   const copyTerminalCommand = useCopyTerminalCommand(slug)
 
-  const q = useTranscript(slug, { poll: running })
+  // subscribe:true — this is a single-thread surface (drawer / standalone page), so it holds the socket
+  // subscription while MOUNTED, not just while running. An at-rest thread otherwise had NO live source in
+  // socket mode, so a steered message stayed rendered "queued" until the board flipped the thread running
+  // and the resubscribe round-trip completed (and sidecar-only advances never rendered at all).
+  const q = useTranscript(slug, { poll: running, subscribe: true })
   const queryClient = useQueryClient()
   const loadingEarlierRef = useRef(false)
   const [loadingEarlier, setLoadingEarlier] = useState(false)
@@ -2336,10 +2342,13 @@ export function QuestionBlockCard({
 
 // A SIGNAL fence rendered as a card in place of the raw ```done / ```awaiting block (the fence
 // language IS the state; the body is the message). `done` → a compact presentation-only success card;
-// its thread's Archive lives in the stable lifecycle footer. `awaiting` → a quiet parked-wait card:
-// body prose plus parsed hint chips (human/timer, with legacy pr/ci/session support).
+// its thread's Archive lives in the stable lifecycle footer. `awaiting` → one compact handoff row:
+// body prose plus one plain-English action summary (with legacy pr/ci/session support).
 export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKind; body: string; hints: AwaitingHint[]; wrap?: boolean }) {
   const html = useMemo(() => (body ? mdToHtml(body) : ""), [body])
+  const awaitingHint = awaitingHintSentence(hints)
+  const awaitingLine = awaitingPresentationLine(body, awaitingHint)
+  const awaitingHtml = useMemo(() => mdInlineToHtml(awaitingLine), [awaitingLine])
   // The owning thread's slug — set by the thread view AND the queue card — so the confirm button
   // resolves its thread and renders on both surfaces (null in a sub-agent's own transcript → no button).
   const slug = useContext(ThreadSlugContext)
@@ -2381,7 +2390,8 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
             <StateButton
               thread={doneThread}
               className="bg-fg px-2.5 py-1 text-bg hover:opacity-90"
-              onArchived={queueDismiss ?? undefined}
+              onArchived={queueDismiss?.dismiss}
+              onDismissCancel={queueDismiss?.cancel}
             />
           </div>
         )}
@@ -2389,31 +2399,11 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
     )
   }
   return (
-    <div className="rounded-lg border border-border-strong bg-panel-2 px-4 py-3">
-      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted/70">
-        <Clock size={12} className="shrink-0" /> Awaiting
-      </div>
-      {html && <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={{ __html: html }} />}
-      {hints.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {hints.map((h, i) => {
-            const timerLabel = h.kind === "timer" ? formatSnoozedUntil(h.value) : null
-            return (
-            <span key={i} className="flex min-w-0 items-center gap-1 rounded-md border border-border bg-panel px-2 py-0.5 text-[11px] text-fg/80">
-              {/* petite-caps sit on the baseline → ~1px low under items-center (see styles.css); lift the
-                  label onto the value's optical midline so "ci"/"pr" and the ref read on one line. */}
-              <span className="petite-caps relative -top-px text-[9.5px] text-muted/60">{h.kind}</span>
-              <span className={h.kind === "timer" ? "min-w-0 break-words" : "font-mono-keep"}>{timerLabel ?? (h.kind === "timer" ? "Schedule unavailable" : h.value)}</span>
-              {/* A live countdown to a timer wait — fray-ui owns this durable wake (it resumes the session when
-                  this fires), so the card shows the human exactly when that happens. */}
-              {/* The timestamp remains the primary information on a narrow queue card; hide the
-                  auxiliary live countdown there so neither value truncates or wraps awkwardly. */}
-              {h.kind === "timer" && <span className="hidden sm:inline"><TimerCountdown iso={h.value} /></span>}
-            </span>
-            )
-          })}
-        </div>
-      )}
+    <div className="flex min-w-0 items-stretch rounded-lg border border-border-strong bg-panel-2">
+      <div
+        className={`md-inline min-w-0 flex-1 content-center px-3 py-2 text-[12px] leading-5 text-fg/85${wrap ? ` ${QUEUE_WRAP}` : ""}`}
+        dangerouslySetInnerHTML={{ __html: awaitingHtml }}
+      />
       {canAct && fenceThread && <AwaitingParkButton thread={fenceThread} hints={hints} />}
     </div>
   )
@@ -2457,13 +2447,13 @@ function AwaitingParkButton({ thread, hints }: { thread: ThreadViewData; hints: 
       .setThreadSnooze({ slug: thread.id, until })
       .then(() => {
         showToast(`${action.toastVerb} · ${formatSnoozeWake(until)}`)
-        queueDismiss?.()
+        queueDismiss?.dismiss()
       })
       .catch((error) => showToast(`Couldn’t snooze: ${(error as Error).message.slice(0, 80)}`))
       .finally(() => setBusy(false))
   }
   return (
-    <div className="mt-3">
+    <div className="flex shrink-0 items-center justify-end border-l border-border px-2 py-1.5">
       <button
         type="button"
         onClick={apply}
@@ -2471,9 +2461,9 @@ function AwaitingParkButton({ thread, hints }: { thread: ThreadViewData; hints: 
         aria-label={action.label}
         title={action.label}
         onMouseDown={(e) => e.preventDefault()}
-        className="flex items-center gap-1.5 rounded-md bg-fg px-2.5 py-1 text-[12px] font-medium text-bg outline-none transition-opacity hover:opacity-90 focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-45"
+        className="flex items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-panel px-2 py-1 text-[11px] font-medium text-fg/85 outline-none transition-colors hover:border-border-strong hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-45"
       >
-        {busy ? <Loader2 size={12} className="animate-spin" /> : <Clock size={12} />}
+        {busy && <Loader2 size={11} className="animate-spin" />}
         {action.label}
       </button>
     </div>
@@ -2723,25 +2713,6 @@ export function PendingAskCard({ ask, onTerminal }: { ask: PendingAsk; onTermina
       </button>
     </div>
   )
-}
-
-// A live countdown to a timer wait's ISO instant, rendered inside the awaiting card's `timer` chip.
-// fray-ui's wakers scheduler OWNS this wake — it resumes the session when `now >= iso` — so the human
-// sees exactly how long until that happens. Ticks once a second (cheap; unmounts with the card). Past
-// due → "firing…" (the scheduler resumes within a tick; the fence then clears and this card vanishes).
-function TimerCountdown({ iso }: { iso: string }) {
-  const target = useMemo(() => Date.parse(iso), [iso])
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    if (!Number.isFinite(target)) return
-    const id = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(id)
-  }, [target])
-  if (!Number.isFinite(target)) return null
-  const remain = Math.floor((target - now) / 1000)
-  if (remain <= 0) return <span className="ml-0.5 text-[10px] text-muted/60 italic">firing…</span>
-  const label = formatCountdownSeconds(remain)
-  return <span className="ml-0.5 tabular-nums text-[10px] text-muted/60">in {label}</span>
 }
 
 // Human-friendly elapsed since an ISO timestamp: "just now", "12m", "1h 3m". Empty when unparseable.

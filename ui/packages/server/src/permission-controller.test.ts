@@ -45,6 +45,7 @@ function harness(storageOverride?: Storage) {
   let pane = ""
   let escaped = ""
   let live = true
+  let atomicSendSucceeds = true
   let clock = 1_000
   let onTailerTick = () => {}
   const sent: string[] = []
@@ -55,6 +56,11 @@ function harness(storageOverride?: Storage) {
     capturePane: () => pane,
     capturePaneEscaped: () => escaped,
     sendLiteral: (_slug, text) => sent.push(`literal:${text}`),
+    sendTextWithKey: (slug, text, key) => {
+      keyQueueSnapshots.push(storage.getSession(slug)?.codex_input_queue)
+      sent.push(`atomic:${key}:${text}`)
+      return atomicSendSucceeds
+    },
     sendKey: (slug, key) => {
       keyQueueSnapshots.push(storage.getSession(slug)?.codex_input_queue)
       sent.push(`key:${key}`)
@@ -97,6 +103,9 @@ function harness(storageOverride?: Storage) {
     },
     setLive(next: boolean) {
       live = next
+    },
+    setAtomicSendSucceeds(next: boolean) {
+      atomicSendSucceeds = next
     },
     setNow(next: number) {
       clock = next
@@ -154,6 +163,79 @@ test("composer inspection matches the exact wrapped nonempty Nub pane and the di
     { kind: "typed", text: "Compare alpha - beta before proceeding.", queueHint: false },
     "a standalone punctuation hyphen preserves the real following space",
   )
+  // NOTE: the earlier fail-closed assertions for multi-paragraph / model-slug-tail drafts followed by
+  // a PLAIN (unstyled) footer were removed here. captureCodexComposer no longer guesses the footer
+  // boundary — a real Codex status line has no stable, draft-distinct signature (it can be a bare
+  // model slug), so guessing it wedged real multi-paragraph steers. Delivery is now decided by the
+  // target-aware codexComposerMatches (see "captures a multi-paragraph draft across internal blank
+  // lines"), which deliberately prefers delivering a matching steer over failing closed on an
+  // ambiguous plain tail; inspectCodexComposer (no target) reports the leading paragraph as typed.
+  const styledFooter =
+    "\u001b[0;1m›\u001b[0m Keep the exact draft.\n\n  \u001b[38;2;246;226;183mgpt-5.6-sol xhigh\u001b[2m\u001b[39m · ~/project\u001b[0m\n  \u001b[2mtab to queue message\u001b[0m"
+  assert.deepEqual(inspectCodexComposer(styledFooter), {
+    kind: "typed",
+    text: "Keep the exact draft.",
+    queueHint: true,
+  })
+  assert.equal(
+    codexComposerMatches(styledFooter, "Keep the exact draft."),
+    true,
+    "a one-paragraph legacy draft remains recoverable only with independently styled footer rows",
+  )
+})
+
+// Regression: a MULTI-PARAGRAPH draft (blank rows between paragraphs) is the common shape of a real
+// steer. captureCodexComposer used to break at the first blank row, truncating the capture to the
+// first paragraph; codexComposerMatches then compared that prefix against the full normalized text
+// and returned false, so the durable queue wedged forever on "existing draft". The blank row is an
+// internal paragraph break, not the composer's end — only the footer/status line ends it.
+test("composer inspection captures a multi-paragraph draft across internal blank lines", () => {
+  const twoParagraphs =
+    "[1m›[0m First paragraph line one\n  continues on row two\n\n  Second paragraph after a blank line\n\n  gpt-5.6-sol xhigh · ~/Documents/projects/fray · Context 66% used"
+  assert.equal(inspectCodexComposer(twoParagraphs).kind, "typed", "a multi-paragraph draft is a typed composer")
+  assert.equal(
+    codexComposerMatches(twoParagraphs, "First paragraph line one continues on row two\n\nSecond paragraph after a blank line"),
+    true,
+    "the exact multi-paragraph staged text matches and can be submitted",
+  )
+  // Three-blank-line gaps collapse identically (normalizedInput turns any whitespace run into one space).
+  const threeBlanks =
+    "[1m›[0m Alpha\n\n\n  Bravo\n\n  gpt-5.6-sol xhigh · ~/x · 100% context left"
+  assert.equal(codexComposerMatches(threeBlanks, "Alpha\n\nBravo"), true)
+  // Fail-closed preserved: a genuinely different draft is never accepted just because we scan further.
+  assert.equal(
+    codexComposerMatches(twoParagraphs, "First paragraph line one continues on row two\n\nA DIFFERENT second paragraph"),
+    false,
+    "a non-matching multi-paragraph draft still fails closed",
+  )
+  // A footer hint rendered TIGHT under the draft (no blank between) still ends the draft — parity with
+  // the old parts-based capture, so delivery never re-wedges if Codex drops the pre-footer blank row.
+  const esc = String.fromCharCode(27)
+  assert.equal(codexComposerMatches(`${esc}[1m›${esc}[0m Do the safe thing\n  ${esc}[2m100% context left${esc}[0m`, "Do the safe thing"), true)
+})
+
+// Regression (adversarial review): the footer terminator must be the DIM, anchored footer row — not a
+// loose substring — or a real steer row that merely says "context left" / "tab to queue message" ends
+// the draft early and wedges the queue (the exact failure this path exists to prevent). Footer rows are
+// dim (\x1b[2m…); draft rows are not.
+test("a legitimate multi-row steer mentioning footer phrases is delivered, not wedged", () => {
+  const esc = String.fromCharCode(27)
+  const dim = `${esc}[2m`
+  const reset = `${esc}[0m`
+  // Second paragraph mentions "context left" mid-sentence (plain, not dim).
+  const steerA = `${esc}[1m\u203a${reset} Keep going on the task.\n\n  You still have plenty of context left, keep going.\n\n  ${dim}100% context left${reset}`
+  assert.equal(
+    codexComposerMatches(steerA, "Keep going on the task.\n\nYou still have plenty of context left, keep going."),
+    true,
+    "a steer paragraph mentioning 'context left' is not mistaken for the footer",
+  )
+  // A plain wrapped continuation row that STARTS with a footer phrase is still draft text.
+  const steerB = `${esc}[1m\u203a${reset} Please remember to\n  tab to queue message support later.\n\n  ${dim}100% context left${reset}`
+  assert.equal(
+    codexComposerMatches(steerB, "Please remember to tab to queue message support later."),
+    true,
+    "a plain wrapped row starting with a footer phrase is draft text, not the footer",
+  )
 })
 
 test("Claude composer inspection distinguishes the idle prompt from an unsent draft or modal", () => {
@@ -172,7 +254,7 @@ test("Claude permission footer reports the active new-pane mode without reading 
   assert.equal(detectClaudePermissionMode(`${"auto mode on\n".repeat(15)}❯\u00a0\n────\n  no status footer`), undefined)
 })
 
-test("a queued follow-up whose Codex visual wrap splits a hyphenated token still submits exactly once", () => {
+test("an idle queued follow-up is pasted and submitted by one terminal operation", () => {
   const h = harness()
   h.storage.upsertSession(row("wrapped-hyphen"))
   h.storage.setBackend("wrapped-hyphen", "codex")
@@ -181,14 +263,8 @@ test("a queued follow-up whose Codex visual wrap splits a hyphenated token still
   const message = "Call the connector for fray-native-audit/restart-test and wait."
 
   h.controller.queueFollowUp("wrapped-hyphen", message)
-  assert.deepEqual(h.sent, [`literal:${message}`])
-
-  h.setPane(
-    "",
-    "\u001b[1m›\u001b[0m Call the connector for fray-native-audit/restart-\n  test and wait.\n\n  \u001b[2m100% context left\u001b[0m",
-  )
-  h.controller.tick()
-  assert.deepEqual(h.sent, [`literal:${message}`, "key:Enter"])
+  assert.deepEqual(h.sent, [`atomic:Enter:${message}`])
+  assert.equal(JSON.parse(h.keyQueueSnapshots.at(-1) ?? "[]")[0].state, "submitted")
 })
 
 test("native queued-follow-up ownership requires Codex's local label and the exact queued text", () => {
@@ -631,7 +707,7 @@ test("an old permission completion cannot clear a newer same-session process gen
   assert.equal(saved.control_error, "new generation owns state")
 })
 
-test("durable live Codex follow-up separates typing from idle Enter and clears only on rollout telemetry", () => {
+test("durable live Codex follow-up persists its barrier before atomic paste-and-Enter", () => {
   const h = harness()
   h.storage.upsertSession(row("idle-input"))
   h.storage.setBackend("idle-input", "codex")
@@ -639,13 +715,7 @@ test("durable live Codex follow-up separates typing from idle Enter and clears o
   h.setPane("", emptyComposer)
 
   h.controller.queueFollowUp("idle-input", "Reply exactly IDLE_OK.")
-  assert.deepEqual(h.sent, ["literal:Reply exactly IDLE_OK."])
-  assert.equal(JSON.parse(h.storage.getSession("idle-input")?.codex_input_queue ?? "[]")[0].state, "pending")
-
-  h.sent.length = 0
-  h.setPane("", "\u001b[1m›\u001b[0m Reply exactly IDLE_OK.\n\n  gpt-5.6-sol")
-  h.controller.tick()
-  assert.deepEqual(h.sent, ["key:Enter"])
+  assert.deepEqual(h.sent, ["atomic:Enter:Reply exactly IDLE_OK."])
   assert.equal(JSON.parse(h.storage.getSession("idle-input")?.codex_input_queue ?? "[]")[0].state, "submitted")
   assert.equal(JSON.parse(h.keyQueueSnapshots.at(-1) ?? "[]")[0].state, "submitted", "barrier is durable before Enter")
 
@@ -662,6 +732,61 @@ test("durable live Codex follow-up separates typing from idle Enter and clears o
   assert.equal(h.storage.getSession("idle-input")?.codex_input_queue, null)
 })
 
+test("an indeterminate atomic-send error preserves the submission barrier and never replays", () => {
+  const h = harness()
+  const slug = "atomic-send-error"
+  h.storage.upsertSession(row(slug))
+  h.storage.setBackend(slug, "codex")
+  h.setTelemetry({ turn: "idle", permPrompt: false, subAgents: [], bgShells: [], pendingQuestion: false })
+  h.setPane("", emptyComposer)
+  h.setAtomicSendSucceeds(false)
+
+  h.controller.queueFollowUp(slug, "SEND_ONCE")
+  assert.deepEqual(h.sent, ["atomic:Enter:SEND_ONCE"])
+  assert.equal(JSON.parse(h.keyQueueSnapshots.at(-1) ?? "[]")[0].state, "submitted")
+  assert.match(h.storage.getSession(slug)?.control_error ?? "", /will not retry/)
+
+  h.setAtomicSendSucceeds(true)
+  h.controller.tick()
+  assert.deepEqual(h.sent, ["atomic:Enter:SEND_ONCE"], "a false return may follow an accepted tmux queue and cannot be retried")
+  assert.equal(JSON.parse(h.storage.getSession(slug)?.codex_input_queue ?? "[]")[0].state, "submitted")
+})
+
+test("a two-paragraph follow-up is atomically pasted and submitted from an empty composer", () => {
+  const h = harness()
+  const slug = "multi-paragraph-input"
+  const message = "Do not keep legacy code around.\n\nImplement this all fully."
+  h.storage.upsertSession(row(slug))
+  h.storage.setBackend(slug, "codex")
+  h.setTelemetry({ turn: "idle", permPrompt: false, subAgents: [], bgShells: [], pendingQuestion: false })
+  h.setPane("", emptyComposer)
+
+  h.controller.queueFollowUp(slug, message)
+
+  assert.deepEqual(h.sent, [`atomic:Enter:${message}`])
+  assert.equal(h.storage.getSession(slug)?.control_error, null)
+  assert.equal(JSON.parse(h.storage.getSession(slug)?.codex_input_queue ?? "[]")[0].state, "submitted")
+})
+
+// Under the deliver-first contract, a composer that already holds EXACTLY the queued text before what
+// reads as a footer is submitted (Enter) rather than failing closed. Trade-off (deliberate — see
+// captureCodexComposer): were that trailing model-slug line actually user-typed rather than Codex's
+// own footer, this would submit it too — judged near-impossible and preferable to wedging a real steer.
+test("a composer already holding the queued text before a footer-like tail is submitted", () => {
+  const h = harness()
+  const slug = "footer-like-user-text"
+  h.storage.upsertSession(row(slug))
+  h.storage.setBackend(slug, "codex")
+  h.setTelemetry({ turn: "idle", permPrompt: false, subAgents: [], bgShells: [], pendingQuestion: false })
+  h.setPane("", "\u001b[0;1m›\u001b[0m SAFE\n\n  gpt-5.6-sol xhigh · ~/project · Context 71% used")
+
+  h.controller.queueFollowUp(slug, "SAFE")
+
+  assert.deepEqual(h.sent, ["key:Enter"])
+  assert.equal(h.storage.getSession(slug)?.control_error, null)
+  assert.equal(JSON.parse(h.storage.getSession(slug)?.codex_input_queue ?? "[]")[0].state, "submitted")
+})
+
 test("a scheduler delivery id makes durable Codex wake enqueue idempotent", () => {
   const h = harness()
   const slug = "idempotent-wake"
@@ -676,7 +801,7 @@ test("a scheduler delivery id makes durable Codex wake enqueue idempotent", () =
   const queue = JSON.parse(h.storage.getSession(slug)?.codex_input_queue ?? "[]")
   assert.equal(queue.length, 1)
   assert.equal(queue[0].deliveryId, "wake-1")
-  assert.deepEqual(h.sent, [`literal:${message}`], "the duplicate acceptance never types or queues twice")
+  assert.deepEqual(h.sent, [`atomic:Enter:${message}`], "the duplicate acceptance never sends twice")
   assert.throws(
     () => h.controller.queueFollowUp(slug, "different payload", "wake-1"),
     /reused with different input/,
@@ -687,16 +812,12 @@ test("an active Codex composer uses its verified Tab queue hint, never Enter", (
   const h = harness()
   h.storage.upsertSession(row("active-input"))
   h.storage.setBackend("active-input", "codex")
-  h.setPane("", emptyComposer)
-  h.controller.queueFollowUp("active-input", "ACTIVE_FOLLOWUP exact text")
-
-  h.sent.length = 0
   h.setPane(
     "",
-    "\u001b[1m›\u001b[0m ACTIVE_FOLLOWUP exact text\n\n  \u001b[2mtab to queue message\u001b[0m  100% context left",
+    "\u001b[1m›\u001b[0m \u001b[2mAdd a follow-up\u001b[0m\n\n  \u001b[2mtab to queue message\u001b[0m",
   )
-  h.controller.tick()
-  assert.deepEqual(h.sent, ["key:Tab"])
+  h.controller.queueFollowUp("active-input", "ACTIVE_FOLLOWUP exact text")
+  assert.deepEqual(h.sent, ["atomic:Tab:ACTIVE_FOLLOWUP exact text"])
   assert.equal(JSON.parse(h.keyQueueSnapshots.at(-1) ?? "[]")[0].state, "submitted", "barrier is durable before Tab")
 })
 
@@ -718,15 +839,97 @@ test("a queued follow-up waits behind a native tool modal and resumes only after
 
   h.controller.queueFollowUp("modal-input", "continue after the approval")
   assert.deepEqual(h.sent, [], "the controller never answers or types through the modal")
-  assert.match(h.storage.getSession("modal-input")?.control_error ?? "", /current Codex modal/)
+  assert.match(h.storage.getSession("modal-input")?.control_error ?? "", /Codex composer or modal/)
   assert.equal(JSON.parse(h.storage.getSession("modal-input")?.codex_input_queue ?? "[]")[0].state, "pending")
 
   // The human presses Escape/Cancel in Terminal. On the next controller tick, the verified empty
   // composer is available again and the durable follow-up resumes without any replayed modal key.
+  h.setTelemetry({ turn: "idle", permPrompt: false, subAgents: [], bgShells: [], pendingQuestion: false })
   h.setPane("", emptyComposer)
   h.controller.tick()
-  assert.deepEqual(h.sent, ["literal:continue after the approval"])
+  assert.deepEqual(h.sent, ["atomic:Enter:continue after the approval"])
   assert.equal(h.storage.getSession("modal-input")?.control_error, null)
+})
+
+test("a post-enqueue transcript message reconciles one externally submitted pending follow-up", () => {
+  const h = harness()
+  h.storage.upsertSession(row("external-input"))
+  h.storage.setBackend("external-input", "codex")
+  h.setPane("", "unavailable composer")
+
+  h.setNow(1_000)
+  h.controller.queueFollowUp("external-input", "SUBMITTED_IN_ANOTHER_TERMINAL")
+  assert.deepEqual(h.sent, [])
+  assert.equal(JSON.parse(h.storage.getSession("external-input")?.codex_input_queue ?? "[]")[0].state, "pending")
+
+  h.setTelemetry({
+    turn: "in-flight",
+    permPrompt: false,
+    subAgents: [],
+    bgShells: [],
+    pendingQuestion: false,
+    lastUserText: "SUBMITTED_IN_ANOTHER_TERMINAL",
+    lastUserAt: "1970-01-01T00:00:00.900Z",
+  })
+  h.controller.tick()
+  assert.equal(JSON.parse(h.storage.getSession("external-input")?.codex_input_queue ?? "[]").length, 1, "older transcript history cannot satisfy a new queue item")
+
+  h.setTelemetry({
+    turn: "in-flight",
+    permPrompt: false,
+    subAgents: [],
+    bgShells: [],
+    pendingQuestion: false,
+    lastUserText: "SUBMITTED_IN_ANOTHER_TERMINAL",
+    lastUserAt: "1970-01-01T00:00:01.200Z",
+  })
+  h.controller.tick()
+  assert.equal(h.storage.getSession("external-input")?.codex_input_queue, null)
+  assert.equal(h.storage.getSession("external-input")?.runtime_control, null)
+  assert.equal(h.storage.getSession("external-input")?.control_error, null)
+})
+
+test("one external transcript event cannot reconcile identical pending follow-ups twice", () => {
+  const h = harness()
+  h.storage.upsertSession(row("external-duplicates"))
+  h.storage.setBackend("external-duplicates", "codex")
+  h.setPane("", "unavailable composer")
+
+  h.setNow(1_000)
+  h.controller.queueFollowUp("external-duplicates", "SAME_EXTERNAL")
+  h.setNow(1_050)
+  h.controller.queueFollowUp("external-duplicates", "SAME_EXTERNAL")
+
+  h.setTelemetry({
+    turn: "in-flight",
+    permPrompt: false,
+    subAgents: [],
+    bgShells: [],
+    pendingQuestion: false,
+    lastUserText: "SAME_EXTERNAL",
+    lastUserAt: "1970-01-01T00:00:01.200Z",
+  })
+  h.controller.tick()
+  let queue = JSON.parse(h.storage.getSession("external-duplicates")?.codex_input_queue ?? "[]")
+  assert.equal(queue.length, 1)
+  assert.equal(queue[0].state, "pending")
+  assert.equal(queue[0].reconcileAfter, "1970-01-01T00:00:01.200Z")
+
+  const restarted = createPermissionController({ storage: h.storage, tailer: h.tailer, board: h.board, terminal: h.terminal })
+  restarted.tick()
+  assert.equal(JSON.parse(h.storage.getSession("external-duplicates")?.codex_input_queue ?? "[]").length, 1, "the consumed transcript event stays fenced across ticks")
+
+  h.setTelemetry({
+    turn: "in-flight",
+    permPrompt: false,
+    subAgents: [],
+    bgShells: [],
+    pendingQuestion: false,
+    lastUserText: "SAME_EXTERNAL",
+    lastUserAt: "1970-01-01T00:00:01.500Z",
+  })
+  restarted.tick()
+  assert.equal(h.storage.getSession("external-duplicates")?.codex_input_queue, null)
 })
 
 test("identical consecutive follow-ups each require their own post-submission rollout", () => {
@@ -738,10 +941,9 @@ test("identical consecutive follow-ups each require their own post-submission ro
 
   h.setNow(1_000)
   h.controller.queueFollowUp("duplicate-input", "SAME")
-  h.setPane("", "\u001b[1m›\u001b[0m SAME\n\n  gpt-5.6-sol")
   h.setNow(1_050)
   h.controller.queueFollowUp("duplicate-input", "SAME")
-  assert.deepEqual(h.sent, ["literal:SAME", "key:Enter"])
+  assert.deepEqual(h.sent, ["atomic:Enter:SAME"])
 
   h.setTelemetry({
     turn: "idle",
@@ -760,11 +962,10 @@ test("identical consecutive follow-ups each require their own post-submission ro
   h.setPane("", emptyComposer)
   h.setNow(1_300)
   h.controller.tick()
-  h.setPane("", "\u001b[1m›\u001b[0m SAME\n\n  gpt-5.6-sol")
-  h.setNow(1_400)
-  h.controller.tick()
+  assert.deepEqual(h.sent, ["atomic:Enter:SAME", "atomic:Enter:SAME"])
   queue = JSON.parse(h.storage.getSession("duplicate-input")?.codex_input_queue ?? "[]")
-  assert.equal(queue[0].submittedAt, "1970-01-01T00:00:01.400Z")
+  assert.equal(queue[0].state, "submitted")
+  assert.equal(queue[0].submittedAt, "1970-01-01T00:00:01.300Z")
 
   h.controller.tick()
   assert.equal(
@@ -848,9 +1049,10 @@ test("explicit idle recovery submits the verified existing draft first, confirms
   assert.deepEqual(queue.map((item: { text: string }) => item.text), ["queued after recovery"])
   assert.deepEqual(h.sent, [], "the next message never shares the recovery-confirmation tick")
 
+  h.setTelemetry({ turn: "idle", permPrompt: false, subAgents: [], bgShells: [], pendingQuestion: false })
   h.setPane("", emptyComposer)
   h.controller.tick()
-  assert.deepEqual(h.sent, ["literal:queued after recovery"])
+  assert.deepEqual(h.sent, ["atomic:Enter:queued after recovery"])
 })
 
 test("explicit active recovery uses only Codex's advertised Tab queue control", () => {

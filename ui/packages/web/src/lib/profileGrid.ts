@@ -89,10 +89,11 @@ export function profileGridDisplayLabel(
   if (!selection?.model && !selection?.effort) return placeholder
   const option = groups.flatMap((group) => group.options).find((candidate) => candidate.model === selection.model)
   const model = option?.label ?? selection.model ?? "Model unknown"
-  // Older Claude sessions record their resolved model in the provider transcript but never the
-  // launch effort. Present that incomplete provenance as a legacy state, not as an apparent
-  // malformed selection. A concrete effort is always shown verbatim; no default is inferred.
-  return selection.effort ? `${model} › ${selection.effort}` : `${model} › Legacy profile`
+  // A Claude thread records its resolved model in the provider transcript but never the launch effort,
+  // so a thread dispatched without an explicit effort (or an older/foreign session) has a known model
+  // and an unknown effort. Show the model alone in that case: a concrete effort is displayed verbatim
+  // when present, and no effort is ever inferred — but the profile never reads as a "legacy" state.
+  return selection.effort ? `${model} › ${selection.effort}` : model
 }
 
 // Arrow keys move through the visual matrix rather than the DOM's flattened menu order. Horizontal

@@ -1,58 +1,17 @@
 import { Hono } from "hono"
 import { cors } from "hono/cors"
 import { streamSSE } from "hono/streaming"
-import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs"
-import { isAbsolute, extname, join } from "node:path"
+import { mkdirSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { mountRouter } from "@fray-ui/rpc/server"
 import { DEFAULT_PORT, ATTACHMENT_MAX_BASE64_CHARS, attachmentExtension, isAllowedAttachmentName, type ServerEvent } from "@fray-ui/shared"
 import { createRouter } from "./router.ts"
 import type { AppContext } from "./context.ts"
 import { allowedLocalCorsOrigin, isTrustedLocalHttpRequest } from "./local-origin.ts"
+import { resolveLocalImage } from "./local-image.ts"
 
-// Local image serving. Screenshot paths in agent markdown point at real files on disk; the web
-// client renders them via <img src="/local-image?path=…">. Strictly gated: absolute paths only,
-// an image-extension whitelist, and the symlink-resolved real path must sit under a trusted root
-// (the project dir, the OS temp dir, or ~/Screenshots). Anything else is 403 — never a raw file read.
-const IMAGE_CONTENT_TYPE: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-}
-
-export type LocalImageResult =
-  | { status: 400 | 404 }
-  | { status: 200; contentType: string; body: Buffer }
-
-// Resolve a local image request. Deliberately UNCONFINED — no trusted-root allowlist: the proxy renders
-// ANY readable local image the requester names (a screenshot anywhere on disk, not just under the
-// workspace/tmp). This is safe to widen: the route is loopback-only (the app-wide origin gate), the
-// extension allowlist keeps it to image bytes, realpath+isFile reject non-files and dangling/looping
-// symlinks, and the bytes render in the viewer's OWN browser where sanitized markdown can't read them
-// back — so it adds no exfiltration path. Any failed check returns a status-only result.
-export function resolveLocalImage(rawPath: string | undefined): LocalImageResult {
-  if (!rawPath || !isAbsolute(rawPath)) return { status: 400 }
-
-  const ext = extname(rawPath).toLowerCase()
-  const contentType = IMAGE_CONTENT_TYPE[ext]
-  if (!contentType) return { status: 400 }
-
-  let real: string
-  try {
-    real = realpathSync(rawPath) // resolve symlinks; a dangling/looping link is a clean 404
-  } catch {
-    return { status: 404 }
-  }
-
-  try {
-    if (!statSync(real).isFile()) return { status: 404 }
-    return { status: 200, contentType, body: readFileSync(real) }
-  } catch {
-    return { status: 404 }
-  }
-}
+export { resolveLocalImage } from "./local-image.ts"
 
 // The API surface routed to app.fetch: /rpc/* (typed procedures), /events (the single SSE
 // board channel), /health. The terminal WebSocket and static/Vite assets are handled by the

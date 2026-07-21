@@ -1,7 +1,10 @@
 import assert from "node:assert/strict"
-import { createServer, request, type RequestListener } from "node:http"
+import { createServer, request, type IncomingHttpHeaders, type RequestListener } from "node:http"
 import { once } from "node:events"
 import { test } from "node:test"
+import { mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import {
   RestartSupervisorProxy,
   SUPERVISOR_RESTART_PATH,
@@ -40,6 +43,18 @@ async function get(port: number, path: string, method = "GET") {
       res.setEncoding("utf8")
       res.on("data", (chunk) => { body += chunk })
       res.on("end", () => resolve({ status: res.statusCode ?? 0, body }))
+    })
+    req.once("error", reject)
+    req.end()
+  })
+}
+
+async function getBytes(port: number, path: string, headers: Record<string, string> = {}, method = "GET") {
+  return new Promise<{ status: number; headers: IncomingHttpHeaders; body: Buffer }>((resolve, reject) => {
+    const req = request({ host: "127.0.0.1", port, path, headers, method }, (res) => {
+      const chunks: Buffer[] = []
+      res.on("data", (chunk: Buffer) => { chunks.push(chunk) })
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks) }))
     })
     req.once("error", reject)
     req.end()
@@ -85,6 +100,44 @@ test("public restart supervisor preserves routes, does not restart initial/subre
   } finally {
     await proxy.close().catch(() => undefined)
     await current.close().catch(() => undefined)
+  }
+})
+
+test("public supervisor serves local images without entering or requiring the disposable child", async () => {
+  const image = Buffer.from("89504e470d0a1a0a", "hex")
+  const imageDir = mkdtempSync(join(tmpdir(), "fray-supervisor-image-"))
+  const imagePath = join(imageDir, "handoff.png")
+  writeFileSync(imagePath, image)
+
+  const port = await freePort()
+  const proxy = new RestartSupervisorProxy({
+    port,
+    childPort: () => undefined,
+    restart: async () => ({ state: "ready" }),
+  })
+  try {
+    await proxy.listen()
+    const path = `/local-image?path=${encodeURIComponent(imagePath)}`
+    const served = await getBytes(port, path, { "sec-fetch-site": "same-origin" })
+    assert.equal(served.status, 200)
+    assert.equal(served.headers["content-type"], "image/png")
+    assert.equal(served.headers["cache-control"], "private, max-age=60")
+    assert.deepEqual(served.body, image)
+
+    const head = await getBytes(port, path, { "sec-fetch-site": "same-origin" }, "HEAD")
+    assert.equal(head.status, 200)
+    assert.equal(head.headers["content-length"], String(image.length))
+    assert.equal(head.body.length, 0)
+
+    const cors = await getBytes(port, path, { origin: `http://127.0.0.1:${port}` })
+    assert.equal(cors.status, 200)
+    assert.equal(cors.headers["access-control-allow-origin"], `http://127.0.0.1:${port}`)
+
+    assert.equal((await getBytes(port, path)).status, 403, "missing browser authority stays forbidden")
+    assert.equal((await getBytes(port, path, { origin: "http://attacker.invalid" })).status, 403)
+    assert.equal((await get(port, "/ordinary-route")).status, 503, "only local images bypass an unavailable child")
+  } finally {
+    await proxy.close().catch(() => undefined)
   }
 })
 

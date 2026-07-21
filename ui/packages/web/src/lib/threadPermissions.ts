@@ -14,6 +14,20 @@ export interface ThreadPermissionState {
   profileChangePending?: boolean
   runtimeControlPending?: boolean
   followUpQueueAvailable?: boolean
+  controlError?: string
+}
+
+export type ThreadComposerStatus = {
+  kind: "queue-blocked" | "queue-sending" | "profile-error"
+  message: string
+}
+
+export function threadComposerStatus(thread: ThreadPermissionState, profileError?: string): ThreadComposerStatus | null {
+  const queued = (thread.queuedInputCount ?? 0) > 0
+  const error = thread.controlError?.trim()
+  if (queued && error && !error.startsWith("fray-steer-failed:")) return { kind: "queue-blocked", message: error }
+  if (profileError?.trim()) return { kind: "profile-error", message: `Profile controls unavailable: ${profileError.trim().slice(0, 160)}` }
+  return queued ? { kind: "queue-sending", message: "Sending queued Codex message…" } : null
 }
 
 export function threadPermissionBlockedReason(thread: ThreadPermissionState): string | null {

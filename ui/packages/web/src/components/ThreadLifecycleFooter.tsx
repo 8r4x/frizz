@@ -3,7 +3,7 @@ import { Check, Loader2 } from "lucide-react"
 import type { ThreadView } from "@fray-ui/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
-import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
+import { threadLifecycleAvailability, completionArchivesImmediately } from "../lib/threadLifecycle.ts"
 import { SnoozeButton } from "./SnoozeButton.tsx"
 import { Dialog } from "./ui/Dialog.tsx"
 
@@ -15,6 +15,7 @@ export function ThreadLifecycleFooter({
   sticky = false,
   safeArea = false,
   onArchived,
+  onDismissCancel,
   onSnoozed,
 }: {
   thread: ThreadView
@@ -23,6 +24,10 @@ export function ThreadLifecycleFooter({
   // inset here, after the lifecycle controls, rather than padding the chat footer below the prompt.
   safeArea?: boolean
   onArchived?: () => void
+  // Undo an OPTIMISTIC dismissal (see StateButton): the queue passes this so a card that faded on click
+  // can be un-hidden the instant the server declines to complete (needs confirmation, or errors). Absent
+  // ⇒ the button stays non-optimistic (the drawer footer, where there is no queue card to reinstate).
+  onDismissCancel?: () => void
   onSnoozed?: () => void
 }) {
   const available = threadLifecycleAvailability(thread)
@@ -34,7 +39,7 @@ export function ThreadLifecycleFooter({
       className={`${sticky ? "z-20" : "rounded-b-[7px]"} flex min-h-10 shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/70 bg-panel/95 px-3 pt-2 ${safeArea ? "pb-[max(0.5rem,env(safe-area-inset-bottom))]" : "pb-2"} backdrop-blur-sm`}
     >
       {available.snooze && <SnoozeButton thread={thread} onSnoozed={onSnoozed} />}
-      <StateButton thread={thread} onArchived={onArchived} />
+      <StateButton thread={thread} onArchived={onArchived} onDismissCancel={onDismissCancel} />
     </footer>
   )
 }
@@ -46,10 +51,14 @@ export function ThreadLifecycleFooter({
 export function StateButton({
   thread,
   onArchived,
+  onDismissCancel,
   className = "border border-border-strong bg-panel-2/60 px-2.5 py-1 text-fg/80 hover:bg-panel-2 hover:text-fg",
 }: {
   thread: ThreadView
   onArchived?: () => void
+  // Undo an optimistic dismissal (queue only). Present ⇒ the click may dismiss the card BEFORE the RPC
+  // returns and reinstate it if the server declines; absent ⇒ the button waits for the round-trip.
+  onDismissCancel?: () => void
   className?: string
 }) {
   // Disables the instant it's clicked. On success we DON'T reset it: the card is dissolving, so the
@@ -58,32 +67,46 @@ export function StateButton({
   // (re-enables under the dialog) or a failure (re-enables in place) clears it.
   const [pending, setPending] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
-  const complete = (terminateLive: boolean) => {
+  // `optimistic`: fade the card NOW (before the RPC) rather than after the round-trip. Only when a
+  // reinstate path exists AND the completion is predicted to archive immediately — so the common resting
+  // "done" card feels instantaneous, while an executing turn still waits and shows the confirm dialog.
+  const complete = (terminateLive: boolean, optimistic: boolean) => {
     setPending(true)
+    if (optimistic) onArchived?.() // start the exit animation immediately
     rpc
       .completeThread({ slug: thread.id, terminateLive })
       .then((result) => {
         if (result.needsConfirmation) {
+          // The server wants confirmation after all (an executing/ambiguous turn, or a rare mispredict).
+          // Reinstate the optimistically-dismissed card (onDismissCancel cancels its pending unmount too),
+          // then open the dialog over it. The server returns needsConfirmation from a cheap liveness/telemetry
+          // check BEFORE any tmux kill, so this reply normally lands before the card's exit and the button is
+          // still mounted → the dialog opens. If it arrives after the card already unmounted (a slow reply
+          // under event-loop contention), the card still reinstates but this setConfirmOpen no-ops on the
+          // gone instance — the user simply sees the card return and can click again. Safe either way.
+          if (optimistic) onDismissCancel?.()
           setConfirmOpen(true)
           setPending(false)
           return
         }
         setConfirmOpen(false)
         showToast("Done")
-        onArchived?.()
+        if (!optimistic) onArchived?.() // non-optimistic path dismisses now; optimistic already did
       })
       .catch((error) => {
+        if (optimistic) onDismissCancel?.() // roll the card back into the queue on failure
         showToast(`Couldn’t finish: ${(error as Error).message.slice(0, 80)}`)
         setPending(false)
       })
   }
+  const canOptimistic = !!onArchived && !!onDismissCancel && completionArchivesImmediately(thread)
   return (
     <>
       <button
         type="button"
         // The server owns the execution verdict. A live tmux shell can be resting at its provider
         // prompt, in which case Done should immediately stop it and archive the thread.
-        onClick={() => complete(false)}
+        onClick={() => complete(false, canOptimistic)}
         disabled={pending}
         aria-label="Mark as done"
         title="Mark as done"
@@ -113,7 +136,7 @@ export function StateButton({
             <button
               type="button"
               disabled={pending}
-              onClick={() => complete(true)}
+              onClick={() => complete(true, false)}
               className="flex items-center gap-1.5 rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-opacity hover:opacity-90 disabled:opacity-45"
             >
               {pending && <Loader2 size={12} className="animate-spin" />}
