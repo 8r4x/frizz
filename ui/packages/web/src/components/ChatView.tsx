@@ -3,7 +3,7 @@ import { useSnapshot } from "valtio"
 import * as RadixTabs from "@radix-ui/react-tabs"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight, FileText, HelpCircle, KeyRound, ListChecks, Loader2, ShieldCheck, Sparkles, X } from "lucide-react"
+import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, ShieldCheck, Sparkles, X } from "lucide-react"
 import type { AwaitingHint, NativeInputRequired as NativeInputRequiredData, PendingAsk, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptToolCall } from "@fray-ui/shared"
 import { isValidAwaitingTimer } from "@fray-ui/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, showToast } from "../store.ts"
@@ -346,7 +346,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
               })
               return out
             })()}
-            {(thread?.providerFault || thread?.pendingAsk || nativeInputRequired || thread?.runtime === "perm-prompt" || running) && <VSpace />}
+            {(thread?.providerFault || thread?.limitPause || thread?.pendingAsk || nativeInputRequired || thread?.runtime === "perm-prompt" || running) && <VSpace />}
             {/* A frozen native AskUserQuestion takes precedence over the generic perm banner and the
                 Working… spinner — it's the salient state (the safety net). Background sub-agents/shells
                 are NOT surfaced here anymore: they live in the anchored ops strip (below), which is
@@ -358,6 +358,8 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
                 fault={thread.providerFault}
                 retryText={lastUserIdx >= 0 ? messages[lastUserIdx]?.text : undefined}
               />
+            ) : thread?.limitPause && !thread.foreign ? (
+              <LimitPauseCard slug={slug} pause={thread.limitPause} />
             ) : thread?.pendingAsk ? (
               <PendingAskCard ask={thread.pendingAsk} onTerminal={copyTerminalCommand} />
             ) : nativeInputRequired ? (
@@ -475,6 +477,7 @@ function VirtualizedThreadTranscript({
   }, [messages])
   const hasRuntimeStatus = Boolean(
     (thread?.providerFault && !thread.foreign)
+      || (thread?.limitPause && !thread.foreign)
       || thread?.pendingAsk
       || nativeInputRequired
       || thread?.runtime === "perm-prompt"
@@ -712,6 +715,8 @@ function VirtualizedThreadTranscript({
               <div className="px-6" style={{ paddingTop: STEP }}>
                 {thread?.providerFault && !thread.foreign ? (
                   <ProviderFaultCard slug={slug} fault={thread.providerFault} retryText={lastUserIdx >= 0 ? messages[lastUserIdx]?.text : undefined} />
+                ) : thread?.limitPause && !thread.foreign ? (
+                  <LimitPauseCard slug={slug} pause={thread.limitPause} />
                 ) : thread?.pendingAsk ? (
                   <PendingAskCard ask={thread.pendingAsk} onTerminal={copyTerminalCommand} />
                 ) : nativeInputRequired ? (
@@ -2527,6 +2532,55 @@ export function ProviderFaultCard({
           onAuthed={() => setSignIn(false)}
         />
       )}
+    </div>
+  )
+}
+
+// Format a unix-seconds instant as a bare local wall clock ("5:50 PM"), or with the weekday when it
+// is not today — a limit that resets tomorrow afternoon must not read as if it comes back this hour.
+function limitResumeClock(unixSeconds: number): string {
+  const when = new Date(unixSeconds * 1000)
+  const sameDay = when.toDateString() === new Date().toDateString()
+  const time = when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+  return sameDay ? time : `${when.toLocaleDateString([], { weekday: "short" })} ${time}`
+}
+
+// The usage-limit pause card. Rendered ONLY from the server's TYPED limitPause — the same trust rule
+// as ProviderFaultCard, so an agent quoting a limit message into its own transcript can never
+// fabricate a "paused, resuming later" affordance.
+//
+// Deliberately NOT the sign-in card's shape, even though both are provider faults: here the
+// credential is fine and the recovery is TIME, not an action. So the card leads with information —
+// when the window comes back, and that fray will pick the thread up itself — and keeps a manual
+// continue as the secondary, for the operator who has capacity elsewhere and doesn't want to wait.
+export function LimitPauseCard({ slug, pause }: { slug: string; pause: NonNullable<ThreadViewData["limitPause"]> }) {
+  const label = PROVIDER_LABEL[pause.backend]
+  const which = pause.window === "weekly" ? "weekly limit" : pause.window === "session" ? "session limit" : "usage limit"
+  const continueNow = useMutation({
+    mutationFn: () => rpc.followUp({ slug, message: "Continue exactly where you left off." }),
+    onSuccess: () => showToast("Continuing…"),
+    onError: (e) => showToast(`Continue failed: ${(e as Error).message.slice(0, 80)}`),
+  })
+  return (
+    <div data-limit-pause className="flex items-center gap-2.5 rounded-md border border-amber-500/40 bg-panel-2 px-3 py-2 text-[12px]">
+      <Hourglass size={13} className="shrink-0 text-amber-400" />
+      <span className="min-w-0 flex-1 text-fg/90">
+        <span className="font-medium">Paused — {label} {which} reached</span>
+        {" — "}
+        {pause.autoResume
+          ? pause.resumesAt
+            ? `this thread continues automatically at ${limitResumeClock(pause.resumesAt)}.`
+            : "this thread continues automatically once the window resets."
+          : "continue it whenever you have capacity again."}
+      </span>
+      <button
+        onClick={() => continueNow.mutate()}
+        disabled={continueNow.isPending}
+        onMouseDown={(e) => e.preventDefault()}
+        className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-fg/90 transition-colors hover:bg-panel hover:border-border-strong disabled:opacity-60"
+      >
+        Continue now
+      </button>
     </div>
   )
 }

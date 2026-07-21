@@ -32,6 +32,7 @@ export const SETTINGS_HELP = {
   queueOrder: "Orders the Needs-you queue and the sidebar's rested threads by when each was last active. Oldest first (FIFO, default) surfaces the longest-waiting item first so you cycle through everything; Newest first (LIFO) keeps the most recently active on top. Applies immediately in this browser.",
   notifications: "Shows a desktop notification when work needs attention while this window is hidden.",
   runtimeGate: "When on, dispatched workers must verify UI/runtime changes in a real browser, screenshot the result into their handoff, and get an independent review before finishing. Turn off to drop that requirement from the worker prompt.",
+  autoResumeOnLimit: "When a usage limit interrupts running threads, fray remembers every one it cut off and sends each a “continue” once the window resets. Those threads stay out of your queue while they wait. Turn off to leave them parked for you to restart by hand.",
   subagentInstructions: "Your custom per-project instructions, appended to every dispatched agent's prompt after the built-in worker contract.",
 } as const
 function currentPerm(): NotifPerm {
@@ -227,6 +228,11 @@ export function SettingsDrawer() {
                 Absent ⇒ on, so a checkbox always reflects the effective state. */}
             <SettingsField label="Runtime QA gate" help={SETTINGS_HELP.runtimeGate}>
               <OnOffToggle value={draft.runtimeGate !== false} onChange={(on) => setTrackedDraft({ ...draft, runtimeGate: on })} />
+            </SettingsField>
+
+            {/* Server setting (the wake scheduler's limit source). Absent ⇒ on, same as above. */}
+            <SettingsField label="Auto-resume after usage limits" help={SETTINGS_HELP.autoResumeOnLimit}>
+              <OnOffToggle value={draft.autoResumeOnLimit !== false} onChange={(on) => setTrackedDraft({ ...draft, autoResumeOnLimit: on })} />
             </SettingsField>
 
             <PromptsSection draft={draft} setDraft={setTrackedDraft} />
