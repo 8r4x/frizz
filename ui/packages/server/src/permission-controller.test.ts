@@ -851,6 +851,87 @@ test("a queued follow-up waits behind a native tool modal and resumes only after
   assert.equal(h.storage.getSession("modal-input")?.control_error, null)
 })
 
+test("a post-enqueue transcript message reconciles one externally submitted pending follow-up", () => {
+  const h = harness()
+  h.storage.upsertSession(row("external-input"))
+  h.storage.setBackend("external-input", "codex")
+  h.setPane("", "unavailable composer")
+
+  h.setNow(1_000)
+  h.controller.queueFollowUp("external-input", "SUBMITTED_IN_ANOTHER_TERMINAL")
+  assert.deepEqual(h.sent, [])
+  assert.equal(JSON.parse(h.storage.getSession("external-input")?.codex_input_queue ?? "[]")[0].state, "pending")
+
+  h.setTelemetry({
+    turn: "in-flight",
+    permPrompt: false,
+    subAgents: [],
+    bgShells: [],
+    pendingQuestion: false,
+    lastUserText: "SUBMITTED_IN_ANOTHER_TERMINAL",
+    lastUserAt: "1970-01-01T00:00:00.900Z",
+  })
+  h.controller.tick()
+  assert.equal(JSON.parse(h.storage.getSession("external-input")?.codex_input_queue ?? "[]").length, 1, "older transcript history cannot satisfy a new queue item")
+
+  h.setTelemetry({
+    turn: "in-flight",
+    permPrompt: false,
+    subAgents: [],
+    bgShells: [],
+    pendingQuestion: false,
+    lastUserText: "SUBMITTED_IN_ANOTHER_TERMINAL",
+    lastUserAt: "1970-01-01T00:00:01.200Z",
+  })
+  h.controller.tick()
+  assert.equal(h.storage.getSession("external-input")?.codex_input_queue, null)
+  assert.equal(h.storage.getSession("external-input")?.runtime_control, null)
+  assert.equal(h.storage.getSession("external-input")?.control_error, null)
+})
+
+test("one external transcript event cannot reconcile identical pending follow-ups twice", () => {
+  const h = harness()
+  h.storage.upsertSession(row("external-duplicates"))
+  h.storage.setBackend("external-duplicates", "codex")
+  h.setPane("", "unavailable composer")
+
+  h.setNow(1_000)
+  h.controller.queueFollowUp("external-duplicates", "SAME_EXTERNAL")
+  h.setNow(1_050)
+  h.controller.queueFollowUp("external-duplicates", "SAME_EXTERNAL")
+
+  h.setTelemetry({
+    turn: "in-flight",
+    permPrompt: false,
+    subAgents: [],
+    bgShells: [],
+    pendingQuestion: false,
+    lastUserText: "SAME_EXTERNAL",
+    lastUserAt: "1970-01-01T00:00:01.200Z",
+  })
+  h.controller.tick()
+  let queue = JSON.parse(h.storage.getSession("external-duplicates")?.codex_input_queue ?? "[]")
+  assert.equal(queue.length, 1)
+  assert.equal(queue[0].state, "pending")
+  assert.equal(queue[0].reconcileAfter, "1970-01-01T00:00:01.200Z")
+
+  const restarted = createPermissionController({ storage: h.storage, tailer: h.tailer, board: h.board, terminal: h.terminal })
+  restarted.tick()
+  assert.equal(JSON.parse(h.storage.getSession("external-duplicates")?.codex_input_queue ?? "[]").length, 1, "the consumed transcript event stays fenced across ticks")
+
+  h.setTelemetry({
+    turn: "in-flight",
+    permPrompt: false,
+    subAgents: [],
+    bgShells: [],
+    pendingQuestion: false,
+    lastUserText: "SAME_EXTERNAL",
+    lastUserAt: "1970-01-01T00:00:01.500Z",
+  })
+  restarted.tick()
+  assert.equal(h.storage.getSession("external-duplicates")?.codex_input_queue, null)
+})
+
 test("identical consecutive follow-ups each require their own post-submission rollout", () => {
   const h = harness()
   h.storage.upsertSession(row("duplicate-input"))

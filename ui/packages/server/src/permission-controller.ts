@@ -89,6 +89,9 @@ export interface QueuedInput {
   enqueuedAt: string
   state: "pending" | "submitted"
   submittedAt?: string
+  // A transcript user_message at or before this instant already reconciled an earlier queue item.
+  // Remaining duplicates must wait for distinct provider evidence rather than reusing that event.
+  reconcileAfter?: string
   // Positive native Codex ownership observed after Tab, before JSONL emits user_message. This is
   // durable because the native block may scroll away while Codex continues its turn.
   providerQueuedAt?: string
@@ -104,6 +107,7 @@ function isQueuedInput(item: unknown): item is QueuedInput {
     typeof candidate.enqueuedAt === "string" &&
     (candidate.state === "pending" || candidate.state === "submitted") &&
     (candidate.submittedAt === undefined || typeof candidate.submittedAt === "string") &&
+    (candidate.reconcileAfter === undefined || typeof candidate.reconcileAfter === "string") &&
     (candidate.providerQueuedAt === undefined || typeof candidate.providerQueuedAt === "string") &&
     (candidate.source === undefined || candidate.source === "existing-draft") &&
     (candidate.match === undefined || candidate.match === "normalized") &&
@@ -840,18 +844,27 @@ export function createPermissionController(deps: PermissionControllerDeps): Perm
     }
   }
 
-  function delivered(item: QueuedInput, slug: string): boolean {
-    // Pending input has not crossed the native submit boundary yet. `submittedAt` disambiguates
-    // identical consecutive messages: telemetry from the earlier turn must never acknowledge the
-    // later one merely because both were enqueued before that telemetry arrived.
-    if (item.state !== "submitted" || !item.submittedAt) return false
+  function deliveryEvidence(item: QueuedInput, slug: string): { observedAt: string; observedMs: number } | undefined {
     const tele = deps.tailer.get(slug)
-    if (!tele?.lastUserText || !tele.lastUserAt) return false
+    if (!tele?.lastUserText || !tele.lastUserAt) return undefined
     const textMatches = item.match === "normalized" ? normalizedInput(tele.lastUserText) === item.text : tele.lastUserText === item.text
-    if (!textMatches) return false
-    const observedAt = Date.parse(tele.lastUserAt)
-    const submittedAt = Date.parse(item.submittedAt)
-    return Number.isFinite(observedAt) && Number.isFinite(submittedAt) && observedAt >= submittedAt
+    if (!textMatches) return undefined
+
+    const observedMs = Date.parse(tele.lastUserAt)
+    const eligibleAt = Date.parse(item.state === "submitted" ? item.submittedAt ?? "" : item.enqueuedAt)
+    if (!Number.isFinite(observedMs) || !Number.isFinite(eligibleAt) || observedMs < eligibleAt) return undefined
+
+    const reconcileAfter = item.reconcileAfter ? Date.parse(item.reconcileAfter) : NaN
+    if (Number.isFinite(reconcileAfter) && observedMs <= reconcileAfter) return undefined
+    return { observedAt: tele.lastUserAt, observedMs }
+  }
+
+  function consumeDeliveryEvidence(queue: QueuedInput[], evidence: { observedAt: string; observedMs: number }): void {
+    queue.shift()
+    for (const item of queue) {
+      const current = item.reconcileAfter ? Date.parse(item.reconcileAfter) : NaN
+      if (!Number.isFinite(current) || current < evidence.observedMs) item.reconcileAfter = evidence.observedAt
+    }
   }
 
   // Returns true while a queued input owns or is waiting for the composer; a permission reattach must
@@ -875,8 +888,9 @@ export function createPermissionController(deps: PermissionControllerDeps): Perm
     }
     if (row.runtime_control === null || row.runtime_control === undefined) row = ownCodexInput(row)
     const item = queue[0]
-    if (delivered(item, slug)) {
-      queue.shift()
+    const evidence = deliveryEvidence(item, slug)
+    if (evidence) {
+      consumeDeliveryEvidence(queue, evidence)
       writeQueue(slug, queue, row)
       if (queue.length === 0) releaseCodexInput(row)
       setError(slug, null)

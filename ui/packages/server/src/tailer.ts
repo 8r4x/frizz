@@ -963,7 +963,9 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
       state.lastFence = undefined
       if (!ev.synthetic) {
         if (typeof ev.at === "string") state.lastUserAt = ev.at
-        if (typeof ev.text === "string") state.lastUserText = ev.text
+        // Keep the delivery-confirmation pair atomic. A genuine non-text user event may still bump
+        // row activity, but its newer timestamp must never retain text from an older human turn.
+        state.lastUserText = typeof ev.text === "string" ? ev.text : undefined
       }
       break
     case "tool-call":
