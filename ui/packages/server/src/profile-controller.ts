@@ -15,7 +15,7 @@ import {
   parseCodexInputQueue,
   type PermissionTerminal,
 } from "./permission-controller.ts"
-import { validateThreadProfile } from "./backend/thread-profiles.ts"
+import { resolveRollbackProfile, validateThreadProfile } from "./backend/thread-profiles.ts"
 import { parseProfileHandoffJournal } from "./profile-handoff.ts"
 import type { ProfileReattachCheckpoint } from "./resume.ts"
 
@@ -189,9 +189,15 @@ export function createProfileController(deps: ProfileControllerDeps): ProfileCon
       return { effect: "next-resume" }
     }
 
-    const current = { model: row.model?.trim() ?? "", effort: row.effort?.trim() ?? "" }
-    validateThreadProfile(row.backend, current.model, current.effort)
-    if (current.model === requested.model && current.effort === requested.effort) {
+    // `current` is the ROLLBACK target — it is journaled as `previous` and relaunched if the target
+    // profile fails — so it is resolved to a launchable pair (a never-recorded effort becomes the
+    // model's default). The no-op check below deliberately compares the RAW persisted pair instead: a
+    // thread whose effort was never recorded must still perform a real handoff when the request names
+    // that model's default effort, rather than short-circuit as "applied" while the live runtime keeps
+    // an unknown effort.
+    const persisted = { model: row.model?.trim() ?? "", effort: row.effort?.trim() ?? "" }
+    const current = resolveRollbackProfile(row.backend, persisted.model, persisted.effort)
+    if (persisted.model === requested.model && persisted.effort === requested.effort) {
       deps.storage.setControlErrorIfCurrent(slug, row.session_id, row.runtime_generation ?? 0, null)
       deps.board.refresh()
       return { effect: "applied" }

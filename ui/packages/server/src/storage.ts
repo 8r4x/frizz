@@ -74,6 +74,9 @@ export interface SessionRow {
   // neither a queued follow-up nor a permission request can safely advance right now.
   codex_input_queue?: string | null
   control_error?: string | null
+  // Durable Claude follow-up delivery ledger (delivery-ledger.ts): small JSON array of not-yet-
+  // delivered sends, correlated by the tailer and projected into the rendered transcript.
+  delivery_ledger?: string | null
   // Monotonic process incarnation for this Fray session. Incremented atomically before every
   // respawn/reattach so output or async completion from an older process cannot mutate the new one.
   runtime_generation?: number
@@ -390,6 +393,7 @@ export interface Storage {
     queue: string | null,
   ): boolean
   setControlError(slug: string, error: string | null): void
+  setDeliveryLedger(slug: string, ledger: string | null): void
   getSetting(key: string): unknown
   setSetting(key: string, value: unknown): void
   deleteSetting(key: string): void
@@ -479,6 +483,7 @@ export function createStorage(dbPath: string): Storage {
     "permission_pending TEXT",
     "codex_input_queue TEXT",
     "control_error TEXT",
+    "delivery_ledger TEXT",
     "runtime_generation INTEGER NOT NULL DEFAULT 0",
     "runtime_control TEXT",
     "runtime_control_revision INTEGER NOT NULL DEFAULT 0",
@@ -907,6 +912,7 @@ export function createStorage(dbPath: string): Storage {
     WHERE slug = ? AND session_id = ? AND runtime_generation = ? AND codex_input_queue IS ?
   `)
   const controlErrorStmt = db.prepare("UPDATE session SET control_error = ? WHERE slug = ?")
+  const deliveryLedgerStmt = db.prepare("UPDATE session SET delivery_ledger = ? WHERE slug = ?")
   const getSet = db.prepare<[string], { value: string }>("SELECT value FROM settings WHERE key = ?")
   const putSet = db.prepare(
     "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -928,6 +934,7 @@ export function createStorage(dbPath: string): Storage {
     snoozed_until: row.snoozed_until ?? null,
     codex_input_queue: row.codex_input_queue ?? null,
     control_error: row.control_error ?? null,
+    delivery_ledger: row.delivery_ledger ?? null,
     runtime_generation: row.runtime_generation ?? 0,
     runtime_control: row.runtime_control ?? null,
     runtime_control_revision: row.runtime_control_revision ?? 0,
@@ -1475,6 +1482,7 @@ export function createStorage(dbPath: string): Storage {
         expected.queue,
       ).changes === 1,
     setControlError: (slug, error) => void controlErrorStmt.run(error, slug),
+    setDeliveryLedger: (slug, ledger) => void deliveryLedgerStmt.run(ledger, slug),
     getSetting: (key) => {
       const row = getSet.get(key)
       if (!row) return undefined

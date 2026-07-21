@@ -7,7 +7,7 @@ import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight,
 import type { AwaitingHint, NativeInputRequired as NativeInputRequiredData, PendingAsk, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptToolCall } from "@fray-ui/shared"
 import { isValidAwaitingTimer } from "@fray-ui/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, showToast } from "../store.ts"
-import { useBoard, useTranscript, useSocketTranscripts, type ChatMessage, type TranscriptData } from "../hooks.ts"
+import { useBoard, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
 import { displayTitle, lastActiveLabelAt } from "../groups.ts"
 import { mdToHtml, mdInlineToHtml, stripFrontmatter } from "../lib/markdown.ts"
@@ -116,11 +116,9 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
   const nativeInputRequired = thread?.foreign ? undefined : thread?.nativeInputRequired
   const copyTerminalCommand = useCopyTerminalCommand(slug)
 
-  // subscribe:true — this is a single-thread surface (drawer / standalone page), so it holds the socket
-  // subscription while MOUNTED, not just while running. An at-rest thread otherwise had NO live source in
-  // socket mode, so a steered message stayed rendered "queued" until the board flipped the thread running
-  // and the resubscribe round-trip completed (and sidecar-only advances never rendered at all).
-  const q = useTranscript(slug, { poll: running, subscribe: true })
+  // Freshness is centrally managed (transcript-live.ts keeps every observed transcript live); `poll`
+  // only gates the SSE-fallback interval for a running thread.
+  const q = useTranscript(slug, { poll: running })
   const queryClient = useQueryClient()
   const loadingEarlierRef = useRef(false)
   const [loadingEarlier, setLoadingEarlier] = useState(false)
@@ -147,21 +145,9 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
   // open message's chips AND its own bottom Send button (scoped to just that message's blocks).
   const { answeringForMessage } = useLiveAnswering(slug, messages, undefined, { multiMessage: true })
 
-  // Board pushes are a cheap signal that the transcript may have grown, but pushing on EVERY board push
-  // over-fetches (the board changes for reasons unrelated to this thread). Only refetch when this thread's
-  // own activity marker actually moved since the last push. SKIPPED in /ws socket mode: the server pushes
-  // transcript updates directly into the cache (on the tailer's offset-advance, strictly more sensitive
-  // than this lastActivityAt edge), so a pull here would be a redundant fetch.
-  const socketPush = useSocketTranscripts()
-  const lastActivityRef = useRef(thread?.lastActivityAt)
-  useEffect(() => {
-    if (socketPush || q.transportFallback) return
-    if (thread?.lastActivityAt !== lastActivityRef.current) {
-      lastActivityRef.current = thread?.lastActivityAt
-      q.refetch()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [thread?.lastActivityAt, socketPush, q.transportFallback])
+  // (The SSE-mode lastActivityAt refetch effect that lived here moved into transcript-live.ts: the
+  // manager applies the same activity-edge pull to EVERY observed transcript that the push channel
+  // doesn't cover, so no surface has to wire its own.)
 
   // The drawer transcript is the only scrolling region. The composer, selectors, and running
   // operation rows are siblings, so a long draft cannot push any footer control under a boundary.
@@ -1866,7 +1852,7 @@ export function StickyUserBand({ children, stickyTopPx, sourceId }: { children: 
 // ellipsis) with a soft "there's more" cue; hovering expands it to the full message (up to 85vh, then
 // it scrolls) and leaving re-collapses. Non-sticky (every historical bubble) is the plain, uncapped
 // bubble, unchanged. Its own component so the sticky hover/measure hooks stay out of memoized Message.
-function UserBubble({ text, queued, sticky }: { text: string; queued?: boolean; sticky?: boolean }) {
+function UserBubble({ text, queued, sticky, deliveryUnconfirmed }: { text: string; queued?: boolean; sticky?: boolean; deliveryUnconfirmed?: boolean }) {
   const ref = useRef<HTMLDivElement>(null)
   const [expanded, setExpanded] = useState(false)
   const [overflows, setOverflows] = useState(false)
@@ -1928,6 +1914,12 @@ function UserBubble({ text, queued, sticky }: { text: string; queued?: boolean; 
           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-user-bubble to-transparent" />
         )}
       </div>
+      {/* Delivery-ledger verdict: no JSONL evidence within the confirmation window — the injection
+          likely mutated or never reached the agent. Quiet one-liner (not a modal): the terminal pane
+          is the recovery surface, and the bubble stays gray so the send is still legible above it. */}
+      {deliveryUnconfirmed && (
+        <div className="text-[11px] text-amber-400/80">Delivery unconfirmed — check the terminal</div>
+      )}
     </div>
   )
 }
@@ -1971,7 +1963,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     // Non-matching text (and a parse hiccup → null) falls back to the plain bubble; text is never lost.
     const answers = paired !== undefined ? paired : parseAnswersMessage(text)
     if (answers) return <AnswersCard answers={answers} queued={m.queued} />
-    return <UserBubble text={text} queued={m.queued} sticky={sticky} />
+    return <UserBubble text={text} queued={m.queued} sticky={sticky} deliveryUnconfirmed={m.deliveryState === "unconfirmed"} />
   }
 
   // Build ONE ordered list of block-level children, then interleave with explicit spacers. The

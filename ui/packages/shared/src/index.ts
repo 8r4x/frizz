@@ -1021,6 +1021,16 @@ export const TranscriptMessage = z.object({
   // + optional: a pre-restart client ignores it; an old server simply never sets it. NB: the client ALSO
   // sets this transiently on an optimistic local send (see web hooks.ts) — same meaning, same styling.
   queued: z.boolean().optional(),
+  // Server-side delivery-ledger identity for a Claude follow-up (delivery-ledger.ts): set on a queued
+  // bubble the ledger projects (or tags), so the client's optimistic copy of the SAME send is consumed
+  // by id instead of by exact text — the text-match path stays only for id-less legacy flows. Additive.
+  deliveryId: z.string().optional(),
+  // The ledger's own state for that send. "pending": injected, no JSONL evidence yet. "enqueued":
+  // Claude Code's queue holds it (positive receipt, undelivered). "unconfirmed": no evidence appeared
+  // within the timeout — the injection likely mutated/never landed; the client renders a quiet warning
+  // and the terminal is the recovery surface. Delivered sends never carry this (the ledger drops them;
+  // the real transcript record renders). Additive + optional.
+  deliveryState: z.enum(["pending", "enqueued", "unconfirmed"]).optional(),
 })
 export type TranscriptMessage = z.infer<typeof TranscriptMessage>
 

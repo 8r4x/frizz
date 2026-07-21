@@ -13,6 +13,7 @@ import {
 import type { Project } from "./project.ts"
 import type { Storage } from "./storage.ts"
 import type { AgentBackend, NormalizedEvent } from "./backend/types.ts"
+import { parseDeliveryLedger, projectDeliveryLedger } from "./delivery-ledger.ts"
 import { CODEX_FIRST_FINAL_TITLE_TRANSPORT, CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT, parseCodexLine, createCodexBackend, extractCodexFrayTitle } from "./backend/codex.ts"
 import { discoverTranscriptId, DISCOVERY_GRACE_MS } from "./discover.ts"
 import { isClaudeAuthErrorText } from "./tailer.ts"
@@ -1962,8 +1963,15 @@ export function readLatestThreadTranscriptPage(
     }
   }
   const start = Math.max(0, projected.length - MAX_MESSAGES)
+  // The latest window carries the delivery-ledger projection (same as readThreadTranscript): a tracked
+  // follow-up renders as its gray queued bubble at the tail even before any JSONL evidence exists. The
+  // LATEST page only — earlier pages are settled history a pending send can never belong to.
+  const row = storage.getSession(slug)
+  const pageMessages = row && row.backend !== "codex"
+    ? projectDeliveryLedger(projected.slice(start), parseDeliveryLedger(row.delivery_ledger))
+    : projected.slice(start)
   return {
-    messages: projected.slice(start),
+    messages: pageMessages,
     beforeCursor: start > 0 ? encodeTranscriptCursor(snapshot, projected[start].sourceId!) : null,
     hasEarlier: start > 0,
     reachedTurnBoundary: true,
@@ -2046,13 +2054,18 @@ export function readThreadTranscript(
       const path = backend.transcriptPath(nativeId)
       return path ? readCodexTranscriptFile(path, nativeId) : []
     }
+    // Claude rows carry the follow-up delivery ledger: project every not-yet-delivered send as its gray
+    // queued bubble (server truth — reload-safe; the client's optimistic copy consumes it by deliveryId).
+    // Applied at each return AFTER the discovery gates below, which must judge the RAW parse — a
+    // projected bubble on an otherwise-empty transcript must not suppress discovery.
+    const ledger = parseDeliveryLedger(row.delivery_ledger)
     const msgs = readTranscript(project, row.transcript_id ?? row.session_id)
-    if (msgs.length || row.transcript_id) return msgs
+    if (msgs.length || row.transcript_id) return projectDeliveryLedger(msgs, ledger)
     // The pinned transcript rendered empty and nothing's cached. GATE the fallback on the spin-up grace:
     // a fresh dispatch renders empty simply because its file isn't written yet, and this path runs on
     // every drawer view / WS subscribe — an ungated per-view directory scan would be wasted work on the
     // common case. Only a genuinely-overdue thread engages discovery (bounded; see discover.ts).
-    if (Date.now() - Date.parse(row.spawned_at) < DISCOVERY_GRACE_MS) return msgs
+    if (Date.now() - Date.parse(row.spawned_at) < DISCOVERY_GRACE_MS) return projectDeliveryLedger(msgs, ledger)
     // Exclude ids owned by OTHER rows (their pinned + discovered transcripts) — never steal a claimed one.
     const exclude = new Set<string>()
     for (const r of storage.allSessions()) {
@@ -2061,7 +2074,7 @@ export function readThreadTranscript(
       if (r.transcript_id) exclude.add(r.transcript_id)
     }
     const found = discoverTranscriptId(logDirOf(project), row.session_id, { exclude })
-    return found ? readTranscript(project, found) : msgs
+    return projectDeliveryLedger(found ? readTranscript(project, found) : msgs, ledger)
   }
   if (FOREIGN_SESSION_ID_RE.test(slug)) return readTranscript(project, slug)
   return []

@@ -48,15 +48,24 @@ test("threadProfileControlState: exited legacy profiles can be repaired without 
   assert.equal(retiredEffort.effortKnown, false)
 })
 
-test("threadProfileControlState: a live unknown or partial profile stays fail closed", () => {
+test("threadProfileControlState: a live thread with an unknown model stays fail closed", () => {
   const options = [{ model: "sonnet", efforts: ["low", "high"], defaultEffort: "high" }]
-  for (const state of [
-    threadProfileControlState(options, "retired-model", "high", false),
-    threadProfileControlState(options, "sonnet", "retired-effort", false),
-  ]) {
-    assert.equal(state.modelSelectable, false)
-    assert.equal(state.effortSelectable, false)
-  }
+  const unknownModel = threadProfileControlState(options, "retired-model", "high", false)
+  assert.equal(unknownModel.modelSelectable, false)
+  assert.equal(unknownModel.effortSelectable, false)
+})
+
+test("threadProfileControlState: a live thread with a known model but unknown effort can be re-profiled", () => {
+  // The common Claude case: model is recorded in the transcript, launch effort never was. The model
+  // may still be re-selected (every committed pair is complete + validated), while effort-only editing
+  // stays gated on the full pair being known.
+  const options = [{ model: "sonnet", efforts: ["low", "high"], defaultEffort: "high" }]
+  const unknownEffort = threadProfileControlState(options, "sonnet", "retired-effort", false)
+  assert.equal(unknownEffort.modelKnown, true)
+  assert.equal(unknownEffort.effortKnown, false)
+  assert.equal(unknownEffort.modelSelectable, true)
+  assert.equal(unknownEffort.effortSelectable, false)
+
   const known = threadProfileControlState(options, "sonnet", "high", false)
   assert.equal(known.modelSelectable, true)
   assert.equal(known.effortSelectable, true)

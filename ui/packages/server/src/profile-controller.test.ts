@@ -135,6 +135,50 @@ test("an idle live profile change owns one generation and commits only after rea
   h.storage.close()
 })
 
+test("a live thread whose launch effort was never recorded can still change model", async () => {
+  // Claude records a thread's model but frequently not its launch effort, so a live thread sits at a
+  // known model with an absent effort. That pair is not launchable argv, and validating it as the
+  // rollback target used to reject the change outright — leaving the thread stuck on that model.
+  const h = harness()
+  h.storage.upsertSession(session("unrecorded", { model: "fable", effort: "" }))
+  const calls: unknown[][] = []
+  const controller = createProfileController({
+    ...h,
+    reattach: async (slug, current, requested, onGeneration, onCheckpoint) => {
+      calls.push([slug, current, requested])
+      const row = h.storage.getSession(slug)!
+      const generation = h.storage.beginRuntimeGeneration(slug, {
+        sessionId: row.session_id,
+        generation: row.runtime_generation ?? 0,
+        permissionPending: null,
+        runtimeControl: "profile",
+      }, "2026-07-13T11:00:00.000Z")!
+      onGeneration?.(generation)
+      const handoffToken = randomUUID()
+      onCheckpoint?.({ phase: "target-ready", generation, handoffToken, identity: PANE })
+      return { generation, outcome: "target-ready" }
+    },
+  })
+  assert.deepEqual(await controller.request("unrecorded", { model: "opus", effort: "high" }), { effect: "applied" })
+  // The rollback target handed to the reattach is the RECONSTRUCTED launchable pair, never the raw
+  // empty effort that would have produced malformed relaunch argv.
+  assert.deepEqual(calls, [["unrecorded", { model: "fable", effort: "medium" }, { model: "opus", effort: "high" }]])
+  const saved = h.storage.getSession("unrecorded")!
+  assert.equal(saved.model, "opus")
+  assert.equal(saved.effort, "high")
+  h.storage.close()
+
+  // An unknown MODEL still fails closed — nothing can reconstruct a launchable rollback pair.
+  const unknown = harness()
+  unknown.storage.upsertSession(session("mystery", { model: "claude-mystery-9", effort: "high" }))
+  await assert.rejects(
+    createProfileController(unknown).request("mystery", { model: "opus", effort: "high" }),
+    /Unsupported claude model\/effort pair/,
+  )
+  assert.equal(unknown.storage.getSession("mystery")?.model, "claude-mystery-9")
+  unknown.storage.close()
+})
+
 test("active work does not arm, while an unproven provider failure stays durably locked", async () => {
   const active = harness({ tele: telemetry({ turn: "in-flight" }) })
   active.storage.upsertSession(session("active"))

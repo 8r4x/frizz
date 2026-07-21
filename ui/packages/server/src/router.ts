@@ -60,6 +60,7 @@ import type { AppContext } from "./context.ts"
 import { runThreadUpdate } from "./fray.ts"
 import { repairThreadFile } from "./repair.ts"
 import { resumeThread } from "./resume.ts"
+import { appendDelivery } from "./delivery-ledger.ts"
 import {
   readEarlierThreadTranscriptPage,
   readLatestThreadTranscriptPage,
@@ -550,6 +551,13 @@ export function createRouter(ctx: AppContext) {
           }
         }
         resumeThread({ project: ctx.project, storage: ctx.storage, board: ctx.board, getSettings: ctx.getSettings, backendFor: ctx.backendFor }, input.slug, input.message)
+        // Injection accepted → open a delivery-ledger entry (Claude rows only; Codex has its own durable
+        // queue above). From here the send is a tracked state machine: the tailer correlates the JSONL
+        // evidence and the transcript projection renders the queued bubble as SERVER truth — reload-safe,
+        // consumed by the client's optimistic copy via this deliveryId instead of by text match.
+        if (input.deliveryId && row?.backend !== "codex") {
+          appendDelivery(ctx.storage, input.slug, { id: input.deliveryId, text: input.message })
+        }
         ctx.storage.setSnoozedUntil(input.slug, null)
         ctx.board.refresh()
       },
