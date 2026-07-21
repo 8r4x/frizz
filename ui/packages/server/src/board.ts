@@ -19,7 +19,7 @@ import { effectivePermissionMode, resolveLegacyThreadFile } from "./dispatch.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { listPlanFiles } from "./plan-files.ts"
-import { LIMIT_RESUME_MAX_AGE_MS, textResetInstant } from "./backend/usage-limit.ts"
+import { limitPauseIsStale, textResetInstant } from "./backend/usage-limit.ts"
 import { getSettings } from "./settings.ts"
 
 // The read model is provenance-bound to the durable session registry. A session row exists only after
@@ -285,7 +285,7 @@ export function resolveLimitPause(
   const fault = tele?.limitFault
   if (!fault) return undefined
   const at = Date.parse(fault.at)
-  const stale = Number.isFinite(at) && nowMs - at > LIMIT_RESUME_MAX_AGE_MS
+  const stale = limitPauseIsStale(fault.window, at, nowMs)
   // Resolve the clock relative to the FAULT, never to `now`. "resets 5:50pm" means the first 5:50pm
   // after the provider said it; anchoring on `now` would silently roll the answer to TOMORROW's 5:50pm
   // the moment the real one passed, so the promised time would run away from the reader forever.

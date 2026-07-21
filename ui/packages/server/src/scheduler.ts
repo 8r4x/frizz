@@ -6,7 +6,7 @@ import type { Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { FenceView } from "./tailer.ts"
 import type { LimitFault } from "./backend/types.ts"
-import { LIMIT_RESUME_MAX_AGE_MS, quotaWindowRecovered, textResetInstant } from "./backend/usage-limit.ts"
+import { limitPauseIsStale, quotaWindowRecovered, textResetInstant } from "./backend/usage-limit.ts"
 import { createWakeDeliveryStore, type WakeDelivery } from "./wake-store.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
 
@@ -776,12 +776,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const tele = deps.tailer.get(row.slug)
       const fault = tele?.limitFault
       if (!fault || tele?.turn !== "idle") continue
-      const at = Date.parse(fault.at)
-      // Not merely a tidiness rule — this IS the boot guard. A server starting hours later replays
-      // every transcript from byte zero and would otherwise see a whole fleet of old limit faults and
-      // wake them all at once. Same age policy the board renders, so a card never promises a wake the
-      // waker has already written off.
-      if (!Number.isFinite(at) || nowMs - at > LIMIT_RESUME_MAX_AGE_MS) continue
+      // The boot guard, and the same age policy the board renders — so a card never promises a wake
+      // the waker has already written off.
+      if (limitPauseIsStale(fault.window, Date.parse(fault.at), nowMs)) continue
       out.push({
         slug: row.slug,
         sessionId: row.session_id,

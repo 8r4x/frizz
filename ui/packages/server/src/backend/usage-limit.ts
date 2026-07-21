@@ -168,13 +168,30 @@ export function textResetInstant(c: LimitClassification, faultAtMs: number): num
   return at - faultAtMs > 5 * 60 * 60_000 ? undefined : at
 }
 
-// How long after a limit stop fray still considers a paused thread auto-resumable — the same policy
-// the board renders and the scheduler fires on, so the card can never promise a wake the waker has
-// already given up on. A window that ran dry a day and a half ago has almost certainly been dealt
-// with (or abandoned) by the operator; silently waking a stale fleet then is a cost event nobody
-// asked for. Past this age the pause stops promising anything and the thread returns to the queue as
-// an ordinary handoff.
-export const LIMIT_RESUME_MAX_AGE_MS = 36 * 60 * 60_000
+// How long a paused thread stays auto-resumable AFTER its window was due back. This is the boot
+// guard: a server starting days later replays every transcript from byte zero and would otherwise see
+// a fleet of old limit faults and wake them all at once, long after the operator moved on.
+//
+// Measured from when the pause became RESUMABLE, not from the interruption — those differ by up to a
+// whole week. A weekly window can reset seven days after it cut a thread off, so a flat age-since-
+// interruption cap would have made weekly auto-resume structurally impossible while looking perfectly
+// reasonable in the code. (Caught by the weekly scheduler test, which fired zero wakes.)
+export const LIMIT_RESUME_GRACE_AFTER_RESET_MS = 36 * 60 * 60_000
+
+// The longest a window can stay closed after cutting a thread off, per window kind.
+const MAX_CLOSED_MS: Record<LimitWindow, number> = {
+  session: 5 * 60 * 60_000,
+  weekly: 7 * 24 * 60 * 60_000,
+  unknown: 5 * 60 * 60_000,
+}
+
+// Has this pause aged past the point where waking it is still what the operator would want? Shared by
+// the board (which renders the promise) and the waker (which keeps it), so a card can never advertise
+// an auto-resume the scheduler has already written off.
+export function limitPauseIsStale(window: LimitWindow, faultAtMs: number, nowMs: number): boolean {
+  if (!Number.isFinite(faultAtMs)) return true
+  return nowMs - faultAtMs > MAX_CLOSED_MS[window] + LIMIT_RESUME_GRACE_AFTER_RESET_MS
+}
 
 // ---- Recovery, read off the provider's own usage endpoint ------------------------------------------
 // The span of each metered window, used to derive when the CURRENT window began.
