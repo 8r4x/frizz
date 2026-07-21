@@ -1697,25 +1697,31 @@ export function createTailer(deps: TailerDeps): Tailer {
       // interactive permission prompt: no jsonl signal, so pane-sniff a quiet in-flight turn.
       // Cleared automatically once jsonl activity resumes (turn no longer quiet) or the pane stops
       // matching. Rides the board snapshot only — no notify, no unread (it's not a completed turn).
-      const pane = sniffPane(
-        state,
-        row,
-        nextTurn,
-        nowMs,
-        backend,
-      )
-      if (pane.permPrompt !== state.permPrompt) dirty = true
-      if (!sameNativeInput(pane.nativeInputRequired, state.nativeInputRequired)) dirty = true
-      state.permPrompt = pane.permPrompt
-      state.nativeInputRequired = pane.nativeInputRequired
+      // App-server codex sessions are headless (no tmux pane): pane capture is meaningless and a
+      // "missing pane" must NOT read as process death. Native approvals arrive via the bridge's
+      // InteractionStore (surfaced through interactionPresence), not a scraped modal; rest is stamped
+      // by onTurnDone off the rollout, not onPaneDeath.
+      if (row.codex_runtime !== "app-server") {
+        const pane = sniffPane(
+          state,
+          row,
+          nextTurn,
+          nowMs,
+          backend,
+        )
+        if (pane.permPrompt !== state.permPrompt) dirty = true
+        if (!sameNativeInput(pane.nativeInputRequired, state.nativeInputRequired)) dirty = true
+        state.permPrompt = pane.permPrompt
+        state.nativeInputRequired = pane.nativeInputRequired
 
-      // pane death (tmux remain-on-exit pane went dead) — the agent process exited.
-      const dead = paneDeadForRow(row)
-      if (dead && !state.paneDead) {
-        onPaneDeath(row)
-        dirty = true
+        // pane death (tmux remain-on-exit pane went dead) — the agent process exited.
+        const dead = paneDeadForRow(row)
+        if (dead && !state.paneDead) {
+          onPaneDeath(row)
+          dirty = true
+        }
+        state.paneDead = dead
       }
-      state.paneDead = dead
 
       // live background ops + pending ask: a dispatch/completion/launch changes the set, a running→stale
       // flip is purely time-based (no new record), and an ask appears/clears — recompute every tick.

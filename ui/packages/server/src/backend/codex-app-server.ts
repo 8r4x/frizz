@@ -1628,6 +1628,42 @@ export class CodexAppServerBridge {
     }
   }
 
+  // Dispatch entry: create a PERSISTED (ephemeral:false, restart-resumable) session with the worker
+  // instruction surfaces, then send the dispatch prompt as its first turn. Returns the binding (whose
+  // codexSessionId matches the on-disk rollout filename the tailer already locates) + the first turn id.
+  async spawnDispatch(input: {
+    threadSlug: string
+    sessionId: string
+    cwd: string
+    prompt: string
+    model?: string
+    effort?: string
+    sandbox?: "read-only" | "workspace-write" | "danger-full-access"
+    baseInstructions?: string
+    developerInstructions?: string
+    config?: Record<string, unknown>
+  }): Promise<{ binding: CodexAppServerSessionBinding; turnId: string }> {
+    const binding = await this.startDisposableSession({
+      threadSlug: input.threadSlug,
+      sessionId: input.sessionId,
+      cwd: input.cwd,
+      ephemeral: false,
+      model: input.model,
+      sandbox: input.sandbox ?? "workspace-write",
+      baseInstructions: input.baseInstructions,
+      developerInstructions: input.developerInstructions,
+      config: input.config,
+    })
+    const { turnId } = await this.startTurn({
+      threadSlug: input.threadSlug,
+      sessionId: input.sessionId,
+      text: input.prompt,
+      model: input.model,
+      effort: input.effort,
+    })
+    return { binding, turnId }
+  }
+
   binding(threadSlug: string, sessionId: string): CodexAppServerSessionBinding | undefined {
     if (this.dbClosed) return undefined
     const row = this.bindingForScope(threadSlug, sessionId)

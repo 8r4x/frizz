@@ -469,6 +469,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     getSettings: () => getSettings(storage),
     claudeBin: opts.claudeBin,
     backendFor,
+    codexAppServer,
     // Auth preflight (claude-auth plan, Slice A): Claude asks its own CLI (`claude auth status
     // --json`, run in the project cwd with the dispatch executable); Codex reads the local
     // auth.json/env. Both block only on a positive "signed-out" — everything else fails open.

@@ -81,6 +81,9 @@ export interface SessionRow {
   // finishes and another starts with the same kind while an async pane operation is still returning.
   runtime_control?: string | null
   runtime_control_revision?: number
+  // Codex transport: NULL/'tmux' = legacy interactive-TUI-in-tmux; 'app-server' = a bridge-owned
+  // JSON-RPC session. Only meaningful for backend='codex' rows.
+  codex_runtime?: string | null
 }
 
 export interface RuntimeExpectation {
@@ -327,6 +330,7 @@ export interface Storage {
   // `backend` stays the column DEFAULT 'claude' and `agent_session_id` stays NULL.
   setBackend(slug: string, backend: string): void
   setAgentSession(slug: string, agentSessionId: string): void
+  setCodexRuntime(slug: string, runtime: string): void
   setPermissionMode(slug: string, permissionMode: string): void
   setPermissionPending(slug: string, permissionMode: string | null): void
   beginRuntimeControl(
@@ -477,6 +481,9 @@ export function createStorage(dbPath: string): Storage {
     "runtime_generation INTEGER NOT NULL DEFAULT 0",
     "runtime_control TEXT",
     "runtime_control_revision INTEGER NOT NULL DEFAULT 0",
+    // Codex transport discriminator: NULL/'tmux' = the legacy interactive-TUI path; 'app-server' = a
+    // bridge-owned JSON-RPC session (input via turn/start|steer, liveness from the bridge not a pane).
+    "codex_runtime TEXT",
   ]) {
     try {
       db.exec(`ALTER TABLE session ADD COLUMN ${col}`)
@@ -791,6 +798,7 @@ export function createStorage(dbPath: string): Storage {
   )
   const backendStmt = db.prepare("UPDATE session SET backend = ? WHERE slug = ?")
   const agentSessionStmt = db.prepare("UPDATE session SET agent_session_id = ? WHERE slug = ?")
+  const codexRuntimeStmt = db.prepare("UPDATE session SET codex_runtime = ? WHERE slug = ?")
   const permissionModeStmt = db.prepare("UPDATE session SET permission_mode = ? WHERE slug = ?")
   const permissionPendingStmt = db.prepare("UPDATE session SET permission_pending = ? WHERE slug = ?")
   const beginRuntimeControlStmt = db.prepare(`
@@ -921,6 +929,7 @@ export function createStorage(dbPath: string): Storage {
     runtime_generation: row.runtime_generation ?? 0,
     runtime_control: row.runtime_control ?? null,
     runtime_control_revision: row.runtime_control_revision ?? 0,
+    codex_runtime: row.codex_runtime ?? null,
   })
 
   const getAdoptionRuntimeSnapshot = db.transaction((slug: string) => ({
@@ -1291,6 +1300,7 @@ export function createStorage(dbPath: string): Storage {
     forgottenIds: () => new Set(allTombs.all().map((r) => r.transcript_id)),
     setBackend: (slug, backend) => void backendStmt.run(backend, slug),
     setAgentSession: (slug, agentSessionId) => void agentSessionStmt.run(agentSessionId, slug),
+    setCodexRuntime: (slug, runtime) => void codexRuntimeStmt.run(runtime, slug),
     setPermissionMode: (slug, permissionMode) => void permissionModeStmt.run(permissionMode, slug),
     setPermissionPending: (slug, permissionMode) => void permissionPendingStmt.run(permissionMode, slug),
     beginRuntimeControl: (slug, expected, kind) => {

@@ -496,6 +496,20 @@ export function createRouter(ctx: AppContext) {
         if (hasPendingPermissionChange(row)) {
           throw new Error("Wait for the current permission change to finish before sending a follow-up")
         }
+        // Headless app-server codex thread: deliver over the bridge. It owns the steer-vs-start
+        // decision atomically and dedups on deliveryId — no composer, no queue, no stale-draft class.
+        // Reactivate the persisted thread first if the bridge lost its live binding (server restart).
+        if (row?.backend === "codex" && row.codex_runtime === "app-server" && ctx.codexAppServer) {
+          const bridge = ctx.codexAppServer
+          const binding = bridge.binding(input.slug, row.session_id)
+          if (!binding || binding.state !== "active") {
+            await bridge.resumeOwnedSession(input.slug, row.session_id)
+          }
+          await bridge.followUp({ threadSlug: input.slug, sessionId: row.session_id, text: input.message, deliveryId: input.deliveryId })
+          ctx.storage.setSnoozedUntil(input.slug, null)
+          ctx.board.refresh()
+          return
+        }
         if (row?.backend === "codex") {
           const binding = adoptionRuntimeBinding(ctx.storage, row)
           if (binding.kind === "conflict") {

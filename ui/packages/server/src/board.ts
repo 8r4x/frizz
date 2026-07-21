@@ -45,6 +45,13 @@ function deriveRuntime(
   permPrompt: boolean,
 ): RuntimeState {
   if (!row) return "none"
+  // App-server codex sessions have NO tmux pane. A persisted bridge thread is always resumable, so
+  // liveness is never "is a pane alive" — it's the rollout-tailed turn state. Deriving from tmux here
+  // would mark every headless thread "exited" (and, mid-turn, trip the crash-net). Never do that.
+  if (row.codex_runtime === "app-server") {
+    if (permPrompt) return "perm-prompt"
+    return turn === "idle" ? "turn-idle" : "running"
+  }
   const adoption = adoptionRuntimeBinding(storage, row)
   if (adoption.kind === "conflict") return "exited"
   if (adoption.kind === "bound") {
@@ -300,7 +307,12 @@ function sessionThreadView(
   interactionPresence: { pending: boolean; needsUser: boolean },
   nowMs: number,
 ): ThreadView {
-  const runtime = degradeIfNoTranscript(deriveRuntime(row.slug, row, storage, tele?.turn, tele?.permPrompt ?? false), tele?.noTranscript)
+  // App-server threads write their rollout synchronously at thread/start, so a transient "no transcript
+  // yet" must not degrade a healthy headless thread to the "exited"/stalled crash affordance.
+  const runtime = degradeIfNoTranscript(
+    deriveRuntime(row.slug, row, storage, tele?.turn, tele?.permPrompt ?? false),
+    row.codex_runtime === "app-server" ? false : tele?.noTranscript,
+  )
   const state = effectiveSessionState(row, registeredLegacyTerminal)
   const archived = state === "archived"
   const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs)

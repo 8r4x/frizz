@@ -19,7 +19,8 @@ import type { BoardManager } from "./board.ts"
 import type { AgentBackend, BackendKind, BuiltCommand, SpawnThreadMcp } from "./backend/types.ts"
 import { CHROME_DEVTOOLS_MCP } from "./backend/types.ts"
 import { buildWorkerPrompt } from "./workerPrompt.ts"
-import { ensureCwdTrusted, discoverCodexRollout, codexSessionSentinel } from "./backend/codex.ts"
+import { ensureCwdTrusted, discoverCodexRollout, codexSessionSentinel, codexSandbox, CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS } from "./backend/codex.ts"
+import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
 import { ProviderAuthRequiredError } from "./backend/auth-status.ts"
 import { readBoard, type FrayBoard, type FrayThread } from "./fray.ts"
 import * as tmux from "./tmux.ts"
@@ -602,6 +603,10 @@ export interface DispatchDeps {
   // Injected by the composition layer (context.ts); when absent (tests) dispatch falls back to the
   // local Claude argv builder, producing a byte-identical command. Selected by `opts.backend`.
   backendFor?: (kind?: string) => AgentBackend
+  // The Codex app-server bridge (context.ts, when FRAY_CODEX_APP_SERVER_BRIDGE=1). When present, a
+  // codex dispatch runs over the JSON-RPC bridge (persisted session + turn/start) instead of the tmux
+  // TUI. Absent ⇒ the legacy tmux path, unchanged.
+  codexAppServer?: CodexAppServerBridge
   // $CODEX_HOME override for the codex trust pre-arm + rollout discovery (tests inject a tmp dir);
   // unset → the codex default (~/.codex), matching the CodexBackend the composition layer built.
   codexHome?: string
@@ -777,6 +782,63 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
 
       const prompt = composePrompt(sessionId, input.prompt, settings.dispatchPreamble, kind)
       const runtimeGate = settings.runtimeGate !== false
+
+      // Codex app-server transport: a PERSISTED JSON-RPC session + the prompt as its first turn. No
+      // tmux pane and no rollout discovery — the bridge returns the codex session id, which the tailer
+      // locates on disk exactly like a discovered rollout (identical filename suffix). Gated on the
+      // bridge being present (FRAY_CODEX_APP_SERVER_BRIDGE); the tmux path below is byte-identical when
+      // the bridge is absent. The worker contract + scratchpad orientation ride baseInstructions, and
+      // the fray title protocol rides developerInstructions (vs the tmux path inlining both).
+      if (kind === "codex" && deps.codexAppServer) {
+        const extraSystemPrompt = [scratchpadOrientation(sessionId, planPath, kind), frayConfigBlock(deps.project.dir)]
+          .filter(Boolean).join("\n\n")
+        let spawned: Awaited<ReturnType<CodexAppServerBridge["spawnDispatch"]>>
+        try {
+          spawned = await deps.codexAppServer.spawnDispatch({
+            threadSlug: slug,
+            sessionId,
+            cwd: deps.project.dir,
+            prompt,
+            model,
+            effort,
+            sandbox: codexSandbox(permissionMode) as "read-only" | "workspace-write" | "danger-full-access",
+            baseInstructions: [loadWorkerPrompt("codex", runtimeGate), extraSystemPrompt].filter(Boolean).join("\n\n"),
+            developerInstructions: CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS,
+            config: { model_reasoning_summary: "detailed" },
+          })
+        } catch (err) {
+          cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
+          throw err
+        }
+        deps.storage.upsertSession({
+          slug,
+          session_id: sessionId,
+          tmux_name: tmuxSessionName(slug),
+          spawned_at: new Date().toISOString(),
+          last_read_at: null,
+          unread: 0,
+          exited: 0,
+          archived: 0,
+          rested_at: null,
+          title_auto: input.title?.trim() ? 0 : 1,
+          title: registryTitle,
+          state: "open",
+          meta: null,
+          seen_at: null,
+          plan_path: planPath,
+          transcript_id: null,
+          model: model ?? null,
+          effort: effort ?? null,
+          permission_mode: permissionMode,
+        })
+        deps.storage.setBackend(slug, "codex")
+        // The codex SESSION id (not the thread id) matches the rollout filename the tailer scans for.
+        deps.storage.setAgentSession(slug, spawned.binding.codexSessionId)
+        deps.storage.setCodexRuntime(slug, "app-server")
+        void deps.board.rebuild().catch(() => {})
+        return { slug, sessionId }
+      }
+
       const built = buildSpawnCommand({
         sessionId,
         permissionMode,
