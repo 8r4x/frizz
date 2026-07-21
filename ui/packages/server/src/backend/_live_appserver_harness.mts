@@ -7,8 +7,23 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import Database from "better-sqlite3"
+import { readdirSync, readFileSync } from "node:fs"
+import { homedir } from "node:os"
 import { createInteractionStore } from "../interaction-store.ts"
 import { CodexAppServerBridge, type CodexAppServerSpawn } from "./codex-app-server.ts"
+import { CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS } from "./codex.ts"
+
+function findRollout(sessionId: string): string | undefined {
+  const root = join(process.env.CODEX_HOME || join(homedir(), ".codex"), "sessions")
+  let hit: string | undefined
+  const walk = (d: string) => { for (const e of readdirSync(d, { withFileTypes: true })) {
+    const p = join(d, e.name)
+    if (e.isDirectory()) walk(p)
+    else if (e.name.endsWith(`-${sessionId}.jsonl`)) hit = p
+  } }
+  try { walk(root) } catch {}
+  return hit
+}
 
 const CODEX_BIN = process.env.CODEX_BIN || "codex"
 const dir = mkdtempSync(join(tmpdir(), "fray-live-appserver-"))
@@ -35,9 +50,13 @@ async function waitTurnClear(label: string, ms = 40_000) {
 
 ;(async () => {
   try {
-    console.log("=== startDisposableSession (ephemeral:false) ===")
-    const binding = await bridge.startDisposableSession({ threadSlug: slug, sessionId, cwd: dir, sandbox: "read-only", ephemeral: false })
-    console.log("thread bound:", binding.codexThreadId)
+    console.log("=== startDisposableSession (ephemeral:false) + config injection (M2) ===")
+    const binding = await bridge.startDisposableSession({
+      threadSlug: slug, sessionId, cwd: dir, sandbox: "read-only", ephemeral: false,
+      developerInstructions: CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS,
+      config: { model_reasoning_summary: "detailed" },
+    })
+    console.log("thread bound:", binding.codexThreadId, " codexSessionId:", binding.codexSessionId)
 
     console.log("=== startTurn (long-ish so we can steer mid-flight) ===")
     const t1 = await bridge.startTurn({ threadSlug: slug, sessionId, text: "Write a careful ~250 word explanation of how a hash map handles collisions. Take your time." })
@@ -49,6 +68,17 @@ async function waitTurnClear(label: string, ms = 40_000) {
     catch (e) { console.log("  STEER FAILED (unexpected):", (e as Error).message) }
 
     await waitTurnClear("post-steer")
+
+    console.log("=== M2 CHECK: rollout has reasoning + fray title comment? ===")
+    const rollout = findRollout(binding.codexSessionId)
+    if (rollout) {
+      const lines = readFileSync(rollout, "utf8").trim().split("\n").map((l) => { try { return JSON.parse(l) } catch { return {} } })
+      const hasReasoning = lines.some((r) => r.type === "response_item" && r.payload?.type === "reasoning")
+      const firstAgent = lines.find((r) => r.type === "event_msg" && r.payload?.type === "agent_message")
+      const titleComment = typeof firstAgent?.payload?.message === "string" && /<!--\s*fray title=/.test(firstAgent.payload.message)
+      console.log(`  rollout=${rollout.split("/").pop()}  reasoning=${hasReasoning}  frayTitleComment=${titleComment}`)
+      if (titleComment) console.log("  title line:", (firstAgent.payload.message as string).split("\n")[0].slice(0, 120))
+    } else console.log("  ROLLOUT NOT FOUND for", binding.codexSessionId)
 
     console.log("=== steerTurn AFTER turn ended (expect failure — learn the REAL error) ===")
     try { const s = await bridge.steerTurn({ threadSlug: slug, sessionId, text: "This should fail: no active turn." }); console.log("  STEER unexpectedly OK ->", s.turnId) }

@@ -629,6 +629,14 @@ export interface StartCodexAppServerSessionInput {
   // The foundation defaults to disposable sessions. A later opt-in UI may explicitly request a
   // persisted bridge-owned session; existing TUI sessions are never imported into this table.
   ephemeral?: boolean
+  // Session-scoped instruction surfaces the tmux path expressed via prompt-inlining + `-c`:
+  //   baseInstructions   — the worker contract (the tmux path inlines this ~18KB into the prompt).
+  //   developerInstructions — the one-shot title protocol (tmux passes it as `-c developer_instructions`).
+  //   config             — arbitrary codex config overrides (e.g. { model_reasoning_summary: "detailed" }),
+  //                        the app-server equivalent of the tmux `-c key=value` flags.
+  baseInstructions?: string
+  developerInstructions?: string
+  config?: Record<string, unknown>
 }
 
 export interface StartCodexAppServerTurnInput {
@@ -1413,6 +1421,9 @@ export class CodexAppServerBridge {
         ...(input.permissions
           ? { permissions: input.permissions }
           : { sandbox: input.sandbox ?? "read-only" }),
+        ...(input.baseInstructions ? { baseInstructions: input.baseInstructions } : {}),
+        ...(input.developerInstructions ? { developerInstructions: input.developerInstructions } : {}),
+        ...(input.config ? { config: input.config } : {}),
         ephemeral,
       }))
       if (response.thread.ephemeral !== ephemeral) throw new Error("Codex app-server returned an incompatible persistence mode")

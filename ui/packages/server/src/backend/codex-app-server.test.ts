@@ -997,6 +997,21 @@ test("followUp falls back to a fresh turn when the live steer is rejected (turn 
   h.close()
 })
 
+test("startDisposableSession forwards worker-contract/title/config instruction surfaces to thread/start", async () => {
+  const h = harness()
+  await h.bridge.startDisposableSession({
+    threadSlug: "cfg-thread", sessionId: "cfg-session", cwd: h.dir,
+    baseInstructions: "WORKER CONTRACT BODY", developerInstructions: "TITLE PROTOCOL",
+    config: { model_reasoning_summary: "detailed" },
+  })
+  const start = h.processes[0]!.clientRequests.find((message) => message.method === "thread/start")!
+  const params = start.params as Message
+  assert.equal(params.baseInstructions, "WORKER CONTRACT BODY")
+  assert.equal(params.developerInstructions, "TITLE PROTOCOL")
+  assert.deepEqual(params.config, { model_reasoning_summary: "detailed" })
+  h.close()
+})
+
 test("unsupported structured command decisions fail closed instead of silently broadening approval", async () => {
   const h = harness()
   const binding = await h.bridge.startDisposableSession({ threadSlug: "structured-decision", sessionId: "structured-session", cwd: h.dir })
