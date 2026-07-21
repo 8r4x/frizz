@@ -116,7 +116,11 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
   const nativeInputRequired = thread?.foreign ? undefined : thread?.nativeInputRequired
   const copyTerminalCommand = useCopyTerminalCommand(slug)
 
-  const q = useTranscript(slug, { poll: running })
+  // subscribe:true — this is a single-thread surface (drawer / standalone page), so it holds the socket
+  // subscription while MOUNTED, not just while running. An at-rest thread otherwise had NO live source in
+  // socket mode, so a steered message stayed rendered "queued" until the board flipped the thread running
+  // and the resubscribe round-trip completed (and sidecar-only advances never rendered at all).
+  const q = useTranscript(slug, { poll: running, subscribe: true })
   const queryClient = useQueryClient()
   const loadingEarlierRef = useRef(false)
   const [loadingEarlier, setLoadingEarlier] = useState(false)

@@ -86,6 +86,22 @@ not just first paint.
 An empty board proves the shell renders but not much else. To exercise real flows, drive the app's own RPC
 surface (`POST /rpc`) or the UI itself (type a task in the composer via `shot.mjs`'s evaluate / CDP `fill`)
 so the state is created the way production creates it — never hand-write rows into the sandbox SQLite.
+RPC calls from node need the loopback Origin header (`origin: http://127.0.0.1:<port>`) or they 403.
+
+**Dispatching a REAL Claude worker usually won't work here** — the sandbox HOME has no Claude
+credentials, `rpc/dispatch` fails `AUTH_REQUIRED:claude`, and seeding credentials into the temp HOME
+(copying the Keychain blob, symlinking `~/Library/Keychains`) is blocked by the permission classifier.
+Don't fight it. For transcript/board/telemetry flows, **simulate a worker** — the tailer only needs three
+things, all inside the sandbox:
+1. a JSONL at `<tempHome>/.claude/projects/<cwd-slug>/<sessionId>.jsonl` you append records to
+   (copy real record shapes: `user` / `assistant` (+`stop_reason`) / `queue-operation` / `queued_command`
+   attachment — `transcript.ts` + `tailer.ts` document what each field drives);
+2. a live dummy pane on the sandbox socket: `tmux -L <stack-socket> new-session -d -s fray-<slug> "sleep 7200"`;
+3. one `session` row in the sandbox DB (`sqlite3 <tempHome>/.fray/projects/*/ui.db "INSERT INTO session
+   (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode) VALUES (…)"`).
+   This is the sanctioned exception to "never hand-write rows": the row is the fixture, and appending
+   records then exercises the REAL tailer → board → push → render pipeline end-to-end (turn state flips
+   on the records exactly as with a live worker).
 
 ---
 

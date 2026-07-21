@@ -5,7 +5,7 @@ import type { BoardSnapshot, InteractionRecord, ThreadView, TranscriptMessage } 
 import { store, threadBySlug } from "./store.ts"
 import { rpc } from "./api/rpc.ts"
 import { retryTranscriptSocket, subscribeTranscript, unsubscribeTranscript } from "./api/socket.ts"
-import { mergeOptimistic, isTranscriptStale, newestRenderedAt } from "./lib/transcript-sync.ts"
+import { mergeOptimistic, preserveMessageIdentity, isTranscriptStale, newestRenderedAt } from "./lib/transcript-sync.ts"
 import { pendingInteractionsKey } from "./api/interaction-cache.ts"
 import { reconcileLatestPage, type PaginatedTranscriptData } from "./lib/transcriptPagination.ts"
 
@@ -102,22 +102,31 @@ const WATCHDOG_MS = 7000
 const STALE_MS = 5000
 const MAX_HEAL_ATTEMPTS = 3
 
-export function useTranscript(slug: string, opts: { poll: boolean }) {
+export function useTranscript(slug: string, opts: { poll: boolean; subscribe?: boolean }) {
   const qc = useQueryClient()
   const snap = useSnapshot(store)
   const socket = snap.socketTranscripts
   const transportFallback = snap.socketTranscriptFallbacks[slug]
+  // A surface that holds the socket subscription while MOUNTED, not just while the turn is running.
+  // `poll: running` alone left an AT-REST thread with no live source in socket mode (no subscription, no
+  // interval, watchdog off): a steered thread's transcript stayed frozen — the gray "queued" bubble
+  // outliving the agent's actual pickup — until the board flipped it to running AND the resubscribe
+  // round-trip completed; sidecar-only advances (an enqueue at rest) never rendered at all. An idle
+  // subscription is free (the server pushes only when the JSONL advances), so the single-thread surfaces
+  // (drawer / standalone page) pass subscribe:true. The 1.5s HTTP fallback stays gated on `poll` — an
+  // at-rest thread must not interval-poll when the socket is down.
+  const live = opts.subscribe ?? opts.poll
 
   // Subscribe the live surface to server transcript push (ref-counted in socket.ts, so a drawer + the main
-  // view on one slug share a single server subscription; unmount / poll→false / socket-flip unsubscribes).
-  // Reactive in BOTH `socket` and `opts.poll`: when the socket confirms mid-session the effect re-runs and
+  // view on one slug share a single server subscription; unmount / live→false / socket-flip unsubscribes).
+  // Reactive in BOTH `socket` and `live`: when the socket confirms mid-session the effect re-runs and
   // subscribes (poll turns off in the same render); on SSE fallback it re-runs and unsubscribes (poll turns
   // back on) — the poll and the subscription are exact complements, so exactly one is active at any instant.
   useEffect(() => {
-    if (!socket || !opts.poll) return
+    if (!socket || !live) return
     subscribeTranscript(slug)
     return () => unsubscribeTranscript(slug)
-  }, [slug, opts.poll, socket])
+  }, [slug, live, socket])
 
   const query = useQuery({
     queryKey: ["transcript", slug],
@@ -128,7 +137,12 @@ export function useTranscript(slug: string, opts: { poll: boolean }) {
       const reconciled = reconcileLatestPage(prev as PaginatedTranscriptData | undefined, res)
       return {
         ...reconciled,
-        messages: mergeOptimistic(prev?.messages, reconciled.messages as ChatMessage[]),
+        // preserveMessageIdentity: unchanged messages keep their previous object so memoized rows
+        // bail out of re-render — a refetch repaints only what actually changed.
+        messages: preserveMessageIdentity(
+          prev?.messages,
+          mergeOptimistic(prev?.messages, reconciled.messages as ChatMessage[]),
+        ),
       }
     },
     // A typed per-subscription transport rejection (logical overflow or aggregate read budget) is
@@ -148,7 +162,10 @@ export function useTranscript(slug: string, opts: { poll: boolean }) {
   // FUTURE pushes), and warn a structured breadcrumb so the underlying delivery bug stays diagnosable. Lives
   // in the hook so every consumer (main ChatView + the drawer's) inherits the invariant.
   useEffect(() => {
-    if (!opts.poll || transportFallback) return // typed pause stays manual; never turn the watchdog into a full-read loop
+    // Armed whenever the surface has a live source to guard: an interval poll, or a held socket
+    // subscription (subscribe:true keeps one even at rest — a missed push edge there would otherwise
+    // freeze the view exactly like the pre-subscription bug this watchdog exists for).
+    if ((!opts.poll && !(socket && live)) || transportFallback) return // typed pause stays manual; never turn the watchdog into a full-read loop
     let inFlight = false
     let attempts = 0
     let lastHealNewest: string | undefined
@@ -180,9 +197,9 @@ export function useTranscript(slug: string, opts: { poll: boolean }) {
     }
     const iv = setInterval(tick, WATCHDOG_MS)
     return () => clearInterval(iv)
-    // query.refetch is stable across renders (react-query); slug/poll/socket cover the meaningful deps.
+    // query.refetch is stable across renders (react-query); slug/poll/live/socket cover the meaningful deps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slug, opts.poll, socket, transportFallback])
+  }, [slug, opts.poll, live, socket, transportFallback])
 
   return {
     ...query,

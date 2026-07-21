@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mergeOptimistic, isTranscriptStale, newestRenderedAt, type QueuedMessage } from "./transcript-sync.ts"
+import { mergeOptimistic, preserveMessageIdentity, isTranscriptStale, newestRenderedAt, type QueuedMessage } from "./transcript-sync.ts"
 
 const user = (text: string, opts: { queued?: boolean; at?: string; sourceId?: string } = {}): QueuedMessage => ({
   role: "user",
@@ -158,4 +158,36 @@ test("newestRenderedAt: returns the last message carrying an `at`, scanning from
 test("newestRenderedAt: undefined when nothing has a timestamp", () => {
   assert.equal(newestRenderedAt([user("a"), user("b")]), undefined)
   assert.equal(newestRenderedAt(undefined), undefined)
+})
+
+// ---- preserveMessageIdentity (per-push identity reuse so memoized rows bail out) ----
+test("preserveMessageIdentity: an unchanged message keeps the PREVIOUS object identity", () => {
+  const prev = [user("a", { sourceId: "s:1", at: "2026-07-01T00:00:00.000Z" }), user("b", { sourceId: "s:2" })]
+  const incoming = [user("a", { sourceId: "s:1", at: "2026-07-01T00:00:00.000Z" }), user("b", { sourceId: "s:2" }), user("c", { sourceId: "s:3" })]
+  const out = preserveMessageIdentity(prev, incoming)
+  assert.equal(out[0], prev[0])
+  assert.equal(out[1], prev[1])
+  assert.equal(out[2], incoming[2]) // genuinely new tail keeps the fresh object
+})
+
+test("preserveMessageIdentity: a changed message takes the FRESH object (queued→delivered flip re-renders)", () => {
+  const prev = [user("landed", { sourceId: "s:1", queued: true })]
+  const incoming = [user("landed", { sourceId: "s:1" })] // same text, queued flag cleared
+  const out = preserveMessageIdentity(prev, incoming)
+  assert.equal(out[0], incoming[0])
+})
+
+test("preserveMessageIdentity: id-less (optimistic) entries are never matched or replaced", () => {
+  const optimistic = user("pending", { queued: true })
+  const prev = [user("a", { sourceId: "s:1" }), optimistic]
+  const incoming = [user("a", { sourceId: "s:1" }), optimistic] // mergeOptimistic re-appended the same object
+  const out = preserveMessageIdentity(prev, incoming)
+  assert.equal(out[0], prev[0])
+  assert.equal(out[1], optimistic)
+})
+
+test("preserveMessageIdentity: no previous window → incoming unchanged", () => {
+  const incoming = [user("a", { sourceId: "s:1" })]
+  assert.equal(preserveMessageIdentity(undefined, incoming), incoming)
+  assert.equal(preserveMessageIdentity([], incoming), incoming)
 })

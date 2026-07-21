@@ -227,6 +227,12 @@ export function TodosView() {
   // their exit (goneRef) are excluded whether or not the board has caught up — that instant removal is
   // what the neighbour pin compensates. Spliced low-index-first so each stored index still addresses the
   // right slot as the list grows.
+  // Recomputed with `items` itself (NOT the membership-only itemKey it once keyed on): keying on itemKey
+  // froze every card's ThreadView at the last membership change, so field-level board deltas on a mounted
+  // card (lastActivityAt, lastAssistant, statusText) never reached it — the card rendered a stale snapshot
+  // (and its activity-edge transcript refetch below never fired). Recomputing per render is O(queue size)
+  // splice work on a tiny list; the memoized CardSlot/QueueCard boundary (JSON-compare on thread) is what
+  // actually prevents re-render churn, and it only passes threads that genuinely changed.
   const renderItems = useMemo(() => {
     const list = items.filter((it) => !goneRef.current.has(it.id))
     const held = [...departedRef.current.entries()]
@@ -236,7 +242,7 @@ export function TodosView() {
     for (const { view, index } of held) list.splice(Math.min(index, list.length), 0, view)
     return list
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [itemKey, leaving, exitTick])
+  }, [items, leaving, exitTick])
   // Remember this render's exact order (board + held) so the NEXT departure captures a stable slot.
   prevRenderRef.current = renderItems.map((i) => i.id)
 
@@ -635,6 +641,22 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // The queue card is a simplified thread: by default the most recent messages, with "View more"
   // revealing progressively older ones above. statusText is the fallback before any transcript exists.
   const q = useTranscript(thread.id, { poll: false })
+  // Cards deliberately do NOT hold a socket subscription (a To-dos view can mount dozens; the per-connection
+  // subscription budget is 32) — but poll:false also means NOTHING refreshed a mounted card's transcript,
+  // ever. A card that outlives activity (the 8s reappear guard after a steer, or a needs-you thread the
+  // agent touched from another surface) kept showing the stale copy — a sent follow-up rendered as a gray
+  // "queued" bubble long after the agent had picked it up. Refetch on the thread's own lastActivityAt edge
+  // (delivered over the board-delta channel): one HTTP pull exactly when this thread actually moved.
+  const lastActivityRef = useRef(thread.lastActivityAt)
+  useEffect(() => {
+    if (q.transportFallback) return // typed pause stays manual — mirror useTranscript's own gating
+    if (thread.lastActivityAt !== lastActivityRef.current) {
+      lastActivityRef.current = thread.lastActivityAt
+      void q.refetch()
+    }
+    // q.refetch is stable across renders (react-query); the activity edge is the one meaningful dep.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [thread.lastActivityAt, q.transportFallback])
   // Raw server order — each message renders its `parts` in block order (fidelity). Memoized so the
   // windowing/useLiveAnswering below line up on identity.
   const messages = useMemo(() => q.data?.messages ?? [], [q.data])

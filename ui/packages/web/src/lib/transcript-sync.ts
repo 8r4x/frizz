@@ -67,6 +67,48 @@ export function mergeOptimistic(prev: QueuedMessage[] | undefined, incoming: Que
   return unconsumed.length ? [...incoming, ...unconsumed] : incoming
 }
 
+// ── Per-push message identity preservation ─────────────────────────────────────────────────────────────
+// Every transcript push/refetch re-parses the full window, so each message arrives as a NEW object even
+// when nothing about it changed. The memoized <Message> rows key their bail-out on `m`'s identity, so an
+// identity churn re-renders EVERY mounted row on EVERY push — measured ~60-75ms of main-thread block per
+// push on an ~130-row drawer, i.e. a solid jank beat all through a streaming turn. Reuse the PREVIOUS
+// render's object wherever the incoming copy is content-identical (sourceId match + deep-equal via a
+// serialized signature, cached per object so the prev side is stringified once across its lifetime).
+// Messages that really changed (a tool status backfill, a queued→delivered flip, tail growth) keep the
+// fresh object and re-render exactly as before.
+const contentSig = new WeakMap<TranscriptMessage, string>()
+function sigOf(message: TranscriptMessage): string {
+  let sig = contentSig.get(message)
+  if (sig === undefined) {
+    sig = JSON.stringify(message)
+    contentSig.set(message, sig)
+  }
+  return sig
+}
+
+export function preserveMessageIdentity(
+  prev: readonly QueuedMessage[] | undefined,
+  incoming: QueuedMessage[],
+): QueuedMessage[] {
+  if (!prev?.length || !incoming.length) return incoming
+  const prevById = new Map<string, QueuedMessage>()
+  for (const message of prev) {
+    if (message.sourceId) prevById.set(message.sourceId, message)
+  }
+  if (!prevById.size) return incoming
+  let reused = false
+  const out = incoming.map((message) => {
+    if (message === prevById.get(message.sourceId ?? "")) return message // already the same object (optimistic re-append)
+    const previous = message.sourceId ? prevById.get(message.sourceId) : undefined
+    if (previous && sigOf(previous) === sigOf(message)) {
+      reused = true
+      return previous
+    }
+    return message
+  })
+  return reused ? out : incoming
+}
+
 // ── Level-triggered freshness watchdog (pure decision) ─────────────────────────────────────────────────
 // The transport (socket push AND poll) is edge-triggered: a single missed edge — a dropped subscription
 // across a reconnect/HMR, a suppressed broadcast, a mount-order flip — wedges a live view forever with no
