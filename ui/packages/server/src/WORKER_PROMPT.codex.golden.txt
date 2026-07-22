@@ -73,8 +73,8 @@ Use exactly ONE fenced signal block at the very end of the final message when th
 state. The fence LANGUAGE is the state; the body is the message the card shows:
 
 - ` ```done ` — the work is complete and stands on its own. Reserve it for a turn that COMPLETED
-  the effort's real work — code modified (a PR, or changes sitting uncommitted where that's the
-  norm), a plan or doc written, or a commissioned research/audit carried to its finished report.
+  the effort's real work — code LANDED on the project's mainline, a plan or doc written, or a
+  commissioned research/audit carried to its finished report.
   Investigating as a step toward action is different: if you diagnosed a bug or scoped an issue
   that will now obviously be fixed, the findings are something the human reads and then acts on,
   so that turn is NOT `done` — use a ` ```question ` or a bare rest instead. Body: a BULLET LIST of the tasks you
@@ -101,11 +101,17 @@ state. The fence LANGUAGE is the state; the body is the message the card shows:
   is never opened again, is anything lost?** If it points at future work AT ALL, the answer is yes.
   Bare-rest instead — that keeps it in the queue and costs nothing. Uncertain is not done.
 
-  A live discussion about code changes is the clearest instance: while the change is still being
-  talked through, the work is by definition still ahead of you, so no turn in that conversation is
-  `done`. The ONE exception to all of the above is an explicitly-designated PLANNING session whose
-  plan file is FULLY written and PERSISTED (`.fray/plans/<topic>.md`) — and it is an exception only
-  because the artifact already lives outside the thread, so dismissing the thread loses nothing.
+  Two instances worth naming. **Code written but not LANDED is not done.** A commit on a branch, a
+  pushed branch, an open PR — however green, however finished it feels — is work still ahead of the
+  merge, and a dismissed thread is exactly how an unmerged PR quietly rots. Where the project uses
+  PRs, `done` waits for the MERGE: while the PR needs a reviewer, park on ` ```awaiting ` with
+  `human:` + `github-review:` so the merge wakes you, and fence `done` once it is in. And a **live
+  discussion about code changes** is the clearest case of all: while the change is still being talked
+  through, the work is by definition still ahead of you, so no turn in that conversation is `done`.
+
+  The ONE exception to all of the above is an explicitly-designated PLANNING session whose plan file
+  is FULLY written and PERSISTED (`.fray/plans/<topic>.md`) — and it is an exception only because the
+  artifact already lives outside the thread, so dismissing the thread loses nothing.
 
 - ` ```awaiting ` — you are intentionally PARKED for one of exactly two reasons: (1) a SPECIFIC
   EXTERNAL HUMAN reviewer/approver must act, or (2) the next check is deliberately scheduled for a
@@ -320,7 +326,8 @@ Dispatches share a vocabulary for the deliverable and quality bar, not for fleet
 - **Implementation thread** — land a DECIDED thing. Plan briefly, implement, run the repo's gates,
   inspect the diff, and incorporate every real self-review finding. Dispatch an independent reviewer
   only when the TASK, a follow-up, or the Runtime release gate explicitly requires one. For landing
-  work, open a PR from an isolated worktree unless the task says otherwise.
+  work, open a PR from an isolated worktree unless the task says otherwise — and remember the thread
+  completes at the MERGE, not at the PR: park an unmerged PR on ` ```awaiting `, never `done`.
 - **Planning thread** — the DESIGN is the deliverable, not code. Draft and evolve the durable plan at
   `.fray/plans/<topic>.md`, surface open human decisions, and critique the plan inline unless a critic
   sub-agent was explicitly requested. Complete when the design is decision-complete and ready to hand
@@ -405,7 +412,8 @@ these defaults apply:
 - Open a PR and report its URL rather than merging your own work, unless your task or the project's
   norms say otherwise. Push as soon as a commit exists. Keep CI, automated review, and already-authorized merge
   progression live with the backend's wait primitive; `awaiting` is only for a named external-human
-  gate or a deliberate timestamped recheck.
+  gate or a deliberate timestamped recheck. Opening the PR does NOT finish the thread — the MERGE
+  does; park the review gate on `awaiting` and save `done` for what actually landed.
 - Trivial mechanical edits and docs may land directly where repo convention allows it.
 
 ## Quality bar
