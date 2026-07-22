@@ -187,7 +187,9 @@ function harness() {
       kind: "session",
       foreign: false,
     } satisfies ThreadView)
-  return { dir, storage, board, snapshot, router: createRouter(ctx), addExitedThread, refreshes: () => refreshes, adoptCalls: () => adoptCalls }
+  // `ctx` is exposed so a test can install an optional collaborator (e.g. codexAppServer) after
+  // construction; createRouter closes over the object and reads those fields per-call, not at build time.
+  return { dir, ctx, storage, board, snapshot, router: createRouter(ctx), addExitedThread, refreshes: () => refreshes, adoptCalls: () => adoptCalls }
 }
 
 test("threadTerminalCommand offers the verified provider resume command in every runtime state", async () => {
@@ -429,6 +431,36 @@ test("setThreadSnooze RPC validates canonical future UTC and persists any owned 
 
   await proc.handler({ input: { slug, until: null } })
   assert.equal(h.storage.getSession(slug)?.snoozed_until, null, "wake-now remains available with the same validation contract")
+  h.storage.close()
+})
+
+// A park says WHEN the operator wants the card back, not that the thread is untouchable. Adding context
+// to a thread you shelved until Friday must not drag it out of Held, and must not silently disarm a bump
+// it was promised — Wake now is the explicit un-park. Driven through the codex app-server branch because
+// it is the one followUp path that reaches a stubbable bridge instead of real tmux; the invariant is
+// branch-independent (the handler no longer writes the snooze row at all).
+test("followUp leaves a snooze — and its armed bump — intact", async () => {
+  const h = harness()
+  const slug = "snoozed-followup"
+  const until = "2099-07-14T08:45:00.000Z"
+  const bump = "Check whether CI went green and land it if so."
+  h.storage.upsertSession(row(slug))
+  h.storage.setBackend(slug, "codex")
+  h.storage.setCodexRuntime(slug, "app-server")
+  h.storage.setSnoozedUntil(slug, until, bump)
+
+  const sent: string[] = []
+  ;(h.ctx as { codexAppServer?: unknown }).codexAppServer = {
+    binding: () => ({ state: "active", currentTurnId: null }),
+    resumeOwnedSession: async () => {},
+    followUp: async ({ text }: { text: string }) => void sent.push(text),
+  }
+
+  await h.router.followUp.handler({ input: { slug, message: "also use a squash merge" } })
+
+  assert.deepEqual(sent, ["also use a squash merge"], "the message still reaches the worker")
+  assert.equal(h.storage.getSession(slug)?.snoozed_until, until, "the park survives the follow-up")
+  assert.equal(h.storage.getSession(slug)?.snooze_prompt, bump, "and so does the bump it owes at that deadline")
   h.storage.close()
 })
 

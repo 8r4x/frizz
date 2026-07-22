@@ -999,7 +999,7 @@ test("snooze: a due prompt-carrying snooze bumps the thread with the prompt VERB
   h.tele.set("s", tele())
   const s = h.make()
   await s.tick()
-  assert.deepEqual(h.resumes, [], "a snooze still in the future must not fire")
+  assert.equal(h.resumes.length, 0, "a snooze still in the future must not fire")
 
   h.clock.ms = Date.parse(until)
   await s.tick()
@@ -1069,7 +1069,7 @@ test("snooze: re-snoozing before delivery keeps the NEW deadline and mints its o
   h.storage.setSnoozedUntil("s", second, "new prompt")
   h.tele.set("s", tele())
   await s.tick()
-  assert.deepEqual(h.resumes, [], "the superseded bump must not deliver")
+  assert.equal(h.resumes.length, 0, "the superseded bump must not deliver")
   assert.equal(h.storage.getSession("s")?.snoozed_until, second, "settling the stale wake must not erase the fresh snooze")
 
   h.clock.ms = Date.parse(second)
@@ -1086,7 +1086,7 @@ test("snooze: a bump that comes due mid-turn is HELD, then delivered once the th
   const s = h.make()
   h.clock.ms = Date.parse(until)
   await s.tick()
-  assert.deepEqual(h.resumes, [])
+  assert.equal(h.resumes.length, 0)
 
   h.tele.set("s", tele()) // comes to rest
   h.clock.ms += 60_000

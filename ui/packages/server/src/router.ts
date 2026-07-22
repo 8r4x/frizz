@@ -510,6 +510,13 @@ export function createRouter(ctx: AppContext) {
         // Codex's TUI drops Enter when it follows literal text in the same instant, so this path is
         // persisted + capture-gated and submits through one atomic paste-and-key. Claude keeps its native
         // live injection, and any dead session resumes through the backend command.
+        //
+        // A follow-up deliberately PRESERVES any snooze on this row. A park says when the operator wants
+        // the card back, not that the thread is untouchable: adding context to a thread you shelved until
+        // Friday should not drag it out of Held, and it must not silently disarm a bump the operator armed
+        // for a reason. Nothing is hidden by keeping it — isHeld() excuses a running thread from Held, so
+        // the turn you just sent renders live in Active and only re-parks once it rests. The opposite
+        // intent ("I'm re-engaging now") already has its own one-click affordance in Wake now.
         const row = ctx.storage.getSession(input.slug)
         if (hasPendingPermissionChange(row)) {
           throw new Error("Wait for the current permission change to finish before sending a follow-up")
@@ -540,7 +547,6 @@ export function createRouter(ctx: AppContext) {
             model: row.model ?? undefined,
             effort: row.effort ?? undefined,
           })
-          ctx.storage.setSnoozedUntil(input.slug, null)
           ctx.board.refresh()
           return
         }
@@ -554,7 +560,6 @@ export function createRouter(ctx: AppContext) {
             : tmux.isLive(input.slug)
           if (live) {
             ctx.permissionController.queueFollowUp(input.slug, input.message, input.deliveryId)
-            ctx.storage.setSnoozedUntil(input.slug, null)
             ctx.board.refresh()
             return
           }
@@ -567,7 +572,6 @@ export function createRouter(ctx: AppContext) {
         if (input.deliveryId && row?.backend !== "codex") {
           appendDelivery(ctx.storage, input.slug, { id: input.deliveryId, text: input.message })
         }
-        ctx.storage.setSnoozedUntil(input.slug, null)
         ctx.board.refresh()
       },
     }),
@@ -721,8 +725,9 @@ export function createRouter(ctx: AppContext) {
     }),
 
     // Durable manual snooze. The client sends one exact UTC instant derived from its local picker;
-    // Archive clears it, and a human follow-up wakes immediately. The operator may deliberately park
-    // any queue reason—including an unresolved ask, permission prompt, or crash—until this deadline.
+    // Archive clears it, and Wake now (`until: null`) is the explicit un-park. A follow-up deliberately
+    // does NOT wake it — see followUp. The operator may deliberately park any queue reason—including an
+    // unresolved ask, permission prompt, or crash—until this deadline.
     //
     // An optional `prompt` upgrades the park into a SCHEDULED BUMP: at the deadline the wake scheduler
     // resumes this thread with that text over the same durable outbox a worker's `awaiting timer:` uses

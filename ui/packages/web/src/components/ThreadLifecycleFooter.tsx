@@ -1,9 +1,11 @@
 import { useState } from "react"
-import { Check, Loader2 } from "lucide-react"
+import { Check, Hourglass, Loader2 } from "lucide-react"
 import type { ThreadView } from "@fray-ui/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { threadLifecycleAvailability, completionArchivesImmediately } from "../lib/threadLifecycle.ts"
+import { futureSnoozedUntil } from "../groups.ts"
+import { formatSnoozeWake, formatUserSnooze, snoozePromptPreview } from "../lib/snooze.ts"
 import { SnoozeButton } from "./SnoozeButton.tsx"
 import { Dialog } from "./ui/Dialog.tsx"
 
@@ -38,9 +40,37 @@ export function ThreadLifecycleFooter({
       data-thread-lifecycle-footer
       className={`${sticky ? "z-20" : "rounded-b-[7px]"} flex min-h-10 shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/70 bg-panel/95 px-3 pt-2 ${safeArea ? "pb-[max(0.5rem,env(safe-area-inset-bottom))]" : "pb-2"} backdrop-blur-sm`}
     >
+      <PendingSnooze thread={thread} />
       {available.snooze && <SnoozeButton thread={thread} onSnoozed={onSnoozed} />}
       <StateButton thread={thread} onArchived={onArchived} onDismissCancel={onDismissCancel} />
     </footer>
+  )
+}
+
+// The park is otherwise invisible from inside the thread: the sidebar carries the only snooze
+// affordance-at-rest (an hourglass whose tooltip you have to hover), and a follow-up no longer clears
+// the snooze — so without this you could type into a thread, watch it answer, and never learn it was
+// still going to drop back out of your queue. States it in the one place both surfaces share.
+// `mr-auto` pins it left while the lifecycle buttons stay right-aligned; it wraps under them when the
+// card is too narrow to hold both.
+function PendingSnooze({ thread }: { thread: ThreadView }) {
+  const until = futureSnoozedUntil(thread)
+  if (!until) return null
+  const prompt = thread.snoozePrompt?.trim()
+  return (
+    <span
+      data-pending-snooze
+      title={formatUserSnooze(until, thread.snoozePrompt) ?? undefined}
+      className="mr-auto flex min-w-0 items-center gap-1.5 text-[11px] text-muted/75"
+    >
+      <Hourglass size={11} className="shrink-0 text-muted/60" />
+      <span className="shrink-0">
+        {prompt ? "Bumps" : "Snoozed until"} {formatSnoozeWake(until)}
+      </span>
+      {/* The prompt is the difference between "the card comes back" and "the agent gets sent this",
+          so it earns space when there is any — truncated, with the full text in the title above. */}
+      {prompt && <span className="truncate text-muted/50">· {snoozePromptPreview(prompt)}</span>}
+    </span>
   )
 }
 
