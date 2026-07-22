@@ -2265,9 +2265,11 @@ export function QuestionBlockCard({
                 // input still holds DOM focus (its mousedown is prevented, so clicking won't blur it),
                 // its accent focus border would sit next to the chip's, so blur it. MULTI keeps both
                 // live at once (chips + a color note coexist), so leave the input focused there.
+                // Scoped to THIS block's own answer box by ref, not by a data- tag: the queue card now
+                // also renders a free-form composer alongside an open ask, and a tag match would blur
+                // the caret out of that unrelated box whenever a chip is clicked.
                 if (isMulti) return
-                const ae = document.activeElement as HTMLElement | null
-                if (ae?.tagName === "TEXTAREA" && ae.dataset.surface === "queueComposer") ae.blur()
+                if (taRef.current && document.activeElement === taRef.current) taRef.current.blur()
               }}
             />
           ))}
@@ -2278,10 +2280,11 @@ export function QuestionBlockCard({
             <textarea
               ref={taRef}
               rows={1}
-              // Tagged so the chip-click blur above can identify this box. Escape BLURS (climb out,
-              // same semantics as the shared Composer) and must NOT bubble — the window handler would
-              // pop the enclosing drawer mid-answer. Every key stops here.
-              data-surface="queueComposer"
+              // Its own surface tag — deliberately NOT the queue card's `queueComposer`, which is the
+              // separate free-form prompt box at the bottom of the card. Escape BLURS (climb out, same
+              // semantics as the shared Composer) and must NOT bubble — the window handler would pop
+              // the enclosing drawer mid-answer. Every key stops here.
+              data-surface="questionAnswer"
               value={freetext}
               onChange={(e) => interactive.onText(e.target.value)}
               onKeyDown={(e) => {
