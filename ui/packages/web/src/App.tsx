@@ -14,6 +14,7 @@ import { Sidebar, IdentityMark, projectIdentity } from "./components/Sidebar.tsx
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { ThreadSheet } from "./components/ThreadSheet.tsx"
 import { SubAgentSheet } from "./components/SubAgentSheet.tsx"
+import { BackgroundShellSheet } from "./components/BackgroundShellSheet.tsx"
 import { TodosView } from "./components/TodosView.tsx"
 import { NewThreadDialog } from "./components/NewThreadModal.tsx"
 import { GithubPickerModal } from "./components/GithubPickerModal.tsx"
@@ -350,6 +351,17 @@ export function App() {
               subId={d.subId ?? ""}
               label={d.label ?? d.slug}
               subagentType={d.subagentType}
+              startedAt={d.startedAt}
+              depth={i}
+              widthDepth={widthDepth}
+            />
+          ) : d.kind === "shell" ? (
+            <BackgroundShellSheet
+              key={d.id}
+              id={d.id}
+              slug={d.slug}
+              shellId={d.subId ?? ""}
+              label={d.label ?? "Background shell"}
               startedAt={d.startedAt}
               depth={i}
               widthDepth={widthDepth}

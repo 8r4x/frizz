@@ -12,7 +12,7 @@ test("awaiting hints become one compact plain-English action", () => {
   )
   assert.equal(
     awaitingHintSentence([{ kind: "github-review", value: "owner/repo#42" }], now),
-    "Watch owner/repo#42 for new human review activity",
+    "Watch owner/repo#42 for new reviews, approvals, or comments",
   )
   assert.equal(
     awaitingHintSentence([{ kind: "human", value: "Alice to approve the API shape" }], now),
@@ -26,13 +26,25 @@ test("actionable hints win and elapsed timers remain stable instead of becoming 
       { kind: "timer", value: "not-a-time" },
       { kind: "github-review", value: "owner/repo#42" },
     ], now),
-    "Watch owner/repo#42 for new human review activity",
+    "Watch owner/repo#42 for new reviews, approvals, or comments",
   )
   assert.match(
     awaitingHintSentence([{ kind: "timer", value: "2026-07-21T17:00:00.000Z" }], now) ?? "",
     /^Scheduled for /,
   )
   assert.equal(awaitingHintSentence([{ kind: "timer", value: "not-a-time" }], now), "Snooze schedule unavailable")
+})
+
+test("pr-watch presents the same watcher sentence + park action as legacy github-review", () => {
+  assert.equal(
+    awaitingHintSentence([{ kind: "pr-watch", value: "acme/app#391" }], now),
+    "Watch acme/app#391 for new reviews, approvals, or comments",
+  )
+  assert.deepEqual(awaitingParkAction([{ kind: "pr-watch", value: "acme/app#391" }], now), {
+    label: "Confirm watcher",
+    toastVerb: "Parked",
+    timerUntil: null,
+  })
 })
 
 test("legacy hints degrade to readable text and an empty hint set stays empty", () => {

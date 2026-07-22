@@ -309,7 +309,7 @@ test("end-state contract: bare rest queues, done checks, awaiting parks human/ti
     assert.match(c, /Code written but not LANDED is not done/)
     assert.match(c, /open PR — however green[\s\S]{0,80}still ahead of the\s+merge/)
     assert.match(c, /`done` waits for the MERGE/)
-    assert.match(c, /`human:` \+ `github-review:` so the merge wakes you/)
+    assert.match(c, /`pr-watch:` so fray\s+watches the PR/)
     // The git-discipline + implementation-thread surfaces must not contradict it by fencing on a PR.
     assert.match(c, /Opening the PR does NOT finish the thread — the MERGE\s+does/)
     assert.doesNotMatch(c, /done ` fence naming the PR\/paths/)

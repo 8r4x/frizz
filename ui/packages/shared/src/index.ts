@@ -124,13 +124,17 @@ export const SubAgentView = z.object({
 export type SubAgentView = z.infer<typeof SubAgentView>
 
 // A LIVE background SHELL the worker launched (Bash run_in_background:true) — same tailer tracking as a
-// sub-agent (dispatch → launch output path → task-notification clear + mtime staleness), but
-// display-only (no drill-in). Foreground-blocking waits keep the turn in-flight, so the spinner already
-// covers them; this is for ops that PERSIST across a rest (a CI watcher, a long build). No id/drawer.
+// sub-agent (dispatch → launch output path → task-notification clear). Foreground-blocking waits keep
+// the turn in-flight, so the spinner already covers them; this is for ops that PERSIST across a rest
+// (a CI watcher, a long build). New servers include the stable tool-use id + raw command so the row can
+// open its read-only output drawer; both stay optional for old snapshots / Monitor calls without a
+// command.
 export const BgShellView = z.object({
   label: z.string(), // the command's `description`, else its first-line summary
   startedAt: z.string(), // ISO8601 of the launch record
   state: z.enum(["running", "stale"]),
+  id: z.string().optional(),
+  command: z.string().optional(),
 })
 export type BgShellView = z.infer<typeof BgShellView>
 
@@ -171,13 +175,18 @@ export type NativeInputRequired = z.infer<typeof NativeInputRequired>
 // verbs). Legacy .fray/<slug>.md rows survive read-only in a collapsed Legacy shelf. The queue
 // inversion: a thread at rest is awaiting the human UNLESS it excused itself with a signal fence.
 
-// A parked-wait hint parsed from `<kind>: <value>` lines in an ```awaiting fence body. `human`,
-// `github-review`, and `timer` are current; pr/ci/session remain readable for legacy transcripts and
-// wakers. A github-review hint is paired with `human:`: the latter names the exact external gate while
-// the former gives the durable scheduler a machine-readable PR cursor to watch for NEW non-bot human
-// review activity.
+// A parked-wait hint parsed from `<kind>: <value>` lines in an ```awaiting fence body. `pr-watch`,
+// `human`, and `timer` are current; `github-review` is the prior review-watcher name (still parsed and
+// scheduled, now Held-legacy); pr/ci/session remain readable for older transcripts and wakers.
+//
+// `pr-watch: owner/repo#N` is the general PR watcher: the durable scheduler polls the PR and bumps the
+// worker on ANY new non-bot activity — a review, an approval, or a comment. Unlike `github-review`, it
+// does NOT park the thread in Held: a pr-watch thread stays a visible QUEUE handoff (the worker opened
+// a PR and is watching it), and new activity re-surfaces it. Pair it with `human:` only when the worker
+// is genuinely blocked on a NAMED reviewer — then `human:` supplies the Held/park while pr-watch supplies
+// the machine-readable cursor.
 export const AwaitingHint = z.object({
-  kind: z.enum(["human", "github-review", "timer", "pr", "ci", "session"]),
+  kind: z.enum(["pr-watch", "human", "github-review", "timer", "pr", "ci", "session"]),
   value: z.string(),
 })
 export type AwaitingHint = z.infer<typeof AwaitingHint>
@@ -319,7 +328,7 @@ export const ThreadView = z.object({
   // snapshot/row (or a pre-restart server that doesn't emit the field yet) parses without breaking.
   subAgents: z.array(SubAgentView).default([]),
   // Live background SHELLS the worker launched (tailer-derived). Same default-[] discipline. Rendered
-  // in the anchored background-ops strip alongside sub-agents; display-only.
+  // in the anchored background-ops strip alongside sub-agents; ids make current rows drillable.
   bgShells: z.array(BgShellView).default([]),
   // A pending native AskUserQuestion the session is frozen on (tailer-derived). Optional — absent
   // when there's no unanswered ask. Feeds needsAction + the read-only question render + "Answer in Terminal".

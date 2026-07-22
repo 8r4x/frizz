@@ -23,9 +23,11 @@ export type FenceSegment =
 // can't match the (done|awaiting) alternation, so question blocks are left entirely to questionBlocks.ts.
 const FENCE_BLOCK = /^```(done|awaiting)[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/gm
 
-// A parked-wait hint line inside an ```awaiting body. `human`/`github-review`/`timer` are current; the
-// other three remain parseable for legacy transcripts. Case-insensitive; everything else is prose.
-const HINT_RE = /^(human|github-review|timer|pr|ci|session):\s*(\S.*)$/i
+// A parked-wait hint line inside an ```awaiting body. `pr-watch`/`human`/`timer` are current;
+// `github-review` is the legacy review-watcher name; pr/ci/session remain parseable for older
+// transcripts. Case-insensitive; everything else is prose. `pr-watch` precedes `pr` so it wins the
+// alternation on a `pr-watch:` line (a bare `pr:` still falls through to the legacy `pr`).
+const HINT_RE = /^(pr-watch|human|github-review|timer|pr|ci|session):\s*(\S.*)$/i
 
 // Split the body of a fence into its prose (hint lines removed) and its parsed hints. `done` fences
 // carry no hints — the whole body is prose.

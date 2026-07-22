@@ -79,19 +79,19 @@ export const store = proxy({
   // Plans, Archive, Legacy start collapsed. Session-scoped UI state (deliberately not persisted).
   sidebarCollapsed: { active: false, inactive: true, plans: true } as Record<"active" | "inactive" | "plans", boolean>,
   // The SIDE-DRAWER STACK — arbitrary depth. `thread` layers are full thread views (the Open-thread
-  // sheet); `doc` layers are the fray-document markdown; `subagent` layers are a live/stale sub-agent's
-  // read-only transcript (the drill-in that overlays a thread). A drill-in within one thread's family
+  // sheet); `doc` layers are the fray-document markdown; `subagent` and `shell` layers are read-only
+  // operation drill-ins that overlay a thread. A drill-in within one thread's family
   // (its doc, its sub-agents) stacks OVER the previous layer (higher z, slight inset); any lateral open
   // REPLACES the layers it doesn't stack over (one drawer at a time — see openOrRaiseDrawer). Esc /
   // backdrop / browser-Back unwind the TOP layer first. There is no
-  // standalone thread page — this stack is the only thread surface. The subagent-only fields (subId /
-  // label / subagentType / startedAt) ride the same entry so App can render its sheet without a lookup.
+  // standalone thread page — this stack is the only thread surface. Operation-only fields ride the
+  // same entry so App can render its sheet without a board lookup after the operation finishes.
   drawers: [] as {
     id: number
-    kind: "thread" | "doc" | "subagent" | "plan"
+    kind: "thread" | "doc" | "subagent" | "shell" | "plan"
     slug: string
     routed?: boolean // URL/deep-link-created thread: visible on first paint, never an invisible animated backdrop
-    subId?: string // subagent: the dispatch tool_use id (the RPC handle + dedupe key)
+    subId?: string // subagent/shell: the launch tool_use id (the RPC handle + dedupe key)
     label?: string // subagent: the dispatch description (header title) / plan: the plan title
     path?: string // plan: the PlanView.path (.fray/plans/*.md) the drawer renders + dispatches from
     subagentType?: string // subagent: the model+effort cell tag
@@ -151,7 +151,7 @@ type Drawer = (typeof store.drawers)[number]
 function sameDrawer(a: Drawer, b: Pick<Drawer, "kind" | "slug" | "path" | "subId">): boolean {
   if (a.kind !== b.kind) return false
   if (a.kind === "plan") return a.path === b.path
-  if (a.kind === "subagent") return a.subId === b.subId
+  if (a.kind === "subagent" || a.kind === "shell") return a.subId === b.subId
   return a.slug === b.slug
 }
 
@@ -159,7 +159,7 @@ function sameDrawer(a: Drawer, b: Pick<Drawer, "kind" | "slug" | "path" | "subId
 // transcript over its parent thread/doc, and a thread⇄doc pair sharing a slug. Everything else —
 // sibling threads, sibling sub-agents, plans — is a lateral move, not a drill-in.
 function stacksOver(below: Drawer, next: Pick<Drawer, "kind" | "slug">): boolean {
-  if (next.kind === "subagent") return (below.kind === "thread" || below.kind === "doc") && below.slug === next.slug
+  if (next.kind === "subagent" || next.kind === "shell") return (below.kind === "thread" || below.kind === "doc") && below.slug === next.slug
   if (next.kind === "doc") return below.kind === "thread" && below.slug === next.slug
   if (next.kind === "thread") return below.kind === "doc" && below.slug === next.slug
   return false
@@ -198,6 +198,10 @@ export function pushDrawer(kind: "thread" | "doc", slug: string, opts?: { routed
 // handle). Deduped on subId so a double-click / re-click doesn't stack duplicates.
 export function pushSubAgentDrawer(slug: string, subId: string, opts: { label: string; subagentType?: string; startedAt?: string }): void {
   openOrRaiseDrawer({ kind: "subagent", slug, subId, label: opts.label, subagentType: opts.subagentType, startedAt: opts.startedAt })
+}
+
+export function pushBackgroundShellDrawer(slug: string, id: string, opts: { label: string; startedAt?: string }): void {
+  openOrRaiseDrawer({ kind: "shell", slug, subId: id, label: opts.label, startedAt: opts.startedAt })
 }
 
 // Open a thread from a listing/notification click-through. Routing by runtime: a thread with NO

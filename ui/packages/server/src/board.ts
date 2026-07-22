@@ -140,9 +140,16 @@ function hasLiveBackgroundWork(tele: SessionTelemetry | undefined): boolean {
   return Boolean(tele?.subAgents?.some((agent) => agent.state === "running"))
 }
 
-// A declared wait excuses an idle thread only for a specific external-human/review gate or a valid
-// future scheduler instant. Legacy PR/CI/session hints, malformed/elapsed timers, and hintless fences
-// are agent-owned work; if the worker nevertheless comes to rest, the queue must surface that rest.
+// A declared wait excuses an idle thread from the queue only for a specific external-human gate, the
+// LEGACY `github-review` review gate, or a valid future scheduler instant. Legacy PR/CI/session hints,
+// malformed/elapsed timers, and hintless fences are agent-owned work; if the worker nevertheless comes
+// to rest, the queue must surface that rest.
+//
+// `pr-watch` is DELIBERATELY NOT here (maintainer 2026-07-22): the modern review/approval/comment
+// watcher keeps its thread a VISIBLE queue handoff rather than parking it, so a PR whose reviews may
+// never arrive can't silently vanish. The scheduler still polls + bumps it on new activity (it keys on
+// the hint, not on this excusal); the human hides it via Snooze if they choose. Mirrors
+// groups.parkedAwaitingHint — keep the two in lockstep.
 function hasParkedExternalWait(tele: SessionTelemetry | undefined, nowMs: number): boolean {
   if (tele?.lastFence?.kind !== "awaiting") return false
   return tele.lastFence.hints.some((hint) =>

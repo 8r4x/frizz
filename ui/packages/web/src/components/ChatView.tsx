@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight, FileText, Hash, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, ShieldCheck, Sparkles, X } from "lucide-react"
 import type { AwaitingHint, NativeInputRequired as NativeInputRequiredData, PendingAsk, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptToolCall } from "@fray-ui/shared"
-import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, showToast } from "../store.ts"
+import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBoard, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
 import { displayTitle, lastActiveLabelAt } from "../groups.ts"
@@ -2768,7 +2768,14 @@ export function BackgroundOpsStrip({
         />
       ))}
       {shells.map((s, i) => (
-        <OpRow key={`s${i}`} kind="SHELL" label={s.label} state={s.state} startedAt={s.startedAt} />
+        <OpRow
+          key={`s${i}`}
+          kind="SHELL"
+          label={s.label}
+          state={s.state}
+          startedAt={s.startedAt}
+          onOpen={s.id ? () => pushBackgroundShellDrawer(slug, s.id!, { label: s.label, startedAt: s.startedAt }) : undefined}
+        />
       ))}
     </div>
   )
@@ -2777,18 +2784,13 @@ export function BackgroundOpsStrip({
 // One row of the ops strip: a live dot + petite-caps kind tag + label + elapsed. The dot has three
 // states — a bright accent pulse for a row with fresh output (running), a slow "breathing" dot for a
 // still-alive-but-quiet SHELL/Monitor (stale, but the process is live until its terminal signal), and
-// a flat gray dot for a stale AGENT (whose staleness can be a missed-completion fallback). AGENT rows
-// drill into the child's transcript (a hover arrow signals it); SHELL rows are display-only.
+// a flat gray dot for a stale AGENT (whose staleness can be a missed-completion fallback). Current rows
+// drill into their transcript/output (a hover arrow signals it); old snapshots without an id stay plain.
 function OpRow({ kind, label, state, startedAt, onOpen }: { kind: "AGENT" | "SHELL"; label: string; state: "running" | "stale"; startedAt: string; onOpen?: () => void }) {
   const when = elapsed(startedAt)
   const clickable = !!onOpen
-  return (
-    <div
-      onClick={onOpen}
-      onMouseDown={clickable ? (e) => e.stopPropagation() : undefined}
-      title={clickable ? "Open sub-agent transcript" : undefined}
-      className={`group flex items-center gap-1.5 min-w-0 text-[11.5px] ${clickable ? "cursor-pointer" : ""}`}
-    >
+  const content = (
+    <>
       {/* ⤷ the SAME down-right arrow as the sidebar's sub-agent rows — a subtle, borderless list that
           reads as ambient status hanging under the composer, not chrome (maintainer 2026-07-11). */}
       <span aria-hidden className="shrink-0 text-[11px] leading-none text-muted/40">⤷</span>
@@ -2807,8 +2809,12 @@ function OpRow({ kind, label, state, startedAt, onOpen }: { kind: "AGENT" | "SHE
       <span className={`min-w-0 truncate text-muted/70 ${clickable ? "group-hover:text-fg/80 group-hover:underline" : ""}`}>{label}</span>
       {when && <span className="shrink-0 text-muted/40">{when}</span>}
       {clickable && <ArrowUpRight size={11} className="shrink-0 text-transparent transition-colors group-hover:text-muted/50" />}
-    </div>
+    </>
   )
+  const className = `group flex min-w-0 items-center gap-1.5 text-left text-[11.5px] ${clickable ? "cursor-pointer rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-fg/60" : ""}`
+  if (!clickable) return <div className={className}>{content}</div>
+  const title = kind === "AGENT" ? "Open sub-agent transcript" : "Open background shell output"
+  return <button type="button" onClick={onOpen} onMouseDown={(e) => e.stopPropagation()} title={title} aria-label={`${title}: ${label}`} className={className}>{content}</button>
 }
 
 // The read-only render of a PENDING native AskUserQuestion (the safety net for a session that bypassed

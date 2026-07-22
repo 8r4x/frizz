@@ -342,7 +342,7 @@ test("applyRecord: a Monitor registers the same live SHELL op and clears only on
   assert.equal(s.subAgents.size, 1, "a Monitor launch ack must not retire the live watcher")
   applyRecord(s, taskNotification("toolu_mon", "completed"))
   assert.equal(s.subAgents.size, 0)
-  assert.equal(s.retiredSubAgents.size, 0, "Monitors are display-only like background Bash")
+  assert.equal(s.retiredShells.size, 1, "the output drawer remains resolvable after completion")
 })
 
 test("applyRecord: a background shell without a description labels from the command's first line", () => {
@@ -351,12 +351,12 @@ test("applyRecord: a background shell without a description labels from the comm
   assert.equal(s.subAgents.get("toolu_sh")?.label, "gh run watch 123")
 })
 
-test("applyRecord: a shell CLEARS on terminal notification and does NOT retain (display-only)", () => {
+test("applyRecord: a shell leaves the live view on completion and retains bounded drawer metadata", () => {
   const s = newTailState("t", "s", "/x")
   applyRecord(s, bashBg("toolu_sh", "Watch CI", "gh run watch"))
   applyRecord(s, taskNotification("toolu_sh", "completed"))
   assert.equal(s.subAgents.size, 0)
-  assert.equal(s.retiredSubAgents.size, 0, "shells don't retain — nothing to drill into")
+  assert.deepEqual(s.retiredShells.get("toolu_sh"), { toolUseId: "toolu_sh", command: "gh run watch", outputFile: undefined, status: "completed" })
 })
 
 test("applyRecord: a manual TaskStop clears a background Bash shell (the phantom-row leak fix)", () => {
@@ -622,7 +622,7 @@ test("tailer: a dead pane clears its background shells — a shell cannot outliv
 
   h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z") // <5min since shell output → live
   t.tick()
-  assert.deepEqual(t.get("t")?.bgShells, [{ label: "Watch CI", startedAt: "2026-07-01T00:00:01.000Z", state: "running" }])
+  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", command: "gh run watch", label: "Watch CI", startedAt: "2026-07-01T00:00:01.000Z", state: "running" }])
 
   // The agent process dies (its tmux pane went dead) WITHOUT a terminal notification landing for the
   // shell. The shell is a child of that process, so it died with it — the board must stop reporting it
@@ -658,7 +658,7 @@ test("tailer: a manual TaskStop clears a live background shell from the board vi
 
   h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
   t.tick()
-  assert.deepEqual(t.get("t")?.bgShells, [{ label: "Boot isolated stack", startedAt: "2026-07-01T00:00:01.000Z", state: "running" }])
+  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", command: "npx tsx scripts/adhoc-stack.mjs", label: "Boot isolated stack", startedAt: "2026-07-01T00:00:01.000Z", state: "running" }])
 
   // The worker TaskStops the shell (pane still alive). Its structured result is the terminal signal.
   appendFileSync(join(h.logDir, "sid.jsonl"), JSON.stringify(taskStopResult("ba3y11c3t", "npx tsx scripts/adhoc-stack.mjs")) + "\n")
@@ -733,7 +733,7 @@ test("tailer: a background shell stays running however long it is quiet; only it
 
   h.clock.ms = Date.parse("2026-07-01T00:40:00.000Z") // 40min quiet — an ordinary CI wait
   t.tick()
-  assert.deepEqual(t.get("t")?.bgShells, [{ label: "Run vite dev server", startedAt: "2026-07-01T00:00:01.000Z", state: "running" }])
+  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_srv", command: "npx vite --port 5231", label: "Run vite dev server", startedAt: "2026-07-01T00:00:01.000Z", state: "running" }])
 
   h.clock.ms = Date.parse("2026-07-01T08:00:00.000Z") // 8h quiet — a dev server left running; still "running"
   t.tick()
@@ -743,6 +743,7 @@ test("tailer: a background shell stays running however long it is quiet; only it
   appendFileSync(join(h.logDir, "sid.jsonl"), JSON.stringify(taskNotification("toolu_srv", "completed")) + "\n")
   t.tick()
   assert.deepEqual(t.get("t")?.bgShells, [])
+  assert.deepEqual(t.backgroundShell?.("t", "toolu_srv"), { command: "npx vite --port 5231", outputFile: "/tmp/tasks/ba3y11c3t.output", state: "done" })
 })
 
 // ---- derived pending-question detection (chat-only ```question the worker didn't encode as blocked) ----
@@ -1486,16 +1487,26 @@ test("parseSignalFence: END-ANCHORED — a fence with prose after it is quoted/e
   assert.deepEqual(parseSignalFence("all done\n\n```done\nShipped.\n```\n  \n"), { kind: "done", body: "Shipped.", hints: [] })
 })
 
-test("parseSignalFence: an awaiting fence parses current human/timer and legacy pr/ci/session hints", () => {
-  const f = parseSignalFence("```awaiting\nhuman: repo maintainer must approve fork CI\ntimer: 2026-07-02T00:00:00Z\npr: 391\nci: build #42\nsession: abc-123\nWaiting on a named gate.\n```")
+test("parseSignalFence: an awaiting fence parses current pr-watch/human/timer and legacy pr/ci/session hints", () => {
+  const f = parseSignalFence("```awaiting\npr-watch: acme/app#391\nhuman: repo maintainer must approve fork CI\ntimer: 2026-07-02T00:00:00Z\npr: 391\nci: build #42\nsession: abc-123\nWaiting on a named gate.\n```")
   assert.equal(f?.kind, "awaiting")
   assert.equal(f?.body, "Waiting on a named gate.")
   assert.deepEqual(f?.hints, [
+    { kind: "pr-watch", value: "acme/app#391" },
     { kind: "human", value: "repo maintainer must approve fork CI" },
     { kind: "timer", value: "2026-07-02T00:00:00Z" },
     { kind: "pr", value: "391" },
     { kind: "ci", value: "build #42" },
     { kind: "session", value: "abc-123" },
+  ])
+})
+
+test("parseSignalFence: `pr-watch:` wins the alternation over legacy `pr:` (the shared -watch suffix)", () => {
+  // A bare `pr:` must still parse as the legacy pr hint, not as a truncated pr-watch.
+  const f = parseSignalFence("```awaiting\npr-watch: acme/app#7\npr: 391\n```")
+  assert.deepEqual(f?.hints, [
+    { kind: "pr-watch", value: "acme/app#7" },
+    { kind: "pr", value: "391" },
   ])
 })
 

@@ -298,6 +298,7 @@ test("partitionActive: splits an ordered Active list into running/rested; queued
 
 const awaitingHuman = { kind: "awaiting" as const, body: "", hints: [{ kind: "human" as const, value: "Cloudflare maintainer must approve fork CI" }] }
 const awaitingGithubReview = { kind: "awaiting" as const, body: "", hints: [{ kind: "github-review" as const, value: "owner/repo#12" }] }
+const awaitingPrWatch = { kind: "awaiting" as const, body: "", hints: [{ kind: "pr-watch" as const, value: "owner/repo#12" }] }
 const awaitingTimer = { kind: "awaiting" as const, body: "", hints: [{ kind: "timer" as const, value: "2099-07-15T17:00:00Z" }] }
 const awaitingElapsedTimer = { kind: "awaiting" as const, body: "", hints: [{ kind: "timer" as const, value: "2020-07-15T17:00:00Z" }] }
 const awaitingBadTimer = { kind: "awaiting" as const, body: "", hints: [{ kind: "timer" as const, value: "tomorrow-ish" }] }
@@ -310,7 +311,10 @@ test("isHeld: only current human/review/future-timer fences and canonical timed 
   assert.equal(isHeld(thread({ runtime: "turn-idle", lastFence: awaitingHuman })), true)
   assert.equal(isHeld(thread({ runtime: "exited", lastFence: awaitingHuman })), true)
   assert.equal(isHeld(thread({ runtime: "turn-idle", lastFence: awaitingTimer })), true)
-  assert.equal(isHeld(thread({ runtime: "turn-idle", lastFence: awaitingGithubReview })), true)
+  assert.equal(isHeld(thread({ runtime: "turn-idle", lastFence: awaitingGithubReview })), true, "legacy github-review still parks")
+  // pr-watch is the modern watcher and NEVER parks — a PR handoff stays a visible queue card, never
+  // hidden in Held even though the scheduler is polling it. (2026-07-22)
+  assert.equal(isHeld(thread({ runtime: "turn-idle", lastFence: awaitingPrWatch })), false, "pr-watch queues, never Held")
   assert.equal(isHeld(thread({ runtime: "turn-idle", lastFence: awaitingBadTimer })), false)
   assert.equal(isHeld(thread({ runtime: "turn-idle", lastFence: awaitingElapsedTimer })), false)
   assert.equal(isHeld(thread({ runtime: "turn-idle", lastFence: awaitingPr })), false)

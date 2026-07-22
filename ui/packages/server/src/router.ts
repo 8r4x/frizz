@@ -78,6 +78,7 @@ import type { SessionRow, Storage } from "./storage.ts"
 import type { SessionTelemetry } from "./tailer.ts"
 import { resolvePlanFile, deletePlanFile } from "./plan-files.ts"
 import { providerResumeCommand } from "./external-terminal.ts"
+import { readBackgroundShellOutput } from "./background-shell-output.ts"
 
 const SlugInput = z.object({ slug: ThreadSlug }).strict()
 
@@ -478,6 +479,24 @@ export function createRouter(ctx: AppContext) {
         if (!info) return { messages: [], state: "gone" as const }
         const messages = info.outputFile ? readTranscriptFile(info.outputFile) : []
         return { messages, state: info.state }
+      },
+    }),
+
+    // A live/recent background shell's command and combined process output. The tailer supplies the
+    // scoped path; the reader caps the response so long-lived watchers/dev servers stay cheap.
+    backgroundShellOutput: query({
+      input: z.object({ slug: ThreadSlug, id: z.string() }).strict(),
+      output: z.object({
+        command: z.string().nullable(),
+        output: z.string(),
+        truncated: z.boolean(),
+        state: z.enum(["running", "done", "gone"]),
+      }),
+      handler: async ({ input }) => {
+        const info = ctx.tailer.backgroundShell?.(input.slug, input.id)
+        if (!info) return { command: null, output: "", truncated: false, state: "gone" as const }
+        const content = info.outputFile ? readBackgroundShellOutput(info.outputFile) : { output: "", truncated: false }
+        return { command: info.command ?? null, ...content, state: info.state }
       },
     }),
 

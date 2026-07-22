@@ -12,13 +12,14 @@ import { ProducerStoppedError } from "./shutdown.ts"
 
 const execFileAsync = promisify(execFile)
 
-// ---- DURABLE TIMER WAKER + LEGACY COMPATIBILITY --------------------------------------------------
-// New workers reserve `awaiting` for a specific external HUMAN gate (`human:`), an optional durable
-// GitHub cursor for that gate (`github-review:`), or a wall-clock checkpoint (`timer:`). A plain human
-// gate is descriptive; github-review wakes on NEW non-bot human activity after this fence, while a
-// registered timer remains durable across server/worker restarts and resumes when it crosses. Historical transcripts may
-// still carry `pr:`/`ci:` hints, so their existing out-of-band wake behavior remains as a compatibility
-// bridge. New automated waits should instead stay ACTIVE through Bash/Monitor (Claude) or a blocking
+// ---- DURABLE TIMER WAKER + PR-WATCH + LEGACY COMPATIBILITY ----------------------------------------
+// New workers use `awaiting` for a PR-activity watcher (`pr-watch:`), a specific external HUMAN gate
+// (`human:`), or a wall-clock checkpoint (`timer:`). `pr-watch` (formerly `github-review`, still
+// scheduled identically) wakes on ANY NEW non-bot activity on the PR after this fence — a review, an
+// approval, or a comment — while a registered timer remains durable across server/worker restarts and
+// resumes when it crosses. Historical transcripts may still carry `pr:`/`ci:` hints, so their existing
+// out-of-band wake behavior remains as a compatibility bridge. Other automated waits should instead
+// stay ACTIVE through Bash/Monitor (Claude) or a blocking
 // exec wait (Codex). The resumed turn supersedes the fence, naturally making the wake idempotent.
 //
 // ---- THE BOOT-MASS-FIRE SAFETY GUARD (critical — the maintainer has ~14 real sessions) ----
@@ -67,6 +68,9 @@ export interface GithubReviewActivity {
   actorType?: string
   at?: string
   kind: "review" | "comment"
+  // For a review node, its GitHub state (APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | …) so
+  // the bump steer can name an APPROVAL specifically. Absent on comments and on legacy cursors.
+  reviewState?: string
 }
 interface RollupEntry {
   status?: string // CheckRun: QUEUED | IN_PROGRESS | COMPLETED | PENDING | WAITING
@@ -143,12 +147,20 @@ export function evalRollup(rollup: RollupEntry[]): { done: boolean; ok: boolean 
   return { done: !pending, ok: !failed }
 }
 
+// The PR-activity watcher hints: `pr-watch:` (current) and `github-review:` (its prior name). Both are
+// polled and bumped identically by the scheduler; they differ only in board presentation (pr-watch
+// stays a visible queue handoff; github-review parks in Held). One predicate so every scheduler branch
+// treats them the same.
+function isPrWatchHint(kind: FenceView["hints"][number]["kind"]): boolean {
+  return kind === "pr-watch" || kind === "github-review"
+}
+
 // Is a hint one this scheduler can act on? A current STRICT ISO `timer:`, a machine-readable
-// `github-review:` PR ref, plus legacy `pr:`/`ci:` refs. `human:` is descriptive by definition and
-// `session:` has no cross-session liveness signal, so neither is resolved here.
+// `pr-watch:`/`github-review:` PR ref, plus legacy `pr:`/`ci:` refs. `human:` is descriptive by
+// definition and `session:` has no cross-session liveness signal, so neither is resolved here.
 function isActionable(hint: FenceView["hints"][number]): boolean {
   if (hint.kind === "timer") return isValidAwaitingTimer(hint.value)
-  if (hint.kind === "github-review" || hint.kind === "pr" || hint.kind === "ci") return parsePrRef(hint.value) !== undefined
+  if (isPrWatchHint(hint.kind) || hint.kind === "pr" || hint.kind === "ci") return parsePrRef(hint.value) !== undefined
   return false
 }
 
@@ -267,7 +279,7 @@ function evalHint(hint: FenceView["hints"][number], nowMs: number, prCache: Map<
     const desc = fenceBody.trim().replace(/\s+/g, " ").slice(0, 200)
     return { met: nowMs >= target, steer: `⏰ Your timer fired${desc ? `: ${desc}` : ""}. Continue.`, reason: `timer ${hint.value}` }
   }
-  if (hint.kind === "github-review") return undefined // evaluated against its persisted activity cursor below
+  if (isPrWatchHint(hint.kind)) return undefined // evaluated against its persisted activity cursor below
   const ref = parsePrRef(hint.value)
   if (!ref) return undefined
   const s = prCache.get(refKey(ref))
@@ -345,7 +357,7 @@ async function defaultFetchPr(ref: PrRef): Promise<PrStatus | undefined> {
 const REVIEW_QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $number) {
-      reviews(last: 50) { nodes { id submittedAt author { login __typename } } }
+      reviews(last: 50) { nodes { id state submittedAt author { login __typename } } }
       comments(last: 50) { nodes { id createdAt author { login __typename } } }
     }
   }
@@ -369,7 +381,8 @@ export function parseGithubReviewActivities(raw: unknown): GithubReviewActivity[
       if (!rawId || !actor) continue
       const actorType = typeof author?.__typename === "string" ? author.__typename : undefined
       const at = typeof n[atKey] === "string" ? (n[atKey] as string) : undefined
-      out.push({ id: `${kind}:${rawId}`, actor, actorType, at, kind })
+      const reviewState = kind === "review" && typeof n.state === "string" ? n.state : undefined
+      out.push({ id: `${kind}:${rawId}`, actor, actorType, at, kind, ...(reviewState ? { reviewState } : {}) })
     }
   }
   add((pr as any)?.reviews?.nodes, "review", "submittedAt")
@@ -550,6 +563,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
                 actorType: typeof p.actorType === "string" ? p.actorType : undefined,
                 at: typeof p.at === "string" ? p.at : undefined,
                 kind: p.kind,
+                ...(typeof p.reviewState === "string" ? { reviewState: p.reviewState } : {}),
               }
               if (isNonBotGithubActivity(candidate)) pending = candidate
             }
@@ -656,6 +670,20 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     return tele.turn === "idle" ? "current-idle" : "current-busy"
   }
 
+  // Name the activity for the bump steer. A review carries a GitHub `state`, so an APPROVAL or a
+  // CHANGES_REQUESTED is called out specifically (the two the worker most needs to act on); a plain
+  // review or a conversation comment reads generically. Falls back to "activity" for an unknown state.
+  function activityLabel(a: GithubReviewActivity): string {
+    if (a.kind === "comment") return "comment"
+    switch (a.reviewState?.toUpperCase()) {
+      case "APPROVED": return "approval"
+      case "CHANGES_REQUESTED": return "requested changes"
+      case "COMMENTED": return "review comment"
+      case "DISMISSED": return "dismissed review"
+      default: return "review"
+    }
+  }
+
   function reviewVerdict(
     persistKey: string,
     hint: FenceView["hints"][number],
@@ -671,8 +699,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (prior?.pending) {
       return {
         met: true,
-        steer: `👤 New human GitHub ${prior.pending.kind} activity on ${refKey(ref)} from @${prior.pending.actor}. Re-open the review/comments and continue.`,
-        reason: `github review ${refKey(ref)} by ${prior.pending.actor}`,
+        steer: `👤 New human GitHub ${activityLabel(prior.pending)} on ${refKey(ref)} from @${prior.pending.actor}. Re-open the PR and continue.`,
+        reason: `pr-watch ${refKey(ref)} by ${prior.pending.actor}`,
       }
     }
     const human = activities
@@ -708,8 +736,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     saveReviewCursor(persistKey, hintKey, [...human.map((a) => a.id), ...(prior?.seen ?? [])], newest)
     return {
       met: true,
-      steer: `👤 New human GitHub ${newest.kind} activity on ${refKey(ref)} from @${newest.actor}. Re-open the review/comments and continue.`,
-      reason: `github review ${refKey(ref)} by ${newest.actor}`,
+      steer: `👤 New human GitHub ${activityLabel(newest)} on ${refKey(ref)} from @${newest.actor}. Re-open the PR and continue.`,
+      reason: `pr-watch ${refKey(ref)} by ${newest.actor}`,
     }
   }
 
@@ -745,7 +773,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
     // Refresh PR statuses/review activity on the slow cadence (one fetch per distinct ref per kind).
     const needsPr = actionable.some((h) => h.kind === "pr" || h.kind === "ci")
-    const needsReview = actionable.some((h) => h.kind === "github-review")
+    const needsReview = actionable.some((h) => isPrWatchHint(h.kind))
     if ((needsPr || needsReview) && (st.lastPollAt === 0 || nowMs - st.lastPollAt >= pollMs)) {
       st.lastPollAt = nowMs
       const refs = new Map<string, PrRef>()
@@ -754,7 +782,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         const ref = parsePrRef(h.value)
         if (!ref) continue
         if (h.kind === "pr" || h.kind === "ci") refs.set(refKey(ref), ref)
-        if (h.kind === "github-review") reviewRefs.set(refKey(ref), ref)
+        if (isPrWatchHint(h.kind)) reviewRefs.set(refKey(ref), ref)
       }
       for (const [k, ref] of refs) {
         try {
@@ -778,10 +806,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
     for (const h of actionable) {
       const key = `${h.kind}:${h.value}`
-      const reviewRef = h.kind === "github-review" ? parsePrRef(h.value) : undefined
+      const reviewRef = isPrWatchHint(h.kind) ? parsePrRef(h.value) : undefined
       const reviewActivity = reviewRef ? st.reviewCache.get(refKey(reviewRef)) : undefined
       const pendingReview = registrations.get(persistKey)?.reviews[key]?.pending
-      const verdict = h.kind === "github-review"
+      const verdict = isPrWatchHint(h.kind)
         ? reviewActivity || pendingReview
           ? reviewVerdict(persistKey, h, reviewActivity ?? [], fenceAt)
           : undefined
@@ -792,9 +820,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         if (h.kind === "timer") armTimer(persistKey, key, h.value)
         continue
       }
-      // Reviews are eligible once a persisted baseline detects an unseen human id. Timer/legacy
+      // PR-watch hints are eligible once a persisted baseline detects an unseen human id. Timer/legacy
       // conditions still require arming; for timers that arming was restored from durable registration.
-      if (h.kind !== "github-review" && !st.armed.get(key)) continue
+      if (!isPrWatchHint(h.kind) && !st.armed.get(key)) continue
       const item = outbox.enqueue({
         id: deliveryId,
         slug,

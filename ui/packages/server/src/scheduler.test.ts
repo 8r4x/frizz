@@ -35,16 +35,16 @@ test("ghPrViewArgs uses numeric selector + explicit normalized repo (never owner
   ])
 })
 
-test("GitHub review GraphQL normalization preserves actor type for bot filtering", () => {
+test("GitHub review GraphQL normalization preserves actor type for bot filtering + review state", () => {
   const got = parseGithubReviewActivities({
     data: { repository: { pullRequest: {
-      reviews: { nodes: [{ id: "R1", submittedAt: "2026-07-09T12:01:00Z", author: { login: "alice", __typename: "User" } }] },
+      reviews: { nodes: [{ id: "R1", state: "APPROVED", submittedAt: "2026-07-09T12:01:00Z", author: { login: "alice", __typename: "User" } }] },
       comments: { nodes: [{ id: "C1", createdAt: "2026-07-09T12:02:00Z", author: { login: "dependabot[bot]", __typename: "Bot" } }] },
     } } },
   })
-  assert.deepEqual(got.map((a) => [a.id, a.actor, a.actorType, a.kind]), [
-    ["review:R1", "alice", "User", "review"],
-    ["comment:C1", "dependabot[bot]", "Bot", "comment"],
+  assert.deepEqual(got.map((a) => [a.id, a.actor, a.actorType, a.kind, a.reviewState]), [
+    ["review:R1", "alice", "User", "review", "APPROVED"],
+    ["comment:C1", "dependabot[bot]", "Bot", "comment", undefined], // comments carry no review state
   ])
 })
 
@@ -373,6 +373,47 @@ test("github-review retries a failed resume from its durable pending cursor acro
   assert.equal(attempts, 2, "one failed and one successful delivery; the delivered outbox state blocks a third")
   assert.equal(h.resumes.length, 1)
   assert.match(h.resumes[0].message, /@bob/)
+})
+
+test("pr-watch: schedules identically to github-review — baselines, then bumps on a new human comment", async () => {
+  const h = harness()
+  const fenceAt = iso(h.clock.ms)
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: fenceAt })
+  h.review.result = [{ id: "comment:old", actor: "alice", actorType: "User", at: iso(h.clock.ms - 1000), kind: "comment" }]
+  await h.make().tick() // baseline existing activity, no wake
+  assert.equal(h.resumes.length, 0)
+
+  h.clock.ms += 10_000
+  h.review.result = [
+    { id: "comment:new", actor: "carol", actorType: "User", at: iso(h.clock.ms), kind: "comment" },
+    { id: "comment:old", actor: "alice", actorType: "User", at: iso(h.clock.ms - 1000), kind: "comment" },
+  ]
+  const s = h.make()
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.match(h.resumes[0].message, /@carol/)
+  assert.match(h.resumes[0].message, /comment/)
+})
+
+test("pr-watch: an APPROVAL is named specifically in the bump steer", async () => {
+  const h = harness()
+  const fenceAt = iso(h.clock.ms)
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: fenceAt })
+  h.review.result = [] // no prior activity to baseline
+  await h.make().tick()
+  assert.equal(h.resumes.length, 0)
+
+  h.clock.ms += 10_000
+  h.review.result = [{ id: "review:appr", actor: "dana", actorType: "User", at: iso(h.clock.ms), kind: "review", reviewState: "APPROVED" }]
+  const s = h.make()
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.match(h.resumes[0].message, /approval/)
+  assert.match(h.resumes[0].message, /@dana/)
 })
 
 // ---- PR / CI transitions + graceful gh failure ----
