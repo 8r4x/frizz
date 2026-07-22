@@ -5,7 +5,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, ShieldCheck, Sparkles, X } from "lucide-react"
 import type { AwaitingHint, NativeInputRequired as NativeInputRequiredData, PendingAsk, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptToolCall } from "@fray-ui/shared"
-import { isValidAwaitingTimer } from "@fray-ui/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, showToast } from "../store.ts"
 import { useBoard, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
@@ -21,7 +20,7 @@ import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { messagePresentationText } from "../lib/messagePresentation.ts"
 import { snoozePresetInstant, formatSnoozeWake } from "../lib/snooze.ts"
-import { awaitingHintSentence, awaitingPresentationLine } from "../lib/awaitingPresentation.ts"
+import { awaitingHintSentence, awaitingParkAction, awaitingPresentationLine } from "../lib/awaitingPresentation.ts"
 import { prefs } from "../lib/prefs.ts"
 import { canAdoptThread } from "../lib/adoption.ts"
 import { THREAD_TITLE_MAX_LENGTH, aiRenameAvailability, manualThreadTitleSeed, threadTitleToCommit } from "../lib/threadTitle.ts"
@@ -2411,24 +2410,8 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
 // non-bot PR activity) AND already files the thread into the dimmed Held band — this button lets the
 // human EXPLICITLY commit a USER-OWNED snooze on top, so the park carries a concrete wake time and is
 // durable across fence changes. It NEVER suppresses the auto-armed wake: a user snooze is a
-// board-presentation concern only (board.ts), independent of the scheduler. Kind → label + snooze
-// target: a future `timer` → "Confirm snooze" until that exact instant; `github-review` → "Confirm
-// watcher" (its own verb — the watcher is activity-based, so there is no instant to show); a plain
-// `human` gate → "Confirm snooze". For github-review/human there's no declared time, so we park for
-// the user's default snooze preset (a "remind me if it's still quiet" fallback; the watcher still
-// wakes on activity). Returns null when no hint is parkable (legacy pr/ci/session, or an
-// elapsed/malformed timer) — there's nothing to confirm.
-function awaitingParkAction(
-  hints: readonly AwaitingHint[],
-  nowMs = Date.now(),
-): { label: string; toastVerb: string; timerUntil: string | null } | null {
-  const timer = hints.find((h) => h.kind === "timer" && isValidAwaitingTimer(h.value) && Date.parse(h.value) > nowMs)
-  if (timer) return { label: "Confirm snooze", toastVerb: "Snoozed", timerUntil: timer.value }
-  if (hints.some((h) => h.kind === "github-review")) return { label: "Confirm watcher", toastVerb: "Parked", timerUntil: null }
-  if (hints.some((h) => h.kind === "human")) return { label: "Confirm snooze", toastVerb: "Snoozed", timerUntil: null }
-  return null
-}
-
+// board-presentation concern only (board.ts), independent of the scheduler. Its kind → label + snooze
+// target policy lives in lib/awaitingPresentation.ts (awaitingParkAction), where it is unit-tested.
 function AwaitingParkButton({ thread, hints }: { thread: ThreadViewData; hints: readonly AwaitingHint[] }) {
   const [busy, setBusy] = useState(false)
   // On the queue, confirming the park dismisses THIS card through the user-initiated auto-scroll exit

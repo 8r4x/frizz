@@ -201,6 +201,23 @@ test("HTTP/CORS preserves same-authority desktop/PWA preflights and valid mutati
   assert.equal(dispatchCalls, 4)
 })
 
+// A rejected input must name what was wrong. The envelope used to carry zod's nested `format()` OBJECT,
+// which the web client cannot render — every validation failure app-wide surfaced as the opaque
+// "RPC <name> failed", and that is what hid a real snooze timer-format bug from the operator.
+test("a rejected RPC input returns a readable string message, not an unrenderable object", async () => {
+  const port = 49_177
+  const app = originTestApp(port)
+  const res = await app.request(`http://127.0.0.1:${port}/rpc/setThreadSnooze`, {
+    method: "POST",
+    headers: { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}`, "content-type": "application/json" },
+    body: JSON.stringify({ slug: "some-thread", until: "2026-07-24T17:00:00Z" }),
+  })
+  assert.equal(res.status, 400)
+  const body = (await res.json()) as { error: unknown }
+  assert.equal(typeof body.error, "string", "the web client only surfaces a string error verbatim")
+  assert.match(body.error as string, /until: .*ISO-8601 UTC instant/)
+})
+
 test("HTTP control plane rejects hostile/prefix/port/Host/forwarded origin tricks", async () => {
   const port = 49_177
   const app = originTestApp(port)

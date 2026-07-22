@@ -73,6 +73,14 @@ export function extractProcedureMap(router: Router): Record<string, "query" | "m
   return map
 }
 
+// A validation failure must travel as a READABLE STRING. Both clients surface `error` verbatim only
+// when it is a string — the web one otherwise falls back to an opaque "RPC <name> failed", which hid
+// a real timer-format bug behind a message naming nothing. Keep the field's type stable at `string`.
+function validationMessage(error: z.ZodError): string {
+  const issues = error.issues.map((i) => (i.path.length > 0 ? `${i.path.join(".")}: ${i.message}` : i.message))
+  return issues.length > 0 ? issues.join("; ") : "Invalid input"
+}
+
 // ---- Mount router onto Hono ----
 
 export function mountRouter(app: Hono, prefix: string, router: Router) {
@@ -97,7 +105,7 @@ export function mountRouter(app: Hono, prefix: string, router: Router) {
         if (proc.input) {
           const parsed = proc.input.safeParse(input)
           if (!parsed.success) {
-            return c.json({ error: parsed.error.format() }, 400)
+            return c.json({ error: validationMessage(parsed.error) }, 400)
           }
           input = parsed.data
         }
@@ -118,7 +126,7 @@ export function mountRouter(app: Hono, prefix: string, router: Router) {
         if (proc.input) {
           const parsed = proc.input.safeParse(input)
           if (!parsed.success) {
-            return c.json({ error: parsed.error.format() }, 400)
+            return c.json({ error: validationMessage(parsed.error) }, 400)
           }
           input = parsed.data
         }
@@ -143,7 +151,7 @@ export function mountRouter(app: Hono, prefix: string, router: Router) {
         if (proc.input) {
           const parsed = proc.input.safeParse(input)
           if (!parsed.success) {
-            return c.json({ error: parsed.error.format() }, 400)
+            return c.json({ error: validationMessage(parsed.error) }, 400)
           }
           input = parsed.data
         }

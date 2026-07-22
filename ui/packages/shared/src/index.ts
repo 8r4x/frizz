@@ -197,6 +197,16 @@ export function isValidAwaitingTimer(value: string): boolean {
   return AWAITING_TIMER_RE.test(s) && Number.isFinite(Date.parse(s))
 }
 
+/** The canonical UTC serialization of a worker `timer:` instant, or null when it is not a valid timer.
+ *  The fence grammar above deliberately admits shapes the durable `SnoozeUntil` grammar rejects — no
+ *  seconds, no milliseconds, an explicit numeric offset — so every timer→snooze handoff normalizes
+ *  HERE. Sending a raw hint at the RPC boundary is what made "Confirm snooze" fail on the contract's
+ *  own documented `2026-07-24T17:00:00Z` form. */
+export function canonicalSnoozeInstant(value: string): string | null {
+  if (!isValidAwaitingTimer(value)) return null
+  return new Date(Date.parse(value.trim())).toISOString()
+}
+
 // A user-chosen snooze is UI lifecycle state, not agent-authored transcript state. The browser
 // serializes local date/time input with Date#toISOString, so the wire/storage representation is one
 // unambiguous UTC instant. Keeping this stricter than the legacy awaiting-timer grammar avoids locale
