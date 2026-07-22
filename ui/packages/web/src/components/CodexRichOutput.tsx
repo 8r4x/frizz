@@ -32,26 +32,24 @@ function webUrl(attrs: CodexHostDirective["attrs"], key: string): string | undef
   } catch { return undefined }
 }
 
-function Card({ directive, icon, eyebrow, title, children }: { directive: CodexHostDirective; icon: ReactNode; eyebrow: string; title: string; children?: ReactNode }) {
+function Card({ directive, icon, title, meta, children }: { directive: CodexHostDirective; icon: ReactNode; title: ReactNode; meta?: ReactNode; children?: ReactNode }) {
   return (
     <section
       data-codex-directive={directive.name}
-      className="min-w-0 rounded-lg border border-border bg-panel-2/75 px-3 py-2.5"
+      className="min-w-0 rounded-lg border border-border bg-panel-2/75 px-3 py-2"
     >
-      <div className="flex min-w-0 items-start gap-2.5">
-        <span className="mt-0.5 shrink-0 text-muted" aria-hidden>{icon}</span>
-        <div className="min-w-0 flex-1">
-          <div className="text-[10px] uppercase tracking-[0.08em] text-muted">{eyebrow}</div>
-          <div className="mt-0.5 break-words text-[13px] font-medium text-fg">{title}</div>
-          {children}
-        </div>
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="flex h-4 w-4 shrink-0 items-center justify-center text-muted" aria-hidden>{icon}</span>
+        <div className="max-w-[calc(100%-1.5rem)] shrink-0 break-words text-[12px] font-medium leading-4 text-fg">{title}</div>
+        {meta && <div className="min-w-0 truncate text-[11px] font-normal leading-4 text-muted">{meta}</div>}
       </div>
+      {children}
     </section>
   )
 }
 
 function Detail({ children, mono = false }: { children: ReactNode; mono?: boolean }) {
-  return <div className={`mt-1 break-words text-[11px] leading-4 text-muted${mono ? " font-mono-keep" : ""}`}>{children}</div>
+  return <div className={`ml-6 mt-1 break-words text-[11px] leading-4 text-muted${mono ? " font-mono-keep" : ""}`}>{children}</div>
 }
 
 function TemplateCard({ directive }: { directive: CodexHostDirective }) {
@@ -62,16 +60,15 @@ function TemplateCard({ directive }: { directive: CodexHostDirective }) {
   const directory = text(attrs, "skill_directory")
   const [preview, setPreview] = useState(Boolean(directory))
   return (
-    <Card directive={directive} icon={<LayoutTemplate size={16} />} eyebrow={kind ? `${kind} template` : "Template"} title={displayName}>
+    <Card directive={directive} icon={<LayoutTemplate size={15} />} title={displayName} meta={kind ? `${kind} template` : "Template"}>
       {skill && <Detail mono>{skill.startsWith("$") ? skill : `$${skill}`}</Detail>}
-      {directory && <Detail mono>{directory}</Detail>}
       {preview && directory && (
         <img
           src={`/local-image?path=${encodeURIComponent(`${directory}/assets/preview.png`)}`}
           alt={`${displayName} template preview`}
           loading="lazy"
           onError={() => setPreview(false)}
-          className="mt-2 max-h-44 max-w-full rounded-md border border-border object-contain"
+          className="ml-6 mt-2 max-h-44 max-w-[calc(100%-1.5rem)] rounded-md border border-border object-contain"
         />
       )}
     </Card>
@@ -86,10 +83,10 @@ function CodeCommentCard({ directive }: { directive: CodexHostDirective }) {
   const priority = number(attrs, "priority")
   const location = file ? `${file}${start ? `:${start}${end && end !== start ? `-${end}` : ""}` : ""}` : "Code location unavailable"
   return (
-    <Card directive={directive} icon={<MessageSquareCode size={16} />} eyebrow={priority === undefined ? "Code comment" : `P${priority} code comment`} title={text(attrs, "title") ?? "Review finding"}>
+    <Card directive={directive} icon={<MessageSquareCode size={15} />} title={text(attrs, "title") ?? "Review finding"} meta={priority === undefined ? undefined : `P${priority}`}>
       {text(attrs, "body") && <Detail>{text(attrs, "body")}</Detail>}
       {file ? (
-        <button type="button" className="local-file-action mt-1 max-w-full break-all text-left font-mono-keep text-[11px] text-accent underline decoration-dotted underline-offset-2" data-local-path={file} title={location}>
+        <button type="button" className="local-file-action ml-6 mt-1 max-w-[calc(100%-1.5rem)] break-all text-left font-mono-keep text-[11px] leading-4 text-accent underline decoration-dotted underline-offset-2" data-local-path={file} title={location}>
           {location}
         </button>
       ) : <Detail mono>{location}</Detail>}
@@ -98,26 +95,26 @@ function CodeCommentCard({ directive }: { directive: CodexHostDirective }) {
 }
 
 const GIT_PRESENTATION = {
-  "git-stage": [PackageCheck, "Git", "Changes staged"],
-  "git-commit": [GitCommitHorizontal, "Git", "Commit created"],
-  "git-create-branch": [GitBranch, "Git", "Branch created"],
-  "git-push": [Upload, "Git", "Branch pushed"],
-  "git-create-pr": [GitPullRequest, "Git", "Pull request created"],
+  "git-stage": [PackageCheck, "Changes staged"],
+  "git-commit": [GitCommitHorizontal, "Commit created"],
+  "git-create-branch": [GitBranch, "Branch created"],
+  "git-push": [Upload, "Branch pushed"],
+  "git-create-pr": [GitPullRequest, "Pull request created"],
 } as const
 
 function GitCard({ directive }: { directive: CodexHostDirective }) {
-  const [Icon, eyebrow, title] = GIT_PRESENTATION[directive.name as keyof typeof GIT_PRESENTATION]
-  const cwd = text(directive.attrs, "cwd")
+  const [Icon, title] = GIT_PRESENTATION[directive.name as keyof typeof GIT_PRESENTATION]
   const branch = text(directive.attrs, "branch")
   const url = webUrl(directive.attrs, "url")
   const draft = directive.attrs.isDraft === true
+  const label = `${title}${draft ? " as draft" : ""}`
   return (
-    <Card directive={directive} icon={<Icon size={16} />} eyebrow={eyebrow} title={`${title}${draft ? " as draft" : ""}`}>
-      {branch && <Detail mono>{branch}</Detail>}
-      {cwd && <Detail mono>{cwd}</Detail>}
-      {url && <a className="mt-1 block break-all text-[11px] text-accent underline underline-offset-2" href={url} target="_blank" rel="noopener noreferrer">Open pull request</a>}
-      <Detail>Reported by Codex</Detail>
-    </Card>
+    <Card
+      directive={directive}
+      icon={<Icon size={15} />}
+      title={url ? <a className="text-accent underline underline-offset-2" href={url} target="_blank" rel="noopener noreferrer">{label}</a> : label}
+      meta={branch && <span className="font-mono-keep">{branch}</span>}
+    />
   )
 }
 
@@ -125,27 +122,21 @@ function ThreadCard({ directive }: { directive: CodexHostDirective }) {
   const id = text(directive.attrs, "threadId")
   const pending = text(directive.attrs, "pendingWorktreeId")
   return (
-    <Card directive={directive} icon={<Network size={16} />} eyebrow="Codex thread" title={pending ? "Thread setup queued" : "Thread created"}>
-      {(id || pending) && <Detail mono>{id ?? pending}</Detail>}
-      <Detail>Recorded from the native Codex host</Detail>
-    </Card>
+    <Card directive={directive} icon={<Network size={15} />} title={pending ? "Thread setup queued" : "Thread created"} meta={(id || pending) && <span className="font-mono-keep">{id ?? pending}</span>} />
   )
 }
 
 function LifecycleCard({ directive }: { directive: CodexHostDirective }) {
   const reason = text(directive.attrs, "reason")
   return (
-    <Card directive={directive} icon={<Archive size={16} />} eyebrow="Codex lifecycle" title="Archive requested">
-      {reason && <Detail>{reason}</Detail>}
-      <Detail>Recorded only · Fray state unchanged</Detail>
-    </Card>
+    <Card directive={directive} icon={<Archive size={15} />} title="Archive suggested" meta={reason} />
   )
 }
 
 function scheduleSummary(value: CodexHostDirectiveValue | undefined): string | undefined {
   if (typeof value !== "string" || !value) return undefined
-  const interval = value.match(/(?:^|;)FREQ=HOURLY(?:;|$).*?(?:^|;)INTERVAL=(\d+)(?:;|$)/)?.[1]
-  if (interval) return `Every ${interval} hour${interval === "1" ? "" : "s"}`
+  const interval = value.match(/(?:^|;)INTERVAL=(\d+)(?:;|$)/)?.[1]
+  if (/(?:^|;)FREQ=HOURLY(?:;|$)/.test(value)) return `Every ${interval ?? "1"} hour${interval === "1" || interval === undefined ? "" : "s"}`
   if (/(?:^|;)FREQ=WEEKLY(?:;|$)/.test(value)) return "Weekly schedule"
   return "Custom schedule"
 }
@@ -156,11 +147,10 @@ function AutomationCard({ directive }: { directive: CodexHostDirective }) {
   const name = text(attrs, "name") ?? "Automation"
   const schedule = scheduleSummary(attrs.rrule)
   const status = text(attrs, "status")
+  const summary = [name, mode, status, schedule].filter(Boolean).join(" · ")
   return (
-    <Card directive={directive} icon={<CalendarClock size={16} />} eyebrow="Codex automation" title={name}>
-      {(mode || status || schedule) && <Detail>{[mode, status, schedule].filter(Boolean).join(" · ")}</Detail>}
+    <Card directive={directive} icon={<CalendarClock size={15} />} title="Automation suggested" meta={summary}>
       {text(attrs, "prompt") && <Detail>{text(attrs, "prompt")}</Detail>}
-      <Detail>Suggestion only · no schedule changed</Detail>
     </Card>
   )
 }
