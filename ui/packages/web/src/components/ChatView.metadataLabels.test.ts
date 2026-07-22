@@ -10,7 +10,13 @@ test("collapsed tool counts and thought events share one metadata-label rhythm",
   const toolClass = source.match(/className=\{`\$\{TRANSCRIPT_META_LABEL_CLASS\}([^`]*)`\}/)?.[1]
   assert.ok(toolClass, "collapsed tool-count button must consume the shared metadata-label class")
   assert.doesNotMatch(toolClass, /(?:text-\[|leading-|text-muted\/)/, "tool-count button must not override the shared type rhythm")
-  assert.match(source, /className=\{TRANSCRIPT_META_LABEL_CLASS\}>\{text\}<\/div>/)
+  // The quiet event line's own root. It gained a `group/msg relative` host for the hover-revealed
+  // debug-id chip, so the class is now interpolated rather than passed bare — but the RHYTHM contract
+  // is unchanged, and the two additions must stay purely positional.
+  const eventClass = source.match(/className=\{`group\/msg relative \$\{TRANSCRIPT_META_LABEL_CLASS\}([^`]*)`\}/)?.[1]
+  assert.ok(eventClass !== undefined, "event line must consume the shared metadata-label class")
+  assert.doesNotMatch(eventClass, /(?:text-\[|leading-|text-muted\/|petite-caps)/, "event line must not override the shared type rhythm")
+  assert.match(source, /<MessageDebugId sourceId=\{sourceId\} \/>\s*\{text\}/, "event line still renders its text verbatim beside the chip")
   // No vertical nudge on the toggle chevrons: the 12px icon's ink center already lands on the
   // petite-caps optical center; `-top-px` rode visibly high (2 device px on retina).
   assert.match(source, /<ChevronRight[^>]*className=\{`shrink-0 transition-transform/)

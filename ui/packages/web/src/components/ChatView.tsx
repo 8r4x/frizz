@@ -3,7 +3,7 @@ import { useSnapshot } from "valtio"
 import * as RadixTabs from "@radix-ui/react-tabs"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, ShieldCheck, Sparkles, X } from "lucide-react"
+import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight, FileText, Hash, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, ShieldCheck, Sparkles, X } from "lucide-react"
 import type { AwaitingHint, NativeInputRequired as NativeInputRequiredData, PendingAsk, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptToolCall } from "@fray-ui/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, showToast } from "../store.ts"
 import { useBoard, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
@@ -37,6 +37,7 @@ import { TRANSCRIPT_META_LABEL_CLASS } from "../lib/transcriptMetaLabels.ts"
 import { InteractionStack } from "./InteractionCards.tsx"
 import { LastActive } from "./LastActive.tsx"
 import { CopyTerminalCommandButton, useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
+import { MessageDebugId } from "./MessageDebugId.tsx"
 import { SignInModal } from "./SignInModal.tsx"
 import { PROVIDER_LABEL } from "../lib/signIn.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
@@ -1851,7 +1852,7 @@ export function StickyUserBand({ children, stickyTopPx, sourceId }: { children: 
 // ellipsis) with a soft "there's more" cue; hovering expands it to the full message (up to 85vh, then
 // it scrolls) and leaving re-collapses. Non-sticky (every historical bubble) is the plain, uncapped
 // bubble, unchanged. Its own component so the sticky hover/measure hooks stay out of memoized Message.
-function UserBubble({ text, queued, sticky, deliveryUnconfirmed }: { text: string; queued?: boolean; sticky?: boolean; deliveryUnconfirmed?: boolean }) {
+function UserBubble({ text, queued, sticky, deliveryUnconfirmed, sourceId }: { text: string; queued?: boolean; sticky?: boolean; deliveryUnconfirmed?: boolean; sourceId?: string }) {
   const ref = useRef<HTMLDivElement>(null)
   const [expanded, setExpanded] = useState(false)
   const [overflows, setOverflows] = useState(false)
@@ -1887,7 +1888,13 @@ function UserBubble({ text, queued, sticky, deliveryUnconfirmed }: { text: strin
   // Scroll ONLY when expanded, over the cap, AND the expand animation has settled.
   const scrollable = sticky === true && expanded && exceedsCap && scrollReady
   return (
-    <div className="self-end flex flex-col items-end gap-0.5 max-w-[85%]">
+    // `self-end` must stay on THIS node: the parent scroll container is a flex column and the bubble's
+    // right-justification depends on being its direct child (see the group-container note above the
+    // queued-message stack). So the debug chip is hosted here rather than in a wrapper.
+    <div data-fray-msg={sourceId} className="group/msg relative self-end flex flex-col items-end gap-0.5 max-w-[85%]">
+      {/* Left gutter: a right-aligned bubble leaves empty space to its left, so the chip sits there
+          instead of over the human's own words. */}
+      <MessageDebugId sourceId={sourceId} side="left" />
       {/* OFF-WHITE bubble, BLACK text — the human's words POP against the dark page + agent prose. bg-user-bubble
           is a tick less white than bg-fg so it reads as a card. whitespace-pre-wrap is load-bearing: user text
           is verbatim, so its line breaks must survive. */}
@@ -1945,10 +1952,10 @@ function UserBubble({ text, queued, sticky, deliveryUnconfirmed }: { text: strin
 export const Message = memo(function Message({ m, answering, dense, paired, sticky, textOnly, showSendButton }: { m: ChatMessage; answering?: MessageAnswering; dense?: boolean; paired?: PairedAnswer[] | null; sticky?: boolean; textOnly?: boolean; showSendButton?: boolean }) {
   // An event line (a sub-agent completion) is transcript PUNCTUATION — a quiet full-width line, not a
   // bubble or a tool band. Rendered before the role branches (its role field is nominal).
-  if (m.kind === "event") return <EventLine text={m.text} boundary={m.boundary} />
+  if (m.kind === "event") return <EventLine text={m.text} boundary={m.boundary} sourceId={m.sourceId} />
   // A model-reasoning summary (Codex) — quiet punctuation like an event line, but CLICKABLE to expand
   // the full reasoning. Rendered before the role branches (its role field is nominal, like an event).
-  if (m.kind === "reasoning") return <ReasoningBlock text={m.text} durationMs={m.durationMs} />
+  if (m.kind === "reasoning") return <ReasoningBlock text={m.text} durationMs={m.durationMs} sourceId={m.sourceId} />
   // User messages: right-justified chat bubble; agent output stays left-aligned prose. A follow-up
   // that's been sent but not yet echoed by the transcript shows as a grayed-out bubble — the dimming
   // alone signals queued (a "queued" tag under the bubble caused layout shift when it cleared).
@@ -1961,8 +1968,8 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     // renders as a structured answers card echoing the question component — not a flat run-on bubble.
     // Non-matching text (and a parse hiccup → null) falls back to the plain bubble; text is never lost.
     const answers = paired !== undefined ? paired : parseAnswersMessage(text)
-    if (answers) return <AnswersCard answers={answers} queued={m.queued} />
-    return <UserBubble text={text} queued={m.queued} sticky={sticky} deliveryUnconfirmed={m.deliveryState === "unconfirmed"} />
+    if (answers) return <AnswersCard answers={answers} queued={m.queued} sourceId={m.sourceId} />
+    return <UserBubble text={text} queued={m.queued} sticky={sticky} deliveryUnconfirmed={m.deliveryState === "unconfirmed"} sourceId={m.sourceId} />
   }
 
   // Build ONE ordered list of block-level children, then interleave with explicit spacers. The
@@ -2066,7 +2073,15 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     )
   }
   // No gap on the container — between-block spacing is entirely the explicit VSpace elements.
-  return <div className="flex flex-col text-[13px] min-w-0">{withSpacers(blocks)}</div>
+  // `group/msg relative` hosts the hover-revealed debug-id chip (absolutely positioned, so it adds no
+  // height and never perturbs the virtualizer's row measurement). The group is NAMED so a nested
+  // `group` elsewhere in the tree can never toggle it.
+  return (
+    <div data-fray-msg={m.sourceId} className="group/msg relative flex flex-col text-[13px] min-w-0">
+      <MessageDebugId sourceId={m.sourceId} />
+      {withSpacers(blocks)}
+    </div>
+  )
 })
 
 // A user's composed multi-block answer, rendered as a structured card that MIRRORS the question
@@ -2078,9 +2093,10 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
 // (count mismatch / no question message found — `question` undefined) degrades to the numbered layout,
 // where the number still points a scrolled-up reader at the right block. Answers keep
 // whitespace-pre-wrap so a multi-line answer's breaks survive.
-function AnswersCard({ answers, queued }: { answers: PairedAnswer[]; queued?: boolean }) {
+function AnswersCard({ answers, queued, sourceId }: { answers: PairedAnswer[]; queued?: boolean; sourceId?: string }) {
   return (
-    <div className={`self-end flex w-full max-w-[85%] flex-col items-end ${queued ? "opacity-50" : ""}`}>
+    <div data-fray-msg={sourceId} className={`group/msg relative self-end flex w-full max-w-[85%] flex-col items-end ${queued ? "opacity-50" : ""}`}>
+      <MessageDebugId sourceId={sourceId} side="left" />
       <div className="w-full rounded-2xl rounded-br-sm border border-border-strong bg-elevated px-3.5 py-3">
         <div className="mb-2 flex items-center justify-end gap-1.5 text-[10px] uppercase tracking-wide text-muted/70">
           <ListChecks size={11} className="shrink-0" />
@@ -2770,13 +2786,14 @@ function fmtDurationMs(ms: number): string {
 // A sub-agent completion event — transcript PUNCTUATION between message bands. Quiet and muted (~12px,
 // no bubble, no icon chrome): a centered label flanked by faint hairlines so it reads as a timeline
 // marker, sitting at the same message rhythm as everything around it.
-function EventLine({ text, boundary }: { text: string; boundary?: boolean }) {
+function EventLine({ text, boundary, sourceId }: { text: string; boundary?: boolean; sourceId?: string }) {
   // A turn BOUNDARY (an external wake — a background task/shell completion re-invoked the agent): a
   // centered divider rule carrying the cause label ON it, so two consecutive assistant turns don't read
   // as one bubble. This IS the section break the plain event line deliberately avoids.
   if (boundary) {
     return (
-      <div className="my-1 flex items-center gap-3" role="separator" aria-label={text}>
+      <div data-fray-msg={sourceId} className="group/msg relative my-1 flex items-center gap-3" role="separator" aria-label={text}>
+        <MessageDebugId sourceId={sourceId} />
         <span aria-hidden="true" className="h-px flex-1 bg-border/70" />
         <span className="petite-caps min-w-0 break-words text-center text-[12px] text-muted/70">{text}</span>
         <span aria-hidden="true" className="h-px flex-1 bg-border/70" />
@@ -2786,7 +2803,12 @@ function EventLine({ text, boundary }: { text: string; boundary?: boolean }) {
   // Transcript PUNCTUATION ("Thought for Ns", "Agent … finished — 35m") — a quiet, left-justified
   // light-gray label. No flanking dividers: it reads as a subtle annotation, not a section break.
   // petite-caps for consistency with the other inline dispatch readouts (the Agent label, etc.).
-  return <div className={TRANSCRIPT_META_LABEL_CLASS}>{text}</div>
+  return (
+    <div data-fray-msg={sourceId} className={`group/msg relative ${TRANSCRIPT_META_LABEL_CLASS}`}>
+      <MessageDebugId sourceId={sourceId} />
+      {text}
+    </div>
+  )
 }
 
 // A Codex model-reasoning SUMMARY — the coalesced `summary[]` steps of a turn's reasoning records
@@ -2797,7 +2819,7 @@ function EventLine({ text, boundary }: { text: string; boundary?: boolean }) {
 // whole row toggles to reveal the train of thought as muted markdown in a ruled block. The `.fray-reasoning`
 // rule below quiets that body (12px/muted, and de-bolds codex's `**step header**` fragments) so an
 // expanded turn reads as a soft aside, never a wall of bold headers competing with the real answer.
-function ReasoningBlock({ text, durationMs }: { text: string; durationMs?: number }) {
+function ReasoningBlock({ text, durationMs, sourceId }: { text: string; durationMs?: number; sourceId?: string }) {
   const [open, setOpen] = useState(false)
   const bodyId = useId()
   // "Thought for N seconds" — the wall-clock the model spent thinking this turn (server-derived from the
@@ -2808,7 +2830,8 @@ function ReasoningBlock({ text, durationMs }: { text: string; durationMs?: numbe
       ? `Thought for ${durationMs < 60_000 ? `${Math.max(1, Math.round(durationMs / 1000))} seconds` : `${Math.floor(durationMs / 60_000)}m ${Math.round((durationMs % 60_000) / 1000)}s`}`
       : "Thought"
   return (
-    <div className="flex flex-col">
+    <div data-fray-msg={sourceId} className="group/msg relative flex flex-col">
+      <MessageDebugId sourceId={sourceId} />
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
