@@ -307,7 +307,23 @@ test("end-state contract: bare rest queues, done checks, awaiting parks human/ti
     assert.match(c, /research or audit EFFORT[\s\S]{0,200}earns `done`/)
     assert.match(c, /awaiting[\s\S]{0,140}(?:human|timestamp)/i)
     assert.match(c, /(?:CI|automatable)[\s\S]{0,180}(?:stay active|active wait|live operation)/i)
+    // A live code-change discussion forbids `done` outright; the ONLY carve-out is a planning
+    // session whose plan file is fully written AND persisted (done-never-into-live-discussion).
+    assert.match(c, /NEVER `done` into a LIVE code-change discussion/)
+    assert.match(c, /still being NEGOTIATED/)
+    assert.match(c, /When in doubt about whether the discussion is\s+still open, it is: bare-rest/)
+    assert.match(c, /The ONE exception[\s\S]{0,120}PLANNING session/)
+    assert.match(c, /FULLY written and PERSISTED to disk \(`\.fray\/plans\/<topic>\.md`/)
+    assert.match(c, /exists only in chat, does\s+not\./)
+    // The planning thread type names the same carve-out where a worker looks up its deliverable.
+    assert.match(c, /WRITTEN, PERSISTED plan file is what earns a ` ```done ` fence/)
+    assert.match(c, /only carve-out from "never `done` into a live discussion"/)
+    // The Rules recap repeats the ban so a worker skimming the tail still sees it.
+    assert.match(c, /Nor is a turn taken while a code-change discussion is still live/)
   }
+  // The runtime re-grounding carries the same ban in one line (slim, not a second contract copy).
+  assert.match(SESSION_SEED, /NEVER ```done while a code-change discussion is still live \(the ONE exception: an explicit planning session whose plan file is fully written and persisted\)/)
+  assert.match(SESSION_SEED, /never done while a code-change discussion is live/)
   assert.doesNotMatch(SESSION_SEED, /BARE REST[^\n]*quiet/i)
   assert.doesNotMatch(SESSION_SEED, /```done \/ ```awaiting excuse/)
   assert.match(SESSION_SEED, /```done queues a checked completion until Archive \(completed work only[^)]*\); ```awaiting parks only a human:\/timer: gate/)
