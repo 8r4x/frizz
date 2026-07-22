@@ -33,7 +33,7 @@ In a fresh thread after setup, dispatch one fully scripted documentation or test
 bounded implementation, and one genuinely high-risk provider-protocol task with evidence of coupled
 concurrency behavior.
 
-Expected: pass `model`, `reasoning_effort`, and `fork_context: false` directly on each native spawn call. Use `gpt-5.6-luna` + `medium` or `gpt-5.6-terra` + `medium` for the mechanical task, `gpt-5.6-terra` + `medium` for ordinary implementation, and `gpt-5.6-sol` + `high` only for the demonstrated provider-protocol/concurrency risk. The Sol dispatch must name the observed evidence, specific risk, and why Terra + medium is inadequate. Omit `agent_type`. Verify the effective child model and effort from native thread metadata or a trace; a prompt claim alone does not count. Keep task intent in prompts rather than encoding it into profiles.
+Expected: pass `model`, `reasoning_effort`, and the context-fork control set to no parent history (current Codex `fork_turns: "none"`, older builds `fork_context: false`) directly on each native spawn call. Use `gpt-5.6-luna` + `medium` or `gpt-5.6-terra` + `medium` for the mechanical task, `gpt-5.6-terra` + `medium` for ordinary implementation, and `gpt-5.6-sol` + `high` only for the demonstrated provider-protocol/concurrency risk. The Sol dispatch must name the observed evidence, specific risk, and why Terra + medium is inadequate. Omit `agent_type`. Verify the effective child model and effort from native thread metadata or a trace; a prompt claim alone does not count. Keep task intent in prompts rather than encoding it into profiles.
 
 ### Reject unsupported escalation
 

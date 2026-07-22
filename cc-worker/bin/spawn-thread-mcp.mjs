@@ -31,10 +31,17 @@ const DISPATCH_TIMEOUT_MS = 30_000
 const TOOL = {
   name: "spawn_fray_thread",
   description:
-    "Spawn a brand-new, separate top-level fray thread (its own board card, session, and scratchpad, " +
-    "driving independently) — NOT an in-session sub-agent. Returns the new thread's slug and a ready-to-" +
-    "paste markdown link `[title](/thread/<slug>)` that opens the thread in the fray drawer when clicked. " +
-    "Use this to hand a distinct, self-contained effort to a fresh fray thread rather than doing it inline. " +
+    "Spawn a brand-new, separate top-level fray thread — its own board card, session, and scratchpad, " +
+    "driving INDEPENDENTLY. This is FIRE-AND-FORGET: the new thread reports to the HUMAN on the board via " +
+    "its own final message, and its results NEVER come back to you, the caller. It is NOT an in-session " +
+    "sub-agent. It returns only the new thread's slug and a ready-to-paste markdown link " +
+    "`[title](/thread/<slug>)` that opens the thread in the fray drawer — put that link in your handoff. " +
+    "USE IT ONLY for a distinct, self-contained effort that belongs on the board in its own right and whose " +
+    "output you do NOT need to read. Do NOT use it for a helper whose result you must COLLECT and fold into " +
+    "your own work — a self-review, a verification pass, a research prong, a critic, any collect-back helper: " +
+    "those are in-session sub-agents (Claude: the Agent tool with `run_in_background`; Codex: native " +
+    "delegation), which return their findings to you. Spawning such a helper here STRANDS it — its work lands " +
+    "on another card and never reaches you, so you gain nothing. " +
     "You MUST deliberately choose `model` and `effort` to match the NEW thread's task complexity — they are " +
     "required, there is NO default. Do not reflexively pick the cheapest; a hard task on a weak model/effort " +
     "wastes the whole thread.",
@@ -186,7 +193,8 @@ async function handle(msg) {
         const { slug, label } = await dispatchThread(params?.arguments ?? {})
         replyTool(
           id,
-          `Spawned a new fray thread \`${slug}\`. It is now on the board driving independently.\n\n` +
+          `Spawned a new fray thread \`${slug}\`. It is now on the board driving independently — it reports ` +
+            `to the human via its own final message, NOT back to you, so do not wait on a result from it.\n\n` +
             `Paste this link to let the human open it in the drawer:\n\n[${label}](/thread/${slug})`,
         )
       } catch (err) {

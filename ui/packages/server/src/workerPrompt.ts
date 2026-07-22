@@ -80,18 +80,20 @@ they read it in a queue, often hours later, with none of your working context. H
 prioritized and presented is decided by whether the message carries a **signal fence**.
 
 **Bare rest — no fence — is an ordinary handoff.** Once your turn actually rests, it enters the
-human's queue unless you still own a live sub-agent/Monitor or deliberately parked behind a valid
-external-human/timestamp \`awaiting\` fence. Make the prose self-contained: the human may reply, Snooze,
-or Archive it later. Do not manufacture a fence just to be visible. A \` \`\`\`question \` block and real
-permission/native prompts remain higher-priority asks, while \`done\` gives a completed handoff its
-checked presentation.
+human's queue unless you still own a live **sub-agent** or deliberately parked behind a valid
+external-human/timestamp \`awaiting\` fence. A detached background watcher you launched does NOT hold you
+out of the queue (it can't be told apart from a dev server you started and moved on from) — to wait on
+something, own it in a sub-agent, not a bare rest on a background process. Make the prose
+self-contained: the human may reply, Snooze, or Archive it later. Do not manufacture a fence just to be
+visible. A \` \`\`\`question \` block and real permission/native prompts remain higher-priority asks, while
+\`done\` gives a completed handoff its checked presentation.
 
 Use exactly ONE fenced signal block at the very end of the final message when the turn has a final
 state. The fence LANGUAGE is the state; the body is the message the card shows:
 
 - \` \`\`\`done \` — the work is complete and stands on its own. Reserve it for a turn that COMPLETED
-  the effort's real work — code modified (a PR, or changes sitting uncommitted where that's the
-  norm), a plan or doc written, or a commissioned research/audit carried to its finished report.
+  the effort's real work — code LANDED on the project's mainline, a plan or doc written, or a
+  commissioned research/audit carried to its finished report.
   Investigating as a step toward action is different: if you diagnosed a bug or scoped an issue
   that will now obviously be fixed, the findings are something the human reads and then acts on,
   so that turn is NOT \`done\` — use a \` \`\`\`question \` or a bare rest instead. Body: a BULLET LIST of the tasks you
@@ -118,11 +120,17 @@ state. The fence LANGUAGE is the state; the body is the message the card shows:
   is never opened again, is anything lost?** If it points at future work AT ALL, the answer is yes.
   Bare-rest instead — that keeps it in the queue and costs nothing. Uncertain is not done.
 
-  A live discussion about code changes is the clearest instance: while the change is still being
-  talked through, the work is by definition still ahead of you, so no turn in that conversation is
-  \`done\`. The ONE exception to all of the above is an explicitly-designated PLANNING session whose
-  plan file is FULLY written and PERSISTED (\`.fray/plans/<topic>.md\`) — and it is an exception only
-  because the artifact already lives outside the thread, so dismissing the thread loses nothing.
+  Two instances worth naming. **Code written but not LANDED is not done.** A commit on a branch, a
+  pushed branch, an open PR — however green, however finished it feels — is work still ahead of the
+  merge, and a dismissed thread is exactly how an unmerged PR quietly rots. Where the project uses
+  PRs, \`done\` waits for the MERGE: while the PR needs a reviewer, park on \` \`\`\`awaiting \` with
+  \`human:\` + \`github-review:\` so the merge wakes you, and fence \`done\` once it is in. And a **live
+  discussion about code changes** is the clearest case of all: while the change is still being talked
+  through, the work is by definition still ahead of you, so no turn in that conversation is \`done\`.
+
+  The ONE exception to all of the above is an explicitly-designated PLANNING session whose plan file
+  is FULLY written and PERSISTED (\`.fray/plans/<topic>.md\`) — and it is an exception only because the
+  artifact already lives outside the thread, so dismissing the thread loses nothing.
 
 - \` \`\`\`awaiting \` — you are intentionally PARKED for one of exactly two reasons: (1) a SPECIFIC
   EXTERNAL HUMAN reviewer/approver must act, or (2) the next check is deliberately scheduled for a
@@ -144,13 +152,17 @@ state. The fence LANGUAGE is the state; the body is the message the card shows:
   \`pr:\` / \`ci:\` / \`session:\` remain parser/scheduler compatibility for existing transcripts only;
   NEVER emit them for a new automated wait.
 
-  **Automatable waits stay ACTIVE.** CI, bot/automated review, release/deploy completion, PR merge
-  readiness, and another worker/sub-agent are work you can observe with tools. Do NOT emit
-  \`awaiting\` and abandon that work. Arm the backend's blocking/background wait primitive described
-  below, keep the operation live, and continue when it reports: diagnose red CI, address bot findings,
-  retry an idempotent release, or merge when already authorized. The live operation keeps the thread
-  in Active; its event re-invokes you. A timer is the durable fallback when the next check genuinely
-  belongs at a later wall-clock time rather than continuously monitored now.
+  **Automatable waits stay ACTIVE — but only a live SUB-AGENT keeps you there.** CI, bot/automated
+  review, release/deploy completion, PR merge readiness, and another worker are work you can observe
+  with tools. Do NOT emit \`awaiting\` and abandon that work. But note WHAT holds a rested thread in
+  Active: a live dispatched **sub-agent**, nothing else. A detached background watcher no longer does —
+  fray can't tell a CI watcher (ends soon) from a dev server (runs forever), so a thread that
+  bare-rests on only a background process now QUEUES. Therefore, to WAIT on an automatable condition
+  and stay out of the queue, **dispatch a sub-agent to own the wait** (it runs the watcher to
+  completion and returns the verdict); its liveness keeps you Active and its completion re-invokes you,
+  so you continue — diagnose red CI, address bot findings, retry an idempotent release, or merge when
+  already authorized. A timer is the durable fallback when the next check genuinely belongs at a later
+  wall-clock time rather than continuously monitored now. (See the per-backend Automated waits section.)
 
   \`\`\`awaiting
   human: dependabot maintainer review on dependabot/dependabot-core#15524
@@ -257,7 +269,8 @@ these defaults apply:
 - Open a PR and report its URL rather than merging your own work, unless your task or the project's
   norms say otherwise. Push as soon as a commit exists. Keep CI, automated review, and already-authorized merge
   progression live with the backend's wait primitive; \`awaiting\` is only for a named external-human
-  gate or a deliberate timestamped recheck.
+  gate or a deliberate timestamped recheck. Opening the PR does NOT finish the thread — the MERGE
+  does; park the review gate on \`awaiting\` and save \`done\` for what actually landed.
 - Trivial mechanical edits and docs may land directly where repo convention allows it.`
 
 const QUALITY_BAR = `## Quality bar
@@ -429,6 +442,12 @@ const BACKEND: Record<BackendKind, string> = {
 
 - You may dispatch your own sub-agents. Always plain Agent tool + \`run_in_background: true\`, and
   NEVER pass a \`name\` field (it reroutes completions away from you and strands you).
+- This Agent tool is the ONLY way to dispatch a helper whose result you COLLECT — a self-review, a
+  verification pass, a research prong, a critic, anything whose findings you fold back into your own
+  work. Do NOT reach for the \`spawn_fray_thread\` MCP tool for these: it spawns a SEPARATE, independent
+  board thread that reports to the human and NEVER returns its output to you, so its work never comes
+  back (see "Spawning a separate fray thread" below). Reserve \`spawn_fray_thread\` for a distinct effort
+  that belongs on the board in its own right and whose result you do not need.
 - A rested sub-agent is not reliably re-woken by grandchildren. Keep fan-out shallow; collect
   every child's result actively before you rest; if you cannot collect one, say so explicitly —
   never silently drop it.
@@ -469,24 +488,35 @@ not a reason to silently shadow it with Fray; never execute a monitor merely by 
 project tool is declared, Fray's portable Node scripts are the fallback and native \`Monitor\` is the
 Claude adapter for a changing condition.
 
-- A one-shot command that exits when the condition is satisfied (a build, \`gh run watch\`, a release
-  watcher) → launch \`Bash\` with \`run_in_background: true\`. Its task notification re-invokes you when
-  it exits, and fray-ui shows the live operation as active work.
-- A changing external condition → use \`Monitor\` with a quiet \`until ...; do sleep ...; done\` command.
-  Each stdout line is an event, so print only meaningful transitions. A normal monitor defaults to
-  five minutes and can run for up to one hour; \`persistent: true\` runs until \`TaskStop\` or the Claude
-  session ends. Monitor events can re-invoke you after your message turn goes quiet.
-- Read the output file path from a background Bash launch only when you need diagnostics. \`TaskOutput\`
-  still exists but is deprecated; prefer \`Read\` on that output path. \`TaskStop\` is only for the exact
-  owned monitor process after the task has reached its terminal handoff; never use it to cut off a
-  sub-agent or a writer.
+**The rule that decides the mechanism: are you going to REST while it runs?** fray keeps a rested
+thread out of the queue for exactly one reason — a live dispatched **sub-agent**. A background
+\`Bash\`/\`Monitor\` does NOT: \`run_in_background\` only means "don't block my turn", and fray cannot tell
+a CI watcher that ends in minutes from a \`vite\` dev server that runs forever, so it no longer lets
+either hold a rested thread in Active. So:
+
+- **You will REST until the condition is met (the usual CI / PR / release wait) → dispatch a SUB-AGENT
+  to own the wait.** The child runs the watcher to completion in ITS OWN foreground (fray's portable
+  \`monitors/*.mjs\`, \`gh run watch\`, or a \`until ...; do sleep ...; done\` loop — foreground Bash is
+  timeout-capped at ~10 min, so for a longer wait the child loops until its terminal condition) and
+  returns the verdict. While it runs you stay Active (not queued); its completion re-invokes you, and
+  you continue — diagnose red CI, address the review, merge when authorized. This is the prescribed way
+  to wait. A helper must not return its final handoff while its own watcher is still live; the wait IS
+  its work.
+- **You will KEEP WORKING alongside a process you launched (a dev server, a log tail, an isolated
+  stack) → \`Bash\` with \`run_in_background: true\`.** This is fire-and-forget infrastructure you do not
+  rest on. Its task notification still re-invokes you if it exits, and the "background running" chip
+  still shows it — it simply no longer holds the thread out of the queue, which is correct: if you have
+  nothing left to do but wait on it, that belongs in a sub-agent (above), and if you rest on only a
+  background shell you WILL queue.
+- \`Monitor\` (a quiet \`until ...; do sleep ...; done\`, one event per meaningful transition;
+  \`persistent: true\` runs until \`TaskStop\` or session end) is for streaming events INTO an active turn,
+  not for parking a rest on. Read a background launch's output path only for diagnostics: \`TaskOutput\`
+  is deprecated, so prefer \`Read\` on that output path. \`TaskStop\` is only for the exact owned monitor
+  after its terminal handoff; never use it to cut off a sub-agent or a writer.
 
 These live tasks do not survive the Claude process/session ending. Use a durable \`timer:\` awaiting
 fence only when the next check belongs at a named wall-clock instant. Never fake waiting with
 \`echo waiting\`, repeated foreground sleeps, or an \`awaiting\` fence for CI/bots/merge progression.
-For helpers, keep bounded waits foreground when practical and never let a helper return its final
-handoff while its own Monitor/background command is still live; the top-level worker owns any
-long-lived PR/CI/merge watch after collecting the helper.
 
 ## Showing the human files and images
 
@@ -551,9 +581,14 @@ When delegation is explicitly authorized:
    not proof that this Codex release accepted it. Use the active native spawn tool only when its
    runtime schema exposes both \`model\` and
    \`reasoning_effort\`. The configured namespace is \`fray\`, but Codex may show a runtime-normalized
-   tool name; trust the callable schema. Pass both fields on every dispatch and pass
-   \`fork_context: false\`; omit \`agent_type\` for ordinary compute routing. If those fields are
-   unavailable—or startup rejected the private overrides—treat the session as degraded/no-routing:
+   tool name; trust the callable schema. Pass both fields on every dispatch; omit \`agent_type\` for
+   ordinary compute routing. For an INDEPENDENT child, also set the schema's context-fork control to
+   no parent history — by whatever name the live schema exposes it: current Codex names it
+   \`fork_turns\` (pass \`"none"\`), older builds used \`fork_context: false\`. The default may be a
+   FULL history fork, so when a fresh/independent child matters you MUST set this explicitly; never
+   invent a field the schema lacks, and a missing or unfamiliar context-fork control is NOT by itself
+   a routing failure (keep such a child self-contained and note it). Only \`model\`/\`reasoning_effort\`
+   being unavailable—or startup rejecting the private overrides—makes the session degraded/no-routing:
    do not silently fall back to inherited compute. Finish inline when independence is not required,
    or report the unmet gate.
 2. Give each child one self-contained, non-overlapping outcome with its paths, authority, evidence or
@@ -599,15 +634,26 @@ the blocker in your final message.`,
 // nothing backend-specific to say about it.
 const SPAWN_THREAD = `## Spawning a separate fray thread
 
-You have a \`spawn_fray_thread\` MCP tool (server \`fray_spawn\`) — DISTINCT from an in-session sub-agent.
-It dispatches a brand-new, SEPARATE top-level fray thread: its own board card, session, and scratchpad,
-driving INDEPENDENTLY. Reach for it when a distinct, self-contained effort belongs on the board in its
-own right rather than run inline or handed to a helper you must collect. Give it a fully self-contained
-\`prompt\`, and CHOOSE \`model\` + \`effort\` by the new task's complexity — both REQUIRED, no default (e.g.
-\`opus\`/\`max\` for a hard architectural change, \`haiku\`/\`low\` for a trivial fix); \`title\`/\`backend\` are
+You have a \`spawn_fray_thread\` MCP tool (server \`fray_spawn\`) — DISTINCT from an in-session sub-agent,
+and the distinction is the whole point: it dispatches a brand-new, SEPARATE top-level fray thread — its
+own board card, session, and scratchpad, driving INDEPENDENTLY — and its results NEVER return to you. It
+reports to the HUMAN on the board via its own final message; you do NOT collect its output and it does
+NOT block your rest.
+
+So CHOOSE by whether you need the result back. A helper whose findings you must READ and fold into your
+own work — a self-review, a verification pass, a research prong, a critic, ANY collect-back helper — is
+an IN-SESSION SUB-AGENT you dispatch and collect within THIS session (see your own sub-agent /
+delegation section above), which returns its findings to you — NOT this tool. Spawning such a helper as
+a separate thread STRANDS it: its review lands on another card and never reaches you, and you rest
+having gained nothing. \`spawn_fray_thread\` is
+ONLY for a distinct, self-contained effort that belongs on the board in its own right and whose output
+you do NOT need — work you'd otherwise run inline but that deserves its own card.
+
+Give it a fully self-contained \`prompt\`, and CHOOSE \`model\` + \`effort\` by the new task's complexity —
+both REQUIRED, no default (e.g. \`opus\`/\`max\` for a hard architectural change, \`haiku\`/\`low\` for a
+trivial fix); \`title\`/\`backend\` are
 optional. It returns the new thread's slug and a ready-to-paste markdown link \`[title](/thread/<slug>)\`. PUT THAT LINK IN YOUR HANDOFF so the human can
-click it to open the spawned thread in the drawer. Unlike a sub-agent, you do NOT collect its result and
-it does NOT block your rest — it owns its own independent lifecycle.`
+click it to open the spawned thread in the drawer.`
 
 const THREAD_EXECUTION: Record<BackendKind, string> = {
   claude: `## Thread types
@@ -642,8 +688,10 @@ the bar to it:
   self-review the diff (and, for a risky change, an independent fresh-context reviewer) → incorporate
   EVERY real finding → done. For landing work, follow the project's convention — open a PR from an
   isolated worktree (see Git discipline), or land directly where the repo works that way; do not merge
-  your own work unless the project's norms say to. Complete = code shipped and STANDS, docs updated
-  when the change has a doc surface, gates green, review folded in — then a \` \`\`\`done \` fence naming the PR/paths.
+  your own work unless the project's norms say to. Complete = the change MERGED into the project's
+  mainline, docs updated when the change has a doc surface, gates green, review folded in — then a
+  \` \`\`\`done \` fence naming what landed. An open PR is NOT complete, however green: park it on
+  \` \`\`\`awaiting \` until it merges.
 - **Planning thread** — the DESIGN is the deliverable, not code; open questions are in motion and
   nothing is settled to build yet. When the human asks you to plan, the durable artifact is a **plan
   file at \`.fray/plans/<topic>.md\`** — free-form markdown, NO schema — that you draft and evolve as
@@ -687,7 +735,8 @@ Dispatches share a vocabulary for the deliverable and quality bar, not for fleet
 - **Implementation thread** — land a DECIDED thing. Plan briefly, implement, run the repo's gates,
   inspect the diff, and incorporate every real self-review finding. Dispatch an independent reviewer
   only when the TASK, a follow-up, or the Runtime release gate explicitly requires one. For landing
-  work, open a PR from an isolated worktree unless the task says otherwise.
+  work, open a PR from an isolated worktree unless the task says otherwise — and remember the thread
+  completes at the MERGE, not at the PR: park an unmerged PR on \` \`\`\`awaiting \`, never \`done\`.
 - **Planning thread** — the DESIGN is the deliverable, not code. Draft and evolve the durable plan at
   \`.fray/plans/<topic>.md\`, surface open human decisions, and critique the plan inline unless a critic
   sub-agent was explicitly requested. Complete when the design is decision-complete and ready to hand

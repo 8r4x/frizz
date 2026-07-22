@@ -3,6 +3,7 @@ import "./styles.css"
 import { splitProseAttachments } from "./lib/imagePaths.ts"
 import { mdToHtml } from "./lib/markdown.ts"
 import { BlockImage, BlockFile } from "./components/ChatView.tsx"
+import { CodexDirectiveCard, MermaidDiagram } from "./components/CodexRichOutput.tsx"
 import { installLocalFileLinkInterceptor } from "./lib/local-file-links.ts"
 
 // Proves the transcript render half of the attachment feature end-to-end with the REAL components:
@@ -54,6 +55,8 @@ createRoot(document.getElementById("root")!).render(
         part.kind === "image" ? <BlockImage key={i} path={part.path} />
         : part.kind === "file" ? <BlockFile key={i} path={part.path} />
         : part.kind === "visualization" ? <code key={i}>{`::codex-inline-vis{file="${part.file}"}`}</code>
+        : part.kind === "directive" ? <CodexDirectiveCard key={i} directive={part.directive} />
+        : part.kind === "mermaid" ? <MermaidDiagram key={i} source={part.source} />
         : <div key={i} className="md-body" dangerouslySetInnerHTML={{ __html: mdToHtml(part.text) }} />,
       )}
     </div>

@@ -127,7 +127,10 @@ test("sessionIndicatorKind: bare queued rest stays rest while concrete input sta
   assert.equal(sessionIndicatorKind(thread({ needsYou: true, crashed: true, runtime: "exited" })), "stalled")
   assert.equal(sessionIndicatorKind(thread({ needsYou: true, crashed: false, runtime: "exited" })), "rest")
   assert.equal(sessionIndicatorKind(thread({ needsYou: true, crashed: undefined, runtime: "exited" })), "stalled")
-  assert.equal(sessionIndicatorKind(thread({ runtime: "turn-idle", bgShells: liveShell, lastFence: awaitingTimer })), "working")
+  // A live SUB-AGENT is live work → "working", beating the future-timer held state.
+  assert.equal(sessionIndicatorKind(thread({ runtime: "turn-idle", subAgents: liveSub, lastFence: awaitingTimer })), "working")
+  // A live background SHELL is NOT live work (2026-07-22): the future-timer wait now shows through as "held".
+  assert.equal(sessionIndicatorKind(thread({ runtime: "turn-idle", bgShells: liveShell, lastFence: awaitingTimer })), "held")
   assert.equal(sessionIndicatorKind(thread({ state: "archived", needsYou: true, runtime: "exited" })), "archived")
 })
 
@@ -251,8 +254,9 @@ test("sectionOf: an ARCHIVED thread that's ACTIVELY RUNNING goes to Active (neve
   assert.equal(sectionOf(thread({ kind: "session", state: "archived", runtime: "spawning" })), "active")
   // turn-idle but a dispatched sub-agent is still going (the sidebar shows a spinner) → Active too.
   assert.equal(sectionOf(thread({ kind: "session", state: "archived", runtime: "turn-idle", subAgents: [{ label: "x", startedAt: "2026-07-10T00:00:00.000Z", state: "running", id: "a1" }] })), "active")
-  // A live background Bash/Monitor has the same ownership semantics as a live child.
-  assert.equal(sectionOf(thread({ kind: "session", state: "archived", runtime: "turn-idle", bgShells: [{ label: "watch CI", startedAt: "2026-07-10T00:00:00.000Z", state: "running" }] })), "active")
+  // A live background Bash/Monitor is NOT live work (2026-07-22): an idle-archived thread with only a
+  // background shell stays Inactive — the shell can't be told apart from an endless dev server.
+  assert.equal(sectionOf(thread({ kind: "session", state: "archived", runtime: "turn-idle", bgShells: [{ label: "watch CI", startedAt: "2026-07-10T00:00:00.000Z", state: "running" }] })), "inactive")
 })
 
 test("sectionThreads v2: Active bands running-on-top then rested (queue order); foreign + legacy excluded", () => {
@@ -336,9 +340,11 @@ test("manual snooze: every parked queue reason is Held until the exact deadline"
 })
 
 test("isHeld: live work, mid-turn, settled, bare, archived, and non-timer blocked states are not held", () => {
-  // Awaiting its own child or background Bash/Monitor is live work, even with a stale wait fence.
+  // Awaiting its own live SUB-AGENT is live work, even with a stale wait fence — not held.
   assert.equal(isHeld(thread({ runtime: "turn-idle", lastFence: awaitingHuman, subAgents: liveSub })), false)
-  assert.equal(isHeld(thread({ runtime: "turn-idle", lastFence: awaitingTimer, bgShells: liveShell })), false)
+  // A background shell is NOT live work (2026-07-22), so it can't rescue a thread from a valid future
+  // wait: awaitingTimer + only a bgShell → held (see the held test below for the paired assertion).
+  assert.equal(isHeld(thread({ runtime: "turn-idle", lastFence: awaitingTimer, bgShells: liveShell })), true)
   // Mid-turn (still working) never awaits externally, even with a stale human fence.
   assert.equal(isHeld(thread({ runtime: "running", lastFence: awaitingHuman })), false)
   // A done fence or a bare rest is NOT awaiting-external (those read as done/idle).
@@ -357,9 +363,10 @@ test("sectionOf: human/future-timer waits and canonical timers are Held; machine
   assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingCi })), "active")
   assert.equal(sectionOf(thread({ kind: "session", state: "open", status: "blocked", mechanism: "timer", revalidate: "2099-07-15T17:00:00Z", runtime: "turn-idle" })), "held")
   assert.equal(sectionOf(thread({ kind: "session", state: "open", needsYou: true, runtime: "exited", lastFence: awaitingTimer })), "active")
-  // A live child/background watcher wins over a stale parked fence.
+  // A live SUB-AGENT wins over a stale parked fence (live work → Active).
   assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingHuman, subAgents: liveSub })), "active")
-  assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingTimer, bgShells: liveShell })), "active")
+  // A background shell does NOT (2026-07-22): the future-timer wait shows through → Held.
+  assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingTimer, bgShells: liveShell })), "held")
   // Session-hint / hintless / elapsed timer waits remain Active, like bare rest.
   assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle", lastFence: { kind: "awaiting", body: "", hints: [{ kind: "session", value: "s1" }] } })), "active")
   assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle", lastFence: { kind: "awaiting", body: "", hints: [] } })), "active")
@@ -375,12 +382,15 @@ test("sectionThreads: only human/future-timer waits partition into Held; live an
     thread({ id: "live-old", kind: "session", state: "open", runtime: "running", lastUserAt: "2026-07-08T01:00:00.000Z" }),
     thread({ id: "timer-old", kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingTimer, lastUserAt: "2026-07-08T05:00:00.000Z" }),
     thread({ id: "sub-wait", kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingHuman, subAgents: liveSub, lastUserAt: "2026-07-09T01:00:00.000Z" }),
+    // shell-wait: a future-timer fence + only a background shell. The shell is no longer live work
+    // (2026-07-22), so this now partitions into HELD (its timer wait), not the Active running band.
     thread({ id: "shell-wait", kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingTimer, bgShells: liveShell, lastUserAt: "2026-07-09T02:00:00.000Z" }),
     thread({ id: "legacy-pr", kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingPr, lastUserAt: "2026-07-09T03:00:00.000Z" }),
   ])
-  // Running band (live-old + the two live-op waiters) leads by recency; the legacy-pr rest sits below.
-  assert.deepEqual(s.active.map((t) => t.id), ["shell-wait", "sub-wait", "live-old", "legacy-pr"])
-  assert.deepEqual(s.held.map((t) => t.id), ["human-new", "timer-old"])
+  // Running band: live-old + the one live-SUB-AGENT waiter lead by recency; the legacy-pr rest sits below.
+  assert.deepEqual(s.active.map((t) => t.id), ["sub-wait", "live-old", "legacy-pr"])
+  // Held: the two human/future-timer waits — now including shell-wait, whose shell can't hold it Active.
+  assert.deepEqual(s.held.map((t) => t.id), ["human-new", "shell-wait", "timer-old"])
 })
 
 test("displayTitle: an explicit human title wins over stale backend AI-title and slug fallbacks", () => {

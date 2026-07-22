@@ -46,7 +46,9 @@ export function resolveRollbackProfile(backend: unknown, model: string, effort: 
   const catalogue = threadProfileOptions(backend)
   const option = catalogue.options.find((candidate) => candidate.model === model)
   if (!option || !option.efforts.includes(option.defaultEffort)) {
-    throw new Error(`Unsupported ${catalogue.backend} model/effort pair: ${model} / ${effort}`)
+    // Name the absent half explicitly: this pair comes from stored/observed state rather than a grid
+    // click, so an empty model rendered a message ("pair:  / ") that identified nothing to act on.
+    throw new Error(`Unsupported ${catalogue.backend} model/effort pair: ${model || "(unknown model)"} / ${effort || "(unrecorded effort)"}`)
   }
   return { model: option.model, effort: option.efforts.includes(effort) ? effort : option.defaultEffort }
 }

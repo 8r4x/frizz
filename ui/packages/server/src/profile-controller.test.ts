@@ -179,6 +179,53 @@ test("a live thread whose launch effort was never recorded can still change mode
   unknown.storage.close()
 })
 
+test("a live thread whose profile was only ever OBSERVED can change model and effort", async () => {
+  // The registry keeps model AND effort NULL until the tailer sees BOTH halves, and Claude records the
+  // model in its transcript while frequently never recording the launch effort. So the real-world
+  // "Opus, no effort" thread is a row with NO persisted profile at all, whose model the board resolves
+  // from telemetry. Reading the raw row for the rollback target rejected every one of those threads
+  // with an empty pair, while the composer — reading the board — offered the control as enabled.
+  const h = harness({ tele: telemetry({ model: "claude-opus-4-8", profileAt: "2026-07-13T11:30:00.000Z" }) })
+  h.storage.upsertSession(session("observed-only", { model: null, effort: null }))
+  const calls: unknown[][] = []
+  const controller = createProfileController({
+    ...h,
+    reattach: async (slug, current, requested, onGeneration, onCheckpoint) => {
+      calls.push([slug, current, requested])
+      const row = h.storage.getSession(slug)!
+      const generation = h.storage.beginRuntimeGeneration(slug, {
+        sessionId: row.session_id,
+        generation: row.runtime_generation ?? 0,
+        permissionPending: null,
+        runtimeControl: "profile",
+      }, "2026-07-13T11:00:00.000Z")!
+      onGeneration?.(generation)
+      const handoffToken = randomUUID()
+      onCheckpoint?.({ phase: "target-ready", generation, handoffToken, identity: PANE })
+      return { generation, outcome: "target-ready" }
+    },
+  })
+  assert.deepEqual(await controller.request("observed-only", { model: "opus", effort: "xhigh" }), { effect: "applied" })
+  // The rollback pair is the NORMALIZED observed model plus that model's default effort — launchable
+  // argv for the relaunch, rather than the row's two empty strings.
+  assert.deepEqual(calls, [["observed-only", { model: "opus", effort: "medium" }, { model: "opus", effort: "xhigh" }]])
+  const saved = h.storage.getSession("observed-only")!
+  assert.equal(saved.model, "opus")
+  assert.equal(saved.effort, "xhigh")
+  h.storage.close()
+
+  // With NOTHING persisted and NOTHING observed there is still no runtime to relabel, and the failure
+  // now names the absent halves instead of rendering an empty "pair:  / ". The composer fails closed on
+  // exactly this state too (an unknown model disables the control), so the two agree.
+  const blank = harness()
+  blank.storage.upsertSession(session("blank", { model: null, effort: null }))
+  await assert.rejects(
+    createProfileController(blank).request("blank", { model: "opus", effort: "high" }),
+    /Unsupported claude model\/effort pair: \(unknown model\) \/ \(unrecorded effort\)/,
+  )
+  blank.storage.close()
+})
+
 test("active work does not arm, while an unproven provider failure stays durably locked", async () => {
   const active = harness({ tele: telemetry({ turn: "in-flight" }) })
   active.storage.upsertSession(session("active"))

@@ -125,11 +125,19 @@ function futureSnooze(row: Pick<SessionRow, "snoozed_until">, nowMs: number): st
   return parsed.success && Date.parse(parsed.data) > nowMs ? parsed.data : undefined
 }
 
+// The ONE signal that a rested top-level turn is still working: a live dispatched SUB-AGENT. A child
+// exists only because this worker asked for it and intends to act on what it returns, so its liveness
+// really does mean "not a handoff yet".
+//
+// A background SHELL deliberately does NOT count (maintainer 2026-07-22). `run_in_background` says
+// only "don't block my turn" — it cannot distinguish a CI watcher the worker is parked on from a vite
+// dev server it started as infrastructure and moved on from, and a corpus survey found 26% of real
+// background launches are the latter (long-lived servers/stacks). Counting them buried a genuinely
+// finished thread behind a process that is never going to end. Erring the other way is cheap: a
+// spurious queue card costs one click, while a wrongly-held thread is invisible for hours. A worker
+// that actually wants to wait dispatches a sub-agent to own the wait — see the worker contract.
 function hasLiveBackgroundWork(tele: SessionTelemetry | undefined): boolean {
-  return Boolean(
-    tele?.subAgents?.some((agent) => agent.state === "running") ||
-    tele?.bgShells?.some((shell) => shell.state === "running"),
-  )
+  return Boolean(tele?.subAgents?.some((agent) => agent.state === "running"))
 }
 
 // A declared wait excuses an idle thread only for a specific external-human/review gate or a valid
@@ -186,13 +194,13 @@ export function deriveNeedsYou(
   // needing input surface automatically and STAY until resolved). The tailer clears pendingQuestion the
   // moment a newer user message lands (an answer/steer supersedes the fence), which is what dequeues it.
   if (tele?.pendingQuestion) return true
-  // A top-level turn that is resting only while its own child/Monitor still runs is still in flight,
-  // not a human handoff. Once that operation clears, the next board refresh queues the bare rest.
+  // A top-level turn that is resting only while its own dispatched SUB-AGENT still runs is still in
+  // flight, not a human handoff. Once that child clears, the next board refresh queues the bare rest.
+  // A background shell does NOT excuse the rest — see hasLiveBackgroundWork for why.
   // This excuse holds ONLY while the parent pane is alive: a child cannot outlive the process that
-  // spawned it. The tailer already zeroes bgShells on pane death (bgShellViews), but a dead pane's
-  // SUB-AGENTS keep reading "running" until their transcript goes stale — or forever when the child's
-  // output file never resolved (subAgentViews has no paneDead guard). So an EXITED parent still showing
-  // "running" background work is a crash mid-background-work; surface it rather than bury it on stale
+  // spawned it. A dead pane's SUB-AGENTS keep reading "running" until their transcript goes stale — or
+  // forever when the child's output file never resolved (subAgentViews has no paneDead guard). So an
+  // EXITED parent still showing "running" background work is a crash mid-background-work; surface it rather than bury it on stale
   // child liveness (found 2026-07-21: such a thread silently dangled).
   if (runtime !== "exited" && hasLiveBackgroundWork(tele)) return false
   if (hasParkedExternalWait(tele, nowMs)) return false
@@ -340,9 +348,9 @@ function sessionThreadView(
   const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause)
   // A pane that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
   // "running" (its parent is gone, so it cannot actually be live) — is a crash/stall, not a clean
-  // handoff, so it cards as "stalled" not a bare "rest". Mirrors deriveNeedsYou's surfacing above. (The
-  // tailer already zeroes bgShells on pane death, so in practice the background-work arm keys on
-  // sub-agents; it flips back to bare rest once the child's transcript goes stale.)
+  // handoff, so it cards as "stalled" not a bare "rest". Mirrors deriveNeedsYou's surfacing above.
+  // hasLiveBackgroundWork keys on sub-agents only (a background shell is never treated as live work);
+  // it flips back to bare rest once the child's transcript goes stale.
   const crashed = runtime === "exited" && (tele?.turn === "in-flight" || hasLiveBackgroundWork(tele))
   const snoozedUntil = futureSnooze(row, nowMs)
   const profile = resolveSessionProfile(row, tele)

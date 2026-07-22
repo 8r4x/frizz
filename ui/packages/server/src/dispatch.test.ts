@@ -213,7 +213,8 @@ test("loadWorkerPrompt(codex) carries codex's OWN session/wake + model/effort/sa
   assert.match(c, /Luna child is optional\nonly/)
   assert.match(c, /active native spawn tool/)
   assert.match(c, /configured namespace is `fray`/)
-  assert.match(c, /`fork_context: false`/)
+  assert.match(c, /context-fork control/)
+  assert.match(c, /`fork_turns` \(pass `"none"`\), older builds used `fork_context: false`/)
   assert.match(c, /`gpt-5\.6-luna` \+ `medium`/)
   assert.match(c, /`gpt-5\.6-terra` \+ `medium`/)
   assert.match(c, /`gpt-5\.6-sol` \+ `high` or `xhigh`/)
@@ -300,9 +301,19 @@ test("end-state contract: bare rest queues, done checks, awaiting parks human/ti
     assert.match(c, /(?:question|permission)[\s\S]{0,100}higher.priority/i)
     assert.match(c, /checked success card[^\n]*queue/)
     assert.match(c, /until the human (?:explicitly )?(?:A|a)rchives? it/)
-    // done is gated on COMPLETED work (uncommitted is fine); a pre-fix bug/issue investigation never
-    // earns it, while a commissioned research/audit effort's finished report does (done-requires-completed-work)
+    // done is gated on LANDED work — merged, not merely committed/pushed/PR-opened (an open PR parks
+    // on awaiting until it merges); a pre-fix bug/issue investigation never earns it, while a
+    // commissioned research/audit effort's finished report does (done-requires-landed-work)
     assert.match(c, /COMPLETED\s+the effort's real work/)
+    assert.match(c, /code LANDED on the project's mainline/)
+    assert.match(c, /Code written but not LANDED is not done/)
+    assert.match(c, /open PR — however green[\s\S]{0,80}still ahead of the\s+merge/)
+    assert.match(c, /`done` waits for the MERGE/)
+    assert.match(c, /`human:` \+ `github-review:` so the merge wakes you/)
+    // The git-discipline + implementation-thread surfaces must not contradict it by fencing on a PR.
+    assert.match(c, /Opening the PR does NOT finish the thread — the MERGE\s+does/)
+    assert.doesNotMatch(c, /done ` fence naming the PR\/paths/)
+    assert.doesNotMatch(c, /changes sitting uncommitted/)
     assert.match(c, /investigat(?:ed|ing|ion)[\s\S]{0,300}NOT `?done`?/i)
     assert.match(c, /research or audit EFFORT[\s\S]{0,200}earns `done`/)
     assert.match(c, /awaiting[\s\S]{0,140}(?:human|timestamp)/i)
@@ -317,8 +328,10 @@ test("end-state contract: bare rest queues, done checks, awaiting parks human/ti
     assert.match(c, /if this thread\s+is never opened again, is anything lost\?/)
     assert.match(c, /points at future work AT ALL/)
     assert.match(c, /Uncertain is not done\./)
-    // The live code-change discussion is taught as an INSTANCE of the heuristic, not its own rule.
-    assert.match(c, /live discussion about code changes is the clearest instance/)
+    // Unlanded code and the live code-change discussion are taught as INSTANCES of the heuristic,
+    // not as their own free-standing rules.
+    assert.match(c, /Two instances worth naming/)
+    assert.match(c, /live\s+discussion about code changes\*\* is the clearest case of all/)
     assert.match(c, /The ONE exception[\s\S]{0,140}PLANNING session/)
     assert.match(c, /FULLY written and PERSISTED \(`\.fray\/plans\/<topic>\.md`\)/)
     assert.match(c, /artifact already lives outside the thread, so dismissing the thread loses nothing/)
@@ -333,6 +346,7 @@ test("end-state contract: bare rest queues, done checks, awaiting parks human/ti
   assert.match(SESSION_SEED, /points at future work AT ALL[^;]*bare rest instead, and uncertain is not done/)
   assert.match(SESSION_SEED, /because that artifact outlives the thread/)
   assert.match(SESSION_SEED, /never when the thread still points at future work/)
+  assert.match(SESSION_SEED, /code LANDED on the mainline — an open PR is NOT done, park it on ```awaiting until it MERGES/)
   assert.doesNotMatch(SESSION_SEED, /BARE REST[^\n]*quiet/i)
   assert.doesNotMatch(SESSION_SEED, /```done \/ ```awaiting excuse/)
   assert.match(SESSION_SEED, /```done queues a checked completion until Archive and is a DISMISSAL — completed work only[\s\S]{0,200}; ```awaiting parks only a human:\/timer: gate/)
