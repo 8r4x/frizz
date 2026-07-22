@@ -74,6 +74,11 @@ export interface NormalizedTail {
   aiTitle?: string
   lastUserAt?: string
   lastUserText?: string // latest genuine human message (used to confirm durable Codex input delivery)
+  // The last few genuine human messages, oldest first. Codex hands its whole native queue to the model
+  // in ONE go at a tool boundary, so several user records can land inside a SINGLE fold — and then the
+  // `lastUserText` scalar only ever names the newest, leaving every earlier item of a steer batch with
+  // no evidence it was ever delivered. Bounded ring (see USER_TEXT_RING_MAX).
+  recentUserTexts?: { text: string; at: string }[]
   lastFence?: FenceView // parsed by the shared fence grammar from the final message
   pendingQuestion: boolean
   subAgents: SubAgentView[] // codex: always []
@@ -119,6 +124,7 @@ export interface FoldState {
   autoTitleSource?: "fallback" | "fray" | "native"
   lastUserAt?: string // ISO8601 of the newest GENUINE (non-synthetic) human turn — the listing sort key
   lastUserText?: string // exact text of that genuine human turn when the backend records it
+  recentUserTexts?: { text: string; at: string }[] // bounded ring of genuine human turns, oldest first
   lastFence?: FenceView // done/awaiting excusal fence on the final message (cleared by any user turn)
   lastAssistantHasQuestion: boolean // the final message carries an unanswered ```question fence
   // Runtime provider-auth rejection (claude-auth plan, Slice A). Set when the backend records a

@@ -1021,7 +1021,7 @@ test("one external transcript event cannot reconcile identical pending follow-up
   assert.equal(h.storage.getSession("external-duplicates")?.codex_input_queue, null)
 })
 
-test("identical consecutive follow-ups each require their own post-submission rollout", () => {
+test("a burst of identical follow-ups is released together but each still needs its own rollout", () => {
   const h = harness()
   h.storage.upsertSession(row("duplicate-input"))
   h.storage.setBackend("duplicate-input", "codex")
@@ -1032,10 +1032,15 @@ test("identical consecutive follow-ups each require their own post-submission ro
   h.controller.queueFollowUp("duplicate-input", "SAME")
   h.setNow(1_050)
   h.controller.queueFollowUp("duplicate-input", "SAME")
-  assert.deepEqual(h.sent, ["atomic:Enter:SAME"])
+  // Both reach Codex right away: it holds the whole batch and releases it at one tool boundary. Holding
+  // the second behind the first's rollout spent an entire model turn per queued message.
+  assert.deepEqual(h.sent, ["atomic:Enter:SAME", "atomic:Enter:SAME"])
+  let queue = JSON.parse(h.storage.getSession("duplicate-input")?.codex_input_queue ?? "[]")
+  assert.deepEqual(queue.map((item: { state: string }) => item.state), ["submitted", "submitted"])
 
+  // One rollout of "SAME" is evidence for exactly ONE of them; the survivor is pinned past that instant.
   h.setTelemetry({
-    turn: "idle",
+    turn: "in-flight",
     permPrompt: false,
     subAgents: [],
     bgShells: [],
@@ -1044,23 +1049,15 @@ test("identical consecutive follow-ups each require their own post-submission ro
     lastUserAt: "1970-01-01T00:00:01.200Z",
   })
   h.controller.tick()
-  let queue = JSON.parse(h.storage.getSession("duplicate-input")?.codex_input_queue ?? "[]")
-  assert.equal(queue.length, 1)
-  assert.equal(queue[0].state, "pending", "the first rollout cannot dequeue an unsubmitted duplicate")
-
-  h.setPane("", emptyComposer)
-  h.setNow(1_300)
-  h.controller.tick()
-  assert.deepEqual(h.sent, ["atomic:Enter:SAME", "atomic:Enter:SAME"])
   queue = JSON.parse(h.storage.getSession("duplicate-input")?.codex_input_queue ?? "[]")
-  assert.equal(queue[0].state, "submitted")
-  assert.equal(queue[0].submittedAt, "1970-01-01T00:00:01.300Z")
+  assert.equal(queue.length, 1)
+  assert.equal(queue[0].reconcileAfter, "1970-01-01T00:00:01.200Z")
 
   h.controller.tick()
   assert.equal(
     JSON.parse(h.storage.getSession("duplicate-input")?.codex_input_queue ?? "[]").length,
     1,
-    "the earlier identical rollout predates this native submission",
+    "the same identical rollout cannot be consumed twice",
   )
 
   h.setTelemetry({
@@ -1074,6 +1071,42 @@ test("identical consecutive follow-ups each require their own post-submission ro
   })
   h.controller.tick()
   assert.equal(h.storage.getSession("duplicate-input")?.codex_input_queue, null)
+})
+
+test("a batch Codex releases in one fold reconciles every queued item, not just the newest", () => {
+  const h = harness()
+  h.storage.upsertSession(row("batch-rollout"))
+  h.storage.setBackend("batch-rollout", "codex")
+  h.setTelemetry({ turn: "in-flight", permPrompt: false, subAgents: [], bgShells: [], pendingQuestion: false })
+  h.setPane("", busyEmptyComposerPane)
+
+  h.setNow(1_000)
+  h.controller.queueFollowUp("batch-rollout", "steer one")
+  h.controller.queueFollowUp("batch-rollout", "steer two")
+  h.controller.queueFollowUp("batch-rollout", "steer three")
+  assert.deepEqual(h.sent, ["atomic:Enter:steer one", "atomic:Enter:steer two", "atomic:Enter:steer three"])
+
+  // Codex hands its whole native queue to the model at ONE tool boundary, so all three user records land
+  // inside a single fold and `lastUserText` names only the last of them. Reading that scalar alone left
+  // "steer one" and "steer two" unconfirmed forever.
+  h.setTelemetry({
+    turn: "in-flight",
+    permPrompt: false,
+    subAgents: [],
+    bgShells: [],
+    pendingQuestion: false,
+    lastUserText: "steer three",
+    lastUserAt: "1970-01-01T00:00:02.000Z",
+    recentUserTexts: [
+      { text: "steer one", at: "1970-01-01T00:00:01.800Z" },
+      { text: "steer two", at: "1970-01-01T00:00:01.900Z" },
+      { text: "steer three", at: "1970-01-01T00:00:02.000Z" },
+    ],
+  })
+  h.controller.tick()
+  h.controller.tick()
+  h.controller.tick()
+  assert.equal(h.storage.getSession("batch-rollout")?.codex_input_queue, null, "every item in the batch reconciles")
 })
 
 test("a different existing draft blocks a queued follow-up without overwriting or submitting it", () => {

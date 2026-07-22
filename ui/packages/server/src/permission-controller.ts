@@ -876,19 +876,33 @@ export function createPermissionController(deps: PermissionControllerDeps): Perm
     }
   }
 
-  function deliveryEvidence(item: QueuedInput, slug: string): { observedAt: string; observedMs: number } | undefined {
+  // Every genuine human message the fold still remembers, OLDEST FIRST. Codex releases its whole native
+  // queue at one tool boundary, so a batch of steers can land as several user records inside a single
+  // fold — reading only the `lastUserText` scalar would see the batch's LAST message and leave every
+  // earlier item permanently unconfirmed. The scalar pair remains the fallback for a backend (or an
+  // older persisted fold) that carries no ring.
+  function observedUserTexts(slug: string): { text: string; at: string }[] {
     const tele = deps.tailer.get(slug)
-    if (!tele?.lastUserText || !tele.lastUserAt) return undefined
-    const textMatches = item.match === "normalized" ? normalizedInput(tele.lastUserText) === item.text : tele.lastUserText === item.text
-    if (!textMatches) return undefined
+    if (tele?.recentUserTexts?.length) return tele.recentUserTexts
+    return tele?.lastUserText && tele.lastUserAt ? [{ text: tele.lastUserText, at: tele.lastUserAt }] : []
+  }
 
-    const observedMs = Date.parse(tele.lastUserAt)
+  function deliveryEvidence(item: QueuedInput, slug: string): { observedAt: string; observedMs: number } | undefined {
     const eligibleAt = Date.parse(item.state === "submitted" ? item.submittedAt ?? "" : item.enqueuedAt)
-    if (!Number.isFinite(observedMs) || !Number.isFinite(eligibleAt) || observedMs < eligibleAt) return undefined
-
+    if (!Number.isFinite(eligibleAt)) return undefined
     const reconcileAfter = item.reconcileAfter ? Date.parse(item.reconcileAfter) : NaN
-    if (Number.isFinite(reconcileAfter) && observedMs <= reconcileAfter) return undefined
-    return { observedAt: tele.lastUserAt, observedMs }
+
+    // Oldest first, so a batch reconciles in the order Codex delivered it and each queue item consumes
+    // its OWN record rather than the newest one.
+    for (const observed of observedUserTexts(slug)) {
+      const textMatches = item.match === "normalized" ? normalizedInput(observed.text) === item.text : observed.text === item.text
+      if (!textMatches) continue
+      const observedMs = Date.parse(observed.at)
+      if (!Number.isFinite(observedMs) || observedMs < eligibleAt) continue
+      if (Number.isFinite(reconcileAfter) && observedMs <= reconcileAfter) continue
+      return { observedAt: observed.at, observedMs }
+    }
+    return undefined
   }
 
   function consumeDeliveryEvidence(queue: QueuedInput[], evidence: { observedAt: string; observedMs: number }): void {
@@ -940,20 +954,19 @@ export function createPermissionController(deps: PermissionControllerDeps): Perm
           setError(slug, null)
           return true
         }
+        const submittedAt = Date.parse(item.submittedAt)
+        if (Number.isFinite(submittedAt) && now() - submittedAt >= CODEX_INPUT_CONFIRMATION_TIMEOUT_MS) {
+          // Without transcript confirmation or native ownership, delivery is indeterminate. Drop
+          // only Fray's barrier and surface a compact failure signal; the browser restores its draft.
+          // Retrying would risk duplicating provider-visible input, so there is intentionally none.
+          queue.shift()
+          writeQueue(slug, queue, row)
+          if (queue.length === 0) releaseCodexInput(row)
+          setError(slug, `${STEER_FAILURE_PREFIX}${item.deliveryId ?? ""}`)
+          return queue.length > 0
+        }
       }
-      if (item.providerQueuedAt) return true
-
-      const submittedAt = Date.parse(item.submittedAt)
-      if (Number.isFinite(submittedAt) && now() - submittedAt >= CODEX_INPUT_CONFIRMATION_TIMEOUT_MS) {
-        // Without transcript confirmation or native ownership, delivery is indeterminate. Drop
-        // only Fray's barrier and surface a compact failure signal; the browser restores its draft.
-        // Retrying would risk duplicating provider-visible input, so there is intentionally none.
-        queue.shift()
-        writeQueue(slug, queue, row)
-        if (queue.length === 0) releaseCodexInput(row)
-        setError(slug, `${STEER_FAILURE_PREFIX}${item.deliveryId ?? ""}`)
-        return queue.length > 0
-      }
+      // An awaited head deliberately does NOT block the rest of the queue any more — see the batch below.
     }
     const liveState = runtimeState(row)
     if (liveState !== "live") {
@@ -964,43 +977,52 @@ export function createPermissionController(deps: PermissionControllerDeps): Perm
           : "Queued Codex message was not submitted before the session exited; send another follow-up to resume")
       return true
     }
-    if (item.state === "submitted") return true
+    if (!queue.some((queued) => queued.state === "pending")) return true
 
     if (codexModalHolds(deps.tailer.get(slug))) {
       setError(slug, "Queued message blocked by an ambiguous Codex composer or modal; resolve it in Terminal")
       return true
     }
-    const escaped = captureOwned(row, true) ?? ""
-    const composer = inspectCodexComposer(escaped)
-    if (composer.kind === "empty") {
-      // Persist the barrier before one tmux command queue pastes the complete message and submits it.
-      // Fray never leaves its own draft behind for a later content-based guess.
-      item.state = "submitted"
-      item.submittedAt = new Date(now()).toISOString()
+    // Hand EVERY still-pending item to Codex in this one tick rather than releasing them one per turn.
+    // Codex's native queue holds the whole list ("Messages to be submitted after next tool call"
+    // enumerates each) and delivers them TOGETHER at the next tool boundary, so a burst of steers reaches
+    // the model as one batch — which is what the human meant by sending them. Waiting for each item's
+    // transcript confirmation before releasing the next one instead spent a whole model turn per message.
+    for (const queued of queue) {
+      if (queued.state !== "pending") continue
+      // Re-read the composer before EVERY paste. If the previous item's key did not register, its text
+      // is still sitting in the composer, and pasting on top would splice two steers into one message.
+      const escaped = captureOwned(row, true) ?? ""
+      const composer = inspectCodexComposer(escaped)
+      const submitInPlace = composer.kind === "typed" && codexComposerMatches(escaped, queued.text)
+      if (composer.kind !== "empty" && !submitInPlace) {
+        setError(slug, composer.kind === "typed"
+          ? "Queued message blocked: submit or clear the existing Codex terminal draft"
+          : "Queued message blocked by an ambiguous Codex composer or modal; resolve it in Terminal")
+        return true
+      }
+      // Persist the barrier before the key. A crash in between can leave an item safely awaiting
+      // confirmation, but can never replay a key that Codex may already have handled.
+      queued.state = "submitted"
+      queued.submittedAt = new Date(now()).toISOString()
       writeQueue(slug, queue, row)
       setError(slug, null)
-      if (!sendTextWithKeyOwned(row, item.text, CODEX_SUBMIT_KEY)) {
-        setError(slug, "Queued Codex submission could not be confirmed; Fray will not retry it automatically")
+      const delivered = submitInPlace
+        ? sendKeyOwned(row, CODEX_SUBMIT_KEY)
+        : sendTextWithKeyOwned(row, queued.text, CODEX_SUBMIT_KEY)
+      if (!delivered) {
+        setError(slug, submitInPlace
+          ? "Queued Codex message was not submitted because the worker identity changed"
+          : "Queued Codex submission could not be confirmed; Fray will not retry it automatically")
+        return true
       }
-      return true
+      // Each write CASes against the queue value this row was read with, so the next item in the batch
+      // needs the row the write just produced. A generation/session change mid-batch means this tick no
+      // longer owns the runtime: stop and let the next tick re-derive ownership from scratch.
+      const current = deps.storage.getSession(slug)
+      if (!current || current.session_id !== row.session_id || (current.runtime_generation ?? 0) !== (row.runtime_generation ?? 0)) return true
+      row = current
     }
-    if (composer.kind === "typed" && codexComposerMatches(escaped, item.text)) {
-      // Persist the submission barrier before sending the key. A crash in between can leave an item
-      // safely awaiting confirmation, but can never replay a key that Codex may already have handled.
-      item.state = "submitted"
-      item.submittedAt = new Date(now()).toISOString()
-      writeQueue(slug, queue, row)
-      setError(slug, null)
-      if (!sendKeyOwned(row, CODEX_SUBMIT_KEY)) {
-        setError(slug, "Queued Codex message was not submitted because the worker identity changed")
-      }
-      return true
-    }
-    if (composer.kind === "typed") {
-      setError(slug, "Queued message blocked: submit or clear the existing Codex terminal draft")
-      return true
-    }
-    setError(slug, "Queued message blocked by an ambiguous Codex composer or modal; resolve it in Terminal")
     return true
   }
 
