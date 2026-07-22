@@ -55,6 +55,15 @@ const CARD = `(() => {
     // The answer action must sit ABOVE the prompt box: it stays adjacent to the question it answers,
     // and the card's bottom edge is the same prompt box in every state.
     answersAboveBox: Boolean(boxRect && answersRect && answersRect.bottom <= boxRect.top + 1),
+    // …and its spacing must stay ASYMMETRIC — tight to the question stack it belongs to, looser to the
+    // prompt box below. Symmetric gaps make it read as an appendage of the box, hovering above-right of
+    // it rather than hanging off the questions (maintainer 2026-07-22: "the spacing is insane").
+    questionToAnswers: (() => {
+      const blocks = [...card.querySelectorAll('div')].filter((d) => d.querySelector(':scope > .mt-2 textarea[data-surface="questionAnswer"]'))
+      const last = blocks[blocks.length - 1]
+      return last && answersRect ? Math.round(answersRect.top - last.getBoundingClientRect().bottom) : null
+    })(),
+    answersToBox: answersRect && boxRect ? Math.round(boxRect.top - answersRect.bottom) : null,
     boxWidth: boxRect ? Math.round(boxRect.width) : null,
     // A recommended chip's badge precedes its label in source order (the float-right trick), so its
     // textContent reads "RecommendedA. …" — match by substring, never by prefix.
@@ -84,6 +93,8 @@ try {
   check("it ALSO renders the Send answers action", s?.hasAnswers === true)
   check("Send answers starts disabled (nothing answered yet)", s?.answersDisabled === true)
   check("Send answers sits ABOVE the prompt box", s?.answersAboveBox === true)
+  check("it hangs TIGHT off the question stack", s?.questionToAnswers !== null && s?.questionToAnswers <= 10, `${s?.questionToAnswers}px`)
+  check("…and is spaced AWAY from the prompt box below it", (s?.answersToBox ?? 0) >= s?.questionToAnswers * 1.5, `${s?.questionToAnswers}px up vs ${s?.answersToBox}px down`)
   check("the ask's own chips render alongside it", s?.chips === 4, `found ${s?.chips}`)
   check("the ask's answer textareas are a SEPARATE surface from the card box", s?.answerBoxes === 2, `found ${s?.answerBoxes}`)
   check("the placeholder names the escape hatch", /skip the questions/i.test(s?.placeholder ?? ""), s?.placeholder)

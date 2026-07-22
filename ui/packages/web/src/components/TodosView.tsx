@@ -965,8 +965,12 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
       {collapsed ? null : (
       <>
       {/* Message body — the same chat renderer ChatView uses, tail-first with "Load earlier messages"
-          above. The card grows to its content; the PAGE is what scrolls. */}
-      <div className="px-5 py-5">
+          above. The card grows to its content; the PAGE is what scrolls.
+          The bottom pad TIGHTENS while an ask is open: the "Send answers" action below belongs to the
+          question stack it answers, so it has to hang CLOSE off the last question block and leave the
+          bigger gap for the prompt box under it. At the standard pb-5 the button floated midway and read
+          as an appendage of the prompt box instead. */}
+      <div className={`px-5 pt-5 ${answerable ? "pb-2" : "pb-5"}`}>
         <InteractionStack
           thread={thread}
           className="mb-4"
@@ -1103,10 +1107,12 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
           (maintainer 2026-07-22): answering the question is the primary path, not the only one, and
           ignoring the options to steer with a plain prompt has to stay one keystroke away. The button
           sits above the box so it stays adjacent to the question it answers, and the card's bottom edge
-          is the same prompt box in every state. */}
+          is the same prompt box in every state. Its spacing is deliberately ASYMMETRIC — 8px up to the
+          last question block, 16px down to the prompt box — so it reads as hanging off the questions
+          rather than hovering over the box. */}
       <div className="shrink-0 px-5 pb-3 pt-0">
       {answerable && (
-        <div className="mb-2 flex items-center justify-end gap-2">
+        <div className="mb-4 flex items-center justify-end gap-2">
           <button
             disabled={!anyAnswered}
             onClick={() => sendAnswers()}
