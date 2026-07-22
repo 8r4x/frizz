@@ -436,7 +436,7 @@ export function hintGloss(hints: readonly AwaitingHint[]): string | null {
   const h = parkedAwaitingHint(hints) ?? hints.find((x) => x.kind === "pr" || x.kind === "ci")
   if (!h) return null
   if (h.kind === "timer") return formatSnoozedUntil(h.value) ?? "Timer schedule unavailable"
-  const label = h.kind === "pr" ? "PR" : h.kind === "ci" ? "CI" : h.kind === "human" ? "HUMAN" : h.kind === "github-review" ? "REVIEW" : h.kind
+  const label = h.kind === "pr" ? "PR" : h.kind === "ci" ? "CI" : h.kind === "human" ? "HUMAN" : h.kind === "pr-watch" ? "WATCH" : h.kind === "github-review" ? "REVIEW" : h.kind
   return `${label} ${h.value}`
 }
 

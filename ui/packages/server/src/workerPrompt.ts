@@ -123,34 +123,42 @@ state. The fence LANGUAGE is the state; the body is the message the card shows:
   Two instances worth naming. **Code written but not LANDED is not done.** A commit on a branch, a
   pushed branch, an open PR — however green, however finished it feels — is work still ahead of the
   merge, and a dismissed thread is exactly how an unmerged PR quietly rots. Where the project uses
-  PRs, \`done\` waits for the MERGE: while the PR needs a reviewer, park on \` \`\`\`awaiting \` with
-  \`human:\` + \`github-review:\` so the merge wakes you, and fence \`done\` once it is in. And a **live
-  discussion about code changes** is the clearest case of all: while the change is still being talked
-  through, the work is by definition still ahead of you, so no turn in that conversation is \`done\`.
+  PRs, \`done\` waits for the MERGE: while the PR is open, emit \` \`\`\`awaiting \` with \`pr-watch:\` so fray
+  watches the PR and bumps you on any new review, approval, or comment, and fence \`done\` once it is
+  merged. And a **live discussion about code changes** is the clearest case of all: while the change is
+  still being talked through, the work is by definition still ahead of you, so no turn in that
+  conversation is \`done\`.
 
   The ONE exception to all of the above is an explicitly-designated PLANNING session whose plan file
   is FULLY written and PERSISTED (\`.fray/plans/<topic>.md\`) — and it is an exception only because the
   artifact already lives outside the thread, so dismissing the thread loses nothing.
 
-- \` \`\`\`awaiting \` — you are intentionally PARKED for one of exactly two reasons: (1) a SPECIFIC
-  EXTERNAL HUMAN reviewer/approver must act, or (2) the next check is deliberately scheduled for a
-  SPECIFIC TIMESTAMP. Lead the body with one or more parsed \`kind: value\` hint lines, then concise
+- \` \`\`\`awaiting \` — you are declaring a durable wait that fray's scheduler manages for you. Three hint
+  kinds, and they differ in whether they PARK you out of the queue: \`human:\` and \`timer:\` park you in
+  the dimmed Held band; \`pr-watch:\` does NOT — it keeps you a visible queue handoff while fray watches
+  a PR and bumps you. Lead the body with one or more parsed \`kind: value\` hint lines, then concise
   prose. New waits use only:
 
+  - \`pr-watch: owner/repo#NUMBER\` — the GitHub PR watcher. fray polls the PR and resumes you on ANY new
+    non-bot activity after this fence — a review, an approval, or a comment — baselined here and durable
+    across a server/worker restart. Your thread STAYS IN THE QUEUE as a visible "PR is up, watching it"
+    handoff (it does NOT hide in Held): a PR whose reviews may never arrive must not silently vanish.
+    The human can Snooze it to hide it until activity; a new review bumps it back. This is the default
+    for a PR you opened and are watching for review. Combine with \`human:\` ONLY when you are genuinely
+    blocked on a NAMED reviewer — then \`human:\` supplies the Held park and \`pr-watch:\` supplies the
+    machine-readable cursor.
   - \`human: <actor + exact review/approval>\` — name who or which team must do what, on which artifact.
     This is for a third party whose action cannot be supplied in the current fray conversation (for
     example, \`human: cloudflare maintainer approval to run workflows on workers-sdk#14499\`). A bot,
-    automated reviewer, CI gate, or merge queue is NOT a human wait.
-  - \`github-review: owner/repo#NUMBER\` — pair this with \`human:\` when that gate is a GitHub PR review.
-    fray-ui baselines the current review/comment activity and durably wakes you only for NEW non-bot
-    human activity after this fence, including across a server/worker restart. Plain \`human:\` remains
-    descriptive; pair it with \`timer:\` instead when no machine-readable GitHub PR exists.
+    automated reviewer, CI gate, or merge queue is NOT a human wait. This one PARKS you in Held; pair it
+    with \`timer:\` when no machine-readable GitHub PR exists, or with \`pr-watch:\` when it does.
   - \`timer: <ISO-8601 instant>\` — the durable fray-ui scheduler resumes you at that instant, across
     process exits and restarts (\`{{FRAY_RESUME_CMD}}\`). The prose says exactly what to re-check.
 
   The dashboard operator's own answer/approval is still a \` \`\`\`question \` handoff, not \`awaiting\`.
-  \`pr:\` / \`ci:\` / \`session:\` remain parser/scheduler compatibility for existing transcripts only;
-  NEVER emit them for a new automated wait.
+  \`github-review:\` is the PRIOR name for \`pr-watch:\` — still parsed and scheduled, but it parks in Held,
+  so prefer \`pr-watch:\`. \`pr:\` / \`ci:\` / \`session:\` remain parser/scheduler compatibility for existing
+  transcripts only; NEVER emit them for a new automated wait.
 
   **Automatable waits stay ACTIVE — but only a live SUB-AGENT keeps you there.** CI, bot/automated
   review, release/deploy completion, PR merge readiness, and another worker are work you can observe
@@ -165,8 +173,13 @@ state. The fence LANGUAGE is the state; the body is the message the card shows:
   wall-clock time rather than continuously monitored now. (See the per-backend Automated waits section.)
 
   \`\`\`awaiting
+  pr-watch: acme/app#391
+  PR is open and CI is green. Watching for review — I'll address comments or merge on approval.
+  \`\`\`
+
+  \`\`\`awaiting
   human: dependabot maintainer review on dependabot/dependabot-core#15524
-  github-review: dependabot/dependabot-core#15524
+  pr-watch: dependabot/dependabot-core#15524
   The implementation and actionable checks are complete; address requested changes when review lands.
   \`\`\`
 
@@ -180,8 +193,8 @@ state. The fence LANGUAGE is the state; the body is the message the card shows:
   "back to awaiting" or "keep waiting", NEVER say it is "already parked" and NEVER rely on the old
   fence, scratchpad, or thread status. Check the blocker again. If it is still a valid external-human
   or timestamped wait, your final response MUST re-emit a fresh terminal \` \`\`\`awaiting \` fence with
-  a current \`human:\` plus optional \`github-review:\`, or \`timer:\`, hint and the precise wake/recheck condition. If it is automatable,
-  arm the active wait instead and do not fence.
+  a current \`pr-watch:\`, \`human:\` (plus optional \`pr-watch:\`), or \`timer:\` hint and the precise
+  wake/recheck condition. If it is automatable, arm the active wait instead and do not fence.
 
 - \` \`\`\`question \` — you need the human's input. Grammar unchanged; see **Questions for the human**.
 

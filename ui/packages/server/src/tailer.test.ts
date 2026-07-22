@@ -1486,16 +1486,26 @@ test("parseSignalFence: END-ANCHORED — a fence with prose after it is quoted/e
   assert.deepEqual(parseSignalFence("all done\n\n```done\nShipped.\n```\n  \n"), { kind: "done", body: "Shipped.", hints: [] })
 })
 
-test("parseSignalFence: an awaiting fence parses current human/timer and legacy pr/ci/session hints", () => {
-  const f = parseSignalFence("```awaiting\nhuman: repo maintainer must approve fork CI\ntimer: 2026-07-02T00:00:00Z\npr: 391\nci: build #42\nsession: abc-123\nWaiting on a named gate.\n```")
+test("parseSignalFence: an awaiting fence parses current pr-watch/human/timer and legacy pr/ci/session hints", () => {
+  const f = parseSignalFence("```awaiting\npr-watch: acme/app#391\nhuman: repo maintainer must approve fork CI\ntimer: 2026-07-02T00:00:00Z\npr: 391\nci: build #42\nsession: abc-123\nWaiting on a named gate.\n```")
   assert.equal(f?.kind, "awaiting")
   assert.equal(f?.body, "Waiting on a named gate.")
   assert.deepEqual(f?.hints, [
+    { kind: "pr-watch", value: "acme/app#391" },
     { kind: "human", value: "repo maintainer must approve fork CI" },
     { kind: "timer", value: "2026-07-02T00:00:00Z" },
     { kind: "pr", value: "391" },
     { kind: "ci", value: "build #42" },
     { kind: "session", value: "abc-123" },
+  ])
+})
+
+test("parseSignalFence: `pr-watch:` wins the alternation over legacy `pr:` (the shared -watch suffix)", () => {
+  // A bare `pr:` must still parse as the legacy pr hint, not as a truncated pr-watch.
+  const f = parseSignalFence("```awaiting\npr-watch: acme/app#7\npr: 391\n```")
+  assert.deepEqual(f?.hints, [
+    { kind: "pr-watch", value: "acme/app#7" },
+    { kind: "pr", value: "391" },
   ])
 })
 

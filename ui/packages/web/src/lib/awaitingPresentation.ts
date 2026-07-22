@@ -21,7 +21,10 @@ export function awaitingParkAction(
     .flatMap((hint) => (hint.kind === "timer" ? [canonicalSnoozeInstant(hint.value)] : []))
     .find((instant): instant is string => instant !== null && Date.parse(instant) > nowMs)
   if (timerUntil) return { label: "Confirm snooze", toastVerb: "Snoozed", timerUntil }
-  if (hints.some((hint) => hint.kind === "github-review")) return { label: "Confirm watcher", toastVerb: "Parked", timerUntil: null }
+  // pr-watch/github-review: park the visible queue card until its default snooze preset — the "hide this
+  // until something happens" opt-in. The watcher keeps polling and a new review/approval/comment bumps
+  // it back regardless of the snooze.
+  if (hints.some((hint) => hint.kind === "pr-watch" || hint.kind === "github-review")) return { label: "Confirm watcher", toastVerb: "Parked", timerUntil: null }
   if (hints.some((hint) => hint.kind === "human")) return { label: "Confirm snooze", toastVerb: "Snoozed", timerUntil: null }
   return null
 }
@@ -36,8 +39,8 @@ export function awaitingHintSentence(hints: readonly AwaitingHint[], nowMs = Dat
     return `Snooze until ${lowerCalendarLead(formatSnoozeWake(timer.value, nowMs))}`
   }
 
-  const review = hints.find((hint) => hint.kind === "github-review")
-  if (review) return `Watch ${review.value} for new human review activity`
+  const review = hints.find((hint) => hint.kind === "pr-watch" || hint.kind === "github-review")
+  if (review) return `Watch ${review.value} for new reviews, approvals, or comments`
 
   const human = hints.find((hint) => hint.kind === "human")
   if (human) return `Wait for ${human.value}`

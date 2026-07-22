@@ -176,13 +176,18 @@ export type NativeInputRequired = z.infer<typeof NativeInputRequired>
 // verbs). Legacy .fray/<slug>.md rows survive read-only in a collapsed Legacy shelf. The queue
 // inversion: a thread at rest is awaiting the human UNLESS it excused itself with a signal fence.
 
-// A parked-wait hint parsed from `<kind>: <value>` lines in an ```awaiting fence body. `human`,
-// `github-review`, and `timer` are current; pr/ci/session remain readable for legacy transcripts and
-// wakers. A github-review hint is paired with `human:`: the latter names the exact external gate while
-// the former gives the durable scheduler a machine-readable PR cursor to watch for NEW non-bot human
-// review activity.
+// A parked-wait hint parsed from `<kind>: <value>` lines in an ```awaiting fence body. `pr-watch`,
+// `human`, and `timer` are current; `github-review` is the prior review-watcher name (still parsed and
+// scheduled, now Held-legacy); pr/ci/session remain readable for older transcripts and wakers.
+//
+// `pr-watch: owner/repo#N` is the general PR watcher: the durable scheduler polls the PR and bumps the
+// worker on ANY new non-bot activity — a review, an approval, or a comment. Unlike `github-review`, it
+// does NOT park the thread in Held: a pr-watch thread stays a visible QUEUE handoff (the worker opened
+// a PR and is watching it), and new activity re-surfaces it. Pair it with `human:` only when the worker
+// is genuinely blocked on a NAMED reviewer — then `human:` supplies the Held/park while pr-watch supplies
+// the machine-readable cursor.
 export const AwaitingHint = z.object({
-  kind: z.enum(["human", "github-review", "timer", "pr", "ci", "session"]),
+  kind: z.enum(["pr-watch", "human", "github-review", "timer", "pr", "ci", "session"]),
   value: z.string(),
 })
 export type AwaitingHint = z.infer<typeof AwaitingHint>
