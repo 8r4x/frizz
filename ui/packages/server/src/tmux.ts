@@ -628,6 +628,14 @@ export function sendTextToExpectedAdoptionPane(
 ): boolean {
   const condition = expectedAdoptionCondition(expected)
   if (!condition || expected.pane_id === null) return false
+  // A SUBMIT routes through the settle-safe key path (paste → blocking run-shell settle → RE-CHECK
+  // the pane identity → Enter). Pasting the bracketed block and firing Enter back-to-back let a
+  // mid-turn worker read them as one input burst and split a MULTILINE follow-up into one queued
+  // message per line — the same "stuck enqueued" race fixed for the owned pasteText path. Reusing
+  // sendTextWithKeyToPane also keeps the post-settle recheck, so a pane replaced during the settle
+  // boundary never receives the delayed key (it just leaves the text unsubmitted → returns false).
+  if (submit) return sendTextWithKeyToPane(socket, expected.pane_id, condition, "fray-exact", text, "Enter")
+  // Draft paste (no submit): no key follows the paste, so there is no burst race to settle.
   const buffer = `fray-exact-${randomUUID()}`
   try {
     const out = execFileSync("tmux", [
@@ -635,7 +643,7 @@ export function sendTextToExpectedAdoptionPane(
       "load-buffer", "-b", buffer, "-",
       ";",
       "if-shell", "-t", expected.pane_id, "-F", condition,
-      `paste-buffer -p -b ${buffer} -t ${expected.pane_id}${submit ? ` ; send-keys -t ${expected.pane_id} Enter` : ""} ; display-message -p ${EXACT_ACTION_OK}`,
+      `paste-buffer -p -b ${buffer} -t ${expected.pane_id} ; display-message -p ${EXACT_ACTION_OK}`,
       `display-message -p ${EXACT_ACTION_MISS}`,
       ";",
       "delete-buffer", "-b", buffer,
@@ -1044,9 +1052,22 @@ export function sendKey(slug: string, key: "Enter" | "Tab" | "Up" | "Down" | "Es
 // so newlines/quotes survive untouched), request bracketed-paste framing, then send a distinct Enter.
 // Without -p, an active Claude turn can treat the first embedded newline as submit and queue only the
 // first line (for example, `Answers:`) while silently losing the rest of the logical follow-up.
+//
+// The Enter MUST be chained after the paste inside ONE tmux command with a blocking run-shell settle
+// between them (matching the adoption path's sendTextWithKeyToPane). As two separate tmux invocations
+// with no settle, the submit key raced the TUI's paste ingestion: a mid-turn worker read the bracketed
+// block and the adjacent Enter as one input burst and split the follow-up into one QUEUED message per
+// line (the exact "still shows enqueued" bug — the client's single optimistic bubble then never matches
+// any server line and stays grayed forever). The run-shell blocks this one tmux server queue for one
+// event-loop boundary so the TUI finishes the paste into its composer before the Enter submits it whole.
 export function pasteText(slug: string, text: string): void {
   const name = exactSessionTarget(slug)
   execFileSync("tmux", ["-L", socket, "load-buffer", "-"], { input: text })
-  tmux("paste-buffer", "-p", "-t", name, "-d")
-  tmux("send-keys", "-t", name, "Enter")
+  tmux(
+    "paste-buffer", "-p", "-t", name, "-d",
+    ";",
+    "run-shell", INPUT_SETTLE_COMMAND,
+    ";",
+    "send-keys", "-t", name, "Enter",
+  )
 }
