@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { canRecoverExistingCodexDraft, threadComposerStatus, threadFollowUpBlocked, threadPermissionBlockedReason, threadPermissionEffectMessage } from "./threadPermissions.ts"
+import { threadComposerStatus, threadFollowUpBlocked, threadPermissionBlockedReason, threadPermissionEffectMessage } from "./threadPermissions.ts"
 
 const state = (over: Partial<Parameters<typeof threadPermissionBlockedReason>[0]> = {}) => ({ ...over })
 
@@ -12,54 +12,33 @@ test("thread permission control: only idle or exited owned threads are editable"
   assert.match(threadPermissionBlockedReason(state({ runtime: "turn-idle", permissionChangePending: true }))!, /already in progress/)
   assert.match(threadPermissionBlockedReason(state({ runtime: "turn-idle", profileChangePending: true }))!, /model and effort change/)
   assert.match(threadPermissionBlockedReason(state({ runtime: "turn-idle", runtimeControlPending: true }))!, /runtime control/)
-  assert.match(threadPermissionBlockedReason(state({ runtime: "turn-idle", runtimeControlPending: true, followUpQueueAvailable: true }))!, /runtime control/, "the queue capability unlocks only sending, never profile or permission controls")
   assert.match(threadPermissionBlockedReason(state({ runtime: "turn-idle", subAgents: [{ state: "running" }] }))!, /background operation/)
   assert.match(threadPermissionBlockedReason(state({ runtime: "turn-idle", bgShells: [{ state: "stale" }] }))!, /unresolved background operation/)
   assert.match(threadPermissionBlockedReason(state({ runtime: "perm-prompt" }))!, /terminal approval or question/)
   assert.match(threadPermissionBlockedReason(state({ runtime: "turn-idle", nativeInputRequired: { kind: "question" } }))!, /terminal approval or question/)
-  assert.match(threadPermissionBlockedReason(state({ runtime: "turn-idle", queuedInputCount: 1 }))!, /queued Codex input/)
 })
 
 test("thread permission control: foreign threads remain read-only", () => {
   assert.match(threadPermissionBlockedReason(state({ foreign: true }))!, /Read-only/)
 })
 
-test("a Codex queue owner keeps only follow-up submission available", () => {
+test("any durable runtime-control owner blocks follow-up submission", () => {
+  assert.equal(threadFollowUpBlocked(state()), false)
   assert.equal(threadFollowUpBlocked(state({ runtimeControlPending: true })), true)
-  assert.equal(threadFollowUpBlocked(state({ runtimeControlPending: true, followUpQueueAvailable: true })), false)
-  assert.equal(threadFollowUpBlocked(state({ runtimeControlPending: true, followUpQueueAvailable: true, permissionPending: "default" })), true)
-  assert.equal(threadFollowUpBlocked(state({ runtimeControlPending: true, followUpQueueAvailable: true, profileChangePending: true })), true)
+  assert.equal(threadFollowUpBlocked(state({ permissionPending: "default" })), true)
+  assert.equal(threadFollowUpBlocked(state({ permissionChangePending: true })), true)
+  assert.equal(threadFollowUpBlocked(state({ profileChangePending: true })), true)
 })
 
-test("queued input status distinguishes active delivery from a controller blocker", () => {
-  assert.equal(threadComposerStatus(state()), null)
-  assert.deepEqual(threadComposerStatus(state({ queuedInputCount: 1 })), {
-    kind: "queue-sending",
-    message: "Sending queued Codex message…",
-  })
-  assert.deepEqual(threadComposerStatus(state({
-    queuedInputCount: 1,
-    controlError: "Queued Codex message is waiting for an idle or queueable composer",
-  }), "profile lookup failed"), {
-    kind: "queue-blocked",
-    message: "Queued Codex message is waiting for an idle or queueable composer",
-  }, "the actionable queue blocker wins over an ancillary profile-options failure")
-  assert.deepEqual(threadComposerStatus(state({
-    queuedInputCount: 1,
-    controlError: "fray-steer-failed:delivery-id",
-  }), " profile lookup failed "), {
+test("composer status surfaces only an ancillary profile-options failure", () => {
+  assert.equal(threadComposerStatus(), null)
+  assert.deepEqual(threadComposerStatus(" profile lookup failed "), {
     kind: "profile-error",
     message: "Profile controls unavailable: profile lookup failed",
-  }, "the machine-only draft restoration signal is never rendered as status copy")
+  })
 })
 
 test("thread permission control: feedback distinguishes a live apply from next resume", () => {
   assert.equal(threadPermissionEffectMessage("applied", "codex"), "Sandbox applied to the live session")
   assert.equal(threadPermissionEffectMessage("next-resume", "codex"), "Sandbox saved for the next resume")
-})
-
-test("draft recovery affordance appears only for the verified existing-composer condition", () => {
-  assert.equal(canRecoverExistingCodexDraft("Queued message blocked: submit or clear the existing Codex terminal draft"), true)
-  assert.equal(canRecoverExistingCodexDraft("Permission change blocked by the current Codex modal"), false)
-  assert.equal(canRecoverExistingCodexDraft(undefined), false)
 })

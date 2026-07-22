@@ -14,12 +14,6 @@ import type {
   SetThreadProfileInput,
   SetThreadProfileResult,
   SetThreadSnoozeInput,
-  SubmitCodexDraftInput,
-  SubmitCodexDraftResult,
-  PrepareCodexDraftReplacementInput,
-  PrepareCodexDraftReplacementResult,
-  ClearAmbiguousCodexInputInput,
-  ClearAmbiguousCodexInputResult,
   TranscriptMessage,
   TranscriptPage,
   TranscriptEarlierInput,
@@ -81,9 +75,6 @@ export interface Api {
   setThreadPermission(input: SetThreadPermissionInput): Promise<SetThreadPermissionResult>
   threadProfileOptions(input: ThreadProfileOptionsInput): Promise<ThreadProfileOptionsResult>
   setThreadProfile(input: SetThreadProfileInput): Promise<SetThreadProfileResult>
-  submitCodexDraft(input: SubmitCodexDraftInput): Promise<SubmitCodexDraftResult>
-  prepareCodexDraftReplacement(input: PrepareCodexDraftReplacementInput): Promise<PrepareCodexDraftReplacementResult>
-  clearAmbiguousCodexInput(input: ClearAmbiguousCodexInputInput): Promise<ClearAmbiguousCodexInputResult>
   markRead(input: { slug: string }): Promise<void>
   // Opening a thread records read/seen telemetry only. Queue membership is lifecycle-driven and is
   // never cleared by viewing a resting thread. No-op for a foreign thread (no registry row).
@@ -169,9 +160,6 @@ const PROCEDURES: Record<keyof Api, ProcType> = {
   setThreadPermission: "mutation",
   threadProfileOptions: "query",
   setThreadProfile: "mutation",
-  submitCodexDraft: "mutation",
-  prepareCodexDraftReplacement: "query",
-  clearAmbiguousCodexInput: "mutation",
   markRead: "mutation",
   threadSeen: "mutation",
   setThreadState: "mutation",

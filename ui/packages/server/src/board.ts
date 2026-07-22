@@ -6,7 +6,7 @@ import {
 import { join } from "node:path"
 import watcher from "@parcel/watcher"
 import type { BoardSnapshot, ThreadView, RuntimeState, PlanView } from "@fray-ui/shared"
-import { BoardDiffer, CODEX_INPUT_CONFIRMATION_TIMEOUT_MS, PermissionMode, SnoozeUntil, ThreadSlug, isValidAwaitingTimer, type PermissionMode as PermissionModeValue } from "@fray-ui/shared"
+import { BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isValidAwaitingTimer, type PermissionMode as PermissionModeValue } from "@fray-ui/shared"
 import type { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
 import type { Storage, SessionRow } from "./storage.ts"
@@ -301,27 +301,6 @@ export function resolveLimitPause(
   }
 }
 
-export function queuedInputCount(value: string | null | undefined): number {
-  if (!value) return 0
-  try {
-    const parsed = JSON.parse(value)
-    return Array.isArray(parsed) ? parsed.length : 0
-  } catch {
-    return 0
-  }
-}
-
-export function codexInputIsAmbiguous(value: string | null | undefined, now = Date.now()): boolean {
-  if (!value) return false
-  try {
-    const first = JSON.parse(value)?.[0]
-    if (!first || first.state !== "submitted" || typeof first.submittedAt !== "string") return false
-    const submittedAt = Date.parse(first.submittedAt)
-    return Number.isFinite(submittedAt) && now - submittedAt >= CODEX_INPUT_CONFIRMATION_TIMEOUT_MS
-  } catch {
-    return false
-  }
-}
 
 // Title provenance is resolved server-side as well as in the web display helper. A transcript title
 // is eligible only while the registry says the stored fallback was machine-generated; once a human
@@ -437,12 +416,6 @@ function sessionThreadView(
       row.profile_pending_model !== null && row.profile_pending_model !== undefined ||
       row.profile_pending_effort !== null && row.profile_pending_effort !== undefined,
     runtimeControlPending: row.runtime_control !== null && row.runtime_control !== undefined,
-    // A queued Codex follow-up deliberately retains the `codex-input` owner until transcript
-    // confirmation. The controller accepts another follow-up under that same owner, so expose this
-    // exact capability rather than making every runtime control look sendable to the browser.
-    followUpQueueAvailable: row.backend === "codex" && row.runtime_control === "codex-input",
-    queuedInputCount: queuedInputCount(row.codex_input_queue),
-    codexInputAmbiguous: codexInputIsAmbiguous(row.codex_input_queue),
     controlError: row.control_error?.trim() || undefined,
     // Session profile resolved from backend-observed transcript truth first, then pinned launch
     // metadata (which supplies immediate/pre-response values and Claude's unrecorded effort). Never

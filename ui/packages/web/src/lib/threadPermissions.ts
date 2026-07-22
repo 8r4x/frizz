@@ -7,27 +7,21 @@ export interface ThreadPermissionState {
   nativeInputRequired?: unknown
   subAgents?: readonly { state: string }[]
   bgShells?: readonly { state: string }[]
-  queuedInputCount?: number
-  codexInputAmbiguous?: boolean
   permissionPending?: unknown
   permissionChangePending?: boolean
   profileChangePending?: boolean
   runtimeControlPending?: boolean
-  followUpQueueAvailable?: boolean
   controlError?: string
 }
 
 export type ThreadComposerStatus = {
-  kind: "queue-blocked" | "queue-sending" | "profile-error"
+  kind: "profile-error"
   message: string
 }
 
-export function threadComposerStatus(thread: ThreadPermissionState, profileError?: string): ThreadComposerStatus | null {
-  const queued = (thread.queuedInputCount ?? 0) > 0
-  const error = thread.controlError?.trim()
-  if (queued && error && !error.startsWith("fray-steer-failed:")) return { kind: "queue-blocked", message: error }
+export function threadComposerStatus(profileError?: string): ThreadComposerStatus | null {
   if (profileError?.trim()) return { kind: "profile-error", message: `Profile controls unavailable: ${profileError.trim().slice(0, 160)}` }
-  return queued ? { kind: "queue-sending", message: "Sending queued Codex message…" } : null
+  return null
 }
 
 export function threadPermissionBlockedReason(thread: ThreadPermissionState): string | null {
@@ -40,25 +34,19 @@ export function threadPermissionBlockedReason(thread: ThreadPermissionState): st
   }
   const unresolvedOps = [...(thread.subAgents ?? []), ...(thread.bgShells ?? [])].filter((op) => op.state === "running" || op.state === "stale").length
   if (unresolvedOps > 0) return `Wait for ${unresolvedOps} unresolved background operation${unresolvedOps === 1 ? "" : "s"}`
-  if ((thread.queuedInputCount ?? 0) > 0) return "Wait for the queued Codex input to finish"
   if (thread.runtime === "running" || thread.runtime === "spawning") return "Wait for the current turn to finish"
   return null
 }
 
-// Composer submission is intentionally less restrictive than runtime profile/permission changes.
-// Codex owns an in-flight queue with `codex-input`, but its controller can atomically append a
-// follow-up. Every other runtime owner remains a hard fence.
+// Composer submission is intentionally less restrictive than runtime profile/permission changes: any
+// durable runtime-control owner fences it, but an ordinary in-flight turn does not.
 export function threadFollowUpBlocked(thread: ThreadPermissionState): boolean {
   return thread.permissionChangePending === true || thread.permissionPending !== undefined ||
     thread.profileChangePending === true ||
-    (thread.runtimeControlPending === true && thread.followUpQueueAvailable !== true)
+    thread.runtimeControlPending === true
 }
 
 export function threadPermissionEffectMessage(effect: "applied" | "next-resume", backend: "claude" | "codex"): string {
   const noun = backend === "codex" ? "Sandbox" : "Permissions"
   return effect === "applied" ? `${noun} applied to the live session` : `${noun} saved for the next resume`
-}
-
-export function canRecoverExistingCodexDraft(error?: string): boolean {
-  return typeof error === "string" && error.includes("submit or clear the existing Codex terminal draft")
 }

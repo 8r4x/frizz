@@ -1,5 +1,4 @@
 import {
-  CODEX_INPUT_CONFIRMATION_TIMEOUT_MS,
   PermissionMode,
   type PermissionMode as PermissionModeValue,
 } from "@fray-ui/shared"
@@ -11,9 +10,6 @@ import { effectivePermissionMode } from "./dispatch.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 
 const POLL_MS = 750
-// Durable machine signal, not UI copy. board.ts turns this into a terse failure state while
-// retaining the delivery id so the originating composer can restore its exact draft.
-export const STEER_FAILURE_PREFIX = "fray-steer-failed:"
 
 export interface PermissionTerminal {
   isLive(slug: string): boolean
@@ -35,10 +31,6 @@ export interface PermissionTerminal {
 
 export interface PermissionController {
   request(slug: string, requested: PermissionModeValue): Promise<{ effect: "applied" | "next-resume" }>
-  queueFollowUp(slug: string, message: string, deliveryId?: string): void
-  submitExistingDraft(slug: string): { effect: "submitted" }
-  prepareCodexDraftReplacement(slug: string): { queuedMessage: string }
-  clearAmbiguousCodexInput(slug: string): { effect: "cleared" }
   tick(): void
   start(): void
   stop(): void
@@ -84,255 +76,12 @@ export function detectClaudePermissionMode(pane: string): PermissionModeValue | 
   return undefined
 }
 
-export interface QueuedInput {
-  text: string
-  enqueuedAt: string
-  state: "pending" | "submitted"
-  submittedAt?: string
-  // A transcript user_message at or before this instant already reconciled an earlier queue item.
-  // Remaining duplicates must wait for distinct provider evidence rather than reusing that event.
-  reconcileAfter?: string
-  // Positive native Codex ownership observed after Tab, before JSONL emits user_message. This is
-  // durable because the native block may scroll away while Codex continues its turn.
-  providerQueuedAt?: string
-  source?: "existing-draft"
-  match?: "normalized"
-  deliveryId?: string
-}
-
-function isQueuedInput(item: unknown): item is QueuedInput {
-  if (!item || typeof item !== "object") return false
-  const candidate = item as Partial<QueuedInput>
-  return typeof candidate.text === "string" &&
-    typeof candidate.enqueuedAt === "string" &&
-    (candidate.state === "pending" || candidate.state === "submitted") &&
-    (candidate.submittedAt === undefined || typeof candidate.submittedAt === "string") &&
-    (candidate.reconcileAfter === undefined || typeof candidate.reconcileAfter === "string") &&
-    (candidate.providerQueuedAt === undefined || typeof candidate.providerQueuedAt === "string") &&
-    (candidate.source === undefined || candidate.source === "existing-draft") &&
-    (candidate.match === undefined || candidate.match === "normalized") &&
-    (candidate.deliveryId === undefined || typeof candidate.deliveryId === "string")
-}
-
-export function parseCodexInputQueue(
-  value: string | null | undefined,
-): { valid: boolean; items: QueuedInput[] } {
-  if (!value) return { valid: true, items: [] }
-  try {
-    const parsed = JSON.parse(value)
-    if (!Array.isArray(parsed) || !parsed.every(isQueuedInput)) return { valid: false, items: [] }
-    return { valid: true, items: parsed }
-  } catch {
-    return { valid: false, items: [] }
-  }
-}
-
-function parseInputQueue(value: string | null | undefined): QueuedInput[] {
-  return parseCodexInputQueue(value).items
-}
-
 const normalizedInput = (value: string) => value.replace(/\s+/g, " ").trim()
-
-export type CodexComposerState =
-  | { kind: "empty" }
-  | { kind: "typed"; text: string; queueHint: boolean }
-  | { kind: "unavailable" }
 
 export type ClaudeComposerState =
   | { kind: "empty" }
   | { kind: "typed"; text: string }
   | { kind: "unavailable" }
-
-type CodexComposerCapture =
-  | { kind: "empty" }
-  | { kind: "typed"; parts: string[]; rows: { text: string; boundaryBefore: boolean; dim: boolean }[]; queueHint: boolean }
-  | { kind: "unavailable" }
-
-const codexDimAnsi = /\x1b\[(?:\d+;)*2(?:;\d+)*m/
-
-function codexQueueHint(escapedPane: string): boolean {
-  const lines = escapedPane.split("\n")
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (!/\x1b\[(?:0;)?1m›\x1b\[0m/.test(lines[i])) continue
-    return lines.slice(i + 1).some((line) => {
-      const plain = stripAnsi(line).trimStart()
-      return codexDimAnsi.test(line) && plain.startsWith("tab to queue message")
-    })
-  }
-  return false
-}
-
-// Codex's dim footer rows are "tab to queue message …" and "N% context left …". Match those ANCHORED
-// forms rather than a loose substring: a real steer row that merely mentions the phrase (for example
-// "you have plenty of context left, keep going") must not be mistaken for the footer, or the draft ends
-// early and codexComposerMatches wedges the very multi-row steer this path exists to deliver.
-function isCodexFooterHintText(text: string): boolean {
-  return /^tab to queue message\b/i.test(text) || /^\d+%\s+context left\b/i.test(text)
-}
-
-// Capture only Codex's LAST bold composer prompt. Keeping the visual rows lets the durable-input
-// controller distinguish content from Codex's own width-dependent line breaks without treating an
-// arbitrary difference inside a row as equivalent.
-function captureCodexComposer(escapedPane: string): CodexComposerCapture {
-  const lines = escapedPane.split("\n")
-  for (let i = lines.length - 1; i >= 0; i--) {
-    // Codex emits both SGR `1` and the equivalent reset-plus-bold `0;1` across redraws.
-    const matches = [...lines[i].matchAll(/\x1b\[(?:0;)?1m›\x1b\[0m/g)]
-    const marker = matches.at(-1)
-    if (!marker || marker.index === undefined) continue
-    const raw = lines[i].slice(marker.index + marker[0].length)
-    if (/^\s*\x1b\[2m/.test(raw)) return { kind: "empty" }
-    // `parts` stops at the first blank/footer — the text-extraction (inspectCodexComposer) contract.
-    // `rows` keeps every visual row below the marker, each tagged with whether a blank (a paragraph
-    // break) preceded it, WITHOUT guessing the footer boundary: the target-aware codexComposerMatches
-    // decides where a (possibly multi-paragraph) draft ends. A blank row alone is NOT the end — a
-    // real steer routinely contains blank lines between paragraphs.
-    const parts = [stripAnsi(raw).trim()]
-    const rows = [{ text: parts[0], boundaryBefore: false, dim: codexDimAnsi.test(raw) }]
-    let blankPending = false
-    let sawStop = false
-    for (let j = i + 1; j < lines.length; j++) {
-      const part = stripAnsi(lines[j]).trim()
-      if (!part) { blankPending = true; continue }
-      // Codex's footer/status rows are DIM-styled; real draft text is not. Require the dim styling
-      // (as the pre-existing dim-footer detector did) so a draft row that merely reads like a footer
-      // phrase is never mistaken for the footer boundary.
-      const dim = codexDimAnsi.test(lines[j])
-      if (!sawStop) {
-        if ((dim && isCodexFooterHintText(part)) || blankPending) sawStop = true
-        else parts.push(part)
-      }
-      rows.push({ text: part, boundaryBefore: blankPending, dim })
-      blankPending = false
-    }
-    return {
-      kind: "typed",
-      parts,
-      rows,
-      // The phrase can occur in transcript history or in the user's draft. Trust only Codex's dim
-      // footer after this (last) composer marker, never a global plain-text match.
-      queueHint: codexQueueHint(escapedPane),
-    }
-  }
-  return { kind: "unavailable" }
-}
-
-// Inspect only Codex's bold composer prompt. Empty suggestions are dim; real typed text is not.
-// Plain text after a paragraph gap is ambiguous with Codex's unstyled footer, so it fails closed.
-export function inspectCodexComposer(escapedPane: string): CodexComposerState {
-  const captured = captureCodexComposer(escapedPane)
-  if (captured.kind !== "typed") return captured
-  const { parts, queueHint } = captured
-    // Codex reflows a draft to the pane width. Ordinary continuation rows break at whitespace, but
-    // hyphenated tokens are allowed to break immediately AFTER the hyphen (for example
-    // `restart-` + `test`). Joining every visual row with a space silently changes that draft to
-    // `restart- test`, so the durable queue no longer recognizes the exact text it just injected.
-    // Suppress the synthetic space only for a word-ending hyphen; a standalone ` -` still keeps its
-    // real following space. This stays deliberately narrow/fail-closed for every other ambiguous
-    // visual wrap rather than auto-submitting text we cannot prove is ours.
-    const text = parts.reduce((joined, part, index) => {
-      if (index === 0) return part
-      return `${joined}${/\S-$/.test(joined) ? "" : " "}${part}`
-    }, "")
-    return {
-      kind: "typed",
-      text: normalizedInput(text),
-      queueHint,
-    }
-}
-
-// Compare a persisted queue item with the visual composer without guessing where Codex inserted a
-// soft row break. Every WITHIN-paragraph boundary may represent either zero characters (a token
-// split) or one normalized whitespace character (a word break); a BLANK row is a paragraph break —
-// always exactly one normalized space. Differences anywhere INSIDE a row still fail closed. The
-// position-set DP is linear in practice and cannot explode as 2^rows.
-//
-// The draft can be MULTI-PARAGRAPH (blank rows between paragraphs) and is followed by Codex's
-// footer/status line. Rather than guess where the draft ends and the footer begins (the status line
-// has no stable, draft-distinct signature — it can be a bare model slug), the draft is defined as the
-// blank-separated run of rows that EXACTLY reconstructs the target: once the target is fully matched
-// at a paragraph boundary, the draft is complete and everything below is footer. This is strictly
-// tighter than the old "stop at the first blank" rule for a single paragraph and, unlike it, no longer
-// truncates a multi-paragraph steer to its first paragraph (which wedged the durable queue forever).
-export function codexComposerMatches(escapedPane: string, expected: string): boolean {
-  const captured = captureCodexComposer(escapedPane)
-  if (captured.kind !== "typed" || captured.rows.length === 0) return false
-  const target = normalizedInput(expected)
-  if (!target) return false
-  const first = normalizedInput(captured.rows[0].text)
-  if (first === "" || !target.startsWith(first)) return false
-  let positions = new Set([first.length])
-  for (const row of captured.rows.slice(1)) {
-    // A blank row separated the previous paragraph from this row. If the target is already fully
-    // reconstructed, the draft ended at that paragraph and this row (plus the footer/status below it)
-    // is not part of the staged text — the composer is confirmed to hold exactly our message.
-    if (row.boundaryBefore && positions.has(target.length)) return true
-    // Codex renders its mode/status line (fields joined by " · ") TIGHT under the last draft line —
-    // no blank separator — when it RESTORES an unsent draft on `codex resume`. Without this, the DP
-    // would try to consume that status row, fail, and wedge a resumed thread on its OWN restored
-    // draft ("submit or clear the existing Codex terminal draft"). Once the target is fully
-    // reconstructed, a " · " status row is the footer boundary, exactly like a blank. A prose draft
-    // effectively never contains a " · " middot, so real multi-paragraph steers still fail closed.
-    if (row.text.includes(" · ") && positions.has(target.length)) return true
-    // A recognized footer hint ends the draft even when Codex renders it tight under the last line
-    // (no blank between). The old parts-based capture stopped at these markers regardless of blanks;
-    // preserving that keeps delivery robust if a future Codex build drops the pre-footer blank row.
-    // (The status/mode line has no such stable marker — it is handled only by the blank-boundary rule
-    // above, which is why a foreign draft whose leading paragraphs happen to exactly equal the queued
-    // text can still early-complete; that submit is a deliberate, near-impossible trade for never
-    // wedging a real multi-paragraph steer.)
-    if (row.dim && isCodexFooterHintText(row.text)) {
-      return positions.has(target.length)
-    }
-    const part = normalizedInput(row.text)
-    if (part === "") continue
-    // A paragraph break is exactly one space; a within-paragraph wrap is "" or " ".
-    const separators = row.boundaryBefore ? [" "] : ["", " "]
-    const next = new Set<number>()
-    for (const position of positions) {
-      for (const separator of separators) {
-        const token = separator + part
-        if (target.startsWith(token, position)) next.add(position + token.length)
-      }
-    }
-    if (next.size === 0) return false
-    positions = next
-  }
-  return positions.has(target.length)
-}
-
-// Codex heads its native queued-input block with one of several labels, each rendered after a bullet
-// glyph. Captured verbatim from codex-cli 0.144.6: Tab yields "• Queued follow-up inputs", Enter with a
-// tool call in flight yields "• Messages to be submitted after next tool call (press esc to interrupt and
-// send immediately)", and "Messages to be submitted at end of turn" is the third form. Matching only a
-// bare `Queued follow-ups` recognized NONE of them, so provider ownership never registered and every
-// steer queued behind a turn longer than CODEX_INPUT_CONFIRMATION_TIMEOUT_MS timed out into a false
-// fray-steer-failed. Anchoring at both ends still keeps a transcript line that merely mentions the
-// phrase from passing.
-const CODEX_QUEUED_BLOCK_LABEL =
-  /^(?:[•›]\s+)?(?:queued follow-?ups?(?:\s+inputs?)?(?:\s*\(\d+\)|\s*:\s*)?|messages to be submitted\b.*)$/i
-
-// After Tab or a mid-turn Enter, Codex can visibly own a queued follow-up before JSONL emits a
-// user_message. Require both its native label and the exact queued text in its bounded local section;
-// history text alone is never enough proof to suppress the fail-closed path. A queued message can span
-// many visual rows, so the block ends only at the next Codex composer marker (with a defensive line
-// cap), never after an arbitrary handful of wrapped lines.
-export function codexNativeQueuedInputMatches(escapedPane: string, expected: string): boolean {
-  const expectedText = normalizedInput(expected)
-  if (!expectedText) return false
-  const lines = escapedPane.split("\n").map((line) => normalizedInput(stripAnsi(line)))
-  for (let i = 0; i < lines.length; i++) {
-    if (!CODEX_QUEUED_BLOCK_LABEL.test(lines[i])) continue
-    const block: string[] = []
-    for (const line of lines.slice(i + 1, i + 241)) {
-      if (/^›(?:\s|$)/u.test(line)) break
-      block.push(line)
-    }
-    const visible = normalizedInput(block.join(" "))
-    if (visible.includes(expectedText)) return true
-  }
-  return false
-}
 
 // Claude's idle composer is the last `❯` row immediately above its footer divider. A trust prompt,
 // selector, or other modal may also use `❯`, but always carries text and therefore fails closed as a
@@ -367,28 +116,6 @@ export function inspectClaudeComposer(pane: string): ClaudeComposerState {
   return footer.every(idleFooter) ? { kind: "empty" } : { kind: "unavailable" }
 }
 
-// ONE key hands the composer to Codex in EVERY state. Verified against codex-cli 0.144.6: Enter submits
-// an idle composer, and mid-turn Codex takes it as a steer under "Messages to be submitted after next
-// tool call" — delivered at the next tool boundary, which is the whole point of steering. (Tab also
-// queues mid-turn, but under "Queued follow-up inputs", which Codex withholds until the turn ENDS, and
-// Tab doubles as the composer's completion key.)
-//
-// The key used to be derived from Codex's `tab to queue message` footer hint, which Codex renders ONLY
-// under a NON-EMPTY composer — an empty one carries the model/context status row instead. So the empty
-// composer a steer is pasted into could never advertise it, the key came out undefined, and EVERY steer
-// sent to a working thread parked on "waiting for an idle or queueable composer" until the turn happened
-// to end — or was lost outright when the session exited first. There is deliberately no "refuse to send"
-// branch left: an undelivered steer is the bug, and a key that fails to register still surfaces visibly
-// through the unchanged CODEX_INPUT_CONFIRMATION_TIMEOUT_MS barrier.
-const CODEX_SUBMIT_KEY = "Enter" as const
-
-// Codex is showing a native modal (tool approval, AskUserQuestion, permission prompt) that owns the
-// keyboard. Composer inspection already fails closed on most of these, but this is checked FIRST because
-// the controller now always sends: an Enter aimed at a modal would answer it.
-function codexModalHolds(tele: ReturnType<Tailer["get"]>): boolean {
-  return !!tele?.permPrompt || !!tele?.pendingAsk || !!tele?.nativeInputRequired
-}
-
 function pendingMode(value: unknown): PermissionModeValue | undefined {
   const parsed = PermissionMode.safeParse(value)
   return parsed.success ? parsed.data : undefined
@@ -408,7 +135,6 @@ export function createPermissionController(deps: PermissionControllerDeps): Perm
     sendTextWithKeyToExpectedAdoptionPane: tmux.sendTextWithKeyToExpectedAdoptionPane,
     sendKeyToExpectedAdoptionPane: tmux.sendKeyToExpectedAdoptionPane,
   }
-  const now = deps.now ?? Date.now
   let timer: NodeJS.Timeout | null = null
   const activePermissionRequests = new Set<string>()
 
@@ -434,212 +160,6 @@ export function createPermissionController(deps: PermissionControllerDeps): Perm
     return captured?.kind === "captured" ? captured.text : undefined
   }
 
-  function sendTextWithKeyOwned(row: SessionRow, text: string, key: "Enter" | "Tab"): boolean {
-    const binding = adoptionRuntimeBinding(deps.storage, row)
-    if (binding.kind === "conflict") return false
-    if (binding.kind === "bound") {
-      return terminal.sendTextWithKeyToExpectedAdoptionPane?.(binding.claim, text, key) === true
-    }
-    if (!terminal.isLive(row.slug)) return false
-    return terminal.sendTextWithKey?.(row.slug, text, key) === true
-  }
-
-  function sendKeyOwned(
-    row: SessionRow,
-    key: "Enter" | "Tab" | "Up" | "Down" | "Escape",
-  ): boolean {
-    const binding = adoptionRuntimeBinding(deps.storage, row)
-    if (binding.kind === "conflict") return false
-    if (binding.kind === "bound") {
-      return terminal.sendKeyToExpectedAdoptionPane?.(binding.claim, key) === true
-    }
-    if (!terminal.isLive(row.slug)) return false
-    terminal.sendKey(row.slug, key)
-    return true
-  }
-
-  function setError(slug: string, error: string | null): void {
-    const row = deps.storage.getSession(slug)
-    if (!row || (row.control_error ?? null) === error) return
-    if (deps.storage.setControlErrorIfCurrent(slug, row.session_id, row.runtime_generation ?? 0, error)) {
-      deps.board.refresh()
-    }
-  }
-
-  function writeQueue(slug: string, queue: QueuedInput[], expectedRow?: SessionRow): void {
-    const row = expectedRow ?? deps.storage.getSession(slug)
-    if (!row) throw new Error(`session ${slug} is no longer available`)
-    const saved = deps.storage.setCodexInputQueueIfCurrent(
-      slug,
-      {
-        sessionId: row.session_id,
-        generation: row.runtime_generation ?? 0,
-        queue: row.codex_input_queue ?? null,
-      },
-      queue.length ? JSON.stringify(queue) : null,
-    )
-    if (!saved) throw new Error("Codex input changed while this action was running; refresh and retry")
-    deps.board.refresh()
-  }
-
-  function ownCodexInput(row: SessionRow): SessionRow {
-    if (row.runtime_control === "codex-input") return row
-    if (row.runtime_control !== null && row.runtime_control !== undefined) {
-      throw new Error("Another runtime control is in progress; queued input was not changed")
-    }
-    const revision = deps.storage.beginRuntimeControl(row.slug, {
-      sessionId: row.session_id,
-      nativeSessionId: row.agent_session_id ?? null,
-      generation: row.runtime_generation ?? 0,
-    }, "codex-input")
-    if (revision === null) throw new Error("This thread changed before queued input could take control")
-    const owned = deps.storage.getSession(row.slug)
-    if (!owned || owned.session_id !== row.session_id || owned.runtime_control_revision !== revision) {
-      throw new Error("Queued input lost runtime ownership before it could be persisted")
-    }
-    return owned
-  }
-
-  function releaseCodexInput(row: SessionRow): void {
-    if (row.runtime_control !== "codex-input") return
-    deps.storage.releaseRuntimeControl(row.slug, {
-      sessionId: row.session_id,
-      generation: row.runtime_generation ?? 0,
-      kind: "codex-input",
-      revision: row.runtime_control_revision ?? 0,
-    })
-  }
-
-  function queueFollowUp(slug: string, message: string, deliveryId?: string): void {
-    let row = deps.storage.getSession(slug)
-    if (!row || row.backend !== "codex" || runtimeState(row) !== "live") {
-      throw new Error(`live Codex session ${slug} is not available`)
-    }
-    if (row.runtime_control !== null && row.runtime_control !== undefined && row.runtime_control !== "codex-input") {
-      throw new Error("Wait for the current runtime control to finish before sending a follow-up")
-    }
-    if (activePermissionRequests.has(slug) || row.permission_pending !== null && row.permission_pending !== undefined) {
-      throw new Error("Wait for the current permission change to finish before sending a follow-up")
-    }
-    if (!parseCodexInputQueue(row.codex_input_queue).valid) {
-      throw new Error("Durable Codex input state is invalid; clear or repair it before sending another follow-up")
-    }
-    row = ownCodexInput(row)
-    if (row.state === "archived" || row.archived === 1) {
-      if (!deps.storage.setStateIfCurrent(slug, row.session_id, row.runtime_generation ?? 0, "open")) {
-        throw new Error("The thread changed before it could be reopened; no input was queued")
-      }
-    }
-    const queue = parseInputQueue(row.codex_input_queue)
-    if (deliveryId) {
-      const existing = queue.find((item) => item.deliveryId === deliveryId)
-      if (existing) {
-        if (existing.text !== message) throw new Error("Wake delivery id was reused with different input")
-        setError(slug, null)
-        return
-      }
-    }
-    queue.push({ text: message, enqueuedAt: new Date(now()).toISOString(), state: "pending", ...(deliveryId ? { deliveryId } : {}) })
-    writeQueue(slug, queue, row)
-    setError(slug, null)
-    tickInput(slug)
-  }
-
-  function submitExistingDraft(slug: string): { effect: "submitted" } {
-    let row = deps.storage.getSession(slug)
-    if (!row || row.backend !== "codex" || runtimeState(row) !== "live") throw new Error(`live Codex session ${slug} is not available`)
-    if (row.runtime_control !== null && row.runtime_control !== undefined && row.runtime_control !== "codex-input") {
-      throw new Error("Wait for the current runtime control to finish before submitting the draft")
-    }
-    if (activePermissionRequests.has(slug) || row.permission_pending !== null && row.permission_pending !== undefined) {
-      throw new Error("Wait for the current permission change to finish before submitting the draft")
-    }
-    if (!parseCodexInputQueue(row.codex_input_queue).valid) {
-      throw new Error("Durable Codex input state is invalid; clear or repair it before submitting the draft")
-    }
-    row = ownCodexInput(row)
-    const escaped = captureOwned(row, true) ?? ""
-    const pane = stripAnsi(escaped || captureOwned(row, false) || "")
-    if (pane.includes("Press enter to confirm or esc to go back")) {
-      throw new Error("Codex is showing a modal; resolve it in Terminal before submitting the draft")
-    }
-    const composer = inspectCodexComposer(escaped)
-    if (composer.kind !== "typed" || !composer.text) throw new Error("No nonempty Codex terminal draft is available to submit")
-    if (codexModalHolds(deps.tailer.get(slug))) {
-      throw new Error("Codex is showing a modal; resolve it in Terminal before submitting the draft")
-    }
-
-    const queue = parseInputQueue(row.codex_input_queue)
-    if (queue.some((item) => item.source === "existing-draft" && item.state === "submitted")) {
-      throw new Error("The existing Codex draft was already submitted and is awaiting transcript confirmation")
-    }
-    // Persist the recovery barrier BEFORE the key. The queued follow-up and permission request cannot
-    // overtake it, and a control-plane restart waits for the same rollout confirmation.
-    queue.unshift({
-      text: composer.text,
-      enqueuedAt: new Date(now()).toISOString(),
-      state: "submitted",
-      submittedAt: new Date(now()).toISOString(),
-      source: "existing-draft",
-      match: "normalized",
-    })
-    writeQueue(slug, queue, row)
-    setError(slug, null)
-    if (!sendKeyOwned(row, CODEX_SUBMIT_KEY)) throw new Error("Codex runtime identity changed before the draft could be submitted")
-    return { effect: "submitted" }
-  }
-
-  // This intentionally does not clear, type, or submit anything. tmux can atomically authorize a
-  // pane identity, but cannot atomically compare its rendered composer with this capture and then
-  // replace it. Returning only the queued text gives the operator a safe terminal-mediated path:
-  // copying it cannot lose or duplicate either message if Codex redraws between capture and paste.
-  function prepareCodexDraftReplacement(slug: string): { queuedMessage: string } {
-    let row = deps.storage.getSession(slug)
-    if (!row || row.backend !== "codex" || runtimeState(row) !== "live") throw new Error(`live Codex session ${slug} is not available`)
-    if (row.runtime_control !== null && row.runtime_control !== undefined && row.runtime_control !== "codex-input") {
-      throw new Error("Wait for the current runtime control to finish before preparing terminal recovery")
-    }
-    if (!parseCodexInputQueue(row.codex_input_queue).valid) {
-      throw new Error("Durable Codex input state is invalid; Fray will not disclose or discard queued input")
-    }
-    const queue = parseInputQueue(row.codex_input_queue)
-    const queued = queue[0]
-    if (!queued || queued.state !== "pending" || queued.source === "existing-draft") {
-      throw new Error("No pending Codex follow-up is available for terminal replacement")
-    }
-    const escaped = captureOwned(row, true) ?? ""
-    const composer = inspectCodexComposer(escaped)
-    if (composer.kind !== "typed" || !composer.text) {
-      throw new Error("The existing Codex terminal draft changed; refresh and inspect Terminal before replacing it")
-    }
-    return { queuedMessage: queued.text }
-  }
-
-  function clearAmbiguousCodexInput(slug: string): { effect: "cleared" } {
-    let row = deps.storage.getSession(slug)
-    if (!row || row.backend !== "codex") throw new Error(`Codex session ${slug} is not available`)
-    if (row.runtime_control !== null && row.runtime_control !== undefined && row.runtime_control !== "codex-input") {
-      throw new Error("Wait for the current runtime control to finish before clearing queued input")
-    }
-    if (!parseCodexInputQueue(row.codex_input_queue).valid) {
-      throw new Error("Durable Codex input state is invalid and cannot be cleared as a submitted message")
-    }
-    row = ownCodexInput(row)
-    const queue = parseInputQueue(row.codex_input_queue)
-    const item = queue[0]
-    const submittedAt = item?.submittedAt ? Date.parse(item.submittedAt) : NaN
-    if (item?.state !== "submitted" || !Number.isFinite(submittedAt) || now() - submittedAt < CODEX_INPUT_CONFIRMATION_TIMEOUT_MS) {
-      throw new Error("No timed-out unconfirmed Codex submission is available to clear")
-    }
-    // This is an acknowledgement barrier, not a retry: remove exactly the ambiguous head item and
-    // never replay its key or text. It may have reached Codex, so the UI tells the human to inspect the
-    // transcript before choosing whether to send anything again.
-    queue.shift()
-    writeQueue(slug, queue, row)
-    if (queue.length === 0) releaseCodexInput(row)
-    setError(slug, null)
-    return { effect: "cleared" }
-  }
 
   function failRequest(slug: string, message: string, expected?: RuntimeExpectation): never {
     let row = deps.storage.getSession(slug)
@@ -769,22 +289,12 @@ export function createPermissionController(deps: PermissionControllerDeps): Perm
     if (unresolvedOps > 0) {
       failRequest(slug, `Permission changes require no unresolved background work; wait for ${unresolvedOps} operation${unresolvedOps === 1 ? "" : "s"}`)
     }
-    const durableQueue = parseCodexInputQueue(row.codex_input_queue)
-    if (!durableQueue.valid) {
-      failRequest(slug, "Durable Codex input state is invalid; repair it before changing permissions")
-    }
-    if (durableQueue.items.length > 0) {
-      failRequest(slug, "Wait for the queued Codex input to finish before changing permissions")
-    }
-
-    const composer = row.backend === "codex"
-      ? inspectCodexComposer(captureOwned(row, true) ?? "")
-      : inspectClaudeComposer(captureOwned(row, false) ?? "")
+    const composer = inspectClaudeComposer(captureOwned(row, false) ?? "")
     if (composer.kind === "typed") {
-      failRequest(slug, `Permission change blocked: submit or clear the existing ${row.backend === "codex" ? "Codex" : "Claude"} terminal draft`)
+      failRequest(slug, "Permission change blocked: submit or clear the existing Claude terminal draft")
     }
     if (composer.kind !== "empty") {
-      failRequest(slug, `Permission change blocked by the current ${row.backend === "codex" ? "Codex" : "Claude"} terminal screen; return it to the idle prompt`)
+      failRequest(slug, "Permission change blocked by the current Claude terminal screen; return it to the idle prompt")
     }
     if (!deps.reattach) failRequest(slug, "Live permission changes are unavailable in this Fray server; restart Fray and retry")
 
@@ -883,156 +393,6 @@ export function createPermissionController(deps: PermissionControllerDeps): Perm
     }
   }
 
-  // Every genuine human message the fold still remembers, OLDEST FIRST. Codex releases its whole native
-  // queue at one tool boundary, so a batch of steers can land as several user records inside a single
-  // fold — reading only the `lastUserText` scalar would see the batch's LAST message and leave every
-  // earlier item permanently unconfirmed. The scalar pair remains the fallback for a backend (or an
-  // older persisted fold) that carries no ring.
-  function observedUserTexts(slug: string): { text: string; at: string }[] {
-    const tele = deps.tailer.get(slug)
-    if (tele?.recentUserTexts?.length) return tele.recentUserTexts
-    return tele?.lastUserText && tele.lastUserAt ? [{ text: tele.lastUserText, at: tele.lastUserAt }] : []
-  }
-
-  function deliveryEvidence(item: QueuedInput, slug: string): { observedAt: string; observedMs: number } | undefined {
-    const eligibleAt = Date.parse(item.state === "submitted" ? item.submittedAt ?? "" : item.enqueuedAt)
-    if (!Number.isFinite(eligibleAt)) return undefined
-    const reconcileAfter = item.reconcileAfter ? Date.parse(item.reconcileAfter) : NaN
-
-    // Oldest first, so a batch reconciles in the order Codex delivered it and each queue item consumes
-    // its OWN record rather than the newest one.
-    for (const observed of observedUserTexts(slug)) {
-      const textMatches = item.match === "normalized" ? normalizedInput(observed.text) === item.text : observed.text === item.text
-      if (!textMatches) continue
-      const observedMs = Date.parse(observed.at)
-      if (!Number.isFinite(observedMs) || observedMs < eligibleAt) continue
-      if (Number.isFinite(reconcileAfter) && observedMs <= reconcileAfter) continue
-      return { observedAt: observed.at, observedMs }
-    }
-    return undefined
-  }
-
-  function consumeDeliveryEvidence(queue: QueuedInput[], evidence: { observedAt: string; observedMs: number }): void {
-    queue.shift()
-    for (const item of queue) {
-      const current = item.reconcileAfter ? Date.parse(item.reconcileAfter) : NaN
-      if (!Number.isFinite(current) || current < evidence.observedMs) item.reconcileAfter = evidence.observedAt
-    }
-  }
-
-  // Returns true while a queued input owns or is waiting for the composer; a permission reattach must
-  // stay behind it. New input is pasted and submitted by one tmux command queue after its durable
-  // barrier is written, so Fray never has to rediscover its own multiline draft from screen text.
-  function tickInput(slug: string): boolean {
-    let row = deps.storage.getSession(slug)
-    if (!row) return false
-    if (row.runtime_control !== null && row.runtime_control !== undefined && row.runtime_control !== "codex-input") {
-      return true
-    }
-    const parsed = parseCodexInputQueue(row.codex_input_queue)
-    if (!parsed.valid) {
-      setError(slug, "Durable Codex input state is invalid; Fray will not type or discard any part of it")
-      return true
-    }
-    const queue = parsed.items
-    if (queue.length === 0) {
-      releaseCodexInput(row)
-      return false
-    }
-    if (row.runtime_control === null || row.runtime_control === undefined) row = ownCodexInput(row)
-    const item = queue[0]
-    const evidence = deliveryEvidence(item, slug)
-    if (evidence) {
-      consumeDeliveryEvidence(queue, evidence)
-      writeQueue(slug, queue, row)
-      if (queue.length === 0) releaseCodexInput(row)
-      setError(slug, null)
-      return queue.length > 0
-    }
-    if (item.state === "submitted" && item.submittedAt) {
-      // Persist provider ownership as soon as we can positively witness it. The TUI can later
-      // scroll this block out of capture while the queued message remains owned by Codex; looking
-      // only at the timeout capture would turn that successful handoff into a false failure.
-      if (!item.providerQueuedAt) {
-        const escaped = captureOwned(row, true) ?? ""
-        if (codexNativeQueuedInputMatches(escaped, item.text)) {
-          item.providerQueuedAt = new Date(now()).toISOString()
-          writeQueue(slug, queue, row)
-          setError(slug, null)
-          return true
-        }
-        const submittedAt = Date.parse(item.submittedAt)
-        if (Number.isFinite(submittedAt) && now() - submittedAt >= CODEX_INPUT_CONFIRMATION_TIMEOUT_MS) {
-          // Without transcript confirmation or native ownership, delivery is indeterminate. Drop
-          // only Fray's barrier and surface a compact failure signal; the browser restores its draft.
-          // Retrying would risk duplicating provider-visible input, so there is intentionally none.
-          queue.shift()
-          writeQueue(slug, queue, row)
-          if (queue.length === 0) releaseCodexInput(row)
-          setError(slug, `${STEER_FAILURE_PREFIX}${item.deliveryId ?? ""}`)
-          return queue.length > 0
-        }
-      }
-      // An awaited head deliberately does NOT block the rest of the queue any more — see the batch below.
-    }
-    const liveState = runtimeState(row)
-    if (liveState !== "live") {
-      setError(slug, item.state === "submitted"
-        ? "Waiting for confirmation of the last Codex submission"
-        : liveState === "conflict" || liveState === "unavailable"
-          ? "Queued Codex message is blocked because this thread's exact runtime identity is unavailable"
-          : "Queued Codex message was not submitted before the session exited; send another follow-up to resume")
-      return true
-    }
-    if (!queue.some((queued) => queued.state === "pending")) return true
-
-    if (codexModalHolds(deps.tailer.get(slug))) {
-      setError(slug, "Queued message blocked by an ambiguous Codex composer or modal; resolve it in Terminal")
-      return true
-    }
-    // Hand EVERY still-pending item to Codex in this one tick rather than releasing them one per turn.
-    // Codex's native queue holds the whole list ("Messages to be submitted after next tool call"
-    // enumerates each) and delivers them TOGETHER at the next tool boundary, so a burst of steers reaches
-    // the model as one batch — which is what the human meant by sending them. Waiting for each item's
-    // transcript confirmation before releasing the next one instead spent a whole model turn per message.
-    for (const queued of queue) {
-      if (queued.state !== "pending") continue
-      // Re-read the composer before EVERY paste. If the previous item's key did not register, its text
-      // is still sitting in the composer, and pasting on top would splice two steers into one message.
-      const escaped = captureOwned(row, true) ?? ""
-      const composer = inspectCodexComposer(escaped)
-      const submitInPlace = composer.kind === "typed" && codexComposerMatches(escaped, queued.text)
-      if (composer.kind !== "empty" && !submitInPlace) {
-        setError(slug, composer.kind === "typed"
-          ? "Queued message blocked: submit or clear the existing Codex terminal draft"
-          : "Queued message blocked by an ambiguous Codex composer or modal; resolve it in Terminal")
-        return true
-      }
-      // Persist the barrier before the key. A crash in between can leave an item safely awaiting
-      // confirmation, but can never replay a key that Codex may already have handled.
-      queued.state = "submitted"
-      queued.submittedAt = new Date(now()).toISOString()
-      writeQueue(slug, queue, row)
-      setError(slug, null)
-      const delivered = submitInPlace
-        ? sendKeyOwned(row, CODEX_SUBMIT_KEY)
-        : sendTextWithKeyOwned(row, queued.text, CODEX_SUBMIT_KEY)
-      if (!delivered) {
-        setError(slug, submitInPlace
-          ? "Queued Codex message was not submitted because the worker identity changed"
-          : "Queued Codex submission could not be confirmed; Fray will not retry it automatically")
-        return true
-      }
-      // Each write CASes against the queue value this row was read with, so the next item in the batch
-      // needs the row the write just produced. A generation/session change mid-batch means this tick no
-      // longer owns the runtime: stop and let the next tick re-derive ownership from scratch.
-      const current = deps.storage.getSession(slug)
-      if (!current || current.session_id !== row.session_id || (current.runtime_generation ?? 0) !== (row.runtime_generation ?? 0)) return true
-      row = current
-    }
-    return true
-  }
-
   function tick(): void {
     for (const row of deps.storage.allSessions()) {
       if (row.permission_pending !== null && row.permission_pending !== undefined) {
@@ -1080,19 +440,12 @@ export function createPermissionController(deps: PermissionControllerDeps): Perm
         )) {
           deps.board.refresh()
         }
-        continue
       }
-
-      tickInput(row.slug)
     }
   }
 
   return {
     request,
-    queueFollowUp,
-    submitExistingDraft,
-    prepareCodexDraftReplacement,
-    clearAmbiguousCodexInput,
     tick,
     start() {
       if (timer) return

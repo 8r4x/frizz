@@ -1,6 +1,5 @@
 import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, statSync, writeFileSync, renameSync, mkdirSync, rmSync, type Stats } from "node:fs"
 import { basename, join, resolve, dirname } from "node:path"
-import { tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { createHash, randomUUID } from "node:crypto"
 import {
@@ -19,7 +18,7 @@ import type { BoardManager } from "./board.ts"
 import type { AgentBackend, BackendKind, BuiltCommand, SpawnThreadMcp } from "./backend/types.ts"
 import { CHROME_DEVTOOLS_MCP } from "./backend/types.ts"
 import { buildWorkerPrompt } from "./workerPrompt.ts"
-import { ensureCwdTrusted, discoverCodexRollout, codexSessionSentinel, codexSandbox, CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS } from "./backend/codex.ts"
+import { codexSandbox, CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS } from "./backend/codex.ts"
 import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
 import { ProviderAuthRequiredError } from "./backend/auth-status.ts"
 import { readBoard, type FrayBoard, type FrayThread } from "./fray.ts"
@@ -546,49 +545,6 @@ export function buildClaudeResumeCommand(opts: {
   return argv
 }
 
-// Codex rollout-discovery timeout: session_meta normally appears within hundreds of ms, followed by
-// the first user_message carrying Fray's ownership sentinel. Stay bounded, but never weaken that proof
-// to cwd-only matching while we wait (concurrent workers intentionally share cwd).
-// Two simultaneous cold Codex 0.144.1 starts were observed to serialize enough initialization that
-// the second wrote session_meta/task_started immediately but its sentinel-bearing user record landed
-// after 5s. Fifteen seconds keeps failure bounded without rejecting a healthy concurrent launch.
-const CODEX_DISCOVERY_TIMEOUT_MS = 15_000
-const CODEX_DISCOVERY_INTERVAL_MS = 100
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
-
-// ---- codex prompt transport (tmux command-length dodge) ----
-// The codex worker-contract rides the PROMPT (the resolved prompt-prepend decision), so codex's prompt
-// argv is the full contract (~18KB) — passing it inline on the `tmux new-session` command line exceeds
-// tmux's command-length limit and fails EVERY codex spawn (the SAME limit Claude dodges by writing its
-// system prompt to a file and passing a short `--append-system-prompt-file <path>`). Codex has no
-// prompt-file flag, so we spill the prompt to a temp file and rebuild argv as a tiny `sh -c` wrapper
-// that reads it at exec time — the tmux command stays short, and codex still receives the identical
-// prompt as its trailing positional arg (nothing pollutes the repo/global config — the temp file is a
-// transient transport artifact, NOT an on-disk AGENTS.md). This lives in the DISPATCH layer (like
-// Claude's systemPromptFlags), leaving the CodexBackend's argv contract untouched.
-const CODEX_PROMPT_DIR = join(tmpdir(), "fray-codex-prompts")
-// POSIX single-quote a shell token (wrap in '' and escape embedded quotes) so the wrapper script can't
-// word-split or interpret the codex flags (cwd/model/effort values).
-function shQuote(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`
-}
-// Rewrite a codex BuiltCommand so its (large) trailing prompt argv travels via a temp file instead of
-// the tmux command line. The prompt is ALWAYS the last argv element (codex takes it as the trailing
-// positional). Adds the temp file to prewrite (dispatch writes it before spawn).
-function transportCodexPrompt(built: BuiltCommand, sessionId: string): BuiltCommand {
-  const prompt = built.argv[built.argv.length - 1]
-  const head = built.argv.slice(0, -1)
-  mkdirSync(CODEX_PROMPT_DIR, { recursive: true })
-  const promptFile = join(CODEX_PROMPT_DIR, `${sessionId}.txt`)
-  // sh -c '<script>' <$0> <$1=promptFile>: `"$(cat "$1")"` re-hydrates the prompt as ONE arg at exec.
-  const script = `exec ${head.map(shQuote).join(" ")} "$(cat "$1")"`
-  return {
-    ...built,
-    argv: ["sh", "-c", script, "fray-codex", promptFile],
-    prewrite: [...built.prewrite, { path: promptFile, contents: prompt, mode: 0o600 }],
-  }
-}
-
 export interface Dispatcher {
   // `opts.backend` selects the agent backend for THIS dispatch (Codex-support epic, Phase 2); omitted /
   // "claude" is the default, so the RPC path (which passes no opts until the Phase-3 UI picker wires
@@ -621,20 +577,13 @@ export interface DispatchDeps {
   // Injected by the composition layer (context.ts); when absent (tests) dispatch falls back to the
   // local Claude argv builder, producing a byte-identical command. Selected by `opts.backend`.
   backendFor?: (kind?: string) => AgentBackend
-  // The Codex app-server bridge (context.ts, when FRAY_CODEX_APP_SERVER_BRIDGE=1). When present, a
-  // codex dispatch runs over the JSON-RPC bridge (persisted session + turn/start) instead of the tmux
-  // TUI. Absent ⇒ the legacy tmux path, unchanged.
+  // The Codex app-server bridge (context.ts). A codex dispatch runs SOLELY over the JSON-RPC bridge
+  // (persisted session + turn/start); there is no tmux TUI transport. Absent ⇒ a codex dispatch fails
+  // loudly rather than falling back to a retired path.
   codexAppServer?: CodexAppServerBridge
-  // $CODEX_HOME override for the codex trust pre-arm + rollout discovery (tests inject a tmp dir);
-  // unset → the codex default (~/.codex), matching the CodexBackend the composition layer built.
-  codexHome?: string
   // Failure cleanup targets only the exact freshly-spawned slug. Injectable so timeout tests can prove
   // no neighboring tmux session is touched.
   killSession?: typeof tmux.killSession
-  // Deterministic discovery timing seams. Production uses the bounded 15s/100ms policy above.
-  codexDiscoveryTimeoutMs?: number
-  codexDiscoveryIntervalMs?: number
-  codexDiscoverySleep?: (ms: number) => Promise<void>
   // Provider auth preflight (claude-auth plan, Slice A): resolves the target provider's credential
   // state BEFORE any thread state exists; a positive "signed-out" rejects the dispatch with
   // ProviderAuthRequiredError. Injected by the composition layer (context.ts: `claude auth status
@@ -689,10 +638,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         effort: o.effort,
         spawnThreadMcp,
       })
-      // Codex inlines the ~18KB worker contract into its prompt argv — too long for the tmux command
-      // line. Spill it to a temp file (see transportCodexPrompt). Claude already writes its system
-      // prompt to a file, so its argv is short — left untouched.
-      return o.kind === "codex" ? transportCodexPrompt(built, o.sessionId) : built
+      return built
     }
     const argv = buildClaudeCommand({
       sessionId: o.sessionId,
@@ -707,28 +653,6 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       spawnThreadMcp,
     })
     return { argv, env: claudeWorkerEnvironment(), prewrite: [] }
-  }
-
-  // Codex has NO --session-id pin: the rollout id is minted by codex and only knowable once it writes
-  // session_meta (a beat after spawn). Poll the sentinel-based discovery briefly until the rollout
-  // appears, so the pinned id is on the row before the tailer first sights it. Bounded so a Codex that
-  // never records its first prompt cannot hang dispatch. A timeout is a dispatch FAILURE: the caller
-  // tears down only this just-spawned slug and writes no row, instead of returning a stranded session
-  // with a null/wrong native id.
-  async function discoverCodexRolloutWithRetry(o: { sessionId: string; spawnedAtMs: number }): Promise<string | undefined> {
-    const sentinel = codexSessionSentinel(o.sessionId)
-    const timeoutMs = Math.max(0, deps.codexDiscoveryTimeoutMs ?? CODEX_DISCOVERY_TIMEOUT_MS)
-    const intervalMs = Math.max(1, deps.codexDiscoveryIntervalMs ?? CODEX_DISCOVERY_INTERVAL_MS)
-    const wait = deps.codexDiscoverySleep ?? sleep
-    let elapsed = 0
-    for (;;) {
-      const found = discoverCodexRollout({ cwd: deps.project.dir, spawnedAtMs: o.spawnedAtMs, sentinel, codexHome: deps.codexHome })
-      if (found) return found.sessionId
-      if (elapsed >= timeoutMs) return undefined
-      const delay = Math.min(intervalMs, timeoutMs - elapsed)
-      await wait(delay)
-      elapsed += delay
-    }
   }
 
   function writePrewrites(built: BuiltCommand): void {
@@ -803,15 +727,20 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
 
       // Codex app-server transport: a PERSISTED JSON-RPC session + the prompt as its first turn. No
       // tmux pane and no rollout discovery — the bridge returns the codex session id, which the tailer
-      // locates on disk exactly like a discovered rollout (identical filename suffix). Gated on the
-      // bridge being present (FRAY_CODEX_APP_SERVER_BRIDGE); the tmux path below is byte-identical when
-      // the bridge is absent. The worker contract + scratchpad orientation ride baseInstructions, and
-      // the fray title protocol rides developerInstructions (vs the tmux path inlining both).
-      if (kind === "codex" && deps.codexAppServer) {
+      // locates on disk exactly like a discovered rollout (identical filename suffix). This is the SOLE
+      // codex transport: the tmux TUI path was retired, so a codex dispatch that can't reach the bridge
+      // fails loudly rather than degrading. The worker contract + scratchpad orientation ride
+      // baseInstructions, and the fray title protocol rides developerInstructions.
+      if (kind === "codex") {
+        const bridge = deps.codexAppServer
+        if (!bridge) {
+          cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
+          throw new Error("Codex app-server is unavailable; cannot start this thread. Check that `codex` is installed and its app-server protocol matches the pinned revision (re-pin if you upgraded codex).")
+        }
         const extraSystemPrompt = [scratchpadOrientation(sessionId, planPath, kind), frayConfigBlock(deps.project.dir)]
           .filter(Boolean).join("\n\n")
         try {
-          const spawned = await deps.codexAppServer.spawnDispatch({
+          const spawned = await bridge.spawnDispatch({
             threadSlug: slug,
             sessionId,
             cwd: deps.project.dir,
@@ -855,7 +784,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           // installed codex drifted from the pinned protocol), fail LOUDLY with an actionable hint rather
           // than silently degrading to the retired TUI path. Clean up the scratchpad + any partial bridge
           // binding so a failed dispatch leaves no trace.
-          try { deps.codexAppServer.releaseSession(slug, sessionId, "session-deleted") } catch { /* best-effort */ }
+          try { bridge.releaseSession(slug, sessionId, "session-deleted") } catch { /* best-effort */ }
           cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
           throw new Error(`Codex app-server could not start this thread: ${(err as Error).message}. Check that \`codex\` is installed and its app-server protocol matches the pinned revision (re-pin if you upgraded codex).`)
         }
@@ -871,13 +800,6 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         kind,
         runtimeGate,
       })
-
-      // Codex TUI blocks on a "Do you trust this directory?" modal for an untrusted cwd — an unattended
-      // worker would hang forever. Pre-arm the persisted-trust entry BEFORE spawn (idempotent global
-      // ~/.codex/config.toml write; respects an existing block — see ensureCwdTrusted). Claude never
-      // touches it. [maintainer-approved global write — Codex-support epic ⚖.]
-      if (kind === "codex") ensureCwdTrusted(deps.project.dir, deps.codexHome)
-      const spawnedAtMs = Date.now()
 
       // Spawn BEFORE writing the registry row so a spawn failure never strands a contentless row on
       // the board (C1). If the spawn throws, roll back the scratchpad we just provisioned too — a
@@ -898,40 +820,6 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         throw err
       }
 
-      // Codex mints its own rollout id — discover it (sentinel-matched, race-proof across concurrent
-      // same-cwd dispatches) so it's pinned on the row BEFORE the tailer first sights it (else the
-      // tailer can't locate the rollout). Never register a Codex row without that ownership proof:
-      // resume would otherwise target the Fray UUID (not Codex's id) and silently attach incorrectly.
-      let agentSessionId: string | undefined
-      if (kind === "codex") {
-        try {
-          agentSessionId = await discoverCodexRolloutWithRetry({ sessionId, spawnedAtMs })
-        } catch (err) {
-          try {
-            killSession(slug)
-          } catch {
-            // Preserve the discovery error; production killSession is already idempotent/best-effort.
-          }
-          cleanupDispatchFiles(scratchRel, built, sessionId)
-          throw err
-        }
-        if (!agentSessionId) {
-          try {
-            killSession(slug)
-          } catch {
-            // The slug is still never registered or confused with a neighboring session.
-          }
-          cleanupDispatchFiles(scratchRel, built, sessionId)
-          throw new Error(
-            `Codex started, but Fray could not verify its rollout within ${Math.max(0, deps.codexDiscoveryTimeoutMs ?? CODEX_DISCOVERY_TIMEOUT_MS)}ms. The unregistered worker was stopped; please retry.`,
-          )
-        }
-        // Seeing this dispatch's exact sentinel proves Codex already consumed the prompt transport.
-        // Remove only these session-id-keyed prewrites before returning; successful dispatches must
-        // not accumulate full user tasks/contracts in a shared temp directory.
-        cleanupPrewrites(built)
-      }
-
       deps.storage.upsertSession({
         slug,
         session_id: sessionId,
@@ -941,8 +829,8 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         unread: 0,
         exited: 0,
         archived: 0,
-        // No explicit human title → backend telemetry becomes the display name. Codex's neutral slug
-        // fallback is intentionally never rendered as a title; Claude retains its historical fallback.
+        // No explicit human title → backend telemetry becomes the display name; Claude retains its
+        // historical fallback.
         rested_at: null,
         title_auto: input.title?.trim() ? 0 : 1,
         title: registryTitle,
@@ -950,18 +838,11 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         meta: null,
         seen_at: null,
         plan_path: planPath,
-        transcript_id: null, // discovery caches this later only if the transcript drifts off <session_id>.jsonl
+        transcript_id: null,
         model: model ?? null,
         effort: effort ?? null,
         permission_mode: permissionMode,
       })
-      // Codex pins live OFF the shared upsert (whose named-param statement every claude caller feeds):
-      // stamp the backend + the discovered rollout id AFTER the row exists. Claude skips both, so its
-      // `backend` stays the column DEFAULT 'claude' and `agent_session_id` stays NULL — untouched.
-      if (kind === "codex") {
-        deps.storage.setBackend(slug, kind)
-        deps.storage.setAgentSession(slug, agentSessionId!)
-      }
 
       // Respond immediately — the client switches views on the slug; the rebuild (a shell-out to
       // the fray board scripts) fans out over SSE moments later.

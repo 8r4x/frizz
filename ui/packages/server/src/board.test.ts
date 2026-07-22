@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { InteractionRequest } from "@fray-ui/shared"
-import { codexInputIsAmbiguous, createBoard, deriveNeedsYou, degradeIfNoTranscript, queuedInputCount, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle } from "./board.ts"
+import { createBoard, deriveNeedsYou, degradeIfNoTranscript, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle } from "./board.ts"
 import { Bus } from "./bus.ts"
 import { createStorage } from "./storage.ts"
 import type { Project } from "./project.ts"
@@ -84,54 +84,6 @@ test("resolveSessionPermission: exposes only a persisted valid per-thread mode; 
     "bypassPermissions",
     "a later backend-observed Codex transition wins",
   )
-})
-
-test("queuedInputCount: valid durable arrays count; malformed state degrades to zero", () => {
-  assert.equal(queuedInputCount('[{"text":"a"},{"text":"b"}]'), 2)
-  assert.equal(queuedInputCount("not json"), 0)
-  assert.equal(queuedInputCount(null), 0)
-})
-
-test("codexInputIsAmbiguous: only a timed-out submitted head exposes recovery", () => {
-  const submitted = JSON.stringify([{ state: "submitted", submittedAt: "1970-01-01T00:00:01.000Z" }])
-  assert.equal(codexInputIsAmbiguous(submitted, 30_999), false)
-  assert.equal(codexInputIsAmbiguous(submitted, 31_000), true)
-  assert.equal(codexInputIsAmbiguous(JSON.stringify([{ state: "pending", submittedAt: "1970-01-01T00:00:01.000Z" }]), 31_000), false)
-  assert.equal(codexInputIsAmbiguous("not json", 31_000), false)
-})
-
-test("board exposes only the safe Codex queued-follow-up capability, never a raw runtime owner", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-board-codex-queue-"))
-  const project: Project = { dir, id: "board-codex-queue", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
-  const storage = createStorage(join(dir, "ui.db"))
-  storage.upsertSession(row({
-    slug: "codex-queue",
-    tmux_name: "fray-codex-queue",
-    backend: "codex",
-    runtime_control: "codex-input",
-    codex_input_queue: JSON.stringify([{ text: "first", enqueuedAt: T0, state: "pending" }]),
-  }))
-  storage.setBackend("codex-queue", "codex")
-  const tailer = {
-    get: () => undefined,
-    foreignIds: () => [],
-    subAgent: () => undefined,
-    forget: () => {},
-    start: () => {},
-    stop: () => {},
-    tick: () => {},
-  } satisfies Tailer
-  const board = createBoard(project, storage, new Bus(), tailer, "codex-queue-boot")
-  try {
-    const thread = (await board.snapshot()).threads.find((candidate) => candidate.id === "codex-queue")!
-    assert.equal(thread.runtimeControlPending, true)
-    assert.equal(thread.followUpQueueAvailable, true)
-    assert.equal(thread.queuedInputCount, 1)
-  } finally {
-    board.stop()
-    storage.close()
-    rmSync(dir, { recursive: true, force: true })
-  }
 })
 
 test("resolveSessionTitle: a human title suppresses stale transcript names; generated fallbacks may use them", () => {

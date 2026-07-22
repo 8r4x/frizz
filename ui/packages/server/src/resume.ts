@@ -16,8 +16,7 @@ import type {
 } from "./storage.ts"
 import type { BoardManager } from "./board.ts"
 import type { AgentBackend } from "./backend/types.ts"
-import { ensureCwdTrusted } from "./backend/codex.ts"
-import { inspectClaudeComposer, inspectCodexComposer, parseCodexInputQueue } from "./permission-controller.ts"
+import { inspectClaudeComposer } from "./permission-controller.ts"
 import {
   buildClaudeResumeCommand,
   claudeWorkerEnvironment,
@@ -112,9 +111,6 @@ export interface ResumeDeps {
   // Injected by the composition layer; when absent (tests) resume falls back to the local Claude resume
   // builder. Resolved by the row's `backend` column so a codex row resumes via `codex resume`.
   backendFor?: (kind?: string) => AgentBackend
-  // $CODEX_HOME override for the codex trust pre-arm (tests inject a tmp dir); unset → the codex default
-  // (~/.codex), matching the CodexBackend the composition layer built.
-  codexHome?: string
   // Tests can replace the bounded post-spawn liveness probe. Production waits across a short
   // stability window so a CLI that rejects its resume/auth arguments cannot masquerade as applied.
   permissionReady?: (slug: string) => Promise<boolean>
@@ -126,12 +122,6 @@ function permissionModeForRow(row: SessionRow, settings: Settings): PermissionMo
   const saved = PermissionMode.safeParse(row.permission_mode)
   const requested = saved.success ? saved.data : settings.permissionMode
   return effectivePermissionMode(row.backend === "codex" ? "codex" : "claude", requested)
-}
-
-export function hasUnconfirmedCodexSubmission(row: Pick<SessionRow, "backend" | "codex_input_queue">): boolean {
-  if (row.backend !== "codex" || !row.codex_input_queue) return false
-  const parsed = parseCodexInputQueue(row.codex_input_queue)
-  return !parsed.valid || parsed.items.some((item) => item.state === "submitted")
 }
 
 // Build + spawn the backend-native resume invocation. `message` omitted means REATTACH ONLY: open the
@@ -153,7 +143,6 @@ function spawnPinnedSession(
   // dispatch produced and re-set the env the session-seed hook reads — otherwise an opted-out project
   // would silently get the RUNTIME RELEASE GATE forced back on the moment its worker respawns.
   const runtimeGate = deps.getSettings().runtimeGate !== false
-  if (row.backend === "codex") ensureCwdTrusted(deps.project.dir, deps.codexHome)
   const spawnThreadMcp = resolveSpawnThreadMcp(deps.project.stateDir)
   const built = backend
     ? backend.buildResume({
@@ -250,13 +239,11 @@ async function permissionProcessStayedLive(
       if (!expectedIdentity && expectedPanePid !== undefined && tx.panePid?.(row.slug) !== expectedPanePid) return "replaced"
     }
     const exactCapture = expectedAdoption
-      ? tx.captureExpectedAdoptionPane?.(expectedAdoption, row.backend === "codex")
+      ? tx.captureExpectedAdoptionPane?.(expectedAdoption, false)
       : undefined
     if (expectedAdoption && exactCapture?.kind !== "captured") return "replaced"
     const paneText = exactCapture?.kind === "captured" ? exactCapture.text : undefined
-    const composer = row.backend === "codex"
-      ? inspectCodexComposer(expectedAdoption ? paneText! : tx.capturePaneEscaped?.(row.slug) ?? "")
-      : inspectClaudeComposer(expectedAdoption ? paneText! : tx.capturePane?.(row.slug) ?? "")
+    const composer = inspectClaudeComposer(expectedAdoption ? paneText! : tx.capturePane?.(row.slug) ?? "")
     if (composer.kind === "empty") return "ready"
   }
   return "unready"
@@ -994,9 +981,9 @@ export async function recoverThreadProfileHandoff(
 
   if (legKind === "rollback") {
     const expected = { ...exactIdentity, handoffToken: leg.handoffToken }
-    const capture = tx.captureExpectedProfileHandoffPane?.(expected, initialRow.backend === "codex")
+    const capture = tx.captureExpectedProfileHandoffPane?.(expected, false)
     const composer = capture?.kind === "captured"
-      ? initialRow.backend === "codex" ? inspectCodexComposer(capture.text) : inspectClaudeComposer(capture.text)
+      ? inspectClaudeComposer(capture.text)
       : { kind: "unavailable" as const }
     if (!found.pane.dead && (journal.phase === "rollback-ready" || composer.kind === "empty")) {
       if (journal.phase !== "rollback-ready") checkpoint({
@@ -1105,20 +1092,8 @@ function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string): voi
     throw new Error("A model/effort change is in progress; wait for it to finish before sending a follow-up")
   }
   if (row.runtime_control !== null && row.runtime_control !== undefined &&
-      row.runtime_control !== "follow-up" &&
-      !(row.runtime_control === "codex-input" && row.backend === "codex")) {
+      row.runtime_control !== "follow-up") {
     throw new Error("Another runtime control is in progress; wait for it to finish before sending a follow-up")
-  }
-  const codexQueue = row.backend === "codex"
-    ? parseCodexInputQueue(row.codex_input_queue)
-    : { valid: true, items: [] }
-  if (!codexQueue.valid) {
-    throw new Error("Invalid durable Codex input state cannot be resumed or discarded automatically")
-  }
-  // A submitted item may already have crossed the native boundary. Only explicit transcript
-  // confirmation or the timed-out clear action can acknowledge it.
-  if (hasUnconfirmedCodexSubmission(row)) {
-    throw new Error("Codex has an unconfirmed submitted message; resolve or clear it before resuming")
   }
   const runtimeBinding = adoptionRuntimeBinding(deps.storage, row)
   if (runtimeBinding.kind === "conflict") {
@@ -1150,9 +1125,6 @@ function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string): voi
   const live = adoption
     ? adoptionLookup?.kind === "found" && !adoptionLookup.pane.dead
     : tx.isLive(slug)
-  if (live && codexQueue.items.length > 0) {
-    throw new Error("Queued Codex input must finish before direct live injection")
-  }
   if (live) {
     if (adoption) {
       if (tx.sendTextToExpectedAdoptionPane?.(adoption, message, true) !== true) {
@@ -1168,13 +1140,11 @@ function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string): voi
     // is never cleared or submitted on the user's behalf; there is no safe retry boundary there.
     const legacy = tx.findCompatibleLegacyWorker?.(slug, deps.project, row.agent_session_id ?? row.session_id, row.backend)
     if (legacy?.kind === "found") {
-      const capture = tx.captureCompatibleLegacyWorker?.(legacy.worker, row.backend === "codex")
+      const capture = tx.captureCompatibleLegacyWorker?.(legacy.worker, false)
       if (capture?.kind !== "captured") {
         throw new Error("The compatible legacy worker changed before the follow-up could be submitted")
       }
-      const composer = row.backend === "codex"
-        ? inspectCodexComposer(capture.text)
-        : inspectClaudeComposer(capture.text)
+      const composer = inspectClaudeComposer(capture.text)
       if (composer.kind !== "empty") {
         throw new Error("The compatible legacy worker has an existing draft; it was left untouched")
       }
@@ -1217,25 +1187,7 @@ function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string): voi
   // A thread-specific override always wins. Only a migrated/unknown row falls back to the current
   // defaults, and that concrete value is stamped below once this resume actually launches it.
   const permissionMode = permissionModeForRow(row, deps.getSettings())
-  let resumeMessage: string | undefined = message
-  if (row.backend === "codex" && codexQueue.items.length > 0) {
-    const nextQueue = [
-      ...codexQueue.items,
-      { text: message, enqueuedAt: new Date().toISOString(), state: "pending" as const },
-    ]
-    const queued = deps.storage.setCodexInputQueueIfCurrent(
-      row.slug,
-      {
-        sessionId: row.session_id,
-        generation: row.runtime_generation ?? 0,
-        queue: row.codex_input_queue ?? null,
-      },
-      JSON.stringify(nextQueue),
-    )
-    if (!queued) throw new Error("Codex input changed before the dead session could resume; retry")
-    // Reattach only. The durable controller will submit the existing head first, then this trigger.
-    resumeMessage = undefined
-  }
+  const resumeMessage: string | undefined = message
   let adoptionAttemptToken: string | undefined
   if (adoption) {
     const reservedAtMs = Date.now()
@@ -1374,23 +1326,8 @@ export function resumeThread(deps: ResumeDeps, slug: string, message: string): v
       initial.profile_pending_effort !== null && initial.profile_pending_effort !== undefined) {
     throw new Error("A model/effort change is in progress; wait for it to finish before sending a follow-up")
   }
-  const initialQueue = initial.backend === "codex"
-    ? parseCodexInputQueue(initial.codex_input_queue)
-    : { valid: true, items: [] }
-  if (!initialQueue.valid) {
-    throw new Error("Invalid durable Codex input state cannot be resumed or discarded automatically")
-  }
-  if (hasUnconfirmedCodexSubmission(initial)) {
-    throw new Error("Codex has an unconfirmed submitted message; resolve or clear it before resuming")
-  }
   if (adoptionRuntimeBinding(deps.storage, initial).kind === "conflict") {
     throw new Error("This thread has a competing adoption attempt; no worker was contacted")
-  }
-  // Durable Codex input already owns this path. Its queue controller is responsible for releasing
-  // that claim after the native transcript acknowledges the final submitted item.
-  if (initial.runtime_control === "codex-input" && initial.backend === "codex") {
-    resumeThreadOwned(deps, slug, message)
-    return
   }
   if (initial.runtime_control !== null && initial.runtime_control !== undefined) {
     throw new Error("Another runtime control is in progress; wait for it to finish before sending a follow-up")

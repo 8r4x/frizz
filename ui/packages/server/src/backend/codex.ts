@@ -1,10 +1,9 @@
 import { join } from "node:path"
 import { homedir } from "node:os"
-import { readdirSync, statSync, readFileSync, appendFileSync, mkdirSync, realpathSync } from "node:fs"
+import { readdirSync, statSync } from "node:fs"
 import type { PermissionMode } from "@fray-ui/shared"
 import { applyEvent } from "../tailer.ts"
-import type { AgentBackend, BuiltCommand, FoldState, NativeInputRequiredData, NormalizedEvent, ResumeOpts, SpawnOpts, SpawnThreadMcp } from "./types.ts"
-import { CHROME_DEVTOOLS_MCP } from "./types.ts"
+import type { AgentBackend, BuiltCommand, FoldState, NativeInputRequiredData, NormalizedEvent, ResumeOpts, SpawnOpts } from "./types.ts"
 
 // CodexBackend: everything Codex-CLI-specific behind the AgentBackend seam (Codex-support epic,
 // Phase 2). Unlike ClaudeBackend — which reuses the tailer's corpus-verified applyRecord — codex's
@@ -26,23 +25,6 @@ function sessionsDir(codexHome: string): string {
   return join(codexHome, "sessions")
 }
 
-// A discovered rollout must be no older than the spawn (minus a clock-skew tolerance): codex creates
-// the file AT session start, so its mtime is >= spawn time. The skew guards against fs mtime coarseness
-// / small clock differences between the spawner's `Date.now()` and the filesystem.
-const DISCOVERY_SKEW_MS = 10_000
-// Defensive cap on how many fresh rollout candidates discovery will open (newest-first). A tight spawn
-// window holds only a handful; the cap bounds a pathological "thousands of fresh sessions" scan.
-const DISCOVERY_MAX_CANDIDATES = 64
-
-// ---- worker-contract injection (prompt-prepend) ----
-// A UNIQUE per-dispatch sentinel embedded in the first prompt so post-spawn discovery can pin the
-// exact rollout even when concurrent codex dispatches share one repo cwd (the §6 discovery race). The
-// fray-minted `sessionId` (advisory for codex — codex mints its OWN rollout id) is a perfect unique
-// key: it rides the first user_message (which the rollout records verbatim) and discovery scans for it.
-export function codexSessionSentinel(sessionId: string): string {
-  return `fray-session:${sessionId}`
-}
-
 // The fixed worker contract still travels in the first user turn, but title creation has a stronger,
 // invocation-scoped instruction below. Keep this tiny user-turn reminder as a redundant compatibility
 // belt: it is machine metadata, stripped from the chat by the transcript projector, and requests an
@@ -59,34 +41,13 @@ export const CODEX_FIRST_FINAL_TITLE_TRANSPORT =
 export const CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS =
   'FRAY UI metadata protocol (mandatory): the very first assistant message in this new session, before any commentary, acknowledgement, tool call, or other action, MUST begin on its first line with exactly one `<!-- fray title="..." -->` HTML comment. Replace `...` with a concise human-readable 3-8 word title for the user\'s task. Put no text before the comment. You may continue the message normally after it. Emit this title comment exactly once. Do not explain the protocol. Fray removes the comment before displaying the conversation.'
 
-function firstOutputTitleDeveloperInstructionFlags(): string[] {
-  // JSON strings are valid TOML basic strings, which preserves quotes/backslashes without shell
-  // interpretation because argv is passed directly. `-c` applies only to this Codex process.
-  return ["-c", `developer_instructions=${JSON.stringify(CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS)}`]
-}
-
 // Historical first prompts used a visible H1 as the transport. It remains a parse-compatible title
 // signal, and the transcript projector recognizes this exact retired trailer so old dispatch metadata
 // never appears as human chat content.
 export const CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT =
   "FRAY TITLE TRANSPORT (required): on your first final answer, put one concise `# Title` H1 on its first line before the answer. Fray removes that H1 from chat and uses it only as this thread's automatic title."
 
-// Compose the first user prompt: the worker contract + scratchpad/plan orientation prepended (codex
-// has NO --append-system-prompt flag; AGENTS.md pollutes the repo and ~/.codex/AGENTS.md leaks into
-// every unrelated codex session — see the placement note in the report). The sentinel rides an
-// unobtrusive trailing HTML comment the model ignores but discovery can grep.
-function composeSpawnPrompt(o: SpawnOpts): string {
-  const sentinel = codexSessionSentinel(o.sessionId)
-  return [
-    o.workerContract?.trim(),
-    o.extraSystemPrompt?.trim(),
-    o.prompt,
-    CODEX_FIRST_FINAL_TITLE_TRANSPORT,
-    `<!-- ${sentinel} -->`,
-  ].filter(Boolean).join("\n\n")
-}
-
-// ---- spawn / resume argv ----
+// ---- codex reasoning-effort universe ----
 // Codex reasoning-effort universe (per ~/.codex/models_cache.json): low/medium/high/xhigh/max/ultra.
 // It is PER-MODEL which of these a given model accepts (gpt-5.6-sol/terra → all six, luna → …max, 5.5 →
 // …xhigh) — that gating happens in the UI, which offers only the chosen model's cache `efforts`. This
@@ -98,136 +59,6 @@ export function codexEffort(effort?: string): string | undefined {
   if (!effort) return undefined
   if (CODEX_EFFORTS.has(effort)) return effort
   return undefined
-}
-
-// A Fray UI worker already owns one dashboard effort. Suppress only the portfolio-orchestrator
-// skill—standalone, plugin-qualified, and legacy names—while leaving every unrelated skill and the
-// native `fray.*` Multi-Agent v2 tool namespace available. This is a session flag, not a persisted
-// user-config mutation, and must be applied on both spawn and resume.
-export const FRAY_UI_DISABLED_SKILLS_CONFIG =
-  'skills.config=[{name="fray-orchestrator",enabled=false},{name="fray-codex:fray-orchestrator",enabled=false},{name="fray",enabled=false},{name="fray-codex:fray",enabled=false}]'
-
-// These are deliberately process-scoped. A Fray UI worker needs the native V2 surface, but must not
-// rewrite the operator's $CODEX_HOME/config.toml (or install the orchestrator plugin) to obtain it.
-// The cap is intentionally conservative for a dashboard-owned worker session.
-export const FRAY_UI_MAX_CONCURRENT_THREADS = 4
-export const FRAY_UI_MULTI_AGENT_V2_CONFIG = [
-  "features.multi_agent_v2.enabled=true",
-  "features.multi_agent_v2.hide_spawn_agent_metadata=false",
-  'features.multi_agent_v2.tool_namespace="fray"',
-  `features.multi_agent_v2.max_concurrent_threads_per_session=${FRAY_UI_MAX_CONCURRENT_THREADS}`,
-] as const
-
-function frayUiRoutingFlags(): string[] {
-  return FRAY_UI_MULTI_AGENT_V2_CONFIG.flatMap((config) => ["-c", config])
-}
-
-function workerSkillIsolationFlags(): string[] {
-  return ["-c", FRAY_UI_DISABLED_SKILLS_CONFIG]
-}
-
-// Mount the fray spawn-thread MCP server as an ADDITIVE, process-scoped `-c` override — it deep-merges
-// onto the operator's own `[mcp_servers.*]` and NEVER touches ~/.codex/config.toml on disk (verified:
-// `codex mcp list --json` shows both fray_spawn and the user's servers). The `-c` value is parsed as
-// TOML, so the path/table values are TOML basic strings (only `\` and `"` need escaping). Codex runs
-// with `-a never`, so the tool executes without an approval prompt. A namespaced id (`fray_spawn`)
-// avoids overriding a user's own server. Absent descriptor → no flags (parity with Claude).
-function codexSpawnThreadMcpFlags(mcp?: SpawnThreadMcp): string[] {
-  if (!mcp) return []
-  const toml = (v: string) => v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
-  return [
-    // Absolute node path (process.execPath), not bare "node" — the worker's PATH may not include node,
-    // and a missing MCP-server binary means the tool silently never loads. Quoted TOML basic string.
-    "-c", `mcp_servers.fray_spawn.command="${toml(process.execPath)}"`,
-    "-c", `mcp_servers.fray_spawn.args=["${toml(mcp.scriptPath)}"]`,
-    "-c", `mcp_servers.fray_spawn.env={FRAY_STATE_DIR="${toml(mcp.stateDir)}"}`,
-  ]
-}
-
-// ---- Chrome DevTools MCP for codex workers (spawn-scoped, presence-gated) ----
-// The runtime release gate requires driving a real browser, and codex renders a native terminal modal
-// for any non-read-only MCP tool call — which a headless worker can never answer, so the thread stalls
-// until a human attaches (the stuck-modal incident, 2026-07-21). Inject the server definition AND its
-// pre-approval as `-c` overrides so EVERY fray-created codex worker gets a working, never-prompting
-// chrome-devtools out of the box — no plugin install, no config edit, any project, any machine.
-// `default_tools_approval_mode="approve"` is codex's never-prompt mode (AppToolApproval::Approve);
-// `-a never` alone does NOT cover MCP tool approvals. Mirrors codex/.mcp.json (the plugin path, which
-// only reaches machines that installed + re-synced the fray marketplace plugin).
-// Verified empirically (codex 0.144.6): in a FRESH CODEX_HOME these flags run new_page/navigate_page
-// unprompted under `codex exec`; without the approve key the same calls are auto-cancelled; with the
-// fray-codex plugin also installed the injection coexists cleanly (single tool namespace, no error).
-// Derived from the canonical CHROME_DEVTOOLS_MCP spec (types.ts) so claude and codex inject the
-// IDENTICAL server. JSON.stringify(args) is a valid TOML string array (basic strings, no spaces).
-export const FRAY_CHROME_DEVTOOLS_MCP_CONFIG = [
-  `mcp_servers.${CHROME_DEVTOOLS_MCP.name}.command="${CHROME_DEVTOOLS_MCP.command}"`,
-  `mcp_servers.${CHROME_DEVTOOLS_MCP.name}.args=${JSON.stringify(CHROME_DEVTOOLS_MCP.args)}`,
-  `mcp_servers.${CHROME_DEVTOOLS_MCP.name}.startup_timeout_sec=${CHROME_DEVTOOLS_MCP.startupTimeoutSec}`,
-  `mcp_servers.${CHROME_DEVTOOLS_MCP.name}.default_tools_approval_mode="approve"`,
-] as const
-
-// Presence-gated as one unit: an operator who declares `mcp_servers.chrome-devtools` themselves (table
-// header or dotted assignment, bare or quoted key) owns its transport AND approval policy — injecting
-// a partial table on top would either fight their transport or, worse, fail config validation
-// ("invalid transport") when only approval keys land on an undeclared server. Same fail-safe direction
-// as codexConfigDeclaresKey: unreadable/absent config → nothing declared → inject everything.
-function chromeDevtoolsMcpFlags(codexHome: string): string[] {
-  let configText = ""
-  try {
-    configText = readFileSync(join(codexHome, "config.toml"), "utf8")
-  } catch {
-    configText = ""
-  }
-  const declared =
-    /\[\s*mcp_servers\s*\.\s*["']?chrome-devtools["']?\s*[\].]/.test(configText) ||
-    /(^|\n)\s*["']?mcp_servers["']?\s*\.\s*["']?chrome-devtools["']?\s*\./.test(configText)
-  return declared ? [] : FRAY_CHROME_DEVTOOLS_MCP_CONFIG.flatMap((config) => ["-c", config])
-}
-
-// ---- opinionated Codex output defaults (process-scoped, presence-gated) ----
-// Saner Codex defaults for a fray worker whose operator hasn't tuned Codex themselves — terse output,
-// DETAILED reasoning summary, the pragmatic personality. These are the community-favorite starting
-// points, injected as one-shot `-c` overrides so we NEVER write the operator's config or their repo.
-//
-// `model_reasoning_summary` is DETAILED (not concise) because Fray renders the reasoning summary as an
-// expandable "train of thought" block: concise emits a single bold header per turn, so the block has
-// nothing to expand; detailed emits the full sequence of reasoning steps the block is there to show.
-//
-// Critically these are DEFAULTS, not overrides: `codex -c` is Codex's HIGHEST-precedence layer (it
-// beats config.toml), so we inject a key ONLY when the operator has not set it themselves. Anyone who
-// declares the key — top-level or inside a [profiles.*] block — ALWAYS wins, which also makes "set it
-// yourself" the opt-out. A UI-selected model/effort travels on its own axis (modelFlags/effortFlags);
-// model_reasoning_effort is deliberately NOT one of these so the dashboard's effort control still leads.
-export const FRAY_CODEX_OUTPUT_DEFAULTS: ReadonlyArray<readonly [key: string, value: string]> = [
-  ["model_reasoning_summary", "detailed"],
-  ["model_verbosity", "low"],
-  ["personality", "pragmatic"],
-]
-
-// Active-assignment presence check (mirrors ensureCwdTrusted's string-level, TOML-dep-free approach):
-// the key at the head of an assignment. Left-anchored on line start OR a `.` so it catches a bare
-// top-level key, a key inside any [profiles.*] table, AND a dotted spelling (`profiles.fast.personality
-// = …`); the optional surrounding quotes catch TOML quoted keys (`"personality" = …`, `'personality'
-// = …`). All of these are the SAME key to TOML, so treating any of them as "declared" is what keeps the
-// never-override invariant honest — a bare-identifier regex would false-negative on the quoted/dotted
-// forms and we'd inject a `-c` override on top of the operator's own value. Comments (`# key = …`) and
-// prose stay ignored (the `#` sits between the anchor and the key). Fail-safe direction: if we can read
-// the file and see the key assigned anywhere — even in an inactive profile — we DEFER to the operator
-// and skip our default; an unreadable/absent config means nothing is declared, so all defaults apply.
-// Keys are fixed literals with no regex metacharacters, so no escaping is needed.
-function codexConfigDeclaresKey(configText: string, key: string): boolean {
-  return new RegExp(`(^|\\n|\\.)\\s*["']?${key}["']?\\s*=`).test(configText)
-}
-
-function outputDefaultFlags(codexHome: string): string[] {
-  let configText = ""
-  try {
-    configText = readFileSync(join(codexHome, "config.toml"), "utf8")
-  } catch {
-    configText = "" // no config (or unreadable) → operator declared nothing → apply every default
-  }
-  return FRAY_CODEX_OUTPUT_DEFAULTS.flatMap(([key, value]) =>
-    codexConfigDeclaresKey(configText, key) ? [] : ["-c", `${key}="${value}"`],
-  )
 }
 
 // fray permissionMode → codex --sandbox. codex "sandbox" is a different axis than Claude "permission
@@ -247,12 +78,13 @@ export function codexSandbox(mode: PermissionMode): string {
 }
 
 // ---- native TUI modal detection ----
-// Codex does not record connector/tool approvals (or its own selection/confirmation menus) in the
-// rollout. They exist only in the rendered pane, so Fray recognizes the small set of 0.144.1 modal
-// families we have captured. Detection is deliberately BOTTOM-ANCHORED on the modal's exact footer:
-// prompt-like prose in transcript history is ignored once Codex's ordinary composer/status footer is
-// below it. We also require the selector + multiple independent family markers. Most importantly, the
-// return value is fixed presentation copy — repository/content/commands/options never leave the server.
+// A LEGACY tmux codex row (dispatched before the app-server cutover, not yet adopted) still renders its
+// approval/selection modals only in the pane — the rollout never records them. The tailer pane-sniffs
+// those live legacy panes through this detector (app-server codex rows are headless and skip capture
+// entirely). Detection is BOTTOM-ANCHORED on the modal's exact footer: prompt-like prose in transcript
+// history is ignored once Codex's ordinary composer/status footer is below it. We also require the
+// selector + multiple independent family markers. The return value is fixed presentation copy —
+// repository/content/commands/options never leave the server.
 const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g
 const SUBMIT_FOOTER = /^enter to submit\s*\|\s*esc to cancel$/i
 const CONFIRM_FOOTER = /^press enter to confirm or esc to go back$/i
@@ -335,15 +167,6 @@ export function detectCodexNativeInput(pane: string): NativeInputRequiredData | 
 
   return undefined
 }
-
-function modelFlags(model?: string): string[] {
-  return model && model.trim() ? ["-m", model] : []
-}
-function effortFlags(effort?: string): string[] {
-  const eff = codexEffort(effort)
-  return eff ? ["-c", `model_reasoning_effort="${eff}"`] : []
-}
-const NO_STARTUP_UPDATE_PROMPT = ["-c", "check_for_update_on_startup=false"]
 
 export interface CodexBackendOptions {
   codexHome?: string // $CODEX_HOME override (~/.codex); tests inject a tmp dir
@@ -758,97 +581,6 @@ function allRolloutsByMtime(codexHome: string, cap = 4096): { path: string; mtim
   return out
 }
 
-// Parse a rollout's session_meta (first line) → {session_id, cwd}. Keeping sentinel + meta parsing on
-// one read snapshot prevents a growing/partially-rewritten file from mixing two observations.
-function parseSessionMeta(content: string): { sessionId?: string; cwd?: string } {
-  const nl = content.indexOf("\n")
-  const firstLine = nl === -1 ? content : content.slice(0, nl)
-  try {
-    const rec = JSON.parse(firstLine.trim())
-    const p = rec?.payload
-    if (!p || typeof p !== "object") return {}
-    const sessionId = typeof p.session_id === "string" ? p.session_id : undefined
-    const cwd = typeof p.cwd === "string" ? p.cwd : undefined
-    return { sessionId, cwd }
-  } catch {
-    return {}
-  }
-}
-
-// Read-side wrapper used by legacy cwd matching and id lookup. Unreadable/partial/misshaped → {};
-// dispatch polling will simply retry after Codex appends the rest of the record.
-function readSessionMeta(path: string): { sessionId?: string; cwd?: string } {
-  try {
-    return parseSessionMeta(readFileSync(path, "utf8"))
-  } catch {
-    return {}
-  }
-}
-
-// Canonicalize a path for cwd comparison (codex stores the REAL cwd, e.g. /private/tmp/..). Falls back
-// to the raw string when realpath fails (path gone) so a match is still possible.
-function canonical(p: string): string {
-  try {
-    return realpathSync(p)
-  } catch {
-    return p
-  }
-}
-
-export interface DiscoverOpts {
-  cwd: string
-  spawnedAtMs: number
-  // When present, this is an exact ownership proof, not a preference. Discovery must never degrade to
-  // cwd-only matching: concurrent Codex starts legitimately share cwd and can have tied mtimes.
-  sentinel?: string
-  codexHome?: string
-}
-
-// Resolve the rollout a freshly-spawned codex session wrote — the core of the §6 discovery spike.
-// Strategy is deliberately exclusive:
-//   - SENTINEL PROVIDED: return only a fresh rollout containing that exact sentinel, with a complete
-//     session_meta whose cwd also matches. A partial file is a miss for this poll, never permission to
-//     claim a same-cwd neighbor.
-//   - NO SENTINEL (legacy AgentBackend caller): retain newest cwd matching for backward compatibility.
-// Returns {sessionId, path} or undefined if nothing fresh matches (caller retries next tick — the
-// rollout may not be written yet).
-export function discoverCodexRollout(opts: DiscoverOpts): { sessionId: string; path: string } | undefined {
-  const codexHome = opts.codexHome ?? defaultCodexHome()
-  const floor = opts.spawnedAtMs - DISCOVERY_SKEW_MS
-  const allFresh = allRolloutsByMtime(codexHome).filter((r) => r.mtimeMs >= floor)
-  const cutoff = allFresh[Math.min(allFresh.length, DISCOVERY_MAX_CANDIDATES) - 1]?.mtimeMs
-  // Never split an mtime tie at the candidate cap: concurrent starts can all share the cutoff mtime.
-  const fresh = allFresh.filter((r, index) => index < DISCOVERY_MAX_CANDIDATES || r.mtimeMs === cutoff)
-  const wantCwd = canonical(opts.cwd)
-
-  if (opts.sentinel !== undefined) {
-    if (!opts.sentinel) return undefined
-    for (const cand of fresh) {
-      let content: string
-      try {
-        content = readFileSync(cand.path, "utf8")
-      } catch {
-        continue
-      }
-      if (content.includes(opts.sentinel)) {
-        const meta = parseSessionMeta(content)
-        if (meta.sessionId && meta.cwd && canonical(meta.cwd) === wantCwd) {
-          return { sessionId: meta.sessionId, path: cand.path }
-        }
-      }
-    }
-    return undefined
-  }
-
-  // Legacy only: callers that genuinely have no per-dispatch sentinel retain cwd+newest behavior.
-  for (const cand of fresh) {
-    const meta = readSessionMeta(cand.path)
-    if (!meta.sessionId) continue
-    if (meta.cwd && canonical(meta.cwd) === wantCwd) return { sessionId: meta.sessionId, path: cand.path }
-  }
-  return undefined
-}
-
 // Locate an ALREADY-DISCOVERED session's rollout by its codex id (filename suffix -<id>.jsonl). Used by
 // the tailer once the id is pinned on the registry row. Returns the path or undefined (not yet written).
 export function findRolloutById(sessionId: string, codexHome = defaultCodexHome()): string | undefined {
@@ -859,99 +591,21 @@ export function findRolloutById(sessionId: string, codexHome = defaultCodexHome(
   return undefined
 }
 
-// ---- trust-gate pre-arm (the interactive TUI blocks on an untrusted dir) ----
-// The `codex` TUI (unlike `codex exec`) shows a blocking "Do you trust this directory?" modal for any
-// cwd not recorded as trusted in $CODEX_HOME/config.toml — an unattended worker would hang on it
-// forever, and NEITHER -a never NOR --dangerously-bypass-approvals-and-sandbox skips it (verified).
-// The persisted-trust entry a user's "Yes" writes is the only reliable bypass. This idempotently
-// appends it when absent (and NEVER overrides an existing [projects."<cwd>"] block — respecting a
-// user's own trust choice). The dispatch layer currently calls this BEFORE spawning a codex TUI.
-// Routing must stay separate: its process-scoped V2 flags never mutate global config. Replacing this
-// legacy trust pre-arm with an explicit product flow needs UI/security design and is intentionally
-// deferred rather than treated as an implicit routing bypass.
-export function ensureCwdTrusted(cwd: string, codexHome = defaultCodexHome()): void {
-  const real = canonical(cwd)
-  const configPath = join(codexHome, "config.toml")
-  let content = ""
-  try {
-    content = readFileSync(configPath, "utf8")
-  } catch {
-    content = ""
-  }
-  const header = `[projects."${real}"]`
-  if (content.includes(header)) return // already declared (trusted or otherwise) — respect it
-  try {
-    mkdirSync(codexHome, { recursive: true })
-    const sep = content === "" || content.endsWith("\n") ? "" : "\n"
-    appendFileSync(configPath, `${sep}\n[projects."${real}"]\ntrust_level = "trusted"\n`)
-  } catch {
-    // best-effort: a write failure just means the worker may hit the trust modal — surfaced, not fatal.
-  }
-}
-
 export function createCodexBackend(opts: CodexBackendOptions = {}): AgentBackend {
   const codexHome = opts.codexHome ?? defaultCodexHome()
-  const bin = opts.codexBin ?? "codex"
 
   return {
     kind: "codex",
 
-    buildSpawn(o: SpawnOpts): BuiltCommand {
-      // codex --cd <cwd> [-m <model>] -s <sandbox> -a never [-c model_reasoning_effort=<eff>] <prompt>
-      const argv = [
-        bin,
-        "--cd",
-        o.cwd,
-        ...modelFlags(o.model),
-        "-s",
-        codexSandbox(o.permissionMode),
-        "-a",
-        "never",
-        ...NO_STARTUP_UPDATE_PROMPT,
-        ...firstOutputTitleDeveloperInstructionFlags(),
-        ...frayUiRoutingFlags(),
-        ...workerSkillIsolationFlags(),
-        ...codexSpawnThreadMcpFlags(o.spawnThreadMcp),
-        ...outputDefaultFlags(codexHome),
-        ...chromeDevtoolsMcpFlags(codexHome),
-        ...effortFlags(o.effort),
-        composeSpawnPrompt(o),
-      ]
-      // No prewrite: the worker contract rides the prompt (see the AGENTS.md-placement note). The
-      // trust-gate pre-arm (ensureCwdTrusted) is a config MERGE the dispatch layer runs separately — it
-      // can't be expressed as a whole-file prewrite without clobbering the user's config.
-      return { argv, env: {}, prewrite: [] }
+    // The tmux TUI transport was retired: codex now runs SOLELY on the app-server bridge
+    // (backend/codex-app-server.ts). These argv builders exist only to satisfy the AgentBackend
+    // interface; nothing should call them for a codex row anymore.
+    buildSpawn(_o: SpawnOpts): BuiltCommand {
+      throw new Error("codex runs via the app-server bridge, not tmux")
     },
 
-    buildResume(o: ResumeOpts): BuiltCommand {
-      // codex resume [-C cwd] -a never -s <sandbox> <sessionId> <message>. `o.sessionId` is the
-      // DISCOVERED codex rollout id (pinned on the row). Model/effort are NOT re-sent — a resumed
-      // conversation can't be retargeted (mirrors ClaudeBackend). For a normal follow-up the scratchpad
-      // orientation rides the message. For a permission-only reattach there is deliberately NO trailing
-      // prompt: adding orientation alone would fabricate a user turn and wake the agent.
-      const message = o.message ? [o.extraSystemPrompt?.trim(), o.message].filter(Boolean).join("\n\n") : undefined
-      const argv = [
-        bin,
-        "resume",
-        "--cd",
-        o.cwd,
-        ...modelFlags(o.model),
-        "-a",
-        "never",
-        "-c",
-        "check_for_update_on_startup=false",
-        ...frayUiRoutingFlags(),
-        ...workerSkillIsolationFlags(),
-        ...codexSpawnThreadMcpFlags(o.spawnThreadMcp),
-        ...outputDefaultFlags(codexHome),
-        ...chromeDevtoolsMcpFlags(codexHome),
-        ...effortFlags(o.effort),
-        "-s",
-        codexSandbox(o.permissionMode),
-        o.sessionId,
-      ]
-      if (message) argv.push(message)
-      return { argv, env: {}, prewrite: [] }
+    buildResume(_o: ResumeOpts): BuiltCommand {
+      throw new Error("codex runs via the app-server bridge, not tmux")
     },
 
     // Codex's id is minted by codex and not known until it writes session_meta, so there is no
@@ -959,13 +613,6 @@ export function createCodexBackend(opts: CodexBackendOptions = {}): AgentBackend
     // the tailer calls this with that id and we locate the (date-sharded) rollout by filename suffix.
     transcriptPath(sessionId: string): string | undefined {
       return findRolloutById(sessionId, codexHome)
-    },
-
-    // Post-spawn discovery (the tailer resolves the id, then pins it on the row). The AgentBackend
-    // signature carries no sentinel; the sentinel path (race-proof) is reached via discoverCodexRollout
-    // directly by the dispatch wiring, which knows the fray sessionId. Here we do the cwd+newest match.
-    discoverSession(cwd: string, spawnedAtMs: number): { sessionId: string; path: string } | undefined {
-      return discoverCodexRollout({ cwd, spawnedAtMs, codexHome })
     },
 
     // Codex's rollout brackets turns explicitly, so — unlike Claude — its authoritative fold DOES route
@@ -1052,9 +699,10 @@ export function createCodexBackend(opts: CodexBackendOptions = {}): AgentBackend
       }
     },
 
-    // `-a never` prevents ordinary shell approval prompts, but connector/tool approvals and Codex's
-    // native selectors still exist outside the rollout. Surface them as a safe structured blocker;
-    // never answer them here (the human must use Terminal).
+    // A legacy (pre-cutover, not-yet-adopted) codex row still renders connector/tool approvals and its
+    // native selectors only in the tmux pane — the rollout never records them. Surface them to the
+    // tailer as a safe structured blocker; never answer them here (the human must use Terminal).
+    // App-server codex rows are headless and never reach this (the tailer skips their pane capture).
     detectNativeInput: detectCodexNativeInput,
   }
 }

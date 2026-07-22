@@ -11,8 +11,6 @@ import * as tmux from "./tmux.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import {
   inspectClaudeComposer,
-  inspectCodexComposer,
-  parseCodexInputQueue,
   type PermissionTerminal,
 } from "./permission-controller.ts"
 import { resolveRollbackProfile, validateThreadProfile } from "./backend/thread-profiles.ts"
@@ -216,12 +214,8 @@ export function createProfileController(deps: ProfileControllerDeps): ProfileCon
     if (tele.turn !== "idle") throw new Error("Model and effort changes require an idle thread; wait for the current turn to finish")
     const unresolved = [...tele.subAgents, ...tele.bgShells].filter((op) => op.state === "running" || op.state === "stale").length
     if (unresolved > 0) throw new Error(`Model and effort changes require no unresolved background work; wait for ${unresolved} operation${unresolved === 1 ? "" : "s"}`)
-    const queue = parseCodexInputQueue(row.codex_input_queue)
-    if (!queue.valid || queue.items.length > 0) throw new Error("Queued or ambiguous Codex input must finish before changing model or effort")
-    const composer = row.backend === "codex"
-      ? inspectCodexComposer(captureOwned(row, true) ?? "")
-      : inspectClaudeComposer(captureOwned(row, false) ?? "")
-    if (composer.kind === "typed") throw new Error(`Profile change blocked: submit or clear the existing ${row.backend === "codex" ? "Codex" : "Claude"} terminal draft`)
+    const composer = inspectClaudeComposer(captureOwned(row, false) ?? "")
+    if (composer.kind === "typed") throw new Error("Profile change blocked: submit or clear the existing Claude terminal draft")
     if (composer.kind !== "empty") throw new Error("Profile change blocked by the current terminal screen; return it to the idle prompt")
     if (!deps.reattach) throw new Error("Live profile changes are unavailable in this Fray server; restart Fray and retry")
     const priorBinding = exactCurrentBinding(row)

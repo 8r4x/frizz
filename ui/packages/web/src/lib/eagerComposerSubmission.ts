@@ -1,11 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { rpc } from "../api/rpc.ts"
 import { appendQueuedMessage, removeQueuedMessage } from "../hooks.ts"
-import { showToast, store } from "../store.ts"
-import { useSnapshot } from "valtio"
+import { showToast } from "../store.ts"
 
-const STEER_FAILURE_PREFIX = "fray-steer-failed:"
 let fallbackDeliverySequence = 0
 
 function newDeliveryId(): string {
@@ -50,27 +48,11 @@ export function useEagerFollowUp(slug: string): {
   pending: boolean
 } {
   const queryClient = useQueryClient()
-  const snap = useSnapshot(store)
-  const controlError = snap.board?.threads.find((thread) => thread.id === slug)?.controlError
   const [pending, setPending] = useState(false)
   // A controlled textarea normally makes a second Enter impossible because it becomes empty
   // synchronously. Keep the guard anyway for duplicate programmatic/click submissions and for a
   // second mounted representation of the same draft.
   const inFlight = useRef(new Set<string>())
-  // The RPC only acknowledges durable queue acceptance. Keep a small local record until provider
-  // evidence arrives so an indeterminate server reconciliation can restore precisely this draft.
-  const accepted = useRef(new Map<string, { text: string; callbacks: EagerFollowUpCallbacks }>())
-
-  useEffect(() => {
-    if (!controlError?.startsWith(STEER_FAILURE_PREFIX)) return
-    const deliveryId = controlError.slice(STEER_FAILURE_PREFIX.length)
-    const submission = accepted.current.get(deliveryId)
-    if (!submission) return
-    accepted.current.delete(deliveryId)
-    removeQueuedMessage(queryClient, slug, submission.text, deliveryId)
-    submission.callbacks.onRollback?.()
-    showToast("Steer failed")
-  }, [controlError, queryClient, slug])
 
   const submit = useCallback((text: string, callbacks: EagerFollowUpCallbacks = {}) => {
     const message = text.trim()
@@ -87,7 +69,6 @@ export function useEagerFollowUp(slug: string): {
       success: () => {
         inFlight.current.delete(deliveryId)
         setPending(inFlight.current.size > 0)
-        accepted.current.set(deliveryId, { text: message, callbacks })
         callbacks.onSuccess?.()
         showToast("Steered")
       },

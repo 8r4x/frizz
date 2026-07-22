@@ -464,27 +464,6 @@ test("followUp leaves a snooze — and its armed bump — intact", async () => {
   h.storage.close()
 })
 
-test("clearAmbiguousCodexInput RPC: explicitly removes only a timed-out submitted barrier", async () => {
-  const h = harness()
-  h.storage.upsertSession(row("rpc-ambiguous"))
-  h.storage.setBackend("rpc-ambiguous", "codex")
-  h.storage.setCodexInputQueue(
-    "rpc-ambiguous",
-    JSON.stringify([
-      { text: "MAYBE", enqueuedAt: "1970-01-01T00:00:00.000Z", state: "submitted", submittedAt: "1970-01-01T00:00:00.000Z" },
-      { text: "LATER", enqueuedAt: "1970-01-01T00:00:01.000Z", state: "pending" },
-    ]),
-  )
-  h.addExitedThread("rpc-ambiguous")
-  h.snapshot.threads.at(-1)!.backend = "codex"
-
-  const result = await h.router.clearAmbiguousCodexInput.handler({ input: { slug: "rpc-ambiguous" } })
-  assert.deepEqual(result, { effect: "cleared" })
-  const queue = JSON.parse(h.storage.getSession("rpc-ambiguous")?.codex_input_queue ?? "[]")
-  assert.deepEqual(queue.map((item: { text: string }) => item.text), ["LATER"])
-  h.storage.close()
-})
-
 test("setThreadPermission RPC safety: running and stale background entries are unresolved", () => {
   assert.equal(hasUnresolvedBackgroundOps({ subAgents: [{ state: "stale" }], bgShells: [{ state: "stale" }] }), true)
   assert.equal(hasUnresolvedBackgroundOps({ subAgents: [{ state: "running" }], bgShells: [] }), true)

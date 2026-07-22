@@ -36,12 +36,6 @@ import {
   ThreadProfileOptionsResult,
   SetThreadProfileInput,
   SetThreadProfileResult,
-  SubmitCodexDraftInput,
-  SubmitCodexDraftResult,
-  PrepareCodexDraftReplacementInput,
-  PrepareCodexDraftReplacementResult,
-  ClearAmbiguousCodexInputInput,
-  ClearAmbiguousCodexInputResult,
   DispatchPreferences,
   SetDispatchPreferenceInput,
   ListInteractionsInput,
@@ -614,43 +608,6 @@ export function createRouter(ctx: AppContext) {
         }
         if (!ctx.profileController) throw new Error("Runtime profile controls are unavailable; restart Fray and retry")
         return ctx.profileController.request(input.slug, { model: input.model, effort: input.effort })
-      },
-    }),
-
-    // Explicit recovery for a pre-existing Codex TUI draft. The controller re-captures and validates
-    // the composer at click time, persists a delivery barrier, then uses only the backend-advertised
-    // idle Enter / active Tab path. It never clears or rewrites the draft.
-    submitCodexDraft: mutation({
-      input: SubmitCodexDraftInput,
-      output: SubmitCodexDraftResult,
-      handler: async ({ input }) => {
-        const thread = (await ctx.board.snapshot()).threads.find((t) => t.id === input.slug)
-        if (!thread || thread.foreign || thread.backend !== "codex") throw new Error(`thread ${input.slug} is not an editable Codex session`)
-        return ctx.permissionController.submitExistingDraft(input.slug)
-      },
-    }),
-
-    // This recovery is intentionally read-only. The operator receives the queued text to paste
-    // after manually replacing the terminal draft; no transport claims a compare-and-swap it lacks.
-    prepareCodexDraftReplacement: query({
-      input: PrepareCodexDraftReplacementInput,
-      output: PrepareCodexDraftReplacementResult,
-      handler: async ({ input }) => {
-        const thread = (await ctx.board.snapshot()).threads.find((t) => t.id === input.slug)
-        if (!thread || thread.foreign || thread.backend !== "codex") throw new Error(`thread ${input.slug} is not an editable Codex session`)
-        return ctx.permissionController.prepareCodexDraftReplacement(input.slug)
-      },
-    }),
-
-    // A submitted key is never replayed automatically: if transcript confirmation never arrives,
-    // the human explicitly acknowledges that ambiguity and removes only that queue barrier.
-    clearAmbiguousCodexInput: mutation({
-      input: ClearAmbiguousCodexInputInput,
-      output: ClearAmbiguousCodexInputResult,
-      handler: async ({ input }) => {
-        const thread = (await ctx.board.snapshot()).threads.find((t) => t.id === input.slug)
-        if (!thread || thread.foreign || thread.backend !== "codex") throw new Error(`thread ${input.slug} is not an editable Codex session`)
-        return ctx.permissionController.clearAmbiguousCodexInput(input.slug)
       },
     }),
 

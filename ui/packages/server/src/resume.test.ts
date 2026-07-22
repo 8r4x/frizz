@@ -8,13 +8,11 @@ import { createStorage, type ProfileHandoffJournal, type Storage, type SessionRo
 import { createBoard, type BoardManager } from "./board.ts"
 import { Bus } from "./bus.ts"
 import {
-  hasUnconfirmedCodexSubmission,
   reattachThreadWithPermission,
   recoverThreadProfileHandoff,
   resumeThread,
   type ResumeTmux,
 } from "./resume.ts"
-import { createCodexBackend } from "./backend/codex.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
 import type { AgentBackend } from "./backend/types.ts"
 import type { Project } from "./project.ts"
@@ -550,55 +548,6 @@ test("resumeThread clears an adopted dead generation and atomically rotates its 
   assert.equal(storage.getSession(slug)?.exited, 0)
 })
 
-test("resumeThread (codex, dead): pre-arms cwd trust + re-attaches the pinned rollout via `codex resume <id>`", () => {
-  const { storage, board, dir } = harness()
-  const codexHome = tmpDir("fray-codexhome-")
-  const slug = "codex-dead"
-  const CODEX_ID = "019f4e0a-cafe-7891-9cbf-00000000feed"
-  storage.upsertSession(sessionRow(slug, { exited: 1, model: "gpt-5.5", effort: "high" }))
-  storage.setBackend(slug, "codex") // the shared upsert never writes backend/agent_session_id
-  storage.setAgentSession(slug, CODEX_ID)
-
-  const spawnedCmds: string[][] = []
-  const tmux: ResumeTmux = {
-    isLive: () => false, // dead → dead-resume (respawn) path
-    sendKeys: () => {},
-    pasteText: () => {},
-    killSession: () => {},
-    ensureServer: () => {},
-    spawn: (_slug, cmd) => void spawnedCmds.push(cmd),
-  }
-  const codexBackend = createCodexBackend({ codexHome })
-  const claudeBackend = createClaudeBackend({ logDir: join(dir, "logs") })
-  const backendFor = (kind?: string): AgentBackend => (kind === "codex" ? codexBackend : claudeBackend)
-  resumeThread({ project: fakeProject(dir), storage, board, getSettings: () => settings, tmux, backendFor, codexHome }, slug, "keep going")
-
-  // A codex respawn hits the trust modal for an untrusted cwd — resume must pre-arm it too.
-  const cfg = readFileSync(join(codexHome, "config.toml"), "utf8")
-  assert.ok(cfg.includes('trust_level = "trusted"'), "resume pre-arms the codex cwd trust gate")
-
-  // argv: `codex resume … <CODEX_ID> <message>` — the DISCOVERED rollout id, not the fray session_id.
-  const cmd = spawnedCmds[0]
-  assert.equal(cmd[0], "codex")
-  assert.equal(cmd[1], "resume")
-  assert.ok(cmd.includes(CODEX_ID), "resume re-attaches the pinned codex rollout id")
-  assert.ok(!cmd.includes(`sid-${slug}`), "the fray session_id is NOT used as the codex resume id")
-  assert.equal(storage.getSession(slug)?.exited, 0, "respawn cleared the exited flag")
-  assert.equal(storage.getSession(slug)?.model, "gpt-5.5", "resume preserves the session-pinned model")
-  assert.equal(storage.getSession(slug)?.effort, "high", "resume preserves the session-pinned effort")
-  const resumedView = threadIn(board.refresh(), slug)
-  assert.equal(resumedView.model, "gpt-5.5", "the board exposes the pinned model to the thread UI")
-  assert.equal(resumedView.effort, "high", "the board exposes the pinned effort to the thread UI")
-
-  // The resume MESSAGE (last argv element) re-carries the backend-aware scratchpad orientation — for a
-  // codex row that means the CODEX variant (compaction memory), NOT Claude's sub-agent/blackboard
-  // framing. This pins `scratchpadOrientation(..., backend?.kind)` on the resume seam (resume.ts).
-  const message = cmd[cmd.length - 1]
-  assert.match(message, /compaction-proof working memory/, "codex resume carries the codex scratchpad orientation")
-  assert.doesNotMatch(message, /blackboard/, "codex resume never carries the sub-agent blackboard framing")
-  assert.doesNotMatch(message, /sub-agent/, "codex resume never carries sub-agent framing")
-})
-
 test("resumeThread leaves a non-archived thread's state untouched (no needless flip)", () => {
   const { storage, board } = harness()
   const slug = "already-open"
@@ -642,29 +591,6 @@ test("resumeThread: a migrated unknown row falls back once, then pins the concre
   assert.equal(storage.getSession(slug)?.permission_mode, "acceptEdits")
 })
 
-test("resumeThread: a dead Codex session cannot bypass an unconfirmed submitted-input barrier", () => {
-  const { storage, board } = harness()
-  const slug = "codex-unconfirmed-resume"
-  const submitted = JSON.stringify([{
-    text: "MAYBE",
-    enqueuedAt: "2026-07-12T00:00:00.000Z",
-    state: "submitted",
-    submittedAt: "2026-07-12T00:00:00.000Z",
-  }])
-  storage.upsertSession(sessionRow(slug, { backend: "codex", exited: 1, codex_input_queue: submitted }))
-  storage.setBackend(slug, "codex")
-  storage.setCodexInputQueue(slug, submitted)
-  const tx = permissionTmux(false)
-
-  assert.equal(hasUnconfirmedCodexSubmission(storage.getSession(slug)!), true)
-  assert.throws(
-    () => resumeThread({ project: fakeProject("/tmp"), storage, board, getSettings: () => settings, tmux: tx }, slug, "new follow-up"),
-    /unconfirmed submitted message/,
-  )
-  assert.equal(tx.spawnedCmds.length, 0)
-  assert.equal(storage.getSession(slug)?.codex_input_queue, submitted)
-})
-
 test("resumeThread blocks every durable permission handoff before live injection or unarchive", () => {
   for (const [pending, slug] of [["bypassPermissions", "pending-bypass-permissions"], ["future-mode", "pending-future-mode"]]) {
     const { storage, board } = harness()
@@ -678,55 +604,6 @@ test("resumeThread blocks every durable permission handoff before live injection
     assert.deepEqual(tx.keyed, [])
     assert.equal(storage.getSession(slug)?.state, "archived", "a blocked resume has no lifecycle side effect")
   }
-})
-
-test("resumeThread reattaches a dead Codex pending queue without consuming it and appends the trigger", () => {
-  const { storage, board, dir } = harness()
-  const slug = "queued-pending"
-  const queued = JSON.stringify([{ text: "WAIT", enqueuedAt: "2026-07-12T00:00:00.000Z", state: "pending" }])
-  storage.upsertSession(sessionRow(slug, {
-    backend: "codex",
-    exited: 1,
-    agent_session_id: "codex-native-id",
-    codex_input_queue: queued,
-  }))
-  storage.setBackend(slug, "codex")
-  storage.setAgentSession(slug, "codex-native-id")
-  storage.setCodexInputQueue(slug, queued)
-  const tx = permissionTmux(false)
-  const codexBackend = createCodexBackend({ codexHome: tmpDir("fray-codexhome-queued-") })
-  const claudeBackend = createClaudeBackend({ logDir: join(dir, "logs") })
-  resumeThread(
-    {
-      project: fakeProject(dir), storage, board, getSettings: () => settings, tmux: tx,
-      backendFor: (kind) => kind === "codex" ? codexBackend : claudeBackend,
-    },
-    slug,
-    "NEW FOLLOWUP",
-  )
-  assert.equal(tx.spawnedCmds.length, 1)
-  assert.equal(tx.spawnedCmds[0].at(-1), "codex-native-id", "recovery is reattach-only; queued text is not duplicated in argv")
-  const savedQueue = JSON.parse(storage.getSession(slug)?.codex_input_queue ?? "[]")
-  assert.deepEqual(savedQueue.map((item: { text: string; state: string }) => [item.text, item.state]), [
-    ["WAIT", "pending"],
-    ["NEW FOLLOWUP", "pending"],
-  ])
-})
-
-test("resumeThread rejects but byte-preserves malformed durable Codex queue state", () => {
-  const { storage, board } = harness()
-  const slug = "queued-invalid"
-  const queued = "malformed-but-durable"
-  storage.upsertSession(sessionRow(slug, { backend: "codex", exited: 1, codex_input_queue: queued }))
-  storage.setBackend(slug, "codex")
-  storage.setCodexInputQueue(slug, queued)
-  const tx = permissionTmux(false)
-  assert.throws(
-    () => resumeThread({ project: fakeProject("/tmp"), storage, board, getSettings: () => settings, tmux: tx }, slug, "new follow-up"),
-    /invalid.*Codex input/i,
-  )
-  assert.equal(tx.spawnedCmds.length, 0)
-  assert.equal(storage.getSession(slug)?.codex_input_queue, queued)
 })
 
 test("resumeThread stamps a new runtime generation before spawning a dead process", () => {

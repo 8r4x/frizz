@@ -42,9 +42,6 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
   // The board's pending bit is authoritative across every mounted surface (queue + drawer + another
   // tab). A local React mutation alone cannot prevent a second composer from steering the pane during
   // the backend handoff.
-  // A Codex input queue owns the terminal while it delivers an earlier message, but the server can
-  // atomically append another follow-up under that same owner. Keep the profile/permission controls
-  // fenced below, while leaving the text composer usable for this one advertised capability.
   const busy = localBusy || threadFollowUpBlocked(thread)
 
   const model = thread.model?.trim()
@@ -70,7 +67,7 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
     label: backend === "codex" ? "Codex" : "Claude Code",
     options: profileOptions,
   }]
-  const composerStatus = threadComposerStatus(thread, profiles.isError ? (profiles.error as Error).message : undefined)
+  const composerStatus = threadComposerStatus(profiles.isError ? (profiles.error as Error).message : undefined)
 
   function changeProfile(target: { model: string; effort: string }) {
     profile.mutate(target, {
@@ -149,9 +146,8 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
     ),
     status: composerStatus ? (
           <div
-            data-thread-control-error={composerStatus.kind === "profile-error" ? "" : undefined}
-            data-thread-queue-status={composerStatus.kind === "queue-blocked" ? "blocked" : composerStatus.kind === "queue-sending" ? "sending" : undefined}
-            className={`px-1 pt-1 text-[9.5px] leading-tight ${composerStatus.kind === "queue-sending" ? "text-muted/45" : "text-muted/65"}`}
+            data-thread-control-error=""
+            className="px-1 pt-1 text-[9.5px] leading-tight text-muted/65"
           >
             {composerStatus.message}
           </div>

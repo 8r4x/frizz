@@ -2,11 +2,6 @@ import { z } from "zod"
 import { InteractionLifecycle, InteractionOpaqueId, InteractionRevision, InteractionThreadSlug } from "./interactions.ts"
 import { THREAD_SLUG_MAX_CHARS, ThreadSlug } from "./thread-slug.ts"
 
-// A Codex submit key is deliberately never replayed after Fray persists it: the process may have
-// accepted the key even if its transcript confirmation was lost. After this bounded observation
-// window the queue becomes explicitly recoverable by the human instead of blocking forever.
-export const CODEX_INPUT_CONFIRMATION_TIMEOUT_MS = 30_000
-
 // ---- Attachment intake (drag/drop, paste, file picker) ----
 // The "safe tier": formats an agent's Read/file tool consumes with NO conversion step, so a dropped
 // file lands on disk and its absolute path — inserted as plain text into the message — is read directly
@@ -423,14 +418,7 @@ export const ThreadView = z.object({
   // One durable runtime-control owner serializes reattach/resume/native-composer mutations. Unknown
   // future owner values still disable the composer rather than being treated as idle.
   runtimeControlPending: z.boolean().optional(),
-  // The one narrow exception to the generic runtime-control fence: Codex's durable input controller
-  // owns its queue while it is delivering a prior follow-up, and can atomically append another one.
-  // This is a capability, not the raw control kind, so clients cannot infer that other owners are safe.
-  followUpQueueAvailable: z.boolean().optional(),
-  // Durable Codex terminal-control state. A queued input is waiting to be echoed/submitted/observed;
-  // controlError is an actionable reason the controller failed closed (for example an existing draft).
-  queuedInputCount: z.number().int().nonnegative().optional(),
-  codexInputAmbiguous: z.boolean().optional(),
+  // controlError is an actionable reason the controller failed closed (for example a busy thread).
   controlError: z.string().optional(),
   // The session's concrete model + reasoning effort: pinned launch metadata for new dispatches,
   // refined/backfilled from backend transcript telemetry where available (Claude records model;
@@ -747,24 +735,6 @@ export const SetThreadProfileResult = z.object({
   effect: z.enum(["applied", "next-resume"]),
 })
 export type SetThreadProfileResult = z.infer<typeof SetThreadProfileResult>
-
-export const SubmitCodexDraftInput = z.object({ slug: ThreadSlug })
-export type SubmitCodexDraftInput = z.infer<typeof SubmitCodexDraftInput>
-export const SubmitCodexDraftResult = z.object({ effect: z.literal("submitted") })
-export type SubmitCodexDraftResult = z.infer<typeof SubmitCodexDraftResult>
-
-// A deliberately non-destructive recovery helper. Fray can verify the live terminal draft and
-// disclose the queued follow-up, but tmux cannot atomically compare and rewrite a TUI composer.
-// The browser copies this text and the operator performs the replacement in Codex's terminal.
-export const PrepareCodexDraftReplacementInput = z.object({ slug: ThreadSlug })
-export type PrepareCodexDraftReplacementInput = z.infer<typeof PrepareCodexDraftReplacementInput>
-export const PrepareCodexDraftReplacementResult = z.object({ queuedMessage: z.string().min(1) })
-export type PrepareCodexDraftReplacementResult = z.infer<typeof PrepareCodexDraftReplacementResult>
-
-export const ClearAmbiguousCodexInputInput = z.object({ slug: ThreadSlug })
-export type ClearAmbiguousCodexInputInput = z.infer<typeof ClearAmbiguousCodexInputInput>
-export const ClearAmbiguousCodexInputResult = z.object({ effect: z.literal("cleared") })
-export type ClearAmbiguousCodexInputResult = z.infer<typeof ClearAmbiguousCodexInputResult>
 
 // ---- GitHub-first batch dispatch (server ↔ web mirror; wrapper in server/github.ts) ----
 
