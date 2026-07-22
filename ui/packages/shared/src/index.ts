@@ -129,13 +129,17 @@ export const SubAgentView = z.object({
 export type SubAgentView = z.infer<typeof SubAgentView>
 
 // A LIVE background SHELL the worker launched (Bash run_in_background:true) — same tailer tracking as a
-// sub-agent (dispatch → launch output path → task-notification clear + mtime staleness), but
-// display-only (no drill-in). Foreground-blocking waits keep the turn in-flight, so the spinner already
-// covers them; this is for ops that PERSIST across a rest (a CI watcher, a long build). No id/drawer.
+// sub-agent (dispatch → launch output path → task-notification clear). Foreground-blocking waits keep
+// the turn in-flight, so the spinner already covers them; this is for ops that PERSIST across a rest
+// (a CI watcher, a long build). New servers include the stable tool-use id + raw command so the row can
+// open its read-only output drawer; both stay optional for old snapshots / Monitor calls without a
+// command.
 export const BgShellView = z.object({
   label: z.string(), // the command's `description`, else its first-line summary
   startedAt: z.string(), // ISO8601 of the launch record
   state: z.enum(["running", "stale"]),
+  id: z.string().optional(),
+  command: z.string().optional(),
 })
 export type BgShellView = z.infer<typeof BgShellView>
 
@@ -329,7 +333,7 @@ export const ThreadView = z.object({
   // snapshot/row (or a pre-restart server that doesn't emit the field yet) parses without breaking.
   subAgents: z.array(SubAgentView).default([]),
   // Live background SHELLS the worker launched (tailer-derived). Same default-[] discipline. Rendered
-  // in the anchored background-ops strip alongside sub-agents; display-only.
+  // in the anchored background-ops strip alongside sub-agents; ids make current rows drillable.
   bgShells: z.array(BgShellView).default([]),
   // A pending native AskUserQuestion the session is frozen on (tailer-derived). Optional — absent
   // when there's no unanswered ask. Feeds needsAction + the read-only question render + "Answer in Terminal".

@@ -217,6 +217,14 @@ export function useSubAgentTranscript(slug: string, id: string) {
   })
 }
 
+export function useBackgroundShellOutput(slug: string, id: string) {
+  return useQuery({
+    queryKey: ["backgroundShellOutput", slug, id],
+    queryFn: () => rpc.backgroundShellOutput({ slug, id }),
+    refetchInterval: (query) => (query.state.data?.state === "running" ? 1500 : false),
+  })
+}
+
 // Follow-ups are injected into the agent's terminal stdin and only surface in the transcript once the
 // agent's next turn picks them up — so the message would otherwise vanish on send. Optimistically
 // append it to the ["transcript", slug] cache as a user bubble tagged `queued`; the next real refetch

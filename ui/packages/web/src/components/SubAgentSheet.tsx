@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useSnapshot } from "valtio"
-import { X } from "lucide-react"
 import { store, markDrawerClosing, removeDrawerAfterExit } from "../store.ts"
 import { registerDrawerClose } from "../lib/overlays.ts"
 import { useSubAgentTranscript } from "../hooks.ts"
 import { Message } from "./ChatView.tsx"
-import { formatElapsedMinutes } from "../lib/durationLabels.ts"
+import { SubAgentHeader } from "./SubAgentHeader.tsx"
 
 // One SUB-AGENT layer of the side-drawer stack: a right sheet (same slide/backdrop family as the
 // thread sheet) showing a live/stale sub-agent's OWN transcript, READ-ONLY — no composer, no answering,
@@ -20,22 +19,13 @@ function prefersReducedMotion() {
   return typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
 }
 
-// Coarse elapsed since an ISO dispatch time: "just now", "12m", "1h 3m". Empty when unparseable.
-function elapsed(startedAt: string | undefined): string {
-  if (!startedAt) return ""
-  const t = Date.parse(startedAt)
-  if (!Number.isFinite(t)) return ""
-  const mins = Math.floor((Date.now() - t) / 60_000)
-  return formatElapsedMinutes(mins)
-}
-
 export function SubAgentSheet({
   id,
   slug,
   subId,
   label,
-  subagentType,
-  startedAt,
+  subagentType: _subagentType,
+  startedAt: _startedAt,
   depth,
   widthDepth,
 }: {
@@ -120,17 +110,6 @@ export function SubAgentSheet({
     setShown(true)
   }, [snap.drawers, id])
 
-  const stateLabel =
-    state === "stale"
-      ? "stale"
-      : state === "gone"
-        ? "unavailable"
-        : state === "done"
-          ? "finished"
-          : state === "running"
-            ? `running${elapsed(startedAt) ? ` ${elapsed(startedAt)}` : ""}`
-            : ""
-
   return (
     <div
       className={`fixed inset-0 flex justify-end bg-black/40 backdrop-blur-[1px] transition-opacity duration-200 ease-out motion-reduce:transition-none ${shown ? "opacity-100" : "opacity-0"}`}
@@ -142,21 +121,9 @@ export function SubAgentSheet({
         style={{ width: `min(${720 - widthDepth * 28}px, ${80 - widthDepth * 4}vw)` }}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        {/* Header shell paints immediately (part of the instant-open shell). */}
-        <header className="shrink-0 flex items-center gap-2.5 px-3 h-12 border-b border-border bg-panel">
-          <div className="min-w-0 pl-1 flex-1 flex items-center gap-2">
-            {subagentType && <span className="shrink-0 font-mono-keep text-[11px] text-muted/55">[{subagentType}]</span>}
-            <span className="font-semibold truncate text-[14px]" title={label}>{label}</span>
-            {stateLabel && <span className="shrink-0 text-[11.5px] text-muted/60 whitespace-nowrap">{stateLabel}</span>}
-          </div>
-          <button
-            aria-label="Close"
-            onClick={close}
-            className="rounded-md p-1.5 text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
-          >
-            <X size={15} />
-          </button>
-        </header>
+        {/* Header shell paints immediately (part of the instant-open shell). Runtime/profile details
+            live on the dispatch row that opens this drawer; the drawer header only names the work. */}
+        <SubAgentHeader label={label} onClose={close} />
 
         <div ref={scrollerRef} className="flex-1 min-h-0 overflow-y-auto">
           {unavailable ? (

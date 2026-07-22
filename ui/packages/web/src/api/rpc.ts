@@ -69,6 +69,7 @@ export interface Api {
   threadTranscript(input: { slug: string }): Promise<TranscriptPage>
   threadTranscriptEarlier(input: TranscriptEarlierInput): Promise<TranscriptPage>
   subAgentTranscript(input: { slug: string; id: string }): Promise<{ messages: TranscriptMessage[]; state: "running" | "stale" | "done" | "gone" }>
+  backgroundShellOutput(input: { slug: string; id: string }): Promise<{ command: string | null; output: string; truncated: boolean; state: "running" | "done" | "gone" }>
   // Scoped typed requests are read/answered only for the current registered session. There is
   // deliberately no browser create method: provider adapters alone can journal a request.
   pendingInteractions(input: ListInteractionsInput): Promise<ListInteractionsResult>
@@ -159,6 +160,7 @@ const PROCEDURES: Record<keyof Api, ProcType> = {
   threadTranscript: "query",
   threadTranscriptEarlier: "query",
   subAgentTranscript: "query",
+  backgroundShellOutput: "query",
   pendingInteractions: "query",
   interactionGet: "query",
   interactionResolve: "mutation",

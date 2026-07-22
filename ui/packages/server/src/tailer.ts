@@ -232,10 +232,11 @@ export function matchesPermPrompt(pane: string): boolean {
 // <tool-use-id>). Registered on the background dispatch, enriched with `outputFile` from the launch
 // tool_result, and removed on a terminal completion notification.
 interface SubAgentEntry {
-  kind: "agent" | "shell" // an Agent sub-agent (drill-in) vs a background Bash shell (display-only)
+  kind: "agent" | "shell" // an Agent sub-agent vs a background Bash/Monitor shell
   toolUseId: string
   label: string // the dispatch's input.description (shell: falls back to the command's first-line summary)
   startedAt: string // ISO8601 — the dispatch record's timestamp
+  command?: string // shell only: raw launch command for the read-only output drawer
   subagentType?: string // the dispatch's input.subagent_type verbatim (agents only; may be absent)
   outputFile?: string // the child/shell's output path (from the launch tool_result); its mtime = liveness
   // The RUNTIME task id (Bash "…with ID: <id>", Monitor "(task <id>…)", Agent "agentId: <id>"), parsed
@@ -250,6 +251,8 @@ export interface BgShellView {
   label: string
   startedAt: string
   state: "running" | "stale"
+  id?: string
+  command?: string
 }
 
 // A pending native AskUserQuestion (structured, capped). Mirrors @fray-ui/shared PendingAsk; `id` is
@@ -282,8 +285,15 @@ interface RetiredSubAgent {
   finishedAt?: string // ISO8601 of the completion notification
   status: "completed" | "failed" | "killed"
 }
+interface RetiredShell {
+  toolUseId: string
+  command?: string
+  outputFile?: string
+  status: "completed" | "failed" | "killed"
+}
 // How many terminal sub-agents to retain per thread for drawer review (newest-wins ring).
 const RETAINED_SUBAGENTS_MAX = 20
+const RETAINED_SHELLS_MAX = 20
 
 // Mutable accumulator for one session's tail. Extends the backend-neutral FoldState (the running
 // derivation `applyRecord`/`applyEvent` fold into — turn, lastActivityAt, lastAssistant, aiTitle,
@@ -315,6 +325,8 @@ export interface TailState extends FoldState {
   subAgents: Map<string, SubAgentEntry>
   // completed sub-agents retained for drawer review (bounded ring; NOT surfaced live) — see above
   retiredSubAgents: Map<string, RetiredSubAgent>
+  // completed shells retained so an already-open output drawer can render the terminal tail.
+  retiredShells: Map<string, RetiredShell>
   // a pending native AskUserQuestion the session is frozen on (no tool_result yet), else undefined
   pendingAsk?: PendingAskData
   subAgentsSig?: string // last-emitted signature of the derived background-ops + ask view (dirty-change detection)
@@ -390,6 +402,7 @@ export function newTailState(
     lastAssistantHasQuestion: false,
     subAgents: new Map(),
     retiredSubAgents: new Map(),
+    retiredShells: new Map(),
     primed: false,
     turn: "in-flight",
     permPrompt: false,
@@ -565,7 +578,8 @@ function trackDispatches(state: TailState, rec: Record): void {
     if (!id) continue
     const input = (b.input ?? {}) as { description?: unknown; run_in_background?: unknown; subagent_type?: unknown; command?: unknown }
     const startedAt = typeof rec.timestamp === "string" ? rec.timestamp : (state.lastActivityAt ?? "")
-    const outputFile = state.subAgents.get(id)?.outputFile
+    const previous = state.subAgents.get(id)
+    const outputFile = previous?.outputFile
     const desc = typeof input.description === "string" && input.description.trim() ? input.description.trim() : undefined
     if (b.name === "Agent") {
       if (input.run_in_background === false) continue // foreground (blocking) — visible via the spinner
@@ -573,7 +587,8 @@ function trackDispatches(state: TailState, rec: Record): void {
       const subagentType = typeof input.subagent_type === "string" && input.subagent_type.trim() ? input.subagent_type.trim() : undefined
       state.subAgents.set(id, { kind: "agent", toolUseId: id, label: desc ?? "sub-agent", startedAt, subagentType, outputFile })
     } else if ((b.name === "Bash" && input.run_in_background === true) || b.name === "Monitor") {
-      state.subAgents.set(id, { kind: "shell", toolUseId: id, label: desc ?? shellSummary(input.command), startedAt, outputFile })
+      const command = typeof input.command === "string" ? input.command : previous?.command
+      state.subAgents.set(id, { kind: "shell", toolUseId: id, label: desc ?? shellSummary(input.command), startedAt, command, outputFile, taskId: previous?.taskId })
     }
   }
 }
@@ -611,11 +626,20 @@ function retireToRing(state: TailState, entry: SubAgentEntry, finishedAt: string
 }
 
 // Retire a live entry however it was CORRELATED (by tool_use id from a notification, or by runtime
-// task id from a manual stop) — the map key is always its tool_use id. A display-only SHELL just
-// clears; an AGENT moves into the review ring. The single exit for every terminal signal.
+// task id from a manual stop) — the map key is always its tool_use id. Both kinds retain the bounded
+// metadata their read-only drawers need. The single exit for every terminal signal.
 function retireLive(state: TailState, entry: SubAgentEntry, finishedAt: string | undefined, status: "completed" | "failed" | "killed"): void {
   state.subAgents.delete(entry.toolUseId)
-  if (entry.kind === "shell") return // display-only — nothing to review, no retention ring
+  if (entry.kind === "shell") {
+    state.retiredShells.delete(entry.toolUseId)
+    state.retiredShells.set(entry.toolUseId, { toolUseId: entry.toolUseId, command: entry.command, outputFile: entry.outputFile, status })
+    while (state.retiredShells.size > RETAINED_SHELLS_MAX) {
+      const oldest = state.retiredShells.keys().next().value
+      if (oldest === undefined) break
+      state.retiredShells.delete(oldest)
+    }
+    return
+  }
   retireToRing(state, entry, finishedAt, status)
 }
 
@@ -1088,6 +1112,8 @@ export interface Tailer {
   // Drill-in drawer lookup: a tracked or retained sub-agent's transcript path + state, or undefined if
   // unknown (never dispatched, or aged out of the retained ring). The router maps undefined → "gone".
   subAgent(slug: string, id: string): { outputFile?: string; state: "running" | "stale" | "done" } | undefined
+  // Read-only background-shell drawer lookup. Output content stays server-side until the scoped query.
+  backgroundShell?(slug: string, id: string): { command?: string; outputFile?: string; state: "running" | "done" } | undefined
   // Drop a session's in-memory tail state (registered + foreign) — called when its row is hard-deleted
   // (forgetSession) so a stale TailState bound to the gone transcript can't mis-tail a later same-slug
   // re-dispatch. A no-op for an unknown slug.
@@ -1296,7 +1322,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     const out: BgShellView[] = []
     for (const e of state.subAgents.values()) {
       if (e.kind !== "shell") continue
-      out.push({ label: e.label, startedAt: e.startedAt, state: "running" })
+      out.push({ label: e.label, startedAt: e.startedAt, state: "running", id: e.toolUseId, command: e.command })
     }
     return out
   }
@@ -1323,6 +1349,18 @@ export function createTailer(deps: TailerDeps): Tailer {
     if (live) return { outputFile: live.outputFile, state: entryStale(live, now()) ? "stale" : "running" }
     const dead = state.retiredSubAgents.get(id)
     if (dead) return { outputFile: dead.outputFile, state: "done" }
+    return undefined
+  }
+
+  function backgroundShellLookup(slug: string, id: string): { command?: string; outputFile?: string; state: "running" | "done" } | undefined {
+    const state = states.get(slug)
+    if (!state || !registeredStateIsCurrent(state)) return undefined
+    const live = state.subAgents.get(id)
+    if (live?.kind === "shell") {
+      return { command: live.command, outputFile: live.outputFile, state: state.paneDead ? "done" : "running" }
+    }
+    const dead = state.retiredShells.get(id)
+    if (dead) return { command: dead.command, outputFile: dead.outputFile, state: "done" }
     return undefined
   }
 
@@ -1981,6 +2019,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.
     foreignIds: () => foreignFresh.map((f) => f.id),
     subAgent: subAgentLookup,
+    backgroundShell: backgroundShellLookup,
     forget(slug) {
       states.delete(slug)
       foreignStates.delete(slug)
