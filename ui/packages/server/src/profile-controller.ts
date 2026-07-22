@@ -1,4 +1,4 @@
-import type { BoardManager } from "./board.ts"
+import { resolveSessionProfile, type BoardManager } from "./board.ts"
 import type {
   ProfileChangeExpectation,
   ProfileHandoffBinding,
@@ -191,12 +191,19 @@ export function createProfileController(deps: ProfileControllerDeps): ProfileCon
 
     // `current` is the ROLLBACK target — it is journaled as `previous` and relaunched if the target
     // profile fails — so it is resolved to a launchable pair (a never-recorded effort becomes the
-    // model's default). The no-op check below deliberately compares the RAW persisted pair instead: a
+    // model's default) from the SAME persisted+observed merge the board renders, never the raw row.
+    // The tailer persists an observed profile only once BOTH halves are known, and Claude records a
+    // thread's model in its transcript while frequently never recording the launch effort — so a thread
+    // dispatched without an explicit effort keeps model AND effort NULL in the registry while the board
+    // (correctly) shows its observed model and the composer enables the control off that. Reading the
+    // raw row here made every such thread fail closed on an empty "pair:  / " naming neither half.
+    // The no-op check below deliberately compares the RAW persisted pair instead: a
     // thread whose effort was never recorded must still perform a real handoff when the request names
     // that model's default effort, rather than short-circuit as "applied" while the live runtime keeps
     // an unknown effort.
     const persisted = { model: row.model?.trim() ?? "", effort: row.effort?.trim() ?? "" }
-    const current = resolveRollbackProfile(row.backend, persisted.model, persisted.effort)
+    const observed = resolveSessionProfile(row, deps.tailer.get(slug))
+    const current = resolveRollbackProfile(row.backend, observed.model ?? "", observed.effort ?? "")
     if (persisted.model === requested.model && persisted.effort === requested.effort) {
       deps.storage.setControlErrorIfCurrent(slug, row.session_id, row.runtime_generation ?? 0, null)
       deps.board.refresh()
