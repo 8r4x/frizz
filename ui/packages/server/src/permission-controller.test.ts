@@ -244,6 +244,38 @@ test("composer inspection captures a multi-paragraph draft across internal blank
   assert.equal(codexComposerMatches(`${esc}[1m›${esc}[0m Do the safe thing\n  ${esc}[2m100% context left${esc}[0m`, "Do the safe thing"), true)
 })
 
+// Regression: on `codex resume`, Codex RESTORES an unsent draft and renders its mode/status line TIGHT
+// under the last paragraph — no blank separator, and the internal paragraph blanks collapsed too. The
+// blank-boundary early-completion never fires, so the DP consumed that status row, failed, and wedged a
+// resumed thread on its OWN restored draft ("submit or clear the existing Codex terminal draft"). Once
+// the target is fully reconstructed, a " · " status row is the footer boundary, exactly like a blank.
+test("a resumed draft with a TIGHT status line (no blank) reconciles instead of wedging", () => {
+  const esc = String.fromCharCode(27)
+  // Everything consecutive — para1, para2, and the mode/status line — as Codex re-renders a restore.
+  const tight =
+    `${esc}[1m›${esc}[0m Fix the snooze button color.\n  I hate the nested agent card; remove the fence.\n  gpt-5.6-sol xhigh · ~/Documents/projects/fray · Context 37% used`
+  assert.equal(
+    codexComposerMatches(tight, "Fix the snooze button color.\n\nI hate the nested agent card; remove the fence."),
+    true,
+    "the restored draft (tight status line) matches and delivers instead of wedging",
+  )
+  // Fail-closed: a tight draft whose content differs from the queued item is still rejected.
+  assert.equal(
+    codexComposerMatches(tight, "Something completely different.\n\nAnother thing entirely."),
+    false,
+    "a foreign tight draft still fails closed",
+  )
+  // The " · " boundary only fires AFTER the target is fully reconstructed, so a draft that itself
+  // contains " · " on a row BEFORE the target completes is not truncated early.
+  const midDot =
+    `${esc}[1m›${esc}[0m Compare\n  a · b · c and then finish the analysis.\n  gpt-5.6-sol xhigh · ~/x · Context 5% used`
+  assert.equal(
+    codexComposerMatches(midDot, "Compare a · b · c and then finish the analysis."),
+    true,
+    "a ' · ' row before the target completes is draft text, not the status boundary",
+  )
+})
+
 // Regression (adversarial review): the footer terminator must be the DIM, anchored footer row — not a
 // loose substring — or a real steer row that merely says "context left" / "tab to queue message" ends
 // the draft early and wedges the queue (the exact failure this path exists to prevent). Footer rows are

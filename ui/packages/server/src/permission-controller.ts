@@ -267,6 +267,13 @@ export function codexComposerMatches(escapedPane: string, expected: string): boo
     // reconstructed, the draft ended at that paragraph and this row (plus the footer/status below it)
     // is not part of the staged text — the composer is confirmed to hold exactly our message.
     if (row.boundaryBefore && positions.has(target.length)) return true
+    // Codex renders its mode/status line (fields joined by " · ") TIGHT under the last draft line —
+    // no blank separator — when it RESTORES an unsent draft on `codex resume`. Without this, the DP
+    // would try to consume that status row, fail, and wedge a resumed thread on its OWN restored
+    // draft ("submit or clear the existing Codex terminal draft"). Once the target is fully
+    // reconstructed, a " · " status row is the footer boundary, exactly like a blank. A prose draft
+    // effectively never contains a " · " middot, so real multi-paragraph steers still fail closed.
+    if (row.text.includes(" · ") && positions.has(target.length)) return true
     // A recognized footer hint ends the draft even when Codex renders it tight under the last line
     // (no blank between). The old parts-based capture stopped at these markers regardless of blanks;
     // preserving that keeps delivery robust if a future Codex build drops the pre-footer blank row.
