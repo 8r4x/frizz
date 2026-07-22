@@ -430,6 +430,38 @@ test("manual snooze persists exactly across restart, expires atomically, and Arc
   s.close()
 })
 
+test("a snooze carrying a prompt outlives its deadline for the waker, and the pair is written/cleared atomically", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fray-storage-snooze-prompt-"))
+  const path = join(dir, "ui.db")
+  const exact = "2026-07-14T08:45:12.345Z"
+  let s = createStorage(path)
+  s.upsertSession(row({ slug: "bumps", state: "open" }))
+  s.upsertSession(row({ slug: "reminds", state: "open" }))
+  s.setSnoozedUntil("bumps", exact, "Check whether CI went green.")
+  s.setSnoozedUntil("reminds", exact)
+  s.close()
+
+  s = createStorage(path)
+  assert.equal(s.getSession("bumps")?.snooze_prompt, "Check whether CI went green.", "the follow-up survives restart")
+  // THE LOAD-BEARING ASYMMETRY: the board sweeps elapsed snoozes on every refresh, far more often than
+  // the waker ticks. If it swept a prompt-carrying row the scheduled bump would be silently lost.
+  assert.equal(s.clearExpiredSnoozes(exact), 1, "only the promptless reminder expires here")
+  assert.equal(s.getSession("reminds")?.snoozed_until, null)
+  assert.equal(s.getSession("bumps")?.snoozed_until, exact, "the armed bump is the scheduler's to settle, not the board's")
+
+  s.setSnoozedUntil("bumps", null)
+  assert.equal(s.getSession("bumps")?.snooze_prompt, null, "wake-now disarms the prompt with the instant")
+
+  s.setSnoozedUntil("bumps", exact, "Land it.")
+  s.setState("bumps", "archived")
+  assert.deepEqual(
+    (({ snoozed_until, snooze_prompt }) => ({ snoozed_until, snooze_prompt }))(s.getSession("bumps")!),
+    { snoozed_until: null, snooze_prompt: null },
+    "Archive can never leave an armed prompt behind a cleared deadline",
+  )
+  s.close()
+})
+
 test("runtime generations make permission and queue commits compare-and-swap safe", () => {
   const s = store()
   s.upsertSession(row({

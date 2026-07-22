@@ -12,7 +12,7 @@ import { QuotaBar } from "./QuotaBar.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { ProviderMark } from "./ProviderMark.tsx"
 import { STATUS_CHIP } from "../lib/status.ts"
-import { formatSnoozedUntil, formatSnoozeWake, formatAutoSnoozedUntil } from "../lib/snooze.ts"
+import { formatSnoozedUntil, formatSnoozeWake, formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
 import { activeSidebarSection, railRevealDelta, type SidebarSectionGeometry } from "../lib/sidebarScrollspy.ts"
 import type { ReactElement, ReactNode } from "react"
 
@@ -281,7 +281,7 @@ export const ThreadRow = memo(function ThreadRow({
   const gloss = held
     ? null
     : snoozedUntil
-      ? `SNOOZED · ${formatSnoozeWake(snoozedUntil)}`
+      ? `${t.snoozePrompt ? "BUMPS" : "SNOOZED"} · ${formatSnoozeWake(snoozedUntil)}`
       : !legacy && t.lastFence?.kind === "awaiting"
         ? hintGloss(t.lastFence.hints)
         : null
@@ -494,8 +494,12 @@ function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string |
     // the tooltip wording marks as an `auto` variant of the same word rather than a separate idea:
     //   • a user snooze re-surfaces the CARD for you  → "Snoozed until <wake>"       (you act next)
     //   • an ```awaiting timer:` park / blocked+timer status auto-resumes the agent → "Auto-snoozed until <wake>"
+    // A user snooze that carries a PROMPT crosses that line by design — fray resumes the agent with it —
+    // so formatUserSnooze reads it as the auto variant and names the follow-up it will send.
     const snoozedUntil = futureSnoozedUntil(t)
-    if (snoozedUntil) return { node: hourglass, tip: formatSnoozedUntil(snoozedUntil) ?? "Snoozed until a scheduled check" }
+    if (snoozedUntil) {
+      return { node: hourglass, tip: formatUserSnooze(snoozedUntil, t.snoozePrompt) ?? "Snoozed until a scheduled check" }
+    }
     // A usage-limit park is the third member of that same "held on the clock" family — fray resolves
     // this one too, so it reads as an auto-snooze, named by what actually stopped the work.
     if (t.limitPause?.autoResume) {

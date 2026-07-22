@@ -222,6 +222,14 @@ export const SnoozeUntil = z.string().regex(
 }, "Snooze time must be valid")
 export type SnoozeUntil = z.infer<typeof SnoozeUntil>
 
+// The follow-up a snooze carries. Its presence is what turns a snooze from a passive reminder (the
+// card re-surfaces, you act) into a SCHEDULED BUMP (fray resumes the agent with this text at the
+// deadline). Trimmed at the boundary so whitespace can never arm a wake that delivers nothing, and
+// capped like a composer message because it is delivered as an ordinary user turn.
+export const SNOOZE_PROMPT_MAX = 4000
+export const SnoozePrompt = z.string().trim().min(1).max(SNOOZE_PROMPT_MAX)
+export type SnoozePrompt = z.infer<typeof SnoozePrompt>
+
 // The signal fence on a thread's FINAL assistant message — the fence language IS the state, the
 // body is the message. `done` = checked success card in the queue until the human Archives it (the
 // fence itself MUTATES NOTHING — maintainer-settled); `awaiting` = a parked human/timer wait.
@@ -360,6 +368,10 @@ export const ThreadView = z.object({
   // suppressed from Queue and shown dimmed in Held. Hard interactive gates (question, permission,
   // native approval, crash) deliberately break through it. Expired values are cleared server-side.
   snoozedUntil: SnoozeUntil.optional(),
+  // The prompt this snooze will deliver at its deadline, when it carries one. Present ⇒ the wake is an
+  // AUTO-bump (the scheduler resumes the agent with exactly this text) rather than a reminder, which is
+  // the distinction the held row's tooltip renders. Absent ⇒ the card merely re-surfaces.
+  snoozePrompt: z.string().optional(),
   // The signal fence on the final assistant message, present only while the thread is excused by it.
   lastFence: ThreadFence.optional(),
   // SERVER-DERIVED queue membership: explicit questions, checked/done handoffs, plus the process-level
@@ -682,6 +694,10 @@ export const SetThreadSnoozeInput = z.object({
   slug: ThreadSlug,
   // null is the explicit "wake now"/cancel operation; presets and custom local input send UTC.
   until: SnoozeUntil.nullable(),
+  // Optional scheduled follow-up. Omitted/null ⇒ a plain reminder snooze; a prompt ⇒ the thread is
+  // automatically bumped with it at `until`. Always cleared together with the instant, so a wake-now
+  // can never leave an armed prompt behind.
+  prompt: SnoozePrompt.nullable().optional(),
 }).strict()
 export type SetThreadSnoozeInput = z.infer<typeof SetThreadSnoozeInput>
 

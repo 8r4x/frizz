@@ -2,7 +2,7 @@ import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
 import { isValidAwaitingTimer, type QuotaSnapshot } from "@fray-ui/shared"
-import type { Storage } from "./storage.ts"
+import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { FenceView } from "./tailer.ts"
 import type { LimitFault } from "./backend/types.ts"
@@ -207,6 +207,50 @@ function isLimitFenceId(fenceId: string): boolean {
 export function limitResumeSteer(window: LimitFault["window"]): string {
   const which = window === "weekly" ? "weekly usage limit" : window === "session" ? "session usage limit" : "usage limit"
   return `⏳ The ${which} that interrupted you has reset. Continue exactly where you left off.`
+}
+
+// ---- SOURCE 3: THE USER SNOOZE ------------------------------------------------------------------
+// A snooze that carries a prompt is the human's own `awaiting timer:` — park until an instant, then
+// resume with a message — differing only in WHO authored the message. So it wakes over this same
+// outbox rather than a private timer of its own, inheriting crash-safety, retry/backoff, supersession
+// and every-backend delivery for free.
+//
+// Its record of intent is the session row itself (`snoozed_until` + `snooze_prompt`), exactly as the
+// limit source's record is the tail's limit fault. That is why `clearExpiredSnoozes` deliberately
+// leaves a prompt-carrying snooze standing past its deadline: the row must outlive the crossing so a
+// wake-now, a human follow-up, or a re-snooze can be READ here as supersession. It is cleared only
+// once this wake reaches a terminal state — and only while it still matches the delivery it armed.
+//
+// The prompt is delivered VERBATIM, with no "⏰ your snooze fired" preamble: the human scheduled a
+// follow-up, so the worker should receive precisely the turn they wrote, not a paraphrase of it.
+const SNOOZE_FENCE_PREFIX = "snooze"
+const SNOOZE_HINT_PREFIX = "snooze:"
+
+// The prompt is part of the generation id, not just the instant: editing the follow-up on an
+// already-due snooze must mint a NEW delivery rather than collide with the enqueued one's message.
+function snoozeFenceId(until: string, prompt: string): string {
+  const digest = createHash("sha256").update(prompt).digest("hex").slice(0, 16)
+  return `${SNOOZE_FENCE_PREFIX}:${until}:${digest}`
+}
+function isSnoozeFenceId(fenceId: string): boolean {
+  return fenceId.startsWith(`${SNOOZE_FENCE_PREFIX}:`)
+}
+
+interface ArmedSnooze {
+  until: string
+  untilMs: number
+  prompt: string
+  fenceId: string
+}
+// A row's CURRENT scheduled bump, if it has one. A snooze without a prompt is the historical reminder
+// (the board owns its expiry) and never reaches the waker.
+function armedSnooze(row: Pick<SessionRow, "snoozed_until" | "snooze_prompt">): ArmedSnooze | undefined {
+  const until = row.snoozed_until
+  const prompt = row.snooze_prompt?.trim()
+  if (!until || !prompt) return undefined
+  const untilMs = Date.parse(until)
+  if (!Number.isFinite(untilMs)) return undefined
+  return { until, untilMs, prompt, fenceId: snoozeFenceId(until, prompt) }
 }
 
 // A single hint's verdict this tick: met? + the steer to send when it fires. `undefined` = indeterminate
@@ -598,6 +642,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (!fault || limitFenceId(fault) !== item.fenceId) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
+    // A snooze wake is bound to the exact (instant, prompt) the human armed. Wake-now, a follow-up
+    // (both clear the row) and a re-snooze (a different fence id) therefore all read as supersession
+    // here — the human already said something newer than the message we were holding.
+    if (isSnoozeFenceId(item.fenceId)) {
+      if (armedSnooze(row)?.fenceId !== item.fenceId) return "superseded"
+      return tele.turn === "idle" ? "current-idle" : "current-busy"
+    }
     const fence = tele.lastFence
     if (!fence || fence.kind !== "awaiting" || !fence.hints.some(isActionable)) return "superseded"
     if (fenceIdentity(fence.hints, tele.lastActivityAt) !== item.fenceId) return "superseded"
@@ -843,15 +894,57 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   }
 
+  // ---- The user-snooze bump pass -------------------------------------------------------------------
+  // Deliberately does NOT filter on `turn === "idle"` the way the fence pass does. A snooze deadline is
+  // a promise to the human, so a thread that happens to be mid-turn when it crosses must not LOSE its
+  // follow-up — the delivery gate below holds the item until the thread comes to rest instead.
+  //
+  // Unlike an unregistered legacy timer, an overdue snooze found at boot DOES fire: the DB row is
+  // itself the durable registration, so a deadline that crossed while fray was down is exactly the case
+  // this is meant to honor. The blast radius stays bounded by the handful of threads a human snoozed.
+  function evalSnoozes(nowMs: number): void {
+    for (const row of deps.storage.allSessions()) {
+      if (row.state === "archived" || row.archived === 1) continue
+      const armed = armedSnooze(row)
+      if (!armed || armed.untilMs > nowMs) continue
+      const deliveryId = wakeDeliveryId(row.slug, row.session_id, armed.fenceId)
+      if (outbox.get(deliveryId)) continue // this snooze already has its one wake
+      const item = outbox.enqueue({
+        id: deliveryId,
+        slug: row.slug,
+        sessionId: row.session_id,
+        fenceId: armed.fenceId,
+        hintKey: `${SNOOZE_HINT_PREFIX}${armed.until}`,
+        message: armed.prompt,
+        reason: `snooze elapsed (${armed.until})`,
+      }, nowMs).delivery
+      log(`waker: queued ${row.slug} — ${item.reason}`)
+      checkpoint("after-enqueue", item)
+    }
+  }
+
+  // Disarm the row a snooze wake came from, once that wake is terminal. Guarded on the fence id still
+  // matching so a human who re-snoozed (or snoozed again) between enqueue and settlement keeps their
+  // NEW deadline — the stale delivery must never erase state it no longer describes.
+  function settleSnooze(item: WakeDelivery): void {
+    if (!isSnoozeFenceId(item.fenceId)) return
+    const row = deps.storage.getSession(item.slug)
+    if (!row || row.session_id !== item.sessionId) return
+    if (armedSnooze(row)?.fenceId !== item.fenceId) return
+    deps.storage.setSnoozedUntil(item.slug, null)
+  }
+
   function reconcileOutbox(nowMs: number): void {
     for (const item of outbox.listOpen()) {
       const context = deliveryContext(item)
       if (context === "confirmed") {
         outbox.confirm(item.id, nowMs)
+        settleSnooze(item)
         continue
       }
       if (context === "superseded") {
         outbox.supersede(item.id, nowMs, "the exact awaiting fence or session was superseded")
+        settleSnooze(item)
         continue
       }
       if (item.state !== "leased" || item.leaseUntil === null || item.leaseUntil > nowMs) continue
@@ -867,6 +960,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         item.lastError ?? "delivery lease expired before acknowledgement",
       )
       if (recovered?.state === "exhausted") {
+        settleSnooze(item)
         log(`waker: delivery EXHAUSTED for ${item.slug} after ${recovered.attempts} attempts — ${recovered.lastError ?? "unknown error"}`)
       }
     }
@@ -885,10 +979,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const context = deliveryContext(item)
       if (context === "confirmed") {
         outbox.confirm(item.id, now())
+        settleSnooze(item)
         continue
       }
       if (context === "superseded") {
         outbox.supersede(item.id, now(), "the exact awaiting fence or session was superseded before delivery")
+        settleSnooze(item)
         continue
       }
       if (context !== "current-idle") {
@@ -916,6 +1012,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         // decoupled from resume.ts (see TerminalDeliveryError).
         if ((error as { terminalDelivery?: unknown })?.terminalDelivery === true) {
           outbox.supersede(item.id, failedAt, message)
+          settleSnooze(item)
           log(`waker: delivery ABANDONED for ${item.slug} (terminal, no retry): ${message}`)
           continue
         }
@@ -938,6 +1035,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         log(`waker: delivery acknowledgement lost ownership for ${item.slug}; preserving the authoritative terminal state`)
         continue
       }
+      settleSnooze(item)
       const acknowledged = outbox.get(item.id)
       if (acknowledged) checkpoint("after-ack", acknowledged)
     }
@@ -975,6 +1073,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
       log(`waker: limit-resume pass failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    try {
+      evalSnoozes(now())
+    } catch (err) {
+      if (err instanceof InjectedSchedulerCrash) throw err
+      log(`waker: snooze-bump pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     reconcileOutbox(now())
     await deliverDue()

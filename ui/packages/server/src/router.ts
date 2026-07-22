@@ -714,6 +714,11 @@ export function createRouter(ctx: AppContext) {
     // Durable manual snooze. The client sends one exact UTC instant derived from its local picker;
     // Archive clears it, and a human follow-up wakes immediately. The operator may deliberately park
     // any queue reason—including an unresolved ask, permission prompt, or crash—until this deadline.
+    //
+    // An optional `prompt` upgrades the park into a SCHEDULED BUMP: at the deadline the wake scheduler
+    // resumes this thread with that text over the same durable outbox a worker's `awaiting timer:` uses
+    // (scheduler.ts, SOURCE 3). Without one the snooze stays what it always was — the card re-surfaces
+    // and the human acts. `until: null` (wake now) clears both halves.
     setThreadSnooze: mutation({
       input: SetThreadSnoozeInput,
       handler: async ({ input }) => {
@@ -725,7 +730,7 @@ export function createRouter(ctx: AppContext) {
           if (thread.state === "archived") throw new Error("Reopen this thread before snoozing it")
           if (Date.parse(input.until) <= Date.now()) throw new Error("Snooze time must be in the future")
         }
-        ctx.storage.setSnoozedUntil(input.slug, input.until)
+        ctx.storage.setSnoozedUntil(input.slug, input.until, input.prompt ?? null)
         ctx.board.refresh()
       },
     }),

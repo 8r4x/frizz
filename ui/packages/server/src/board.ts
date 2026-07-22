@@ -413,6 +413,9 @@ function sessionThreadView(
     planPath: row.plan_path ?? undefined,
     state,
     snoozedUntil,
+    // Only meaningful while the snooze is still pending — a prompt without a live deadline is an
+    // already-delivered (or superseded) bump the row has not been swept clean of yet.
+    snoozePrompt: snoozedUntil ? row.snooze_prompt ?? undefined : undefined,
     needsYou,
     crashed,
     pendingInteraction: interactionPresence.pending,

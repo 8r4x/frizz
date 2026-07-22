@@ -1,11 +1,12 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import {
-  defaultCustomSnoozeValue,
   DEFAULT_SNOOZE_PRESET,
   formatSnoozedUntil,
   formatSnoozeWake,
   formatAutoSnoozedUntil,
+  formatUserSnooze,
+  snoozePromptPreview,
   isSnoozePreset,
   localDateTimeInputValue,
   parseLocalSnooze,
@@ -55,7 +56,6 @@ test("calendar tomorrow stays at 9 AM while exact-day snooze crosses a DST bound
 test("custom local snooze round-trips wall-clock input and rejects normalized/past values", () => {
   const now = new Date(2026, 6, 13, 12, 0, 0, 0)
   assert.equal(localDateTimeInputValue(now), "2026-07-13T12:00")
-  assert.equal(defaultCustomSnoozeValue(now.getTime()), localDateTimeInputValue(new Date(now.getTime() + 86_400_000)))
   const parsed = parseLocalSnooze("2026-07-14T08:45", now.getTime())
   assert.equal(parsed.ok, true)
   if (parsed.ok) {
@@ -93,4 +93,32 @@ test("wake formatting uses the local calendar and locale-aware times", () => {
     if (previousTz === undefined) delete process.env.TZ
     else process.env.TZ = previousTz
   }
+})
+
+test("a snooze carrying a prompt reads as the AUTO variant and names the follow-up it will send", () => {
+  const previousTz = process.env.TZ
+  process.env.TZ = "America/Los_Angeles"
+  try {
+    const now = new Date(2026, 6, 13, 8, 0, 0, 0)
+    const wednesday = new Date(2026, 6, 15, 21, 0, 0, 0).toISOString()
+    // Without a prompt it is still the reminder it always was — YOU act at the deadline.
+    assert.equal(formatUserSnooze(wednesday, undefined, now.getTime()), "Snoozed until Wednesday at 9:00 PM")
+    assert.equal(formatUserSnooze(wednesday, "   ", now.getTime()), "Snoozed until Wednesday at 9:00 PM")
+    // With one, fray resolves the park by resuming the agent — the same thing "Auto-snoozed" already
+    // means for a worker `timer:` park, so it must not sprout a third vocabulary.
+    assert.equal(
+      formatUserSnooze(wednesday, "Check CI", now.getTime()),
+      "Auto-snoozed until Wednesday at 9:00 PM — then: Check CI",
+    )
+    assert.equal(formatUserSnooze("not-a-date", "Check CI", now.getTime()), null)
+  } finally {
+    if (previousTz === undefined) delete process.env.TZ
+    else process.env.TZ = previousTz
+  }
+})
+
+test("a snooze prompt preview collapses to one line and truncates without spilling the tooltip", () => {
+  assert.equal(snoozePromptPreview("  check\n  CI   now  "), "check CI now")
+  assert.equal(snoozePromptPreview("abcdefghij", 5), "abcd\u2026")
+  assert.equal(snoozePromptPreview("abcde", 5), "abcde", "exactly at the cap is not truncated")
 })

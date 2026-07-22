@@ -981,3 +981,142 @@ test("limit: a limit wake and a fence wake for the same session get distinct del
   assert.equal(new Set(ids).size, ids.length, "no delivery-id collision between the two wake sources")
   h.storage.close()
 })
+
+// ---- SOURCE 3: the user snooze --------------------------------------------------------------------
+
+// A snooze that carries a prompt is the human's own `awaiting timer:` — park until an instant, then
+// resume with a message. These lock down that it rides the SAME outbox, delivers the prompt verbatim,
+// and settles the row that armed it.
+
+function snoozeRow(slug: string, until: string, prompt: string | null): SessionRow {
+  return row(slug, { snoozed_until: until, snooze_prompt: prompt })
+}
+
+test("snooze: a due prompt-carrying snooze bumps the thread with the prompt VERBATIM, exactly once", async () => {
+  const h = harness()
+  const until = iso(h.clock.ms + 60_000)
+  h.storage.upsertSession(snoozeRow("s", until, "Check whether CI went green and land it if so."))
+  h.tele.set("s", tele())
+  const s = h.make()
+  await s.tick()
+  assert.deepEqual(h.resumes, [], "a snooze still in the future must not fire")
+
+  h.clock.ms = Date.parse(until)
+  await s.tick()
+  await s.tick() // must not double-bump
+  assert.deepEqual(h.resumes.map((r) => r.slug), ["s"])
+  // No "⏰ your snooze fired" preamble: the human scheduled a turn, so the worker receives that turn.
+  assert.equal(h.resumes[0].message, "Check whether CI went green and land it if so.")
+  // The row that armed the bump is settled by the delivery, so nothing re-arms on the next tick.
+  assert.equal(h.storage.getSession("s")?.snoozed_until, null)
+  assert.equal(h.storage.getSession("s")?.snooze_prompt, null)
+  h.storage.close()
+})
+
+test("snooze: a snooze WITHOUT a prompt never wakes the agent (it is a reminder the board owns)", async () => {
+  const h = harness()
+  const until = iso(h.clock.ms + 60_000)
+  h.storage.upsertSession(snoozeRow("s", until, null))
+  h.tele.set("s", tele())
+  const s = h.make()
+  h.clock.ms = Date.parse(until) + 60_000
+  await s.tick()
+  assert.deepEqual(h.resumes, [], "the historical snooze only re-surfaces the card")
+  h.storage.close()
+})
+
+test("snooze: an OVERDUE snooze found at boot does fire — unlike an unregistered timer fence", async () => {
+  // The deliberate divergence from the boot-mass-fire guard. A fence hint is only a claim in a
+  // transcript, so an already-past one is untrustworthy; a snooze row is an explicit durable promise
+  // the human made, so a deadline that crossed while fray was down is exactly what it is FOR.
+  const h = harness()
+  h.storage.upsertSession(snoozeRow("s", iso(h.clock.ms - 3 * 3_600_000), "Pick this back up."))
+  h.tele.set("s", tele())
+  const s = h.make()
+  await s.tick()
+  assert.deepEqual(h.resumes.map((r) => r.message), ["Pick this back up."])
+  h.storage.close()
+})
+
+test("snooze: waking now before delivery supersedes the queued bump", async () => {
+  const h = harness()
+  const until = iso(h.clock.ms + 60_000)
+  h.storage.upsertSession(snoozeRow("s", until, "stale follow-up"))
+  h.tele.set("s", tele(undefined, "in-flight")) // busy → enqueued, but delivery defers
+  const s = h.make()
+  h.clock.ms = Date.parse(until)
+  await s.tick()
+  assert.deepEqual(h.resumes, [], "a mid-turn thread is not stepped on")
+
+  h.storage.setSnoozedUntil("s", null) // the human hit "Wake now" (or sent a follow-up)
+  h.tele.set("s", tele())
+  await s.tick()
+  assert.deepEqual(h.resumes, [], "the human already said something newer than the message we held")
+  assert.equal(createWakeDeliveryStore(h.storage.db).list()[0]?.state, "superseded")
+  h.storage.close()
+})
+
+test("snooze: re-snoozing before delivery keeps the NEW deadline and mints its own bump", async () => {
+  const h = harness()
+  const first = iso(h.clock.ms + 60_000)
+  h.storage.upsertSession(snoozeRow("s", first, "old prompt"))
+  h.tele.set("s", tele(undefined, "in-flight"))
+  const s = h.make()
+  h.clock.ms = Date.parse(first)
+  await s.tick() // enqueued, undeliverable (busy)
+
+  const second = iso(h.clock.ms + 3_600_000)
+  h.storage.setSnoozedUntil("s", second, "new prompt")
+  h.tele.set("s", tele())
+  await s.tick()
+  assert.deepEqual(h.resumes, [], "the superseded bump must not deliver")
+  assert.equal(h.storage.getSession("s")?.snoozed_until, second, "settling the stale wake must not erase the fresh snooze")
+
+  h.clock.ms = Date.parse(second)
+  await s.tick()
+  assert.deepEqual(h.resumes.map((r) => r.message), ["new prompt"])
+  h.storage.close()
+})
+
+test("snooze: a bump that comes due mid-turn is HELD, then delivered once the thread rests", async () => {
+  const h = harness()
+  const until = iso(h.clock.ms + 60_000)
+  h.storage.upsertSession(snoozeRow("s", until, "resume the audit"))
+  h.tele.set("s", tele(undefined, "in-flight"))
+  const s = h.make()
+  h.clock.ms = Date.parse(until)
+  await s.tick()
+  assert.deepEqual(h.resumes, [])
+
+  h.tele.set("s", tele()) // comes to rest
+  h.clock.ms += 60_000
+  await s.tick()
+  assert.deepEqual(h.resumes.map((r) => r.message), ["resume the audit"], "a deadline crossed mid-turn is owed, not dropped")
+  h.storage.close()
+})
+
+test("snooze: an archived thread never bumps", async () => {
+  const h = harness()
+  const until = iso(h.clock.ms - 60_000)
+  h.storage.upsertSession(row("s", { snoozed_until: until, snooze_prompt: "nope", state: "archived", archived: 1 }))
+  h.tele.set("s", tele())
+  const s = h.make()
+  await s.tick()
+  assert.deepEqual(h.resumes, [])
+  h.storage.close()
+})
+
+test("snooze: a snooze wake and a fence wake for the same session get distinct deliveries", async () => {
+  const h = harness()
+  const target = h.clock.ms + 30_000
+  h.storage.upsertSession(snoozeRow("s", iso(target), "snooze prompt"))
+  h.tele.set("s", tele(awaiting([{ kind: "timer", value: iso(target) }], "re-check")))
+  const s = h.make()
+  await s.tick() // arms the fence timer (witnessed unmet); the snooze is not yet due
+  h.clock.ms = target + 1000
+  await s.tick()
+  const ids = createWakeDeliveryStore(h.storage.db).list().map((d) => d.id)
+  assert.equal(new Set(ids).size, ids.length, "no delivery-id collision between the snooze and fence sources")
+  assert.equal(ids.length, 2, "both sources armed their own wake for this session")
+  h.storage.close()
+})
