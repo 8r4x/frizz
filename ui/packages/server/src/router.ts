@@ -507,8 +507,8 @@ export function createRouter(ctx: AppContext) {
     followUp: mutation({
       input: FollowUpInput,
       handler: async ({ input }) => {
-        // Codex's TUI drops Enter when it follows literal text in the same instant, and an active turn
-        // explicitly requires Tab to queue. Persist + capture-gate that path; Claude keeps its native
+        // Codex's TUI drops Enter when it follows literal text in the same instant, so this path is
+        // persisted + capture-gated and submits through one atomic paste-and-key. Claude keeps its native
         // live injection, and any dead session resumes through the backend command.
         const row = ctx.storage.getSession(input.slug)
         if (hasPendingPermissionChange(row)) {
