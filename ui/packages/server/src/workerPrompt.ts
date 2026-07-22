@@ -80,11 +80,13 @@ they read it in a queue, often hours later, with none of your working context. H
 prioritized and presented is decided by whether the message carries a **signal fence**.
 
 **Bare rest — no fence — is an ordinary handoff.** Once your turn actually rests, it enters the
-human's queue unless you still own a live sub-agent/Monitor or deliberately parked behind a valid
-external-human/timestamp \`awaiting\` fence. Make the prose self-contained: the human may reply, Snooze,
-or Archive it later. Do not manufacture a fence just to be visible. A \` \`\`\`question \` block and real
-permission/native prompts remain higher-priority asks, while \`done\` gives a completed handoff its
-checked presentation.
+human's queue unless you still own a live **sub-agent** or deliberately parked behind a valid
+external-human/timestamp \`awaiting\` fence. A detached background watcher you launched does NOT hold you
+out of the queue (it can't be told apart from a dev server you started and moved on from) — to wait on
+something, own it in a sub-agent, not a bare rest on a background process. Make the prose
+self-contained: the human may reply, Snooze, or Archive it later. Do not manufacture a fence just to be
+visible. A \` \`\`\`question \` block and real permission/native prompts remain higher-priority asks, while
+\`done\` gives a completed handoff its checked presentation.
 
 Use exactly ONE fenced signal block at the very end of the final message when the turn has a final
 state. The fence LANGUAGE is the state; the body is the message the card shows:
@@ -150,13 +152,17 @@ state. The fence LANGUAGE is the state; the body is the message the card shows:
   \`pr:\` / \`ci:\` / \`session:\` remain parser/scheduler compatibility for existing transcripts only;
   NEVER emit them for a new automated wait.
 
-  **Automatable waits stay ACTIVE.** CI, bot/automated review, release/deploy completion, PR merge
-  readiness, and another worker/sub-agent are work you can observe with tools. Do NOT emit
-  \`awaiting\` and abandon that work. Arm the backend's blocking/background wait primitive described
-  below, keep the operation live, and continue when it reports: diagnose red CI, address bot findings,
-  retry an idempotent release, or merge when already authorized. The live operation keeps the thread
-  in Active; its event re-invokes you. A timer is the durable fallback when the next check genuinely
-  belongs at a later wall-clock time rather than continuously monitored now.
+  **Automatable waits stay ACTIVE — but only a live SUB-AGENT keeps you there.** CI, bot/automated
+  review, release/deploy completion, PR merge readiness, and another worker are work you can observe
+  with tools. Do NOT emit \`awaiting\` and abandon that work. But note WHAT holds a rested thread in
+  Active: a live dispatched **sub-agent**, nothing else. A detached background watcher no longer does —
+  fray can't tell a CI watcher (ends soon) from a dev server (runs forever), so a thread that
+  bare-rests on only a background process now QUEUES. Therefore, to WAIT on an automatable condition
+  and stay out of the queue, **dispatch a sub-agent to own the wait** (it runs the watcher to
+  completion and returns the verdict); its liveness keeps you Active and its completion re-invokes you,
+  so you continue — diagnose red CI, address bot findings, retry an idempotent release, or merge when
+  already authorized. A timer is the durable fallback when the next check genuinely belongs at a later
+  wall-clock time rather than continuously monitored now. (See the per-backend Automated waits section.)
 
   \`\`\`awaiting
   human: dependabot maintainer review on dependabot/dependabot-core#15524
@@ -476,24 +482,35 @@ not a reason to silently shadow it with Fray; never execute a monitor merely by 
 project tool is declared, Fray's portable Node scripts are the fallback and native \`Monitor\` is the
 Claude adapter for a changing condition.
 
-- A one-shot command that exits when the condition is satisfied (a build, \`gh run watch\`, a release
-  watcher) → launch \`Bash\` with \`run_in_background: true\`. Its task notification re-invokes you when
-  it exits, and fray-ui shows the live operation as active work.
-- A changing external condition → use \`Monitor\` with a quiet \`until ...; do sleep ...; done\` command.
-  Each stdout line is an event, so print only meaningful transitions. A normal monitor defaults to
-  five minutes and can run for up to one hour; \`persistent: true\` runs until \`TaskStop\` or the Claude
-  session ends. Monitor events can re-invoke you after your message turn goes quiet.
-- Read the output file path from a background Bash launch only when you need diagnostics. \`TaskOutput\`
-  still exists but is deprecated; prefer \`Read\` on that output path. \`TaskStop\` is only for the exact
-  owned monitor process after the task has reached its terminal handoff; never use it to cut off a
-  sub-agent or a writer.
+**The rule that decides the mechanism: are you going to REST while it runs?** fray keeps a rested
+thread out of the queue for exactly one reason — a live dispatched **sub-agent**. A background
+\`Bash\`/\`Monitor\` does NOT: \`run_in_background\` only means "don't block my turn", and fray cannot tell
+a CI watcher that ends in minutes from a \`vite\` dev server that runs forever, so it no longer lets
+either hold a rested thread in Active. So:
+
+- **You will REST until the condition is met (the usual CI / PR / release wait) → dispatch a SUB-AGENT
+  to own the wait.** The child runs the watcher to completion in ITS OWN foreground (fray's portable
+  \`monitors/*.mjs\`, \`gh run watch\`, or a \`until ...; do sleep ...; done\` loop — foreground Bash is
+  timeout-capped at ~10 min, so for a longer wait the child loops until its terminal condition) and
+  returns the verdict. While it runs you stay Active (not queued); its completion re-invokes you, and
+  you continue — diagnose red CI, address the review, merge when authorized. This is the prescribed way
+  to wait. A helper must not return its final handoff while its own watcher is still live; the wait IS
+  its work.
+- **You will KEEP WORKING alongside a process you launched (a dev server, a log tail, an isolated
+  stack) → \`Bash\` with \`run_in_background: true\`.** This is fire-and-forget infrastructure you do not
+  rest on. Its task notification still re-invokes you if it exits, and the "background running" chip
+  still shows it — it simply no longer holds the thread out of the queue, which is correct: if you have
+  nothing left to do but wait on it, that belongs in a sub-agent (above), and if you rest on only a
+  background shell you WILL queue.
+- \`Monitor\` (a quiet \`until ...; do sleep ...; done\`, one event per meaningful transition;
+  \`persistent: true\` runs until \`TaskStop\` or session end) is for streaming events INTO an active turn,
+  not for parking a rest on. Read a background launch's output path only for diagnostics: \`TaskOutput\`
+  is deprecated, so prefer \`Read\` on that output path. \`TaskStop\` is only for the exact owned monitor
+  after its terminal handoff; never use it to cut off a sub-agent or a writer.
 
 These live tasks do not survive the Claude process/session ending. Use a durable \`timer:\` awaiting
 fence only when the next check belongs at a named wall-clock instant. Never fake waiting with
 \`echo waiting\`, repeated foreground sleeps, or an \`awaiting\` fence for CI/bots/merge progression.
-For helpers, keep bounded waits foreground when practical and never let a helper return its final
-handoff while its own Monitor/background command is still live; the top-level worker owns any
-long-lived PR/CI/merge watch after collecting the helper.
 
 ## Showing the human files and images
 

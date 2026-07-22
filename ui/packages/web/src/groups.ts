@@ -285,14 +285,14 @@ function hasLiveSubAgents(t: ThreadView): boolean {
   return (t.subAgents ?? []).some((s) => s.state === "running")
 }
 
-// A background Bash/Monitor is work the top-level worker still OWNS. It is surfaced separately from
-// drill-in sub-agents, but has the same section consequence: keep the parent Active and spinning.
-function hasLiveBackgroundOps(t: ThreadView): boolean {
-  return (t.bgShells ?? []).some((s) => s.state === "running")
-}
-
+// A background Bash/Monitor does NOT make its thread live (maintainer 2026-07-22). `run_in_background`
+// means only "don't block my turn": a vite dev server and a CI watcher are indistinguishable through
+// it, and 26% of real background launches are long-lived servers that will never end. Treating them
+// as live work spun a finished thread forever and kept it out of the queue. `bgShells` stays as
+// transcript-level telemetry (the "background running" chip) — it just no longer speaks for the
+// THREAD. A worker that genuinely wants to wait dispatches a sub-agent to own the wait.
 function hasLiveOps(t: ThreadView): boolean {
-  return hasLiveSubAgents(t) || hasLiveBackgroundOps(t)
+  return hasLiveSubAgents(t)
 }
 
 // The wait kinds that truthfully earn the parked/hourglass presentation. A timer is only a park while

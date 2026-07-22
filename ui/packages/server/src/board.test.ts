@@ -414,12 +414,15 @@ test("deriveNeedsYou: a parked human/timestamp awaiting fence stays out of the o
   assert.equal(deriveNeedsYou(row({ seen_at: LATER }), both, "turn-idle"), true)
 })
 
-test("deriveNeedsYou: every owned bare rest queues; live child/Monitor work remains in flight", () => {
+test("deriveNeedsYou: every owned bare rest queues; a live SUB-AGENT holds in flight — a background shell does NOT", () => {
   assert.equal(deriveNeedsYou(row({ seen_at: null, last_read_at: null }), tele({ lastActivityAt: LATER }), "turn-idle"), true)
   assert.equal(deriveNeedsYou(row({ seen_at: T0 }), tele({ lastActivityAt: LATER }), "turn-idle"), true, "viewing cannot clear rest")
   assert.equal(deriveNeedsYou(row({ seen_at: null }), tele({ turn: "idle", lastActivityAt: LATER }), "exited"), true)
+  // A live dispatched SUB-AGENT is the ONE thing that keeps a rested turn out of the queue.
   assert.equal(deriveNeedsYou(row({ seen_at: null }), tele({ subAgents: [{ label: "c", startedAt: T0, state: "running", id: "a1" }], lastActivityAt: LATER }), "turn-idle"), false)
-  assert.equal(deriveNeedsYou(row(), tele({ bgShells: [{ label: "watch", startedAt: T0, state: "running" }] }), "turn-idle"), false)
+  // A live background SHELL does NOT (maintainer 2026-07-22): run_in_background can't tell a CI watcher
+  // from an endless dev server, so a bare rest on only a background shell QUEUES like any other rest.
+  assert.equal(deriveNeedsYou(row(), tele({ bgShells: [{ label: "watch", startedAt: T0, state: "running" }] }), "turn-idle"), true)
 })
 
 test("deriveNeedsYou: mid-turn never queues; once runtime reports rest the session is presented", () => {

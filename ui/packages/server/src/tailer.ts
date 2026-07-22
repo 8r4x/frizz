@@ -54,22 +54,26 @@ const POLL_MS = 1000
 const CLAUDE_PERMISSION_CONFIRM_POLLS = 3
 // A tracked background sub-agent whose transcript file has gone this long without an append is
 // treated as "stale" — a liveness fallback for a completion record we somehow missed (the child
-// died, or the worker session ended before the <task-notification> landed). ~5min: comfortably
-// longer than a child's between-tool quiet gaps, short enough that a dead child clears promptly.
-// AGENTS ONLY: a child appends to its transcript on every step, so silence there really is a
-// liveness signal. A background SHELL has no such property — see bgShellViews.
-const SUBAGENT_STALE_MS = 5 * 60_000
+// died, or the worker session ended before the <task-notification> landed).
+//
+// The window MUST exceed the longest a LIVE child can legitimately stay silent, and that has a hard
+// ceiling: a child writes its tool_use record, then blocks, and Claude's foreground Bash timeout is
+// capped at 600000 ms — so one tool call buys at most ~10 minutes of silence. The old 5-minute window
+// sat UNDER that ceiling and therefore declared healthy children dead: a child dispatched to own a CI
+// wait (the contract's prescribed way to wait) flipped to "stale" at 312s while blocked in its
+// watcher, dropping hasLiveBackgroundWork and queueing its parent mid-wait — measured on the live
+// board 2026-07-22. 15 minutes clears the ceiling with headroom and still clears a genuinely dead
+// child promptly; across 1366 real child transcripts (176k inter-record gaps) only 0.04% exceed it,
+// while the p99 gap is 95s.
+//
+// AGENTS ONLY: a child appends on every step, so silence there is a real (if coarse) liveness signal.
+// A background SHELL has no such property and is not judged this way at all — see bgShellViews.
+const SUBAGENT_STALE_MS = 15 * 60_000
 // How many genuine human messages the fold retains for delivery confirmation (NormalizedTail
 // .recentUserTexts). Only the durable Codex input queue reads it, and only to match items it submitted
 // in this session, so a couple of dozen comfortably covers any realistic steer batch while keeping the
 // per-session fold state trivially small.
 const USER_TEXT_RING_MAX = 32
-// The absolute age backstop for a tracked background SHELL (see bgShellViews for why output silence
-// cannot be its liveness signal). A watcher this old that has still produced no terminal signal is
-// presumed lost — the honest read on a session whose transcript we can no longer follow — so the
-// thread stops being excused as "working" and re-enters the queue. Deliberately far longer than any
-// real CI/release watch, so it never fires on a healthy wait.
-const SHELL_MAX_TRACKED_MS = 2 * 60 * 60_000
 // How long the transcript must be silent while a turn still looks in-flight before we spend a
 // tmux capture-pane to sniff for an interactive permission prompt. Keeps us from shelling out
 // every tick for a healthily-streaming turn; a real prompt only appears after a tool_use record
@@ -1262,14 +1266,6 @@ export function createTailer(deps: TailerDeps): Tailer {
     return m === undefined || nowMs - m > SUBAGENT_STALE_MS
   }
 
-  // A tracked SHELL is presumed lost only once it is absurdly old (see SHELL_MAX_TRACKED_MS) — never
-  // for going quiet, which is a watcher's normal state (see bgShellViews). An unparseable startedAt
-  // never ages out: a missing timestamp is not evidence of death.
-  function shellPresumedLost(e: SubAgentEntry, nowMs: number): boolean {
-    const started = Date.parse(e.startedAt)
-    return Number.isFinite(started) && nowMs - started > SHELL_MAX_TRACKED_MS
-  }
-
   // Derive the surfaced view of a session's live SUB-AGENTS (kind "agent"; insertion = dispatch order).
   function subAgentViews(state: TailState, nowMs: number): SubAgentView[] {
     if (state.subAgents.size === 0) return []
@@ -1281,42 +1277,37 @@ export function createTailer(deps: TailerDeps): Tailer {
     return out
   }
 
-  // Derive the surfaced view of a session's live background SHELLS (kind "shell"; display-only).
-  // A background Bash/Monitor is a CHILD of the agent process inside this session's tmux pane — it
-  // cannot outlive it. So a dead pane (the agent exited/crashed WITHOUT emitting each shell's terminal
-  // <task-notification>) means every tracked shell died with it: report none rather than leaving them
-  // to read as live (the UI would otherwise show them "alive", quietly breathing, forever). The normal
-  // path — a shell exiting while the agent lives — still clears via its terminal notification.
+  // Derive the surfaced view of a session's live background SHELLS (kind "shell"; DISPLAY-ONLY — the
+  // "background running" chip on the launch record, nothing more). A background Bash/Monitor is a CHILD
+  // of the agent process inside this session's tmux pane — it cannot outlive it. So a dead pane (the
+  // agent exited/crashed WITHOUT emitting each shell's terminal <task-notification>) means every tracked
+  // shell died with it: report none rather than leaving them to read as live (the UI would otherwise
+  // show them "alive", quietly breathing, forever). The normal path — a shell exiting while the agent
+  // lives — still clears via its terminal notification.
   //
-  // A shell deliberately does NOT use the sub-agent mtime rule, because OUTPUT SILENCE IS A WATCHER'S
-  // NORMAL OPERATING STATE, not evidence of death. The waits the worker contract routes here are
-  // exactly the quiet ones: fray's own `monitors/*.mjs` emit one NDJSON line per state TRANSITION, and
-  // `Monitor` is told to print only meaningful transitions — so a healthy watcher sitting on a 40-minute
-  // CI run writes nothing at all. Judging that by output mtime marked every such watcher "stale" after
-  // five minutes, which dropped it out of hasLiveBackgroundWork (board.ts) and floated a queue card
-  // with nothing to act on — the reported bug, reproduced on the live board 2026-07-21. A `Monitor` was
-  // already immune, but only by accident: its launch ack carries no output path, so entryStale
-  // short-circuits on `!e.outputFile`. This makes background Bash agree with it on purpose.
-  //
-  // Liveness is therefore: still TRACKED (no terminal <task-notification>/TaskStop/non-ack result) and
-  // its pane alive — plus SHELL_MAX_TRACKED_MS as the backstop for the one case neither signal covers,
-  // a session whose transcript we silently stopped following.
-  function bgShellViews(state: TailState, nowMs: number): BgShellView[] {
+  // A tracked, pane-alive shell is simply "running" — there is no age-based staleness. `run_in_background`
+  // cannot tell a CI watcher (ends soon) from a vite dev server (runs forever), so NO clock is a correct
+  // clock: an mtime rule falsely killed quiet watchers, and an absolute-age cap would falsely kill
+  // long-lived servers. Crucially none of that can bury a thread anymore — a shell no longer excuses a
+  // rest (hasLiveBackgroundWork / hasLiveOps are sub-agent-only), so this view is now purely cosmetic and
+  // does not need to guess at liveness. It clears on the shell's real terminal signal or on pane death.
+  function bgShellViews(state: TailState): BgShellView[] {
     if (state.subAgents.size === 0 || state.paneDead) return []
     const out: BgShellView[] = []
     for (const e of state.subAgents.values()) {
       if (e.kind !== "shell") continue
-      out.push({ label: e.label, startedAt: e.startedAt, state: shellPresumedLost(e, nowMs) ? "stale" : "running" })
+      out.push({ label: e.label, startedAt: e.startedAt, state: "running" })
     }
     return out
   }
 
   // A compact change-key over ALL derived background state — sub-agents + shells + the pending ask —
-  // so the tick marks the board dirty on any add/removal, running→stale flip (purely time-based, no new
-  // record), or an ask appearing/clearing. Without it those changes would linger to the next reconcile.
+  // so the tick marks the board dirty on any add/removal, a sub-agent running→stale flip (purely
+  // time-based, no new record), or an ask appearing/clearing. Without it those changes would linger to
+  // the next reconcile. (Shells no longer have a time-based flip, but their add/removal still counts.)
   function derivedSignature(state: TailState, nowMs: number): string {
     const agents = subAgentViews(state, nowMs).map((v) => `A:${v.label}|${v.state}|${v.startedAt}`).join("")
-    const shells = bgShellViews(state, nowMs).map((v) => `S:${v.label}|${v.state}|${v.startedAt}`).join("")
+    const shells = bgShellViews(state).map((v) => `S:${v.label}|${v.state}|${v.startedAt}`).join("")
     const ask = state.pendingAsk ? `Q:${state.pendingAsk.id}:${state.pendingAsk.questions.length}` : ""
     return `${agents}\n${shells}\n${ask}`
   }
@@ -1984,7 +1975,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // an unanswered ```question fence (a user reply clears the flag and flips the turn in-flight).
       const pendingQuestion = s.turn === "idle" && s.lastAssistantHasQuestion
       const nowMs = now()
-      return { turn: s.turn, permPrompt: s.permPrompt, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), bgShells: bgShellViews(s, nowMs), pendingAsk: s.pendingAsk, pendingQuestion, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, recentUserTexts: s.recentUserTexts, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault }
+      return { turn: s.turn, permPrompt: s.permPrompt, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), bgShells: bgShellViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, recentUserTexts: s.recentUserTexts, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.
