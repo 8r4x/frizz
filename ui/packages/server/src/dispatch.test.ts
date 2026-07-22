@@ -307,26 +307,35 @@ test("end-state contract: bare rest queues, done checks, awaiting parks human/ti
     assert.match(c, /research or audit EFFORT[\s\S]{0,200}earns `done`/)
     assert.match(c, /awaiting[\s\S]{0,140}(?:human|timestamp)/i)
     assert.match(c, /(?:CI|automatable)[\s\S]{0,180}(?:stay active|active wait|live operation)/i)
-    // A live code-change discussion forbids `done` outright; the ONLY carve-out is a planning
-    // session whose plan file is fully written AND persisted (done-never-into-live-discussion).
-    assert.match(c, /NEVER `done` into a LIVE code-change discussion/)
-    assert.match(c, /still being NEGOTIATED/)
-    assert.match(c, /When in doubt about whether the discussion is\s+still open, it is: bare-rest/)
-    assert.match(c, /The ONE exception[\s\S]{0,120}PLANNING session/)
-    assert.match(c, /FULLY written and PERSISTED to disk \(`\.fray\/plans\/<topic>\.md`/)
-    assert.match(c, /exists only in chat, does\s+not\./)
-    // The planning thread type names the same carve-out where a worker looks up its deliverable.
-    assert.match(c, /WRITTEN, PERSISTED plan file is what earns a ` ```done ` fence/)
-    assert.match(c, /only carve-out from "never `done` into a live discussion"/)
-    // The Rules recap repeats the ban so a worker skimming the tail still sees it.
-    assert.match(c, /Nor is a turn taken while a code-change discussion is still live/)
+    // `done` is taught as a DISMISSAL, not a summary: its card is the one-click path into Inactive
+    // (groups.ts), so anything living only in the conversation dies with the thread. The rule is the
+    // intent-level heuristic — "points at future work AT ALL" → bare rest — not a scenario list, and
+    // the planning carve-out is DERIVED from it (the artifact outlives the thread), never asserted
+    // as an arbitrary exception (done-is-a-dismissal).
+    assert.match(c, /`done` is a DISMISSAL, not a summary/)
+    assert.match(c, /files the thread away where nobody looks again/)
+    assert.match(c, /if this thread\s+is never opened again, is anything lost\?/)
+    assert.match(c, /points at future work AT ALL/)
+    assert.match(c, /Uncertain is not done\./)
+    // The live code-change discussion is taught as an INSTANCE of the heuristic, not its own rule.
+    assert.match(c, /live discussion about code changes is the clearest instance/)
+    assert.match(c, /The ONE exception[\s\S]{0,140}PLANNING session/)
+    assert.match(c, /FULLY written and PERSISTED \(`\.fray\/plans\/<topic>\.md`\)/)
+    assert.match(c, /artifact already lives outside the thread, so dismissing the thread loses nothing/)
+    // The planning thread type derives the same carve-out where a worker reads its deliverable.
+    assert.match(c, /WRITTEN, PERSISTED file is the whole reason a planning thread may/)
+    assert.match(c, /design outlives the thread's dismissal/)
+    // The Rules recap repeats the heuristic (not the scenario) for a worker skimming the tail.
+    assert.match(c, /Nor is a turn on a thread that still points at future work/)
   }
-  // The runtime re-grounding carries the same ban in one line (slim, not a second contract copy).
-  assert.match(SESSION_SEED, /NEVER ```done while a code-change discussion is still live \(the ONE exception: an explicit planning session whose plan file is fully written and persisted\)/)
-  assert.match(SESSION_SEED, /never done while a code-change discussion is live/)
+  // The runtime re-grounding carries the same intent in one line (slim, not a second contract copy).
+  assert.match(SESSION_SEED, /```done is a DISMISSAL \(its card files the thread away where nobody looks again\)/)
+  assert.match(SESSION_SEED, /points at future work AT ALL[^;]*bare rest instead, and uncertain is not done/)
+  assert.match(SESSION_SEED, /because that artifact outlives the thread/)
+  assert.match(SESSION_SEED, /never when the thread still points at future work/)
   assert.doesNotMatch(SESSION_SEED, /BARE REST[^\n]*quiet/i)
   assert.doesNotMatch(SESSION_SEED, /```done \/ ```awaiting excuse/)
-  assert.match(SESSION_SEED, /```done queues a checked completion until Archive \(completed work only[^)]*\); ```awaiting parks only a human:\/timer: gate/)
+  assert.match(SESSION_SEED, /```done queues a checked completion until Archive and is a DISMISSAL — completed work only[\s\S]{0,200}; ```awaiting parks only a human:\/timer: gate/)
   assert.match(SESSION_SEED, /real work is COMPLETE/)
 })
 

@@ -110,22 +110,19 @@ state. The fence LANGUAGE is the state; the body is the message the card shows:
   - Self-review folded in; \`npm run lint\` clean.
   \`\`\`
 
-  **NEVER \`done\` into a LIVE code-change discussion.** If the thread is mid-conversation about code
-  that is still being NEGOTIATED — the human is weighing an approach, questioning a diff, pushing
-  back, reshaping the scope, or asking what you think, and the natural next beat is another message
-  from them — that turn is NOT \`done\`, however much you did in it. \`done\` renders as a checked,
-  finished card, so emitting one into a running discussion tells the human the effort is closed while
-  the change is still being decided. Bare-rest instead, or ask a \` \`\`\`question \` when you need their
-  call, and let their next message set the direction. When in doubt about whether the discussion is
-  still open, it is: bare-rest. This is about a change still IN FLIGHT, not about how the effort
-  began — a change the human DECIDED and you then implemented, verified, and landed is complete, and
-  it still earns \`done\` even though a conversation preceded it.
+  **\`done\` is a DISMISSAL, not a summary — so be conservative with it.** The card it renders carries
+  the button that files the thread away where nobody looks again, and everything living ONLY in the
+  conversation goes with it. Landed code survives in the repo; a written plan survives on disk; an
+  idea, a direction you and the human half-agreed on, a fix you scoped, a follow-up you both assumed
+  would happen — those survive nowhere else. So ask one question before you fence: **if this thread
+  is never opened again, is anything lost?** If it points at future work AT ALL, the answer is yes.
+  Bare-rest instead — that keeps it in the queue and costs nothing. Uncertain is not done.
 
-  The ONE exception: an explicitly-designated PLANNING session, where the plan document IS the
-  deliverable. Once that plan is FULLY written and PERSISTED to disk (\`.fray/plans/<topic>.md\` — not
-  merely described in your message), the turn that finishes it earns \`done\` even though a design
-  discussion produced it and may continue. A half-drafted plan, or one that exists only in chat, does
-  not.
+  A live discussion about code changes is the clearest instance: while the change is still being
+  talked through, the work is by definition still ahead of you, so no turn in that conversation is
+  \`done\`. The ONE exception to all of the above is an explicitly-designated PLANNING session whose
+  plan file is FULLY written and PERSISTED (\`.fray/plans/<topic>.md\`) — and it is an exception only
+  because the artifact already lives outside the thread, so dismissing the thread loses nothing.
 
 - \` \`\`\`awaiting \` — you are intentionally PARKED for one of exactly two reasons: (1) a SPECIFIC
   EXTERNAL HUMAN reviewer/approver must act, or (2) the next check is deliberately scheduled for a
@@ -182,13 +179,13 @@ human/timestamp wait only while it stays the final message; a \`done\` fence que
 completion. Any newer activity clears either fence. And the line that opens the fence is exactly
 \` \`\`\`done \` or \` \`\`\`awaiting \` — nothing after the language word. If you finished something that
 genuinely needs human sign-off before it's real, that is NOT \`done\` — it is a \` \`\`\`question \`
-approval gate. Nor is a turn taken while a code-change discussion is still live (planning sessions
-with a persisted plan file aside — see above). And an investigation that feeds a next step — a bug
-diagnosed, an issue scoped — is not \`done\` either, however thorough: \`done\` reads as complete while
-the fix is still owed. The other fences are yours, though — reach for a \` \`\`\`question \` when there's
-a fix to choose (recommendation marked, so one reply rolls into implementation), or bare-rest.
-Distinguish this from a commissioned research or audit EFFORT, where the broad-spectrum report IS the
-deliverable: a finished report there earns \`done\`.`
+approval gate. Nor is a turn on a thread that still points at future work — a live code-change
+discussion above all (a persisted planning doc aside; see above). And an investigation that feeds a
+next step — a bug diagnosed, an issue scoped — is not \`done\` either, however thorough: \`done\` reads
+as complete while the fix is still owed. The other fences are yours, though — reach for a
+\` \`\`\`question \` when there's a fix to choose (recommendation marked, so one reply rolls into
+implementation), or bare-rest. Distinguish this from a commissioned research or audit EFFORT, where
+the broad-spectrum report IS the deliverable: a finished report there earns \`done\`.`
 
 const AGENT_COMPLETION = `## Agent completion invariant
 
@@ -655,10 +652,9 @@ the bar to it:
   the plan file is what persists and what an implementation effort is later dispatched against.
   Surface open design questions to the human with \` \`\`\`question \` blocks. Complete (for planning) =
   the design locks and the open questions resolve into decisions, captured in the plan file, ready to
-  hand off to implementation. That WRITTEN, PERSISTED plan file is what earns a \` \`\`\`done \` fence —
-  and it is the only carve-out from "never \`done\` into a live discussion", because here the document,
-  not a code change, is the deliverable. A plan still being argued out in chat, or one you only
-  described in a message, has not been written: bare-rest or ask.
+  hand off to implementation. That WRITTEN, PERSISTED file is the whole reason a planning thread may
+  close with \` \`\`\`done \`: the design outlives the thread's dismissal. A plan that exists only in
+  chat has not been written — bare-rest or ask.
 
 ## Substantive implementation
 
@@ -695,10 +691,9 @@ Dispatches share a vocabulary for the deliverable and quality bar, not for fleet
 - **Planning thread** — the DESIGN is the deliverable, not code. Draft and evolve the durable plan at
   \`.fray/plans/<topic>.md\`, surface open human decisions, and critique the plan inline unless a critic
   sub-agent was explicitly requested. Complete when the design is decision-complete and ready to hand
-  to implementation. That WRITTEN, PERSISTED plan file is what earns a \` \`\`\`done \` fence — and it is
-  the only carve-out from "never \`done\` into a live discussion", because here the document, not a
-  code change, is the deliverable. A plan still being argued out in chat, or one you only described
-  in a message, has not been written: bare-rest or ask.
+  to implementation. That WRITTEN, PERSISTED file is the whole reason a planning thread may close
+  with \` \`\`\`done \`: the design outlives the thread's dismissal. A plan that exists only in chat has
+  not been written — bare-rest or ask.
 
 ## Substantive implementation
 
