@@ -467,22 +467,17 @@ generic "verify in a real browser" principle already lives in the prompt's runti
 `skills/gh` remains the ONE injected skill: bulky, conditionally relevant, and its pointer is already
 auth-gated in the seed — exactly the on-demand shape skills are for.
 
-## 2026-07-22: Tool-layer PR block — `deny-pr` PreToolUse(Bash) hook
+## 2026-07-22: The no-PR rule now also lives in AGENTS.md (docs, not a hook)
 
 Root cause of "agents keep opening PRs despite FRAY.md": the worker contract + injected FRAY.md are a
-SNAPSHOT frozen at session creation. A long-lived Codex worker (thread `862831cf`, born 09:50 Jul 21,
-minutes before FRAY.md injection first landed and hours before the no-PR rule existed) never saw the
-rule and carried the base contract's "open a PR and report its URL" on every turn — it opened PR #17
-and #18. Editing FRAY.md does nothing for any session already in flight, and sub-agents never receive
-FRAY.md at all. So text alone can't fix this.
+SNAPSHOT frozen at session creation. The Codex worker that opened PR #17 and #18 (thread `862831cf`,
+born 09:50 Jul 21) spawned minutes before FRAY.md injection first landed and hours before the no-PR
+rule existed, so it never saw the rule and carried the base contract's "open a PR and report its URL"
+on every turn. Editing FRAY.md does nothing for a session already in flight, and sub-agents never
+receive FRAY.md at all.
 
-`hooks/deny-pr.mjs` is the backstop: a PreToolUse(Bash) hook that DENIES `gh pr create` (and the
-`gh api .../pulls` POST equivalent) by reading the project's FRAY.md FRESH from disk on every call —
-immune to instruction freeze, and covering the top-level worker AND every sub-agent (both inherit
-`FRAY_UI_THREAD`). It is SCOPED: it fires only when the on-disk FRAY.md forbids PRs ("NEVER open a
-pull request" / "does NOT use pull requests"), so the generic plugin never wedges a legitimate PR in a
-PR-using repo (nub, pullfrog). Gated on `FRAY_UI_THREAD`; fails open on any error. Read commands
-(`gh pr view/list`, `gh api .../pulls` GET) are untouched. Codex is NOT covered by cc-worker hooks;
-its coverage is AGENTS.md (Codex re-reads it fresh each session) plus the existing FRAY.md injection —
-both only for NEW sessions, so an already-frozen Codex session stays uncovered until restarted. The
-no-PR rule was also added to `AGENTS.md` (agent-neutral, fresh-read by Codex, loaded by sub-agents).
+Mitigation (docs only): the no-PR rule was added to `AGENTS.md` — the agent-neutral home Codex
+re-reads FRESH every session and sub-agents load. That reaches NEW sessions of both backends without a
+frozen snapshot. It does NOT retroactively reach an already-running frozen session; restart such a
+session to pick up a rule change. A tool-layer enforcement hook (`deny-pr` PreToolUse) was built and
+then deliberately reverted as overkill for a single-user repo — the doc reach is the intended fix.

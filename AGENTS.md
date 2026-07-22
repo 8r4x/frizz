@@ -12,7 +12,7 @@ remove the worktree. Getting the change onto local `main` is your job — never 
 review and never hand back an unmerged branch. Reading GitHub (issues, PRs, CI) is fine; creating or
 pushing a PR is not. (`FRAY.md` states this in full; it is repeated here because Codex re-reads
 `AGENTS.md` fresh every session and sub-agents load it, whereas the fray worker contract can be frozen
-at session start. A `deny-pr` PreToolUse hook also blocks `gh pr create` at the tool layer.)
+at session start.)
 
 # Web UI completion rule
 
