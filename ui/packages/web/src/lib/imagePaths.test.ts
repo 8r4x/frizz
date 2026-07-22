@@ -30,6 +30,27 @@ test("inline visualization directives stay literal inside fences or with unsafe 
   ]) assert.deepEqual(splitProseAttachments(directive), [{ kind: "md", text: directive }])
 })
 
+test("known Codex host directives become ordered inert directive parts", () => {
+  assert.deepEqual(splitProseAttachments('Before\n::git-commit{cwd="/tmp/repo"}\n::archive{reason="Done"}\nAfter'), [
+    { kind: "md", text: "Before" },
+    { kind: "directive", directive: { name: "git-commit", attrs: { cwd: "/tmp/repo" } } },
+    { kind: "directive", directive: { name: "archive", attrs: { reason: "Done" } } },
+    { kind: "md", text: "After" },
+  ])
+})
+
+test("complete Mermaid fences become diagrams while incomplete or nested directives stay markdown", () => {
+  assert.deepEqual(splitProseAttachments("Lead\n```mermaid\ngraph TD\n  A --> B\n```\nTail"), [
+    { kind: "md", text: "Lead" },
+    { kind: "mermaid", source: "graph TD\n  A --> B" },
+    { kind: "md", text: "Tail" },
+  ])
+  const incomplete = "```mermaid\ngraph TD\n  A --> B"
+  assert.deepEqual(splitProseAttachments(incomplete), [{ kind: "md", text: incomplete }])
+  const fencedDirective = '```text\n::git-stage{cwd="/tmp/repo"}\n```'
+  assert.deepEqual(splitProseAttachments(fencedDirective), [{ kind: "md", text: fencedDirective }])
+})
+
 test("backtick-wrapped path lines are detected and unwrapped", () => {
   const parts = splitProseAttachments("`/tmp/a.jpeg`")
   assert.deepEqual(parts, [{ kind: "image", path: "/tmp/a.jpeg" }])

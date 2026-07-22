@@ -7,12 +7,15 @@
 // the sanitizer runs, so nothing loosens the HTML allowlist.
 
 import { ATTACHMENT_DOC_EXTENSIONS } from "@fray-ui/shared"
+import { parseCodexHostDirective, type CodexHostDirective } from "./codexHostDirectives.ts"
 
 export type ProsePart =
   | { kind: "md"; text: string }
   | { kind: "image"; path: string }
   | { kind: "file"; path: string }
   | { kind: "visualization"; file: string }
+  | { kind: "directive"; directive: CodexHostDirective }
+  | { kind: "mermaid"; source: string }
 
 // Path characters: any non-whitespace/non-backtick, plus a literal space when NOT followed by "/".
 // Paths with spaces are real and common — macOS screenshots ("Screen Shot … at 1.23.45 PM.png"),
@@ -33,6 +36,7 @@ const DOC_LINE = new RegExp(String.raw`^\s*\`?(/${PATH_CHARS}\.(?:${ATTACHMENT_D
 // pasting `ls`/`git`/`tree` output is common) as ordinary code, instead of ripping it into a chip and
 // orphaning the fence markers.
 const FENCE_LINE = /^\s{0,3}(?:```|~~~)/
+const MERMAID_FENCE = /^\s{0,3}(`{3,}|~{3,})\s*mermaid\s*$/i
 // Codex's Visualize skill emits one host directive whose basename resolves inside the owning
 // thread's `.codex/visualizations/YYYY/MM/DD/<session-id>/` directory. Keep the grammar exact:
 // arbitrary attributes, paths, uppercase names, and inline occurrences remain ordinary prose.
@@ -50,7 +54,22 @@ export function splitProseAttachments(md: string): ProsePart[] {
       buf = []
     }
   }
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (!inFence) {
+      const opener = line.match(MERMAID_FENCE)?.[1]
+      if (opener) {
+        const close = new RegExp(`^\\s{0,3}${opener[0] === "`" ? "`" : "~"}{${opener.length},}\\s*$`)
+        let end = i + 1
+        while (end < lines.length && !close.test(lines[end])) end++
+        if (end < lines.length) {
+          flush()
+          parts.push({ kind: "mermaid", source: lines.slice(i + 1, end).join("\n") })
+          i = end
+          continue
+        }
+      }
+    }
     if (FENCE_LINE.test(line)) {
       inFence = !inFence
       buf.push(line)
@@ -64,6 +83,12 @@ export function splitProseAttachments(md: string): ProsePart[] {
     if (visualization) {
       flush()
       parts.push({ kind: "visualization", file: visualization[1] })
+      continue
+    }
+    const directive = parseCodexHostDirective(line)
+    if (directive) {
+      flush()
+      parts.push({ kind: "directive", directive })
       continue
     }
     const image = line.match(IMAGE_LINE)

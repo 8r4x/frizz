@@ -43,6 +43,7 @@ import { PROVIDER_LABEL } from "../lib/signIn.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
 import { buildVirtualTranscriptMessageRows, earlierLoadGate, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
+import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
 
 // Answer types moved to lib/questionBlocks.ts (shared by the queue card, the thread view, and the
 // answering controller). Re-exported here so existing importers keep working.
@@ -2005,6 +2006,8 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
               p.kind === "image" ? <BlockImage key={partKey} path={p.path} />
               : p.kind === "file" ? <BlockFile key={partKey} path={p.path} />
               : p.kind === "visualization" ? <InlineVisualization key={partKey} file={p.file} />
+              : p.kind === "directive" ? <CodexDirectiveCard key={partKey} directive={p.directive} />
+              : p.kind === "mermaid" ? <MermaidDiagram key={partKey} source={p.source} />
               : <ProseHtml key={partKey} md={p.text} wrap={dense} />,
             )
           }

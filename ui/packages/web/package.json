@@ -26,6 +26,7 @@
     "highlight.js": "^11.11.1",
     "lucide-react": "^0.525",
     "marked": "^15",
+    "mermaid": "^11.16.0",
     "react": "^19",
     "react-dom": "^19",
     "valtio": "^2",
