@@ -177,6 +177,10 @@ test("loadWorkerPrompt(claude) carries the Claude-Code-only guidance", () => {
   assert.match(c, /Always plain Agent tool \+ `run_in_background: true`/)
   assert.match(c, /namespaced string `fray:<model>-<effort>`/)
   assert.match(c, /the shared blackboard for your sub-agents/)
+  // Claude fray workers have NO fork option (`subagent_type: "fork"` does not resolve); say so
+  // explicitly so a worker never blocks hunting for one — the codex fork_context failure mode.
+  assert.match(c, /There is NO fork\/inherit option here/)
+  assert.match(c, /absence of a fork switch is NOT a blocker to report/)
   assert.match(c, /## Automated waits in Claude Code/)
   assert.match(c, /`Monitor`/)
   assert.match(c, /`persistent: true`/)
@@ -214,7 +218,11 @@ test("loadWorkerPrompt(codex) carries codex's OWN session/wake + model/effort/sa
   assert.match(c, /active native spawn tool/)
   assert.match(c, /configured namespace is `fray`/)
   assert.match(c, /context-fork control/)
-  assert.match(c, /`fork_turns` \(pass `"none"`\), older builds used `fork_context: false`/)
+  // Both directions must be teachable: fresh for clean-room/adversarial, fork when the child
+  // genuinely continues the parent's reasoning. An unset control silently forks EVERYTHING.
+  assert.match(c, /Pass NO parent history \(`fork_turns: "none"`\) for an INDEPENDENT/)
+  assert.match(c, /FORK instead \(`fork_turns: "all"`/)
+  assert.match(c, /schema default is a FULL fork/)
   assert.match(c, /`gpt-5\.6-luna` \+ `medium`/)
   assert.match(c, /`gpt-5\.6-terra` \+ `medium`/)
   assert.match(c, /`gpt-5\.6-sol` \+ `high` or `xhigh`/)

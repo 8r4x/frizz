@@ -473,6 +473,12 @@ const BACKEND: Record<BackendKind, string> = {
   the prompt. Spell out the full process; never write "self-review your work" and hope. Include the
   scratchpad path (\`.fray/threads/<session-id>/scratch.md\`) in the prompt as standard practice — that is how
   a helper reads the shared context; then fold its report back into the pad yourself.
+- There is NO fork/inherit option here, so do not go hunting for one: EVERY \`subagent_type\` available
+  to you starts a FRESH child (a bare \`subagent_type: "fork"\` does not resolve in a fray worker), and a
+  child can never see your conversation. Handing a child its context is therefore ALWAYS your job — put
+  what it needs in the prompt and point it at the scratchpad. If a task truly depends on your
+  accumulated reasoning, write that reasoning into the pad or the prompt, or do the work inline; the
+  absence of a fork switch is NOT a blocker to report.
 - Multi-pronged research/investigation: when it genuinely decomposes into independent prongs and the
   scale warrants it, fan out one sub-agent per prong and synthesize rather than grinding them serially
   in one context — a good option at scale, not a requirement.
@@ -595,10 +601,16 @@ When delegation is explicitly authorized:
    runtime schema exposes both \`model\` and
    \`reasoning_effort\`. The configured namespace is \`fray\`, but Codex may show a runtime-normalized
    tool name; trust the callable schema. Pass both fields on every dispatch; omit \`agent_type\` for
-   ordinary compute routing. For an INDEPENDENT child, also set the schema's context-fork control to
-   no parent history — by whatever name the live schema exposes it: current Codex names it
-   \`fork_turns\` (pass \`"none"\`), older builds used \`fork_context: false\`. The default may be a
-   FULL history fork, so when a fresh/independent child matters you MUST set this explicitly; never
+   ordinary compute routing. Choose the child's CONTEXT deliberately — the schema's context-fork
+   control goes BOTH ways, under whatever name the live schema exposes it (current Codex: \`fork_turns\`;
+   older builds: \`fork_context\`). Pass NO parent history (\`fork_turns: "none"\`) for an INDEPENDENT
+   child — a clean-room or adversarial review, an independent reproduction, anything inherited
+   assumptions would bias. FORK instead (\`fork_turns: "all"\`, or a positive integer string like \`"3"\`
+   for only the most recent turns) when the child genuinely CONTINUES your reasoning and the
+   conversation so far is load-bearing. Fresh is the default for fray work; a fork is heavier and
+   carries your assumptions with it. The schema default is a FULL fork, so an unset control silently
+   hands the child everything — set it explicitly either way, and when you do fork, verify the child's
+   effective model/effort from native metadata rather than assuming your overrides survived. Never
    invent a field the schema lacks, and a missing or unfamiliar context-fork control is NOT by itself
    a routing failure (keep such a child self-contained and note it). Only \`model\`/\`reasoning_effort\`
    being unavailable—or startup rejecting the private overrides—makes the session degraded/no-routing:

@@ -247,6 +247,12 @@ Generally: anything you'd want to survive a compaction, or hand to a child, goes
   the prompt. Spell out the full process; never write "self-review your work" and hope. Include the
   scratchpad path (`.fray/threads/<session-id>/scratch.md`) in the prompt as standard practice — that is how
   a helper reads the shared context; then fold its report back into the pad yourself.
+- There is NO fork/inherit option here, so do not go hunting for one: EVERY `subagent_type` available
+  to you starts a FRESH child (a bare `subagent_type: "fork"` does not resolve in a fray worker), and a
+  child can never see your conversation. Handing a child its context is therefore ALWAYS your job — put
+  what it needs in the prompt and point it at the scratchpad. If a task truly depends on your
+  accumulated reasoning, write that reasoning into the pad or the prompt, or do the work inline; the
+  absence of a fork switch is NOT a blocker to report.
 - Multi-pronged research/investigation: when it genuinely decomposes into independent prongs and the
   scale warrants it, fan out one sub-agent per prong and synthesize rather than grinding them serially
   in one context — a good option at scale, not a requirement.
