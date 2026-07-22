@@ -1,3 +1,19 @@
+# No pull requests — land on local `main`
+
+This repo does NOT use pull requests. Ever. NEVER run `gh pr create` (or the `gh api .../pulls` POST
+equivalent, or the GitHub UI) — not for a typo, not for a big feature, no size threshold, no
+exception. This binds EVERY agent that touches this repo: the top-level worker and every sub-agent it
+dispatches. If you find yourself about to open a PR, STOP — in this repo that is always the wrong move.
+
+Land finished work on this machine's local `main` instead: work directly on `main`, or do
+isolated/messy work in a git worktree on a local branch (`git worktree add <dir> -b <slug>`) and, when
+it's done and you're confident, merge it back yourself (`git switch main && git merge <slug>`) and
+remove the worktree. Getting the change onto local `main` is your job — never push a branch to stage a
+review and never hand back an unmerged branch. Reading GitHub (issues, PRs, CI) is fine; creating or
+pushing a PR is not. (`FRAY.md` states this in full; it is repeated here because Codex re-reads
+`AGENTS.md` fresh every session and sub-agents load it, whereas the fray worker contract can be frozen
+at session start. A `deny-pr` PreToolUse hook also blocks `gh pr create` at the tool layer.)
+
 # Web UI completion rule
 
 For any user-visible web UI change, work is not complete until end-to-end Chrome or Chromium QA has exercised the affected workflow. Prefer Chrome DevTools MCP when it is available to the current provider. If it is unavailable or unsuitable, use `agent-browser` or this repository's Puppeteer harness as an explicit fallback; each path must produce the same real-browser evidence. Capture and inspect multiple screenshots covering the meaningful states: before and after, desktop and relevant narrow/mobile widths, plus open menus, drawers, hover, selected, loading, or error states when applicable. Check the browser console and page errors, and inspect visual results optically—not only by box-model measurements. Icons beside text must be optically vertically centered, and placement, truncation, and wrapping must be verified.

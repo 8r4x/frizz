@@ -466,3 +466,23 @@ fray-ui-specific (adhoc-stack.mjs / shot.mjs), so it is a project skill, not glo
 generic "verify in a real browser" principle already lives in the prompt's runtime-gate section.
 `skills/gh` remains the ONE injected skill: bulky, conditionally relevant, and its pointer is already
 auth-gated in the seed — exactly the on-demand shape skills are for.
+
+## 2026-07-22: Tool-layer PR block — `deny-pr` PreToolUse(Bash) hook
+
+Root cause of "agents keep opening PRs despite FRAY.md": the worker contract + injected FRAY.md are a
+SNAPSHOT frozen at session creation. A long-lived Codex worker (thread `862831cf`, born 09:50 Jul 21,
+minutes before FRAY.md injection first landed and hours before the no-PR rule existed) never saw the
+rule and carried the base contract's "open a PR and report its URL" on every turn — it opened PR #17
+and #18. Editing FRAY.md does nothing for any session already in flight, and sub-agents never receive
+FRAY.md at all. So text alone can't fix this.
+
+`hooks/deny-pr.mjs` is the backstop: a PreToolUse(Bash) hook that DENIES `gh pr create` (and the
+`gh api .../pulls` POST equivalent) by reading the project's FRAY.md FRESH from disk on every call —
+immune to instruction freeze, and covering the top-level worker AND every sub-agent (both inherit
+`FRAY_UI_THREAD`). It is SCOPED: it fires only when the on-disk FRAY.md forbids PRs ("NEVER open a
+pull request" / "does NOT use pull requests"), so the generic plugin never wedges a legitimate PR in a
+PR-using repo (nub, pullfrog). Gated on `FRAY_UI_THREAD`; fails open on any error. Read commands
+(`gh pr view/list`, `gh api .../pulls` GET) are untouched. Codex is NOT covered by cc-worker hooks;
+its coverage is AGENTS.md (Codex re-reads it fresh each session) plus the existing FRAY.md injection —
+both only for NEW sessions, so an already-frozen Codex session stays uncovered until restarted. The
+no-PR rule was also added to `AGENTS.md` (agent-neutral, fresh-read by Codex, loaded by sub-agents).
