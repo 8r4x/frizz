@@ -442,6 +442,12 @@ const BACKEND: Record<BackendKind, string> = {
 
 - You may dispatch your own sub-agents. Always plain Agent tool + \`run_in_background: true\`, and
   NEVER pass a \`name\` field (it reroutes completions away from you and strands you).
+- This Agent tool is the ONLY way to dispatch a helper whose result you COLLECT — a self-review, a
+  verification pass, a research prong, a critic, anything whose findings you fold back into your own
+  work. Do NOT reach for the \`spawn_fray_thread\` MCP tool for these: it spawns a SEPARATE, independent
+  board thread that reports to the human and NEVER returns its output to you, so its work never comes
+  back (see "Spawning a separate fray thread" below). Reserve \`spawn_fray_thread\` for a distinct effort
+  that belongs on the board in its own right and whose result you do not need.
 - A rested sub-agent is not reliably re-woken by grandchildren. Keep fan-out shallow; collect
   every child's result actively before you rest; if you cannot collect one, say so explicitly —
   never silently drop it.
@@ -623,15 +629,26 @@ the blocker in your final message.`,
 // nothing backend-specific to say about it.
 const SPAWN_THREAD = `## Spawning a separate fray thread
 
-You have a \`spawn_fray_thread\` MCP tool (server \`fray_spawn\`) — DISTINCT from an in-session sub-agent.
-It dispatches a brand-new, SEPARATE top-level fray thread: its own board card, session, and scratchpad,
-driving INDEPENDENTLY. Reach for it when a distinct, self-contained effort belongs on the board in its
-own right rather than run inline or handed to a helper you must collect. Give it a fully self-contained
-\`prompt\`, and CHOOSE \`model\` + \`effort\` by the new task's complexity — both REQUIRED, no default (e.g.
-\`opus\`/\`max\` for a hard architectural change, \`haiku\`/\`low\` for a trivial fix); \`title\`/\`backend\` are
+You have a \`spawn_fray_thread\` MCP tool (server \`fray_spawn\`) — DISTINCT from an in-session sub-agent,
+and the distinction is the whole point: it dispatches a brand-new, SEPARATE top-level fray thread — its
+own board card, session, and scratchpad, driving INDEPENDENTLY — and its results NEVER return to you. It
+reports to the HUMAN on the board via its own final message; you do NOT collect its output and it does
+NOT block your rest.
+
+So CHOOSE by whether you need the result back. A helper whose findings you must READ and fold into your
+own work — a self-review, a verification pass, a research prong, a critic, ANY collect-back helper — is
+an IN-SESSION SUB-AGENT you dispatch and collect within THIS session (see your own sub-agent /
+delegation section above), which returns its findings to you — NOT this tool. Spawning such a helper as
+a separate thread STRANDS it: its review lands on another card and never reaches you, and you rest
+having gained nothing. \`spawn_fray_thread\` is
+ONLY for a distinct, self-contained effort that belongs on the board in its own right and whose output
+you do NOT need — work you'd otherwise run inline but that deserves its own card.
+
+Give it a fully self-contained \`prompt\`, and CHOOSE \`model\` + \`effort\` by the new task's complexity —
+both REQUIRED, no default (e.g. \`opus\`/\`max\` for a hard architectural change, \`haiku\`/\`low\` for a
+trivial fix); \`title\`/\`backend\` are
 optional. It returns the new thread's slug and a ready-to-paste markdown link \`[title](/thread/<slug>)\`. PUT THAT LINK IN YOUR HANDOFF so the human can
-click it to open the spawned thread in the drawer. Unlike a sub-agent, you do NOT collect its result and
-it does NOT block your rest — it owns its own independent lifecycle.`
+click it to open the spawned thread in the drawer.`
 
 const THREAD_EXECUTION: Record<BackendKind, string> = {
   claude: `## Thread types
