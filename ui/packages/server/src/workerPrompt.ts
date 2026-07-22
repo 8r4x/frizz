@@ -581,9 +581,14 @@ When delegation is explicitly authorized:
    not proof that this Codex release accepted it. Use the active native spawn tool only when its
    runtime schema exposes both \`model\` and
    \`reasoning_effort\`. The configured namespace is \`fray\`, but Codex may show a runtime-normalized
-   tool name; trust the callable schema. Pass both fields on every dispatch and pass
-   \`fork_context: false\`; omit \`agent_type\` for ordinary compute routing. If those fields are
-   unavailable—or startup rejected the private overrides—treat the session as degraded/no-routing:
+   tool name; trust the callable schema. Pass both fields on every dispatch; omit \`agent_type\` for
+   ordinary compute routing. For an INDEPENDENT child, also set the schema's context-fork control to
+   no parent history — by whatever name the live schema exposes it: current Codex names it
+   \`fork_turns\` (pass \`"none"\`), older builds used \`fork_context: false\`. The default may be a
+   FULL history fork, so when a fresh/independent child matters you MUST set this explicitly; never
+   invent a field the schema lacks, and a missing or unfamiliar context-fork control is NOT by itself
+   a routing failure (keep such a child self-contained and note it). Only \`model\`/\`reasoning_effort\`
+   being unavailable—or startup rejecting the private overrides—makes the session degraded/no-routing:
    do not silently fall back to inherited compute. Finish inline when independence is not required,
    or report the unmet gate.
 2. Give each child one self-contained, non-overlapping outcome with its paths, authority, evidence or

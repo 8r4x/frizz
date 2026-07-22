@@ -73,8 +73,10 @@ stops and reports the limitation instead of silently spawning inherited-compute 
 
 ## Model and effort routing
 
-Every Fray dispatch passes an exact model slug, an explicit effort, and `fork_context: false` so the
-child starts from its self-contained task prompt rather than a parent-history fork:
+Every Fray dispatch passes an exact model slug, an explicit effort, and — for an independent child —
+the schema's context-fork control set to no parent history (current Codex `fork_turns: "none"`, older
+builds `fork_context: false`) so the child starts from its self-contained task prompt rather than a
+parent-history fork (the default fork is FULL history, so this is set explicitly, never assumed):
 
 - `gpt-5.6-terra` + `medium` is the default for most work, including ordinary research, bounded
   implementation, verification, review, and planning.
