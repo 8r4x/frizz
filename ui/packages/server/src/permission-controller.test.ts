@@ -124,6 +124,36 @@ function harness(storageOverride?: Storage) {
 const emptyComposer =
   "OpenAI Codex (v0.144.1)\n\u001b[1m›\u001b[0m \u001b[2mSummarize recent commits\u001b[0m\n  gpt-5.6-sol default"
 
+// Captured verbatim from a real codex-cli 0.144.6 TUI mid-turn (only the machine-specific absolute
+// directory in the status row is shortened). Codex renders its `tab to queue message` hint ONLY under a
+// NON-EMPTY composer — an EMPTY one carries the model/context status row instead — so a steer arriving
+// while the agent works can never read that hint off the pane it is about to paste into.
+const busyEmptyComposerPane = [
+  "\u001b[1m› \u001b[0mRun the shell command: sleep 200 && echo done4. Then say finished4.",
+  "\u001b[2m• \u001b[0mI’ll run it and wait for completion.",
+  "\u001b[2m◦\u001b[0m \u001b[2mWorking\u001b[0m \u001b[2m(13s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close\u001b[0m",
+  "",
+  "\u001b[1m›\u001b[0m \u001b[2mImprove documentation in @filename\u001b[0m",
+  "",
+  "  gpt-5.6-sol medium · ~/probe-repo · gpt-5.6-sol · medium · Context 4% used · weekly 78% left",
+].join("\n")
+
+// The same TUI after a mid-turn Enter (tool call in flight) and after a mid-turn Tab. Both are Codex's
+// native queued-input block; neither is headed by the bare `Queued follow-ups` the old matcher required.
+const enterQueuedPane = [
+  "\u001b[2m• \u001b[0mMessages to be submitted after next tool call\u001b[2m (press esc to interrupt and send immediately)\u001b[0m",
+  "\u001b[2m  ↳ I kinda think Unified nubx is a little too unexpected. It's weird that you can run a file with nubx. No one's really asking for this. It's pretty divisive. Kinda confusing, I dunno. I think it's possibly dangerous\u001b[0m",
+  "    \u001b[2mtoo. I'm having second thoughts\u001b[0m",
+  "\u001b[1m›\u001b[0m \u001b[2mImprove documentation in @filename\u001b[0m",
+].join("\n")
+
+const tabQueuedPane = [
+  "\u001b[2m• \u001b[0mQueued follow-up inputs",
+  "\u001b[2m  ↳ \u001b[3msecond steer via tab queue\u001b[0m",
+  "\u001b[2m    shift + ← edit last queued message\u001b[0m",
+  "\u001b[1m›\u001b[0m \u001b[2mImprove documentation in @filename\u001b[0m",
+].join("\n")
+
 const liveNubDraft =
   "\n\n\u001b[1m›\u001b[0m works for sandboxed dev servers etc...doesn't work for per-tool-call sandboxing\n  (presumably0\n\n  \u001b[38;2;246;226;183mgpt-5.6-sol high\u001b[2m\u001b[39m · \u001b[0m~/Documents/projects/nub\n"
 
@@ -191,7 +221,7 @@ test("composer inspection matches the exact wrapped nonempty Nub pane and the di
 // internal paragraph break, not the composer's end — only the footer/status line ends it.
 test("composer inspection captures a multi-paragraph draft across internal blank lines", () => {
   const twoParagraphs =
-    "[1m›[0m First paragraph line one\n  continues on row two\n\n  Second paragraph after a blank line\n\n  gpt-5.6-sol xhigh · ~/Documents/projects/fray · Context 66% used"
+    "\u001b[1m›\u001b[0m First paragraph line one\n  continues on row two\n\n  Second paragraph after a blank line\n\n  gpt-5.6-sol xhigh · ~/Documents/projects/fray · Context 66% used"
   assert.equal(inspectCodexComposer(twoParagraphs).kind, "typed", "a multi-paragraph draft is a typed composer")
   assert.equal(
     codexComposerMatches(twoParagraphs, "First paragraph line one continues on row two\n\nSecond paragraph after a blank line"),
@@ -200,7 +230,7 @@ test("composer inspection captures a multi-paragraph draft across internal blank
   )
   // Three-blank-line gaps collapse identically (normalizedInput turns any whitespace run into one space).
   const threeBlanks =
-    "[1m›[0m Alpha\n\n\n  Bravo\n\n  gpt-5.6-sol xhigh · ~/x · 100% context left"
+    "\u001b[1m›\u001b[0m Alpha\n\n\n  Bravo\n\n  gpt-5.6-sol xhigh · ~/x · 100% context left"
   assert.equal(codexComposerMatches(threeBlanks, "Alpha\n\nBravo"), true)
   // Fail-closed preserved: a genuinely different draft is never accepted just because we scan further.
   assert.equal(
@@ -277,6 +307,63 @@ test("native queued-follow-up ownership requires Codex's local label and the exa
   assert.equal(codexNativeQueuedInputMatches("old transcript: Queued follow-ups KEEP_PENDING\n\n›", "KEEP_PENDING"), false)
   assert.equal(codexNativeQueuedInputMatches("Queued follow-ups\n  another message\n\n›", "KEEP_PENDING"), false)
   assert.equal(codexNativeQueuedInputMatches("KEEP_PENDING\n\n›", "KEEP_PENDING"), false)
+
+  // Real codex-cli 0.144.6 blocks. Requiring a bare `Queued follow-ups` header matched NEITHER, so a
+  // steer Codex had visibly accepted looked unconfirmed and timed out into a false steer failure.
+  assert.equal(
+    codexNativeQueuedInputMatches(tabQueuedPane, "second steer via tab queue"),
+    true,
+    "Tab's native block is headed `• Queued follow-up inputs`",
+  )
+  assert.equal(
+    codexNativeQueuedInputMatches(
+      enterQueuedPane,
+      "I kinda think Unified nubx is a little too unexpected. It's weird that you can run a file with nubx. No one's really asking for this. It's pretty divisive. Kinda confusing, I dunno. I think it's possibly dangerous too. I'm having second thoughts",
+    ),
+    true,
+    "a mid-tool-call Enter queues under `• Messages to be submitted after next tool call`, wrapped across rows",
+  )
+  assert.equal(codexNativeQueuedInputMatches(tabQueuedPane, "a message Codex never took"), false)
+})
+
+test("a steer reaches a working Codex instead of waiting for the composer to go idle", () => {
+  const h = harness()
+  h.storage.upsertSession(row("steer-working-codex"))
+  h.storage.setBackend("steer-working-codex", "codex")
+  // The exact pane a steer meets: Codex mid-turn, composer empty, and therefore NO `tab to queue
+  // message` hint to read. Deriving the key from that hint refused to send at all, so the follow-up sat
+  // undelivered for the whole turn and was lost outright if the session exited first.
+  h.setTelemetry({ turn: "in-flight", permPrompt: false, subAgents: [], bgShells: [], pendingQuestion: false })
+  h.setPane("", busyEmptyComposerPane)
+
+  h.controller.queueFollowUp("steer-working-codex", "stop and reconsider")
+
+  assert.deepEqual(h.sent, ["atomic:Enter:stop and reconsider"])
+  assert.equal(h.storage.getSession("steer-working-codex")?.control_error ?? null, null)
+  assert.equal(JSON.parse(h.storage.getSession("steer-working-codex")?.codex_input_queue ?? "[]")[0].state, "submitted")
+})
+
+test("a verified native modal still blocks a steer whose composer reads empty", () => {
+  const h = harness()
+  h.storage.upsertSession(row("steer-behind-modal"))
+  h.storage.setBackend("steer-behind-modal", "codex")
+  // The controller no longer has a refuse-to-send branch, so a modal Codex is holding must be caught by
+  // telemetry rather than by the composer read: an Enter aimed at a modal would ANSWER it.
+  h.setTelemetry({
+    turn: "in-flight",
+    permPrompt: false,
+    nativeInputRequired: { kind: "tool-approval", title: "GitHub tool approval required" },
+    subAgents: [],
+    bgShells: [],
+    pendingQuestion: false,
+  })
+  h.setPane("", busyEmptyComposerPane)
+
+  h.controller.queueFollowUp("steer-behind-modal", "do not answer the modal")
+
+  assert.deepEqual(h.sent, [])
+  assert.match(h.storage.getSession("steer-behind-modal")?.control_error ?? "", /Codex composer or modal/)
+  assert.equal(JSON.parse(h.storage.getSession("steer-behind-modal")?.codex_input_queue ?? "[]")[0].state, "pending")
 })
 
 test("a live Codex queue owner atomically accepts a second follow-up", () => {
@@ -808,7 +895,7 @@ test("a scheduler delivery id makes durable Codex wake enqueue idempotent", () =
   )
 })
 
-test("an active Codex composer uses its verified Tab queue hint, never Enter", () => {
+test("an active Codex composer is steered with Enter even where it advertises Tab", () => {
   const h = harness()
   h.storage.upsertSession(row("active-input"))
   h.storage.setBackend("active-input", "codex")
@@ -817,8 +904,10 @@ test("an active Codex composer uses its verified Tab queue hint, never Enter", (
     "\u001b[1m›\u001b[0m \u001b[2mAdd a follow-up\u001b[0m\n\n  \u001b[2mtab to queue message\u001b[0m",
   )
   h.controller.queueFollowUp("active-input", "ACTIVE_FOLLOWUP exact text")
-  assert.deepEqual(h.sent, ["atomic:Tab:ACTIVE_FOLLOWUP exact text"])
-  assert.equal(JSON.parse(h.keyQueueSnapshots.at(-1) ?? "[]")[0].state, "submitted", "barrier is durable before Tab")
+  // Tab queues under "Queued follow-up inputs", which Codex withholds until the turn ENDS; Enter queues
+  // under "Messages to be submitted after next tool call", reaching the model at the next tool boundary.
+  assert.deepEqual(h.sent, ["atomic:Enter:ACTIVE_FOLLOWUP exact text"])
+  assert.equal(JSON.parse(h.keyQueueSnapshots.at(-1) ?? "[]")[0].state, "submitted", "barrier is durable before the key")
 })
 
 test("a queued follow-up waits behind a native tool modal and resumes only after the human clears it", () => {
@@ -1055,13 +1144,13 @@ test("explicit idle recovery submits the verified existing draft first, confirms
   assert.deepEqual(h.sent, ["atomic:Enter:queued after recovery"])
 })
 
-test("explicit active recovery uses only Codex's advertised Tab queue control", () => {
+test("explicit active recovery submits the draft into Codex's active turn", () => {
   const h = harness()
   h.storage.upsertSession(row("recover-active"))
   h.storage.setBackend("recover-active", "codex")
   h.setPane("", `${liveNubDraft}\n  \u001b[2mtab to queue message\u001b[0m`)
   assert.deepEqual(h.controller.submitExistingDraft("recover-active"), { effect: "submitted" })
-  assert.deepEqual(h.sent, ["key:Tab"])
+  assert.deepEqual(h.sent, ["key:Enter"])
 })
 
 test("draft recovery fails closed on a modal or ambiguous running composer and cannot double-submit", () => {
@@ -1072,9 +1161,9 @@ test("draft recovery fails closed on a modal or ambiguous running composer and c
   assert.throws(() => h.controller.submitExistingDraft("recover-guard"), /modal/)
   assert.deepEqual(h.sent, [])
 
+  // Mid-turn without an advertised Tab hint the draft is still delivered rather than refused: Codex
+  // queues an Enter submit. Refusing to send here was half of the steering wedge.
   h.setPane("", liveNubDraft)
-  assert.throws(() => h.controller.submitExistingDraft("recover-guard"), /neither idle nor advertising/)
-  h.setTelemetry({ turn: "idle", permPrompt: false, subAgents: [], bgShells: [], pendingQuestion: false })
   h.controller.submitExistingDraft("recover-guard")
   assert.throws(() => h.controller.submitExistingDraft("recover-guard"), /already submitted/)
   assert.deepEqual(h.sent, ["key:Enter"])

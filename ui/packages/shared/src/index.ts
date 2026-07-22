@@ -197,6 +197,16 @@ export function isValidAwaitingTimer(value: string): boolean {
   return AWAITING_TIMER_RE.test(s) && Number.isFinite(Date.parse(s))
 }
 
+/** The canonical UTC serialization of a worker `timer:` instant, or null when it is not a valid timer.
+ *  The fence grammar above deliberately admits shapes the durable `SnoozeUntil` grammar rejects — no
+ *  seconds, no milliseconds, an explicit numeric offset — so every timer→snooze handoff normalizes
+ *  HERE. Sending a raw hint at the RPC boundary is what made "Confirm snooze" fail on the contract's
+ *  own documented `2026-07-24T17:00:00Z` form. */
+export function canonicalSnoozeInstant(value: string): string | null {
+  if (!isValidAwaitingTimer(value)) return null
+  return new Date(Date.parse(value.trim())).toISOString()
+}
+
 // A user-chosen snooze is UI lifecycle state, not agent-authored transcript state. The browser
 // serializes local date/time input with Date#toISOString, so the wire/storage representation is one
 // unambiguous UTC instant. Keeping this stricter than the legacy awaiting-timer grammar avoids locale
@@ -211,6 +221,14 @@ export const SnoozeUntil = z.string().regex(
   return Number.isFinite(instant) && new Date(instant).toISOString() === value
 }, "Snooze time must be valid")
 export type SnoozeUntil = z.infer<typeof SnoozeUntil>
+
+// The follow-up a snooze carries. Its presence is what turns a snooze from a passive reminder (the
+// card re-surfaces, you act) into a SCHEDULED BUMP (fray resumes the agent with this text at the
+// deadline). Trimmed at the boundary so whitespace can never arm a wake that delivers nothing, and
+// capped like a composer message because it is delivered as an ordinary user turn.
+export const SNOOZE_PROMPT_MAX = 4000
+export const SnoozePrompt = z.string().trim().min(1).max(SNOOZE_PROMPT_MAX)
+export type SnoozePrompt = z.infer<typeof SnoozePrompt>
 
 // The signal fence on a thread's FINAL assistant message — the fence language IS the state, the
 // body is the message. `done` = checked success card in the queue until the human Archives it (the
@@ -233,6 +251,28 @@ export const PlanView = z.object({
   threadIds: z.array(ThreadSlug).default([]), // threads dispatched from this plan
 })
 export type PlanView = z.infer<typeof PlanView>
+
+// ---- Subscription usage-limit pause (auto-resume) ------------------------------------------------
+// Which metered subscription window the provider says is exhausted. "session" is the 5-hour rolling
+// window (Claude's "You've hit your session limit"); "weekly" is the 7-day window; "unknown" is a
+// limit stop whose phrasing we could not attribute — never auto-resumed on a text-derived clock.
+export const LimitWindow = z.enum(["session", "weekly", "unknown"])
+export type LimitWindow = z.infer<typeof LimitWindow>
+
+// A thread whose turn was cut off mid-work by an exhausted subscription window, plus what fray will
+// do about it. `resumesAt` is a unix-seconds instant resolved from the provider's own reset clock (or
+// its usage endpoint) — absent when neither source could supply one, in which case `autoResume` is
+// false and the thread stays a normal human handoff.
+export const LimitPause = z.object({
+  backend: Backend,
+  window: LimitWindow,
+  at: z.string(), // ISO8601 of the limit record — "when the agent got cut off"
+  resumesAt: z.number().optional(), // unix seconds the window rolls
+  // Whether fray intends to deliver its own "continue" once `resumesAt` passes. False when the
+  // setting is off, the instant is unresolvable, or the pause is too old to safely resume.
+  autoResume: z.boolean(),
+})
+export type LimitPause = z.infer<typeof LimitPause>
 
 // One sidebar row: fray board thread + runtime overlay.
 export const ThreadView = z.object({
@@ -307,6 +347,11 @@ export const ThreadView = z.object({
     backend: z.enum(["claude", "codex"]),
     category: z.enum(["authentication_required", "authentication_rejected"]),
   }).optional(),
+  // The session's turn was cut off by an exhausted SUBSCRIPTION window. Distinct from providerFault:
+  // the credential is fine, the account is simply out of quota until the window rolls, so the recovery
+  // is to WAIT and continue — not to sign in. Same discipline as providerFault: only typed data
+  // travels, never the provider's own error text. Optional so old snapshots/servers parse.
+  limitPause: LimitPause.optional(),
 
   // ---- Session-first fields (ALL optional: absent ⇒ a legacy .fray-file row / pre-restart server;
   // the client treats such rows as Legacy-shelf material). Deliberately not zod-defaulted so server
@@ -323,6 +368,10 @@ export const ThreadView = z.object({
   // suppressed from Queue and shown dimmed in Held. Hard interactive gates (question, permission,
   // native approval, crash) deliberately break through it. Expired values are cleared server-side.
   snoozedUntil: SnoozeUntil.optional(),
+  // The prompt this snooze will deliver at its deadline, when it carries one. Present ⇒ the wake is an
+  // AUTO-bump (the scheduler resumes the agent with exactly this text) rather than a reminder, which is
+  // the distinction the held row's tooltip renders. Absent ⇒ the card merely re-surfaces.
+  snoozePrompt: z.string().optional(),
   // The signal fence on the final assistant message, present only while the thread is excused by it.
   lastFence: ThreadFence.optional(),
   // SERVER-DERIVED queue membership: explicit questions, checked/done handoffs, plus the process-level
@@ -537,6 +586,11 @@ export const Settings = z.object({
   // is the differentiator); a project that doesn't want that opinionation flips it off in one click.
   // Optional so an old settings blob parses; absent ⇒ on (defaultSettings pins true).
   runtimeGate: z.boolean().optional(),
+  // When a subscription window runs dry mid-turn, remember every thread it cut off and deliver a
+  // "continue" to each one once the window rolls. ON by default — an interrupted agent that never
+  // gets picked back up is the whole cost of a limit. Flip it off to leave the paused threads in the
+  // queue for a human to restart. Optional so an old settings blob parses; absent ⇒ on.
+  autoResumeOnLimit: z.boolean().optional(),
   // GitHub batch-dispatch prompt templates (the picker's per-item worker prompt). Optional: when
   // unset OR blank the server falls back to its exported DEFAULT_ISSUE_PROMPT / DEFAULT_PR_PROMPT.
   // Substitution tokens the server fills: {repo} {n} {title} {url} {labels} {body}. The leading
@@ -640,6 +694,10 @@ export const SetThreadSnoozeInput = z.object({
   slug: ThreadSlug,
   // null is the explicit "wake now"/cancel operation; presets and custom local input send UTC.
   until: SnoozeUntil.nullable(),
+  // Optional scheduled follow-up. Omitted/null ⇒ a plain reminder snooze; a prompt ⇒ the thread is
+  // automatically bumped with it at `until`. Always cleared together with the instant, so a wake-now
+  // can never leave an armed prompt behind.
+  prompt: SnoozePrompt.nullable().optional(),
 }).strict()
 export type SetThreadSnoozeInput = z.infer<typeof SetThreadSnoozeInput>
 
@@ -989,6 +1047,16 @@ export const TranscriptMessage = z.object({
   // + optional: a pre-restart client ignores it; an old server simply never sets it. NB: the client ALSO
   // sets this transiently on an optimistic local send (see web hooks.ts) — same meaning, same styling.
   queued: z.boolean().optional(),
+  // Server-side delivery-ledger identity for a Claude follow-up (delivery-ledger.ts): set on a queued
+  // bubble the ledger projects (or tags), so the client's optimistic copy of the SAME send is consumed
+  // by id instead of by exact text — the text-match path stays only for id-less legacy flows. Additive.
+  deliveryId: z.string().optional(),
+  // The ledger's own state for that send. "pending": injected, no JSONL evidence yet. "enqueued":
+  // Claude Code's queue holds it (positive receipt, undelivered). "unconfirmed": no evidence appeared
+  // within the timeout — the injection likely mutated/never landed; the client renders a quiet warning
+  // and the terminal is the recovery surface. Delivered sends never carry this (the ledger drops them;
+  // the real transcript record renders). Additive + optional.
+  deliveryState: z.enum(["pending", "enqueued", "unconfirmed"]).optional(),
 })
 export type TranscriptMessage = z.infer<typeof TranscriptMessage>
 

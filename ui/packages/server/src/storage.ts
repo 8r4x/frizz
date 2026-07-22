@@ -35,6 +35,10 @@ export interface SessionRow {
   // from an agent fence. Optional keeps old fixtures/source-compatible; SQLite always returns null or
   // a concrete value after the additive migration.
   snoozed_until?: string | null
+  // The follow-up this snooze owes at its deadline. NULL = a plain reminder snooze (the card just
+  // re-surfaces, which is all a snooze ever did before). Non-NULL = the scheduler owns the expiry: it
+  // bumps the thread with exactly this text, so the board must NOT clear such a row on elapse.
+  snooze_prompt?: string | null
   meta: string | null // JSON blob for future annotations (unparsed here)
   seen_at: string | null // ISO8601 — interaction clearance: recorded when the human opens the thread
   plan_path: string | null // project-relative .fray/plans/*.md this thread was dispatched from
@@ -74,6 +78,9 @@ export interface SessionRow {
   // neither a queued follow-up nor a permission request can safely advance right now.
   codex_input_queue?: string | null
   control_error?: string | null
+  // Durable Claude follow-up delivery ledger (delivery-ledger.ts): small JSON array of not-yet-
+  // delivered sends, correlated by the tailer and projected into the rendered transcript.
+  delivery_ledger?: string | null
   // Monotonic process incarnation for this Fray session. Incremented atomically before every
   // respawn/reattach so output or async completion from an older process cannot mutate the new one.
   runtime_generation?: number
@@ -291,9 +298,13 @@ export interface Storage {
     generation: number,
     state: "open" | "archived",
   ): boolean
-  setSnoozedUntil(slug: string, until: string | null): void
-  // Clears elapsed values atomically and returns the number changed. The board calls this at each
-  // refresh and at its exact wake timer so restart/reload cannot leave a stale Held marker behind.
+  // `prompt` arms the deadline as a scheduled BUMP: the waker resumes the thread with exactly this
+  // text when the instant crosses. Omitted/null keeps the historical reminder behavior (the card
+  // simply re-surfaces). Clearing the instant always clears the prompt with it.
+  setSnoozedUntil(slug: string, until: string | null, prompt?: string | null): void
+  // Clears elapsed PROMPTLESS values atomically and returns the number changed. The board calls this at
+  // each refresh and at its exact wake timer so restart/reload cannot leave a stale Held marker behind.
+  // A snooze carrying a prompt survives its deadline until the scheduler has delivered its bump.
   clearExpiredSnoozes(now: string): number
   // Persist an EXPLICIT human title. The flag flip is atomic with the text write so no board refresh,
   // transcript ai-title, resume upsert, or server restart can see the new title as machine-generated.
@@ -390,6 +401,7 @@ export interface Storage {
     queue: string | null,
   ): boolean
   setControlError(slug: string, error: string | null): void
+  setDeliveryLedger(slug: string, ledger: string | null): void
   getSetting(key: string): unknown
   setSetting(key: string, value: unknown): void
   deleteSetting(key: string): void
@@ -463,6 +475,7 @@ export function createStorage(dbPath: string): Storage {
     "title TEXT",
     "state TEXT",
     "snoozed_until TEXT",
+    "snooze_prompt TEXT",
     "meta TEXT",
     "seen_at TEXT",
     "plan_path TEXT",
@@ -479,6 +492,7 @@ export function createStorage(dbPath: string): Storage {
     "permission_pending TEXT",
     "codex_input_queue TEXT",
     "control_error TEXT",
+    "delivery_ledger TEXT",
     "runtime_generation INTEGER NOT NULL DEFAULT 0",
     "runtime_control TEXT",
     "runtime_control_revision INTEGER NOT NULL DEFAULT 0",
@@ -514,8 +528,8 @@ export function createStorage(dbPath: string): Storage {
   const selOne = db.prepare<[string], SessionRow>("SELECT * FROM session WHERE slug = ?")
   const selAll = db.prepare<[], SessionRow>("SELECT * FROM session")
   const upsertStmt = db.prepare(`
-    INSERT INTO session (slug, session_id, tmux_name, spawned_at, last_read_at, unread, exited, title_auto, title, state, snoozed_until, meta, seen_at, plan_path, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, codex_input_queue, control_error, runtime_generation, runtime_control, runtime_control_revision)
-    VALUES (@slug, @session_id, @tmux_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title, @state, @snoozed_until, @meta, @seen_at, @plan_path, @transcript_id, @model, @effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @codex_input_queue, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision)
+    INSERT INTO session (slug, session_id, tmux_name, spawned_at, last_read_at, unread, exited, title_auto, title, state, snoozed_until, snooze_prompt, meta, seen_at, plan_path, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, codex_input_queue, control_error, runtime_generation, runtime_control, runtime_control_revision)
+    VALUES (@slug, @session_id, @tmux_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title, @state, @snoozed_until, @snooze_prompt, @meta, @seen_at, @plan_path, @transcript_id, @model, @effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @codex_input_queue, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision)
     ON CONFLICT(slug) DO UPDATE SET
       session_id = excluded.session_id,
       tmux_name  = excluded.tmux_name,
@@ -526,6 +540,9 @@ export function createStorage(dbPath: string): Storage {
       title_auto = excluded.title_auto,
       title = excluded.title,
       snoozed_until = excluded.snoozed_until,
+      -- Always moves WITH the instant: a spread row carries both, a re-dispatch clears both. An armed
+      -- prompt outliving its deadline would be a wake nothing can ever fire.
+      snooze_prompt = excluded.snooze_prompt,
       plan_path = excluded.plan_path,
       model = excluded.model,
       effort = excluded.effort,
@@ -552,14 +569,14 @@ export function createStorage(dbPath: string): Storage {
   const insertSessionIfAbsentStmt = db.prepare(`
     INSERT INTO session (
       slug, session_id, tmux_name, spawned_at, last_read_at, unread, exited, archived, rested_at,
-      title_auto, title, transcript_id, state, snoozed_until, meta, seen_at, plan_path, backend, agent_session_id,
+      title_auto, title, transcript_id, state, snoozed_until, snooze_prompt, meta, seen_at, plan_path, backend, agent_session_id,
       model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff,
       permission_mode, permission_pending, codex_input_queue, control_error,
       runtime_generation, runtime_control, runtime_control_revision
     )
     VALUES (
       @slug, @session_id, @tmux_name, @spawned_at, @last_read_at, @unread, @exited, @archived,
-      @rested_at, @title_auto, @title, @transcript_id, @state, @snoozed_until, @meta, @seen_at, @plan_path,
+      @rested_at, @title_auto, @title, @transcript_id, @state, @snoozed_until, @snooze_prompt, @meta, @seen_at, @plan_path,
       @backend, @agent_session_id, @model, @effort, @profile_pending_model,
       @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending,
       @codex_input_queue, @control_error, @runtime_generation, @runtime_control,
@@ -698,10 +715,10 @@ export function createStorage(dbPath: string): Storage {
   `)
   const completeIfCurrentStmt = db.prepare(`
     UPDATE session
-    SET exited = 1, state = 'archived', archived = 1, unread = 0, snoozed_until = NULL
+    SET exited = 1, state = 'archived', archived = 1, unread = 0, snoozed_until = NULL, snooze_prompt = NULL
     WHERE slug = ? AND session_id = ? AND runtime_generation = ?
   `)
-  const archivedStmt = db.prepare("UPDATE session SET archived = ?, unread = CASE WHEN ? = 1 THEN 0 ELSE unread END, snoozed_until = CASE WHEN ? = 1 THEN NULL ELSE snoozed_until END WHERE slug = ?")
+  const archivedStmt = db.prepare("UPDATE session SET archived = ?, unread = CASE WHEN ? = 1 THEN 0 ELSE unread END, snoozed_until = CASE WHEN ? = 1 THEN NULL ELSE snoozed_until END, snooze_prompt = CASE WHEN ? = 1 THEN NULL ELSE snooze_prompt END WHERE slug = ?")
   const restedStmt = db.prepare("UPDATE session SET rested_at = ? WHERE slug = ?")
   const restedIfCurrentStmt = db.prepare(`
     UPDATE session SET rested_at = ?
@@ -714,18 +731,22 @@ export function createStorage(dbPath: string): Storage {
     WHERE slug = ? AND session_id = ? AND runtime_generation = ?
   `)
   const stateStmt = db.prepare(
-    "UPDATE session SET state = ?, archived = ?, unread = CASE WHEN ? = 1 THEN 0 ELSE unread END, snoozed_until = CASE WHEN ? = 1 THEN NULL ELSE snoozed_until END WHERE slug = ?",
+    "UPDATE session SET state = ?, archived = ?, unread = CASE WHEN ? = 1 THEN 0 ELSE unread END, snoozed_until = CASE WHEN ? = 1 THEN NULL ELSE snoozed_until END, snooze_prompt = CASE WHEN ? = 1 THEN NULL ELSE snooze_prompt END WHERE slug = ?",
   )
   const stateIfCurrentStmt = db.prepare(`
     UPDATE session SET state = ?, archived = ?,
       unread = CASE WHEN ? = 1 THEN 0 ELSE unread END,
-      snoozed_until = CASE WHEN ? = 1 THEN NULL ELSE snoozed_until END
+      snoozed_until = CASE WHEN ? = 1 THEN NULL ELSE snoozed_until END,
+      snooze_prompt = CASE WHEN ? = 1 THEN NULL ELSE snooze_prompt END
     WHERE slug = ? AND session_id = ? AND runtime_generation = ?
   `)
-  const snoozedUntilStmt = db.prepare("UPDATE session SET snoozed_until = ? WHERE slug = ?")
+  const snoozedUntilStmt = db.prepare("UPDATE session SET snoozed_until = ?, snooze_prompt = ? WHERE slug = ?")
+  // Only a PROMPTLESS snooze expires here. One that carries a prompt still owes the thread a bump, and
+  // the scheduler — not the board — clears it once that wake reaches a terminal state. Erasing it on
+  // elapse (the board refreshes far more often than the waker ticks) would drop the follow-up entirely.
   const clearExpiredSnoozesStmt = db.prepare(`
     UPDATE session SET snoozed_until = NULL
-    WHERE snoozed_until IS NOT NULL AND snoozed_until <= ?
+    WHERE snoozed_until IS NOT NULL AND snoozed_until <= ? AND snooze_prompt IS NULL
   `)
   const titleStmt = db.prepare("UPDATE session SET title = ?, title_auto = 0 WHERE slug = ?")
   const titleCasStmt = db.prepare(
@@ -907,6 +928,7 @@ export function createStorage(dbPath: string): Storage {
     WHERE slug = ? AND session_id = ? AND runtime_generation = ? AND codex_input_queue IS ?
   `)
   const controlErrorStmt = db.prepare("UPDATE session SET control_error = ? WHERE slug = ?")
+  const deliveryLedgerStmt = db.prepare("UPDATE session SET delivery_ledger = ? WHERE slug = ?")
   const getSet = db.prepare<[string], { value: string }>("SELECT value FROM settings WHERE key = ?")
   const putSet = db.prepare(
     "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -926,8 +948,10 @@ export function createStorage(dbPath: string): Storage {
     permission_mode: row.permission_mode ?? null,
     permission_pending: row.permission_pending ?? null,
     snoozed_until: row.snoozed_until ?? null,
+    snooze_prompt: row.snooze_prompt ?? null,
     codex_input_queue: row.codex_input_queue ?? null,
     control_error: row.control_error ?? null,
+    delivery_ledger: row.delivery_ledger ?? null,
     runtime_generation: row.runtime_generation ?? 0,
     runtime_control: row.runtime_control ?? null,
     runtime_control_revision: row.runtime_control_revision ?? 0,
@@ -1260,7 +1284,8 @@ export function createStorage(dbPath: string): Storage {
       exitedIfCurrentStmt.run(exited ? 1 : 0, slug, sessionId, generation).changes === 1,
     completeIfCurrent: (slug, sessionId, generation) =>
       completeIfCurrentStmt.run(slug, sessionId, generation).changes === 1,
-    setArchived: (slug, archived) => void archivedStmt.run(archived ? 1 : 0, archived ? 1 : 0, archived ? 1 : 0, slug),
+    setArchived: (slug, archived) =>
+      void archivedStmt.run(archived ? 1 : 0, archived ? 1 : 0, archived ? 1 : 0, archived ? 1 : 0, slug),
     setRestedAt: (slug, at) => void restedStmt.run(at, slug),
     setRestedAtIfCurrent: (slug, sessionId, generation, at) =>
       restedIfCurrentStmt.run(at, slug, sessionId, generation).changes === 1,
@@ -1268,10 +1293,19 @@ export function createStorage(dbPath: string): Storage {
     setTranscriptId: (slug, transcriptId) => void transcriptIdStmt.run(transcriptId, slug),
     setTranscriptIdIfCurrent: (slug, sessionId, generation, transcriptId) =>
       transcriptIdIfCurrentStmt.run(transcriptId, slug, sessionId, generation).changes === 1,
-    setState: (slug, state) => void stateStmt.run(state, state === "archived" ? 1 : 0, state === "archived" ? 1 : 0, state === "archived" ? 1 : 0, slug),
+    setState: (slug, state) =>
+      void stateStmt.run(
+        state,
+        state === "archived" ? 1 : 0,
+        state === "archived" ? 1 : 0,
+        state === "archived" ? 1 : 0,
+        state === "archived" ? 1 : 0,
+        slug,
+      ),
     setStateIfCurrent: (slug, sessionId, generation, state) =>
       stateIfCurrentStmt.run(
         state,
+        state === "archived" ? 1 : 0,
         state === "archived" ? 1 : 0,
         state === "archived" ? 1 : 0,
         state === "archived" ? 1 : 0,
@@ -1279,7 +1313,10 @@ export function createStorage(dbPath: string): Storage {
         sessionId,
         generation,
       ).changes === 1,
-    setSnoozedUntil: (slug, until) => void snoozedUntilStmt.run(until, slug),
+    // The instant and its follow-up are ONE fact: clearing the snooze (wake-now, follow-up, archive)
+    // always disarms the prompt, and a prompt can never be written without a deadline to fire it.
+    setSnoozedUntil: (slug, until, prompt = null) =>
+      void snoozedUntilStmt.run(until, until === null ? null : prompt, slug),
     clearExpiredSnoozes: (now) => clearExpiredSnoozesStmt.run(now).changes,
     setTitle: (slug, title) => void titleStmt.run(title, slug),
     setTitleIfCurrent: (slug, title, expected) =>
@@ -1475,6 +1512,7 @@ export function createStorage(dbPath: string): Storage {
         expected.queue,
       ).changes === 1,
     setControlError: (slug, error) => void controlErrorStmt.run(error, slug),
+    setDeliveryLedger: (slug, ledger) => void deliveryLedgerStmt.run(ledger, slug),
     getSetting: (key) => {
       const row = getSet.get(key)
       if (!row) return undefined

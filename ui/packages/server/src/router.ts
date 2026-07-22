@@ -60,6 +60,7 @@ import type { AppContext } from "./context.ts"
 import { runThreadUpdate } from "./fray.ts"
 import { repairThreadFile } from "./repair.ts"
 import { resumeThread } from "./resume.ts"
+import { appendDelivery } from "./delivery-ledger.ts"
 import {
   readEarlierThreadTranscriptPage,
   readLatestThreadTranscriptPage,
@@ -506,8 +507,8 @@ export function createRouter(ctx: AppContext) {
     followUp: mutation({
       input: FollowUpInput,
       handler: async ({ input }) => {
-        // Codex's TUI drops Enter when it follows literal text in the same instant, and an active turn
-        // explicitly requires Tab to queue. Persist + capture-gate that path; Claude keeps its native
+        // Codex's TUI drops Enter when it follows literal text in the same instant, so this path is
+        // persisted + capture-gated and submits through one atomic paste-and-key. Claude keeps its native
         // live injection, and any dead session resumes through the backend command.
         const row = ctx.storage.getSession(input.slug)
         if (hasPendingPermissionChange(row)) {
@@ -559,6 +560,13 @@ export function createRouter(ctx: AppContext) {
           }
         }
         resumeThread({ project: ctx.project, storage: ctx.storage, board: ctx.board, getSettings: ctx.getSettings, backendFor: ctx.backendFor }, input.slug, input.message)
+        // Injection accepted → open a delivery-ledger entry (Claude rows only; Codex has its own durable
+        // queue above). From here the send is a tracked state machine: the tailer correlates the JSONL
+        // evidence and the transcript projection renders the queued bubble as SERVER truth — reload-safe,
+        // consumed by the client's optimistic copy via this deliveryId instead of by text match.
+        if (input.deliveryId && row?.backend !== "codex") {
+          appendDelivery(ctx.storage, input.slug, { id: input.deliveryId, text: input.message })
+        }
         ctx.storage.setSnoozedUntil(input.slug, null)
         ctx.board.refresh()
       },
@@ -715,6 +723,11 @@ export function createRouter(ctx: AppContext) {
     // Durable manual snooze. The client sends one exact UTC instant derived from its local picker;
     // Archive clears it, and a human follow-up wakes immediately. The operator may deliberately park
     // any queue reason—including an unresolved ask, permission prompt, or crash—until this deadline.
+    //
+    // An optional `prompt` upgrades the park into a SCHEDULED BUMP: at the deadline the wake scheduler
+    // resumes this thread with that text over the same durable outbox a worker's `awaiting timer:` uses
+    // (scheduler.ts, SOURCE 3). Without one the snooze stays what it always was — the card re-surfaces
+    // and the human acts. `until: null` (wake now) clears both halves.
     setThreadSnooze: mutation({
       input: SetThreadSnoozeInput,
       handler: async ({ input }) => {
@@ -726,7 +739,7 @@ export function createRouter(ctx: AppContext) {
           if (thread.state === "archived") throw new Error("Reopen this thread before snoozing it")
           if (Date.parse(input.until) <= Date.now()) throw new Error("Snooze time must be in the future")
         }
-        ctx.storage.setSnoozedUntil(input.slug, input.until)
+        ctx.storage.setSnoozedUntil(input.slug, input.until, input.prompt ?? null)
         ctx.board.refresh()
       },
     }),

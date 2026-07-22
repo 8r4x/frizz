@@ -1098,11 +1098,15 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
         )}
       </div>
 
-      {/* Bottom of the card. With answerable question blocks: a single "Send answers" action that
-          composes the per-block answers into one reply. Otherwise: the free-form steering composer. */}
+      {/* Bottom of the card. Answerable question blocks add a "Send answers" action that composes the
+          per-block answers into one reply — but the free-form composer stays PRESENT underneath it
+          (maintainer 2026-07-22): answering the question is the primary path, not the only one, and
+          ignoring the options to steer with a plain prompt has to stay one keystroke away. The button
+          sits above the box so it stays adjacent to the question it answers, and the card's bottom edge
+          is the same prompt box in every state. */}
       <div className="shrink-0 px-5 pb-3 pt-0">
-      {answerable ? (
-        <div className="flex items-center justify-end gap-2">
+      {answerable && (
+        <div className="mb-2 flex items-center justify-end gap-2">
           <button
             disabled={!anyAnswered}
             onClick={() => sendAnswers()}
@@ -1112,21 +1116,20 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
             Send answers
           </button>
         </div>
-      ) : (
-        <>
-          <Composer
-            surface="queueComposer"
-            value={message}
-            onChange={setMessage}
-            onSubmit={send}
-            placeholder="Reply to the agent…"
-            minHeight={44}
-            busy={controls.busy || sending}
-            footer={controls.footer}
-          />
-          {controls.status}
-        </>
       )}
+      <Composer
+        surface="queueComposer"
+        value={message}
+        onChange={setMessage}
+        onSubmit={send}
+        // With an open ask the box is the deliberate escape hatch, so say so — otherwise "Reply to the
+        // agent…" reads as a second way to answer the question rather than a way around it.
+        placeholder={answerable ? "Or skip the questions and reply…" : "Reply to the agent…"}
+        minHeight={44}
+        busy={controls.busy || sending}
+        footer={controls.footer}
+      />
+      {controls.status}
         <QueueSubAgentLines slug={thread.id} subAgents={thread.subAgents ?? []} />
         {/* Background shells / Monitors remain a runtime strip below the reply area. Live sub-agents are
             intentionally excluded here because their compact ↳ child lines sit directly above it.

@@ -1,0 +1,48 @@
+{
+  "what-s-with-the-firing-tatus": [
+    {
+      "state": "pending",
+      "text": "This snooze button should remain white, actually, I think, just for consistency we should put these confirm buttons into a small footer inside of the card. The buttons can be white, but smaller than they are now, inside of a footer and right justified. You still have these weird labels like \"Timer snooze\".. Those take up an unnecessary amount of vertical space. You should just make it look like a call-out where there's some kind of icon followed by a bolded subtitle e.g. \"**Recommended snooze** — ...\" \n\nI hate the fact that we have this outer agent card with an inner agent card/tool call component inside it. It looks terrible. I don't understand why we have an agent fence at all."
+    },
+    {
+      "state": "pending",
+      "text": "This snooze button should remain white, actually, I think, just for consistency we should put these confirm buttons into a small footer inside of the card. The buttons can be white, but smaller than they are now, inside of a footer and right justified. You still have these weird labels like \"Timer snooze\".. Those take up an unnecessary amount of vertical space. You should just make it look like a call-out where there's some kind of icon followed by a bolded subtitle e.g. \"**Recommended snooze** — ...\" \n\nI hate the fact that we have this outer agent card with an inner agent card/tool call component inside it. It looks terrible. I don't understand why we have an agent fence at all."
+    }
+  ],
+  "did-we-ever-complete-the-switch": [
+    {
+      "state": "pending",
+      "text": "Do not keep legacy shit around. We are in active development. I am currently the only user of Frey. \n\nImplement this all fully!!! Implementation thread."
+    },
+    {
+      "state": "pending",
+      "text": "Do not keep legacy shit around. We are in active development. I am currently the only user of Frey. \n\nImplement this all fully!!! Implementation thread."
+    },
+    {
+      "state": "pending",
+      "text": "yo!"
+    },
+    {
+      "state": "pending",
+      "text": "Do not keep legacy shit around. We are in active development. I am currently the only user of Frey. \n\nImplement this all fully!!! Implementation thread."
+    }
+  ],
+  "i-submitted-an-answer": [
+    {
+      "state": "pending",
+      "text": "Desktop question cards\n\nActive-turn state\n\nNarrow completed state"
+    },
+    {
+      "state": "pending",
+      "text": "I don't want you to remove the screenshots. I want you to fix the proxy."
+    },
+    {
+      "state": "pending",
+      "text": "YO!"
+    },
+    {
+      "state": "pending",
+      "text": "yo"
+    }
+  ]
+}

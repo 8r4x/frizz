@@ -1,12 +1,11 @@
 import { useId, useMemo, useState } from "react"
 import { useSnapshot } from "valtio"
 import { ChevronDown, Clock, Loader2 } from "lucide-react"
-import type { ThreadView } from "@fray-ui/shared"
+import { SNOOZE_PROMPT_MAX, type ThreadView } from "@fray-ui/shared"
 import { rpc } from "../api/rpc.ts"
 import { futureSnoozedUntil } from "../groups.ts"
 import {
   SNOOZE_PRESETS,
-  defaultCustomSnoozeValue,
   formatSnoozeWake,
   localDateTimeInputValue,
   parseLocalSnooze,
@@ -22,21 +21,25 @@ import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Me
 export function SnoozeButton({ thread, onSnoozed }: { thread: ThreadView; onSnoozed?: () => void }) {
   const [busy, setBusy] = useState(false)
   const [customOpen, setCustomOpen] = useState(false)
-  const [customValue, setCustomValue] = useState(() => defaultCustomSnoozeValue())
+  const [customValue, setCustomValue] = useState("")
+  const [promptValue, setPromptValue] = useState("")
   const [customError, setCustomError] = useState("")
   const customInputId = useId()
+  const promptInputId = useId()
   const customFormId = useId()
   const snoozedUntil = futureSnoozedUntil(thread)
   const selectedPreset = useSnapshot(prefs).snoozePreset
   const selectedLabel = snoozePresetLabel(selectedPreset)
   const minCustom = useMemo(() => localDateTimeInputValue(new Date(Date.now() + 60_000)), [customOpen])
 
-  async function apply(until: string | null): Promise<void> {
+  // `prompt` is what upgrades a park into a scheduled BUMP: the server arms a durable wake that resumes
+  // this thread with exactly that text at `until`. null keeps the historical reminder behavior.
+  async function apply(until: string | null, prompt: string | null = null): Promise<void> {
     setBusy(true)
     try {
-      await rpc.setThreadSnooze({ slug: thread.id, until })
+      await rpc.setThreadSnooze({ slug: thread.id, until, prompt: until ? prompt : null })
       if (until) {
-        showToast(`Snoozed · ${formatSnoozeWake(until)}`)
+        showToast(`${prompt ? "Bump scheduled" : "Snoozed"} · ${formatSnoozeWake(until)}`)
         onSnoozed?.()
       } else {
         showToast("Snooze cleared")
@@ -57,8 +60,12 @@ export function SnoozeButton({ thread, onSnoozed }: { thread: ThreadView; onSnoo
     void apply(snoozePresetInstant(preset))
   }
 
+  // Opens on the CURRENTLY SELECTED preset rather than a fixed 1-day default, so the dialog is the
+  // "…and send this" continuation of the quick action beside it. An existing snooze re-opens as itself
+  // so editing the follow-up never silently moves the deadline.
   function openCustom() {
-    setCustomValue(defaultCustomSnoozeValue())
+    setCustomValue(localDateTimeInputValue(new Date(snoozedUntil ?? snoozePresetInstant(selectedPreset))))
+    setPromptValue(thread.snoozePrompt ?? "")
     setCustomError("")
     setCustomOpen(true)
   }
@@ -69,7 +76,12 @@ export function SnoozeButton({ thread, onSnoozed }: { thread: ThreadView; onSnoo
       setCustomError(parsed.message)
       return
     }
-    void apply(parsed.until)
+    const prompt = promptValue.trim()
+    if (prompt.length > SNOOZE_PROMPT_MAX) {
+      setCustomError(`Prompt is too long (${prompt.length}/${SNOOZE_PROMPT_MAX})`)
+      return
+    }
+    void apply(parsed.until, prompt || null)
   }
 
   return (
@@ -109,7 +121,7 @@ export function SnoozeButton({ thread, onSnoozed }: { thread: ThreadView; onSnoo
               </MenuItem>
             ))}
             <MenuSeparator />
-            <MenuItem onSelect={openCustom}>Custom date &amp; time…</MenuItem>
+            <MenuItem onSelect={openCustom}>Custom time &amp; prompt…</MenuItem>
             {snoozedUntil && (
               <>
                 <MenuSeparator />
@@ -144,7 +156,7 @@ export function SnoozeButton({ thread, onSnoozed }: { thread: ThreadView; onSnoo
               className="flex items-center gap-1.5 rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-opacity hover:opacity-90 disabled:opacity-45"
             >
               {busy && <Loader2 size={12} className="animate-spin" />}
-              Snooze
+              {promptValue.trim() ? "Snooze & bump" : "Snooze"}
             </button>
           </>
         }
@@ -164,7 +176,6 @@ export function SnoozeButton({ thread, onSnoozed }: { thread: ThreadView; onSnoo
             id={customInputId}
             type="datetime-local"
             required
-            autoFocus
             min={minCustom}
             value={customValue}
             onChange={(event) => {
@@ -173,8 +184,38 @@ export function SnoozeButton({ thread, onSnoozed }: { thread: ThreadView; onSnoo
             }}
             className="w-full rounded-md border border-border bg-bg px-2.5 py-2 text-[13px] text-fg outline-none focus:border-accent"
           />
-          <p className="min-h-4 text-[10.5px] text-muted/65">
+          <p className="text-[10.5px] text-muted/65">
             Stored as an exact instant; shown here in your browser’s local time zone.
+          </p>
+          <label htmlFor={promptInputId} className="mt-1 text-[11px] font-medium text-muted">
+            Then send this prompt <span className="font-normal text-muted/55">(optional)</span>
+          </label>
+          {/* The prompt is the difference between a reminder and a scheduled bump, so the field is
+              focused: the dialog exists to write one, and the time above already carries a sane default. */}
+          <textarea
+            id={promptInputId}
+            autoFocus
+            rows={3}
+            maxLength={SNOOZE_PROMPT_MAX}
+            placeholder="e.g. Check whether CI went green and land it if so."
+            value={promptValue}
+            onChange={(event) => {
+              setPromptValue(event.target.value)
+              setCustomError("")
+            }}
+            onKeyDown={(event) => {
+              // ⌘/Ctrl+Enter submits from inside the textarea, where a bare Enter has to stay a newline.
+              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault()
+                submitCustom()
+              }
+            }}
+            className="w-full resize-y rounded-md border border-border bg-bg px-2.5 py-2 text-[13px] leading-5 text-fg outline-none placeholder:text-muted/40 focus:border-accent"
+          />
+          <p className="min-h-4 text-[10.5px] text-muted/65">
+            {promptValue.trim()
+              ? "fray will resume this thread with the prompt at the wake time."
+              : "Leave empty to just bring the card back to your queue."}
           </p>
           {customError && <p role="alert" className="text-[11px] text-red-400">{customError}</p>}
         </form>

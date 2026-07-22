@@ -42,10 +42,6 @@ export function localDateTimeInputValue(date: Date): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
-export function defaultCustomSnoozeValue(nowMs = Date.now()): string {
-  return localDateTimeInputValue(new Date(nowMs + DAY))
-}
-
 export type ParsedLocalSnooze = { ok: true; until: string } | { ok: false; message: string }
 
 export function parseLocalSnooze(value: string, nowMs = Date.now()): ParsedLocalSnooze {
@@ -104,6 +100,26 @@ function wakePhrase(until: string, nowMs: number): string | null {
 export function formatSnoozedUntil(until: string, nowMs = Date.now()): string | null {
   const wake = wakePhrase(until, nowMs)
   return wake ? `Snoozed until ${wake}` : null
+}
+
+/** How long a scheduled follow-up may run in a one-line tooltip before it stops being a hint. */
+const PROMPT_PREVIEW_MAX = 120
+
+/** A snooze prompt collapsed to one readable line. */
+export function snoozePromptPreview(prompt: string, max = PROMPT_PREVIEW_MAX): string {
+  const flat = prompt.trim().replace(/\s+/g, " ")
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
+}
+
+/** The held-row sentence for a USER snooze, which now comes in two shapes. A snooze carrying a prompt
+ *  resolves itself by resuming the agent with that text, so it is an AUTO-snooze in the exact sense
+ *  below — and naming the follow-up is the whole point of having armed one. A plain snooze is still
+ *  the reminder it always was. */
+export function formatUserSnooze(until: string, prompt: string | undefined, nowMs = Date.now()): string | null {
+  const follow = prompt?.trim()
+  if (!follow) return formatSnoozedUntil(until, nowMs)
+  const auto = formatAutoSnoozedUntil(until, nowMs)
+  return auto ? `${auto} — then: ${snoozePromptPreview(follow)}` : null
 }
 
 /** A complete AUTO-SNOOZE sentence. Same concept as a human snooze — park until a wall-clock instant —

@@ -294,17 +294,28 @@ export function codexComposerMatches(escapedPane: string, expected: string): boo
   return positions.has(target.length)
 }
 
-// After Tab, Codex can visibly own a queued follow-up before JSONL emits a user_message. Require
-// both its native label and the exact text in its bounded local section; history text alone is never
-// enough proof to suppress the fail-closed path. A queued message can span many visual rows, so the
-// block ends only at the next Codex composer marker (with a defensive line cap), never after an
-// arbitrary handful of wrapped lines.
+// Codex heads its native queued-input block with one of several labels, each rendered after a bullet
+// glyph. Captured verbatim from codex-cli 0.144.6: Tab yields "• Queued follow-up inputs", Enter with a
+// tool call in flight yields "• Messages to be submitted after next tool call (press esc to interrupt and
+// send immediately)", and "Messages to be submitted at end of turn" is the third form. Matching only a
+// bare `Queued follow-ups` recognized NONE of them, so provider ownership never registered and every
+// steer queued behind a turn longer than CODEX_INPUT_CONFIRMATION_TIMEOUT_MS timed out into a false
+// fray-steer-failed. Anchoring at both ends still keeps a transcript line that merely mentions the
+// phrase from passing.
+const CODEX_QUEUED_BLOCK_LABEL =
+  /^(?:[•›]\s+)?(?:queued follow-?ups?(?:\s+inputs?)?(?:\s*\(\d+\)|\s*:\s*)?|messages to be submitted\b.*)$/i
+
+// After Tab or a mid-turn Enter, Codex can visibly own a queued follow-up before JSONL emits a
+// user_message. Require both its native label and the exact queued text in its bounded local section;
+// history text alone is never enough proof to suppress the fail-closed path. A queued message can span
+// many visual rows, so the block ends only at the next Codex composer marker (with a defensive line
+// cap), never after an arbitrary handful of wrapped lines.
 export function codexNativeQueuedInputMatches(escapedPane: string, expected: string): boolean {
   const expectedText = normalizedInput(expected)
   if (!expectedText) return false
   const lines = escapedPane.split("\n").map((line) => normalizedInput(stripAnsi(line)))
   for (let i = 0; i < lines.length; i++) {
-    if (!/^queued follow-?ups?(?:\s*\(\d+\)|\s*:\s*)?$/i.test(lines[i])) continue
+    if (!CODEX_QUEUED_BLOCK_LABEL.test(lines[i])) continue
     const block: string[] = []
     for (const line of lines.slice(i + 1, i + 241)) {
       if (/^›(?:\s|$)/u.test(line)) break
@@ -347,6 +358,28 @@ export function inspectClaudeComposer(pane: string): ClaudeComposerState {
   const idleFooter = (line: string) =>
     line.includes(" · ") || /^[⏵⏸?]/u.test(line) || /(?:for shortcuts|context left|tokens left|shift\+tab)/i.test(line)
   return footer.every(idleFooter) ? { kind: "empty" } : { kind: "unavailable" }
+}
+
+// ONE key hands the composer to Codex in EVERY state. Verified against codex-cli 0.144.6: Enter submits
+// an idle composer, and mid-turn Codex takes it as a steer under "Messages to be submitted after next
+// tool call" — delivered at the next tool boundary, which is the whole point of steering. (Tab also
+// queues mid-turn, but under "Queued follow-up inputs", which Codex withholds until the turn ENDS, and
+// Tab doubles as the composer's completion key.)
+//
+// The key used to be derived from Codex's `tab to queue message` footer hint, which Codex renders ONLY
+// under a NON-EMPTY composer — an empty one carries the model/context status row instead. So the empty
+// composer a steer is pasted into could never advertise it, the key came out undefined, and EVERY steer
+// sent to a working thread parked on "waiting for an idle or queueable composer" until the turn happened
+// to end — or was lost outright when the session exited first. There is deliberately no "refuse to send"
+// branch left: an undelivered steer is the bug, and a key that fails to register still surfaces visibly
+// through the unchanged CODEX_INPUT_CONFIRMATION_TIMEOUT_MS barrier.
+const CODEX_SUBMIT_KEY = "Enter" as const
+
+// Codex is showing a native modal (tool approval, AskUserQuestion, permission prompt) that owns the
+// keyboard. Composer inspection already fails closed on most of these, but this is checked FIRST because
+// the controller now always sends: an Enter aimed at a modal would answer it.
+function codexModalHolds(tele: ReturnType<Tailer["get"]>): boolean {
+  return !!tele?.permPrompt || !!tele?.pendingAsk || !!tele?.nativeInputRequired
 }
 
 function pendingMode(value: unknown): PermissionModeValue | undefined {
@@ -525,10 +558,9 @@ export function createPermissionController(deps: PermissionControllerDeps): Perm
     }
     const composer = inspectCodexComposer(escaped)
     if (composer.kind !== "typed" || !composer.text) throw new Error("No nonempty Codex terminal draft is available to submit")
-
-    const tele = deps.tailer.get(slug)
-    const key = composer.queueHint ? "Tab" : tele?.turn === "idle" ? "Enter" : undefined
-    if (!key) throw new Error("Codex is neither idle nor advertising its active-turn queue control")
+    if (codexModalHolds(deps.tailer.get(slug))) {
+      throw new Error("Codex is showing a modal; resolve it in Terminal before submitting the draft")
+    }
 
     const queue = parseInputQueue(row.codex_input_queue)
     if (queue.some((item) => item.source === "existing-draft" && item.state === "submitted")) {
@@ -546,7 +578,7 @@ export function createPermissionController(deps: PermissionControllerDeps): Perm
     })
     writeQueue(slug, queue, row)
     setError(slug, null)
-    if (!sendKeyOwned(row, key)) throw new Error("Codex runtime identity changed before the draft could be submitted")
+    if (!sendKeyOwned(row, CODEX_SUBMIT_KEY)) throw new Error("Codex runtime identity changed before the draft could be submitted")
     return { effect: "submitted" }
   }
 
@@ -934,40 +966,32 @@ export function createPermissionController(deps: PermissionControllerDeps): Perm
     }
     if (item.state === "submitted") return true
 
+    if (codexModalHolds(deps.tailer.get(slug))) {
+      setError(slug, "Queued message blocked by an ambiguous Codex composer or modal; resolve it in Terminal")
+      return true
+    }
     const escaped = captureOwned(row, true) ?? ""
     const composer = inspectCodexComposer(escaped)
     if (composer.kind === "empty") {
-      const tele = deps.tailer.get(slug)
-      const key = codexQueueHint(escaped) ? "Tab" : tele?.turn === "idle" ? "Enter" : undefined
-      if (!key) {
-        setError(slug, "Queued Codex message is waiting for an idle or queueable composer")
-        return true
-      }
       // Persist the barrier before one tmux command queue pastes the complete message and submits it.
       // Fray never leaves its own draft behind for a later content-based guess.
       item.state = "submitted"
       item.submittedAt = new Date(now()).toISOString()
       writeQueue(slug, queue, row)
       setError(slug, null)
-      if (!sendTextWithKeyOwned(row, item.text, key)) {
+      if (!sendTextWithKeyOwned(row, item.text, CODEX_SUBMIT_KEY)) {
         setError(slug, "Queued Codex submission could not be confirmed; Fray will not retry it automatically")
       }
       return true
     }
     if (composer.kind === "typed" && codexComposerMatches(escaped, item.text)) {
-      const tele = deps.tailer.get(slug)
-      const key = composer.queueHint ? "Tab" : tele?.turn === "idle" ? "Enter" : undefined
-      if (!key) {
-        setError(slug, "Queued Codex message is waiting for an idle or queueable composer")
-        return true
-      }
       // Persist the submission barrier before sending the key. A crash in between can leave an item
       // safely awaiting confirmation, but can never replay a key that Codex may already have handled.
       item.state = "submitted"
       item.submittedAt = new Date(now()).toISOString()
       writeQueue(slug, queue, row)
       setError(slug, null)
-      if (!sendKeyOwned(row, key)) {
+      if (!sendKeyOwned(row, CODEX_SUBMIT_KEY)) {
         setError(slug, "Queued Codex message was not submitted because the worker identity changed")
       }
       return true

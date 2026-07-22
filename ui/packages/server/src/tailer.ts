@@ -11,6 +11,8 @@ import * as tmux from "./tmux.ts"
 import { detectClaudePermissionMode } from "./permission-controller.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { normalizeObservedThreadModel, validateThreadProfile } from "./backend/thread-profiles.ts"
+import { classifyLimitRecord } from "./backend/usage-limit.ts"
+import { parseDeliveryLedger, correlateDeliveryRecord, ageDeliveries, serializeDeliveryLedger, type DeliveryLedgerItem } from "./delivery-ledger.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
 // (~/.claude/projects/<cwdSlug>/<session_id>.jsonl) to derive liveness telemetry — last activity
@@ -54,7 +56,15 @@ const CLAUDE_PERMISSION_CONFIRM_POLLS = 3
 // treated as "stale" — a liveness fallback for a completion record we somehow missed (the child
 // died, or the worker session ended before the <task-notification> landed). ~5min: comfortably
 // longer than a child's between-tool quiet gaps, short enough that a dead child clears promptly.
+// AGENTS ONLY: a child appends to its transcript on every step, so silence there really is a
+// liveness signal. A background SHELL has no such property — see bgShellViews.
 const SUBAGENT_STALE_MS = 5 * 60_000
+// The absolute age backstop for a tracked background SHELL (see bgShellViews for why output silence
+// cannot be its liveness signal). A watcher this old that has still produced no terminal signal is
+// presumed lost — the honest read on a session whose transcript we can no longer follow — so the
+// thread stops being excused as "working" and re-enters the queue. Deliberately far longer than any
+// real CI/release watch, so it never fires on a healthy wait.
+const SHELL_MAX_TRACKED_MS = 2 * 60 * 60_000
 // How long the transcript must be silent while a turn still looks in-flight before we spend a
 // tmux capture-pane to sniff for an interactive permission prompt. Keeps us from shelling out
 // every tick for a healthily-streaming turn; a real prompt only appears after a tool_use record
@@ -276,6 +286,10 @@ export interface TailState extends FoldState {
   nativeSessionId: string
   runtimeGeneration: number
   path: string
+  // The delivery_ledger JSON this tailer last accounted for (pushed a projection for). A ROUTER write
+  // (followUp opening a ledger entry) changes the row without any JSONL advance; this drift check is
+  // what re-projects the transcript to already-subscribed clients within one tick.
+  deliveryLedgerSeen?: string | null
   // A FOREIGN thread (a maintainer terminal discovered from the log dir, no registry row). Structural
   // guarantee that this state can NEVER shell out to tmux — no pane-sniff, no pane-death, no notify /
   // storage write — since no `fray-<slug>` tmux session exists for it. Keyed by session id, not slug.
@@ -329,6 +343,11 @@ interface Record {
   content?: unknown // top-level string on queue-operation records — carries the <task-notification> XML
   promptSource?: string // on user records: typed/queued (human) · "system" (peer msg / task-notification)
   isApiErrorMessage?: boolean // synthetic assistant record claude writes for a provider API error
+  // Structured category claude stamps on that synthetic record: "rate_limit" (subscription window
+  // exhausted) · "server_error" (connectivity/5xx) · "unknown" (everything else). This is what makes
+  // limit detection structural rather than a text guess — see backend/usage-limit.ts.
+  error?: unknown
+  apiErrorStatus?: unknown // HTTP status alongside `error` (429 on a limit stop); absent on some errors
   message?: { stop_reason?: string; content?: unknown; model?: string }
 }
 
@@ -848,6 +867,20 @@ export function applyRecord(state: TailState, rec: Record): void {
     } else if (raw !== undefined) {
       state.authFault = undefined
     }
+    // Subscription usage-limit classifier (auto-resume): the SAME synthetic-record channel, keyed on
+    // the structured `error:"rate_limit"` category rather than any text match. The limit is what cut
+    // this turn off mid-work, so the fault standing on the tail IS "this agent was running when the
+    // window ran dry" — the set the scheduler later continues. A REAL assistant text clears it (the
+    // provider is serving again); a user record clears it below (the human — or our own delivered
+    // "continue" — has already moved the thread on, which is what makes the wake idempotent).
+    if (rec.isApiErrorMessage === true) {
+      const limit = classifyLimitRecord(rec, raw)
+      if (limit && typeof rec.timestamp === "string") {
+        state.limitFault = { window: limit.window, at: rec.timestamp, resetClock: limit.resetClock }
+      }
+    } else if (raw !== undefined) {
+      state.limitFault = undefined
+    }
     if (raw !== undefined) {
       const preview = previewText(raw)
       if (preview !== undefined) state.lastAssistant = preview
@@ -871,6 +904,12 @@ export function applyRecord(state: TailState, rec: Record): void {
     // FINAL message); the NEXT assistant record recomputes them.
     state.lastAssistantHasQuestion = false
     state.lastFence = undefined
+    // Any user record supersedes a usage-limit pause: the conversation has moved past the point where
+    // it was cut off, whether by the human or by the "continue" the wake scheduler delivered. This is
+    // precisely what makes the auto-resume one-shot — the delivered message erases the very fault that
+    // selected the thread. If the window is still dry, the provider simply writes a NEW limit record
+    // (with a NEW, later reset instant), so a re-fire can never tighten into a loop.
+    state.limitFault = undefined
     // `lastUserAt` is the ROW-ORDER key — bump it ONLY for a genuine HUMAN interaction. A tool_result
     // is agent activity (excluded by isRealUserMessage); a system record (peer/notification) is
     // machine motion the human didn't cause — neither may jump the row to the top (the one part of the
@@ -1210,6 +1249,14 @@ export function createTailer(deps: TailerDeps): Tailer {
     return m === undefined || nowMs - m > SUBAGENT_STALE_MS
   }
 
+  // A tracked SHELL is presumed lost only once it is absurdly old (see SHELL_MAX_TRACKED_MS) — never
+  // for going quiet, which is a watcher's normal state (see bgShellViews). An unparseable startedAt
+  // never ages out: a missing timestamp is not evidence of death.
+  function shellPresumedLost(e: SubAgentEntry, nowMs: number): boolean {
+    const started = Date.parse(e.startedAt)
+    return Number.isFinite(started) && nowMs - started > SHELL_MAX_TRACKED_MS
+  }
+
   // Derive the surfaced view of a session's live SUB-AGENTS (kind "agent"; insertion = dispatch order).
   function subAgentViews(state: TailState, nowMs: number): SubAgentView[] {
     if (state.subAgents.size === 0) return []
@@ -1227,12 +1274,26 @@ export function createTailer(deps: TailerDeps): Tailer {
   // <task-notification>) means every tracked shell died with it: report none rather than leaving them
   // to read as live (the UI would otherwise show them "alive", quietly breathing, forever). The normal
   // path — a shell exiting while the agent lives — still clears via its terminal notification.
+  //
+  // A shell deliberately does NOT use the sub-agent mtime rule, because OUTPUT SILENCE IS A WATCHER'S
+  // NORMAL OPERATING STATE, not evidence of death. The waits the worker contract routes here are
+  // exactly the quiet ones: fray's own `monitors/*.mjs` emit one NDJSON line per state TRANSITION, and
+  // `Monitor` is told to print only meaningful transitions — so a healthy watcher sitting on a 40-minute
+  // CI run writes nothing at all. Judging that by output mtime marked every such watcher "stale" after
+  // five minutes, which dropped it out of hasLiveBackgroundWork (board.ts) and floated a queue card
+  // with nothing to act on — the reported bug, reproduced on the live board 2026-07-21. A `Monitor` was
+  // already immune, but only by accident: its launch ack carries no output path, so entryStale
+  // short-circuits on `!e.outputFile`. This makes background Bash agree with it on purpose.
+  //
+  // Liveness is therefore: still TRACKED (no terminal <task-notification>/TaskStop/non-ack result) and
+  // its pane alive — plus SHELL_MAX_TRACKED_MS as the backstop for the one case neither signal covers,
+  // a session whose transcript we silently stopped following.
   function bgShellViews(state: TailState, nowMs: number): BgShellView[] {
     if (state.subAgents.size === 0 || state.paneDead) return []
     const out: BgShellView[] = []
     for (const e of state.subAgents.values()) {
       if (e.kind !== "shell") continue
-      out.push({ label: e.label, startedAt: e.startedAt, state: entryStale(e, nowMs) ? "stale" : "running" })
+      out.push({ label: e.label, startedAt: e.startedAt, state: shellPresumedLost(e, nowMs) ? "stale" : "running" })
     }
     return out
   }
@@ -1420,10 +1481,48 @@ export function createTailer(deps: TailerDeps): Tailer {
     return dirty
   }
 
+  // Delivery-ledger fold for one registered CLAUDE row's tick: `onLine` correlates each appended JSONL
+  // record against the row's pending follow-ups (delivery-ledger.ts); `finish()` ages the items
+  // (pending→unconfirmed timeout, unconfirmed drop) and persists any transition, returning true so the
+  // caller re-projects the transcript + dirties the board. Codex rows (their queue is codex_input_queue)
+  // and rows with an empty ledger cost one null check.
+  function ledgerFold(
+    row: SessionRow,
+    nowMs: number,
+  ): { onLine?: (line: string) => void; finish: () => { changed: boolean; value: string | null } } {
+    if (row.backend === "codex" || !row.delivery_ledger) {
+      return { finish: () => ({ changed: false, value: null }) }
+    }
+    let items: DeliveryLedgerItem[] = parseDeliveryLedger(row.delivery_ledger)
+    const before = items
+    const nowIso = new Date(nowMs).toISOString()
+    return {
+      onLine: (line: string) => {
+        if (!line.trim() || !items.length) return
+        let rec: unknown
+        try {
+          rec = JSON.parse(line)
+        } catch {
+          return
+        }
+        items = correlateDeliveryRecord(items, rec, nowIso)
+      },
+      finish: () => {
+        items = ageDeliveries(items, nowMs)
+        if (items === before) return { changed: false, value: null }
+        const value = serializeDeliveryLedger(items)
+        deps.storage.setDeliveryLedger(row.slug, value)
+        return { changed: true, value }
+      },
+    }
+  }
+
   // Read whatever has been appended since our last offset, folding each complete line into the
   // derivation. Handles: file-not-yet-created (ENOENT → skip), truncation/rotation (size < offset
   // → re-read from 0), and a trailing partial line (buffered until its newline arrives).
-  function consume(state: TailState, backend: TailBackend): void {
+  // `onLine` (optional) sees each complete appended line AFTER the fold — the delivery-ledger
+  // correlation seam for registered Claude rows; unset everywhere else (zero cost).
+  function consume(state: TailState, backend: TailBackend, onLine?: (line: string) => void): void {
     let size: number
     try {
       size = statSync(state.path).size
@@ -1452,7 +1551,10 @@ export function createTailer(deps: TailerDeps): Tailer {
     }
     const lines = (state.partial + chunk).split("\n")
     state.partial = lines.pop() ?? "" // last element is the (possibly empty) trailing partial
-    for (const line of lines) backend.foldLine(state, line)
+    for (const line of lines) {
+      backend.foldLine(state, line)
+      onLine?.(line)
+    }
   }
 
   // Every OTHER row's pinned + discovered id — the exclude set so discovery never steals a transcript
@@ -1607,7 +1709,11 @@ export function createTailer(deps: TailerDeps): Tailer {
       // exited notifies — those pre-restart events are history, not new activity.
       if (!state.primed) {
         const primeOffset = state.offset
-        consume(state, backend)
+        const primeLedger = ledgerFold(row, nowMs)
+        consume(state, backend, primeLedger.onLine)
+        const primedLedger = primeLedger.finish()
+        state.deliveryLedgerSeen = primedLedger.changed ? primedLedger.value : row.delivery_ledger ?? null
+        if (primedLedger.changed) transcriptDirty.push(row.slug)
         persistCodexAutoTitle(row, state, runtimeGeneration)
         if (state.offset !== primeOffset) transcriptDirty.push(row.slug)
         state.turn = computeTurn(state, nowMs)
@@ -1660,7 +1766,16 @@ export function createTailer(deps: TailerDeps): Tailer {
       // never touches state.turn (computeTurn derives it), so prevTurn === state.turn for claude here:
       // byte-identical. This makes the transition edge backend-agnostic.
       const prevTurn = state.turn
-      consume(state, backend)
+      const rowLedger = row.delivery_ledger ?? null
+      const ledgerDrifted = rowLedger !== (state.deliveryLedgerSeen ?? null) // a router write with no JSONL advance
+      const ledger = ledgerFold(row, nowMs)
+      consume(state, backend, ledger.onLine)
+      const ledgerResult = ledger.finish()
+      state.deliveryLedgerSeen = ledgerResult.changed ? ledgerResult.value : rowLedger
+      if (ledgerDrifted || ledgerResult.changed) {
+        transcriptDirty.push(row.slug) // the ledger projection changed even if no renderable record did
+        dirty = true
+      }
       const profileRecordLanded = (state.profileRevision ?? 0) !== prevProfileRevision
       if (profileRecordLanded && state.model && state.profileAt) {
         const observedAt = Date.parse(state.profileAt)
@@ -1856,7 +1971,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // an unanswered ```question fence (a user reply clears the flag and flips the turn in-flight).
       const pendingQuestion = s.turn === "idle" && s.lastAssistantHasQuestion
       const nowMs = now()
-      return { turn: s.turn, permPrompt: s.permPrompt, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), bgShells: bgShellViews(s, nowMs), pendingAsk: s.pendingAsk, pendingQuestion, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault }
+      return { turn: s.turn, permPrompt: s.permPrompt, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), bgShells: bgShellViews(s, nowMs), pendingAsk: s.pendingAsk, pendingQuestion, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.
