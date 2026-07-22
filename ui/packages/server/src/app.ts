@@ -10,8 +10,10 @@ import { createRouter } from "./router.ts"
 import type { AppContext } from "./context.ts"
 import { allowedLocalCorsOrigin, isTrustedLocalHttpRequest } from "./local-origin.ts"
 import { resolveLocalImage } from "./local-image.ts"
+import { resolveLocalVisualization } from "./local-visualization.ts"
 
 export { resolveLocalImage } from "./local-image.ts"
+export { resolveLocalVisualization } from "./local-visualization.ts"
 
 // The API surface routed to app.fetch: /rpc/* (typed procedures), /events (the single SSE
 // board channel), /health. The terminal WebSocket and static/Vite assets are handled by the
@@ -100,6 +102,17 @@ export function createApp(ctx: AppContext, options: AppOptions = {}) {
     if (r.status !== 200) return c.text(String(r.status), r.status)
     // Copy into a plain Uint8Array<ArrayBuffer> — Hono's body type rejects Node's Buffer union.
     return c.body(Uint8Array.from(r.body), 200, { "content-type": r.contentType, "cache-control": "private, max-age=60" })
+  })
+
+  app.get("/local-visualization", (c) => {
+    const row = ctx.storage.getSession(c.req.query("slug") ?? "")
+    const r = resolveLocalVisualization(ctx.project.dir, row?.session_id, c.req.query("file"))
+    if (r.status !== 200) return c.text(String(r.status), r.status)
+    return c.html(r.body, 200, {
+      "cache-control": "private, no-store",
+      "content-security-policy": r.contentSecurityPolicy,
+      "x-content-type-options": "nosniff",
+    })
   })
 
   // Attachment intake for drag-and-dropped / pasted / picked files (images AND the safe-tier document

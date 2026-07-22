@@ -11,6 +11,25 @@ test("a standalone image-path line becomes an image part", () => {
   ])
 })
 
+test("a Codex inline visualization directive becomes an ordered visualization part", () => {
+  assert.deepEqual(splitProseAttachments('Before\n::codex-inline-vis{file="july-spend-prediction.html"}\nAfter'), [
+    { kind: "md", text: "Before" },
+    { kind: "visualization", file: "july-spend-prediction.html" },
+    { kind: "md", text: "After" },
+  ])
+})
+
+test("inline visualization directives stay literal inside fences or with unsafe file syntax", () => {
+  const fenced = '```text\n::codex-inline-vis{file="chart.html"}\n```'
+  assert.deepEqual(splitProseAttachments(fenced), [{ kind: "md", text: fenced }])
+  for (const directive of [
+    '::codex-inline-vis{file="../chart.html"}',
+    '::codex-inline-vis{file="/tmp/chart.html"}',
+    '::codex-inline-vis{file="Chart.html"}',
+    'prefix ::codex-inline-vis{file="chart.html"}',
+  ]) assert.deepEqual(splitProseAttachments(directive), [{ kind: "md", text: directive }])
+})
+
 test("backtick-wrapped path lines are detected and unwrapped", () => {
   const parts = splitProseAttachments("`/tmp/a.jpeg`")
   assert.deepEqual(parts, [{ kind: "image", path: "/tmp/a.jpeg" }])

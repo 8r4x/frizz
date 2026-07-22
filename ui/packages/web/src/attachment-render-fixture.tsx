@@ -53,6 +53,7 @@ createRoot(document.getElementById("root")!).render(
       {splitProseAttachments(message).map((part, i) =>
         part.kind === "image" ? <BlockImage key={i} path={part.path} />
         : part.kind === "file" ? <BlockFile key={i} path={part.path} />
+        : part.kind === "visualization" ? <code key={i}>{`::codex-inline-vis{file="${part.file}"}`}</code>
         : <div key={i} className="md-body" dangerouslySetInnerHTML={{ __html: mdToHtml(part.text) }} />,
       )}
     </div>

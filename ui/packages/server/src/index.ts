@@ -172,7 +172,7 @@ export interface StartedServer {
 
 const isApiUrl = (url: string) =>
   url.startsWith("/rpc") || url.startsWith("/events") || url === "/health" || url === "/control/stop"
-  || url.startsWith("/local-image") || url === "/attach"
+  || url.startsWith("/local-image") || url.startsWith("/local-visualization") || url === "/attach"
 
 const MIME: Record<string, string> = {
   ".html": "text/html",

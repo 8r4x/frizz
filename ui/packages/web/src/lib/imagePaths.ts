@@ -12,6 +12,7 @@ export type ProsePart =
   | { kind: "md"; text: string }
   | { kind: "image"; path: string }
   | { kind: "file"; path: string }
+  | { kind: "visualization"; file: string }
 
 // Path characters: any non-whitespace/non-backtick, plus a literal space when NOT followed by "/".
 // Paths with spaces are real and common — macOS screenshots ("Screen Shot … at 1.23.45 PM.png"),
@@ -32,6 +33,10 @@ const DOC_LINE = new RegExp(String.raw`^\s*\`?(/${PATH_CHARS}\.(?:${ATTACHMENT_D
 // pasting `ls`/`git`/`tree` output is common) as ordinary code, instead of ripping it into a chip and
 // orphaning the fence markers.
 const FENCE_LINE = /^\s{0,3}(?:```|~~~)/
+// Codex's Visualize skill emits one host directive whose basename resolves inside the owning
+// thread's `.codex/visualizations/YYYY/MM/DD/<session-id>/` directory. Keep the grammar exact:
+// arbitrary attributes, paths, uppercase names, and inline occurrences remain ordinary prose.
+const INLINE_VIS_LINE = /^\s*::codex-inline-vis\{file="([a-z0-9][a-z0-9-]{0,127}\.html)"\}\s*$/
 
 export function splitProseAttachments(md: string): ProsePart[] {
   const lines = md.split("\n")
@@ -53,6 +58,12 @@ export function splitProseAttachments(md: string): ProsePart[] {
     }
     if (inFence) {
       buf.push(line)
+      continue
+    }
+    const visualization = line.match(INLINE_VIS_LINE)
+    if (visualization) {
+      flush()
+      parts.push({ kind: "visualization", file: visualization[1] })
       continue
     }
     const image = line.match(IMAGE_LINE)

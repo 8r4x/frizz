@@ -2004,6 +2004,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
             blocks.push(
               p.kind === "image" ? <BlockImage key={partKey} path={p.path} />
               : p.kind === "file" ? <BlockFile key={partKey} path={p.path} />
+              : p.kind === "visualization" ? <InlineVisualization key={partKey} file={p.file} />
               : <ProseHtml key={partKey} md={p.text} wrap={dense} />,
             )
           }
@@ -2192,6 +2193,85 @@ export function BlockFile({ path }: { path: string }) {
       <FileText size={14} strokeWidth={2} className="shrink-0 text-muted" />
       <span className="font-mono-keep truncate text-[12px] text-fg">{base}</span>
     </button>
+  )
+}
+
+const VIS_THEME_VARIABLES: Record<string, string> = {
+  "--background": "--color-bg",
+  "--foreground": "--color-fg",
+  "--card": "--color-panel-2",
+  "--card-foreground": "--color-fg",
+  "--popover": "--color-elevated",
+  "--popover-foreground": "--color-fg",
+  "--primary": "--color-fg",
+  "--primary-foreground": "--color-bg",
+  "--secondary": "--color-panel-2",
+  "--secondary-foreground": "--color-fg",
+  "--muted": "--color-panel-2",
+  "--muted-foreground": "--color-muted",
+  "--accent": "--color-border-strong",
+  "--accent-foreground": "--color-fg",
+  "--border": "--color-border-strong",
+  "--input": "--color-border-strong",
+  "--ring": "--color-accent",
+}
+
+function visualizationTheme() {
+  const root = getComputedStyle(document.documentElement)
+  const vars = Object.fromEntries(Object.entries(VIS_THEME_VARIABLES).map(([target, source]) => [target, root.getPropertyValue(source).trim()]))
+  vars["--font-size-base"] = getComputedStyle(document.body).fontSize
+  return { type: "fray-inline-vis-theme", colorScheme: root.colorScheme === "light" ? "light" : "dark", vars }
+}
+
+// Codex Visualize emits a thread-local HTML fragment plus this directive. The server resolves the
+// basename against the owning Fray session and wraps it in a CSP; this iframe deliberately omits
+// allow-same-origin, forms, popups, downloads, and navigation so fragment scripts never inherit the
+// control plane's authority. A tiny postMessage bridge supplies theme tokens and natural height.
+export function InlineVisualization({ file }: { file: string }) {
+  const slug = useContext(ThreadSlugContext)
+  const iframeRef = useRef<HTMLIFrameElement>(null)
+  const [height, setHeight] = useState(360)
+  const [available, setAvailable] = useState<boolean | null>(null)
+  const src = slug ? `/local-visualization?slug=${encodeURIComponent(slug)}&file=${encodeURIComponent(file)}` : null
+
+  useEffect(() => {
+    if (!src) { setAvailable(false); return }
+    const controller = new AbortController()
+    setAvailable(null)
+    // Probe before mounting so a missing fragment gets a useful fallback instead of a tiny iframe
+    // containing a bare HTTP status. HEAD avoids downloading a potentially 2 MB fragment twice.
+    void fetch(src, { method: "HEAD", signal: controller.signal }).then((response) => {
+      if (!controller.signal.aborted) setAvailable(response.ok)
+    }).catch(() => {
+      if (!controller.signal.aborted) setAvailable(false)
+    })
+    return () => controller.abort()
+  }, [src])
+
+  useEffect(() => {
+    const receive = (event: MessageEvent) => {
+      if (event.source !== iframeRef.current?.contentWindow || event.data?.type !== "fray-inline-vis-height") return
+      const next = Number(event.data.height)
+      if (Number.isFinite(next)) setHeight(Math.max(80, Math.min(2400, Math.ceil(next))))
+    }
+    window.addEventListener("message", receive)
+    return () => window.removeEventListener("message", receive)
+  }, [])
+
+  if (available === false || !src) {
+    return <div role="status" className="rounded-lg border border-border bg-panel-2 px-3 py-2 text-[12px] text-muted">Visualization unavailable: <span className="font-mono-keep break-all">{file}</span></div>
+  }
+  if (available === null) return <div role="status" className="h-20 animate-pulse rounded-lg bg-panel-2" aria-label={`Loading ${file}`} />
+  return (
+    <iframe
+      ref={iframeRef}
+      src={src}
+      title={file.replace(/\.html$/, "").replaceAll("-", " ")}
+      sandbox="allow-scripts"
+      onLoad={() => iframeRef.current?.contentWindow?.postMessage(visualizationTheme(), "*")}
+      className="block w-full border-0 bg-transparent"
+      style={{ height }}
+    />
   )
 }
 

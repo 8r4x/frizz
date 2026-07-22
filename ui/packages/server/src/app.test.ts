@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, writeFileSync, symlinkSync, existsSync, readFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, writeFileSync, symlinkSync, existsSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createApp, resolveLocalImage, type AppOptions } from "./app.ts"
@@ -9,7 +9,7 @@ import type { AppContext } from "./context.ts"
 // A 1x1 PNG's leading bytes are enough — the route serves the bytes verbatim, it doesn't decode.
 const PNG = Buffer.from("89504e470d0a1a0a", "hex")
 
-function originTestApp(port: number, onDispatch?: () => void, options: Partial<AppOptions> = {}, stateDir = "/tmp/origin-test-state") {
+function originTestApp(port: number, onDispatch?: () => void, options: Partial<AppOptions> = {}, stateDir = "/tmp/origin-test-state", overrides: Partial<AppContext> = {}) {
   const inert = new Proxy({}, { get: () => () => {} })
   const ctx = {
     bootId: "origin-test-boot",
@@ -41,6 +41,7 @@ function originTestApp(port: number, onDispatch?: () => void, options: Partial<A
     getSettings: () => ({}),
     setSettings: (settings: unknown) => settings,
     resetSettings: () => ({}),
+    ...overrides,
   } as unknown as AppContext
   return createApp(ctx, { port, ...options })
 }
@@ -355,6 +356,38 @@ test("/local-image route serves an agent screenshot under /tmp end-to-end", asyn
   assert.equal(served.status, 200, "worker screenshot serves")
   assert.equal(served.headers.get("content-type"), "image/png")
   assert.deepEqual(Buffer.from(await served.arrayBuffer()), PNG)
+})
+
+test("/local-visualization binds a directive basename to the owning thread session", async () => {
+  const port = 49_234
+  const projectDir = mkdtempSync(join(tmpdir(), "fray-inline-vis-route-"))
+  const dir = join(projectDir, ".codex", "visualizations", "2026", "07", "22", "session-a")
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, "spend-chart.html"), "<section>bound visualization</section>")
+  const app = originTestApp(port, undefined, {}, "/tmp/origin-test-state", {
+    project: {
+      id: "origin-test-project",
+      dir: projectDir,
+      stateDir: "/tmp/origin-test-state",
+      cwdSlug: "-tmp-origin-test-project",
+      name: "origin-test",
+      label: "local/origin-test",
+    },
+    storage: { getSession: (slug: string) => slug === "spend-thread" ? { session_id: "session-a" } : undefined } as AppContext["storage"],
+  })
+  const headers = { host: `127.0.0.1:${port}`, "sec-fetch-site": "same-origin" }
+  const served = await app.request(`http://127.0.0.1:${port}/local-visualization?slug=spend-thread&file=spend-chart.html`, { headers })
+  assert.equal(served.status, 200)
+  assert.match(served.headers.get("content-security-policy") ?? "", /default-src 'none'/)
+  assert.equal(served.headers.get("x-content-type-options"), "nosniff")
+  assert.match(await served.text(), /bound visualization/)
+
+  const probe = await app.request(`http://127.0.0.1:${port}/local-visualization?slug=spend-thread&file=spend-chart.html`, { method: "HEAD", headers })
+  assert.equal(probe.status, 200)
+  assert.equal(await probe.text(), "")
+
+  const unowned = await app.request(`http://127.0.0.1:${port}/local-visualization?slug=other&file=spend-chart.html`, { headers })
+  assert.equal(unowned.status, 400)
 })
 
 test("symlink to a real image resolves and renders → 200; a dangling symlink → 404", () => {
