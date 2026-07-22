@@ -50,7 +50,9 @@ test("terminal attach resolver rejects a stale replaced row instead of name-atta
   const storage = createStorage(join(mkdtempSync(join(tmpdir(), "fray-terminal-aba-")), "ui.db"))
   const stale = terminalRow("terminal-aba", "owner-a")
   storage.upsertSession(stale)
-  assert.deepEqual(resolveThreadAttach(storage, stale), ["attach-session", "-t", "fray-terminal-aba"])
+  // `=…:` is tmux's exact-name target: a bare `fray-terminal-aba` would prefix-match — and attach to —
+  // a `fray-terminal-aba-2` neighbour once this session is gone (see exactSessionTarget).
+  assert.deepEqual(resolveThreadAttach(storage, stale), ["attach-session", "-t", "=fray-terminal-aba:"])
   storage.upsertSession(terminalRow(stale.slug, "owner-b"))
   assert.equal(resolveThreadAttach(storage, stale), null)
 })

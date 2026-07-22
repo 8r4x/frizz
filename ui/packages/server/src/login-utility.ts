@@ -115,7 +115,7 @@ export function createLoginUtility(deps: {
     },
     attachArgs(slug) {
       if (!attempts.has(slug)) return null
-      return ["attach-session", "-t", tmuxSessionName(slug)]
+      return ["attach-session", "-t", tmux.exactSessionTarget(slug)]
     },
     status(attemptId) {
       const attempt = attempts.get(attemptId)

@@ -3,8 +3,8 @@ import type { Duplex } from "node:stream"
 import { execFile } from "node:child_process"
 import { WebSocket, WebSocketServer, type RawData } from "ws"
 import pty from "node-pty"
-import { ThreadSlug, tmuxSessionName, type TermClientMsg } from "@fray-ui/shared"
-import { expectedAdoptionAttachArgs, socketName } from "./tmux.ts"
+import { ThreadSlug, type TermClientMsg } from "@fray-ui/shared"
+import { exactSessionTarget, expectedAdoptionAttachArgs, socketName } from "./tmux.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import { isTrustedLocalWebSocketRequest, rejectWebSocketUpgrade } from "./local-origin.ts"
@@ -24,7 +24,7 @@ export function resolveThreadAttach(
   const binding = adoptionRuntimeBinding(storage, row)
   if (binding.kind === "conflict") return null
   if (binding.kind === "bound") return expectedAdoptionAttachArgs(binding.claim)
-  return ["attach-session", "-t", tmuxSessionName(row.slug)]
+  return ["attach-session", "-t", exactSessionTarget(row.slug)]
 }
 
 // Keep the raw websocket bounded before JSON parsing, and independently validate the decoded input.
@@ -349,7 +349,7 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
       }
       attachArgs = deps.resolveAttach?.(slug) ?? (deps.resolveAttach
         ? null
-        : ["attach-session", "-t", tmuxSessionName(slug)])
+        : ["attach-session", "-t", exactSessionTarget(slug)])
     } catch {
       beginClose(1011, "terminal unavailable")
       return

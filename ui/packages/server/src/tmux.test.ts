@@ -20,6 +20,10 @@ import {
   findExpectedAdoptionPane,
   captureExpectedAdoptionPane,
   crossSocketLiveOwner,
+  capturePane,
+  isLive,
+  panePid,
+  sendKeys,
   sendTextToCompatibleLegacyWorker,
   sendTextWithKey,
   sendTextWithKeyToExpectedAdoptionPane,
@@ -194,6 +198,42 @@ test("crossSocketLiveOwner treats absent compatible tmux servers as exited, not 
   try {
     assert.equal(crossSocketLiveOwner(slug, { id: projectId, dir: process.cwd() }), "absent")
   } finally {
+    setSocket(original)
+  }
+})
+
+// tmux resolves a bare `-t <name>` target by exact match, then by PREFIX. Fray's slug allocator mints
+// `<slug>-2` for a re-dispatch of the same prompt, so `fray-X` and `fray-X-2` coexist constantly — and
+// once `fray-X` is gone, every bare-name call silently retargets `fray-X-2`. Observed in production
+// 2026-07-22: archiving a thread whose pane had already gone prefix-killed the freshly-dispatched
+// `-2` worker 1.2s into its first turn. Every name target now carries the `=…:` exact-match guard.
+test("a name-targeted call for an absent slug never reaches its `-2` neighbour", { skip: !tmuxAvailable }, () => {
+  const original = socketName()
+  const base = `prefix-neighbour-${process.pid}-${Date.now()}`
+  const neighbour = `${base}-2`
+  setSocket(`fray-prefix-neighbour-${process.pid}`)
+  try {
+    // Only the NEIGHBOUR exists; `base` was never spawned (equivalently: already exited and was reaped).
+    spawn(neighbour, [process.execPath, "-e", "process.stdin.resume()"], process.cwd())
+    assert.equal(isLive(neighbour), true, "the neighbour must be live for this test to mean anything")
+
+    // Reads must not mistake the neighbour for the absent slug…
+    assert.equal(hasSession(base), false)
+    assert.equal(isLive(base), false)
+    assert.equal(panePid(base), null)
+    assert.equal(capturePane(base), "")
+    assert.equal(lookupAdoptionPane(base).kind, "absent")
+
+    // …input must not be delivered into the neighbour's composer. sendKeys surfaces the miss (it has
+    // always thrown for a genuinely absent session); what matters is that nothing was typed anywhere.
+    assert.throws(() => sendKeys(base, "LEAKED_INTO_NEIGHBOUR"))
+    assert.equal(capturePane(neighbour).includes("LEAKED_INTO_NEIGHBOUR"), false)
+
+    // …and the destructive verb must not take the neighbour down with it.
+    killSession(base)
+    assert.equal(isLive(neighbour), true, "killing an absent slug must never kill its `-2` neighbour")
+  } finally {
+    killSession(neighbour)
     setSocket(original)
   }
 })

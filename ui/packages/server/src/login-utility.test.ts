@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { ThreadSlug, tmuxSessionName } from "@fray-ui/shared"
 import { createLoginUtility } from "./login-utility.ts"
+import { exactSessionTarget } from "./tmux.ts"
 import type { AdoptionPaneLookup, PaneIdentity } from "./tmux.ts"
 
 function harness(over: { paneDead?: boolean; paneLookup?: AdoptionPaneLookup } = {}) {
@@ -59,7 +60,9 @@ test("a vanished session is replaced rather than reused", () => {
 test("attachArgs gates on a live attempt and targets its exact tmux session", () => {
   const h = harness()
   const { attemptId } = h.utility.start("claude")
-  assert.deepEqual(h.utility.attachArgs(attemptId), ["attach-session", "-t", tmuxSessionName(attemptId)])
+  // Exact-name target (`=fray-<id>:`), never the bare name — tmux would prefix-match a neighbour.
+  assert.deepEqual(h.utility.attachArgs(attemptId), ["attach-session", "-t", exactSessionTarget(attemptId)])
+  assert.equal(exactSessionTarget(attemptId), `=${tmuxSessionName(attemptId)}:`)
   assert.equal(h.utility.attachArgs("login-0000000000000000"), null, "an unknown id never attaches")
   assert.equal(h.utility.attachArgs("some-thread"), null)
 })

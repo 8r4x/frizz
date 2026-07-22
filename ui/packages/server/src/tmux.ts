@@ -60,6 +60,25 @@ export function socketName(): string {
   return socket
 }
 
+// EVERY `-t <session>` target must go through this, never a bare `tmuxSessionName(slug)`.
+//
+// tmux resolves a bare name target by EXACT match, then by PREFIX, then by fnmatch. Fray's slug
+// allocator mints `<slug>-2` when the same prompt is dispatched twice, so `fray-X` and `fray-X-2`
+// routinely coexist — and the moment `fray-X` is gone, every bare `-t fray-X` call silently
+// retargets its NEIGHBOUR. Observed 2026-07-22: archiving a thread after its pane had already gone
+// ran `kill-session -t fray-inside-of-codex-i-was-trying`, which prefix-matched and KILLED the
+// freshly-dispatched `…-trying-2` worker 1.2s into its first turn (the board then showed it as a
+// stalled yellow "!"). The same hazard reads a dead thread as LIVE through has-session/list-panes,
+// and delivers a follow-up into a DIFFERENT worker's composer through send-keys/paste-buffer.
+//
+// A leading `=` forces exact-name resolution. The trailing `:` makes the string parse as a SESSION
+// for the window/pane-target verbs (list-panes, send-keys, capture-pane, paste-buffer) — without it
+// they reject `=fray-X` outright ("can't find pane"). This one form is accepted by both target
+// classes, so it is the only target spelling fray uses. All verified empirically against tmux here.
+export function exactSessionTarget(slug: string): string {
+  return `=${tmuxSessionName(slug)}:`
+}
+
 export type CrossSocketOwner = "live" | "absent" | "unknown"
 
 // A pre-project-socket Fray worker can be recovered without starting a duplicate only when its
@@ -82,7 +101,7 @@ export type CompatibleLegacyWorkerLookup =
 // a second worker merely because the selected socket changed.
 export function crossSocketLiveOwner(slug: string, project: { id: string; dir: string }): CrossSocketOwner {
   const candidates = [...new Set([socket, "fray", deriveLegacySocket(project.id), deriveSocket(project.id)])]
-  const name = tmuxSessionName(slug)
+  const name = exactSessionTarget(slug)
   const belongs = (cwd: string) => {
     if (!isAbsolute(cwd)) return false
     const rel = relative(resolve(project.dir), resolve(cwd))
@@ -159,7 +178,7 @@ export function findCompatibleLegacyWorker(
   // the full project socket was DETECTED as live yet never reachable here, so every wake threw
   // "A live matching worker exists …" and retried to silent exhaustion.  Scanning it closes that gap.
   const candidates = [...new Set(["fray", deriveLegacySocket(project.id), deriveSocket(project.id)])]
-  const name = tmuxSessionName(slug)
+  const name = exactSessionTarget(slug)
   const belongs = (cwd: string) => {
     if (!isAbsolute(cwd)) return false
     const rel = relative(resolve(project.dir), resolve(cwd))
@@ -262,7 +281,7 @@ export function ensureServer(): void {
 
 export function hasSession(slug: string): boolean {
   try {
-    tmux("has-session", "-t", tmuxSessionName(slug))
+    tmux("has-session", "-t", exactSessionTarget(slug))
     return true
   } catch {
     return false
@@ -280,7 +299,7 @@ export function listSessions(): string[] {
 
 export function killSession(slug: string): void {
   try {
-    tmux("kill-session", "-t", tmuxSessionName(slug))
+    tmux("kill-session", "-t", exactSessionTarget(slug))
   } catch {
     // already gone
   }
@@ -411,7 +430,7 @@ export function spawn(
 // prompt, which has no JSONL signal. Empty string if the session is gone.
 export function capturePane(slug: string): string {
   try {
-    return tmux("capture-pane", "-p", "-t", tmuxSessionName(slug))
+    return tmux("capture-pane", "-p", "-t", exactSessionTarget(slug))
   } catch {
     return ""
   }
@@ -421,7 +440,7 @@ export function capturePane(slug: string): string {
 // style to distinguish an empty composer from human-typed text before injecting a slash command.
 export function capturePaneEscaped(slug: string): string {
   try {
-    return tmux("capture-pane", "-p", "-e", "-t", tmuxSessionName(slug))
+    return tmux("capture-pane", "-p", "-e", "-t", exactSessionTarget(slug))
   } catch {
     return ""
   }
@@ -666,7 +685,7 @@ export function expectedAdoptionAttachArgs(expected: ExpectedAdoptionPane): stri
 // Tri-state lookup for destructive recovery. "unknown" is deliberately distinct from absence: a
 // transient tmux error must retain the durable claim instead of authorizing artifact/ownership loss.
 export function lookupAdoptionPane(slug: string): AdoptionPaneLookup {
-  const name = tmuxSessionName(slug)
+  const name = exactSessionTarget(slug)
   try {
     const out = runSpawnCommand([
       "-L", socket, "list-panes", "-t", name, "-F", PANE_SNAPSHOT_FORMAT,
@@ -891,7 +910,7 @@ export function paneIdentity(slug: string): PaneIdentity | null {
     const out = tmux(
       "list-panes",
       "-t",
-      tmuxSessionName(slug),
+      exactSessionTarget(slug),
       "-F",
       "#{pane_id}\t#{pane_pid}\t#{session_created}",
     ).trim()
@@ -908,7 +927,7 @@ export function paneIdentity(slug: string): PaneIdentity | null {
 // pane_pid of the (single) pane — the live child's pid, or null if the session is gone.
 export function panePid(slug: string): number | null {
   try {
-    const out = tmux("list-panes", "-t", tmuxSessionName(slug), "-F", "#{pane_pid}").trim()
+    const out = tmux("list-panes", "-t", exactSessionTarget(slug), "-F", "#{pane_pid}").trim()
     const pid = parseInt(out.split("\n")[0] ?? "", 10)
     return Number.isFinite(pid) ? pid : null
   } catch {
@@ -920,7 +939,7 @@ export function panePid(slug: string): number | null {
 // remain-on-exit). A missing session reads as dead too.
 export function paneDead(slug: string): boolean {
   try {
-    const out = tmux("list-panes", "-t", tmuxSessionName(slug), "-F", "#{pane_dead}").trim()
+    const out = tmux("list-panes", "-t", exactSessionTarget(slug), "-F", "#{pane_dead}").trim()
     return (out.split("\n")[0] ?? "1") === "1"
   } catch {
     return true
@@ -998,7 +1017,7 @@ export function invalidateLiveness(): void {
 // Inject a single-line follow-up: send the text literally (-l, so no key interpretation),
 // then a separate Enter. For multiline use pasteText.
 export function sendKeys(slug: string, text: string): void {
-  const name = tmuxSessionName(slug)
+  const name = exactSessionTarget(slug)
   tmux("send-keys", "-t", name, "-l", text)
   tmux("send-keys", "-t", name, "Enter")
 }
@@ -1006,7 +1025,7 @@ export function sendKeys(slug: string, text: string): void {
 // Lower-level terminal controls for version-gated TUI automation. Callers must capture + validate the
 // pane before using these; unlike sendKeys, these never guess that a literal string is a user prompt.
 export function sendLiteral(slug: string, text: string): void {
-  tmux("send-keys", "-t", tmuxSessionName(slug), "-l", text)
+  tmux("send-keys", "-t", exactSessionTarget(slug), "-l", text)
 }
 
 export function sendTextWithKey(slug: string, text: string, key: "Enter" | "Tab"): boolean {
@@ -1018,7 +1037,7 @@ export function sendTextWithKey(slug: string, text: string, key: "Enter" | "Tab"
 }
 
 export function sendKey(slug: string, key: "Enter" | "Tab" | "Up" | "Down" | "Escape"): void {
-  tmux("send-keys", "-t", tmuxSessionName(slug), key)
+  tmux("send-keys", "-t", exactSessionTarget(slug), key)
 }
 
 // Multiline-safe injection: stage the text in a tmux paste-buffer (load-buffer from stdin,
@@ -1026,7 +1045,7 @@ export function sendKey(slug: string, key: "Enter" | "Tab" | "Up" | "Down" | "Es
 // Without -p, an active Claude turn can treat the first embedded newline as submit and queue only the
 // first line (for example, `Answers:`) while silently losing the rest of the logical follow-up.
 export function pasteText(slug: string, text: string): void {
-  const name = tmuxSessionName(slug)
+  const name = exactSessionTarget(slug)
   execFileSync("tmux", ["-L", socket, "load-buffer", "-"], { input: text })
   tmux("paste-buffer", "-p", "-t", name, "-d")
   tmux("send-keys", "-t", name, "Enter")
