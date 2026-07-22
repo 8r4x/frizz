@@ -506,26 +506,20 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     resume: (slug, message, deliveryId) => {
       const deliveryMessage = `${message}\n\n${wakeDeliveryToken(deliveryId)}`
       const row = storage.getSession(slug)
-      // App-server codex wake: deliver over the bridge (reactivating the persisted thread first),
-      // exactly like the followUp RPC. Never fall through to the tmux resume path.
-      if (row?.backend === "codex" && row.codex_runtime === "app-server" && codexAppServer) {
+      // Codex wake: deliver over the app-server bridge (adopting a legacy tmux rollout first, then
+      // reactivating the persisted thread), exactly like the followUp RPC. Codex never uses tmux resume.
+      if (row?.backend === "codex" && codexAppServer) {
         const bridge = codexAppServer
         void (async () => {
+          if (row.codex_runtime !== "app-server" && row.agent_session_id) {
+            await bridge.adoptExternalRollout({ threadSlug: slug, sessionId: row.session_id, codexThreadId: row.agent_session_id, cwd: project.dir })
+            storage.setCodexRuntime(slug, "app-server")
+          }
           const binding = bridge.binding(slug, row.session_id)
           if (!binding || binding.state !== "active") await bridge.resumeOwnedSession(slug, row.session_id)
           await bridge.followUp({ threadSlug: slug, sessionId: row.session_id, text: deliveryMessage, deliveryId })
-        })().catch(() => { /* wake delivery is best-effort, mirroring the tmux resume path */ })
+        })().catch(() => { /* wake delivery is best-effort */ })
         return
-      }
-      if (row?.backend === "codex") {
-        const binding = adoptionRuntimeBinding(storage, row)
-        const live = binding.kind === "unbound"
-          ? tmux.isLive(slug)
-          : binding.kind === "bound" && tmux.findExpectedAdoptionPane(binding.claim).kind === "found"
-        if (live) {
-          permissionController.queueFollowUp(slug, deliveryMessage, deliveryId)
-          return
-        }
       }
       resumeThread({ project, storage, board, getSettings: () => getSettings(storage), backendFor }, slug, deliveryMessage)
     },

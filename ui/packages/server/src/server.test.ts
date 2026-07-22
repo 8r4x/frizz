@@ -510,21 +510,19 @@ function codexDispatcherHarness(codexAppServer?: Partial<CodexAppServerBridge>) 
   return { dir, codexHome, storage, project, spawned, dispatcher, CODEX_ID }
 }
 
-test("dispatch(codex): a failing app-server bridge falls back to the tmux TUI path (cutover safety net)", async () => {
+test("dispatch(codex): a failing app-server bridge throws loudly — there is NO tmux fallback (retired)", async () => {
   let released = 0
   const h = codexDispatcherHarness({
     spawnDispatch: async () => { throw new Error("app-server unavailable (protocol drift)") },
     releaseSession: () => { released++; return true },
   })
-  const { slug } = await h.dispatcher.dispatch({ prompt: "Fall back to tmux." }, { backend: "codex" })
-  // The bridge threw, so dispatch must have used the tmux path instead of hard-failing: a codex TUI was
-  // spawned via the sh -c wrapper, and the row is a legacy tmux codex row (no codex_runtime='app-server').
-  assert.equal(h.spawned.length, 1, "the tmux fallback spawned a codex TUI")
-  assert.equal(h.spawned[0].cmd[0], "sh", "fell back to the tmux sh -c wrapper")
-  const row = h.storage.getSession(slug)!
-  assert.equal(row.backend, "codex")
-  assert.notEqual(row.codex_runtime, "app-server")
-  assert.equal(released, 1, "the partial bridge binding was released before falling back")
+  await assert.rejects(
+    h.dispatcher.dispatch({ prompt: "No fallback." }, { backend: "codex" }),
+    /Codex app-server could not start this thread/,
+  )
+  assert.equal(h.spawned.length, 0, "no tmux spawn — the TUI path is retired")
+  assert.equal(released, 1, "the partial bridge binding was released")
+  assert.equal(h.storage.getSession("no-fallback"), undefined, "a failed dispatch leaves no row")
 })
 
 test("dispatch(codex): pre-arms cwd trust, spawns the codex argv, and pins the discovered rollout id", async () => {

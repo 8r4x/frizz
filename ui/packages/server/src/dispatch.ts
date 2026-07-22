@@ -851,15 +851,13 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           void deps.board.rebuild().catch(() => {})
           return { slug, sessionId }
         } catch (err) {
-          // The app-server bridge couldn't service this dispatch — most likely codex app-server is
-          // unavailable or the installed protocol drifted from the pinned revision. Fall back to the
-          // legacy tmux TUI path so a codex dispatch NEVER hard-fails on the cutover default. Release any
-          // partial bridge binding first (so it can't be orphaned/reconciled), and surface a diagnostic —
-          // the fallback loses the app-server steering elegance, so it must not be silent. No durable row
-          // was written yet, and the scratchpad is reused by the tmux spawn below.
+          // No tmux fallback — the app-server is the sole codex transport. If it can't be reached (or the
+          // installed codex drifted from the pinned protocol), fail LOUDLY with an actionable hint rather
+          // than silently degrading to the retired TUI path. Clean up the scratchpad + any partial bridge
+          // binding so a failed dispatch leaves no trace.
           try { deps.codexAppServer.releaseSession(slug, sessionId, "session-deleted") } catch { /* best-effort */ }
-          process.stderr.write(`[fray] codex app-server dispatch failed for ${slug}; falling back to tmux: ${(err as Error).message}\n`)
-          // fall through to the tmux buildSpawnCommand path below
+          cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
+          throw new Error(`Codex app-server could not start this thread: ${(err as Error).message}. Check that \`codex\` is installed and its app-server protocol matches the pinned revision (re-pin if you upgraded codex).`)
         }
       }
 

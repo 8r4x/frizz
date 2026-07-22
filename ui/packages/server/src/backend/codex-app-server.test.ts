@@ -292,10 +292,9 @@ function sessionRow(slug: string, sessionId: string, backend = "claude"): Sessio
   }
 }
 
-test("bridge is enabled by default (cutover) and negotiates exact installed protocol over stdio", async () => {
-  // Cutover: app-server is the default codex transport. Opt out to legacy tmux with FRAY_CODEX_LEGACY_TMUX=1.
-  assert.equal(codexAppServerBridgeEnabled({}), true)
-  assert.equal(codexAppServerBridgeEnabled({ FRAY_CODEX_LEGACY_TMUX: "1" }), false)
+test("bridge is the sole codex transport (always enabled) and negotiates exact installed protocol over stdio", async () => {
+  // The tmux TUI path is retired: app-server is always the codex transport.
+  assert.equal(codexAppServerBridgeEnabled(), true)
   const h = harness()
   const binding = await h.bridge.startDisposableSession({
     threadSlug: "bridge-thread",

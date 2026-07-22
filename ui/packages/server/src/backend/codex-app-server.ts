@@ -1481,6 +1481,62 @@ export class CodexAppServerBridge {
     }
   }
 
+  // Adopt a rollout this bridge did NOT create — a legacy tmux Codex thread (its `agent_session_id` is
+  // the on-disk rollout id). `thread/resume` reads that rollout by id (verified live: the app-server
+  // resumes an external `codex exec`/TUI rollout), so an old tmux row migrates to the app-server on its
+  // next follow-up and every subsequent turn/steer/interrupt flows through here. Idempotent: an already
+  // bound scope returns its binding.
+  async adoptExternalRollout(input: {
+    threadSlug: string
+    sessionId: string
+    codexThreadId: string
+    cwd: string
+  }): Promise<CodexAppServerSessionBinding> {
+    if (!ThreadSlug.safeParse(input.threadSlug).success) throw new Error("invalid Fray thread slug")
+    if (!input.sessionId || input.sessionId.length > 256) throw new Error("invalid Fray session id")
+    if (!input.codexThreadId || input.codexThreadId.length > 256) throw new Error("invalid Codex rollout id")
+    if (!input.cwd.startsWith("/") || input.cwd.length > 8_192) throw new Error("Codex app-server cwd must be an absolute bounded path")
+    const releaseOperation = this.beginOperation()
+    try {
+      const existing = this.bindingForScope(input.threadSlug, input.sessionId)
+      if (existing) return bindingFromRow(existing)
+      if (this.db.prepare("SELECT 1 FROM codex_app_server_session WHERE thread_slug = ? OR fray_session_id = ? OR codex_thread_id = ?")
+        .get(input.threadSlug, input.sessionId, input.codexThreadId)) {
+        throw new Error("Codex app-server thread slug, session id, or rollout is already bound")
+      }
+      const connection = await this.ensureConnected()
+      const response = ThreadResponse.parse(await connection.request("thread/resume", {
+        threadId: input.codexThreadId,
+        excludeTurns: true,
+        approvalsReviewer: "user",
+      }))
+      if (response.thread.id !== input.codexThreadId || response.thread.ephemeral) {
+        throw new Error("Codex app-server resumed a different or disposable thread")
+      }
+      const at = this.now().toISOString()
+      this.db.prepare(`
+        INSERT INTO codex_app_server_session (
+          fray_session_id, thread_slug, codex_thread_id, codex_session_id,
+          session_epoch, capability_revision, connection_epoch, current_turn_id,
+          cwd, ephemeral, state, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 1, ?, ?, NULL, ?, 0, 'active', ?, ?)
+      `).run(
+        input.sessionId,
+        input.threadSlug,
+        response.thread.id,
+        response.thread.sessionId,
+        this.capabilityRevision,
+        this.connectionEpoch,
+        input.cwd,
+        at,
+        at,
+      )
+      return bindingFromRow(this.bindingForScope(input.threadSlug, input.sessionId)!)
+    } finally {
+      releaseOperation()
+    }
+  }
+
   async startTurn(input: StartCodexAppServerTurnInput): Promise<{ turnId: string }> {
     if (!input.text || Buffer.byteLength(input.text, "utf8") > 64 * 1024) throw new Error("Codex app-server turn text is empty or too large")
     const startKey = `${input.threadSlug}\u0000${input.sessionId}`
@@ -2575,11 +2631,10 @@ export function createCodexAppServerBridge(options: CodexAppServerBridgeOptions)
   return new CodexAppServerBridge(options)
 }
 
-// Cutover: the Codex app-server bridge is the DEFAULT transport for codex threads. Opt OUT to the
-// legacy tmux TUI path with FRAY_CODEX_LEGACY_TMUX=1 (e.g. to ride a codex version that drifted from
-// the pinned protocol, or to debug the old path). If the bridge is enabled but can't service a
-// dispatch, dispatch falls back to tmux per-dispatch anyway, so this is a soft default, not a hard gate.
-export const CODEX_LEGACY_TMUX_FLAG = "FRAY_CODEX_LEGACY_TMUX"
-export function codexAppServerBridgeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env[CODEX_LEGACY_TMUX_FLAG] !== "1"
+// The Codex app-server bridge is the SOLE transport for codex threads (the tmux TUI path is retired).
+// Always enabled. If `codex app-server` can't be reached (or its protocol drifted from the pinned
+// revision), a codex dispatch fails LOUDLY with a re-pin hint rather than silently degrading — there is
+// no tmux fallback to hide behind. Kept as a function so callers/tests have a single source of truth.
+export function codexAppServerBridgeEnabled(): boolean {
+  return true
 }

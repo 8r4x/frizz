@@ -521,17 +521,23 @@ export function createRouter(ctx: AppContext) {
         if (hasPendingPermissionChange(row)) {
           throw new Error("Wait for the current permission change to finish before sending a follow-up")
         }
-        // Headless app-server codex thread: deliver over the bridge. It owns the steer-vs-start
-        // decision atomically and dedups on deliveryId — no composer, no queue, no stale-draft class.
-        // Reactivate the persisted thread first if the bridge lost its live binding (server restart).
-        if (row?.backend === "codex" && row.codex_runtime === "app-server" && ctx.codexAppServer) {
+        // Every Codex follow-up flows through the app-server bridge — no tmux composer, no queue, no
+        // stale-draft class. The bridge owns the steer-vs-start decision atomically and dedups on
+        // deliveryId. A LEGACY tmux Codex row (dispatched before the cutover) is migrated on its first
+        // follow-up by adopting its rollout; from then on it is an ordinary app-server thread.
+        if (row?.backend === "codex") {
           const bridge = ctx.codexAppServer
+          if (!bridge) throw new Error("Codex app-server is unavailable; cannot deliver this follow-up")
+          if (row.codex_runtime !== "app-server") {
+            if (!row.agent_session_id) throw new Error("This legacy Codex thread has no resumable rollout id yet")
+            await bridge.adoptExternalRollout({ threadSlug: input.slug, sessionId: row.session_id, codexThreadId: row.agent_session_id, cwd: ctx.project.dir })
+            ctx.storage.setCodexRuntime(input.slug, "app-server")
+          }
           const binding = bridge.binding(input.slug, row.session_id)
           // Writer-yield: if the rollout shows an in-flight turn the bridge did NOT start (it has no
           // current turn of its own), someone is driving this thread in their own terminal via
           // `codex resume`. fray keeps MIRRORING that turn (the tailer follows the same rollout), but it
-          // must not start/steer a second turn on the same session and race two writers. Yield until the
-          // external turn rests; the user can then follow up here, or take back over from their terminal.
+          // must not start/steer a second turn and race two writers. Yield until the external turn rests.
           const turnLive = ctx.tailer.get(input.slug)?.turn === "in-flight"
           if (turnLive && (!binding || binding.currentTurnId === null)) {
             throw new Error("This thread is running in your terminal right now — fray is mirroring it live. Wait for that turn to finish, then send your follow-up here.")
@@ -549,20 +555,6 @@ export function createRouter(ctx: AppContext) {
           })
           ctx.board.refresh()
           return
-        }
-        if (row?.backend === "codex") {
-          const binding = adoptionRuntimeBinding(ctx.storage, row)
-          if (binding.kind === "conflict") {
-            throw new Error("This thread has a competing adoption attempt; no worker was contacted")
-          }
-          const live = binding.kind === "bound"
-            ? tmux.findExpectedAdoptionPane(binding.claim).kind === "found"
-            : tmux.isLive(input.slug)
-          if (live) {
-            ctx.permissionController.queueFollowUp(input.slug, input.message, input.deliveryId)
-            ctx.board.refresh()
-            return
-          }
         }
         resumeThread({ project: ctx.project, storage: ctx.storage, board: ctx.board, getSettings: ctx.getSettings, backendFor: ctx.backendFor }, input.slug, input.message)
         // Injection accepted → open a delivery-ledger entry (Claude rows only; Codex has its own durable
