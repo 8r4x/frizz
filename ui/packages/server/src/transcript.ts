@@ -1,5 +1,6 @@
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import { createHash } from "node:crypto"
+import { StringDecoder } from "node:string_decoder"
 import { join } from "node:path"
 import { homedir, tmpdir } from "node:os"
 import {
@@ -77,7 +78,30 @@ function pushToolPart(m: TranscriptMessage, call: TranscriptToolCall): void {
   else m.parts.push({ kind: "tools", tools: [call] })
 }
 
-export function projectClaudeTranscript(raw: string, identityPrefix = "claude"): TranscriptMessage[] {
+// ── Retained incremental Claude parse ───────────────────────────────────────────────────────────────
+// The single-pass fold that turns a Claude JSONL into renderable messages, made RESUMABLE: every piece
+// of closure state (the `out` array + the pending-tool / queued-follow-up / agent-dispatch / background-
+// shell maps + the thinking/merge anchors) lives for the life of the fold, and lines are fed through
+// `ingest` incrementally. A one-shot parse is `ingest(whole) + finalize()`; the retained-parse cache
+// (readTranscript) keeps a fold alive per file and feeds it ONLY the bytes appended since the last read,
+// so an append that mutates a message far behind the tail (a queued_command un-graying, a tool_result
+// back-fill, a sub-agent completion) "just works" — the maps still hold the same object references.
+// `processLine` is byte-for-byte the legacy per-line body (`continue` → `return`). sourceId stays
+// `${identityPrefix}:${lineOffset}` where lineOffset counts bytes INCLUDING newlines, cumulative from
+// byte 0 — identical to a one-shot `raw.split("\n")` fold, preserved exactly across chunk boundaries.
+export interface TranscriptFold {
+  ingest(chunk: string): void
+  finalize(): void
+  // Capped to the MAX_MESSAGES render window (what parseTranscript/readTranscript return).
+  messages(): TranscriptMessage[]
+  // The full retained projection, uncapped (what projectClaudeTranscript returns).
+  allMessages(): TranscriptMessage[]
+  // Total bytes the fold has ingested (offset of the committed frontier + any buffered trailing partial).
+  // Monotonically non-decreasing across ingests; used by the cache's correctness net, not for framing.
+  consumedBytes(): number
+}
+
+export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold {
   const out: TranscriptMessage[] = []
   let lastAssistantId: string | null = null
   // Tool calls awaiting their tool_result, keyed by tool_use id. Claude records every result as a
@@ -110,17 +134,21 @@ export function projectClaudeTranscript(raw: string, identityPrefix = "claude"):
   // identical text (a belt-and-suspenders guard; unobserved in the evidence) doesn't double-render.
   let deliveredDedupe: string | null = null
 
-  let byteOffset = 0
-  for (const line of raw.split("\n")) {
-    const lineOffset = byteOffset
-    byteOffset += Buffer.byteLength(line) + 1
-    if (!line.trim()) continue
+  // Incremental line framing. `offset` is the byte position of `buffer[0]` in the overall stream (or,
+  // when buffer is empty, of the next unprocessed byte). `buffer` holds a trailing line whose newline
+  // has NOT yet arrived and which was not optimistically consumed; it is prepended to the next chunk.
+  // Byte counts include the '\n' terminator so a line's offset matches a one-shot fold exactly.
+  let offset = 0
+  let buffer = ""
+
+  function processLine(line: string, lineOffset: number): void {
+    if (!line.trim()) return
     const sourceId = `${identityPrefix}:${lineOffset}`
     let rec: Raw
     try {
       rec = JSON.parse(line)
     } catch {
-      continue
+      return
     }
 
     // A sub-agent completion notification (a queue-operation record with a top-level <task-notification>
@@ -131,7 +159,7 @@ export function projectClaudeTranscript(raw: string, identityPrefix = "claude"):
       ev.sourceId = sourceId
       out.push(ev)
       lastAssistantId = null // the completion card breaks the assistant-record merge chain
-      continue
+      return
     }
 
     // Long THINKING window: an assistant record that opens a NEW turn with a (redacted) thinking block,
@@ -183,7 +211,7 @@ export function projectClaudeTranscript(raw: string, identityPrefix = "claude"):
           if (i !== -1) out.splice(i, 1)
         }
       }
-      continue
+      return
     }
 
     // The DELIVERY of a queued human follow-up: Claude Code materializes the queued text into the agent's
@@ -210,7 +238,7 @@ export function projectClaudeTranscript(raw: string, identityPrefix = "claude"):
         if (thisTs) prevTs = thisTs // a delivered human turn is substantive — it bounds the next thinking window
         lastAssistantId = null // …and breaks the assistant-record merge chain, like any user message
       }
-      continue
+      return
     }
 
     if (rec.type === "user") {
@@ -219,11 +247,11 @@ export function projectClaudeTranscript(raw: string, identityPrefix = "claude"):
       attachToolResults(rec, pendingTools)
       // isMeta marks harness-injected user records (hook feedback, reminders) — plumbing the
       // human never typed, so it must not render as their bubble.
-      if (rec.isMeta === true) continue
+      if (rec.isMeta === true) return
       let text = userText(rec)
       // Harness/orchestrator injections that arrive as ordinary user records (task-notifications,
       // system reminders, fray pulses) are ALSO not the human's words — drop them from the chat.
-      if (text && isInjectedNoise(text)) continue
+      if (text && isInjectedNoise(text)) return
       if (text) {
         // Claude Code 2.1.207's print/SDK path emits enqueue → empty dequeue → the ordinary user
         // record (no queued_command attachment). Resolve an identical pending bubble in place; adding
@@ -234,14 +262,14 @@ export function projectClaudeTranscript(raw: string, identityPrefix = "claude"):
           queued.queued = false
           queued.at = rec.timestamp
           lastAssistantId = null
-          continue
+          return
         }
         // Belt-and-suspenders: a normal user record that echoes a JUST-delivered queued message would
         // otherwise render it twice. Skip the immediately-following identical text. (Unobserved in the
         // evidence — the queued text only ever arrives via the attachment — but cheap to guard.)
         if (deliveredDedupe !== null && text === deliveredDedupe) {
           deliveredDedupe = null
-          continue
+          return
         }
         deliveredDedupe = null
         // The first user message is the composed dispatch prompt (fixed worker prompt + thread
@@ -254,12 +282,12 @@ export function projectClaudeTranscript(raw: string, identityPrefix = "claude"):
         out.push({ sourceId, role: "user", text, ...(displayText ? { displayText } : {}), tools: [], parts: [], at: rec.timestamp })
         lastAssistantId = null
       }
-      continue
+      return
     }
 
     if (rec.type === "assistant") {
       const msg = rec.message
-      if (!msg || !Array.isArray(msg.content)) continue
+      if (!msg || !Array.isArray(msg.content)) return
       // A synthetic provider AUTH-error record (isApiErrorMessage + the 401/login text) is app
       // state, not something the model said: its ONLY surface is the trusted recovery card driven by
       // ThreadView.providerFault. Rendering it as an assistant bubble was the exact dead-end the
@@ -270,7 +298,7 @@ export function projectClaudeTranscript(raw: string, identityPrefix = "claude"):
           .filter((b: Raw) => b?.type === "text" && typeof b.text === "string")
           .map((b: Raw) => b.text)
           .join("\n")
-        if (isClaudeAuthErrorText(errText)) continue
+        if (isClaudeAuthErrorText(errText)) return
       }
       const id = typeof msg.id === "string" ? msg.id : null
       // Never merge into an EVENT line (a "Thought for Ns" emitted from this same turn's thinking
@@ -315,19 +343,97 @@ export function projectClaudeTranscript(raw: string, identityPrefix = "claude"):
       // (the interleave "wall of text" — tool calls landing under an earlier turn, texts coalesced).
       if (target || rendered) lastAssistantId = id
       deliveredDedupe = null // the turn moved on; the delivered-message dedupe window only spans the very next record
-      continue
+      return
     }
 
     // Any other record type (attachment, queue-operation, ai-title, …) is sidecar — ignore, but
     // a non-user/assistant record between assistant chunks shouldn't break merging, so no reset.
   }
 
-  return out
+  // A trailing partial (a line with no newline yet) is consumed IMMEDIATELY only when it PARSES — proof
+  // it is a complete record and not a mid-write cut (a torn write cannot produce valid JSON). Otherwise
+  // it stays buffered for the next ingest. Returns true iff consumed (so the caller advances past it).
+  function tryConsumePartial(text: string, at: number): boolean {
+    if (!text.trim()) return false
+    try {
+      JSON.parse(text)
+    } catch {
+      return false
+    }
+    processLine(text, at)
+    return true
+  }
+
+  function ingest(chunk: string): void {
+    if (!chunk) return
+    const data = buffer + chunk
+    buffer = ""
+    let pos = offset
+    const lastNl = data.lastIndexOf("\n")
+    if (lastNl === -1) {
+      // No complete line yet — the whole thing is a trailing partial.
+      if (tryConsumePartial(data, pos)) offset = pos + Buffer.byteLength(data)
+      else {
+        buffer = data
+        offset = pos
+      }
+      return
+    }
+    // Everything up to the last '\n' is complete lines; split EXACTLY as the one-shot fold does. The
+    // final element after the trailing '\n' is always "" — the loop bound drops it so byteOffset lands
+    // on the next real byte (not one past it), which matters for the appended-bytes cache path.
+    const complete = data.slice(0, lastNl + 1)
+    const rest = data.slice(lastNl + 1)
+    const segs = complete.split("\n")
+    for (let i = 0; i < segs.length - 1; i++) {
+      const line = segs[i]
+      const lineOffset = pos
+      pos += Buffer.byteLength(line) + 1
+      processLine(line, lineOffset)
+    }
+    if (rest === "") {
+      offset = pos
+    } else if (tryConsumePartial(rest, pos)) {
+      // Consumed optimistically: advance PAST its bytes (no +1 — its '\n' has not arrived). The next
+      // ingest's leading '\n' is absorbed as an empty line, keeping offsets in step with a one-shot fold.
+      offset = pos + Buffer.byteLength(rest)
+    } else {
+      buffer = rest
+      offset = pos
+    }
+  }
+
+  // One-shot path only: flush any remaining trailing partial exactly as the legacy fold did (a final line
+  // with no newline is still projected; a parse failure is skipped). The incremental cache never calls
+  // this — its buffered partial waits for the newline (or an optimistic parse) on the next appended read.
+  function finalize(): void {
+    if (buffer === "") return
+    processLine(buffer, offset)
+    offset += Buffer.byteLength(buffer)
+    buffer = ""
+  }
+
+  return {
+    ingest,
+    finalize,
+    messages: () => (out.length > MAX_MESSAGES ? out.slice(-MAX_MESSAGES) : out),
+    allMessages: () => out,
+    consumedBytes: () => offset + Buffer.byteLength(buffer),
+  }
+}
+
+export function projectClaudeTranscript(raw: string, identityPrefix = "claude"): TranscriptMessage[] {
+  const fold = createTranscriptFold(identityPrefix)
+  fold.ingest(raw)
+  fold.finalize()
+  return fold.allMessages()
 }
 
 export function parseTranscript(raw: string, identityPrefix = "claude"): TranscriptMessage[] {
-  const out = projectClaudeTranscript(raw, identityPrefix)
-  return out.length > MAX_MESSAGES ? out.slice(-MAX_MESSAGES) : out
+  const fold = createTranscriptFold(identityPrefix)
+  fold.ingest(raw)
+  fold.finalize()
+  return fold.messages()
 }
 
 function userText(rec: Raw): string | null {
@@ -859,13 +965,131 @@ function completionEvent(
   }
 }
 
+// ── Retained incremental parse cache ────────────────────────────────────────────────────────────────
+// readTranscript is the hot path: the /ws producer calls it via readThreadTranscript on every tailer
+// tick for every subscribed thread, and today it re-reads + re-parses the WHOLE JSONL from byte 0 each
+// time. This LRU keeps the fold's closure state alive per file and feeds it only the bytes appended
+// since the last read (the fold's in-place mutations back-fill earlier messages transparently). Bounded
+// at 16 files. A file that shrank/rotated or whose identityPrefix changed drops its entry → full re-fold.
+interface TranscriptCacheEntry {
+  identityPrefix: string
+  fold: TranscriptFold
+  // File bytes handed to the decoder so far (the read cursor). Decoupled from fold.consumedBytes():
+  // the StringDecoder may retain a torn trailing multibyte sequence across reads, so the fold can lag
+  // this by a few bytes — but bytesRead is always the true file position we've consumed up to.
+  bytesRead: number
+  // Cross-read UTF-8 boundary safety: reading only [bytesRead, size) can slice a multibyte character;
+  // the decoder emits complete characters and holds any incomplete trailing bytes for the next read.
+  decoder: StringDecoder
+  // dev:ino:birthtime — a rotation/replacement of the same path (unlink + recreate) invalidates the fold
+  // even when the new file is the same size or larger.
+  fileId: string
+}
+const TRANSCRIPT_CACHE_CAP = 16
+const transcriptCache = new Map<string, TranscriptCacheEntry>()
+// ~1/50 of cache-hit reads are re-parsed from scratch and deep-compared against the incremental result
+// when FRAY_TRANSCRIPT_PARSE_VERIFY=1 — a loud, non-throwing correctness net for the appended-bytes fold.
+const PARSE_VERIFY_SAMPLE = 1 / 50
+
+function readAppendedBytes(fd: number, from: number, to: number): Buffer {
+  const buf = Buffer.allocUnsafe(to - from)
+  let filled = 0
+  while (filled < buf.length) {
+    const n = readSync(fd, buf, filled, buf.length - filled, from + filled)
+    if (n === 0) break
+    filled += n
+  }
+  return filled === buf.length ? buf : buf.subarray(0, filled)
+}
+
 export function readTranscript(project: Project, sessionId: string): TranscriptMessage[] {
+  const path = join(homedir(), ".claude", "projects", project.cwdSlug, `${sessionId}.jsonl`)
+  const identityPrefix = `claude:${sessionId}`
+  let fd: number | undefined
   try {
-    const path = join(homedir(), ".claude", "projects", project.cwdSlug, `${sessionId}.jsonl`)
-    return parseTranscript(readFileSync(path, "utf8"), `claude:${sessionId}`)
+    fd = openSync(path, "r")
+    const st = fstatSync(fd)
+    const size = st.size
+    const fileId = `${st.dev}:${st.ino}:${Math.trunc(st.birthtimeMs)}`
+
+    let entry = transcriptCache.get(path)
+    // Drop a stale entry: the file shrank (truncation), rotated (new inode), or is being parsed under a
+    // different identity. Any of these means the retained fold no longer describes byte 0..size.
+    if (entry && (entry.identityPrefix !== identityPrefix || entry.fileId !== fileId || size < entry.bytesRead)) {
+      transcriptCache.delete(path)
+      entry = undefined
+    }
+    const hit = entry !== undefined
+    if (!entry) {
+      entry = { identityPrefix, fold: createTranscriptFold(identityPrefix), bytesRead: 0, decoder: new StringDecoder("utf8"), fileId }
+      transcriptCache.set(path, entry)
+    } else {
+      // LRU touch — re-insert to move to the most-recently-used end.
+      transcriptCache.delete(path)
+      transcriptCache.set(path, entry)
+    }
+
+    if (size > entry.bytesRead) {
+      const buf = readAppendedBytes(fd, entry.bytesRead, size)
+      entry.bytesRead += buf.length
+      const chunk = entry.decoder.write(buf)
+      if (chunk) entry.fold.ingest(chunk)
+    }
+    // size == bytesRead → no read, no ingest; the retained projection is already current.
+
+    // Evict the least-recently-used entries beyond the cap (the first keys in insertion order).
+    while (transcriptCache.size > TRANSCRIPT_CACHE_CAP) {
+      const oldest = transcriptCache.keys().next().value
+      if (oldest === undefined) break
+      transcriptCache.delete(oldest)
+    }
+
+    const messages = entry.fold.messages()
+    if (hit && process.env.FRAY_TRANSCRIPT_PARSE_VERIFY === "1" && Math.random() < PARSE_VERIFY_SAMPLE) {
+      verifyIncrementalParse(path, identityPrefix, messages)
+    }
+    // Defensive shallow slice: keeps per-message identity (all that matters downstream) while protecting
+    // the RETAINED array from callers that append synthetic tail rows — projectDeliveryLedger pushes
+    // queued bubbles into the array it's handed, which would otherwise pollute the fold across reads.
+    return [...messages]
   } catch {
     return [] // file not created yet (agent still booting) — the UI shows the spinner
+  } finally {
+    if (fd !== undefined) closeSync(fd)
   }
+}
+
+// Correctness net for the retained fold: re-parse the whole file from scratch and deep-compare (by JSON
+// stringification) against the incremental result. Logs a loud structured line on divergence; NEVER
+// throws — a false alarm from a mid-write torn read must not break the read path.
+function verifyIncrementalParse(path: string, identityPrefix: string, incremental: TranscriptMessage[]): void {
+  try {
+    const fresh = parseTranscript(readFileSync(path, "utf8"), identityPrefix)
+    const a = JSON.stringify(incremental)
+    const b = JSON.stringify(fresh)
+    if (a !== b) {
+      console.error(
+        JSON.stringify({
+          event: "transcript_parse_divergence",
+          path,
+          identityPrefix,
+          incrementalCount: incremental.length,
+          freshCount: fresh.length,
+          incrementalBytes: a.length,
+          freshBytes: b.length,
+        }),
+      )
+    }
+  } catch {
+    /* verification is best-effort — a read/parse error here must never affect the live read */
+  }
+}
+
+// Test-only: drop the retained parse cache so a fresh read re-folds from byte 0. Exported for the
+// incremental-parse tests; production never needs to clear it (LRU + identity/shrink invalidation cover
+// every real case).
+export function __clearTranscriptCacheForTests(): void {
+  transcriptCache.clear()
 }
 
 // A thread slug that is ITSELF a session id — a FOREIGN thread (a maintainer terminal) has no registry
