@@ -430,6 +430,41 @@ test("boot releases a stranded 'codex-input' runtime lock left by the retired tm
   reopened.close()
 })
 
+// Same class as above: a CODEX row can also still hold the tmux-era PROFILE handoff from a pre-cutover
+// crash. It can never complete (recovery reads the pane with the Claude composer parser), and the
+// recovery loop would re-block the thread on every tick. Boot abandons it and explains why.
+test("boot abandons a codex row still holding the retired tmux profile handoff", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fray-storage-codex-profile-"))
+  const path = join(dir, "ui.db")
+  const s = createStorage(path)
+  s.upsertSession(row({ slug: "codex-stuck" }))
+  s.upsertSession(row({ slug: "claude-stuck", session_id: "sid-claude" }))
+  s.setBackend("codex-stuck", "codex")
+  s.setBackend("claude-stuck", "claude")
+  s.close()
+
+  const sqlite = new Database(path)
+  sqlite.exec(`
+    UPDATE session
+    SET runtime_control = 'profile', profile_pending_model = 'gpt-5.6-sol',
+        profile_pending_effort = 'high', profile_handoff = '{"version":1,"phase":"armed"}'
+  `)
+  sqlite.close()
+
+  const reopened = createStorage(path)
+  const codex = reopened.getSession("codex-stuck")!
+  assert.equal(codex.runtime_control ?? null, null, "the codex row is released")
+  assert.equal(codex.profile_pending_model ?? null, null, "its unreachable pending pair is abandoned")
+  assert.equal(codex.profile_pending_effort ?? null, null)
+  assert.equal(codex.profile_handoff ?? null, null, "and so is its journal")
+  assert.match(codex.control_error ?? "", /armed on the retired Codex tmux path/, "the operator is told why it vanished")
+
+  const claude = reopened.getSession("claude-stuck")!
+  assert.equal(claude.runtime_control, "profile", "a CLAUDE handoff still recovers normally")
+  assert.equal(claude.profile_pending_model, "gpt-5.6-sol", "and keeps its pending pair")
+  reopened.close()
+})
+
 test("manual snooze persists exactly across restart, expires atomically, and Archive clears it", () => {
   const dir = mkdtempSync(join(tmpdir(), "fray-storage-snooze-"))
   const path = join(dir, "ui.db")

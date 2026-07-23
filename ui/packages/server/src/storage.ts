@@ -506,6 +506,18 @@ export function createStorage(dbPath: string): Storage {
     // nothing can ever clear it again: the board reports runtimeControlPending forever, which fences
     // that thread's composer, model, and sandbox controls permanently. Release it once, at boot.
     db.exec("UPDATE session SET runtime_control = NULL WHERE runtime_control = 'codex-input'")
+    // Same class, one step further: a CODEX row can also still hold the tmux-era PROFILE handoff from a
+    // pre-cutover crash. That handoff can never complete now — recovery reattaches a tmux pane and reads
+    // it with the Claude composer parser, which a Codex pane never satisfies, so the recovery loop
+    // re-blocks the thread on every tick forever. Abandon the pending pair and say why; codex takes
+    // model/effort per turn, so nothing is lost but the stuck arming.
+    db.exec(`
+      UPDATE session
+      SET runtime_control = NULL, profile_pending_model = NULL, profile_pending_effort = NULL,
+          profile_handoff = NULL,
+          control_error = 'A model/effort change armed on the retired Codex tmux path was abandoned; set it again.'
+      WHERE backend = 'codex' AND runtime_control = 'profile'
+    `)
   } catch {
     // best-effort
   }
