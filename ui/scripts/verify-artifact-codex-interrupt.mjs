@@ -202,8 +202,12 @@ try {
   check(afterA.aborted >= 1, "GROUND TRUTH: the codex rollout records turn_aborted — the turn was interrupted", `aborted=${afterA.aborted}`)
   check(afterA.completed === 0, "and NOT task_complete — the turn did not run to its own ending", `completed=${afterA.completed}`)
 
-  const stoppedRow = await thread(a.slug)
-  check(stoppedRow?.runtime === "exited", "the row settles as exited", `runtime=${stoppedRow?.runtime}`)
+  // …and the ROW settles coherently with it. An app-server codex row has no pane, so "stopped" is not
+  // "dead" — board.ts derives its runtime from the rollout, and the stopped thread must come to REST.
+  // Carding it as still-running (and then, once the stall grace expires, as crashed/"Stalled" with a
+  // Retry) is exactly what the turn_aborted bracket fixes.
+  const stoppedRow = await waitForThread(a.slug, (t) => t.runtime !== "running", 30, "row A to settle")
+  check(stoppedRow?.runtime === "turn-idle", "the row settles AT REST, not spinning and not falsely crashed", `runtime=${stoppedRow?.runtime}`)
 
   // The turn must stay dead. We interrupt within a few seconds of `sleep 60` starting, so an
   // uninterrupted turn would reach its own task_complete comfortably inside this window — the point
