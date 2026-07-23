@@ -1,4 +1,5 @@
 import { isValidAwaitingTimer, type AwaitingHint, type ThreadView } from "@fray-ui/shared"
+import { canRetry } from "./lib/status.ts"
 
 // Shared listing logic: the queue definition (needsAction), the sidebar's status-keyed sections
 // (sectionThreads), and the interaction-recency ordering both surfaces use.
@@ -392,6 +393,20 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   // clean bare rest keeps the ordinary ellipsis instead of falsely advertising a question.
   if (t.crashed === true || (t.crashed === undefined && t.needsYou && t.runtime === "exited")) return "stalled"
   return "rest"
+}
+
+// Whether a GLANCEABLE surface — the sidebar rail row and the queue card — should carry the inline
+// one-click Retry. The full thread drawer exposes Retry for ANY exited session (canRetry) since it is
+// the place to see every recovery option; the triage surfaces are narrower and offer Retry only for a
+// thread that actually STOPPED and needs a nudge: an exited session showing the [!] crash mark
+// (`stalled`) OR the […] bare-at-rest mark (`rest` — the worker's process exited without a done fence,
+// which reads as canRetry in the drawer but was NOT surfaced on the rail/card before). A needs-input
+// ([?]), done ([✓]), held (hourglass), or archived exited row keeps its own better-suited affordance
+// (answer / mark-done / wait) and never sprouts a redundant retry. canRetry already excludes foreign.
+export function offersInlineRetry(t: ThreadView): boolean {
+  if (!canRetry(t)) return false
+  const kind = sessionIndicatorKind(t)
+  return kind === "stalled" || kind === "rest"
 }
 
 export function sectionOf(t: ThreadView): SectionKey | null {

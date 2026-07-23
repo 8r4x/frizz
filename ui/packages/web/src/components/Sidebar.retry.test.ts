@@ -6,9 +6,11 @@ import type { ThreadView } from "@fray-ui/shared"
 import { ThreadRow } from "./Sidebar.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
 
-// The sidebar's one-click recovery verb. It must appear on EXACTLY the rows the rail already marks
-// stalled with [!] — never on a row that is working, resting, held, done, or read-only-foreign, since
-// on those "retry" either means nothing or would interrupt live work.
+// The sidebar's one-click recovery verb. It must appear on EXACTLY the rows that actually STOPPED and
+// can resume: an exited session showing the [!] stalled crash mark OR the […] bare-at-rest mark (its
+// process exited without a done fence). Never on a row that is working, needs-input ([?], answered not
+// retried), held, done, archived, or read-only-foreign — on those "retry" either means nothing, has a
+// better-suited affordance, or would interrupt live work.
 
 const base = {
   kind: "session",
@@ -42,12 +44,20 @@ test("the older exited+needsYou snapshot shape (no `crashed` field) still gets t
   assert.match(row({ runtime: "exited", needsYou: true }), /data-sidebar-retry/)
 })
 
+test("an exited-at-rest row (process gone, no done fence, not a crash) also gets the button", () => {
+  // The reported bug: the worker's process EXITED after resting without a done fence, so it cards as
+  // […] at-rest (crashed:false, not [!] stalled) — the drawer offered Retry (canRetry) but the rail
+  // did not. Now it does.
+  assert.match(row({ runtime: "exited", crashed: false }), /data-sidebar-retry="stalled-thread"/)
+})
+
 test("no retry button on rows that are not stalled", () => {
   for (const [name, extra] of [
     ["working", { runtime: "running" }],
-    ["at rest", { runtime: "turn-idle" }],
-    ["needs input", { runtime: "exited", crashed: true, humanBlocked: true }],
+    ["at rest but still live (turn-idle, process not exited)", { runtime: "turn-idle" }],
+    ["needs input (exited mid-ask — answered, not retried)", { runtime: "exited", crashed: true, humanBlocked: true }],
     ["done", { runtime: "turn-idle", lastFence: { kind: "done", hints: [] } }],
+    ["done and exited (process gone but it finished)", { runtime: "exited", lastFence: { kind: "done", hints: [] } }],
     ["archived", { runtime: "exited", crashed: true, state: "archived" }],
     ["foreign (read-only)", { runtime: "exited", crashed: true, needsYou: true, foreign: true }],
   ] as [string, Partial<ThreadView>][]) {

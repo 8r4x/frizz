@@ -31,9 +31,10 @@ test("hovering a stalled sidebar row reveals a Retry button that restarts the se
     await page.goto(`${baseUrl}/sidebar-retry-fixture.html`, { waitUntil: "networkidle0" })
     await page.waitForSelector('[data-sidebar-item="stalled-migration"]')
 
-    // ONLY the stalled row has a retry control. The working row and the resting row must not.
+    // The two STOPPED rows (a [!] crash and a […] exited-at-rest) carry a retry control; the live
+    // working row and the live turn-idle resting row must not.
     const retryCount = await page.$$eval("[data-sidebar-retry]", (els) => els.map((e) => e.getAttribute("data-sidebar-retry")))
-    assert.deepEqual(retryCount, ["stalled-migration"], "exactly the stalled row carries Retry")
+    assert.deepEqual(retryCount, ["stalled-migration", "exited-at-rest"], "exactly the two stopped rows carry Retry")
 
     // Hidden at rest…
     assert.equal(await visible(retry), false, "the Retry button is hidden until the row is hovered")

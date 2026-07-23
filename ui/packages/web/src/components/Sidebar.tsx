@@ -5,13 +5,13 @@ import type { AwaitingHint, BoardSnapshot, PlanView, ThreadView } from "@fray-ui
 import { store, openThread, scrollToQueueCard, pushSubAgentDrawer, pushPlanDrawer, type ConnectionState } from "../store.ts"
 import { useBoard, asThreads } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
-import { sectionThreads, partitionActive, needsAction, displayTitle, titleIsProvisional, isHeld, parkedAwaitingHint, sessionIndicatorKind, futureSnoozedUntil } from "../groups.ts"
+import { sectionThreads, partitionActive, needsAction, displayTitle, titleIsProvisional, isHeld, parkedAwaitingHint, sessionIndicatorKind, offersInlineRetry, futureSnoozedUntil } from "../groups.ts"
 import { MarkAsButton } from "./MarkAsButton.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
 import { QuotaBar } from "./QuotaBar.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { ProviderMark } from "./ProviderMark.tsx"
-import { STATUS_CHIP, canRetry } from "../lib/status.ts"
+import { STATUS_CHIP } from "../lib/status.ts"
 import { retrySession } from "../lib/retrySession.ts"
 import { formatSnoozedUntil, formatSnoozeWake, formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
 import { isOptimisticallySteering, useSteeredAt } from "../lib/steering.ts"
@@ -274,10 +274,11 @@ export const ThreadRow = memo(function ThreadRow({
   // A thread awaiting its OWN live sub-agent/Monitor is not Held and stays fully active.
   const held = !legacy && isHeld(t)
   const dimLabel = !legacy && titleIsProvisional(t)
-  // A STALLED row — the [!] indicator, i.e. the agent EXITED mid-turn — is the one row state with an
-  // obvious single next action, so it carries that verb inline instead of making you open the thread
-  // to find it. `canRetry` additionally excludes a foreign (read-only) session.
-  const canRestart = !legacy && sessionIndicatorKind(t) === "stalled" && canRetry(t)
+  // A STOPPED row — the [!] stalled crash mark OR the […] bare-at-rest mark, i.e. the agent's process
+  // EXITED (mid-turn, or after resting without a done fence) — is a row state with an obvious single
+  // next action, so it carries that verb inline instead of making you open the thread to find it.
+  // offersInlineRetry gates on exactly those two kinds and excludes foreign/needs-input/done/held/archived.
+  const canRestart = !legacy && offersInlineRetry(t)
   // Held rows collapse to a SINGLE LINE — no subtitle. The "what it's held for" detail (snooze/timer
   // wake time, human gate, review watch) lives ENTIRELY in the hourglass indicator's hover tooltip
   // (see sessionIndicatorFor), so a snooze and a timer-park read identically instead of sprouting two

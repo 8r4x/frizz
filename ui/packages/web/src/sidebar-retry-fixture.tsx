@@ -6,11 +6,12 @@ import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
 
-// The sidebar's one-click recovery verb: a stalled row exposes a hover-revealed Retry on its right
-// edge. This fixture renders the REAL ThreadRow for a stalled row and, for contrast, a working row
-// and a resting row (neither may grow the button). Clicking Retry POSTs the ordinary follow-up; we
-// stub /rpc/followUp so the click drives the real retrySession → showToast → Toaster path end to end
-// and records that the RPC actually fired.
+// The sidebar's one-click recovery verb: a STOPPED row (an exited session) exposes a hover-revealed
+// Retry on its right edge. This fixture renders the REAL ThreadRow for two stopped rows — a [!] stalled
+// crash AND a […] exited-at-rest (process gone, no done fence) — plus, for contrast, a live working row
+// and a live turn-idle resting row (neither may grow the button). Clicking Retry POSTs the ordinary
+// follow-up; we stub /rpc/followUp so the click drives the real retrySession → showToast → Toaster path
+// end to end and records that the RPC actually fired.
 
 const nativeFetch = window.fetch.bind(window)
 window.fetch = async (input, init) => {
@@ -53,6 +54,18 @@ const stalledThread = {
   needsYou: true,
 } as unknown as ThreadView
 
+// A worker whose process EXITED after resting WITHOUT a done fence — the […] at-rest mark, not a crash.
+// The drawer offered Retry (canRetry) but the rail did not; now this stopped row gets the hover Retry too.
+const exitedAtRestThread = {
+  ...base,
+  id: "exited-at-rest",
+  title: "Draft the changelog",
+  runtime: "exited",
+  status: "active",
+  crashed: false,
+  needsYou: true,
+} as unknown as ThreadView
+
 // A live worker — spinner, NO retry (retrying would interrupt real work).
 const workingThread = {
   ...base,
@@ -75,13 +88,14 @@ const restingThread = {
   needsYou: false,
 } as unknown as ThreadView
 
-store.board = { threads: [stalledThread, workingThread, restingThread] } as BoardSnapshot
+store.board = { threads: [stalledThread, exitedAtRestThread, workingThread, restingThread] } as BoardSnapshot
 
 createRoot(document.getElementById("root")!).render(
   <TooltipProvider>
     <main className="min-h-screen bg-bg px-10 py-10 text-fg">
       <div data-sidebar-rail className="w-[clamp(320px,34vw,680px)]">
         <ThreadRow t={stalledThread} />
+        <ThreadRow t={exitedAtRestThread} />
         <ThreadRow t={workingThread} />
         <ThreadRow t={restingThread} />
       </div>

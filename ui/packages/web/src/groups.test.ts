@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { ThreadView } from "@fray-ui/shared"
-import { needsAction, queued, orderQueue, partitionActive, sectionOf, sectionThreads, isHeld, sessionIndicatorKind, titleIsProvisional, displayTitle, lastActiveLabelAt, SPINNING_UP_TITLE, UNTITLED_THREAD_TITLE } from "./groups.ts"
+import { needsAction, queued, orderQueue, partitionActive, sectionOf, sectionThreads, isHeld, sessionIndicatorKind, offersInlineRetry, titleIsProvisional, displayTitle, lastActiveLabelAt, SPINNING_UP_TITLE, UNTITLED_THREAD_TITLE } from "./groups.ts"
 
 // Minimal ThreadView fixture — the same shape board-delta.test.ts uses, defaulting to a live/active
 // thread; each case overrides only the fields under test.
@@ -132,6 +132,21 @@ test("sessionIndicatorKind: bare queued rest stays rest while concrete input sta
   // A live background SHELL is NOT live work (2026-07-22): the future-timer wait now shows through as "held".
   assert.equal(sessionIndicatorKind(thread({ runtime: "turn-idle", bgShells: liveShell, lastFence: awaitingTimer })), "held")
   assert.equal(sessionIndicatorKind(thread({ state: "archived", needsYou: true, runtime: "exited" })), "archived")
+})
+
+test("offersInlineRetry: the sidebar/queue retry gate — only exited STOPPED sessions (stalled + at-rest)", () => {
+  const session = (over: Partial<ThreadView>) => thread({ kind: "session", ...over })
+  // The two STOPPED states get the inline retry: a [!] crash and a […] exited-at-rest (the reported bug).
+  assert.equal(offersInlineRetry(session({ needsYou: true, crashed: true, runtime: "exited" })), true)
+  assert.equal(offersInlineRetry(session({ needsYou: true, crashed: false, runtime: "exited" })), true)
+  // Everything else is excluded, even when canRetry is true (the drawer's broader gate).
+  assert.equal(offersInlineRetry(session({ runtime: "turn-idle", crashed: false })), false, "live turn-idle: not exited")
+  assert.equal(offersInlineRetry(session({ runtime: "running" })), false, "working")
+  assert.equal(offersInlineRetry(session({ needsYou: true, humanBlocked: true, status: "needs-human", runtime: "exited" })), false, "needs-input: answered not retried")
+  assert.equal(offersInlineRetry(session({ runtime: "exited", lastFence: { kind: "done", body: "shipped", hints: [] } })), false, "done + exited: finished, not stopped")
+  assert.equal(offersInlineRetry(session({ state: "archived", needsYou: true, runtime: "exited" })), false, "archived")
+  assert.equal(offersInlineRetry(session({ foreign: true, crashed: true, needsYou: true, runtime: "exited" })), false, "foreign: read-only")
+  assert.equal(offersInlineRetry(thread({ kind: "legacy", crashed: true, runtime: "exited" })), false, "legacy: no provider runtime")
 })
 
 test("queued: legacy rows NEVER card (only session threads enter the queue)", () => {
