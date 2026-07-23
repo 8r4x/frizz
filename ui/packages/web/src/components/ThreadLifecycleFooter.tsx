@@ -107,7 +107,7 @@ export function StateButton({
     setPending(true)
     if (optimistic) onArchived?.() // start the exit animation immediately
     rpc
-      .completeThread({ slug: thread.id, terminateLive })
+      .completeThread({ slug: thread.id, sessionId: thread.sessionId ?? "", terminateLive })
       .then((result) => {
         if (result.needsConfirmation) {
           // The server wants confirmation after all (an executing/ambiguous turn, or a rare mispredict).

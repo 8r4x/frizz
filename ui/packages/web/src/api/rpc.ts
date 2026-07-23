@@ -1,49 +1,9 @@
-import type {
-  BoardSnapshot,
-  Settings,
-  DispatchInput,
-  AdoptThreadInput,
-  AdoptThreadResult,
-  FollowUpInput,
-  RenameThreadInput,
-  AiRenameThreadResult,
-  SetThreadPermissionInput,
-  SetThreadPermissionResult,
-  ThreadProfileOptionsInput,
-  ThreadProfileOptionsResult,
-  SetThreadProfileInput,
-  SetThreadProfileResult,
-  SetThreadSnoozeInput,
-  TranscriptMessage,
-  TranscriptPage,
-  TranscriptEarlierInput,
-  GithubStatus,
-  GithubItem,
-  GithubBatchInput,
-  GithubBatchResult,
-  CodexModel,
-  QuotaSnapshot,
-  AuthSnapshot,
-  AccountLogoutInput,
-  AccountLogoutResult,
-  AccountLoginStartInput,
-  AccountLoginStartResult,
-  AccountLoginStatusInput,
-  AccountLoginStatusResult,
-  DispatchPreferences,
-  SetDispatchPreferenceInput,
-  ListInteractionsInput,
-  ListInteractionsResult,
-  GetInteractionInput,
-  GetInteractionResult,
-  ResolveInteractionInput,
-  ResolveInteractionResult,
-  CancelInteractionInput,
-  CancelInteractionResult,
-  CompletionHold,
-} from "@fray-ui/shared"
 import { noteServerBootId } from "./boot.ts"
 import { store } from "../store.ts"
+import { PROCEDURES, type Api, type ProcType, type RpcCallOpts } from "./contract.ts"
+
+export type { Api, ProcType, RpcCallOpts } from "./contract.ts"
+export { PROCEDURES } from "./contract.ts"
 
 export const CONTROL_PLANE_RESTARTING_MESSAGE = "Fray is updating and restarting. Your draft is preserved; wait until it is ready before sending or changing settings."
 
@@ -51,151 +11,6 @@ export function assertMutationAllowedDuringControlPlaneTransition(type: ProcType
   if (type === "mutation" && store.controlPlaneState === "restarting") {
     throw new Error(CONTROL_PLANE_RESTARTING_MESSAGE)
   }
-}
-
-// Typed surface of the server's rpc router. This mirrors the procedures defined
-// in the server package; TODO: replace with
-//   import type { AppRouter } from "@fray-ui/server/router"
-//   type Api = ClientFromRouter<AppRouter>
-// once the server package typechecks in this workspace.
-export interface Api {
-  board(): Promise<BoardSnapshot>
-  threadBody(input: { slug: string }): Promise<{ markdown: string }>
-  threadTranscript(input: { slug: string }): Promise<TranscriptPage>
-  threadTranscriptEarlier(input: TranscriptEarlierInput): Promise<TranscriptPage>
-  subAgentTranscript(input: { slug: string; id: string }): Promise<{ messages: TranscriptMessage[]; state: "running" | "stale" | "done" | "gone" }>
-  backgroundShellOutput(input: { slug: string; id: string }): Promise<{ command: string | null; output: string; truncated: boolean; state: "running" | "done" | "gone" }>
-  // Scoped typed requests are read/answered only for the current registered session. There is
-  // deliberately no browser create method: provider adapters alone can journal a request.
-  pendingInteractions(input: ListInteractionsInput): Promise<ListInteractionsResult>
-  interactionGet(input: GetInteractionInput): Promise<GetInteractionResult>
-  interactionResolve(input: ResolveInteractionInput): Promise<ResolveInteractionResult>
-  interactionCancel(input: CancelInteractionInput): Promise<CancelInteractionResult>
-  dispatch(input: DispatchInput): Promise<{ slug: string; sessionId: string }>
-  adoptThread(input: AdoptThreadInput): Promise<AdoptThreadResult>
-  followUp(input: FollowUpInput): Promise<void>
-  setThreadPermission(input: SetThreadPermissionInput): Promise<SetThreadPermissionResult>
-  threadProfileOptions(input: ThreadProfileOptionsInput): Promise<ThreadProfileOptionsResult>
-  setThreadProfile(input: SetThreadProfileInput): Promise<SetThreadProfileResult>
-  markRead(input: { slug: string }): Promise<void>
-  // Opening a thread records read/seen telemetry only. Queue membership is lifecycle-driven and is
-  // never cleared by viewing a resting thread. No-op for a foreign thread (no registry row).
-  threadSeen(input: { slug: string }): Promise<void>
-  // The ONLY writer of a session thread's open|archived lifecycle (the done fence mutates nothing).
-  setThreadState(input: { slug: string; state: "open" | "archived" }): Promise<void>
-  // Completes an inactive session immediately. A live provider shell reports that confirmation is
-  // required; the caller must opt into its termination before the row can move to Done. `hold` carries
-  // WHY it declined — the executing turn and/or the named live sub-agents/shells — for the dialog to name.
-  completeThread(input: { slug: string; terminateLive?: boolean }): Promise<{ needsConfirmation: boolean; hold?: CompletionHold }>
-  setThreadSnooze(input: SetThreadSnoozeInput): Promise<void>
-  // A plan artifact's markdown (.fray/plans/*.md); `path` is a PlanView.path from the board snapshot.
-  planBody(input: { path: string }): Promise<{ markdown: string }>
-  // Hard-delete a plan artifact (.fray/plans/*.md). Secure-resolver gated server-side; idempotent.
-  planDelete(input: { path: string }): Promise<void>
-  // A session thread's scratchpad (.fray/threads/<session-id>/scratch.md) — read-only doc tab.
-  threadScratchpad(input: { slug: string }): Promise<{ markdown: string }>
-  // Server-authoritative, shell-safe provider resume command for a registered Fray-owned session.
-  // A live Fray-owned runtime is deliberately unavailable: a second provider client is uncoordinated.
-  threadTerminalCommand(input: { slug: string }): Promise<{ command: string | null; mode: "resume" | "unavailable"; reason: string | null }>
-  openExternal(input: { url: string }): Promise<void>
-  openLocalFile(input: { path: string; image?: boolean }): Promise<{ action: "opened" | "copy"; path: string }>
-  // Classify path references (as they appear in inline code) → canonical openable path, or null when the
-  // candidate doesn't resolve to a real file under the server's openable roots. Drives clickable inline code.
-  resolveLocalPaths(input: { paths: string[] }): Promise<{ resolved: { input: string; path: string | null }[] }>
-  markComplete(input: { slug: string }): Promise<void>
-  setThreadStatus(input: { slug: string; status: "active" | "planning" | "planned" | "needs-human" | "blocked" | "done" | "dismissed" }): Promise<void>
-  dismissThread(input: { slug: string }): Promise<void>
-  repairThread(input: { file: string }): Promise<{ slug: string }>
-  archiveThread(input: { slug: string }): Promise<void>
-  killAgent(input: { slug: string }): Promise<void>
-  renameThread(input: RenameThreadInput): Promise<void>
-  aiRenameThread(input: { slug: string }): Promise<AiRenameThreadResult>
-  // The selectable Codex models + per-model effort options, read server-side from the authoritative
-  // ~/.codex/models_cache.json (never a hand-maintained list). The model picker's Codex section and its
-  // effort dropdown are driven by this; a tiny client fallback covers the loading/no-cache state.
-  codexModels(): Promise<CodexModel[]>
-  // Provider subscription quota (5h + weekly windows) for the sidebar status bar. `force` bypasses
-  // the shared freshness window for an explicit user recheck.
-  quota(input?: { force?: boolean }, opts?: RpcCallOpts): Promise<QuotaSnapshot>
-  // Per-provider LOCAL credential presence for the new-thread dispatch gate. Distinct from quota's
-  // overloaded "unavailable" — reports only whether a credential exists. Never rejects.
-  authStatus(input?: undefined, opts?: RpcCallOpts): Promise<AuthSnapshot>
-  accountLogout(input: AccountLogoutInput): Promise<AccountLogoutResult>
-  // Slice B login utility: start/attach/inspect/cancel the restricted `claude auth login` terminal.
-  accountLoginStart(input: AccountLoginStartInput): Promise<AccountLoginStartResult>
-  accountLoginStatus(input: AccountLoginStatusInput): Promise<AccountLoginStatusResult>
-  accountLoginCancel(input: AccountLoginStatusInput): Promise<Record<string, never>>
-  settingsGet(): Promise<Settings>
-  settingsSet(input: Settings): Promise<void>
-  settingsReset(): Promise<Settings>
-  dispatchPreferencesGet(): Promise<DispatchPreferences>
-  dispatchPreferenceSet(input: SetDispatchPreferenceInput): Promise<DispatchPreferences>
-  // The shipped GitHub batch-dispatch prompt templates — the Settings UI prefills its editors from
-  // these and resets to them (an empty githubIssuePrompt/githubPrPrompt setting = the server default).
-  githubPromptDefaults(): Promise<{ issue: string; pr: string }>
-  // GitHub-first batch dispatch. Detection (installed/inRepo/nameWithOwner) is cached server-side;
-  // `authed` is re-checked live per call. githubList reads the repo's issues/PRs; githubDispatchBatch
-  // hydrates each selected item fresh + spins up one thread per item (sequential, reuses dispatch).
-  githubStatus(): Promise<GithubStatus>
-  githubList(input: { kind: "issues" | "prs"; sort: "recent" | "reactions"; limit?: number }): Promise<{ items: GithubItem[] }>
-  githubDispatchBatch(input: GithubBatchInput): Promise<GithubBatchResult>
-}
-
-type ProcType = "query" | "mutation"
-
-const PROCEDURES: Record<keyof Api, ProcType> = {
-  board: "query",
-  threadBody: "query",
-  threadTranscript: "query",
-  threadTranscriptEarlier: "query",
-  subAgentTranscript: "query",
-  backgroundShellOutput: "query",
-  pendingInteractions: "query",
-  interactionGet: "query",
-  interactionResolve: "mutation",
-  interactionCancel: "mutation",
-  dispatch: "mutation",
-  adoptThread: "mutation",
-  followUp: "mutation",
-  setThreadPermission: "mutation",
-  threadProfileOptions: "query",
-  setThreadProfile: "mutation",
-  markRead: "mutation",
-  threadSeen: "mutation",
-  setThreadState: "mutation",
-  completeThread: "mutation",
-  setThreadSnooze: "mutation",
-  planBody: "query",
-  planDelete: "mutation",
-  threadScratchpad: "query",
-  threadTerminalCommand: "query",
-  openExternal: "mutation",
-  openLocalFile: "mutation",
-  resolveLocalPaths: "query",
-  markComplete: "mutation",
-  setThreadStatus: "mutation",
-  dismissThread: "mutation",
-  repairThread: "mutation",
-  archiveThread: "mutation",
-  killAgent: "mutation",
-  renameThread: "mutation",
-  aiRenameThread: "mutation",
-  codexModels: "query",
-  quota: "query",
-  authStatus: "query",
-  accountLogout: "mutation",
-  accountLoginStart: "mutation",
-  accountLoginStatus: "query",
-  accountLoginCancel: "mutation",
-  settingsGet: "query",
-  settingsSet: "mutation",
-  settingsReset: "mutation",
-  dispatchPreferencesGet: "query",
-  dispatchPreferenceSet: "mutation",
-  githubPromptDefaults: "query",
-  githubStatus: "query",
-  githubList: "query",
-  githubDispatchBatch: "mutation",
 }
 
 // Parse one RPC envelope without leaking a browser JSON SyntaxError into the UI. During local HMR the
@@ -215,14 +30,6 @@ export async function parseRpcResponse(res: Response, name: string): Promise<unk
   }
   if (!res.ok) throw new Error(typeof json.error === "string" ? json.error : `RPC ${name} failed`)
   return json.result
-}
-
-// Per-call transport options. `signal` aborts the underlying fetch — callers that poll (quota) pass a
-// timeout signal so ONE severed/hung response (a dev-server restart mid-request) can't strand the
-// request forever: an unsettled fetch pins react-query in "fetching" (it never retries a promise that
-// never settles) and leaks one of the origin's six HTTP/1.1 connections each poll.
-export interface RpcCallOpts {
-  signal?: AbortSignal
 }
 
 async function call(name: string, type: ProcType, input?: unknown, opts?: RpcCallOpts): Promise<unknown> {
@@ -248,7 +55,7 @@ async function call(name: string, type: ProcType, input?: unknown, opts?: RpcCal
 
 export const rpc = new Proxy({} as Api, {
   get(_target, name: string) {
-    const type = PROCEDURES[name as keyof Api]
+    const type = (PROCEDURES as Record<string, ProcType | undefined>)[name]
     if (!type) return undefined
     return (input?: unknown, opts?: RpcCallOpts) => call(name, type, input, opts)
   },

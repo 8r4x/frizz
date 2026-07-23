@@ -3,9 +3,12 @@ import type { z } from "zod"
 
 // ---- Type-level: infer client shape from router ----
 
+// `z.input`, NOT `z.infer`. A client sends the PRE-parse value: `terminateLive: z.boolean()
+// .default(false)` is optional on the wire and only becomes required after the server parses it.
+// Inferring the output type here would have demanded fields no caller should have to send.
 type InferInput<P> = P extends { input: infer I }
   ? I extends z.ZodType
-    ? z.infer<I>
+    ? z.input<I>
     : void
   : void
 
