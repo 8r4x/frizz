@@ -436,3 +436,34 @@ test("/attach accepts the safe tier, rejects office/extensionless/oversized, and
   // The base64 payload cap is enforced (ATTACHMENT_MAX_BASE64_CHARS = 25_000_000).
   assert.equal((await attach({ name: "big.pdf", data: "A".repeat(25_000_001) })).status, 400)
 })
+
+// The /events board stream was the single reason a healthy Ctrl-C never finished: Hono wires
+// `c.req.raw.signal` → `stream.abort()` ONLY on old Bun, so on Node the sole way to end a streaming
+// handler is CANCELLING its response body. index.ts's pipeToApp therefore cancels the reader when the
+// request aborts. Pin BOTH halves — the trap and the fix — so that cancel can never be "simplified"
+// back into an AbortController that this handler cannot hear.
+test("/events ends when its response body is cancelled, and an aborted request signal alone does not", async () => {
+  const port = 49_181
+  let unsubscribed = 0
+  const app = originTestApp(port, undefined, {}, "/tmp/origin-test-state", {
+    bus: { subscribe: () => () => { unsubscribed++ } },
+    board: { snapshot: async () => ({}), currentSeq: () => 0 },
+  } as unknown as Partial<AppContext>)
+
+  const controller = new AbortController()
+  const res = await app.request(`http://127.0.0.1:${port}/events`, {
+    headers: { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` },
+    signal: controller.signal,
+  })
+  assert.equal(res.status, 200)
+  const reader = res.body!.getReader()
+  await reader.read() // the connect keyframe
+
+  controller.abort()
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.equal(unsubscribed, 0, "aborting the request signal alone leaves a hono stream running on Node")
+
+  await reader.cancel()
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.equal(unsubscribed, 1, "cancelling the response body is what actually ends the stream")
+})
