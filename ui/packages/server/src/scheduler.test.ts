@@ -416,7 +416,7 @@ test("pr-watch: an APPROVAL is named specifically in the bump steer", async () =
   assert.match(h.resumes[0].message, /@dana/)
 })
 
-test("pr-watch: 'Snooze until activity' — a new-activity bump CLEARS the user snooze so the card re-surfaces", async () => {
+test("pr-watch: 'Arm watcher' — a new-activity bump CLEARS the user snooze so the card re-surfaces", async () => {
   const h = harness()
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
@@ -424,7 +424,7 @@ test("pr-watch: 'Snooze until activity' — a new-activity bump CLEARS the user 
   h.review.result = [] // baseline empty
   await h.make().tick()
 
-  // The human parked the card via "Snooze until activity" — a user snooze with a far-future safety timeout.
+  // The human parked the card via "Arm watcher" — a user snooze with a far-future safety timeout.
   const safety = iso(h.clock.ms + 24 * 3600_000)
   h.storage.setSnoozedUntil("r", safety)
   assert.equal(h.storage.getSession("r")?.snoozed_until, safety)

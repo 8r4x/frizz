@@ -302,7 +302,7 @@ function hasLiveOps(t: ThreadView): boolean {
 // `pr-watch` is DELIBERATELY ABSENT: it is the review/approval/comment watcher and it must NOT park in
 // Held. A worker that opens a PR and watches it stays a VISIBLE queue handoff (a PR whose reviews may
 // never arrive must not silently vanish into the dimmed band — maintainer 2026-07-22); the scheduler
-// still polls and bumps it, and the human opts into hiding it via the card's "Snooze until activity"
+// still polls and bumps it, and the human opts into hiding it via the card's "Arm watcher"
 // button (a user snooze the next activity clears). Adding pr-watch here would re-introduce exactly the
 // auto-Held danger this split was built to remove.
 export function parkedAwaitingHint(hints: readonly AwaitingHint[], nowMs = Date.now()): AwaitingHint | undefined {

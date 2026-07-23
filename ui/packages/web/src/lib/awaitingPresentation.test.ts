@@ -35,14 +35,14 @@ test("actionable hints win and elapsed timers remain stable instead of becoming 
   assert.equal(awaitingHintSentence([{ kind: "timer", value: "not-a-time" }], now), "Snooze schedule unavailable")
 })
 
-test("pr-watch: watcher sentence + a 'Snooze until activity' park action (holds until the next PR activity)", () => {
+test("pr-watch: watcher sentence + an 'Arm watcher' park action (parks the card until the next PR activity)", () => {
   assert.equal(
     awaitingHintSentence([{ kind: "pr-watch", value: "acme/app#391" }], now),
     "Watch acme/app#391 for new reviews, approvals, or comments",
   )
   assert.deepEqual(awaitingParkAction([{ kind: "pr-watch", value: "acme/app#391" }], now), {
-    label: "Snooze until activity",
-    toastVerb: "Holding until PR activity",
+    label: "Arm watcher",
+    toastVerb: "Watcher armed",
     timerUntil: null,
   })
 })
@@ -75,8 +75,8 @@ test("a park target is always an instant setThreadSnooze accepts, whatever shape
 
 test("park kinds without a declared instant defer to the caller's preset, and unparkable hints offer nothing", () => {
   assert.deepEqual(awaitingParkAction([{ kind: "pr-watch", value: "owner/repo#42" }], now), {
-    label: "Snooze until activity",
-    toastVerb: "Holding until PR activity",
+    label: "Arm watcher",
+    toastVerb: "Watcher armed",
     timerUntil: null,
   })
   assert.deepEqual(awaitingParkAction([{ kind: "human", value: "Alice to approve" }], now), {

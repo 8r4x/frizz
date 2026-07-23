@@ -4,13 +4,18 @@ import { formatSnoozeWake } from "./snooze.ts"
 /** What the awaiting card's park button offers for these hints, or null when no hint is parkable
  *  (legacy pr/ci/session, or an elapsed/malformed timer) — there is then nothing to confirm.
  *
- *  A future `timer` → "Confirm snooze" until that exact instant; `pr-watch` → "Snooze until activity"
- *  — the opt-in "hide this until something happens", since a pr-watch card is a VISIBLE queue handoff
- *  by default; a plain `human` gate → "Confirm snooze". For pr-watch/human there's no declared time, so
+ *  A future `timer` → "Confirm snooze" until that exact instant; `pr-watch` → "Arm watcher" — the
+ *  opt-in "hand this to the watcher and hide it", since a pr-watch card is a VISIBLE queue handoff by
+ *  default; a plain `human` gate → "Confirm snooze". For pr-watch/human there's no declared time, so
  *  the caller parks for the user's default snooze preset — for pr-watch that preset is only a SAFETY
- *  timeout: the scheduler clears the snooze the moment new PR activity arrives (board.ts / scheduler
- *  clearSnooze-on-review), so "until activity" is the real wake and the timeout just guards against a
+ *  timeout: the scheduler clears the snooze the moment new PR activity arrives (scheduler.ts, the
+ *  clear-snooze-on-pr-watch-wake), so ACTIVITY is the real wake and the timeout just guards against a
  *  dead PR hiding forever. Signalled by a null `timerUntil`.
+ *
+ *  NB the label is user-facing framing, not literal mechanics: the scheduler polls a pr-watch thread
+ *  whether or not this button was pressed (it auto-arms off the fence). What the button actually does
+ *  is PARK the visible card and let the watcher bring it back — "Arm watcher" is how the maintainer
+ *  wants that handoff to read.
  *
  *  `timerUntil` is CANONICALIZED, never the raw hint: the fence grammar admits instants the durable
  *  snooze grammar rejects (no millis, a numeric offset), and setThreadSnooze rejects those as invalid
@@ -23,7 +28,7 @@ export function awaitingParkAction(
     .flatMap((hint) => (hint.kind === "timer" ? [canonicalSnoozeInstant(hint.value)] : []))
     .find((instant): instant is string => instant !== null && Date.parse(instant) > nowMs)
   if (timerUntil) return { label: "Confirm snooze", toastVerb: "Snoozed", timerUntil }
-  if (hints.some((hint) => hint.kind === "pr-watch")) return { label: "Snooze until activity", toastVerb: "Holding until PR activity", timerUntil: null }
+  if (hints.some((hint) => hint.kind === "pr-watch")) return { label: "Arm watcher", toastVerb: "Watcher armed", timerUntil: null }
   if (hints.some((hint) => hint.kind === "human")) return { label: "Confirm snooze", toastVerb: "Snoozed", timerUntil: null }
   return null
 }

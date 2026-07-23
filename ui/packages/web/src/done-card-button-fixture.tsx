@@ -10,7 +10,7 @@ import "./styles.css"
 //   • the done card's white "Mark as done" button (completeThread; ?mode=executing → needsConfirmation
 //     → the End-session dialog path)
 //   • the awaiting card's compact confirm-park button, one per parkable kind (timer → "Confirm snooze"
-//     to the exact instant; pr-watch → "Snooze until activity"; human → "Confirm snooze"). Each applies
+//     to the exact instant; pr-watch → "Arm watcher"; human → "Confirm snooze"). Each applies
 //     a user snooze via setThreadSnooze.
 // RPC is mocked like completion-lifecycle-fixture so nothing real is hit.
 const mode = new URLSearchParams(window.location.search).get("mode") === "executing" ? "executing" : "resting"

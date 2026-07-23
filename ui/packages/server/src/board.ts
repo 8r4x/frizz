@@ -148,7 +148,7 @@ function hasLiveBackgroundWork(tele: SessionTelemetry | undefined): boolean {
 // `pr-watch` is DELIBERATELY NOT here (maintainer 2026-07-22): the review/approval/comment watcher
 // keeps its thread a VISIBLE queue handoff rather than parking it, so a PR whose reviews may never
 // arrive can't silently vanish. The scheduler still polls + bumps it on new activity (it keys on the
-// hint, not on this excusal); the human hides it on demand via the card's "Snooze until activity"
+// hint, not on this excusal); the human hides it on demand via the card's "Arm watcher"
 // button (a user snooze, cleared by the next activity). Mirrors groups.parkedAwaitingHint — keep the
 // two in lockstep.
 function hasParkedExternalWait(tele: SessionTelemetry | undefined, nowMs: number): boolean {

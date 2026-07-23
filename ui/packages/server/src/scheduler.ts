@@ -832,7 +832,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         reason: verdict.reason,
       }, nowMs).delivery
       st.fired = true
-      // "Snooze until activity": if the human parked this pr-watch card with a user snooze, new PR
+      // "Arm watcher": if the human parked this pr-watch card with a user snooze, new PR
       // activity is exactly the thing it was hiding UNTIL — so clear the snooze here, the moment we
       // enqueue the wake, and the card re-surfaces in the queue (the preset instant was only a safety
       // timeout). A no-op when nothing was snoozed. Scoped to pr-watch: a human/timer park is a
