@@ -13,6 +13,7 @@ import { Tooltip } from "./Tooltip.tsx"
 import { ProviderMark } from "./ProviderMark.tsx"
 import { STATUS_CHIP } from "../lib/status.ts"
 import { formatSnoozedUntil, formatSnoozeWake, formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
+import { isOptimisticallySteering, useSteeredAt } from "../lib/steering.ts"
 import { activeSidebarSection, railRevealDelta, type SidebarSectionGeometry } from "../lib/sidebarScrollspy.ts"
 import type { ReactElement, ReactNode } from "react"
 
@@ -451,7 +452,16 @@ const ATTENTION = 9
 // Each indicator carries a terse hover tooltip naming the state it signals. The faint "at rest" dot
 // gets none. A plain wrapper <span> is the tooltip trigger (a real DOM node Radix can ref).
 export function ThreadIndicator({ t, legacy }: { t: ThreadView; legacy?: boolean }) {
-  const { node, tip } = legacy ? legacyIndicatorFor(t) : sessionIndicatorFor(t)
+  // A just-sent steer paints the rail's spinner immediately. Without it the row keeps its old mark —
+  // often the very "?" the human just answered — for the whole injection round-trip plus however long
+  // the tailer takes to notice the worker's turn, which is the difference between "sent" and "ignored".
+  // Server truth reclaims the row the instant it has anything to say (see isOptimisticallySteering).
+  const steeredAt = useSteeredAt()[t.id]
+  const { node, tip } = legacy
+    ? legacyIndicatorFor(t)
+    : isOptimisticallySteering(t, steeredAt)
+      ? { node: <BoxSpinner />, tip: "Working" }
+      : sessionIndicatorFor(t)
   if (!tip) return node
   return (
     <Tooltip label={tip} side="left">

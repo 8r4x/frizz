@@ -65,7 +65,11 @@ export function ThreadActionBar({ slug, ops }: { slug: string; onTerminal?: () =
         onChange={setMessage}
         onSubmit={send}
         placeholder="Follow up…"
-        busy={controls.busy || followUp.pending}
+        // NOT `|| followUp.pending`. The send is already committed locally (draft cleared, bubble
+        // appended), so gating the textarea on its round-trip only made the box go dead — and, because
+        // the browser blurs a disabled element, cost the caret — for the ~½s the tmux injection takes.
+        // What remains is a genuine backend fence: a permission/profile change owning the runtime.
+        busy={controls.busy}
         footer={controls.footer}
       />
       {controls.status}

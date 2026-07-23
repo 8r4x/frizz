@@ -48,7 +48,20 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
   const effort = thread.effort?.trim()
   const backend = thread.backend === "codex" ? "codex" : "claude"
   const displayedPermission = thread.permissionMode ? permValueFor(backend, thread.permissionMode) : undefined
-  const pendingPermission = thread.permissionPending ? permValueFor(backend, thread.permissionPending) : undefined
+  // OPTIMISTIC PENDING. Both of these controls are backed by a runtime handoff that can take a
+  // half-second or more, and the board's own pending bit only appears once the server has claimed the
+  // row — so picking a model used to produce NO visible response at all until it landed, which reads
+  // as a dropped click and invites a second one. The in-flight mutation variables give us the exact
+  // target immediately, expressed in the SAME "→ … pending" affordance the server's bit drives, so the
+  // local hint and the authoritative one are indistinguishable and hand over without a flicker.
+  // Deliberately NOT rendered as the applied value: the server may still answer "next-resume", and a
+  // control that claims a live change it did not make is worse than a slow one.
+  const optimisticProfile = profile.isPending ? profile.variables : undefined
+  const optimisticPermission = permission.isPending ? permission.variables : undefined
+  const pendingModel = thread.profilePendingModel ?? optimisticProfile?.model
+  const pendingEffort = thread.profilePendingEffort ?? optimisticProfile?.effort
+  const pendingPermissionMode = thread.permissionPending ?? optimisticPermission
+  const pendingPermission = pendingPermissionMode ? permValueFor(backend, pendingPermissionMode) : undefined
   const permissionOptions = permOptionsFor(backend)
   const pendingLabel = pendingPermission ? permissionOptions.find((option) => option.value === pendingPermission)?.label : undefined
   const permissionBlocked = threadPermissionBlockedReason(thread)
@@ -95,8 +108,8 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
         <ProfileGridSelector
           groups={profileGroups}
           value={{ provider: backend, model, effort }}
-          pending={thread.profilePendingModel || thread.profilePendingEffort
-            ? { provider: backend, model: thread.profilePendingModel, effort: thread.profilePendingEffort }
+          pending={pendingModel || pendingEffort
+            ? { provider: backend, model: pendingModel, effort: pendingEffort }
             : undefined}
           onValueChange={({ model: nextModel, effort: nextEffort }) => changeProfile({ model: nextModel, effort: nextEffort })}
           placeholder={profiles.isPending ? "Profile loading…" : "Profile unknown"}
@@ -132,9 +145,9 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
           side="top"
           className={`${PROMPT_CONTROL_TYPOGRAPHY_CLASS} shrink-0 px-1.5 py-0.5 ${displayedPermission ? PERMISSION_COLOR[displayedPermission] : "text-muted/50"}`}
         />
-        {thread.profilePendingModel && thread.profilePendingEffort && (
+        {pendingModel && pendingEffort && (
           <span className="min-w-0 truncate text-[9px] text-muted/50">
-            → {thread.profilePendingModel} · {thread.profilePendingEffort} pending
+            → {pendingModel} · {pendingEffort} pending
           </span>
         )}
         {pendingLabel && (
