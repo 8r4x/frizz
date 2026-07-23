@@ -15,7 +15,7 @@ import type { Tailer, SessionTelemetry } from "./tailer.ts"
 import type { InteractionChange } from "./interaction-store.ts"
 import { frayDirExists } from "./fray.ts"
 import * as tmux from "./tmux.ts"
-import { effectivePermissionMode, resolveLegacyThreadFile } from "./dispatch.ts"
+import { effectivePermissionMode, resolveLegacyThreadFile, scratchpadRelPath } from "./dispatch.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { listPlanFiles } from "./plan-files.ts"
@@ -229,7 +229,7 @@ export function deriveNeedsYou(
 // The scratchpad path for a session, iff the file exists under the project dir (else undefined so the
 // client offers no doc tab). Convention: .fray/threads/<session_id>/scratch.md.
 function scratchpadPathIfExists(projectDir: string, sessionId: string): string | undefined {
-  const rel = `.fray/threads/${sessionId}/scratch.md`
+  const rel = scratchpadRelPath(sessionId)
   return existsSync(join(projectDir, rel)) ? rel : undefined
 }
 

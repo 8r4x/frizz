@@ -231,6 +231,14 @@ Your compaction-proof working memory and the fleet blackboard — keep your task
 `
 }
 
+// The thread scratchpad's project-relative path — the ONE spelling, shared by the writer below, the
+// board's doc-tab visibility probe, and the reader RPC. The tab is offered iff this file exists and
+// shows what this file holds, so a reader that spells the path out separately silently renders every
+// scratchpad as "No scratchpad yet." — which is exactly what it did.
+export function scratchpadRelPath(sessionId: string): string {
+  return `.fray/threads/${sessionId}/scratch.md`
+}
+
 // Provision the thread's scratchpad (.fray/threads/<sessionId>/scratch.md), atomic tmp+rename. Returns the
 // project-relative path. sessionId is a fresh UUID at both dispatch and adopt, so this never clobbers.
 export function writeScratchpad(projectDir: string, sessionId: string, title: string, kind: BackendKind = "claude"): string {
@@ -239,7 +247,7 @@ export function writeScratchpad(projectDir: string, sessionId: string, title: st
   const frayDir = ensureSafeDirectDirectory(projectRoot, ".fray")
   const threadsDir = ensureSafeDirectDirectory(frayDir, "threads")
   const dir = ensureSafeDirectDirectory(threadsDir, sessionId)
-  const rel = `.fray/threads/${sessionId}/scratch.md`
+  const rel = scratchpadRelPath(sessionId)
   const path = join(dir, "scratch.md")
   // Deterministic per-session staging name lets restart recovery remove a SIGKILL artifact; the
   // session id is unique, so randomizing this filename only made the orphan undiscoverable.
