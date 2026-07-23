@@ -299,6 +299,7 @@ async function runSupervisor(
   }
   const stop = createSupervisorShutdownHandler({
     close: () => supervisor.close(),
+    force: () => supervisor.forceStop(),
     release: () => {
       launchOwner.release();
     },

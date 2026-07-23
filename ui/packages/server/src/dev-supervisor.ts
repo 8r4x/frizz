@@ -107,6 +107,8 @@ export interface DevSupervisor {
   readonly stopRequested: Promise<void>
   currentBoot(): DevBoot | null
   close(): Promise<void>
+  /** Abandon a graceful drain and reclaim the control-plane child by force. */
+  forceStop(): void
 }
 
 export interface SupervisorShutdownHandlerOptions {
@@ -114,23 +116,46 @@ export interface SupervisorShutdownHandlerOptions {
   release: () => void
   exit: (code: number) => void
   error?: (line: string) => void
+  /** Reclaim the control-plane child by force when the operator refuses to wait for the drain. */
+  force?: () => void
 }
 
-/** Idempotent, permanently-installed signal/control handler for the durable supervisor owner. */
+/**
+ * Idempotent, permanently-installed signal/control handler for the durable supervisor owner.
+ *
+ * The FIRST signal starts exactly one graceful close, however many arrive. A SECOND signal is the
+ * operator saying they will not wait: escalate instead of swallowing it, so a wedged control-plane
+ * child (whose reclaim is otherwise bounded only by CHILD_STOP_TIMEOUT_MS) can never look like a
+ * launcher that ignores Ctrl-C. Escalation still releases the tokenized launch owner — a forced exit
+ * must not strand the project — and reports a non-zero code because the drain did not complete.
+ */
 export function createSupervisorShutdownHandler(options: SupervisorShutdownHandlerOptions): () => void {
   let stopping = false
+  let decided = false
+  const decide = (code: number) => {
+    if (decided) return
+    decided = true
+    options.release()
+    options.exit(code)
+  }
   return () => {
-    if (stopping) return
+    if (stopping) {
+      if (decided) return
+      options.error?.("[fray-ui] second stop signal — abandoning the graceful drain")
+      try {
+        options.force?.()
+      } catch (error) {
+        options.error?.(`[fray-ui] forced supervisor stop failed: ${error instanceof Error ? error.message : error}`)
+      }
+      decide(1)
+      return
+    }
     stopping = true
     void options.close().then(
-      () => {
-        options.release()
-        options.exit(0)
-      },
+      () => decide(0),
       (error) => {
         options.error?.(`[fray-ui] supervisor shutdown failed: ${error instanceof Error ? error.message : error}`)
-        options.release()
-        options.exit(1)
+        decide(1)
       },
     )
   }
@@ -835,6 +860,24 @@ class Supervisor implements DevSupervisor {
     if (this.stopping === child) this.stopping = null
     this.boot = null
     this.activeChildEnvironment = {}
+  }
+
+  /**
+   * Second-Ctrl-C escalation. `stopChild` waits up to CHILD_STOP_TIMEOUT_MS for a clean drain; an
+   * operator who signals again has withdrawn that patience, so take the control plane down now. The
+   * child owns only Fray's own handles — worker tmux sessions and the detached Codex app-server
+   * daemon are keyed project resources in their own process trees and deliberately survive this.
+   */
+  forceStop(): void {
+    this.closed = true
+    const child = this.child
+    if (!child) return
+    this.errorLine(`[fray-ui] force-stopping control plane (pid ${child.pid ?? "?"})`)
+    try {
+      child.kill("SIGKILL")
+    } catch {
+      // Already gone; the exit handler has done, or will do, the bookkeeping.
+    }
   }
 
   async close(): Promise<void> {

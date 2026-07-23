@@ -117,7 +117,7 @@ async function runSupervisor(port: number, token: string): Promise<never> {
       process.exit(0);
     },
   });
-  const stop = createSupervisorShutdownHandler({ close: () => supervisor.close(), release: () => owner.release(), exit: (code) => process.exit(code) });
+  const stop = createSupervisorShutdownHandler({ close: () => supervisor.close(), force: () => supervisor.forceStop(), release: () => owner.release(), exit: (code) => process.exit(code), error: (line) => console.error(line) });
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
   void supervisor.stopRequested.then(stop);

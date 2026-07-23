@@ -117,7 +117,7 @@ test("dev crash retry backs off exponentially and caps restart storms", () => {
   assert.equal(devCrashRetryDelay(99), DEV_CRASH_RETRY_MAX_MS)
 })
 
-test("repeated supervisor signals share one close, release, and exit decision", async () => {
+test("a lone supervisor signal starts exactly one close, release, and exit decision", async () => {
   let resolveClose!: () => void
   const closing = new Promise<void>((resolve) => { resolveClose = resolve })
   let closes = 0
@@ -129,8 +129,6 @@ test("repeated supervisor signals share one close, release, and exit decision", 
     exit: (code) => { exits.push(code) },
   })
   stop()
-  stop()
-  stop()
   assert.equal(closes, 1)
   assert.equal(releases, 0)
   resolveClose()
@@ -138,6 +136,44 @@ test("repeated supervisor signals share one close, release, and exit decision", 
   await Promise.resolve()
   assert.equal(releases, 1)
   assert.deepEqual(exits, [0])
+})
+
+// The operator's second Ctrl-C is a withdrawal of patience, not a duplicate of the first. Swallowing
+// it left a wedged control plane looking like a launcher that ignores the keyboard for the whole 15s
+// child-stop bound.
+test("a second supervisor signal escalates once instead of waiting out the drain", async () => {
+  let closes = 0
+  let forces = 0
+  let releases = 0
+  const exits: number[] = []
+  const errors: string[] = []
+  let resolveClose!: () => void
+  const closing = new Promise<void>((resolve) => { resolveClose = resolve })
+  const stop = createSupervisorShutdownHandler({
+    close: () => { closes++; return closing },
+    force: () => { forces++ },
+    release: () => { releases++ },
+    exit: (code) => { exits.push(code) },
+    error: (line) => { errors.push(line) },
+  })
+  stop()
+  stop()
+  stop()
+  // Exactly one graceful close was ever started, and exactly one forced reclaim answered the repeat.
+  assert.equal(closes, 1)
+  assert.equal(forces, 1)
+  // A forced exit still releases the tokenized launch owner — abandoning the drain must not strand
+  // the project — and reports failure, because the drain did not complete.
+  assert.equal(releases, 1)
+  assert.deepEqual(exits, [1])
+  assert.ok(errors.some((line) => line.includes("second stop signal")))
+
+  // The abandoned close settling later must not re-decide the exit.
+  resolveClose()
+  await closing
+  await Promise.resolve()
+  assert.deepEqual(exits, [1])
+  assert.equal(releases, 1)
 })
 
 test("dev launcher syntax-checks package JSON and JSONC tsconfig before replacing a healthy child", () => {

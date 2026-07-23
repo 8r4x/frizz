@@ -11,8 +11,11 @@
 //
 //   npx tsx ui/scripts/verify-graceful-shutdown.mjs [--port=4952] [--mode=sigint|sigterm|double-sigint]
 //
-// --mode=double-sigint sends a second SIGINT 150ms after the first (the impatient operator): a second
-// signal must escalate/no-op, never deadlock.
+// --mode=double-sigint sends a second SIGINT 150ms after the first (the impatient operator).
+// --mode=wedged-double-sigint SIGSTOPs the control-plane child first, so it CANNOT drain, then sends a
+// second SIGINT: escalation must reclaim it promptly instead of waiting out the 15s child stop bound.
+// --mode=orphan-kill SIGKILLs ONLY the launcher, so nothing can ask the control-plane child to stop:
+// the child must notice its lost IPC channel and reap itself rather than outliving its launcher.
 import { spawn } from "node:child_process"
 import { execFileSync } from "node:child_process"
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs"
@@ -61,6 +64,7 @@ if (process.env.FRAY_SHUTDOWN_HARNESS === "launcher") {
   console.log(`FRAY_HARNESS_READY ${JSON.stringify({ port, pid: process.pid })}`)
   const stop = createSupervisorShutdownHandler({
     close: () => supervisor.close(),
+    force: () => supervisor.forceStop(),
     release: () => { launchOwner.release() },
     exit: (code) => process.exit(code),
     error: (line) => console.error(line),
@@ -173,13 +177,45 @@ if (process.env.FRAY_SHUTDOWN_HARNESS === "launcher") {
 
   const group = descendants(child.pid)
   const owned = [child.pid, ...group]
-  console.log(`[verify] launcher process tree before signal: ${owned.join(", ")}`)
+  const launcherPid = JSON.parse(transcript.find((l) => l.includes("FRAY_HARNESS_READY")).split("FRAY_HARNESS_READY ")[1]).pid
+  const childProcessPid = Number(transcript.find((l) => /control plane ready \(pid (\d+)/.test(l)).match(/control plane ready \(pid (\d+)/)[1])
+  console.log(`[verify] launcher process tree before signal: ${owned.join(", ")} (control plane ${childProcessPid})`)
+
+  // The operator's "EPIPE printed over my prompt seconds after I exited" symptom: a launcher that is
+  // gone while its control-plane child is still running. Nothing can ask the child to stop, so this
+  // pins that the child reaps ITSELF off the severed IPC channel.
+  if (mode === "orphan-kill") {
+    const t = Date.now()
+    process.kill(launcherPid, "SIGKILL")
+    const deadline = Date.now() + 20_000
+    while (alive(childProcessPid) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100))
+    const orphanMs = Date.now() - t
+    await new Promise((r) => setTimeout(r, 1000))
+    const left = owned.filter(alive)
+    console.log(transcript.join("\n"))
+    console.log(JSON.stringify({ mode, orphanMs, ownedPids: owned, survivingPids: left }, null, 2))
+    rmSync(home, { recursive: true, force: true })
+    if (left.length > 0) {
+      for (const pid of left) { try { process.kill(pid, "SIGKILL") } catch {} }
+      console.error(`FAIL: ${left.length} process(es) outlived their killed launcher: ${left.join(", ")}`)
+      process.exit(1)
+    }
+    console.log(`PASS: control plane reaped itself ${orphanMs}ms after its launcher was SIGKILLed; nothing survived`)
+    process.exit(0)
+  }
 
   const signal = mode === "sigterm" ? "SIGTERM" : "SIGINT"
+  // The impatient-operator escalation is only meaningful against a control plane that CANNOT drain.
+  // SIGSTOP the real control-plane child: it can no longer answer SIGTERM, so the supervisor's normal
+  // reclaim would block for CHILD_STOP_TIMEOUT_MS (15s). The second signal must cut that short.
+  if (mode === "wedged-double-sigint") {
+    process.kill(childProcessPid, "SIGSTOP")
+    console.log(`[verify] wedged control-plane child ${childProcessPid} with SIGSTOP`)
+  }
   const t0 = Date.now()
   process.kill(-child.pid, signal)
-  if (mode === "double-sigint") {
-    await new Promise((r) => setTimeout(r, 150))
+  if (mode === "double-sigint" || mode === "wedged-double-sigint") {
+    await new Promise((r) => setTimeout(r, mode === "wedged-double-sigint" ? 800 : 150))
     try { process.kill(-child.pid, "SIGINT") } catch {}
   }
 
@@ -230,8 +266,17 @@ if (process.env.FRAY_SHUTDOWN_HARNESS === "launcher") {
 
   rmSync(home, { recursive: true, force: true })
   const problems = []
-  if (raced.code !== 0) problems.push(`launcher exited ${JSON.stringify(raced)} — expected code 0`)
-  if (noisy.length > 0) problems.push(`${noisy.length} timeout/error line(s) in shutdown output`)
+  const escalating = mode === "wedged-double-sigint"
+  if (escalating) {
+    // Escalation is a deliberate abandonment: non-zero exit, and it must be PROMPT — well inside the
+    // 15s CHILD_STOP_TIMEOUT_MS it exists to cut short — while still reaping every owned process.
+    if (raced.code === 0) problems.push("escalated stop exited 0 — a forced stop must report failure")
+    if (shutdownMs > 5_000) problems.push(`escalation took ${shutdownMs}ms — it must not wait out the 15s child reclaim`)
+    if (!transcript.some((l) => l.includes("second stop signal"))) problems.push("no escalation was reported")
+  } else {
+    if (raced.code !== 0) problems.push(`launcher exited ${JSON.stringify(raced)} — expected code 0`)
+    if (noisy.length > 0) problems.push(`${noisy.length} timeout/error line(s) in shutdown output`)
+  }
   if (survivors.length > 0) problems.push(`${survivors.length} process(es) survived: ${survivors.join(", ")}`)
   if (problems.length > 0) {
     console.error(`FAIL: ${problems.join("; ")}`)
