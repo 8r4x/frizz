@@ -1185,6 +1185,9 @@ export interface TailerDeps {
   now?: () => number // injectable clock (tests)
   paneDead?: (slug: string) => boolean // injectable liveness (tests)
   capturePane?: (slug: string) => string // injectable pane text (tests); defaults to tmux
+  // Batched pane text for the per-tick prefetch; defaults to tmux.capturePanes. A fixture that injects
+  // only `capturePane` gets no batching (see createTailer) so existing per-slug fakes keep working.
+  capturePanes?: (slugs: readonly string[]) => Map<string, string>
   findExpectedAdoptionPane?: (expected: tmux.ExpectedAdoptionPane) => tmux.AdoptionPaneLookup
   captureExpectedAdoptionPane?: (expected: tmux.ExpectedAdoptionPane) => tmux.ExactPaneCapture
   sessionLogDir?: string // injectable transcript dir (tests); defaults to the Claude Code path
@@ -1264,6 +1267,10 @@ export function createTailer(deps: TailerDeps): Tailer {
   // subprocess per row per second, a standing event-loop tax that grew with thread count.
   const paneDead = deps.paneDead ?? tmux.paneDeadCached
   const capturePane = deps.capturePane ?? tmux.capturePane
+  // Batched sibling of capturePane, for the per-tick prefetch below. Absent (narrow test fixtures that
+  // inject only `capturePane`) ⇒ no batching, and every sniff falls back to the injected per-slug fake —
+  // byte-identical to the pre-batch behavior.
+  const capturePanes = deps.capturePanes ?? (deps.capturePane ? undefined : tmux.capturePanes)
   const findExpectedAdoptionPane = deps.findExpectedAdoptionPane ?? tmux.findExpectedAdoptionPane
   const captureExpectedAdoptionPane = deps.captureExpectedAdoptionPane ?? tmux.captureExpectedAdoptionPane
   const logDir = deps.sessionLogDir ?? defaultLogDir(deps.project)
@@ -1283,9 +1290,47 @@ export function createTailer(deps: TailerDeps): Tailer {
     return current.kind !== "found" || current.pane.dead
   }
 
+  // ---- Per-tick pane-capture prefetch --------------------------------------------------------------
+  // The pane sniff is the tick's dominant cost: `capture-pane` is one tmux subprocess, ~105ms measured
+  // on the maintainer's machine, and the tick asks for it once per quiet in-flight thread. Twenty-five
+  // threads = 2.6-6.2s of SYNCHRONOUS event-loop blocking per 1s tick, which is what made every RPC
+  // reply and board delta land seconds late (measured 2026-07-23: `[probe] tick 3950ms captures=25
+  // captureMs=3369`; /health p50 2219ms with the server otherwise idle).
+  //
+  // So: the FIRST sniff of a tick captures EVERY registered pane in one batched tmux invocation
+  // (tmux.capturePanes) and the rest of the tick serves from that map. Prefetching panes no row ends up
+  // asking for is free — the subprocess spawn dominates, not the bytes — while asking per row is not.
+  // Freshness is unchanged: every capture in a tick already described the same instant.
+  // Reset at the top of each tick; never consulted outside one.
+  let paneTextCache: Map<string, string> | null = null
+  let paneTextPrefetched = false
+
+  function prefetchPaneText(): void {
+    paneTextPrefetched = true
+    if (!capturePanes) return
+    // Only slugs tmux actually knows: a command list ABORTS at its first bad target, so asking for a
+    // vanished session would truncate every capture after it. The liveness map is already batched and
+    // cached (one list-panes -a per tick), so this filter is free. A dead-but-present pane is kept —
+    // remain-on-exit panes still hold the boot-failure text captureStall exists to read.
+    const slugs: string[] = []
+    for (const row of deps.storage.allSessions()) {
+      if (row.codex_runtime === "app-server") continue // headless: no pane to capture
+      if (adoptionBinding(row).kind !== "unbound") continue // adopted rows capture by exact pane tuple
+      if (!tmux.paneSnapshotCached(row.slug)) continue
+      slugs.push(row.slug)
+    }
+    if (slugs.length > 1) paneTextCache = capturePanes(slugs)
+  }
+
   function capturePaneForRow(row: SessionRow): string {
     const binding = adoptionBinding(row)
-    if (binding.kind === "unbound") return capturePane(row.slug)
+    if (binding.kind === "unbound") {
+      if (!paneTextPrefetched) prefetchPaneText()
+      const cached = paneTextCache?.get(row.slug)
+      // A miss (batch aborted before this slug, or the session appeared mid-tick) falls back to the
+      // single capture — correctness never depends on the prefetch landing.
+      return cached ?? capturePane(row.slug)
+    }
     if (binding.kind === "conflict") return ""
     const captured = captureExpectedAdoptionPane(binding.claim)
     return captured.kind === "captured" ? captured.text : ""
@@ -1775,6 +1820,9 @@ export function createTailer(deps: TailerDeps): Tailer {
     // /ws transcript producer at the end so it pushes only for genuinely-changed threads.
     const transcriptDirty: string[] = []
     const nowMs = now()
+    // One batched pane capture per tick, filled lazily on the first sniff (see prefetchPaneText).
+    paneTextCache = null
+    paneTextPrefetched = false
     for (const row of deps.storage.allSessions()) {
       // Per-row backend + the DISCOVERED transcript stem. Both backends decouple the transcript id from
       // the pinned session_id, via DIFFERENT columns (only one is ever set): codex pins its rollout id on
@@ -2055,6 +2103,32 @@ export function createTailer(deps: TailerDeps): Tailer {
     deps.bus.publish({ type: "notify", slug: row.slug, kind: "exited", title: row.slug, body: "Agent session ended" })
   }
 
+  // The tick runs SYNCHRONOUSLY on the event loop, so its duration is a hard floor on every RPC reply,
+  // board delta and transcript push the server owes a client while it runs. When it exceeds its own poll
+  // period the server is, by definition, permanently behind — and the whole UI reads as laggy (the
+  // 2026-07-23 report: "I mark something as done and the sidebar won't update for a number of seconds").
+  // That regression is invisible without a signal, so say it once per occurrence and name the board size.
+  // Silent on a healthy board — this must never become log noise.
+  let overBudgetTicks = 0
+  function tickWithBudget(): void {
+    const started = performance.now()
+    try {
+      tick()
+    } finally {
+      const elapsed = performance.now() - started
+      if (elapsed > POLL_MS) {
+        overBudgetTicks++
+        // Log the first, then decimate: a saturated server must not spend its remaining budget logging.
+        if (overBudgetTicks === 1 || overBudgetTicks % 30 === 0) {
+          console.error(
+            `[fray-ui] tailer tick took ${Math.round(elapsed)}ms (poll ${POLL_MS}ms, ${states.size} sessions) — ` +
+            `the event loop is blocked for that long, so RPCs and board pushes are delayed (occurrence ${overBudgetTicks})`,
+          )
+        }
+      }
+    }
+  }
+
   function registeredStateIsCurrent(state: TailState): boolean {
     const current = deps.storage.getSession(state.slug)
     return Boolean(
@@ -2098,7 +2172,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     start() {
       if (timer) return
       tick() // derive current state immediately (also restores state after a server restart)
-      timer = setInterval(tick, POLL_MS)
+      timer = setInterval(tickWithBudget, POLL_MS)
       timer.unref?.()
     },
     stop() {

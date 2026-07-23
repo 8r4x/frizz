@@ -5,15 +5,27 @@
 // which boots the stack and calls this. Kept in-tree because "the board is slow" recurs and reproducing
 // it needs a populated board.
 //
-//   node scripts/seed-steer.mjs <tempHome> <tmuxSocket> <projectDir> [count=25]
-import { mkdirSync, writeFileSync, readdirSync } from "node:fs"
+//   node scripts/seed-steer.mjs <tempHome> <tmuxSocket> <projectDir> [count=25] [inFlight=0]
+import { mkdirSync, writeFileSync, readdirSync, realpathSync } from "node:fs"
 import { join } from "node:path"
 import { execFileSync } from "node:child_process"
 
-const [home, socket, projectDir, countArg] = process.argv.slice(2)
+const [home, socket, projectDirArg, countArg, inFlightArg] = process.argv.slice(2)
+// The server resolves its project dir through realpath, so on macOS `/tmp/x` becomes `/private/tmp/x`
+// and its Claude log dir is `-private-tmp-x`. Seeding under the un-resolved spelling put every fixture
+// transcript somewhere the tailer never looks: each row read as noTranscript, which degrades to the
+// "Stalled"/exited affordance AND makes the pane sniff fire on every tick (the bootWedge branch). The
+// board then looked like 25 boot-failed threads rather than 25 working ones.
+const projectDir = projectDirArg ? realpathSync(projectDirArg) : projectDirArg
 const count = Number(countArg ?? 25)
+// How many of the seeded threads are left MID-TURN (a tool_use with no result, last activity long
+// enough ago to clear PERM_SNIFF_MS). That is the shape that costs: an at-rest thread is sniff-free,
+// while every quiet in-flight one is pane-captured on every tailer tick. A real operator board running
+// N agents that think/run-tools for tens of seconds looks exactly like this, so latency work has to be
+// measured against it — a board of resting threads hides the whole problem.
+const inFlight = Number(inFlightArg ?? 0)
 if (!home || !socket || !projectDir) {
-  console.error("usage: node seed-steer.mjs <tempHome> <tmuxSocket> <projectDir> [count]")
+  console.error("usage: node seed-steer.mjs <tempHome> <tmuxSocket> <projectDir> [count] [inFlight]")
   process.exit(1)
 }
 
@@ -42,11 +54,17 @@ for (let i = 0; i < count; i++) {
     rows.push({ type: "assistant", timestamp: ts(590 - k * 10), message: { id: `t${k}`, content: [{ type: "tool_use", name: "Read", input: { file_path: `/src/component-${k}.tsx` } }] } })
     rows.push({ type: "assistant", timestamp: ts(589 - k * 10), message: { id: `x${k}`, content: [{ type: "text", text: `Checked component ${k} — the spacing scale is consistent there.` }] } })
   }
-  rows.push({
-    type: "assistant",
-    timestamp: ts(20),
-    message: { id: "z", content: [{ type: "text", text: i === 0 ? "Done — the tiers now wrap cleanly at 420px and the CTA stays optically centered." : `Finished task ${i}.` }], stop_reason: "end_turn" },
-  })
+  if (i < inFlight) {
+    // Mid-turn: the last record is an unanswered tool_use, so the tailer derives turn="in-flight", and
+    // its timestamp is old enough that the perm-prompt sniff's quiet gate (PERM_SNIFF_MS) is satisfied.
+    rows.push({ type: "assistant", timestamp: ts(30), message: { id: "z", content: [{ type: "tool_use", name: "Bash", input: { command: "npm test" } }], stop_reason: "tool_use" } })
+  } else {
+    rows.push({
+      type: "assistant",
+      timestamp: ts(20),
+      message: { id: "z", content: [{ type: "text", text: i === 0 ? "Done — the tiers now wrap cleanly at 420px and the CTA stays optically centered." : `Finished task ${i}.` }], stop_reason: "end_turn" },
+    })
+  }
   writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), rows.map((r) => JSON.stringify(r)).join("\n") + "\n")
 
   try {
@@ -58,4 +76,4 @@ for (let i = 0; i < count; i++) {
   )
 }
 execFileSync("sqlite3", [db, sql.join("\n")], { stdio: "inherit" })
-console.log(JSON.stringify({ seeded: count, db, jsonlDir }))
+console.log(JSON.stringify({ seeded: count, inFlight, db, jsonlDir }))
