@@ -768,3 +768,89 @@ test("forgetSession: a fresh re-dispatch of the same slug (NEW session_id) is un
   assert.ok(tombs.has("old-sid"))
   assert.ok(!tombs.has("new-sid"), "the live session's id is never tombstoned")
 })
+
+// ── awaiting-wait confirmation (ported from origin/main during the 2026-07-23 reconcile) ────────────
+// The four session-guarded methods behind confirmAwaiting / wake-now. A confirmation binds one exact
+// (session_id, generation, fence identity); a re-dispatch or stale card can never write onto it.
+
+test("confirmAwaitingWait binds the fence identity and is session+generation guarded", () => {
+  const s = store()
+  s.upsertSession(row({ slug: "aw", session_id: "sid-aw", state: "open" }))
+  // Wrong session id fails closed.
+  assert.equal(
+    s.confirmAwaitingWait("aw", "stale-sid", 0, "fence-1", "2026-07-23T19:00:00.000Z", "2099-07-14T08:45:00.000Z"),
+    false,
+    "a stale session cannot confirm",
+  )
+  // Wrong generation fails closed.
+  assert.equal(
+    s.confirmAwaitingWait("aw", "sid-aw", 9, "fence-1", "2026-07-23T19:00:00.000Z", "2099-07-14T08:45:00.000Z"),
+    false,
+    "a superseded generation cannot confirm",
+  )
+  // Correct identity writes the fence id, the confirmation instant, and the canonical snooze target.
+  assert.equal(
+    s.confirmAwaitingWait("aw", "sid-aw", 0, "fence-1", "2026-07-23T19:00:00.000Z", "2099-07-14T08:45:00.000Z"),
+    true,
+  )
+  const saved = s.getSession("aw")!
+  assert.equal(saved.awaiting_fence_id, "fence-1")
+  assert.equal(saved.awaiting_confirmed_at, "2026-07-23T19:00:00.000Z")
+  assert.equal(saved.snoozed_until, "2099-07-14T08:45:00.000Z")
+})
+
+test("confirmAwaitingWait refuses an archived row", () => {
+  const s = store()
+  s.upsertSession(row({ slug: "aw2", session_id: "sid", state: "archived", archived: 1 }))
+  assert.equal(
+    s.confirmAwaitingWait("aw2", "sid", 0, "fence-1", "2026-07-23T19:00:00.000Z", null),
+    false,
+    "an archived thread's wait cannot be armed",
+  )
+})
+
+test("clearAwaitingWaitIfSession drops the confirmation on wake-now, session-guarded", () => {
+  const s = store()
+  s.upsertSession(row({ slug: "aw3", session_id: "sid", state: "open" }))
+  assert.equal(s.confirmAwaitingWait("aw3", "sid", 0, "f", "2026-07-23T19:00:00.000Z", "2099-07-14T08:45:00.000Z"), true)
+  // A stale session id clears nothing.
+  assert.equal(s.clearAwaitingWaitIfSession("aw3", "stale", 0), false)
+  assert.equal(s.getSession("aw3")?.awaiting_fence_id, "f", "the confirmation survives a stale clear")
+  // The owning session clears the fence id, the confirmation instant, and the snooze together.
+  assert.equal(s.clearAwaitingWaitIfSession("aw3", "sid", 0), true)
+  const saved = s.getSession("aw3")!
+  assert.equal(saved.awaiting_fence_id, null)
+  assert.equal(saved.awaiting_confirmed_at, null)
+  assert.equal(saved.snoozed_until, null)
+})
+
+test("clearAwaitingWaitIfCurrent clears only the exact fence id it was armed under", () => {
+  const s = store()
+  s.upsertSession(row({ slug: "aw4", session_id: "sid", state: "open" }))
+  assert.equal(s.confirmAwaitingWait("aw4", "sid", 0, "fence-A", "2026-07-23T19:00:00.000Z", null), true)
+  // A different fence id is a no-op — the armed wait is a newer generation's promise.
+  assert.equal(s.clearAwaitingWaitIfCurrent("aw4", "sid", "fence-B"), false)
+  assert.equal(s.getSession("aw4")?.awaiting_fence_id, "fence-A")
+  assert.equal(s.clearAwaitingWaitIfCurrent("aw4", "sid", "fence-A"), true)
+  assert.equal(s.getSession("aw4")?.awaiting_fence_id, null)
+})
+
+test("a re-dispatch (new session_id) drops an inherited awaiting confirmation on upsert", () => {
+  const s = store()
+  s.upsertSession(row({ slug: "aw5", session_id: "old-sid", state: "open" }))
+  assert.equal(s.confirmAwaitingWait("aw5", "old-sid", 0, "f", "2026-07-23T19:00:00.000Z", null), true)
+  // Re-dispatch reuses the slug with a new session id; the prior operator confirmation must not carry.
+  s.upsertSession(row({ slug: "aw5", session_id: "new-sid", state: "open" }))
+  const saved = s.getSession("aw5")!
+  assert.equal(saved.session_id, "new-sid")
+  assert.equal(saved.awaiting_fence_id, null, "the confirmation does not survive onto a new session")
+  assert.equal(saved.awaiting_confirmed_at, null)
+})
+
+test("setSnoozedUntilIfCurrent parks only the current session+generation and leaves the bump untouched", () => {
+  const s = store()
+  s.upsertSession(row({ slug: "aw6", session_id: "sid", state: "open" }))
+  assert.equal(s.setSnoozedUntilIfCurrent("aw6", "stale", 0, "2099-07-14T08:45:00.000Z"), false)
+  assert.equal(s.setSnoozedUntilIfCurrent("aw6", "sid", 0, "2099-07-14T08:45:00.000Z"), true)
+  assert.equal(s.getSession("aw6")?.snoozed_until, "2099-07-14T08:45:00.000Z")
+})

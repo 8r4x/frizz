@@ -108,7 +108,7 @@ function row(slug: string): SessionRow {
   }
 }
 
-function harness() {
+function harness(tailer: Tailer = noopTailer) {
   const dir = mkdtempSync(join(tmpdir(), "fray-router-permission-"))
   const project: Project = { dir, id: "router-permission", name: "test", label: "test", stateDir: dir, cwdSlug: "test" }
   const storage = createStorage(join(dir, "ui.db"))
@@ -137,7 +137,7 @@ function harness() {
   const settings = { permissionMode: "auto" } as unknown as Settings
   const permissionController = createPermissionController({
     storage,
-    tailer: noopTailer,
+    tailer,
     board,
     terminal: {
       isLive: () => false,
@@ -151,7 +151,7 @@ function harness() {
     project,
     storage,
     board,
-    tailer: noopTailer,
+    tailer,
     backendFor: () => backend,
     getSettings: () => settings,
     permissionController,
@@ -570,6 +570,95 @@ test("followUp leaves a snooze — and its armed bump — intact", async () => {
   assert.deepEqual(sent, ["also use a squash merge"], "the message still reaches the worker")
   assert.equal(h.storage.getSession(slug)?.snoozed_until, until, "the park survives the follow-up")
   assert.equal(h.storage.getSession(slug)?.snooze_prompt, bump, "and so does the bump it owes at that deadline")
+  h.storage.close()
+})
+
+// ── confirmAwaiting (ported from origin/main during the 2026-07-23 reconcile) ───────────────────────
+// A fence is a PROPOSAL; the operator confirms one exact generation. The RPC binds the tail's
+// lastActivityAt as the fence instant (local main's FenceView carries hints[] and no `.at`) and
+// canonicalizes the timer before it reaches the durable snooze column.
+function awaitingTailer(over: {
+  turn?: "idle" | "in-flight"
+  fence?: { kind: "done" | "awaiting"; hints: { kind: string; value: string }[] } | undefined
+  lastActivityAt?: string
+} = {}): Tailer {
+  const tele = {
+    turn: over.turn ?? "idle",
+    lastFence: "fence" in over ? over.fence : { kind: "awaiting", body: "", hints: [{ kind: "timer", value: "2099-07-14T08:45:00Z" }] },
+    lastActivityAt: over.lastActivityAt ?? "2026-07-23T19:30:00.000Z",
+  }
+  return { ...noopTailer, get: () => tele as never }
+}
+
+test("confirmAwaiting binds the current fence and writes a canonical snooze target", async () => {
+  const h = harness(awaitingTailer())
+  h.storage.upsertSession(row("aw-ok"))
+  h.storage.setState("aw-ok", "open")
+  await h.router.confirmAwaiting.handler({
+    input: {
+      slug: "aw-ok",
+      sessionId: "sid-aw-ok",
+      fenceAt: "2026-07-23T19:30:00.000Z",
+      hint: { kind: "timer", value: "2099-07-14T08:45:00Z" },
+    },
+  })
+  const saved = h.storage.getSession("aw-ok")!
+  assert.ok(saved.awaiting_fence_id, "a fence identity is written")
+  assert.ok(saved.awaiting_confirmed_at, "the confirmation instant is stamped")
+  // The fence hint's no-millis instant is canonicalized to the durable snooze grammar.
+  assert.equal(saved.snoozed_until, "2099-07-14T08:45:00.000Z")
+  h.storage.close()
+})
+
+test("confirmAwaiting fails closed on a stale session id", async () => {
+  const h = harness(awaitingTailer())
+  h.storage.upsertSession(row("aw-stale"))
+  h.storage.setState("aw-stale", "open")
+  await assert.rejects(
+    h.router.confirmAwaiting.handler({
+      input: { slug: "aw-stale", sessionId: "wrong-sid", fenceAt: "2026-07-23T19:30:00.000Z", hint: { kind: "timer", value: "2099-07-14T08:45:00Z" } },
+    }),
+    /replaced/,
+  )
+  h.storage.close()
+})
+
+test("confirmAwaiting rejects a fenceAt that no longer matches the tail", async () => {
+  const h = harness(awaitingTailer())
+  h.storage.upsertSession(row("aw-drift"))
+  h.storage.setState("aw-drift", "open")
+  await assert.rejects(
+    h.router.confirmAwaiting.handler({
+      input: { slug: "aw-drift", sessionId: "sid-aw-drift", fenceAt: "2020-01-01T00:00:00.000Z", hint: { kind: "timer", value: "2099-07-14T08:45:00Z" } },
+    }),
+    /changed before it could be confirmed/,
+  )
+  h.storage.close()
+})
+
+test("confirmAwaiting refuses a non-actionable hint (a human gate arms nothing)", async () => {
+  const h = harness(awaitingTailer({ fence: { kind: "awaiting", hints: [{ kind: "human", value: "Alice to approve" }] } }))
+  h.storage.upsertSession(row("aw-human"))
+  h.storage.setState("aw-human", "open")
+  await assert.rejects(
+    h.router.confirmAwaiting.handler({
+      input: { slug: "aw-human", sessionId: "sid-aw-human", fenceAt: "2026-07-23T19:30:00.000Z", hint: { kind: "human", value: "Alice to approve" } },
+    }),
+    /no longer current/,
+  )
+  h.storage.close()
+})
+
+test("confirmAwaiting refuses while the worker is mid-turn", async () => {
+  const h = harness(awaitingTailer({ turn: "in-flight" }))
+  h.storage.upsertSession(row("aw-busy"))
+  h.storage.setState("aw-busy", "open")
+  await assert.rejects(
+    h.router.confirmAwaiting.handler({
+      input: { slug: "aw-busy", sessionId: "sid-aw-busy", fenceAt: "2026-07-23T19:30:00.000Z", hint: { kind: "timer", value: "2099-07-14T08:45:00Z" } },
+    }),
+    /no longer current/,
+  )
   h.storage.close()
 })
 
