@@ -761,7 +761,12 @@ export const SetThreadPermissionInput = z.object({
 export type SetThreadPermissionInput = z.infer<typeof SetThreadPermissionInput>
 
 export const SetThreadPermissionResult = z.object({
-  effect: z.enum(["applied", "next-resume"]),
+  // "next-turn" is the Codex mid-turn answer: `thread/settings/update` ACCEPTS a sandbox change while a
+  // turn is running, but the running turn keeps the policy it started with (verified live — a turn that
+  // attempted a write after the flip to danger-full-access was still refused). So the change is real and
+  // durable, yet it does not reach work already executing. Distinct from "next-resume", which means
+  // nothing was applied to the live session at all.
+  effect: z.enum(["applied", "next-turn", "next-resume"]),
 })
 export type SetThreadPermissionResult = z.infer<typeof SetThreadPermissionResult>
 

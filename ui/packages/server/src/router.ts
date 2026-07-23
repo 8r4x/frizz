@@ -675,7 +675,9 @@ export function createRouter(ctx: AppContext) {
           if (bridge && bridge.binding(input.slug, permRow.session_id)) {
             try {
               const applied = await bridge.setSandbox({ threadSlug: input.slug, sessionId: permRow.session_id, sandbox })
-              if (applied.applied) return { effect: "applied" as const }
+              // A change made against a RUNNING turn is accepted and durable, but the running turn keeps
+              // the policy it started under — so say "next turn", never "applied to the live session".
+              if (applied.applied) return { effect: applied.turnInFlight ? "next-turn" as const : "applied" as const }
             } catch {
               // A bridge that cannot reach the app-server (or a thread it no longer holds) is not an
               // error the operator needs to see: the intent is already persisted and the next resume

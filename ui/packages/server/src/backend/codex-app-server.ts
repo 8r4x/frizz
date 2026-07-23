@@ -1443,6 +1443,14 @@ export interface CodexSandboxChangeResult {
   confirmedBy: "notification" | "already-current" | "unconfirmed"
   /** The approvalPolicy the server reported alongside the change; undefined on the other two paths. */
   approvalPolicy?: unknown
+  /**
+   * A turn was already in flight when the change was accepted. The app-server takes the update
+   * mid-turn — it does NOT reject it — but the running turn keeps the policy it started with:
+   * verified live that a turn which attempted a write AFTER the flip to danger-full-access was still
+   * refused, and reported the failure itself. So this is next-TURN, not next-resume, and the UI must
+   * say so rather than claim the change reached work already executing.
+   */
+  turnInFlight: boolean
 }
 
 interface CorrelatedFileItem extends FileChangeDisplaySnapshot {
@@ -2506,6 +2514,9 @@ export class CodexAppServerBridge {
         if (!binding) throw new Error("Codex app-server session disappeared during sandbox change")
       }
       const threadId = binding.codex_thread_id
+      // Sampled BEFORE the update: whether the operator's change was made against a running turn is
+      // what decides the wording, and the turn can end while we wait for the confirmation.
+      const turnInFlight = binding.current_turn_id !== null || this.pendingTurnStarts.has(turnKey(binding))
       const expectNotification = binding.sandbox !== input.sandbox
       const observedPromise = this.awaitSettingsUpdate(
         threadId,
@@ -2527,10 +2538,10 @@ export class CodexAppServerBridge {
             `Codex app-server reported sandbox ${String(observed.sandbox ?? "unknown")} after a request for ${input.sandbox}`,
           )
         }
-        return { applied: true, sandbox: input.sandbox, confirmedBy: "notification", approvalPolicy: observed.approvalPolicy }
+        return { applied: true, sandbox: input.sandbox, confirmedBy: "notification", approvalPolicy: observed.approvalPolicy, turnInFlight }
       }
-      if (!expectNotification) return { applied: true, sandbox: input.sandbox, confirmedBy: "already-current" }
-      return { applied: false, sandbox: input.sandbox, confirmedBy: "unconfirmed" }
+      if (!expectNotification) return { applied: true, sandbox: input.sandbox, confirmedBy: "already-current", turnInFlight }
+      return { applied: false, sandbox: input.sandbox, confirmedBy: "unconfirmed", turnInFlight }
     } finally {
       releaseOperation()
     }
