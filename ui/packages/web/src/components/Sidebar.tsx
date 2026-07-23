@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { useSnapshot } from "valtio"
-import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, FileText, Github, Hourglass, Timer } from "lucide-react"
+import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, FileText, Github, Hourglass, Loader2, RotateCcw, Timer } from "lucide-react"
 import type { AwaitingHint, BoardSnapshot, PlanView, ThreadView } from "@fray-ui/shared"
 import { store, openThread, scrollToQueueCard, pushSubAgentDrawer, pushPlanDrawer, type ConnectionState } from "../store.ts"
 import { useBoard, asThreads } from "../hooks.ts"
@@ -11,7 +11,8 @@ import { DispatchForm } from "./NewThreadModal.tsx"
 import { QuotaBar } from "./QuotaBar.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { ProviderMark } from "./ProviderMark.tsx"
-import { STATUS_CHIP } from "../lib/status.ts"
+import { STATUS_CHIP, canRetry } from "../lib/status.ts"
+import { retrySession } from "../lib/retrySession.ts"
 import { formatSnoozedUntil, formatSnoozeWake, formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
 import { activeSidebarSection, railRevealDelta, type SidebarSectionGeometry } from "../lib/sidebarScrollspy.ts"
 import type { ReactElement, ReactNode } from "react"
@@ -272,6 +273,10 @@ export const ThreadRow = memo(function ThreadRow({
   // A thread awaiting its OWN live sub-agent/Monitor is not Held and stays fully active.
   const held = !legacy && isHeld(t)
   const dimLabel = !legacy && titleIsProvisional(t)
+  // A STALLED row — the [!] indicator, i.e. the agent EXITED mid-turn — is the one row state with an
+  // obvious single next action, so it carries that verb inline instead of making you open the thread
+  // to find it. `canRetry` additionally excludes a foreign (read-only) session.
+  const canRestart = !legacy && sessionIndicatorKind(t) === "stalled" && canRetry(t)
   // Held rows collapse to a SINGLE LINE — no subtitle. The "what it's held for" detail (snooze/timer
   // wake time, human gate, review watch) lives ENTIRELY in the hourglass indicator's hover tooltip
   // (see sessionIndicatorFor), so a snooze and a timer-park read identically instead of sprouting two
@@ -350,6 +355,11 @@ export const ThreadRow = memo(function ThreadRow({
           <MarkAsButton slug={t.id} size="sm" />
         </div>
       )}
+      {/* ONE-CLICK RECOVERY on a stalled row. Hover-revealed and pinned to the row's right edge, over
+          the title's first line (it OVERLAYS rather than taking layout, so pointing at a row never
+          reflows its wrapped title). `group-focus-within` keeps it reachable from the keyboard: focus
+          the row button and the next Tab lands here. */}
+      {canRestart && <RowRetryButton slug={t.id} />}
       {/* RUNNING SUB-AGENT CHILD ROWS (maintainer 2026-07-09: render running sub-agents in the
           sidebar). One indented row per live child under its parent thread — spinner while running,
           faint when stale; click opens the sub-agent transcript drawer over the parent. Replaces the
@@ -357,6 +367,37 @@ export const ThreadRow = memo(function ThreadRow({
     </div>
   )
 })
+
+// The stalled row's recovery verb: a compact accent icon button that restarts the exited session in
+// ONE click, without opening the thread. Deliberately the SAME verb, icon, message and RPC path as the
+// thread header's Retry (lib/retrySession) — the row is just a faster door to it. Named "Retry", not
+// "Restart", because "restart" already means the fray control plane restarting itself
+// (RestartFrayButton) and the two must not blur.
+function RowRetryButton({ slug }: { slug: string }) {
+  const [busy, setBusy] = useState(false)
+  return (
+    <Tooltip label="Retry — resume this session where it left off">
+      <button
+        data-sidebar-retry={slug}
+        aria-label="Retry exited session"
+        disabled={busy}
+        // Keep DOM focus off the button on click so the reveal doesn't outlive the pointer, and stop
+        // the press from reaching the row (which would navigate to the thread as well as retry it).
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={(e) => {
+          e.stopPropagation()
+          setBusy(true)
+          retrySession(slug).finally(() => setBusy(false))
+        }}
+        // OPAQUE background on purpose: the button overlays the title's last words, so a translucent
+        // accent wash would let text bleed through it.
+        className="absolute right-1 top-0.5 hidden h-6 w-6 items-center justify-center rounded-md border border-accent/45 bg-panel-2 text-accent shadow-sm shadow-black/30 outline-none transition-colors group-hover:flex group-focus-within:flex hover:border-accent/70 hover:bg-elevated disabled:opacity-50"
+      >
+        {busy ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
+      </button>
+    </Tooltip>
+  )
+}
 
 function SubAgentRows({ t }: { t: ThreadView }) {
   // id is the drill-in drawer's RPC handle — a child without one (old snapshot shape) can't open, so
