@@ -198,7 +198,8 @@ const WRITE_PROMPT = [
     const midFlip = await bridge.setSandbox({ threadSlug: slug, sessionId, sandbox: "danger-full-access" })
     console.log("  MID-TURN setSandbox ->", JSON.stringify(midFlip))
     check("mid-turn update is accepted and confirmed", midFlip.applied === true && midFlip.confirmedBy === "notification", JSON.stringify(midFlip))
-    await waitTurnClear("mid-turn flip")
+    // Generous: this turn deliberately contains a 30s sleep, and the model's own latency rides on top.
+    await waitTurnClear("mid-turn flip", 240_000)
     const midAExists = existsSync(midA), midBExists = existsSync(midB)
     console.log(`  step 1 (attempted under read-only) wrote=${midAExists}   step 3 (attempted after the flip) wrote=${midBExists}`)
     // An absent file alone would be weak evidence — the model could simply have given up after step 1.
@@ -219,7 +220,7 @@ const WRITE_PROMPT = [
     check("a new turn still starts after a mid-turn change", Boolean(afterMid.turnId), afterMid.turnId)
     await waitTurnClear("post-mid-turn")
 
-    console.log("\n=== 8. COLD RESUME carries the operator's persisted sandbox ===")
+    console.log("\n=== 8. COLD RESUME carries the operator's intent, even if the registry is reverted ===")
     operatorSandbox = "read-only"
     await bridge.setSandbox({ threadSlug: slug, sessionId, sandbox: "read-only" })
     check("reset to read-only before the cold-resume probe", observedSandbox() === "read-only", `observed=${String(observedSandbox())}`)
@@ -227,7 +228,14 @@ const WRITE_PROMPT = [
     // app-server so the next connect gets a brand-new process that has never loaded this thread. Only
     // then is the resume genuinely COLD — closing the connection object is not enough, the daemon would
     // still hold the thread and silently ignore the override (finding 5).
-    operatorSandbox = "danger-full-access"
+    await bridge.setSandbox({ threadSlug: slug, sessionId, sandbox: "danger-full-access" })
+    // THE HOSTILE CASE. fray's registry is NOT a reliable home for a codex row's sandbox intent: the
+    // tailer overwrites `sessions.permission_mode` with the mode the ROLLOUT reports, and a change that
+    // only takes effect next turn is still described by the old policy. Observed live on 2026-07-23 —
+    // a confirmed mid-turn change to `plan` was reverted to `default` in the registry seconds later.
+    // Simulate exactly that by pointing sandboxFor back at the OLD value, and require the cold resume
+    // to carry the operator's change anyway.
+    operatorSandbox = "read-only"
     const victim = spawnedPids[spawnedPids.length - 1]
     console.log("  SIGKILLing app-server pid", victim, "to force a cold resume")
     try { process.kill(victim, "SIGKILL") } catch {}
@@ -236,9 +244,9 @@ const WRITE_PROMPT = [
     const resumed = await bridge.resumeOwnedSession(slug, sessionId)
     console.log("  resumed binding sandbox (read back off the thread/resume response):", resumed.sandbox)
     check(
-      "cold resume applied the persisted intent",
+      "cold resume applied the operator's intent, not the reverted registry value",
       resumed.sandbox === "danger-full-access",
-      `observed=${String(resumed.sandbox)}`,
+      `observed=${String(resumed.sandbox)} (registry was lying with read-only)`,
     )
 
     console.log(`\n==== LIVE SANDBOX HARNESS ${failures === 0 ? "OK" : `FAILED (${failures})`} ====`)

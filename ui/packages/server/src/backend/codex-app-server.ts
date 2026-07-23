@@ -678,6 +678,20 @@ interface BindingRow {
    * than assume a no-op.
    */
   sandbox: string | null
+  /**
+   * The operator's last EXPLICIT sandbox intent for this thread, as issued through fray. Distinct from
+   * `sandbox` (what the server is believed to hold): this one is forward-looking and is what every cold
+   * `thread/resume` carries.
+   *
+   * It exists because fray's registry cannot be trusted to hold that intent for a codex row. The tailer
+   * writes the ROLLOUT-OBSERVED mode back over `sessions.permission_mode` whenever a permission record
+   * lands (tailer.ts, setObservedPermissionIfCurrent) — and since a mid-turn change only takes effect on
+   * the NEXT turn, the very next record still describes the OLD policy and reverts the row. Observed live
+   * on 2026-07-23: a mid-turn change to `plan` was confirmed by the app-server and cached here as
+   * `read-only`, while `sessions.permission_mode` went straight back to `default` seconds later. Reading
+   * the intent off that row would have made the next cold resume silently undo the operator's change.
+   */
+  intended_sandbox: string | null
 }
 
 const BindingRowSchema = z.object({
@@ -699,6 +713,7 @@ const BindingRowSchema = z.object({
   // Bounded string rather than an enum: a value this Fray does not recognise (a newer sandbox mode
   // written by a later build) must degrade to "unknown", never poison the row as corrupt.
   sandbox: z.string().max(64).nullable(),
+  intended_sandbox: z.string().max(64).nullable(),
 }).strict()
 const BridgeMetaRowSchema = z.object({
   singleton: z.literal(1),
@@ -1558,7 +1573,8 @@ export class CodexAppServerBridge {
           updated_at            TEXT NOT NULL,
           auto_resumed_turn_id  TEXT,
           auto_resume_count     INTEGER NOT NULL DEFAULT 0,
-          sandbox               TEXT
+          sandbox               TEXT,
+          intended_sandbox      TEXT
         );
         CREATE INDEX IF NOT EXISTS codex_app_server_session_thread
           ON codex_app_server_session (codex_thread_id, state);
@@ -1592,12 +1608,13 @@ export class CodexAppServerBridge {
     addColumn("codex_app_server_session", "auto_resumed_turn_id", "TEXT")
     addColumn("codex_app_server_session", "auto_resume_count", "INTEGER NOT NULL DEFAULT 0")
     addColumn("codex_app_server_session", "sandbox", "TEXT")
+    addColumn("codex_app_server_session", "intended_sandbox", "TEXT")
 
     const requiredMeta = ["singleton", "connection_epoch", "capability_revision", "protocol_fingerprint", "daemon_generation"]
     const requiredSession = [
       "fray_session_id", "thread_slug", "codex_thread_id", "codex_session_id", "session_epoch",
       "capability_revision", "connection_epoch", "current_turn_id", "cwd", "ephemeral", "state",
-      "created_at", "updated_at", "auto_resumed_turn_id", "auto_resume_count", "sandbox",
+      "created_at", "updated_at", "auto_resumed_turn_id", "auto_resume_count", "sandbox", "intended_sandbox",
     ]
     if (requiredMeta.some((column) => !columns("codex_app_server_meta").has(column)) ||
       requiredSession.some((column) => !columns("codex_app_server_session").has(column))) {
@@ -1669,8 +1686,8 @@ export class CodexAppServerBridge {
         INSERT INTO codex_app_server_session (
           fray_session_id, thread_slug, codex_thread_id, codex_session_id,
           session_epoch, capability_revision, connection_epoch, current_turn_id,
-          cwd, ephemeral, state, created_at, updated_at, sandbox
-        ) VALUES (?, ?, ?, ?, 1, ?, ?, NULL, ?, ?, 'active', ?, ?, ?)
+          cwd, ephemeral, state, created_at, updated_at, sandbox, intended_sandbox
+        ) VALUES (?, ?, ?, ?, 1, ?, ?, NULL, ?, ?, 'active', ?, ?, ?, ?)
       `).run(
         input.sessionId,
         input.threadSlug,
@@ -1682,6 +1699,7 @@ export class CodexAppServerBridge {
         ephemeral ? 1 : 0,
         at,
         at,
+        startedSandbox,
         startedSandbox,
       )
       return bindingFromRow(this.bindingForScope(input.threadSlug, input.sessionId)!)
@@ -1745,13 +1763,16 @@ export class CodexAppServerBridge {
         throw new Error("Codex app-server thread slug, session id, or rollout is already bound")
       }
       const connection = await this.ensureConnected()
+      // A legacy tmux row's sandbox is whatever the CLI was launched with; fray's registry is the
+      // operator's stated intent, so adoption is the moment the two are unified.
+      const adoptionOverride = this.resumeSandboxOverride({
+        thread_slug: input.threadSlug, fray_session_id: input.sessionId, sandbox: null, intended_sandbox: null,
+      })
       const rawResponse = await connection.request("thread/resume", {
         threadId: input.codexThreadId,
         excludeTurns: true,
         approvalsReviewer: "user",
-        // A legacy tmux row's sandbox is whatever the CLI was launched with; fray's registry is the
-        // operator's stated intent, so adoption is the moment the two are unified.
-        ...this.resumeSandboxOverride({ thread_slug: input.threadSlug, fray_session_id: input.sessionId, sandbox: null }),
+        ...adoptionOverride,
       })
       const response = ThreadResponse.parse(rawResponse)
       if (response.thread.id !== input.codexThreadId || response.thread.ephemeral) {
@@ -1762,8 +1783,8 @@ export class CodexAppServerBridge {
         INSERT INTO codex_app_server_session (
           fray_session_id, thread_slug, codex_thread_id, codex_session_id,
           session_epoch, capability_revision, connection_epoch, current_turn_id,
-          cwd, ephemeral, state, created_at, updated_at, sandbox
-        ) VALUES (?, ?, ?, ?, 1, ?, ?, NULL, ?, 0, 'active', ?, ?, ?)
+          cwd, ephemeral, state, created_at, updated_at, sandbox, intended_sandbox
+        ) VALUES (?, ?, ?, ?, 1, ?, ?, NULL, ?, 0, 'active', ?, ?, ?, ?)
       `).run(
         input.sessionId,
         input.threadSlug,
@@ -1775,6 +1796,7 @@ export class CodexAppServerBridge {
         at,
         at,
         effectiveResumeSandbox(rawResponse) ?? null,
+        adoptionOverride.sandbox ?? null,
       )
       return bindingFromRow(this.bindingForScope(input.threadSlug, input.sessionId)!)
     } finally {
@@ -2468,9 +2490,14 @@ export class CodexAppServerBridge {
    * policy off the response instead of assuming this took.
    */
   private resumeSandboxOverride(
-    row: Pick<BindingRow, "thread_slug" | "fray_session_id" | "sandbox">,
+    row: Pick<BindingRow, "thread_slug" | "fray_session_id" | "sandbox" | "intended_sandbox">,
   ): { sandbox?: CodexSandboxMode; approvalPolicy?: string } {
-    const intent = this.options.sandboxFor?.(row.thread_slug, row.fray_session_id)
+    // Order matters. `intended_sandbox` wins because it is the only record of the operator's intent
+    // that the tailer's observed-permission writeback cannot revert (see the field's own note).
+    // `sandboxFor` covers the threads this bridge has no intent for — a legacy row being adopted, or a
+    // binding written before this column existed. The observed cache is the last resort.
+    const intent = (isCodexSandboxMode(row.intended_sandbox) ? row.intended_sandbox : undefined)
+      ?? this.options.sandboxFor?.(row.thread_slug, row.fray_session_id)
       ?? (isCodexSandboxMode(row.sandbox) ? row.sandbox : undefined)
     if (!intent) return {}
     return { sandbox: intent, approvalPolicy: CODEX_RESUME_APPROVAL_POLICY }
@@ -2514,6 +2541,11 @@ export class CodexAppServerBridge {
         if (!binding) throw new Error("Codex app-server session disappeared during sandbox change")
       }
       const threadId = binding.codex_thread_id
+      // Record the INTENT before the wire call, and independently of whether it lands. Even a change
+      // the app-server never confirms must survive to the next cold resume — that is the whole promise
+      // behind "saved for the next resume", and fray's own registry cannot hold it for a codex row.
+      this.db.prepare("UPDATE codex_app_server_session SET intended_sandbox = ?, updated_at = ? WHERE fray_session_id = ? AND thread_slug = ?")
+        .run(input.sandbox, this.now().toISOString(), input.sessionId, input.threadSlug)
       // Sampled BEFORE the update: whether the operator's change was made against a running turn is
       // what decides the wording, and the turn can end while we wait for the confirmation.
       const turnInFlight = binding.current_turn_id !== null || this.pendingTurnStarts.has(turnKey(binding))
