@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync, spawn as spawnChild } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { tmuxSessionName } from "@fray-ui/shared"
@@ -195,6 +195,48 @@ test("crossSocketLiveOwner treats absent compatible tmux servers as exited, not 
   setSocket(`fray-cross-socket-active-${process.pid}`)
   try {
     assert.equal(crossSocketLiveOwner(slug, { id: projectId, dir: process.cwd() }), "absent")
+  } finally {
+    setSocket(original)
+  }
+})
+
+// tmux reports "there is no server on this socket" in several dialects. A socket file that was never
+// created fails at connect() with ENOENT — `error connecting to <path> (No such file or directory)` —
+// which reads nothing like the "no server running" / "no sessions" a stopped-or-empty server emits.
+//
+// Every one of them is POSITIVE evidence that no pane exists, and the adoption lookups must say so:
+// `unknown` is fail-closed, so a lookup that can never prove absence permanently wedges recovery.
+// abandonAdoptionAttempt refuses to release the durable claim or delete the attempt's files until the
+// pane is proven gone, and reconcileAdoptionClaims returns "recovery-in-progress" forever — so on a
+// host whose fray socket has not been created yet (fresh boot, or after `tmux kill-server`) a failed
+// adoption used to leak its claim plus its `.fray/threads/<sessionId>/` scratchpad, and the slug
+// stayed permanently un-adoptable. Regression guard for that exact ENOENT dialect, driven through the
+// real tmux binary rather than a stubbed stderr string.
+test("a socket that was never created is proven pane absence, never an unsafe unknown", { skip: !tmuxAvailable }, () => {
+  const original = socketName()
+  const missing = `fray-never-created-${process.pid}-${Date.now()}`
+  assert.equal(
+    existsSync(join(tmpdir(), `tmux-${process.getuid?.() ?? 0}`, missing)),
+    false,
+    "this test is only meaningful while the socket path genuinely does not exist",
+  )
+  setSocket(missing)
+  try {
+    // The three locators destructive adoption recovery depends on: by slug, by attempt token, and by
+    // the exact pane tuple. None of them may hedge when tmux has already answered definitively.
+    assert.equal(lookupAdoptionPane(`absent-slug-${process.pid}`).kind, "absent")
+    assert.equal(findAdoptionPane(randomUUID()).kind, "absent")
+    assert.equal(findPaneIdentity({ paneId: "%1", panePid: 1000, sessionCreated: 2000 }).kind, "absent")
+    // The composite locator agrees, so a finalized owner on a never-started server is releasable too.
+    assert.equal(
+      findExpectedAdoptionPane({
+        attempt_token: randomUUID(),
+        pane_id: "%1",
+        pane_pid: 1000,
+        session_created: 2000,
+      }).kind,
+      "absent",
+    )
   } finally {
     setSocket(original)
   }
