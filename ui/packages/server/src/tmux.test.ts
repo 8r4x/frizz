@@ -573,8 +573,12 @@ test("an exact adopted pane replaced during settle receives no delayed key and s
     const moduleUrl = new URL("./tmux.ts", import.meta.url).href
     let output = ""
     const child = spawnChild(process.execPath, ["--input-type=module", "-e", `
-      import { setSocket, sendTextToExpectedAdoptionPane } from ${JSON.stringify(moduleUrl)};
+      import { setSocket, setInputSettleSeconds, sendTextToExpectedAdoptionPane } from ${JSON.stringify(moduleUrl)};
       setSocket(${JSON.stringify(testSocket)});
+      // The test must replace the pane DURING the settle. Production's 250ms cannot reliably contain a
+      // tmux kill plus a respawn on a loaded machine, so widen the window — the logic under test (the
+      // post-settle identity RE-CHECK) is unchanged, only the wall clock it races.
+      setInputSettleSeconds(5);
       process.stdout.write("FRAY_EXACT_SETTLE_READY\\n");
       const result = sendTextToExpectedAdoptionPane(
         ${JSON.stringify(expected)},
@@ -648,8 +652,12 @@ test("SIGKILL during exact atomic text-and-key transport cannot strand its priva
     }
     const moduleUrl = new URL("./tmux.ts", import.meta.url).href
     const child = spawnChild(process.execPath, ["--input-type=module", "-e", `
-      import { setSocket, sendTextToExpectedAdoptionPane } from ${JSON.stringify(moduleUrl)};
+      import { setSocket, setInputSettleSeconds, sendTextToExpectedAdoptionPane } from ${JSON.stringify(moduleUrl)};
       setSocket(${JSON.stringify(testSocket)});
+      // The test must replace the pane DURING the settle. Production's 250ms cannot reliably contain a
+      // tmux kill plus a respawn on a loaded machine, so widen the window — the logic under test (the
+      // post-settle identity RE-CHECK) is unchanged, only the wall clock it races.
+      setInputSettleSeconds(5);
       process.stdout.write("FRAY_SEND_READY\\n");
       sendTextToExpectedAdoptionPane(
         ${JSON.stringify(expected)},

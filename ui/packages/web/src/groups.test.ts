@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { ThreadView } from "@fray-ui/shared"
-import { needsAction, queued, orderQueue, partitionActive, sectionOf, sectionThreads, isHeld, sessionIndicatorKind, offersInlineRetry, titleIsProvisional, displayTitle, lastActiveLabelAt, SPINNING_UP_TITLE, UNTITLED_THREAD_TITLE } from "./groups.ts"
+import { needsAction, queued, orderQueue, partitionActive, sectionOf, sectionThreads, isHeld, sessionIndicatorKind, offersRetry, titleIsProvisional, displayTitle, lastActiveLabelAt, SPINNING_UP_TITLE, UNTITLED_THREAD_TITLE } from "./groups.ts"
 
 // Minimal ThreadView fixture — the same shape board-delta.test.ts uses, defaulting to a live/active
 // thread; each case overrides only the fields under test.
@@ -166,23 +166,23 @@ const RETRY_CONTRACT: { name: string; over: Partial<ThreadView>; kind: string; r
   { name: "registry lost the row (runtime none — not reattachable)", over: { needsYou: true, crashed: true, runtime: "none" }, kind: "rest", retry: false },
 ]
 
-test("offersInlineRetry: the sidebar/queue retry gate is exactly the stalled (process-exited) state", () => {
+test("offersRetry: the sidebar/queue retry gate is exactly the stalled (process-exited) state", () => {
   for (const { name, over, kind, retry } of RETRY_CONTRACT) {
     const t = thread({ kind: "session", ...over })
     assert.equal(sessionIndicatorKind(t), kind, `${name}: sidebar indicator`)
-    assert.equal(offersInlineRetry(t), retry, `${name}: inline retry`)
+    assert.equal(offersRetry(t), retry, `${name}: inline retry`)
   }
-  assert.equal(offersInlineRetry(thread({ kind: "legacy", crashed: true, runtime: "exited" })), false, "legacy: no provider runtime")
+  assert.equal(offersRetry(thread({ kind: "legacy", crashed: true, runtime: "exited" })), false, "legacy: no provider runtime")
 })
 
 test("the queue card and the sidebar row can never disagree: retry ⇔ the stalled [!] mark", () => {
-  // The ONE invariant behind the bug. Both surfaces call offersInlineRetry, and offersInlineRetry IS
+  // The ONE invariant behind the bug. Both surfaces call offersRetry, and offersRetry IS
   // `sessionIndicatorKind === "stalled"` — so a card showing Retry always has a yellow-[!] rail row,
   // and a rail row showing [!] always has a card Retry. Re-widening the gate breaks this test first.
   for (const { name, over } of RETRY_CONTRACT) {
     const t = thread({ kind: "session", ...over })
     assert.equal(
-      offersInlineRetry(t),
+      offersRetry(t),
       sessionIndicatorKind(t) === "stalled",
       `${name}: the queue card's Retry and the sidebar's stalled mark must be the same decision`,
     )

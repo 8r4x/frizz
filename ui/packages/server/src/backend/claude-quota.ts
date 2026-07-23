@@ -1,5 +1,5 @@
 import { join } from "node:path"
-import { homedir } from "node:os"
+import { homedir, platform } from "node:os"
 import { createHash } from "node:crypto"
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { execFile } from "node:child_process"
@@ -8,16 +8,34 @@ import type { ProviderQuota, QuotaWindow } from "@fray-ui/shared"
 
 const execFileAsync = promisify(execFile)
 
-// Claude Code's non-interactive `/usage` command owns the unstable parts of reading subscription
-// quota: secure-storage variants, OAuth refresh/rotation, endpoint retries, and its seeded fallback
-// from recent API headers. Fray consumes that public CLI surface instead of impersonating an old
-// Claude Code build with a raw access token.
+// Subscription quota is read from the OAuth usage endpoint FIRST — the same call Claude Code's own
+// /usage command makes — authorized by the credential already on this machine (the on-disk
+// ~/.claude/.credentials.json, or the macOS login Keychain). That is one ~200ms HTTPS GET, immune to
+// local CPU load. The `claude -p /usage` CLI is only the FALLBACK for what the raw token cannot do:
+// it owns OAuth refresh/rotation, so it covers the no-token and expired-token (401/403) cases.
+// Spawning a whole Claude Code process was previously the primary path, and under heavy machine load
+// (worker fleets pushing load-80+) it reliably exceeded any sane exec timeout — every refresh died
+// and the chip served the same stale reading for hours.
+//
+//   GET https://api.anthropic.com/api/oauth/usage
+//     Authorization: Bearer <oauth access token>
+//     anthropic-beta: oauth-2025-04-20
+//     User-Agent: claude-code/<version>      ← REQUIRED; without it the endpoint 429s aggressively
+//   → { five_hour:{utilization 0..100, reset_at ISO}, seven_day:{…}, seven_day_opus, seven_day_sonnet }
+const USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+const OAUTH_BETA = "oauth-2025-04-20"
+const USER_AGENT = "claude-code/2.0.0" // gates by product, not exact version
+const ENDPOINT_TIMEOUT_MS = 5000
 const OK_TTL_MS = 3 * 60_000
 const FAIL_TTL_MS = 10_000
 const STALE_MAX_AGE_MS = 24 * 60 * 60_000
-// The lock must outlive the 12s CLI timeout, and followers must be willing to wait through that same
-// bound. Otherwise a merely slow first process would make every other Fray window give up early.
-const LOCK_STALE_MS = 20_000
+// The CLI fallback boots a full Claude Code process; under load-80 a cold boot alone can blow well
+// past 12s, and a too-tight bound here is indistinguishable from a broken credential.
+const CLI_TIMEOUT_MS = 30_000
+// The lock must outlive the slowest refresh (the 30s CLI fallback), and followers must be willing to
+// wait through most of that bound. Otherwise a merely slow first process would make every other Fray
+// window give up early.
+const LOCK_STALE_MS = 40_000
 const LOCK_WAIT_MS = 15_000
 const LOCK_POLL_MS = 50
 
@@ -42,31 +60,108 @@ export function tokenFromCredentialsJson(raw: string): string | undefined {
   return typeof token === "string" && token ? token : undefined
 }
 
-// Map one usage window from the endpoint (utilization 0..100, reset_at ISO) → a QuotaWindow.
+// Keychain path for a default macOS install (no .credentials.json on disk; `security -w` prints the
+// same blob shape as the file). Defensive: darwin-only, short timeout, swallow any error → undefined.
+// ASYNC on purpose: a Keychain ACL prompt can block until the timeout, and a synchronous exec would
+// freeze the whole server event loop for that window.
+async function readKeychainToken(): Promise<string | undefined> {
+  if (platform() !== "darwin") return undefined
+  try {
+    const { stdout } = await execFileAsync("security", ["find-generic-password", "-s", "Claude Code-credentials", "-w"], {
+      encoding: "utf8",
+      timeout: 4000,
+    })
+    return tokenFromCredentialsJson(String(stdout).trim())
+  } catch {
+    return undefined
+  }
+}
+
+// The OAuth access token, tried in the order Claude Code itself resolves it: the on-disk
+// .credentials.json first (Linux, and macOS installs that opted out of the Keychain), then the macOS
+// login Keychain. Returns undefined only when NEITHER source yields a token.
+async function readAccessToken(configDir: string): Promise<string | undefined> {
+  try {
+    const fromFile = tokenFromCredentialsJson(await readFile(join(configDir, ".credentials.json"), "utf8"))
+    if (fromFile) return fromFile
+  } catch {
+    // Missing/unreadable file is expected on a Keychain-backed macOS install — fall through.
+  }
+  return readKeychainToken()
+}
+
+function isoToUnix(value: unknown): number | undefined {
+  const ms = typeof value === "string" ? Date.parse(value) : NaN
+  return Number.isFinite(ms) ? Math.round(ms / 1000) : undefined
+}
+
+function slugify(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+}
+
+// Map one legacy usage window from the endpoint (utilization 0..100, reset_at/resets_at ISO).
 function toWindow(raw: unknown, key: string, label: string): QuotaWindow | undefined {
   if (!raw || typeof raw !== "object") return undefined
   const w = raw as Record<string, unknown>
   const util = typeof w.utilization === "number" && Number.isFinite(w.utilization) ? w.utilization : undefined
   if (util === undefined) return undefined
-  const resetIso = typeof w.reset_at === "string" ? w.reset_at : undefined
-  const resetMs = resetIso ? Date.parse(resetIso) : NaN
-  const resetsAt = Number.isFinite(resetMs) ? Math.round(resetMs / 1000) : undefined
-  return { key, label, usedPercent: util, resetsAt }
+  const resetsAt = isoToUnix(w.resets_at ?? w.reset_at)
+  return { key, label, usedPercent: util, ...(resetsAt === undefined ? {} : { resetsAt }) }
+}
+
+// Map one modern `limits[]` entry: { kind, group, percent, resets_at, scope: { model: { display_name } } }.
+// A scoped weekly ("weekly_scoped" with a model name — e.g. the Fable weekly cap on a Fable plan) keeps
+// its model identity so the chip's tightest-window pick can name the cap that actually binds.
+function windowFromLimit(raw: unknown): QuotaWindow | undefined {
+  if (!raw || typeof raw !== "object") return undefined
+  const l = raw as Record<string, unknown>
+  const percent = typeof l.percent === "number" && Number.isFinite(l.percent) ? l.percent : undefined
+  if (percent === undefined) return undefined
+  const group = typeof l.group === "string" ? l.group : typeof l.kind === "string" ? l.kind : ""
+  const scope = l.scope && typeof l.scope === "object" ? (l.scope as Record<string, unknown>) : undefined
+  const model = scope?.model && typeof scope.model === "object" ? (scope.model as Record<string, unknown>) : undefined
+  const scopeName = typeof model?.display_name === "string" && model.display_name ? model.display_name : undefined
+  let key: string
+  let label: string
+  if (group === "session") {
+    key = "5h"
+    label = "5h"
+  } else if (group === "weekly") {
+    key = scopeName ? `weekly-${slugify(scopeName)}` : "weekly"
+    label = scopeName ? `${scopeName} wk` : "Weekly"
+  } else if (group) {
+    // An unfamiliar future cap must not be invisible — it may be the one that binds.
+    key = slugify(group)
+    label = scopeName ? `${scopeName} ${group}` : group
+  } else {
+    return undefined
+  }
+  const resetsAt = isoToUnix(l.resets_at ?? l.reset_at)
+  return { key, label, usedPercent: percent, ...(resetsAt === undefined ? {} : { resetsAt }) }
 }
 
 // Parse the endpoint's JSON body → a ProviderQuota. Total: never throws. Exported for a fixture test.
-// Surfaces the model-specific weekly caps (seven_day_opus / seven_day_sonnet) too: on a Max plan the
-// Opus weekly cap is frequently the BINDING limit, so omitting it would let the chip show a rosy general
-// weekly % while the user is actually near their Opus wall. The chip's "tightest window" then reflects it.
+// The modern body carries the authoritative windows in `limits[]` (session + weekly entries, scoped
+// weeklies naming their model); older bodies used top-level five_hour / seven_day / seven_day_<model>
+// objects. Read `limits[]` first and fill any window the legacy keys still uniquely describe — the
+// model-scoped weekly caps matter because they are frequently the BINDING limit, and omitting one
+// would let the chip show a rosy general weekly % while the user is actually near that wall.
 export function parseClaudeUsage(body: unknown, planType?: string): ProviderQuota {
   if (!body || typeof body !== "object") return { status: "unavailable", windows: [], detail: "Malformed usage response" }
   const b = body as Record<string, unknown>
-  const windows = [
-    toWindow(b.five_hour, "5h", "5h"),
-    toWindow(b.seven_day, "weekly", "Weekly"),
-    toWindow(b.seven_day_opus, "weekly-opus", "Opus wk"),
-    toWindow(b.seven_day_sonnet, "weekly-sonnet", "Sonnet wk"),
-  ].filter((x): x is QuotaWindow => x !== undefined)
+  const windows: QuotaWindow[] = []
+  const seen = new Set<string>()
+  const add = (w: QuotaWindow | undefined) => {
+    if (w && !seen.has(w.key)) {
+      seen.add(w.key)
+      windows.push(w)
+    }
+  }
+  if (Array.isArray(b.limits)) for (const entry of b.limits) add(windowFromLimit(entry))
+  add(toWindow(b.five_hour, "5h", "5h"))
+  add(toWindow(b.seven_day, "weekly", "Weekly"))
+  add(toWindow(b.seven_day_opus, "weekly-opus", "Opus wk"))
+  add(toWindow(b.seven_day_sonnet, "weekly-sonnet", "Sonnet wk"))
   if (windows.length === 0) return { status: "unavailable", windows: [], detail: "No usage windows reported" }
   return { status: "ok", planType, windows }
 }
@@ -77,6 +172,8 @@ export interface ClaudeQuotaDeps {
   now?: () => number
   execUsage?: UsageExec
   cacheDir?: string
+  fetchImpl?: typeof fetch
+  readToken?: (configDir: string) => Promise<string | undefined>
 }
 
 interface SharedQuota {
@@ -142,9 +239,52 @@ async function runClaudeUsage(claudeBin: string): Promise<string> {
   const { stdout } = await execFileAsync(
     claudeBin,
     ["-p", "/usage", "--safe-mode", "--output-format", "json", "--no-session-persistence", "--tools", ""],
-    { encoding: "utf8", timeout: 12_000, maxBuffer: 2 * 1024 * 1024 },
+    { encoding: "utf8", timeout: CLI_TIMEOUT_MS, maxBuffer: 2 * 1024 * 1024 },
   )
   return String(stdout)
+}
+
+// One live refresh: the endpoint first, the CLI only for what the raw token can't do. Returns ONLY a
+// healthy quota; every failure shape throws so the callers' stale-serving catch handles them uniformly.
+async function refreshQuota(claudeBin: string, deps: ClaudeQuotaDeps, now: number): Promise<ProviderQuota> {
+  const doFetch = deps.fetchImpl ?? fetch
+  const readToken = deps.readToken ?? readAccessToken
+  let token: string | undefined
+  try {
+    token = await readToken(claudeConfigDir())
+  } catch {
+    token = undefined
+  }
+  if (token) {
+    try {
+      const res = await doFetch(USAGE_URL, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "anthropic-beta": OAUTH_BETA,
+          "User-Agent": USER_AGENT,
+          "Content-Type": "application/json",
+        },
+        signal: AbortSignal.timeout(ENDPOINT_TIMEOUT_MS),
+      })
+      if (res.ok) {
+        const body = (await res.json()) as Record<string, unknown>
+        const planType = typeof body.plan_type === "string" ? body.plan_type : undefined
+        const quota = parseClaudeUsage(body, planType)
+        if (quota.status === "ok") return quota
+      } else if (res.status === 429 || res.status === 529) {
+        // The endpoint asked us to back off. The CLI would just hit the same wall from inside a whole
+        // spawned process — fail this refresh and let the cached reading ride.
+        throw new Error(`Usage endpoint ${res.status}`)
+      }
+      // 401/403 (stale token the CLI can refresh), 5xx, or a malformed body → try the CLI below.
+    } catch (err) {
+      if (err instanceof Error && /^Usage endpoint (429|529)$/.test(err.message)) throw err
+      // Network/timeout failures fall through to the CLI, which retries with its own transport.
+    }
+  }
+  const quota = parseClaudeUsageOutput(await (deps.execUsage ?? runClaudeUsage)(claudeBin), now)
+  if (quota.status !== "ok") throw new Error(quota.detail)
+  return quota
 }
 
 const LINE_WINDOWS: Array<[RegExp, string, string]> = [
@@ -262,14 +402,14 @@ async function tryAcquireLock(path: string): Promise<(() => Promise<void>) | und
 // In-process guard so overlapping polls from one server start at most one background refresh.
 const backgroundRefreshes = new Map<string, Promise<void>>()
 
-function refreshSharedInBackground(paths: { data: string; lock: string }, claudeBin: string, exec: UsageExec, now: number): void {
+function refreshSharedInBackground(paths: { data: string; lock: string }, claudeBin: string, deps: ClaudeQuotaDeps, now: number): void {
   if (backgroundRefreshes.has(paths.data)) return
   const task = (async () => {
     const release = await tryAcquireLock(paths.lock)
     if (!release) return
     try {
-      const quota = parseClaudeUsageOutput(await exec(claudeBin), now)
-      if (quota.status === "ok") await writeShared(paths.data, { at: now, quota })
+      const quota = await refreshQuota(claudeBin, deps, now)
+      await writeShared(paths.data, { at: now, quota })
     } finally {
       await release().catch(() => {})
     }
@@ -305,9 +445,9 @@ export async function readClaudeQuota(
     await mkdir(cacheDir, { recursive: true, mode: 0o700 })
   } catch {
     try {
-      return parseClaudeUsageOutput(await (deps.execUsage ?? runClaudeUsage)(claudeBin), now)
+      return await refreshQuota(claudeBin, deps, now)
     } catch {
-      return { status: "unavailable", windows: [], detail: "Claude Code usage unavailable" }
+      return { status: "unavailable", windows: [], detail: "Claude usage unavailable" }
     }
   }
   const initial = await readShared(paths.data)
@@ -315,7 +455,7 @@ export async function readClaudeQuota(
     return initial.quota
   }
   if (!options.force && initial?.quota.status === "ok" && now - initial.at < STALE_MAX_AGE_MS) {
-    refreshSharedInBackground(paths, claudeBin, deps.execUsage ?? runClaudeUsage, now)
+    refreshSharedInBackground(paths, claudeBin, deps, now)
     const ageMs = now - initial.at
     // Freshly-expired data is normal churn; only label the reading once it is meaningfully old.
     if (ageMs < 10 * 60_000) return initial.quota
@@ -329,9 +469,7 @@ export async function readClaudeQuota(
     // Another Fray process may have completed the requested refresh while this process waited.
     if (afterLock && afterLock.at !== initial?.at && now - afterLock.at < OK_TTL_MS) return afterLock.quota
 
-    const output = await (deps.execUsage ?? runClaudeUsage)(claudeBin)
-    const quota = parseClaudeUsageOutput(output, now)
-    if (quota.status !== "ok") throw new Error(quota.detail)
+    const quota = await refreshQuota(claudeBin, deps, now)
     await writeShared(paths.data, { at: now, quota }).catch(() => {})
     return quota
   } catch {

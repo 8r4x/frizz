@@ -11,9 +11,7 @@ import { localImageUrlForTarget, localMarkdownTarget } from "./markdownTargets.t
 // ships, with the optional second tilde made mandatory.
 const DOUBLE_TILDE_DEL = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/
 
-// Exported for markdown.test.ts: the sanitizer below needs a DOM, so the render path can't run under
-// `node --test`, but this tokenizer is pure and is the piece that changed.
-export const strikethroughTokenizer = {
+const strikethroughTokenizer = {
   del(this: { lexer: { inlineTokens: (src: string) => Tokens.Del["tokens"] } }, src: string) {
     const cap = DOUBLE_TILDE_DEL.exec(src)
     // undefined, NOT false: marked reads a `false` return as "no opinion, fall through to the
@@ -23,13 +21,22 @@ export const strikethroughTokenizer = {
   },
 }
 
-const markdown = new Marked({
+// Exported so markdown.test.ts can drive the EXACT configuration the app renders with: mdToHtml
+// itself can't run under `node --test` (the sanitizer needs a DOM), but everything here is pure.
+export const MARKDOWN_OPTIONS = {
   breaks: true,
   tokenizer: strikethroughTokenizer,
   renderer: {
-    code: ({ text, lang }) => renderHighlightedCode(text, lang),
+    code: ({ text, lang }: Tokens.Code) => renderHighlightedCode(text, lang),
+    // GFM task lists. marked's default is `<input type="checkbox" disabled>`, which the render
+    // allowlist below drops — so `- [x] done` and `- [ ] todo` came out as identical plain bullets and
+    // a checklist lost the only thing it was communicating. An inert span (drawn by `.md-task` in
+    // styles.css) keeps the state visible without putting a form control in a transcript.
+    checkbox: ({ checked }: { checked: boolean }) => `<span class="md-task${checked ? " md-task-checked" : ""}"></span>`,
   },
-})
+}
+
+const markdown = new Marked(MARKDOWN_OPTIONS)
 
 // Agent-written markdown → sanitized HTML. Shared by the chat view, the To-dos pager, and the
 // thread-details drawer. marked output goes through a small allowlist sanitizer (content is only
@@ -67,7 +74,25 @@ const ALLOWED_TAGS = new Set([
   "blockquote", "ul", "ol", "li", "a", "img", "button", "table", "thead", "tbody", "tr", "th", "td", "span",
 ])
 const ALLOWED_ATTRS = new Set(["href", "src", "alt", "title", "type", "class", "data-local-path", "data-local-image"])
-const ALLOWED_HIGHLIGHT_CLASS = /^(?:hljs(?:-[a-z0-9_-]+)?|language-[a-z0-9-]+)$/
+const ALLOWED_CLASS = /^(?:hljs(?:-[a-z0-9_-]+)?|language-[a-z0-9-]+|md-task(?:-checked)?)$/
+
+// Attributes admitted only on the tag that gives them meaning, and only with a well-formed value.
+// Both carry information the author wrote and the flat allowlist above was silently discarding:
+// `start` is how a list that doesn't begin at 1 keeps its numbers (stripping it renumbered a worker's
+// "17." back to "1."), `align` is GFM's table column alignment.
+const ALLOWED_ATTRS_BY_TAG: Record<string, Record<string, RegExp>> = {
+  ol: { start: /^\d{1,9}$/ },
+  th: { align: /^(?:left|center|right)$/ },
+  td: { align: /^(?:left|center|right)$/ },
+}
+
+// Disallowed tags are UNWRAPPED (see walk) — but for these the content IS the payload, so element and
+// subtree go together. Raw-text elements (`script`, `style`, `textarea`, `title`, `xmp`) would spill
+// their unparsed text into the document, and the embedding elements have nothing worth salvaging.
+const DROP_WITH_CONTENT = new Set([
+  "script", "style", "textarea", "title", "xmp", "iframe", "frame", "frameset",
+  "object", "embed", "applet", "noscript", "template", "svg", "math",
+])
 
 function sanitize(dirty: string, inertInteractive = false): string {
   const tpl = document.createElement("template")
@@ -80,7 +105,12 @@ function walk(node: ParentNode, inertInteractive: boolean) {
   for (const el of Array.from(node.children)) {
     const tag = el.tagName.toLowerCase()
     if (!ALLOWED_TAGS.has(tag)) {
-      el.remove()
+      // Unwrap rather than delete. marked passes raw HTML through, and the parser turns an ordinary
+      // piece of prose — `Promise<void>`, a `<sessionId>` placeholder — into an ELEMENT that swallows
+      // the rest of the block, so `el.remove()` silently deleted everything after it. Keeping the
+      // children (what DOMPurify does) costs only the bracketed token itself.
+      if (DROP_WITH_CONTENT.has(tag)) el.remove()
+      else unwrap(el, inertInteractive)
       continue
     }
     if (tag === "a" && inertInteractive) {
@@ -137,9 +167,14 @@ function walk(node: ParentNode, inertInteractive: boolean) {
     for (const attr of Array.from(el.attributes)) {
       const name = attr.name.toLowerCase()
       if (name === "class" && (tag === "code" || tag === "span")) {
-        const classes = attr.value.split(/\s+/).filter((value) => ALLOWED_HIGHLIGHT_CLASS.test(value))
+        const classes = attr.value.split(/\s+/).filter((value) => ALLOWED_CLASS.test(value))
         if (classes.length > 0) el.setAttribute("class", classes.join(" "))
         else el.removeAttribute(attr.name)
+        continue
+      }
+      const byTag = ALLOWED_ATTRS_BY_TAG[tag]?.[name]
+      if (byTag) {
+        if (!byTag.test(attr.value)) el.removeAttribute(attr.name)
         continue
       }
       if (!ALLOWED_ATTRS.has(name)) {
@@ -154,4 +189,13 @@ function walk(node: ParentNode, inertInteractive: boolean) {
     }
     walk(el, inertInteractive)
   }
+}
+
+// Splice an element's children in where the element stood. They are sanitized BEFORE the splice: the
+// caller is iterating a snapshot of the parent's children and would never revisit them otherwise.
+function unwrap(el: Element, inertInteractive: boolean) {
+  const frag = el.ownerDocument.createDocumentFragment()
+  while (el.firstChild) frag.append(el.firstChild)
+  walk(frag, inertInteractive)
+  el.replaceWith(frag)
 }

@@ -3,7 +3,7 @@ import { ArrowUpRight, ChevronsDownUp, ChevronsUpDown, FileText, Loader2, Rotate
 import type { ThreadView } from "@fray-ui/shared"
 import { Tooltip } from "./Tooltip.tsx"
 import { MarkAsButton } from "./MarkAsButton.tsx"
-import { canRetry } from "../lib/status.ts"
+import { offersRetry } from "../groups.ts"
 import { retrySession } from "../lib/retrySession.ts"
 
 // The retry message + follow-up now live in lib/retrySession so the sidebar's hover-revealed Retry
@@ -13,10 +13,11 @@ export { STALLED_RETRY_MESSAGE } from "../lib/retrySession.ts"
 // THE shared whole-thread action icons, rendered IDENTICALLY by the queue card header and the thread
 // header so the two can never drift. Order left→right runs least→most important, so the primary verb
 // sits at the far RIGHT. The verbs SPLIT on kind:
-//   • SESSION (non-foreign): doc/open navigation; the full thread additionally exposes Retry for any
-//     exited session (crashed or ordinarily rested — both resume through the same follow-up path).
-//     Queue headers suppress it so their whole-thread verbs have one persistent home in
-//     ThreadLifecycleFooter. Rename lives next to the title in ThreadHeader.
+//   • SESSION (non-foreign): doc/open navigation, plus Retry on exactly the STALLED threads —
+//     `offersRetry`, which IS `sessionIndicatorKind === "stalled"`, the very same derivation behind the
+//     rail's yellow [!]. Every surface that renders this component agrees by construction, so the verb
+//     and the mark can never disagree about one thread. Other lifecycle verbs (Mark as done / Snooze)
+//     live in ThreadLifecycleFooter; rename lives next to the title in ThreadHeader.
 //   • SESSION (foreign): read-only. Only the doc/open NAVIGATION affordances — no kill/archive.
 //   • LEGACY (kind !== "session"): the vestigial Mark-as split button, exactly as before.
 export function HeaderActions({
@@ -30,7 +31,6 @@ export function HeaderActions({
   onStatusMutate,
   onStatusApplied,
   onStatusFailed,
-  showExitAction = true,
 }: {
   thread: ThreadView
   onOpen?: () => void // present only on queue cards → shows the Open-thread (drawer) icon
@@ -44,12 +44,8 @@ export function HeaderActions({
   onStatusMutate?: () => void
   onStatusApplied?: () => void
   onStatusFailed?: () => void
-  // Queue cards keep every lifecycle verb in their footer. Full thread surfaces expose Retry for an
-  // exited session.
-  showExitAction?: boolean
 }) {
   const isSession = thread.kind === "session"
-  const isForeign = thread.foreign === true
 
   return (
     <div className="flex shrink-0 items-center gap-0.5">
@@ -64,11 +60,12 @@ export function HeaderActions({
       {onDoc && <IconBtn label="Fray document" icon={FileText} size={14} onClick={onDoc} />}
       {onOpen && <IconBtn label="Open thread" icon={ArrowUpRight} size={14} onClick={onOpen} />}
       {isSession ? (
-        // Foreign sessions are read-only. An exited session leads with recovery — Retry is the only
-        // exit-state verb here; clearing a finished row is the footer's job (Mark as done / Snooze).
-        showExitAction && !isForeign && canRetry(thread)
-          ? <RetryButton slug={thread.id} />
-          : null
+        // A STALLED session (its process is gone with the work unfinished) leads with recovery — Retry
+        // is the only exit-state verb here; clearing a finished row is the footer's job (Mark as done /
+        // Snooze). offersRetry already excludes foreign (read-only) sessions, and — the point of the
+        // 2026-07-23 fix — archived and done-fenced ones, which are at rest on purpose and must not
+        // advertise a recovery verb their rail row does not also mark.
+        offersRetry(thread) ? <RetryButton slug={thread.id} /> : null
       ) : (
         <div className="ml-1">
           <MarkAsButton

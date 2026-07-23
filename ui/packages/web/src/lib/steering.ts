@@ -1,3 +1,4 @@
+import { useMemo } from "react"
 import { proxy, useSnapshot } from "valtio"
 import type { ThreadView } from "@fray-ui/shared"
 
@@ -55,4 +56,45 @@ export function isOptimisticallySteering(t: ThreadView, at: number | undefined, 
 // every row to every other row's steers.
 export function useSteeredAt(): Record<string, number> {
   return useSnapshot(steering).at as Record<string, number>
+}
+
+// THE overlay: the board fields a just-sent steer asserts on the operator's behalf. Deliberately a
+// whole ThreadView rather than a "show a spinner" flag, because the rail's PLACEMENT is derived — the
+// section, the running/rested band, the order within it — and a hint only the indicator consults
+// produces exactly the split the operator sees today: the row spins instantly while sitting among the
+// queue cards for seconds, then hops. Overlaying the fields instead lets every existing pure predicate
+// (isActivelyRunning, isHeld, sectionOf, orderActive, sessionIndicatorKind) reach the same conclusion
+// from ONE rule.
+//
+// Every field here is what the SERVER itself will report once the tailer sees the turn start, so the
+// optimistic position is the position truth lands on — the row settles once and never hops again.
+export function optimisticallySteered(t: ThreadView, at: number | undefined, nowMs = Date.now()): ThreadView {
+  if (at === undefined || !isOptimisticallySteering(t, at, nowMs)) return t
+  return {
+    ...t,
+    runtime: "running",
+    // A running thread is not awaiting you — deriveNeedsYou says so itself (`if (!atRest) return
+    // false`). The queue reasons a steer resolves (an unanswered question, a native ask, a permission
+    // prompt, a bare-rest handoff) are precisely the ones the operator just cleared by typing; the
+    // queue card already leaves on that assumption, and the rail row must agree with it.
+    needsYou: false,
+    pendingAsk: undefined,
+    pendingQuestion: false,
+    nativeInputRequired: undefined,
+    actionableInteraction: false,
+    // The steer IS a user interaction, and the running band orders by user recency (groups.ts
+    // orderByInteraction). Without this the row would enter the band at its STALE position and then
+    // jump again when the server reported this same instant a beat later.
+    lastUserAt: new Date(at).toISOString(),
+    // lastActivityAt is deliberately untouched: it is the evidence isOptimisticallySteering watches
+    // for to hand the row back to server truth, so writing it here would make the hint self-sealing.
+  }
+}
+
+// Apply the overlay across a board's threads. A thread with no live steer is returned BY IDENTITY, so
+// the memoized rows still skip re-rendering; the memo re-runs when the board changes or when a stamp
+// is set/expired (markSteered's expiry timer is what guarantees the cap actually repaints).
+export function useOptimisticallySteered(threads: readonly ThreadView[]): ThreadView[] {
+  const at = useSteeredAt()
+  return useMemo(() => threads.map((t) => optimisticallySteered(t, at[t.id])), [threads, at])
 }
