@@ -88,9 +88,6 @@ export interface Api {
   // WHY it declined — the executing turn and/or the named live sub-agents/shells — for the dialog to name.
   completeThread(input: { slug: string; terminateLive?: boolean }): Promise<{ needsConfirmation: boolean; hold?: CompletionHold }>
   setThreadSnooze(input: SetThreadSnoozeInput): Promise<void>
-  // Hard-delete a stalled/exited session (the Dismiss verb): removes the row + tombstones its transcript
-  // so it stays gone across a rescan. Server-gated to non-live rows; rejects a running/idle session.
-  forgetThread(input: { slug: string }): Promise<void>
   // A plan artifact's markdown (.fray/plans/*.md); `path` is a PlanView.path from the board snapshot.
   planBody(input: { path: string }): Promise<{ markdown: string }>
   // Hard-delete a plan artifact (.fray/plans/*.md). Secure-resolver gated server-side; idempotent.
@@ -168,7 +165,6 @@ const PROCEDURES: Record<keyof Api, ProcType> = {
   setThreadState: "mutation",
   completeThread: "mutation",
   setThreadSnooze: "mutation",
-  forgetThread: "mutation",
   planBody: "query",
   planDelete: "mutation",
   threadScratchpad: "query",

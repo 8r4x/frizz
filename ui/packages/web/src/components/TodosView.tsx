@@ -935,7 +935,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
             </div>
           )}
         </div>
-        {/* SHARED navigation actions: collapse and open-in-drawer. Diagnostic Dismiss is intentionally
+        {/* SHARED navigation actions: collapse and open-in-drawer. Retry is intentionally
             absent from queue headers; lifecycle actions stay in the footer. (Rename lives by the title
             in the thread drawer, not here — the queue is a triage surface.) Open-thread slides in the side drawer — an overlay,
             NOT a nav switch, so the queue scroll/selection stays put. */}

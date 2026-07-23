@@ -76,5 +76,6 @@ export function ThreadActionBar({ slug, ops }: { slug: string; onTerminal?: () =
   )
 }
 
-// The old ⋯ overflow menu is gone: the fray-document, dismiss, and done actions all live as direct
-// icons in the shared <HeaderActions> (Kill was dropped entirely — Dismiss ends the session too).
+// The old ⋯ overflow menu is gone: the fray-document, retry, and done actions all live as direct
+// icons in the shared <HeaderActions> (Kill and Dismiss were dropped entirely — an exited session
+// is retried from the header, or cleared through the lifecycle footer).
