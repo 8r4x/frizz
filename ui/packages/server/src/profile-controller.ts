@@ -346,6 +346,11 @@ export function createProfileController(deps: ProfileControllerDeps): ProfileCon
   function tick(): void {
     for (const row of deps.storage.allSessions()) {
       if (row.runtime_control !== "profile" || active.has(row.slug)) continue
+      // Recovery reattaches a tmux pane and reads it with the Claude composer parser, so it can only
+      // ever succeed for Claude. Codex takes model/effort per turn through the app-server bridge and
+      // never arms this handoff; boot already abandons any pre-cutover row that still holds one. Skip
+      // rather than spin a recovery that would re-block the thread on every tick.
+      if (row.backend === "codex") continue
       const spawnedAt = Date.parse(row.spawned_at)
       if (Number.isFinite(spawnedAt) && now() - spawnedAt < RECOVERY_GRACE_MS) continue
       active.add(row.slug)
