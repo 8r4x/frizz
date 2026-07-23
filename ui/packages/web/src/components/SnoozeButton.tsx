@@ -37,7 +37,7 @@ export function SnoozeButton({ thread, onSnoozed }: { thread: ThreadView; onSnoo
   async function apply(until: string | null, prompt: string | null = null): Promise<void> {
     setBusy(true)
     try {
-      await rpc.setThreadSnooze({ slug: thread.id, until, prompt: until ? prompt : null })
+      await rpc.setThreadSnooze({ slug: thread.id, sessionId: thread.sessionId ?? "", until, prompt: until ? prompt : null })
       if (until) {
         showToast(`${prompt ? "Bump scheduled" : "Snoozed"} · ${formatSnoozeWake(until)}`)
         onSnoozed?.()

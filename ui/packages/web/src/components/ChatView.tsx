@@ -342,11 +342,12 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
             {thread?.providerFault && !thread.foreign ? (
               <ProviderFaultCard
                 slug={slug}
+                sessionId={thread.sessionId}
                 fault={thread.providerFault}
                 retryText={lastUserIdx >= 0 ? messages[lastUserIdx]?.text : undefined}
               />
             ) : thread?.limitPause && !thread.foreign ? (
-              <LimitPauseCard slug={slug} pause={thread.limitPause} />
+              <LimitPauseCard slug={slug} sessionId={thread.sessionId} pause={thread.limitPause} />
             ) : thread?.pendingAsk ? (
               <PendingAskCard ask={thread.pendingAsk} onTerminal={copyTerminalCommand} />
             ) : nativeInputRequired ? (
@@ -701,9 +702,9 @@ function VirtualizedThreadTranscript({
             ) : row.kind === "runtime-status" ? (
               <div className="px-6" style={{ paddingTop: STEP }}>
                 {thread?.providerFault && !thread.foreign ? (
-                  <ProviderFaultCard slug={slug} fault={thread.providerFault} retryText={lastUserIdx >= 0 ? messages[lastUserIdx]?.text : undefined} />
+                  <ProviderFaultCard slug={slug} sessionId={thread.sessionId} fault={thread.providerFault} retryText={lastUserIdx >= 0 ? messages[lastUserIdx]?.text : undefined} />
                 ) : thread?.limitPause && !thread.foreign ? (
-                  <LimitPauseCard slug={slug} pause={thread.limitPause} />
+                  <LimitPauseCard slug={slug} sessionId={thread.sessionId} pause={thread.limitPause} />
                 ) : thread?.pendingAsk ? (
                   <PendingAskCard ask={thread.pendingAsk} onTerminal={copyTerminalCommand} />
                 ) : nativeInputRequired ? (
@@ -2526,7 +2527,7 @@ function AwaitingParkButton({ thread, hints }: { thread: ThreadViewData; hints: 
     const until = action.timerUntil ?? snoozePresetInstant(prefs.snoozePreset)
     setBusy(true)
     rpc
-      .setThreadSnooze({ slug: thread.id, until })
+      .setThreadSnooze({ slug: thread.id, sessionId: thread.sessionId ?? "", until })
       .then(() => {
         showToast(`${action.toastVerb} · ${formatSnoozeWake(until)}`)
         queueDismiss?.dismiss()
@@ -2564,17 +2565,19 @@ function AwaitingParkButton({ thread, hints }: { thread: ThreadViewData; hints: 
 // action — a prompt is never replayed automatically after login.
 export function ProviderFaultCard({
   slug,
+  sessionId,
   fault,
   retryText,
 }: {
   slug: string
+  sessionId: string | undefined
   fault: NonNullable<ThreadViewData["providerFault"]>
   retryText?: string
 }) {
   const [signIn, setSignIn] = useState(false)
   const label = PROVIDER_LABEL[fault.backend]
   const retry = useMutation({
-    mutationFn: (message: string) => rpc.followUp({ slug, message }),
+    mutationFn: (message: string) => rpc.followUp({ slug, sessionId: sessionId ?? "", message }),
     onSuccess: () => showToast("Retrying with the previous message…"),
     onError: (e) => showToast(`Retry failed: ${(e as Error).message.slice(0, 80)}`),
   })
@@ -2630,11 +2633,11 @@ function limitResumeClock(unixSeconds: number): string {
 // credential is fine and the recovery is TIME, not an action. So the card leads with information —
 // when the window comes back, and that fray will pick the thread up itself — and keeps a manual
 // continue as the secondary, for the operator who has capacity elsewhere and doesn't want to wait.
-export function LimitPauseCard({ slug, pause }: { slug: string; pause: NonNullable<ThreadViewData["limitPause"]> }) {
+export function LimitPauseCard({ slug, sessionId, pause }: { slug: string; sessionId: string | undefined; pause: NonNullable<ThreadViewData["limitPause"]> }) {
   const label = PROVIDER_LABEL[pause.backend]
   const which = pause.window === "weekly" ? "weekly limit" : pause.window === "session" ? "session limit" : "usage limit"
   const continueNow = useMutation({
-    mutationFn: () => rpc.followUp({ slug, message: "Continue exactly where you left off." }),
+    mutationFn: () => rpc.followUp({ slug, sessionId: sessionId ?? "", message: "Continue exactly where you left off." }),
     onSuccess: () => showToast("Continuing…"),
     onError: (e) => showToast(`Continue failed: ${(e as Error).message.slice(0, 80)}`),
   })

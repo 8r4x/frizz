@@ -2,7 +2,8 @@ import { useCallback, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { rpc } from "../api/rpc.ts"
 import { appendQueuedMessage, removeQueuedMessage } from "../hooks.ts"
-import { showToast } from "../store.ts"
+import { showToast, store, threadBySlug } from "../store.ts"
+import { useSnapshot } from "valtio"
 
 let fallbackDeliverySequence = 0
 
@@ -48,6 +49,8 @@ export function useEagerFollowUp(slug: string): {
   pending: boolean
 } {
   const queryClient = useQueryClient()
+  const snap = useSnapshot(store)
+  const sessionId = threadBySlug(snap.board as never, slug)?.sessionId
   const [pending, setPending] = useState(false)
   // A controlled textarea normally makes a second Enter impossible because it becomes empty
   // synchronously. Keep the guard anyway for duplicate programmatic/click submissions and for a
@@ -65,7 +68,7 @@ export function useEagerFollowUp(slug: string): {
         appendQueuedMessage(queryClient, slug, message, { scrollToBottom: callbacks.scrollToBottom, deliveryId })
         rpc.markRead({ slug }).catch(() => {})
       },
-      request: () => rpc.followUp({ slug, message, deliveryId }),
+      request: () => rpc.followUp({ slug, sessionId: sessionId ?? "", message, deliveryId }),
       success: () => {
         inFlight.current.delete(deliveryId)
         setPending(inFlight.current.size > 0)

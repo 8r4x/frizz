@@ -468,25 +468,25 @@ test("setThreadSnooze RPC validates canonical future UTC and persists any owned 
   thread.crashed = false
   const proc = h.router.setThreadSnooze
   for (const until of ["tomorrow", "2026-07-14T08:45:00Z", "2026-07-14 08:45:00.000Z", "2026-07-14T08:45:00.000+00:00", "2099-02-31T08:45:00.000Z"]) {
-    assert.equal(proc.input.safeParse({ slug, until }).success, false, until)
+    assert.equal(proc.input.safeParse({ slug, sessionId: `sid-${slug}`, until }).success, false, until)
   }
-  assert.equal(proc.input.safeParse({ slug, until: "2099-07-14T08:45:00.000Z", extra: true }).success, false)
+  assert.equal(proc.input.safeParse({ slug, sessionId: `sid-${slug}`, until: "2099-07-14T08:45:00.000Z", extra: true }).success, false)
   await assert.rejects(
-    proc.handler({ input: { slug, until: "2000-01-01T00:00:00.000Z" } }),
+    proc.handler({ input: { slug, sessionId: `sid-${slug}`, until: "2000-01-01T00:00:00.000Z" } }),
     /future/,
   )
 
   const exact = "2099-07-14T08:45:00.000Z"
-  await proc.handler({ input: { slug, until: exact } })
+  await proc.handler({ input: { slug, sessionId: `sid-${slug}`, until: exact } })
   assert.equal(h.storage.getSession(slug)?.snoozed_until, exact)
   assert.equal(h.refreshes(), 1)
 
   thread.pendingQuestion = true
   const replacement = "2099-07-15T08:45:00.000Z"
-  await proc.handler({ input: { slug, until: replacement } })
+  await proc.handler({ input: { slug, sessionId: `sid-${slug}`, until: replacement } })
   assert.equal(h.storage.getSession(slug)?.snoozed_until, replacement, "an unresolved question remains explicitly snoozable")
 
-  await proc.handler({ input: { slug, until: null } })
+  await proc.handler({ input: { slug, sessionId: `sid-${slug}`, until: null } })
   assert.equal(h.storage.getSession(slug)?.snoozed_until, null, "wake-now remains available with the same validation contract")
   h.storage.close()
 })
@@ -530,14 +530,14 @@ test("followUp yields to a live external writer but still answers a thread whose
   const yielded: string[] = []
   install({ bridgeTurn: false, ownedSince: new Date().toISOString() }, yielded)
   await assert.rejects(
-    h.router.followUp.handler({ input: { slug: external, message: "hello" } }),
+    h.router.followUp.handler({ input: { slug: external, sessionId: `sid-${external}`, message: "hello" } }),
     /running in your terminal/,
   )
   assert.deepEqual(yielded, [], "fray must not race a second writer onto a live external turn")
 
   const delivered: string[] = []
   install({ bridgeTurn: false, ownedSince }, delivered)
-  await h.router.followUp.handler({ input: { slug: stalled, message: "still there?" } })
+  await h.router.followUp.handler({ input: { slug: stalled, sessionId: `sid-${stalled}`, message: "still there?" } })
   assert.deepEqual(delivered, ["still there?"], "a stalled thread stays answerable")
   h.storage.close()
 })
@@ -565,7 +565,7 @@ test("followUp leaves a snooze — and its armed bump — intact", async () => {
     followUp: async ({ text }: { text: string }) => void sent.push(text),
   }
 
-  await h.router.followUp.handler({ input: { slug, message: "also use a squash merge" } })
+  await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "also use a squash merge" } })
 
   assert.deepEqual(sent, ["also use a squash merge"], "the message still reaches the worker")
   assert.equal(h.storage.getSession(slug)?.snoozed_until, until, "the park survives the follow-up")

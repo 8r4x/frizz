@@ -2,7 +2,8 @@ import { useState, type ComponentType } from "react"
 import { ArrowUpRight, ChevronsDownUp, ChevronsUpDown, FileText, Loader2, RotateCcw, Trash2 } from "lucide-react"
 import type { ThreadView } from "@fray-ui/shared"
 import { rpc } from "../api/rpc.ts"
-import { showToast } from "../store.ts"
+import { showToast, store, threadBySlug } from "../store.ts"
+import { useSnapshot } from "valtio"
 import { Tooltip } from "./Tooltip.tsx"
 import { MarkAsButton } from "./MarkAsButton.tsx"
 import { canDismiss, canRetry } from "../lib/status.ts"
@@ -92,11 +93,13 @@ export function HeaderActions({
 // app-server session the server rebinds the rollout and retires its phantom current turn before
 // starting this continuation; for a dead provider process it performs the normal native resume.
 function RetryButton({ slug }: { slug: string }) {
+  const snap = useSnapshot(store)
+  const sessionId = threadBySlug(snap.board as never, slug)?.sessionId
   const [busy, setBusy] = useState(false)
   const apply = () => {
     setBusy(true)
     rpc
-      .followUp({ slug, message: STALLED_RETRY_MESSAGE })
+      .followUp({ slug, sessionId: sessionId ?? "", message: STALLED_RETRY_MESSAGE })
       .then(() => showToast("Retrying…"))
       .catch((e) => showToast(`Retry failed: ${(e as Error).message.slice(0, 80)}`))
       .finally(() => setBusy(false))

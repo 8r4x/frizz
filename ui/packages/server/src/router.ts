@@ -9,6 +9,8 @@ import {
   DispatchInput,
   FollowUpInput,
   SetThreadSnoozeInput,
+  ConfirmAwaitingInput,
+  canonicalSnoozeInstant,
   GithubStatus,
   GithubItem,
   GithubListInput,
@@ -75,6 +77,7 @@ import { threadProfileOptions, validateThreadProfile } from "./backend/thread-pr
 import * as tmux from "./tmux.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { createClaudeRenameController } from "./rename-controller.ts"
+import { awaitingFenceIdentity, isActionableAwaitingHint } from "./awaiting.ts"
 import { getDispatchPreferences, setDispatchPreference } from "./dispatch-preferences.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { SessionTelemetry } from "./tailer.ts"
@@ -337,6 +340,16 @@ export function createRouter(ctx: AppContext) {
     }
   }
 
+  // Bind a mutation to the session the CALLER was looking at. A stale tab holding a replaced session
+  // id fails closed rather than acting on whatever now owns the slug (merged from origin/main).
+  function currentOwnedSession(slug: string, sessionId: string) {
+    const row = ctx.storage.getSession(slug)
+    if (!row || row.session_id !== sessionId) {
+      throw new Error("This thread was replaced; refresh before acting on its current session")
+    }
+    return row
+  }
+
   // Every interaction RPC re-derives the project from this server and binds the requested slug to the
   // CURRENT registered session id. Foreign transcripts have no registry row; a stale page holding a
   // replaced session id fails closed instead of reading or answering the replacement's requests.
@@ -563,7 +576,12 @@ export function createRouter(ctx: AppContext) {
         // for a reason. Nothing is hidden by keeping it — isHeld() excuses a running thread from Held, so
         // the turn you just sent renders live in Active and only re-parks once it rests. The opposite
         // intent ("I'm re-engaging now") already has its own one-click affordance in Wake now.
-        const row = ctx.storage.getSession(input.slug)
+        //
+        // The row is bound to the CALLER's session id (origin/main's staleness guard): a stale tab must
+        // not deliver a follow-up into a thread that has since been re-dispatched. Note the guard is the
+        // ONLY thing adopted from origin's followUp — origin also CLEARED the wait here, which would
+        // silently disarm the scheduled bump this handler documents preserving.
+        const row = currentOwnedSession(input.slug, input.sessionId)
         if (hasPendingPermissionChange(row)) {
           throw new Error("Wait for the current permission change to finish before sending a follow-up")
         }
@@ -729,12 +747,11 @@ export function createRouter(ctx: AppContext) {
     // “Mark as done” stops a resting provider shell and archives in one action. The server—not the
     // client—asks for confirmation only when current telemetry shows an executing/ambiguous turn.
     completeThread: mutation({
-      input: z.object({ slug: ThreadSlug, terminateLive: z.boolean().default(false) }).strict(),
+      input: z.object({ slug: ThreadSlug, sessionId: z.string().min(1), terminateLive: z.boolean().default(false) }).strict(),
       // `hold` rides along only with needsConfirmation:true — it is the evidence the dialog names.
       output: z.object({ needsConfirmation: z.boolean(), hold: CompletionHold.optional() }),
       handler: async ({ input }) => {
-        const row = ctx.storage.getSession(input.slug)
-        if (!row) throw new Error(`no session registered for ${input.slug}`)
+        const row = currentOwnedSession(input.slug, input.sessionId)
         const result = completeRegisteredThread(ctx.storage, row, input.terminateLive, cachedLivenessTerminator, ctx.tailer.get(input.slug))
         if (!result.needsConfirmation) ctx.board.refresh()
         return result
@@ -753,8 +770,7 @@ export function createRouter(ctx: AppContext) {
     setThreadSnooze: mutation({
       input: SetThreadSnoozeInput,
       handler: async ({ input }) => {
-        const row = ctx.storage.getSession(input.slug)
-        if (!row) throw new Error(`no session registered for ${input.slug}`)
+        const row = currentOwnedSession(input.slug, input.sessionId)
         const thread = (await ctx.board.snapshot()).threads.find((candidate) => candidate.id === input.slug)
         if (!thread || thread.kind !== "session" || thread.foreign) throw new Error(`thread ${input.slug} is not editable`)
         if (input.until !== null) {
@@ -762,6 +778,54 @@ export function createRouter(ctx: AppContext) {
           if (Date.parse(input.until) <= Date.now()) throw new Error("Snooze time must be in the future")
         }
         ctx.storage.setSnoozedUntil(input.slug, input.until, input.prompt ?? null)
+        // "Wake now" is also the cancellation path for a confirmed wait: clearing only snoozed_until
+        // would leave the row still holding an operator confirmation it no longer wants.
+        if (input.until === null) {
+          ctx.storage.clearAwaitingWaitIfSession(input.slug, row.session_id, row.runtime_generation ?? 0)
+        }
+        ctx.board.refresh()
+      },
+    }),
+
+    // An awaiting fence is only a PROPOSAL. Confirming binds ONE exact final-message generation to
+    // durable state; stale cards, malformed refs, elapsed timers, and in-flight workers fail closed.
+    //
+    // Ported from origin/main onto local main's fence shape. Two adaptations matter: local main's
+    // FenceView carries `hints[]` and no instant of its own, so the identity instant is the tail's last
+    // activity — exactly what scheduler.ts's fenceIdentity() keys on. And the timer is CANONICALIZED
+    // before it reaches snoozed_until: the fence grammar admits instants the durable snooze grammar
+    // rejects, and writing a raw hint here is the precise bug that made "Confirm snooze" fail on the
+    // worker contract's own documented form.
+    confirmAwaiting: mutation({
+      input: ConfirmAwaitingInput,
+      handler: async ({ input }) => {
+        const row = currentOwnedSession(input.slug, input.sessionId)
+        const tele = ctx.tailer.get(input.slug)
+        const fence = tele?.lastFence
+        if (row.state === "archived" || row.archived === 1) {
+          throw new Error("Reopen this thread before confirming its wait")
+        }
+        const fenceAt = tele?.lastActivityAt
+        const hint = fence?.hints.find((h) => h.kind === input.hint.kind && h.value === input.hint.value)
+        if (tele?.turn !== "idle" || fence?.kind !== "awaiting" || !isActionableAwaitingHint(hint)) {
+          throw new Error("This awaiting proposal is no longer current")
+        }
+        if (!fenceAt || !Number.isFinite(Date.parse(fenceAt)) || fenceAt !== input.fenceAt) {
+          throw new Error("This awaiting proposal changed before it could be confirmed")
+        }
+        const snoozedUntil = hint.kind === "timer" ? canonicalSnoozeInstant(hint.value) : null
+        if (hint.kind === "timer" && !snoozedUntil) {
+          throw new Error("This awaiting proposal changed before it could be confirmed")
+        }
+        if (snoozedUntil && Date.parse(snoozedUntil) <= Date.now()) {
+          throw new Error("This scheduled time has already passed")
+        }
+        const fenceId = awaitingFenceIdentity(input.hint, input.fenceAt)
+        if (!ctx.storage.confirmAwaitingWait(
+          input.slug, row.session_id, row.runtime_generation ?? 0, fenceId, new Date().toISOString(), snoozedUntil,
+        )) {
+          throw new Error("This awaiting proposal changed before it could be confirmed")
+        }
         ctx.board.refresh()
       },
     }),
