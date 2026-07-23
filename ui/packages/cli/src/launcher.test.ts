@@ -49,6 +49,7 @@ import {
   resolveWorkspace,
   sourceWorkspaceDir,
   supervisorNeedsAttention,
+  waitForWorkspace,
   workspaceLaunchTarget,
   type Workspace,
 } from "./launcher.ts";
@@ -1982,4 +1983,75 @@ test("concurrent installer processes publish only complete shims and clean up te
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// A port with nothing listening on it, so /health can only ever fail to connect.
+async function freePort(): Promise<number> {
+  return await new Promise<number>((resolvePort, rejectPort) => {
+    const probe = createServer();
+    probe.once("error", rejectPort);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      probe.close(() => resolvePort(port));
+    });
+  });
+}
+
+// ---- progress-tracked launch wait (boot-progress.ts) -------------------------------------------
+// The flat 30s deadline conflated "something is wrong" with "this board is big and this machine is
+// busy": the maintainer's own board tripped it on every launch while a perfectly healthy child kept
+// booting behind the failure message. These pin the replacement contract.
+
+test("waitForWorkspace: a boot that keeps reporting progress outlives the stall window", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "fray-bootprogress-"));
+  const port = await freePort();
+  try {
+    // Advance the published step every 40ms — well inside the 120ms stall window, indefinitely.
+    let step = 0;
+    const ticking = setInterval(() => {
+      step++;
+      writeFileSync(
+        join(stateDir, "boot.progress"),
+        JSON.stringify({ pid: process.pid, step, phase: `tailer producer ${step * 20}/5000`, at: new Date().toISOString() })
+      );
+    }, 40);
+    const waiting = waitForWorkspace(port, { projectId: "p", projectDir: "/p" }, 120, { stateDir });
+    // A flat 120ms deadline would have fired several times over by now.
+    await delay(700);
+    clearInterval(ticking);
+    await assert.rejects(waiting, /stopped making progress/);
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("waitForWorkspace: a boot that STOPS reporting fails inside the stall window, naming its last step", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "fray-bootprogress-"));
+  const port = await freePort();
+  try {
+    writeFileSync(
+      join(stateDir, "boot.progress"),
+      JSON.stringify({ pid: process.pid, step: 3, phase: "board producer", at: new Date().toISOString() })
+    );
+    const started = Date.now();
+    await assert.rejects(
+      waitForWorkspace(port, { projectId: "p", projectDir: "/p" }, 300, { stateDir }),
+      /last reported boot step was "board producer"/
+    );
+    assert.ok(Date.now() - started < 3_000, "a stalled boot must not be waited out to the hard cap");
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("waitForWorkspace: with no state dir the historical flat deadline is unchanged", async () => {
+  const port = await freePort();
+  const started = Date.now();
+  await assert.rejects(
+    waitForWorkspace(port, { projectId: "p", projectDir: "/p" }, 250),
+    /did not become healthy/
+  );
+  const waited = Date.now() - started;
+  assert.ok(waited >= 250 && waited < 3_000, `flat deadline honored (waited ${waited}ms)`);
 });

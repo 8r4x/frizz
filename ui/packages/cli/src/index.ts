@@ -704,7 +704,13 @@ try {
     // From here the forked control-plane child logs to the same TTY. Go line-oriented so its
     // records (and the supervisor's own) land on their own rows instead of gluing onto the spinner.
     startupProgress?.beginConcurrentLogs("Waiting for Fray server health");
-    await Promise.race([waitForWorkspace(port, ownedHealth), running]);
+    // Progress-tracked (see waitForWorkspace): the flat deadline made a slow-but-healthy boot — a big
+    // board, or a busy machine — indistinguishable from a wedge. `running` still wins the race the
+    // moment the in-process supervisor itself fails, so a real failure is reported immediately.
+    await Promise.race([
+      waitForWorkspace(port, ownedHealth, undefined, { stateDir: workspace.stateDir }),
+      running,
+    ]);
     // Hold the allocation/startup lock until the port is actually listening, then release it before the
     // foreground server lifetime. Concurrent repositories therefore allocate distinct ports without
     // serializing their running UI servers.

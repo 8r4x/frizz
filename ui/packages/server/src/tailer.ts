@@ -99,6 +99,9 @@ const FOREIGN_SCAN_EVERY = 5
 // many appended bytes a boot can have to re-fold to at most one interval's worth per thread, while
 // keeping the steady-state cost to one small batched transaction per interval instead of one per tick.
 const CACHE_FLUSH_MS = 30_000
+// How often the FIRST pass reports its position (see Tailer.start). Frequent enough that a launcher
+// watching for progress never mistakes a working boot for a wedged one, coarse enough to cost nothing.
+const PRIME_PROGRESS_EVERY = 20
 // While a thread's transcript is still unresolved (missing past the grace window), re-run discovery at
 // most this often — the file may yet appear (a very late boot) or a drifted transcript may materialize.
 const DISCOVER_RETRY_MS = 15_000
@@ -1182,7 +1185,12 @@ export interface Tailer {
   // during the handoff. Any later backend record remains authoritative (for example a model/version
   // that rejects or coerces a requested mode).
   notePermissionMode?(slug: string, permissionMode: PermissionMode): void
-  start(): void
+  /**
+   * Derive current state immediately, then poll every POLL_MS. `onPrimeProgress` observes the FIRST
+   * pass only, once per PRIME_PROGRESS_EVERY rows — a cold board of thousands of threads spends real
+   * time in here, and the launcher waiting on /health needs to see that it is working, not wedged.
+   */
+  start(onPrimeProgress?: (done: number, total: number) => void): void
   stop(): void
   tick(): void // exposed for tests + boot; the interval calls it every POLL_MS
 }
@@ -1589,6 +1597,8 @@ export function createTailer(deps: TailerDeps): Tailer {
   let foreignFresh: { id: string; path: string }[] = []
   let foreignScanTick = 0
   let timer: NodeJS.Timeout | null = null
+  // Set for the duration of the FIRST tick only (see start): the launcher's progress signal.
+  let primeProgress: ((done: number, total: number) => void) | undefined
 
   // Discover FOREIGN sessions: *.jsonl in the log dir whose stem is not any registered row's
   // session_id, touched within FOREIGN_FRESH_MS, most-recent-first, capped at FOREIGN_MAX. Registered
@@ -1990,7 +2000,11 @@ export function createTailer(deps: TailerDeps): Tailer {
     // One batched pane capture per tick, filled lazily on the first sniff (see prefetchPaneText).
     paneTextCache = null
     paneTextPrefetched = false
-    for (const row of deps.storage.allSessions()) {
+    const rows = deps.storage.allSessions()
+    let primed = 0
+    for (const row of rows) {
+      if (primeProgress && primed % PRIME_PROGRESS_EVERY === 0) primeProgress(primed, rows.length)
+      primed++
       // Per-row backend + the DISCOVERED transcript stem. Both backends decouple the transcript id from
       // the pinned session_id, via DIFFERENT columns (only one is ever set): codex pins its rollout id on
       // `agent_session_id` (post-dispatch discovery); claude caches a drifted stem on `transcript_id`
@@ -2355,9 +2369,14 @@ export function createTailer(deps: TailerDeps): Tailer {
         state.unconfirmedPermissionPolls = undefined
       }
     },
-    start() {
+    start(onPrimeProgress) {
       if (timer) return
-      tick() // derive current state immediately (also restores state after a server restart)
+      primeProgress = onPrimeProgress
+      try {
+        tick() // derive current state immediately (also restores state after a server restart)
+      } finally {
+        primeProgress = undefined
+      }
       timer = setInterval(tickWithBudget, POLL_MS)
       timer.unref?.()
     },
