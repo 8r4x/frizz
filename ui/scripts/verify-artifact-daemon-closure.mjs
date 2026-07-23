@@ -94,6 +94,17 @@ try {
   check(healthy, "the artifact server booted and serves /health", `port ${PORT}`)
   if (!healthy) throw new Error(`server never came up:\n${output.slice(-4000)}`)
 
+  // PRECONDITION, not a product assertion. These harnesses isolate HOME to a temp dir and inject
+  // CODEX_HOME so the app-server can still authenticate. When that var does not reach the child the
+  // lookup falls back to <tempHOME>/.codex, finds nothing, and dispatch fails with a bare
+  // "AUTH_REQUIRED:codex" 500 that reads like a product bug. Say what it actually is. (A real user's
+  // HOME is their own, so this fallback finds their real ~/.codex — the hazard is harness-only.)
+  const auth = await api.query("authStatus").catch((e) => ({ error: e.message }))
+  if (auth?.codex !== "authed") {
+    throw new Error(`HARNESS ENV: the server cannot see codex credentials (authStatus=${JSON.stringify(auth)}). CODEX_HOME did not reach it; re-run.`)
+  }
+
+
   // 3. Dispatch a REAL codex thread through the artifact — this is what forks the daemon.
   log("dispatching a real codex thread…")
   const dispatched = await api.mutate("dispatch", {
