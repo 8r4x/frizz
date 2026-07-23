@@ -81,6 +81,42 @@ export function exactSessionTarget(slug: string): string {
 
 export type CrossSocketOwner = "live" | "absent" | "unknown"
 
+// ---- Absence evidence -------------------------------------------------------------------------
+// Every tri-state lookup below must distinguish "tmux PROVED nothing is there" from "tmux could not
+// answer". Only the first authorizes destructive recovery (retiring a durable adoption claim and
+// deleting the attempt's files); the second must stay `unknown` so a transient failure never trades
+// a possibly-live orphan for a clean toast.
+//
+// tmux has several dialects for "there is no server on this socket", and which one you get depends
+// on how the socket died: a socket that was never created fails at connect() with ENOENT, a stale
+// socket file left behind by a crashed server fails with ECONNREFUSED, a server that shut down
+// cleanly answers "no server running", and a live server with nothing in it answers "no sessions".
+// All four are equally positive evidence of absence. Reading the connect-level dialects as `unknown`
+// is not cosmetic: on any machine whose fray socket has not been created yet (a fresh boot, a
+// `tmux kill-server`), no pane can ever be proven gone, so adoption rollback and boot recovery
+// retain every abandoned claim and its scratchpad forever.
+const NO_TMUX_SERVER_RE =
+  /(?:no server running|no sessions|failed to connect|error connecting to .*\((?:no such file or directory|connection refused)\))/i
+// `-t <target>` lookups additionally get a target-scoped miss. `list-panes -a` never can.
+const NO_TMUX_TARGET_RE = /can't find (?:session|window|pane)/i
+
+function stderrOf(error: unknown): string {
+  return error && typeof error === "object" && "stderr" in error
+    ? String((error as { stderr?: unknown }).stderr ?? "")
+    : ""
+}
+
+/** tmux's own diagnostic proves no server is reachable on this socket. */
+function tmuxServerAbsent(error: unknown): boolean {
+  return NO_TMUX_SERVER_RE.test(stderrOf(error))
+}
+
+/** As above, plus the `-t <target>` miss that a name/id-targeted command reports. */
+function tmuxTargetAbsent(error: unknown): boolean {
+  const stderr = stderrOf(error)
+  return NO_TMUX_SERVER_RE.test(stderr) || NO_TMUX_TARGET_RE.test(stderr)
+}
+
 // A pre-project-socket Fray worker can be recovered without starting a duplicate only when its
 // pane still proves both the project directory and the native provider conversation it belongs to.
 // The full pane tuple is kept so the eventual paste is authorized by tmux itself, rather than by a
@@ -123,9 +159,7 @@ export function crossSocketLiveOwner(slug: string, project: { id: string; dir: s
         if (dead === "0") return "live"
       }
     } catch (error) {
-      const stderr = error && typeof error === "object" && "stderr" in error
-        ? String((error as { stderr?: unknown }).stderr ?? "") : ""
-      if (!/(?:no server running|can't find (?:session|window|pane)|no sessions|failed to connect|error connecting to .*\((?:no such file or directory|connection refused)\))/i.test(stderr)) return "unknown"
+      if (!tmuxTargetAbsent(error)) return "unknown"
     }
   }
   return "absent"
@@ -206,9 +240,7 @@ export function findCompatibleLegacyWorker(
       if (found) return { kind: "unknown" } // more than one exact claimant is still ambiguous
       found = worker
     } catch (error) {
-      const stderr = error && typeof error === "object" && "stderr" in error
-        ? String((error as { stderr?: unknown }).stderr ?? "") : ""
-      if (!/(?:no server running|can't find (?:session|window|pane)|no sessions|failed to connect|error connecting to .*\((?:no such file or directory|connection refused)\))/i.test(stderr)) return { kind: "unknown" }
+      if (!tmuxTargetAbsent(error)) return { kind: "unknown" }
     }
   }
   return found ? { kind: "found", worker: found } : { kind: "absent" }
@@ -673,13 +705,7 @@ export function lookupAdoptionPane(slug: string): AdoptionPaneLookup {
     const parsed = parsePaneSnapshot(out.split("\n")[0] ?? "")
     return parsed ? { kind: "found", pane: parsed.pane } : { kind: "unknown" }
   } catch (error) {
-    const stderr = error && typeof error === "object" && "stderr" in error
-      ? String((error as { stderr?: unknown }).stderr ?? "")
-      : ""
-    if (/no server running|can't find (?:session|window|pane)|no sessions/i.test(stderr)) {
-      return { kind: "absent" }
-    }
-    return { kind: "unknown" }
+    return tmuxTargetAbsent(error) ? { kind: "absent" } : { kind: "unknown" }
   }
 }
 
@@ -702,10 +728,7 @@ export function findProfileHandoffPane(handoffToken: string): AdoptionPaneLookup
     return matches.length === 1 ? { kind: "found", pane: matches[0].pane }
       : matches.length === 0 ? { kind: "absent" } : { kind: "unknown" }
   } catch (error) {
-    const stderr = error && typeof error === "object" && "stderr" in error
-      ? String((error as { stderr?: unknown }).stderr ?? "")
-      : ""
-    return /no server running|no sessions/i.test(stderr) ? { kind: "absent" } : { kind: "unknown" }
+    return tmuxServerAbsent(error) ? { kind: "absent" } : { kind: "unknown" }
   }
 }
 
@@ -776,12 +799,7 @@ export function findAdoptionPanes(attemptTokens: readonly string[]): Map<string,
     }
     return result
   } catch (error) {
-    const stderr = error && typeof error === "object" && "stderr" in error
-      ? String((error as { stderr?: unknown }).stderr ?? "")
-      : ""
-    const lookup: AdoptionPaneLookup = /no server running|no sessions/i.test(stderr)
-      ? { kind: "absent" }
-      : { kind: "unknown" }
+    const lookup: AdoptionPaneLookup = tmuxServerAbsent(error) ? { kind: "absent" } : { kind: "unknown" }
     for (const token of valid) result.set(token, lookup)
     return result
   }
@@ -807,11 +825,7 @@ export function findPaneIdentity(identity: PaneIdentity): AdoptionPaneLookup {
       ? { kind: "absent" }
       : { kind: "unknown" }
   } catch (error) {
-    const stderr = error && typeof error === "object" && "stderr" in error
-      ? String((error as { stderr?: unknown }).stderr ?? "")
-      : ""
-    if (/no server running|no sessions/i.test(stderr)) return { kind: "absent" }
-    return { kind: "unknown" }
+    return tmuxServerAbsent(error) ? { kind: "absent" } : { kind: "unknown" }
   }
 }
 
