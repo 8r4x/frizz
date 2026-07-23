@@ -139,9 +139,8 @@ state. The fence LANGUAGE is the state; the body is the message the card shows:
     process exits and restarts (`codex resume`). The prose says exactly what to re-check.
 
   The dashboard operator's own answer/approval is still a ` ```question ` handoff, not `awaiting`.
-  `github-review:` is the PRIOR name for `pr-watch:` — still parsed and scheduled, but it parks in Held,
-  so prefer `pr-watch:`. `pr:` / `ci:` / `session:` remain parser/scheduler compatibility for existing
-  transcripts only; NEVER emit them for a new automated wait.
+  `pr:` / `ci:` / `session:` remain parser/scheduler compatibility for existing transcripts only;
+  NEVER emit them for a new automated wait.
 
   **Automatable waits stay ACTIVE — but only a live SUB-AGENT keeps you there.** CI, bot/automated
   review, release/deploy completion, PR merge readiness, and another worker are work you can observe

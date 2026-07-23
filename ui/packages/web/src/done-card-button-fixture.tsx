@@ -10,7 +10,7 @@ import "./styles.css"
 //   • the done card's white "Mark as done" button (completeThread; ?mode=executing → needsConfirmation
 //     → the End-session dialog path)
 //   • the awaiting card's compact confirm-park button, one per parkable kind (timer → "Confirm snooze"
-//     to the exact instant; github-review → "Confirm watcher"; human → "Confirm snooze"). Each applies
+//     to the exact instant; pr-watch → "Snooze until activity"; human → "Confirm snooze"). Each applies
 //     a user snooze via setThreadSnooze.
 // RPC is mocked like completion-lifecycle-fixture so nothing real is hit.
 const mode = new URLSearchParams(window.location.search).get("mode") === "executing" ? "executing" : "resting"
@@ -63,7 +63,7 @@ const timerIso = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString()
 const cards: { slug: string; label: string; fence: "done" | "awaiting"; body: string; hints: AwaitingHint[] }[] = [
   { slug: "card-done", label: "done", fence: "done", body: "Shipped the change.", hints: [] },
   { slug: "card-timer", label: "timer snooze", fence: "awaiting", body: "Park until the checkpoint.", hints: [{ kind: "timer", value: timerIso }] },
-  { slug: "card-review", label: "GitHub review watcher", fence: "awaiting", body: "The implementation is ready for review.", hints: [{ kind: "github-review", value: "owner/repo#42" }] },
+  { slug: "card-review", label: "PR watch", fence: "awaiting", body: "The implementation is ready for review.", hints: [{ kind: "pr-watch", value: "owner/repo#42" }] },
   { slug: "card-human", label: "human approval", fence: "awaiting", body: "The API shape needs approval.", hints: [{ kind: "human", value: "Alice to approve the API shape" }] },
   { slug: "card-legacy", label: "legacy CI (no button)", fence: "awaiting", body: "The legacy build is still running.", hints: [{ kind: "ci", value: "owner/repo#7" }] },
 ]

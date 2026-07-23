@@ -24,8 +24,8 @@ test("a done fence with surrounding prose", () => {
   ])
 })
 
-test("an awaiting fence: current human/github-review/timer hint lines parse with the prose", () => {
-  const text = "```awaiting\nWaiting on a named maintainer at a scheduled checkpoint.\nhuman: Alice must approve fork CI\ngithub-review: owner/repo#12\ntimer: 2026-07-15T17:00:00Z\n```"
+test("an awaiting fence: current human/pr-watch/timer hint lines parse with the prose", () => {
+  const text = "```awaiting\nWaiting on a named maintainer at a scheduled checkpoint.\nhuman: Alice must approve fork CI\npr-watch: owner/repo#12\ntimer: 2026-07-15T17:00:00Z\n```"
   assert.deepEqual(splitFenceBlocks(text), [
     {
       kind: "fence",
@@ -33,7 +33,7 @@ test("an awaiting fence: current human/github-review/timer hint lines parse with
       body: "Waiting on a named maintainer at a scheduled checkpoint.",
       hints: [
         { kind: "human", value: "Alice must approve fork CI" },
-        { kind: "github-review", value: "owner/repo#12" },
+        { kind: "pr-watch", value: "owner/repo#12" },
         { kind: "timer", value: "2026-07-15T17:00:00Z" },
       ],
     },

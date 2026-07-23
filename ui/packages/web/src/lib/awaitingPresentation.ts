@@ -4,11 +4,13 @@ import { formatSnoozeWake } from "./snooze.ts"
 /** What the awaiting card's park button offers for these hints, or null when no hint is parkable
  *  (legacy pr/ci/session, or an elapsed/malformed timer) — there is then nothing to confirm.
  *
- *  A future `timer` → "Confirm snooze" until that exact instant; `github-review` → "Confirm watcher"
- *  (its own verb — the watcher is activity-based, so there is no instant to show); a plain `human`
- *  gate → "Confirm snooze". For github-review/human there's no declared time, so the caller parks for
- *  the user's default snooze preset (a "remind me if it's still quiet" fallback; the watcher still
- *  wakes on activity), signalled by a null `timerUntil`.
+ *  A future `timer` → "Confirm snooze" until that exact instant; `pr-watch` → "Snooze until activity"
+ *  — the opt-in "hide this until something happens", since a pr-watch card is a VISIBLE queue handoff
+ *  by default; a plain `human` gate → "Confirm snooze". For pr-watch/human there's no declared time, so
+ *  the caller parks for the user's default snooze preset — for pr-watch that preset is only a SAFETY
+ *  timeout: the scheduler clears the snooze the moment new PR activity arrives (board.ts / scheduler
+ *  clearSnooze-on-review), so "until activity" is the real wake and the timeout just guards against a
+ *  dead PR hiding forever. Signalled by a null `timerUntil`.
  *
  *  `timerUntil` is CANONICALIZED, never the raw hint: the fence grammar admits instants the durable
  *  snooze grammar rejects (no millis, a numeric offset), and setThreadSnooze rejects those as invalid
@@ -21,10 +23,7 @@ export function awaitingParkAction(
     .flatMap((hint) => (hint.kind === "timer" ? [canonicalSnoozeInstant(hint.value)] : []))
     .find((instant): instant is string => instant !== null && Date.parse(instant) > nowMs)
   if (timerUntil) return { label: "Confirm snooze", toastVerb: "Snoozed", timerUntil }
-  // pr-watch/github-review: park the visible queue card until its default snooze preset — the "hide this
-  // until something happens" opt-in. The watcher keeps polling and a new review/approval/comment bumps
-  // it back regardless of the snooze.
-  if (hints.some((hint) => hint.kind === "pr-watch" || hint.kind === "github-review")) return { label: "Confirm watcher", toastVerb: "Parked", timerUntil: null }
+  if (hints.some((hint) => hint.kind === "pr-watch")) return { label: "Snooze until activity", toastVerb: "Holding until PR activity", timerUntil: null }
   if (hints.some((hint) => hint.kind === "human")) return { label: "Confirm snooze", toastVerb: "Snoozed", timerUntil: null }
   return null
 }
@@ -39,7 +38,7 @@ export function awaitingHintSentence(hints: readonly AwaitingHint[], nowMs = Dat
     return `Snooze until ${lowerCalendarLead(formatSnoozeWake(timer.value, nowMs))}`
   }
 
-  const review = hints.find((hint) => hint.kind === "pr-watch" || hint.kind === "github-review")
+  const review = hints.find((hint) => hint.kind === "pr-watch")
   if (review) return `Watch ${review.value} for new reviews, approvals, or comments`
 
   const human = hints.find((hint) => hint.kind === "human")

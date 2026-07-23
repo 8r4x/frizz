@@ -14,10 +14,10 @@ const execFileAsync = promisify(execFile)
 
 // ---- DURABLE TIMER WAKER + PR-WATCH + LEGACY COMPATIBILITY ----------------------------------------
 // New workers use `awaiting` for a PR-activity watcher (`pr-watch:`), a specific external HUMAN gate
-// (`human:`), or a wall-clock checkpoint (`timer:`). `pr-watch` (formerly `github-review`, still
-// scheduled identically) wakes on ANY NEW non-bot activity on the PR after this fence — a review, an
-// approval, or a comment — while a registered timer remains durable across server/worker restarts and
-// resumes when it crosses. Historical transcripts may still carry `pr:`/`ci:` hints, so their existing
+// (`human:`), or a wall-clock checkpoint (`timer:`). `pr-watch` wakes on ANY NEW non-bot activity on
+// the PR after this fence — a review, an approval, or a comment — while a registered timer remains
+// durable across server/worker restarts and resumes when it crosses. Historical transcripts may still
+// carry `pr:`/`ci:` hints, so their existing
 // out-of-band wake behavior remains as a compatibility bridge. Other automated waits should instead
 // stay ACTIVE through Bash/Monitor (Claude) or a blocking
 // exec wait (Codex). The resumed turn supersedes the fence, naturally making the wake idempotent.
@@ -147,16 +147,15 @@ export function evalRollup(rollup: RollupEntry[]): { done: boolean; ok: boolean 
   return { done: !pending, ok: !failed }
 }
 
-// The PR-activity watcher hints: `pr-watch:` (current) and `github-review:` (its prior name). Both are
-// polled and bumped identically by the scheduler; they differ only in board presentation (pr-watch
-// stays a visible queue handoff; github-review parks in Held). One predicate so every scheduler branch
-// treats them the same.
+// The PR-activity watcher hint. A one-line predicate (rather than inlining `=== "pr-watch"`) keeps
+// every scheduler branch reading uniformly and leaves an obvious seam if the watcher ever grows a
+// second spelling again. (`github-review`, the prior name, was removed 2026-07-22.)
 function isPrWatchHint(kind: FenceView["hints"][number]["kind"]): boolean {
-  return kind === "pr-watch" || kind === "github-review"
+  return kind === "pr-watch"
 }
 
 // Is a hint one this scheduler can act on? A current STRICT ISO `timer:`, a machine-readable
-// `pr-watch:`/`github-review:` PR ref, plus legacy `pr:`/`ci:` refs. `human:` is descriptive by
+// `pr-watch:` PR ref, plus legacy `pr:`/`ci:` refs. `human:` is descriptive by
 // definition and `session:` has no cross-session liveness signal, so neither is resolved here.
 function isActionable(hint: FenceView["hints"][number]): boolean {
   if (hint.kind === "timer") return isValidAwaitingTimer(hint.value)
@@ -833,6 +832,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         reason: verdict.reason,
       }, nowMs).delivery
       st.fired = true
+      // "Snooze until activity": if the human parked this pr-watch card with a user snooze, new PR
+      // activity is exactly the thing it was hiding UNTIL — so clear the snooze here, the moment we
+      // enqueue the wake, and the card re-surfaces in the queue (the preset instant was only a safety
+      // timeout). A no-op when nothing was snoozed. Scoped to pr-watch: a human/timer park is a
+      // deliberate hold this activity signal has no business clearing.
+      if (isPrWatchHint(h.kind)) deps.storage.setSnoozedUntil(slug, null)
       log(`waker: queued ${slug} — ${verdict.reason}`)
       checkpoint("after-enqueue", item)
       return // one durable wake per thread per rest

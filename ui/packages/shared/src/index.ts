@@ -176,17 +176,19 @@ export type NativeInputRequired = z.infer<typeof NativeInputRequired>
 // inversion: a thread at rest is awaiting the human UNLESS it excused itself with a signal fence.
 
 // A parked-wait hint parsed from `<kind>: <value>` lines in an ```awaiting fence body. `pr-watch`,
-// `human`, and `timer` are current; `github-review` is the prior review-watcher name (still parsed and
-// scheduled, now Held-legacy); pr/ci/session remain readable for older transcripts and wakers.
+// `pr-watch`, `human`, and `timer` are current; pr/ci/session remain readable for older transcripts
+// and wakers. (`github-review`, the prior review-watcher name, was removed 2026-07-22 — fully
+// displaced by `pr-watch`; an in-flight `github-review:` line now degrades to prose → an ordinary
+// bare-rest queue handoff, which is harmless.)
 //
 // `pr-watch: owner/repo#N` is the general PR watcher: the durable scheduler polls the PR and bumps the
-// worker on ANY new non-bot activity — a review, an approval, or a comment. Unlike `github-review`, it
-// does NOT park the thread in Held: a pr-watch thread stays a visible QUEUE handoff (the worker opened
-// a PR and is watching it), and new activity re-surfaces it. Pair it with `human:` only when the worker
-// is genuinely blocked on a NAMED reviewer — then `human:` supplies the Held/park while pr-watch supplies
-// the machine-readable cursor.
+// worker on ANY new non-bot activity — a review, an approval, or a comment. It does NOT park the thread
+// in Held: a pr-watch thread stays a visible QUEUE handoff (the worker opened a PR and is watching it),
+// and new activity re-surfaces it. The human can park it via the card's "Snooze until activity" button
+// (a hold the next activity clears). Pair `pr-watch:` with `human:` only when the worker is genuinely
+// blocked on a NAMED reviewer — then `human:` supplies the Held/park while pr-watch supplies the cursor.
 export const AwaitingHint = z.object({
-  kind: z.enum(["pr-watch", "human", "github-review", "timer", "pr", "ci", "session"]),
+  kind: z.enum(["pr-watch", "human", "timer", "pr", "ci", "session"]),
   value: z.string(),
 })
 export type AwaitingHint = z.infer<typeof AwaitingHint>

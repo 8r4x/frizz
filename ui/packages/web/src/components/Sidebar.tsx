@@ -436,7 +436,7 @@ export function hintGloss(hints: readonly AwaitingHint[]): string | null {
   const h = parkedAwaitingHint(hints) ?? hints.find((x) => x.kind === "pr" || x.kind === "ci")
   if (!h) return null
   if (h.kind === "timer") return formatSnoozedUntil(h.value) ?? "Timer schedule unavailable"
-  const label = h.kind === "pr" ? "PR" : h.kind === "ci" ? "CI" : h.kind === "human" ? "HUMAN" : h.kind === "pr-watch" ? "WATCH" : h.kind === "github-review" ? "REVIEW" : h.kind
+  const label = h.kind === "pr" ? "PR" : h.kind === "ci" ? "CI" : h.kind === "human" ? "HUMAN" : h.kind === "pr-watch" ? "WATCH" : h.kind
   return `${label} ${h.value}`
 }
 
@@ -517,7 +517,6 @@ function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string |
     // but do not claim that a working wake is armed.
     const parked = parkedAwaitingHint(t.lastFence.hints)
     if (parked?.kind === "human") return { node: hourglass, tip: "Waiting on a human review or approval" }
-    if (parked?.kind === "github-review") return { node: hourglass, tip: "Watching for new non-bot human GitHub review activity" }
     if (parked?.kind === "timer") return { node: hourglass, tip: formatAutoSnoozedUntil(parked.value) ?? "Auto-snoozed until a scheduled check" }
     const hk = t.lastFence.hints[0]?.kind
     if (hk === "pr") return { node: <StatusBox><Github size={9} className="text-muted/70" /></StatusBox>, tip: "Legacy PR wait — active monitoring is not armed" }

@@ -24,10 +24,10 @@ export type FenceSegment =
 const FENCE_BLOCK = /^```(done|awaiting)[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/gm
 
 // A parked-wait hint line inside an ```awaiting body. `pr-watch`/`human`/`timer` are current;
-// `github-review` is the legacy review-watcher name; pr/ci/session remain parseable for older
-// transcripts. Case-insensitive; everything else is prose. `pr-watch` precedes `pr` so it wins the
-// alternation on a `pr-watch:` line (a bare `pr:` still falls through to the legacy `pr`).
-const HINT_RE = /^(pr-watch|human|github-review|timer|pr|ci|session):\s*(\S.*)$/i
+// pr/ci/session remain parseable for older transcripts. Case-insensitive; everything else is prose.
+// `pr-watch` precedes `pr` so it wins the alternation on a `pr-watch:` line (a bare `pr:` still falls
+// through to the legacy `pr`). (`github-review` was removed 2026-07-22 — displaced by `pr-watch`.)
+const HINT_RE = /^(pr-watch|human|timer|pr|ci|session):\s*(\S.*)$/i
 
 // Split the body of a fence into its prose (hint lines removed) and its parsed hints. `done` fences
 // carry no hints — the whole body is prose.

@@ -293,14 +293,14 @@ test("registered future timer crosses during server downtime and fires exactly o
   assert.equal(h.resumes.length, 1)
 })
 
-test("github-review baselines existing activity, ignores bots, then wakes once on a new human review across restart", async () => {
+test("pr-watch baselines existing activity, ignores bots, then wakes once on a new human review across restart", async () => {
   const h = harness()
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
   h.tele.set("r", {
     ...tele(awaiting([
       { kind: "human", value: "repo maintainer review" },
-      { kind: "github-review", value: "acme/app#391" },
+      { kind: "pr-watch", value: "acme/app#391" },
     ])),
     lastActivityAt: fenceAt,
   })
@@ -328,14 +328,14 @@ test("github-review baselines existing activity, ignores bots, then wakes once o
   assert.match(h.resumes[0].message, /@bob/)
 })
 
-test("github-review retries a failed resume from its durable pending cursor across restart and network loss", async () => {
+test("pr-watch retries a failed resume from its durable pending cursor across restart and network loss", async () => {
   const h = harness()
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
   h.tele.set("r", {
     ...tele(awaiting([
       { kind: "human", value: "repo maintainer review" },
-      { kind: "github-review", value: "acme/app#391" },
+      { kind: "pr-watch", value: "acme/app#391" },
     ])),
     lastActivityAt: fenceAt,
   })
@@ -375,7 +375,7 @@ test("github-review retries a failed resume from its durable pending cursor acro
   assert.match(h.resumes[0].message, /@bob/)
 })
 
-test("pr-watch: schedules identically to github-review — baselines, then bumps on a new human comment", async () => {
+test("pr-watch: baselines, then bumps on a new human comment", async () => {
   const h = harness()
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
@@ -414,6 +414,30 @@ test("pr-watch: an APPROVAL is named specifically in the bump steer", async () =
   assert.equal(h.resumes.length, 1)
   assert.match(h.resumes[0].message, /approval/)
   assert.match(h.resumes[0].message, /@dana/)
+})
+
+test("pr-watch: 'Snooze until activity' — a new-activity bump CLEARS the user snooze so the card re-surfaces", async () => {
+  const h = harness()
+  const fenceAt = iso(h.clock.ms)
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: fenceAt })
+  h.review.result = [] // baseline empty
+  await h.make().tick()
+
+  // The human parked the card via "Snooze until activity" — a user snooze with a far-future safety timeout.
+  const safety = iso(h.clock.ms + 24 * 3600_000)
+  h.storage.setSnoozedUntil("r", safety)
+  assert.equal(h.storage.getSession("r")?.snoozed_until, safety)
+
+  // A real human review lands well before the safety instant. The scheduler keeps polling the snoozed
+  // thread, fires, and CLEARS the snooze so the card returns to the queue immediately.
+  h.clock.ms += 10_000
+  h.review.result = [{ id: "review:new", actor: "erin", actorType: "User", at: iso(h.clock.ms), kind: "review", reviewState: "COMMENTED" }]
+  const s = h.make()
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 1, "the bump resumed the worker")
+  assert.equal(h.storage.getSession("r")?.snoozed_until, null, "the user snooze was cleared by the activity bump")
 })
 
 // ---- PR / CI transitions + graceful gh failure ----

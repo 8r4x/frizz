@@ -116,7 +116,7 @@ export interface SubAgentView {
 export interface FenceView {
   kind: "done" | "awaiting"
   body: string
-  hints: { kind: "pr-watch" | "human" | "github-review" | "timer" | "pr" | "ci" | "session"; value: string }[]
+  hints: { kind: "pr-watch" | "human" | "timer" | "pr" | "ci" | "session"; value: string }[]
 }
 
 // Per-session derived telemetry surfaced to the board overlay. Structurally a NormalizedTail (the
@@ -475,7 +475,7 @@ export function hasQuestionBlock(text: string | undefined): boolean {
 const SIGNAL_FENCE_RE = /^```(done|awaiting)[ \t]*\n([\s\S]*?)\n```[ \t]*$/gm
 // An awaiting-body hint line: `<kind>: <value>`. Kind is case-insensitive (lowercased on output); the
 // value must start with a non-space char (a bare `pr:` with nothing after is prose, not a hint).
-const AWAITING_HINT_RE = /^(pr-watch|human|github-review|timer|pr|ci|session):\s*(\S.*)$/i
+const AWAITING_HINT_RE = /^(pr-watch|human|timer|pr|ci|session):\s*(\S.*)$/i
 const FENCE_BODY_MAX = 500 // defensive: never let a worker's fence body fatten the snapshot
 const HINT_MAX = 8 // defensive cap on parsed hint lines
 const HINT_VALUE_MAX = 200 // defensive cap on a single hint value
@@ -514,7 +514,7 @@ export function parseSignalFence(text: string | undefined): FenceView | undefine
     const k = hm?.[1].toLowerCase()
     // Only real hint kinds become hints; any other `word:` line is prose (a stray colon-line
     // like "note: …" must not mint a phantom hint that then glosses as leaked internals). 2026-07-10.
-    if (hm && (k === "pr-watch" || k === "human" || k === "github-review" || k === "timer" || k === "pr" || k === "ci" || k === "session")) {
+    if (hm && (k === "pr-watch" || k === "human" || k === "timer" || k === "pr" || k === "ci" || k === "session")) {
       const value = hm[2].trim()
       hints.push({ kind: k, value: value.length > HINT_VALUE_MAX ? value.slice(0, HINT_VALUE_MAX) : value })
     } else {

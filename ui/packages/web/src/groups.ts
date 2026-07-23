@@ -297,18 +297,17 @@ function hasLiveOps(t: ThreadView): boolean {
 
 // The wait kinds that truthfully earn the parked/hourglass presentation. A timer is only a park while
 // its valid scheduler instant is still in the future; malformed or elapsed timer prose must not
-// advertise a durable future wake. `github-review` is the LEGACY review-watcher name — still a durable
-// Held gate. Legacy machine waits (pr/ci/session) intentionally do not qualify.
+// advertise a durable future wake. Legacy machine waits (pr/ci/session) intentionally do not qualify.
 //
-// `pr-watch` is DELIBERATELY ABSENT: it is the modern review/approval/comment watcher and it must NOT
-// park in Held. A worker that opens a PR and watches it stays a VISIBLE queue handoff (a PR whose
-// reviews may never arrive must not silently vanish into the dimmed band — maintainer 2026-07-22); the
-// scheduler still polls and bumps it, and the human opts into hiding it via Snooze. Adding pr-watch
-// here would re-introduce exactly the auto-Held danger this split was built to remove.
+// `pr-watch` is DELIBERATELY ABSENT: it is the review/approval/comment watcher and it must NOT park in
+// Held. A worker that opens a PR and watches it stays a VISIBLE queue handoff (a PR whose reviews may
+// never arrive must not silently vanish into the dimmed band — maintainer 2026-07-22); the scheduler
+// still polls and bumps it, and the human opts into hiding it via the card's "Snooze until activity"
+// button (a user snooze the next activity clears). Adding pr-watch here would re-introduce exactly the
+// auto-Held danger this split was built to remove.
 export function parkedAwaitingHint(hints: readonly AwaitingHint[], nowMs = Date.now()): AwaitingHint | undefined {
   return (
     hints.find((h) => h.kind === "human") ??
-    hints.find((h) => h.kind === "github-review") ??
     hints.find((h) => h.kind === "timer" && isValidAwaitingTimer(h.value) && Date.parse(h.value) > nowMs)
   )
 }
