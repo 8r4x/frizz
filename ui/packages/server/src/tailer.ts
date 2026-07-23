@@ -69,11 +69,6 @@ const CLAUDE_PERMISSION_CONFIRM_POLLS = 3
 // AGENTS ONLY: a child appends on every step, so silence there is a real (if coarse) liveness signal.
 // A background SHELL has no such property and is not judged this way at all — see bgShellViews.
 const SUBAGENT_STALE_MS = 15 * 60_000
-// How many genuine human messages the fold retains for delivery confirmation (NormalizedTail
-// .recentUserTexts). Only the durable Codex input queue reads it, and only to match items it submitted
-// in this session, so a couple of dozen comfortably covers any realistic steer batch while keeping the
-// per-session fold state trivially small.
-const USER_TEXT_RING_MAX = 32
 // How long the transcript must be silent while a turn still looks in-flight before we spend a
 // tmux capture-pane to sniff for an interactive permission prompt. Keeps us from shelling out
 // every tick for a healthily-streaming turn; a real prompt only appears after a tool_use record
@@ -1038,14 +1033,6 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
         // Keep the delivery-confirmation pair atomic. A genuine non-text user event may still bump
         // row activity, but its newer timestamp must never retain text from an older human turn.
         state.lastUserText = typeof ev.text === "string" ? ev.text : undefined
-        // Codex releases its ENTIRE native queue at one tool boundary, so a batch of steers arrives as
-        // several user records inside a single fold. The scalar above would keep only the last of them
-        // and strand every earlier item of the batch unconfirmed, so retain a bounded ring too.
-        if (typeof ev.text === "string" && typeof ev.at === "string") {
-          const ring = state.recentUserTexts ?? (state.recentUserTexts = [])
-          ring.push({ text: ev.text, at: ev.at })
-          if (ring.length > USER_TEXT_RING_MAX) ring.splice(0, ring.length - USER_TEXT_RING_MAX)
-        }
       }
       break
     case "tool-call":
@@ -1526,8 +1513,8 @@ export function createTailer(deps: TailerDeps): Tailer {
   // Delivery-ledger fold for one registered CLAUDE row's tick: `onLine` correlates each appended JSONL
   // record against the row's pending follow-ups (delivery-ledger.ts); `finish()` ages the items
   // (pending→unconfirmed timeout, unconfirmed drop) and persists any transition, returning true so the
-  // caller re-projects the transcript + dirties the board. Codex rows (their queue is codex_input_queue)
-  // and rows with an empty ledger cost one null check.
+  // caller re-projects the transcript + dirties the board. Codex rows (the app-server bridge dedups
+  // their delivery on deliveryId) and rows with an empty ledger cost one null check.
   function ledgerFold(
     row: SessionRow,
     nowMs: number,
@@ -2013,7 +2000,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // an unanswered ```question fence (a user reply clears the flag and flips the turn in-flight).
       const pendingQuestion = s.turn === "idle" && s.lastAssistantHasQuestion
       const nowMs = now()
-      return { turn: s.turn, permPrompt: s.permPrompt, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), bgShells: bgShellViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, recentUserTexts: s.recentUserTexts, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault }
+      return { turn: s.turn, permPrompt: s.permPrompt, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), bgShells: bgShellViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.

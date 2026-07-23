@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
+import Database from "better-sqlite3"
 import { createStorage, type ProfileHandoffJournal, type Storage, type SessionRow } from "./storage.ts"
 
 function profileHandoff(
@@ -392,17 +393,40 @@ test("session permission actual/pending values round-trip independently and surv
   assert.equal(s.getSession("permissioned")?.permission_mode, "bypassPermissions")
   s.setPermissionPending("permissioned", "default")
   assert.equal(s.getSession("permissioned")?.permission_pending, "default")
-  s.setCodexInputQueue("permissioned", '[{"text":"hello"}]')
   s.setControlError("permissioned", "existing draft")
   s.close()
 
   const reopened = createStorage(path)
   assert.equal(reopened.getSession("permissioned")?.permission_mode, "bypassPermissions")
   assert.equal(reopened.getSession("permissioned")?.permission_pending, "default")
-  assert.equal(reopened.getSession("permissioned")?.codex_input_queue, '[{"text":"hello"}]')
   assert.equal(reopened.getSession("permissioned")?.control_error, "existing draft")
   reopened.setPermissionPending("permissioned", null)
   assert.equal(reopened.getSession("permissioned")?.permission_pending, null)
+  reopened.close()
+})
+
+// The retired tmux codex composer held a DURABLE 'codex-input' runtime lock across restarts, and both
+// its writer (queueFollowUp) and its releaser are gone. A row still holding one would report
+// runtimeControlPending forever — permanently fencing that thread's composer, model, and sandbox
+// controls with nothing left in the product able to clear it. Boot releases it exactly once.
+test("boot releases a stranded 'codex-input' runtime lock left by the retired tmux composer", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fray-storage-codex-input-"))
+  const path = join(dir, "ui.db")
+  const s = createStorage(path)
+  s.upsertSession(row({ slug: "stranded" }))
+  s.upsertSession(row({ slug: "other-owner", session_id: "sid-other" }))
+  s.beginRuntimeControl("other-owner", { sessionId: "sid-other", nativeSessionId: null, generation: 0 }, "profile")
+  s.close()
+
+  // Forge the pre-upgrade state directly: 'codex-input' is no longer a RuntimeControlKind, so this is
+  // exactly how a db written by a pre-cutover fray looks on disk.
+  const sqlite = new Database(path)
+  sqlite.exec("UPDATE session SET runtime_control = 'codex-input' WHERE slug = 'stranded'")
+  sqlite.close()
+
+  const reopened = createStorage(path)
+  assert.equal(reopened.getSession("stranded")?.runtime_control ?? null, null, "the stranded codex-input lock is released at boot")
+  assert.equal(reopened.getSession("other-owner")?.runtime_control, "profile", "a live non-codex runtime control is untouched")
   reopened.close()
 })
 
@@ -462,13 +486,12 @@ test("a snooze carrying a prompt outlives its deadline for the waker, and the pa
   s.close()
 })
 
-test("runtime generations make permission and queue commits compare-and-swap safe", () => {
+test("runtime generations make permission commits compare-and-swap safe", () => {
   const s = store()
   s.upsertSession(row({
     slug: "generation",
     permission_mode: "default",
     permission_pending: "bypassPermissions",
-    codex_input_queue: '[{"text":"queued"}]',
   }))
 
   const initial = s.getSession("generation")!
@@ -507,17 +530,6 @@ test("runtime generations make permission and queue commits compare-and-swap saf
     true,
   )
   assert.equal(s.getSession("generation")?.permission_mode, "default")
-
-  const queue = s.getSession("generation")!.codex_input_queue ?? null
-  assert.equal(
-    s.setCodexInputQueueIfCurrent(
-      "generation",
-      { sessionId: initial.session_id, generation: 0, queue },
-      null,
-    ),
-    false,
-  )
-  assert.equal(s.getSession("generation")?.codex_input_queue, queue)
 
   const replacement = row({
     slug: "generation",
