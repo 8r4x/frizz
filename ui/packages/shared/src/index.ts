@@ -705,6 +705,9 @@ export type AdoptThreadResult = z.infer<typeof AdoptThreadResult>
 
 export const FollowUpInput = z.object({
   slug: ThreadSlug,
+  // Binds the call to the session the tab is looking at, so a stale page cannot deliver a follow-up
+  // into a thread that has since been re-dispatched (merged from origin/main, 2026-07-21).
+  sessionId: z.string().min(1),
   message: z.string().min(1),
   // Generated once before the optimistic clear so a transport replay can be idempotent.
   deliveryId: z.string().min(1).max(200).optional(),
@@ -713,6 +716,7 @@ export type FollowUpInput = z.infer<typeof FollowUpInput>
 
 export const SetThreadSnoozeInput = z.object({
   slug: ThreadSlug,
+  sessionId: z.string().min(1),
   // null is the explicit "wake now"/cancel operation; presets and custom local input send UTC.
   until: SnoozeUntil.nullable(),
   // Optional scheduled follow-up. Omitted/null ⇒ a plain reminder snooze; a prompt ⇒ the thread is
@@ -721,6 +725,17 @@ export const SetThreadSnoozeInput = z.object({
   prompt: SnoozePrompt.nullable().optional(),
 }).strict()
 export type SetThreadSnoozeInput = z.infer<typeof SetThreadSnoozeInput>
+
+// An ```awaiting fence is a PROPOSAL. Confirming binds ONE exact final-message generation — identified
+// by the fence instant plus the hint it proposed — to durable state, so a later fence or an edited hint
+// asks the operator again instead of inheriting a stale approval.
+export const ConfirmAwaitingInput = z.object({
+  slug: ThreadSlug,
+  sessionId: z.string().min(1),
+  fenceAt: z.string().datetime({ offset: true }),
+  hint: AwaitingHint,
+}).strict()
+export type ConfirmAwaitingInput = z.infer<typeof ConfirmAwaitingInput>
 
 // A human-authored display title for a registered session. Trimming happens at the RPC boundary so
 // storage never has to distinguish whitespace-only names from real intent; the web input mirrors the
