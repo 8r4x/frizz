@@ -589,10 +589,14 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const thread = (await ctx.board.snapshot()).threads.find((t) => t.id === input.slug)
         if (!thread || thread.foreign || thread.kind !== "session") throw new Error(`thread ${input.slug} is not editable`)
-        // App-server threads have no tmux pane to reattach — the tmux permission controller would spawn
-        // a duplicate codex process on the same rollout. Persist the sandbox; it applies on the next turn.
+        // EVERY codex thread persists its sandbox and applies it on the next turn: there is no tmux pane
+        // to reattach, and the permission controller is now a CLAUDE-only path (it inspects the pane with
+        // inspectClaudeComposer). Keying this on `codex_runtime === "app-server"` instead of the backend
+        // let a LEGACY codex row (dispatched pre-cutover, codex_runtime NULL, not yet migrated) fall into
+        // that controller and get its Codex TUI parsed as a Claude composer. followUp already branches on
+        // the backend alone and migrates such a row on contact; match it.
         const permRow = ctx.storage.getSession(input.slug)
-        if (permRow?.codex_runtime === "app-server") {
+        if (permRow?.backend === "codex") {
           ctx.storage.setPermissionMode(input.slug, input.permissionMode)
           ctx.board.refresh()
           return { effect: "next-resume" as const }
@@ -617,10 +621,11 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const thread = (await ctx.board.snapshot()).threads.find((candidate) => candidate.id === input.slug)
         if (!thread || thread.foreign || thread.kind !== "session") throw new Error(`thread ${input.slug} is not editable`)
-        // App-server threads take model/effort per turn (turn/start) — no tmux process handoff. Persist
-        // them; the next follow-up turn picks them up. (Avoids the tmux profile controller's reattach.)
+        // Codex takes model/effort per turn (turn/start) — no tmux process handoff. Persist them; the
+        // next follow-up turn picks them up. Branch on the BACKEND, not codex_runtime: the profile
+        // controller is Claude-only now, so a legacy (unmigrated) codex row must not reach its reattach.
         const profRow = ctx.storage.getSession(input.slug)
-        if (profRow?.codex_runtime === "app-server") {
+        if (profRow?.backend === "codex") {
           ctx.storage.setProfile(input.slug, input.model, input.effort)
           ctx.board.refresh()
           return { effect: "next-resume" as const }

@@ -392,6 +392,39 @@ test("setThreadPermission RPC: validates input and persists an exited thread ove
   h.storage.close()
 })
 
+// The permission/profile controllers are CLAUDE-only since the codex tmux composer was removed (they
+// parse the pane with inspectClaudeComposer). A LEGACY codex row — dispatched before the app-server
+// cutover, so codex_runtime is still NULL — must therefore persist like any other codex row instead of
+// being handed to them, which is what gating on `codex_runtime === "app-server"` used to do.
+test("setThreadPermission/setThreadProfile RPC: a legacy codex row persists and never reaches the tmux controllers", async () => {
+  const h = harness()
+  const slug = "legacy-codex-row"
+  h.storage.upsertSession(row(slug))
+  h.storage.setBackend(slug, "codex") // codex_runtime deliberately left NULL
+  h.addExitedThread(slug)
+
+  let controllerCalls = 0
+  const spy = { request: async () => { controllerCalls++; return { effect: "applied" as const } } }
+  ;(h.ctx as { permissionController?: unknown }).permissionController = { ...spy, tick: () => {}, start: () => {}, stop: () => {} }
+  ;(h.ctx as { profileController?: unknown }).profileController = spy
+
+  assert.deepEqual(
+    await h.router.setThreadPermission.handler({ input: { slug, permissionMode: "bypassPermissions" } }),
+    { effect: "next-resume" },
+  )
+  assert.deepEqual(
+    await h.router.setThreadProfile.handler({ input: { slug, model: "gpt-5.6-sol", effort: "high" } }),
+    { effect: "next-resume" },
+  )
+  assert.equal(controllerCalls, 0, "a codex row never reaches the Claude-only permission/profile controllers")
+  const saved = h.storage.getSession(slug)!
+  assert.equal(saved.permission_mode, "bypassPermissions")
+  assert.equal(saved.model, "gpt-5.6-sol")
+  assert.equal(saved.effort, "high")
+  assert.equal(saved.runtime_control ?? null, null, "no durable tmux runtime control was armed")
+  h.storage.close()
+})
+
 test("setThreadPermission RPC: rowless/foreign-style threads are read-only", async () => {
   const h = harness()
   await assert.rejects(
