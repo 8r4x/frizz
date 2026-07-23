@@ -84,7 +84,10 @@ export interface ResumeTmux {
   panePid?(slug: string): number | null
   capturePane?(slug: string): string
   pasteText(slug: string, text: string): void
-  sendKeys(slug: string, text: string): void
+  // Optional and NO LONGER CALLED by this module: the un-settled `send-keys -l text` + `send-keys Enter`
+  // pair is the swallowed-Enter path (see the live-inject branch below). Kept on the interface so the
+  // existing fixtures that supply it stay valid.
+  sendKeys?(slug: string, text: string): void
   sendTextToExpectedAdoptionPane?(expected: tmux.ExpectedAdoptionPane, text: string, submit: boolean): boolean
   killExpectedAdoptionPane?(expected: tmux.ExpectedAdoptionPane): boolean
   killExpectedProfileHandoffPane?(expected: tmux.ExpectedProfileHandoffPane): boolean
@@ -1129,8 +1132,21 @@ function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string): voi
       if (tx.sendTextToExpectedAdoptionPane?.(adoption, message, true) !== true) {
         throw new Error("This adopted worker changed before the follow-up could be submitted")
       }
-    } else if (message.includes("\n")) tx.pasteText(slug, message)
-    else tx.sendKeys(slug, message)
+    } else {
+      // EVERY follow-up — single-line included — goes through the bracketed-paste + settle path.
+      // A single-line steer used to take tmux.sendKeys: `send-keys -l <text>` and then a SEPARATE
+      // `send-keys Enter`, with nothing between them. Claude Code's TUI reads those two writes out of
+      // the pty as ONE input burst, treats the burst as a paste, and inserts the trailing \r into the
+      // composer as a literal newline instead of submitting — so the follow-up just sits there unsent
+      // until a LATER Enter submits the accumulation as one glued message. Measured against a real
+      // claude 2.1.218 TUI in a real tmux pane (2026-07-23): 20 single-line follow-ups injected with
+      // sendKeys mid-turn produced FOUR queue records, three of them concatenations joined by \r — a
+      // 16/20 swallow rate; a second run at 120 columns swallowed 8 of 8. The same 20 sends through
+      // pasteText (bracketed paste + a blocking run-shell settle + Enter) produced 20 clean records
+      // and zero concatenations. The settle is what buys the separation: it forces the Enter into a
+      // read() the TUI cannot fold into the paste.
+      tx.pasteText(slug, message)
+    }
     return
   }
   if (!adoption) {

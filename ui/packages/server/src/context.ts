@@ -24,6 +24,7 @@ import type { AgentBackend } from "./backend/types.ts"
 import { detectGithub, type GithubDetection } from "./github.ts"
 import * as tmux from "./tmux.ts"
 import { createPermissionController, type PermissionController } from "./permission-controller.ts"
+import { createDeliveryConfirmer, type DeliveryConfirmer } from "./delivery-confirm.ts"
 import { createProfileController, type ProfileController } from "./profile-controller.ts"
 import type { InteractionStore } from "./interaction-store.ts"
 import {
@@ -123,6 +124,9 @@ export interface AppContext {
   // conversation with backend-native launch flags; busy/ambiguous states fail explicitly.
   permissionController: PermissionController
   profileController?: ProfileController
+  // Proves an injected Claude follow-up was actually SUBMITTED, and re-presses Enter when the TUI
+  // swallowed it and fray's own text is provably still sitting in the composer (delivery-confirm.ts).
+  deliveryConfirmer: DeliveryConfirmer
   // Detach storage-owned observers before board/storage teardown. Idempotent and synchronous so a
   // deferred interaction notification cannot enqueue fresh board work during the shutdown drain.
   stopSubscriptions(): void
@@ -203,11 +207,13 @@ interface PartialContextResources {
   scheduler?: Scheduler
   permissionController?: PermissionController
   profileController?: ProfileController
+  deliveryConfirmer?: DeliveryConfirmer
 }
 
 interface PartialContextCleanup {
   tailer(): Promise<void>
   permissionController(): Promise<void>
+  deliveryConfirmer(): Promise<void>
   profileController(): Promise<void>
   subscriptions(): Promise<void>
   scheduler(): Promise<void>
@@ -220,6 +226,7 @@ function partialContextCleanup(resources: PartialContextResources): PartialConte
   return {
     tailer: createRetryableCleanup(() => resources.tailer?.stop()),
     permissionController: createRetryableCleanup(() => resources.permissionController?.stop()),
+    deliveryConfirmer: createRetryableCleanup(() => resources.deliveryConfirmer?.stop()),
     profileController: createRetryableCleanup(() => resources.profileController?.stop()),
     subscriptions: createRetryableCleanup(() => resources.stopSubscriptions?.()),
     scheduler: createRetryableCleanup(async () => { await resources.scheduler?.stop() }),
@@ -243,6 +250,7 @@ function contextCleanupBarrier(
     phases: [
       { name: "context tailer", run: cleanup.tailer },
       { name: "context permission producer", run: cleanup.permissionController },
+      { name: "context delivery confirmer", run: cleanup.deliveryConfirmer },
       { name: "context profile producer", run: cleanup.profileController },
       { name: "context subscriptions", run: cleanup.subscriptions },
       { name: "context wake scheduler", run: cleanup.scheduler },
@@ -492,6 +500,8 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   })
   resources.permissionController = permissionController
   opts.startup?.afterPhase?.("permission producer")
+  const deliveryConfirmer = createDeliveryConfirmer({ storage, board })
+  resources.deliveryConfirmer = deliveryConfirmer
   const profileController = createProfileController({
     storage,
     tailer,
@@ -586,6 +596,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     scheduler,
     permissionController,
     profileController,
+    deliveryConfirmer,
     stopSubscriptions,
     backendFor,
     getSettings: () => getSettings(storage),
