@@ -33,6 +33,12 @@ function row(slug: string, over: Partial<SessionRow> = {}): SessionRow {
   }
 }
 
+// Idle Claude panes whose footer BOTH reads as idle to inspectClaudeComposer (the mode row starts with
+// the ⏵ glyph) and names the mode to detectClaudePermissionMode — which is what the post-reattach
+// verification reads to confirm the backend actually applied the request.
+const CLAUDE_BYPASS_PANE = "history\n❯ \n────────\n  ⏵⏵ bypass permissions on"
+const CLAUDE_ACCEPT_EDITS_PANE = "history\n❯ \n────────\n  ⏵⏵ accept edits mode on"
+
 function harness(storageOverride?: Storage) {
   const storage = storageOverride ?? createStorage(join(mkdtempSync(join(tmpdir(), "fray-permission-controller-")), "ui.db"))
   let telemetry: SessionTelemetry | undefined = {
@@ -43,25 +49,13 @@ function harness(storageOverride?: Storage) {
     pendingQuestion: false,
   }
   let pane = ""
-  let escaped = ""
   let live = true
-  let atomicSendSucceeds = true
   let clock = 1_000
   let onTailerTick = () => {}
-  const sent: string[] = []
   const reattached: string[] = []
   const terminal: PermissionTerminal = {
     isLive: () => live,
     capturePane: () => pane,
-    capturePaneEscaped: () => escaped,
-    sendLiteral: (_slug, text) => sent.push(`literal:${text}`),
-    sendTextWithKey: (_slug, text, key) => {
-      sent.push(`atomic:${key}:${text}`)
-      return atomicSendSucceeds
-    },
-    sendKey: (_slug, key) => {
-      sent.push(`key:${key}`)
-    },
   }
   let refreshes = 0
   const board = { refresh: () => void refreshes++ } as unknown as BoardManager
@@ -89,20 +83,15 @@ function harness(storageOverride?: Storage) {
   return {
     storage,
     controller,
-    sent,
     reattached,
-    setPane(plain: string, withEscapes = plain) {
+    setPane(plain: string) {
       pane = plain
-      escaped = withEscapes
     },
     setTelemetry(next: SessionTelemetry | undefined) {
       telemetry = next
     },
     setLive(next: boolean) {
       live = next
-    },
-    setAtomicSendSucceeds(next: boolean) {
-      atomicSendSucceeds = next
     },
     setNow(next: number) {
       clock = next
@@ -235,9 +224,9 @@ test("a new Claude pane footer wins over the replaced pane's delayed shutdown si
 test("the cleanup timer cannot invalidate a readiness-checked permission handoff in progress", async () => {
   const h = harness()
   h.storage.upsertSession(row("slow-handoff"))
-  h.storage.setBackend("slow-handoff", "codex")
+  h.storage.setBackend("slow-handoff", "claude")
   h.setTelemetry({ turn: "idle", permPrompt: false, subAgents: [], bgShells: [], pendingQuestion: false, permissionMode: "default" })
-  h.setPane("history\n❯ \n────────")
+  h.setPane(CLAUDE_BYPASS_PANE)
   let release!: () => void
   const ready = new Promise<void>((resolve) => { release = resolve })
   const controller = createPermissionController({
@@ -253,7 +242,7 @@ test("the cleanup timer cannot invalidate a readiness-checked permission handoff
   assert.equal(h.storage.getSession("slow-handoff")?.permission_pending, "bypassPermissions")
   assert.equal(h.storage.getSession("slow-handoff")?.control_error, null)
   h.setLive(false)
-  await assert.rejects(controller.request("slow-handoff", "plan"), /already in progress/)
+  await assert.rejects(controller.request("slow-handoff", "acceptEdits"), /already in progress/)
   assert.equal(h.storage.getSession("slow-handoff")?.permission_pending, "bypassPermissions")
   h.setLive(true)
 
@@ -324,7 +313,6 @@ test("a stale pending permission is failed closed on controller restart instead 
   restarted.tick()
   assert.equal(h.storage.getSession("restart")?.permission_pending, null)
   assert.match(h.storage.getSession("restart")?.control_error ?? "", /prior permission change was not observed/)
-  assert.deepEqual(h.sent, [])
 })
 
 test("restart reconciliation never treats historical or dead telemetry as a completed handoff", () => {
@@ -399,21 +387,19 @@ test("an old permission completion cannot clear a newer same-session process gen
 test("an exited mode saves for native resume while a live read-only request reattaches", async () => {
   const h = harness()
   h.storage.upsertSession(row("exited", { exited: 1 }))
-  h.storage.setBackend("exited", "codex")
+  h.storage.setBackend("exited", "claude")
   h.setLive(false)
-  assert.deepEqual(await h.controller.request("exited", "plan"), { effect: "next-resume" })
-  assert.equal(h.storage.getSession("exited")?.permission_mode, "plan")
+  assert.deepEqual(await h.controller.request("exited", "acceptEdits"), { effect: "next-resume" })
+  assert.equal(h.storage.getSession("exited")?.permission_mode, "acceptEdits")
   assert.equal(h.storage.getSession("exited")?.permission_pending, null)
-  assert.deepEqual(h.sent, [])
 
   h.storage.upsertSession(row("live-read"))
-  h.storage.setBackend("live-read", "codex")
+  h.storage.setBackend("live-read", "claude")
   h.setLive(true)
   h.setTelemetry({ turn: "idle", permPrompt: false, subAgents: [], bgShells: [], pendingQuestion: false, permissionMode: "default" })
-  h.setPane("history\n❯ \n────────")
-  assert.deepEqual(await h.controller.request("live-read", "plan"), { effect: "applied" })
-  assert.equal(h.storage.getSession("live-read")?.permission_mode, "plan")
+  h.setPane(CLAUDE_ACCEPT_EDITS_PANE)
+  assert.deepEqual(await h.controller.request("live-read", "acceptEdits"), { effect: "applied" })
+  assert.equal(h.storage.getSession("live-read")?.permission_mode, "acceptEdits")
   assert.equal(h.storage.getSession("live-read")?.permission_pending, null)
-  assert.deepEqual(h.reattached, ["live-read:default->plan"])
-  assert.deepEqual(h.sent, [])
+  assert.deepEqual(h.reattached, ["live-read:default->acceptEdits"])
 })

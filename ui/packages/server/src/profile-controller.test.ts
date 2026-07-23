@@ -75,9 +75,6 @@ function harness(options: { live?: boolean; tele?: SessionTelemetry; now?: numbe
     isLive: () => options.live ?? true,
     paneIdentity: () => PANE,
     capturePane: () => EMPTY_CLAUDE,
-    capturePaneEscaped: () => EMPTY_CLAUDE,
-    sendLiteral: () => undefined,
-    sendKey: () => undefined,
   }
   return { storage, tailer, board, terminal, currentTelemetry, refreshes: () => refreshes, now: () => options.now ?? Date.parse("2026-07-13T12:00:00.000Z") }
 }

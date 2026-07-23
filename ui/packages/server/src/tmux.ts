@@ -436,16 +436,6 @@ export function capturePane(slug: string): string {
   }
 }
 
-// Same pane with SGR escapes preserved. The live-permission controller uses Codex's dim placeholder
-// style to distinguish an empty composer from human-typed text before injecting a slash command.
-export function capturePaneEscaped(slug: string): string {
-  try {
-    return tmux("capture-pane", "-p", "-e", "-t", exactSessionTarget(slug))
-  } catch {
-    return ""
-  }
-}
-
 export interface PaneIdentity {
   paneId: string
   panePid: number
@@ -658,24 +648,6 @@ export function sendTextToExpectedAdoptionPane(
     // the server either rejected it before authorization or finishes the queued cleanup itself.
     return false
   }
-}
-
-export function sendTextWithKeyToExpectedAdoptionPane(
-  expected: ExpectedAdoptionPane,
-  text: string,
-  key: "Enter" | "Tab",
-): boolean {
-  const condition = expectedAdoptionCondition(expected)
-  if (!condition || expected.pane_id === null) return false
-  return sendTextWithKeyToPane(socket, expected.pane_id, condition, "fray-exact", text, key)
-}
-
-export function sendKeyToExpectedAdoptionPane(
-  expected: ExpectedAdoptionPane,
-  key: "Enter" | "Tab" | "Up" | "Down" | "Escape",
-): boolean {
-  if (expected.pane_id === null) return false
-  return exactPaneAction(expected, `send-keys -t ${expected.pane_id} ${key}`)
 }
 
 // The PTY runs this exact conditional itself. Unlike a canAttach preflight followed by
@@ -1034,14 +1006,6 @@ export function sendKeys(slug: string, text: string): void {
 // pane before using these; unlike sendKeys, these never guess that a literal string is a user prompt.
 export function sendLiteral(slug: string, text: string): void {
   tmux("send-keys", "-t", exactSessionTarget(slug), "-l", text)
-}
-
-export function sendTextWithKey(slug: string, text: string, key: "Enter" | "Tab"): boolean {
-  const identity = paneIdentity(slug)
-  if (!identity) return false
-  const condition = expectedPaneIdentityCondition(identity)
-  if (!condition) return false
-  return sendTextWithKeyToPane(socket, identity.paneId, condition, "fray-input", text, key)
 }
 
 export function sendKey(slug: string, key: "Enter" | "Tab" | "Up" | "Down" | "Escape"): void {

@@ -11,22 +11,16 @@ import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 
 const POLL_MS = 750
 
+// Read-only by construction. Both controllers that use this only ever INSPECT a Claude pane (to protect
+// an unsent draft before a controlled reattach); neither types into one. The send/key members existed for
+// the retired Codex composer — the AI-rename controller keeps its own terminal for the one path that
+// still writes to a pane.
 export interface PermissionTerminal {
   isLive(slug: string): boolean
   paneIdentity?(slug: string): tmux.PaneIdentity | null
   capturePane(slug: string): string
-  capturePaneEscaped(slug: string): string
-  sendLiteral(slug: string, text: string): void
-  sendTextWithKey?(slug: string, text: string, key: "Enter" | "Tab"): boolean
-  sendKey(slug: string, key: "Enter" | "Tab" | "Up" | "Down" | "Escape"): void
   findExpectedAdoptionPane?(expected: tmux.ExpectedAdoptionPane): tmux.AdoptionPaneLookup
   captureExpectedAdoptionPane?(expected: tmux.ExpectedAdoptionPane, escaped?: boolean): tmux.ExactPaneCapture
-  sendTextToExpectedAdoptionPane?(expected: tmux.ExpectedAdoptionPane, text: string, submit: boolean): boolean
-  sendTextWithKeyToExpectedAdoptionPane?(expected: tmux.ExpectedAdoptionPane, text: string, key: "Enter" | "Tab"): boolean
-  sendKeyToExpectedAdoptionPane?(
-    expected: tmux.ExpectedAdoptionPane,
-    key: "Enter" | "Tab" | "Up" | "Down" | "Escape",
-  ): boolean
 }
 
 export interface PermissionController {
@@ -125,15 +119,8 @@ export function createPermissionController(deps: PermissionControllerDeps): Perm
   const terminal: PermissionTerminal = deps.terminal ?? {
     isLive: tmux.isLive,
     capturePane: tmux.capturePane,
-    capturePaneEscaped: tmux.capturePaneEscaped,
-    sendLiteral: tmux.sendLiteral,
-    sendTextWithKey: tmux.sendTextWithKey,
-    sendKey: tmux.sendKey,
     findExpectedAdoptionPane: tmux.findExpectedAdoptionPane,
     captureExpectedAdoptionPane: tmux.captureExpectedAdoptionPane,
-    sendTextToExpectedAdoptionPane: tmux.sendTextToExpectedAdoptionPane,
-    sendTextWithKeyToExpectedAdoptionPane: tmux.sendTextWithKeyToExpectedAdoptionPane,
-    sendKeyToExpectedAdoptionPane: tmux.sendKeyToExpectedAdoptionPane,
   }
   let timer: NodeJS.Timeout | null = null
   const activePermissionRequests = new Set<string>()
@@ -149,17 +136,16 @@ export function createPermissionController(deps: PermissionControllerDeps): Perm
     return current.kind === "found" && !current.pane.dead ? "live" : "absent"
   }
 
-  function captureOwned(row: SessionRow, escaped: boolean): string | undefined {
+  function captureOwned(row: SessionRow): string | undefined {
     const binding = adoptionRuntimeBinding(deps.storage, row)
     if (binding.kind === "conflict") return undefined
     if (binding.kind === "unbound") {
       if (!terminal.isLive(row.slug)) return undefined
-      return escaped ? terminal.capturePaneEscaped(row.slug) : terminal.capturePane(row.slug)
+      return terminal.capturePane(row.slug)
     }
-    const captured = terminal.captureExpectedAdoptionPane?.(binding.claim, escaped)
+    const captured = terminal.captureExpectedAdoptionPane?.(binding.claim, false)
     return captured?.kind === "captured" ? captured.text : undefined
   }
-
 
   function failRequest(slug: string, message: string, expected?: RuntimeExpectation): never {
     let row = deps.storage.getSession(slug)
@@ -213,11 +199,7 @@ export function createPermissionController(deps: PermissionControllerDeps): Perm
   async function requestOwned(slug: string, requested: PermissionModeValue): Promise<{ effect: "applied" | "next-resume" }> {
     let row = deps.storage.getSession(slug)
     if (!row) throw new Error(`no session registered for ${slug}`)
-    const codex = row.backend === "codex"
-    if (codex && requested !== "plan" && requested !== "default" && requested !== "bypassPermissions") {
-      throw new Error("Choose Read-only, Workspace-write, or Full access for a Codex thread")
-    }
-    if (!codex && requested === "plan") throw new Error("Plan mode is not available for dashboard workers")
+    if (requested === "plan") throw new Error("Plan mode is not available for dashboard workers")
     if (activePermissionRequests.has(slug)) {
       throw new Error("A permission change is already in progress for this thread")
     }
@@ -262,10 +244,9 @@ export function createPermissionController(deps: PermissionControllerDeps): Perm
     const sessionId = row.session_id
     const initialGeneration = row.runtime_generation ?? 0
     const tele = deps.tailer.get(slug)
-    const permissionRevision = tele?.permissionModeRevision ?? 0
     const savedMode = pendingMode(row.permission_mode)
     const current = savedMode
-      ? effectivePermissionMode(row.backend === "codex" ? "codex" : "claude", savedMode)
+      ? effectivePermissionMode("claude", savedMode)
       : tele?.permissionMode
     if (!current) failRequest(slug, "Current permission mode is still loading; retry after the session metadata appears")
     if (current === requested) {
@@ -289,7 +270,7 @@ export function createPermissionController(deps: PermissionControllerDeps): Perm
     if (unresolvedOps > 0) {
       failRequest(slug, `Permission changes require no unresolved background work; wait for ${unresolvedOps} operation${unresolvedOps === 1 ? "" : "s"}`)
     }
-    const composer = inspectClaudeComposer(captureOwned(row, false) ?? "")
+    const composer = inspectClaudeComposer(captureOwned(row) ?? "")
     if (composer.kind === "typed") {
       failRequest(slug, "Permission change blocked: submit or clear the existing Claude terminal draft")
     }
@@ -329,25 +310,11 @@ export function createPermissionController(deps: PermissionControllerDeps): Perm
       // the launch fallback. A fresh backend record is authoritative: Claude can reject/coerce a mode
       // for a particular model/version, and presenting the requested flag as applied would be false.
       deps.tailer.tick()
-      const observed = deps.tailer.get(slug)
-      const paneMode = row.backend === "claude" ? detectClaudePermissionMode(captureOwned(handoffRow, false) ?? "") : undefined
-      // The fresh pane is generation-scoped (reattach verified its PID before returning), while an
-      // untimestamped Claude sidecar observed in this window may belong to the pane just killed. A
-      // visible footer therefore wins. If the footer is unavailable (very narrow/partial capture), a
-      // genuinely fresh backend record remains the fail-closed fallback.
-      const observedAt = observed?.permissionModeAt ? Date.parse(observed.permissionModeAt) : NaN
-      const handoffSpawnedAt = Date.parse(handoffRow.spawned_at)
-      const codexObservationIsCurrent =
-        (observed?.permissionModeRevision ?? 0) > permissionRevision &&
-        Number.isFinite(observedAt) &&
-        Number.isFinite(handoffSpawnedAt) &&
-        observedAt >= handoffSpawnedAt
-      const actualMode = row.backend === "claude"
-        ? paneMode
-        : codexObservationIsCurrent
-          ? observed?.permissionMode
-          : undefined
-      if (row.backend === "claude" && !actualMode) {
+      // The fresh pane is generation-scoped (reattach verified its PID before returning), and its
+      // rendered footer is the authority: an untimestamped Claude sidecar observed in this window may
+      // belong to the pane just killed.
+      const actualMode = detectClaudePermissionMode(captureOwned(handoffRow) ?? "")
+      if (!actualMode) {
         throw new Error("Backend mode could not be confirmed from the new Claude pane; the change was not reported as applied")
       }
       if (
@@ -406,17 +373,10 @@ export function createPermissionController(deps: PermissionControllerDeps): Perm
           continue
         }
         if (activePermissionRequests.has(row.slug)) continue
-        const observed = deps.tailer.get(row.slug)
         const live = runtimeState(row) === "live"
-        const observedIsCurrent = live && (
-          row.backend === "codex"
-            ? observed?.permissionMode === requested &&
-              !!observed.permissionModeAt &&
-              Number.isFinite(Date.parse(observed.permissionModeAt)) &&
-              Number.isFinite(Date.parse(row.spawned_at)) &&
-              Date.parse(observed.permissionModeAt) >= Date.parse(row.spawned_at)
-            : detectClaudePermissionMode(captureOwned(row, false) ?? "") === requested
-        )
+        // Only CLAUDE rows ever arm permission_pending: a codex sandbox change is persisted by the
+        // router and applied by the app-server on its next turn, never through this tmux handoff.
+        const observedIsCurrent = live && detectClaudePermissionMode(captureOwned(row) ?? "") === requested
         const next = observedIsCurrent
           ? { permissionMode: requested, controlError: null }
           : {
