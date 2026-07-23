@@ -88,6 +88,67 @@ test("an unconfirmed item is dropped after the drop window", () => {
   assert.deepEqual(out, [])
 })
 
+// ---- merged submissions (the "Delivery unconfirmed" bug) ----
+// fray pastes a follow-up into Claude Code's composer and sends Enter. When the TUI swallows that Enter
+// mid-render the text STAYS in the composer, and the next follow-up's paste lands after it — so one
+// Enter submits the accumulation and Claude Code records ONE enqueue whose content is the concatenation.
+// Byte shapes below are taken from the maintainer's own transcript (2026-07-23, `why-when-i-try-to-change`),
+// where four such sends all reached the agent and all four rendered "Delivery unconfirmed" forever.
+const merged = (a: string, b: string, sep = "") => ({
+  type: "queue-operation", operation: "enqueue", timestamp: iso(T0 + 1000), content: `${a}${sep}${b}`,
+})
+
+test("a merged enqueue confirms EVERY send it is composed of (newline-joined)", () => {
+  const a = item({ id: "d-a", text: "You should probably also investigate how the client and server ever got out of sync." })
+  const b = item({ id: "d-b", text: "You have to remind me again why we are not just using the SDK for codex." })
+  const out = correlateDeliveryRecord([a, b], merged(a.text, b.text, "\n"), iso(T0 + 1000))
+  assert.deepEqual(out.map((i) => i.state), ["enqueued", "enqueued"])
+})
+
+test("a merged enqueue confirms both sends when the composer joined them with NO separator", () => {
+  const a = item({ id: "d-a", text: "http://127.0.0.1:4919/thread/why-when-i-try-to-change" })
+  const b = item({ id: "d-b", text: "> codex remote-control start|stop|pair — you sure this is the same kind of thing?" })
+  const out = correlateDeliveryRecord([a, b], merged(a.text, b.text), iso(T0 + 1000))
+  assert.deepEqual(out.map((i) => i.state), ["enqueued", "enqueued"])
+})
+
+test("a merged queued_command DELIVERS every send it is composed of", () => {
+  const a = item({ id: "d-a", text: "the first long follow-up the composer swallowed" })
+  const b = item({ id: "d-b", text: "the second follow-up whose Enter submitted both" })
+  const rec = {
+    type: "attachment", timestamp: iso(T0 + 1000),
+    attachment: { type: "queued_command", commandMode: "prompt", prompt: `${a.text}\n${b.text}` },
+  }
+  assert.deepEqual(correlateDeliveryRecord([a, b], rec, iso(T0 + 1000)), [])
+})
+
+test("an ALREADY-unconfirmed item is rescued by a late enqueue", () => {
+  // Observed: 87s and 12min between the send and the enqueue record, because the composer held the
+  // paste. PENDING_TIMEOUT_MS is 60s, so the item had already gone amber — and used to stay that way.
+  const stale = item({ state: "unconfirmed" })
+  const out = correlateDeliveryRecord([stale], {
+    type: "queue-operation", operation: "enqueue", timestamp: iso(T0 + 90_000), content: stale.text,
+  }, iso(T0 + 90_000))
+  assert.equal(out[0].state, "enqueued")
+})
+
+test("a merged record leaves an item it does NOT contain alone", () => {
+  const a = item({ id: "d-a", text: "the first long follow-up the composer swallowed" })
+  const other = item({ id: "d-b", text: "an unrelated send that never reached the composer" })
+  const out = correlateDeliveryRecord([a, other], merged(a.text, "trailing text nobody sent", "\n"), iso(T0 + 1000))
+  assert.deepEqual(out.map((i) => i.state), ["enqueued", "pending"])
+})
+
+test("a SHORT send is never resolved by merely appearing inside an unrelated message", () => {
+  // The whole safety of the composition rule: a segment may only match mid-record when it is long
+  // enough to be unambiguous. "continue" typed inside a human's own terminal message must not confirm
+  // a pending "continue" fray sent.
+  const items = [item({ text: "continue" })]
+  const rec = { type: "user", timestamp: iso(T0 + 1000), message: { content: "ok, please continue with the plan" } }
+  // Same array identity: nothing matched, so the caller writes nothing back to the row.
+  assert.equal(correlateDeliveryRecord(items, rec, iso(T0 + 1000)), items)
+})
+
 test("aging is identity-stable when nothing changes", () => {
   const items = [item({ state: "enqueued" })]
   assert.equal(ageDeliveries(items, T0 + 5000), items)
