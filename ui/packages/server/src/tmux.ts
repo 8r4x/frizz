@@ -927,16 +927,23 @@ export function paneDead(slug: string): boolean {
 }
 
 // Alive ⟺ the session exists AND its command has not exited.
+//
+// ONE subprocess, not two. This used to read `hasSession(slug) && !paneDead(slug)`, but paneDead
+// already answers both questions: its `list-panes -t` throws for a session that does not exist, and
+// the catch reports dead. So the has-session exec was pure duplicate work on the same target — worth
+// ~85ms of measured wall time on every call, and this is the UNCACHED liveness that the follow-up
+// injection path takes on every steer, synchronously, on the event loop. Truth table is unchanged:
+// missing session → dead, present-but-exited → dead, present-and-running → live.
 export function isLive(slug: string): boolean {
-  return hasSession(slug) && !paneDead(slug)
+  return !paneDead(slug)
 }
 
 // ---- Batched liveness cache -------------------------------------------------------------------
-// hasSession/paneDead are one subprocess EACH, and the hot paths ask per-thread: the board's
-// deriveRuntime on every overlay refresh (16 threads × 2 calls) and the tailer's 1s tick (one per
-// session row). Those sync execs stacked up and starved the event loop — RPC latency climbed to
-// many seconds while any agent was streaming. One `list-panes -a` answers ALL sessions in a single
-// subprocess; cache it briefly (below the tailer's poll period) so each tick pays for one exec.
+// A per-slug liveness question is one subprocess, and the hot paths ask it per-thread: the board's
+// deriveRuntime on every overlay refresh (one per thread) and the tailer's 1s tick (one per session
+// row). Those sync execs stacked up and starved the event loop — RPC latency climbed to many seconds
+// while any agent was streaming. One `list-panes -a` answers ALL sessions in a single subprocess;
+// cache it briefly (below the tailer's poll period) so each tick pays for one exec.
 const LIVENESS_TTL_MS = 900
 let livenessAt = 0
 let livenessMap = new Map<string, PaneSnapshot>() // session name -> exact pane generation + dead bit

@@ -112,7 +112,7 @@ export const store = proxy({
   // subscription while the last complete copy remains visible and manually refreshable. All reset on reload.
   socketBoardFallback: null as SocketPayloadFallback | null,
   socketTranscriptFallbacks: {} as Record<string, SocketTranscriptFallback>,
-  // Transient bottom-center toast (e.g. "Steered" on an eager queue reply). `id` bumps per call so
+  // Transient bottom-center toast (e.g. "Steer failed …" when an eager reply is rejected). `id` bumps per call so
   // repeat toasts re-trigger the fade. Rendered by <Toaster>; null when nothing is showing.
   toast: null as { id: number; text: string; spinner?: boolean; sticky?: boolean; duration?: number; link?: { label: string; slug: string } } | null,
 })

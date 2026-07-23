@@ -4,8 +4,8 @@ import { Loader2 } from "lucide-react"
 import { store, pushDrawer } from "../store.ts"
 
 // Minimal toast (no dep): rises in at the BOTTOM RIGHT, holds, then sinks back down and fades.
-// Each showToast bumps the id, which re-arms the timer so a repeat message ("Steered", "Steered")
-// flashes again. Variants: `spinner` (in-flight feel), `sticky` (no auto-hide — replaced by the
+// Each showToast bumps the id, which re-arms the timer so a repeat message (the same failure twice
+// running, say) flashes again. Variants: `spinner` (in-flight feel), `sticky` (no auto-hide — replaced by the
 // next toast, e.g. "Starting agent…" → the started confirmation), and `link` (a button that opens
 // the named thread in the side drawer).
 export function Toaster() {
