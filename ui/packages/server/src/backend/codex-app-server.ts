@@ -57,6 +57,87 @@ export const CLIENT_CAPABILITIES = Object.freeze({
   requestAttestation: false,
   mcpServerOpenaiFormElicitation: false,
 })
+// ---- sandbox: the app-server spells the SAME axis two different ways ----
+// `thread/start` and `thread/resume` take the plain `sandbox: SandboxMode` string fray already uses.
+// `thread/settings/update` and `turn/start` take `sandboxPolicy: SandboxPolicy`, a TAGGED OBJECT, and
+// there is NO string shorthand on those methods. Worse, the params structs are not
+// `deny_unknown_fields`: sending the thread-level `sandbox: "danger-full-access"` spelling to
+// `thread/settings/update` returns `{"result":{}}` and does NOTHING, with no notification (verified
+// live against codex-cli 0.144.6, 2026-07-23). A successful-looking response is therefore NOT proof
+// the change applied — only the `thread/settings/updated` notification is.
+//
+// The tagged values below are not invented: they are what the app-server itself derives from each
+// SandboxMode at `thread/start`, read back off the `thread/settings/updated` notification it emits for
+// such a thread (codex-cli 0.144.6, 2026-07-23):
+//   read-only          -> { type: "readOnly", networkAccess: false }
+//   workspace-write    -> { type: "workspaceWrite", writableRoots: [], networkAccess: false,
+//                           excludeTmpdirEnvVar: false, excludeSlashTmp: false }
+//   danger-full-access -> { type: "dangerFullAccess" }
+// `writableRoots: []` is the observed default — the thread's own cwd is writable implicitly and is NOT
+// listed, so mirroring the server means sending an EMPTY array, not [cwd].
+export type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access"
+export type CodexSandboxPolicy =
+  | { type: "dangerFullAccess" }
+  | { type: "readOnly"; networkAccess: boolean }
+  | { type: "externalSandbox"; networkAccess: "restricted" | "enabled" }
+  | {
+      type: "workspaceWrite"
+      writableRoots: string[]
+      networkAccess: boolean
+      excludeTmpdirEnvVar: boolean
+      excludeSlashTmp: boolean
+    }
+
+export const CODEX_SANDBOX_MODES: readonly CodexSandboxMode[] = Object.freeze([
+  "read-only", "workspace-write", "danger-full-access",
+] as const)
+
+export function isCodexSandboxMode(value: unknown): value is CodexSandboxMode {
+  return typeof value === "string" && (CODEX_SANDBOX_MODES as readonly string[]).includes(value)
+}
+
+export function codexSandboxPolicy(mode: CodexSandboxMode): CodexSandboxPolicy {
+  switch (mode) {
+    case "read-only":
+      return { type: "readOnly", networkAccess: false }
+    case "danger-full-access":
+      return { type: "dangerFullAccess" }
+    default:
+      return {
+        type: "workspaceWrite",
+        writableRoots: [],
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false,
+      }
+  }
+}
+
+// The inverse, used to CONFIRM a reported policy against the mode we asked for. Deliberately compares
+// only the variant tag: fray's axis is the mode, and the server is free to normalize the workspaceWrite
+// detail fields (e.g. add a writable root of its own) without that meaning our request was refused.
+// `externalSandbox` — a variant fray never requests — maps to undefined so it can never read as a match.
+export function codexSandboxModeOfPolicy(policy: { type?: unknown } | null | undefined): CodexSandboxMode | undefined {
+  switch (policy?.type) {
+    case "readOnly": return "read-only"
+    case "workspaceWrite": return "workspace-write"
+    case "dangerFullAccess": return "danger-full-access"
+    default: return undefined
+  }
+}
+
+// The approval policy fray establishes at `thread/start` (see startDisposableSession). It has to be
+// re-sent alongside `sandbox` on a COLD `thread/resume`, because those two params are coupled there:
+// passing only one resets the OTHER to the config.toml default. `thread/settings/update` does NOT have
+// that coupling — sending `sandboxPolicy` alone leaves `approvalPolicy` untouched (verified live: a
+// thread started `approvalPolicy: "untrusted"` still reported `"untrusted"` in the
+// `thread/settings/updated` payload after a sandboxPolicy-only update).
+const CODEX_RESUME_APPROVAL_POLICY = "on-request"
+// How long a confirmed sandbox change may take to come back as a notification, and how long we wait
+// for a notification we do NOT expect (the requested policy already being current emits nothing).
+const SANDBOX_CONFIRM_TIMEOUT_MS = 8_000
+const SANDBOX_NOOP_GRACE_MS = 750
+
 const MAX_JSONL_BYTES = 256 * 1024
 const MAX_INBOUND_RECORDS = 256
 const MAX_INBOUND_QUEUED_BYTES = MAX_JSONL_BYTES * 2
@@ -588,6 +669,15 @@ interface BindingRow {
   auto_resumed_turn_id: string | null
   /** Consecutive restart-recovery nudges; reset by a turn that actually completes. */
   auto_resume_count: number
+  /**
+   * What the app-server is believed to have as this thread's sandbox RIGHT NOW — a cache of observed
+   * server state, not of operator intent (intent lives in fray's own `sessions.permission_mode`). It is
+   * written only from authoritative reads: the mode we passed to `thread/start`, the `sandbox` the
+   * `thread/resume` RESPONSE reports back, and a `thread/settings/updated` notification. NULL means
+   * "unknown" (a row migrated from an older Fray), which makes setSandbox demand a notification rather
+   * than assume a no-op.
+   */
+  sandbox: string | null
 }
 
 const BindingRowSchema = z.object({
@@ -606,6 +696,9 @@ const BindingRowSchema = z.object({
   updated_at: z.string().datetime(),
   auto_resumed_turn_id: Opaque.nullable(),
   auto_resume_count: z.number().int().nonnegative(),
+  // Bounded string rather than an enum: a value this Fray does not recognise (a newer sandbox mode
+  // written by a later build) must degrade to "unknown", never poison the row as corrupt.
+  sandbox: z.string().max(64).nullable(),
 }).strict()
 const BridgeMetaRowSchema = z.object({
   singleton: z.literal(1),
@@ -619,6 +712,14 @@ function checkedBindingRow(raw: unknown): BindingRow {
   const parsed = BindingRowSchema.safeParse(raw)
   if (!parsed.success) throw new InteractionStoreError("corrupt-journal", "Codex app-server session binding is corrupt")
   return parsed.data
+}
+
+// `thread/resume` answers with the thread's EFFECTIVE `sandbox` as a tagged SandboxPolicy (the
+// response field is named `sandbox` but is a SandboxPolicy, not a SandboxMode — the two spellings
+// again). Undefined when the server did not report a policy we recognise.
+function effectiveResumeSandbox(rawResponse: unknown): CodexSandboxMode | undefined {
+  const parsed = ThreadResumeSandbox.safeParse(rawResponse)
+  return parsed.success ? codexSandboxModeOfPolicy(parsed.data.sandbox) : undefined
 }
 
 function turnKey(row: Pick<BindingRow, "thread_slug" | "fray_session_id" | "connection_epoch">): string {
@@ -637,6 +738,8 @@ export interface CodexAppServerSessionBinding {
   cwd: string
   ephemeral: boolean
   state: "active" | "detached"
+  /** Last sandbox mode OBSERVED from the app-server for this thread; undefined when unknown. */
+  sandbox?: CodexSandboxMode
 }
 
 // Whether a TURN is genuinely in flight for a bridge-owned thread. The rollout cannot answer this on
@@ -706,6 +809,15 @@ export interface CodexAppServerBridgeOptions {
    * by a turn it never asked for. Defaults to allowing every rebind.
    */
   shouldAutoResume?: (threadSlug: string, sessionId: string) => boolean
+  /**
+   * The operator's CURRENT sandbox intent for a thread, read from fray's own registry
+   * (`sessions.permission_mode` → codexSandbox()). Consulted on every COLD `thread/resume` so a
+   * sandbox the operator changed while the thread was detached actually takes effect — before this
+   * existed, `setPermissionMode` wrote the row and nothing ever read it back, so "saved for the next
+   * resume" was a promise the resume path never kept. Undefined ⇒ send no sandbox override at all
+   * (exactly the pre-existing behaviour).
+   */
+  sandboxFor?: (threadSlug: string, sessionId: string) => CodexSandboxMode | undefined
 }
 
 function bindingFromRow(row: BindingRow): CodexAppServerSessionBinding {
@@ -721,6 +833,7 @@ function bindingFromRow(row: BindingRow): CodexAppServerSessionBinding {
     cwd: row.cwd,
     ephemeral: row.ephemeral === 1,
     state: row.state,
+    ...(isCodexSandboxMode(row.sandbox) ? { sandbox: row.sandbox } : {}),
   }
 }
 
@@ -1296,9 +1409,41 @@ const ThreadResponse = z.object({
 const TurnResponse = z.object({ turn: z.object({ id: Opaque }).passthrough() }).strict()
 // turn/steer returns a FLAT { turnId }, unlike turn/start's nested { turn: { id } }.
 const TurnSteerResponse = z.object({ turnId: Opaque }).passthrough()
+// `thread/resume` reports the thread's EFFECTIVE sandbox back as a tagged SandboxPolicy — the one
+// authoritative read of live server state fray gets, and what keeps the binding's sandbox cache honest
+// whether the resume was cold (our override applied) or a live rejoin (our override was ignored).
+const ThreadResumeSandbox = z.object({ sandbox: z.object({ type: z.string().max(64) }).passthrough() }).passthrough()
+// The ONLY reliable confirmation that a sandbox change took effect. Emitted after
+// `thread/settings/update` — but only when the settings ACTUALLY CHANGED.
+const ThreadSettingsUpdated = z.object({
+  threadId: Opaque,
+  threadSettings: z.object({
+    sandboxPolicy: z.object({ type: z.string().max(64) }).passthrough(),
+    approvalPolicy: z.unknown().optional(),
+  }).passthrough(),
+}).passthrough()
 const TurnStarted = z.object({ threadId: Opaque, turn: z.object({ id: Opaque }).passthrough() }).strict()
 const TurnCompleted = z.object({ threadId: Opaque, turn: z.object({ id: Opaque }).passthrough() }).strict()
 const MAX_CORRELATED_FILE_ITEMS = 128
+
+interface ObservedThreadSettings {
+  sandbox: CodexSandboxMode | undefined
+  approvalPolicy: unknown
+}
+
+export interface CodexSandboxChangeResult {
+  /** True only when the app-server is KNOWN to hold the requested sandbox. Never inferred from `{}`. */
+  applied: boolean
+  sandbox: CodexSandboxMode
+  /**
+   * `notification` — a `thread/settings/updated` reported the requested policy (a real change).
+   * `already-current` — the thread already held it, so no notification was due and none arrived.
+   * `unconfirmed`     — a change was expected and no notification arrived in time. NOT applied.
+   */
+  confirmedBy: "notification" | "already-current" | "unconfirmed"
+  /** The approvalPolicy the server reported alongside the change; undefined on the other two paths. */
+  approvalPolicy?: unknown
+}
 
 interface CorrelatedFileItem extends FileChangeDisplaySnapshot {
   threadId: string
@@ -1336,6 +1481,8 @@ export class CodexAppServerBridge {
   private readonly pendingTurnStarts = new Set<string>()
   /** Threads the last reconcile found dead mid-turn, awaiting warmUp()'s recovery sweep. */
   private readonly pendingAutoResume = new Map<string, { row: BindingRow; interruptedTurn: string }>()
+  /** One-shot `thread/settings/updated` listeners, keyed by codex thread id. See setSandbox(). */
+  private readonly settingsWaiters = new Map<string, Set<(observed: ObservedThreadSettings | undefined) => void>>()
   private readonly correlatedFileItems = new Map<string, CorrelatedFileItem>()
   private activeOperations = 0
   private readonly operationWaiters = new Set<() => void>()
@@ -1402,7 +1549,8 @@ export class CodexAppServerBridge {
           created_at            TEXT NOT NULL,
           updated_at            TEXT NOT NULL,
           auto_resumed_turn_id  TEXT,
-          auto_resume_count     INTEGER NOT NULL DEFAULT 0
+          auto_resume_count     INTEGER NOT NULL DEFAULT 0,
+          sandbox               TEXT
         );
         CREATE INDEX IF NOT EXISTS codex_app_server_session_thread
           ON codex_app_server_session (codex_thread_id, state);
@@ -1435,12 +1583,13 @@ export class CodexAppServerBridge {
     addColumn("codex_app_server_meta", "daemon_generation", "TEXT NOT NULL DEFAULT ''")
     addColumn("codex_app_server_session", "auto_resumed_turn_id", "TEXT")
     addColumn("codex_app_server_session", "auto_resume_count", "INTEGER NOT NULL DEFAULT 0")
+    addColumn("codex_app_server_session", "sandbox", "TEXT")
 
     const requiredMeta = ["singleton", "connection_epoch", "capability_revision", "protocol_fingerprint", "daemon_generation"]
     const requiredSession = [
       "fray_session_id", "thread_slug", "codex_thread_id", "codex_session_id", "session_epoch",
       "capability_revision", "connection_epoch", "current_turn_id", "cwd", "ephemeral", "state",
-      "created_at", "updated_at", "auto_resumed_turn_id", "auto_resume_count",
+      "created_at", "updated_at", "auto_resumed_turn_id", "auto_resume_count", "sandbox",
     ]
     if (requiredMeta.some((column) => !columns("codex_app_server_meta").has(column)) ||
       requiredSession.some((column) => !columns("codex_app_server_session").has(column))) {
@@ -1492,6 +1641,7 @@ export class CodexAppServerBridge {
 
       const connection = await this.ensureConnected()
       const ephemeral = input.ephemeral ?? true
+      const startedSandbox = input.permissions ? null : (input.sandbox ?? "read-only")
       const response = ThreadResponse.parse(await connection.request("thread/start", {
         cwd: input.cwd,
         model: input.model ?? null,
@@ -1499,7 +1649,7 @@ export class CodexAppServerBridge {
         approvalsReviewer: "user",
         ...(input.permissions
           ? { permissions: input.permissions }
-          : { sandbox: input.sandbox ?? "read-only" }),
+          : { sandbox: startedSandbox }),
         ...(input.baseInstructions ? { baseInstructions: input.baseInstructions } : {}),
         ...(input.developerInstructions ? { developerInstructions: input.developerInstructions } : {}),
         ...(input.config ? { config: input.config } : {}),
@@ -1511,8 +1661,8 @@ export class CodexAppServerBridge {
         INSERT INTO codex_app_server_session (
           fray_session_id, thread_slug, codex_thread_id, codex_session_id,
           session_epoch, capability_revision, connection_epoch, current_turn_id,
-          cwd, ephemeral, state, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, 1, ?, ?, NULL, ?, ?, 'active', ?, ?)
+          cwd, ephemeral, state, created_at, updated_at, sandbox
+        ) VALUES (?, ?, ?, ?, 1, ?, ?, NULL, ?, ?, 'active', ?, ?, ?)
       `).run(
         input.sessionId,
         input.threadSlug,
@@ -1524,6 +1674,7 @@ export class CodexAppServerBridge {
         ephemeral ? 1 : 0,
         at,
         at,
+        startedSandbox,
       )
       return bindingFromRow(this.bindingForScope(input.threadSlug, input.sessionId)!)
     } finally {
@@ -1545,15 +1696,17 @@ export class CodexAppServerBridge {
       if (binding.state === "active" && binding.connection_epoch === this.connectionEpoch) return bindingFromRow(binding)
       if (binding.ephemeral === 1) throw new Error("disposable Codex app-server session is detached")
 
-      const response = ThreadResponse.parse(await connection.request("thread/resume", {
+      const rawResponse = await connection.request("thread/resume", {
         threadId: binding.codex_thread_id,
         excludeTurns: true,
         approvalsReviewer: "user",
-      }))
+        ...this.resumeSandboxOverride(binding),
+      })
+      const response = ThreadResponse.parse(rawResponse)
       if (response.thread.id !== binding.codex_thread_id || response.thread.ephemeral) {
         throw new Error("Codex app-server resumed a different or disposable thread")
       }
-      this.updateResumedBinding(binding, response.thread.sessionId)
+      this.updateResumedBinding(binding, response.thread.sessionId, effectiveResumeSandbox(rawResponse))
       return bindingFromRow(this.bindingForScope(threadSlug, sessionId)!)
     } finally {
       releaseOperation()
@@ -1584,11 +1737,15 @@ export class CodexAppServerBridge {
         throw new Error("Codex app-server thread slug, session id, or rollout is already bound")
       }
       const connection = await this.ensureConnected()
-      const response = ThreadResponse.parse(await connection.request("thread/resume", {
+      const rawResponse = await connection.request("thread/resume", {
         threadId: input.codexThreadId,
         excludeTurns: true,
         approvalsReviewer: "user",
-      }))
+        // A legacy tmux row's sandbox is whatever the CLI was launched with; fray's registry is the
+        // operator's stated intent, so adoption is the moment the two are unified.
+        ...this.resumeSandboxOverride({ thread_slug: input.threadSlug, fray_session_id: input.sessionId, sandbox: null }),
+      })
+      const response = ThreadResponse.parse(rawResponse)
       if (response.thread.id !== input.codexThreadId || response.thread.ephemeral) {
         throw new Error("Codex app-server resumed a different or disposable thread")
       }
@@ -1597,8 +1754,8 @@ export class CodexAppServerBridge {
         INSERT INTO codex_app_server_session (
           fray_session_id, thread_slug, codex_thread_id, codex_session_id,
           session_epoch, capability_revision, connection_epoch, current_turn_id,
-          cwd, ephemeral, state, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, 1, ?, ?, NULL, ?, 0, 'active', ?, ?)
+          cwd, ephemeral, state, created_at, updated_at, sandbox
+        ) VALUES (?, ?, ?, ?, 1, ?, ?, NULL, ?, 0, 'active', ?, ?, ?)
       `).run(
         input.sessionId,
         input.threadSlug,
@@ -1609,6 +1766,7 @@ export class CodexAppServerBridge {
         input.cwd,
         at,
         at,
+        effectiveResumeSandbox(rawResponse) ?? null,
       )
       return bindingFromRow(this.bindingForScope(input.threadSlug, input.sessionId)!)
     } finally {
@@ -2131,6 +2289,10 @@ export class CodexAppServerBridge {
     const epoch = this.connectionEpoch
     this.connection = null
     this.forgetCorrelatedFileItems()
+    // No notification can ever arrive on a dead connection, so release every settings waiter now
+    // rather than stranding an eager sandbox change until its own timeout. Resolving with `undefined`
+    // makes setSandbox report `unconfirmed` — honest: we do not know that it took.
+    this.releaseSettingsWaiters()
     if (this.closed || this.dbClosed) return
     this.db.prepare(`
       UPDATE codex_app_server_session SET state = 'detached', updated_at = ?
@@ -2173,14 +2335,16 @@ export class CodexAppServerBridge {
         continue
       }
       try {
-        const response = ThreadResponse.parse(await connection.request("thread/resume", {
+        const rawResponse = await connection.request("thread/resume", {
           threadId: row.codex_thread_id,
           excludeTurns: true,
           approvalsReviewer: "user",
-        }))
+          ...this.resumeSandboxOverride(row),
+        })
+        const response = ThreadResponse.parse(rawResponse)
         if (response.thread.id !== row.codex_thread_id || response.thread.ephemeral) throw new Error("resume ownership mismatch")
         const interruptedTurn = row.current_turn_id
-        this.updateResumedBinding(row, response.thread.sessionId)
+        this.updateResumedBinding(row, response.thread.sessionId, effectiveResumeSandbox(rawResponse))
         // Record, don't nudge. Recovery is issued by warmUp() — see autoResumeInterruptedTurns().
         if (interruptedTurn) this.pendingAutoResume.set(row.fray_session_id, { row, interruptedTurn })
       } catch {
@@ -2253,7 +2417,7 @@ export class CodexAppServerBridge {
   // startTurn then refused with "already has an active turn" (live incident 2026-07-22: four codex
   // threads died with their app-server and could never be answered again). detach PRESERVES the id for
   // replay/diagnosis; taking the thread onto a live connection is the edge that retires it.
-  private updateResumedBinding(row: BindingRow, codexSessionId: string): void {
+  private updateResumedBinding(row: BindingRow, codexSessionId: string, effectiveSandbox?: CodexSandboxMode): void {
     if (row.capability_revision !== this.capabilityRevision) {
       this.options.interactions.cancelForSession(row.thread_slug, row.fray_session_id, "capabilities-changed")
     } else if (row.current_turn_id !== null) {
@@ -2264,20 +2428,146 @@ export class CodexAppServerBridge {
       // died with its connection never sends one, so retire them here on the same grounds.
       this.options.interactions.cancelForSession(row.thread_slug, row.fray_session_id, "turn-ended")
     }
+    // `sandbox` is taken from the resume RESPONSE, which reports the thread's effective policy — the
+    // one read that is right whether our override applied (cold resume from disk) or was ignored (a
+    // rejoin of a thread the server still had loaded). Recording anything else would let setSandbox
+    // report a false no-op success later. `null` when the server did not report one → "unknown".
     this.db.prepare(`
       UPDATE codex_app_server_session SET
         codex_session_id = ?, capability_revision = ?, connection_epoch = ?, state = 'active',
-        current_turn_id = NULL, updated_at = ?
+        current_turn_id = NULL, updated_at = ?, sandbox = ?
       WHERE fray_session_id = ? AND thread_slug = ? AND codex_thread_id = ?
     `).run(
       codexSessionId,
       this.capabilityRevision,
       this.connectionEpoch,
       this.now().toISOString(),
+      effectiveSandbox ?? null,
       row.fray_session_id,
       row.thread_slug,
       row.codex_thread_id,
     )
+  }
+
+  /**
+   * The `sandbox` + `approvalPolicy` pair to attach to a `thread/resume`, or `{}` when fray has no
+   * stated intent for this thread.
+   *
+   * This is what finally makes "saved for the next resume" TRUE. Both params go together on purpose:
+   * on a cold resume the app-server couples them — passing only `sandbox` resets `approvalPolicy` to
+   * the config.toml default (and vice versa) — so sending one alone would silently retune approvals.
+   * On a live rejoin the app-server ignores both, which is why the caller re-reads the effective
+   * policy off the response instead of assuming this took.
+   */
+  private resumeSandboxOverride(
+    row: Pick<BindingRow, "thread_slug" | "fray_session_id" | "sandbox">,
+  ): { sandbox?: CodexSandboxMode; approvalPolicy?: string } {
+    const intent = this.options.sandboxFor?.(row.thread_slug, row.fray_session_id)
+      ?? (isCodexSandboxMode(row.sandbox) ? row.sandbox : undefined)
+    if (!intent) return {}
+    return { sandbox: intent, approvalPolicy: CODEX_RESUME_APPROVAL_POLICY }
+  }
+
+  /**
+   * Change a LIVE thread's sandbox, eagerly, without waiting for a resume.
+   *
+   * The wire call is `thread/settings/update` with the TAGGED `sandboxPolicy` — never the thread-level
+   * `sandbox` string, which those params silently ignore. `approvalPolicy` is deliberately NOT sent:
+   * verified live that a sandboxPolicy-only update leaves it exactly as it was (a thread started
+   * `approvalPolicy: "untrusted"` still reported `"untrusted"` in the resulting `thread/settings/updated`
+   * payload), so sending it would only risk overwriting an approval posture nobody asked to change.
+   *
+   * Success is NEVER inferred from the `{}` response — an ignored param produces the identical `{}`.
+   * The confirmation is the `thread/settings/updated` notification, which the server emits only when
+   * the settings ACTUALLY CHANGED. So a request for the policy the thread already holds legitimately
+   * produces no notification; the binding's `sandbox` cache (written only from authoritative reads)
+   * tells the two apart, and an unknown cache falls to the strict "wait for the notification" branch.
+   */
+  async setSandbox(input: {
+    threadSlug: string
+    sessionId: string
+    sandbox: CodexSandboxMode
+  }): Promise<CodexSandboxChangeResult> {
+    if (!isCodexSandboxMode(input.sandbox)) throw new Error("unknown Codex sandbox mode")
+    const releaseOperation = this.beginOperation()
+    try {
+      if (!this.bindingForScope(input.threadSlug, input.sessionId)) {
+        throw new Error("Codex app-server sandbox change requires a bridge-owned session")
+      }
+      const connection = await this.ensureConnected()
+      let binding = this.bindingForScope(input.threadSlug, input.sessionId)
+      if (!binding) throw new Error("Codex app-server sandbox change requires a bridge-owned session")
+      if (binding.state !== "active" || binding.connection_epoch !== this.connectionEpoch) {
+        // A detached thread has to be back on this connection before the server will accept settings
+        // for it. The resume carries fray's intent itself, so this frequently applies the change on
+        // its own — the update below then confirms (or no-ops, which the cache reports honestly).
+        await this.resumeOwnedSession(input.threadSlug, input.sessionId)
+        binding = this.bindingForScope(input.threadSlug, input.sessionId)
+        if (!binding) throw new Error("Codex app-server session disappeared during sandbox change")
+      }
+      const threadId = binding.codex_thread_id
+      const expectNotification = binding.sandbox !== input.sandbox
+      const observedPromise = this.awaitSettingsUpdate(
+        threadId,
+        expectNotification ? SANDBOX_CONFIRM_TIMEOUT_MS : SANDBOX_NOOP_GRACE_MS,
+      )
+      try {
+        await connection.request("thread/settings/update", {
+          threadId,
+          sandboxPolicy: codexSandboxPolicy(input.sandbox),
+        })
+      } catch (error) {
+        observedPromise.cancel()
+        throw error
+      }
+      const observed = await observedPromise.promise
+      if (observed) {
+        if (observed.sandbox !== input.sandbox) {
+          throw new Error(
+            `Codex app-server reported sandbox ${String(observed.sandbox ?? "unknown")} after a request for ${input.sandbox}`,
+          )
+        }
+        return { applied: true, sandbox: input.sandbox, confirmedBy: "notification", approvalPolicy: observed.approvalPolicy }
+      }
+      if (!expectNotification) return { applied: true, sandbox: input.sandbox, confirmedBy: "already-current" }
+      return { applied: false, sandbox: input.sandbox, confirmedBy: "unconfirmed" }
+    } finally {
+      releaseOperation()
+    }
+  }
+
+  private awaitSettingsUpdate(threadId: string, timeoutMs: number): {
+    promise: Promise<ObservedThreadSettings | undefined>
+    cancel: () => void
+  } {
+    let settle: ((observed: ObservedThreadSettings | undefined) => void) | undefined
+    let listener: ((observed: ObservedThreadSettings | undefined) => void) | undefined
+    let timer: NodeJS.Timeout | undefined
+    const detach = (): void => {
+      if (timer) clearTimeout(timer)
+      const set = this.settingsWaiters.get(threadId)
+      if (set && listener) {
+        set.delete(listener)
+        if (set.size === 0) this.settingsWaiters.delete(threadId)
+      }
+    }
+    const promise = new Promise<ObservedThreadSettings | undefined>((resolve) => {
+      settle = resolve
+      listener = (observed) => { detach(); resolve(observed) }
+      const set = this.settingsWaiters.get(threadId) ?? new Set()
+      set.add(listener)
+      this.settingsWaiters.set(threadId, set)
+      // Real wall-clock: tests inject a fixed `this.now()` that would never advance a deadline.
+      timer = setTimeout(() => { detach(); resolve(undefined) }, timeoutMs)
+      timer.unref?.()
+    })
+    return { promise, cancel: () => { detach(); settle?.(undefined) } }
+  }
+
+  private releaseSettingsWaiters(): void {
+    const waiters = [...this.settingsWaiters.values()].flatMap((set) => [...set])
+    this.settingsWaiters.clear()
+    for (const waiter of waiters) waiter(undefined)
   }
 
   private ownedBinding(threadId: string, turnId: string | null): BindingRow {
@@ -2738,6 +3028,24 @@ export class CodexAppServerBridge {
       )) {
         throw new Error("Codex request acknowledgement crossed an owned session boundary")
       }
+      return
+    }
+    if (method === "thread/settings/updated") {
+      // The ONLY trustworthy evidence that a settings change took effect: the app-server emits this
+      // exclusively when the settings actually changed, and it carries the FULL effective ThreadSettings.
+      const parsed = ThreadSettingsUpdated.safeParse(rawParams)
+      if (!parsed.success) return
+      const observed: ObservedThreadSettings = {
+        sandbox: codexSandboxModeOfPolicy(parsed.data.threadSettings.sandboxPolicy),
+        approvalPolicy: parsed.data.threadSettings.approvalPolicy,
+      }
+      // Keep the cache honest for EVERY thread, including ones changed by someone else's client.
+      const binding = this.bindingForCodexThread(parsed.data.threadId)
+      if (binding) {
+        this.db.prepare("UPDATE codex_app_server_session SET sandbox = ?, updated_at = ? WHERE codex_thread_id = ?")
+          .run(observed.sandbox ?? null, this.now().toISOString(), parsed.data.threadId)
+      }
+      for (const waiter of [...(this.settingsWaiters.get(parsed.data.threadId) ?? [])]) waiter(observed)
       return
     }
     if (method === "turn/started") {
