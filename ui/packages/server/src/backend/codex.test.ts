@@ -275,6 +275,41 @@ test("parseCodexLine: event_msg/task_complete → turn-end carrying last_agent_m
   assert.match((evs[0] as any).finalText, /```done\nall-good\n```/)
 })
 
+// An INTERRUPTED turn is the one that never reaches task_complete. Its ONLY closing bracket is
+// turn_aborted — captured verbatim from a live rollout after fray issued turn/interrupt (2026-07-23).
+// Without it the tailer holds the turn in-flight forever, so a thread the operator deliberately
+// STOPPED cards as still running and then as crashed/"Stalled" with a Retry it never earned.
+const TURN_ABORTED_LINE = JSON.stringify({
+  timestamp: "2026-07-23T22:01:57.355Z",
+  type: "event_msg",
+  payload: {
+    type: "turn_aborted",
+    turn_id: "019f90ff-aa4a-7673-925e-7c31905622a7",
+    reason: "interrupted",
+    completed_at: 1784844117,
+    duration_ms: 15126,
+  },
+})
+
+test("parseCodexLine: event_msg/turn_aborted → turn-end, an interrupted turn's only bracket", () => {
+  const evs = parseCodexLine(TURN_ABORTED_LINE)
+  assert.equal(evs.length, 1)
+  assert.equal(evs[0].kind, "turn-end")
+  assert.equal(typeof (evs[0] as any).at, "string")
+  // No answer was produced, so it must not carry (or invent) final text — no fence, no excusal.
+  assert.equal((evs[0] as any).finalText, undefined)
+})
+
+test("foldLine: turn_aborted brackets the turn IDLE so a stopped thread stops carding as running", () => {
+  const backend = createCodexBackend()
+  const state = newTailState("t", "sid", "/x")
+  backend.foldLine(state, firstLineOf((r) => r.payload?.type === "task_started"))
+  assert.equal(state.turn, "in-flight")
+  backend.foldLine(state, TURN_ABORTED_LINE)
+  assert.equal(state.turn, "idle")
+  assert.equal(state.lastFence, undefined, "an aborted turn excuses nothing")
+})
+
 test("parseCodexLine: event_msg/agent_message final_answer → assistant-text{final:true}; text from .message", () => {
   const line = firstLineOf((r) => r.type === "event_msg" && r.payload?.type === "agent_message" && r.payload?.phase === "final_answer")
   const evs = parseCodexLine(line)
