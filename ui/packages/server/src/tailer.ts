@@ -356,6 +356,10 @@ interface Record {
   customTitle?: string // present only on custom-title records (written by /rename)
   permissionMode?: unknown // present only on Claude permission-mode sidecars
   content?: unknown // top-level string on queue-operation records — carries the <task-notification> XML
+  // On `attachment` records (type:"queued_command"): the injected text — a queued human follow-up OR a
+  // background op's <task-notification>. This is the notification's INLINE-written carrier, positioned
+  // AFTER its launch — unlike the queue-operation bookkeeping, which is flushed and can land BEFORE it.
+  attachment?: { type?: string; prompt?: unknown }
   promptSource?: string // on user records: typed/queued (human) · "system" (peer msg / task-notification)
   isApiErrorMessage?: boolean // synthetic assistant record claude writes for a provider API error
   // Structured category claude stamps on that synthetic record: "rate_limit" (subscription window
@@ -707,16 +711,25 @@ function trackLaunchResults(state: TailState, rec: Record): void {
 
 // RETIRE a tracked sub-agent when its <task-notification> reports a TERMINAL status: move it OUT of the
 // live map (so banner/counts/spinner stop showing it) and INTO the bounded retained ring (so the
-// drill-in drawer can still resolve its transcript for review). Notifications ride TWO record shapes
-// (both must be handled — missing the second leaked 20+ phantom "running" sub-agents on a busy
-// session, found 2026-07-09): (a) queue-operation records with a top-level `content` string, and
-// (b) USER records whose message.content (string, or text blocks) embeds the <task-notification>
-// XML — the shape newer harness versions emit. A record can carry multiple notification blocks;
+// drill-in drawer can still resolve its transcript for review). Notifications ride THREE record shapes
+// (all must be handled — missing the second leaked 20+ phantom "running" sub-agents on a busy session,
+// found 2026-07-09; missing the third leaked a stuck background shell whose completion arrived
+// mid-turn, found 2026-07-22): (a) queue-operation records with a top-level `content` string,
+// (b) USER records whose message.content (string, or text blocks) embeds the <task-notification> XML —
+// the shape newer harness versions emit, and (c) `attachment` records (type:"queued_command") whose
+// `attachment.prompt` carries it. Shape (c) is LOAD-BEARING, not redundant with (a): when a shell
+// completes MID-TURN the harness enqueues the notification and flushes the queue-operation bookkeeping
+// (a) at a FILE POSITION that PRECEDES the launch's own assistant record — so we fold that completion
+// before the shell is even registered (no live entry → no-op) and it is lost. The `attachment` (c) is
+// written INLINE when the queued item is injected, always AFTER the launch, so it is the only
+// reliably-ordered completion carrier for that race. A record can carry multiple notification blocks;
 // each is retired independently. A task-id can notify more than once (a resumed background agent
 // re-notifies) and a non-terminal "running" ping exists too, so only completed/failed/killed retire
-// the entry. Idempotent: a repeat terminal notify finds nothing live to move (no-op).
+// the entry. Idempotent: a repeat terminal notify (the same completion arriving via both (a) and (c))
+// finds nothing live to move (no-op).
 function notificationText(rec: Record): string | undefined {
   if (typeof rec.content === "string") return rec.content
+  if (typeof rec.attachment?.prompt === "string") return rec.attachment.prompt
   const c = rec.message?.content
   if (typeof c === "string") return c
   if (Array.isArray(c)) {
@@ -961,8 +974,9 @@ export function applyRecord(state: TailState, rec: Record): void {
   }
   // all other types (attachment, queue-operation, last-prompt, mode,
   // bridge-session, file-history-snapshot, system) are sidecar metadata — ignored for turn state.
-  // Sub-agent completion rides queue-operation records (a top-level <task-notification> string), so
-  // it's checked for EVERY record regardless of type (the helper self-guards on shape + tracked ids).
+  // Sub-agent completion rides queue-operation AND attachment records (each a <task-notification>
+  // carrier — see notificationText), so it's checked for EVERY record regardless of type (the helper
+  // self-guards on shape + tracked ids).
   trackCompletions(state, rec)
 }
 

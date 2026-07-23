@@ -398,6 +398,36 @@ test("applyRecord: a completion notification lacking <tool-use-id> resolves by t
   assert.equal(s.subAgents.size, 0, "task-id is a valid fallback correlation key when tool-use-id is absent")
 })
 
+test("applyRecord: an attachment record carrying a <task-notification> retires a live shell", () => {
+  const s = newTailState("t", "s", "/x")
+  applyRecord(s, bashBg("toolu_sh", "Watch CI", "gh run watch"))
+  applyRecord(s, taskNotificationAttachment("toolu_sh", "completed"))
+  assert.equal(s.subAgents.size, 0, "the inline attachment carrier is a valid completion signal")
+  assert.equal(s.retiredShells.get("toolu_sh")?.status, "completed")
+})
+
+test("applyRecord: a shell whose completion RACES ahead of its launch is retired by the inline attachment", () => {
+  // Real 2026-07-22 leak (session 6dfa3c7c, shell b9br679ws): a background shell completed MID-TURN,
+  // so the harness flushed its queue-operation completion bookkeeping at a FILE POSITION PRECEDING the
+  // launch's own assistant record. Folding that first finds no live entry (no-op) — the queue-operation
+  // path can never retire the shell. The launch then registers it, and the SAME completion arrives a
+  // second time, inline, on an `attachment` record positioned AFTER the launch. Without reading the
+  // attachment carrier the shell leaked as a phantom "active background shell" forever.
+  const s = newTailState("t", "s", "/x")
+  // (a) completion folded BEFORE the launch: no live entry, so the queue-operation path is a no-op.
+  applyRecord(s, taskNotification("toolu_race", "completed"))
+  assert.equal(s.subAgents.size, 0)
+  assert.equal(s.retiredShells.size, 0, "a completion for a not-yet-registered id retires nothing")
+  // launch + ack registers the shell and captures its runtime task id.
+  applyRecord(s, bashBg("toolu_race", "Create retirement worktree + install deps", "git worktree add ../wt -b slug"))
+  applyRecord(s, resultText("toolu_race", "Command running in background with ID: b9br679ws. Output is being written to: /tmp/tasks/b9br679ws.output."))
+  assert.equal(s.subAgents.size, 1, "the shell is live after its launch")
+  // (c) the same completion, delivered inline on the attachment record AFTER the launch — retires it.
+  applyRecord(s, taskNotificationAttachment("toolu_race", "completed"))
+  assert.equal(s.subAgents.size, 0, "the inline attachment completion retires the raced shell")
+  assert.equal(s.retiredShells.get("toolu_race")?.status, "completed")
+})
+
 test("applyRecord: a TaskStop that did NOT confirm success never retires a live op", () => {
   const s = newTailState("t", "s", "/x")
   applyRecord(s, bashBg("toolu_sh", "Watch CI", "gh run watch"))
@@ -435,6 +465,17 @@ function taskNotificationByTaskId(taskId: string, status: string) {
     operation: "enqueue",
     timestamp: "2026-07-01T00:00:09.000Z",
     content: `<task-notification>\n<task-id>${taskId}</task-id>\n<status>${status}</status>\n<summary>done</summary>\n</task-notification>`,
+  }
+}
+// A completion <task-notification> delivered INLINE on an `attachment` record (type:"queued_command",
+// carried in `attachment.prompt`). This is the carrier that survives the mid-turn race: the
+// queue-operation bookkeeping (above) can be flushed BEFORE the launch, but the attachment is written
+// inline when the queued item is injected — always AFTER the launch that was in flight.
+function taskNotificationAttachment(id: string, status: string, taskId = "abc123") {
+  return {
+    type: "attachment",
+    timestamp: "2026-07-01T00:00:10.000Z",
+    attachment: { type: "queued_command", prompt: `<task-notification>\n<task-id>${taskId}</task-id>\n<tool-use-id>${id}</tool-use-id>\n<status>${status}</status>\n<summary>Shell finished</summary>\n</task-notification>` },
   }
 }
 
