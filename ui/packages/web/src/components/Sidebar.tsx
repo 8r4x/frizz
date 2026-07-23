@@ -5,7 +5,7 @@ import type { AwaitingHint, BoardSnapshot, PlanView, ThreadView } from "@fray-ui
 import { store, openThread, scrollToQueueCard, pushSubAgentDrawer, pushPlanDrawer, type ConnectionState } from "../store.ts"
 import { useBoard, asThreads } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
-import { sectionThreads, partitionActive, needsAction, displayTitle, titleIsProvisional, isHeld, parkedAwaitingHint, sessionIndicatorKind, offersInlineRetry, futureSnoozedUntil } from "../groups.ts"
+import { sectionThreads, partitionActive, needsAction, displayTitle, titleIsProvisional, isHeld, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil } from "../groups.ts"
 import { MarkAsButton } from "./MarkAsButton.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
 import { QuotaBar } from "./QuotaBar.tsx"
@@ -276,10 +276,10 @@ export const ThreadRow = memo(function ThreadRow({
   const dimLabel = !legacy && titleIsProvisional(t)
   // A STALLED row — the [!] mark, i.e. the agent's process EXITED (mid-turn, or after resting without
   // a done fence) — is the one row state with an obvious single next action, so it carries that verb
-  // inline instead of making you open the thread to find it. offersInlineRetry IS `kind === "stalled"`
+  // inline instead of making you open the thread to find it. offersRetry IS `kind === "stalled"`
   // (groups.ts), so this row's mark and this row's verb are the same decision and the queue card, which
   // reads the same helper, can never disagree with the rail about a thread.
-  const canRestart = !legacy && offersInlineRetry(t)
+  const canRestart = !legacy && offersRetry(t)
   // Held rows collapse to a SINGLE LINE — no subtitle. The "what it's held for" detail (snooze/timer
   // wake time, human gate, review watch) lives ENTIRELY in the hourglass indicator's hover tooltip
   // (see sessionIndicatorFor), so a snooze and a timer-park read identically instead of sprouting two
@@ -527,7 +527,7 @@ export function ThreadIndicator({ t, legacy }: { t: ThreadView; legacy?: boolean
 //   [!] stalled     — the agent's PROCESS EXITED with the work unfinished (accent box + "!"), whether
 //                     it died mid-turn or exited after resting without a done fence. Same mark either
 //                     way, because the next action is the same: Retry. Exactly the rows that carry the
-//                     inline Retry verb (offersInlineRetry === this kind — one decision, two surfaces).
+//                     inline Retry verb (offersRetry === this kind — one decision, two surfaces).
 //   clock waiting   — machine-waiting behind an ```awaiting fence
 //   [✓] done        — a ```done fence at rest, OR an archived thread (muted check — NOTHING else)
 //   […] at rest     — an ordinary bare rest with no concrete ask

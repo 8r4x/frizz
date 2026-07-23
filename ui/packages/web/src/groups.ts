@@ -404,15 +404,20 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   return "rest"
 }
 
-// Whether a GLANCEABLE surface — the sidebar rail row and the queue card — carries the inline
-// one-click Retry. This is DEFINITIONALLY the stalled mark: the yellow [!] and the Retry verb are ONE
-// decision with ONE derivation, so the two surfaces cannot drift apart again (they did — a queue card
-// offered Retry while the same thread's rail row showed a calm "At rest" […]). NEVER re-widen this to
-// "stalled OR <something else>"; if a state should offer Retry, make sessionIndicatorKind call it
-// stalled. The full thread drawer stays deliberately broader — it offers Retry for ANY exited session
-// (canRetry), including a done-fenced or answered one, because the full view is the place to see every
-// recovery option; these two glanceable surfaces show it only where it is the obvious next action.
-export function offersInlineRetry(t: ThreadView): boolean {
+// Whether a thread offers the Retry verb — on EVERY surface: the sidebar rail row, the queue card,
+// AND the full thread drawer's header. This is DEFINITIONALLY the stalled mark: the yellow [!] and the
+// Retry verb are ONE decision with ONE derivation, so no two surfaces can drift apart again. NEVER
+// re-widen this to "stalled OR <something else>"; if a state should offer Retry, make
+// sessionIndicatorKind call it stalled.
+//
+// The drawer used to be deliberately broader — raw `canRetry` (ANY exited owned session) — on the
+// theory that the full view should show every recovery option. That was wrong twice over, and it is
+// the bug the maintainer hit (2026-07-23, second report): `canRetry` does not consult `state`, so all
+// 158 ARCHIVED-and-exited threads on the real board opened with a Retry pill while their rail row
+// showed the muted [✓] — "a thread that appears to have just come to rest, with a retry button, not
+// yellow, no exclamation point". Nothing is lost by narrowing: the drawer has a composer, and sending
+// an archived or done thread a message is already how you reopen it (see StateButton).
+export function offersRetry(t: ThreadView): boolean {
   return sessionIndicatorKind(t) === "stalled"
 }
 
