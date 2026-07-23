@@ -529,7 +529,7 @@ test("Update & Restart hands the durable owner to a fresh supervisor without cop
     slug: "kept", session_id: "fray-session", tmux_name: "fray-kept", spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0,
     title: null, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
-    backend: "codex", agent_session_id: "provider-rollout", codex_input_queue: '[{"text":"continue"}]',
+    backend: "codex", agent_session_id: "provider-rollout", control_error: "existing draft",
   })
   storage.setAgentSession("kept", "provider-rollout")
   storage.close()
@@ -578,8 +578,8 @@ test("Update & Restart hands the durable owner to a fresh supervisor without cop
     const reopened = createStorage(join(stateDir, "ui.db"))
     const kept = reopened.getSession("kept")
     reopened.close()
-    assert.deepEqual({ session: kept?.session_id, provider: kept?.agent_session_id, queue: kept?.codex_input_queue }, {
-      session: "fray-session", provider: "provider-rollout", queue: '[{"text":"continue"}]',
+    assert.deepEqual({ session: kept?.session_id, provider: kept?.agent_session_id, error: kept?.control_error }, {
+      session: "fray-session", provider: "provider-rollout", error: "existing draft",
     })
   } finally {
     await successor?.close()

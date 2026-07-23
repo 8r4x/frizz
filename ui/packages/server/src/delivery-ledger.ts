@@ -13,8 +13,8 @@ import type { Storage } from "./storage.ts"
 //   pending ──(no evidence for PENDING_TIMEOUT_MS)──▶ unconfirmed (kept, projected with a warning,
 //   dropped after UNCONFIRMED_DROP_MS — the terminal pane is the recovery surface)
 //
-// The ledger is persisted on the session row (`delivery_ledger`, a small JSON array — the same shape of
-// home as codex_input_queue), correlated by the tailer as it folds new JSONL records, and PROJECTED into
+// The ledger is persisted on the session row (`delivery_ledger`, a small JSON array), correlated by the
+// tailer as it folds new JSONL records, and PROJECTED into
 // the rendered transcript by readThreadTranscript: a pending/enqueued item renders as the gray queued
 // bubble (sourceId `delivery:<id>`) so the queued affordance is server truth — reload-safe, and consumed
 // by the client's optimistic bubble via deliveryId rather than text.

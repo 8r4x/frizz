@@ -74,9 +74,7 @@ export interface SessionRow {
   // A requested live permission change that has not yet been observed in backend telemetry. Kept
   // separately from permission_mode so the board never presents an optimistic selection as actual.
   permission_pending?: string | null
-  // Durable Codex TUI control state. The queue survives Fray restarts; control_error explains why
-  // neither a queued follow-up nor a permission request can safely advance right now.
-  codex_input_queue?: string | null
+  // An actionable reason a runtime control failed closed and cannot safely advance right now.
   control_error?: string | null
   // Durable Claude follow-up delivery ledger (delivery-ledger.ts): small JSON array of not-yet-
   // delivered sends, correlated by the tailer and projected into the rendered transcript.
@@ -100,7 +98,7 @@ export interface RuntimeExpectation {
   runtimeControl?: string | null
 }
 
-export type RuntimeControlKind = "permission" | "profile" | "resume" | "follow-up" | "codex-input" | "ai-rename"
+export type RuntimeControlKind = "permission" | "profile" | "resume" | "follow-up" | "ai-rename"
 
 export type ProfileHandoffPhase =
   | "armed"
@@ -394,12 +392,6 @@ export interface Storage {
   ): boolean
   setObservedPermissionIfCurrent(slug: string, sessionId: string, generation: number, permissionMode: string): boolean
   setControlErrorIfCurrent(slug: string, sessionId: string, generation: number, error: string | null): boolean
-  setCodexInputQueue(slug: string, queue: string | null): void
-  setCodexInputQueueIfCurrent(
-    slug: string,
-    expected: { sessionId: string; generation: number; queue: string | null },
-    queue: string | null,
-  ): boolean
   setControlError(slug: string, error: string | null): void
   setDeliveryLedger(slug: string, ledger: string | null): void
   getSetting(key: string): unknown
@@ -490,7 +482,6 @@ export function createStorage(dbPath: string): Storage {
     "profile_handoff TEXT",
     "permission_mode TEXT",
     "permission_pending TEXT",
-    "codex_input_queue TEXT",
     "control_error TEXT",
     "delivery_ledger TEXT",
     "runtime_generation INTEGER NOT NULL DEFAULT 0",
@@ -510,6 +501,11 @@ export function createStorage(dbPath: string): Storage {
   // into the new lifecycle column. Only fills NULLs — an explicit later state write always wins.
   try {
     db.exec("UPDATE session SET state = 'archived' WHERE archived = 1 AND state IS NULL")
+    db.exec("UPDATE session SET runtime_control = NULL WHERE runtime_control = 'codex-input'")
+    // The tmux codex composer is gone, and with it every writer AND releaser of its durable
+    // 'codex-input' runtime lock. A row that still holds one was locked by the retired subsystem and
+    // nothing can ever clear it again: the board reports runtimeControlPending forever, which fences
+    // that thread's composer, model, and sandbox controls permanently. Release it once, at boot.
   } catch {
     // best-effort
   }
@@ -528,8 +524,8 @@ export function createStorage(dbPath: string): Storage {
   const selOne = db.prepare<[string], SessionRow>("SELECT * FROM session WHERE slug = ?")
   const selAll = db.prepare<[], SessionRow>("SELECT * FROM session")
   const upsertStmt = db.prepare(`
-    INSERT INTO session (slug, session_id, tmux_name, spawned_at, last_read_at, unread, exited, title_auto, title, state, snoozed_until, snooze_prompt, meta, seen_at, plan_path, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, codex_input_queue, control_error, runtime_generation, runtime_control, runtime_control_revision)
-    VALUES (@slug, @session_id, @tmux_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title, @state, @snoozed_until, @snooze_prompt, @meta, @seen_at, @plan_path, @transcript_id, @model, @effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @codex_input_queue, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision)
+    INSERT INTO session (slug, session_id, tmux_name, spawned_at, last_read_at, unread, exited, title_auto, title, state, snoozed_until, snooze_prompt, meta, seen_at, plan_path, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, control_error, runtime_generation, runtime_control, runtime_control_revision)
+    VALUES (@slug, @session_id, @tmux_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title, @state, @snoozed_until, @snooze_prompt, @meta, @seen_at, @plan_path, @transcript_id, @model, @effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision)
     ON CONFLICT(slug) DO UPDATE SET
       session_id = excluded.session_id,
       tmux_name  = excluded.tmux_name,
@@ -552,7 +548,6 @@ export function createStorage(dbPath: string): Storage {
       profile_handoff = excluded.profile_handoff,
       permission_mode = excluded.permission_mode,
       permission_pending = excluded.permission_pending,
-      codex_input_queue = excluded.codex_input_queue,
       control_error = excluded.control_error,
       runtime_generation = CASE
         WHEN session.session_id = excluded.session_id THEN MAX(session.runtime_generation, excluded.runtime_generation)
@@ -571,7 +566,7 @@ export function createStorage(dbPath: string): Storage {
       slug, session_id, tmux_name, spawned_at, last_read_at, unread, exited, archived, rested_at,
       title_auto, title, transcript_id, state, snoozed_until, snooze_prompt, meta, seen_at, plan_path, backend, agent_session_id,
       model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff,
-      permission_mode, permission_pending, codex_input_queue, control_error,
+      permission_mode, permission_pending, control_error,
       runtime_generation, runtime_control, runtime_control_revision
     )
     VALUES (
@@ -579,7 +574,7 @@ export function createStorage(dbPath: string): Storage {
       @rested_at, @title_auto, @title, @transcript_id, @state, @snoozed_until, @snooze_prompt, @meta, @seen_at, @plan_path,
       @backend, @agent_session_id, @model, @effort, @profile_pending_model,
       @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending,
-      @codex_input_queue, @control_error, @runtime_generation, @runtime_control,
+      @control_error, @runtime_generation, @runtime_control,
       @runtime_control_revision
     )
     ON CONFLICT(slug) DO NOTHING
@@ -830,7 +825,6 @@ export function createStorage(dbPath: string): Storage {
     WHERE slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
       AND runtime_control IS NULL AND permission_pending IS NULL
       AND profile_pending_model IS NULL AND profile_pending_effort IS NULL
-      AND (? IN ('codex-input', 'follow-up') OR codex_input_queue IS NULL)
   `)
   const releaseRuntimeControlStmt = db.prepare(`
     UPDATE session SET runtime_control = NULL
@@ -843,7 +837,6 @@ export function createStorage(dbPath: string): Storage {
     WHERE slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
       AND runtime_control IS NULL AND permission_pending IS NULL
       AND profile_pending_model IS NULL AND profile_pending_effort IS NULL
-      AND codex_input_queue IS NULL
   `)
   const armProfileChangeStmt = db.prepare(`
     UPDATE session
@@ -855,7 +848,6 @@ export function createStorage(dbPath: string): Storage {
     WHERE slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
       AND runtime_control IS NULL AND permission_pending IS NULL
       AND profile_pending_model IS NULL AND profile_pending_effort IS NULL
-      AND codex_input_queue IS NULL
   `)
   const checkpointProfileChangeStmt = db.prepare(`
     UPDATE session SET profile_handoff = ?, control_error = NULL
@@ -922,11 +914,6 @@ export function createStorage(dbPath: string): Storage {
   const controlErrorIfCurrentStmt = db.prepare(
     "UPDATE session SET control_error = ? WHERE slug = ? AND session_id = ? AND runtime_generation = ?",
   )
-  const codexInputQueueStmt = db.prepare("UPDATE session SET codex_input_queue = ? WHERE slug = ?")
-  const codexInputQueueIfCurrentStmt = db.prepare(`
-    UPDATE session SET codex_input_queue = ?
-    WHERE slug = ? AND session_id = ? AND runtime_generation = ? AND codex_input_queue IS ?
-  `)
   const controlErrorStmt = db.prepare("UPDATE session SET control_error = ? WHERE slug = ?")
   const deliveryLedgerStmt = db.prepare("UPDATE session SET delivery_ledger = ? WHERE slug = ?")
   const getSet = db.prepare<[string], { value: string }>("SELECT value FROM settings WHERE key = ?")
@@ -949,7 +936,6 @@ export function createStorage(dbPath: string): Storage {
     permission_pending: row.permission_pending ?? null,
     snoozed_until: row.snoozed_until ?? null,
     snooze_prompt: row.snooze_prompt ?? null,
-    codex_input_queue: row.codex_input_queue ?? null,
     control_error: row.control_error ?? null,
     delivery_ledger: row.delivery_ledger ?? null,
     runtime_generation: row.runtime_generation ?? 0,
@@ -1351,7 +1337,6 @@ export function createStorage(dbPath: string): Storage {
         expected.sessionId,
         expected.nativeSessionId,
         expected.generation,
-        kind,
       ).changes === 1
       if (!changed) return null
       const current = selOne.get(slug)
@@ -1503,15 +1488,6 @@ export function createStorage(dbPath: string): Storage {
       observedPermissionIfCurrentStmt.run(permissionMode, slug, sessionId, generation, permissionMode).changes === 1,
     setControlErrorIfCurrent: (slug, sessionId, generation, error) =>
       controlErrorIfCurrentStmt.run(error, slug, sessionId, generation).changes === 1,
-    setCodexInputQueue: (slug, queue) => void codexInputQueueStmt.run(queue, slug),
-    setCodexInputQueueIfCurrent: (slug, expected, queue) =>
-      codexInputQueueIfCurrentStmt.run(
-        queue,
-        slug,
-        expected.sessionId,
-        expected.generation,
-        expected.queue,
-      ).changes === 1,
     setControlError: (slug, error) => void controlErrorStmt.run(error, slug),
     setDeliveryLedger: (slug, ledger) => void deliveryLedgerStmt.run(ledger, slug),
     getSetting: (key) => {

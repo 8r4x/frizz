@@ -50,19 +50,16 @@ function harness(storageOverride?: Storage) {
   let onTailerTick = () => {}
   const sent: string[] = []
   const reattached: string[] = []
-  const keyQueueSnapshots: Array<string | null | undefined> = []
   const terminal: PermissionTerminal = {
     isLive: () => live,
     capturePane: () => pane,
     capturePaneEscaped: () => escaped,
     sendLiteral: (_slug, text) => sent.push(`literal:${text}`),
-    sendTextWithKey: (slug, text, key) => {
-      keyQueueSnapshots.push(storage.getSession(slug)?.codex_input_queue)
+    sendTextWithKey: (_slug, text, key) => {
       sent.push(`atomic:${key}:${text}`)
       return atomicSendSucceeds
     },
-    sendKey: (slug, key) => {
-      keyQueueSnapshots.push(storage.getSession(slug)?.codex_input_queue)
+    sendKey: (_slug, key) => {
       sent.push(`key:${key}`)
     },
   }
@@ -114,7 +111,6 @@ function harness(storageOverride?: Storage) {
       onTailerTick = next
     },
     refreshes: () => refreshes,
-    keyQueueSnapshots,
     terminal,
     tailer,
     board,
