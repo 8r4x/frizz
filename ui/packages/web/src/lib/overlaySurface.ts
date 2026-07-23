@@ -19,7 +19,15 @@ export const OPAQUE_SURFACE_BASE =
 // The selector-surface contract for Select, DropdownMenu, and the profile grid: the opaque base at
 // z-[110]. Portal content mounts at document.body, so it must clear the modal surfaces it can be
 // opened from (a selector inside a z-50 dialog) rather than paint beneath them.
-export const OPAQUE_PORTAL_SURFACE_CLASS = `z-[110] ${OPAQUE_SURFACE_BASE}`
+export const OPAQUE_PORTAL_SURFACE_Z = "z-[110]"
+export const OPAQUE_PORTAL_SURFACE_CLASS = `${OPAQUE_PORTAL_SURFACE_Z} ${OPAQUE_SURFACE_BASE}`
+
+// The stacking level a selector must take when it is opened from INSIDE the shared z-[200] surface
+// (the GitHub picker's Overlay). Its portal still mounts at document.body, so the default z-[110]
+// would paint the menu BENEATH that overlay's frosted backdrop — the classic "hidden underneath"
+// bug. This is the raise-the-specific-overlay fix, not a re-elevation of the z-[110] tier itself:
+// it borrows the anchored-overlay level, which is defined to clear z-[200].
+export const OPAQUE_PORTAL_SURFACE_ABOVE_DIALOG_Z = "z-[250]"
 
 // The z-index for ANCHORED transient overlays that pop off a trigger — tooltips and popovers. They
 // must clear every surface they can be opened from: the opaque selector surface (z-[110]) and the

@@ -17,7 +17,7 @@ import {
   type ProfileGridSelection,
 } from "../lib/profileGrid.ts"
 import { registerOpenSelect } from "../lib/selectOverlay.ts"
-import { OPAQUE_PORTAL_SURFACE_CLASS } from "../lib/overlaySurface.ts"
+import { OPAQUE_PORTAL_SURFACE_Z, OPAQUE_SURFACE_BASE } from "../lib/overlaySurface.ts"
 
 function effortLabel(effort: string): string {
   return effort === "xhigh" ? "X-high" : effort.charAt(0).toUpperCase() + effort.slice(1)
@@ -35,6 +35,7 @@ export function ProfileGridSelector({
   disabled = false,
   compact = false,
   side = "bottom",
+  menuZClass = OPAQUE_PORTAL_SURFACE_Z,
   className = "",
 }: {
   groups: readonly ProfileGridGroup[]
@@ -48,6 +49,10 @@ export function ProfileGridSelector({
   disabled?: boolean
   compact?: boolean
   side?: "top" | "bottom"
+  // EXACTLY ONE z utility for the portaled menu (see lib/overlaySurface.ts — two z-* classes on one
+  // element resolve by CSS source order, not class order). Override only to clear a higher surface
+  // the trigger lives inside, e.g. OPAQUE_PORTAL_SURFACE_ABOVE_DIALOG_Z inside the z-[200] Overlay.
+  menuZClass?: string
   className?: string
 }) {
   const [open, setOpen] = useState(false)
@@ -167,7 +172,7 @@ export function ProfileGridSelector({
           sideOffset={5}
           collisionPadding={8}
           onEscapeKeyDown={(event) => event.stopPropagation()}
-          className={`profile-grid-menu ${OPAQUE_PORTAL_SURFACE_CLASS} max-h-[min(360px,var(--radix-dropdown-menu-content-available-height))] max-w-[calc(100vw-1rem)] overflow-auto rounded-lg p-1.5 ${typography}`}
+          className={`profile-grid-menu ${menuZClass} ${OPAQUE_SURFACE_BASE} max-h-[min(360px,var(--radix-dropdown-menu-content-available-height))] max-w-[calc(100vw-1rem)] overflow-auto rounded-lg p-1.5 ${typography}`}
         >
           {groups.map((group) => (
             <RadixMenu.Group key={group.id}>

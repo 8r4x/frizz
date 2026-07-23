@@ -34,7 +34,7 @@ function Fixture() {
           minHeight={96}
           maxHeight={340}
           footer={<span className="text-[11px] text-muted">gpt-5.6 · default</span>}
-          leftAction={<GithubTrigger profile={{ label: "stub" } as never} />}
+          leftAction={<GithubTrigger />}
         />
       </div>
     </div>

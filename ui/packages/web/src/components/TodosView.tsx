@@ -870,7 +870,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // suppress the generic chat bottom-pin: it fights card exit/reorder. Both keyboard and button submits
   // run this same onSent, which dissolves the card in place — TodosView's unmount effect then
   // auto-scrolls the next card to the viewport top (like every user-initiated dismissal).
-  const { liveMsg, answering, answerable, anyAnswered, sending, sendAnswers, sendMessage } = useLiveAnswering(thread.id, messages, () => {
+  const { liveMsg, answering, answerable, anyAnswered, sendAnswers, sendMessage } = useLiveAnswering(thread.id, messages, () => {
     ;(document.activeElement as HTMLElement | null)?.blur()
     onResolve(thread.id)
   }, { scrollToBottom: false })
@@ -935,7 +935,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
             </div>
           )}
         </div>
-        {/* SHARED navigation actions: collapse and open-in-drawer. Diagnostic Dismiss is intentionally
+        {/* SHARED navigation actions: collapse and open-in-drawer. Retry is intentionally
             absent from queue headers; lifecycle actions stay in the footer. (Rename lives by the title
             in the thread drawer, not here — the queue is a triage surface.) Open-thread slides in the side drawer — an overlay,
             NOT a nav switch, so the queue scroll/selection stays put. */}
@@ -1132,7 +1132,10 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
         // agent…" reads as a second way to answer the question rather than a way around it.
         placeholder={answerable ? "Or skip the questions and reply…" : "Reply to the agent…"}
         minHeight={44}
-        busy={controls.busy || sending}
+        // NOT `|| sending`. The card already dissolves optimistically on send; locking the textarea for
+        // the injection round-trip on top of that just froze the last surface still on screen. `busy`
+        // is left to mean what it should: a backend fence owning this thread's runtime.
+        busy={controls.busy}
         footer={controls.footer}
       />
       {controls.status}

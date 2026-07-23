@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { parseCodexQuotaFromRollout } from "./codex-quota.ts"
-import { parseClaudeUsage, parseClaudeUsageOutput, tokenFromCredentialsJson, readClaudeQuota } from "./claude-quota.ts"
+import { parseClaudeUsage, parseClaudeUsageOutput, tokenFromCredentialsJson, readClaudeQuota, claudeQuotaRefreshSettled } from "./claude-quota.ts"
 
 // ---- Codex rollout parsing ----
 
@@ -148,6 +148,27 @@ test("claude CLI usage: parses the JSON result envelope and rejects cost-only si
   assert.equal(missing.detail, "Claude Code did not report subscription quota")
 })
 
+test("claude CLI usage: parses the live '<Mon> <D> at <clock> (<tz>)' reset labels", () => {
+  const now = new Date("2026-07-23T10:30:00").getTime()
+  const q = parseClaudeUsageOutput(
+    [
+      "Current session: 17% used · resets Jul 23 at 3pm (America/Los_Angeles)",
+      "Current week (Fable): 45% used · resets Jul 27 at 12:59am (America/Los_Angeles)",
+    ].join("\n"),
+    now,
+  )
+  assert.equal(q.status, "ok")
+  assert.deepEqual(q.windows.map((w) => [w.key, w.usedPercent]), [["5h", 17], ["weekly-fable", 45]])
+  assert.equal(q.windows[0]?.resetsAt, Math.round(new Date("2026-07-23T15:00:00").getTime() / 1000))
+  assert.equal(q.windows[1]?.resetsAt, Math.round(new Date("2026-07-27T00:59:00").getTime() / 1000))
+})
+
+test("claude CLI usage: a year-less date label crossing New Year resolves forward", () => {
+  const now = new Date("2026-12-30T10:00:00").getTime()
+  const q = parseClaudeUsageOutput("Current session: 5% used · resets Jan 2 at 3pm (America/Los_Angeles)", now)
+  assert.equal(q.windows[0]?.resetsAt, Math.round(new Date("2027-01-02T15:00:00").getTime() / 1000))
+})
+
 async function withCache(run: (cacheDir: string) => Promise<void>) {
   const cacheDir = await mkdtemp(join(tmpdir(), "fray-quota-test-"))
   try {
@@ -184,6 +205,38 @@ test("claude quota: concurrent project windows collapse onto one Claude Code inv
   ])
   assert.equal(calls, 1)
   assert.ok(results.every((result) => result.status === "ok"))
+}))
+
+test("claude quota: an expired reading is served instantly while a background refresh updates the cache", () => withCache(async (cacheDir) => {
+  let calls = 0
+  const execUsage = async () => {
+    calls++
+    return JSON.stringify({ type: "result", subtype: "success", result: `Current session: ${calls === 1 ? 20 : 55}% used · resets 4pm` })
+  }
+  await readClaudeQuota("claude-test", { cacheDir, now: () => 0, execUsage })
+  assert.equal(calls, 1)
+  // TTL expired: the poll gets the stale-but-recent reading back immediately (no CLI wait on the
+  // request path) and the refresh happens behind it.
+  const swr = await readClaudeQuota("claude-test", { cacheDir, now: () => 4 * 60_000, execUsage })
+  assert.equal(swr.status, "ok")
+  assert.equal(swr.windows[0]?.usedPercent, 20)
+  assert.equal(swr.detail, undefined)
+  await claudeQuotaRefreshSettled()
+  assert.equal(calls, 2)
+  const after = await readClaudeQuota("claude-test", { cacheDir, now: () => 4 * 60_000 + 1, execUsage })
+  assert.equal(after.windows[0]?.usedPercent, 55)
+  assert.equal(calls, 2)
+}))
+
+test("claude quota: a meaningfully old reading served via stale-while-revalidate says so", () => withCache(async (cacheDir) => {
+  await readClaudeQuota("claude-test", { cacheDir, now: () => 0, execUsage: async () => usageEnvelope })
+  const swr = await readClaudeQuota(
+    "claude-test",
+    { cacheDir, now: () => 15 * 60_000, execUsage: async () => { throw new Error("CLI down") } },
+  )
+  assert.equal(swr.status, "ok")
+  assert.equal(swr.detail, "Refreshing · last updated 15m ago")
+  await claudeQuotaRefreshSettled()
 }))
 
 test("claude quota: a failed refresh retains the last good reading with an honest stale label", () => withCache(async (cacheDir) => {

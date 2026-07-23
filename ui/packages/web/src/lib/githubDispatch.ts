@@ -3,41 +3,13 @@ import type {
   DispatchProfileSnapshot,
   GithubBatchInput,
 } from "@fray-ui/shared"
-import type { ResolvedDispatchPreferences } from "./dispatchPreferences.ts"
 import { CLAUDE_MODELS, EFFORTS } from "./options.ts"
 
-export type ProfileCaptureResult =
-  | { ok: true; profile: DispatchProfileSnapshot }
-  | { ok: false; error: string }
-
-// Capture the exact values currently rendered by a prompt box. Availability flags come from the same
-// resolved preference object that gates typed submission, so the GitHub trigger cannot snapshot an
-// unknown model or split an invalid model/effort pair.
-export function captureDispatchProfile(
-  resolved: ResolvedDispatchPreferences | undefined,
-): ProfileCaptureResult {
-  if (!resolved) return { ok: false, error: "Profile is still loading — wait before opening GitHub" }
-  if (!resolved.modelAvailable) {
-    return { ok: false, error: "Saved model is unavailable — choose a model before opening GitHub" }
-  }
-  if (!resolved.effortAvailable) {
-    return { ok: false, error: "Saved reasoning level is unavailable — choose another level before opening GitHub" }
-  }
-  // No permissionMode: the server stamps every created worker with its fixed non-interactive mode
-  // (WORKER_DISPATCH_PERMISSION) — the GitHub flow carries no permission choice either.
-  const profile: DispatchProfileSnapshot = {
-    backend: resolved.backend,
-    model: resolved.model,
-    effort: resolved.effort as DispatchProfileSnapshot["effort"],
-  }
-  const error = dispatchProfileError(profile, resolved.backend === "codex" && resolved.codexModel
-    ? [resolved.codexModel]
-    : [])
-  return error ? { ok: false, error } : { ok: true, profile }
-}
-
-// Revalidate immediately before the final mutation. A Codex cache refresh can invalidate a model or
-// effort while the picker is open; that must stop visibly instead of falling back or downgrading.
+// Validate the picker's live model/effort pair immediately before the final mutation. A Codex cache
+// refresh can invalidate a model or effort while the picker is open; that must stop visibly (the
+// selector's own red line + a disabled dispatch) instead of falling back or downgrading.
+// No permissionMode participates: the server stamps every created worker with its fixed
+// non-interactive mode (WORKER_DISPATCH_PERMISSION), so the GitHub flow carries no permission choice.
 export function dispatchProfileError(
   profile: DispatchProfileSnapshot,
   codexModels: readonly CodexModel[],

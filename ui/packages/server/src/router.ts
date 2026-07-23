@@ -134,7 +134,7 @@ interface RegisteredRuntimeTerminator {
 
 // The terminator completeThread runs on. Its standalone liveness check trusts the BATCHED cache (one
 // `list-panes -a` answers every session) for a "live" verdict — the common resting-shell path — instead of
-// the default uncached isLive (a hasSession + paneDead pair, run before AND after the kill). Those stacked
+// the default uncached isLive (its own `list-panes` exec, run before AND after the kill). Those stacked
 // sync tmux execs on the request path are exactly what starved the event loop and pushed Mark-as-done
 // latency to seconds while an agent streamed (see tmux.ts liveness cache). A cached "dead" verdict is
 // CONFIRMED with one fresh uncached check before it is trusted: paneMap() caches an all-dead map for its

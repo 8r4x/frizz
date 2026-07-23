@@ -1,20 +1,16 @@
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useSnapshot } from "valtio"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import type { Backend, DispatchInput, SetDispatchPreferenceInput } from "@fray-ui/shared"
+import { useMutation, useQuery } from "@tanstack/react-query"
+import type { Backend, DispatchInput } from "@fray-ui/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast, store } from "../store.ts"
 import { Composer } from "./Composer.tsx"
 import { GithubTrigger } from "./GithubTrigger.tsx"
 import { ProfileGridSelector } from "./ProfileGridSelector.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
-import {
-  applyDispatchPreferenceUpdate,
-  dispatchProfileGroups,
-  resolveDispatchPreferences,
-} from "../lib/dispatchPreferences.ts"
-import { captureDispatchProfile } from "../lib/githubDispatch.ts"
+import { dispatchProfileGroups } from "../lib/dispatchPreferences.ts"
+import { useDispatchProfile } from "../hooks/useDispatchProfile.ts"
 import { handleDialogEscape } from "../lib/selectOverlay.ts"
 import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
 import { parseAccountAlias } from "../lib/signIn.ts"
@@ -34,12 +30,8 @@ export function DispatchForm({
   // oriented to the plan and the thread is associated with it.
   planPath?: string
 }) {
-  const queryClient = useQueryClient()
-  const preferences = useQuery({ queryKey: ["dispatchPreferencesGet"], queryFn: () => rpc.dispatchPreferencesGet() })
-  // The codex model catalogue + per-model effort options, from the authoritative ~/.codex cache (never a
-  // hand-maintained list). [] until it loads; the option builders fall back to a compiled-in mirror.
-  const codexModels = useQuery({ queryKey: ["codexModels"], queryFn: () => rpc.codexModels() })
-  const codexList = codexModels.data ?? []
+  // The one durable new-thread profile, shared with the GitHub picker's own selector.
+  const { resolved, codexList, loadError: profileLoadError, saveProfile } = useDispatchProfile()
   const projectDir = useProjectDir()
   // Queue and modal are the same semantic new-thread composer. A plan gets a distinct intent because
   // dispatching it changes the worker's durable context.
@@ -57,21 +49,6 @@ export function DispatchForm({
   const [signInFor, setSignInFor] = useState<Backend | null>(null)
   const [logoutFor, setLogoutFor] = useState<Backend | null>(null)
   const gatedInputRef = useRef<DispatchInput | null>(null)
-
-  const preference = useMutation({
-    mutationFn: (update: SetDispatchPreferenceInput) => rpc.dispatchPreferenceSet(update),
-    // TanStack serializes mutations sharing this scope. This prevents a fast pair of selections from
-    // reaching SQLite out of order while optimistic query data keeps every mounted composer in sync.
-    scope: { id: "dispatch-preferences" },
-    onMutate: (update) => {
-      const current = queryClient.getQueryData<Awaited<ReturnType<typeof rpc.dispatchPreferencesGet>>>(["dispatchPreferencesGet"])
-      if (current) queryClient.setQueryData(["dispatchPreferencesGet"], applyDispatchPreferenceUpdate(current, update))
-    },
-    onError: (error) => {
-      void queryClient.invalidateQueries({ queryKey: ["dispatchPreferencesGet"] })
-      showToast(`Could not save new-thread preference: ${(error as Error).message.slice(0, 80)}`)
-    },
-  })
 
   // Dispatch does NOT navigate anywhere: you stay on the queue, the new thread appears in the
   // sidebar, and the toast walks through the lifecycle — an immediate spinner while the server
@@ -104,19 +81,6 @@ export function DispatchForm({
       showToast(`Dispatch failed: ${(e as Error).message.slice(0, 80)}`)
     },
   })
-
-  // Do not render Opus/high while durable intent is still loading. In particular, a saved Codex model
-  // must not be classified as Claude merely because the Codex catalogue has not hydrated yet.
-  const controlsReady = !!preferences.data && !!codexModels.data
-  const resolved = useMemo(
-    () => controlsReady ? resolveDispatchPreferences(preferences.data!, codexList) : undefined,
-    [controlsReady, preferences.data, codexList],
-  )
-  const githubProfile = useMemo(() => captureDispatchProfile(resolved), [resolved])
-
-  function savePreference(update: SetDispatchPreferenceInput) {
-    preference.mutate(update)
-  }
 
   // Fire the dispatch and do the one-shot UI bookkeeping (optimistic toast + prompt clear). Called both
   // on a clean submit and after the sign-in gate is cleared, so the prompt is only cleared once the
@@ -186,7 +150,7 @@ export function DispatchForm({
           groups={[]}
           value={undefined}
           onValueChange={() => {}}
-          placeholder={preferences.isError || codexModels.isError ? "Profile unavailable" : "Profile loading…"}
+          placeholder={profileLoadError ? "Profile unavailable" : "Profile loading…"}
           ariaLabel="Model and effort loading"
           disabled
         />
@@ -197,7 +161,7 @@ export function DispatchForm({
       <ProfileGridSelector
         groups={profileGroups}
         value={{ provider: resolved.backend, model: resolved.model, effort: resolved.effort }}
-        onValueChange={(selection) => savePreference({
+        onValueChange={(selection) => saveProfile({
           field: "profile",
           backend: selection.provider as typeof resolved.backend,
           model: selection.model,
@@ -210,7 +174,7 @@ export function DispatchForm({
         className="max-w-[min(21rem,72vw)]"
       />
     )
-  }, [resolved, codexList, preferences.isError, codexModels.isError])
+  }, [resolved, codexList, profileLoadError, saveProfile])
 
   return (
     <div className="w-full flex flex-col gap-3">
@@ -225,10 +189,7 @@ export function DispatchForm({
         maxHeight={340}
         busy={dispatch.isPending}
         footer={footer}
-        leftAction={<GithubTrigger
-          profile={githubProfile.ok ? githubProfile.profile : undefined}
-          profileError={githubProfile.ok ? undefined : githubProfile.error}
-        />}
+        leftAction={<GithubTrigger />}
       />
       {dispatch.isError && (
         <span className="px-0.5 text-[11px] text-red-400 truncate">{(dispatch.error as Error).message}</span>

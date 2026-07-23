@@ -165,25 +165,44 @@ function windowIdentity(title: string): [string, string] | undefined {
   return slug ? [`weekly-${slug}`, `${name} wk`] : undefined
 }
 
+const MONTH_INDEX: Record<string, number> = {
+  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+}
+
 function parseResetLabel(label: string | undefined, now: number): number | undefined {
   if (!label) return undefined
   // Claude Code and Fray run on the same machine, so its explicit IANA suffix names the local timezone
   // already in effect here. Remove only that redundant suffix; never reinterpret it as UTC.
   const text = label.replace(/\s+\([^)]+\)\s*$/, "").trim()
-  const clock = /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i.exec(text)
-  if (clock) {
-    let hour = Number(clock[1]) % 12
-    if (clock[3]!.toLowerCase() === "pm") hour += 12
+  // The live label shapes: "3pm", "Jul 23 at 3pm", "Jul 27 at 12:59am", optionally with a year.
+  // Date.parse cannot handle the "<Mon> <D> at <clock>" form (and resolves a year-less "<Mon> <D>" to
+  // 2001), so assemble these from local-time parts directly.
+  const parts = /^(?:([A-Za-z]{3,9})\s+(\d{1,2})(?:,?\s+(\d{4}))?)?\s*(?:at\s+)?(?:(\d{1,2})(?::(\d{2}))?\s*(am|pm))?$/i.exec(text)
+  const month = parts?.[1] ? MONTH_INDEX[parts[1].slice(0, 3).toLowerCase()] : undefined
+  const hasClock = parts?.[6] !== undefined
+  if (parts && (month !== undefined || hasClock) && (parts[1] === undefined || month !== undefined)) {
     const date = new Date(now)
-    date.setHours(hour, Number(clock[2] ?? 0), 0, 0)
-    if (date.getTime() <= now) date.setDate(date.getDate() + 1)
+    if (hasClock) {
+      let hour = Number(parts[4]) % 12
+      if (parts[6]!.toLowerCase() === "pm") hour += 12
+      date.setHours(hour, Number(parts[5] ?? 0), 0, 0)
+    } else {
+      date.setHours(0, 0, 0, 0)
+    }
+    if (month !== undefined) {
+      date.setMonth(month, Number(parts[2]))
+      // A year-less date must resolve forward: a weekly reset labeled "Jan 2" in late December is next
+      // year's Jan 2, not the one eleven+ months past.
+      if (parts[3]) date.setFullYear(Number(parts[3]))
+      else if (date.getTime() <= now) date.setFullYear(date.getFullYear() + 1)
+    } else if (date.getTime() <= now) {
+      date.setDate(date.getDate() + 1)
+    }
     return Math.round(date.getTime() / 1000)
   }
   const parsed = Date.parse(text)
   if (!Number.isFinite(parsed)) return undefined
   const date = new Date(parsed)
-  // Date-only labels omit the year. A weekly reset crossing New Year must resolve forward, not to the
-  // same month/day in the past.
   if (!/\b\d{4}\b/.test(text) && date.getTime() <= now) date.setFullYear(date.getFullYear() + 1)
   return Math.round(date.getTime() / 1000)
 }
@@ -219,9 +238,60 @@ export function parseClaudeUsageOutput(stdout: string, now = Date.now()): Provid
   return { status: "ok", windows }
 }
 
+// One non-blocking lock attempt for a BACKGROUND refresh: if another process holds the lock, someone
+// is already refreshing and this process's next poll will read their result — give up instantly
+// instead of parking a waiter.
+async function tryAcquireLock(path: string): Promise<(() => Promise<void>) | undefined> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await mkdir(path)
+      return () => rm(path, { recursive: true, force: true })
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") return undefined
+      try {
+        if (Date.now() - (await stat(path)).mtimeMs <= LOCK_STALE_MS) return undefined
+        await rm(path, { recursive: true, force: true })
+      } catch {
+        return undefined
+      }
+    }
+  }
+  return undefined
+}
+
+// In-process guard so overlapping polls from one server start at most one background refresh.
+const backgroundRefreshes = new Map<string, Promise<void>>()
+
+function refreshSharedInBackground(paths: { data: string; lock: string }, claudeBin: string, exec: UsageExec, now: number): void {
+  if (backgroundRefreshes.has(paths.data)) return
+  const task = (async () => {
+    const release = await tryAcquireLock(paths.lock)
+    if (!release) return
+    try {
+      const quota = parseClaudeUsageOutput(await exec(claudeBin), now)
+      if (quota.status === "ok") await writeShared(paths.data, { at: now, quota })
+    } finally {
+      await release().catch(() => {})
+    }
+  })().catch(() => {})
+    .finally(() => backgroundRefreshes.delete(paths.data))
+  backgroundRefreshes.set(paths.data, task)
+}
+
+/** Test seam: resolves once any in-flight background refreshes have settled. */
+export async function claudeQuotaRefreshSettled(): Promise<void> {
+  await Promise.all([...backgroundRefreshes.values()])
+}
+
 // The healthy cache is shared under ~/.fray so three project windows make one Claude Code request,
 // not three simultaneous requests to the same account. A failed refresh serves the last known-good
 // reading (clearly labeled in the popover) for at most one day instead of erasing useful data.
+//
+// Ordinary (non-force) reads are STALE-WHILE-REVALIDATE: any known-good reading newer than a day is
+// returned immediately and the refresh happens in the background. The poll must never block on the
+// CLI + cross-process lock (~27s worst case) — responses that slow straddle dev-server restarts and
+// leave the browser's fetch hung, which is exactly how the chip froze into an em dash. Only `force`
+// (the popover's explicit recheck) waits for a live refresh.
 export async function readClaudeQuota(
   claudeBin = "claude",
   deps: ClaudeQuotaDeps = {},
@@ -243,6 +313,13 @@ export async function readClaudeQuota(
   const initial = await readShared(paths.data)
   if (!options.force && initial && now - initial.at < (initial.quota.status === "ok" ? OK_TTL_MS : FAIL_TTL_MS)) {
     return initial.quota
+  }
+  if (!options.force && initial?.quota.status === "ok" && now - initial.at < STALE_MAX_AGE_MS) {
+    refreshSharedInBackground(paths, claudeBin, deps.execUsage ?? runClaudeUsage, now)
+    const ageMs = now - initial.at
+    // Freshly-expired data is normal churn; only label the reading once it is meaningfully old.
+    if (ageMs < 10 * 60_000) return initial.quota
+    return { ...initial.quota, detail: `Refreshing · last updated ${Math.round(ageMs / 60_000)}m ago` }
   }
 
   let release: (() => Promise<void>) | undefined

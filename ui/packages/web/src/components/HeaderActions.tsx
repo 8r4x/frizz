@@ -1,22 +1,22 @@
 import { useState, type ComponentType } from "react"
-import { ArrowUpRight, ChevronsDownUp, ChevronsUpDown, FileText, Loader2, RotateCcw, Trash2 } from "lucide-react"
+import { ArrowUpRight, ChevronsDownUp, ChevronsUpDown, FileText, Loader2, RotateCcw } from "lucide-react"
 import type { ThreadView } from "@fray-ui/shared"
-import { rpc } from "../api/rpc.ts"
-import { showToast, store, threadBySlug } from "../store.ts"
-import { useSnapshot } from "valtio"
 import { Tooltip } from "./Tooltip.tsx"
 import { MarkAsButton } from "./MarkAsButton.tsx"
-import { canDismiss, canRetry } from "../lib/status.ts"
+import { canRetry } from "../lib/status.ts"
+import { retrySession } from "../lib/retrySession.ts"
 
-export const STALLED_RETRY_MESSAGE = "Continue exactly where you left off."
+// The retry message + follow-up now live in lib/retrySession so the sidebar's hover-revealed Retry
+// shares this exact recovery path. Re-exported for existing importers.
+export { STALLED_RETRY_MESSAGE } from "../lib/retrySession.ts"
 
 // THE shared whole-thread action icons, rendered IDENTICALLY by the queue card header and the thread
 // header so the two can never drift. Order left→right runs least→most important, so the primary verb
 // sits at the far RIGHT. The verbs SPLIT on kind:
-//   • SESSION (non-foreign): doc/open navigation; the full thread additionally exposes Retry for a
-//     stalled session, or diagnostic Dismiss for an ordinary exited session. Queue headers suppress
-//     either action so their whole-thread verbs have one persistent home in ThreadLifecycleFooter.
-//     Rename lives next to the title in ThreadHeader.
+//   • SESSION (non-foreign): doc/open navigation; the full thread additionally exposes Retry for any
+//     exited session (crashed or ordinarily rested — both resume through the same follow-up path).
+//     Queue headers suppress it so their whole-thread verbs have one persistent home in
+//     ThreadLifecycleFooter. Rename lives next to the title in ThreadHeader.
 //   • SESSION (foreign): read-only. Only the doc/open NAVIGATION affordances — no kill/archive.
 //   • LEGACY (kind !== "session"): the vestigial Mark-as split button, exactly as before.
 export function HeaderActions({
@@ -39,13 +39,13 @@ export function HeaderActions({
   onCollapse?: () => void // queue cards → collapse/expand the card body to just its header
   collapsed?: boolean
   doneBusy?: boolean
-  // Mutation pass-through: LEGACY uses the MarkAsButton choreography; an ordinary exited session uses
-  // onStatusApplied after Dismiss. Archive/Snooze callbacks belong to ThreadLifecycleFooter.
+  // Mutation pass-through for the LEGACY MarkAsButton choreography. Archive/Snooze callbacks belong
+  // to ThreadLifecycleFooter.
   onStatusMutate?: () => void
   onStatusApplied?: () => void
   onStatusFailed?: () => void
-  // Queue cards keep every lifecycle verb in their footer. Full thread surfaces expose the appropriate
-  // recovery/diagnostic action for a stalled or ordinarily-exited session.
+  // Queue cards keep every lifecycle verb in their footer. Full thread surfaces expose Retry for an
+  // exited session.
   showExitAction?: boolean
 }) {
   const isSession = thread.kind === "session"
@@ -64,14 +64,10 @@ export function HeaderActions({
       {onDoc && <IconBtn label="Fray document" icon={FileText} size={14} onClick={onDoc} />}
       {onOpen && <IconBtn label="Open thread" icon={ArrowUpRight} size={14} onClick={onOpen} />}
       {isSession ? (
-        // Foreign sessions are read-only. A stalled session leads with recovery; Dismiss remains only
-        // for an ordinary exited row. Snooze and Archive live in the footer.
-        showExitAction && !isForeign
-          ? canRetry(thread)
-            ? <RetryButton slug={thread.id} />
-            : canDismiss(thread)
-              ? <DismissButton slug={thread.id} onDismissed={onStatusApplied} />
-              : null
+        // Foreign sessions are read-only. An exited session leads with recovery — Retry is the only
+        // exit-state verb here; clearing a finished row is the footer's job (Mark as done / Snooze).
+        showExitAction && !isForeign && canRetry(thread)
+          ? <RetryButton slug={thread.id} />
           : null
       ) : (
         <div className="ml-1">
@@ -89,66 +85,25 @@ export function HeaderActions({
   )
 }
 
-// Retry uses the same authoritative recovery path as any other follow-up. For a detached Codex
-// app-server session the server rebinds the rollout and retires its phantom current turn before
-// starting this continuation; for a dead provider process it performs the normal native resume.
+// Retry uses the same authoritative recovery path as any other follow-up (see lib/retrySession).
 function RetryButton({ slug }: { slug: string }) {
-  const snap = useSnapshot(store)
-  const sessionId = threadBySlug(snap.board as never, slug)?.sessionId
   const [busy, setBusy] = useState(false)
   const apply = () => {
     setBusy(true)
-    rpc
-      .followUp({ slug, sessionId: sessionId ?? "", message: STALLED_RETRY_MESSAGE })
-      .then(() => showToast("Retrying…"))
-      .catch((e) => showToast(`Retry failed: ${(e as Error).message.slice(0, 80)}`))
-      .finally(() => setBusy(false))
+    // retrySession now resolves the session id from the board and passes it to the guarded followUp.
+    retrySession(slug).finally(() => setBusy(false))
   }
   return (
-    <Tooltip label="Retry — continue this stalled session">
+    <Tooltip label="Retry — resume this session where it left off">
       <button
         onClick={apply}
         disabled={busy}
-        aria-label="Retry stalled session"
+        aria-label="Retry exited session"
         onMouseDown={(e) => e.preventDefault()}
         className="ml-1 flex items-center gap-1.5 rounded-md border border-accent/45 bg-accent/10 px-2.5 py-1 text-[12px] font-medium text-accent outline-none transition-colors hover:border-accent/70 hover:bg-accent/15 disabled:opacity-50"
       >
         {busy ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
         Retry
-      </button>
-    </Tooltip>
-  )
-}
-
-// The Dismiss verb: hard-delete an ordinarily-exited session (rpc.forgetThread) — the row is removed and its
-// transcript tombstoned so it stays gone across a rescan. On success it fires `onDismissed` so the
-// surface closes: a queue card collapses, a thread drawer slides
-// out. Rendered iff the owning surface opts in and canDismiss(thread); the server re-checks liveness
-// and rejects a live row.
-function DismissButton({ slug, onDismissed }: { slug: string; onDismissed?: () => void }) {
-  const [busy, setBusy] = useState(false)
-  const apply = () => {
-    setBusy(true)
-    rpc
-      .forgetThread({ slug })
-      .then(() => {
-        showToast("Dismissed")
-        onDismissed?.()
-      })
-      .catch((e) => showToast(`Failed: ${(e as Error).message.slice(0, 60)}`))
-      .finally(() => setBusy(false))
-  }
-  return (
-    <Tooltip label="Dismiss — permanently remove this stalled session">
-      <button
-        onClick={apply}
-        disabled={busy}
-        aria-label="Dismiss session"
-        onMouseDown={(e) => e.preventDefault()}
-        className="ml-1 flex items-center gap-1.5 rounded-md border border-border-strong bg-panel-2 px-2.5 py-1 text-[12px] font-medium text-muted outline-none transition-colors hover:bg-elevated hover:text-red-400 disabled:opacity-50"
-      >
-        {busy ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
-        Dismiss
       </button>
     </Tooltip>
   )

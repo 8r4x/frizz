@@ -65,7 +65,11 @@ export function ThreadActionBar({ slug, ops }: { slug: string; onTerminal?: () =
         onChange={setMessage}
         onSubmit={send}
         placeholder="Follow up…"
-        busy={controls.busy || followUp.pending}
+        // NOT `|| followUp.pending`. The send is already committed locally (draft cleared, bubble
+        // appended), so gating the textarea on its round-trip only made the box go dead — and, because
+        // the browser blurs a disabled element, cost the caret — for the ~½s the tmux injection takes.
+        // What remains is a genuine backend fence: a permission/profile change owning the runtime.
+        busy={controls.busy}
         footer={controls.footer}
       />
       {controls.status}
@@ -76,5 +80,6 @@ export function ThreadActionBar({ slug, ops }: { slug: string; onTerminal?: () =
   )
 }
 
-// The old ⋯ overflow menu is gone: the fray-document, dismiss, and done actions all live as direct
-// icons in the shared <HeaderActions> (Kill was dropped entirely — Dismiss ends the session too).
+// The old ⋯ overflow menu is gone: the fray-document, retry, and done actions all live as direct
+// icons in the shared <HeaderActions> (Kill and Dismiss were dropped entirely — an exited session
+// is retried from the header, or cleared through the lifecycle footer).

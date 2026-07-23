@@ -24,6 +24,20 @@ import { PROVIDER_LABEL } from "../lib/signIn.ts"
 // UNAVAILABLE read re-polls at 15s (a blip should self-heal in seconds, not a minute), and opening a
 // chip's popover forces a fresh read of both quota and auth — the popover is the recheck.
 
+// Every quota/auth request carries an abort deadline. Without one, a single response the server never
+// finishes (a dev-server restart severing an in-flight request) leaves the fetch pending FOREVER:
+// react-query stays "fetching" and never retries, the recheck latch never clears, and the chip freezes
+// into an em dash with a dead click target — the exact reported failure. The deadline turns that into
+// an ordinary error the next poll recovers from, while `data` keeps the last good reading.
+const POLL_TIMEOUT_MS = 30_000
+// A forced recheck legitimately runs Claude Code's `/usage` CLI behind a cross-process lock (~27s
+// worst case), so it gets a longer leash.
+const RECHECK_TIMEOUT_MS = 45_000
+
+function deadline(ms: number, signal?: AbortSignal): AbortSignal {
+  return signal ? AbortSignal.any([signal, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms)
+}
+
 export function QuotaBar() {
   const queryClient = useQueryClient()
   const recheckInFlight = useRef<Promise<void> | null>(null)
@@ -32,7 +46,7 @@ export function QuotaBar() {
   // rejects meaningfully (the server degrades each provider to "unavailable").
   const quota = useQuery({
     queryKey: ["quota"],
-    queryFn: () => rpc.quota(),
+    queryFn: ({ signal }) => rpc.quota(undefined, { signal: deadline(POLL_TIMEOUT_MS, signal) }),
     refetchInterval: (query) => {
       const d = query.state.data
       const degraded = !d || d.claude.status !== "ok" || d.codex.status !== "ok"
@@ -45,7 +59,7 @@ export function QuotaBar() {
   // updates both. Polled slowly; the popover-open refetch is the responsive path.
   const auth = useQuery({
     queryKey: ["authStatus"],
-    queryFn: () => rpc.authStatus(),
+    queryFn: ({ signal }) => rpc.authStatus(undefined, { signal: deadline(POLL_TIMEOUT_MS, signal) }),
     refetchInterval: 120_000,
     staleTime: 30_000,
     refetchOnWindowFocus: true,
@@ -55,7 +69,8 @@ export function QuotaBar() {
     if (recheckInFlight.current) return
     setRechecking(true)
     const request = Promise.all([
-      rpc.quota({ force: backend === "claude" }).then((snapshot) => queryClient.setQueryData(["quota"], snapshot)),
+      rpc.quota({ force: backend === "claude" }, { signal: deadline(RECHECK_TIMEOUT_MS) })
+        .then((snapshot) => queryClient.setQueryData(["quota"], snapshot)),
       queryClient.refetchQueries({ queryKey: ["authStatus"] }),
     ]).then(() => {}).catch(() => {})
       .finally(() => {

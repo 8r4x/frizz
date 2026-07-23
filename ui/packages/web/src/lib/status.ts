@@ -1,20 +1,15 @@
 import { FrayStatus, type ThreadView } from "@fray-ui/shared"
 
-type RecoveryThread = Pick<ThreadView, "kind" | "foreign" | "runtime" | "crashed">
+type RecoveryThread = Pick<ThreadView, "kind" | "foreign" | "runtime">
 
-// A crash/stall is recoverable through the ordinary follow-up path: the server reattaches a dead
-// provider session, retires any phantom Codex turn, then starts the continuation. Keep this distinct
-// from runtime="exited", which also describes a normally-rested provider process.
+// EVERY owned exited session is recoverable through the ordinary follow-up path: the server
+// reattaches the dead provider session, retires any phantom Codex turn, then starts the
+// continuation. That holds whether the exit was a mid-turn crash or an ordinary rest, so Retry is
+// the single exit-state header action — the old diagnostic Dismiss (hard-delete) verb is gone; a
+// finished row is cleared through the footer's Mark-as-done/Snooze instead. Foreign sessions are
+// read-only, and a live session has nothing to retry.
 export function canRetry(thread: RecoveryThread): boolean {
-  return thread.kind === "session" && thread.foreign !== true && thread.runtime === "exited" && thread.crashed === true
-}
-
-// Dismiss (hard-delete/forget) remains the diagnostic escape hatch for an ordinary exited session,
-// but never leads a stalled session anymore — a recoverable crash gets Retry instead. A running /
-// turn-idle / perm-prompt session is live and must be Archived, never forgotten out from under itself
-// (the server re-checks this too). Foreign sessions are read-only.
-export function canDismiss(thread: RecoveryThread): boolean {
-  return thread.kind === "session" && thread.foreign !== true && thread.runtime === "exited" && thread.crashed !== true
+  return thread.kind === "session" && thread.foreign !== true && thread.runtime === "exited"
 }
 
 // Lifecycle order for status pickers: planning → planned → active → blocked → done → dismissed.

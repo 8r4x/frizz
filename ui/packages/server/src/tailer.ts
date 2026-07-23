@@ -222,6 +222,52 @@ export function matchesPermPrompt(pane: string): boolean {
   return PERM_QUESTION.test(tail) || PERM_FOOTER.test(tail)
 }
 
+// ---- pre-session boot modals (NAMING the wedge matchesPermPrompt can only flag) ----
+// Claude Code can block on an interactive screen BEFORE it opens a session, so the worker writes no
+// transcript at all: agent_session_id stays empty and the pinned jsonl never appears. matchesPermPrompt
+// already fires on these panes, but "blocked" alone made every such row card as a bare "Stalled" while
+// the reason sat unread in the stall log. These name the two screens whose chrome is known, captured
+// verbatim from real panes (claude 2.1.218) — the API-key screen from a worker wedged in production,
+// the trust screen reproduced in a disposable HOME (its fixture is PANE_PERM_TRUST):
+//
+//   Detected a custom API key in your environment      Quick safety check: Is this a project you
+//   ANTHROPIC_API_KEY: sk-ant-...<suffix>              created or one you trust? …
+//   Do you want to use this API key?                   ❯ 1. Yes, I trust this folder
+//     1. Yes                                             2. No, exit
+//   ❯ 2. No (recommended)                              Enter to confirm · Esc to cancel
+//   Enter to confirm · Esc to cancel
+//
+// Two signals each (headline + question, or question + its exact option) so one stray line cannot trip
+// either. Titles are FIXED strings: per the AgentBackend contract pane text never crosses the server
+// boundary, and here it holds a masked credential and the workspace path.
+//
+// Lives here rather than in backend/claude.ts for the same reason matchesPermPrompt does: the tailer's
+// defaultBackend must stay identical to the injected ClaudeBackend (tests drive the default), and
+// backend/claude.ts already imports from this module, so the dependency can only run one way.
+const BOOT_APIKEY_HEADLINE = /Detected a custom API key in your environment/
+const BOOT_APIKEY_QUESTION = /Do you want to use this API key\?/
+const BOOT_TRUST_QUESTION = /Is this a project you created or one you trust\?/
+const BOOT_TRUST_OPTION = /(^|\n)\s*(❯\s*)?1\.\s+Yes, I trust this folder\b/
+// Both modals put their decisive rows within a few non-blank rows of the end; the trust screen is the
+// deeper of the two (its blurb precedes the options). 24 keeps real margin over that.
+const BOOT_MODAL_TAIL_ROWS = 24
+// Fallback for a boot wedge whose pane trips the generic matcher but matches no chrome we can name.
+// Deliberately vague — the alternative is the silent "Stalled" card, and an uncatalogued startup screen
+// is still worth sending the human to look at.
+const GENERIC_BOOT_MODAL: NativeInputRequiredData = { kind: "confirmation", title: "Blocked on a startup prompt" }
+
+export function detectClaudeBootModal(pane: string): NativeInputRequiredData | undefined {
+  if (!pane) return undefined
+  const tail = pane.split("\n").filter((row) => row.trim() !== "").slice(-BOOT_MODAL_TAIL_ROWS).join("\n")
+  if (BOOT_APIKEY_HEADLINE.test(tail) && BOOT_APIKEY_QUESTION.test(tail)) {
+    return { kind: "confirmation", title: "Confirm the API key in your environment" }
+  }
+  if (BOOT_TRUST_QUESTION.test(tail) && BOOT_TRUST_OPTION.test(tail)) {
+    return { kind: "confirmation", title: "Trust this folder" }
+  }
+  return undefined
+}
+
 // One tracked live background sub-agent, keyed in TailState by its dispatch tool_use id (the
 // correlation key present BOTH on the Agent tool_use block AND in the completion <task-notification>'s
 // <tool-use-id>). Registered on the background dispatch, enriched with `outputFile` from the launch
@@ -1210,7 +1256,7 @@ function defaultReadPermMarker(project: Project): (slug: string) => PermMarker |
 
 // The slice of AgentBackend the tailer drives: locate a session's transcript, fold a raw line into
 // the accumulator, and (registered sessions only) sniff the pane for a permission prompt.
-type TailBackend = Pick<AgentBackend, "transcriptPath" | "foldLine" | "matchesPermPrompt" | "detectNativeInput">
+type TailBackend = Pick<AgentBackend, "transcriptPath" | "foldLine" | "matchesPermPrompt" | "detectNativeInput" | "detectBootModal">
 
 export function createTailer(deps: TailerDeps): Tailer {
   const now = deps.now ?? Date.now
@@ -1257,6 +1303,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       if (rec) applyRecord(state as TailState, rec)
     },
     matchesPermPrompt,
+    detectBootModal: detectClaudeBootModal,
   }
   // Resolve the backend for a row by its `backend` column. Prod injects `backendFor` (claude|codex);
   // a single injected `backend` or the local default covers every row otherwise. For claude (and every
@@ -1417,16 +1464,32 @@ export function createTailer(deps: TailerDeps): Tailer {
     if (turn === "in-flight" && row.backend !== "codex" && permMarkerBlocks(state, row)) {
       return { permPrompt: true }
     }
-    if (!state.nativeInputRequired) {
+    // A worker wedged on a modal BEFORE its session exists writes no transcript, so `turn` and
+    // `lastActivityAt` — both transcript-derived — can never satisfy the quiet gate below and the pane
+    // was never even captured. That left the ONE case these matchers were built for invisible: the
+    // corpus behind matchesPermPrompt includes the pre-boot trust prompt, yet a boot wedge could only
+    // ever card as a bare "Stalled" while the reason sat unread in the stall log. noTranscript stands
+    // in for the quiet gate rather than bypassing it — resolveTranscript raises it only past
+    // DISCOVERY_GRACE_MS with nothing left to bind, which already IS a quiet period.
+    const bootWedge = state.noTranscript === true
+    if (!state.nativeInputRequired && !bootWedge) {
       if (turn !== "in-flight" || !state.lastActivityAt) return { permPrompt: false }
       const at = Date.parse(state.lastActivityAt)
       if (!Number.isFinite(at) || nowMs - at < PERM_SNIFF_MS) return { permPrompt: false }
     }
 
     const pane = capturePaneForRow(row)
+    const perm = backend.matchesPermPrompt?.(pane) ?? false
+    if (bootWedge) {
+      // Name the screen where its chrome is known; otherwise anything that still trips the generic
+      // matcher says "startup prompt" rather than nothing. Either way permPrompt flips the row off the
+      // degraded "Stalled" affordance onto perm-prompt, which deriveNeedsYou queues just the same.
+      const boot = backend.detectBootModal?.(pane) ?? (perm ? GENERIC_BOOT_MODAL : undefined)
+      return { permPrompt: perm || boot !== undefined, nativeInputRequired: boot }
+    }
     const detected = backend.detectNativeInput?.(pane)
     return {
-      permPrompt: backend.matchesPermPrompt?.(pane) ?? false,
+      permPrompt: perm,
       nativeInputRequired: detected,
     }
   }
