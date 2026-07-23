@@ -53,6 +53,13 @@ if (load.has("sse")) {
   const first = await reader.read()
   console.log(`[probe] sse open, first frame ${first.value?.length ?? 0} bytes`)
   opened.push(reader)
+  // Regression guard for the reader-cancel fix: the stream must still be LIVE afterwards. The
+  // /events handler heartbeats every 10s, so a second frame proves nothing cancelled it early.
+  if (process.env.PROBE_ASSERT_LIVE) {
+    const next = await Promise.race([reader.read(), new Promise((r) => setTimeout(() => r("TIMEOUT"), 14_000))])
+    if (next === "TIMEOUT") { console.error("[probe] FAIL: no heartbeat within 14s — the SSE stream died early"); process.exit(1) }
+    console.log(`[probe] sse still live, heartbeat frame ${next.value?.length ?? 0} bytes`)
+  }
 }
 if (load.has("ws")) {
   const wsmod = await import("../packages/server/node_modules/ws/index.js")
