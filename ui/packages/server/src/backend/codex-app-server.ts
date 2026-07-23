@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from "node:crypto"
-import { spawn as spawnChild, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { StringDecoder } from "node:string_decoder"
 import type { Readable, Writable } from "node:stream"
 import Database from "better-sqlite3"
@@ -24,6 +23,11 @@ import {
   type QueueProviderResponseResult,
 } from "../interaction-store.ts"
 import { redactCredentialSyntax } from "../credential-redaction.ts"
+import {
+  daemonCodexAppServerHost,
+  directChildHost,
+  type CodexAppServerHost,
+} from "./codex-app-server-host.ts"
 
 // Foundation-only bridge. It is deliberately not an AgentBackend: no current/default Codex TUI
 // session can accidentally cross this boundary. Context exposes it only behind the explicit env flag.
@@ -44,6 +48,15 @@ const PROTOCOL_FINGERPRINT = [
   CODEX_APP_SERVER_PROTOCOL_REVISION.sourceCommit,
   "experimental:user-input-answer-only:permissions-grant-or-deny:mcp-standard",
 ].join(":")
+// The handshake identity. Shared with the daemon host, which performs `initialize` on our behalf and
+// serves the cached response to every later attachment — so the version gate below still reads the
+// REAL app-server userAgent, not something the daemon invented.
+export const CLIENT_INFO = Object.freeze({ name: "fray", title: "Fray", version: "0.0.1" })
+export const CLIENT_CAPABILITIES = Object.freeze({
+  experimentalApi: true,
+  requestAttestation: false,
+  mcpServerOpenaiFormElicitation: false,
+})
 const MAX_JSONL_BYTES = 256 * 1024
 const MAX_INBOUND_RECORDS = 256
 const MAX_INBOUND_QUEUED_BYTES = MAX_JSONL_BYTES * 2
@@ -281,6 +294,7 @@ export type CodexAppServerDiagnostic =
   | { event: "version-rejected"; expected: string; received: string }
   | { event: "stderr"; bytes: number; truncated: boolean }
   | { event: "request-rejected"; method: string; code: number }
+  | { event: "turn-auto-resumed"; threadSlug: string; interruptedTurnId: string }
 
 class RpcProtocolError extends Error {
   readonly code: number
@@ -570,6 +584,10 @@ interface BindingRow {
   state: "active" | "detached"
   created_at: string
   updated_at: string
+  /** The dead turn a restart-recovery nudge has already been issued for; never nudged twice. */
+  auto_resumed_turn_id: string | null
+  /** Consecutive restart-recovery nudges; reset by a turn that actually completes. */
+  auto_resume_count: number
 }
 
 const BindingRowSchema = z.object({
@@ -586,12 +604,15 @@ const BindingRowSchema = z.object({
   state: z.enum(["active", "detached"]),
   created_at: z.string().datetime(),
   updated_at: z.string().datetime(),
+  auto_resumed_turn_id: Opaque.nullable(),
+  auto_resume_count: z.number().int().nonnegative(),
 }).strict()
 const BridgeMetaRowSchema = z.object({
   singleton: z.literal(1),
   connection_epoch: z.number().int().nonnegative(),
   capability_revision: z.number().int().nonnegative(),
   protocol_fingerprint: z.string().max(1_024),
+  daemon_generation: z.string().max(256),
 }).strict()
 
 function checkedBindingRow(raw: unknown): BindingRow {
@@ -669,11 +690,22 @@ export interface CodexAppServerBridgeOptions {
   dbPath: string
   interactions: InteractionStore
   codexBin?: string
+  /** Legacy/test seam: a direct child per connect. Ignored when `host` is given. */
   spawn?: CodexAppServerSpawn
+  /** How the app-server process is obtained. Defaults to the detached per-project daemon, which is
+   *  what makes an in-flight turn survive Update & Restart. */
+  host?: CodexAppServerHost
+  /** Where the daemon's record/socket live. Required for the default daemon host. */
+  stateDir?: string
   now?: () => Date
   id?: () => string
   requestTimeoutMs?: number
   diagnostic?: (event: CodexAppServerDiagnostic) => void
+  /**
+   * Gate for the auto-resume nudge (B): a thread the human has archived or retired must not be woken
+   * by a turn it never asked for. Defaults to allowing every rebind.
+   */
+  shouldAutoResume?: (threadSlug: string, sessionId: string) => boolean
 }
 
 function bindingFromRow(row: BindingRow): CodexAppServerSessionBinding {
@@ -1286,9 +1318,11 @@ export class CodexAppServerBridge {
   private readonly db: Database.Database
   private readonly now: () => Date
   private readonly makeId: () => string
-  private readonly spawn: CodexAppServerSpawn
+  private readonly host: CodexAppServerHost
   private readonly codexBin: string
   private readonly timeoutMs: number
+  /** Identity of the app-server PROCESS behind the current connection (see CodexAppServerAttachment). */
+  private daemonGeneration = ""
   private connection: JsonlRpcConnection | null = null
   private openingConnection: JsonlRpcConnection | null = null
   private connecting: Promise<JsonlRpcConnection> | null = null
@@ -1300,6 +1334,8 @@ export class CodexAppServerBridge {
   private readonly startingSessions = new Set<string>()
   private readonly startingTurns = new Set<string>()
   private readonly pendingTurnStarts = new Set<string>()
+  /** Threads the last reconcile found dead mid-turn, awaiting warmUp()'s recovery sweep. */
+  private readonly pendingAutoResume = new Map<string, { row: BindingRow; interruptedTurn: string }>()
   private readonly correlatedFileItems = new Map<string, CorrelatedFileItem>()
   private activeOperations = 0
   private readonly operationWaiters = new Set<() => void>()
@@ -1311,11 +1347,10 @@ export class CodexAppServerBridge {
     this.makeId = options.id ?? randomUUID
     this.codexBin = options.codexBin ?? "codex"
     this.timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
-    this.spawn = options.spawn ?? ((binary, args, spawnOptions) => spawnChild(binary, [...args], {
-      cwd: spawnOptions.cwd,
-      env: spawnOptions.env,
-      stdio: ["pipe", "pipe", "pipe"],
-    }) as ChildProcessWithoutNullStreams)
+    // Production hosts the app-server in a DETACHED per-project daemon so it outlives this runtime
+    // (see codex-app-server-host.ts). An injected `spawn` — every unit test and the live harnesses —
+    // keeps the historical direct-child behavior, where each connect really is a new process.
+    this.host = options.host ?? (options.spawn ? directChildHost(options.spawn) : daemonCodexAppServerHost)
     this.db = new Database(options.dbPath)
     this.db.pragma("journal_mode = WAL")
     this.db.pragma("busy_timeout = 5000")
@@ -1345,7 +1380,8 @@ export class CodexAppServerBridge {
           singleton             INTEGER PRIMARY KEY CHECK (singleton = 1),
           connection_epoch      INTEGER NOT NULL CHECK (connection_epoch >= 0),
           capability_revision   INTEGER NOT NULL CHECK (capability_revision >= 0),
-          protocol_fingerprint  TEXT NOT NULL
+          protocol_fingerprint  TEXT NOT NULL,
+          daemon_generation     TEXT NOT NULL DEFAULT ''
         );
         INSERT OR IGNORE INTO codex_app_server_meta (
           singleton, connection_epoch, capability_revision, protocol_fingerprint
@@ -1364,7 +1400,9 @@ export class CodexAppServerBridge {
           ephemeral             INTEGER NOT NULL CHECK (ephemeral IN (0, 1)),
           state                 TEXT NOT NULL CHECK (state IN ('active', 'detached')),
           created_at            TEXT NOT NULL,
-          updated_at            TEXT NOT NULL
+          updated_at            TEXT NOT NULL,
+          auto_resumed_turn_id  TEXT,
+          auto_resume_count     INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS codex_app_server_session_thread
           ON codex_app_server_session (codex_thread_id, state);
@@ -1384,11 +1422,25 @@ export class CodexAppServerBridge {
     const columns = (table: "codex_app_server_meta" | "codex_app_server_session") => new Set(
       this.db.prepare<[], { name: string }>(`PRAGMA table_info(${table})`).all().map((column) => column.name),
     )
-    const requiredMeta = ["singleton", "connection_epoch", "capability_revision", "protocol_fingerprint"]
+    // Additive columns for daemon hosting + auto-resume. A database written by an older Fray has the
+    // tables already, so CREATE TABLE IF NOT EXISTS above is a no-op for it — these ALTERs are what
+    // actually migrate it, and they must run before the required-column assertion below.
+    const addColumn = (table: "codex_app_server_meta" | "codex_app_server_session", column: string, decl: string): void => {
+      if (columns(table).has(column)) return
+      try { this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`) } catch {
+        this.db.close()
+        throw new InteractionStoreError("schema-version", `Codex app-server bridge could not add ${table}.${column}`)
+      }
+    }
+    addColumn("codex_app_server_meta", "daemon_generation", "TEXT NOT NULL DEFAULT ''")
+    addColumn("codex_app_server_session", "auto_resumed_turn_id", "TEXT")
+    addColumn("codex_app_server_session", "auto_resume_count", "INTEGER NOT NULL DEFAULT 0")
+
+    const requiredMeta = ["singleton", "connection_epoch", "capability_revision", "protocol_fingerprint", "daemon_generation"]
     const requiredSession = [
       "fray_session_id", "thread_slug", "codex_thread_id", "codex_session_id", "session_epoch",
       "capability_revision", "connection_epoch", "current_turn_id", "cwd", "ephemeral", "state",
-      "created_at", "updated_at",
+      "created_at", "updated_at", "auto_resumed_turn_id", "auto_resume_count",
     ]
     if (requiredMeta.some((column) => !columns("codex_app_server_meta").has(column)) ||
       requiredSession.some((column) => !columns("codex_app_server_session").has(column))) {
@@ -1747,6 +1799,36 @@ export class CodexAppServerBridge {
     return { binding, turnId }
   }
 
+  /**
+   * Reattach at boot, without waiting for someone to touch a codex thread.
+   *
+   * This is not an optimization — it is required for correctness now that the app-server outlives us.
+   * A turn still running inside the daemon keeps emitting `turn/completed` and approval requests, and
+   * those queue in the daemon until a client attaches. Worse, an unconnected bridge has
+   * `connectionEpoch = 0`, so `turnLiveness` reports `bridgeTurn: false` and the board's stall grace
+   * expires 30 s later — a perfectly healthy surviving turn would card as "Stalled". Connecting here
+   * makes the rejoin (and the auto-resume of anything that genuinely died) happen at boot instead.
+   *
+   * Skipped entirely when this project has never bound a codex thread, so a claude-only board never
+   * pays for a codex process it will not use.
+   */
+  async warmUp(): Promise<void> {
+    if (this.closed || this.dbClosed) return
+    const bound = this.db.prepare<[], { n: number }>(
+      "SELECT COUNT(*) AS n FROM codex_app_server_session WHERE ephemeral = 0",
+    ).get()?.n ?? 0
+    if (bound === 0) return
+    const releaseOperation = this.beginOperation()
+    try {
+      await this.ensureConnected()
+      await this.autoResumeInterruptedTurns()
+    } catch {
+      // A boot must never fail because codex is unavailable. The next real operation retries.
+    } finally {
+      releaseOperation()
+    }
+  }
+
   binding(threadSlug: string, sessionId: string): CodexAppServerSessionBinding | undefined {
     if (this.dbClosed) return undefined
     const row = this.bindingForScope(threadSlug, sessionId)
@@ -1965,12 +2047,18 @@ export class CodexAppServerBridge {
   }
 
   private async connect(): Promise<JsonlRpcConnection> {
-    const child = this.spawn(this.codexBin, ["app-server", "--stdio"], {
+    const attachment = await this.host({
+      projectId: this.options.projectId,
+      stateDir: this.options.stateDir ?? this.options.projectDir,
       cwd: this.options.projectDir,
-      // Preserve only the audited Codex runtime/auth surface. Values stay in the child environment;
-      // no value is copied into argv, SQLite, diagnostics, or logs.
+      codexBin: this.codexBin,
+      // Preserve only the audited Codex runtime/auth surface. Values stay in the app-server's
+      // environment; no value is copied into argv, SQLite, diagnostics, or logs.
       env: codexAppServerEnvironment(),
+      clientInfo: CLIENT_INFO,
+      capabilities: CLIENT_CAPABILITIES,
     })
+    const child = attachment.process
     let connection!: JsonlRpcConnection
     connection = new JsonlRpcConnection(
       child,
@@ -1983,12 +2071,8 @@ export class CodexAppServerBridge {
     this.openingConnection = connection
     try {
       const initialized = InitializeResponse.parse(await connection.request("initialize", {
-        clientInfo: { name: "fray", title: "Fray", version: "0.0.1" },
-        capabilities: {
-          experimentalApi: true,
-          requestAttestation: false,
-          mcpServerOpenaiFormElicitation: false,
-        },
+        clientInfo: CLIENT_INFO,
+        capabilities: CLIENT_CAPABILITIES,
       }))
       // Exact 0.144.1 source sets our initialized client name as the originator, yielding
       // `fray/<package-version> ...`. Do not accept an expected-looking version buried elsewhere in
@@ -2013,20 +2097,25 @@ export class CodexAppServerBridge {
           ? Math.max(1, meta.capability_revision)
           : meta.capability_revision + 1
         const connectionEpoch = meta.connection_epoch + 1
+        // Did we rejoin the SAME app-server process, or is this a new one? That single fact decides
+        // whether in-flight turns are still running (rejoin) or died and need recovering (new).
+        const sameProcess = attachment.reattached && meta.daemon_generation === attachment.generation
         this.db.prepare(`
-          UPDATE codex_app_server_meta SET connection_epoch = ?, capability_revision = ?, protocol_fingerprint = ?
+          UPDATE codex_app_server_meta
+          SET connection_epoch = ?, capability_revision = ?, protocol_fingerprint = ?, daemon_generation = ?
           WHERE singleton = 1
-        `).run(connectionEpoch, capabilityRevision, PROTOCOL_FINGERPRINT)
-        return { connectionEpoch, capabilityRevision }
+        `).run(connectionEpoch, capabilityRevision, PROTOCOL_FINGERPRINT, attachment.generation)
+        return { connectionEpoch, capabilityRevision, sameProcess }
       })()
       this.connectionEpoch = negotiated.connectionEpoch
       this.capabilityRevision = negotiated.capabilityRevision
+      this.daemonGeneration = attachment.generation
       if (this.closed) throw new Error("Codex app-server bridge closed during negotiation")
       this.connection = connection
       this.openingConnection = null
       await connection.notification("initialized")
       this.options.diagnostic?.({ event: "connected", version, connectionEpoch: this.connectionEpoch })
-      await this.reconcileOwnedSessions(connection)
+      await this.reconcileOwnedSessions(connection, negotiated.sameProcess)
       if (this.connection !== connection) throw new Error("Codex app-server disconnected during session reconciliation")
       return connection
     } catch (error) {
@@ -2050,12 +2139,37 @@ export class CodexAppServerBridge {
     this.options.diagnostic?.({ event: "disconnected", connectionEpoch: epoch, reason })
   }
 
-  private async reconcileOwnedSessions(connection: JsonlRpcConnection): Promise<void> {
-    const rows = this.db.prepare<[], BindingRow>("SELECT * FROM codex_app_server_session WHERE state = 'active'").all().map(checkedBindingRow)
+  /**
+   * Take this generation's bindings onto the connection we just opened.
+   *
+   * The selection used to be `WHERE state = 'active'`, which found NOTHING after a restart: close()
+   * and handleDisconnect both mark every binding `detached` on their way out, and the constructor
+   * re-asserts that for a SIGKILLed predecessor. So the one set of threads that most needed
+   * reconciling — the ones killed mid-turn — was the one set that was never looked at. Select the
+   * mid-turn detached rows too; idle detached rows stay lazily rebound on next use, which keeps this
+   * bounded on a board with a long history.
+   *
+   * `sameProcess` says we rejoined the very app-server that owned these turns (it outlived our
+   * restart inside the daemon). Then the turns are STILL RUNNING and the only correct action is to
+   * re-mark the binding active and keep `current_turn_id`: issuing `thread/resume` against a live
+   * turn would disturb it, and clearing the id would orphan the `turn/completed` still to come.
+   */
+  private async reconcileOwnedSessions(connection: JsonlRpcConnection, sameProcess: boolean): Promise<void> {
+    const rows = this.db.prepare<[], BindingRow>(`
+      SELECT * FROM codex_app_server_session
+      WHERE state = 'active' OR (state = 'detached' AND current_turn_id IS NOT NULL)
+    `).all().map(checkedBindingRow)
+    const detach = (row: BindingRow): void => {
+      this.db.prepare("UPDATE codex_app_server_session SET state = 'detached', updated_at = ? WHERE fray_session_id = ?")
+        .run(this.now().toISOString(), row.fray_session_id)
+    }
     for (const row of rows) {
-      if (row.ephemeral === 1) {
-        this.db.prepare("UPDATE codex_app_server_session SET state = 'detached', updated_at = ? WHERE fray_session_id = ?")
-          .run(this.now().toISOString(), row.fray_session_id)
+      if (row.ephemeral === 1) { detach(row); continue }
+      if (sameProcess) {
+        this.db.prepare(`
+          UPDATE codex_app_server_session SET state = 'active', connection_epoch = ?, updated_at = ?
+          WHERE fray_session_id = ?
+        `).run(this.connectionEpoch, this.now().toISOString(), row.fray_session_id)
         continue
       }
       try {
@@ -2065,10 +2179,69 @@ export class CodexAppServerBridge {
           approvalsReviewer: "user",
         }))
         if (response.thread.id !== row.codex_thread_id || response.thread.ephemeral) throw new Error("resume ownership mismatch")
+        const interruptedTurn = row.current_turn_id
         this.updateResumedBinding(row, response.thread.sessionId)
+        // Record, don't nudge. Recovery is issued by warmUp() — see autoResumeInterruptedTurns().
+        if (interruptedTurn) this.pendingAutoResume.set(row.fray_session_id, { row, interruptedTurn })
       } catch {
-        this.db.prepare("UPDATE codex_app_server_session SET state = 'detached', updated_at = ? WHERE fray_session_id = ?")
-          .run(this.now().toISOString(), row.fray_session_id)
+        detach(row)
+      }
+    }
+  }
+
+  // The nudge a thread gets when its app-server really died (not merely our own restart). Deliberately
+  // NOT a replay of the original prompt: the dead turn may have half-applied a patch or half-run a
+  // command, so re-running it could duplicate side effects. Tell the worker what happened and let it
+  // re-establish its own footing.
+  private static readonly RESTART_RECOVERY_NUDGE = [
+    "[fray] Your previous turn was interrupted: the Codex app-server process running it exited (a Fray",
+    "restart or a crash). This was not a decision by you or the human, and nothing you had already done",
+    "was rolled back — but any command or edit that was in flight at that moment may not have finished.",
+    "Re-check the state of your work before trusting it, then continue from where you left off.",
+  ].join("\n")
+
+  private static readonly MAX_AUTO_RESUMES = 3
+
+  /**
+   * (B) Re-issue a turn for every thread whose turn died with its app-server.
+   *
+   * Deliberately driven from warmUp() and NOT from connect(). connect() runs for two very different
+   * reasons: the boot reattach (nobody asked — recovery is exactly what is wanted) and an operator
+   * action like a follow-up (in which case THEIR message is the recovery, and injecting a synthetic
+   * turn first would race their `startTurn` into "already has an active turn"). Splitting it this way
+   * lets the boot path recover silently while a human interaction always wins.
+   *
+   * Guarded three ways: never twice for the same dead turn, never past MAX_AUTO_RESUMES in a row (a
+   * crash-looping app-server must not become an infinite nudge machine — the counter resets on any
+   * turn that actually completes), and never for a thread that already picked up a turn in the
+   * meantime.
+   */
+  private async autoResumeInterruptedTurns(): Promise<void> {
+    const pending = [...this.pendingAutoResume.values()]
+    this.pendingAutoResume.clear()
+    for (const { row, interruptedTurn } of pending) {
+      if (this.closed || this.dbClosed) return
+      if (row.auto_resumed_turn_id === interruptedTurn) continue
+      if (row.auto_resume_count >= CodexAppServerBridge.MAX_AUTO_RESUMES) continue
+      if (this.options.shouldAutoResume && !this.options.shouldAutoResume(row.thread_slug, row.fray_session_id)) continue
+      // Re-read: an operator follow-up may have opened a turn between the rebind and here, in which
+      // case their message already IS the continuation and a nudge would be noise.
+      const current = this.bindingForScope(row.thread_slug, row.fray_session_id)
+      if (!current || current.state !== "active" || current.current_turn_id !== null) continue
+      this.db.prepare(`
+        UPDATE codex_app_server_session SET auto_resumed_turn_id = ?, auto_resume_count = auto_resume_count + 1, updated_at = ?
+        WHERE fray_session_id = ?
+      `).run(interruptedTurn, this.now().toISOString(), row.fray_session_id)
+      try {
+        await this.startTurn({
+          threadSlug: row.thread_slug,
+          sessionId: row.fray_session_id,
+          text: CodexAppServerBridge.RESTART_RECOVERY_NUDGE,
+        })
+        this.options.diagnostic?.({ event: "turn-auto-resumed", threadSlug: row.thread_slug, interruptedTurnId: interruptedTurn })
+      } catch {
+        // A thread that will not take a turn right now is left exactly as the rebind left it: detached
+        // from its dead turn, visible to the human, and answerable by hand. Never fail the boot.
       }
     }
   }
@@ -2598,8 +2771,11 @@ export class CodexAppServerBridge {
         if (!active) break
       }
       this.forgetCorrelatedFileItems(parsed.data.threadId, parsed.data.turn.id)
+      // A turn that reaches its own ending proves the thread is healthy again, so the restart-recovery
+      // budget is restored. Without this reset a thread that had been nudged MAX_AUTO_RESUMES times
+      // over its whole life could never be auto-recovered again, however long ago those were.
       this.db.prepare(`
-        UPDATE codex_app_server_session SET current_turn_id = NULL, updated_at = ?
+        UPDATE codex_app_server_session SET current_turn_id = NULL, auto_resume_count = 0, updated_at = ?
         WHERE codex_thread_id = ? AND connection_epoch = ? AND current_turn_id = ?
       `).run(this.now().toISOString(), parsed.data.threadId, this.connectionEpoch, parsed.data.turn.id)
     }
