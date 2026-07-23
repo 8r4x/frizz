@@ -18,7 +18,7 @@
 // the child must notice its lost IPC channel and reap itself rather than outliving its launcher.
 import { spawn } from "node:child_process"
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs"
+import { mkdtempSync, mkdirSync, rmSync, readdirSync, readFileSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -175,7 +175,30 @@ if (process.env.FRAY_SHUTDOWN_HARNESS === "launcher") {
   ))
   console.log("[verify] load in flight: 1 SSE board stream, 1 app socket, 8 RPC calls")
 
-  const group = descendants(child.pid)
+  // The Codex app-server daemon is DELIBERATELY detached and MUST outlive a shutdown — an in-flight
+  // Codex turn survives a restart precisely because nothing here kills it. Record it so this harness
+  // asserts survival rather than absence, and so the run cleans up its own daemon afterwards.
+  const stateDirs = readdirSync(join(home, ".fray", "projects"), { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => join(home, ".fray", "projects", e.name))
+  let codexDaemon = null
+  for (const stateDir of stateDirs) {
+    const dir = join(stateDir, "codex-app-server")
+    if (!existsSync(dir)) continue
+    for (const file of readdirSync(dir)) {
+      if (!file.endsWith(".json")) continue
+      try {
+        const record = JSON.parse(readFileSync(join(dir, file), "utf8"))
+        if (typeof record.daemonPid === "number" && alive(record.daemonPid)) codexDaemon = record
+      } catch {}
+    }
+  }
+  if (codexDaemon) console.log(`[verify] detached codex app-server daemon pid ${codexDaemon.daemonPid} (must SURVIVE)`)
+  else console.log("[verify] no codex app-server daemon was started on this stack")
+
+  // The daemon is still parented to the control-plane child until that child exits, so it shows up in
+  // the process-tree walk. It is NOT an owned process to reap — exclude it from the accounting.
+  const group = descendants(child.pid).filter((pid) => pid !== codexDaemon?.daemonPid)
   const owned = [child.pid, ...group]
   const launcherPid = JSON.parse(transcript.find((l) => l.includes("FRAY_HARNESS_READY")).split("FRAY_HARNESS_READY ")[1]).pid
   const childProcessPid = Number(transcript.find((l) => /control plane ready \(pid (\d+)/.test(l)).match(/control plane ready \(pid (\d+)/)[1])
@@ -192,9 +215,18 @@ if (process.env.FRAY_SHUTDOWN_HARNESS === "launcher") {
     const orphanMs = Date.now() - t
     await new Promise((r) => setTimeout(r, 1000))
     const left = owned.filter(alive)
+    const daemonAlive = codexDaemon ? alive(codexDaemon.daemonPid) : null
     console.log(transcript.join("\n"))
-    console.log(JSON.stringify({ mode, orphanMs, ownedPids: owned, survivingPids: left }, null, 2))
+    console.log(JSON.stringify({
+      mode, orphanMs, ownedPids: owned, survivingPids: left,
+      codexDaemonPid: codexDaemon?.daemonPid ?? null, codexDaemonSurvived: daemonAlive,
+    }, null, 2))
     rmSync(home, { recursive: true, force: true })
+    if (codexDaemon) { try { process.kill(codexDaemon.daemonPid, "SIGTERM") } catch {} }
+    if (codexDaemon && daemonAlive !== true) {
+      console.error(`FAIL: the detached codex app-server daemon (pid ${codexDaemon.daemonPid}) was killed — it must survive`)
+      process.exit(1)
+    }
     if (left.length > 0) {
       for (const pid of left) { try { process.kill(pid, "SIGKILL") } catch {} }
       console.error(`FAIL: ${left.length} process(es) outlived their killed launcher: ${left.join(", ")}`)
@@ -253,10 +285,13 @@ if (process.env.FRAY_SHUTDOWN_HARNESS === "launcher") {
   console.log(transcript.join("\n"))
   console.log("─".repeat(90))
 
+  const codexSurvived = codexDaemon ? alive(codexDaemon.daemonPid) : null
   const result = {
     mode,
     signal,
     shutdownMs,
+    codexDaemonPid: codexDaemon?.daemonPid ?? null,
+    codexDaemonSurvived: codexSurvived,
     exit: raced,
     noisyLines: noisy,
     ownedPids: owned,
@@ -266,6 +301,11 @@ if (process.env.FRAY_SHUTDOWN_HARNESS === "launcher") {
 
   rmSync(home, { recursive: true, force: true })
   const problems = []
+  if (codexDaemon && codexSurvived !== true) {
+    problems.push(`the detached codex app-server daemon (pid ${codexDaemon.daemonPid}) was killed — it must survive`)
+  }
+  // This harness owns the daemon it started; reap it by exact PID so verification leaks nothing.
+  if (codexDaemon) { try { process.kill(codexDaemon.daemonPid, "SIGTERM") } catch {} }
   const escalating = mode === "wedged-double-sigint"
   if (escalating) {
     // Escalation is a deliberate abandonment: non-zero exit, and it must be PROMPT — well inside the
