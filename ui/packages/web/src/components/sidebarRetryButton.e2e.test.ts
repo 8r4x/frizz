@@ -60,7 +60,9 @@ test("hovering a stalled sidebar row reveals a Retry button that restarts the se
     await page.click(retry)
     await page.waitForFunction(() => JSON.parse(sessionStorage.getItem("followUpCalls") ?? "[]").length === 1, { timeout: 5_000 })
     const calls = await page.evaluate(() => JSON.parse(sessionStorage.getItem("followUpCalls") ?? "[]"))
-    assert.deepEqual(calls, [{ slug: "stalled-migration", message: "Continue exactly where you left off." }])
+    // retrySession resolves the session-guard id from the board; the fixture thread carries none, so
+    // it sends "" (the server would fail a stale/absent row closed). The message is the shared constant.
+    assert.deepEqual(calls, [{ slug: "stalled-migration", sessionId: "", message: "Continue exactly where you left off." }])
 
     // The retry toast confirms it to the user.
     await page.waitForFunction(() => /Retrying/.test(document.body.innerText), { timeout: 5_000 })

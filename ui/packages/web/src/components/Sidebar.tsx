@@ -369,8 +369,8 @@ export const ThreadRow = memo(function ThreadRow({
   )
 })
 
-// The stalled row's recovery verb: a compact accent icon button that restarts the exited session in
-// ONE click, without opening the thread. Deliberately the SAME verb, icon, message and RPC path as the
+// The stalled row's recovery verb: a SMALL GREY icon button that restarts the exited session in ONE
+// click, without opening the thread. Deliberately the SAME verb, icon, message and RPC path as the
 // thread header's Retry (lib/retrySession) — the row is just a faster door to it. Named "Retry", not
 // "Restart", because "restart" already means the fray control plane restarting itself
 // (RestartFrayButton) and the two must not blur.
@@ -390,11 +390,12 @@ function RowRetryButton({ slug }: { slug: string }) {
           setBusy(true)
           retrySession(slug).finally(() => setBusy(false))
         }}
-        // OPAQUE background on purpose: the button overlays the title's last words, so a translucent
-        // accent wash would let text bleed through it.
-        className="absolute right-1 top-0.5 hidden h-6 w-6 items-center justify-center rounded-md border border-accent/45 bg-panel-2 text-accent shadow-sm shadow-black/30 outline-none transition-colors group-hover:flex group-focus-within:flex hover:border-accent/70 hover:bg-elevated disabled:opacity-50"
+        // Sized to the title's FIRST line (h-[19px], top-1 matches the row's pt-1) so it never exceeds
+        // the row height. Quiet grey, no border/accent — the muted-icon idiom of the header actions. An
+        // opaque `bg-panel` backing keeps the title's last words from bleeding through the overlay.
+        className="absolute right-1.5 top-1 hidden h-[19px] w-[19px] items-center justify-center rounded bg-panel text-muted/70 outline-none transition-colors group-hover:flex group-focus-within:flex hover:bg-panel-2 hover:text-fg disabled:opacity-50"
       >
-        {busy ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
+        {busy ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
       </button>
     </Tooltip>
   )
