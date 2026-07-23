@@ -1,6 +1,44 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { stripFrontmatter } from "./markdown.ts"
+import { Marked } from "marked"
+import { stripFrontmatter, strikethroughTokenizer } from "./markdown.ts"
+
+// mdToHtml's sanitizer needs a DOM, so the render path is exercised in the browser
+// (markdown-strikethrough-fixture + markdownStrikethrough.e2e.test.ts). These drive the one piece
+// that is pure — the tokenizer the real instance is built with — through marked's real inline pass.
+const render = (md: string) =>
+  new Marked({ breaks: true, tokenizer: strikethroughTokenizer }).parseInline(md, { async: false }) as string
+
+// The bug: marked's GFM opener is `~~?`, so a lone `~` opened a strikethrough. Agent prose is full of
+// approximation and home-path tildes, and two on one line struck out everything between them.
+test("strikethrough: an approximation tilde pair is prose, not a strikethrough", () => {
+  assert.equal(render("up to ~35s + one 10s poll tick (~45s) before the client"),
+    "up to ~35s + one 10s poll tick (~45s) before the client")
+  assert.equal(render("bg-panel (val~21) barely differs from page bg (val~13)"),
+    "bg-panel (val~21) barely differs from page bg (val~13)")
+})
+
+test("strikethrough: a pair of ~/ home paths survives intact", () => {
+  assert.equal(render("SYSTEM ~/.claude/settings.json and hook (~/.orca/claude-hook.sh) on User"),
+    "SYSTEM ~/.claude/settings.json and hook (~/.orca/claude-hook.sh) on User")
+})
+
+test("strikethrough: one tilde on each side is literal text", () => {
+  assert.equal(render("~one tilde~"), "~one tilde~")
+})
+
+test("strikethrough: the ~~two-tilde~~ form still strikes, and still nests inline markup", () => {
+  assert.equal(render("~~struck~~"), "<del>struck</del>")
+  assert.equal(render("~~a **b** c~~"), "<del>a <strong>b</strong> c</del>")
+  assert.equal(render("~~first~~ then ~single~ then ~~second~~"),
+    "<del>first</del> then ~single~ then <del>second</del>")
+})
+
+test("strikethrough: non-strikethrough tilde shapes are unchanged", () => {
+  assert.equal(render("`~~code~~` stays literal"), "<code>~~code~~</code> stays literal")
+  assert.equal(render("~~unclosed"), "~~unclosed")
+  assert.equal(render("~~ leading space ~~"), "~~ leading space ~~")
+})
 
 // stripFrontmatter underpins the thread header's "Fray document" gate (ChatView.ThreadHeader): the
 // button shows iff `stripFrontmatter(threadBody).trim()` is non-empty. These lock the two invariants
