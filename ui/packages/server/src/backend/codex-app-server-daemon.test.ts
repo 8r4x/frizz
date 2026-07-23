@@ -226,3 +226,43 @@ test("codex daemon: killing the daemon tears down the app-server and prunes the 
     assert.equal(existsSync(codexAppServerSocketPath(h.stateDir, PROJECT)), false, "and the socket is unlinked")
   }
 })
+
+// The daemon buys ONE property — an in-flight turn surviving Update & Restart. Codex itself predates
+// it and does not need it. So a daemon that cannot start must degrade to the historical in-process
+// app-server, never take Codex down: one packaging slip doing exactly that killed every dispatch,
+// follow-up, steer and interrupt at once (2026-07-23). The fallback is the safety net for the class,
+// so it gets its own proof rather than being trusted because it looks obvious.
+test("codex daemon: a daemon that cannot start falls back to an in-process app-server", async () => {
+  const h = harness()
+  const errors: string[] = []
+  const consoleError = console.error
+  console.error = (...args: unknown[]) => { errors.push(args.join(" ")) }
+  try {
+    const attachment = await daemonCodexAppServerHost({
+      ...options(h),
+      // A daemon entry that is not there — precisely the promoted-artifact failure.
+      daemonEntry: join(h.stateDir, "does-not-exist-daemon.js"),
+    })
+    try {
+      assert.equal(liveDaemonRecord(h.stateDir, PROJECT), null, "no daemon record: this is the fallback, not a daemon")
+      assert.equal(attachment.daemonPid, process.pid, "the app-server is a child of THIS runtime")
+      assert.equal(attachment.reattached, false)
+      // The whole point: it must be a WORKING app-server, not merely a returned object.
+      const c = client(attachment.process)
+      const initialized = await c.request("initialize", { clientInfo: CLIENT_INFO, capabilities: CLIENT_CAPABILITIES })
+      assert.ok((initialized.result as { userAgent?: string })?.userAgent, "the fallback app-server answers initialize")
+      const echoed = await c.request("ping", { echo: "fallback" })
+      assert.equal((echoed.result as { echo?: string })?.echo, "fallback", "and serves ordinary requests")
+      // Degrading silently would be its own trap — the operator loses restart survival and must be told.
+      assert.ok(
+        errors.some((line) => /falling back to an in-process app-server/.test(line)),
+        `the degradation is announced, not silent — saw ${JSON.stringify(errors)}`,
+      )
+    } finally {
+      attachment.process.kill()
+    }
+  } finally {
+    console.error = consoleError
+    killCodexAppServerDaemon(h.stateDir, PROJECT)
+  }
+})

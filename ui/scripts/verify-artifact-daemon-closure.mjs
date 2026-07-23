@@ -19,6 +19,7 @@ import { join, resolve } from "node:path"
 import { buildFrayArtifact } from "../packages/cli/src/artifacts.ts"
 import { acquireProjectLaunchOwner, projectLaunchEnvironment } from "../packages/server/src/project-launch.ts"
 import { DETACHED_DAEMON_ENTRIES, detachedDaemonOutputName } from "../packages/server/src/detached-daemons.ts"
+import { createRpcClient } from "./lib/rpc-client.mjs"
 
 const SOURCE = resolve(import.meta.dirname, "..")
 const PORT = Number(process.env.VERIFY_PORT ?? 4941)
@@ -45,29 +46,7 @@ let release
 const stateDir = join(root, "state")
 mkdirSync(stateDir, { recursive: true })
 
-// Queries are GET with `?input=`; mutations are POST. Same split the web client uses.
-async function query(method, input) {
-  const url = new URL(`http://127.0.0.1:${PORT}/rpc/${method}`)
-  if (input !== undefined) url.searchParams.set("input", JSON.stringify(input))
-  const res = await fetch(url, { headers: { origin: `http://127.0.0.1:${PORT}` } })
-  const text = await res.text()
-  try { const p = JSON.parse(text); return { status: res.status, body: p?.result ?? p, error: p?.error } }
-  catch { return { status: res.status, body: { raw: text } } }
-}
-
-async function rpc(method, body) {
-  const res = await fetch(`http://127.0.0.1:${PORT}/rpc/${method}`, {
-    method: "POST",
-    headers: { "content-type": "application/json", origin: `http://127.0.0.1:${PORT}` },
-    body: JSON.stringify(body ?? {}),
-  })
-  const text = await res.text()
-  // The RPC envelope is {result} | {error}; unwrap so assertions read the payload, not the wrapper.
-  try {
-    const parsed = JSON.parse(text)
-    return { status: res.status, body: parsed?.result ?? parsed, error: parsed?.error }
-  } catch { return { status: res.status, body: { raw: text } } }
-}
+const api = createRpcClient(`http://127.0.0.1:${PORT}/`)
 
 try {
   log("building a real artifact from the current checkout…")
@@ -111,28 +90,19 @@ try {
   child.stdout.on("data", (c) => { output += c })
   child.stderr.on("data", (c) => { output += c })
 
-  let healthy = false
-  for (let i = 0; i < 200; i++) {
-    try { if ((await fetch(`http://127.0.0.1:${PORT}/health`)).ok) { healthy = true; break } } catch {}
-    await sleep(150)
-  }
+  const healthy = await api.waitForHealth(30_000)
   check(healthy, "the artifact server booted and serves /health", `port ${PORT}`)
   if (!healthy) throw new Error(`server never came up:\n${output.slice(-4000)}`)
 
   // 3. Dispatch a REAL codex thread through the artifact — this is what forks the daemon.
   log("dispatching a real codex thread…")
-  const dispatched = await rpc("dispatch", {
+  const dispatched = await api.mutate("dispatch", {
     title: "artifact daemon smoke",
     prompt: "Reply with exactly the word READY and nothing else. Do not use any tools.",
     backend: "codex",
   })
-  check(
-    dispatched.status === 200 && !!dispatched.body?.slug,
-    "codex dispatch succeeded through the bundled artifact",
-    JSON.stringify(dispatched.body ?? dispatched.error).slice(0, 400),
-  )
-  if (dispatched.status !== 200) throw new Error("dispatch failed — the fix is NOT proven")
-  const { slug, sessionId } = dispatched.body
+  check(!!dispatched?.slug, "codex dispatch succeeded through the bundled artifact", JSON.stringify(dispatched).slice(0, 400))
+  const { slug, sessionId } = dispatched
 
   // The on-disk record proves the DETACHED daemon really forked, not the in-process fallback.
   const recordDir = join(stateDir, "codex-app-server")
@@ -143,10 +113,18 @@ try {
     await sleep(250)
   }
   check(records.length > 0, "the DETACHED daemon forked and published its record", `${recordDir} → ${records.join(",") || "(empty)"}`)
+
+  // A fray-created codex worker is headless: it must launch at danger-full-access, because a
+  // restrictive sandbox just stalls an unattended worker on a modal nobody is watching.
+  const stored = execFileSync("sqlite3", [
+    join(stateDir, "ui.db"),
+    `SELECT permission_mode FROM session WHERE slug = '${slug}';`,
+  ], { encoding: "utf8" }).trim()
+  check(stored === "bypassPermissions", "a fresh codex dispatch stores full access, not workspace-write", `permission_mode=${stored || "(null)"}`)
   check(!/exited before it became ready/.test(output), "server output is free of 'daemon exited before it became ready'")
   check(!/falling back to an in-process app-server/.test(output), "the daemon path was used (no fallback)")
 
-  const threadOnBoard = async () => (await query("board")).body?.threads?.find((t) => t.id === slug)
+  const threadOnBoard = async () => (await api.query("board"))?.threads?.find((t) => t.id === slug)
   const waitForRuntime = async (want, ms) => {
     for (let i = 0; i < Math.ceil(ms / 500); i++) {
       const t = await threadOnBoard()
@@ -161,23 +139,25 @@ try {
 
   // 4a. STEER an IN-FLIGHT turn — the operation the operator watched fail.
   log("steering the in-flight turn… runtime =", thread?.runtime)
-  const steered = await rpc("followUp", {
+  let steerError = null
+  await api.mutate("followUp", {
     slug, sessionId,
     message: "Ignore that. Reply with exactly the word STEERED instead.",
     deliveryId: randomUUID(),
-  })
-  check(steered.status === 200, "steer of the in-flight turn was accepted", JSON.stringify(steered.error ?? steered.body).slice(0, 300))
+  }).catch((e) => { steerError = e.message })
+  check(steerError === null, "steer of the in-flight turn was accepted", steerError ?? "")
 
   // 4b. FOLLOW UP once the turn has rested — the other half of the same button.
   log("waiting for the turn to rest, then following up…")
   thread = await waitForRuntime((r) => r !== "running" && r !== "spawning", 90_000)
   log("runtime at rest:", thread?.runtime)
-  const followed = await rpc("followUp", {
+  let followError = null
+  await api.mutate("followUp", {
     slug, sessionId,
     message: "Now reply with exactly the word AGAIN.",
     deliveryId: randomUUID(),
-  })
-  check(followed.status === 200, "follow-up on the rested thread was accepted", JSON.stringify(followed.error ?? followed.body).slice(0, 300))
+  }).catch((e) => { followError = e.message })
+  check(followError === null, "follow-up on the rested thread was accepted", followError ?? "")
 
   console.log("\n--- server output tail ---")
   console.log(output.slice(-3000))

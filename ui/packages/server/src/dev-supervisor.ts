@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs"
 import { createServer as createNetServer } from "node:net"
 import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
+import { resolveDetachedDaemonEntry } from "./detached-daemons.ts"
 import watcher, {
   type AsyncSubscription,
   type Event as WatchEvent,
@@ -355,7 +356,7 @@ class Supervisor implements DevSupervisor {
     this.watchEnabled = opts.watch !== false
     this.childEnvironment = opts.childEnvironment ?? (() => ({}))
     this.debounceMs = opts.debounceMs ?? DEV_RESTART_DEBOUNCE_MS
-    this.childEntry = opts.childEntry ?? fileURLToPath(new URL("./dev-bootstrap.ts", import.meta.url))
+    this.childEntry = opts.childEntry ?? resolveDetachedDaemonEntry(import.meta.url, "dev-bootstrap")
     this.childEntryProvider = opts.childEntryProvider
     this.childLaunchProvider = opts.childLaunchProvider
     this.childArgs = opts.childArgs ?? []

@@ -22,6 +22,10 @@ import { fileURLToPath } from "node:url"
 export const DETACHED_DAEMON_ENTRIES = [
   "packages/server/src/backend/codex-app-server-daemon.ts",
   "packages/server/src/session-broker-daemon.ts",
+  // fork()ed by dev-supervisor.ts as the supervised child. Only the source-run launcher should reach
+  // it, but "should" is exactly the reasoning that shipped the outage above — it is spawned as a file,
+  // so it is emitted as a file.
+  "packages/server/src/dev-bootstrap.ts",
 ] as const
 
 /** The filename an entry must be emitted under, beside the runtime bundle. */

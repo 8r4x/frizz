@@ -84,9 +84,26 @@ not just first paint.
 
 ### Seeding real state
 An empty board proves the shell renders but not much else. To exercise real flows, drive the app's own RPC
-surface (`POST /rpc`) or the UI itself (type a task in the composer via `shot.mjs`'s evaluate / CDP `fill`)
+surface or the UI itself (type a task in the composer via `shot.mjs`'s evaluate / CDP `fill`)
 so the state is created the way production creates it — never hand-write rows into the sandbox SQLite.
-RPC calls from node need the loopback Origin header (`origin: http://127.0.0.1:<port>`) or they 403.
+
+**Use `ui/scripts/lib/rpc-client.mjs`. Never hand-roll `fetch` against `/rpc`.** Two details are easy to
+get wrong, and both fail SILENTLY — you get a plausible wrong answer instead of an error, which is how a
+harness ends up "proving" something it never tested:
+- **queries are `GET /rpc/<name>?input=<json>`, mutations are `POST /rpc/<name>`.** POSTing a query does
+  not throw; it 404s, and reads back as "no data" (this is what made a verify run report an empty board).
+- **every response is `{result}` or `{error}` — never the payload bare.** Reading `body.slug` off the
+  envelope yields `undefined` for a call that actually SUCCEEDED.
+
+```js
+import { createRpcClient } from "./lib/rpc-client.mjs"
+const api = createRpcClient(`http://127.0.0.1:${port}/`)
+await api.waitForHealth()
+const { slug, sessionId } = await api.mutate("dispatch", { prompt: "…", backend: "codex" })
+const board = await api.query("board")            // unwrapped result; throws RpcError on {error}
+```
+
+The client also sets the loopback `Origin` header, without which any write 403s.
 
 **Dispatching a REAL Claude worker usually won't work here** — the sandbox HOME has no Claude
 credentials, `rpc/dispatch` fails `AUTH_REQUIRED:claude`, and seeding credentials into the temp HOME

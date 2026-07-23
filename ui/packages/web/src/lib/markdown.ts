@@ -1,9 +1,31 @@
 import { Marked } from "marked"
+import type { Tokens } from "marked"
 import { renderHighlightedCode } from "./syntaxHighlight.ts"
 import { localImageUrlForTarget, localMarkdownTarget } from "./markdownTargets.ts"
 
+// marked's GFM strikethrough opener is `~~?` — ONE tilde is enough. That misreads the tilde agents
+// actually type: `~` is the approximation sign ("takes ~2.7s", "around ~line 897") and the home
+// prefix (`~/.claude/settings.json`), so any line carrying two of them silently struck out
+// everything in between ("finished in <del>2.7s; see </del>/.fray/quota-cache"). Nobody writes
+// single-tilde strikethrough deliberately, so require the unambiguous `~~…~~` — same rule marked
+// ships, with the optional second tilde made mandatory.
+const DOUBLE_TILDE_DEL = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/
+
+// Exported for markdown.test.ts: the sanitizer below needs a DOM, so the render path can't run under
+// `node --test`, but this tokenizer is pure and is the piece that changed.
+export const strikethroughTokenizer = {
+  del(this: { lexer: { inlineTokens: (src: string) => Tokens.Del["tokens"] } }, src: string) {
+    const cap = DOUBLE_TILDE_DEL.exec(src)
+    // undefined, NOT false: marked reads a `false` return as "no opinion, fall through to the
+    // built-in tokenizer" — which would hand the single-tilde rule right back.
+    if (!cap) return undefined
+    return { type: "del" as const, raw: cap[0], text: cap[2], tokens: this.lexer.inlineTokens(cap[2]) }
+  },
+}
+
 const markdown = new Marked({
   breaks: true,
+  tokenizer: strikethroughTokenizer,
   renderer: {
     code: ({ text, lang }) => renderHighlightedCode(text, lang),
   },
