@@ -14,7 +14,7 @@ import { ProviderMark } from "./ProviderMark.tsx"
 import { STATUS_CHIP } from "../lib/status.ts"
 import { retrySession } from "../lib/retrySession.ts"
 import { formatSnoozedUntil, formatSnoozeWake, formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
-import { isOptimisticallySteering, useSteeredAt } from "../lib/steering.ts"
+import { useOptimisticallySteered } from "../lib/steering.ts"
 import { activeSidebarSection, railRevealDelta, type SidebarSectionGeometry } from "../lib/sidebarScrollspy.ts"
 import type { ReactElement, ReactNode } from "react"
 
@@ -41,7 +41,13 @@ import type { ReactElement, ReactNode } from "react"
 export function Sidebar() {
   const snap = useSnapshot(store)
   const board = useBoard()
-  const all = asThreads(board?.threads ?? [])
+  // A just-sent steer is folded into the board BEFORE anything is derived from it, so the row's
+  // spinner and its POSITION land together. Consulting the hint further down (in the indicator alone,
+  // as this once did) left the two disagreeing for the whole injection + tailer round-trip: the row
+  // spun while still sitting in the queue-ordered rested band, below the rule, and hopped up to the
+  // running band seconds later — measured at 2.0s here with an instantaneous fixture worker, longer in
+  // production. See lib/steering.ts.
+  const all = useOptimisticallySteered(asThreads(board?.threads ?? []))
   const sections = sectionThreads(all, useSnapshot(prefs).queueOrder)
   const plans = (board?.plans ?? []) as PlanView[]
   const collapsed = snap.sidebarCollapsed
@@ -496,16 +502,11 @@ const ATTENTION = 9
 // Each indicator carries a terse hover tooltip naming the state it signals. The faint "at rest" dot
 // gets none. A plain wrapper <span> is the tooltip trigger (a real DOM node Radix can ref).
 export function ThreadIndicator({ t, legacy }: { t: ThreadView; legacy?: boolean }) {
-  // A just-sent steer paints the rail's spinner immediately. Without it the row keeps its old mark —
-  // often the very "?" the human just answered — for the whole injection round-trip plus however long
-  // the tailer takes to notice the worker's turn, which is the difference between "sent" and "ignored".
-  // Server truth reclaims the row the instant it has anything to say (see isOptimisticallySteering).
-  const steeredAt = useSteeredAt()[t.id]
-  const { node, tip } = legacy
-    ? legacyIndicatorFor(t)
-    : isOptimisticallySteering(t, steeredAt)
-      ? { node: <BoxSpinner />, tip: "Working" }
-      : sessionIndicatorFor(t)
+  // No steer special-case here anymore: Sidebar overlays a just-sent steer onto the thread itself
+  // (useOptimisticallySteered), so `t` already reads as running and the ordinary derivation returns
+  // the spinner — the same one decision that put the row in the running band. When this hook consulted
+  // the hint on its own, the glyph and the placement were two rules and drifted apart on every steer.
+  const { node, tip } = legacy ? legacyIndicatorFor(t) : sessionIndicatorFor(t)
   if (!tip) return node
   return (
     <Tooltip label={tip} side="left">
