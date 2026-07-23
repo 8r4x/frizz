@@ -110,7 +110,17 @@ window.fetch = async (input, init) => {
     if (new URLSearchParams(location.search).get("needsConfirmation") === "1") {
       await new Promise((resolve) => setTimeout(resolve, 90))
       telemetry.completeResolvedAt = performance.now()
-      return new Response(JSON.stringify({ result: { needsConfirmation: true } }), { headers: { "content-type": "application/json" } })
+      // The decline carries the server's EVIDENCE (completionConfirmationHold), so the dialog names the
+      // work Done is about to kill instead of the useless "this thread is still running".
+      const hold = {
+        turnInFlight: false,
+        unobservable: false,
+        subAgents: [{ label: "Audit the refresh-token rotation", state: "running" }],
+        subAgentCount: 1,
+        bgShells: [{ label: "Watch origin/main CI", state: "running" }, { label: "vite dev server", state: "stale" }],
+        bgShellCount: 2,
+      }
+      return new Response(JSON.stringify({ result: { needsConfirmation: true, hold } }), { headers: { "content-type": "application/json" } })
     }
     // The real completion path does real tmux work (stop the shell + prove it stopped) before responding,
     // THEN board.refresh() drops the row — modelled by the fixed delay + prune. The card must already be

@@ -100,6 +100,7 @@ test("a needsConfirmation reply reinstates the optimistically-dismissed card and
         remaining: document.querySelectorAll("[data-queue-card-root]").length,
         dialogOpen: !!dialog,
         dialogMentionsEndSession: !!dialog && /End this session|stop its agent session/i.test(dialog.textContent ?? ""),
+        holdText: document.querySelector("[data-completion-hold]")?.textContent ?? null,
       }
     }, SLUG)
     assert.equal(reconciled.cardPresent, true, "declined completion must reinstate the card")
@@ -107,6 +108,15 @@ test("a needsConfirmation reply reinstates the optimistically-dismissed card and
     assert.equal(reconciled.remaining, 3, "all three cards are back")
     assert.equal(reconciled.dialogOpen, true, "the confirmation dialog opens over the reinstated card")
     assert.equal(reconciled.dialogMentionsEndSession, true)
+    // The whole point of the dialog: it must name WHAT is still running, counted and labelled, so the
+    // human can tell "a CI watcher I forgot about" from "a child still mid-audit" without leaving it.
+    const hold = reconciled.holdText ?? ""
+    assert.match(hold, /1 sub-agent(?!s)/, "the live child is counted, singular")
+    assert.match(hold, /Audit the refresh-token rotation/, "…and named")
+    assert.match(hold, /2 background shells/, "both shells are counted, plural")
+    assert.match(hold, /Watch origin\/main CI/)
+    assert.match(hold, /vite dev server/)
+    assert.match(hold, /no recent output/, "the quiet shell is marked, not overclaimed as running")
     assert.deepEqual(errors, [], "no console/page errors during the reconcile flow")
   } finally {
     await browser.close()
