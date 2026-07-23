@@ -585,6 +585,17 @@ test("an exact adopted pane replaced during settle receives no delayed key and s
     `], { stdio: ["ignore", "pipe", "pipe"] })
     child.stdout.on("data", (chunk) => { output += String(chunk) })
 
+    // Wait for the child's OWN readiness line before timing anything. It has to cold-start node and
+    // load the tmux module graph first, and folding that into the buffer deadline below made this a
+    // flake that only bit under load — which is precisely when a CI box is slowest. The signal is
+    // already printed; it just was not being waited on.
+    const readyDeadline = Date.now() + 30_000
+    while (Date.now() < readyDeadline && !output.includes("FRAY_EXACT_SETTLE_READY")) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    assert.match(output, /FRAY_EXACT_SETTLE_READY/, "the settle child started")
+
+    // Only now is 2s a real measurement of tmux, not of node's startup.
     const bufferDeadline = Date.now() + 2_000
     while (Date.now() < bufferDeadline && !buffers().includes("fray-exact-")) {
       await new Promise((resolve) => setTimeout(resolve, 1))
