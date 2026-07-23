@@ -236,4 +236,10 @@ export interface AgentBackend {
   // Structured, backend-specific native-modal detection. Implementations MUST match verified terminal
   // chrome rather than arbitrary model output and MUST NOT return pane-derived option/detail text.
   detectNativeInput?(pane: string): NativeInputRequiredData | undefined
+  // PRE-SESSION modals only — the screens a backend can block on BEFORE it opens a session and writes
+  // its first transcript record. Kept separate from detectNativeInput because the tailer runs it on a
+  // different path (the no-transcript stall, where no transcript-derived signal exists) and because a
+  // boot screen must never be matched against a live session's pane, where ordinary transcript text
+  // could quote the same chrome. Same presentation-safe contract: fixed titles, never pane-derived.
+  detectBootModal?(pane: string): NativeInputRequiredData | undefined
 }

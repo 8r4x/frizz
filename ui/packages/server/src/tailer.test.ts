@@ -7,7 +7,7 @@ import { createStorage, type Storage, type SessionRow } from "./storage.ts"
 import { Bus } from "./bus.ts"
 import type { ServerEvent } from "@fray-ui/shared"
 import { permMarkerPath, type Project } from "./project.ts"
-import { parseLine, applyRecord, applyEvent, computeTurn, newTailState, createTailer, matchesPermPrompt, hasQuestionBlock, isClaudeAuthErrorText, isRealUserMessage, parseSignalFence, FOREIGN_FRESH_MS } from "./tailer.ts"
+import { parseLine, applyRecord, applyEvent, computeTurn, newTailState, createTailer, matchesPermPrompt, detectClaudeBootModal, hasQuestionBlock, isClaudeAuthErrorText, isRealUserMessage, parseSignalFence, FOREIGN_FRESH_MS } from "./tailer.ts"
 import type { AgentBackend, NormalizedEvent } from "./backend/types.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
 import { createCodexBackend } from "./backend/codex.ts"
@@ -1011,6 +1011,47 @@ test("matchesPermPrompt: the ctrl+o transcript view counts as a live composer", 
   assert.equal(matchesPermPrompt(PANE_TRANSCRIPT_VIEW), false)
 })
 
+// Verbatim capture (2026-07-22, claude 2.1.218) from the worker that wedged in production: a stray
+// ANTHROPIC_API_KEY in the environment gates the session before it opens, so nothing is ever written
+// to the transcript and the board had only "No message yet." to show.
+const PANE_BOOT_APIKEY = [
+  "─".repeat(96),
+  "  Detected a custom API key in your environment",
+  "",
+  "  ANTHROPIC_API_KEY: sk-ant-...1gsVZdvC3IA-dfjolgAA",
+  "",
+  "  Do you want to use this API key?",
+  "",
+  "    1. Yes",
+  "  ❯ 2. No (recommended)",
+  "",
+  "  Enter to confirm · Esc to cancel",
+].join("\n")
+
+test("detectClaudeBootModal: names the API-key and trust screens with fixed, pane-free titles", () => {
+  assert.deepEqual(detectClaudeBootModal(PANE_BOOT_APIKEY), {
+    kind: "confirmation",
+    title: "Confirm the API key in your environment",
+  })
+  assert.deepEqual(detectClaudeBootModal(PANE_PERM_TRUST), { kind: "confirmation", title: "Trust this folder" })
+  // The contract is presentation-safe: the masked credential and the workspace path must not ride along.
+  const title = detectClaudeBootModal(PANE_BOOT_APIKEY)!.title
+  assert.equal(title.includes("sk-ant"), false)
+  assert.equal(detectClaudeBootModal(PANE_PERM_TRUST)!.title.includes("/tmp/repro"), false)
+})
+
+test("detectClaudeBootModal: no match on ordinary approvals, a quoted prompt, or an empty pane", () => {
+  // These ARE modals (matchesPermPrompt fires) but they are mid-session, not boot screens — the
+  // fallback title covers them; a specific one would be a lie.
+  assert.equal(detectClaudeBootModal(PANE_PERM_BASH), undefined)
+  assert.equal(detectClaudeBootModal(PANE_PERM_EDIT), undefined)
+  assert.equal(detectClaudeBootModal(PANE_QUOTING_PROMPT), undefined)
+  assert.equal(detectClaudeBootModal(""), undefined)
+  // One signal is not enough: the headline alone (e.g. an agent echoing it) must not trip the matcher.
+  assert.equal(detectClaudeBootModal("Detected a custom API key in your environment"), undefined)
+  assert.equal(detectClaudeBootModal("Is this a project you created or one you trust?"), undefined)
+})
+
 test("matchesPermPrompt: rejects streaming / idle / a model's own numbered list / empty", () => {
   assert.equal(matchesPermPrompt(PANE_STREAMING), false)
   assert.equal(matchesPermPrompt(PANE_IDLE), false)
@@ -1816,6 +1857,65 @@ test("tailer: a transcript missing past the grace window → noTranscript degrad
   const log = readFileSync(stallLog, "utf8")
   assert.match(log, /already in use/, "the boot-failure pane is persisted for triage")
   try { rmSync(stallLog) } catch { /* cleanup */ }
+})
+
+// The regression this fixes: a worker wedged on a startup modal has no transcript, so `turn` and
+// `lastActivityAt` never satisfy sniffPane's quiet gate — the pane was never captured and the row
+// carded as a bare "Stalled" while the reason sat unread in the stall log.
+test("tailer: a no-transcript stall parked on a boot modal reports WHAT it is blocked on", () => {
+  const slug = "boot-modal-thread"
+  const stallLog = join(tmpdir(), "fray-worker-logs", `${slug}.stall.log`)
+  try { rmSync(stallLog) } catch { /* not there */ }
+  const h = harness()
+  h.storage.upsertSession(row({ slug, tmux_name: `fray-${slug}` }))
+  h.pane.text = PANE_BOOT_APIKEY
+  const t = makeTailer(h)
+
+  h.clock.ms = Date.parse(SPAWN)
+  t.tick() // within grace: still spinning up, nothing claimed yet
+  assert.equal(t.get(slug)?.nativeInputRequired, undefined)
+  assert.equal(t.get(slug)?.permPrompt, false)
+
+  h.clock.ms = PAST_GRACE
+  t.tick()
+  assert.equal(t.get(slug)?.noTranscript, true)
+  assert.deepEqual(
+    t.get(slug)?.nativeInputRequired,
+    { kind: "confirmation", title: "Confirm the API key in your environment" },
+    "the card states the screen instead of an empty stall",
+  )
+  // permPrompt flips the row off the degraded "Stalled" affordance onto perm-prompt, which
+  // deriveNeedsYou queues identically — so naming the reason never costs the row its place in the queue.
+  assert.equal(t.get(slug)?.permPrompt, true)
+  try { rmSync(stallLog) } catch { /* cleanup */ }
+})
+
+test("tailer: an uncatalogued startup modal still gets the generic reason, and a blank pane gets none", () => {
+  const h = harness()
+  h.storage.upsertSession(row({ slug: "unknown-modal", tmux_name: "fray-unknown-modal" }))
+  h.pane.text = PANE_PERM_BASH // a real modal, but not a screen detectClaudeBootModal can name
+  const t = makeTailer(h)
+  h.clock.ms = PAST_GRACE
+  t.tick()
+  assert.deepEqual(t.get("unknown-modal")?.nativeInputRequired, {
+    kind: "confirmation",
+    title: "Blocked on a startup prompt",
+  })
+
+  // A stall with no modal on screen (claude's boot-failure text, the case the original test covers)
+  // must stay a plain degraded row — inventing an input prompt there would be worse than silence.
+  const h2 = harness()
+  h2.storage.upsertSession(row({ slug: "plain-stall", tmux_name: "fray-plain-stall" }))
+  h2.pane.text = "Error: Session ID sid is already in use."
+  const t2 = makeTailer(h2)
+  h2.clock.ms = PAST_GRACE
+  t2.tick()
+  assert.equal(t2.get("plain-stall")?.noTranscript, true)
+  assert.equal(t2.get("plain-stall")?.nativeInputRequired, undefined)
+  assert.equal(t2.get("plain-stall")?.permPrompt, false)
+  for (const slug of ["unknown-modal", "plain-stall"]) {
+    try { rmSync(join(tmpdir(), "fray-worker-logs", `${slug}.stall.log`)) } catch { /* cleanup */ }
+  }
 })
 
 test("tailer: a present-but-EMPTY (0-byte) transcript past grace is treated as MISSING → degraded (0-byte crash-net hole closed)", () => {

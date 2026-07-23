@@ -1,7 +1,7 @@
 import { join } from "node:path"
 import { buildClaudeCommand, buildClaudeResumeCommand, claudeWorkerEnvironment, workerPluginDir } from "../dispatch.ts"
-import { parseLine as parseClaudeRecord, applyRecord, matchesPermPrompt, isRealUserMessage, type TailState } from "../tailer.ts"
-import type { AgentBackend, BuiltCommand, FoldState, NormalizedEvent, ResumeOpts, SpawnOpts } from "./types.ts"
+import { parseLine as parseClaudeRecord, applyRecord, matchesPermPrompt, detectClaudeBootModal, isRealUserMessage, type TailState } from "../tailer.ts"
+import type { AgentBackend, BuiltCommand, FoldState, NativeInputRequiredData, NormalizedEvent, ResumeOpts, SpawnOpts } from "./types.ts"
 
 // ClaudeBackend: everything Claude-Code-specific behind the AgentBackend seam — the spawn/resume argv
 // (Claude's `--session-id` pin + `--append-system-prompt-file` worker-contract injection), the
@@ -152,6 +152,11 @@ export function createClaudeBackend(opts: ClaudeBackendOptions): AgentBackend {
 
     matchesPermPrompt(pane: string): boolean {
       return matchesPermPrompt(pane)
+    },
+
+    // Pre-session screens only; the tailer runs it on the no-transcript stall path.
+    detectBootModal(pane: string): NativeInputRequiredData | undefined {
+      return detectClaudeBootModal(pane)
     },
   }
 }

@@ -1,12 +1,16 @@
-import { useState, type ComponentType } from "react"
+import { useMemo, useState, type ComponentType } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { Check, CircleCheck, CircleDot, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Github, Inbox, Loader2, MessageSquare } from "lucide-react"
-import type { DispatchProfileSnapshot, GithubBatchInput, GithubItem } from "@fray-ui/shared"
+import type { DispatchInput, DispatchProfileSnapshot, GithubBatchInput, GithubItem } from "@fray-ui/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { Overlay } from "./NewThreadModal.tsx"
-import { EFFORT_LABEL } from "../lib/options.ts"
+import { ProfileGridSelector } from "./ProfileGridSelector.tsx"
+import { useDispatchProfile } from "../hooks/useDispatchProfile.ts"
+import { dispatchProfileGroups } from "../lib/dispatchPreferences.ts"
+import { OPAQUE_PORTAL_SURFACE_ABOVE_DIALOG_Z } from "../lib/overlaySurface.ts"
 import { buildGithubBatchInput, dispatchProfileError } from "../lib/githubDispatch.ts"
+import { applyRowSelection } from "../lib/rowRangeSelection.ts"
 
 type Kind = "issues" | "prs"
 type Sort = "recent" | "reactions"
@@ -17,29 +21,28 @@ type Sort = "recent" | "reactions"
 const MAX_BATCH = 20
 
 // THE GitHub picker: a wider anywhere-modal (reusing NewThreadModal's Overlay) that lists the repo's
-// Issues or PRs (tabs), sortable by recency or reactions, with multi-select checkboxes and a
-// frozen inherited profile/permission footer. "Dispatch N thread(s)" spins up one fray thread per checked item
+// Issues or PRs (tabs), sortable by recency or reactions, with multi-select checkboxes and the
+// ordinary model/effort selector in its bottom-left corner. "Dispatch N thread(s)" spins up one fray
+// thread per checked item
 // (each ISSUE an investigate/reproduce/recommend thread, each PR a review thread) via
 // rpc.githubDispatchBatch — the server hydrates + templates each fresh, reusing the normal dispatch
 // flow; the new sidebar rows paint via the board SSE. The trigger that opens this is auth-gated, so
 // the RPCs are guaranteed serviceable when it's mounted.
-export function GithubPickerModal({
-  profile,
-  onClose,
-}: {
-  profile: DispatchProfileSnapshot
-  onClose: () => void
-}) {
+export function GithubPickerModal({ onClose }: { onClose: () => void }) {
   const status = useQuery({ queryKey: ["githubStatus"], queryFn: () => rpc.githubStatus() })
-  // Re-read only the authoritative Codex catalogue, never Settings/default preferences. A cache refresh
-  // can invalidate the captured pair while the picker is open, in which case final dispatch fails closed.
-  const codexModels = useQuery({ queryKey: ["codexModels"], queryFn: () => rpc.codexModels() })
+  // The batch dispatches with the SAME durable new-thread profile the prompt box uses — the selector
+  // below writes it, so choosing here also becomes the composer's next default (one profile, not a
+  // picker-local copy that silently diverges). A Codex cache refresh can invalidate the saved pair
+  // while the picker is open; the final revalidation below then fails closed rather than downgrading.
+  const { resolved, codexList, loadError, saveProfile } = useDispatchProfile()
 
   const [kind, setKind] = useState<Kind>("issues")
   const [sort, setSort] = useState<Sort>("recent")
   // Selection is a Set<number> scoped to the CURRENT tab — switching tabs CLEARS it (simplest, and it
   // dodges the issue#N-vs-pr#N number collision a shared set would hit). Documented choice per plan §6.
   const [selected, setSelected] = useState<ReadonlySet<number>>(() => new Set())
+  // The shift-click anchor: the last PLAINLY clicked row's number (see lib/rowRangeSelection.ts).
+  const [anchor, setAnchor] = useState<number | null>(null)
 
   // Server order is AUTHORITATIVE (the gh --search sort) — render items exactly as returned, never
   // re-sort client-side. The query re-keys on {kind, sort}, so a tab/sort flip refetches.
@@ -62,6 +65,7 @@ export function GithubPickerModal({
     if (k === kind) return
     setKind(k)
     setSelected(new Set())
+    setAnchor(null)
   }
   function switchSort(s: Sort) {
     if (s === sort) return
@@ -70,31 +74,48 @@ export function GithubPickerModal({
     // other's (limit-truncated) window and then dispatch INVISIBLY, with the count exceeding the
     // visible checks. Clearing keeps "what's checked is what dispatches" honest.
     setSelected(new Set())
+    setAnchor(null)
   }
-  function toggle(n: number) {
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(n)) next.delete(n)
-      else if (next.size < MAX_BATCH) next.add(n) // cap adds at the server's per-batch max (MAX_BATCH)
-      return next
+  // One entry point for every row activation (click, Enter, Space). Shift paints the whole
+  // anchor→row range with the anchor's state; a plain click toggles and re-anchors. The cap is the
+  // server's per-batch max (MAX_BATCH), so a range that overruns it truncates VISIBLY with a toast
+  // rather than silently dropping rows the human watched themselves select.
+  function activate(n: number, shiftKey: boolean) {
+    const result = applyRowSelection({
+      keys: items.map((it) => it.number),
+      key: n,
+      shiftKey,
+      anchor,
+      selected,
+      max: MAX_BATCH,
     })
+    setSelected(result.selected)
+    setAnchor(result.anchor)
+    if (result.capped) showToast(`${MAX_BATCH} max per batch — selection capped`)
   }
 
   const nameWithOwner = status.data?.nameWithOwner ?? "this repo"
   const n = selected.size
-  const profileError = profile.backend === "codex" && !codexModels.data
-    ? codexModels.isError
-      ? "Could not validate the captured Codex profile — reopen after the catalogue loads"
-      : "Validating the captured Codex profile…"
-    : dispatchProfileError(profile, codexModels.data ?? [])
-  const modelLabel = profile.backend === "codex"
-    ? codexModels.data?.find((model) => model.slug === profile.model)?.displayName ?? profile.model
-    : profile.model.charAt(0).toUpperCase() + profile.model.slice(1)
-  const effortLabel = EFFORT_LABEL[profile.effort] ?? profile.effort
+  // Stable identity: ProfileGridSelector memoizes off `groups`, and this modal re-renders on every
+  // row toggle.
+  const profileGroups = useMemo(() => dispatchProfileGroups(codexList), [codexList])
+  const profile: DispatchProfileSnapshot | undefined = resolved
+    ? { backend: resolved.backend, model: resolved.model, effort: resolved.effort as DispatchProfileSnapshot["effort"] }
+    : undefined
+  // Two levels, deliberately: `profileError` is a real fault worth a red line under the selector (a
+  // saved model/effort the catalogue no longer offers, or a catalogue that failed to load), while
+  // `dispatchBlocked` also covers the merely-not-loaded-yet case — the selector's own "Profile
+  // loading…" placeholder already says that, so it must not paint red.
+  const profileError = profile
+    ? dispatchProfileError(profile, codexList)
+    : loadError
+      ? "Could not load the model catalogue — reopen once it loads"
+      : undefined
+  const dispatchBlocked = profileError ?? (profile ? undefined : "Loading the model catalogue…")
 
   function startDispatch() {
-    if (profileError) {
-      showToast(profileError)
+    if (!profile || dispatchBlocked) {
+      showToast(dispatchBlocked ?? "Choose a model and reasoning level")
       return
     }
     dispatch.mutate(buildGithubBatchInput(
@@ -160,25 +181,43 @@ export function GithubPickerModal({
               <span className="text-[12.5px] text-muted/60">No open {kind === "issues" ? "issues" : "pull requests"}</span>
             </Centered>
           ) : (
-            items.map((it) => <Row key={it.number} item={it} checked={selected.has(it.number)} onToggle={() => toggle(it.number)} />)
+            items.map((it) => (
+              <Row key={it.number} item={it} checked={selected.has(it.number)} onActivate={(shiftKey) => activate(it.number, shiftKey)} />
+            ))
           )}
         </div>
 
-        {/* Footer: the exact immutable prompt-box snapshot + the batch-dispatch button. */}
+        {/* Footer: the ordinary model/effort selector (bottom-left) + the batch-dispatch button. The
+            selector is the SAME control the prompt box carries and writes the same durable
+            preference, so the profile every dispatched thread gets is editable right here. Opens
+            UPWARD (side="top") — the footer sits on the modal's bottom edge. */}
         <div className="mt-4 flex items-end justify-between gap-3">
           <div className="min-w-0">
-            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
-              <span className="petite-caps text-muted/55">Inherited</span>
-              <span className="truncate text-muted" title={`${profile.backend} · ${profile.model} · ${profile.effort}`}>
-                {profile.backend === "codex" ? "Codex" : "Claude Code"} · {modelLabel} / {effortLabel}
-              </span>
-            </div>
+            <ProfileGridSelector
+              groups={profileGroups}
+              value={resolved ? { provider: resolved.backend, model: resolved.model, effort: resolved.effort } : undefined}
+              onValueChange={(selection) => saveProfile({
+                field: "profile",
+                backend: selection.provider as DispatchProfileSnapshot["backend"],
+                model: selection.model,
+                effort: selection.effort as DispatchInput["effort"] & string,
+              })}
+              placeholder={loadError ? "Profile unavailable" : "Profile loading…"}
+              ariaLabel="Model and effort"
+              title={dispatchBlocked ?? "Model and reasoning effort for every thread this batch starts"}
+              disabled={!resolved}
+              side="top"
+              // The picker's Overlay is z-[200]; the default z-[110] portal would paint the menu
+              // beneath its frosted backdrop.
+              menuZClass={OPAQUE_PORTAL_SURFACE_ABOVE_DIALOG_Z}
+              className="max-w-[min(21rem,60vw)]"
+            />
             {profileError && <p className="mt-1 max-w-[430px] text-[10.5px] text-red-400">{profileError}</p>}
           </div>
           <div className="flex items-center gap-3">
             {n >= MAX_BATCH && <span className="petite-caps text-[11px] text-muted/60">{MAX_BATCH} max per batch</span>}
             <button
-              disabled={n === 0 || dispatch.isPending || !!profileError}
+              disabled={n === 0 || dispatch.isPending || !!dispatchBlocked}
               onClick={startDispatch}
               onMouseDown={(e) => e.preventDefault()}
               className="flex items-center gap-2 rounded-md bg-fg px-3.5 py-1.5 text-[12.5px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:hover:opacity-30"
@@ -270,19 +309,25 @@ function LabelChip({ name, color }: { name: string; color: string }) {
 
 // One issue/PR row, mirroring github.com: the select checkbox, the state glyph, the title (a LINK OUT)
 // with its label chips, a metadata line "#N · author opened <ago>", and the comment/reaction badges on
-// the right. Clicking the row toggles selection; clicking the title or the #number opens GitHub.
-function Row({ item, checked, onToggle }: { item: GithubItem; checked: boolean; onToggle: () => void }) {
+// the right. Clicking the row toggles selection, SHIFT-clicking extends from the last clicked row
+// through every row in between; clicking the title or the #number opens GitHub.
+function Row({ item, checked, onActivate }: { item: GithubItem; checked: boolean; onActivate: (shiftKey: boolean) => void }) {
   const opened = relTime(item.createdAt)
   const meta = [item.author, opened ? `opened ${opened}` : ""].filter(Boolean).join(" ")
   return (
     <div
       role="button"
       tabIndex={0}
-      onClick={onToggle}
+      data-row-number={item.number}
+      aria-pressed={checked}
+      onClick={(e) => onActivate(e.shiftKey)}
+      // Shift+click natively drags a text selection across the rows it spans; the range select is the
+      // only meaning shift has here, so suppress the browser's before it paints over the list.
+      onMouseDown={(e) => { if (e.shiftKey) e.preventDefault() }}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault()
-          onToggle()
+          onActivate(e.shiftKey)
         }
       }}
       className="group flex w-full cursor-pointer items-start gap-2.5 border-b border-border/40 px-3 py-2.5 text-left outline-none transition-colors last:border-b-0 hover:bg-white/[0.03]"
