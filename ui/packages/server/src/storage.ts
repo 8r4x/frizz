@@ -501,11 +501,11 @@ export function createStorage(dbPath: string): Storage {
   // into the new lifecycle column. Only fills NULLs — an explicit later state write always wins.
   try {
     db.exec("UPDATE session SET state = 'archived' WHERE archived = 1 AND state IS NULL")
-    db.exec("UPDATE session SET runtime_control = NULL WHERE runtime_control = 'codex-input'")
     // The tmux codex composer is gone, and with it every writer AND releaser of its durable
     // 'codex-input' runtime lock. A row that still holds one was locked by the retired subsystem and
     // nothing can ever clear it again: the board reports runtimeControlPending forever, which fences
     // that thread's composer, model, and sandbox controls permanently. Release it once, at boot.
+    db.exec("UPDATE session SET runtime_control = NULL WHERE runtime_control = 'codex-input'")
   } catch {
     // best-effort
   }
