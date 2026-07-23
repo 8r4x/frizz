@@ -428,6 +428,22 @@ test("applyRecord: a shell whose completion RACES ahead of its launch is retired
   assert.equal(s.retiredShells.get("toolu_race")?.status, "completed")
 })
 
+test("applyRecord: a background AGENT hit by the SAME race is retired by the inline attachment (symmetric with shells)", () => {
+  // The race is not shell-specific: background Agent dispatches ride the exact same
+  // notificationText/trackCompletions path, so a sub-agent completing mid-turn (queue-op completion
+  // flushed BEFORE its launch, recovered by the inline attachment AFTER it) must retire too — into the
+  // drawer ring, with status "completed".
+  const s = newTailState("t", "s", "/x")
+  applyRecord(s, taskNotification("toolu_ag", "completed")) // folded before launch — no live entry, no-op
+  assert.equal(s.subAgents.size, 0)
+  applyRecord(s, dispatch("toolu_ag", "review the diff")) // background Agent
+  applyRecord(s, launch("toolu_ag", "/tmp/tasks/abc.output"))
+  assert.equal(s.subAgents.size, 1, "the agent is live after its launch")
+  applyRecord(s, taskNotificationAttachment("toolu_ag", "completed"))
+  assert.equal(s.subAgents.size, 0, "the inline attachment completion retires the raced agent")
+  assert.equal(s.retiredSubAgents.get("toolu_ag")?.status, "completed", "an agent stays drillable in the ring")
+})
+
 test("applyRecord: a TaskStop that did NOT confirm success never retires a live op", () => {
   const s = newTailState("t", "s", "/x")
   applyRecord(s, bashBg("toolu_sh", "Watch CI", "gh run watch"))
