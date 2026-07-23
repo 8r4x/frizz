@@ -562,16 +562,22 @@ test("a real Nub/esbuild artifact boots its WebSocket-capable server and loads i
     assert.ok(artifact.manifest.dependencyCell, "runtime binds an immutable dependency cell");
     const modules = join(artifact.runtimeDir, "node_modules");
     assert.equal(resolve(dirname(modules), readlinkSync(modules)), join(root, "cells", artifact.manifest.dependencyCell!, "node_modules"));
-    // Detached daemons are spawned as their OWN node process, so reachability through the bundle is
-    // not enough — node must be able to LOAD each one from the artifact. Started with no config env,
-    // a daemon that really ran fails on its own guard; MODULE_NOT_FOUND means it was never emitted,
-    // which is precisely what silently killed every Codex turn on 2026-07-23.
+    // Detached entries are spawned as their OWN node process, so reachability through the bundle is
+    // not enough — node must be able to LOAD each one from the artifact. Run with no config env, each
+    // must reach ITS OWN guard and refuse; MODULE_NOT_FOUND means it was never emitted, which is
+    // precisely what silently killed every Codex turn on 2026-07-23.
+    //
+    // The guards differ (the daemons want their FRAY_* config, dev-bootstrap wants a live project
+    // launch owner), so assert the SHAPE rather than one message: it must fail from inside the emitted
+    // file itself. A wrong-but-plausible message would otherwise pass a laxer check.
     for (const entry of DETACHED_DAEMON_ENTRIES) {
-      const emitted = join(artifact.runtimeDir, "src", detachedDaemonOutputName(entry));
-      assert.ok(existsSync(emitted), `artifact ships ${detachedDaemonOutputName(entry)} beside index.js`);
+      const name = detachedDaemonOutputName(entry);
+      const emitted = join(artifact.runtimeDir, "src", name);
+      assert.ok(existsSync(emitted), `artifact ships ${name} beside index.js`);
       const started = spawnSync(process.execPath, [emitted], { encoding: "utf8" });
-      assert.doesNotMatch(started.stderr, /Cannot find module/, `${emitted} is loadable from the artifact`);
-      assert.match(started.stderr, /started without FRAY_/, `${emitted} runs its own entry point`);
+      assert.doesNotMatch(started.stderr, /Cannot find module|ERR_MODULE_NOT_FOUND/, `${name} is loadable from the artifact`);
+      assert.notEqual(started.status, 0, `${name} refuses to run without its configuration`);
+      assert.match(started.stderr, new RegExp(`${name}:\\d+`), `${name} threw from inside itself, i.e. node really executed it`);
     }
     const projectId = randomUUID();
     const canonicalRoot = realpathSync(root);
