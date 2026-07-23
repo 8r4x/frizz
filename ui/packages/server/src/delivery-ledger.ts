@@ -109,13 +109,16 @@ export function correlateDeliveryRecord(
   }
 
   // Claude Code accepted the message into its own queue → positive receipt, still undelivered.
+  // Deliberately NOT gated on state==='pending': the evidence can arrive long after PENDING_TIMEOUT_MS
+  // aged the item to 'unconfirmed' (87s and 12min observed in the maintainer's own transcript, because
+  // the composer can hold a paste for minutes before the TUI submits it). An enqueue record is positive
+  // proof the message reached Claude Code's queue, so it must clear the amber warning whenever it lands.
   if (r.type === "queue-operation" && r.operation === "enqueue" && typeof r.content === "string") {
-    const text = norm(r.content)
-    const index = items.findIndex((item) => item.state === "pending" && norm(item.text) === text && contemporaneous(item))
-    if (index === -1) return items
-    const next = [...items]
-    next[index] = { ...next[index], state: "enqueued", updatedAt: nowIso }
-    return next
+    const matched = matchComposedText(items, norm(r.content), contemporaneous)
+    if (matched.size === 0) return items
+    return items.map((item, index) =>
+      matched.has(index) && item.state !== "enqueued" ? { ...item, state: "enqueued", updatedAt: nowIso } : item,
+    )
   }
 
   // Delivery into the agent's context: the queued_command attachment (mid-turn/turn-start pickup) or a
@@ -132,8 +135,76 @@ export function correlateDeliveryRecord(
     if (text) deliveredText = norm(text)
   }
   if (deliveredText === null) return items
-  const remaining = items.filter((item) => norm(item.text) !== deliveredText || !contemporaneous(item))
-  return remaining.length === items.length ? items : remaining
+  const delivered = matchComposedText(items, deliveredText, contemporaneous)
+  if (delivered.size === 0) return items
+  return items.filter((_, index) => !delivered.has(index))
+}
+
+// A merged submission's constituent text must be at least this long before it may be matched at a
+// non-zero offset (i.e. after content this ledger never sent — a draft the operator had already typed
+// into the pane). Whole-record and prefix-anchored matches are exact and are not length-gated; this
+// bound exists so a short generic send ("continue") can't be resolved by merely APPEARING inside an
+// unrelated message the human typed in the terminal.
+const COMPOSED_ANCHOR_MIN = 24
+
+// Which ledger items a single JSONL evidence record accounts for.
+//
+// The naive rule — whole-string equality — is what shipped, and it is wrong for the case the operator
+// actually hit. fray injects a follow-up by pasting into Claude Code's composer and sending Enter, and
+// the TUI can SWALLOW that Enter while it is mid-render: the text stays in the composer, and the NEXT
+// follow-up's paste lands after it, so its Enter submits the ACCUMULATION as one message. Claude Code
+// then writes exactly one `queue-operation enqueue` and one `queued_command` attachment whose text is
+// the CONCATENATION of the N sends. Verified byte-exact against the maintainer's own transcript
+// (2026-07-23, thread `why-when-i-try-to-change`): a 709-char enqueue = item(565) + "\n" + item(143),
+// and a 379-char enqueue = item(196) + item(183) with no separator at all. Under whole-string equality
+// NONE of the four constituents matched, all four aged to `unconfirmed`, and the drawer told the
+// operator to "check the terminal" for four messages the agent had already read and acted on.
+//
+// So: consume the record left-to-right, taking any unconsumed item whose text is a PREFIX of what's
+// left (skipping the newline the composer may insert between pastes). Every consumed segment is a
+// whole item text anchored at a boundary the previous items produced, so this is strictly a
+// generalization of equality — it can only match MORE of a record that the ledger genuinely composed,
+// never a coincidental substring in the middle of an unrelated message.
+export function matchComposedText(
+  items: readonly DeliveryLedgerItem[],
+  recordText: string,
+  contemporaneous: (item: DeliveryLedgerItem) => boolean,
+): Set<number> {
+  const matched = new Set<number>()
+  if (!recordText) return matched
+  let rest = recordText
+  // The composer may already have held content this ledger never sent (a draft the human typed in the
+  // pane). Anchor once on the earliest long-enough item that occurs in the record, then compose forward
+  // from it — every later segment must be a clean prefix of what remains.
+  let anchored = false
+  const candidate = (index: number): string | null => {
+    if (matched.has(index)) return null
+    const item = items[index]
+    if (!contemporaneous(item)) return null
+    const text = norm(item.text)
+    return text || null
+  }
+  for (let guard = 0; guard < items.length && rest.length > 0; guard++) {
+    let hit: { index: number; at: number; length: number } | null = null
+    // Prefix matches always win — they are exact composition, and never length-gated.
+    for (let index = 0; index < items.length; index++) {
+      const text = candidate(index)
+      if (text && rest.startsWith(text)) { hit = { index, at: 0, length: text.length }; break }
+    }
+    if (!hit && !anchored) {
+      for (let index = 0; index < items.length; index++) {
+        const text = candidate(index)
+        if (!text || text.length < COMPOSED_ANCHOR_MIN) continue
+        const at = rest.indexOf(text)
+        if (at > 0 && (!hit || at < hit.at)) hit = { index, at, length: text.length }
+      }
+    }
+    if (!hit) break
+    matched.add(hit.index)
+    anchored = true
+    rest = rest.slice(hit.at + hit.length).replace(/^\n+/, "")
+  }
+  return matched
 }
 
 // Level-triggered aging, run every tick: a pending item with no evidence for PENDING_TIMEOUT_MS becomes

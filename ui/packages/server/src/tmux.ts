@@ -468,6 +468,97 @@ export function capturePane(slug: string): string {
   }
 }
 
+// ---- Batched pane capture ------------------------------------------------------------------------
+// The SAME lesson as the batched liveness cache above, for the other per-row subprocess: the tailer's
+// 1s tick pane-sniffs every quiet in-flight thread, and `capturePane` is one `tmux` exec each. On the
+// maintainer's machine a bare process spawn measures ~60ms and a `capture-pane` ~105ms, so a 25-thread
+// board spent 2.6-6.2 SECONDS of synchronous, event-loop-blocking work per 1s tick (measured
+// 2026-07-23: `[probe] tick 3950ms captures=25 captureMs=3369`). Every RPC reply, board delta and
+// transcript push queues behind that — which is exactly what "mark as done and the sidebar doesn't
+// update for seconds" is.
+//
+// tmux runs a `;`-separated command list in ONE invocation, so N captures cost ONE spawn. Outputs are
+// concatenated with no framing, so each capture is BRACKETED by `display-message -p <sentinel>` open and
+// close markers and stdout is split on the sentinel. Three failure modes are handled rather than assumed
+// away — each found by verify-batched-pane-capture.mjs rather than reasoned about:
+//   • a command list ABORTS at the first error (verified: a bad target prints its error and the
+//     remaining commands never run), so a batch can be truncated at any point;
+//   • the OPEN marker of the aborted slug has ALREADY been written when its capture fails, so an
+//     open-only frame must be rejected. With a single marker per frame that slug was recorded with
+//     EMPTY pane text — which reads as \"no permission prompt\" for a thread that may well have one, and
+//     suppressed the retry that would have recovered the panes behind it;
+//   • that abort makes tmux exit non-zero, and execFileSync throws — but the partial stdout survives on
+//     the thrown error, so it is salvaged rather than discarded.
+// The sentinel is a control character (never present in a rendered pane cell) plus a per-process
+// random id, so captured pane text can never forge a frame boundary.
+const CAPTURE_SENTINEL = `\u0001fray-capture-${randomUUID()}\u0001`
+const CAPTURE_OPEN = "<"
+const CAPTURE_CLOSE = ">"
+
+// How many times a truncated batch is re-issued for the slugs it never reached. A pane that vanishes
+// between the liveness listing and the capture aborts the list at that slug; dropping it and retrying
+// the remainder keeps ONE dead pane from costing a full per-slug fallback for the whole board. Bounded
+// so a pathological board can never spend more execs than the unbatched path it replaced.
+const CAPTURE_BATCH_ROUNDS = 3
+
+export function capturePanes(slugs: readonly string[]): Map<string, string> {
+  const out = new Map<string, string>()
+  let pending = [...slugs]
+  for (let round = 0; round < CAPTURE_BATCH_ROUNDS && pending.length > 0; round++) {
+    captureBatchRound(pending, out)
+    const next = pending.filter((slug) => !out.has(slug))
+    if (next.length === pending.length) break // the very first slug failed — retrying it is pointless
+    pending = next.slice(1) // drop the slug the list aborted on; the caller captures it individually
+  }
+  return out
+}
+
+function captureBatchRound(slugs: readonly string[], out: Map<string, string>): void {
+  const args: string[] = []
+  for (const slug of slugs) {
+    if (args.length > 0) args.push(";")
+    // "<slug\n" + the pane bytes + a bare ">" frame. `display-message -p` appends its own newline, so the
+    // open marker's newline terminates the header and the close marker proves the capture actually ran.
+    args.push("display-message", "-p", `${CAPTURE_SENTINEL}${CAPTURE_OPEN}${slug}`)
+    args.push(";", "capture-pane", "-p", "-t", exactSessionTarget(slug))
+    args.push(";", "display-message", "-p", `${CAPTURE_SENTINEL}${CAPTURE_CLOSE}`)
+  }
+  let text: string
+  try {
+    text = tmuxWithPartialOutput(...args)
+  } catch {
+    return // nothing salvageable — the caller falls back to the per-slug capture
+  }
+  const wanted = new Set(slugs)
+  const frames = text.split(CAPTURE_SENTINEL)
+  for (let i = 0; i < frames.length; i++) {
+    const frame = frames[i]
+    if (!frame.startsWith(CAPTURE_OPEN)) continue
+    const brk = frame.indexOf("\n")
+    if (brk === -1) continue
+    // No close marker → this slug's capture is exactly where the list aborted. Leave it out so the
+    // caller retries it per-slug instead of adopting an empty pane as its text.
+    if (!frames[i + 1]?.startsWith(CAPTURE_CLOSE)) continue
+    const slug = frame.slice(CAPTURE_OPEN.length, brk)
+    if (!wanted.has(slug) || out.has(slug)) continue
+    out.set(slug, frame.slice(brk + 1))
+  }
+}
+
+// `tmux()` with stdout preserved across a non-zero exit: an aborted command list still wrote every
+// command's output before the failure, and throwing that away would turn one dead pane into a full
+// per-slug fallback for the whole board.
+function tmuxWithPartialOutput(...args: string[]): string {
+  try {
+    return execFileSync("tmux", ["-L", socket, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 })
+  } catch (error) {
+    const partial = (error as { stdout?: string | Buffer }).stdout
+    if (typeof partial === "string") return partial
+    if (partial) return partial.toString("utf8")
+    throw error
+  }
+}
+
 export interface PaneIdentity {
   paneId: string
   panePid: number
