@@ -13,6 +13,15 @@ import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { normalizeObservedThreadModel, validateThreadProfile } from "./backend/thread-profiles.ts"
 import { classifyLimitRecord } from "./backend/usage-limit.ts"
 import { parseDeliveryLedger, correlateDeliveryRecord, ageDeliveries, serializeDeliveryLedger, type DeliveryLedgerItem } from "./delivery-ledger.ts"
+import {
+  createTailStateCache,
+  decodeTailState,
+  encodeTailState,
+  fenceMatches,
+  measureFence,
+  type TailCacheEntry,
+  type TailStateCache,
+} from "./tail-cache.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
 // (~/.claude/projects/<cwdSlug>/<session_id>.jsonl) to derive liveness telemetry — last activity
@@ -85,6 +94,11 @@ const FOREIGN_MAX = 20
 // Foreign discovery is a readdir + per-file stat; too costly per 1s tick, so scan at most every 5th
 // tick (~5s) plus the very first tick. Between scans the last fresh set is reused verbatim.
 const FOREIGN_SCAN_EVERY = 5
+// How often the durable prime cache (tail-cache.ts) is written back for threads whose transcript grew.
+// The cache exists to make the NEXT boot cheap, so it only has to be roughly current: this bounds how
+// many appended bytes a boot can have to re-fold to at most one interval's worth per thread, while
+// keeping the steady-state cost to one small batched transaction per interval instead of one per tick.
+const CACHE_FLUSH_MS = 30_000
 // While a thread's transcript is still unresolved (missing past the grace window), re-run discovery at
 // most this often — the file may yet appear (a very late boot) or a drifted transcript may materialize.
 const DISCOVER_RETRY_MS = 15_000
@@ -1188,6 +1202,11 @@ export interface TailerDeps {
   // Batched pane text for the per-tick prefetch; defaults to tmux.capturePanes. A fixture that injects
   // only `capturePane` gets no batching (see createTailer) so existing per-slug fakes keep working.
   capturePanes?: (slugs: readonly string[]) => Map<string, string>
+  // "tmux does not list a pane for this slug" — the existence half of the batched inventory, kept
+  // separate from `paneDead` because a DEAD (remain-on-exit) pane still exists and still holds the
+  // boot-failure text captureStall wants. Defaults to the batched liveness map; a fixture that injects
+  // only the per-slug `capturePane` gets no absence check at all, exactly as before.
+  paneAbsent?: (slug: string) => boolean
   findExpectedAdoptionPane?: (expected: tmux.ExpectedAdoptionPane) => tmux.AdoptionPaneLookup
   captureExpectedAdoptionPane?: (expected: tmux.ExpectedAdoptionPane) => tmux.ExactPaneCapture
   sessionLogDir?: string // injectable transcript dir (tests); defaults to the Claude Code path
@@ -1207,6 +1226,10 @@ export interface TailerDeps {
   // tool-approval prompt. Injectable for tests; the default reads that file. Absent stateDir (narrow
   // test fixtures) → always undefined, so the pane-sniff regex fallback covers exactly as before.
   readPermMarker?: (slug: string) => PermMarker | undefined
+  // Durable prime cache (see tail-cache.ts). Defaults to a table in the project's own SQLite DB;
+  // pass `null` to disable it entirely, which restores the historical "fold every transcript from
+  // byte 0 on every boot" behaviour exactly (that is what the cache-off tests assert against).
+  tailCache?: TailStateCache | null
 }
 
 // The durable "blocked on <tool>" marker written by the worker's PermissionRequest hook. `at` is the
@@ -1271,11 +1294,23 @@ export function createTailer(deps: TailerDeps): Tailer {
   // inject only `capturePane`) ⇒ no batching, and every sniff falls back to the injected per-slug fake —
   // byte-identical to the pre-batch behavior.
   const capturePanes = deps.capturePanes ?? (deps.capturePane ? undefined : tmux.capturePanes)
+  const paneAbsent = deps.paneAbsent ?? (deps.capturePane ? undefined : (slug: string) => !tmux.paneSnapshotCached(slug))
   const findExpectedAdoptionPane = deps.findExpectedAdoptionPane ?? tmux.findExpectedAdoptionPane
   const captureExpectedAdoptionPane = deps.captureExpectedAdoptionPane ?? tmux.captureExpectedAdoptionPane
   const logDir = deps.sessionLogDir ?? defaultLogDir(deps.project)
   const mtimeMs = deps.mtimeMs ?? defaultMtimeMs
   const readPermMarker = deps.readPermMarker ?? defaultReadPermMarker(deps.project)
+  // The durable prime cache. `undefined` dep ⇒ open the default table in the project DB; `null` ⇒
+  // explicitly disabled. A storage stub with no `db` degrades to disabled rather than throwing.
+  const tailCache: TailStateCache | null = deps.tailCache === null
+    ? null
+    : deps.tailCache ?? (() => {
+        try {
+          return deps.storage.db ? createTailStateCache(deps.storage.db) : null
+        } catch {
+          return null
+        }
+      })()
 
   function adoptionBinding(row: SessionRow) {
     const binding = adoptionRuntimeBinding(deps.storage, row)
@@ -1327,9 +1362,16 @@ export function createTailer(deps: TailerDeps): Tailer {
     if (binding.kind === "unbound") {
       if (!paneTextPrefetched) prefetchPaneText()
       const cached = paneTextCache?.get(row.slug)
-      // A miss (batch aborted before this slug, or the session appeared mid-tick) falls back to the
-      // single capture — correctness never depends on the prefetch landing.
-      return cached ?? capturePane(row.slug)
+      if (cached !== undefined) return cached
+      // A slug the batched inventory does not list has NO PANE: a per-slug capture-pane on it can only
+      // spend a ~105ms process spawn to fail into the same empty string. That is not a rare case — a
+      // thread whose last record left the turn mid-flight (a killed worker, a crashed CLI) reads
+      // in-flight forever, so every boot sniffed every one of them. On the maintainer's board that was
+      // 22 doomed spawns = 2.4s of the tailer's first tick, and it grows with the thread count.
+      if (paneAbsent?.(row.slug)) return ""
+      // Any other miss (batch aborted before this slug, or the session appeared mid-tick) falls back to
+      // the single capture — correctness never depends on the prefetch landing.
+      return capturePane(row.slug)
     }
     if (binding.kind === "conflict") return ""
     const captured = captureExpectedAdoptionPane(binding.claim)
@@ -1593,6 +1635,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   // check, and NO notify / storage write — a foreign thread has no tmux session and no registry row.
   // Returns whether its derived telemetry changed (→ board dirty). Pushes to transcriptDirty on bytes.
   function tailForeign(state: TailState, nowMs: number, transcriptDirty: string[], backend: TailBackend): boolean {
+    const key = `foreign:${state.slug}`
     if (!state.primed) {
       const primeOffset = state.offset
       consume(state, backend)
@@ -1600,6 +1643,11 @@ export function createTailer(deps: TailerDeps): Tailer {
       state.turn = computeTurn(state, nowMs)
       state.subAgentsSig = derivedSignature(state, nowMs)
       state.primed = true
+      // Foreign maintainer terminals are the LARGEST transcripts on the board (a day of a human's own
+      // Claude session) and there are up to FOREIGN_MAX of them, so they are worth caching for exactly
+      // the same reason registered rows are.
+      if (state.offset !== primeOffset || !cacheHydrated.has(key)) cacheDirty.add(key)
+      cacheHydrated.delete(key)
       return true // surface the newly-discovered thread
     }
     const prevActivity = state.lastActivityAt
@@ -1609,7 +1657,10 @@ export function createTailer(deps: TailerDeps): Tailer {
     const prevPermissionMode = state.permissionMode
     const prevOffset = state.offset
     consume(state, backend)
-    if (state.offset !== prevOffset) transcriptDirty.push(state.slug)
+    if (state.offset !== prevOffset) {
+      transcriptDirty.push(state.slug)
+      cacheDirty.add(key)
+    }
     let dirty = false
     const nextTurn = computeTurn(state, nowMs)
     if (state.turn !== nextTurn) {
@@ -1665,6 +1716,122 @@ export function createTailer(deps: TailerDeps): Tailer {
         return { changed: true, value }
       },
     }
+  }
+
+  // ---- durable prime cache (tail-cache.ts) ------------------------------------------------------
+  // Loaded lazily on the first tick, consumed once per slug. Entries that miss their fence are simply
+  // never applied: the row then folds from byte 0, exactly as it always did.
+  let cacheEntries: Map<string, TailCacheEntry> | null = null
+  // Slugs whose cached entry is stale (or absent) and must be (re)written at the next flush.
+  const cacheDirty = new Set<string>()
+  // Slugs that were restored from the cache on this boot — used to skip rewriting an entry that is
+  // already byte-accurate, so a warm boot of thousands of threads writes nothing at all.
+  const cacheHydrated = new Set<string>()
+  let cachePruned = false
+  let lastCacheFlushMs = 0
+
+  // Fields the cache must NEVER restore. Identity comes from the live registry row; the pane/discovery
+  // fields are re-derived by the prime branch on every boot and a stale value would suppress a genuine
+  // observation (a stall that must be captured, a discovery that must be retried).
+  const UNRESTORED_TAIL_FIELDS = new Set([
+    "slug", "sessionId", "nativeSessionId", "runtimeGeneration", "path", "foreign",
+    "primed", "permPrompt", "nativeInputRequired", "paneDead", "subAgentsSig",
+    "noTranscript", "nextDiscoverMs", "stallLogged",
+    "deliveryLedgerSeen", "unconfirmedPermissionMode", "unconfirmedPermissionPolls",
+  ])
+
+  // Restore a freshly-created state from the durable cache so the prime below resumes the fold at the
+  // cached byte offset instead of at 0. Returns true only when EVERY fence held. Any doubt — a
+  // different session/generation, a different transcript path, an open delivery ledger, a file whose
+  // inode/size/content moved under the cached prefix, an undecodable blob — returns false and leaves
+  // the state untouched, which is the full re-read.
+  // Registered slugs and FOREIGN thread ids live in separate namespaces (the tailer keeps two maps for
+  // exactly that reason), so they get separate key spaces in the one cache table too.
+  const cacheKey = (state: TailState): string => (state.foreign ? `foreign:${state.slug}` : state.slug)
+
+  function hydrateFromCache(state: TailState, row: SessionRow | null, nativeId: string): boolean {
+    if (!tailCache) return false
+    if (cacheEntries === null) cacheEntries = tailCache.load()
+    const key = cacheKey(state)
+    const entry = cacheEntries.get(key)
+    if (!entry) return false
+    cacheEntries.delete(key) // one shot: a rebind within this process must re-derive, not re-restore
+    if (
+      entry.sessionId !== (row ? row.session_id : state.sessionId) ||
+      entry.nativeSessionId !== nativeId ||
+      entry.runtimeGeneration !== (row ? row.runtime_generation ?? 0 : 0) ||
+      entry.path !== state.path
+    ) return false
+    // A row with an OPEN delivery ledger has follow-ups whose evidence may still be sitting in the
+    // prefix we would skip. Correlating those records is the ledger's whole job, so such a row keeps
+    // the full replay — there are only ever a handful, and they are the actively-steered threads.
+    if (row?.delivery_ledger) return false
+    const current = measureFence(entry.path, entry.offset)
+    if (!current || !fenceMatches(entry, current)) return false
+    const decoded = decodeTailState(entry.state)
+    if (!decoded) return false
+    if (decoded.offset !== entry.offset || typeof decoded.partial !== "string") return false
+    // The three Maps must have survived the round trip as Maps; a blob that says otherwise is corrupt.
+    for (const field of ["subAgents", "retiredSubAgents", "retiredShells"]) {
+      if (!(decoded[field] instanceof Map)) return false
+    }
+    // `Record` is shadowed in this module by the JSONL record interface — spell the index type out.
+    const target = state as unknown as { [key: string]: unknown }
+    for (const [key, value] of Object.entries(decoded)) {
+      if (UNRESTORED_TAIL_FIELDS.has(key)) continue
+      target[key] = value
+    }
+    cacheHydrated.add(key)
+    return true
+  }
+
+  // The durable record of `state` at its current byte cursor, or null when it must not be cached: a
+  // foreign thread (no registry row to fence against), a state bound to nothing yet, a row with an
+  // open delivery ledger, or a file that will not stat/read.
+  function cacheSnapshot(state: TailState, row: SessionRow | null): TailCacheEntry | null {
+    if (state.offset <= 0 || row?.delivery_ledger) return null
+    const fence = measureFence(state.path, state.offset)
+    if (!fence) return null
+    return {
+      slug: cacheKey(state),
+      sessionId: state.sessionId,
+      nativeSessionId: state.nativeSessionId,
+      runtimeGeneration: state.runtimeGeneration,
+      path: state.path,
+      state: encodeTailState(state),
+      ...fence,
+    }
+  }
+
+  // Persist every dirty state in one transaction. Best-effort by construction — a failure costs the
+  // next boot its speedup and nothing else.
+  function flushCache(nowMs: number): void {
+    if (!tailCache) return
+    lastCacheFlushMs = nowMs
+    if (!cachePruned) {
+      cachePruned = true
+      try {
+        const live = new Set<string>()
+        for (const row of deps.storage.allSessions()) live.add(row.slug)
+        for (const id of foreignStates.keys()) live.add(`foreign:${id}`)
+        tailCache.prune(live)
+      } catch {
+        // a stale row can only ever fail its fence
+      }
+    }
+    if (cacheDirty.size === 0) return
+    const entries: TailCacheEntry[] = []
+    for (const key of cacheDirty) {
+      const foreign = key.startsWith("foreign:")
+      const state = foreign ? foreignStates.get(key.slice("foreign:".length)) : states.get(key)
+      if (!state) continue
+      const row = foreign ? null : deps.storage.getSession(key) ?? null
+      if (!foreign && !row) continue
+      const entry = cacheSnapshot(state, row)
+      if (entry) entries.push(entry)
+    }
+    cacheDirty.clear()
+    tailCache.put(entries)
   }
 
   // Read whatever has been appended since our last offset, folding each complete line into the
@@ -1845,6 +2012,10 @@ export function createTailer(deps: TailerDeps): Tailer {
         // placeholder until discovery pins it).
         const path = backend.transcriptPath(nativeId) ?? join(logDir, `${nativeId}.jsonl`)
         state = newTailState(row.slug, row.session_id, path, false, nativeId, runtimeGeneration)
+        // Resume the fold at the byte offset the last process reached, when the transcript can be
+        // PROVEN to still carry the prefix that produced it. On a miss the state stays fresh and the
+        // prime below folds from 0 — the historical path, unchanged.
+        hydrateFromCache(state, row, nativeId)
         states.set(row.slug, state)
       }
 
@@ -1882,6 +2053,10 @@ export function createTailer(deps: TailerDeps): Tailer {
         state.paneDead = paneDeadForRow(row)
         state.subAgentsSig = derivedSignature(state, nowMs)
         state.primed = true
+        // Cache what this prime derived, unless it came from the cache and consumed nothing — in which
+        // case the stored entry is already byte-accurate and rewriting it is pure work.
+        if (state.offset !== primeOffset || !cacheHydrated.has(row.slug)) cacheDirty.add(row.slug)
+        cacheHydrated.delete(row.slug)
         if (state.permissionMode) {
           const saved = PermissionMode.safeParse(row.permission_mode)
           const observedAt = state.permissionModeAt ? Date.parse(state.permissionModeAt) : NaN
@@ -1949,7 +2124,10 @@ export function createTailer(deps: TailerDeps): Tailer {
         }
       }
       if (state.aiTitle !== prevAiTitle) persistCodexAutoTitle(row, state, runtimeGeneration)
-      if (state.offset !== prevOffset) transcriptDirty.push(row.slug)
+      if (state.offset !== prevOffset) {
+        transcriptDirty.push(row.slug)
+        cacheDirty.add(row.slug) // the cached prefix is short by the bytes we just folded
+      }
 
       // turn transition (in-flight → idle): a completed turn. Mark unread + notify, gated on
       // last_read_at so a turn the user has already scrolled past doesn't re-badge.
@@ -2059,9 +2237,17 @@ export function createTailer(deps: TailerDeps): Tailer {
       let state = foreignStates.get(f.id)
       if (!state) {
         state = newTailState(f.id, f.id, f.path, true) // slug = session id = thread id for a foreign thread
+        hydrateFromCache(state, null, f.id)
         foreignStates.set(f.id, state)
       }
       if (tailForeign(state, nowMs, transcriptDirty, foreignBackend)) dirty = true
+    }
+
+    // Persist the prime cache. The FIRST tick always flushes (that is the boot the next one inherits);
+    // afterwards a growing transcript is written at most every CACHE_FLUSH_MS, so an active board costs
+    // one small batched transaction per interval rather than one per tick.
+    if (tailCache && (lastCacheFlushMs === 0 || nowMs - lastCacheFlushMs >= CACHE_FLUSH_MS)) {
+      flushCache(nowMs)
     }
 
     if (dirty) deps.onChange()
@@ -2178,6 +2364,9 @@ export function createTailer(deps: TailerDeps): Tailer {
     stop() {
       if (timer) clearInterval(timer)
       timer = null
+      // A clean shutdown is the cheapest moment to make the next boot free: write back everything the
+      // interval flush has not reached yet. A hard kill just costs that thread its delta re-read.
+      flushCache(now())
     },
     tick,
   }

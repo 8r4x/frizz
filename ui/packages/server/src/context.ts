@@ -168,6 +168,14 @@ export interface ContextOptions {
 // server exit (or the agent finished/was killed) — stamp exited so the registry doesn't show a
 // forever-running ghost. Runtime is also derived live on each board build; this keeps the stored
 // column honest too.
+//
+// Liveness is asked through the BATCHED cache (one `list-panes -a` for the whole tmux server), not the
+// per-slug `tmux.isLive`. The uncached form is one subprocess per row, run synchronously, before the
+// server can listen: 165 rows measured 5.2-6.3s of pure process-spawn on the maintainer's board and
+// grows linearly with thread count — it was the larger half of the "context" boot phase. The truth
+// table is identical (missing session → dead, present-but-exited → dead, present-and-running → live);
+// the only difference is that every row now reads the same ≤900ms-old inventory, which for a
+// boot-time reconcile is the same instant.
 export function reconcileSessions(storage: Storage) {
   for (const row of storage.allSessions()) {
     // A codex app-server thread has NO tmux pane by construction — it lives in the detached bridge
@@ -177,7 +185,7 @@ export function reconcileSessions(storage: Storage) {
     if (row.codex_runtime === "app-server") continue
     const binding = adoptionRuntimeBinding(storage, row)
     const live = binding.kind === "unbound"
-      ? tmux.isLive(row.slug)
+      ? tmux.isLiveCached(row.slug)
       : binding.kind === "bound"
         ? (() => {
             const current = tmux.findExpectedAdoptionPane(binding.claim)
