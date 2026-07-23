@@ -21,6 +21,10 @@ import {
 import { arch, homedir, platform } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createRequire } from "node:module";
+import {
+  DETACHED_DAEMON_ENTRIES,
+  detachedDaemonOutputName,
+} from "@fray-ui/server/detached-daemons";
 
 export interface FrayArtifactManifest {
   version: 1 | 2;
@@ -281,6 +285,20 @@ function assertWorkerPluginClosure(root: string): void {
   for (const file of WORKER_PLUGIN_REQUIRED_FILES) {
     if (!existsSync(join(root, file)))
       throw new Error(`Fray worker plugin closure is missing ${file}`);
+  }
+}
+
+// A detached daemon is spawned as its own `node <file>` process, so it must be a REAL FILE beside
+// the bundle — an import edge into index.js is not enough. Fail the BUILD when one is missing:
+// shipping it costs a live outage that only shows up on a promoted artifact, with a misleading
+// "daemon exited before it became ready" (2026-07-23). See server/src/detached-daemons.ts.
+function assertDetachedDaemonClosure(runtimeSrc: string): void {
+  for (const entry of DETACHED_DAEMON_ENTRIES) {
+    const emitted = detachedDaemonOutputName(entry);
+    if (!existsSync(join(runtimeSrc, emitted)))
+      throw new Error(
+        `Fray runtime bundle is missing the detached daemon ${emitted} (built from ${entry}); it is spawned as its own node process and must exist beside index.js`
+      );
   }
 }
 
@@ -837,16 +855,20 @@ export function buildFrayArtifact(
     mkdirSync(staging, { mode: 0o700 });
     // esbuild absorbs Fray's CLI, server and workspace code into one Node 26 ESM entry. Only the
     // native loaders stay external; their complete host-specific closure lives in an immutable cell
-    // below, never in the mutable source checkout or an enormous deploy tree.
+    // below, never in the mutable source checkout or an enormous deploy tree. The detached daemons
+    // are the one exception: fray spawns them as their own node processes, so each is bundled as a
+    // real file beside index.js and asserted below.
     options.onProgress?.("Building immutable artifact: bundled runtime");
     mkdirSync(join(staging, "runtime", "src"), { recursive: true, mode: 0o700 });
     runArtifactCommand(
       [
         "packages/cli/scripts/build-runtime.mjs",
         join(staging, "runtime", "src", "index.js"),
+        ...DETACHED_DAEMON_ENTRIES,
       ],
       source
     );
+    assertDetachedDaemonClosure(join(staging, "runtime", "src"));
     options.onProgress?.("Finalizing immutable artifact");
     const cell = ensureFrayDependencyCell(source, root);
     symlinkSync(relative(join(staging, "runtime"), cell.modulesDir), join(staging, "runtime", "node_modules"), "dir");

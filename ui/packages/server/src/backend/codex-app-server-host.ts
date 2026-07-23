@@ -12,9 +12,9 @@ import { createConnection, type Socket } from "node:net"
 import { createHash, randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs"
 import { join } from "node:path"
-import { fileURLToPath } from "node:url"
 import { PassThrough, Writable, type Readable } from "node:stream"
 import { StringDecoder } from "node:string_decoder"
+import { resolveDetachedDaemonEntry } from "../detached-daemons.ts"
 import type { CodexAppServerProcess } from "./codex-app-server.ts"
 
 export interface CodexAppServerDaemonRecord {
@@ -53,7 +53,11 @@ export interface CodexAppServerHostOptions {
 /** Resolves an attachment to a live app-server, forking a daemon only when there is not one already. */
 export type CodexAppServerHost = (options: CodexAppServerHostOptions) => Promise<CodexAppServerAttachment>
 
-const daemonEntry = fileURLToPath(new URL("./codex-app-server-daemon.ts", import.meta.url))
+// Resolved LAZILY and by EXISTENCE: a promoted artifact is one esbuild bundle plus the daemons
+// emitted beside it as `.js`, while a source checkout has only the `.ts`. Hard-coding either
+// extension pointed `spawn()` at a file that was not there on the other one — see
+// ../detached-daemons.ts for the outage that bought this comment.
+const daemonEntry = (): string => resolveDetachedDaemonEntry(import.meta.url, "codex-app-server-daemon")
 
 function daemonDir(stateDir: string): string {
   return join(stateDir, "codex-app-server")
@@ -129,7 +133,7 @@ function forkDaemon(options: CodexAppServerHostOptions): Promise<CodexAppServerD
     projectId, socketPath, recordPath: record, codexBin: options.codexBin, cwd: options.cwd,
     env, generation, clientInfo: options.clientInfo, capabilities: options.capabilities,
   })
-  const child = spawn(process.execPath, [options.daemonEntry ?? daemonEntry], {
+  const child = spawn(process.execPath, [options.daemonEntry ?? daemonEntry()], {
     cwd: options.cwd,
     // The daemon's OWN environment only needs the handoff; the app-server's environment travels in
     // the payload and is applied by the daemon, keeping the audited env allowlist authoritative.
@@ -254,8 +258,28 @@ export const daemonCodexAppServerHost: CodexAppServerHost = async (options) => {
     const stale = codexAppServerSocketPath(options.stateDir, options.projectId)
     if (existsSync(stale) && !liveDaemonRecord(options.stateDir, options.projectId)) { try { unlinkSync(stale) } catch {} }
   }
-  const record = await forkDaemon(options)
-  return { process: await attach(record, timeoutMs), generation: record.generation, reattached: false, daemonPid: record.daemonPid }
+  try {
+    const record = await forkDaemon(options)
+    return { process: await attach(record, timeoutMs), generation: record.generation, reattached: false, daemonPid: record.daemonPid }
+  } catch (error) {
+    // LAST RESORT, and deliberately not a hard failure. The daemon buys ONE thing — an in-flight turn
+    // surviving Update & Restart. Codex itself does not need it: before the daemon existed the
+    // app-server was an ordinary child of this runtime. So a daemon that cannot start must cost the
+    // survival property, never Codex. Without this, one packaging slip took out every Codex dispatch,
+    // follow-up, steer and interrupt at once (2026-07-23) with only a cryptic toast to go on.
+    console.error(`[fray-ui] codex app-server daemon unavailable (${(error as Error).message}); falling back to an in-process app-server — turns will NOT survive a fray restart`)
+    return inProcessCodexAppServer(options)
+  }
+}
+
+/** The pre-daemon transport: `codex app-server --stdio` as an ordinary child of this runtime. */
+function inProcessCodexAppServer(options: CodexAppServerHostOptions): CodexAppServerAttachment {
+  const child = spawn(options.codexBin, ["app-server", "--stdio"], {
+    cwd: options.cwd,
+    env: options.env,
+    stdio: ["pipe", "pipe", "pipe"],
+  })
+  return { process: child as unknown as CodexAppServerProcess, generation: randomUUID(), reattached: false, daemonPid: process.pid }
 }
 
 /** Test/harness seam: keep the historical direct-child behavior, where every connect is a NEW

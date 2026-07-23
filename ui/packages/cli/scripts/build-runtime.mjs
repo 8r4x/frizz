@@ -1,14 +1,13 @@
 // Invoked through Nub by artifacts.ts. Keeping the esbuild API in a tiny Node entry avoids asking
 // Nub to execute esbuild's platform binary as though it were JavaScript, while retaining Nub's
 // source-loader/runtime contract for the build itself.
+import { basename, dirname, join } from "node:path";
 import { build } from "esbuild";
 
-const output = process.argv[2];
-if (!output) throw new Error("usage: build-runtime.mjs <outfile>");
+const [output, ...daemonEntries] = process.argv.slice(2);
+if (!output) throw new Error("usage: build-runtime.mjs <outfile> [detached-daemon-entry...]");
 
-await build({
-  entryPoints: ["packages/cli/src/index.ts"],
-  outfile: output,
+const shared = {
   bundle: true,
   platform: "node",
   format: "esm",
@@ -21,4 +20,17 @@ await build({
   },
   external: ["better-sqlite3", "node-pty", "@parcel/watcher", "vite"],
   logLevel: "silent",
-});
+};
+
+await build({ ...shared, entryPoints: ["packages/cli/src/index.ts"], outfile: output });
+
+// Detached daemons are spawned as their OWN `node <file>` process, so each needs a real file beside
+// the bundle — an import edge is not enough. See packages/server/src/detached-daemons.ts, which owns
+// this list and whose resolver looks for exactly these names. artifacts.ts asserts they landed.
+for (const entry of daemonEntries) {
+  await build({
+    ...shared,
+    entryPoints: [entry],
+    outfile: join(dirname(output), basename(entry).replace(/\.ts$/, ".js")),
+  });
+}

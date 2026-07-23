@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawn as spawnChild } from "node:child_process";
+import { execFileSync, spawnSync, spawn as spawnChild } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -37,6 +37,10 @@ import {
   acquireProjectLaunchOwner,
   projectLaunchEnvironment,
 } from "../../server/src/project-launch.ts";
+import {
+  DETACHED_DAEMON_ENTRIES,
+  detachedDaemonOutputName,
+} from "../../server/src/detached-daemons.ts";
 
 const hash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
@@ -558,6 +562,17 @@ test("a real Nub/esbuild artifact boots its WebSocket-capable server and loads i
     assert.ok(artifact.manifest.dependencyCell, "runtime binds an immutable dependency cell");
     const modules = join(artifact.runtimeDir, "node_modules");
     assert.equal(resolve(dirname(modules), readlinkSync(modules)), join(root, "cells", artifact.manifest.dependencyCell!, "node_modules"));
+    // Detached daemons are spawned as their OWN node process, so reachability through the bundle is
+    // not enough — node must be able to LOAD each one from the artifact. Started with no config env,
+    // a daemon that really ran fails on its own guard; MODULE_NOT_FOUND means it was never emitted,
+    // which is precisely what silently killed every Codex turn on 2026-07-23.
+    for (const entry of DETACHED_DAEMON_ENTRIES) {
+      const emitted = join(artifact.runtimeDir, "src", detachedDaemonOutputName(entry));
+      assert.ok(existsSync(emitted), `artifact ships ${detachedDaemonOutputName(entry)} beside index.js`);
+      const started = spawnSync(process.execPath, [emitted], { encoding: "utf8" });
+      assert.doesNotMatch(started.stderr, /Cannot find module/, `${emitted} is loadable from the artifact`);
+      assert.match(started.stderr, /started without FRAY_/, `${emitted} runs its own entry point`);
+    }
     const projectId = randomUUID();
     const canonicalRoot = realpathSync(root);
     const target = {
