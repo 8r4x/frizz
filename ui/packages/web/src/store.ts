@@ -1,6 +1,6 @@
 import { proxy } from "valtio"
-import type { BoardSnapshot, ThreadView, BoardDelta, DispatchProfileSnapshot } from "@fray-ui/shared"
-import { applyBoardDelta, DispatchProfileSnapshot as DispatchProfileSnapshotSchema } from "@fray-ui/shared"
+import type { BoardSnapshot, ThreadView, BoardDelta } from "@fray-ui/shared"
+import { applyBoardDelta } from "@fray-ui/shared"
 import { closeDrawerAnimated, focusDrawer } from "./lib/overlays.ts"
 
 // Where a scroll-to-card lands a card's outer border below the viewport top (px).
@@ -67,10 +67,9 @@ export const store = proxy({
   showNewThread: false,
   // The GitHub picker modal (Issues/PRs tabs → multi-select → batch dispatch). Its trigger appears
   // only when gh is authed AND the project is a GitHub repo; see GithubTrigger + openGithubPicker.
+  // The modal reads the durable new-thread profile live and carries its own selector for it, so
+  // nothing about the dispatch tuple is captured here.
   showGithubPicker: false,
-  // Immutable prompt-box values captured at the instant its GitHub button is clicked. The modal and
-  // every item in its batch consume this tuple; no Settings/global fallback participates afterward.
-  githubDispatchProfile: null as DispatchProfileSnapshot | null,
   // When the New-thread modal was opened FROM a plan ("Implement this"), the plan's path — passed
   // as dispatch.planPath so the worker is oriented to the plan. Null for an ordinary new thread. Cleared
   // when the modal closes.
@@ -126,14 +125,12 @@ export function openNewThread(planPath?: string): void {
 
 // Open the GitHub picker modal (batch-dispatch from issues/PRs). The trigger that calls this is
 // itself gated on gh being authed + in a GitHub repo, so the modal only opens when the RPCs can serve.
-export function openGithubPicker(profile: DispatchProfileSnapshot): void {
-  store.githubDispatchProfile = DispatchProfileSnapshotSchema.parse(profile)
+export function openGithubPicker(): void {
   store.showGithubPicker = true
 }
 
 export function closeGithubPicker(): void {
   store.showGithubPicker = false
-  store.githubDispatchProfile = null
 }
 
 let toastSeq = 0

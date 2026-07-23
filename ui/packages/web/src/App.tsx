@@ -382,9 +382,7 @@ export function App() {
       })()}
       {snap.showSettings && <SettingsDrawer />}
       {snap.showNewThread && <NewThreadDialog onClose={() => { store.showNewThread = false; store.newThreadPlanPath = null }} />}
-      {snap.showGithubPicker && snap.githubDispatchProfile && (
-        <GithubPickerModal profile={{ ...snap.githubDispatchProfile }} onClose={closeGithubPicker} />
-      )}
+      {snap.showGithubPicker && <GithubPickerModal onClose={closeGithubPicker} />}
       <CommandPalette />
       <Toaster />
     </div>

@@ -640,9 +640,9 @@ export const DispatchPreferences = z.object({
 })
 export type DispatchPreferences = z.infer<typeof DispatchPreferences>
 
-// One immutable launch profile captured from a prompt box. GitHub batch dispatch carries this
-// complete tuple through its picker instead of consulting Settings again: backend owns the model,
-// effort is part of the same atomic profile cell, and permission belongs to that backend profile.
+// One complete launch profile. GitHub batch dispatch carries this whole tuple — read from the
+// durable new-thread preference its own footer selector writes — instead of consulting Settings
+// again: backend owns the model, and effort is part of the same atomic profile cell.
 export const DispatchProfileSnapshot = z.object({
   backend: Backend,
   model: z.string().trim().min(1).max(200),

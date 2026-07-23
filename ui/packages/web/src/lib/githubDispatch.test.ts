@@ -1,12 +1,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { GithubBatchInput, type CodexModel } from "@fray-ui/shared"
-import type { ResolvedDispatchPreferences } from "./dispatchPreferences.ts"
-import {
-  buildGithubBatchInput,
-  captureDispatchProfile,
-  dispatchProfileError,
-} from "./githubDispatch.ts"
+import { buildGithubBatchInput, dispatchProfileError } from "./githubDispatch.ts"
+import { resolveDispatchPreferences } from "./dispatchPreferences.ts"
 import { closeGithubPicker, openGithubPicker, store } from "../store.ts"
 
 const codexModel: CodexModel = {
@@ -16,43 +12,34 @@ const codexModel: CodexModel = {
   efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
 }
 
-function resolved(overrides: Partial<ResolvedDispatchPreferences> = {}): ResolvedDispatchPreferences {
-  return {
-    backend: "claude",
-    model: "opus",
-    effort: "high",
-    permissionMode: "acceptEdits",
-    modelAvailable: true,
-    effortAvailable: true,
-    effortOptions: [],
-    ...overrides,
-  }
-}
+test("the picker dispatches the LIVE durable profile — the same pair the prompt box resolves", () => {
+  const claude = resolveDispatchPreferences(
+    { backend: "claude", claude: { model: "opus", effort: "high" }, codex: {} },
+    [codexModel],
+  )
+  assert.deepEqual(
+    { backend: claude.backend, model: claude.model, effort: claude.effort },
+    { backend: "claude", model: "opus", effort: "high" },
+  )
 
-test("prompt-box capture preserves the exact current provider and atomic pair (no permission)", () => {
-  const first = captureDispatchProfile(resolved())
-  assert.deepEqual(first, {
-    ok: true,
-    profile: { backend: "claude", model: "opus", effort: "high" },
-  })
-
-  const changed = captureDispatchProfile(resolved({
-    backend: "codex",
-    model: codexModel.slug,
-    effort: "ultra",
-    codexModel,
-  }))
-  assert.deepEqual(changed, {
-    ok: true,
-    profile: { backend: "codex", model: "gpt-5.6-sol", effort: "ultra" },
-  })
+  // Switching the selector in EITHER surface writes one preference row, so the picker's next read is
+  // the changed pair — there is no captured copy that can keep dispatching the old one.
+  const codex = resolveDispatchPreferences(
+    { backend: "codex", claude: { model: "opus", effort: "high" }, codex: { model: codexModel.slug, effort: "ultra" } },
+    [codexModel],
+  )
+  assert.deepEqual(
+    { backend: codex.backend, model: codex.model, effort: codex.effort },
+    { backend: "codex", model: "gpt-5.6-sol", effort: "ultra" },
+  )
+  assert.equal(codex.modelAvailable && codex.effortAvailable, true)
 })
 
-test("capture and final validation reject unavailable or invalid model/effort pairs without downgrade", () => {
-  assert.deepEqual(captureDispatchProfile(resolved({ modelAvailable: false, model: "unknown" })), {
-    ok: false,
-    error: "Saved model is unavailable — choose a model before opening GitHub",
-  })
+test("final validation rejects an unavailable model/effort pair without downgrading", () => {
+  assert.match(
+    dispatchProfileError({ backend: "claude", model: "gpt-5.6-sol", effort: "high" }, [codexModel]) ?? "",
+    /no longer available/,
+  )
   assert.match(
     dispatchProfileError(
       { backend: "codex", model: codexModel.slug, effort: "ultra", permissionMode: "default" },
@@ -60,9 +47,10 @@ test("capture and final validation reject unavailable or invalid model/effort pa
     ) ?? "",
     /ultra is not available/,
   )
+  assert.equal(dispatchProfileError({ backend: "codex", model: codexModel.slug, effort: "ultra" }, [codexModel]), undefined)
 })
 
-test("multi-select builds one exact RPC payload with the captured tuple for every item", () => {
+test("multi-select builds one exact RPC payload with the live tuple for every item", () => {
   const profile = { backend: "codex", model: codexModel.slug, effort: "ultra" } as const
   const input = buildGithubBatchInput(profile, [
     { kind: "issue", number: 17 },
@@ -79,20 +67,14 @@ test("multi-select builds one exact RPC payload with the captured tuple for ever
   assert.throws(() => GithubBatchInput.parse({ ...input, extraDefault: "opus" }), /unrecognized/i)
 })
 
-test("picker close clears its capture and reopen takes a fresh prompt-box snapshot", () => {
-  const first = { backend: "claude", model: "sonnet", effort: "medium", permissionMode: "auto" } as const
-  const second = { backend: "codex", model: codexModel.slug, effort: "xhigh", permissionMode: "default" } as const
+test("opening the picker carries no profile state — the modal reads the live preference itself", () => {
   try {
-    openGithubPicker(first)
+    openGithubPicker()
     assert.equal(store.showGithubPicker, true)
-    assert.deepEqual({ ...store.githubDispatchProfile! }, first)
+    assert.equal("githubDispatchProfile" in store, false)
 
     closeGithubPicker()
     assert.equal(store.showGithubPicker, false)
-    assert.equal(store.githubDispatchProfile, null)
-
-    openGithubPicker(second)
-    assert.deepEqual({ ...store.githubDispatchProfile! }, second)
   } finally {
     closeGithubPicker()
   }
