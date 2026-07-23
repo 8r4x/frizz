@@ -4,7 +4,7 @@
 // (occlusion/clip/alignment/optical-center) against the live app.
 //
 // Usage:
-//   node ui/scripts/shot.mjs <url> [out.png] [evalExprOr@file] [--w=1440] [--h=900] [--wait=1500]
+//   node ui/scripts/shot.mjs <url> [out.png] [evalExprOr@file] [--before=exprOr@file] [--w=1440] [--h=900] [--wait=1500]
 //   evalExpr: a JS expression string evaluated in page context (completion value → printed as JSON).
 //   @file:    read the expression from a file (e.g. an occlusion routine).
 import { readFileSync } from "node:fs"
@@ -32,6 +32,10 @@ try {
   page.on("pageerror", (e) => errors.push(String(e)))
   await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 })
   await new Promise((r) => setTimeout(r, WAIT)) // let the SSE board render
+  if (flags.before) {
+    const expr = flags.before.startsWith("@") ? readFileSync(flags.before.slice(1), "utf8") : flags.before
+    await page.evaluate(expr)
+  }
   if (out) {
     await page.screenshot({ path: out, fullPage: false })
     console.error("shot ->", out)

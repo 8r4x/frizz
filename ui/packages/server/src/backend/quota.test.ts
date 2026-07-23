@@ -1,7 +1,10 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { mkdtemp, rm } from "node:fs/promises"
+import { join } from "node:path"
+import { tmpdir } from "node:os"
 import { parseCodexQuotaFromRollout } from "./codex-quota.ts"
-import { parseClaudeUsage, tokenFromCredentialsJson, readClaudeQuota } from "./claude-quota.ts"
+import { parseClaudeUsage, parseClaudeUsageOutput, tokenFromCredentialsJson, readClaudeQuota } from "./claude-quota.ts"
 
 // ---- Codex rollout parsing ----
 
@@ -116,87 +119,81 @@ test("claude creds: garbage / empty / no token → undefined, never throws", () 
   assert.equal(tokenFromCredentialsJson(JSON.stringify({ other: 1 })), undefined)
 })
 
-// ---- Quota memo: outcome-based TTL (the "recheck actually re-hits" fix) ----
-// readClaudeQuota memoizes per configDir; a FLAT 3-min cache used to strand a transient failure for
-// minutes, so a chip stuck on "Usage endpoint unreachable" ignored every recheck. These drive the real
-// function through injected clock/fetch/token seams (no network, no credential store) and assert the
-// cache clears — or holds — for the RIGHT duration per outcome. Each test uses a unique configDir so the
-// module-global memo never bleeds across tests.
+// ---- Claude Code `/usage` parsing + cross-window cache ----
 
-const okBody = { five_hour: { utilization: 20, reset_at: "2030-01-01T00:00:00Z" } }
-// A fetch stub that counts calls and yields a scripted status/body each time. The call counter is a
-// LIVE getter (Object.defineProperty, not Object.assign — the latter would copy the getter's value once
-// and freeze it at 0).
-function countingFetch(steps: Array<{ status: number; body?: unknown } | "throw">) {
-  let calls = 0
-  const impl = (async () => {
-    const step = steps[Math.min(calls, steps.length - 1)]!
-    calls++
-    if (step === "throw") throw new Error("network down")
-    return { ok: step.status >= 200 && step.status < 300, status: step.status, json: async () => step.body ?? {} }
-  }) as unknown as typeof fetch
-  Object.defineProperty(impl, "calls", { get: () => calls })
-  return impl as typeof fetch & { readonly calls: number }
+const usageText = [
+  "You are currently using your subscription to power your Claude Code usage",
+  "Current session: 20% used · resets 4pm",
+  "Current week (all models): 44% used · resets Thu",
+  "Current week (Sonnet only): 61% used · resets Thu",
+].join("\n")
+const usageEnvelope = JSON.stringify({ type: "result", subtype: "success", result: usageText })
+
+test("claude CLI usage: parses independent session, weekly, and model-scoped windows", () => {
+  const now = new Date("2026-07-22T15:00:00").getTime()
+  const q = parseClaudeUsageOutput(usageText, now)
+  assert.equal(q.status, "ok")
+  assert.deepEqual(q.windows.map((w) => [w.key, w.label, w.usedPercent]), [
+    ["5h", "5h", 20],
+    ["weekly", "Weekly", 44],
+    ["weekly-sonnet", "Sonnet wk", 61],
+  ])
+  assert.equal(q.windows[0]?.resetsAt, Math.round(new Date("2026-07-22T16:00:00").getTime() / 1000))
+})
+
+test("claude CLI usage: parses the JSON result envelope and rejects cost-only signed-out output", () => {
+  assert.equal(parseClaudeUsageOutput(usageEnvelope).status, "ok")
+  const missing = parseClaudeUsageOutput(JSON.stringify({ result: "Total cost: $0.00\nUsage: 0 input" }))
+  assert.equal(missing.status, "unavailable")
+  assert.equal(missing.detail, "Claude Code did not report subscription quota")
+})
+
+async function withCache(run: (cacheDir: string) => Promise<void>) {
+  const cacheDir = await mkdtemp(join(tmpdir(), "fray-quota-test-"))
+  try {
+    await run(cacheDir)
+  } finally {
+    await rm(cacheDir, { recursive: true, force: true })
+  }
 }
-const withToken = async () => "tok-test"
-let dirN = 0
-const freshDir = () => `/nonexistent-fray-quota-test-${++dirN}`
 
-test("quota memo: a transient failure clears within FAIL_TTL so the next read re-hits (not stranded 3 min)", async () => {
-  const dir = freshDir()
-  const fetchImpl = countingFetch(["throw", { status: 200, body: okBody }])
-  const first = await readClaudeQuota(dir, { now: () => 0, fetchImpl, readToken: withToken })
-  assert.equal(first.status, "unavailable")
-  assert.equal(first.detail, "Usage endpoint unreachable")
-  assert.equal(fetchImpl.calls, 1)
-  // Within the 10s failure window → served from cache, endpoint NOT re-hit.
-  const cached = await readClaudeQuota(dir, { now: () => 5_000, fetchImpl, readToken: withToken })
-  assert.equal(cached.status, "unavailable")
-  assert.equal(fetchImpl.calls, 1)
-  // Past the failure window → live re-hit, and it recovers to a healthy read.
-  const recovered = await readClaudeQuota(dir, { now: () => 11_000, fetchImpl, readToken: withToken })
-  assert.equal(recovered.status, "ok")
-  assert.equal(fetchImpl.calls, 2)
-})
+test("claude quota: healthy result is shared, while force performs a real recheck", () => withCache(async (cacheDir) => {
+  let calls = 0
+  const execUsage = async () => {
+    calls++
+    return usageEnvelope
+  }
+  assert.equal((await readClaudeQuota("claude-test", { cacheDir, now: () => 0, execUsage })).status, "ok")
+  assert.equal((await readClaudeQuota("claude-test", { cacheDir, now: () => 60_000, execUsage })).status, "ok")
+  assert.equal(calls, 1)
+  await readClaudeQuota("claude-test", { cacheDir, now: () => 60_001, execUsage }, { force: true })
+  assert.equal(calls, 2)
+}))
 
-test("quota memo: a healthy read is cached generously (1 min) but DOES expire (~3 min), not forever", async () => {
-  const dir = freshDir()
-  const fetchImpl = countingFetch([{ status: 200, body: okBody }])
-  const first = await readClaudeQuota(dir, { now: () => 0, fetchImpl, readToken: withToken })
-  assert.equal(first.status, "ok")
-  const oneMinLater = await readClaudeQuota(dir, { now: () => 60_000, fetchImpl, readToken: withToken })
-  assert.equal(oneMinLater.status, "ok")
-  assert.equal(fetchImpl.calls, 1) // still cached at 1 min (< 3 min OK TTL)
-  // Past the 3-min OK TTL → live re-hit. Asserting the EXPIRY (not just that it holds) guards against
-  // an OK_TTL accidentally set too high / infinite, which the "still cached" check alone would pass.
-  const past = await readClaudeQuota(dir, { now: () => 181_000, fetchImpl, readToken: withToken })
-  assert.equal(past.status, "ok")
-  assert.equal(fetchImpl.calls, 2)
-})
+test("claude quota: concurrent project windows collapse onto one Claude Code invocation", () => withCache(async (cacheDir) => {
+  let calls = 0
+  const execUsage = async () => {
+    calls++
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    return usageEnvelope
+  }
+  const results = await Promise.all([
+    readClaudeQuota("claude-test", { cacheDir, now: () => 1_000, execUsage }),
+    readClaudeQuota("claude-test", { cacheDir, now: () => 1_000, execUsage }),
+    readClaudeQuota("claude-test", { cacheDir, now: () => 1_000, execUsage }),
+  ])
+  assert.equal(calls, 1)
+  assert.ok(results.every((result) => result.status === "ok"))
+}))
 
-test("quota memo: a 429 backs off ~1 min — longer than a plain failure, shorter than the old 3 min", async () => {
-  const dir = freshDir()
-  const fetchImpl = countingFetch([{ status: 429 }, { status: 200, body: okBody }])
-  const limited = await readClaudeQuota(dir, { now: () => 0, fetchImpl, readToken: withToken })
-  assert.equal(limited.detail, "Usage endpoint 429")
-  // At 30s the 429 is still cached — a recheck must NOT hammer the endpoint back into the wall.
-  await readClaudeQuota(dir, { now: () => 30_000, fetchImpl, readToken: withToken })
-  assert.equal(fetchImpl.calls, 1)
-  // Past ~1 min it re-hits (and would have stayed stranded under the old flat 3-min cache).
-  const recovered = await readClaudeQuota(dir, { now: () => 61_000, fetchImpl, readToken: withToken })
-  assert.equal(recovered.status, "ok")
-  assert.equal(fetchImpl.calls, 2)
-})
-
-test("quota memo: not-logged-in clears fast so a fresh sign-in recovers within a poll", async () => {
-  const dir = freshDir()
-  const fetchImpl = countingFetch([{ status: 200, body: okBody }])
-  let token: string | undefined = undefined
-  const readToken = async () => token
-  const out = await readClaudeQuota(dir, { now: () => 0, fetchImpl, readToken })
-  assert.equal(out.detail, "Not logged in to Claude")
-  assert.equal(fetchImpl.calls, 0) // no token → endpoint never called
-  token = "tok-now-present"
-  const after = await readClaudeQuota(dir, { now: () => 11_000, fetchImpl, readToken })
-  assert.equal(after.status, "ok")
-})
+test("claude quota: a failed refresh retains the last good reading with an honest stale label", () => withCache(async (cacheDir) => {
+  await readClaudeQuota("claude-test", { cacheDir, now: () => 0, execUsage: async () => usageEnvelope })
+  const stale = await readClaudeQuota(
+    "claude-test",
+    { cacheDir, now: () => 4 * 60_000, execUsage: async () => { throw new Error("CLI failed") } },
+    { force: true },
+  )
+  assert.equal(stale.status, "ok")
+  assert.equal(stale.windows[0]?.usedPercent, 20)
+  assert.equal(stale.detail, "Could not refresh · last updated 4m ago")
+}))

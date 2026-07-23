@@ -117,10 +117,9 @@ export interface Api {
   // ~/.codex/models_cache.json (never a hand-maintained list). The model picker's Codex section and its
   // effort dropdown are driven by this; a tiny client fallback covers the loading/no-cache state.
   codexModels(): Promise<CodexModel[]>
-  // Provider subscription quota (5h + weekly windows) for the sidebar status bar. Codex reads clean
-  // from rollout JSONL; Claude best-effort via its undocumented OAuth usage endpoint. Never rejects —
-  // each provider degrades to "unavailable".
-  quota(): Promise<QuotaSnapshot>
+  // Provider subscription quota (5h + weekly windows) for the sidebar status bar. `force` bypasses
+  // the shared freshness window for an explicit user recheck.
+  quota(input?: { force?: boolean }): Promise<QuotaSnapshot>
   // Per-provider LOCAL credential presence for the new-thread dispatch gate. Distinct from quota's
   // overloaded "unavailable" — reports only whether a credential exists. Never rejects.
   authStatus(): Promise<AuthSnapshot>

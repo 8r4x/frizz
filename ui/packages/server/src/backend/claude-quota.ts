@@ -1,43 +1,25 @@
 import { join } from "node:path"
-import { homedir, platform } from "node:os"
-import { readFileSync } from "node:fs"
+import { homedir } from "node:os"
+import { createHash } from "node:crypto"
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import type { ProviderQuota, QuotaWindow } from "@fray-ui/shared"
 
 const execFileAsync = promisify(execFile)
 
-// Read the Claude subscription quota (5-hour + 7-day windows) the way Claude Code's own `/usage`
-// command does — there is NO on-disk source for remaining-window quota (the transcript records only
-// per-message token usage; stats-cache.json is cumulative lifetime cost), so the only source is the
-// OAuth usage endpoint:
-//
-//   GET https://api.anthropic.com/api/oauth/usage
-//     Authorization: Bearer <oauth access token from ~/.claude/.credentials.json>
-//     anthropic-beta: oauth-2025-04-20
-//     User-Agent: claude-code/<version>      ← REQUIRED; without it the endpoint 429s aggressively
-//
-//   → { five_hour:{utilization 0..100, reset_at ISO}, seven_day:{…}, seven_day_opus, seven_day_sonnet }
-//
-// This endpoint is UNDOCUMENTED and unstable (no SLA, aggressive rate limiting), so this reader is
-// defensive on every axis: it reads the credential only to authorize this one call, caches for 3+
-// minutes, and degrades to a neutral "unavailable" on ANY error rather than throwing. It is invoked
-// only from the quota RPC — never during board/tailer work.
-
-const USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
-const OAUTH_BETA = "oauth-2025-04-20"
-// The endpoint rate-limits callers without a claude-code User-Agent; a plausible recent version is
-// enough (it gates by product, not exact version).
-const USER_AGENT = "claude-code/2.0.0"
-// Undocumented endpoint that 429s aggressively, so the memo TTL is chosen by OUTCOME rather than a flat
-// interval. A HEALTHY read is cached generously (a 60s UI poll must not hammer it — the original intent).
-// But a FAILURE must NOT be cached that long: the chip's recheck (opening its popover forces a fresh
-// quota read; an unavailable read also degraded-polls at 15s) would just replay a stale "unreachable" for
-// minutes, so a transient blip would look permanent. A rate-limit still backs off (the endpoint asked us
-// to), but every OTHER failure clears within one degraded poll so the very next read re-hits live.
-const OK_TTL_MS = 3 * 60_000 // healthy: cache generously (the community 429-avoidance floor)
-const RATE_LIMIT_TTL_MS = 60_000 // 429/529: respect the backoff, but recover in a minute, not three
-const FAIL_TTL_MS = 10_000 // unreachable/timeout/5xx/malformed/not-logged-in: recover within one 15s poll
+// Claude Code's non-interactive `/usage` command owns the unstable parts of reading subscription
+// quota: secure-storage variants, OAuth refresh/rotation, endpoint retries, and its seeded fallback
+// from recent API headers. Fray consumes that public CLI surface instead of impersonating an old
+// Claude Code build with a raw access token.
+const OK_TTL_MS = 3 * 60_000
+const FAIL_TTL_MS = 10_000
+const STALE_MAX_AGE_MS = 24 * 60 * 60_000
+// The lock must outlive the 12s CLI timeout, and followers must be willing to wait through that same
+// bound. Otherwise a merely slow first process would make every other Fray window give up early.
+const LOCK_STALE_MS = 20_000
+const LOCK_WAIT_MS = 15_000
+const LOCK_POLL_MS = 50
 
 function claudeConfigDir(): string {
   const override = process.env.CLAUDE_CONFIG_DIR
@@ -58,39 +40,6 @@ export function tokenFromCredentialsJson(raw: string): string | undefined {
   const oauth = root.claudeAiOauth && typeof root.claudeAiOauth === "object" ? (root.claudeAiOauth as Record<string, unknown>) : root
   const token = oauth.accessToken ?? oauth.access_token
   return typeof token === "string" && token ? token : undefined
-}
-
-// macOS stores the Claude Code OAuth blob in the login Keychain (generic password
-// "Claude Code-credentials"), NOT in ~/.claude/.credentials.json — that file simply does not exist on
-// a Keychain-backed install. `security find-generic-password -w` prints the raw secret (the same JSON
-// blob shape as the file). Defensive: darwin-only, short timeout, swallow any error → undefined. ASYNC
-// on purpose: reading the Keychain can, in the worst case (an ACL prompt), block until the timeout —
-// synchronous exec would freeze the whole server event loop for that window, so we never do that here.
-async function readKeychainToken(): Promise<string | undefined> {
-  if (platform() !== "darwin") return undefined
-  try {
-    const { stdout } = await execFileAsync("security", ["find-generic-password", "-s", "Claude Code-credentials", "-w"], {
-      encoding: "utf8",
-      timeout: 4000,
-    })
-    return tokenFromCredentialsJson(String(stdout).trim())
-  } catch {
-    return undefined
-  }
-}
-
-// The OAuth access token, tried in the order Claude Code itself resolves it: the on-disk
-// ~/.claude/.credentials.json first (Linux, and macOS installs that opted out of the Keychain), then
-// the macOS login Keychain (the default on macOS, where the file is absent). Returns undefined
-// (→ "unavailable") only when NEITHER source yields a token.
-async function readAccessToken(configDir: string): Promise<string | undefined> {
-  try {
-    const fromFile = tokenFromCredentialsJson(readFileSync(join(configDir, ".credentials.json"), "utf8"))
-    if (fromFile) return fromFile
-  } catch {
-    // Missing/unreadable file is expected on a Keychain-backed macOS install — fall through.
-  }
-  return readKeychainToken()
 }
 
 // Map one usage window from the endpoint (utilization 0..100, reset_at ISO) → a QuotaWindow.
@@ -122,61 +71,204 @@ export function parseClaudeUsage(body: unknown, planType?: string): ProviderQuot
   return { status: "ok", planType, windows }
 }
 
-const memo = new Map<string, { at: number; ttl: number; quota: ProviderQuota }>()
+type UsageExec = (claudeBin: string) => Promise<string>
 
-// Injectable seams so the memo's outcome→TTL recovery behavior is unit-testable without the live
-// network or a real credential store. All default to the real implementations.
 export interface ClaudeQuotaDeps {
   now?: () => number
-  fetchImpl?: typeof fetch
-  readToken?: (configDir: string) => Promise<string | undefined>
+  execUsage?: UsageExec
+  cacheDir?: string
 }
 
-// The Claude provider quota (RPC-facing). Reads the OAuth token, calls the usage endpoint with the
-// required headers, and degrades to "unavailable" on any error — never throws. The result is memoized,
-// but for a duration that depends on the OUTCOME (see the TTL constants): a healthy read sticks for
-// minutes, a rate-limit backs off, and any other failure clears fast so a recheck actually re-hits.
-export async function readClaudeQuota(configDir = claudeConfigDir(), deps: ClaudeQuotaDeps = {}): Promise<ProviderQuota> {
-  const now = (deps.now ?? Date.now)()
-  const doFetch = deps.fetchImpl ?? fetch
-  const readToken = deps.readToken ?? readAccessToken
-  const hit = memo.get(configDir)
-  if (hit && now - hit.at < hit.ttl) return hit.quota
-  let quota: ProviderQuota
-  // Default to the short failure TTL; only a healthy read or a rate-limit widens it below.
-  let ttl = FAIL_TTL_MS
+interface SharedQuota {
+  at: number
+  quota: ProviderQuota
+}
+
+function cachePaths(cacheDir: string, configDir: string) {
+  const profile = createHash("sha256").update(configDir).digest("hex").slice(0, 12)
+  return {
+    data: join(cacheDir, `claude-${profile}.json`),
+    lock: join(cacheDir, `claude-${profile}.lock`),
+  }
+}
+
+async function readShared(path: string): Promise<SharedQuota | undefined> {
   try {
-    const token = await readToken(configDir)
-    if (!token) {
-      quota = { status: "unavailable", windows: [], detail: "Not logged in to Claude" }
-    } else {
-      // Hard 5s timeout: the endpoint is unstable/rate-limited, and readQuota awaits this alongside the
-      // clean Codex read — an un-bounded stall would hold the whole quota RPC open (undici's default
-      // header timeout is minutes). AbortSignal.timeout throws on fire → caught below → "unavailable".
-      const res = await doFetch(USAGE_URL, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "anthropic-beta": OAUTH_BETA,
-          "User-Agent": USER_AGENT,
-          "Content-Type": "application/json",
-        },
-        signal: AbortSignal.timeout(5000),
-      })
-      if (!res.ok) {
-        quota = { status: "unavailable", windows: [], detail: `Usage endpoint ${res.status}` }
-        // 429 (rate limited) / 529 (overloaded) are the endpoint telling us to slow down — back off
-        // longer than a plain failure so a recheck can't hammer it back into the same wall.
-        if (res.status === 429 || res.status === 529) ttl = RATE_LIMIT_TTL_MS
-      } else {
-        const body = (await res.json()) as Record<string, unknown>
-        const planType = typeof body.plan_type === "string" ? body.plan_type : undefined
-        quota = parseClaudeUsage(body, planType)
-        if (quota.status === "ok") ttl = OK_TTL_MS
+    const parsed = JSON.parse(await readFile(path, "utf8")) as SharedQuota
+    if (!Number.isFinite(parsed.at) || !parsed.quota || !Array.isArray(parsed.quota.windows)) return undefined
+    return parsed
+  } catch {
+    return undefined
+  }
+}
+
+async function writeShared(path: string, value: SharedQuota): Promise<void> {
+  const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`
+  try {
+    await writeFile(tmp, JSON.stringify(value), { mode: 0o600 })
+    await rename(tmp, path)
+  } finally {
+    await rm(tmp, { force: true }).catch(() => {})
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function acquireLock(path: string): Promise<() => Promise<void>> {
+  const deadline = Date.now() + LOCK_WAIT_MS
+  for (;;) {
+    try {
+      await mkdir(path)
+      return () => rm(path, { recursive: true, force: true })
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err
+      try {
+        if (Date.now() - (await stat(path)).mtimeMs > LOCK_STALE_MS) {
+          await rm(path, { recursive: true, force: true })
+          continue
+        }
+      } catch {
+        continue
+      }
+      if (Date.now() >= deadline) throw new Error("Claude quota refresh lock timed out")
+      await delay(LOCK_POLL_MS)
+    }
+  }
+}
+
+async function runClaudeUsage(claudeBin: string): Promise<string> {
+  const { stdout } = await execFileAsync(
+    claudeBin,
+    ["-p", "/usage", "--safe-mode", "--output-format", "json", "--no-session-persistence", "--tools", ""],
+    { encoding: "utf8", timeout: 12_000, maxBuffer: 2 * 1024 * 1024 },
+  )
+  return String(stdout)
+}
+
+const LINE_WINDOWS: Array<[RegExp, string, string]> = [
+  [/^Current session$/i, "5h", "5h"],
+  [/^Current week \(all models\)$/i, "weekly", "Weekly"],
+  [/^Current week \(Opus only\)$/i, "weekly-opus", "Opus wk"],
+  [/^Current week \(Sonnet only\)$/i, "weekly-sonnet", "Sonnet wk"],
+]
+
+function windowIdentity(title: string): [string, string] | undefined {
+  for (const [pattern, key, label] of LINE_WINDOWS) {
+    if (pattern.test(title)) return [key, label]
+  }
+  const scoped = /^Current week \((.+)\)$/i.exec(title)
+  if (!scoped) return undefined
+  const name = scoped[1]!.replace(/\s+only$/i, "")
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+  return slug ? [`weekly-${slug}`, `${name} wk`] : undefined
+}
+
+function parseResetLabel(label: string | undefined, now: number): number | undefined {
+  if (!label) return undefined
+  // Claude Code and Fray run on the same machine, so its explicit IANA suffix names the local timezone
+  // already in effect here. Remove only that redundant suffix; never reinterpret it as UTC.
+  const text = label.replace(/\s+\([^)]+\)\s*$/, "").trim()
+  const clock = /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i.exec(text)
+  if (clock) {
+    let hour = Number(clock[1]) % 12
+    if (clock[3]!.toLowerCase() === "pm") hour += 12
+    const date = new Date(now)
+    date.setHours(hour, Number(clock[2] ?? 0), 0, 0)
+    if (date.getTime() <= now) date.setDate(date.getDate() + 1)
+    return Math.round(date.getTime() / 1000)
+  }
+  const parsed = Date.parse(text)
+  if (!Number.isFinite(parsed)) return undefined
+  const date = new Date(parsed)
+  // Date-only labels omit the year. A weekly reset crossing New Year must resolve forward, not to the
+  // same month/day in the past.
+  if (!/\b\d{4}\b/.test(text) && date.getTime() <= now) date.setFullYear(date.getFullYear() + 1)
+  return Math.round(date.getTime() / 1000)
+}
+
+// Claude Code intentionally formats this output as a small line-oriented contract for non-interactive
+// callers. Preserve its percentages and turn its local reset labels back into the unix instants Fray's
+// display and subscription-limit scheduler already consume.
+export function parseClaudeUsageOutput(stdout: string, now = Date.now()): ProviderQuota {
+  let text = stdout
+  try {
+    const envelope = JSON.parse(stdout) as Record<string, unknown>
+    if (typeof envelope.result === "string") text = envelope.result
+  } catch {
+    // Plain-text output is accepted too, which keeps this parser compatible with simple test doubles.
+  }
+  const windows: QuotaWindow[] = []
+  for (const line of text.split(/\r?\n/)) {
+    const match = /^\s*(Current (?:session|week \(.+?\))):\s*(\d+(?:\.\d+)?)%\s+used\b(?:\s*·\s*resets\s+(.+?))?\s*$/i.exec(line)
+    if (!match) continue
+    const identity = windowIdentity(match[1]!)
+    if (!identity) continue
+    const resetsAt = parseResetLabel(match[3], now)
+    windows.push({
+      key: identity[0],
+      label: identity[1],
+      usedPercent: Number(match[2]),
+      ...(resetsAt === undefined ? {} : { resetsAt }),
+    })
+  }
+  if (windows.length === 0) {
+    return { status: "unavailable", windows: [], detail: "Claude Code did not report subscription quota" }
+  }
+  return { status: "ok", windows }
+}
+
+// The healthy cache is shared under ~/.fray so three project windows make one Claude Code request,
+// not three simultaneous requests to the same account. A failed refresh serves the last known-good
+// reading (clearly labeled in the popover) for at most one day instead of erasing useful data.
+export async function readClaudeQuota(
+  claudeBin = "claude",
+  deps: ClaudeQuotaDeps = {},
+  options: { force?: boolean } = {},
+): Promise<ProviderQuota> {
+  const now = (deps.now ?? Date.now)()
+  const configDir = claudeConfigDir()
+  const cacheDir = deps.cacheDir ?? join(homedir(), ".fray", "quota-cache")
+  const paths = cachePaths(cacheDir, configDir)
+  try {
+    await mkdir(cacheDir, { recursive: true, mode: 0o700 })
+  } catch {
+    try {
+      return parseClaudeUsageOutput(await (deps.execUsage ?? runClaudeUsage)(claudeBin), now)
+    } catch {
+      return { status: "unavailable", windows: [], detail: "Claude Code usage unavailable" }
+    }
+  }
+  const initial = await readShared(paths.data)
+  if (!options.force && initial && now - initial.at < (initial.quota.status === "ok" ? OK_TTL_MS : FAIL_TTL_MS)) {
+    return initial.quota
+  }
+
+  let release: (() => Promise<void>) | undefined
+  try {
+    release = await acquireLock(paths.lock)
+    const afterLock = await readShared(paths.data)
+    // Another Fray process may have completed the requested refresh while this process waited.
+    if (afterLock && afterLock.at !== initial?.at && now - afterLock.at < OK_TTL_MS) return afterLock.quota
+
+    const output = await (deps.execUsage ?? runClaudeUsage)(claudeBin)
+    const quota = parseClaudeUsageOutput(output, now)
+    if (quota.status !== "ok") throw new Error(quota.detail)
+    await writeShared(paths.data, { at: now, quota }).catch(() => {})
+    return quota
+  } catch {
+    const fallback = await readShared(paths.data)
+    if (fallback?.quota.status === "ok" && now - fallback.at < STALE_MAX_AGE_MS) {
+      return {
+        ...fallback.quota,
+        detail: `Could not refresh · last updated ${Math.max(1, Math.round((now - fallback.at) / 60_000))}m ago`,
       }
     }
-  } catch {
-    quota = { status: "unavailable", windows: [], detail: "Usage endpoint unreachable" }
+    const unavailable = { status: "unavailable", windows: [], detail: "Claude Code usage unavailable" } satisfies ProviderQuota
+    await writeShared(paths.data, { at: now, quota: unavailable }).catch(() => {})
+    return unavailable
+  } finally {
+    await release?.().catch(() => {})
   }
-  memo.set(configDir, { at: now, ttl, quota })
-  return quota
 }

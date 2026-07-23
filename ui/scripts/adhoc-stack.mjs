@@ -10,7 +10,7 @@
 // The project defaults to the fray repo itself (a gh-authed repo, an empty board under the temp HOME).
 //
 // Usage:
-//   npx tsx ui/scripts/adhoc-stack.mjs [--port=4930] [--project=/abs/dir] [--wakers] [--reaper] [--keep] [--seed]
+//   npx tsx ui/scripts/adhoc-stack.mjs [--port=4930] [--project=/abs/dir] [--claude-bin=/abs/bin] [--wakers] [--reaper] [--keep] [--seed]
 //
 // It prints ONE json line to stdout: {"url","port","home","socket","project"} once /health is green,
 // then stays up until SIGINT/SIGTERM, deleting the temp HOME on exit (unless --keep). Run it with Bash
@@ -28,6 +28,7 @@ const opt = (k, d) => {
 
 const port = Number(opt("port", "4930"))
 const projectDir = opt("project", process.cwd().replace(/\/ui$/, "")) // default: the fray repo root
+const claudeBin = opt("claude-bin", undefined)
 const keep = flag("keep")
 
 // Sandbox HOME first — resolveProject() reads homedir() lazily, so setting it now redirects the whole
@@ -68,7 +69,7 @@ process.on("uncaughtException", (e) => { console.error("[adhoc-stack] uncaught",
 
 const { startServer } = await import("../packages/server/src/index.ts")
 try {
-  const started = await startServer({ dev: true, port, installSignalHandlers: false })
+  const started = await startServer({ dev: true, port, installSignalHandlers: false, claudeBin })
   close = () => started.close()
   // Confirm the API is actually serving before announcing — a race here would hand CDP a dead port.
   for (let i = 0; i < 100; i++) {

@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Loader2 } from "lucide-react"
 import type { Backend, ProviderAuth, ProviderQuota, QuotaWindow } from "@fray-ui/shared"
@@ -19,12 +19,15 @@ import { PROVIDER_LABEL } from "../lib/signIn.ts"
 // was pure redundancy sitting a few hundred px from the first — removed.
 //
 // Quota is polled (rpc.quota) rather than pushed on the board: it is ACCOUNT-global, not per-thread,
-// and its sources are slow/rate-limited (Codex rollout tail; Claude's undocumented OAuth usage
-// endpoint), so a 60s poll with a long stale window is the right cadence while healthy. An
+// and its sources are slow/rate-limited (Codex rollout tail; Claude Code's `/usage` command), so a
+// 60s poll with a long stale window is the right cadence while healthy. An
 // UNAVAILABLE read re-polls at 15s (a blip should self-heal in seconds, not a minute), and opening a
 // chip's popover forces a fresh read of both quota and auth — the popover is the recheck.
 
 export function QuotaBar() {
+  const queryClient = useQueryClient()
+  const recheckInFlight = useRef<Promise<void> | null>(null)
+  const [rechecking, setRechecking] = useState(false)
   // Keep the last value through refetches so the bar never flickers to empty. The query never
   // rejects meaningfully (the server degrades each provider to "unavailable").
   const quota = useQuery({
@@ -48,10 +51,24 @@ export function QuotaBar() {
     refetchOnWindowFocus: true,
   })
 
+  const recheck = (backend: Backend) => {
+    if (recheckInFlight.current) return
+    setRechecking(true)
+    const request = Promise.all([
+      rpc.quota({ force: backend === "claude" }).then((snapshot) => queryClient.setQueryData(["quota"], snapshot)),
+      queryClient.refetchQueries({ queryKey: ["authStatus"] }),
+    ]).then(() => {}).catch(() => {})
+      .finally(() => {
+        recheckInFlight.current = null
+        setRechecking(false)
+      })
+    recheckInFlight.current = request
+  }
+
   return (
     <div data-quota-bar className="flex items-center justify-end gap-2.5 px-1.5 py-1 text-[11px]">
-      <QuotaChip backend="claude" quota={quota.data?.claude} auth={auth.data?.claude} loading={quota.isLoading} fetching={quota.isFetching} />
-      <QuotaChip backend="codex" quota={quota.data?.codex} auth={auth.data?.codex} loading={quota.isLoading} fetching={quota.isFetching} />
+      <QuotaChip backend="claude" quota={quota.data?.claude} auth={auth.data?.claude} loading={quota.isLoading} fetching={quota.isFetching || rechecking} onRecheck={() => recheck("claude")} />
+      <QuotaChip backend="codex" quota={quota.data?.codex} auth={auth.data?.codex} loading={quota.isLoading} fetching={quota.isFetching || rechecking} onRecheck={() => recheck("codex")} />
     </div>
   )
 }
@@ -67,15 +84,16 @@ function QuotaChip({
   auth,
   loading,
   fetching,
+  onRecheck,
 }: {
   backend: Backend
   quota: ProviderQuota | undefined
   auth: ProviderAuth | undefined
   loading: boolean
   fetching: boolean
+  onRecheck: () => void
 }) {
   const providerLabel = PROVIDER_LABEL[backend]
-  const queryClient = useQueryClient()
   const [signIn, setSignIn] = useState(false)
 
   // First fetch, nothing cached yet — a quiet placeholder, no popover (there is nothing to show).
@@ -106,12 +124,9 @@ function QuotaChip({
     <>
       <Popover
         onOpenChange={(open) => {
-          // Opening the chip IS the recheck: force a fresh read of both surfaces rather than making
-          // the user wait out the poll interval on a stale "unreachable"/signed-out verdict.
-          if (open) {
-            void queryClient.refetchQueries({ queryKey: ["quota"] })
-            void queryClient.refetchQueries({ queryKey: ["authStatus"] })
-          }
+          // Opening the chip IS the recheck. This is a true server-side cache bypass, not a replay of
+          // the last cached failure with a decorative spinner.
+          if (open) onRecheck()
         }}
       >
         <PopoverTrigger asChild>
@@ -174,6 +189,7 @@ function QuotaChip({
                   </li>
                 )
               })}
+              {quota!.detail && <li className="pt-1 text-muted/55">{quota!.detail}</li>}
             </ul>
           )}
         </PopoverContent>
@@ -184,8 +200,8 @@ function QuotaChip({
           onClose={() => setSignIn(false)}
           onAuthed={() => {
             setSignIn(false)
-            // Fresh credential → the quota endpoint is worth an immediate re-read too.
-            void queryClient.refetchQueries({ queryKey: ["quota"] })
+            // Fresh credential must bypass the cached signed-out verdict immediately.
+            onRecheck()
           }}
         />
       )}

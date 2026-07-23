@@ -1024,11 +1024,12 @@ export function createRouter(ctx: AppContext) {
     }),
 
     // Provider subscription quota (5h + weekly rate-limit windows) for the sidebar status bar. Codex
-    // reads clean from the rollout JSONL fray already tails; Claude best-effort via its undocumented
-    // OAuth usage endpoint. Never throws — degrades to per-provider "unavailable".
+    // reads clean from the rollout JSONL fray already tails; Claude delegates to Claude Code's own
+    // non-interactive `/usage` command. Never throws — degrades to per-provider "unavailable".
     quota: query({
+      input: z.object({ force: z.boolean().optional() }).strict().optional(),
       output: QuotaSnapshot,
-      handler: async () => readQuota(),
+      handler: async ({ input }) => readQuota({ claudeBin: ctx.claudeBin, force: input?.force }),
     }),
 
     // Per-provider LOCAL credential presence for the new-thread dispatch gate. Distinct from `quota`
