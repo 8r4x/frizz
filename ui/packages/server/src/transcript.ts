@@ -884,9 +884,14 @@ function toolDetail(input: any): string | undefined {
 }
 
 // A concise cause label for the turn-boundary line emitted when a background-shell completion wakes
-// the agent: "Woken by background task «<desc>» — exited N" (failed, exit code parsed from the
-// notification <summary>), "… — finished" (completed), or "… — stopped" (killed). `desc` prefers the
-// Bash `description`, falling back to the command summary; kept short so the divider label stays tidy.
+// the agent: "Background task «<desc>» exited N" (failed, exit code parsed from the notification
+// <summary>), "… finished" (completed), or "… stopped" (killed). `desc` prefers the Bash
+// `description`, falling back to the command summary; kept short so the divider label stays tidy.
+// The subject is the TASK, not the wake — the passive "Woken by …" spent the label's opening on the
+// one fact the divider's own position already conveys. "Background task" is deliberate, and NOT
+// "Agent": only a background SHELL reaches this label (an Agent completion re-renders its AgentBlock
+// card instead — see completionEvent), so borrowing the Agent card's noun would mislabel every line
+// it prints.
 function backgroundWakeLabel(call: TranscriptToolCall, status: string, raw: string): string {
   const rawDesc = (call.desc ?? call.detail ?? "background command").trim()
   const desc = rawDesc.length > 64 ? `${rawDesc.slice(0, 63)}…` : rawDesc
@@ -897,7 +902,7 @@ function backgroundWakeLabel(call: TranscriptToolCall, status: string, raw: stri
     const code = raw.match(/exit code (\d+)/)?.[1]
     outcome = code ? `exited ${code}` : "failed"
   }
-  return `Woken by background task «${desc}» — ${outcome}`
+  return `Background task «${desc}» ${outcome}`
 }
 
 // A completion <task-notification> (rides a queue-operation record as a top-level `content` string;
@@ -930,7 +935,7 @@ function completionEvent(
     // The shell's disclosure card already carries the terminal status above; but this notification also
     // RE-INVOKES the agent, opening a fresh turn with no boundary from the prior one — two turns paint as
     // one bubble. Emit a `boundary` event line at the wake point so the timeline shows a divider carrying
-    // the cause ("Woken by background task «…» — exited N"). The caller resets lastAssistantId, so this
+    // the cause ("Background task «…» exited N"). The caller resets lastAssistantId, so this
     // also breaks the assistant-record merge chain across the wake.
     return {
       role: "assistant",
