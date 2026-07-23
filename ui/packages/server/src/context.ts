@@ -165,6 +165,11 @@ export interface ContextOptions {
 // column honest too.
 export function reconcileSessions(storage: Storage) {
   for (const row of storage.allSessions()) {
+    // A codex app-server thread has NO tmux pane by construction — it lives in the detached bridge
+    // daemon. Sniffing tmux for it would stamp `exited` on every healthy headless thread at every
+    // boot, which is exactly the trap deriveRuntime() in board.ts refuses to fall into. Its liveness
+    // is the bridge's turn state, resolved live on each board build; leave the stored column alone.
+    if (row.codex_runtime === "app-server") continue
     const binding = adoptionRuntimeBinding(storage, row)
     const live = binding.kind === "unbound"
       ? tmux.isLive(row.slug)
@@ -403,9 +408,18 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     ? createCodexAppServerBridge({
         projectId: project.id,
         projectDir: project.dir,
+        // The detached app-server daemon's socket + record live under the project state dir, so a
+        // later fray generation can find the app-server this one left running.
+        stateDir: project.stateDir,
         dbPath,
         interactions: storage.interactions,
         codexBin: opts.codexBin,
+        // Never wake a thread the human has already put away: a restart-recovery nudge is only for a
+        // thread that is still open and still theirs to come back to.
+        shouldAutoResume: (slug) => {
+          const row = storage.getSession(slug)
+          return Boolean(row) && row?.state !== "archived" && row?.archived !== 1
+        },
       })
     : undefined
   resources.codexAppServer = codexAppServer
@@ -418,6 +432,11 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
       )
     }))
   }
+  // Rejoin the detached app-server daemon now rather than on first use. A turn that outlived our
+  // restart is still running in there, and until we attach its `turn/completed` sits queued and the
+  // board's stall grace would card the thread as crashed. Fire-and-forget: codex being unavailable
+  // must never hold up (or fail) a boot.
+  void codexAppServer?.warmUp()
   opts.startup?.afterPhase?.("Codex app-server bridge")
 
   // The tailer derives turn/liveness telemetry and, on a state change, asks the board for an
