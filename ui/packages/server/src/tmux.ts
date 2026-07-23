@@ -446,15 +446,22 @@ export function capturePane(slug: string): string {
 // update for seconds" is.
 //
 // tmux runs a `;`-separated command list in ONE invocation, so N captures cost ONE spawn. Outputs are
-// concatenated with no framing, so a `display-message -p <sentinel>` is emitted before each capture and
-// the stdout is split on it. Two failure modes are handled rather than assumed away:
+// concatenated with no framing, so each capture is BRACKETED by `display-message -p <sentinel>` open and
+// close markers and stdout is split on the sentinel. Three failure modes are handled rather than assumed
+// away — each found by verify-batched-pane-capture.mjs rather than reasoned about:
 //   • a command list ABORTS at the first error (verified: a bad target prints its error and the
-//     remaining commands never run) — so the caller gets a partial map and re-asks individually;
+//     remaining commands never run), so a batch can be truncated at any point;
+//   • the OPEN marker of the aborted slug has ALREADY been written when its capture fails, so an
+//     open-only frame must be rejected. With a single marker per frame that slug was recorded with
+//     EMPTY pane text — which reads as \"no permission prompt\" for a thread that may well have one, and
+//     suppressed the retry that would have recovered the panes behind it;
 //   • that abort makes tmux exit non-zero, and execFileSync throws — but the partial stdout survives on
 //     the thrown error, so it is salvaged rather than discarded.
 // The sentinel is a control character (never present in a rendered pane cell) plus a per-process
 // random id, so captured pane text can never forge a frame boundary.
 const CAPTURE_SENTINEL = `\u0001fray-capture-${randomUUID()}\u0001`
+const CAPTURE_OPEN = "<"
+const CAPTURE_CLOSE = ">"
 
 // How many times a truncated batch is re-issued for the slugs it never reached. A pane that vanishes
 // between the liveness listing and the capture aborts the list at that slug; dropping it and retrying
@@ -478,10 +485,11 @@ function captureBatchRound(slugs: readonly string[], out: Map<string, string>): 
   const args: string[] = []
   for (const slug of slugs) {
     if (args.length > 0) args.push(";")
-    // ONE sentinel per frame, not a matched pair: `display-message -p` appends its own newline, so the
-    // frame is exactly "<sentinel><slug>\n<pane text>" and the newline is the header terminator.
-    args.push("display-message", "-p", `${CAPTURE_SENTINEL}${slug}`)
+    // "<slug\n" + the pane bytes + a bare ">" frame. `display-message -p` appends its own newline, so the
+    // open marker's newline terminates the header and the close marker proves the capture actually ran.
+    args.push("display-message", "-p", `${CAPTURE_SENTINEL}${CAPTURE_OPEN}${slug}`)
     args.push(";", "capture-pane", "-p", "-t", exactSessionTarget(slug))
+    args.push(";", "display-message", "-p", `${CAPTURE_SENTINEL}${CAPTURE_CLOSE}`)
   }
   let text: string
   try {
@@ -490,12 +498,18 @@ function captureBatchRound(slugs: readonly string[], out: Map<string, string>): 
     return // nothing salvageable — the caller falls back to the per-slug capture
   }
   const wanted = new Set(slugs)
-  for (const chunk of text.split(CAPTURE_SENTINEL)) {
-    const brk = chunk.indexOf("\n")
-    if (brk === -1) continue // the leading "" before the first sentinel, or a truncated tail
-    const slug = chunk.slice(0, brk)
+  const frames = text.split(CAPTURE_SENTINEL)
+  for (let i = 0; i < frames.length; i++) {
+    const frame = frames[i]
+    if (!frame.startsWith(CAPTURE_OPEN)) continue
+    const brk = frame.indexOf("\n")
+    if (brk === -1) continue
+    // No close marker → this slug's capture is exactly where the list aborted. Leave it out so the
+    // caller retries it per-slug instead of adopting an empty pane as its text.
+    if (!frames[i + 1]?.startsWith(CAPTURE_CLOSE)) continue
+    const slug = frame.slice(CAPTURE_OPEN.length, brk)
     if (!wanted.has(slug) || out.has(slug)) continue
-    out.set(slug, chunk.slice(brk + 1))
+    out.set(slug, frame.slice(brk + 1))
   }
 }
 
