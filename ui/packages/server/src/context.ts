@@ -507,9 +507,15 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
       const deliveryMessage = `${message}\n\n${wakeDeliveryToken(deliveryId)}`
       const row = storage.getSession(slug)
       // Codex wake: deliver over the app-server bridge (adopting a legacy tmux rollout first, then
-      // reactivating the persisted thread), exactly like the followUp RPC. Codex never uses tmux resume.
-      if (row?.backend === "codex" && codexAppServer) {
+      // reactivating the persisted thread), exactly like the followUp RPC. Codex never uses tmux resume
+      // — resumeThread is a CLAUDE-only path now, so a codex row must never reach it even when the
+      // bridge is absent (only possible in a test context): drop the wake loudly instead of degrading.
+      if (row?.backend === "codex") {
         const bridge = codexAppServer
+        if (!bridge) {
+          process.stderr.write(`[fray] codex wake for ${slug} dropped: the app-server bridge is unavailable\n`)
+          return
+        }
         void (async () => {
           if (row.codex_runtime !== "app-server" && row.agent_session_id) {
             await bridge.adoptExternalRollout({ threadSlug: slug, sessionId: row.session_id, codexThreadId: row.agent_session_id, cwd: project.dir })
