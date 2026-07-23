@@ -521,7 +521,9 @@ test("dispatch(codex): a failing app-server bridge throws loudly — there is NO
   )
   assert.equal(h.spawned.length, 0, "no tmux spawn — the TUI path is retired")
   assert.equal(released, 1, "the partial bridge binding was released")
-  assert.equal(h.storage.getSession("no-fallback"), undefined, "a failed dispatch leaves no row")
+  // Assert on the REGISTRY, not a guessed slug: dispatch throws before any upsertSession, so a
+  // slug-keyed lookup would pass even if it were aimed at the wrong row.
+  assert.equal(h.storage.allSessions().length, 0, "a failed dispatch leaves no row")
 })
 
 test("dispatch(claude) through the same resolver is UNCHANGED — no trust write, backend stays claude", async () => {

@@ -64,13 +64,8 @@ export function createProfileController(deps: ProfileControllerDeps): ProfileCon
     isLive: tmux.isLive,
     paneIdentity: tmux.paneIdentity,
     capturePane: tmux.capturePane,
-    capturePaneEscaped: tmux.capturePaneEscaped,
-    sendLiteral: tmux.sendLiteral,
-    sendKey: tmux.sendKey,
     findExpectedAdoptionPane: tmux.findExpectedAdoptionPane,
     captureExpectedAdoptionPane: tmux.captureExpectedAdoptionPane,
-    sendTextToExpectedAdoptionPane: tmux.sendTextToExpectedAdoptionPane,
-    sendKeyToExpectedAdoptionPane: tmux.sendKeyToExpectedAdoptionPane,
   }
   const now = deps.now ?? Date.now
   const active = new Set<string>()
@@ -87,14 +82,14 @@ export function createProfileController(deps: ProfileControllerDeps): ProfileCon
     return current.kind === "found" && !current.pane.dead ? "live" : "absent"
   }
 
-  function captureOwned(row: SessionRow, escaped: boolean): string | undefined {
+  function captureOwned(row: SessionRow): string | undefined {
     const binding = adoptionRuntimeBinding(deps.storage, row)
     if (binding.kind === "conflict") return undefined
     if (binding.kind === "unbound") {
       if (!terminal.isLive(row.slug)) return undefined
-      return escaped ? terminal.capturePaneEscaped(row.slug) : terminal.capturePane(row.slug)
+      return terminal.capturePane(row.slug)
     }
-    const captured = terminal.captureExpectedAdoptionPane?.(binding.claim, escaped)
+    const captured = terminal.captureExpectedAdoptionPane?.(binding.claim, false)
     return captured?.kind === "captured" ? captured.text : undefined
   }
 
@@ -221,7 +216,7 @@ export function createProfileController(deps: ProfileControllerDeps): ProfileCon
     if (tele.turn !== "idle") throw new Error("Model and effort changes require an idle thread; wait for the current turn to finish")
     const unresolved = [...tele.subAgents, ...tele.bgShells].filter((op) => op.state === "running" || op.state === "stale").length
     if (unresolved > 0) throw new Error(`Model and effort changes require no unresolved background work; wait for ${unresolved} operation${unresolved === 1 ? "" : "s"}`)
-    const composer = inspectClaudeComposer(captureOwned(row, false) ?? "")
+    const composer = inspectClaudeComposer(captureOwned(row) ?? "")
     if (composer.kind === "typed") throw new Error("Profile change blocked: submit or clear the existing Claude terminal draft")
     if (composer.kind !== "empty") throw new Error("Profile change blocked by the current terminal screen; return it to the idle prompt")
     if (!deps.reattach) throw new Error("Live profile changes are unavailable in this Fray server; restart Fray and retry")

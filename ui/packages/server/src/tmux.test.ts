@@ -25,8 +25,6 @@ import {
   panePid,
   sendKeys,
   sendTextToCompatibleLegacyWorker,
-  sendTextWithKey,
-  sendTextWithKeyToExpectedAdoptionPane,
   sendTextToExpectedAdoptionPane,
   expectedAdoptionAttachArgs,
   isExpectedAdoptionPaneLiveAnywhereCached,
@@ -353,7 +351,7 @@ test("exact adoption control is atomic, survives rename, and never contacts a re
     assert.equal(findExpectedAdoptionPane(expected).kind, "found", "global token + tuple still find the renamed owner")
     assert.equal(isExpectedAdoptionPaneLiveAnywhereCached(expected), true)
     assert.equal(captureExpectedAdoptionPane(expected).kind, "captured")
-    assert.equal(sendTextWithKeyToExpectedAdoptionPane(expected, "hello-owner", "Enter"), true)
+    assert.equal(sendTextToExpectedAdoptionPane(expected, "hello-owner", true), true)
 
     const competitor = spawn(
       slug,
@@ -481,137 +479,21 @@ test("atomic text-and-key sends leave no secret-bearing tmux buffer on success, 
     assert.doesNotMatch(buffers(), /fray-exact-/)
     assert.doesNotMatch(buffers(), new RegExp(secret))
 
-    assert.equal(sendTextWithKeyToExpectedAdoptionPane(expected, secret, "Tab"), true)
+    assert.equal(sendTextToExpectedAdoptionPane(expected, secret, true), true)
     assert.doesNotMatch(buffers(), /fray-exact-/)
     assert.doesNotMatch(buffers(), new RegExp(secret))
 
-    assert.equal(sendTextWithKeyToExpectedAdoptionPane({ ...expected, attempt_token: randomUUID() }, secret, "Enter"), false)
+    assert.equal(sendTextToExpectedAdoptionPane({ ...expected, attempt_token: randomUUID() }, secret, true), false)
     assert.doesNotMatch(buffers(), /fray-exact-/)
     assert.doesNotMatch(buffers(), new RegExp(secret))
 
     killSession(slug)
     assert.equal(sendTextToExpectedAdoptionPane(expected, secret, false), false)
-    assert.equal(sendTextWithKeyToExpectedAdoptionPane(expected, secret, "Enter"), false)
+    assert.equal(sendTextToExpectedAdoptionPane(expected, secret, true), false)
     assert.doesNotMatch(buffers(), /fray-exact-/)
     assert.doesNotMatch(buffers(), new RegExp(secret))
   } finally {
     killSession(slug)
-    setSocket(originalSocket)
-  }
-})
-
-test("local atomic text-and-key send pastes the complete multiline payload and cleans its private buffer", { skip: !tmuxAvailable }, async () => {
-  const originalSocket = socketName()
-  const slug = `local-atomic-send-${process.pid}`
-  const secret = `FRAY_LOCAL_BUFFER_SECRET_${randomUUID()}`
-  setSocket(`fray-local-atomic-send-test-${process.pid}`)
-  const buffers = (): string => {
-    try {
-      return execFileSync("tmux", ["-L", socketName(), "list-buffers", "-F", "#{buffer_name}\t#{buffer_sample}"], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      })
-    } catch {
-      return ""
-    }
-  }
-  try {
-    spawn(
-      slug,
-      [process.execPath, "-e", `
-        process.stdin.setRawMode(true);
-        let sawPayload = false;
-        process.stdin.on('data', d => {
-          const value = d.toString();
-          if (value === '\\r') {
-            process.stdout.write(sawPayload ? 'SUBMIT_AFTER_PASTE' : 'COALESCED_SUBMIT');
-          } else {
-            sawPayload = true;
-            process.stdout.write('PAYLOAD:' + value);
-          }
-        });
-      `],
-      process.cwd(),
-    )
-    const payload = `${secret} first paragraph\n\nsecond paragraph`
-    assert.equal(sendTextWithKey(slug, payload, "Enter"), true)
-    assert.doesNotMatch(buffers(), /fray-input-/)
-    assert.doesNotMatch(buffers(), new RegExp(secret))
-
-    let pane = ""
-    const deadline = Date.now() + 2_000
-    while (Date.now() < deadline) {
-      pane = execFileSync("tmux", ["-L", socketName(), "capture-pane", "-p", "-t", tmuxSessionName(slug)], { encoding: "utf8" })
-      if (pane.includes("first paragraph") && pane.includes("second paragraph") && pane.includes("SUBMIT_AFTER_PASTE")) break
-      await new Promise((resolve) => setTimeout(resolve, 10))
-    }
-    assert.match(pane, /first paragraph/)
-    assert.match(pane, /second paragraph/)
-    assert.match(pane, /SUBMIT_AFTER_PASTE/, "the submit key reaches the application in a later input event than the paste")
-    assert.doesNotMatch(pane, /COALESCED_SUBMIT/)
-
-    killSession(slug)
-    assert.equal(sendTextWithKey(slug, secret, "Enter"), false)
-    assert.doesNotMatch(buffers(), /fray-input-/)
-    assert.doesNotMatch(buffers(), new RegExp(secret))
-  } finally {
-    killSession(slug)
-    setSocket(originalSocket)
-  }
-})
-
-test("a pane replaced during the paste settle boundary receives no delayed key and strands no input buffer", { skip: !tmuxAvailable }, async () => {
-  const originalSocket = socketName()
-  const slug = `local-settle-race-${process.pid}`
-  const holder = `local-settle-holder-${process.pid}`
-  const testSocket = `fray-local-settle-race-test-${process.pid}`
-  setSocket(testSocket)
-  const buffers = (): string => {
-    try {
-      return execFileSync("tmux", ["-L", testSocket, "list-buffers", "-F", "#{buffer_name}"], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      })
-    } catch {
-      return ""
-    }
-  }
-  try {
-    spawn(holder, [process.execPath, "-e", "setInterval(() => {}, 1000)"], process.cwd())
-    spawn(slug, [process.execPath, "-e", "process.stdin.resume()"], process.cwd())
-    const moduleUrl = new URL("./tmux.ts", import.meta.url).href
-    let output = ""
-    const child = spawnChild(process.execPath, ["--input-type=module", "-e", `
-      import { setSocket, sendTextWithKey } from ${JSON.stringify(moduleUrl)};
-      setSocket(${JSON.stringify(testSocket)});
-      process.stdout.write("FRAY_SETTLE_READY\\n");
-      const result = sendTextWithKey(${JSON.stringify(slug)}, "MUST_NOT_REACH_REPLACEMENT", "Enter");
-      process.stdout.write("RESULT:" + result + "\\n");
-    `], { stdio: ["ignore", "pipe", "pipe"] })
-    child.stdout.on("data", (chunk) => { output += String(chunk) })
-
-    const bufferDeadline = Date.now() + 2_000
-    while (Date.now() < bufferDeadline && !buffers().includes("fray-input-")) {
-      await new Promise((resolve) => setTimeout(resolve, 1))
-    }
-    assert.match(buffers(), /fray-input-/, "the target is replaced while the server-side settle queue is paused")
-
-    killSession(slug)
-    spawn(slug, [process.execPath, "-e", "process.stdin.on('data', d => process.stdout.write('COMPETITOR:' + d))"], process.cwd())
-    const code = await new Promise<number | null>((resolve) => child.once("close", resolve))
-    assert.equal(code, 0)
-    assert.match(output, /RESULT:false/)
-    assert.doesNotMatch(buffers(), /fray-input-/)
-
-    const competitor = execFileSync(
-      "tmux",
-      ["-L", testSocket, "capture-pane", "-p", "-t", tmuxSessionName(slug)],
-      { encoding: "utf8" },
-    )
-    assert.doesNotMatch(competitor, /MUST_NOT_REACH_REPLACEMENT|COMPETITOR:/)
-  } finally {
-    killSession(slug)
-    killSession(holder)
     setSocket(originalSocket)
   }
 })
@@ -649,13 +531,13 @@ test("an exact adopted pane replaced during settle receives no delayed key and s
     const moduleUrl = new URL("./tmux.ts", import.meta.url).href
     let output = ""
     const child = spawnChild(process.execPath, ["--input-type=module", "-e", `
-      import { setSocket, sendTextWithKeyToExpectedAdoptionPane } from ${JSON.stringify(moduleUrl)};
+      import { setSocket, sendTextToExpectedAdoptionPane } from ${JSON.stringify(moduleUrl)};
       setSocket(${JSON.stringify(testSocket)});
       process.stdout.write("FRAY_EXACT_SETTLE_READY\\n");
-      const result = sendTextWithKeyToExpectedAdoptionPane(
+      const result = sendTextToExpectedAdoptionPane(
         ${JSON.stringify(expected)},
         "MUST_NOT_REACH_EXACT_REPLACEMENT",
-        "Enter",
+        true,
       );
       process.stdout.write("RESULT:" + result + "\\n");
     `], { stdio: ["ignore", "pipe", "pipe"] })
@@ -713,13 +595,13 @@ test("SIGKILL during exact atomic text-and-key transport cannot strand its priva
     }
     const moduleUrl = new URL("./tmux.ts", import.meta.url).href
     const child = spawnChild(process.execPath, ["--input-type=module", "-e", `
-      import { setSocket, sendTextWithKeyToExpectedAdoptionPane } from ${JSON.stringify(moduleUrl)};
+      import { setSocket, sendTextToExpectedAdoptionPane } from ${JSON.stringify(moduleUrl)};
       setSocket(${JSON.stringify(testSocket)});
       process.stdout.write("FRAY_SEND_READY\\n");
-      sendTextWithKeyToExpectedAdoptionPane(
+      sendTextToExpectedAdoptionPane(
         ${JSON.stringify(expected)},
         "FRAY_SIGKILL_BUFFER_SECRET_" + "x".repeat(32 * 1024 * 1024),
-        "Enter",
+        true,
       );
     `], { stdio: ["ignore", "pipe", "pipe"] })
     await new Promise<void>((resolve, reject) => {

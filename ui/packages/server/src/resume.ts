@@ -83,7 +83,6 @@ export interface ResumeTmux {
   captureExpectedProfileHandoffPane?(expected: tmux.ExpectedProfileHandoffPane, escaped?: boolean): tmux.ExactPaneCapture
   panePid?(slug: string): number | null
   capturePane?(slug: string): string
-  capturePaneEscaped?(slug: string): string
   pasteText(slug: string, text: string): void
   sendKeys(slug: string, text: string): void
   sendTextToExpectedAdoptionPane?(expected: tmux.ExpectedAdoptionPane, text: string, submit: boolean): boolean
@@ -1187,7 +1186,6 @@ function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string): voi
   // A thread-specific override always wins. Only a migrated/unknown row falls back to the current
   // defaults, and that concrete value is stamped below once this resume actually launches it.
   const permissionMode = permissionModeForRow(row, deps.getSettings())
-  const resumeMessage: string | undefined = message
   let adoptionAttemptToken: string | undefined
   if (adoption) {
     const reservedAtMs = Date.now()
@@ -1226,7 +1224,7 @@ function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string): voi
           tx,
           row,
           permissionMode,
-          resumeMessage,
+          message,
           {
             adoptionAttemptToken,
             onCreated: (identity) => {
@@ -1246,7 +1244,7 @@ function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string): voi
         tx,
         row,
         permissionMode,
-        resumeMessage,
+        message,
       ) as PaneIdentity | undefined
     }
     if (adoptionAttemptToken) {

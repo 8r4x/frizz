@@ -142,9 +142,6 @@ function harness() {
     terminal: {
       isLive: () => false,
       capturePane: () => "",
-      capturePaneEscaped: () => "",
-      sendLiteral: () => {},
-      sendKey: () => {},
     },
   })
   let adoptCalls = 0
