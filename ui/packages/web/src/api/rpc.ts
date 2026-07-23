@@ -116,10 +116,10 @@ export interface Api {
   codexModels(): Promise<CodexModel[]>
   // Provider subscription quota (5h + weekly windows) for the sidebar status bar. `force` bypasses
   // the shared freshness window for an explicit user recheck.
-  quota(input?: { force?: boolean }): Promise<QuotaSnapshot>
+  quota(input?: { force?: boolean }, opts?: RpcCallOpts): Promise<QuotaSnapshot>
   // Per-provider LOCAL credential presence for the new-thread dispatch gate. Distinct from quota's
   // overloaded "unavailable" — reports only whether a credential exists. Never rejects.
-  authStatus(): Promise<AuthSnapshot>
+  authStatus(input?: undefined, opts?: RpcCallOpts): Promise<AuthSnapshot>
   accountLogout(input: AccountLogoutInput): Promise<AccountLogoutResult>
   // Slice B login utility: start/attach/inspect/cancel the restricted `claude auth login` terminal.
   accountLoginStart(input: AccountLoginStartInput): Promise<AccountLoginStartResult>
@@ -217,14 +217,22 @@ export async function parseRpcResponse(res: Response, name: string): Promise<unk
   return json.result
 }
 
-async function call(name: string, type: ProcType, input?: unknown): Promise<unknown> {
+// Per-call transport options. `signal` aborts the underlying fetch — callers that poll (quota) pass a
+// timeout signal so ONE severed/hung response (a dev-server restart mid-request) can't strand the
+// request forever: an unsettled fetch pins react-query in "fetching" (it never retries a promise that
+// never settles) and leaks one of the origin's six HTTP/1.1 connections each poll.
+export interface RpcCallOpts {
+  signal?: AbortSignal
+}
+
+async function call(name: string, type: ProcType, input?: unknown, opts?: RpcCallOpts): Promise<unknown> {
   // The old child may remain healthy while its durable owner is building a replacement. Do not let
   // a mutation race that handoff; local draft state remains editable and every query stays available.
   assertMutationAllowedDuringControlPlaneTransition(type)
   if (type === "query") {
     const url = new URL(`/rpc/${name}`, location.origin)
     if (input !== undefined) url.searchParams.set("input", JSON.stringify(input))
-    const res = await fetch(url.toString())
+    const res = await fetch(url.toString(), { signal: opts?.signal })
     noteServerBootId(res.headers.get("x-fray-boot")) // notice a server restart on any RPC roundtrip
     return parseRpcResponse(res, name)
   }
@@ -232,6 +240,7 @@ async function call(name: string, type: ProcType, input?: unknown): Promise<unkn
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input ?? {}),
+    signal: opts?.signal,
   })
   noteServerBootId(res.headers.get("x-fray-boot"))
   return parseRpcResponse(res, name)
@@ -241,6 +250,6 @@ export const rpc = new Proxy({} as Api, {
   get(_target, name: string) {
     const type = PROCEDURES[name as keyof Api]
     if (!type) return undefined
-    return (input?: unknown) => call(name, type, input)
+    return (input?: unknown, opts?: RpcCallOpts) => call(name, type, input, opts)
   },
 })
