@@ -1,7 +1,10 @@
 // The detached Codex app-server daemon: ONE per project. It owns the `codex app-server --stdio`
 // child and serves its JSON-RPC over a local socket, so the app-server OUTLIVES the disposable fray
 // runtime that spawned it — which is what makes an in-flight codex turn survive Update & Restart.
-// Same shape, and the same reason, as session-broker-daemon.ts does for PTY agent sessions.
+// It buys Codex the immunity a Claude thread already has from running inside TMUX, whose server is
+// likewise not a child of fray. (An older session-broker-daemon.ts once did this for PTY sessions;
+// it is dead code with no production importer — see detached-daemons.ts — so tmux, not that broker,
+// is why Claude threads live through a restart.)
 //
 // Before this existed the app-server was an ordinary stdio child of the runtime: every restart
 // SIGTERMed it and every in-flight turn died mid-sentence with no `task_complete`, no `turn_aborted`
@@ -11,9 +14,10 @@
 // Launched by ensureCodexAppServerDaemon() in codex-app-server-host.ts, which passes its whole config
 // as JSON in FRAY_CODEX_APP_SERVER_DAEMON. This process has no stdio (stdio:"ignore"); its only
 // interface is the socket and the on-disk record file.
-import { spawn } from "node:child_process"
-import { createServer, type Socket } from "node:net"
-import { existsSync, unlinkSync, writeFileSync } from "node:fs"
+import { execFile, spawn } from "node:child_process"
+import { connect as connectSocket, createServer, type Socket } from "node:net"
+import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
+import { dirname, join } from "node:path"
 import { StringDecoder } from "node:string_decoder"
 
 interface DaemonConfig {
@@ -26,6 +30,8 @@ interface DaemonConfig {
   generation: string
   clientInfo: Record<string, unknown>
   capabilities: Record<string, unknown>
+  /** Test seam only; production leaves this undefined and gets REACHABILITY_CHECK_MS. */
+  reachabilityCheckMs?: number
 }
 
 // A detached client cannot be allowed to make the daemon grow without bound, but dropping traffic
@@ -38,6 +44,11 @@ const MAX_LINE_BYTES = 8 * 1024 * 1024
 // real restart, so anything still unattached after this is genuinely abandoned.
 const IDLE_EXIT_MS = 6 * 60 * 60 * 1000
 const HANDSHAKE_TIMEOUT_MS = 30_000
+// How often an UNATTACHED daemon re-checks that its record file still names it. See `checkReachable`.
+const REACHABILITY_CHECK_MS = 30_000
+// …and how many consecutive checks must agree before it collects itself. Two, so a single unlucky
+// stat (a state dir being rewritten, an NFS hiccup) can never end an app-server on its own.
+const REACHABILITY_STRIKES = 2
 
 function readConfig(): DaemonConfig {
   const raw = process.env.FRAY_CODEX_APP_SERVER_DAEMON
@@ -84,10 +95,27 @@ function main(): void {
   let dropped = 0
   let idleTimer: NodeJS.Timeout | null = null
 
+  let published = false
+
+  /** The pid the record file currently names, or null when there is no readable record. */
+  const recordOwner = (): number | null => {
+    try {
+      const value = JSON.parse(readFileSync(config.recordPath, "utf8")) as { daemonPid?: unknown }
+      return typeof value.daemonPid === "number" ? value.daemonPid : null
+    } catch {
+      return null
+    }
+  }
+
   const cleanup = (): void => {
     try { client?.destroy() } catch {}
-    try { unlinkSync(config.recordPath) } catch {}
-    if (process.platform !== "win32") { try { unlinkSync(config.socketPath) } catch {} }
+    // Both paths are DERIVED from (stateDir, projectId), so a successor daemon owns the very same
+    // record and socket names. Unlink them unconditionally and a corpse deletes the LIVE daemon's
+    // discoverability on its way out. Only ever remove what is still ours.
+    const owner = recordOwner()
+    if (owner === process.pid) { try { unlinkSync(config.recordPath) } catch {} }
+    if (published && owner !== null && owner !== process.pid) return
+    if (published && process.platform !== "win32") { try { unlinkSync(config.socketPath) } catch {} }
   }
   const die = (code: number): never => { cleanup(); process.exit(code) }
 
@@ -95,6 +123,31 @@ function main(): void {
     if (idleTimer) clearTimeout(idleTimer)
     idleTimer = setTimeout(() => { try { child.kill("SIGTERM") } catch {}; die(0) }, IDLE_EXIT_MS)
     idleTimer.unref?.()
+  }
+
+  // ---- self-collection ----------------------------------------------------------------------------
+  // This daemon is DISCOVERABLE only through its record file: daemonCodexAppServerHost reads exactly
+  // that one path. So a daemon whose record has vanished — or has been overwritten by a successor —
+  // can never be attached to by anyone, ever, and holding a `codex app-server` (~150 MB, still able
+  // to edit the filesystem) for the remaining six hours of IDLE_EXIT_MS is pure waste. Nothing else
+  // collects these: the orphan reaper keys on FRAY_UI_THREAD, which this per-PROJECT daemon does not
+  // carry, and it explicitly protects any process named `codex` as a session root
+  // (orphan-reaper.ts). Daemons forked from an agent worktree that was later deleted leaked exactly
+  // this way, in pairs, at ~150 MB each.
+  //
+  // The check is gated on being UNATTACHED, and THAT is what keeps it clear of the one property this
+  // daemon exists for. A normal Update & Restart never touches the record: the runtime dies, the
+  // record sits there untouched, the next generation reads it and reattaches. So the restart window
+  // — the one moment nobody is attached — is invisible to this check, because the record still names
+  // us throughout it. Two consecutive strikes on top of that, so a single unlucky stat cannot end a
+  // turn on its own.
+  let unreachableStrikes = 0
+  const checkReachable = (): void => {
+    if (client) { unreachableStrikes = 0; return }
+    if (recordOwner() === process.pid) { unreachableStrikes = 0; return }
+    if (++unreachableStrikes < REACHABILITY_STRIKES) return
+    try { child.kill("SIGTERM") } catch {}
+    die(0)
   }
 
   // ---- server -> client ---------------------------------------------------------------------------
@@ -209,11 +262,61 @@ function main(): void {
     sock.on("error", drop)
   })
 
+  // ---- stale socket sweep -------------------------------------------------------------------------
+  // A daemon that was SIGKILLed, or that skipped its cleanup because a successor owned the record,
+  // leaves its unix socket FILE behind forever — nothing ever revisits these paths, and the host only
+  // ever considers the one path belonging to the project it is connecting for. They are inert, but
+  // they accumulate (23 on this machine, 9 of them ownerless).
+  //
+  // Safety is the entire design. Merely CONNECTING to a socket that is live would evict that daemon's
+  // real client — the accept handler destroys the previous socket — so a path any process still
+  // references is never probed at all: `lsof -U` names every unix-socket endpoint on the machine, and
+  // only a path absent from that list is touched. The probe must then be REFUSED (kernel proof that no
+  // listener is bound) before anything is unlinked. No lsof, or lsof failing ⇒ sweep nothing.
+  const sweepStaleSockets = (): void => {
+    if (process.platform === "win32") return
+    const dir = dirname(config.socketPath)
+    let candidates: string[]
+    try {
+      candidates = readdirSync(dir)
+        .filter((name) => name.startsWith("fray-codex-") && name.endsWith(".sock"))
+        .map((name) => join(dir, name))
+        .filter((path) => path !== config.socketPath)
+    } catch { return }
+    if (candidates.length === 0) return
+    execFile("lsof", ["-U", "-F", "n"], { timeout: 30_000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
+      if (!stdout) return // lsof absent or produced nothing: we have no evidence, so we touch nothing
+      if (error && !stdout.includes("fray-codex-")) return
+      const referenced = new Set<string>()
+      for (const line of stdout.split("\n")) if (line.startsWith("n/")) referenced.add(line.slice(1))
+      for (const path of candidates) {
+        if (referenced.has(path)) continue
+        const probe = connectSocket(path)
+        probe.unref?.()
+        probe.on("connect", () => probe.destroy()) // live after all — lsof was wrong; leave it alone
+        probe.on("error", (probeError: NodeJS.ErrnoException) => {
+          probe.destroy()
+          if (probeError.code === "ECONNREFUSED" || probeError.code === "ENOENT") {
+            try { unlinkSync(path) } catch {}
+          }
+        })
+      }
+    }).unref?.()
+  }
+
   const startListening = (): void => {
     // A stale unix socket from a crashed prior daemon would block listen(); named pipes need no unlink.
     if (process.platform !== "win32" && existsSync(config.socketPath)) { try { unlinkSync(config.socketPath) } catch {} }
     server.on("error", () => die(6))
-    server.listen(config.socketPath, () => { writeRecord(); armIdleExit() })
+    server.listen(config.socketPath, () => {
+      published = true
+      writeRecord()
+      armIdleExit()
+      const reachability = setInterval(checkReachable, config.reachabilityCheckMs ?? REACHABILITY_CHECK_MS)
+      reachability.unref?.()
+      // Off the critical path on purpose: the client is already being served by now.
+      setTimeout(sweepStaleSockets, 5_000).unref?.()
+    })
   }
 
   child.stdout.on("data", lineReader(readServerLine))
