@@ -11,6 +11,7 @@ import { createClaudeBackend } from "./backend/claude.ts"
 import {
   createRouter,
   completeRegisteredThread,
+  completionConfirmationHold,
   completionNeedsConfirmation,
   githubDispatcherRequest,
   hasPendingPermissionChange,
@@ -26,6 +27,7 @@ import type { AppContext } from "./context.ts"
 import type { Project } from "./project.ts"
 import type { Tailer } from "./tailer.ts"
 import { createPermissionController } from "./permission-controller.ts"
+import { writeScratchpad } from "./dispatch.ts"
 import { providerResumeCommand, shellQuote } from "./external-terminal.ts"
 
 test("provider resume command is shell-safe", () => {
@@ -240,6 +242,31 @@ test("threadTerminalCommand offers the verified provider resume command in every
       h.router.threadTerminalCommand.handler({ input: { slug: "foreign-or-legacy" } }),
       /No Fray-owned terminal session is available/,
     )
+  } finally {
+    h.storage.close()
+    rmSync(h.dir, { recursive: true, force: true })
+  }
+})
+
+// The Doc tab is gated on the scratchpad file existing and filled by this RPC, so the reader must read
+// exactly what the writer wrote. It once read a path of its own (.fray/scratch/<id>.md) that dispatch
+// never wrote, so every thread's Doc tab rendered "No scratchpad yet." Round-trip the real writer.
+test("threadScratchpad reads the scratchpad the dispatcher actually writes", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("scratch-thread"))
+    const rel = writeScratchpad(h.dir, "sid-scratch-thread", "Scratch thread")
+    assert.equal(rel, ".fray/threads/sid-scratch-thread/scratch.md")
+    writeFileSync(join(h.dir, rel), "# Scratchpad\n\nreal worker notes\n")
+
+    assert.deepEqual(await h.router.threadScratchpad.handler({ input: { slug: "scratch-thread" } }), {
+      markdown: "# Scratchpad\n\nreal worker notes\n",
+    })
+
+    // Unowned slug and never-provisioned session both fail closed to the empty doc, never throw.
+    assert.deepEqual(await h.router.threadScratchpad.handler({ input: { slug: "no-such-thread" } }), { markdown: "" })
+    h.storage.upsertSession(row("padless-thread"))
+    assert.deepEqual(await h.router.threadScratchpad.handler({ input: { slug: "padless-thread" } }), { markdown: "" })
   } finally {
     h.storage.close()
     rmSync(h.dir, { recursive: true, force: true })
@@ -573,7 +600,11 @@ test("completeRegisteredThread asks before ending a live session, then stops and
       killSession: (target: string) => { kills.push(target); live = false },
       isLive: () => live,
     }
-    assert.deepEqual(completeRegisteredThread(h.storage, saved, false, runtime), { needsConfirmation: true })
+    assert.deepEqual(completeRegisteredThread(h.storage, saved, false, runtime), {
+      needsConfirmation: true,
+      // No telemetry at all: the dialog must say "unreadable", not invent an executing turn.
+      hold: { turnInFlight: false, unobservable: true, subAgents: [], subAgentCount: 0, bgShells: [], bgShellCount: 0 },
+    })
     assert.equal(h.storage.getSession(slug)?.state, "open", "cancel/initial click leaves the live session open")
     assert.deepEqual(kills, [])
 
@@ -646,12 +677,12 @@ test("completeRegisteredThread requires confirmation for an executing turn or li
       const saved = { ...row(slug), exited: 0 }
       h.storage.upsertSession(saved)
       let kills = 0
-      assert.deepEqual(completeRegisteredThread(h.storage, saved, false, {
+      assert.equal(completeRegisteredThread(h.storage, saved, false, {
         findExpectedAdoptionPane: () => ({ kind: "absent" as const }),
         killExpectedAdoptionPane: () => false,
         killSession: () => { kills++ },
         isLive: () => true,
-      }, telemetry), { needsConfirmation: true })
+      }, telemetry).needsConfirmation, true)
       assert.equal(kills, 0)
       assert.equal(h.storage.getSession(slug)?.state, "open")
     }
@@ -659,6 +690,58 @@ test("completeRegisteredThread requires confirmation for an executing turn or li
     h.storage.close()
     rmSync(h.dir, { recursive: true, force: true })
   }
+})
+
+// The verdict alone left the dialog saying "this thread is still running", which answers nothing the
+// human can act on — they clicked Done because they believed it was finished. The hold carries the
+// server's actual evidence so the confirmation can name the executing turn and every child it is
+// about to kill, by count and by label.
+test("completionConfirmationHold names WHY it declined: the executing turn plus every live child", () => {
+  const base = { turn: "idle" as const, permPrompt: false, pendingQuestion: false, subAgents: [], bgShells: [] }
+  assert.equal(completionConfirmationHold({ ...base }), undefined, "a resting session with no children holds nothing")
+  assert.equal(
+    completionConfirmationHold({ ...base, turn: "in-flight", permPrompt: true }),
+    undefined,
+    "a verified permission pause is a human wait, not executing work",
+  )
+
+  const at = "2026-07-15T00:00:00.000Z"
+  const hold = completionConfirmationHold({
+    ...base,
+    turn: "in-flight",
+    subAgents: [
+      { id: "a1", label: "Audit the resolver", startedAt: at, state: "running" as const },
+      { id: "a2", label: "Finished child", startedAt: at, state: "done" as unknown as "running" },
+    ],
+    bgShells: [
+      { label: "Watch CI", startedAt: at, state: "running" as const },
+      { label: "vite dev", startedAt: at, state: "stale" as const },
+    ],
+  })
+  // Mid-turn AND owning children is one honest reading, not two competing ones — both travel.
+  assert.deepEqual(hold, {
+    turnInFlight: true,
+    unobservable: false,
+    subAgents: [{ label: "Audit the resolver", state: "running" }],
+    subAgentCount: 1,
+    bgShells: [{ label: "Watch CI", state: "running" }, { label: "vite dev", state: "stale" }],
+    bgShellCount: 2,
+  }, "only live ops are named; a settled child is not something Done is about to kill")
+})
+
+test("completionConfirmationHold caps worker-authored labels but reports the untruncated count", () => {
+  const at = "2026-07-15T00:00:00.000Z"
+  const hold = completionConfirmationHold({
+    turn: "idle",
+    permPrompt: false,
+    pendingQuestion: false,
+    subAgents: Array.from({ length: 11 }, (_, i) => ({ id: `a${i}`, label: `child ${i}`, startedAt: at, state: "running" as const })),
+    bgShells: [{ label: "x".repeat(500), startedAt: at, state: "running" as const }],
+  })
+  assert.equal(hold?.turnInFlight, false, "an idle parent with live children is held by the children alone")
+  assert.equal(hold?.subAgents.length, 8, "the named list is capped")
+  assert.equal(hold?.subAgentCount, 11, "the count is NOT capped — the dialog says '+3 more', never a silent truncation")
+  assert.equal(hold?.bgShells[0].label.length, 100, "a runaway label cannot blow out the dialog")
 })
 
 test("completion only trusts known resting telemetry; a live unobservable runtime remains protected", () => {

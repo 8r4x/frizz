@@ -138,6 +138,29 @@ export const BgShellView = z.object({
 })
 export type BgShellView = z.infer<typeof BgShellView>
 
+// WHY "Mark as done" stopped to ask instead of ending the session outright. The server already knows
+// the exact evidence it refused on (an executing turn, named live children, or no telemetry at all) —
+// this carries it to the confirm dialog so the human reads "2 sub-agents and 1 background shell are
+// still running, here they are" rather than a bare "this thread is still running". Labels are the same
+// worker-authored strings the board's ops strip already renders; the lists are capped and the true
+// totals travel separately so a long list can say "+N more" instead of silently truncating.
+export const CompletionHoldOp = z.object({
+  label: z.string(),
+  state: z.enum(["running", "stale"]),
+})
+export type CompletionHoldOp = z.infer<typeof CompletionHoldOp>
+export const CompletionHold = z.object({
+  turnInFlight: z.boolean().default(false), // the session's own turn is mid-execution
+  // Telemetry is missing entirely (live runtime, unreadable transcript). We can neither confirm nor
+  // rule out work in flight, so the dialog says exactly that rather than inventing a specific cause.
+  unobservable: z.boolean().default(false),
+  subAgents: z.array(CompletionHoldOp).default([]),
+  subAgentCount: z.number().default(0), // total live sub-agents (≥ subAgents.length)
+  bgShells: z.array(CompletionHoldOp).default([]),
+  bgShellCount: z.number().default(0), // total live background shells (≥ bgShells.length)
+})
+export type CompletionHold = z.infer<typeof CompletionHold>
+
 // A PENDING native AskUserQuestion — the worker (or any session) called Claude Code's AskUserQuestion
 // tool and is frozen at its TUI dialog, no tool_result yet. Safety net for pre-contract / adopted
 // sessions that bypass the thread-file ask channel: we surface the REAL question(s) so the human knows

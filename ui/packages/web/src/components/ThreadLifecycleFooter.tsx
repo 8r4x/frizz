@@ -1,9 +1,9 @@
 import { useState } from "react"
 import { Check, Hourglass, Loader2 } from "lucide-react"
-import type { ThreadView } from "@fray-ui/shared"
+import type { CompletionHold, ThreadView } from "@fray-ui/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
-import { threadLifecycleAvailability, completionArchivesImmediately } from "../lib/threadLifecycle.ts"
+import { threadLifecycleAvailability, completionArchivesImmediately, completionHoldSummary } from "../lib/threadLifecycle.ts"
 import { futureSnoozedUntil } from "../groups.ts"
 import { formatSnoozeWake } from "../lib/snooze.ts"
 import { SnoozeButton } from "./SnoozeButton.tsx"
@@ -96,6 +96,10 @@ export function StateButton({
   // (re-enables under the dialog) or a failure (re-enables in place) clears it.
   const [pending, setPending] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
+  // The server's own evidence for declining, held for as long as the dialog is up. Never derived from
+  // the board snapshot: the snapshot lags the RPC by up to a poll, and the whole point of this copy is
+  // that it describes the exact state the server refused on.
+  const [hold, setHold] = useState<CompletionHold | undefined>(undefined)
   // `optimistic`: fade the card NOW (before the RPC) rather than after the round-trip. Only when a
   // reinstate path exists AND the completion is predicted to archive immediately — so the common resting
   // "done" card feels instantaneous, while an executing turn still waits and shows the confirm dialog.
@@ -114,6 +118,7 @@ export function StateButton({
           // under event-loop contention), the card still reinstates but this setConfirmOpen no-ops on the
           // gone instance — the user simply sees the card return and can click again. Safe either way.
           if (optimistic) onDismissCancel?.()
+          setHold(result.hold)
           setConfirmOpen(true)
           setPending(false)
           return
@@ -174,10 +179,38 @@ export function StateButton({
           </>
         }
       >
-        <p className="p-4 text-[12px] leading-relaxed text-muted">
-          This thread is still running. Marking it done will stop its agent session, then move it to Done.
-        </p>
+        <CompletionHoldBody hold={hold} />
       </Dialog>
     </>
+  )
+}
+
+// The confirm dialog's body. Ending a session kills its whole process tree, so this names what is
+// about to die: the executing turn and/or every live sub-agent and background shell, counted and
+// listed by label. The human clicked Done believing the thread was finished — the specific "2
+// background shells: `Watch CI`, `vite dev`" is the correction, and a bare "still running" was not.
+function CompletionHoldBody({ hold }: { hold: CompletionHold | undefined }) {
+  const summary = completionHoldSummary(hold)
+  return (
+    <div data-completion-hold className="flex flex-col gap-2 p-4 text-[12px] leading-relaxed text-muted">
+      <p>{summary.lead}</p>
+      {summary.groups.map((group) => (
+        <div key={group.kind} className="flex flex-col gap-0.5">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-fg/70">{group.heading}</div>
+          <ul className="flex flex-col gap-0.5">
+            {group.items.map((item, index) => (
+              <li key={`${item.label}-${index}`} className="flex min-w-0 items-baseline gap-1.5">
+                <span aria-hidden className="shrink-0 text-[11px] leading-none text-muted/40">⤷</span>
+                <span className="min-w-0 truncate text-fg/80">{item.label}</span>
+                {/* Stale is why we ask rather than proof of life: say so instead of implying either. */}
+                {item.stale && <span className="shrink-0 text-[11px] text-muted/60">no recent output</span>}
+              </li>
+            ))}
+            {group.overflow > 0 && <li className="pl-[15px] text-muted/60">+{group.overflow} more</li>}
+          </ul>
+        </div>
+      ))}
+      <p>{summary.trailer}</p>
+    </div>
   )
 }

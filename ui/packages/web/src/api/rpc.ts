@@ -40,6 +40,7 @@ import type {
   ResolveInteractionResult,
   CancelInteractionInput,
   CancelInteractionResult,
+  CompletionHold,
 } from "@fray-ui/shared"
 import { noteServerBootId } from "./boot.ts"
 import { store } from "../store.ts"
@@ -83,8 +84,9 @@ export interface Api {
   // The ONLY writer of a session thread's open|archived lifecycle (the done fence mutates nothing).
   setThreadState(input: { slug: string; state: "open" | "archived" }): Promise<void>
   // Completes an inactive session immediately. A live provider shell reports that confirmation is
-  // required; the caller must opt into its termination before the row can move to Done.
-  completeThread(input: { slug: string; terminateLive?: boolean }): Promise<{ needsConfirmation: boolean }>
+  // required; the caller must opt into its termination before the row can move to Done. `hold` carries
+  // WHY it declined — the executing turn and/or the named live sub-agents/shells — for the dialog to name.
+  completeThread(input: { slug: string; terminateLive?: boolean }): Promise<{ needsConfirmation: boolean; hold?: CompletionHold }>
   setThreadSnooze(input: SetThreadSnoozeInput): Promise<void>
   // Hard-delete a stalled/exited session (the Dismiss verb): removes the row + tombstones its transcript
   // so it stays gone across a rescan. Server-gated to non-live rows; rejects a running/idle session.

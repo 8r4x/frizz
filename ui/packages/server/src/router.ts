@@ -46,6 +46,7 @@ import {
   ResolveInteractionResult,
   CancelInteractionInput,
   CancelInteractionResult,
+  CompletionHold,
   type InteractionRecord,
   type ThreadView,
   ThreadSlug,
@@ -64,7 +65,7 @@ import { openExternalUrl } from "./open-external.ts"
 import { openLocalFile, resolveOpenableFile } from "./local-file.ts"
 import { openableFileRoots } from "./project.ts"
 import { ghInstalled, ghAuthed, ghRepo, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_ISSUE_PROMPT, DEFAULT_PR_PROMPT } from "./github.ts"
-import { slugify, resolveSlug, resolveLegacyThreadFile } from "./dispatch.ts"
+import { slugify, resolveSlug, resolveLegacyThreadFile, scratchpadRelPath } from "./dispatch.ts"
 import { readCodexModels } from "./backend/codex-models.ts"
 import { readQuota } from "./quota.ts"
 import { readAuthSnapshot } from "./backend/auth-status.ts"
@@ -199,19 +200,49 @@ export function stopRuntimeBySlug(
 // done is safe to perform immediately (and must still terminate it so it is not orphaned). We ask
 // only when the server can see work still being executed. Missing telemetry is intentionally
 // conservative: a live, unobservable runtime may still be in the middle of a turn.
-export function completionNeedsConfirmation(telemetry: SessionTelemetry | undefined): boolean {
-  if (!telemetry) return true
+// The evidence itself, not just the verdict: the dialog has to be able to say WHICH work it refused
+// to kill silently. Returns undefined when the completion may proceed immediately.
+export function completionConfirmationHold(telemetry: SessionTelemetry | undefined): CompletionHold | undefined {
+  const empty = { turnInFlight: false, subAgents: [], subAgentCount: 0, bgShells: [], bgShellCount: 0 }
+  if (!telemetry) return { ...empty, unobservable: true }
 
   // These are paused waiting for a person, not churning. They are safe to stop as part of an
   // immediate Done transition; neither is evidence of an executing model/tool turn.
-  if (telemetry.permPrompt || telemetry.nativeInputRequired || telemetry.pendingAsk) return false
-
-  if (telemetry.turn === "in-flight") return true
+  if (telemetry.permPrompt || telemetry.nativeInputRequired || telemetry.pendingAsk) return undefined
 
   // An idle parent can still have a background child/shell doing work. `stale` is not proof that
-  // it has stopped, so retain the confirmation safeguard rather than silently killing it.
-  return telemetry.subAgents.some((op) => op.state === "running" || op.state === "stale") ||
-    telemetry.bgShells.some((op) => op.state === "running" || op.state === "stale")
+  // it has stopped, so retain the confirmation safeguard rather than silently killing it. Both lists
+  // are collected even for an in-flight turn: "mid-turn AND two children running" is the honest
+  // reading, and stopping early would hide half of what Done is about to kill.
+  const busy = (op: { state: "running" | "stale" }) => op.state === "running" || op.state === "stale"
+  const subAgents = telemetry.subAgents.filter(busy)
+  const bgShells = telemetry.bgShells.filter(busy)
+  const turnInFlight = telemetry.turn === "in-flight"
+  if (!turnInFlight && subAgents.length === 0 && bgShells.length === 0) return undefined
+  return {
+    turnInFlight,
+    unobservable: false,
+    subAgents: holdOps(subAgents),
+    subAgentCount: subAgents.length,
+    bgShells: holdOps(bgShells),
+    bgShellCount: bgShells.length,
+  }
+}
+
+// Worker-authored labels, so cap both the list and each string before they cross the wire — the same
+// defensive discipline every other foreign-payload surface here follows. The untruncated counts ride
+// alongside (see CompletionHold), so a capped list is reported as "+N more", never silently shortened.
+const HOLD_OPS_MAX = 8
+const HOLD_LABEL_MAX = 100
+function holdOps(ops: readonly { label: string; state: "running" | "stale" }[]): CompletionHold["subAgents"] {
+  return ops.slice(0, HOLD_OPS_MAX).map((op) => ({
+    label: op.label.trim().slice(0, HOLD_LABEL_MAX) || "(unnamed)",
+    state: op.state,
+  }))
+}
+
+export function completionNeedsConfirmation(telemetry: SessionTelemetry | undefined): boolean {
+  return !!completionConfirmationHold(telemetry)
 }
 
 // A completion is intentionally stronger than an archive toggle. It first establishes whether the
@@ -227,7 +258,7 @@ export function completeRegisteredThread(
   terminateLive: boolean,
   runtime: RegisteredRuntimeTerminator = tmux,
   telemetry?: SessionTelemetry,
-): { needsConfirmation: boolean } {
+): { needsConfirmation: boolean; hold?: CompletionHold } {
   const binding = adoptionRuntimeBinding(storage, row)
   if (binding.kind === "conflict") {
     throw new Error("This thread has a competing adoption attempt; nothing was changed")
@@ -242,7 +273,8 @@ export function completeRegisteredThread(
         return current.kind === "found" && !current.pane.dead
       })()
 
-  if (live && !terminateLive && completionNeedsConfirmation(telemetry)) return { needsConfirmation: true }
+  const hold = live && !terminateLive ? completionConfirmationHold(telemetry) : undefined
+  if (hold) return { needsConfirmation: true, hold }
   if (live) {
     stopRegisteredRuntime(storage, row, runtime)
     // For standalone sessions this is the postcondition that turns tmux's idempotent kill into a
@@ -687,7 +719,8 @@ export function createRouter(ctx: AppContext) {
     // client—asks for confirmation only when current telemetry shows an executing/ambiguous turn.
     completeThread: mutation({
       input: z.object({ slug: ThreadSlug, terminateLive: z.boolean().default(false) }).strict(),
-      output: z.object({ needsConfirmation: z.boolean() }),
+      // `hold` rides along only with needsConfirmation:true — it is the evidence the dialog names.
+      output: z.object({ needsConfirmation: z.boolean(), hold: CompletionHold.optional() }),
       handler: async ({ input }) => {
         const row = ctx.storage.getSession(input.slug)
         if (!row) throw new Error(`no session registered for ${input.slug}`)
@@ -783,7 +816,7 @@ export function createRouter(ctx: AppContext) {
         const row = ctx.storage.getSession(input.slug)
         if (!row) return { markdown: "" }
         try {
-          return { markdown: readFileSync(join(frayDir, "scratch", `${row.session_id}.md`), "utf8") }
+          return { markdown: readFileSync(join(ctx.project.dir, scratchpadRelPath(row.session_id)), "utf8") }
         } catch {
           return { markdown: "" }
         }
