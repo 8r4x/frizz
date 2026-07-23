@@ -70,6 +70,8 @@ import { openableFileRoots } from "./project.ts"
 import { ghInstalled, ghAuthed, ghRepo, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_ISSUE_PROMPT, DEFAULT_PR_PROMPT } from "./github.ts"
 import { slugify, resolveSlug, resolveLegacyThreadFile, scratchpadRelPath } from "./dispatch.ts"
 import { readCodexModels } from "./backend/codex-models.ts"
+import { codexSandbox } from "./backend/codex.ts"
+import type { CodexSandboxMode } from "./backend/codex-app-server.ts"
 import { readQuota } from "./quota.ts"
 import { readAuthSnapshot } from "./backend/auth-status.ts"
 import { liveThreadsForBackend, runProviderLogout } from "./backend/account-actions.ts"
@@ -729,8 +731,30 @@ export function createRouter(ctx: AppContext) {
         // the backend alone and migrates such a row on contact; match it.
         const permRow = ctx.storage.getSession(input.slug)
         if (permRow?.backend === "codex") {
+          // Persist FIRST and unconditionally: the registry is the operator's stated intent, it is what
+          // every later cold resume now carries (resumeSandboxOverride), and it must survive even if the
+          // eager apply below cannot reach the app-server.
           ctx.storage.setPermissionMode(input.slug, input.permissionMode)
           ctx.board.refresh()
+          // Then apply it to the LIVE thread. Before this the handler stopped at the line above and told
+          // the operator "saved for the next resume" — a promise nothing kept, because no resume path
+          // sent a sandbox at all. `thread/settings/update` retunes a loaded thread in place, and the
+          // bridge only reports `applied` once the app-server's own `thread/settings/updated`
+          // notification confirms the new policy.
+          const bridge = ctx.codexAppServer
+          const sandbox = codexSandbox(input.permissionMode) as CodexSandboxMode
+          if (bridge && bridge.binding(input.slug, permRow.session_id)) {
+            try {
+              const applied = await bridge.setSandbox({ threadSlug: input.slug, sessionId: permRow.session_id, sandbox })
+              // A change made against a RUNNING turn is accepted and durable, but the running turn keeps
+              // the policy it started under — so say "next turn", never "applied to the live session".
+              if (applied.applied) return { effect: applied.turnInFlight ? "next-turn" as const : "applied" as const }
+            } catch {
+              // A bridge that cannot reach the app-server (or a thread it no longer holds) is not an
+              // error the operator needs to see: the intent is already persisted and the next resume
+              // carries it. Fall through to the pre-existing "next-resume" answer.
+            }
+          }
           return { effect: "next-resume" as const }
         }
         return ctx.permissionController.request(input.slug, input.permissionMode)

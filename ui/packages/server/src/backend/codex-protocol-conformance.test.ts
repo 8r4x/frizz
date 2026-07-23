@@ -24,18 +24,24 @@ import { join } from "node:path"
 import { CODEX_APP_SERVER_SUPPORTED_VERSION } from "./codex-app-server.ts"
 
 /** Every request fray issues, and the exact param keys it puts on the wire. Kept beside the call
- *  sites it mirrors: thread/start :1495, thread/resume :1548 :1587 :2176, turn/start :1637,
- *  turn/steer :1683, turn/interrupt :1709 in codex-app-server.ts. This table is not a second source
- *  of truth — it is the CLAIM, and the generated schema is what judges it. */
+ *  sites it mirrors: thread/start :1653, thread/resume :1707 :1748 :2346, turn/start :1803,
+ *  turn/steer :1849, turn/interrupt :1875, thread/settings/update :2526 in codex-app-server.ts. This
+ *  table is not a second source of truth — it is the CLAIM, and the generated schema is what judges it. */
 const FRAY_SENDS: Record<string, readonly string[]> = {
   "thread/start": [
     "cwd", "model", "approvalPolicy", "approvalsReviewer", "sandbox", "permissions",
     "baseInstructions", "developerInstructions", "config", "ephemeral",
   ],
-  "thread/resume": ["threadId", "excludeTurns", "approvalsReviewer"],
+  // `sandbox` + `approvalPolicy` ride every resume so a sandbox the operator changed while the thread
+  // was detached actually takes effect. They go TOGETHER on purpose: on a cold resume the app-server
+  // couples them, and passing one alone resets the other to the config.toml default.
+  "thread/resume": ["threadId", "excludeTurns", "approvalsReviewer", "sandbox", "approvalPolicy"],
   "turn/start": ["threadId", "clientUserMessageId", "input", "model", "effort"],
   "turn/steer": ["threadId", "clientUserMessageId", "expectedTurnId", "input"],
   "turn/interrupt": ["threadId", "turnId"],
+  // The eager per-thread sandbox change. Note the OTHER spelling — `sandboxPolicy`, a tagged object;
+  // the test below pins that asymmetry in both directions.
+  "thread/settings/update": ["threadId", "sandboxPolicy"],
 }
 
 function installedCodexVersion(): string | null {

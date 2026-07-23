@@ -138,7 +138,12 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
               ? `${pendingLabel} is being reconciled with backend telemetry`
               : thread.runtime === "exited"
                 ? "Saved per thread and applied when this conversation resumes"
-                : "Reopen this idle conversation with the selected runtime permission mode")
+                // Codex retunes a LIVE thread in place (thread/settings/update) — nothing is reopened,
+                // and the control stays usable during a turn. Say what actually happens instead of
+                // borrowing Claude's reattach language.
+                : backend === "codex"
+                  ? "Change this conversation's sandbox; a running turn keeps the one it started with"
+                  : "Reopen this idle conversation with the selected runtime permission mode")
           }
           disabled={busy || permissionUnknown || permissionControlBlocked !== null}
           indicatorPosition="right"

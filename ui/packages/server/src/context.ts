@@ -1,6 +1,6 @@
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
-import type { Settings } from "@fray-ui/shared"
+import { PermissionMode, type Settings } from "@fray-ui/shared"
 import { Bus, Emitter } from "./bus.ts"
 import { resolveProject, type Project } from "./project.ts"
 import { createStorage, type Storage } from "./storage.ts"
@@ -17,7 +17,7 @@ import {
   resumeThread,
 } from "./resume.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
-import { createCodexBackend } from "./backend/codex.ts"
+import { createCodexBackend, codexSandbox } from "./backend/codex.ts"
 import { readClaudeAuthStatusCli, readCodexAuthState } from "./backend/auth-status.ts"
 import { createLoginUtility, type LoginUtility } from "./login-utility.ts"
 import type { AgentBackend } from "./backend/types.ts"
@@ -30,6 +30,7 @@ import {
   codexAppServerBridgeEnabled,
   createCodexAppServerBridge,
   type CodexAppServerBridge,
+  type CodexSandboxMode,
 } from "./backend/codex-app-server.ts"
 import {
   ADOPTION_RECONCILE_INTERVAL_MS,
@@ -419,6 +420,20 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         shouldAutoResume: (slug) => {
           const row = storage.getSession(slug)
           return Boolean(row) && row?.state !== "archived" && row?.archived !== 1
+        },
+        // The operator's sandbox intent, so a COLD `thread/resume` carries it. fray's registry is the
+        // single authority here — `setThreadPermission` persists `permission_mode` on every change,
+        // including the ones the eager apply could not deliver — which is what finally makes the
+        // "saved for the next resume" copy true. Scoped by session id so a stale binding for a
+        // replaced session can never pull a newer row's permission.
+        sandboxFor: (slug, sessionId) => {
+          const row = storage.getSession(slug)
+          if (!row || row.backend !== "codex" || row.session_id !== sessionId) return undefined
+          const mode = PermissionMode.safeParse(row.permission_mode)
+          // No recorded intent (a row from before permission_mode was stamped) ⇒ send no override at
+          // all, so the resume behaves exactly as it did before this existed.
+          if (!mode.success) return undefined
+          return codexSandbox(mode.data) as CodexSandboxMode
         },
       })
     : undefined

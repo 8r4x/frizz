@@ -1,6 +1,10 @@
 // Foreign sessions have no Fray-owned terminal. Running registered sessions remain editable because
 // the server persists first and uses the backend's in-band control rather than restarting the worker.
 export interface ThreadPermissionState {
+  // Which runtime this row is. The two apply a permission change by completely different means, so
+  // they need different gates — see threadPermissionBlockedReason. Absent/unknown reads as Claude,
+  // i.e. the strict side, so an unlabelled row can never be loosened by accident.
+  backend?: string
   foreign?: boolean
   runtime?: string
   pendingAsk?: unknown
@@ -32,6 +36,19 @@ export function threadPermissionBlockedReason(thread: ThreadPermissionState): st
   if (thread.pendingAsk || thread.nativeInputRequired || thread.runtime === "perm-prompt") {
     return "Resolve the current terminal approval or question first"
   }
+  // ---- everything below this line fences the CLAUDE reattach specifically ----
+  // Claude applies a permission change by RESTARTING the tmux pane (permission-controller.ts does a
+  // controlled idle reattach and inspects the composer first so it does not destroy an unsent draft).
+  // That genuinely cannot happen while a turn — or a sub-agent, or a background shell — is running:
+  // the restart would kill the work.
+  //
+  // A Codex app-server row has no pane and no restart. Its change rides `thread/settings/update`,
+  // which the app-server accepts MID-TURN and applies from the next turn on (verified live), exactly
+  // the "it just queues up like anything else" behaviour the terminal UI gives you. Fencing it on a
+  // running turn was the Claude gate leaking onto a runtime that never needed it, and the operator was
+  // right that it made no sense. The server still fails closed on its own: an unreachable bridge falls
+  // back to persist-only and answers "saved for the next resume".
+  if (thread.backend === "codex") return null
   const unresolvedOps = [...(thread.subAgents ?? []), ...(thread.bgShells ?? [])].filter((op) => op.state === "running" || op.state === "stale").length
   if (unresolvedOps > 0) return `Wait for ${unresolvedOps} unresolved background operation${unresolvedOps === 1 ? "" : "s"}`
   if (thread.runtime === "running" || thread.runtime === "spawning") return "Wait for the current turn to finish"
@@ -46,7 +63,16 @@ export function threadFollowUpBlocked(thread: ThreadPermissionState): boolean {
     thread.runtimeControlPending === true
 }
 
-export function threadPermissionEffectMessage(effect: "applied" | "next-resume", backend: "claude" | "codex"): string {
+// Three outcomes, three honest sentences. "next-turn" exists because a Codex change made against a
+// RUNNING turn is accepted and durable but does not reach the turn already executing — verified live:
+// a turn that attempted a write after the flip to danger-full-access was still refused and said so.
+// Claiming "applied to the live session" there would be a lie the operator could catch in one turn.
+export function threadPermissionEffectMessage(
+  effect: "applied" | "next-turn" | "next-resume",
+  backend: "claude" | "codex",
+): string {
   const noun = backend === "codex" ? "Sandbox" : "Permissions"
-  return effect === "applied" ? `${noun} applied to the live session` : `${noun} saved for the next resume`
+  if (effect === "applied") return `${noun} applied to the live session`
+  if (effect === "next-turn") return `${noun} applied — takes effect on the next turn`
+  return `${noun} saved for the next resume`
 }
