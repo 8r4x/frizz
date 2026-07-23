@@ -1,25 +1,36 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { ThreadView } from "@fray-ui/shared"
-import { canDismiss } from "./status.ts"
+import { canDismiss, canRetry } from "./status.ts"
 
-type DismissInput = Pick<ThreadView, "kind" | "foreign" | "runtime">
-const t = (over: Partial<DismissInput>): DismissInput => ({ kind: "session", foreign: false, runtime: "exited", ...over })
+type RecoveryInput = Pick<ThreadView, "kind" | "foreign" | "runtime" | "crashed">
+const t = (over: Partial<RecoveryInput>): RecoveryInput => ({ kind: "session", foreign: false, runtime: "exited", ...over })
 
-test("canDismiss: TRUE only for a non-foreign exited/stalled session", () => {
-  assert.equal(canDismiss(t({ runtime: "exited" })), true, "an exited (or Stalled) owned session is dismissable")
+test("recovery actions: a crashed owned session retries instead of dismissing", () => {
+  const stalled = t({ crashed: true })
+  assert.equal(canRetry(stalled), true)
+  assert.equal(canDismiss(stalled), false)
 })
 
-test("canDismiss: FALSE for a live session (running / turn-idle / perm-prompt)", () => {
-  assert.equal(canDismiss(t({ runtime: "running" })), false)
-  assert.equal(canDismiss(t({ runtime: "turn-idle" })), false)
-  assert.equal(canDismiss(t({ runtime: "perm-prompt" })), false)
+test("recovery actions: an ordinary exited owned session remains dismissable", () => {
+  const exited = t({ crashed: false })
+  assert.equal(canRetry(exited), false)
+  assert.equal(canDismiss(exited), true)
 })
 
-test("canDismiss: FALSE for a foreign session even when exited", () => {
-  assert.equal(canDismiss(t({ foreign: true, runtime: "exited" })), false, "foreign sessions are read-only")
+test("recovery actions: neither action is offered for a live session", () => {
+  for (const runtime of ["running", "turn-idle", "perm-prompt"] as const) {
+    assert.equal(canRetry(t({ runtime, crashed: true })), false)
+    assert.equal(canDismiss(t({ runtime })), false)
+  }
 })
 
-test("canDismiss: FALSE for a legacy (.fray-file) thread", () => {
-  assert.equal(canDismiss(t({ kind: "legacy", runtime: "exited" })), false)
+test("recovery actions: foreign sessions remain read-only", () => {
+  assert.equal(canRetry(t({ foreign: true, crashed: true })), false)
+  assert.equal(canDismiss(t({ foreign: true })), false)
+})
+
+test("recovery actions: legacy file threads have no provider runtime to control", () => {
+  assert.equal(canRetry(t({ kind: "legacy", crashed: true })), false)
+  assert.equal(canDismiss(t({ kind: "legacy" })), false)
 })

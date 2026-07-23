@@ -1,12 +1,20 @@
 import { FrayStatus, type ThreadView } from "@fray-ui/shared"
 
-// The Dismiss (hard-delete/forget) verb is offered ONLY on an owned session that is NOT live — a
-// stalled/exited row. A "Stalled" phantom (a worker whose transcript never materialized) and a
-// normally-exited session both derive runtime "exited"; a running / turn-idle / perm-prompt session is
-// live and must be Archived, never forgotten out from under itself (the server re-checks this too).
-// Foreign sessions are read-only. Pure predicate so the gate is unit-tested without rendering React.
-export function canDismiss(thread: Pick<ThreadView, "kind" | "foreign" | "runtime">): boolean {
-  return thread.kind === "session" && thread.foreign !== true && thread.runtime === "exited"
+type RecoveryThread = Pick<ThreadView, "kind" | "foreign" | "runtime" | "crashed">
+
+// A crash/stall is recoverable through the ordinary follow-up path: the server reattaches a dead
+// provider session, retires any phantom Codex turn, then starts the continuation. Keep this distinct
+// from runtime="exited", which also describes a normally-rested provider process.
+export function canRetry(thread: RecoveryThread): boolean {
+  return thread.kind === "session" && thread.foreign !== true && thread.runtime === "exited" && thread.crashed === true
+}
+
+// Dismiss (hard-delete/forget) remains the diagnostic escape hatch for an ordinary exited session,
+// but never leads a stalled session anymore — a recoverable crash gets Retry instead. A running /
+// turn-idle / perm-prompt session is live and must be Archived, never forgotten out from under itself
+// (the server re-checks this too). Foreign sessions are read-only.
+export function canDismiss(thread: RecoveryThread): boolean {
+  return thread.kind === "session" && thread.foreign !== true && thread.runtime === "exited" && thread.crashed !== true
 }
 
 // Lifecycle order for status pickers: planning → planned → active → blocked → done → dismissed.

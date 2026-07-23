@@ -945,7 +945,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
         {thread.kind === "session" && thread.foreign !== true && <CopyTerminalCommandButton slug={thread.id} />}
         <HeaderActions
           thread={thread}
-          showDismiss={false}
+          showExitAction={false}
           collapsed={collapsed}
           onCollapse={() => setCollapsed((c) => !c)}
           onOpen={() => pushDrawer("thread", thread.id)}

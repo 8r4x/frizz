@@ -7,6 +7,21 @@ import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
 
+const calls: string[] = []
+globalThis.fetch = async (input, init) => {
+  const url = new URL(typeof input === "string" ? input : input.toString(), window.location.origin)
+  const body = JSON.parse(String(init?.body ?? "{}")) as { message?: string }
+  if (url.pathname === "/rpc/followUp") {
+    calls.push(`followUp: ${body.message ?? ""}`)
+    const output = document.querySelector("[data-fixture-rpc-calls]")
+    if (output) output.textContent = `RPC calls: ${calls.join(" | ")}`
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+  return new Response(JSON.stringify({ result: null }), {
+    headers: { "content-type": "application/json", "x-fray-boot": "thread-header-fixture" },
+  })
+}
+
 const base = {
   status: "active",
   mechanism: null,
@@ -41,6 +56,7 @@ const codexThread = {
   title: "Implement the durable title protocol for new Codex sessions",
   backend: "codex",
   runtime: "exited",
+  crashed: true,
 } as unknown as ThreadView
 
 store.board = { projectDir: "/fixture", threads: [claudeThread, codexThread] } as BoardSnapshot
@@ -65,9 +81,10 @@ function Fixture() {
           <HeaderFixture slug={claudeThread.id} />
         </section>
         <section className="overflow-hidden border border-border bg-panel shadow-xl shadow-black/30">
-          <p className="border-b border-border px-3 py-2 text-[11px] text-muted">Codex exited — long title truncation and direct title editing</p>
+          <p className="border-b border-border px-3 py-2 text-[11px] text-muted">Codex stalled — retry the recoverable turn without discarding the session</p>
           <HeaderFixture slug={codexThread.id} />
         </section>
+        <p data-fixture-rpc-calls className="text-[11px] text-muted">RPC calls: {calls.join(" | ") || "none"}</p>
       </div>
     </main>
   )
