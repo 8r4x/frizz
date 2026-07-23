@@ -16,9 +16,11 @@ import {
   githubDispatcherRequest,
   hasPendingPermissionChange,
   hasUnresolvedBackgroundOps,
+  isAppServerCodexRow,
   stopAndForgetRegisteredRuntime,
   stopRegisteredRuntime,
   stopRuntimeBySlug,
+  stopThreadRuntime,
   validateGithubDispatchProfile,
 } from "./router.ts"
 import { createStorage, type AdoptionClaimRow, type SessionRow } from "./storage.ts"
@@ -724,7 +726,7 @@ function terminatorHarness(initial: AdoptionPaneLookup) {
   }
 }
 
-test("completeRegisteredThread asks before ending a live session, then stops and archives only after confirmation", () => {
+test("completeRegisteredThread asks before ending a live session, then stops and archives only after confirmation", async () => {
   const h = harness()
   const slug = "live-complete"
   const saved = { ...row(slug), exited: 0 }
@@ -738,7 +740,7 @@ test("completeRegisteredThread asks before ending a live session, then stops and
       killSession: (target: string) => { kills.push(target); live = false },
       isLive: () => live,
     }
-    assert.deepEqual(completeRegisteredThread(h.storage, saved, false, runtime), {
+    assert.deepEqual(await completeRegisteredThread(h.storage, saved, false, runtime), {
       needsConfirmation: true,
       // No telemetry at all: the dialog must say "unreadable", not invent an executing turn.
       hold: { turnInFlight: false, unobservable: true, subAgents: [], subAgentCount: 0, bgShells: [], bgShellCount: 0 },
@@ -746,7 +748,7 @@ test("completeRegisteredThread asks before ending a live session, then stops and
     assert.equal(h.storage.getSession(slug)?.state, "open", "cancel/initial click leaves the live session open")
     assert.deepEqual(kills, [])
 
-    assert.deepEqual(completeRegisteredThread(h.storage, saved, true, runtime), { needsConfirmation: false })
+    assert.deepEqual(await completeRegisteredThread(h.storage, saved, true, runtime), { needsConfirmation: false })
     assert.deepEqual(kills, [slug])
     assert.equal(h.storage.getSession(slug)?.state, "archived")
     assert.equal(h.storage.getSession(slug)?.exited, 1)
@@ -756,7 +758,7 @@ test("completeRegisteredThread asks before ending a live session, then stops and
   }
 })
 
-test("completeRegisteredThread ends an idle live provider shell without confirmation and archives it", () => {
+test("completeRegisteredThread ends an idle live provider shell without confirmation and archives it", async () => {
   const h = harness()
   const slug = "idle-live-complete"
   const saved = { ...row(slug), exited: 0 }
@@ -772,7 +774,7 @@ test("completeRegisteredThread ends an idle live provider shell without confirma
       bgShells: [],
     }
     assert.equal(completionNeedsConfirmation(telemetry), false)
-    assert.deepEqual(completeRegisteredThread(h.storage, saved, false, {
+    assert.deepEqual(await completeRegisteredThread(h.storage, saved, false, {
       findExpectedAdoptionPane: () => ({ kind: "absent" as const }),
       killExpectedAdoptionPane: () => false,
       killSession: (target: string) => { kills.push(target); live = false },
@@ -787,7 +789,7 @@ test("completeRegisteredThread ends an idle live provider shell without confirma
   }
 })
 
-test("completeRegisteredThread requires confirmation for an executing turn or live background work", () => {
+test("completeRegisteredThread requires confirmation for an executing turn or live background work", async () => {
   const h = harness()
   try {
     const executing = {
@@ -815,12 +817,12 @@ test("completeRegisteredThread requires confirmation for an executing turn or li
       const saved = { ...row(slug), exited: 0 }
       h.storage.upsertSession(saved)
       let kills = 0
-      assert.equal(completeRegisteredThread(h.storage, saved, false, {
+      assert.equal((await completeRegisteredThread(h.storage, saved, false, {
         findExpectedAdoptionPane: () => ({ kind: "absent" as const }),
         killExpectedAdoptionPane: () => false,
         killSession: () => { kills++ },
         isLive: () => true,
-      }, telemetry).needsConfirmation, true)
+      }, telemetry)).needsConfirmation, true)
       assert.equal(kills, 0)
       assert.equal(h.storage.getSession(slug)?.state, "open")
     }
@@ -893,14 +895,14 @@ test("completion only trusts known resting telemetry; a live unobservable runtim
   }), false, "a verified native permission pause is not executing work")
 })
 
-test("completeRegisteredThread archives an inactive session without a confirmation or termination", () => {
+test("completeRegisteredThread archives an inactive session without a confirmation or termination", async () => {
   const h = harness()
   const slug = "inactive-complete"
   const saved = row(slug)
   let kills = 0
   try {
     h.storage.upsertSession(saved)
-    assert.deepEqual(completeRegisteredThread(h.storage, saved, false, {
+    assert.deepEqual(await completeRegisteredThread(h.storage, saved, false, {
       findExpectedAdoptionPane: () => ({ kind: "absent" as const }),
       killExpectedAdoptionPane: () => false,
       killSession: () => { kills++ },
@@ -914,13 +916,13 @@ test("completeRegisteredThread archives an inactive session without a confirmati
   }
 })
 
-test("completeRegisteredThread never archives when a live provider shell survives termination", () => {
+test("completeRegisteredThread never archives when a live provider shell survives termination", async () => {
   const h = harness()
   const slug = "termination-failed"
   const saved = { ...row(slug), exited: 0 }
   try {
     h.storage.upsertSession(saved)
-    assert.throws(() => completeRegisteredThread(h.storage, saved, true, {
+    await assert.rejects(() => completeRegisteredThread(h.storage, saved, true, {
       findExpectedAdoptionPane: () => ({ kind: "absent" as const }),
       killExpectedAdoptionPane: () => false,
       killSession: () => {},
@@ -1040,7 +1042,7 @@ test("router teardown never downgrades a stale replaced row to reusable-name con
   assert.deepEqual(h.killedPanes, [])
 })
 
-test("rowless reserved/spawned adoption claims fail closed without a name or exact kill", () => {
+test("rowless reserved/spawned adoption claims fail closed without a name or exact kill", async () => {
   const storage = createStorage(join(mkdtempSync(join(tmpdir(), "fray-rowless-adopt-")), "ui.db"))
   const slug = "rowless-adoption"
   assert.equal(storage.reserveAdoptionClaim({
@@ -1051,19 +1053,19 @@ test("rowless reserved/spawned adoption claims fail closed without a name or exa
     leaseExpiresAtMs: 100,
   }), true)
   const h = terminatorHarness({ kind: "absent" })
-  assert.throws(() => stopRuntimeBySlug(storage, slug, h.runtime), /adoption attempt is in progress/i)
+  await assert.rejects(() => stopRuntimeBySlug(storage, slug, h.runtime), /adoption attempt is in progress/i)
   assert.deepEqual(h.killedSessions, [])
   assert.deepEqual(h.killedPanes, [])
 })
 
-test("rowless name teardown is fenced against a claim appearing after the optimistic read", () => {
+test("rowless name teardown is fenced against a claim appearing after the optimistic read", async () => {
   const h = terminatorHarness({ kind: "absent" })
   const storage = {
     getSession: () => undefined,
     getAdoptionClaim: () => undefined,
     withUnclaimedRuntimeFence: () => ({ acquired: false as const }),
   }
-  assert.throws(() => stopRuntimeBySlug(storage, "rowless-race", h.runtime), /nothing was stopped/)
+  await assert.rejects(() => stopRuntimeBySlug(storage, "rowless-race", h.runtime), /nothing was stopped/)
   assert.deepEqual(h.killedSessions, [])
   assert.deepEqual(h.killedPanes, [])
 })
@@ -1087,7 +1089,7 @@ test("rowless adoption claim blocks kill, dismiss-status, and forget RPC handler
   assert.equal(h.storage.getAdoptionClaim(slug)?.state, "reserved")
 })
 
-test("stale forget loses to a finalized successor token and preserves its row and pane binding", () => {
+test("stale forget loses to a finalized successor token and preserves its row and pane binding", async () => {
   const storage = createStorage(join(mkdtempSync(join(tmpdir(), "fray-forget-rotation-")), "ui.db"))
   const slug = "forget-successor"
   const original = finalizedClaim(slug)
@@ -1139,10 +1141,175 @@ test("stale forget loses to a finalized successor token and preserves its row an
     isLive: () => false,
   }
 
-  assert.throws(
+  await assert.rejects(
     () => stopAndForgetRegisteredRuntime(storage, saved, runtime),
     /new worker was preserved/,
   )
   assert.equal(storage.getSession(slug)?.session_id, saved.session_id)
   assert.equal(storage.getAdoptionClaim(slug)?.attempt_token, successorToken)
+})
+
+// ── Stopping an app-server Codex thread (2026-07-23) ───────────────────────────────────────────────
+// An app-server Codex thread has NO tmux pane: its worker is a turn inside the shared codex
+// app-server, which now lives in a DETACHED daemon that outlives the fray runtime. Routed through the
+// tmux terminator every stop verb took stopRegisteredRuntime's `unbound` branch, issued kill-session
+// for a session that never existed, and reported "stopped" — while the turn kept running, burning
+// tokens and touching the repo with no fray-side owner. Before the daemon worked this was masked,
+// because the app-server died with the runtime.
+function codexSessionRow(
+  storage: ReturnType<typeof createStorage>,
+  slug: string,
+  runtime: "app-server" | "legacy-tmux",
+): SessionRow {
+  storage.upsertSession({ ...row(slug), exited: 0 })
+  storage.setBackend(slug, "codex")
+  if (runtime === "app-server") storage.setCodexRuntime(slug, "app-server")
+  return storage.getSession(slug)!
+}
+
+function bridgeStub(options: { turnLive: boolean; interrupt?: () => Promise<{ interrupted: boolean }> }) {
+  const interrupts: string[] = []
+  return {
+    interrupts,
+    bridge: {
+      turnLiveness: () => ({ bridgeTurn: options.turnLive, ownedSince: "2026-07-23T00:00:00.000Z" }),
+      interruptTurn: async (slug: string, sessionId: string) => {
+        interrupts.push(`${slug}/${sessionId}`)
+        return options.interrupt ? options.interrupt() : { interrupted: true }
+      },
+    },
+  }
+}
+
+test("killAgent interrupts a live app-server Codex turn instead of killing a tmux pane it never had", async () => {
+  const h = harness()
+  const slug = "codex-kill"
+  codexSessionRow(h.storage, slug, "app-server")
+  const stub = bridgeStub({ turnLive: true })
+  ;(h.ctx as { codexAppServer?: unknown }).codexAppServer = stub.bridge
+
+  await h.router.killAgent.handler({ input: { slug } })
+
+  assert.deepEqual(stub.interrupts, [`${slug}/sid-${slug}`], "the turn is stopped where it actually lives")
+  assert.equal(h.storage.getSession(slug)?.exited, 1, "and only then is the row recorded as stopped")
+  h.storage.close()
+})
+
+test("a Codex interrupt that could not be delivered never records the worker as stopped", async () => {
+  const h = harness()
+  const slug = "codex-kill-fails"
+  codexSessionRow(h.storage, slug, "app-server")
+  const stub = bridgeStub({
+    turnLive: true,
+    interrupt: async () => { throw new Error("Codex app-server session detached; cannot interrupt") },
+  })
+  ;(h.ctx as { codexAppServer?: unknown }).codexAppServer = stub.bridge
+
+  await assert.rejects(h.router.killAgent.handler({ input: { slug } }), /cannot interrupt/)
+  assert.equal(h.storage.getSession(slug)?.exited, 0, "the row must not claim a stop that did not happen")
+  assert.equal(h.storage.getSession(slug)?.state, "open")
+  h.storage.close()
+})
+
+test("stopping a Codex thread with no active turn is a no-op, not an error", async () => {
+  const h = harness()
+  const slug = "codex-kill-idle"
+  codexSessionRow(h.storage, slug, "app-server")
+  const stub = bridgeStub({
+    turnLive: false,
+    // Reaching the bridge at all here would spawn/attach an app-server just to be told there is
+    // nothing to stop; turnLiveness is a pure read and already answers that.
+    interrupt: async () => { throw new Error("interruptTurn must not be reached for a resting thread") },
+  })
+  ;(h.ctx as { codexAppServer?: unknown }).codexAppServer = stub.bridge
+
+  await h.router.killAgent.handler({ input: { slug } })
+  assert.deepEqual(stub.interrupts, [])
+  assert.equal(h.storage.getSession(slug)?.exited, 1, "a resting thread still settles as stopped")
+  h.storage.close()
+})
+
+test("a LEGACY tmux Codex row keeps the tmux terminator and never reaches the bridge", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "fray-legacy-codex-stop-"))
+  const storage = createStorage(join(dir, "ui.db"))
+  const slug = "legacy-codex"
+  // Dispatched pre-cutover: backend=codex but codex_runtime is NULL, so it really does own a pane and
+  // is migrated only when a follow-up first touches it. followUp/setThreadPermission branch on the
+  // BACKEND because the controller they avoid is Claude-only; termination is the opposite case.
+  const saved = codexSessionRow(storage, slug, "legacy-tmux")
+  assert.equal(isAppServerCodexRow(saved), false)
+  const killed: string[] = []
+  const outcome = await stopThreadRuntime(
+    storage,
+    saved,
+    {
+      findExpectedAdoptionPane: () => ({ kind: "absent" as const }),
+      killExpectedAdoptionPane: () => false,
+      killSession: (target: string) => killed.push(target),
+      isLive: () => false,
+    },
+    {
+      turnLiveness: () => { throw new Error("a legacy tmux row must not consult the bridge") },
+      interruptTurn: async () => { throw new Error("a legacy tmux row must not be interrupted") },
+    },
+  )
+  assert.equal(outcome, "stopped")
+  assert.deepEqual(killed, [slug])
+  storage.close()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test("Mark as done asks before ending a running Codex turn, then actually interrupts it", async () => {
+  const h = harness()
+  const slug = "codex-done"
+  codexSessionRow(h.storage, slug, "app-server")
+  const stub = bridgeStub({ turnLive: true })
+  ;(h.ctx as { codexAppServer?: unknown }).codexAppServer = stub.bridge
+
+  // Before this change the tmux terminator answered "not live" for every app-server codex row, so the
+  // hold was never computed: a running codex thread archived silently, unasked and uninterrupted.
+  const asked = await h.router.completeThread.handler({ input: { slug, sessionId: `sid-${slug}`, terminateLive: false } })
+  assert.equal(asked.needsConfirmation, true)
+  assert.deepEqual(stub.interrupts, [])
+  assert.equal(h.storage.getSession(slug)?.state, "open")
+
+  const done = await h.router.completeThread.handler({ input: { slug, sessionId: `sid-${slug}`, terminateLive: true } })
+  assert.equal(done.needsConfirmation, false)
+  assert.deepEqual(stub.interrupts, [`${slug}/sid-${slug}`])
+  assert.equal(h.storage.getSession(slug)?.state, "archived")
+  assert.equal(h.storage.getSession(slug)?.exited, 1)
+  h.storage.close()
+})
+
+test("Mark as done on a Codex thread whose interrupt fails leaves it open, not archived", async () => {
+  const h = harness()
+  const slug = "codex-done-fails"
+  codexSessionRow(h.storage, slug, "app-server")
+  const stub = bridgeStub({
+    turnLive: true,
+    interrupt: async () => { throw new Error("Codex accepted the interrupt but the turn has not ended; nothing was stopped") },
+  })
+  ;(h.ctx as { codexAppServer?: unknown }).codexAppServer = stub.bridge
+
+  await assert.rejects(
+    h.router.completeThread.handler({ input: { slug, sessionId: `sid-${slug}`, terminateLive: true } }),
+    /nothing was stopped/,
+  )
+  assert.equal(h.storage.getSession(slug)?.state, "open", "an archived row whose turn still runs has no card left to act on")
+  h.storage.close()
+})
+
+test("dismissing a Codex thread stops its turn through the bridge", async () => {
+  const h = harness()
+  const slug = "codex-dismiss"
+  codexSessionRow(h.storage, slug, "app-server")
+  mkdirSync(join(h.dir, ".fray"), { recursive: true })
+  writeFileSync(join(h.dir, ".fray", `${slug}.md`), `---\nstatus: active\n---\n\n# ${slug}\n`)
+  const stub = bridgeStub({ turnLive: true })
+  ;(h.ctx as { codexAppServer?: unknown }).codexAppServer = stub.bridge
+
+  await h.router.setThreadStatus.handler({ input: { slug, status: "dismissed" } })
+  assert.deepEqual(stub.interrupts, [`${slug}/sid-${slug}`])
+  assert.equal(h.storage.getSession(slug)?.exited, 1)
+  h.storage.close()
 })

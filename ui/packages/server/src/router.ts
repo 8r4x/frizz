@@ -149,6 +149,61 @@ const cachedLivenessTerminator: RegisteredRuntimeTerminator = {
   isLive: (slug) => tmux.isLiveCached(slug) || tmux.isLive(slug),
 }
 
+// The other terminator. An app-server Codex thread has NO tmux pane: its worker is a TURN running
+// inside the shared codex app-server, which now lives in a DETACHED daemon that deliberately outlives
+// the fray runtime. Routed through the tmux terminator it takes stopRegisteredRuntime's `unbound`
+// branch, issues `kill-session` for a session that never existed, and reports "stopped" — while the
+// turn keeps running, burning tokens and touching the repo with no fray-side owner and no UI trace.
+// Before the daemon worked this was masked, because the app-server died with the runtime. `turn/interrupt`
+// over the bridge is the only thing that actually stops it. (Subset of CodexAppServerBridge so the
+// router does not depend on the whole bridge and a test can substitute a stub.)
+export interface CodexTurnTerminator {
+  turnLiveness(threadSlug: string, sessionId: string): { bridgeTurn: boolean } | undefined
+  interruptTurn(threadSlug: string, sessionId: string): Promise<{ interrupted: boolean }>
+}
+
+// Which rows the bridge, not tmux, owns. A LEGACY tmux Codex row — dispatched pre-cutover, `codex_runtime`
+// NULL, migrated only when a follow-up first touches it (see followUp) — really does own a tmux pane, so
+// it keeps the tmux terminator. This is deliberately the OPPOSITE test from setThreadPermission /
+// setThreadProfile: those branch on the BACKEND alone because the controller they avoid is Claude-only and
+// would parse a legacy Codex TUI as a Claude composer, so a legacy row must not reach it. Here the tmux
+// path is CORRECT for a legacy row and wrong only for a migrated app-server one, so the runtime column —
+// the thing that actually says where the worker lives — is the right discriminator.
+export function isAppServerCodexRow(row: Pick<SessionRow, "backend" | "codex_runtime">): boolean {
+  return row.backend === "codex" && row.codex_runtime === "app-server"
+}
+
+// The bridge is already the board's authority on whether a codex turn is live (context.ts wires
+// turnLiveness into createBoard for exactly that reason); make it the termination authority too, so the
+// two can never disagree. `bridgeTurn` false means there is nothing to interrupt — a resting codex thread
+// then costs no bridge round-trip and never spawns an app-server just to be told "nothing to stop".
+export function appServerCodexTurnLive(
+  codex: CodexTurnTerminator | undefined,
+  row: Pick<SessionRow, "slug" | "session_id">,
+): boolean {
+  return codex?.turnLiveness(row.slug, row.session_id)?.bridgeTurn === true
+}
+
+// THE seam every "stop this thread's worker" verb goes through, so a new verb cannot silently
+// reacquire the tmux-only hole. Returns "stopped" only for a termination that actually landed; an
+// interrupt that could not be delivered THROWS rather than degrading to "stopped", because the caller's
+// next act is to record the worker as exited/done and that record must not outrun the truth.
+export async function stopThreadRuntime(
+  storage: Pick<Storage, "getAdoptionClaim"> & Partial<Pick<Storage, "getSession" | "getAdoptionRuntimeSnapshot">>,
+  row: SessionRow,
+  runtime: RegisteredRuntimeTerminator = tmux,
+  codex?: CodexTurnTerminator,
+): Promise<"absent" | "stopped"> {
+  if (isAppServerCodexRow(row)) {
+    if (!appServerCodexTurnLive(codex, row)) return "absent"
+    if (!codex) throw new Error("The Codex app-server is unavailable; nothing was stopped")
+    // interruptTurn resolves only once the turn is proved retired (see its contract), so by the time
+    // this returns the caller may record the stop without racing the turn's own ending.
+    return (await codex.interruptTurn(row.slug, row.session_id)).interrupted ? "stopped" : "absent"
+  }
+  return stopRegisteredRuntime(storage, row, runtime)
+}
+
 // A finalized cold adoption is permanently bound to one exact tmux generation. Destructive UI
 // actions must never fall back to the reusable session name: another process may already occupy it
 // after the owner exited. Verify token + full tuple, kill that tuple only, then prove it disappeared
@@ -186,13 +241,14 @@ export function stopRegisteredRuntime(
   return "stopped"
 }
 
-export function stopRuntimeBySlug(
+export async function stopRuntimeBySlug(
   storage: Pick<Storage, "getAdoptionClaim" | "getSession">,
   slug: string,
   runtime: RegisteredRuntimeTerminator = tmux,
-): { outcome: "absent" | "stopped"; row?: SessionRow } {
+  codex?: CodexTurnTerminator,
+): Promise<{ outcome: "absent" | "stopped"; row?: SessionRow }> {
   const row = storage.getSession(slug)
-  if (row) return { outcome: stopRegisteredRuntime(storage, row, runtime), row }
+  if (row) return { outcome: await stopThreadRuntime(storage, row, runtime, codex), row }
   if (storage.getAdoptionClaim(slug)) throw new Error("An adoption attempt is in progress; nothing was stopped")
   // A rowless tmux name has no durable owner identity. Even a DB lock cannot make a forked tmux
   // client crash-safe after this process dies, so never issue a reusable-name kill without a row.
@@ -254,7 +310,7 @@ export function completionNeedsConfirmation(telemetry: SessionTelemetry | undefi
 // has been proved. A live resting shell is stopped and archived in one click; an executing or
 // unobservable runtime requires explicit confirmation. Adopted workers stay bound to their exact
 // pane tuple; a same-name replacement is never killed or mistaken for the original worker.
-export function completeRegisteredThread(
+export async function completeRegisteredThread(
   storage: Pick<Storage,
     "getAdoptionClaim" | "getAdoptionRuntimeSnapshot" | "getSession" | "completeIfCurrent"
   >,
@@ -262,12 +318,21 @@ export function completeRegisteredThread(
   terminateLive: boolean,
   runtime: RegisteredRuntimeTerminator = tmux,
   telemetry?: SessionTelemetry,
-): { needsConfirmation: boolean; hold?: CompletionHold } {
+  codex?: CodexTurnTerminator,
+): Promise<{ needsConfirmation: boolean; hold?: CompletionHold }> {
   const binding = adoptionRuntimeBinding(storage, row)
   if (binding.kind === "conflict") {
     throw new Error("This thread has a competing adoption attempt; nothing was changed")
   }
-  const live = binding.kind === "unbound"
+  // An app-server Codex row is never "live" to tmux — it has no pane — so asking tmux made Mark-as-done
+  // on a RUNNING codex thread archive it silently: no confirmation dialog (live was false, so the hold
+  // was never computed) and no termination. The bridge answers for it instead, which restores BOTH
+  // halves: an executing turn now earns the same "End this session?" confirmation a Claude shell does,
+  // and confirming it actually interrupts the turn.
+  const appServerCodex = isAppServerCodexRow(row)
+  const live = appServerCodex
+    ? appServerCodexTurnLive(codex, row)
+    : binding.kind === "unbound"
     ? runtime.isLive(row.slug)
     : (() => {
         const current = runtime.findExpectedAdoptionPane(binding.claim)
@@ -280,10 +345,15 @@ export function completeRegisteredThread(
   const hold = live && !terminateLive ? completionConfirmationHold(telemetry) : undefined
   if (hold) return { needsConfirmation: true, hold }
   if (live) {
-    stopRegisteredRuntime(storage, row, runtime)
+    // Ordering, both paths: TERMINATE FIRST, record Done only after. A stop that throws must leave the
+    // row exactly as it was — an archived row whose worker is still running is the failure this whole
+    // change exists to remove, and for codex it is unrecoverable from the UI (the daemon outlives us
+    // and an archived thread has no card left to act on).
+    await stopThreadRuntime(storage, row, runtime, codex)
     // For standalone sessions this is the postcondition that turns tmux's idempotent kill into a
-    // safe completion operation. An adopted binding is already verified by stopRegisteredRuntime.
-    if (binding.kind === "unbound" && runtime.isLive(row.slug)) {
+    // safe completion operation. An adopted binding is already verified by stopRegisteredRuntime, and
+    // an app-server codex turn by interruptTurn's own proof that the turn retired.
+    if (!appServerCodex && binding.kind === "unbound" && runtime.isLive(row.slug)) {
       throw new Error("The session could not be confirmed stopped; it was not marked done")
     }
   }
@@ -295,13 +365,14 @@ export function completeRegisteredThread(
   return { needsConfirmation: false }
 }
 
-export function stopAndForgetRegisteredRuntime(
+export async function stopAndForgetRegisteredRuntime(
   storage: Pick<Storage,
     "getAdoptionClaim" | "getAdoptionRuntimeSnapshot" | "getSession" | "forgetSessionIfCurrent"
   >,
   row: SessionRow,
   runtime: RegisteredRuntimeTerminator = tmux,
-): SessionRow {
+  codex?: CodexTurnTerminator,
+): Promise<SessionRow> {
   const binding = adoptionRuntimeBinding(storage, row)
   if (binding.kind === "conflict") {
     throw new Error("This thread changed while it was being dismissed; nothing was removed")
@@ -311,7 +382,7 @@ export function stopAndForgetRegisteredRuntime(
     runtimeGeneration: row.runtime_generation ?? 0,
     adoptionAttemptToken: binding.kind === "bound" ? binding.claim.attempt_token : null,
   }
-  stopRegisteredRuntime(storage, row, runtime)
+  await stopThreadRuntime(storage, row, runtime, codex)
   const forgotten = storage.forgetSessionIfCurrent(row.slug, expected)
   if (!forgotten) {
     throw new Error("This thread resumed or was replaced while it was being dismissed; the new worker was preserved")
@@ -752,7 +823,9 @@ export function createRouter(ctx: AppContext) {
       output: z.object({ needsConfirmation: z.boolean(), hold: CompletionHold.optional() }),
       handler: async ({ input }) => {
         const row = currentOwnedSession(input.slug, input.sessionId)
-        const result = completeRegisteredThread(ctx.storage, row, input.terminateLive, cachedLivenessTerminator, ctx.tailer.get(input.slug))
+        const result = await completeRegisteredThread(
+          ctx.storage, row, input.terminateLive, cachedLivenessTerminator, ctx.tailer.get(input.slug), ctx.codexAppServer,
+        )
         if (!result.needsConfirmation) ctx.board.refresh()
         return result
       },
@@ -851,7 +924,7 @@ export function createRouter(ctx: AppContext) {
         if (t && t.runtime !== "exited") {
           throw new Error("only a stalled or exited session can be dismissed — archive a live one instead")
         }
-        stopAndForgetRegisteredRuntime(ctx.storage, row)
+        await stopAndForgetRegisteredRuntime(ctx.storage, row, tmux, ctx.codexAppServer)
         ctx.tailer.forget(input.slug)
         ctx.board.refresh() // storage-only change — the removed row fans out as a delete delta on SSE
       },
@@ -1003,7 +1076,7 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         assertLegacyMutationAllowed(input.slug)
         if (input.status === "dismissed") {
-          const stopped = stopRuntimeBySlug(ctx.storage, input.slug)
+          const stopped = await stopRuntimeBySlug(ctx.storage, input.slug, tmux, ctx.codexAppServer)
           if (stopped.row && !ctx.storage.setExitedIfCurrent(
             stopped.row.slug,
             stopped.row.session_id,
@@ -1066,7 +1139,11 @@ export function createRouter(ctx: AppContext) {
     killAgent: mutation({
       input: SlugInput,
       handler: async ({ input }) => {
-        const stopped = stopRuntimeBySlug(ctx.storage, input.slug)
+        // Termination goes through stopRuntimeBySlug's seam, so an app-server Codex thread is stopped
+        // with turn/interrupt rather than a tmux kill-session for a pane that never existed. A stop that
+        // could not be delivered throws out of here BEFORE setExitedIfCurrent, so the row is never
+        // marked exited on the strength of a termination that did not happen.
+        const stopped = await stopRuntimeBySlug(ctx.storage, input.slug, tmux, ctx.codexAppServer)
         if (stopped.row && !ctx.storage.setExitedIfCurrent(
           stopped.row.slug,
           stopped.row.session_id,

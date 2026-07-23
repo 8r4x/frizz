@@ -7,7 +7,7 @@ import type { AgentBackend, BuiltCommand, FoldState, NativeInputRequiredData, No
 
 // CodexBackend: everything Codex-CLI-specific behind the AgentBackend seam (Codex-support epic,
 // Phase 2). Unlike ClaudeBackend — which reuses the tailer's corpus-verified applyRecord — codex's
-// rollout brackets turns EXPLICITLY (event_msg/task_started .. task_complete), so its turn model maps
+// rollout brackets turns EXPLICITLY (event_msg/task_started .. task_complete|turn_aborted), so its turn model maps
 // cleanly onto NormalizedEvent and its authoritative fold IS `for (ev of parseLine) applyEvent(state,
 // ev)` (the generic driver added in the Phase-2 PREP refactor). This module owns: the interactive-TUI
 // spawn/resume argv, the worker-contract injection (prompt-prepend — see the AGENTS.md-placement note
@@ -338,6 +338,7 @@ export function extractCodexFrayTitle(text: string, allowLegacy = true): CodexFr
 // rollouts, §2.2-2.4):
 //   event_msg/task_started        → turn-start           (a turn opened → in-flight)
 //   event_msg/task_complete       → turn-end(finalText=last_agent_message)  (turn bracketed → idle)
+//   event_msg/turn_aborted        → turn-end             (an INTERRUPTED turn's only bracket → idle)
 //   event_msg/agent_message       → assistant-text(final = phase==="final_answer")  (text in .message)
 //   event_msg/user_message        → user-message (genuine human turn; codex has no synthetic peer echo)
 //   response_item/function_call        → tool-call  (args JSON in .arguments, id in .call_id)
@@ -433,6 +434,15 @@ export function parseCodexLine(line: string): NormalizedEvent[] {
         const finalText = typeof p.last_agent_message === "string" ? p.last_agent_message : undefined
         return [{ kind: "turn-end", at, finalText }]
       }
+      // The OTHER closing bracket. An INTERRUPTED turn (`reason: "interrupted"` — what turn/interrupt
+      // produces, now that stopping a Codex thread actually stops it) never reaches task_complete.
+      // Without this the rollout's last word stays task_started, so the tailer holds the turn in-flight
+      // forever: a thread the operator deliberately STOPPED cards as still running, then trips the
+      // app-server stall grace and cards as crashed/"Stalled" with a Retry it never earned. An aborted
+      // turn carries no final text by construction (there was no answer), so it brackets the turn and
+      // nothing else — no fence, no excusal.
+      case "turn_aborted":
+        return [{ kind: "turn-end", at }]
       case "agent_message": {
         const text = typeof p.message === "string" ? p.message : ""
         if (!text) return []

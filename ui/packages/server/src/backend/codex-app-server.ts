@@ -1695,7 +1695,26 @@ export class CodexAppServerBridge {
   // Gracefully cancel the active turn. Returns { interrupted: false } when no turn is running (a
   // no-op, not an error). The turn ends server-side with status "interrupted"; `current_turn_id` is
   // cleared by the ensuing turn/completed notification.
-  async interruptTurn(threadSlug: string, sessionId: string): Promise<{ interrupted: boolean }> {
+  //
+  // This is a TERMINATOR — for an app-server Codex thread it is the ONLY thing that stops the worker
+  // (there is no tmux pane to kill), and since the app-server moved into a detached daemon the turn
+  // outlives the fray runtime, so a stop that did not happen has no backstop. It therefore resolves
+  // only once the stop is PROVED, and never reports one that did not land:
+  //
+  //   • A definitive server rejection (RpcProtocolError) means the turn reached its own ending in the
+  //     read→RPC window — the same race followUp resolves for steer. That is "nothing to stop", not a
+  //     failed stop, but only once `current_turn_id` actually retires; if it does not, the rejection
+  //     stands and we throw. Any AMBIGUOUS failure (timeout, closed connection) always throws: the
+  //     caller must be free to leave the row alone rather than record a stop it cannot vouch for.
+  //   • On acceptance we wait for the `turn/completed` that retires `current_turn_id`. Returning
+  //     earlier would let a caller archive the row while the binding still carries a live turn id, and
+  //     a runtime recycled in that window replays exactly that id through `autoResumeInterruptedTurns`
+  //     — restarting, with the recovery nudge, a turn the operator had just killed.
+  async interruptTurn(
+    threadSlug: string,
+    sessionId: string,
+    settleMs = 20_000,
+  ): Promise<{ interrupted: boolean }> {
     const releaseOperation = this.beginOperation()
     try {
       const connection = await this.ensureConnected()
@@ -1706,7 +1725,19 @@ export class CodexAppServerBridge {
       }
       const turnId = binding.current_turn_id
       if (!turnId) return { interrupted: false }
-      await connection.request("turn/interrupt", { threadId: binding.codex_thread_id, turnId })
+      const stillRunning = () => this.bindingForScope(threadSlug, sessionId)?.current_turn_id === turnId
+      try {
+        await connection.request("turn/interrupt", { threadId: binding.codex_thread_id, turnId })
+      } catch (error) {
+        if (!(error instanceof RpcProtocolError)) throw error
+        await this.waitForTurnRetired(threadSlug, sessionId, turnId, settleMs)
+        if (stillRunning()) throw error
+        return { interrupted: false }
+      }
+      await this.waitForTurnRetired(threadSlug, sessionId, turnId, settleMs)
+      if (stillRunning()) {
+        throw new Error("Codex accepted the interrupt but the turn has not ended; nothing was stopped")
+      }
       return { interrupted: true }
     } finally {
       releaseOperation()
@@ -1750,6 +1781,18 @@ export class CodexAppServerBridge {
       ).run(input.deliveryId, input.threadSlug, result.turnId, result.mode, this.now().toISOString())
     }
     return { ...result, deduped: false }
+  }
+
+  // Like waitForTurnCleared but scoped to ONE turn id: a different id already means the turn we were
+  // watching is retired (something else legitimately opened the next one), so this must not keep
+  // waiting for a null it will never see. Same real-wall-clock rationale as waitForTurnCleared.
+  private async waitForTurnRetired(threadSlug: string, sessionId: string, turnId: string, ms: number): Promise<void> {
+    const start = Date.now()
+    while (Date.now() - start < ms) {
+      const row = this.bindingForScope(threadSlug, sessionId)
+      if (!row || row.current_turn_id !== turnId) return
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
   }
 
   private async waitForTurnCleared(threadSlug: string, sessionId: string, ms: number): Promise<void> {

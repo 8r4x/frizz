@@ -38,6 +38,12 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
   // When set, a turn/steer completes the turn (turn/completed) then rejects — modelling the turn
   // ending in the bridge's read→steer window, which must trigger followUp's start-fallback.
   rejectSteerAsEnded = false
+  // How the fake answers turn/interrupt. "accept" is the real behavior (ack, then turn/completed).
+  // "reject-ended" models the turn reaching its own ending in the read→RPC window: turn/completed
+  // first, then the server rejects an interrupt for a turn it no longer runs. "reject-running"
+  // rejects WITHOUT the turn ending — a rejection that must never read as a stop. "accept-no-end"
+  // acks but never ends the turn.
+  interruptBehavior: "accept" | "reject-ended" | "reject-running" | "accept-no-end" = "accept"
   killed = false
   readonly version: string
   afterInitializeResponse?: () => void
@@ -181,8 +187,17 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
     }
     if (message.method === "turn/interrupt") {
       const params = message.params as { threadId: string; turnId: string }
+      if (this.interruptBehavior === "reject-ended") {
+        this.completeActiveTurn(params.threadId, params.turnId)
+        this.send({ id, error: { code: -32602, message: "turn is not running" } })
+        return
+      }
+      if (this.interruptBehavior === "reject-running") {
+        this.send({ id, error: { code: -32602, message: "turn is not running" } })
+        return
+      }
       this.send({ id, result: {} })
-      this.completeActiveTurn(params.threadId, params.turnId)
+      if (this.interruptBehavior !== "accept-no-end") this.completeActiveTurn(params.threadId, params.turnId)
       return
     }
     this.send({ id, error: { code: -32601, message: "not implemented by fake" } })
@@ -968,6 +983,41 @@ test("steerTurn injects into the active turn; interruptTurn cancels it and is a 
     h.bridge.steerTurn({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "x" }),
     /requires an active turn/,
   )
+  h.close()
+})
+
+// interruptTurn is the ONLY thing that stops an app-server Codex worker (there is no pane to kill),
+// and since the app-server moved into a detached daemon a turn it fails to stop has no backstop — it
+// keeps running with no fray-side owner. So it must never report a stop that did not happen, and the
+// router marks the row exited/done strictly on its word.
+test("interruptTurn is honest: a turn that ended under it is 'nothing to stop', a rejection while it still runs is a failure", async () => {
+  const h = harness()
+  const binding = await h.bridge.startDisposableSession({ threadSlug: "honest-interrupt", sessionId: "honest-session", cwd: h.dir })
+  const process = h.processes[0]!
+  const scope = [binding.threadSlug, binding.sessionId] as const
+
+  // The turn reaches its own ending in the read→RPC window: the server rejects an interrupt for a turn
+  // it no longer runs. Definitive AND corroborated by current_turn_id retiring ⇒ nothing to stop.
+  process.interruptBehavior = "reject-ended"
+  const ended = await h.bridge.startTurn({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "one" })
+  await waitFor(() => h.bridge.binding(...scope)?.currentTurnId === ended.turnId, "first turn active")
+  assert.deepEqual(await h.bridge.interruptTurn(...scope), { interrupted: false })
+  assert.equal(h.bridge.binding(...scope)?.currentTurnId, null)
+
+  // The same rejection with the turn STILL RUNNING must propagate. Degrading it to "nothing to stop"
+  // is exactly how the row gets archived while the worker carries on.
+  process.interruptBehavior = "reject-running"
+  const running = await h.bridge.startTurn({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "two" })
+  await waitFor(() => h.bridge.binding(...scope)?.currentTurnId === running.turnId, "second turn active")
+  await assert.rejects(h.bridge.interruptTurn(binding.threadSlug, binding.sessionId, 200), /turn is not running/)
+  assert.equal(h.bridge.binding(...scope)?.currentTurnId, running.turnId, "and the turn is left exactly as it was")
+
+  // An ACCEPTED interrupt whose turn never ends is not a stop either. Returning here would let the
+  // caller archive a row still carrying a live turn id — which a recycled runtime replays through
+  // autoResumeInterruptedTurns, restarting the turn the operator just killed.
+  process.interruptBehavior = "accept-no-end"
+  await assert.rejects(h.bridge.interruptTurn(binding.threadSlug, binding.sessionId, 200), /has not ended/)
+  assert.equal(h.bridge.binding(...scope)?.currentTurnId, running.turnId)
   h.close()
 })
 
