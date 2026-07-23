@@ -26,6 +26,7 @@ import { redactCredentialSyntax } from "../credential-redaction.ts"
 import {
   daemonCodexAppServerHost,
   directChildHost,
+  stopCodexAppServerDaemon,
   type CodexAppServerHost,
 } from "./codex-app-server-host.ts"
 
@@ -376,6 +377,8 @@ export type CodexAppServerDiagnostic =
   | { event: "stderr"; bytes: number; truncated: boolean }
   | { event: "request-rejected"; method: string; code: number }
   | { event: "turn-auto-resumed"; threadSlug: string; interruptedTurnId: string }
+  | { event: "daemon-reforked"; reason: string }
+  | { event: "daemon-events-dropped"; dropped: number }
 
 class RpcProtocolError extends Error {
   readonly code: number
@@ -1491,6 +1494,14 @@ export class CodexAppServerBridge {
   private readonly timeoutMs: number
   /** Identity of the app-server PROCESS behind the current connection (see CodexAppServerAttachment). */
   private daemonGeneration = ""
+  /**
+   * The handshake a FRESHLY FORKED daemon already gave us and we already rejected — i.e. what the
+   * codex binary on disk actually reports. Once we have heard it from a new process there is nothing
+   * left to blame on a stale cache, so a reattach that reports the same thing must fail LOUDLY rather
+   * than buy another refork. Without this the recovery is a machine for killing daemons: every
+   * connect would reattach, reject, refork, reject, and leave a fresh daemon behind to do it again.
+   */
+  private reforkRejectedHandshake: string | null = null
   private connection: JsonlRpcConnection | null = null
   private openingConnection: JsonlRpcConnection | null = null
   private connecting: Promise<JsonlRpcConnection> | null = null
@@ -2277,7 +2288,20 @@ export class CodexAppServerBridge {
     }
   }
 
-  private async connect(): Promise<JsonlRpcConnection> {
+  /**
+   * Attach to an app-server and negotiate.
+   *
+   * `refork` is the version-skew recovery, and it is the ONLY thing in fray that ever ends a Codex
+   * daemon's life. The daemon performs `initialize` once and caches the answer for as long as it
+   * lives (up to six hours idle, unbounded while a client keeps reattaching). Bump
+   * CODEX_APP_SERVER_SUPPORTED_VERSION and Update & Restart — the ordinary upgrade path — and the
+   * surviving daemon happily serves the STALE userAgent to every new generation, so the gate below
+   * rejects every connect and every Codex operation fails, forever, with no way out. Recovery is:
+   * the handshake failed against a daemon we REATTACHED to, so the cache is the suspect; kill that
+   * daemon, fork a fresh one, and ask the real binary. Exactly once — see `reforkRejectedHandshake`
+   * for why a genuinely unsupported codex still fails loudly instead of reforking in a loop.
+   */
+  private async connect(refork = false): Promise<JsonlRpcConnection> {
     const attachment = await this.host({
       projectId: this.options.projectId,
       stateDir: this.options.stateDir ?? this.options.projectDir,
@@ -2300,6 +2324,11 @@ export class CodexAppServerBridge {
       this.options.diagnostic,
     )
     this.openingConnection = connection
+    // True only while the handshake itself is in flight. A failure AFTER it (corrupt metadata, a
+    // disconnect during reconciliation) says nothing about the daemon's cached version, and killing a
+    // daemon over one would destroy live turns for an unrelated reason.
+    let handshaking = true
+    let handshakeVersion: string | undefined
     try {
       const initialized = InitializeResponse.parse(await connection.request("initialize", {
         clientInfo: CLIENT_INFO,
@@ -2309,6 +2338,7 @@ export class CodexAppServerBridge {
       // `fray/<package-version> ...`. Do not accept an expected-looking version buried elsewhere in
       // an incompatible user agent.
       const version = initialized.userAgent.match(/^fray\/(\d+\.\d+\.\d+)(?:\s|\()/u)?.[1]
+      handshakeVersion = version
       if (version !== CODEX_APP_SERVER_SUPPORTED_VERSION) {
         this.options.diagnostic?.({
           event: "version-rejected",
@@ -2317,6 +2347,7 @@ export class CodexAppServerBridge {
         })
         throw new Error(`unsupported Codex app-server version ${version ?? "unknown"}; expected ${CODEX_APP_SERVER_SUPPORTED_VERSION}`)
       }
+      handshaking = false
       const negotiated = this.db.transaction(() => {
         const rawMeta = this.db.prepare<[], unknown>(
           "SELECT * FROM codex_app_server_meta WHERE singleton = 1",
@@ -2330,7 +2361,15 @@ export class CodexAppServerBridge {
         const connectionEpoch = meta.connection_epoch + 1
         // Did we rejoin the SAME app-server process, or is this a new one? That single fact decides
         // whether in-flight turns are still running (rejoin) or died and need recovering (new).
-        const sameProcess = attachment.reattached && meta.daemon_generation === attachment.generation
+        //
+        // `droppedWhileDetached` demotes a rejoin to "new". The daemon caps its detached queue and
+        // reports the overflow precisely so the client learns the stream has HOLES in it; a
+        // `turn/completed` may simply be gone, and `sameProcess` would then keep `current_turn_id`
+        // forever waiting on an event that was already discarded. Falling through to the cold path
+        // (`thread/resume` + the auto-resume nudge) is the honest reading of "we lost events".
+        const sameProcess = attachment.reattached
+          && meta.daemon_generation === attachment.generation
+          && attachment.droppedWhileDetached === 0
         this.db.prepare(`
           UPDATE codex_app_server_meta
           SET connection_epoch = ?, capability_revision = ?, protocol_fingerprint = ?, daemon_generation = ?
@@ -2346,6 +2385,9 @@ export class CodexAppServerBridge {
       this.openingConnection = null
       await connection.notification("initialized")
       this.options.diagnostic?.({ event: "connected", version, connectionEpoch: this.connectionEpoch })
+      if (attachment.droppedWhileDetached > 0) {
+        this.options.diagnostic?.({ event: "daemon-events-dropped", dropped: attachment.droppedWhileDetached })
+      }
       await this.reconcileOwnedSessions(connection, negotiated.sameProcess)
       if (this.connection !== connection) throw new Error("Codex app-server disconnected during session reconciliation")
       return connection
@@ -2353,7 +2395,19 @@ export class CodexAppServerBridge {
       connection.close()
       if (this.openingConnection === connection) this.openingConnection = null
       if (this.connection === connection) this.connection = null
-      throw error
+      if (!handshaking) throw error
+      // A fresh fork just told us this. It is the REAL binary talking, not a cache, so no amount of
+      // reforking will change the answer — remember it, and never spend another daemon on it.
+      const handshakeKey = handshakeVersion ?? "unhandshakeable"
+      if (!attachment.reattached) this.reforkRejectedHandshake = handshakeKey
+      const recoverable = attachment.reattached
+        && !refork
+        && !this.closed
+        && this.reforkRejectedHandshake !== handshakeKey
+      if (!recoverable) throw error
+      this.options.diagnostic?.({ event: "daemon-reforked", reason: (error as Error).message })
+      await stopCodexAppServerDaemon(this.options.stateDir ?? this.options.projectDir, this.options.projectId)
+      return await this.connect(true)
     }
   }
 

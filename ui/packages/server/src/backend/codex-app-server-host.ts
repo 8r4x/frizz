@@ -6,7 +6,14 @@
 // The whole point is the lifetime split. `kill()` on this adapter DETACHES the socket; it never kills
 // the daemon. So when the disposable fray runtime is recycled by Update & Restart, the app-server —
 // and every turn running inside it — keeps going, and the next runtime generation reattaches to the
-// SAME process. Compare session-broker.ts, which does exactly this for PTY agent sessions.
+// SAME process. (Claude threads get the same immunity from tmux, which holds their PTY outside fray
+// entirely; session-broker.ts, which once did this for PTY sessions, is dead code with no importer.)
+//
+// A long-lived process needs someone to END it. That is what `stopCodexAppServerDaemon` is for, and
+// the one production caller is the bridge's version-skew recovery: a daemon caches its `initialize`
+// handshake FOREVER, so after codex is upgraded on disk the cached userAgent fails the bridge's
+// version gate on every single connect and no amount of retrying can fix it. See
+// codex-app-server.ts's `connect()`.
 import { spawn } from "node:child_process"
 import { createConnection, type Socket } from "node:net"
 import { createHash, randomUUID } from "node:crypto"
@@ -35,6 +42,10 @@ export interface CodexAppServerAttachment {
   /** True when we joined an app-server that was ALREADY running (i.e. it outlived a fray restart). */
   reattached: boolean
   daemonPid: number
+  /** Lines the daemon had to DROP because its detached queue overflowed while nobody was attached.
+   *  Non-zero means the stream we just joined has holes in it — a `turn/completed` or an approval
+   *  request may simply be gone — so the caller must NOT treat this as a lossless rejoin. */
+  droppedWhileDetached: number
 }
 
 export interface CodexAppServerHostOptions {
@@ -47,6 +58,8 @@ export interface CodexAppServerHostOptions {
   capabilities: Record<string, unknown>
   /** Test seam: override the forked daemon entry. */
   daemonEntry?: string
+  /** Test seam: how often the daemon re-checks that its record still names it (default 30s). */
+  reachabilityCheckMs?: number
   timeoutMs?: number
 }
 
@@ -111,12 +124,39 @@ export function liveDaemonRecord(stateDir: string, projectId: string): CodexAppS
   return null
 }
 
-/** Terminate the daemon AND its app-server. Only for an explicit teardown — never for a restart. */
+/** Terminate the daemon AND its app-server. Only for an explicit teardown — never for a restart.
+ *  Inert when there is no record, which is exactly the case for `directChildHost` and the in-process
+ *  fallback: a test bridge can never kill a daemon it does not own, or its own in-process child. */
 export function killCodexAppServerDaemon(stateDir: string, projectId: string): void {
   const record = liveDaemonRecord(stateDir, projectId)
   if (!record) return
   try { process.kill(record.daemonPid, "SIGTERM") } catch {}
   try { unlinkSync(recordPath(stateDir, projectId)) } catch {}
+}
+
+/**
+ * `killCodexAppServerDaemon`, then WAIT for the process to actually be gone.
+ *
+ * The wait is not politeness, it is correctness: a dying daemon's exit handler unlinks the record
+ * and the socket, and both paths are DERIVED (same stateDir + projectId ⇒ same paths). Fork a
+ * replacement before the old one finishes dying and the corpse deletes the new daemon's socket and
+ * record on its way out, leaving a daemon nobody can ever find.
+ */
+export async function stopCodexAppServerDaemon(stateDir: string, projectId: string, timeoutMs = 10_000): Promise<void> {
+  const record = liveDaemonRecord(stateDir, projectId)
+  killCodexAppServerDaemon(stateDir, projectId)
+  if (!record) return
+  const deadline = Date.now() + timeoutMs
+  while (pidAlive(record.daemonPid) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  // A daemon that ignored SIGTERM is worse than one that is merely stale: it still holds the socket.
+  if (pidAlive(record.daemonPid)) {
+    try { process.kill(record.daemonPid, "SIGKILL") } catch {}
+    while (pidAlive(record.daemonPid) && Date.now() < deadline + 2_000) {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+  }
 }
 
 function forkDaemon(options: CodexAppServerHostOptions): Promise<CodexAppServerDaemonRecord> {
@@ -132,6 +172,7 @@ function forkDaemon(options: CodexAppServerHostOptions): Promise<CodexAppServerD
   const payload = JSON.stringify({
     projectId, socketPath, recordPath: record, codexBin: options.codexBin, cwd: options.cwd,
     env, generation, clientInfo: options.clientInfo, capabilities: options.capabilities,
+    ...(options.reachabilityCheckMs === undefined ? {} : { reachabilityCheckMs: options.reachabilityCheckMs }),
   })
   const child = spawn(process.execPath, [options.daemonEntry ?? daemonEntry()], {
     cwd: options.cwd,
@@ -161,8 +202,27 @@ function forkDaemon(options: CodexAppServerHostOptions): Promise<CodexAppServerD
  * A `CodexAppServerProcess` backed by a socket to the daemon rather than by a child's stdio.
  * `kill()` closes THIS attachment only — the daemon and its app-server keep running.
  */
-function attach(record: CodexAppServerDaemonRecord, timeoutMs: number): Promise<CodexAppServerProcess> {
-  return new Promise((resolve, reject) => {
+interface Attached {
+  process: CodexAppServerProcess
+  droppedWhileDetached: number
+}
+
+/** Read `droppedWhileDetached` off the daemon's `hello`. An unreadable control line is treated as a
+ *  clean rejoin: it is what every daemon predating the field looks like, and inventing losses would
+ *  force a needless `thread/resume` on every reattach. */
+function helloDropCount(line: string): number {
+  try {
+    const parsed = JSON.parse(line) as { droppedWhileDetached?: unknown }
+    return typeof parsed.droppedWhileDetached === "number" && parsed.droppedWhileDetached > 0
+      ? parsed.droppedWhileDetached
+      : 0
+  } catch {
+    return 0
+  }
+}
+
+function attach(record: CodexAppServerDaemonRecord, timeoutMs: number): Promise<Attached> {
+  return new Promise<Attached>((resolve, reject) => {
     const socket = createConnection(record.socketPath)
     const stdout = new PassThrough()
     const stderr = new PassThrough()
@@ -215,7 +275,11 @@ function attach(record: CodexAppServerDaemonRecord, timeoutMs: number): Promise<
           if (!settled) {
             settled = true
             clearTimeout(timer)
-            resolve(handle)
+            // The `hello` line is the daemon's own report on the stream it is about to replay. Its
+            // `droppedWhileDetached` is the daemon TELLING US the queue overflowed — it was written
+            // for exactly this and, before this parse existed, thrown away unread, so a lossy rejoin
+            // was indistinguishable from a perfect one.
+            resolve({ process: handle, droppedWhileDetached: helloDropCount(trimmed) })
           }
           continue
         }
@@ -247,7 +311,8 @@ export const daemonCodexAppServerHost: CodexAppServerHost = async (options) => {
   const timeoutMs = options.timeoutMs ?? 30_000
   if (existing) {
     try {
-      return { process: await attach(existing, timeoutMs), generation: existing.generation, reattached: true, daemonPid: existing.daemonPid }
+      const attached = await attach(existing, timeoutMs)
+      return { ...attached, generation: existing.generation, reattached: true, daemonPid: existing.daemonPid }
     } catch {
       // The record outlived its socket (a daemon killed between the pid check and connect). Drop it
       // and fall through to a fresh fork rather than failing the whole connect.
@@ -260,7 +325,8 @@ export const daemonCodexAppServerHost: CodexAppServerHost = async (options) => {
   }
   try {
     const record = await forkDaemon(options)
-    return { process: await attach(record, timeoutMs), generation: record.generation, reattached: false, daemonPid: record.daemonPid }
+    const attached = await attach(record, timeoutMs)
+    return { ...attached, generation: record.generation, reattached: false, daemonPid: record.daemonPid }
   } catch (error) {
     // LAST RESORT, and deliberately not a hard failure. The daemon buys ONE thing — an in-flight turn
     // surviving Update & Restart. Codex itself does not need it: before the daemon existed the
@@ -279,7 +345,7 @@ function inProcessCodexAppServer(options: CodexAppServerHostOptions): CodexAppSe
     env: options.env,
     stdio: ["pipe", "pipe", "pipe"],
   })
-  return { process: child as unknown as CodexAppServerProcess, generation: randomUUID(), reattached: false, daemonPid: process.pid }
+  return { process: child as unknown as CodexAppServerProcess, generation: randomUUID(), reattached: false, daemonPid: process.pid, droppedWhileDetached: 0 }
 }
 
 /** Test/harness seam: keep the historical direct-child behavior, where every connect is a NEW
@@ -293,6 +359,7 @@ export function directChildHost(
     generation: generationId(),
     reattached: false,
     daemonPid: process.pid,
+    droppedWhileDetached: 0,
   })
 }
 
