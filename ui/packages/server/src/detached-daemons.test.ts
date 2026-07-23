@@ -54,6 +54,14 @@ test("the entry resolver prefers the bundled .js, falls back to source .ts, and 
 // reintroducing it fails here, naming the file, instead of on a user's machine a build later.
 test("no shipped module resolves a sibling .ts at runtime — that path does not exist in an artifact", () => {
   const roots = [join(workspaceRoot, "packages", "server", "src"), join(workspaceRoot, "packages", "cli", "src")]
+  // The ONE exemption, and it is a knowing one. dev-supervisor.ts forks dev-bootstrap.ts, but the dev
+  // supervisor is the SOURCE launcher — `fray-dev` runs from a checkout where that file exists.
+  // Emitting it into artifacts to close the gap was tried and REVERTED: it woke a control-plane fork
+  // that had been failing fast in every artifact ever built, and the woken path crashed on an
+  // unguarded IPC send and left delegates registered against the developer's live project, wedging
+  // two repos (2026-07-23). Until that path is safe to run from an artifact, failing fast is the
+  // better bug. Anything else that reaches for this pattern still fails below.
+  const EXEMPT = new Set(["packages/server/src/dev-supervisor.ts"])
   const offenders: string[] = []
   const sibling = /new URL\(\s*["'`]\.\/[^"'`]*\.ts["'`]\s*,\s*import\.meta\.url/
 
@@ -63,6 +71,7 @@ test("no shipped module resolves a sibling .ts at runtime — that path does not
       if (entry.isDirectory()) { walk(path); continue }
       // Test files never ship, and the fixtures deliberately contain odd source.
       if (!entry.name.endsWith(".ts") || entry.name.includes(".test.")) continue
+      if (EXEMPT.has(path.slice(workspaceRoot.length + 1))) continue
       readFileSync(path, "utf8").split("\n").forEach((line, index) => {
         // Prose is exempt: the ban is on CODE, and detached-daemons.ts documents the very pattern
         // it bans. A line-comment check is enough — nobody hides a spawn inside a block comment.

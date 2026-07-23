@@ -4,7 +4,6 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs"
 import { createServer as createNetServer } from "node:net"
 import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
-import { resolveDetachedDaemonEntry } from "./detached-daemons.ts"
 import watcher, {
   type AsyncSubscription,
   type Event as WatchEvent,
@@ -356,7 +355,14 @@ class Supervisor implements DevSupervisor {
     this.watchEnabled = opts.watch !== false
     this.childEnvironment = opts.childEnvironment ?? (() => ({}))
     this.debounceMs = opts.debounceMs ?? DEV_RESTART_DEBOUNCE_MS
-    this.childEntry = opts.childEntry ?? resolveDetachedDaemonEntry(import.meta.url, "dev-bootstrap")
+    // EXEMPT from the sibling-.ts ban (detached-daemons.test.ts allowlists this line). The dev
+    // supervisor is the SOURCE launcher: `fray-dev` always runs from a checkout, where this file is
+    // really on disk. Emitting dev-bootstrap.js into artifacts to "fix" the dangling path made things
+    // strictly worse — it woke a control-plane fork that had been failing fast in every artifact ever
+    // built, and the woken path crashed on an unguarded IPC send (EPIPE) and left delegates
+    // registered against the developer's live project, wedging two repos (2026-07-23). Leave it
+    // dangling in artifacts until that path is made safe to run there; failing fast is the better bug.
+    this.childEntry = opts.childEntry ?? fileURLToPath(new URL("./dev-bootstrap.ts", import.meta.url))
     this.childEntryProvider = opts.childEntryProvider
     this.childLaunchProvider = opts.childLaunchProvider
     this.childArgs = opts.childArgs ?? []

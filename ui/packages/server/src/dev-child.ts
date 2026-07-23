@@ -19,6 +19,23 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
   process.exit(1)
 }
 
+// Telling the supervisor something must never be able to KILL this child. `process.send` still exists
+// after the parent goes away — the channel object outlives the peer — so `process.send?.(…)` is not a
+// guard at all: the write fails asynchronously and, with no callback, Node surfaces it as an
+// unhandled 'error' event that takes the process down. The user sees an EPIPE stack printed over
+// their shell prompt seconds after they already gave up (2026-07-23, twice, in two repos).
+//
+// Check `connected` first, and ALWAYS pass a callback — with one, Node routes the failure there
+// instead of emitting 'error'. Losing this message is harmless: a parent that is gone is not waiting.
+function notifySupervisor(message: Record<string, unknown>): void {
+  if (!process.connected || typeof process.send !== "function") return
+  try {
+    process.send(message, undefined, undefined, () => {})
+  } catch {
+    // The channel closed between the check and the write. Nothing to report it to.
+  }
+}
+
 try {
   const target = projectLaunchTargetFromEnvironment(process.env)
   const launchOwnerToken = projectLaunchOwnerTokenFromEnvironment(process.env)
@@ -49,9 +66,9 @@ try {
     ...(stableWebDist ? { webDistDir: stableWebDist } : {}),
     project,
     launchOwnerToken,
-    requestOwnerStop: () => process.send?.({ type: "fray-stop-owner", token: launchOwnerToken }),
+    requestOwnerStop: () => notifySupervisor({ type: "fray-stop-owner", token: launchOwnerToken }),
   })
-  process.send?.({
+  notifySupervisor({
     type: "fray-ready",
     ...currentProcessGeneration(),
     port: server.port,
