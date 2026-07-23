@@ -12,7 +12,11 @@ import { cwdSlug, type Project } from "./project.ts"
 import type { BoardManager } from "./board.ts"
 import { ADOPTION_ATTEMPT_ENV, type PaneIdentity, type PaneSnapshot, type TmuxSpawnOptions } from "./tmux.ts"
 import { readBoard, type FrayBoard, type FrayThread } from "./fray.ts"
-import type { AdoptionRecoveryRuntime } from "./adoption-recovery.ts"
+import {
+  ADOPTION_ATTEMPT_LEASE_MS,
+  reconcileAdoptionClaims,
+  type AdoptionRecoveryRuntime,
+} from "./adoption-recovery.ts"
 
 function sessionRow(slug: string, over: Partial<SessionRow> = {}): SessionRow {
   return {
@@ -583,6 +587,88 @@ test("a registry owner that wins after spawn is preserved and only the exact los
   assert.equal(saved?.exited, 1)
   assert.equal(saved?.archived, 1)
   assert.equal(saved?.state, "archived")
+})
+
+// The sibling of the test above, for the OTHER way an adoption rollback can end. Above, tmux proves
+// the losing pane is gone, so the rollback is complete: claim retired, scratchpad removed.
+//
+// Here tmux cannot answer (`unknown`), so the spawned pane may still be ALIVE and still writing the
+// scratchpad it was given. abandonAdoptionAttempt deliberately refuses to release anything it cannot
+// prove dead — the claim and the session's files are RETAINED for boot recovery rather than deleted
+// out from under a possible orphan. That asymmetry is the whole point of the tri-state lookup, so it
+// is pinned here: a future "just always clean up in rollback" simplification must fail this test.
+//
+// Retained is not leaked. Recovery is retire-only — it never resumes an attempt — and it reads the
+// session id from the CLAIM, not from the scratchpad, so once tmux answers again the level-triggered
+// sweep in context.ts finishes exactly the cleanup the rollback declined to do.
+test("a rollback that cannot prove the pane dead retains the claim and files for boot recovery", async () => {
+  let attemptedSessionId = ""
+  const killedByRollback: string[] = []
+  const competing = sessionRow("murky", {
+    session_id: "murky-codex-winner",
+    backend: "codex",
+    agent_session_id: "murky-native-winner",
+  })
+  // tmux is reachable enough to accept the kill but never confirms the pane is gone.
+  let tmuxAnswers = false
+  const lookup = (): { kind: "absent" } | { kind: "unknown" } =>
+    tmuxAnswers ? { kind: "absent" } : { kind: "unknown" }
+  const h = harness({
+    onSpawn: (storage, spawn) => {
+      attemptedSessionId = spawn.cmd[spawn.cmd.indexOf("--session-id") + 1] ?? ""
+      assert.ok(attemptedSessionId)
+      assert.equal(storage.insertSessionIfAbsent(competing), true, "the competing registry writer wins the CAS gap")
+    },
+    adoptionRuntime: {
+      lookupAdoptionPane: lookup,
+      findAdoptionPane: lookup,
+      findAdoptionPanes: (tokens) => new Map(tokens.map((token) => [token, lookup()])),
+      findPaneIdentity: lookup,
+      killExpectedAdoptionPane: (expected) => {
+        killedByRollback.push(expected.attempt_token)
+        return true
+      },
+    },
+  })
+  h.addLegacyFile("murky")
+
+  await assert.rejects(h.dispatcher.adopt("murky"), /thread is not available for adoption/)
+  assert.equal(h.spawned.length, 1)
+  assert.deepEqual(h.killedNames, [], "there is no slug-targeted fallback here either")
+  assert.equal(h.rebuilds(), 0)
+
+  // The competing winner is untouched — an unconfirmed rollback still never mutates another owner.
+  assert.equal(h.storage.getSession("murky")?.session_id, "murky-codex-winner")
+  assert.equal(h.storage.getSession("murky")?.backend, "codex")
+
+  // …and this attempt's durable state SURVIVES, keyed to the pane the rollback could not verify.
+  const stranded = h.storage.getAdoptionClaim("murky")
+  assert.equal(stranded?.session_id, attemptedSessionId, "the claim is the boot-recovery handle")
+  assert.equal(stranded?.pane_id, h.spawned[0].identity.paneId)
+  assert.deepEqual(killedByRollback, [stranded?.attempt_token], "the exact losing pane was still targeted")
+  const scratch = join(h.dir, ".fray", "threads", attemptedSessionId, "scratch.md")
+  assert.equal(existsSync(scratch), true, "a possibly-live worker's scratchpad is never deleted on a guess")
+
+  // Once tmux answers again, the same reconciliation boot runs retires the claim and removes the
+  // files — proving the retained state is reclaimable rather than a permanent leak.
+  tmuxAnswers = true
+  const outcomes = reconcileAdoptionClaims({
+    storage: h.storage,
+    projectDir: h.dir,
+    now: () => Date.now() + ADOPTION_ATTEMPT_LEASE_MS * 2,
+    runtime: {
+      lookupAdoptionPane: lookup,
+      findAdoptionPane: lookup,
+      findAdoptionPanes: (tokens) => new Map(tokens.map((token) => [token, lookup()])),
+      findPaneIdentity: lookup,
+      killExpectedAdoptionPane: () => true,
+    },
+  })
+  assert.equal(outcomes.get("murky"), "recovered-stale-attempt")
+  assert.equal(h.storage.getAdoptionClaim("murky"), undefined)
+  assert.equal(existsSync(scratch), false, "recovery finishes the cleanup the rollback declined")
+  assert.equal(existsSync(join(h.dir, ".fray", "threads", attemptedSessionId)), false)
+  assert.equal(h.storage.getSession("murky")?.session_id, "murky-codex-winner", "recovery never disturbs the winner")
 })
 
 // ---- Dispatch auth preflight (claude-auth plan, Slice A) ----
