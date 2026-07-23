@@ -247,7 +247,6 @@ export interface BgShellView {
   startedAt: string
   state: "running" | "stale"
   id?: string
-  command?: string
 }
 
 // A pending native AskUserQuestion (structured, capped). Mirrors @fray-ui/shared PendingAsk; `id` is
@@ -1309,7 +1308,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     const out: BgShellView[] = []
     for (const e of state.subAgents.values()) {
       if (e.kind !== "shell") continue
-      out.push({ label: e.label, startedAt: e.startedAt, state: "running", id: e.toolUseId, command: e.command })
+      out.push({ label: e.label, startedAt: e.startedAt, state: "running", id: e.toolUseId })
     }
     return out
   }

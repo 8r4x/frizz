@@ -126,15 +126,14 @@ export type SubAgentView = z.infer<typeof SubAgentView>
 // A LIVE background SHELL the worker launched (Bash run_in_background:true) — same tailer tracking as a
 // sub-agent (dispatch → launch output path → task-notification clear). Foreground-blocking waits keep
 // the turn in-flight, so the spinner already covers them; this is for ops that PERSIST across a rest
-// (a CI watcher, a long build). New servers include the stable tool-use id + raw command so the row can
-// open its read-only output drawer; both stay optional for old snapshots / Monitor calls without a
-// command.
+// (a CI watcher, a long build). New servers include the stable tool-use id so the row can open its
+// read-only output drawer; it stays optional for old snapshots. The raw command remains behind that
+// drawer's scoped RPC rather than inflating or exposing it in every board snapshot.
 export const BgShellView = z.object({
   label: z.string(), // the command's `description`, else its first-line summary
   startedAt: z.string(), // ISO8601 of the launch record
   state: z.enum(["running", "stale"]),
   id: z.string().optional(),
-  command: z.string().optional(),
 })
 export type BgShellView = z.infer<typeof BgShellView>
 
