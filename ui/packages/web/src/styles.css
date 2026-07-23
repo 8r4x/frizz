@@ -399,6 +399,43 @@ a[href] {
 .md-body li::marker {
   color: var(--color-muted);
 }
+/* GFM task lists. lib/markdown.ts renders the checkbox as an inert `.md-task` span (marked's real
+   `<input>` is neither in the render allowlist nor appropriate inside a transcript), so the box is
+   drawn here and the item drops its own bullet. `> p >` catches the loose-list shape, where the span
+   lands inside a paragraph. */
+.md-body li:has(> .md-task),
+.md-body li:has(> p > .md-task) {
+  list-style: none;
+}
+/* Hangs in the gutter the disc marker vacated, so the item's text starts — and WRAPS — at exactly the
+   same x as a plain bullet's: the box's own margins sum with its width to zero advance
+   (-1.25 + 0.85 + 0.4). */
+.md-body .md-task {
+  display: inline-block;
+  position: relative;
+  width: 0.85em;
+  height: 0.85em;
+  margin-left: -1.25em;
+  margin-right: 0.4em;
+  vertical-align: -0.06em;
+  border: 1px solid var(--color-muted);
+  border-radius: 3px;
+}
+.md-body .md-task-checked {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+}
+.md-body .md-task-checked::after {
+  content: "";
+  position: absolute;
+  left: 0.28em;
+  top: 0.09em;
+  width: 0.2em;
+  height: 0.42em;
+  border: solid var(--color-bg);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
 .md-body a {
   color: var(--color-accent);
   text-decoration: underline;
@@ -537,6 +574,16 @@ a[href] {
   border: 1px solid var(--color-border);
   padding: 0.32em 0.55em;
   text-align: left;
+}
+/* GFM column alignment (`| :---: |`). marked emits it as the `align` presentation attribute, which the
+   blanket `text-align: left` above outranks — so honor it explicitly. */
+.md-body th[align="center"],
+.md-body td[align="center"] {
+  text-align: center;
+}
+.md-body th[align="right"],
+.md-body td[align="right"] {
+  text-align: right;
 }
 .md-body th {
   background: var(--color-panel-2);
