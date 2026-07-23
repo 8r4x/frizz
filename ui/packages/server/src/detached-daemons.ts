@@ -21,10 +21,19 @@ import { fileURLToPath } from "node:url"
 /** Every module spawned as its own node process, as a path relative to the `ui` workspace root. */
 export const DETACHED_DAEMON_ENTRIES = [
   "packages/server/src/backend/codex-app-server-daemon.ts",
-  "packages/server/src/session-broker-daemon.ts",
-  // DELIBERATELY NOT dev-bootstrap.ts — see the exemption in dev-supervisor.ts. Emitting it woke a
-  // control-plane path that had been dead in artifacts since artifacts existed, and that path is not
-  // safe to run there yet.
+  // Deliberately SHORT. Two things are pointedly absent:
+  //
+  //   session-broker-daemon.ts — the PTY broker is dead code today; nothing imports session-broker.ts
+  //     (the `hasSession`/`listSessions` callers all mean the tmux module). Emitting a bundle for it
+  //     ships weight for a subsystem that never runs. session-broker.ts still resolves through
+  //     resolveDetachedDaemonEntry(), so if it is ever revived it fails with a precise "looked for
+  //     X.js and X.ts" instead of the silent MODULE_NOT_FOUND this file exists to prevent.
+  //
+  //   dev-bootstrap.ts — see the exemption in dev-supervisor.ts. Emitting it woke a control-plane
+  //     path that had been dead in artifacts since artifacts existed, and that path is not safe to
+  //     run there yet.
+  //
+  // Add an entry only when something is genuinely spawned as its own process IN PRODUCTION.
 ] as const
 
 /** The filename an entry must be emitted under, beside the runtime bundle. */
