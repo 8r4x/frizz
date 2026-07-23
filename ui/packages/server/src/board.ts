@@ -35,6 +35,37 @@ const DEBOUNCE_MS = 150
 // + the 10s health tick). See sse.ts.
 const RECONCILE_MS = 15_000
 
+// A codex app-server turn that reads in-flight but is driven by NOBODY. The rollout is a lagging log:
+// when the app-server process dies mid-turn it simply stops, so the folded turn stays "in-flight"
+// forever and the thread spins on `running` — never at rest, so never queued, so invisible (four
+// threads sat like this for hours on 2026-07-22). The bridge is the authority on whether a turn is
+// actually running; a rollout that has not advanced since fray took the thread onto its current
+// connection is being driven by nobody at all.
+//
+// Rollout activity AFTER that instant means some OTHER writer is driving the thread — the operator
+// running `codex resume` in their own terminal — which is a real live turn fray is mirroring. Keep it.
+//
+// The grace exists because the two signals are read from different places: the bridge clears its turn
+// on `turn/completed` while the rollout's matching record still has to reach the tailer's next tick.
+// Without it, the end of every normal turn could flash "stalled" for a beat. A genuine stall is a rare
+// event nobody is watching in real time, so paying half a minute of latency to make a false stall
+// impossible is the right trade.
+const STALL_GRACE_MS = 30_000
+export function appServerTurnStalled(
+  liveness: { bridgeTurn: boolean; ownedSince: string } | undefined,
+  lastActivityAt: string | undefined,
+  nowMs: number,
+): boolean {
+  // Not bridge-owned — fray has never held this thread, so it has no standing to call the turn dead.
+  if (!liveness) return false
+  if (liveness.bridgeTurn) return false
+  const ownedSince = Date.parse(liveness.ownedSince)
+  if (!Number.isFinite(ownedSince)) return false
+  const advanced = lastActivityAt ? Date.parse(lastActivityAt) : NaN
+  if (Number.isFinite(advanced) && advanced >= ownedSince) return false
+  return nowMs - ownedSince > STALL_GRACE_MS
+}
+
 // Runtime derivation: no session row → never spawned (none); a row whose tmux session is dead/absent
 // → exited; a live session paused on an interactive permission prompt → perm-prompt (pane-sniffed by
 // the tailer, no jsonl signal); otherwise the tailer's turn state (running while a turn is in flight,
@@ -45,6 +76,7 @@ function deriveRuntime(
   storage: Storage,
   turn: "in-flight" | "idle" | undefined,
   permPrompt: boolean,
+  appServerStalled = false,
 ): RuntimeState {
   if (!row) return "none"
   // App-server codex sessions have NO tmux pane. A persisted bridge thread is always resumable, so
@@ -52,7 +84,11 @@ function deriveRuntime(
   // would mark every headless thread "exited" (and, mid-turn, trip the crash-net). Never do that.
   if (row.codex_runtime === "app-server") {
     if (permPrompt) return "perm-prompt"
-    return turn === "idle" ? "turn-idle" : "running"
+    if (turn === "idle") return "turn-idle"
+    // Mid-turn with nobody driving it: the process that owned this turn is gone. Reuse "exited" so the
+    // pair (exited + in-flight) trips the SAME crash-net a dead pane does — the thread cards as
+    // "Stalled" and enters the queue instead of spinning forever.
+    return appServerStalled ? "exited" : "running"
   }
   const adoption = adoptionRuntimeBinding(storage, row)
   if (adoption.kind === "conflict") return "exited"
@@ -342,11 +378,20 @@ function sessionThreadView(
   interactionPresence: { pending: boolean; needsUser: boolean },
   nowMs: number,
   autoResumeOnLimit: boolean,
+  codexTurnLiveness: CodexTurnLivenessReader,
 ): ThreadView {
   // App-server threads write their rollout synchronously at thread/start, so a transient "no transcript
   // yet" must not degrade a healthy headless thread to the "exited"/stalled crash affordance.
   const runtime = degradeIfNoTranscript(
-    deriveRuntime(row.slug, row, storage, tele?.turn, tele?.permPrompt ?? false),
+    deriveRuntime(
+      row.slug,
+      row,
+      storage,
+      tele?.turn,
+      tele?.permPrompt ?? false,
+      row.codex_runtime === "app-server" &&
+        appServerTurnStalled(codexTurnLiveness(row.slug, row.session_id), tele?.lastActivityAt, nowMs),
+    ),
     row.codex_runtime === "app-server" ? false : tele?.noTranscript,
   )
   const state = effectiveSessionState(row, registeredLegacyTerminal)
@@ -473,9 +518,19 @@ export interface BoardManager {
   stop(): Promise<void>
 }
 
+// Reads the codex app-server bridge's turn-liveness authority for one thread; undefined for a thread
+// the bridge does not own (and for every non-codex row). Injected rather than imported so the board
+// keeps no dependency on the bridge — and so a context without one (tests, a bridge-less server)
+// simply never downgrades.
+export type CodexTurnLivenessReader = (
+  slug: string,
+  sessionId: string,
+) => { bridgeTurn: boolean; ownedSince: string } | undefined
+
 export interface BoardManagerDeps {
   subscribe?: typeof watcher.subscribe
   now?: () => number
+  codexTurnLiveness?: CodexTurnLivenessReader
 }
 
 export function createBoard(
@@ -488,6 +543,7 @@ export function createBoard(
 ): BoardManager {
   const subscribe = deps.subscribe ?? watcher.subscribe
   const now = deps.now ?? Date.now
+  const codexTurnLiveness = deps.codexTurnLiveness ?? (() => undefined)
   let cached: BoardSnapshot | null = null
   let parcelSub: watcher.AsyncSubscription | null = null
   let watchSetup: Promise<void> | null = null
@@ -583,6 +639,7 @@ export function createBoard(
         interactionPresence,
         nowMs,
         autoResumeOnLimit,
+        codexTurnLiveness,
       ))
     }
     for (const key of pendingInteractionCache.keys()) {

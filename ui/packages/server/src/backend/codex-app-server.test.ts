@@ -21,6 +21,11 @@ import {
 
 type Message = Record<string, unknown>
 
+// Thread/turn ids are minted PROCESS-INDEPENDENTLY because the real app-server mints uuidv7s and never
+// reuses one. Per-process counters silently handed a restarted fake the same `codex-turn-1`, which
+// makes a restart test pass for the wrong reason (the "new" turn is indistinguishable from the dead one).
+let nextProviderId = 0
+
 class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess {
   readonly stdin = new PassThrough()
   readonly stdout = new PassThrough()
@@ -29,8 +34,6 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
   readonly clientRequests: Message[] = []
   readonly clientResponses: Message[] = []
   private buffer = ""
-  private nextThread = 0
-  private nextTurn = 0
   private activeTurn: { threadId: string; turnId: string } | null = null
   // When set, a turn/steer completes the turn (turn/completed) then rejects — modelling the turn
   // ending in the bridge's read→steer window, which must trigger followUp's start-fallback.
@@ -125,7 +128,7 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
     }
     if (message.method === "thread/start") {
       const params = message.params as { ephemeral?: boolean }
-      const suffix = ++this.nextThread
+      const suffix = ++nextProviderId
       this.send({
         id,
         result: {
@@ -153,7 +156,7 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
     }
     if (message.method === "turn/start") {
       const params = message.params as { threadId: string }
-      const turnId = `codex-turn-${++this.nextTurn}`
+      const turnId = `codex-turn-${++nextProviderId}`
       this.activeTurn = { threadId: params.threadId, turnId }
       this.notify("turn/started", { threadId: params.threadId, turn: { id: turnId } })
       this.send({ id, result: { turn: { id: turnId } } })
@@ -758,20 +761,31 @@ test("file approval requires exact snapshots and invalidates stale cards across 
   const restarted = h.newBridge()
   await restarted.resumeOwnedSession(binding.threadSlug, binding.sessionId)
   const second = h.processes[1]!
+  // The pre-restart turn died with its connection (measured against the real app-server in
+  // scripts/verify-codex-turn-survives-connection.mjs: the rollout never grows again after a resume),
+  // so its card is retired at the rebind — it could never be answered, and the provider can only
+  // re-ask inside a NEW turn. Everything after the restart therefore rides that new turn.
+  assert.equal(h.interactions.get(scope, preRestart.id)?.lifecycle, "cancelled")
+  assert.equal(h.interactions.get(scope, preRestart.id)?.cancellationReason, "turn-ended")
+  assert.notEqual(h.interactions.providerDelivery(scope, preRestart.id)?.connectionEpoch, restarted.binding(binding.threadSlug, binding.sessionId)?.connectionEpoch)
+  const { turnId: restartTurnId } = await restarted.startTurn({
+    threadSlug: binding.threadSlug,
+    sessionId: binding.sessionId,
+    text: "Continue",
+  })
+  assert.notEqual(restartTurnId, turnId)
   second.request("restart-without-replay", "item/fileChange/requestApproval", {
     threadId: binding.codexThreadId,
-    turnId,
+    turnId: restartTurnId,
     itemId: "restart-item",
     startedAtMs: Date.now(),
     reason: "Fresh correlation required",
     grantRoot: null,
   })
   await waitFor(() => second.clientResponses.some((message) => message.id === "restart-without-replay" && "error" in message), "restart cache rejection")
-  assert.equal(h.interactions.providerDelivery(scope, preRestart.id)?.state, "awaiting-user")
-  assert.notEqual(h.interactions.providerDelivery(scope, preRestart.id)?.connectionEpoch, restarted.binding(binding.threadSlug, binding.sessionId)?.connectionEpoch)
   second.notify("item/started", {
     threadId: binding.codexThreadId,
-    turnId,
+    turnId: restartTurnId,
     startedAtMs: Date.now(),
     item: {
       type: "fileChange",
@@ -782,21 +796,20 @@ test("file approval requires exact snapshots and invalidates stale cards across 
   })
   second.request("restart-after-replay", "item/fileChange/requestApproval", {
     threadId: binding.codexThreadId,
-    turnId,
+    turnId: restartTurnId,
     itemId: "restart-item",
     startedAtMs: Date.now(),
     reason: "Fresh correlation witnessed",
     grantRoot: null,
   })
   await waitFor(() => h.interactions.listPending(scope).some((item) => item.owner.itemId === "restart-item"), "restart replay interaction")
-  await waitFor(() => h.interactions.get(scope, preRestart.id)?.lifecycle === "cancelled", "superseded restart snapshot cancellation")
   const postRestart = h.interactions.listPending(scope).find((item) => item.owner.itemId === "restart-item")!
   assert.notEqual(postRestart.id, preRestart.id)
   assert.equal(postRestart.payload.kind, "file-approval")
   if (postRestart.payload.kind !== "file-approval") assert.fail("expected post-restart file approval")
   assert.equal(postRestart.payload.pathLabel, "/tmp/replayed")
 
-  second.notify("turn/completed", { threadId: binding.codexThreadId, turn: { id: turnId, status: "completed" } })
+  second.notify("turn/completed", { threadId: binding.codexThreadId, turn: { id: restartTurnId, status: "completed" } })
   await waitFor(() => h.interactions.get(scope, postRestart.id)?.lifecycle === "cancelled", "turn completion cancellation")
   assert.equal(h.interactions.get(scope, postRestart.id)?.cancellationReason, "turn-ended")
   await waitFor(() => second.clientResponses.some((message) => message.id === "restart-after-replay" && "error" in message), "turn completion invalidation response")
@@ -997,6 +1010,67 @@ test("followUp falls back to a fresh turn when the live steer is rejected (turn 
   h.close()
 })
 
+// A turn cannot outlive the connection running it: the app-server process that owned it is gone, and
+// `thread/resume` (excludeTurns) never resurrects one. Carrying `current_turn_id` across the rebind
+// wedged the thread permanently — followUp steered a turn the new process had never heard of, then
+// startTurn refused with "already has an active turn", so every later follow-up failed. Observed live
+// 2026-07-22: four codex threads died with their app-server at 23:26:33Z and stayed unusable.
+test("a turn never survives its connection: rebinding clears the dead turn so follow-ups still land", async () => {
+  const h = harness()
+  const binding = await h.bridge.startDisposableSession({
+    threadSlug: "stalled-thread",
+    sessionId: "stalled-session",
+    cwd: h.dir,
+    ephemeral: false,
+  })
+  const { turnId } = await h.bridge.startTurn({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "Work" })
+  await waitFor(() => h.bridge.binding(binding.threadSlug, binding.sessionId)?.currentTurnId === turnId, "turn active")
+
+  // The app-server dies mid-turn (no turn/completed ever arrives).
+  h.processes[0]!.disconnect()
+  await waitFor(() => h.bridge.binding(binding.threadSlug, binding.sessionId)?.state === "detached", "detached on disconnect")
+
+  await h.bridge.resumeOwnedSession(binding.threadSlug, binding.sessionId)
+  const rebound = h.bridge.binding(binding.threadSlug, binding.sessionId)!
+  assert.equal(rebound.state, "active")
+  assert.equal(rebound.currentTurnId, null, "the dead connection's turn must not survive the rebind")
+
+  // The operator's next follow-up must open a fresh turn rather than steering a phantom one.
+  const next = await h.bridge.followUp({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "Still there?" })
+  assert.equal(next.mode, "start")
+  assert.notEqual(next.turnId, turnId)
+  assert.equal(h.processes[1]!.clientRequests.filter((message) => message.method === "turn/steer").length, 0)
+  h.close()
+})
+
+// A bridge constructed at server boot owns no connection, so no binding it INHERITS can still be
+// active. Without this, a SIGKILLed fray (close() never ran) left rows claiming `active` at the last
+// epoch, and every ownership check — including the board's liveness read — took that at face value.
+test("a fresh bridge inherits no active bindings: boot detaches what a SIGKILLed process abandoned", async () => {
+  const h = harness()
+  const binding = await h.bridge.startDisposableSession({
+    threadSlug: "killed-thread",
+    sessionId: "killed-session",
+    cwd: h.dir,
+    ephemeral: false,
+  })
+  const { turnId } = await h.bridge.startTurn({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "Work" })
+  // Simulate SIGKILL: the process vanishes without close()/handleDisconnect ever running.
+  const abandoned = h.db.prepare("SELECT state, current_turn_id FROM codex_app_server_session WHERE thread_slug = ?")
+    .get(binding.threadSlug) as { state: string; current_turn_id: string | null }
+  assert.equal(abandoned.state, "active")
+  assert.equal(abandoned.current_turn_id, turnId)
+
+  const restarted = h.newBridge()
+  const inherited = restarted.binding(binding.threadSlug, binding.sessionId)!
+  assert.equal(inherited.state, "detached")
+  assert.equal(inherited.currentTurnId, turnId, "detach preserves the turn id; the rebind retires it")
+
+  await restarted.resumeOwnedSession(binding.threadSlug, binding.sessionId)
+  assert.equal(restarted.binding(binding.threadSlug, binding.sessionId)?.currentTurnId, null)
+  h.close()
+})
+
 test("startDisposableSession forwards worker-contract/title/config instruction surfaces to thread/start", async () => {
   const h = harness()
   await h.bridge.startDisposableSession({
@@ -1176,7 +1250,7 @@ test("request acknowledgements cannot cross bridge-owned session boundaries", as
   h.close()
 })
 
-test("restart never blindly replays a sent response; a freshly witnessed matching request may rebind it", async () => {
+test("restart never blindly replays a sent response, and retires the card whose turn died with the connection", async () => {
   const h = harness()
   const binding = await h.bridge.startDisposableSession({
     threadSlug: "persisted-thread",
@@ -1215,24 +1289,37 @@ test("restart never blindly replays a sent response; a freshly witnessed matchin
   const second = h.processes[1]!
   assert.ok(second.clientRequests.some((message) => message.method === "thread/resume"))
   assert.equal(second.clientResponses.length, 0, "SENT/unknown response is not replayed during reconnect reconciliation")
-  assert.equal(h.interactions.get(scope, pending.id)?.lifecycle, "pending")
+  // The decided response went to a connection that is now dead, and no acknowledgement can ever
+  // arrive: the turn it belonged to died with that connection (measured against the real app-server in
+  // scripts/verify-codex-turn-survives-connection.mjs), and the provider can only re-ask inside a NEW
+  // turn — a different logical request by construction, so nothing will ever rebind this one. Retiring
+  // it at the rebind is what keeps the thread from dangling on an unanswerable card forever.
+  assert.equal(h.interactions.get(scope, pending.id)?.lifecycle, "cancelled")
+  assert.equal(h.interactions.get(scope, pending.id)?.cancellationReason, "turn-ended")
   first.request("stale-old-connection", "item/commandExecution/requestApproval", {
     ...params,
     itemId: "item-from-stale-connection",
   })
   await new Promise<void>((resolve) => setTimeout(resolve, 5))
-  assert.equal(h.interactions.listPending(scope).length, 1, "messages from the disconnected epoch are ignored")
+  assert.equal(h.interactions.listPending(scope).length, 0, "messages from the disconnected epoch are ignored")
 
+  // A fresh turn on the live connection asks again and is journaled as its own card — the retired one
+  // is never resurrected, and the human is asked once, on the turn that is actually running.
+  const { turnId: restartTurnId } = await restarted.startTurn({
+    threadSlug: binding.threadSlug,
+    sessionId: binding.sessionId,
+    text: "Continue",
+  })
+  assert.notEqual(restartTurnId, turnId)
   second.request("approval-new", "item/commandExecution/requestApproval", {
     ...params,
+    turnId: restartTurnId,
     startedAtMs: (params.startedAtMs as number) + 5_000,
   })
-  await waitFor(() => second.clientResponses.some((message) => message.id === "approval-new"), "witnessed retry response")
-  assert.deepEqual(second.clientResponses.filter((message) => message.id === "approval-new"), [
-    { id: "approval-new", result: { decision: "accept" } },
-  ])
-  second.notify("serverRequest/resolved", { threadId: binding.codexThreadId, requestId: "approval-new" })
-  await waitFor(() => h.interactions.get(scope, pending.id)?.lifecycle === "resolved")
+  await waitFor(() => h.interactions.listPending(scope).length === 1, "fresh-turn approval card")
+  const reasked = h.interactions.listPending(scope)[0]!
+  assert.notEqual(reasked.id, pending.id)
+  assert.equal(second.clientResponses.length, 0, "a retired decision is never auto-answered on the new turn")
   h.close()
 })
 

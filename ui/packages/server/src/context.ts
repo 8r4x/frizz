@@ -435,7 +435,12 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   })
   resources.tailer = tailer
   opts.startup?.afterPhase?.("tailer")
-  board = createBoard(project, storage, bus, tailer, bootId)
+  // The bridge is the authority on whether a codex app-server TURN is actually running — a rollout
+  // frozen by a dead app-server reads "in-flight" forever on its own. Without this the board spins
+  // such a thread on `running` and never queues it (live stall 2026-07-22).
+  board = createBoard(project, storage, bus, tailer, bootId, {
+    codexTurnLiveness: (slug, sessionId) => codexAppServer?.turnLiveness(slug, sessionId),
+  })
   resources.board = board
   opts.startup?.afterPhase?.("board watcher")
   const permissionController = createPermissionController({

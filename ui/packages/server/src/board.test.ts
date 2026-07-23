@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { InteractionRequest } from "@fray-ui/shared"
-import { createBoard, deriveNeedsYou, degradeIfNoTranscript, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle } from "./board.ts"
+import { appServerTurnStalled, createBoard, deriveNeedsYou, degradeIfNoTranscript, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle } from "./board.ts"
 import { Bus } from "./bus.ts"
 import { createStorage } from "./storage.ts"
 import type { Project } from "./project.ts"
@@ -444,6 +444,61 @@ test("board: an EXITED parent resting on a 'running' sub-agent surfaces as a sta
   }
 })
 
+test("board: a codex app-server thread whose turn died with its app-server cards as a stall, not a spinner", async () => {
+  // The live 2026-07-22 failure, end-to-end through board assembly: an app-server thread has NO tmux
+  // pane, so its runtime comes only from the rollout — which froze mid-turn when the process died and
+  // therefore reads "in-flight" forever. The bridge's liveness answer is what makes the difference
+  // between a thread that spins on `running` and never queues, and one the human actually sees.
+  const dir = mkdtempSync(join(tmpdir(), "fray-board-appserver-stall-"))
+  const project: Project = { dir, id: "board-appserver-stall", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
+  const storage = createStorage(join(dir, "ui.db"))
+  for (const slug of ["stalled", "driving", "mirrored"]) {
+    storage.upsertSession(row({ slug, session_id: `${slug}-s`, tmux_name: `fray-${slug}`, seen_at: LATER }))
+    storage.setBackend(slug, "codex")
+    storage.setCodexRuntime(slug, "app-server")
+  }
+  const ownedSince = "2026-07-09T10:00:00.000Z"
+  const tailer = {
+    // Every one of them reads in-flight off the rollout — that is exactly why the rollout alone
+    // cannot tell them apart.
+    get: (slug: string) => tele({
+      turn: "in-flight",
+      lastActivityAt: slug === "mirrored" ? "2026-07-09T10:00:30.000Z" : "2026-07-09T09:59:00.000Z",
+    }),
+    foreignIds: () => [],
+    subAgent: () => undefined,
+    forget: () => {},
+    start: () => {},
+    stop: () => {},
+    tick: () => {},
+  } satisfies Tailer
+  const board = createBoard(project, storage, new Bus(), tailer, "appserver-stall-boot", {
+    now: () => Date.parse(ownedSince) + 120_000,
+    codexTurnLiveness: (slug) => ({ bridgeTurn: slug === "driving", ownedSince }),
+  })
+  try {
+    const snap = await board.snapshot()
+    const stalled = snap.threads.find((candidate) => candidate.id === "stalled")!
+    assert.equal(stalled.runtime, "exited", "nobody is driving this turn")
+    assert.equal(stalled.crashed, true, "it cards as a stall, not a bare rest")
+    assert.equal(stalled.needsYou, true, "and it reaches the human instead of spinning invisibly")
+
+    const driving = snap.threads.find((candidate) => candidate.id === "driving")!
+    assert.equal(driving.runtime, "running", "the bridge is driving this turn right now")
+    assert.equal(driving.needsYou, false)
+
+    // An external `codex resume` in the operator's terminal keeps appending after fray took the
+    // thread: a real live turn fray is mirroring, so it must not be declared dead.
+    const mirrored = snap.threads.find((candidate) => candidate.id === "mirrored")!
+    assert.equal(mirrored.runtime, "running")
+    assert.equal(mirrored.needsYou, false)
+  } finally {
+    board.stop()
+    storage.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test("deriveNeedsYou: manual snooze suppresses every queue reason until its exact deadline", () => {
   const now = Date.parse("2026-07-13T12:00:00.000Z")
   const snoozed = row({ snoozed_until: "2026-07-14T12:00:00.000Z" })
@@ -582,6 +637,39 @@ test("degradeIfNoTranscript: only a live-pane spinner (running) downgrades to th
   for (const r of ["none", "turn-idle", "perm-prompt", "exited", "spawning"] as const) {
     assert.equal(degradeIfNoTranscript(r, true), r)
   }
+})
+
+// ---- codex app-server stall detection (four threads spun on `running` for hours, 2026-07-22) ----
+
+test("appServerTurnStalled: only a turn nobody is driving, and only once the read-skew grace has passed", () => {
+  const owned = "2026-07-09T10:00:00.000Z"
+  const ownedMs = Date.parse(owned)
+  const wellPast = ownedMs + 120_000
+  // The live incident: the app-server died mid-turn, so the rollout froze BEFORE fray last took the
+  // thread and nothing has advanced it since. That is a stall.
+  assert.equal(appServerTurnStalled({ bridgeTurn: false, ownedSince: owned }, "2026-07-09T09:59:00.000Z", wellPast), true)
+  // A rollout with no activity at all behaves the same — there is nothing to argue it is alive.
+  assert.equal(appServerTurnStalled({ bridgeTurn: false, ownedSince: owned }, undefined, wellPast), true)
+  // The bridge is driving a turn right now: never stalled, however quiet the rollout is (a long tool
+  // call legitimately writes nothing for minutes).
+  assert.equal(appServerTurnStalled({ bridgeTurn: true, ownedSince: owned }, undefined, wellPast), false)
+  // Someone else is driving it — a `codex resume` in the operator's own terminal keeps appending after
+  // fray took the thread. fray is mirroring a genuinely live turn; leave it running.
+  assert.equal(appServerTurnStalled({ bridgeTurn: false, ownedSince: owned }, "2026-07-09T10:00:30.000Z", wellPast), false)
+  // Read skew at the end of a normal turn: the bridge has cleared its turn but the rollout's matching
+  // record has not reached the tailer yet. The grace makes that flash impossible.
+  assert.equal(appServerTurnStalled({ bridgeTurn: false, ownedSince: owned }, undefined, ownedMs + 1_000), false)
+  // Not bridge-owned (no binding, or a non-codex row): the board has no standing to call it dead.
+  assert.equal(appServerTurnStalled(undefined, undefined, wellPast), false)
+  assert.equal(appServerTurnStalled({ bridgeTurn: false, ownedSince: "not-a-date" }, undefined, wellPast), false)
+})
+
+test("deriveNeedsYou: a stalled app-server turn queues via the crash-net rather than spinning forever", () => {
+  // deriveRuntime maps a stalled app-server turn onto "exited"; paired with the in-flight turn the
+  // frozen rollout keeps, that is exactly the crash-net pair — so the thread cards for the human.
+  assert.equal(deriveNeedsYou(row({ seen_at: LATER }), tele({ turn: "in-flight" }), "exited"), true)
+  // While it is genuinely running it must stay OUT of the queue (not at rest).
+  assert.equal(deriveNeedsYou(row({ seen_at: LATER }), tele({ turn: "in-flight" }), "running"), false)
 })
 
 test("deriveNeedsYou: a missing-transcript row cards — degraded to exited, its turn stays in-flight (crash-net)", () => {

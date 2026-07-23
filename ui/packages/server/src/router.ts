@@ -52,6 +52,7 @@ import {
   ThreadSlug,
 } from "@fray-ui/shared"
 import type { AppContext } from "./context.ts"
+import { appServerTurnStalled } from "./board.ts"
 import { runThreadUpdate } from "./fray.ts"
 import { repairThreadFile } from "./repair.ts"
 import { resumeThread } from "./resume.ts"
@@ -583,7 +584,17 @@ export function createRouter(ctx: AppContext) {
           // current turn of its own), someone is driving this thread in their own terminal via
           // `codex resume`. fray keeps MIRRORING that turn (the tailer follows the same rollout), but it
           // must not start/steer a second turn and race two writers. Yield until the external turn rests.
-          const turnLive = ctx.tailer.get(input.slug)?.turn === "in-flight"
+          //
+          // "In flight" must mean the rollout is ACTUALLY ADVANCING, not merely that it stopped
+          // mid-turn: a rollout frozen by a dead app-server looks identical to an external writer from
+          // here, and yielding to it left the operator unable to answer their own stalled thread at all.
+          // appServerTurnStalled tells the two apart — see board.ts.
+          const stalled = appServerTurnStalled(
+            bridge.turnLiveness(input.slug, row.session_id),
+            ctx.tailer.get(input.slug)?.lastActivityAt,
+            Date.now(),
+          )
+          const turnLive = ctx.tailer.get(input.slug)?.turn === "in-flight" && !stalled
           if (turnLive && (!binding || binding.currentTurnId === null)) {
             throw new Error("This thread is running in your terminal right now — fray is mirroring it live. Wait for that turn to finish, then send your follow-up here.")
           }

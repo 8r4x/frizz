@@ -618,6 +618,22 @@ export interface CodexAppServerSessionBinding {
   state: "active" | "detached"
 }
 
+// Whether a TURN is genuinely in flight for a bridge-owned thread. The rollout cannot answer this on
+// its own: it is a lagging log that simply FREEZES mid-turn when the app-server dies, leaving the
+// tailer's folded turn "in-flight" forever (the live 2026-07-22 stall — four threads read `running`
+// for hours). The bridge is the authority, so it publishes both halves of the answer.
+export interface CodexAppServerTurnLiveness {
+  /** The bridge is driving a turn for this thread on the CURRENT connection right now. */
+  bridgeTurn: boolean
+  /**
+   * When fray last took this thread onto a connection. Nothing the rollout wrote BEFORE this instant
+   * can belong to a live turn — the connection that wrote it is gone. Rollout activity AFTER it means
+   * some other writer (a `codex resume` in the operator's own terminal) is driving the thread, which
+   * is a real live turn fray is merely mirroring.
+   */
+  ownedSince: string
+}
+
 export interface StartCodexAppServerSessionInput {
   threadSlug: string
   sessionId: string
@@ -1390,6 +1406,17 @@ export class CodexAppServerBridge {
       this.db.close()
       throw new InteractionStoreError("corrupt-journal", "Codex app-server bridge ownership bindings are not unique")
     }
+    // A bridge that has just been constructed holds NO connection, so no binding it inherits from the
+    // previous process can still be active. close()/handleDisconnect normally assert that, but a
+    // SIGKILLed fray runs neither — leaving rows claiming `active` at the last epoch, which every
+    // ownership check (and the board's liveness read) would take at face value. Reassert the invariant
+    // here so the registry is honest before anything reads it. `current_turn_id` is deliberately left
+    // in place: detach preserves it for diagnosis, and updateResumedBinding retires it — together with
+    // the cards scoped to it — at the one edge that can do so coherently.
+    this.db.prepare(`
+      UPDATE codex_app_server_session SET state = 'detached', updated_at = ?
+      WHERE state = 'active'
+    `).run(this.now().toISOString())
   }
 
   async startDisposableSession(input: StartCodexAppServerSessionInput): Promise<CodexAppServerSessionBinding> {
@@ -1726,6 +1753,21 @@ export class CodexAppServerBridge {
     return row ? bindingFromRow(row) : undefined
   }
 
+  // The turn-liveness authority for a bridge-owned thread (see CodexAppServerTurnLiveness). Undefined
+  // when this thread is not bound at all — callers must not infer anything about a thread the bridge
+  // has never owned. `pendingTurnStarts` counts as a live turn: between `turn/start`'s request and its
+  // response the turn is genuinely running, it just has no provider-issued id to persist yet.
+  turnLiveness(threadSlug: string, sessionId: string): CodexAppServerTurnLiveness | undefined {
+    if (this.dbClosed) return undefined
+    const row = this.bindingForScope(threadSlug, sessionId)
+    if (!row) return undefined
+    const onThisConnection = row.state === "active" && row.connection_epoch === this.connectionEpoch
+    return {
+      bridgeTurn: onThisConnection && (row.current_turn_id !== null || this.pendingTurnStarts.has(turnKey(row))),
+      ownedSince: row.updated_at,
+    }
+  }
+
   ownsInteraction(scope: InteractionSessionScope, interactionId: string): boolean {
     if (this.closed || this.dbClosed || !this.connection) return false
     const delivery = this.options.interactions.providerDelivery(scope, interactionId)
@@ -2031,13 +2073,28 @@ export class CodexAppServerBridge {
     }
   }
 
+  // Rebind a thread onto the CURRENT connection. `current_turn_id` is cleared here because a turn
+  // cannot outlive the connection running it: the app-server process that owned it is gone, and
+  // `thread/resume` (excludeTurns) never brings one back. Carrying it across wedged the thread
+  // permanently — followUp steered a turn the new process had never heard of, and the fallback
+  // startTurn then refused with "already has an active turn" (live incident 2026-07-22: four codex
+  // threads died with their app-server and could never be answered again). detach PRESERVES the id for
+  // replay/diagnosis; taking the thread onto a live connection is the edge that retires it.
   private updateResumedBinding(row: BindingRow, codexSessionId: string): void {
     if (row.capability_revision !== this.capabilityRevision) {
       this.options.interactions.cancelForSession(row.thread_slug, row.fray_session_id, "capabilities-changed")
+    } else if (row.current_turn_id !== null) {
+      // Everything scoped to the dead turn dies with it. An approval still pending for it can never be
+      // answered — its response would be written to a connection that no longer exists, and the provider
+      // can only re-ask inside a NEW turn (whose logical request id differs by construction), so no
+      // rebind can ever reach it. `turn/completed` retires these cards on a normal ending; a turn that
+      // died with its connection never sends one, so retire them here on the same grounds.
+      this.options.interactions.cancelForSession(row.thread_slug, row.fray_session_id, "turn-ended")
     }
     this.db.prepare(`
       UPDATE codex_app_server_session SET
-        codex_session_id = ?, capability_revision = ?, connection_epoch = ?, state = 'active', updated_at = ?
+        codex_session_id = ?, capability_revision = ?, connection_epoch = ?, state = 'active',
+        current_turn_id = NULL, updated_at = ?
       WHERE fray_session_id = ? AND thread_slug = ? AND codex_thread_id = ?
     `).run(
       codexSessionId,

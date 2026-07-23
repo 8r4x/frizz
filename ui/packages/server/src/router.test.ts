@@ -494,6 +494,57 @@ test("setThreadSnooze RPC validates canonical future UTC and persists any owned 
   h.storage.close()
 })
 
+// The writer-yield guard exists to avoid racing an operator driving the thread from their own
+// terminal. A rollout FROZEN by a dead app-server looks identical from the rollout alone, and yielding
+// to it left the operator unable to answer their own stalled thread at all — the second half of the
+// 2026-07-22 stall (the first was the board showing it as forever-running).
+test("followUp yields to a live external writer but still answers a thread whose turn died", async () => {
+  const h = harness()
+  const ownedSince = "2026-07-09T10:00:00.000Z"
+  const install = (liveness: { bridgeTurn: boolean; ownedSince: string } | undefined, sent: string[]) => {
+    ;(h.ctx as { codexAppServer?: unknown }).codexAppServer = {
+      binding: () => ({ state: "active", currentTurnId: null }),
+      turnLiveness: () => liveness,
+      resumeOwnedSession: async () => {},
+      followUp: async ({ text }: { text: string }) => void sent.push(text),
+    }
+  }
+  // Both threads read in-flight off their rollout; only the timestamps differ.
+  const external = "external-writer"
+  const stalled = "stalled-writer"
+  for (const slug of [external, stalled]) {
+    h.storage.upsertSession(row(slug))
+    h.storage.setBackend(slug, "codex")
+    h.storage.setCodexRuntime(slug, "app-server")
+  }
+  h.ctx.tailer = {
+    ...noopTailer,
+    get: (slug: string) => ({
+      turn: "in-flight" as const,
+      permPrompt: false,
+      subAgents: [],
+      bgShells: [],
+      pendingQuestion: false,
+      // The external writer is still appending; the stalled one froze before fray took the thread.
+      lastActivityAt: slug === external ? new Date().toISOString() : "2026-07-09T09:59:00.000Z",
+    }),
+  }
+
+  const yielded: string[] = []
+  install({ bridgeTurn: false, ownedSince: new Date().toISOString() }, yielded)
+  await assert.rejects(
+    h.router.followUp.handler({ input: { slug: external, message: "hello" } }),
+    /running in your terminal/,
+  )
+  assert.deepEqual(yielded, [], "fray must not race a second writer onto a live external turn")
+
+  const delivered: string[] = []
+  install({ bridgeTurn: false, ownedSince }, delivered)
+  await h.router.followUp.handler({ input: { slug: stalled, message: "still there?" } })
+  assert.deepEqual(delivered, ["still there?"], "a stalled thread stays answerable")
+  h.storage.close()
+})
+
 // A park says WHEN the operator wants the card back, not that the thread is untouchable. Adding context
 // to a thread you shelved until Friday must not drag it out of Held, and must not silently disarm a bump
 // it was promised — Wake now is the explicit un-park. Driven through the codex app-server branch because
@@ -512,6 +563,7 @@ test("followUp leaves a snooze — and its armed bump — intact", async () => {
   const sent: string[] = []
   ;(h.ctx as { codexAppServer?: unknown }).codexAppServer = {
     binding: () => ({ state: "active", currentTurnId: null }),
+    turnLiveness: () => undefined,
     resumeOwnedSession: async () => {},
     followUp: async ({ text }: { text: string }) => void sent.push(text),
   }

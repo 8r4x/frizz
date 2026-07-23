@@ -17,7 +17,7 @@ import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const MARKER = "# fray-dev-source-launcher:v3";
+const MARKER = "# fray-dev-source-launcher:v5";
 const args = new Set(process.argv.slice(2));
 const knownArgs = new Set(["--uninstall", "--check", "--force", "--help"]);
 for (const arg of process.argv.slice(2)) {
@@ -48,7 +48,15 @@ const launcher = realpathSync(
   fileURLToPath(new URL("../packages/cli/src/index.ts", import.meta.url))
 );
 const quote = (value) => `'${value.replaceAll("'", `"'"'`)}'`;
-const body = `#!/bin/sh\n${MARKER}\nexec env FRAY_SOURCE_COMMAND=${quote(command)} nub ${quote(launcher)} "$@"\n`;
+// `--no-env-file` disables nub's automatic `.env*` discovery for the launcher process only. nub
+// resolves those files from the CWD's project root, so launching a board from any repo carrying an
+// ANTHROPIC_API_KEY in its .env put that key in the fray server env — and from there into the
+// long-lived per-project tmux server, which outlives the shell and hands it to every worker pane,
+// where Claude Code blocks on "Detected a custom API key". v4 fixed this with `env -u` and was
+// reverted (3f311e9) for being too invasive: it also stripped a key the developer had deliberately
+// exported. This is the narrower cut — it drops only what nub read off DISK. A key exported in the
+// shell still reaches the worker, so letting an API key supersede the subscription stays available.
+const body = `#!/bin/sh\n${MARKER}\nexec env FRAY_SOURCE_COMMAND=${quote(command)} nub --no-env-file ${quote(launcher)} "$@"\n`;
 
 function isOwned(path) {
   try {
