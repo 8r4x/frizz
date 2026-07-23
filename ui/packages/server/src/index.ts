@@ -11,6 +11,7 @@ import {
   type AppContext,
   type ContextOptions,
   type ContextStartupFence,
+  type ContextStartupPhase,
 } from "./context.ts"
 import { createApp, type AppOptions } from "./app.ts"
 import { createTerminalServer, resolveThreadAttach } from "./terminal.ts"
@@ -83,6 +84,12 @@ export interface StartServerRuntime {
     expected: { pid: number; processStart: string; publisherToken: string; ownerToken: string },
   ): boolean
   afterPhase?(phase: ServerStartupPhase): void | Promise<void>
+  /**
+   * Sub-phase reporter for the "context" phase. `createContext` is a single server phase but does
+   * most of the boot work inside it, so a boot-timing harness that only sees server phases reads a
+   * multi-second opaque block. Purely observational — never affects construction or rollback.
+   */
+  afterContextPhase?(phase: ContextStartupPhase): void
   shutdownDeadline?: ShutdownBarrierOptions["deadline"]
 }
 
@@ -510,6 +517,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         claudeBin: opts.claudeBin,
         project,
         startup: {
+          afterPhase: runtime.afterContextPhase ? (p) => runtime.afterContextPhase?.(p) : undefined,
           cleanupTimeoutMs: opts.shutdownTimeoutMs ?? SERVER_SHUTDOWN_TIMEOUT_MS,
           cleanupDiagnostic: diagnostic,
           cleanupDeadline: runtime.shutdownDeadline,

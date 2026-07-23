@@ -51,6 +51,10 @@ export const CONTEXT_STARTUP_CLEANUP_TIMEOUT_MS = 4_000
 
 export type ContextStartupPhase =
   | "storage"
+  | "interaction expiry"
+  | "adoption reconcile"
+  | "orphan reaper"
+  | "session reconcile"
   | "subscriptions"
   | "Codex app-server bridge"
   | "tailer"
@@ -369,8 +373,10 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     board?.interactionChanged?.(change)
   }))
   storage.interactions.expireDue()
+  opts.startup?.afterPhase?.("interaction expiry")
 
   reconcileAdoptionClaims({ storage, projectDir: project.dir })
+  opts.startup?.afterPhase?.("adoption reconcile")
   // Permanent retired tokens are an active fence for pre-upgrade actors only if enforcement is
   // level-triggered. Sweep the single batched tmux inventory periodically so a late token pane is
   // killed within a bounded window even when no restart or new adoption occurs.
@@ -394,7 +400,9 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   if (!process.env.FRAY_ORPHAN_REAPER_OFF) {
     contextUnsubscribers.push(startOrphanReaper({ log: (m) => console.log(`[fray-ui] ${m}`) }))
   }
+  opts.startup?.afterPhase?.("orphan reaper")
   reconcileSessions(storage)
+  opts.startup?.afterPhase?.("session reconcile")
   opts.startup?.afterPhase?.("subscriptions")
 
   // The agent backends behind the spawn/resume/transcript seam (Codex-support epic). The ClaudeBackend's
