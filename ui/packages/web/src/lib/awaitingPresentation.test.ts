@@ -69,7 +69,7 @@ test("a park target is always an instant setThreadSnooze accepts, whatever shape
     const action = awaitingParkAction([{ kind: "timer", value }], now)
     assert.equal(action?.label, "Confirm snooze", value)
     assert.equal(action?.timerUntil, expected, value)
-    assert.equal(SetThreadSnoozeInput.safeParse({ slug: "t", until: action?.timerUntil }).success, true, value)
+    assert.equal(SetThreadSnoozeInput.safeParse({ slug: "t", sessionId: "s", until: action?.timerUntil }).success, true, value)
   }
 })
 
