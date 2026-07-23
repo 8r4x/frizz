@@ -6,7 +6,7 @@ import { join, dirname } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { buildClaudeCommand, loadWorkerPrompt, composePrompt, resolveWorkerPluginDir, scratchpadOrientation, scratchpadContent, workerPluginDir, frayConfigBlock } from "./dispatch.ts"
 import { parseTranscript } from "./transcript.ts"
-import { CHROME_DEVTOOLS_MCP } from "./backend/types.ts"
+import { CHROME_DEVTOOLS_MCP, FRAY_MCP } from "./backend/types.ts"
 
 // ---- Backend-aware worker contract (worker-contract-backend-aware) ----
 // loadWorkerPrompt(kind) delegates to buildWorkerPrompt in workerPrompt.ts (a single compiled-in TS
@@ -41,13 +41,13 @@ test("Claude dispatch supplies the discovered worker plugin via --plugin-dir", (
   assert.deepEqual(argv.slice(argv.indexOf("--plugin-dir"), argv.indexOf("--plugin-dir") + 2), ["--plugin-dir", plugin])
 })
 
-test("Claude dispatch mounts chrome-devtools + the spawn-thread MCP server and pre-approves both", () => {
+test("Claude dispatch mounts chrome-devtools + the unified fray MCP server and pre-approves both", () => {
   const argv = buildClaudeCommand({
     sessionId: "mcp-dispatch",
     permissionMode: "auto",
     prompt: "test",
     workerPrompt: "",
-    spawnThreadMcp: { scriptPath: "/abs/plugin/bin/spawn-thread-mcp.mjs", stateDir: "/home/.fray/projects/pid" },
+    frayMcp: { scriptPath: "/abs/plugin/bin/fray-mcp.mjs", stateDir: "/home/.fray/projects/pid" },
   })
   const cfgRaw = argv[argv.indexOf("--mcp-config") + 1]
   assert.ok(cfgRaw, "argv must carry an inline --mcp-config")
@@ -58,20 +58,21 @@ test("Claude dispatch mounts chrome-devtools + the spawn-thread MCP server and p
     command: CHROME_DEVTOOLS_MCP.command,
     args: [...CHROME_DEVTOOLS_MCP.args],
   })
-  assert.deepEqual(cfg.mcpServers.fray_spawn, {
+  assert.deepEqual(cfg.mcpServers[FRAY_MCP.name], {
     command: process.execPath, // absolute node path, not bare "node" (worker PATH-independence)
-    args: ["/abs/plugin/bin/spawn-thread-mcp.mjs"],
+    args: ["/abs/plugin/bin/fray-mcp.mjs"],
     env: { FRAY_STATE_DIR: "/home/.fray/projects/pid" },
   })
   // Tools are pre-approved so a headless worker never blocks on a permission prompt. One comma-joined
   // EQUALS-form token: --allowedTools is variadic, so a space-separated value could swallow a
-  // following positional (the prompt) — the equals form binds exactly one token.
-  assert.ok(argv.includes("--allowedTools=mcp__chrome-devtools,mcp__fray_spawn__spawn_fray_thread"))
+  // following positional (the prompt) — the equals form binds exactly one token. BOTH rules are
+  // SERVER-level, so a tool added to either server needs no allow-list edit.
+  assert.ok(argv.includes("--allowedTools=mcp__chrome-devtools,mcp__fray"))
   // The prompt stays the trailing positional (flags never displace it).
   assert.equal(argv[argv.length - 1], "test")
 })
 
-test("Claude dispatch still mounts + pre-approves chrome-devtools when no spawn-thread descriptor is supplied", () => {
+test("Claude dispatch still mounts + pre-approves chrome-devtools when no fray-MCP descriptor is supplied", () => {
   const argv = buildClaudeCommand({ sessionId: "no-mcp", permissionMode: "auto", prompt: "test", workerPrompt: "" })
   const cfg = JSON.parse(argv[argv.indexOf("--mcp-config") + 1])
   assert.deepEqual(Object.keys(cfg.mcpServers), [CHROME_DEVTOOLS_MCP.name])

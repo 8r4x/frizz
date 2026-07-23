@@ -22,7 +22,7 @@ import {
   claudeWorkerEnvironment,
   effectivePermissionMode,
   workerPluginDir,
-  resolveSpawnThreadMcp,
+  resolveFrayMcp,
   scratchpadOrientation,
   frayConfigBlock,
   loadWorkerPrompt,
@@ -142,7 +142,7 @@ function spawnPinnedSession(
   // dispatch produced and re-set the env the session-seed hook reads — otherwise an opted-out project
   // would silently get the RUNTIME RELEASE GATE forced back on the moment its worker respawns.
   const runtimeGate = deps.getSettings().runtimeGate !== false
-  const spawnThreadMcp = resolveSpawnThreadMcp(deps.project.stateDir)
+  const frayMcp = resolveFrayMcp(deps.project.stateDir)
   const built = backend
     ? backend.buildResume({
         sessionId: nativeSessionId,
@@ -153,7 +153,7 @@ function spawnPinnedSession(
         permissionMode,
         model: launchProfile?.model ?? row.model ?? undefined,
         effort: launchProfile?.effort ?? row.effort ?? undefined,
-        spawnThreadMcp,
+        frayMcp,
       })
     : {
         argv: buildClaudeResumeCommand({
@@ -165,7 +165,7 @@ function spawnPinnedSession(
           model: launchProfile?.model ?? row.model ?? undefined,
           effort: launchProfile?.effort ?? row.effort ?? undefined,
           workerPrompt: loadWorkerPrompt("claude", runtimeGate),
-          spawnThreadMcp,
+          frayMcp,
         }),
         env: claudeWorkerEnvironment(),
         prewrite: [],

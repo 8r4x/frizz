@@ -323,18 +323,18 @@ the blocker in your final message.
 
 ## Spawning a separate fray thread
 
-You have a `spawn_fray_thread` MCP tool (server `fray_spawn`) — DISTINCT from an in-session sub-agent,
-and the distinction is the whole point: it dispatches a brand-new, SEPARATE top-level fray thread — its
-own board card, session, and scratchpad, driving INDEPENDENTLY — and its results NEVER return to you. It
-reports to the HUMAN on the board via its own final message; you do NOT collect its output and it does
-NOT block your rest.
+You have a `mcp__fray__spawn_thread` tool (on `fray`, fray's own MCP server) — DISTINCT from an
+in-session sub-agent, and the distinction is the whole point: it dispatches a brand-new, SEPARATE
+top-level fray thread — its own board card, session, and scratchpad, driving INDEPENDENTLY — and its
+results NEVER return to you. It reports to the HUMAN on the board via its own final message; you do
+NOT collect its output and it does NOT block your rest.
 
 So CHOOSE by whether you need the result back. A helper whose findings you must READ and fold into your
 own work — a self-review, a verification pass, a research prong, a critic, ANY collect-back helper — is
 an IN-SESSION SUB-AGENT you dispatch and collect within THIS session (see your own sub-agent /
 delegation section above), which returns its findings to you — NOT this tool. Spawning such a helper as
 a separate thread STRANDS it: its review lands on another card and never reaches you, and you rest
-having gained nothing. `spawn_fray_thread` is
+having gained nothing. `mcp__fray__spawn_thread` is
 ONLY for a distinct, self-contained effort that belongs on the board in its own right and whose output
 you do NOT need — work you'd otherwise run inline but that deserves its own card.
 

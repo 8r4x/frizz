@@ -151,12 +151,21 @@ export interface BuiltCommand {
   prewrite: PrewriteFile[]
 }
 
-// Present ⇒ mount the fray "spawn a new board thread" MCP tool (server `fray_spawn`, tool
-// `spawn_fray_thread`) for this worker. Carries the abs path to the stdio MCP server script and the
-// project state dir it reads `server.lock` from. Computed by the dispatch layer (resolveWorkerPluginDir
-// + project.stateDir) and threaded through both backends; absent in tests / when the plugin dir or
-// script can't be resolved (→ no injection, worker simply lacks the tool).
-export interface SpawnThreadMcp {
+// The ONE unified fray MCP server every worker gets: mounted under the name `fray`, so its tools are
+// addressed as `mcp__fray__<tool>` (today just `mcp__fray__spawn_thread` — new worker-facing fray
+// capabilities join the same server's registry in cc-worker/bin/fray-mcp.mjs rather than mounting a
+// second server). The dispatch layer pre-approves it at SERVER level (`mcp__fray`), so a tool added
+// there needs no allow-list change here.
+export const FRAY_MCP = {
+  name: "fray",
+  script: "fray-mcp.mjs", // resolved under <worker plugin dir>/bin/
+} as const
+
+// Present ⇒ mount FRAY_MCP for this worker. Carries the abs path to the stdio MCP server script and
+// the project state dir it reads `server.lock` from. Computed by the dispatch layer
+// (resolveWorkerPluginDir + project.stateDir) and threaded through both backends; absent in tests /
+// when the plugin dir or script can't be resolved (→ no injection, worker simply lacks the tools).
+export interface FrayMcp {
   scriptPath: string
   stateDir: string
 }
@@ -184,7 +193,7 @@ export interface SpawnOpts {
   permissionMode: PermissionMode
   model?: string
   effort?: string
-  spawnThreadMcp?: SpawnThreadMcp
+  frayMcp?: FrayMcp
 }
 export interface ResumeOpts extends Omit<SpawnOpts, "prompt"> {
   // Omitted when fray is only re-attaching an idle saved conversation to apply a per-thread

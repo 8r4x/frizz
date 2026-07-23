@@ -1,22 +1,26 @@
 #!/usr/bin/env node
 // @ts-check
 /**
- * spawn-thread-mcp — a tiny, dependency-free MCP stdio server that gives a fray WORKER one tool,
- * `spawn_fray_thread`, to dispatch a brand-new TOP-LEVEL fray board thread (its own session +
- * scratchpad + independent drive — NOT an in-session Agent/Task helper). It wraps fray's own
- * dispatch RPC: it reads the running server's port from `<state-dir>/server.lock` and POSTs
- * `/rpc/dispatch`. The `/rpc` surface has no token auth — only a loopback-origin CSRF gate — so a
- * headerless local POST with `sec-fetch-site: same-origin` (undici sends no Origin) satisfies it.
+ * fray-mcp — THE fray MCP server: one unified, dependency-free MCP stdio server (mounted as `fray`,
+ * so its tools are `mcp__fray__<tool>`) carrying every capability fray hands its own WORKERS. Today
+ * that is exactly one tool, `spawn_thread`, which dispatches a brand-new TOP-LEVEL fray board thread
+ * (its own session + scratchpad + independent drive — NOT an in-session Agent/Task helper). Future
+ * worker-facing fray tools join the TOOLS registry below rather than mounting a second server: one
+ * server keeps the worker's tool namespace coherent and the server-level pre-approval single.
  *
- * Injected identically into BOTH backends by the server (dispatch.ts): Claude via `--mcp-config`,
- * Codex via `-c mcp_servers.fray_spawn.*`. The server passes FRAY_STATE_DIR in this process's env so
- * we can locate server.lock without recomputing the project id.
+ * spawn_thread wraps fray's own dispatch RPC: it reads the running server's port from
+ * `<state-dir>/server.lock` and POSTs `/rpc/dispatch`. The `/rpc` surface has no token auth — only a
+ * loopback-origin CSRF gate — so a headerless local POST with `sec-fetch-site: same-origin` (undici
+ * sends no Origin) satisfies it.
+ *
+ * Mounted by the server (dispatch.ts) into the Claude backend via `--mcp-config`. The server passes
+ * FRAY_STATE_DIR in this process's env so we can locate server.lock without recomputing the project id.
  *
  * Protocol: MCP over stdio = newline-delimited JSON-RPC 2.0. We implement exactly the four methods a
  * client drives (initialize, tools/list, tools/call, ping) plus the initialized notification. Hand-
  * rolled rather than pulling @modelcontextprotocol/sdk: the surface is tiny, it ships as one loose
  * .mjs next to bin/fray (no build/bundle/resolution concerns), and it matches this repo's own
- * hand-rolled-RPC aesthetic. The server NEVER crashes on a bad dispatch: failures come back as an
+ * hand-rolled-RPC aesthetic. The server NEVER crashes on a bad tool call: failures come back as an
  * isError tool result so the worker sees a message instead of a dead tool.
  */
 import { readFileSync } from "node:fs"
@@ -28,8 +32,8 @@ const PROTOCOL_FALLBACK = "2025-06-18"
 // double-spawning). The server completes regardless; this is only the client's patience.
 const DISPATCH_TIMEOUT_MS = 30_000
 
-const TOOL = {
-  name: "spawn_fray_thread",
+const SPAWN_THREAD = {
+  name: "spawn_thread",
   description:
     "Spawn a brand-new, separate top-level fray thread — its own board card, session, and scratchpad, " +
     "driving INDEPENDENTLY. This is FIRE-AND-FORGET: the new thread reports to the HUMAN on the board via " +
@@ -82,6 +86,17 @@ const TOOL = {
   },
 }
 
+// The unified server's tool registry: `tools/list` returns these and `tools/call` routes by name.
+// Adding a worker-facing fray tool = one entry here + one handler in `HANDLERS` — never a second
+// MCP server, so every fray tool stays under the same `mcp__fray__*` namespace and the same
+// server-level pre-approval the dispatch layer already grants.
+const TOOLS = [SPAWN_THREAD]
+
+/** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
+const HANDLERS = {
+  [SPAWN_THREAD.name]: spawnThread,
+}
+
 /** @param {unknown} obj */
 function send(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n")
@@ -114,8 +129,9 @@ function serverLockPort() {
   return port
 }
 
-/** @param {Record<string, unknown>} args */
-async function dispatchThread(args) {
+/** The `spawn_thread` handler: POST /rpc/dispatch, return the worker-facing result text.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function spawnThread(args) {
   const prompt = typeof args.prompt === "string" ? args.prompt.trim() : ""
   if (!prompt) throw new Error("`prompt` is required and must be a non-empty string")
   // model + effort are REQUIRED (no default) so the caller must choose by task complexity — a defaulted
@@ -157,7 +173,11 @@ async function dispatchThread(args) {
   const slug = payload?.result?.slug
   if (typeof slug !== "string" || !slug) throw new Error(`dispatch response missing a slug: ${JSON.stringify(payload)?.slice(0, 300)}`)
   const label = typeof body.title === "string" ? body.title : slug
-  return { slug, label }
+  return (
+    `Spawned a new fray thread \`${slug}\`. It is now on the board driving independently — it reports ` +
+    `to the human via its own final message, NOT back to you, so do not wait on a result from it.\n\n` +
+    `Paste this link to let the human open it in the drawer:\n\n[${label}](/thread/${slug})`
+  )
 }
 
 /** @param {any} msg */
@@ -171,7 +191,7 @@ async function handle(msg) {
       reply(id, {
         protocolVersion: typeof requested === "string" ? requested : PROTOCOL_FALLBACK,
         capabilities: { tools: {} },
-        serverInfo: { name: "fray-spawn", version: "0.1.0" },
+        serverInfo: { name: "fray", version: "0.1.0" },
       })
       return
     }
@@ -182,23 +202,19 @@ async function handle(msg) {
       if (!isNotification) reply(id, {})
       return
     case "tools/list":
-      reply(id, { tools: [TOOL] })
+      reply(id, { tools: TOOLS })
       return
     case "tools/call": {
-      if (params?.name !== TOOL.name) {
+      const name = typeof params?.name === "string" ? params.name : ""
+      const handler = HANDLERS[name]
+      if (!handler) {
         replyError(id, -32602, `unknown tool: ${params?.name}`)
         return
       }
       try {
-        const { slug, label } = await dispatchThread(params?.arguments ?? {})
-        replyTool(
-          id,
-          `Spawned a new fray thread \`${slug}\`. It is now on the board driving independently — it reports ` +
-            `to the human via its own final message, NOT back to you, so do not wait on a result from it.\n\n` +
-            `Paste this link to let the human open it in the drawer:\n\n[${label}](/thread/${slug})`,
-        )
+        replyTool(id, await handler(params?.arguments ?? {}))
       } catch (err) {
-        replyTool(id, `Failed to spawn a fray thread: ${err instanceof Error ? err.message : String(err)}`, true)
+        replyTool(id, `\`${name}\` failed: ${err instanceof Error ? err.message : String(err)}`, true)
       }
       return
     }
