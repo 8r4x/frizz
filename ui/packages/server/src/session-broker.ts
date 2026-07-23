@@ -10,7 +10,7 @@ import { createConnection, type Socket } from "node:net"
 import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs"
 import { join } from "node:path"
-import { fileURLToPath } from "node:url"
+import { resolveDetachedDaemonEntry } from "./detached-daemons.ts"
 
 // ---- wire protocol -------------------------------------------------------------------------------
 // FRAME = [type:1][len:uint32 BE][payload:len]. One protocol both directions; the peer reacts per
@@ -85,7 +85,9 @@ export function sessionSocketPath(stateDir: string, slug: string): string {
 }
 
 // ---- daemon discovery / lifecycle ----------------------------------------------------------------
-const daemonEntry = fileURLToPath(new URL("./session-broker-daemon.ts", import.meta.url))
+// Resolved lazily and by EXISTENCE — the bundled `.js` in a promoted artifact, the `.ts` in a
+// checkout. See detached-daemons.ts for the outage that hard-coding either extension caused.
+const daemonEntry = (): string => resolveDetachedDaemonEntry(import.meta.url, "session-broker-daemon")
 
 function pidAlive(pid: number): boolean {
   try {
@@ -168,7 +170,7 @@ export function spawnSession(options: SpawnSessionOptions): Promise<SessionRecor
     cols: options.cols ?? 80,
     rows: options.rows ?? 24,
   })
-  const child = spawn(process.execPath, [options.daemonEntry ?? daemonEntry], {
+  const child = spawn(process.execPath, [options.daemonEntry ?? daemonEntry()], {
     cwd,
     env: { ...env, FRAY_SESSION_BROKER: payload },
     detached: true,
