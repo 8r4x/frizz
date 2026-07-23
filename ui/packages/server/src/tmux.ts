@@ -649,7 +649,19 @@ function expectedPaneIdentityCondition(expected: PaneIdentity, requireLive = tru
 
 const EXACT_ACTION_OK = "FRAY_EXACT_ACTION_OK_9A74D2"
 const EXACT_ACTION_MISS = "FRAY_EXACT_ACTION_MISS_9A74D2"
-const INPUT_SETTLE_COMMAND = "/bin/sleep 0.25"
+const DEFAULT_INPUT_SETTLE_SECONDS = 0.25
+let inputSettleSeconds = DEFAULT_INPUT_SETTLE_SECONDS
+const inputSettleCommand = (): string => `/bin/sleep ${inputSettleSeconds}`
+
+// Test seam ONLY. The settle window is a real wall-clock race: a test that has to replace a pane
+// *during* it must fit a kill plus a respawn — two tmux execs, ~60-100ms each on a loaded machine —
+// inside 250ms, which is not reliably possible and made the settle test flaky in two different
+// directions. Widening it in a test changes the timing, never the logic under test. Numeric and
+// range-checked because this value is interpolated into a shell command.
+export function setInputSettleSeconds(seconds: number): void {
+  if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 60) throw new Error("invalid input settle seconds")
+  inputSettleSeconds = seconds
+}
 
 // Codex can read a pasted block and an immediately adjacent key as one input burst, leaving the
 // text in its composer even though tmux accepted both commands. A blocking run-shell remains part
@@ -667,7 +679,7 @@ function sendTextWithKeyToPane(
   const buffer = `${bufferPrefix}-${randomUUID()}`
   const complete = `send-keys -t ${paneId} ${key} ; display-message -p ${EXACT_ACTION_OK}`
   const afterSettle = `if-shell -t ${paneId} -F '${condition}' '${complete}' 'display-message -p ${EXACT_ACTION_MISS}'`
-  const authorized = `paste-buffer -p -b ${buffer} -t ${paneId} ; run-shell '${INPUT_SETTLE_COMMAND}' ; ${afterSettle}`
+  const authorized = `paste-buffer -p -b ${buffer} -t ${paneId} ; run-shell '${inputSettleCommand()}' ; ${afterSettle}`
   try {
     const out = execFileSync("tmux", [
       "-L", socketName,
@@ -1142,7 +1154,7 @@ export function pasteText(slug: string, text: string): void {
   tmux(
     "paste-buffer", "-p", "-t", name, "-d",
     ";",
-    "run-shell", INPUT_SETTLE_COMMAND,
+    "run-shell", inputSettleCommand(),
     ";",
     "send-keys", "-t", name, "Enter",
   )
