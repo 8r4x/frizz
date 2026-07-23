@@ -936,12 +936,16 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
           )}
         </div>
         {/* SHARED navigation actions: collapse and open-in-drawer, plus Retry when this card's thread
-            actually STOPPED (offersInlineRetry: an exited session showing the [!] crash or […] at-rest
-            mark). A card that stalled out is the one queue state with an obvious recovery verb, so it
-            surfaces here rather than forcing you to open the thread; other lifecycle actions (Mark as
-            done / Snooze) stay in the footer. (Rename lives by the title in the thread drawer, not here —
-            the queue is a triage surface.) Open-thread slides in the side drawer — an overlay, NOT a nav
-            switch, so the queue scroll/selection stays put. */}
+            actually STOPPED — offersInlineRetry, which IS `sessionIndicatorKind(t) === "stalled"`, the
+            very same derivation that paints this thread's sidebar row with the yellow [!]. Sharing that
+            ONE predicate is load-bearing: while the card gated on "the process exited" and the rail row
+            gated on the server's `crashed` bit, a thread could carry a Retry button here and still read
+            as a calm "At rest" […] on the rail (maintainer 2026-07-23). A card that stalled out is the
+            one queue state with an obvious recovery verb, so it surfaces here rather than forcing you to
+            open the thread; other lifecycle actions (Mark as done / Snooze) stay in the footer. (Rename
+            lives by the title in the thread drawer, not here — the queue is a triage surface.)
+            Open-thread slides in the side drawer — an overlay, NOT a nav switch, so the queue
+            scroll/selection stays put. */}
         {/* Every Fray-owned card carries the copy-resume-command affordance: queue cards are at rest
             by default, so opening the same session in your own terminal is entirely safe (and both CLIs
             allow it live too). Foreign/legacy rows have no Fray-owned provider session to resume. */}

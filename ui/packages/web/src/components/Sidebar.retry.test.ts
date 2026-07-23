@@ -7,10 +7,11 @@ import { ThreadRow } from "./Sidebar.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
 
 // The sidebar's one-click recovery verb. It must appear on EXACTLY the rows that actually STOPPED and
-// can resume: an exited session showing the [!] stalled crash mark OR the […] bare-at-rest mark (its
-// process exited without a done fence). Never on a row that is working, needs-input ([?], answered not
-// retried), held, done, archived, or read-only-foreign — on those "retry" either means nothing, has a
-// better-suited affordance, or would interrupt live work.
+// can resume — a session whose PROCESS EXITED, whether it died mid-turn or exited after resting without
+// a done fence — and on exactly those rows it must ALSO paint the yellow [!] stalled mark. Never on a
+// row that is working, needs-input ([?], answered not retried), held, done, archived, or
+// read-only-foreign — on those "retry" either means nothing, has a better-suited affordance, or would
+// interrupt live work.
 
 const base = {
   kind: "session",
@@ -45,13 +46,33 @@ test("the older exited+needsYou snapshot shape (no `crashed` field) still gets t
 })
 
 test("an exited-at-rest row (process gone, no done fence, not a crash) also gets the button", () => {
-  // The reported bug: the worker's process EXITED after resting without a done fence, so it cards as
-  // […] at-rest (crashed:false, not [!] stalled) — the drawer offered Retry (canRetry) but the rail
-  // did not. Now it does.
+  // The worker's process EXITED after resting without a done fence. The drawer offered Retry
+  // (canRetry) but the rail did not; now it does.
   assert.match(row({ runtime: "exited", crashed: false }), /data-sidebar-retry="stalled-thread"/)
 })
 
-test("no retry button on rows that are not stalled", () => {
+// The stalled mark the operator looks for: the accent (yellow, #e8b923) checkbox around a bold "!".
+const STALLED_MARK = /border-accent\/90[\s\S]*?text-accent[^>]*>!</
+
+test("the Retry verb and the yellow [!] mark always ship together on the SAME row", () => {
+  // THE REPORTED BUG (maintainer 2026-07-23): "the card in the queue has a retry button, but it's not
+  // marked as stalled in the sidebar with the yellow and the exclamation point". The row's mark gated
+  // on the server's `crashed` bit while the Retry verb gated on the process being gone, so an
+  // exited-at-rest thread rendered a Retry button beside a calm "At rest" […]. ONE predicate now
+  // decides both — this pins the pairing on the rendered DOM, where the operator actually sees it.
+  for (const [name, extra] of [
+    ["exited mid-turn (crashed)", { runtime: "exited", crashed: true, needsYou: true }],
+    ["exited at bare rest", { runtime: "exited", crashed: false }],
+    ["exited, pre-reload snapshot with no `crashed` field", { runtime: "exited", needsYou: true }],
+    ["exited at rest and NOT queued", { runtime: "exited", crashed: false, needsYou: false }],
+  ] as [string, Partial<ThreadView>][]) {
+    const html = row(extra)
+    assert.match(html, /data-sidebar-retry/, `a ${name} row offers Retry`)
+    assert.match(html, STALLED_MARK, `…so a ${name} row must ALSO wear the yellow [!] mark`)
+  }
+})
+
+test("no retry button — and no yellow [!] either — on rows that are not stalled", () => {
   for (const [name, extra] of [
     ["working", { runtime: "running" }],
     ["at rest but still live (turn-idle, process not exited)", { runtime: "turn-idle" }],
@@ -61,7 +82,9 @@ test("no retry button on rows that are not stalled", () => {
     ["archived", { runtime: "exited", crashed: true, state: "archived" }],
     ["foreign (read-only)", { runtime: "exited", crashed: true, needsYou: true, foreign: true }],
   ] as [string, Partial<ThreadView>][]) {
-    assert.doesNotMatch(row(extra), /data-sidebar-retry/, `a ${name} row must not offer retry`)
+    const html = row(extra)
+    assert.doesNotMatch(html, /data-sidebar-retry/, `a ${name} row must not offer retry`)
+    assert.doesNotMatch(html, STALLED_MARK, `…nor wear the yellow [!] stalled mark`)
   }
 })
 

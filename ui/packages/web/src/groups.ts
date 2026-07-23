@@ -387,26 +387,33 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
 
   if (isHeld(t)) return "held"
   if (t.lastFence?.kind === "done" && atRest(t)) return "done"
-  // `crashed` is explicit on current snapshots. During a rolling client/server reload an older
-  // snapshot may omit it; retain the old exited+needsYou crash rendering only for that undefined
-  // compatibility case. Crucially, Queue membership alone says only "this turn came to rest"—a
-  // clean bare rest keeps the ordinary ellipsis instead of falsely advertising a question.
-  if (t.crashed === true || (t.crashed === undefined && t.needsYou && t.runtime === "exited")) return "stalled"
+  // STALLED = this thread's PROCESS IS GONE with the work unfinished. That is exactly `canRetry`: an
+  // OWNED (non-foreign) session row whose runtime is `exited`. It deliberately does NOT consult the
+  // server's `crashed` bit (= exited AND turn-in-flight/live-background-work). `crashed` says only HOW
+  // it stopped; a worker that exited at BARE REST — no done fence, turn not in flight — is just as
+  // dead and just as unable to move without a nudge, so it earns the same [!] mark. Gating the mark on
+  // `crashed` while the Retry verb gated on the process being gone is precisely what let the queue
+  // card and the rail row disagree about ONE thread (maintainer 2026-07-23: "the card in the queue has
+  // a retry button, but it's not marked as stalled in the sidebar with the yellow and the exclamation
+  // point"). The tooltip still names the distinction; the glyph and the verb no longer care about it.
+  // Every branch ABOVE wins first, so an archived / needs-input / working / held / done-fenced row
+  // keeps its own better-suited mark and affordance even when its process happens to be gone.
+  if (canRetry(t)) return "stalled"
+  // Bare rest with a LIVE process (turn-idle, nothing pending): it can simply be typed at, so it stays
+  // the quiet […] and never advertises a recovery verb.
   return "rest"
 }
 
-// Whether a GLANCEABLE surface — the sidebar rail row and the queue card — should carry the inline
-// one-click Retry. The full thread drawer exposes Retry for ANY exited session (canRetry) since it is
-// the place to see every recovery option; the triage surfaces are narrower and offer Retry only for a
-// thread that actually STOPPED and needs a nudge: an exited session showing the [!] crash mark
-// (`stalled`) OR the […] bare-at-rest mark (`rest` — the worker's process exited without a done fence,
-// which reads as canRetry in the drawer but was NOT surfaced on the rail/card before). A needs-input
-// ([?]), done ([✓]), held (hourglass), or archived exited row keeps its own better-suited affordance
-// (answer / mark-done / wait) and never sprouts a redundant retry. canRetry already excludes foreign.
+// Whether a GLANCEABLE surface — the sidebar rail row and the queue card — carries the inline
+// one-click Retry. This is DEFINITIONALLY the stalled mark: the yellow [!] and the Retry verb are ONE
+// decision with ONE derivation, so the two surfaces cannot drift apart again (they did — a queue card
+// offered Retry while the same thread's rail row showed a calm "At rest" […]). NEVER re-widen this to
+// "stalled OR <something else>"; if a state should offer Retry, make sessionIndicatorKind call it
+// stalled. The full thread drawer stays deliberately broader — it offers Retry for ANY exited session
+// (canRetry), including a done-fenced or answered one, because the full view is the place to see every
+// recovery option; these two glanceable surfaces show it only where it is the obvious next action.
 export function offersInlineRetry(t: ThreadView): boolean {
-  if (!canRetry(t)) return false
-  const kind = sessionIndicatorKind(t)
-  return kind === "stalled" || kind === "rest"
+  return sessionIndicatorKind(t) === "stalled"
 }
 
 export function sectionOf(t: ThreadView): SectionKey | null {

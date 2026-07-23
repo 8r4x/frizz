@@ -124,9 +124,15 @@ test("sessionIndicatorKind: bare queued rest stays rest while concrete input sta
   assert.equal(sessionIndicatorKind(thread({ needsYou: true, nativeInputRequired: { kind: "permission", title: "Permission required" }, runtime: "turn-idle" })), "needs-input")
   assert.equal(sessionIndicatorKind(thread({ needsYou: true, actionableInteraction: true, runtime: "turn-idle" })), "needs-input")
   assert.equal(sessionIndicatorKind(thread({ needsYou: true, status: "needs-human", humanBlocked: true, runtime: "exited" })), "needs-input")
-  assert.equal(sessionIndicatorKind(thread({ needsYou: true, crashed: true, runtime: "exited" })), "stalled")
-  assert.equal(sessionIndicatorKind(thread({ needsYou: true, crashed: false, runtime: "exited" })), "rest")
-  assert.equal(sessionIndicatorKind(thread({ needsYou: true, crashed: undefined, runtime: "exited" })), "stalled")
+  // STALLED keys on the PROCESS being gone (runtime "exited"), NOT on the server's `crashed` bit —
+  // a mid-turn death and an exit at bare rest are equally stopped and need the same verb, so all three
+  // `crashed` shapes (true / false / absent on an older snapshot) render the same [!].
+  assert.equal(sessionIndicatorKind(thread({ kind: "session", needsYou: true, crashed: true, runtime: "exited" })), "stalled")
+  assert.equal(sessionIndicatorKind(thread({ kind: "session", needsYou: true, crashed: false, runtime: "exited" })), "stalled")
+  assert.equal(sessionIndicatorKind(thread({ kind: "session", needsYou: true, crashed: undefined, runtime: "exited" })), "stalled")
+  // …and a thread with no retryable process behind it is never stalled, however `crashed` reads.
+  assert.equal(sessionIndicatorKind(thread({ kind: "session", foreign: true, needsYou: true, crashed: true, runtime: "exited" })), "rest")
+  assert.equal(sessionIndicatorKind(thread({ kind: "session", needsYou: true, crashed: true, runtime: "none" })), "rest")
   // A live SUB-AGENT is live work → "working", beating the future-timer held state.
   assert.equal(sessionIndicatorKind(thread({ runtime: "turn-idle", subAgents: liveSub, lastFence: awaitingTimer })), "working")
   // A live background SHELL is NOT live work (2026-07-22): the future-timer wait now shows through as "held".
@@ -134,19 +140,53 @@ test("sessionIndicatorKind: bare queued rest stays rest while concrete input sta
   assert.equal(sessionIndicatorKind(thread({ state: "archived", needsYou: true, runtime: "exited" })), "archived")
 })
 
-test("offersInlineRetry: the sidebar/queue retry gate — only exited STOPPED sessions (stalled + at-rest)", () => {
-  const session = (over: Partial<ThreadView>) => thread({ kind: "session", ...over })
-  // The two STOPPED states get the inline retry: a [!] crash and a […] exited-at-rest (the reported bug).
-  assert.equal(offersInlineRetry(session({ needsYou: true, crashed: true, runtime: "exited" })), true)
-  assert.equal(offersInlineRetry(session({ needsYou: true, crashed: false, runtime: "exited" })), true)
-  // Everything else is excluded, even when canRetry is true (the drawer's broader gate).
-  assert.equal(offersInlineRetry(session({ runtime: "turn-idle", crashed: false })), false, "live turn-idle: not exited")
-  assert.equal(offersInlineRetry(session({ runtime: "running" })), false, "working")
-  assert.equal(offersInlineRetry(session({ needsYou: true, humanBlocked: true, status: "needs-human", runtime: "exited" })), false, "needs-input: answered not retried")
-  assert.equal(offersInlineRetry(session({ runtime: "exited", lastFence: { kind: "done", body: "shipped", hints: [] } })), false, "done + exited: finished, not stopped")
-  assert.equal(offersInlineRetry(session({ state: "archived", needsYou: true, runtime: "exited" })), false, "archived")
-  assert.equal(offersInlineRetry(session({ foreign: true, crashed: true, needsYou: true, runtime: "exited" })), false, "foreign: read-only")
+// ── THE STALLED/RETRY CONTRACT ────────────────────────────────────────────────────────────────────
+// The queue card's Retry button and the sidebar row's yellow [!] must be ONE decision. They were not:
+// the card gated on "the process exited" while the row gated on the server's `crashed` bit (exited AND
+// turn-in-flight/live-background-work), so a worker that exited at BARE REST carried a Retry button on
+// its card while its rail row read a calm "At rest" […] (maintainer 2026-07-23: "the card in the queue
+// has a retry button, but it's not marked as stalled in the sidebar with the yellow and the exclamation
+// point"). This table is the enumeration that found it; the invariant below is what keeps it fixed.
+const RETRY_CONTRACT: { name: string; over: Partial<ThreadView>; kind: string; retry: boolean }[] = [
+  // ── the states that must show BOTH the [!] and the Retry ──
+  { name: "exited mid-turn (crashed) — the classic stall", over: { needsYou: true, crashed: true, runtime: "exited" }, kind: "stalled", retry: true },
+  // THE REGRESSION: this row said kind "rest" (no badge) while its card offered Retry.
+  { name: "exited at bare rest (crashed:false, no done fence)", over: { needsYou: true, crashed: false, runtime: "exited" }, kind: "stalled", retry: true },
+  { name: "exited on a pre-reload snapshot with no `crashed` field", over: { needsYou: true, runtime: "exited" }, kind: "stalled", retry: true },
+  { name: "exited at rest and NOT queued (needsYou cleared)", over: { needsYou: false, crashed: false, runtime: "exited" }, kind: "stalled", retry: true },
+  // ── the states that must show NEITHER ──
+  { name: "live and working", over: { runtime: "running" }, kind: "working", retry: false },
+  { name: "live at rest (turn-idle) — type at it, don't retry", over: { needsYou: true, crashed: false, runtime: "turn-idle" }, kind: "rest", retry: false },
+  { name: "exited mid-ask — answered, not retried", over: { needsYou: true, crashed: true, humanBlocked: true, status: "needs-human", runtime: "exited" }, kind: "needs-input", retry: false },
+  { name: "exited with a pending question", over: { needsYou: true, pendingQuestion: true, runtime: "exited" }, kind: "needs-input", retry: false },
+  { name: "exited after a done fence — finished, not stopped", over: { runtime: "exited", lastFence: { kind: "done", body: "shipped", hints: [] } }, kind: "done", retry: false },
+  { name: "exited but snoozed — held, wakes on its own deadline", over: { runtime: "exited", snoozedUntil: "2999-01-01T00:00:00.000Z" }, kind: "held", retry: false },
+  { name: "archived", over: { state: "archived", needsYou: true, crashed: true, runtime: "exited" }, kind: "archived", retry: false },
+  { name: "foreign (read-only — nothing fray can restart)", over: { foreign: true, crashed: true, needsYou: true, runtime: "exited" }, kind: "rest", retry: false },
+  { name: "registry lost the row (runtime none — not reattachable)", over: { needsYou: true, crashed: true, runtime: "none" }, kind: "rest", retry: false },
+]
+
+test("offersInlineRetry: the sidebar/queue retry gate is exactly the stalled (process-exited) state", () => {
+  for (const { name, over, kind, retry } of RETRY_CONTRACT) {
+    const t = thread({ kind: "session", ...over })
+    assert.equal(sessionIndicatorKind(t), kind, `${name}: sidebar indicator`)
+    assert.equal(offersInlineRetry(t), retry, `${name}: inline retry`)
+  }
   assert.equal(offersInlineRetry(thread({ kind: "legacy", crashed: true, runtime: "exited" })), false, "legacy: no provider runtime")
+})
+
+test("the queue card and the sidebar row can never disagree: retry ⇔ the stalled [!] mark", () => {
+  // The ONE invariant behind the bug. Both surfaces call offersInlineRetry, and offersInlineRetry IS
+  // `sessionIndicatorKind === "stalled"` — so a card showing Retry always has a yellow-[!] rail row,
+  // and a rail row showing [!] always has a card Retry. Re-widening the gate breaks this test first.
+  for (const { name, over } of RETRY_CONTRACT) {
+    const t = thread({ kind: "session", ...over })
+    assert.equal(
+      offersInlineRetry(t),
+      sessionIndicatorKind(t) === "stalled",
+      `${name}: the queue card's Retry and the sidebar's stalled mark must be the same decision`,
+    )
+  }
 })
 
 test("queued: legacy rows NEVER card (only session threads enter the queue)", () => {

@@ -274,10 +274,11 @@ export const ThreadRow = memo(function ThreadRow({
   // A thread awaiting its OWN live sub-agent/Monitor is not Held and stays fully active.
   const held = !legacy && isHeld(t)
   const dimLabel = !legacy && titleIsProvisional(t)
-  // A STOPPED row — the [!] stalled crash mark OR the […] bare-at-rest mark, i.e. the agent's process
-  // EXITED (mid-turn, or after resting without a done fence) — is a row state with an obvious single
-  // next action, so it carries that verb inline instead of making you open the thread to find it.
-  // offersInlineRetry gates on exactly those two kinds and excludes foreign/needs-input/done/held/archived.
+  // A STALLED row — the [!] mark, i.e. the agent's process EXITED (mid-turn, or after resting without
+  // a done fence) — is the one row state with an obvious single next action, so it carries that verb
+  // inline instead of making you open the thread to find it. offersInlineRetry IS `kind === "stalled"`
+  // (groups.ts), so this row's mark and this row's verb are the same decision and the queue card, which
+  // reads the same helper, can never disagree with the rail about a thread.
   const canRestart = !legacy && offersInlineRetry(t)
   // Held rows collapse to a SINGLE LINE — no subtitle. The "what it's held for" detail (snooze/timer
   // wake time, human gate, review watch) lives ENTIRELY in the hourglass indicator's hover tooltip
@@ -523,7 +524,10 @@ export function ThreadIndicator({ t, legacy }: { t: ThreadView; legacy?: boolean
 //   [ ] idle        — at rest, nothing pending (empty box)
 //   [/] in progress — the rounded-RECT spinner (a segment travels the box perimeter)
 //   [?] needs input — a question / native ask / permission prompt (accent box + "?")
-//   [!] stalled     — the agent EXITED while it still needed you (a crash; accent box + "!")
+//   [!] stalled     — the agent's PROCESS EXITED with the work unfinished (accent box + "!"), whether
+//                     it died mid-turn or exited after resting without a done fence. Same mark either
+//                     way, because the next action is the same: Retry. Exactly the rows that carry the
+//                     inline Retry verb (offersInlineRetry === this kind — one decision, two surfaces).
 //   clock waiting   — machine-waiting behind an ```awaiting fence
 //   [✓] done        — a ```done fence at rest, OR an archived thread (muted check — NOTHING else)
 //   […] at rest     — an ordinary bare rest with no concrete ask
@@ -538,7 +542,13 @@ function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string |
   }
   if (kind === "working") return { node: <BoxSpinner />, tip: "Working" }
   if (kind === "done") return { node: <StatusBox><Check size={10} strokeWidth={3} className="text-muted/75" /></StatusBox>, tip: "Done" }
-  if (kind === "stalled") return { node: <StatusBox accent><Glyph ch="!" /></StatusBox>, tip: "Stalled — the agent exited" }
+  if (kind === "stalled") {
+    // ONE mark for "the process is gone". The server's `crashed` bit (exited AND turn-in-flight/live
+    // background work) no longer gates the mark — it only picks the wording, so the tooltip still tells
+    // you HOW it stopped while the glyph and the Retry verb treat both stops identically.
+    const tip = t.crashed === true ? "Stalled — the agent exited mid-turn" : "Stalled — the agent's process exited"
+    return { node: <StatusBox accent><Glyph ch="!" /></StatusBox>, tip }
+  }
   if (kind === "held") {
     const hourglass = <StatusBox><Hourglass size={9} className="text-muted/70" /></StatusBox>
     // A single-line held row carries its whole "what it's held for" story HERE, in the tooltip. The two
@@ -577,12 +587,13 @@ function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string |
     if (hk === "session") return { node: <StatusBox><CircleDashed size={10} className="text-muted/70" /></StatusBox>, tip: "Waiting on another session" }
     return { node: <StatusBox><Clock size={9} className="text-muted/70" /></StatusBox>, tip: "Waiting on a machine" }
   }
-  // Bare at rest (no fence, no live sub, nothing pending) — a worker that came to rest WITHOUT
-  // declaring done or a machine-wait. Read it as WAITING (maintainer 2026-07-10: a rested-not-done
-  // thread "should be blocked or waiting", never a stark empty box and never a false check). We don't
-  // know the reason — the worker didn't fence — so: the clock, with NO hint gloss (vs an ```awaiting
-  // fence, which carries pr/ci hints AND dims + sinks the row). The honest fix is the worker emitting
-  // ` ```awaiting ` when it's blocked on a machine; until then this is our best-guess "paused/waiting".
+  // Bare at rest (no fence, no live sub, nothing pending) with the process still ALIVE — a worker that
+  // came to rest WITHOUT declaring done or a machine-wait. (An exited one is `stalled` above; this
+  // ellipsis is now honestly reserved for a session you can still just type at.) Read it as WAITING
+  // (maintainer 2026-07-10: a rested-not-done thread "should be blocked or waiting", never a stark
+  // empty box and never a false check). We don't know the reason — the worker didn't fence — so: no
+  // hint gloss (vs an ```awaiting fence, which carries pr/ci hints AND dims + sinks the row). The
+  // honest fix is the worker emitting ` ```awaiting ` when it's blocked on a machine.
   return { node: <StatusBox><Ellipsis size={11} className="text-muted/70" /></StatusBox>, tip: "At rest" }
 }
 
