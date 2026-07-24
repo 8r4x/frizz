@@ -63,9 +63,11 @@ function messageIdentityOf(m: AskMsgLike): string {
 //     There is no "closing": an already-answered question stays clickable (its AnswersCard renders below
 //     it, so nobody re-answers by accident), and Send only gathers the blocks the human actually filled,
 //     so untouched questions contribute nothing. No answered/unanswered bookkeeping anywhere.
-//   · live-only (queue card, multiMessage=false): the FIRST substantive assistant message from the end
-//     decides — its blocks (possibly none) are the only answerable ones, and a later human turn means
-//     nothing is answerable. Byte-for-byte the historic liveBlocks behavior; the queue card is untouched.
+//   · live-only (queue card, multiMessage=false): the MOST-RECENT ask in the tail after the last human
+//     turn — its blocks are the only answerable ones. A later human turn closes the tail (nothing
+//     answerable), but a no-question agent turn does NOT: an agent that asked and then kept working (a
+//     background wake) has merely BURIED its open ask, so the walk scans back past no-question agent
+//     turns to reach it. Only when NO ask trails the last human turn is nothing answerable.
 // `isLive` marks the last substantive assistant message so composeAnswerWire can keep the historic wire
 // format for the trailing ask and switch to the self-describing (question-quoting) form for an earlier
 // one — a purely POSITIONAL check, not answered-tracking.
@@ -95,16 +97,21 @@ export function selectOpenAsks(messages: readonly AskMsgLike[], multiMessage: bo
   }
 
   if (!multiMessage) {
-    // live-only (queue card): the first substantive assistant from the end decides; a later human turn
-    // (text-bearing user message) → nothing answerable. Same skip discipline as the historic liveBlocks.
+    // live-only (queue card): the most-recent ask in the tail AFTER the last human turn. A later human
+    // turn (text-bearing user message) still closes the tail → nothing answerable. But an agent that
+    // asked and then KEPT WORKING (a background wake re-invoked it, so a no-question assistant turn now
+    // trails the ask) has only BURIED its own open ask, not answered it — so scan back past no-question
+    // agent turns until a question OR a human turn, instead of stopping dead at the first agent turn.
+    // Without this the buried ask renders read-only in the queue (its chips vanish) even though the same
+    // ask stays answerable in the drawer (multiMessage) — the exact "red approval can't be answered" gap.
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i]
       if (m.kind === "event" || m.kind === "reasoning") continue // punctuation (completion / codex reasoning)
       if (m.role === "user" && m.text.trim()) break
       if (m.role !== "assistant" || !m.text.trim()) continue
       const blocks = parseBlocks(m.text)
-      const found = blocks.length > 0 ? [{ idx: i, identity: identityOf(m, i), blocks, isLive: i === lastSubstantiveAssistant }] : []
-      return found
+      if (blocks.length > 0) return [{ idx: i, identity: identityOf(m, i), blocks, isLive: i === lastSubstantiveAssistant }]
+      // a no-question agent turn doesn't close the tail — keep scanning back for the buried ask
     }
     return []
   }
@@ -140,9 +147,10 @@ export function composeAnswerWire(input: {
 
 // The ONE controller for answering ```question blocks — shared by the queue card and the thread chat
 // view so their behavior can never drift. By default (`multiMessage` off — the queue card) it targets
-// ONLY the live trailing ask, exactly as before. In `multiMessage` mode (the drawer thread view) EVERY
-// question in the transcript stays answerable, wherever it sits — so a question buried by a sub-agent
-// return / the agent's own continuation can be answered in place by scrolling back to it. This is
+// the most-recent ask in the tail after the last human turn (an agent that kept working past its own
+// ask still leaves it answerable — see selectOpenAsks). In `multiMessage` mode (the drawer thread view)
+// EVERY question in the transcript stays answerable, wherever it sits — so a question buried by a
+// sub-agent return / the agent's own continuation can be answered in place by scrolling back to it. This is
 // deliberately best-effort and TRACKS NOTHING: no answered/unanswered bookkeeping, no "closing" of asks.
 // An already-answered question stays clickable (its AnswersCard renders right below it), and Send only
 // gathers the blocks the human actually filled, so untouched questions contribute nothing. `onSent` runs
