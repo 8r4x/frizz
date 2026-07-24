@@ -194,10 +194,12 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
       data-drawer-scroll-ready={q.isPending ? "false" : "true"}
       className="flex-1 min-h-0 flex flex-col overflow-hidden outline-none"
     >
+      {/* data-virtualized-transcript-scroll marks the WINDOWED renderer, not a surface — the drawer
+          virtualizes too now, so the old "standalone" name would be a lie. */}
       <div
         ref={transcriptRef}
         data-drawer-transcript-scroll
-        data-standalone-transcript={virtualized || undefined}
+        data-virtualized-transcript-scroll={virtualized || undefined}
         tabIndex={virtualized ? 0 : undefined}
         role={virtualized ? "region" : undefined}
         aria-label={virtualized ? "Thread conversation" : undefined}
@@ -216,6 +218,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
           nativeInputRequired={nativeInputRequired}
           running={running}
           copyTerminalCommand={copyTerminalCommand}
+          stickyUserMessage={stickyUserMessage}
           transportFallback={q.transportFallback}
           isFetching={q.isFetching}
           refresh={() => void q.refetch()}
@@ -420,6 +423,7 @@ function VirtualizedThreadTranscript({
   nativeInputRequired,
   running,
   copyTerminalCommand,
+  stickyUserMessage,
   transportFallback,
   isFetching,
   refresh,
@@ -440,6 +444,7 @@ function VirtualizedThreadTranscript({
   nativeInputRequired: NativeInputRequiredData | undefined
   running: boolean
   copyTerminalCommand: () => void
+  stickyUserMessage: boolean
   transportFallback: TranscriptTransportFallback
   isFetching: boolean
   refresh: () => void
@@ -489,6 +494,14 @@ function VirtualizedThreadTranscript({
     return next
   }, [beforeCursor, earlierError, hasEarlier, hasRuntimeStatus, loadingEarlier, messageRows, messages, transportFallback])
 
+  // Which row carries the CURRENT ASK — the message the `stickyUserMessage` pref pins to the pane top.
+  // -1 when the pref is off or the transcript has no landed user message yet; then nothing is hoisted
+  // and every row renders in the absolute layer exactly as it did before.
+  const stickyRowIndex = useMemo(() => {
+    if (!stickyUserMessage || lastUserIdx < 0) return -1
+    return rows.findIndex((row) => row.kind === "message" && row.messageIndex === lastUserIdx)
+  }, [lastUserIdx, rows, stickyUserMessage])
+
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => transcriptRef.current,
@@ -520,7 +533,11 @@ function VirtualizedThreadTranscript({
     const scroller = transcriptRef.current
     if (scroller) {
       const scrollerTop = scroller.getBoundingClientRect().top
-      const firstVisible = Array.from(scroller.querySelectorAll<HTMLElement>("[data-transcript-source-id]"))
+      // `:not([data-transcript-sticky])` is load-bearing: the pinned current-ask band floats AT the
+      // scroll-pane top, so it is always the first element whose bottom clears `scrollerTop` — anchoring
+      // to it would capture an invariant top and restore a zero correction, silently losing the reader's
+      // place across a prepend. Same invariant captureTranscriptViewportAnchor enforces on the queue.
+      const firstVisible = Array.from(scroller.querySelectorAll<HTMLElement>("[data-transcript-source-id]:not([data-transcript-sticky])"))
         .find((element) => element.getBoundingClientRect().bottom > scrollerTop + 1)
       const rowKey = firstVisible?.dataset.transcriptRowKey
       if (firstVisible && rowKey) {
@@ -630,6 +647,20 @@ function VirtualizedThreadTranscript({
     12,
     (virtualizer.scrollOffset ?? 0) + (virtualizer.scrollRect?.height ?? transcriptRef.current?.clientHeight ?? 0) - 48,
   )
+  // THE PINNED CURRENT ASK, virtualized. CSS `position: sticky` is inert on a virtual row: every row is
+  // `position: absolute` + translateY, so its containing block is a zero-height point and there is no
+  // range to stick over. So that ONE row is HOISTED out of the absolute layer and rendered in NORMAL
+  // FLOW — a spacer of exactly its measured `start`, then the row itself — which gives it the
+  // full-height scroll container as its containing block, i.e. precisely what the eager path's
+  // StickyUserBand relies on. It is still `measureElement`-registered under its own `data-index`, so
+  // the virtualizer sizes it from the real DOM exactly like any other row; it is simply always
+  // mounted (one extra message, and it must be, since a pinned message stays visible while its slot
+  // is far off screen). The absolute layer skips it below so it never renders twice.
+  const stickyRow = stickyRowIndex >= 0 ? rows[stickyRowIndex] : undefined
+  const stickyMessageRow = stickyRow?.kind === "message" ? stickyRow : undefined
+  // `measurementsCache` is the PUBLIC field holding what the private getMeasurements() returns; reading
+  // it here is safe because getVirtualItems() above already forced the memoized measure pass this render.
+  const stickyStart = stickyMessageRow ? virtualizer.measurementsCache[stickyRowIndex]?.start ?? 0 : 0
 
   return (
     <div
@@ -638,9 +669,42 @@ function VirtualizedThreadTranscript({
       className="relative w-full"
       style={{ height: totalSize }}
     >
+      {stickyMessageRow && (
+        <>
+          {/* Flow spacer — parks the pinned row at the same offset its absolute twin would have had, so
+              the transcript reads identically until the reader scrolls past it and it lifts to the top. */}
+          <div aria-hidden style={{ height: stickyStart }} />
+          {/* The pinned row is a SINGLE sticky layer — this IS the StickyUserBand for the virtualized
+              path (its classes are inlined here). It must be a direct child of the height:totalSize
+              container so `sticky top-0` has the full transcript as its containing block and can pin
+              across the whole scroll range; wrapping it in a short flow div would give it a tiny
+              containing block and it could never stick. Do NOT also render a nested StickyUserBand —
+              two stacked `sticky top-0` layers push the card down by the inner band's box (the 121px
+              gap that let transcript content bleed above the "pinned" card). `[&>*]:pointer-events-auto`
+              re-enables the bubble (hover-to-expand) while the full-width band stays click-through. */}
+          <div
+            key={stickyMessageRow.key}
+            ref={virtualizer.measureElement}
+            data-index={stickyRowIndex}
+            data-transcript-row-key={stickyMessageRow.key}
+            data-transcript-source-id={stickyMessageRow.message.sourceId}
+            data-transcript-sticky="true"
+            className="pointer-events-none [&>*]:pointer-events-auto sticky top-0 z-[9] flex w-full flex-col px-6 pt-3 pb-1.5"
+          >
+            <Message
+              m={stickyMessageRow.message}
+              answering={answeringForMessage(stickyMessageRow.message)}
+              showSendButton
+              paired={paired[stickyMessageRow.messageIndex]}
+              sticky
+            />
+          </div>
+        </>
+      )}
       {virtualItems.map((virtualRow) => {
         const row = rows[virtualRow.index]
         if (!row) return null
+        if (virtualRow.index === stickyRowIndex) return null
         return (
           <div
             key={row.key}
