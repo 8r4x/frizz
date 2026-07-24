@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react"
 import { useQueryClient, type QueryClient } from "@tanstack/react-query"
-import { rpc } from "../api/rpc.ts"
+import { isRetryableRpcError, rpc } from "../api/rpc.ts"
 import { appendQueuedMessage, removeQueuedMessage } from "../hooks.ts"
 import { showToast, store, threadBySlug } from "../store.ts"
 import { markSteered, clearSteered } from "./steering.ts"
@@ -72,6 +72,60 @@ export function enqueueThreadSend(slug: string, run: () => Promise<void>): Promi
   return next
 }
 
+// ── delivery retry ───────────────────────────────────────────────────────────────────────────────
+// A follow-up used to get exactly ONE attempt: any rejection handed the operator's message straight
+// back to the composer under "Steer failed". But what actually fires here is CONTENTION, not refusal —
+// resumeThread owns the row for the 300-830ms its synchronous tmux injection takes, and a second writer
+// arriving inside that window (the wakers scheduler, another tab, the submit-confirmer) loses the
+// runtime-control CAS. The per-slug FIFO above only orders THIS tab's sends; it cannot see those. A
+// build promotion is the same story from the other end: the mutation is refused before it is ever put
+// on the wire while the control plane restarts.
+//
+// So a refusal that provably took NO EFFECT is now waited out instead of surfaced. Only errors the
+// transport marked replayable are retried (isRetryableRpcError); an ambiguous failure — where the text
+// may already have crossed tmux — is never re-sent. The server independently dedups a replayed
+// deliveryId against its delivery ledger, so even a misclassification here cannot paste a second copy.
+//
+// The retry deliberately runs INSIDE the FIFO link: a later send must not overtake the one being
+// retried, because the operator typed them in an order and means it.
+export const DELIVERY_RETRY_BACKOFF_MS = [300, 800, 1_800, 3_500] as const
+
+const wait = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms) })
+
+// `reanchor` runs on every attempt boundary — after a landed send, and again before each backoff.
+// It re-stamps the optimistic steer so a card steered under load asserts "working" continuously:
+// the hint's window must cover the wait for the TAILER to observe the turn, and that wait starts when
+// delivery lands, not when the operator hit Enter, which under contention can be seconds and several
+// attempts earlier. Without it a queue card leaves, reappears when the hint expires mid-flight, and
+// leaves again once truth arrives — the exact flicker the operator reported.
+export async function withDeliveryRetry(
+  send: () => Promise<void>,
+  reanchor: () => void,
+  sleep: (ms: number) => Promise<void> = wait,
+): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await send()
+      reanchor()
+      return
+    } catch (error) {
+      if (attempt >= DELIVERY_RETRY_BACKOFF_MS.length || !isRetryableRpcError(error)) throw error
+      reanchor()
+      await sleep(DELIVERY_RETRY_BACKOFF_MS[attempt])
+    }
+  }
+}
+
+function deliverFollowUp(slug: string, message: string, deliveryId: string): Promise<void> {
+  return withDeliveryRetry(
+    // Resolve the session id per ATTEMPT from the live board rather than once up front: a thread
+    // re-dispatched mid-retry must bind to its CURRENT session, and the guarded followUp is what turns
+    // a stale id into a clean refusal instead of a misdelivery.
+    () => rpc.followUp({ slug, sessionId: threadBySlug(store.board, slug)?.sessionId ?? "", message, deliveryId }) as Promise<void>,
+    () => markSteered(slug),
+  )
+}
+
 // THE follow-up send, hook-free so that EVERY surface which starts a turn goes through it — including
 // the ones that aren't a composer. A caller that reaches for `rpc.followUp` directly silently opts out
 // of all four things below, and the operator sees the difference immediately: no optimistic bubble, no
@@ -100,8 +154,9 @@ export function sendEagerFollowUp(
       rpc.markRead({ slug }).catch(() => {})
     },
     // Resolve the session id at SEND time from the live board (not render time), so a re-dispatch
-    // between mount and send still binds the guarded followUp to the current session.
-    request: () => enqueueThreadSend(slug, () => rpc.followUp({ slug, sessionId: threadBySlug(store.board, slug)?.sessionId ?? "", message, deliveryId })),
+    // between mount and send still binds the guarded followUp to the current session. Contention
+    // refusals are retried in place — the composer only gets the message back once they are exhausted.
+    request: () => enqueueThreadSend(slug, () => deliverFollowUp(slug, message, deliveryId)),
     success: () => callbacks.onSuccess?.(),
     failure: (error) => {
       removeQueuedMessage(queryClient, slug, message, deliveryId)

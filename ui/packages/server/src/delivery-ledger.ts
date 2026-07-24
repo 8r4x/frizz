@@ -77,6 +77,17 @@ export function appendDelivery(storage: Storage, slug: string, item: { id: strin
   storage.setDeliveryLedger(slug, serializeDeliveryLedger(items))
 }
 
+// Has this exact send already been injected? The ledger entry is written only once `resumeThread` has
+// returned, so a hit is positive evidence the text already crossed into the worker — which is what lets
+// the client REPLAY a refused follow-up (see RetryableDeliveryError) with no possibility of a second
+// copy reaching the pane. A miss is not proof of absence in general, so this backstops an
+// already-safe retry classification rather than being the sole licence to replay.
+export function hasDelivery(storage: Storage, slug: string, id: string): boolean {
+  const row = storage.getSession(slug)
+  if (!row) return false
+  return parseDeliveryLedger(row.delivery_ledger).some((item) => item.id === id)
+}
+
 // Extract the plain text of a user record (string content, or the joined text blocks) — mirrors the
 // transcript parser's reading, minimally.
 function userRecordText(rec: Record<string, unknown>): string {

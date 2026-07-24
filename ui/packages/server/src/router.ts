@@ -58,7 +58,7 @@ import { appServerTurnStalled } from "./board.ts"
 import { runThreadUpdate } from "./fray.ts"
 import { repairThreadFile } from "./repair.ts"
 import { resumeThread } from "./resume.ts"
-import { appendDelivery } from "./delivery-ledger.ts"
+import { appendDelivery, hasDelivery } from "./delivery-ledger.ts"
 import {
   readEarlierThreadTranscriptPage,
   readLatestThreadTranscriptPage,
@@ -720,6 +720,15 @@ export function createRouter(ctx: AppContext) {
             effort: row.effort ?? undefined,
           })
           ctx.board.refresh()
+          return
+        }
+        // A REPLAY of a follow-up fray already injected must never paste a second copy. The client
+        // retries a send whose RPC came back with a retryable verdict (RetryableDeliveryError), and
+        // every such verdict is raised strictly upstream of the first tmux write — but this ledger
+        // check, not that classification, is the structural guarantee: an id already recorded means the
+        // text provably reached the worker, so answer success and inject nothing.
+        if (input.deliveryId && row?.backend !== "codex" &&
+            hasDelivery(ctx.storage, input.slug, input.deliveryId)) {
           return
         }
         resumeThread({ project: ctx.project, storage: ctx.storage, board: ctx.board, getSettings: ctx.getSettings, backendFor: ctx.backendFor }, input.slug, input.message)

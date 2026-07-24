@@ -81,6 +81,16 @@ function validationMessage(error: z.ZodError): string {
   return issues.length > 0 ? issues.join("; ") : "Invalid input"
 }
 
+// A handler may additionally mark its failure as safely REPLAYABLE by raising an error carrying
+// `retryableDelivery` (server/src/resume.ts RetryableDeliveryError): the operation was refused by a
+// contention gate before it could take any effect, so the caller may send the identical request again
+// instead of surfacing the failure. It rides the envelope as a separate boolean precisely because
+// `error` itself must stay a plain readable string.
+function errorEnvelope(err: any): { error: string; retryable?: true } {
+  const error = err?.message ?? "Internal server error"
+  return err?.retryableDelivery === true ? { error, retryable: true } : { error }
+}
+
 // ---- Mount router onto Hono ----
 
 export function mountRouter(app: Hono, prefix: string, router: Router) {
@@ -113,7 +123,7 @@ export function mountRouter(app: Hono, prefix: string, router: Router) {
           const result = await proc.handler(input !== undefined ? { input } : {} as any)
           return c.json({ result })
         } catch (err: any) {
-          return c.json({ error: err.message ?? "Internal server error" }, 500)
+          return c.json(errorEnvelope(err), 500)
         }
       })
     } else if (proc._tag === "mutation") {
@@ -134,7 +144,7 @@ export function mountRouter(app: Hono, prefix: string, router: Router) {
           const result = await proc.handler({ input } as any)
           return c.json({ result: result ?? null })
         } catch (err: any) {
-          return c.json({ error: err.message ?? "Internal server error" }, 500)
+          return c.json(errorEnvelope(err), 500)
         }
       })
     } else if (proc._tag === "stream") {
