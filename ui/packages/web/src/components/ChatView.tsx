@@ -2713,7 +2713,8 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
           <CardActions>
             <StateButton
               thread={doneThread}
-              className={CARD_PRIMARY_BUTTON}
+              className={`text-[11px] ${CARD_PRIMARY_BUTTON}`}
+              iconClassName={ICON_LABEL_NUDGE}
               onArchived={queueDismiss?.dismiss}
               onDismissCancel={queueDismiss?.cancel}
             />
@@ -3095,7 +3096,7 @@ export function PendingAskCard({ ask, onTerminal }: { ask: PendingAsk; onTermina
           onMouseDown={(e) => e.preventDefault()}
           className={CARD_PRIMARY_ACTION}
         >
-          <KeyRound size={12} /> Copy terminal command
+          <KeyRound size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} /> Copy terminal command
         </button>
       </CardActions>
     </TranscriptCard>
@@ -3299,7 +3300,13 @@ function Chip({
           column. The badge must precede the label in source order for the float to take effect. */}
       <span className="min-w-0 flex-1">
         {recommended && (
-          <span className="float-right ml-2 mt-px rounded-full border border-border-strong px-1.5 py-px text-[9.5px] uppercase tracking-wide text-muted">
+          // Optically centred on the option text's CAP BLOCK, not on its line box. Measured on the
+          // rendered page: the pill's ink centre sat 1.88px (sans) / 1.80px (mono) BELOW the label's,
+          // because a 9.5px pill inside a 12px line resolves a shorter line box and lands its baseline
+          // 1px low. Unlike the icon nudge this is font-INDEPENDENT — both sides scale with the same
+          // font — so it is a constant, and 2px lands on a whole device pixel at 2× DPR. `translate`
+          // (not a margin) so the float's exclusion area, and therefore the text wrap, is untouched.
+          <span className="float-right ml-2 mt-px -translate-y-[2px] rounded-full border border-border-strong px-1.5 py-px text-[9.5px] uppercase tracking-wide text-muted">
             Recommended
           </span>
         )}

@@ -82,7 +82,8 @@ export function StateButton({
   thread,
   onArchived,
   onDismissCancel,
-  className = "border border-border-strong bg-panel-2/60 px-2.5 py-1 text-fg/80 hover:bg-panel-2 hover:text-fg",
+  className = "border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] text-fg/80 hover:bg-panel-2 hover:text-fg",
+  iconClassName = "",
 }: {
   thread: ThreadView
   onArchived?: () => void
@@ -90,6 +91,10 @@ export function StateButton({
   // returns and reinstate it if the server declines; absent ⇒ the button waits for the round-trip.
   onDismissCancel?: () => void
   className?: string
+  // The optical nudge for the Check, which is font- AND size-dependent (lib/iconAlign.ts). The FOOTER
+  // keeps its own 12px scale and needs none; the in-card copy runs at the shared 11px card-action
+  // scale and passes ICON_LABEL_NUDGE. Neither surface should guess on the other's behalf.
+  iconClassName?: string
 }) {
   // Disables the instant it's clicked. On success we DON'T reset it: the card is dissolving, so the
   // button stays disabled (still reading "Mark as done", no spinner) for the whole fade-out rather
@@ -146,9 +151,9 @@ export function StateButton({
         aria-label="Mark as done"
         title="Mark as done"
         onMouseDown={(event) => event.preventDefault()}
-        className={`flex items-center gap-1.5 rounded-md text-[12px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-45 ${className}`}
+        className={`flex items-center gap-1.5 rounded-md font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-45 ${className}`}
       >
-        <Check size={12} />
+        <Check size={12} className={iconClassName} />
         Mark as done
       </button>
       <Dialog

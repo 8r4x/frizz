@@ -86,6 +86,21 @@ html[data-font="sans"] .md-body pre,
 html[data-font="sans"] .font-mono-keep {
   font-family: var(--font-mono);
 }
+
+/* Optical centring for a small lucide icon beside a short label — see lib/iconAlign.ts for the
+   measurements and why `items-center` alone leaves the icon reading low. The amount is FONT-DEPENDENT,
+   which is why it lives here beside the font switch rather than as a Tailwind constant: the mono stack
+   needs -1.7px, while system-ui already sits where its ink is and needs nothing. Applying mono's value
+   under sans is what made every card eyebrow read 1.5px high. */
+:root {
+  --icon-label-nudge: -1.7px;
+}
+html[data-font="sans"] {
+  --icon-label-nudge: 0px;
+}
+.icon-label-nudge {
+  translate: 0 var(--icon-label-nudge);
+}
 /* Markdown prose rendered INSIDE a .fray-bash card (the SendMessage peer-message body) is PROSE, not
    code — so it must read in the app's prose font (mono by default, sans under the font experiment),
    matching the surrounding assistant messages. Re-assert the body-font rule here so the mono that
