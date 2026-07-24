@@ -100,10 +100,6 @@ function resolveProjectIdentity(
   return { id: identity.id, scope: identity.scope, root: identity.root }
 }
 
-export function resolveProjectId(dir: string, home = homedir()): string {
-  return resolveProjectIdentity(dir, home).id
-}
-
 // Claude Code's per-project session-log dir name: the absolute cwd with every '/' and '.'
 // replaced by '-'. Verified empirically against ~/.claude/projects (e.g. /Users/x/.workshell
 // → -Users-x--workshell). Used later by the JSONL tailer; computed here so the rule lives once.

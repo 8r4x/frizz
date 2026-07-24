@@ -5,8 +5,6 @@ import { BackgroundOpsStrip } from "./components/ChatView.tsx"
 import { Composer } from "./components/Composer.tsx"
 import { ProfileGridSelector } from "./components/ProfileGridSelector.tsx"
 import { ThreadLifecycleFooter } from "./components/ThreadLifecycleFooter.tsx"
-import { Select } from "./components/ui/Select.tsx"
-import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "./lib/promptControlTypography.ts"
 import { store } from "./store.ts"
 import "./styles.css"
 
@@ -39,9 +37,8 @@ const thread: ThreadView = {
 store.board = { threads: [thread] } as BoardSnapshot
 
 function Fixture() {
-  const [draft, setDraft] = useState("This deliberately long draft verifies that a multiline prompt, model selector, permission selector, and every running-operation row remain visible together.\n\nOption-Enter can add another line without changing the footer boundary.")
+  const [draft, setDraft] = useState("This deliberately long draft verifies that a multiline prompt, the model selector, and every running-operation row remain visible together.\n\nOption-Enter can add another line without changing the footer boundary.")
   const [profile, setProfile] = useState({ provider: "codex", model: "gpt-5.6-sol", effort: "high" })
-  const [permission, setPermission] = useState("full")
   return (
     <main className="relative min-h-screen overflow-hidden bg-bg px-4 py-4">
       {/* This deliberately reproduces the real shell's desktop relationship: a sticky queue rail
@@ -98,7 +95,6 @@ function Fixture() {
                     side="top"
                     className="min-w-0 max-w-[72%] px-1.5 py-0.5"
                   />
-                  <Select variant="readout" value={permission} onValueChange={setPermission} options={[{ value: "auto", label: "Auto" }, { value: "full", label: "Full access" }]} ariaLabel="Thread permission mode" side="top" className={`${PROMPT_CONTROL_TYPOGRAPHY_CLASS} px-1.5 py-0.5 text-fg/80`} />
                 </div>
               )}
             />

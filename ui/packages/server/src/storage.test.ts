@@ -277,37 +277,6 @@ test("session profile: model/effort round-trip and survive a resume-style upsert
   assert.equal(saved.effort, "ultra")
 })
 
-test("queued profile targets survive restart and promote or commit only for their exact owner", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-storage-profile-queue-"))
-  const path = join(dir, "ui.db")
-  let s = createStorage(path)
-  s.upsertSession(row({ slug: "queued-profile", backend: "claude", model: "opus", effort: "high" }))
-  const queued = s.queueProfileChange("queued-profile", {
-    sessionId: "sid",
-    nativeSessionId: null,
-    generation: 0,
-  }, { model: "fable", effort: "medium" })
-  assert.ok(queued)
-  assert.equal(s.getSession("queued-profile")?.runtime_control, "profile-queued")
-  assert.equal(s.getSession("queued-profile")?.profile_queued_model, "fable")
-  assert.equal(s.beginRuntimeControl("queued-profile", {
-    sessionId: "sid",
-    nativeSessionId: null,
-    generation: 0,
-  }, "follow-up"), null, "a queued profile owns the runtime-control lane")
-  s.close()
-
-  s = createStorage(path)
-  assert.equal(s.commitQueuedProfileTarget("queued-profile", { ...queued!, controlRevision: queued!.controlRevision + 1 }), false)
-  assert.equal(s.commitQueuedProfileTarget("queued-profile", queued!), true)
-  const committed = s.getSession("queued-profile")!
-  assert.equal(committed.model, "fable")
-  assert.equal(committed.effort, "medium")
-  assert.equal(committed.profile_queued_model, null)
-  assert.equal(committed.runtime_control, null)
-  s.close()
-})
-
 test("profile target/pending/revision and runtime control commit as one exact-owned CAS", () => {
   const s = store()
   s.upsertSession(row({
@@ -469,10 +438,8 @@ test("boot abandons a codex row still holding the retired tmux profile handoff",
   const path = join(dir, "ui.db")
   const s = createStorage(path)
   s.upsertSession(row({ slug: "codex-stuck" }))
-  s.upsertSession(row({ slug: "codex-queued", session_id: "sid-codex-queued" }))
   s.upsertSession(row({ slug: "claude-stuck", session_id: "sid-claude" }))
   s.setBackend("codex-stuck", "codex")
-  s.setBackend("codex-queued", "codex")
   s.setBackend("claude-stuck", "claude")
   s.close()
 
@@ -481,11 +448,6 @@ test("boot abandons a codex row still holding the retired tmux profile handoff",
     UPDATE session
     SET runtime_control = 'profile', profile_pending_model = 'gpt-5.6-sol',
         profile_pending_effort = 'high', profile_handoff = '{"version":1,"phase":"armed"}'
-    WHERE slug IN ('codex-stuck', 'claude-stuck');
-    UPDATE session
-    SET runtime_control = 'profile-queued', profile_queued_model = 'gpt-5.6-luna',
-        profile_queued_effort = 'medium'
-    WHERE slug = 'codex-queued'
   `)
   sqlite.close()
 
@@ -496,10 +458,6 @@ test("boot abandons a codex row still holding the retired tmux profile handoff",
   assert.equal(codex.profile_pending_effort ?? null, null)
   assert.equal(codex.profile_handoff ?? null, null, "and so is its journal")
   assert.match(codex.control_error ?? "", /armed on the retired Codex tmux path/, "the operator is told why it vanished")
-  const queued = reopened.getSession("codex-queued")!
-  assert.equal(queued.runtime_control ?? null, null, "a stale Codex queue is also released")
-  assert.equal(queued.profile_queued_model ?? null, null)
-  assert.equal(queued.profile_queued_effort ?? null, null)
 
   const claude = reopened.getSession("claude-stuck")!
   assert.equal(claude.runtime_control, "profile", "a CLAUDE handoff still recovers normally")

@@ -34,6 +34,7 @@ import {
   type CodexAppServerBridge,
   type CodexSandboxMode,
 } from "./backend/codex-app-server.ts"
+import { createCodexDiagnosticSink } from "./backend/codex-app-server-diagnostics.ts"
 import {
   ADOPTION_RECONCILE_INTERVAL_MS,
   adoptionRuntimeBinding,
@@ -495,6 +496,10 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         dbPath,
         interactions: storage.interactions,
         codexBin: opts.codexBin,
+        // Persist the bridge's lifecycle events so a mid-turn daemon death is diagnosable after the
+        // fact. Before this the diagnostic sink was unset and every death — the six-sub-agent loss
+        // included — was an unattributable "the thread went quiet." See codex-app-server-diagnostics.ts.
+        diagnostic: createCodexDiagnosticSink(project.stateDir, project.id),
         // Never wake a thread the human has already put away: a restart-recovery nudge is only for a
         // thread that is still open and still theirs to come back to.
         shouldAutoResume: (slug) => {

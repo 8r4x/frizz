@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
-import { Check, Copy, HelpCircle, X } from "lucide-react"
+import { Check, Copy, HelpCircle } from "lucide-react"
 import { type Settings } from "@fray-ui/shared"
 import { rpc } from "../api/rpc.ts"
 import { store } from "../store.ts"
 import { prefs } from "../lib/prefs.ts"
 import { registerSettingsClose } from "../lib/overlays.ts"
+import { SHEET_CLOSE_MS, SHEET_PANEL_CLASS, SHEET_SCRIM_CLASS, prefersReducedMotion } from "../lib/sheet.ts"
 import { queryClient } from "../main.tsx"
+import { SheetHeader } from "./ui/SheetHeader.tsx"
 import { Select } from "./ui/Select.tsx"
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
 import { Tooltip } from "./Tooltip.tsx"
@@ -38,13 +40,6 @@ export const SETTINGS_HELP = {
 function currentPerm(): NotifPerm {
   if (typeof Notification === "undefined") return "unsupported"
   return Notification.permission as NotifPerm
-}
-
-// Slide-out duration; the panel unmounts (store.showSettings=false) after it elapses. Kept in sync
-// with the transition-duration below.
-const CLOSE_MS = 210
-function prefersReducedMotion() {
-  return typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
 }
 
 export function SettingsDrawer() {
@@ -98,7 +93,7 @@ export function SettingsDrawer() {
     if (closing) return
     setClosing(true)
     setShown(false)
-    window.setTimeout(() => (store.showSettings = false), prefersReducedMotion() ? 0 : CLOSE_MS)
+    window.setTimeout(() => (store.showSettings = false), prefersReducedMotion() ? 0 : SHEET_CLOSE_MS)
   }
 
   const save = useMutation({
@@ -134,21 +129,17 @@ export function SettingsDrawer() {
 
   return (
     <div
-      className={`fixed inset-0 z-50 flex justify-end bg-black/55 backdrop-blur-[1px] transition-opacity duration-200 ease-out motion-reduce:transition-none ${shown ? "opacity-100" : "opacity-0"}`}
+      className={`${SHEET_SCRIM_CLASS} z-50 flex justify-end ${shown ? "opacity-100" : "opacity-0"}`}
       onMouseDown={(e) => e.target === e.currentTarget && close()}
     >
       <div
-        className={`w-[560px] max-w-[94vw] h-full flex flex-col border-l border-border bg-panel shadow-2xl shadow-black/50 transition-transform duration-200 ease-out motion-reduce:transition-none ${shown ? "translate-x-0" : "translate-x-full"}`}
+        className={`${SHEET_PANEL_CLASS} w-[560px] max-w-[94vw] ${shown ? "translate-x-0" : "translate-x-full"}`}
       >
-        <header className="px-4 h-11 flex items-center justify-between border-b border-border shrink-0">
-          <span className="flex items-center gap-2 text-[13px] font-medium">
-            Settings
-            {dirty && <span className="text-[11px] font-normal text-accent">● unsaved</span>}
-          </span>
-          <button className="rounded-md p-1 text-muted hover:bg-panel-2 hover:text-fg transition-colors" onClick={close}>
-            <X size={15} />
-          </button>
-        </header>
+        <SheetHeader
+          title="Settings"
+          actions={dirty ? <span className="text-[11px] font-normal text-accent">● unsaved</span> : undefined}
+          onClose={close}
+        />
 
         {!draft ? (
           <div className="p-4 text-[13px] text-muted">Loading…</div>

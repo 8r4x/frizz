@@ -69,11 +69,6 @@ export interface SessionRow {
   // when fray never observed a concrete CLI value.
   model?: string | null
   effort?: string | null
-  // A requested Claude profile waiting for the current turn/background work to reach a safe idle
-  // boundary. Unlike profile_pending_* this has not touched the runtime yet and needs no handoff
-  // journal; runtime_control='profile-queued' serializes it ahead of later follow-ups.
-  profile_queued_model?: string | null
-  profile_queued_effort?: string | null
   // A live profile request is armed as one complete pair. The committed model/effort stay visible
   // and rollback-safe until the replacement generation reaches a proven idle composer.
   profile_pending_model?: string | null
@@ -113,7 +108,7 @@ export interface RuntimeExpectation {
   runtimeControl?: string | null
 }
 
-export type RuntimeControlKind = "permission" | "profile-queued" | "profile" | "resume" | "follow-up" | "ai-rename"
+export type RuntimeControlKind = "permission" | "profile" | "resume" | "follow-up" | "ai-rename"
 
 export type ProfileHandoffPhase =
   | "armed"
@@ -158,15 +153,6 @@ export interface ProfileChangeExpectation {
   model: string
   effort: string
   profileHandoff: string
-}
-
-export interface QueuedProfileExpectation {
-  sessionId: string
-  nativeSessionId: string | null
-  generation: number
-  controlRevision: number
-  model: string
-  effort: string
 }
 
 export interface AutoTitleExpectation {
@@ -398,17 +384,6 @@ export interface Storage {
     expected: { sessionId: string; nativeSessionId: string | null; generation: number },
     profile: { model: string; effort: string },
   ): boolean
-  queueProfileChange(
-    slug: string,
-    expected: { sessionId: string; nativeSessionId: string | null; generation: number },
-    profile: { model: string; effort: string },
-  ): QueuedProfileExpectation | null
-  promoteQueuedProfileChange(
-    slug: string,
-    expected: QueuedProfileExpectation,
-    handoff: ProfileHandoffJournal,
-  ): { profileRevision: number; controlRevision: number; profileHandoff: string } | null
-  commitQueuedProfileTarget(slug: string, expected: QueuedProfileExpectation): boolean
   armProfileChange(
     slug: string,
     expected: { sessionId: string; nativeSessionId: string | null; generation: number },
@@ -531,8 +506,6 @@ export function createStorage(dbPath: string): Storage {
     "agent_session_id TEXT",
     "model TEXT",
     "effort TEXT",
-    "profile_queued_model TEXT",
-    "profile_queued_effort TEXT",
     "profile_pending_model TEXT",
     "profile_pending_effort TEXT",
     "profile_revision INTEGER NOT NULL DEFAULT 0",
@@ -563,16 +536,17 @@ export function createStorage(dbPath: string): Storage {
     // nothing can ever clear it again: the board reports runtimeControlPending forever, which fences
     // that thread's composer, model, and sandbox controls permanently. Release it once, at boot.
     db.exec("UPDATE session SET runtime_control = NULL WHERE runtime_control = 'codex-input'")
-    // Same class, one step further: a CODEX row can also still hold a Claude-style queued/armed PROFILE
-    // control from a pre-cutover crash or an interrupted upgrade. That handoff can never complete now —
-    // Codex changes settings over its app-server bridge, never by reattaching a tmux pane. Abandon the
-    // stale pair and say why; the operator can immediately set it again through the native path.
+    // Same class, one step further: a CODEX row can also still hold the tmux-era PROFILE handoff from a
+    // pre-cutover crash. That handoff can never complete now — recovery reattaches a tmux pane and reads
+    // it with the Claude composer parser, which a Codex pane never satisfies, so the recovery loop
+    // re-blocks the thread on every tick forever. Abandon the pending pair and say why; codex takes
+    // model/effort per turn, so nothing is lost but the stuck arming.
     db.exec(`
       UPDATE session
-      SET runtime_control = NULL, profile_queued_model = NULL, profile_queued_effort = NULL,
-          profile_pending_model = NULL, profile_pending_effort = NULL, profile_handoff = NULL,
+      SET runtime_control = NULL, profile_pending_model = NULL, profile_pending_effort = NULL,
+          profile_handoff = NULL,
           control_error = 'A model/effort change armed on the retired Codex tmux path was abandoned; set it again.'
-      WHERE backend = 'codex' AND runtime_control IN ('profile-queued', 'profile')
+      WHERE backend = 'codex' AND runtime_control = 'profile'
     `)
     // Heal every app-server codex row that was downgraded behind the operator's back. Until the fixes
     // that ship with this line, a cold resume sent no sandbox/approval override, so the app-server
@@ -605,8 +579,8 @@ export function createStorage(dbPath: string): Storage {
   const selOne = db.prepare<[string], SessionRow>("SELECT * FROM session WHERE slug = ?")
   const selAll = db.prepare<[], SessionRow>("SELECT * FROM session")
   const upsertStmt = db.prepare(`
-    INSERT INTO session (slug, session_id, tmux_name, spawned_at, last_read_at, unread, exited, title_auto, title, state, snoozed_until, snooze_prompt, awaiting_fence_id, awaiting_confirmed_at, meta, seen_at, plan_path, transcript_id, model, effort, profile_queued_model, profile_queued_effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, control_error, runtime_generation, runtime_control, runtime_control_revision)
-    VALUES (@slug, @session_id, @tmux_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title, @state, @snoozed_until, @snooze_prompt, @awaiting_fence_id, @awaiting_confirmed_at, @meta, @seen_at, @plan_path, @transcript_id, @model, @effort, @profile_queued_model, @profile_queued_effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision)
+    INSERT INTO session (slug, session_id, tmux_name, spawned_at, last_read_at, unread, exited, title_auto, title, state, snoozed_until, snooze_prompt, awaiting_fence_id, awaiting_confirmed_at, meta, seen_at, plan_path, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, control_error, runtime_generation, runtime_control, runtime_control_revision)
+    VALUES (@slug, @session_id, @tmux_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title, @state, @snoozed_until, @snooze_prompt, @awaiting_fence_id, @awaiting_confirmed_at, @meta, @seen_at, @plan_path, @transcript_id, @model, @effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision)
     ON CONFLICT(slug) DO UPDATE SET
       session_id = excluded.session_id,
       tmux_name  = excluded.tmux_name,
@@ -633,8 +607,6 @@ export function createStorage(dbPath: string): Storage {
       plan_path = excluded.plan_path,
       model = excluded.model,
       effort = excluded.effort,
-      profile_queued_model = excluded.profile_queued_model,
-      profile_queued_effort = excluded.profile_queued_effort,
       profile_pending_model = excluded.profile_pending_model,
       profile_pending_effort = excluded.profile_pending_effort,
       profile_revision = excluded.profile_revision,
@@ -659,8 +631,7 @@ export function createStorage(dbPath: string): Storage {
       slug, session_id, tmux_name, spawned_at, last_read_at, unread, exited, archived, rested_at,
       title_auto, title, transcript_id, state, snoozed_until, snooze_prompt, awaiting_fence_id, awaiting_confirmed_at,
       meta, seen_at, plan_path, backend, agent_session_id,
-      model, effort, profile_queued_model, profile_queued_effort,
-      profile_pending_model, profile_pending_effort, profile_revision, profile_handoff,
+      model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff,
       permission_mode, permission_pending, control_error,
       runtime_generation, runtime_control, runtime_control_revision
     )
@@ -668,8 +639,7 @@ export function createStorage(dbPath: string): Storage {
       @slug, @session_id, @tmux_name, @spawned_at, @last_read_at, @unread, @exited, @archived,
       @rested_at, @title_auto, @title, @transcript_id, @state, @snoozed_until, @snooze_prompt,
       @awaiting_fence_id, @awaiting_confirmed_at, @meta, @seen_at, @plan_path,
-      @backend, @agent_session_id, @model, @effort, @profile_queued_model,
-      @profile_queued_effort, @profile_pending_model,
+      @backend, @agent_session_id, @model, @effort, @profile_pending_model,
       @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending,
       @control_error, @runtime_generation, @runtime_control,
       @runtime_control_revision
@@ -950,7 +920,6 @@ export function createStorage(dbPath: string): Storage {
     SET runtime_control = ?, runtime_control_revision = runtime_control_revision + 1
     WHERE slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
       AND runtime_control IS NULL AND permission_pending IS NULL
-      AND profile_queued_model IS NULL AND profile_queued_effort IS NULL
       AND profile_pending_model IS NULL AND profile_pending_effort IS NULL
   `)
   const releaseRuntimeControlStmt = db.prepare(`
@@ -963,38 +932,6 @@ export function createStorage(dbPath: string): Storage {
     SET model = ?, effort = ?, profile_revision = profile_revision + 1, control_error = NULL
     WHERE slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
       AND runtime_control IS NULL AND permission_pending IS NULL
-      AND profile_queued_model IS NULL AND profile_queued_effort IS NULL
-      AND profile_pending_model IS NULL AND profile_pending_effort IS NULL
-  `)
-  const queueProfileChangeStmt = db.prepare(`
-    UPDATE session
-    SET profile_queued_model = ?, profile_queued_effort = ?,
-        runtime_control = 'profile-queued', runtime_control_revision = runtime_control_revision + 1,
-        control_error = NULL
-    WHERE slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
-      AND runtime_control IS NULL AND permission_pending IS NULL
-      AND profile_queued_model IS NULL AND profile_queued_effort IS NULL
-      AND profile_pending_model IS NULL AND profile_pending_effort IS NULL
-  `)
-  const promoteQueuedProfileChangeStmt = db.prepare(`
-    UPDATE session
-    SET profile_queued_model = NULL, profile_queued_effort = NULL,
-        profile_pending_model = ?, profile_pending_effort = ?,
-        profile_revision = profile_revision + 1, profile_handoff = ?,
-        runtime_control = 'profile', runtime_control_revision = runtime_control_revision + 1,
-        control_error = NULL
-    WHERE slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
-      AND runtime_control = 'profile-queued' AND runtime_control_revision = ?
-      AND profile_queued_model = ? AND profile_queued_effort = ?
-      AND profile_pending_model IS NULL AND profile_pending_effort IS NULL
-  `)
-  const commitQueuedProfileTargetStmt = db.prepare(`
-    UPDATE session
-    SET model = ?, effort = ?, profile_queued_model = NULL, profile_queued_effort = NULL,
-        profile_revision = profile_revision + 1, runtime_control = NULL, control_error = NULL
-    WHERE slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
-      AND runtime_control = 'profile-queued' AND runtime_control_revision = ?
-      AND profile_queued_model = ? AND profile_queued_effort = ?
       AND profile_pending_model IS NULL AND profile_pending_effort IS NULL
   `)
   const armProfileChangeStmt = db.prepare(`
@@ -1006,7 +943,6 @@ export function createStorage(dbPath: string): Storage {
         control_error = NULL
     WHERE slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
       AND runtime_control IS NULL AND permission_pending IS NULL
-      AND profile_queued_model IS NULL AND profile_queued_effort IS NULL
       AND profile_pending_model IS NULL AND profile_pending_effort IS NULL
   `)
   const checkpointProfileChangeStmt = db.prepare(`
@@ -1050,7 +986,6 @@ export function createStorage(dbPath: string): Storage {
     SET model = ?, effort = ?, profile_revision = profile_revision + 1
     WHERE slug = ? AND session_id = ? AND runtime_generation = ?
       AND runtime_control IS NULL AND profile_pending_model IS NULL AND profile_pending_effort IS NULL
-      AND profile_queued_model IS NULL AND profile_queued_effort IS NULL
       AND (model IS NOT ? OR effort IS NOT ?)
   `)
   const beginRuntimeGenerationStmt = db.prepare(`
@@ -1089,8 +1024,6 @@ export function createStorage(dbPath: string): Storage {
     agent_session_id: row.agent_session_id ?? null,
     model: row.model ?? null,
     effort: row.effort ?? null,
-    profile_queued_model: row.profile_queued_model ?? null,
-    profile_queued_effort: row.profile_queued_effort ?? null,
     profile_pending_model: row.profile_pending_model ?? null,
     profile_pending_effort: row.profile_pending_effort ?? null,
     profile_revision: row.profile_revision ?? 0,
@@ -1543,62 +1476,6 @@ export function createStorage(dbPath: string): Storage {
         expected.sessionId,
         expected.nativeSessionId,
         expected.generation,
-      ).changes === 1,
-    queueProfileChange: (slug, expected, profile) => {
-      const changed = queueProfileChangeStmt.run(
-        profile.model,
-        profile.effort,
-        slug,
-        expected.sessionId,
-        expected.nativeSessionId,
-        expected.generation,
-      ).changes === 1
-      if (!changed) return null
-      const current = selOne.get(slug)
-      if (!current || current.runtime_control !== "profile-queued") return null
-      return {
-        sessionId: current.session_id,
-        nativeSessionId: current.agent_session_id ?? null,
-        generation: current.runtime_generation ?? 0,
-        controlRevision: current.runtime_control_revision ?? 0,
-        model: profile.model,
-        effort: profile.effort,
-      }
-    },
-    promoteQueuedProfileChange: (slug, expected, handoff) => {
-      const serialized = JSON.stringify(handoff)
-      const changed = promoteQueuedProfileChangeStmt.run(
-        expected.model,
-        expected.effort,
-        serialized,
-        slug,
-        expected.sessionId,
-        expected.nativeSessionId,
-        expected.generation,
-        expected.controlRevision,
-        expected.model,
-        expected.effort,
-      ).changes === 1
-      if (!changed) return null
-      const current = selOne.get(slug)
-      if (!current || current.runtime_control !== "profile") return null
-      return {
-        profileRevision: current.profile_revision ?? 0,
-        controlRevision: current.runtime_control_revision ?? 0,
-        profileHandoff: serialized,
-      }
-    },
-    commitQueuedProfileTarget: (slug, expected) =>
-      commitQueuedProfileTargetStmt.run(
-        expected.model,
-        expected.effort,
-        slug,
-        expected.sessionId,
-        expected.nativeSessionId,
-        expected.generation,
-        expected.controlRevision,
-        expected.model,
-        expected.effort,
       ).changes === 1,
     armProfileChange: (slug, expected, profile, handoff) => {
       const serialized = JSON.stringify(handoff)

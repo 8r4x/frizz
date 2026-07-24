@@ -47,7 +47,3 @@ export function parseProfileHandoffJournal(raw: string | null | undefined): Prof
       (j.target !== undefined && !leg(j.target)) || (j.rollback !== undefined && !leg(j.rollback))) return null
   return value as ProfileHandoffJournal
 }
-
-export function serializeProfileHandoffJournal(journal: ProfileHandoffJournal): string {
-  return JSON.stringify(journal)
-}

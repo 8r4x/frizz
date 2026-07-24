@@ -822,27 +822,8 @@ export function createRouter(ctx: AppContext) {
         // controller is Claude-only now, so a legacy (unmigrated) codex row must not reach its reattach.
         const profRow = ctx.storage.getSession(input.slug)
         if (profRow?.backend === "codex") {
-          validateThreadProfile("codex", input.model, input.effort)
           ctx.storage.setProfile(input.slug, input.model, input.effort)
           ctx.board.refresh()
-          // `thread/settings/update` is Codex's native subsequent-turn queue. It accepts a change
-          // while a turn is running, but that turn keeps the profile it started with. Persisting
-          // first preserves the operator's intent even if this eager live update cannot be confirmed.
-          const bridge = ctx.codexAppServer
-          if (bridge && bridge.binding(input.slug, profRow.session_id)) {
-            try {
-              const applied = await bridge.setProfile({
-                threadSlug: input.slug,
-                sessionId: profRow.session_id,
-                model: input.model,
-                effort: input.effort,
-              })
-              if (applied.applied) return { effect: applied.turnInFlight ? "next-turn" as const : "applied" as const }
-            } catch {
-              // The persisted pair is still carried by the next cold resume/turn. Fall through to
-              // the conservative wording rather than claiming a live update the server did not prove.
-            }
-          }
           return { effect: "next-resume" as const }
         }
         if (!ctx.profileController) throw new Error("Runtime profile controls are unavailable; restart Fray and retry")
