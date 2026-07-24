@@ -2047,7 +2047,20 @@ function fixedSnapshot(source: TranscriptSourceBinding): FixedTranscriptSnapshot
       .update(`${source.slug}\0${source.sessionId}\0${source.nativeId}\0${source.backend}\0${source.runtimeGeneration}\0${fileKey}`)
       .digest("base64url")
       .slice(0, 32)
-    return { ...source, raw: bytes.toString("utf8"), bytes, fileKey, transcriptKey }
+    // `raw` is LAZY: the cached projection below folds only the APPENDED byte range, so a warm read of a
+    // 30 MB transcript must never pay to materialize the whole file as a JS string. Only the codex
+    // projector (non-incremental) and a cold claude fold ever touch it.
+    let rawText: string | undefined
+    return {
+      ...source,
+      get raw() {
+        if (rawText === undefined) rawText = bytes.toString("utf8")
+        return rawText
+      },
+      bytes,
+      fileKey,
+      transcriptKey,
+    }
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") return undefined
     throw error
@@ -2056,15 +2069,105 @@ function fixedSnapshot(source: TranscriptSourceBinding): FixedTranscriptSnapshot
   }
 }
 
+// ── Retained incremental projection cache (the PAGED read path) ──────────────────────────────────────
+// readLatestThreadTranscriptPage re-folded the WHOLE JSONL from byte 0 on every threadTranscript RPC —
+// measured at 2.3–3.9s for a 30 MB session, synchronously on the event loop, which is what made opening
+// a thread drawer sit on its spinner for ~9s (and far worse on a busy board, where these queue behind
+// each other and behind the tailer tick). This is readTranscript's retained-fold trick applied to the
+// paged reader: keep the fold's closure state alive per file and feed it ONLY the bytes appended since
+// the last read. An unchanged file costs zero parse work; a live one costs the delta.
+//
+// Keyed by path + identityPrefix (NOT path alone, as the readTranscript cache is): the two readers
+// derive their prefix differently — `claude:${sessionId}` there vs `claude:${nativeId}` here — and on a
+// DRIFTED transcript those disagree, so a shared key would make each read evict the other's fold and
+// leave both permanently cold. Deliberately a separate map for the same reason.
+interface ProjectionCacheEntry {
+  fold: TranscriptFold
+  // True file position consumed so far. As in the readTranscript cache this is decoupled from
+  // fold.consumedBytes(): the decoder may retain a torn trailing multibyte sequence across reads.
+  bytesRead: number
+  decoder: StringDecoder
+  // dev:ino:birthtime — an unlink+recreate of the same path invalidates the fold even at equal size.
+  fileKey: string
+}
+// Smaller than TRANSCRIPT_CACHE_CAP: each entry retains every projected message for its file (not the
+// capped tail), and the /ws producer already holds a second fold per hot file through readTranscript.
+const PROJECTION_CACHE_CAP = 6
+const projectionCache = new Map<string, ProjectionCacheEntry>()
+
 function projectSnapshot(snapshot: FixedTranscriptSnapshot): TranscriptMessage[] {
   const prefix = `${snapshot.backend}:${snapshot.nativeId}`
-  return snapshot.backend === "codex"
-    ? projectCodexTranscript(snapshot.raw, prefix)
-    : projectClaudeTranscript(snapshot.raw, prefix)
+  // The codex projector parses a rollout whole — no incremental fold to retain, and rollouts are small.
+  if (snapshot.backend === "codex") return projectCodexTranscript(snapshot.raw, prefix)
+
+  const key = `${snapshot.path}\0${prefix}`
+  let entry = projectionCache.get(key)
+  // Drop a stale entry: the file rotated (new inode) or shrank (truncation) — either means the retained
+  // fold no longer describes byte 0..length.
+  if (entry && (entry.fileKey !== snapshot.fileKey || snapshot.bytes.length < entry.bytesRead)) {
+    projectionCache.delete(key)
+    entry = undefined
+  }
+  if (!entry) {
+    entry = { fold: createTranscriptFold(prefix), bytesRead: 0, decoder: new StringDecoder("utf8"), fileKey: snapshot.fileKey }
+    projectionCache.set(key, entry)
+  } else {
+    projectionCache.delete(key) // LRU touch
+    projectionCache.set(key, entry)
+  }
+
+  if (snapshot.bytes.length > entry.bytesRead) {
+    const chunk = entry.decoder.write(snapshot.bytes.subarray(entry.bytesRead))
+    entry.bytesRead = snapshot.bytes.length
+    if (chunk) entry.fold.ingest(chunk)
+  }
+  // Deliberately NO finalize(): it is the one-shot path's trailing-partial flush and advances the fold
+  // past bytes a later ingest would then re-fold, duplicating messages. A complete final record that
+  // simply lacks its newline is still projected — the fold consumes it optimistically (tryConsumePartial)
+  // — so this matches both the readTranscript cache and, for settled files, the one-shot projection.
+
+  while (projectionCache.size > PROJECTION_CACHE_CAP) {
+    const oldest = projectionCache.keys().next().value
+    if (oldest === undefined) break
+    projectionCache.delete(oldest)
+  }
+  // Shallow copy: callers append synthetic tail rows (projectDeliveryLedger pushes queued bubbles into
+  // the array it is handed), which would otherwise pollute the RETAINED projection across reads.
+  return [...entry.fold.allMessages()]
 }
+
+// Test-only: drop the retained projection cache so the next paged read re-folds from byte 0.
+export function __clearProjectionCacheForTests(): void {
+  projectionCache.clear()
+}
+
+// sha256 over the whole snapshot, memoized per file identity+length. Cursor minting hashes the ENTIRE
+// transcript on every latest-page read; at 30 MB that is real event-loop time to repeat for a file that
+// has not changed. Only the full-length digest is memoized — the cursor VALIDATION path digests an
+// arbitrary historical prefix, which is a one-off per request and stays uncached.
+const fullDigestCache = new Map<string, string>()
+const FULL_DIGEST_CACHE_CAP = 16
 
 function digestPrefix(bytes: Buffer, length = bytes.length): string {
   return createHash("sha256").update(bytes.subarray(0, length)).digest("base64url")
+}
+
+function fullDigest(snapshot: FixedTranscriptSnapshot): string {
+  const key = `${snapshot.fileKey}\0${snapshot.bytes.length}`
+  const hit = fullDigestCache.get(key)
+  if (hit !== undefined) {
+    fullDigestCache.delete(key)
+    fullDigestCache.set(key, hit)
+    return hit
+  }
+  const digest = digestPrefix(snapshot.bytes)
+  fullDigestCache.set(key, digest)
+  while (fullDigestCache.size > FULL_DIGEST_CACHE_CAP) {
+    const oldest = fullDigestCache.keys().next().value
+    if (oldest === undefined) break
+    fullDigestCache.delete(oldest)
+  }
+  return digest
 }
 
 function encodeTranscriptCursor(snapshot: FixedTranscriptSnapshot, anchorSourceId: string): string {
@@ -2077,7 +2180,7 @@ function encodeTranscriptCursor(snapshot: FixedTranscriptSnapshot, anchorSourceI
     runtimeGeneration: snapshot.runtimeGeneration,
     fileKey: snapshot.fileKey,
     snapshotBytes: snapshot.bytes.length,
-    prefixDigest: digestPrefix(snapshot.bytes),
+    prefixDigest: fullDigest(snapshot),
     anchorSourceId,
   }
   return Buffer.from(JSON.stringify(payload)).toString("base64url")
