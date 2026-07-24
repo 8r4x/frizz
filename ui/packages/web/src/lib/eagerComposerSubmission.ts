@@ -106,13 +106,19 @@ export async function withDeliveryRetry(
   for (let attempt = 0; ; attempt++) {
     try {
       await send()
-      reanchor()
-      return
     } catch (error) {
+      // Only a REFUSAL the transport proved took no effect is replayable; an ambiguous failure
+      // (the text may already have crossed tmux) falls straight through to the caller's rollback.
       if (attempt >= DELIVERY_RETRY_BACKOFF_MS.length || !isRetryableRpcError(error)) throw error
       reanchor()
       await sleep(DELIVERY_RETRY_BACKOFF_MS[attempt])
+      continue
     }
+    // Re-anchor ONLY on the success path, and OUTSIDE the try: a delivered send must never be
+    // reclassified as a failure just because re-stamping the optimism threw. `send()` has returned,
+    // so the message is in — nothing after this may undo that.
+    reanchor()
+    return
   }
 }
 
