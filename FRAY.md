@@ -79,14 +79,19 @@ touches GitHub as a PR.
   development effort, once the work is done and you hold HIGH CONFIDENCE, merge that branch straight
   back into local `main` yourself (`git switch main && git merge <slug>`) and remove the worktree.
   Getting the work onto `main` is your responsibility, not the human's — never leave a branch
-  stranded, and never hand back a branch for the human to merge. If the merge-back is genuinely
-  blocked, say so explicitly in your handoff; an unmerged branch is unfinished work.
+  stranded, and never hand back a branch for the human to merge.
 - Commit as you go: small, frequent commits at each coherent checkpoint, not one big commit at the
   end. Committed work can't be clobbered.
 - Always commit your completed work before you rest. Uncommitted work is unfinished work.
 - Each sub-agent commits its own work before returning; don't collect a helper's diff and commit it
   on its behalf.
-- Many agents (and the human) work against the same `main` in parallel, often in the same working
-  tree. Do your best — stage only the paths you changed (never a blanket `git add -A`), pull/rebase
-  before pushing, resolve conflicts sensibly — but don't agonize over perfect git hygiene. A
-  slightly messy history is fine; lost work is not.
+- **Git hygiene does NOT matter — only landing on `main` does, and a busy/dirty shared tree is never a
+  reason to stall.** Many agents (and the human) work against the same `main` in parallel, constantly,
+  in the same working tree, so `main` moves under you and the tree is often dirty with someone else's
+  in-progress edits. Do not wait it out and do not report it as "blocked": commit whatever is in the
+  tree first (`git add -A && git commit -m "wip: snapshot in-flight work"` is fine — committing another
+  agent's uncommitted changes to unblock your own merge is EXPECTED here, not a violation), then merge
+  your branch in and resolve conflicts favoring a correct build of your change. A messy history, a WIP
+  commit mixing several agents' work, an ugly merge — all fine. The ONLY hard rules: never `git stash`
+  in the shared tree (it corrupts concurrent agents), and never force-discard someone's COMMITTED work.
+  A slightly messy history is fine; lost work is not. Keep merging into `main`.

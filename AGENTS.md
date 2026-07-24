@@ -14,6 +14,17 @@ pushing a PR is not. (`FRAY.md` states this in full; it is repeated here because
 `AGENTS.md` fresh every session and sub-agents load it, whereas the fray worker contract can be frozen
 at session start.)
 
+Git hygiene does NOT matter here — the only thing that matters is getting your changes onto local
+`main`. Many agents (and the human) work in parallel against the same repo constantly, so `main` moves
+under you and the shared working tree is often dirty with someone else's in-progress edits. Do not let
+that block you and do not wait it out: commit whatever is in the working tree first (an intermediate
+`git add -A && git commit -m "wip: snapshot in-flight work"` is fine — committing another agent's
+uncommitted changes to unblock your merge is EXPECTED, not a violation), then merge your branch in and
+resolve conflicts favoring a correct build of your own change. A messy history, a WIP commit that mixes
+several agents' work, an ugly merge — all fine. Never `git stash` in the shared tree (it corrupts
+concurrent agents), never force-discard someone's committed work, and never stall a landing on "the
+tree isn't clean." Keep merging into `main`.
+
 # Web UI completion rule
 
 For any user-visible web UI change, work is not complete until end-to-end Chrome or Chromium QA has exercised the affected workflow. Prefer Chrome DevTools MCP when it is available to the current provider. If it is unavailable or unsuitable, use `agent-browser` or this repository's Puppeteer harness as an explicit fallback; each path must produce the same real-browser evidence. Capture and inspect multiple screenshots covering the meaningful states: before and after, desktop and relevant narrow/mobile widths, plus open menus, drawers, hover, selected, loading, or error states when applicable. Check the browser console and page errors, and inspect visual results optically—not only by box-model measurements. Icons beside text must be optically vertically centered, and placement, truncation, and wrapping must be verified.
