@@ -3,9 +3,10 @@ import assert from "node:assert/strict"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createStorage, type Storage, type SessionRow } from "./storage.ts"
 import { wakeDeliveryToken } from "@fray-ui/shared"
+import { createStorage, type Storage, type SessionRow } from "./storage.ts"
 import { createScheduler, parsePrRef, ghPrViewArgs, evalRollup, parseGithubReviewActivities, isNonBotGithubActivity, isWakeworthyGithubActivity, type GithubReviewActivity, type PrRef, type PrStatus } from "./scheduler.ts"
+import { createGithubReviewFetcher } from "./github-review.ts"
 import { createWakeDeliveryStore } from "./wake-store.ts"
 import type { Tailer, SessionTelemetry, FenceView, TurnState } from "./tailer.ts"
 
@@ -494,6 +495,70 @@ test("pr-watch: 'Arm watcher' — a new-activity bump CLEARS the user snooze so 
   await s.tick()
   assert.equal(h.resumes.length, 1, "the bump resumed the worker")
   assert.equal(h.storage.getSession("r")?.snoozed_until, null, "the user snooze was cleared by the activity bump")
+})
+
+test("pr-watch: one scheduler tick batches distinct refs and deduplicates duplicate refs", async () => {
+  const h = harness()
+  const fenceAt = iso(h.clock.ms)
+  for (const [slug, pr] of [["first", 544], ["second", 549], ["duplicate", 544]] as const) {
+    h.storage.upsertSession(row(slug))
+    h.tele.set(slug, { ...tele(awaiting([{ kind: "pr-watch", value: `nubjs/nub#${pr}` }])), lastActivityAt: fenceAt })
+  }
+  let tokenCalls = 0
+  const requests: any[] = []
+  const fetchGithubReview = createGithubReviewFetcher({
+    getToken: async () => {
+      tokenCalls++
+      return "token"
+    },
+    request: async (_input, init) => {
+      const request = JSON.parse(String(init?.body))
+      requests.push(request)
+      return new Response(JSON.stringify({
+        data: {
+          ref0: { pullRequest: { reviews: { nodes: [] }, comments: { nodes: [] } } },
+          ref1: { pullRequest: { reviews: { nodes: [] }, comments: { nodes: [] } } },
+          rateLimit: { cost: 2, remaining: 4_000, resetAt: iso(h.clock.ms + 60 * 60_000), limit: 5_000 },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } })
+    },
+    now: () => h.clock.ms,
+  })
+
+  await h.make({ fetchGithubReview }).tick()
+  assert.equal(tokenCalls, 1)
+  assert.equal(requests.length, 1)
+  assert.deepEqual(Object.values(requests[0].variables).filter((value) => typeof value === "number").sort(), [544, 549])
+})
+
+test("pr-watch: precise failures are coalesced in logs and recovery is explicit", async () => {
+  const h = harness()
+  const fenceAt = iso(h.clock.ms)
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "nubjs/nub#544" }])), lastActivityAt: fenceAt })
+  const logs: string[] = []
+  let recovered = false
+  const scheduler = h.make({
+    log: (message) => logs.push(message),
+    fetchGithubReview: async () => recovered
+      ? { status: "ok", activity: [] }
+      : { status: "error", failure: { kind: "timeout", message: "GitHub GraphQL request timed out after 15s" } },
+  })
+
+  await scheduler.tick()
+  h.clock.ms += 60_000
+  await scheduler.tick()
+  assert.deepEqual(logs, [
+    "waker: GitHub review check failed for nubjs/nub#544 (r) [timeout] — GitHub GraphQL request timed out after 15s",
+  ])
+
+  recovered = true
+  h.clock.ms += 60_000
+  await scheduler.tick()
+  assert.deepEqual(logs, [
+    "waker: GitHub review check failed for nubjs/nub#544 (r) [timeout] — GitHub GraphQL request timed out after 15s",
+    "waker: GitHub review check recovered for nubjs/nub#544 (r); 1 identical repeats were suppressed",
+  ])
 })
 
 // ---- PR / CI transitions + graceful gh failure ----
