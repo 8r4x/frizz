@@ -722,11 +722,17 @@ export function createRouter(ctx: AppContext) {
           ctx.board.refresh()
           return
         }
-        // A REPLAY of a follow-up fray already injected must never paste a second copy. The client
-        // retries a send whose RPC came back with a retryable verdict (RetryableDeliveryError), and
-        // every such verdict is raised strictly upstream of the first tmux write — but this ledger
-        // check, not that classification, is the structural guarantee: an id already recorded means the
-        // text provably reached the worker, so answer success and inject nothing.
+        // Idempotency for a REPLAYED deliveryId: if this exact send is already in the ledger, it
+        // provably reached the worker — answer success and inject nothing.
+        //
+        // What actually guarantees the retry loop cannot double-send is the CLASSIFICATION, not this
+        // check: the client only replays an error typed RetryableDeliveryError, and every such throw is
+        // raised strictly upstream of the first tmux write, so a replayed send never had a first copy to
+        // duplicate. This dedup is defense-in-depth for replays from OTHER sources (a stale tab, an
+        // at-least-once transport). It deliberately does NOT cover a throw misclassified as retryable
+        // AFTER an injection: `appendDelivery` runs only once `resumeThread` returns, so such a throw
+        // leaves no ledger row and this check would miss it. Keeping every retryable throw pre-injection
+        // is therefore load-bearing, not optional.
         if (input.deliveryId && row?.backend !== "codex" &&
             hasDelivery(ctx.storage, input.slug, input.deliveryId)) {
           return

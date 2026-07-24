@@ -130,6 +130,30 @@ test("deriveNeedsYou: a scoped typed interaction queues immediately, independent
   assert.equal(deriveNeedsYou(row(), tele({ turn: "in-flight" }), "running", false), false)
 })
 
+// A delivered-but-unobserved human follow-up (delivery ledger pending/enqueued) means the human just
+// responded, so the thread must leave the queue from SERVER TRUTH — this is what stops a steered card
+// bouncing back when the client's 12s optimism expires before the tailer catches up under load.
+const ledger = (state: "pending" | "enqueued" | "unconfirmed") =>
+  JSON.stringify([{ id: "d1", text: "keep going", state, at: new Date(T0).toISOString(), updatedAt: new Date(T0).toISOString() }])
+
+test("deriveNeedsYou: a fresh delivered follow-up dequeues a question the tailer has not yet cleared", () => {
+  const asking = tele({ pendingQuestion: true, lastActivityAt: T0 })
+  assert.equal(deriveNeedsYou(row(), asking, "turn-idle"), true, "baseline: an unanswered question queues")
+  assert.equal(deriveNeedsYou(row({ delivery_ledger: ledger("pending") }), asking, "turn-idle"), false, "a pending delivery is the human's answer")
+  assert.equal(deriveNeedsYou(row({ delivery_ledger: ledger("enqueued") }), asking, "turn-idle"), false, "Claude Code's own queue holds it")
+})
+
+test("deriveNeedsYou: an UNCONFIRMED delivery does not dequeue — the human may need to re-drive it", () => {
+  assert.equal(deriveNeedsYou(row({ delivery_ledger: ledger("unconfirmed") }), tele({ pendingQuestion: true }), "turn-idle"), true)
+})
+
+test("deriveNeedsYou: a fresh delivery never hides a crash or a hard live ask", () => {
+  // A follow-up delivered to a worker that then died mid-turn is still a stall the human must see.
+  assert.equal(deriveNeedsYou(row({ delivery_ledger: ledger("pending") }), tele({ turn: "in-flight" }), "exited"), true)
+  // A native pendingAsk outranks a delivery (the gate sits above it) — the ask is a different channel.
+  assert.equal(deriveNeedsYou(row({ delivery_ledger: ledger("pending") }), tele({ pendingAsk: { id: "x", questions: [] } }), "turn-idle"), true)
+})
+
 test("board interaction presence cache follows the exact session and rechecks after terminal edges", async () => {
   const dir = mkdtempSync(join(tmpdir(), "fray-board-interactions-"))
   const project: Project = {

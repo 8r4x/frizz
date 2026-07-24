@@ -77,11 +77,13 @@ export function appendDelivery(storage: Storage, slug: string, item: { id: strin
   storage.setDeliveryLedger(slug, serializeDeliveryLedger(items))
 }
 
-// Has this exact send already been injected? The ledger entry is written only once `resumeThread` has
-// returned, so a hit is positive evidence the text already crossed into the worker — which is what lets
-// the client REPLAY a refused follow-up (see RetryableDeliveryError) with no possibility of a second
-// copy reaching the pane. A miss is not proof of absence in general, so this backstops an
-// already-safe retry classification rather than being the sole licence to replay.
+// Has this exact send already been recorded as delivered? The entry is written only once
+// `resumeThread` returns, so a hit is positive evidence the text crossed into the worker. This makes a
+// replayed deliveryId a no-op — defense-in-depth against a replay from any source (a stale tab, an
+// at-least-once transport). It is NOT what makes the client retry safe: because the append trails the
+// injection, a hit only ever exists for an ALREADY-delivered send, never for the pre-injection refusals
+// the client actually replays. Keeping every retryable throw upstream of the first write is the real
+// guarantee; a miss here proves nothing.
 export function hasDelivery(storage: Storage, slug: string, id: string): boolean {
   const row = storage.getSession(slug)
   if (!row) return false

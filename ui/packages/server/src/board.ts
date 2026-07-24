@@ -14,6 +14,7 @@ import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import type { Tailer, SessionTelemetry } from "./tailer.ts"
 import type { InteractionChange } from "./interaction-store.ts"
 import { frayDirExists } from "./fray.ts"
+import { parseDeliveryLedger } from "./delivery-ledger.ts"
 import * as tmux from "./tmux.ts"
 import { effectivePermissionMode, resolveLegacyThreadFile, scratchpadRelPath } from "./dispatch.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
@@ -221,6 +222,14 @@ function hasParkedExternalWait(tele: SessionTelemetry | undefined, nowMs: number
 // to rest. A user-owned snooze temporarily suppresses every queue reason—including a concrete ask,
 // permission prompt, or crash—then the exact deadline restores the still-current reason. Truthful
 // external waits place ordinary rest in Held without writing lifecycle state.
+// A Claude follow-up fray has delivered but the transcript has not yet reflected: it lives in the
+// delivery ledger as `pending` (injected, no JSONL evidence yet) or `enqueued` (positively receipted by
+// Claude Code's own queue). Both mean the human's message is handled and in flight. `unconfirmed` is
+// NOT fresh — fray could not confirm that send, so it must stay visible for the human to re-drive.
+function hasFreshDelivery(row: SessionRow): boolean {
+  return parseDeliveryLedger(row.delivery_ledger).some((d) => d.state === "pending" || d.state === "enqueued")
+}
+
 export function deriveNeedsYou(
   row: SessionRow,
   tele: SessionTelemetry | undefined,
@@ -252,6 +261,17 @@ export function deriveNeedsYou(
   // interaction-clearance would bury it forever after one view). The legacy needsAction had this net
   // (active/planning + exited/none); deriveNeedsYou dropped it — restored here (found 2026-07-09).
   if (runtime === "exited" && tele?.turn === "in-flight") return true
+  // A human follow-up fray has DELIVERED but the transcript has not YET reflected — the tailer folds
+  // JSONL on a poll that runs seconds behind under load — sits in the delivery ledger as pending or
+  // enqueued. The human has already responded, so the thread is NOT awaiting them: suppress it here,
+  // from SERVER TRUTH, so a card the operator just steered leaves the queue and STAYS gone until the
+  // turn is observed — instead of bouncing back when the client's 12s optimism expires first (the
+  // "reappears after ~10s, then leaves again" flicker). This is the durable, reload-safe complement to
+  // the client's optimistic steer. Placed AFTER the crash net (a delivered follow-up to a worker that
+  // then died must still surface) and the hard live asks, but before the at-rest reasons a steer
+  // resolves (a question, a done handoff, bare rest). `unconfirmed` is excluded on purpose: a send fray
+  // could not confirm is one the human may need to re-drive, so the ledger's own aging re-surfaces it.
+  if (hasFreshDelivery(row)) return false
   // An unanswered ```question fence in the last assistant message is an EXPLICIT ask — a hard queue
   // member exactly like a native pendingAsk, NOT subject to interaction-clearance. VIEWING a question
   // is not ANSWERING it, so seen_at must never drop it off the stack (the whole point is that threads
