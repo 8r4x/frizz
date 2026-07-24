@@ -1,3 +1,4 @@
+import { useState } from "react"
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { AwaitingHint, BoardSnapshot, ThreadView } from "@fray-ui/shared"
@@ -111,6 +112,35 @@ function Section({ label, children }: { label: string; children: React.ReactNode
   )
 }
 
+// One question block plus a readout of what a click would put ON THE WIRE. The approval gate's actions
+// send in a single click, so the gallery has to show the composed answer — otherwise the whole point of
+// the affordance (that one click answers) is invisible to a visual check.
+function QuestionSection({ q }: { q: (typeof questions)[number] }) {
+  const [sent, setSent] = useState<string | null>(null)
+  return (
+    <Section label={q.label}>
+      <QuestionBlockCard
+        raw={q.raw}
+        questionKind={q.kind}
+        danger={q.danger}
+        interactive={{
+          answer: { chosen: null, text: "", chosenSet: [] },
+          onChip: () => {},
+          onText: () => {},
+          onSubmit: () => {},
+          onInstantAnswer: (answer: string) => setSent(answer),
+          sending: false,
+        }}
+      />
+      {sent !== null && (
+        <p data-sent className="text-[11px] text-accent">
+          sent → {sent}
+        </p>
+      )}
+    </Section>
+  )
+}
+
 function Fixture() {
   return (
     <QueryClientProvider client={client}>
@@ -125,19 +155,7 @@ function Fixture() {
         ))}
         <p className="petite-caps mt-4 text-[10px] text-accent">Question blocks</p>
         {questions.map((q) => (
-          <Section key={q.label} label={q.label}>
-            <QuestionBlockCard
-              raw={q.raw}
-              questionKind={q.kind}
-              danger={q.danger}
-              interactive={{
-                answer: { chosen: null, text: "", chosenSet: [] },
-                onChip: () => {},
-                onText: () => {},
-                onSubmit: () => {},
-              }}
-            />
-          </Section>
+          <QuestionSection key={q.label} q={q} />
         ))}
         <p className="petite-caps mt-4 text-[10px] text-accent">Runtime banners</p>
         <Section label="permission prompt">

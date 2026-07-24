@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { splitQuestionBlocks, parseQuestionBlock, composeBlockAnswer, optionId, recommendedIndex } from "./questionBlocks.ts"
+import { splitQuestionBlocks, parseQuestionBlock, composeBlockAnswer, optionId, optionVerb, approvalAffirmativeIndex, recommendedIndex } from "./questionBlocks.ts"
 
 // ---- splitQuestionBlocks ----
 
@@ -342,4 +342,87 @@ test("inline marker with no space before the paren, preserving the label's own b
   const p = parseQuestionBlock("Flag?\n\n- A. Use `--strict`(recommended)\n- B. Use `--safe`", "question")
   assert.deepEqual(p.options, ["A. Use `--strict`", "B. Use `--safe`"])
   assert.equal(p.recommendedIdx, 0)
+})
+
+// ---- optionVerb ----
+
+test("optionVerb strips the option id so an action button reads as a verb", () => {
+  assert.equal(optionVerb("A. Approve as-is"), "Approve as-is")
+  assert.equal(optionVerb("- B. Hold"), "- B. Hold") // the list marker is stripped upstream, not here
+  assert.equal(optionVerb("3) Ship it"), "Ship it")
+  assert.equal(optionVerb("Approve"), "Approve") // no id → unchanged
+  assert.equal(optionVerb("A."), "A.") // nothing left after the id → keep the original, never empty
+})
+
+// ---- approvalAffirmativeIndex ----
+// The correctness-critical piece: a primary "go" button rendered on an option that actually says
+// "Hold" would send the OPPOSITE of what the human clicked. Position is never trusted.
+
+test("the canonical approval gate: two affirmatives → the first (unqualified) go is primary", () => {
+  const { options, recommendedIdx } = parseQuestionBlock(
+    "Ready to create CONTRIBUTING.md?\n\n- A. Approve as-is\n- B. Approve with edits — tell me what to change",
+    "approval",
+  )
+  assert.equal(approvalAffirmativeIndex(options, recommendedIdx), 0)
+})
+
+test("the canonical danger gate: 'Do it' is affirmative, 'Hold' is not", () => {
+  const { options, recommendedIdx } = parseQuestionBlock(
+    "Force-merge PR #391?\n\n- A. Do it — the failure is the known-flaky timeout\n- B. Hold — I'll wait for a green run",
+    "approval",
+    true,
+  )
+  assert.equal(approvalAffirmativeIndex(options, recommendedIdx), 0)
+})
+
+test("POSITION IS NOT TRUSTED: a gate that leads with the decline still marks the real go", () => {
+  const { options } = parseQuestionBlock("Ship?\n\n- A. Hold — wait for green\n- B. Approve and merge", "approval")
+  assert.equal(approvalAffirmativeIndex(options, null), 1)
+})
+
+test("classification reads the leading CLAUSE, not a rationale that happens to contain a verb", () => {
+  // "Hold" leads; the rationale mentions merging — must NOT read as affirmative.
+  const { options } = parseQuestionBlock("Ship?\n\n- A. Hold — do not merge until CI is green\n- B. Approve", "approval")
+  assert.equal(approvalAffirmativeIndex(options, null), 1)
+  // Symmetrically, an affirmative whose rationale mentions holding stays affirmative.
+  const b = parseQuestionBlock("Ship?\n\n- A. Merge now — no reason to hold\n- B. Wait", "approval")
+  assert.equal(approvalAffirmativeIndex(b.options, null), 0)
+})
+
+test("no recognizable affirmative → null (every action stays equal-weight, no invented primary)", () => {
+  const { options } = parseQuestionBlock("Which store?\n\n- A. SQLite\n- B. JSON file", "approval")
+  assert.equal(approvalAffirmativeIndex(options, null), null)
+})
+
+test("the recommendation is a TIEBREAK among affirmatives", () => {
+  const { options, recommendedIdx } = parseQuestionBlock(
+    "Ready?\n\n- A. Approve as-is\n- B. Approve with edits (recommended)",
+    "approval",
+  )
+  assert.equal(recommendedIdx, 1)
+  assert.equal(approvalAffirmativeIndex(options, recommendedIdx), 1)
+})
+
+test("the recommendation is a VETO: an agent advising HOLD never gets out-shouted by a primary go", () => {
+  const { options, recommendedIdx } = parseQuestionBlock(
+    "Force-merge?\n\n- A. Do it — the check is flaky\n- B. Hold — wait for a green run (recommended)",
+    "approval",
+    true,
+  )
+  assert.equal(recommendedIdx, 1)
+  assert.equal(approvalAffirmativeIndex(options, recommendedIdx), null)
+})
+
+test("markdown emphasis around the verb doesn't defeat classification", () => {
+  const { options } = parseQuestionBlock("Ship?\n\n- A. **Approve** — land it\n- B. `Hold`", "approval")
+  assert.equal(approvalAffirmativeIndex(options, null), 0)
+})
+
+test("a negative lead always loses, even when the same line also reads affirmative", () => {
+  const { options } = parseQuestionBlock("Ship?\n\n- A. Don't approve yet\n- B. Approve", "approval")
+  assert.equal(approvalAffirmativeIndex(options, null), 1)
+})
+
+test("empty options → null (never indexes into nothing)", () => {
+  assert.equal(approvalAffirmativeIndex([], null), null)
 })

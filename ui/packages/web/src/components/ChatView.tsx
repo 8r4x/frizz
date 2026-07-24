@@ -1,4 +1,4 @@
-import { createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
+import { createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef, type CSSProperties, type ReactNode } from "react"
 import { createPortal } from "react-dom"
 import { useSnapshot } from "valtio"
 import * as RadixTabs from "@radix-ui/react-tabs"
@@ -13,7 +13,7 @@ import { displayTitle, lastActiveLabelAt } from "../groups.ts"
 import { mdToHtml, mdInlineToHtml, stripFrontmatter } from "../lib/markdown.ts"
 import { splitProseAttachments } from "../lib/imagePaths.ts"
 import { DiffBlock, PathLink } from "./DiffBlock.tsx"
-import { splitQuestionBlocks, parseQuestionBlock, type QuestionKind, type BlockAnswer, type MessageAnswering } from "../lib/questionBlocks.ts"
+import { splitQuestionBlocks, parseQuestionBlock, approvalAffirmativeIndex, type QuestionKind, type BlockAnswer, type MessageAnswering } from "../lib/questionBlocks.ts"
 import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
 import { parseAnswersMessage, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
@@ -2129,6 +2129,8 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
               onChip: (optIdx: number, optText: string) => answering.onChip(bi, optIdx, optText),
               onText: (text: string) => answering.onText(bi, text),
               onSubmit: answering.onSubmit,
+              onInstantAnswer: (answer: string) => answering.onInstantAnswer(bi, answer),
+              sending: answering.sending,
             }
           : undefined
         blocks.push(<QuestionBlockCard key={`${keyBase}-${fi}-q${si}`} raw={seg.text} questionKind={seg.questionKind} danger={seg.danger} interactive={interactive} wrap={dense} />)
@@ -2391,6 +2393,10 @@ interface BlockInteractive {
   onChip: (optIdx: number, optText: string) => void
   onText: (text: string) => void
   onSubmit: () => void
+  // Answer THIS block and send in one gesture — the approval gate's action buttons (see ApprovalActions).
+  onInstantAnswer: (answer: string) => void
+  // A send is already in flight — the approval actions disable so a double-click can't fire twice.
+  sending: boolean
 }
 
 // ── The shared card chrome ────────────────────────────────────────────────────────────────────────
@@ -2421,12 +2427,62 @@ function CardKind({
   )
 }
 
+// The card's MEANING, and the ONLY thing allowed to vary between kinds (maintainer 2026-07-24: the
+// styling across kinds was "vastly different… almost no consistency"). Every card is otherwise the
+// same shell — same fill, same border weight, same padding, same body scale, same action row — so a
+// tone is a two-token swap on the border and the kind header, never a different card:
+//   neutral   — a statement of fact (done, awaiting, a question)
+//   attention — the agent is BLOCKED on you, answerable only in your external terminal
+//   caution   — fray paused itself and will continue on its own (a usage limit)
+//   danger    — something is broken or the action is irreversible (sign-in fault, a destructive gate)
+//
+// Only THREE border colors, though: `caution` keeps the neutral border and says its piece in an amber
+// kind header. Its amber and the accent gold sit ~15° apart on the wheel, so as two lit borders they
+// were indistinguishable — and a self-resolving pause must never compete for the eye with "your agent
+// is stuck waiting on you". Border = how loud; the header = what it is.
+type CardTone = "neutral" | "attention" | "caution" | "danger"
+const CARD_TONES: Record<CardTone, { border: string; kind: string }> = {
+  neutral: { border: "border-border-strong", kind: "text-muted/70" },
+  attention: { border: "border-accent/45", kind: "text-accent/80" },
+  caution: { border: "border-border-strong", kind: "text-amber-400" },
+  danger: { border: "border-red-500/45", kind: "text-red-400" },
+}
+
+// Part two: the SHELL. One rounded panel-2 card at one padding for every kind. Cards used to disagree
+// about all three of fill (panel-2 / elevated / an accent or red wash), border color, and whether they
+// carried a shadow — which is what made nine sibling cards read as nine unrelated shapes.
+export function TranscriptCard({
+  tone = "neutral",
+  icon,
+  label,
+  children,
+  className = "",
+  ...rest
+}: {
+  tone?: CardTone
+  icon: LucideIcon
+  label: ReactNode
+  children: ReactNode
+  className?: string
+} & Omit<ComponentPropsWithoutRef<"div">, "children" | "className">) {
+  return (
+    <div {...rest} className={`min-w-0 rounded-lg border ${CARD_TONES[tone].border} bg-panel-2 px-4 py-3 ${className}`}>
+      <CardKind icon={icon} label={label} tone={CARD_TONES[tone].kind} />
+      {children}
+    </div>
+  )
+}
+
+// Part three: the body copy. One scale for every card's sentence, so a two-line explanation in one
+// card is not visibly larger than the same sentence in the card above it.
+export const CARD_BODY = "block min-w-0 text-[12px] leading-5 text-fg/85"
+
 // Part two: the action row, ALWAYS right-justified (maintainer 2026-07-24). A card's buttons are its
 // trailing verb; hung on the left they read as another paragraph of the body and every card disagreed
 // with every other about where to look for the action. Any explainer text passed as the first child
 // takes the leftover width (`flex-1 min-w-0`) and wraps its own lines there, so the button still
 // anchors the right edge on a narrow queue card instead of being pushed onto its own line.
-function CardActions({ children, className = "" }: { children: ReactNode; className?: string }) {
+export function CardActions({ children, className = "" }: { children: ReactNode; className?: string }) {
   return <div className={`mt-3 flex flex-wrap items-center justify-end gap-x-2.5 gap-y-2 ${className}`}>{children}</div>
 }
 
@@ -2489,11 +2545,21 @@ export function QuestionBlockCard({
   }, [freetext])
   const KindIcon = isDanger ? AlertTriangle : isMulti ? ListChecks : isApproval ? ShieldCheck : HelpCircle
   const kindLabel = isMulti ? "select multiple" : isApproval ? "approval" : "question"
+  // An APPROVAL gate is a YES, not a menu (maintainer 2026-07-24). It renders as ONE "Approve" button
+  // in the standard trailing action row — no chips, no in-card answer box. Anything other than yes is
+  // a sentence, and the prompt box at the bottom of the card is already the place to write one. What
+  // goes ON THE WIRE is still the gate's own affirmative option verbatim when the worker declared one
+  // (approvalAffirmativeIndex reads the option's WORDS, never its position, so a "- A. Hold" gate can
+  // never send a decline as an approval), so the worker sees the exact string a chip would have sent.
+  const approvalAnswer = useMemo(() => {
+    if (!isApproval) return null
+    const idx = approvalAffirmativeIndex(parsed.options, recIdx)
+    return idx === null ? APPROVE_LABEL : parsed.options[idx]
+  }, [isApproval, parsed.options, recIdx])
   return (
-    <div className={`rounded-lg border px-4 py-3 ${isDanger ? "border-red-500/40 bg-red-500/[0.05]" : "border-border-strong bg-elevated"}`}>
-      <CardKind icon={KindIcon} label={kindLabel} tone={isDanger ? "text-red-400" : undefined} />
+    <TranscriptCard tone={isDanger ? "danger" : "neutral"} icon={KindIcon} label={kindLabel}>
       {html && <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={{ __html: html }} />}
-      {(parsed.options.length > 0 || interactive) && (
+      {!isApproval && (parsed.options.length > 0 || interactive) && (
         // Options stack in a SINGLE full-width column (maintainer 2026-07-10: a 2-col grid read as
         // ragged, uneven columns with dead whitespace once option text got long). One chip per row;
         // the free-text row keeps col-span-full so the "something else…" answer gets the whole line.
@@ -2587,7 +2653,17 @@ export function QuestionBlockCard({
       {parsed.recommendation && recIdx === null && (
         <div className="md-inline mt-1.5 text-[11px] text-muted/70" dangerouslySetInnerHTML={{ __html: recHtml }} />
       )}
-    </div>
+      {/* The gate's single verb, in the SAME trailing action row every other card puts its action in. */}
+      {isApproval && approvalAnswer !== null && (
+        <CardActions>
+          <ApproveAction
+            danger={isDanger}
+            disabled={!interactive || !!interactive.sending}
+            onApprove={() => interactive?.onInstantAnswer(approvalAnswer)}
+          />
+        </CardActions>
+      )}
+    </TranscriptCard>
   )
 }
 
@@ -2626,11 +2702,9 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   const doneThread = canAct && fenceThread ? fenceThread : doneThreadRef.current
   if (fenceKind === "done") {
     return (
-      // NEUTRAL chrome (same quiet card family as the awaiting card / permission banner) — the green
-      // splash stood out as the only saturated color in the UI (maintainer 2026-07-10). The Check +
-      // "Done" label carries the meaning; no color needed.
-      <div className="rounded-lg border border-border-strong bg-panel-2 px-4 py-3">
-        <CardKind icon={Check} label="Done" />
+      // NEUTRAL tone — the green splash stood out as the only saturated color in the UI (maintainer
+      // 2026-07-10). The Check + "Done" label carries the meaning; no color needed.
+      <TranscriptCard icon={Check} label="Done">
         {html && <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={{ __html: html }} />}
         {/* A white "Mark as done" button, deliberately redundant with the stable lifecycle footer — the
             same completion mutation, styled as the primary (light-on-dark) verb. Only shown when the
@@ -2645,23 +2719,22 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
             />
           </CardActions>
         )}
-      </div>
+      </TranscriptCard>
     )
   }
-  // Same chrome as the done card above — heading, then the prose, then the action. The heading names
+  // Same shell as the done card above — heading, then the prose, then the action. The heading names
   // the WAIT ("Arm watcher"), which is what the old right-rail button label was doing badly: it read
   // as the button's verb when it was really the card's identity (maintainer 2026-07-24). With no
   // parkable hint there's no action to name, so it falls back to a plain "Awaiting".
   const parkTitle = awaitingParkAction(hints)?.title ?? AWAITING_FALLBACK_TITLE
   return (
-    <div className="min-w-0 rounded-lg border border-border-strong bg-panel-2 px-4 py-3">
-      <CardKind icon={Hourglass} label={parkTitle} />
+    <TranscriptCard icon={Hourglass} label={parkTitle}>
       <div
-        className={`md-inline min-w-0 text-[12px] leading-5 text-fg/85${wrap ? ` ${QUEUE_WRAP}` : ""}`}
+        className={`md-inline ${CARD_BODY}${wrap ? ` ${QUEUE_WRAP}` : ""}`}
         dangerouslySetInnerHTML={{ __html: awaitingHtml }}
       />
       {canAct && fenceThread && <AwaitingParkButton thread={fenceThread} hints={hints} />}
-    </div>
+    </TranscriptCard>
   )
 }
 
@@ -2762,9 +2835,8 @@ export function ProviderFaultCard({
     if (!started) setRetrying(false)
   }
   return (
-    <div data-provider-fault className="rounded-lg border border-red-500/40 bg-panel-2 px-4 py-3 text-[12px]">
-      <CardKind icon={KeyRound} label={`${label} sign-in required`} tone="text-red-400" />
-      <span className="block min-w-0 text-fg/90">
+    <TranscriptCard data-provider-fault tone="danger" icon={KeyRound} label={`${label} sign-in required`}>
+      <span className={CARD_BODY}>
         The provider rejected this session's credential. Sign in, then retry.
       </span>
       <CardActions>
@@ -2796,7 +2868,7 @@ export function ProviderFaultCard({
           onAuthed={() => setSignIn(false)}
         />
       )}
-    </div>
+    </TranscriptCard>
   )
 }
 
@@ -2838,12 +2910,11 @@ export function LimitPauseCard({ slug, sessionId, pause }: { slug: string; sessi
     if (!started) setContinuing(false)
   }
   return (
-    <div data-limit-pause className="rounded-lg border border-amber-500/40 bg-panel-2 px-4 py-3 text-[12px]">
-      <CardKind icon={Hourglass} label={`Paused by the ${label} ${which}`} tone="text-amber-400" />
+    <TranscriptCard data-limit-pause tone="caution" icon={Hourglass} label={`Paused by the ${label} ${which}`}>
       {/* The provider's own "You've hit your session limit · resets …" line sits directly above this
           card (unlike an auth error, it is informative, so transcript.ts keeps its bubble). So this
           card says only what THAT line cannot: what fray is going to do about it. */}
-      <span className="block min-w-0 text-fg/90">
+      <span className={CARD_BODY}>
         {pause.autoResume
           ? pause.resumesAt
             ? `Continuing automatically at ${limitResumeClock(pause.resumesAt)}.`
@@ -2860,15 +2931,17 @@ export function LimitPauseCard({ slug, sessionId, pause }: { slug: string; sessi
           Continue now
         </button>
       </CardActions>
-    </div>
+    </TranscriptCard>
   )
 }
 
+// ATTENTION tone, like the two native-input cards below it: all three mean the same thing — the agent
+// is blocked on you and the only place to answer is your external terminal — and they used to wear
+// three different treatments (neutral / accent+shadow / accent wash) for that one meaning.
 export function PermPromptBanner({ onTerminal }: { onTerminal: () => void }) {
   return (
-    <div className="rounded-lg border border-border-strong bg-panel-2 px-4 py-3 text-[12px]">
-      <CardKind icon={KeyRound} label="Permission approval" />
-      <span className="block min-w-0 text-fg/90">
+    <TranscriptCard tone="attention" icon={KeyRound} label="Permission approval">
+      <span className={CARD_BODY}>
         The agent is waiting on your approval — respond in your external terminal.
       </span>
       <CardActions>
@@ -2880,7 +2953,7 @@ export function PermPromptBanner({ onTerminal }: { onTerminal: () => void }) {
           Copy terminal command
         </button>
       </CardActions>
-    </div>
+    </TranscriptCard>
   )
 }
 
@@ -2897,10 +2970,12 @@ export function NativeInputRequiredCard({ input, onTerminal }: { input: NativeIn
           ? "Confirmation required"
           : "Choice required"
   return (
-    <div data-native-input-required className="rounded-lg border border-accent/50 bg-accent/10 px-4 py-3 shadow-sm shadow-black/10">
-      <CardKind icon={AlertTriangle} label={label} tone="font-medium text-accent" />
-      <div className="text-[13px] font-medium leading-snug text-fg">{input.title}</div>
-      <div className="mt-1 text-[12px] leading-snug text-muted">Review and respond in your external terminal. Fray will not choose for you.</div>
+    <TranscriptCard data-native-input-required tone="attention" icon={AlertTriangle} label={label}>
+      {/* The modal's own title is the one line here that carries weight — it's the thing being asked.
+          It stays at the body scale and earns its emphasis from the medium weight and full-strength
+          fg, not from a larger size that made this card's copy visibly bigger than every sibling's. */}
+      <div className="min-w-0 text-[12px] font-medium leading-5 text-fg">{input.title}</div>
+      <div className="mt-1 text-[12px] leading-5 text-muted">Review and respond in your external terminal. Fray will not choose for you.</div>
       <CardActions>
         <button
           onClick={() => onTerminal()}
@@ -2910,7 +2985,7 @@ export function NativeInputRequiredCard({ input, onTerminal }: { input: NativeIn
           Copy terminal command
         </button>
       </CardActions>
-    </div>
+    </TranscriptCard>
   )
 }
 
@@ -2991,18 +3066,19 @@ export function BackgroundOpsStrip({
 // the ONE affordance copies an external-terminal command, where the dialog can actually be answered.
 export function PendingAskCard({ ask, onTerminal }: { ask: PendingAsk; onTerminal: () => void }) {
   return (
-    <div className="rounded-lg border border-accent/40 bg-accent/[0.06] px-4 py-3">
-      <CardKind icon={HelpCircle} label="Waiting on your answer — in your external terminal" tone="text-accent/80" />
+    <TranscriptCard tone="attention" icon={HelpCircle} label="Waiting on your answer — in your external terminal">
       <div className="flex flex-col gap-3">
         {ask.questions.map((q, i) => (
           <div key={i} className="flex flex-col gap-1.5">
             {q.header && <div className="text-[10px] uppercase tracking-wide text-muted/55">{q.header}</div>}
-            <div className="text-[13px] font-medium text-fg/90">{q.question}</div>
+            <div className="min-w-0 text-[12px] font-medium leading-5 text-fg">{q.question}</div>
             {q.options.length > 0 && (
               <div className="flex flex-col gap-1">
                 {q.options.map((o, j) => (
                   // A non-interactive OPTION ROW (clearly display-only — no hover, no cursor-pointer).
-                  <div key={j} className="rounded-md border border-border bg-panel-2 px-2.5 py-1.5 text-[12px] text-fg/80">
+                  // `bg-elevated`, one step above the card's own panel-2 fill — the same relationship the
+                  // question card's chips have to their card, so a row reads as a row on every surface.
+                  <div key={j} className="rounded-md border border-border bg-elevated px-2.5 py-1.5 text-[12px] text-fg/80">
                     <span className="font-medium text-fg/90">{o.label}</span>
                     {o.description && <span className="text-muted/70"> — {o.description}</span>}
                   </div>
@@ -3022,7 +3098,7 @@ export function PendingAskCard({ ask, onTerminal }: { ask: PendingAsk; onTermina
           <KeyRound size={12} /> Copy terminal command
         </button>
       </CardActions>
-    </div>
+    </TranscriptCard>
   )
 }
 
@@ -3113,6 +3189,57 @@ function nextOptionId(options: string[]): string {
 // recommendedIndex (rec-line → option index) now lives in ../lib/questionBlocks.ts alongside the rest
 // of the question parsing, so it's covered by the pure-logic unit tests.
 
+// The approval gate's ONE verb. A gate is a YES/NO, and its yes is the whole point — so it is a single
+// "Approve" button in the card's trailing action row, wearing the same white fill as every other card
+// action rather than a bespoke row of option-shaped buttons (maintainer 2026-07-24: an approval card
+// "should literally just be one button that says Approve, and that's it"). Anything that is not yes is
+// a sentence, and the prompt box at the bottom of the card is already where you write one.
+//
+// DANGER gates arm instead of firing: the first click re-labels the button and only the second sends,
+// so an irreversible force-merge or delete can't ride a stray click on a queue card. The arm lapses on
+// its own so no button sits loaded, and only the ARMED state goes red — a resting button is white like
+// every sibling, and the card's red border + red kind header already say this one is destructive.
+const APPROVE_LABEL = "Approve"
+function ApproveAction({ danger, disabled, onApprove }: { danger: boolean; disabled: boolean; onApprove: () => void }) {
+  const [armed, setArmed] = useState(false)
+  useEffect(() => {
+    if (!armed) return
+    const id = setTimeout(() => setArmed(false), 5000)
+    return () => clearTimeout(id)
+  }, [armed])
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      aria-label={APPROVE_LABEL}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => {
+        if (danger && !armed) {
+          setArmed(true)
+          return
+        }
+        setArmed(false)
+        onApprove()
+      }}
+      className={`flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-40 ${
+        armed ? "bg-red-500 text-white hover:opacity-90" : CARD_PRIMARY_BUTTON
+      }`}
+    >
+      {armed ? (
+        <>
+          <AlertTriangle size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} />
+          Click again to confirm
+        </>
+      ) : (
+        <>
+          <ShieldCheck size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} />
+          {APPROVE_LABEL}
+        </>
+      )}
+    </button>
+  )
+}
+
 // A single answer choice: a left-aligned neutral button; when selected it takes the subtle accent
 // border (focus-adjacent selection). A `multi` chip additionally carries a checkbox square (empty →
 // checked) so the "toggle several" affordance reads unmistakably as multi-select vs the single-select
@@ -3152,7 +3279,9 @@ function Chip({
           ? "border-accent bg-accent/10 text-fg"
           : disabled
             ? "cursor-default border-border text-muted/80"
-            : "border-border text-fg/90 hover:bg-panel-2 hover:border-border-strong"
+            // hover lands on `elevated`, one step above the card's own panel-2 fill — hovering to
+            // panel-2 was invisible once every card standardized on that fill.
+            : "border-border text-fg/90 hover:bg-elevated hover:border-border-strong"
       }`}
     >
       {multi && (
