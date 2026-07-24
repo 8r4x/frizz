@@ -503,8 +503,3 @@ export function resolveGitProjectIdentity(dir: string, home = homedir()): GitPro
     release()
   }
 }
-
-/** Back-compatible scalar API for the exact checkout's durable UUID. */
-export function resolveGitProjectId(dir: string, home = homedir()): string {
-  return resolveGitProjectIdentity(dir, home).id
-}

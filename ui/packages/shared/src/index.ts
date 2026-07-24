@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { InteractionLifecycle, InteractionOpaqueId, InteractionRevision, InteractionThreadSlug } from "./interactions.ts"
-import { THREAD_SLUG_MAX_CHARS, ThreadSlug } from "./thread-slug.ts"
+import { ThreadSlug } from "./thread-slug.ts"
 
 // ---- Attachment intake (drag/drop, paste, file picker) ----
 // The "safe tier": formats an agent's Read/file tool consumes with NO conversion step, so a dropped
@@ -1152,7 +1152,6 @@ export type TermClientMsg = { t: "input"; d: string } | { t: "resize"; cols: num
 // Keep the wire identifier aligned with every server-owned thread slug. Besides bounding retained
 // subscription state, the shape excludes path separators/control text before it can reach transcript
 // lookup code. Foreign session ids are UUID-shaped and remain valid under this grammar.
-export const SOCKET_TRANSCRIPT_SLUG_MAX_CHARS = THREAD_SLUG_MAX_CHARS
 export const SocketTranscriptSlug = ThreadSlug
 export const SocketClientMsg = z.discriminatedUnion("t", [
   z.object({ t: z.literal("sub"), topic: z.literal("transcript"), slug: SocketTranscriptSlug }).strict(),
