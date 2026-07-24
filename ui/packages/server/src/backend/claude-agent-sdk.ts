@@ -95,6 +95,10 @@ export interface ClaudeQueryStartOptions {
   canUseTool?: ClaudeCanUseTool
   onElicitation?: ClaudeOnElicitation
   onDiagnostic?: (event: ClaudeDiagnostic) => void
+  // When true, claude writes its transcript to ~/.claude/projects/<cwdSlug>/<sessionId>.jsonl — the
+  // exact file the tailer reads for liveness + the UI transcript. The broker sets this; the default
+  // stays false so nothing that used this as a standalone foundation starts persisting unexpectedly.
+  persistSession?: boolean
 }
 
 export interface ClaudeQueryHandle extends AsyncIterable<ClaudeQueryEvent> {
@@ -551,7 +555,7 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       canUseTool,
       onElicitation,
       settingSources: [],
-      persistSession: false,
+      persistSession: options.persistSession ?? false,
       stderr(data) {
         const redacted = redact(data)
         diagnostic?.({ kind: "stderr", ...redacted })
