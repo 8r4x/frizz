@@ -47,7 +47,7 @@ import { SignInModal } from "./SignInModal.tsx"
 import { PROVIDER_LABEL } from "../lib/signIn.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
-import { buildVirtualTranscriptMessageRows, earlierLoadGate, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
+import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
 
 // Answer types moved to lib/questionBlocks.ts (shared by the queue card, the thread view, and the
@@ -425,6 +425,10 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
   )
 }
 
+// How long after a wheel/touch/key gesture the reader still owns the scroller. Long enough to cover
+// trackpad momentum between discrete events, short enough that it never outlives the gesture itself.
+const READER_GESTURE_MS = 700
+
 type TranscriptTransportFallback = ReturnType<typeof useTranscript>["transportFallback"]
 type VirtualThreadRow =
   | { key: "interactions"; kind: "interactions" }
@@ -544,9 +548,17 @@ function VirtualizedThreadTranscript({
     paddingEnd: 20,
     anchorTo: "end",
     followOnAppend: true,
-    scrollEndThreshold: 240,
+    scrollEndThreshold: TAIL_FOLLOW_PX,
   })
   const [atEnd, setAtEnd] = useState(true)
+  // Tail-follow state, in refs because syncTailFollow runs from layout/observer/listener callbacks that
+  // must read CURRENT values, not ones closed over from the render that scheduled them.
+  const followingTailRef = useRef(true)
+  const tailHeightRef = useRef(-1)
+  const readerScrollUntilRef = useRef(0)
+  // The virtualizer's total-size box. Its height IS getTotalSize(), so observing it catches every way
+  // the transcript can grow: a row inserted at its estimate, and each later measurement correction.
+  const contentRef = useRef<HTMLDivElement>(null)
   const tailReadyRef = useRef(false)
   const readerMovedRef = useRef(false)
   const nearTopLoadArmedRef = useRef(true)
@@ -616,12 +628,60 @@ function VirtualizedThreadTranscript({
     }
   }, [loadingEarlier, messageRows.length, transcriptRef])
 
+  // TAIL FOLLOW — keep a reader who is AT the bottom at the bottom as the conversation grows.
+  //
+  // TanStack's own `followOnAppend` cannot do this job here: it only fires when the count grows AND the
+  // LAST row's key changes (virtual-core setOptions). A live thread's last row is almost never a
+  // message — it's the runtime-status row (Working…) or a queued bubble — so a landing reply is
+  // INSERTED ABOVE a tail whose key never changes and the follow silently no-ops. `resizeItem` then
+  // PRESERVES the distance from the end while the row measures, so the gap that opened at insert time
+  // is held forever: the reader is left exactly one row ESTIMATE short of the bottom (122px for a
+  // message; ~50-70px for a queued→landed flip, which leaves the row count unchanged and so cannot
+  // trigger the library follow at all) — the "it auto-scrolled but stopped 50px short" bug.
+  //
+  // So own it. Reconciled by nextTailFollow (which decides reader-moved vs content-grew) and driven
+  // from three places, because content settles across several frames: the scroll listener, every
+  // commit, and every resize of the virtualizer's total-size box.
+  const syncTailFollow = useCallback(() => {
+    const scroller = transcriptRef.current
+    // A prepend in flight owns the scroller: "load earlier" grows the content by a whole page and
+    // restores the reader's anchor across the next two frames. Following that growth would race it.
+    if (!scroller || pendingPrependAnchorRef.current) return
+    const next = nextTailFollow({
+      scrollTop: scroller.scrollTop,
+      scrollHeight: scroller.scrollHeight,
+      clientHeight: scroller.clientHeight,
+      previousScrollHeight: tailHeightRef.current,
+      following: followingTailRef.current,
+      readerMoved: performance.now() < readerScrollUntilRef.current,
+    })
+    followingTailRef.current = next.following
+    if (next.scrollTop !== null) scroller.scrollTop = next.scrollTop
+    tailHeightRef.current = scroller.scrollHeight
+    // "Jump to latest" is exactly the negation of attachment, so the affordance can never disagree
+    // with the behavior — and it no longer flickers for one frame while a message lands.
+    setAtEnd((current) => current === next.following ? current : next.following)
+  }, [transcriptRef])
+
+  // Every commit: a row that just mounted at its ESTIMATED height has already pushed the bottom away.
+  // A layout effect (not an effect) so the correction lands in the same frame — no visible slip.
+  useLayoutEffect(syncTailFollow)
+
+  // Every settle after that: TanStack measures the real DOM one or more frames later, and a big
+  // markdown/tool row can keep growing for several. The observed box's height IS getTotalSize().
+  useEffect(() => {
+    const content = contentRef.current
+    if (!content) return
+    const observer = new ResizeObserver(syncTailFollow)
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [syncTailFollow])
+
   useEffect(() => {
     const scroller = transcriptRef.current
     if (!scroller) return
     const inspect = () => {
-      const nextAtEnd = virtualizer.isAtEnd(240)
-      setAtEnd((current) => current === nextAtEnd ? current : nextAtEnd)
+      syncTailFollow()
       const gate = earlierLoadGate({
         armed: nearTopLoadArmedRef.current,
         scrollTop: scroller.scrollTop,
@@ -632,8 +692,11 @@ function VirtualizedThreadTranscript({
       nearTopLoadArmedRef.current = gate.armed
       if (gate.shouldLoad) requestEarlier()
     }
+    // A gesture is in flight: for the next beat, treat every scroll as the READER's, so a transcript
+    // that happens to be growing at that moment can't claim the movement and haul them back down.
     const markReaderIntent = () => {
       readerMovedRef.current = true
+      readerScrollUntilRef.current = performance.now() + READER_GESTURE_MS
       requestAnimationFrame(inspect)
     }
     const markKeyboardIntent = (event: KeyboardEvent) => {
@@ -652,6 +715,7 @@ function VirtualizedThreadTranscript({
     scroller.addEventListener("scroll", inspect, { passive: true })
     scroller.addEventListener("wheel", markWheelIntent, { passive: true })
     scroller.addEventListener("touchstart", markTouchIntent, { passive: true })
+    scroller.addEventListener("touchmove", markTouchIntent, { passive: true })
     scroller.addEventListener("pointerdown", markReaderIntent, { passive: true })
     scroller.addEventListener("keydown", markKeyboardIntent)
     const frame = requestAnimationFrame(inspect)
@@ -660,10 +724,11 @@ function VirtualizedThreadTranscript({
       scroller.removeEventListener("scroll", inspect)
       scroller.removeEventListener("wheel", markWheelIntent)
       scroller.removeEventListener("touchstart", markTouchIntent)
+      scroller.removeEventListener("touchmove", markTouchIntent)
       scroller.removeEventListener("pointerdown", markReaderIntent)
       scroller.removeEventListener("keydown", markKeyboardIntent)
     }
-  }, [hasEarlier, loadingEarlier, requestEarlier, transcriptRef, virtualizer])
+  }, [hasEarlier, loadingEarlier, requestEarlier, syncTailFollow, transcriptRef])
 
   const virtualItems = virtualizer.getVirtualItems()
   const totalSize = virtualizer.getTotalSize()
@@ -684,6 +749,7 @@ function VirtualizedThreadTranscript({
 
   return (
     <div
+      ref={contentRef}
       data-virtualized-transcript
       data-virtual-row-count={virtualItems.length}
       className="relative w-full"
