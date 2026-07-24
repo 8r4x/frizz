@@ -23,7 +23,7 @@ test("every declared detached daemon entry exists in the source tree", () => {
 
 test("detached daemon output names strip the .ts and drop the directory", () => {
   assert.equal(detachedDaemonOutputName("packages/server/src/backend/codex-app-server-daemon.ts"), "codex-app-server-daemon.js")
-  assert.equal(detachedDaemonOutputName("packages/server/src/session-broker-daemon.ts"), "session-broker-daemon.js")
+  assert.equal(detachedDaemonOutputName("packages/server/src/dev-bootstrap.ts"), "dev-bootstrap.js")
 })
 
 test("the entry resolver prefers the bundled .js, falls back to source .ts, and names both when neither is there", () => {

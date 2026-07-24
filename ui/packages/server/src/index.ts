@@ -194,8 +194,9 @@ const MIME: Record<string, string> = {
 }
 
 // Bridge a node req/res through Hono's fetch handler (Web Request/Response). Streams the body so
-// SSE stays live. Adapted from gent's dev server.
-async function pipeToApp(
+// SSE stays live. Adapted from gent's dev server. Exported for pipe-to-app.test.ts, which drives it
+// against a real node http server + real fetch to pin the POST-body-truncation regression.
+export async function pipeToApp(
   app: ReturnType<typeof createApp>,
   req: IncomingMessage,
   res: ServerResponse,
@@ -203,15 +204,15 @@ async function pipeToApp(
   controller: AbortController,
 ) {
   const url = `http://127.0.0.1:${port}${req.url ?? "/"}`
-  // A VANISHED CLIENT — not a request message that merely finished. Node emits 'close' on the REQUEST
-  // as soon as it is complete, which for any POST with a body is long before the response is written
-  // (measured: req.end → req.close with res.writableFinished=false → res.close). Aborting there was
-  // harmless while nothing listened to this signal, but it now cancels the response stream, and every
-  // /rpc reply would be truncated to a non-JSON 200. The response closing UNFINISHED is the accurate
-  // disconnect: it fires for a real drop (SSE included) and never for a completed exchange.
-  res.on("close", () => {
-    if (!res.writableFinished) controller.abort()
-  })
+  // Abort when the RESPONSE closes before it finished — a real client disconnect or a mid-stream SSE
+  // hangup — NOT when the request stream ends. Modern node (observed on v26.5.0) fires `close` on the
+  // IncomingMessage the instant a handler finishes consuming the request body, so keying the abort on
+  // `req`'s close aborted EVERY POST the moment `c.req.json()` drained it — before the response body was
+  // written — and every mutation came back as a 0-byte `application/json` chunked reply (dispatch,
+  // followUp, completeThread, settings: the whole write surface, dead). `res` closes only after
+  // `res.end()` flushes (writableFinished) on the happy path, and closes early with the body still
+  // unfinished exactly when the peer went away — which is the disconnect this abort exists to catch.
+  res.on("close", () => { if (!res.writableFinished) controller.abort() })
   const response = await app.fetch(
     new Request(url, {
       method: req.method,

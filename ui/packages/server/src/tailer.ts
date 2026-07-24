@@ -1211,6 +1211,10 @@ export interface Tailer {
   subAgent(slug: string, id: string): { outputFile?: string; outputFormat?: "codex"; state: "running" | "stale" | "done" } | undefined
   // Read-only background-shell drawer lookup. Output content stays server-side until the scoped query.
   backgroundShell?(slug: string, id: string): { command?: string; outputFile?: string; state: "running" | "done" } | undefined
+  // Manual dismiss of a live background op (the × on an op row): retire it from tracking as if a
+  // terminal signal arrived. Returns false if it is not live (unknown id / already gone). Optional so
+  // an older server without it degrades gracefully.
+  dismissOp?(slug: string, id: string): boolean
   // Drop a session's in-memory tail state (registered + foreign) — called when its row is hard-deleted
   // (forgetSession) so a stale TailState bound to the gone transcript can't mis-tail a later same-slug
   // re-dispatch. A no-op for an unknown slug.
@@ -1241,14 +1245,10 @@ export interface TailerDeps {
   now?: () => number // injectable clock (tests)
   paneDead?: (slug: string) => boolean // injectable liveness (tests)
   capturePane?: (slug: string) => string // injectable pane text (tests); defaults to tmux
-  // Batched pane text for the per-tick prefetch; defaults to tmux.capturePanes. A fixture that injects
-  // only `capturePane` gets no batching (see createTailer) so existing per-slug fakes keep working.
-  capturePanes?: (slugs: readonly string[]) => Map<string, string>
-  // "tmux does not list a pane for this slug" — the existence half of the batched inventory, kept
-  // separate from `paneDead` because a DEAD (remain-on-exit) pane still exists and still holds the
-  // boot-failure text captureStall wants. Defaults to the batched liveness map; a fixture that injects
-  // only the per-slug `capturePane` gets no absence check at all, exactly as before.
-  paneAbsent?: (slug: string) => boolean
+  // ASYNC batched pane text for the off-loop per-tick prefetch; defaults to tmux.capturePanesAsync. A
+  // fixture that injects only `capturePane` gets no async prefetch (see createTailer) so existing
+  // per-slug fakes keep working synchronously.
+  capturePanesAsync?: (slugs: readonly string[]) => Promise<Map<string, string>>
   findExpectedAdoptionPane?: (expected: tmux.ExpectedAdoptionPane) => tmux.AdoptionPaneLookup
   captureExpectedAdoptionPane?: (expected: tmux.ExpectedAdoptionPane) => tmux.ExactPaneCapture
   sessionLogDir?: string // injectable transcript dir (tests); defaults to the Claude Code path
@@ -1333,11 +1333,10 @@ export function createTailer(deps: TailerDeps): Tailer {
   // subprocess per row per second, a standing event-loop tax that grew with thread count.
   const paneDead = deps.paneDead ?? tmux.paneDeadCached
   const capturePane = deps.capturePane ?? tmux.capturePane
-  // Batched sibling of capturePane, for the per-tick prefetch below. Absent (narrow test fixtures that
-  // inject only `capturePane`) ⇒ no batching, and every sniff falls back to the injected per-slug fake —
-  // byte-identical to the pre-batch behavior.
-  const capturePanes = deps.capturePanes ?? (deps.capturePane ? undefined : tmux.capturePanes)
-  const paneAbsent = deps.paneAbsent ?? (deps.capturePane ? undefined : (slug: string) => !tmux.paneSnapshotCached(slug))
+  // ASYNC batched sibling of capturePane, for the off-loop per-tick prefetch below. Absent (narrow test
+  // fixtures that inject only a synchronous `capturePane`) ⇒ no async prefetch, and every sniff falls
+  // back to the injected per-slug fake synchronously — byte-identical to the pre-batch test behavior.
+  const capturePanesAsync = deps.capturePanesAsync ?? (deps.capturePane ? undefined : tmux.capturePanesAsync)
   const findExpectedAdoptionPane = deps.findExpectedAdoptionPane ?? tmux.findExpectedAdoptionPane
   const captureExpectedAdoptionPane = deps.captureExpectedAdoptionPane ?? tmux.captureExpectedAdoptionPane
   const logDir = deps.sessionLogDir ?? defaultLogDir(deps.project)
@@ -1377,36 +1376,54 @@ export function createTailer(deps: TailerDeps): Tailer {
     return current.kind !== "found" || current.pane.dead
   }
 
-  // ---- Per-tick pane-capture prefetch --------------------------------------------------------------
+  // ---- Off-loop pane-capture prefetch --------------------------------------------------------------
   // The pane sniff is the tick's dominant cost: `capture-pane` is one tmux subprocess, ~105ms measured
-  // on the maintainer's machine, and the tick asks for it once per quiet in-flight thread. Twenty-five
-  // threads = 2.6-6.2s of SYNCHRONOUS event-loop blocking per 1s tick, which is what made every RPC
-  // reply and board delta land seconds late (measured 2026-07-23: `[probe] tick 3950ms captures=25
-  // captureMs=3369`; /health p50 2219ms with the server otherwise idle).
+  // on the maintainer's machine. Batching every quiet in-flight thread into ONE tmux invocation cut the
+  // spawn COUNT, but that one invocation was still SYNCHRONOUS — a fork/exec + tmux round-trip whose
+  // duration grows with the board's pane count, run on the event loop every tick. And any thread whose
+  // pane was absent from the batch fell back to a per-slug `capture-pane`, so a board with N exited/
+  // reaped panes paid N synchronous spawns per tick — 13-15 spawns / 2-4s measured 2026-07-23.
   //
-  // So: the FIRST sniff of a tick captures EVERY registered pane in one batched tmux invocation
-  // (tmux.capturePanes) and the rest of the tick serves from that map. Prefetching panes no row ends up
-  // asking for is free — the subprocess spawn dominates, not the bytes — while asking per row is not.
-  // Freshness is unchanged: every capture in a tick already described the same instant.
-  // Reset at the top of each tick; never consulted outside one.
+  // So the prefetch now runs OFF the loop: at the END of each tick we kick a single async batched
+  // `capture-pane` (tmux.capturePanesAsync) for every unbound row with a live-or-frozen pane, and the
+  // NEXT tick's sniff reads its result from `paneTextCache`. Nothing in the tick body ever blocks on a
+  // capture. The verdict it feeds (a permission prompt) is already gated on PERM_SNIFF_MS of quiet and
+  // confirmed over CLAUDE_PERMISSION_CONFIRM_POLLS, so a ≤1-tick-older capture changes no outcome — and
+  // an absent pane simply isn't in the cache (empty text), never a synchronous per-slug spawn.
+  //
+  // `capturePanesAsync` is undefined only for narrow test fixtures that inject a synchronous `capturePane`
+  // fake; those keep the old in-tick synchronous fallback below (byte-identical to the pre-batch path).
   let paneTextCache: Map<string, string> | null = null
-  let paneTextPrefetched = false
+  let paneTextRefreshing = false
 
-  function prefetchPaneText(): void {
-    paneTextPrefetched = true
-    if (!capturePanes) return
-    // Only slugs tmux actually knows: a command list ABORTS at its first bad target, so asking for a
-    // vanished session would truncate every capture after it. The liveness map is already batched and
-    // cached (one list-panes -a per tick), so this filter is free. A dead-but-present pane is kept —
-    // remain-on-exit panes still hold the boot-failure text captureStall exists to read.
+  function paneTextPrefetchSlugs(): string[] {
     const slugs: string[] = []
     for (const row of deps.storage.allSessions()) {
       if (row.codex_runtime === "app-server") continue // headless: no pane to capture
       if (adoptionBinding(row).kind !== "unbound") continue // adopted rows capture by exact pane tuple
+      // A command list ABORTS at its first bad target, so only ask for panes tmux actually knows. The
+      // liveness map is already cached, so this filter is free. A dead-but-present pane is kept —
+      // remain-on-exit panes still hold the boot-failure/frozen-modal text the sniff and captureStall read.
       if (!tmux.paneSnapshotCached(row.slug)) continue
       slugs.push(row.slug)
     }
-    if (slugs.length > 1) paneTextCache = capturePanes(slugs)
+    return slugs
+  }
+
+  // Kick the async batched capture (single-flight). Fire-and-forget from the tick end; its result is
+  // swapped into paneTextCache for subsequent ticks to serve. Never awaited on the tick path.
+  function refreshPaneTextAsync(): void {
+    if (!capturePanesAsync || paneTextRefreshing) return
+    const slugs = paneTextPrefetchSlugs()
+    if (slugs.length === 0) {
+      paneTextCache = new Map()
+      return
+    }
+    paneTextRefreshing = true
+    Promise.resolve(capturePanesAsync(slugs))
+      .then((map) => { paneTextCache = map })
+      .catch(() => { /* transient tmux failure — keep the prior snapshot, retry next tick */ })
+      .finally(() => { paneTextRefreshing = false })
   }
 
   function capturePaneForRow(row: SessionRow): string {
@@ -1414,24 +1431,23 @@ export function createTailer(deps: TailerDeps): Tailer {
     if (binding.kind === "unbound") {
       const cached = paneTextCache?.get(row.slug)
       if (cached !== undefined) return cached
-      // ABSENCE FIRST, before any capture is attempted or prefetched. A slug the batched inventory does
-      // not list has NO PANE, so both the per-slug capture and the whole batch can only spend process
-      // spawns to produce the same empty string. Two distinct costs die here:
-      //   * boot: a thread whose last record left its turn mid-flight (a killed worker, a crashed CLI)
-      //     reads in-flight forever, so every boot sniffed every one of them — 22 doomed spawns, 2.4s.
-      //   * STEADY STATE: a boot-wedged thread (noTranscript) is sniffed on EVERY tick by design, and
-      //     asking on its behalf triggered a full batched capture of every OTHER pane too. Measured on
-      //     the maintainer's 20-session board: ~120ms of the ~210ms idle tick, every second, forever.
-      // The inventory is the same ≤900ms-old snapshot the tick's liveness already depends on, so this
-      // costs no extra subprocess of its own.
-      if (paneAbsent?.(row.slug)) return ""
-      if (!paneTextPrefetched) prefetchPaneText()
-      const batched = paneTextCache?.get(row.slug)
-      if (batched !== undefined) return batched
-      // Any other miss (batch aborted before this slug, or the session appeared mid-tick) falls back to
-      // the single capture — correctness never depends on the prefetch landing.
+      // Async-prefetch mode (production): the cache is authoritative. A miss means the pane is absent
+      // or not yet prefetched → empty, NEVER a synchronous per-slug spawn (that was the O(N) block).
+      if (capturePanesAsync) return ""
+      // Sync-fallback mode (test fixtures inject only capturePane): capture synchronously, as before.
       return capturePane(row.slug)
     }
+    if (binding.kind === "conflict") return ""
+    const captured = captureExpectedAdoptionPane(binding.claim)
+    return captured.kind === "captured" ? captured.text : ""
+  }
+
+  // Synchronous one-shot capture for the boot-failure stall log (captureStall fires once per stalled
+  // row, guarded by stallLogged — not a per-tick cost — so a blocking capture here is fine, and it must
+  // read the FROZEN remain-on-exit pane directly rather than the possibly-empty prefetch cache).
+  function capturePaneForRowSync(row: SessionRow): string {
+    const binding = adoptionBinding(row)
+    if (binding.kind === "unbound") return capturePane(row.slug)
     if (binding.kind === "conflict") return ""
     const captured = captureExpectedAdoptionPane(binding.claim)
     return captured.kind === "captured" ? captured.text : ""
@@ -1556,6 +1572,25 @@ export function createTailer(deps: TailerDeps): Tailer {
     const dead = state.retiredShells.get(id)
     if (dead) return { command: dead.command, outputFile: dead.outputFile, state: "done" }
     return undefined
+  }
+
+  // Manual DISMISS (the × on a live op row): retire a live sub-agent/shell by its dispatch tool_use id
+  // exactly as a real terminal signal would — into the retained ring (so its drawer still resolves),
+  // status "killed" — so it leaves every live surface (banner, counts, completion-hold, sidebar) at
+  // once, and onChange() reflects that immediately instead of waiting for the next tick. This is the
+  // escape hatch for the ONE residual the `stopped` recovery can't reach: a finished op whose completion
+  // was never recorded while its parent stays alive. It is NOT a process kill — fray tracks these by
+  // folding the worker's transcript and does not own the child processes, so a genuinely-still-running
+  // child ends only when its owning pane dies; the × just stops fray showing a phantom. Returns whether
+  // an entry was actually live to dismiss (a no-op for an unknown/already-gone id).
+  function dismissOp(slug: string, id: string): boolean {
+    const state = states.get(slug)
+    if (!state || !registeredStateIsCurrent(state)) return false
+    const entry = state.subAgents.get(id)
+    if (!entry) return false
+    retireLive(state, entry, new Date(now()).toISOString(), "killed")
+    deps.onChange()
+    return true
   }
 
   interface PaneSniff {
@@ -2004,7 +2039,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     state.stallLogged = true
     let pane = ""
     try {
-      pane = capturePaneForRow(row)
+      pane = capturePaneForRowSync(row)
     } catch {
       pane = ""
     }
@@ -2097,9 +2132,8 @@ export function createTailer(deps: TailerDeps): Tailer {
     // /ws transcript producer at the end so it pushes only for genuinely-changed threads.
     const transcriptDirty: string[] = []
     const nowMs = now()
-    // One batched pane capture per tick, filled lazily on the first sniff (see prefetchPaneText).
-    paneTextCache = null
-    paneTextPrefetched = false
+    // paneTextCache holds the LAST async prefetch's result and is read (never written) during the tick;
+    // a fresh batched capture is kicked off the loop at the tick's end (see refreshPaneTextAsync).
     adoptionBindings = new Map()
     const rows = deps.storage.allSessions()
     let primed = 0
@@ -2378,6 +2412,11 @@ export function createTailer(deps: TailerDeps): Tailer {
 
     if (dirty) deps.onChange()
     if (transcriptDirty.length) deps.onTranscriptChange?.(transcriptDirty)
+
+    // Refresh the pane-text cache OFF the loop for the next tick's sniff (production only; test fixtures
+    // with a synchronous capturePane fake take the in-tick fallback instead). Kicked last so it never
+    // sits in front of this tick's board push.
+    refreshPaneTextAsync()
   }
 
   // in-flight → idle: the turn finished. Badge unread if this completion post-dates the last read,
@@ -2491,6 +2530,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     foreignIds: () => foreignFresh.map((f) => f.id),
     subAgent: subAgentLookup,
     backgroundShell: backgroundShellLookup,
+    dismissOp,
     forget(slug) {
       states.delete(slug)
       foreignStates.delete(slug)

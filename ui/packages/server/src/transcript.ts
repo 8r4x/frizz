@@ -245,9 +245,25 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
       // Back-fill any Read excerpts this record carries FIRST — a tool_result record is dropped as a
       // human bubble (isMeta / tool_result-only), but it still holds the file content we want to show.
       attachToolResults(rec, pendingTools)
-      // isMeta marks harness-injected user records (hook feedback, reminders) — plumbing the
-      // human never typed, so it must not render as their bubble.
-      if (rec.isMeta === true) return
+      // isMeta marks harness-injected user records (hook feedback, reminders, autonomous /loop
+      // wakeups) — plumbing the human never typed, so it must not render as their bubble. But an
+      // autonomous /loop wakeup is ENQUEUED like any follow-up (emitting a gray queued bubble),
+      // then delivered as THIS isMeta record — unlike a human follow-up, which delivers non-isMeta.
+      // The enqueue can't know the eventual delivery is harness plumbing, so its bubble would linger
+      // as a stuck "queued" message forever. Splice out any pending bubble this record resolves
+      // BEFORE returning; the enqueue's own text key matches (verified byte-identical in practice).
+      if (rec.isMeta === true) {
+        const metaText = userText(rec)
+        if (metaText) {
+          const pending = queuedPending.get(metaText)
+          if (pending) {
+            queuedPending.delete(metaText)
+            const i = out.indexOf(pending)
+            if (i !== -1) out.splice(i, 1)
+          }
+        }
+        return
+      }
       let text = userText(rec)
       // Harness/orchestrator injections that arrive as ordinary user records (task-notifications,
       // system reminders, fray pulses) are ALSO not the human's words — drop them from the chat.

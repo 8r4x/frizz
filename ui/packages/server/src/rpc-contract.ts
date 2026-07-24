@@ -16,7 +16,7 @@
 //   • each entry of the client's GET/POST table equals the procedure's `_tag`
 // Every assertion is a `type … = Expect<…>` whose failure message NAMES the drifting procedure.
 //
-// WHY A TYPE ASSERTION HERE, RATHER THAN `type Api = ClientFromRouter<AppRouter>` IN THE WEB PACKAGE
+// WHY A TYPE ASSERTION HERE, RATHER THAN DERIVING `type Api` FROM `AppRouter` IN THE WEB PACKAGE
 // (the shape the old TODO proposed): the web package deliberately compiles with `"types": []` and no
 // node typings, and it does not depend on `@fray-ui/server`. Importing the router type into the web
 // program would drag every server source it transitively references (node:fs, better-sqlite3,
