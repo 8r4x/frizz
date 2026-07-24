@@ -213,10 +213,20 @@ async function pipeToApp(
   res.writeHead(response.status, Object.fromEntries(response.headers.entries()))
   if (response.body) {
     const reader = response.body.getReader()
+    // CANCELLING THIS READER IS THE ONLY WAY TO STOP A STREAMING HANDLER ON NODE. Hono wires
+    // `c.req.raw.signal` → `stream.abort()` only on old Bun (helper/streaming/sse.ts); everywhere else
+    // a handler learns its consumer is gone solely through the response stream's `cancel`. Aborting the
+    // request controller alone therefore told /events nothing: its `stream.onAbort` never fired, so its
+    // 10s heartbeat and bus subscription ran forever and THIS promise never settled — which is exactly
+    // why the "http requests" phase could never drain and every Ctrl-C reported a phase timeout and a
+    // blocked storage close. Cancel on abort, so shutdown (and a vanished client) really ends the stream.
+    const cancel = () => { void reader.cancel().catch(() => undefined) }
+    if (controller.signal.aborted) cancel()
+    else controller.signal.addEventListener("abort", cancel, { once: true })
     try {
       for (;;) {
         const { done, value } = await reader.read()
-        if (done || !res.writable) break
+        if (done || !res.writable || controller.signal.aborted) break
         res.write(value)
       }
     } catch {
