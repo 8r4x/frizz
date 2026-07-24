@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { activeSidebarSection, railRevealDelta } from "./sidebarScrollspy.ts"
+import { activeSidebarSection, queueNavigationSettled, railRevealDelta } from "./sidebarScrollspy.ts"
 
 // An 800px viewport throughout: half of it — the coverage a newcomer must reach — is 400.
 const VIEWPORT = 800
@@ -75,6 +75,23 @@ test("scrollspy does not promote the final card away from the document bottom", 
     { id: "current", top: -80, bottom: 560 },
     { id: "final", top: 640, bottom: 764 },
   ], VIEWPORT, false), "current")
+})
+
+test("a click-to-card pin holds the rail until its card reaches the landing", () => {
+  // Still travelling: the card is below the landing and the reader hasn't moved since the click.
+  assert.equal(queueNavigationSettled({ id: "target", top: 240, bottom: 700 }, 1049, 1049, 12), false)
+  // Arrived.
+  assert.equal(queueNavigationSettled({ id: "target", top: 12, bottom: 480 }, 1049, 1049, 12), true)
+  // Unmounted mid-flight.
+  assert.equal(queueNavigationSettled(undefined, 1049, 1049, 12), true)
+})
+
+test("a click-to-card pin lets go once the reader scrolls away from the landing", () => {
+  // A last card at the document's scroll end never reaches the landing; the reader scrolling back up
+  // is what must release it, or the rail stays frozen on a card that is no longer on screen at all.
+  assert.equal(queueNavigationSettled({ id: "last", top: 515, bottom: 848 }, 700, 1049, 12), true)
+  // A sub-pixel settle after the landing is not the reader scrolling.
+  assert.equal(queueNavigationSettled({ id: "last", top: 515, bottom: 848 }, 1048.5, 1049, 12), false)
 })
 
 test("rail reveal scrolls only enough to expose an active item and leaves visible rows alone", () => {

@@ -3,8 +3,9 @@ import type { BoardSnapshot, ThreadView, BoardDelta } from "@fray-ui/shared"
 import { applyBoardDelta } from "@fray-ui/shared"
 import { closeDrawerAnimated, focusDrawer } from "./lib/overlays.ts"
 
-// Where a scroll-to-card lands a card's outer border below the viewport top (px).
-const QUEUE_CARD_VIEWPORT_TOP = 12
+// Where a scroll-to-card lands a card's outer border below the viewport top (px). Exported because the
+// sidebar's reading rail watches for that same landing to know a click-to-card has arrived.
+export const QUEUE_CARD_VIEWPORT_TOP = 12
 
 // The BORDERED CARD ROOT inside a queue slot. The outer `[data-queue-card]` slot also wraps the
 // inter-card hairline rule and its my-10 margins, so anything visual — the scroll landing, the

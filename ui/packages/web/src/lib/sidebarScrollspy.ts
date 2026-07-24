@@ -50,6 +50,23 @@ export function activeSidebarSection(
   return leader.id
 }
 
+// A click on a sidebar row scrolls to that row's queue card and pins the rail to it, so the rail can't
+// flicker through the cards the jump passes over. This decides when the pin lets go: when the card has
+// arrived at the landing, when it is gone, or when the reader has scrolled away from where the click
+// left them. That last clause is what keeps a pin from outliving its click — the LAST card of a short
+// queue can never reach the landing, because the document runs out of scroll first, and the rail used to
+// stay frozen on it however far back up the queue the reader scrolled.
+export function queueNavigationSettled(
+  target: SidebarSectionGeometry | undefined,
+  scrollY: number,
+  landedY: number,
+  landingTop: number,
+): boolean {
+  if (!target) return true
+  if (target.top <= landingTop && target.bottom > landingTop) return true
+  return Math.abs(scrollY - landedY) > 1
+}
+
 // Keep the active marker reachable without disturbing the page's scroll position. The result is a
 // delta for the rail's own scrollTop, with a small breathing margin around the highlighted row.
 export function railRevealDelta(
