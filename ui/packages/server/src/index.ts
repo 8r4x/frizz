@@ -186,8 +186,9 @@ const MIME: Record<string, string> = {
 }
 
 // Bridge a node req/res through Hono's fetch handler (Web Request/Response). Streams the body so
-// SSE stays live. Adapted from gent's dev server.
-async function pipeToApp(
+// SSE stays live. Adapted from gent's dev server. Exported for pipe-to-app.test.ts, which drives it
+// against a real node http server + real fetch to pin the POST-body-truncation regression.
+export async function pipeToApp(
   app: ReturnType<typeof createApp>,
   req: IncomingMessage,
   res: ServerResponse,
