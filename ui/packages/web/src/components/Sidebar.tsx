@@ -66,7 +66,10 @@ export function Sidebar() {
       .map((element) => {
         const id = element.dataset.queueCard
         if (!id) return null
-        const { top, bottom } = element.getBoundingClientRect()
+        // The BORDERED ROOT, not the slot: the slot also spans the ~80px inter-card gutter and its
+        // hairline rule, and the reading rule below is decided by how much of a CARD is on screen.
+        const card = element.querySelector<HTMLElement>("[data-queue-card-root]") ?? element
+        const { top, bottom } = card.getBoundingClientRect()
         return { id, top, bottom } satisfies SidebarSectionGeometry
       })
       .filter((item): item is SidebarSectionGeometry => item !== null)
@@ -81,7 +84,7 @@ export function Sidebar() {
     }
     const maxScrollY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight)
     const atDocumentBottom = maxScrollY > 0 && window.scrollY >= maxScrollY - 1
-    const nextActiveId = activeSidebarSection(items, undefined, atDocumentBottom)
+    const nextActiveId = activeSidebarSection(items, window.innerHeight, atDocumentBottom)
     // Scroll/resize observations can fire several times per frame. Preserve the same primitive
     // state value to avoid a needless row-tree update when the selected card has not changed.
     setActiveId((current) => current === nextActiveId ? current : nextActiveId)

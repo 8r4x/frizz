@@ -169,13 +169,18 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
       return
     }
 
-    // A sub-agent completion notification (a queue-operation record with a top-level <task-notification>
-    // content string) re-renders the dispatch's AgentBlock card inline at its position (clickable into
-    // the run-log drawer) and back-fills the original launch card's terminal state.
-    const ev = completionEvent(rec, agentDispatches, backgroundShells, backgroundTaskIds)
-    if (ev) {
-      ev.sourceId = sourceId
-      out.push(ev)
+    // Sub-agent / background-shell completion notifications (any of the three carriers — see
+    // notificationCarrierText) re-render each finished dispatch's AgentBlock card inline at this
+    // position (clickable into the run-log drawer), back-fill the original launch cards' terminal
+    // state, and emit a boundary line per woken shell.
+    const evs = completionEvents(rec, agentDispatches, backgroundShells, backgroundTaskIds)
+    if (evs.length > 0) {
+      // A user-record carrier can in principle also carry tool_result blocks — never skip their back-fill.
+      attachToolResults(rec, pendingTools, backgroundShells, backgroundTaskIds)
+      evs.forEach((ev, i) => {
+        ev.sourceId = i === 0 ? sourceId : `${sourceId}#${i}` // keep sourceIds unique per rendered message
+        out.push(ev)
+      })
       lastAssistantId = null // the completion card breaks the assistant-record merge chain
       return
     }
@@ -203,10 +208,8 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
     if (thisTs && (rec.type === "assistant" || rec.type === "user")) prevTs = thisTs
 
     // A QUEUED human follow-up's enqueue/removal (the completion <task-notification> queue-operations were
-    // already consumed above). `enqueue` emits a pending grayed bubble. Removal records are deliberately
-    // not authoritative: Claude emits a content-bearing `remove` several seconds BEFORE the corresponding
-    // `queued_command` attachment, so deleting here makes the bubble vanish between its two queues.
-    // Explicit delivery evidence below resolves or removes it in place and preserves the enqueue sourceId.
+    // already consumed above). `enqueue` emits a pending grayed bubble; a CONTENT-BEARING removal
+    // supersedes it (see below); the delivery itself is the `queued_command` attachment handled next.
     if (rec.type === "queue-operation") {
       const op = typeof rec.operation === "string" ? rec.operation : ""
       const content = typeof rec.content === "string" ? normalizeNewlines(rec.content) : ""
@@ -220,6 +223,19 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         const m: TranscriptMessage = { sourceId, role: "user", text: content, ...(queuedDisplay ? { displayText: queuedDisplay } : {}), tools: [], parts: [], at: thisTs, queued: true }
         out.push(m)
         queuedPending.set(content, m)
+      } else if ((op === "remove" || op === "dequeue" || op === "popAll") && content.trim()) {
+        // A removal that ECHOES the queued text supersedes its pending bubble — either the message was
+        // cancelled before delivery, or (in sessions whose `remove` carries the text) it's the delivery
+        // handshake and the following attachment re-renders the delivered copy. Splice the pending bubble
+        // so we never render both. An EMPTY-content removal is the ordinary handshake and is deliberately
+        // IGNORED: matching it by anything but exact text could evict a genuinely-still-pending human
+        // bubble when an unrelated queue item (e.g. a sub-agent task-notification) is dequeued.
+        const m = queuedPending.get(content)
+        if (m) {
+          queuedPending.delete(content)
+          const i = out.indexOf(m)
+          if (i !== -1) out.splice(i, 1)
+        }
       }
       return
     }
@@ -970,84 +986,111 @@ function backgroundWakeLabel(call: TranscriptToolCall, status: string, raw: stri
   return `Background task «${desc}» ${outcome}`
 }
 
-// A completion <task-notification> (rides a queue-operation record as a top-level `content` string;
-// completed/failed/killed are terminal, plus the status-less Monitor-timeout record — a non-terminal
-// "running" ping and status-less Monitor progress events also exist). Two cases:
+// The text carrier of a completion <task-notification>, mirroring the tailer's notificationText:
+// notifications ride THREE record shapes and the timeline must read all of them, not just (a) —
+// (a) queue-operation records with a top-level `content` string,
+// (b) USER records whose message.content (string, or text blocks) embeds the XML (newer harness
+//     versions emit this shape), and
+// (c) `attachment` records (type:"queued_command") whose `attachment.prompt` carries it. (c) is
+//     LOAD-BEARING for the mid-turn race: a shell completing MID-TURN gets its queue-operation (a)
+//     flushed at a file position BEFORE its own launch record — folded first, it finds no registered
+//     card and is lost — while the attachment is written inline AFTER the launch. Reading only (a)
+//     left the card "running" forever even though the live chip retired (the tailer fixed the same
+//     race on 2026-07-22).
+function notificationCarrierText(rec: Raw): string | undefined {
+  if (typeof rec.content === "string") return rec.content
+  if (typeof rec.attachment?.prompt === "string") return rec.attachment.prompt
+  const c = rec.message?.content
+  if (typeof c === "string") return c
+  if (Array.isArray(c)) {
+    const text = c
+      .map((b: Raw) => (b && typeof b === "object" && b.type === "text" ? String(b.text ?? "") : ""))
+      .join("\n")
+    return text || undefined
+  }
+  return undefined
+}
+
+// Completion <task-notification>s (see notificationCarrierText for the carriers). Terminal statuses:
+// completed/failed/killed, `stopped` (the recovery notification a NEW session emits for background ops
+// the previous process orphaned — the owning process is gone, so it is just as terminal; without it the
+// orphans' cards stayed "running" forever after the live chips were recovered), and the status-less
+// Monitor-timeout record. A non-terminal "running" ping and status-less Monitor progress events also
+// exist and must retire nothing. Per terminal block, EVERY correlated op retires — a record can carry
+// several blocks, and one recovery block names every orphan at once (tool-use-ids, task-ids, or both):
 //   • A tracked AGENT dispatch → re-render its AgentBlock card inline at the notification's position
 //     (clickable into the run-log drawer right there in the timeline) and back-fill the launch card.
 //   • A tracked background SHELL → back-fill the shell card's terminal state AND emit a `boundary` event
 //     line (the wake re-invoked the agent, opening a fresh turn that would otherwise merge visually).
-// null when the id matches neither (an unrelated process, or an already-consumed child). Deletes the
-// matched entry so a re-notify is a no-op.
-function completionEvent(
+// Empty when nothing correlates (an unrelated process, or an already-consumed child). Deletes each
+// matched entry so a re-notify — the same completion arriving via two carriers — is a no-op.
+function completionEvents(
   rec: Raw,
   dispatches: Map<string, { at?: string; call: TranscriptToolCall }>,
   backgroundShells: Map<string, { at?: string; call: TranscriptToolCall }>,
   backgroundTaskIds: Map<string, string>,
-): TranscriptMessage | null {
-  const raw = typeof rec.content === "string" ? rec.content : undefined
-  if (!raw || !raw.includes("<task-notification>")) return null
-  const rawStatus = raw.match(/<status>([^<]*)<\/status>/)?.[1]
-  // A Monitor that hits its timeout_ms emits ONE notification with NO <status> and NO <tool-use-id> —
-  // only <task-id> + an <event> carrying the harness's timeout sentinel. Key STRICTLY on the sentinel:
-  // ordinary Monitor progress events also have <event> and no <status>, so "missing status ⇒ terminal"
-  // would retire every live monitor on its first event. The sentinel is harness prose and could drift —
-  // same fragility as the launch-ack strings this parser already depends on.
-  const timedOut = raw.includes("<event>[Monitor timed out")
-  const status = rawStatus === "completed" || rawStatus === "failed" || rawStatus === "killed" ? rawStatus : timedOut ? "killed" : undefined
-  if (!status) return null
-  const id =
-    raw.match(/<tool-use-id>([^<]*)<\/tool-use-id>/)?.[1] ??
-    // The timeout record's only correlation key is the runtime task id captured at launch.
-    (() => {
-      const taskId = raw.match(/<task-id>([^<]*)<\/task-id>/)?.[1]
-      return taskId ? backgroundTaskIds.get(taskId) : undefined
-    })()
-  if (!id) return null
-  const d = dispatches.get(id)
-  if (!d) {
-    const shell = backgroundShells.get(id)
-    if (!shell) return null // an unrelated process, or an already-consumed child
-    backgroundShells.delete(id)
-    const elapsedMs = elapsedBetween(shell.at, rec.timestamp)
-    shell.call.status = status === "completed" ? "completed" : status === "killed" ? "cancelled" : "failed"
-    if (elapsedMs !== undefined) shell.call.durationMs = elapsedMs
-    // The shell's disclosure card already carries the terminal status above; but this notification also
-    // RE-INVOKES the agent, opening a fresh turn with no boundary from the prior one — two turns paint as
-    // one bubble. Emit a `boundary` event line at the wake point so the timeline shows a divider carrying
-    // the cause ("Background task «…» exited N"). The caller resets lastAssistantId, so this
-    // also breaks the assistant-record merge chain across the wake.
-    return {
-      role: "assistant",
-      kind: "event",
-      boundary: true,
-      text: backgroundWakeLabel(shell.call, status, raw),
-      tools: [],
-      parts: [],
-      at: typeof rec.timestamp === "string" ? rec.timestamp : undefined,
+): TranscriptMessage[] {
+  const raw = notificationCarrierText(rec)
+  if (!raw || !raw.includes("<task-notification>")) return []
+  const at = typeof rec.timestamp === "string" ? rec.timestamp : undefined
+  const out: TranscriptMessage[] = []
+  for (const block of raw.match(/<task-notification>[\s\S]*?<\/task-notification>/g) ?? []) {
+    const rawStatus = block.match(/<status>([^<]*)<\/status>/)?.[1]
+    // A Monitor that hits its timeout_ms emits ONE notification with NO <status> and NO <tool-use-id> —
+    // only <task-id> + an <event> carrying the harness's timeout sentinel. Key STRICTLY on the sentinel:
+    // ordinary Monitor progress events also have <event> and no <status>, so "missing status ⇒ terminal"
+    // would retire every live monitor on its first event. The sentinel is harness prose and could drift —
+    // same fragility as the launch-ack strings this parser already depends on.
+    const timedOut = block.includes("<event>[Monitor timed out")
+    const status =
+      rawStatus === "completed" || rawStatus === "failed" || rawStatus === "killed"
+        ? rawStatus
+        : rawStatus === "stopped" || timedOut
+          ? "killed"
+          : undefined
+    if (!status) continue
+    const ids = new Set<string>()
+    for (const m of block.matchAll(/<tool-use-id>([^<]*)<\/tool-use-id>/g)) ids.add(m[1])
+    for (const m of block.matchAll(/<task-id>([^<]*)<\/task-id>/g)) {
+      if (m[1].startsWith("__orphan_summary__")) continue // internal scan sentinel — correlates to nothing
+      const toolUseId = backgroundTaskIds.get(m[1])
+      if (toolUseId) ids.add(toolUseId)
+    }
+    for (const id of ids) {
+      const d = dispatches.get(id)
+      if (!d) {
+        const shell = backgroundShells.get(id)
+        if (!shell) continue // an unrelated process, or an already-consumed child
+        backgroundShells.delete(id)
+        const elapsedMs = elapsedBetween(shell.at, rec.timestamp)
+        shell.call.status = status === "completed" ? "completed" : status === "killed" ? "cancelled" : "failed"
+        if (elapsedMs !== undefined) shell.call.durationMs = elapsedMs
+        // The shell's disclosure card already carries the terminal status above; but this notification
+        // also RE-INVOKES the agent, opening a fresh turn with no boundary from the prior one — two turns
+        // paint as one bubble. Emit a `boundary` event line at the wake point so the timeline shows a
+        // divider carrying the cause ("Background task «…» exited N"). The caller resets lastAssistantId,
+        // so this also breaks the assistant-record merge chain across the wake.
+        out.push({ role: "assistant", kind: "event", boundary: true, text: backgroundWakeLabel(shell.call, status, block), tools: [], parts: [], at })
+        continue
+      }
+      dispatches.delete(id)
+      const start = d.at ? Date.parse(d.at) : NaN
+      const end = at !== undefined ? Date.parse(at) : NaN
+      const elapsedMs = Number.isFinite(start) && Number.isFinite(end) && end >= start ? end - start : undefined
+      d.call.agentStatus = status
+      d.call.agentElapsedMs = elapsedMs
+      d.call.status = status === "completed" ? "completed" : status === "killed" ? "cancelled" : "failed"
+      if (elapsedMs !== undefined) d.call.durationMs = elapsedMs
+      // Re-render the SAME AgentBlock card inline at the completion point — reusing the dispatch's tool
+      // call (now carrying its terminal status + duration) so the finished agent is clickable into its
+      // run-log drawer RIGHT where it landed in the timeline, not only up-thread at the launch card. A
+      // shallow copy keeps the two out-entries from sharing one mutable object. The client renders it via
+      // the ordinary tools-part → AgentBlock path (no bubble chrome for an assistant tools-only message).
+      const finishedCall: TranscriptToolCall = { ...d.call }
+      out.push({ role: "assistant", text: "", tools: [finishedCall], parts: [{ kind: "tools", tools: [finishedCall] }], at })
     }
   }
-  dispatches.delete(id)
-  const start = d.at ? Date.parse(d.at) : NaN
-  const end = typeof rec.timestamp === "string" ? Date.parse(rec.timestamp) : NaN
-  const elapsedMs = Number.isFinite(start) && Number.isFinite(end) && end >= start ? end - start : undefined
-  d.call.agentStatus = status
-  d.call.agentElapsedMs = elapsedMs
-  d.call.status = status === "completed" ? "completed" : status === "killed" ? "cancelled" : "failed"
-  if (elapsedMs !== undefined) d.call.durationMs = elapsedMs
-  // Re-render the SAME AgentBlock card inline at the completion point — reusing the dispatch's tool
-  // call (now carrying its terminal status + duration) so the finished agent is clickable into its
-  // run-log drawer RIGHT where it landed in the timeline, not only up-thread at the launch card. A
-  // shallow copy keeps the two out-entries from sharing one mutable object. The client renders it via
-  // the ordinary tools-part → AgentBlock path (no bubble chrome for an assistant tools-only message).
-  const finishedCall: TranscriptToolCall = { ...d.call }
-  return {
-    role: "assistant",
-    text: "", // tools-only message (no prose)
-    tools: [finishedCall],
-    parts: [{ kind: "tools", tools: [finishedCall] }],
-    at: typeof rec.timestamp === "string" ? rec.timestamp : undefined,
-  }
+  return out
 }
 
 // ── Retained incremental parse cache ────────────────────────────────────────────────────────────────

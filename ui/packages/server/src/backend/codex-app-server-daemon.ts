@@ -116,11 +116,30 @@ function main(): void {
     if (published && owner !== null && owner !== process.pid) return
     if (published && process.platform !== "win32") { try { unlinkSync(config.socketPath) } catch {} }
   }
-  const die = (code: number): never => { cleanup(); process.exit(code) }
+
+  // Why this daemon — and the app-server + every in-flight sub-agent turn inside it — is about to end.
+  // The bridge only ever SEES a socket close; it cannot tell a codex child that panicked from a daemon
+  // that self-collected from an idle expiry. This breadcrumb, keyed by generation, is the only record
+  // of the real cause, and it was missing exactly when it was needed (the 2026-07-24 six-sub-agent loss
+  // had no attributable cause at all). Best-effort, synchronous (the process is exiting), keyed by
+  // generation so a successor's reader can tell whose death it describes. It never gates anything.
+  const writeExitBreadcrumb = (reason: string): void => {
+    try {
+      writeFileSync(`${config.recordPath}.exit`, JSON.stringify({
+        projectId: config.projectId,
+        generation: config.generation,
+        daemonPid: process.pid,
+        childPid: child.pid ?? null,
+        reason,
+        at: new Date().toISOString(),
+      }))
+    } catch {}
+  }
+  const die = (code: number, reason: string): never => { writeExitBreadcrumb(reason); cleanup(); process.exit(code) }
 
   const armIdleExit = (): void => {
     if (idleTimer) clearTimeout(idleTimer)
-    idleTimer = setTimeout(() => { try { child.kill("SIGTERM") } catch {}; die(0) }, IDLE_EXIT_MS)
+    idleTimer = setTimeout(() => { try { child.kill("SIGTERM") } catch {}; die(0, "idle-timeout") }, IDLE_EXIT_MS)
     idleTimer.unref?.()
   }
 
@@ -146,7 +165,10 @@ function main(): void {
     if (recordOwner() === process.pid) { unreachableStrikes = 0; return }
     if (++unreachableStrikes < REACHABILITY_STRIKES) return
     try { child.kill("SIGTERM") } catch {}
-    die(0)
+    // The record no longer names us and nobody is attached: a successor daemon replaced us (a boot
+    // race or a stale-record fork). If a turn was mid-flight when that happened, it dies here — this
+    // reason is the fingerprint of that class of loss.
+    die(0, "self-collected-record-reassigned")
   }
 
   // ---- server -> client ---------------------------------------------------------------------------
@@ -180,7 +202,7 @@ function main(): void {
     try { message = JSON.parse(line) as Record<string, unknown> } catch { return }
     // Handshake response is consumed by the daemon, never forwarded.
     if (!handshakeDone && message.id === HANDSHAKE_ID) {
-      if (message.error) die(3)
+      if (message.error) die(3, "handshake-rejected")
       initializeResult = message.result
       handshakeDone = true
       toServer({ method: "initialized" })
@@ -306,7 +328,7 @@ function main(): void {
   const startListening = (): void => {
     // A stale unix socket from a crashed prior daemon would block listen(); named pipes need no unlink.
     if (process.platform !== "win32" && existsSync(config.socketPath)) { try { unlinkSync(config.socketPath) } catch {} }
-    server.on("error", () => die(6))
+    server.on("error", () => die(6, "socket-listen-error"))
     server.listen(config.socketPath, () => {
       published = true
       writeRecord()
@@ -320,15 +342,18 @@ function main(): void {
 
   child.stdout.on("data", lineReader(readServerLine))
   child.stderr.resume() // drained and discarded; the client sees stderr only via its own attachment
-  child.on("exit", () => die(0))
-  child.on("error", () => die(4))
+  // The app-server child itself ended — the single most important cause to distinguish. A non-zero
+  // code is a codex panic/OOM; a signal is an external kill. Either way every turn inside it (the
+  // parent AND all its sub-agents) is gone, and this is the one place we can name which happened.
+  child.on("exit", (code, signal) => die(0, signal ? `app-server-killed-${signal}` : `app-server-exited-code-${code ?? "null"}`))
+  child.on("error", () => die(4, "app-server-spawn-error"))
 
   toServer({ id: HANDSHAKE_ID, method: "initialize", params: { clientInfo: config.clientInfo, capabilities: config.capabilities } })
-  const handshakeTimer = setTimeout(() => { if (!handshakeDone) { try { child.kill("SIGTERM") } catch {}; die(5) } }, HANDSHAKE_TIMEOUT_MS)
+  const handshakeTimer = setTimeout(() => { if (!handshakeDone) { try { child.kill("SIGTERM") } catch {}; die(5, "handshake-timeout") } }, HANDSHAKE_TIMEOUT_MS)
   handshakeTimer.unref?.()
 
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
-    process.on(signal, () => { try { child.kill("SIGTERM") } catch {}; die(0) })
+    process.on(signal, () => { try { child.kill("SIGTERM") } catch {}; die(0, `signal-${signal}`) })
   }
 }
 

@@ -120,6 +120,37 @@ export function readDaemonRecord(stateDir: string, projectId: string): CodexAppS
   }
 }
 
+export interface CodexAppServerExitBreadcrumb {
+  generation: string
+  daemonPid: number
+  childPid: number | null
+  /** Why the daemon (and the app-server + every turn inside it) ended. See codex-app-server-daemon.ts's
+   *  `writeExitBreadcrumb` for the vocabulary (`app-server-exited-code-*`, `self-collected-*`,
+   *  `signal-*`, `idle-timeout`, …). */
+  reason: string
+  at: string
+}
+
+/** The most recent daemon death for this project, or null when none was ever recorded. Keyed by
+ *  generation so a caller can confirm it describes the generation it actually lost; never gates
+ *  anything — it is pure post-hoc attribution for a socket close the bridge would otherwise see as an
+ *  opaque disconnect. */
+export function readDaemonExitBreadcrumb(stateDir: string, projectId: string): CodexAppServerExitBreadcrumb | null {
+  try {
+    const value = JSON.parse(readFileSync(`${recordPath(stateDir, projectId)}.exit`, "utf8")) as Partial<CodexAppServerExitBreadcrumb>
+    if (typeof value.generation !== "string" || typeof value.reason !== "string") return null
+    return {
+      generation: value.generation,
+      daemonPid: typeof value.daemonPid === "number" ? value.daemonPid : 0,
+      childPid: typeof value.childPid === "number" ? value.childPid : null,
+      reason: value.reason,
+      at: typeof value.at === "string" ? value.at : "",
+    }
+  } catch {
+    return null
+  }
+}
+
 /** A daemon is live only while its process is running; a stale record is pruned. */
 export function liveDaemonRecord(stateDir: string, projectId: string): CodexAppServerDaemonRecord | null {
   const record = readDaemonRecord(stateDir, projectId)
