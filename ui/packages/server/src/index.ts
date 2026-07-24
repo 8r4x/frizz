@@ -195,7 +195,15 @@ async function pipeToApp(
   controller: AbortController,
 ) {
   const url = `http://127.0.0.1:${port}${req.url ?? "/"}`
-  req.on("close", () => controller.abort())
+  // A VANISHED CLIENT — not a request message that merely finished. Node emits 'close' on the REQUEST
+  // as soon as it is complete, which for any POST with a body is long before the response is written
+  // (measured: req.end → req.close with res.writableFinished=false → res.close). Aborting there was
+  // harmless while nothing listened to this signal, but it now cancels the response stream, and every
+  // /rpc reply would be truncated to a non-JSON 200. The response closing UNFINISHED is the accurate
+  // disconnect: it fires for a real drop (SSE included) and never for a completed exchange.
+  res.on("close", () => {
+    if (!res.writableFinished) controller.abort()
+  })
   const response = await app.fetch(
     new Request(url, {
       method: req.method,
