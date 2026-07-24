@@ -211,6 +211,7 @@ export function createGithubReviewFetcher(deps: GithubReviewFetcherDeps = {}): G
   const now = deps.now ?? Date.now
   let tokenPromise: Promise<string> | undefined
   let notBeforeMs = 0
+  let rateLimitBlockedUntilMs = 0
   let pending = new Map<string, PendingRef>()
   let flushScheduled = false
 
@@ -235,6 +236,7 @@ export function createGithubReviewFetcher(deps: GithubReviewFetcherDeps = {}): G
     const spendable = Math.max(0, remaining - RATE_LIMIT_RESERVE)
     if (spendable < cost) {
       notBeforeMs = Math.max(notBeforeMs, resetMs)
+      rateLimitBlockedUntilMs = Math.max(rateLimitBlockedUntilMs, resetMs)
       return
     }
     const sustainableCadence = Math.ceil(((resetMs - current) * cost) / spendable)
@@ -310,7 +312,11 @@ export function createGithubReviewFetcher(deps: GithubReviewFetcherDeps = {}): G
     if (!response.ok) {
       const failure = failureFromStatus(response.status, body, response.headers)
       if (failure.kind === "gh-auth") tokenPromise = undefined
-      if (failure.kind === "rate-limit" && failure.retryAt) notBeforeMs = Math.max(notBeforeMs, Date.parse(failure.retryAt))
+      if (failure.kind === "rate-limit" && failure.retryAt) {
+        const retryAt = Date.parse(failure.retryAt)
+        notBeforeMs = Math.max(notBeforeMs, retryAt)
+        rateLimitBlockedUntilMs = Math.max(rateLimitBlockedUntilMs, retryAt)
+      }
       for (const ref of refs) results.set(refKey(ref), { status: "error", failure })
       return results
     }
@@ -322,6 +328,17 @@ export function createGithubReviewFetcher(deps: GithubReviewFetcherDeps = {}): G
 
     updateBudget((body as any)?.data?.rateLimit)
     const genericGraphError = graphErrorMessage(body)
+    const graphResetAt = typeof (body as any)?.data?.rateLimit?.resetAt === "string"
+      ? (body as any).data.rateLimit.resetAt as string
+      : undefined
+    const graphRateLimited = !!genericGraphError && /rate limit/i.test(genericGraphError)
+    if (graphRateLimited && graphResetAt) {
+      const resetMs = Date.parse(graphResetAt)
+      if (Number.isFinite(resetMs)) {
+        notBeforeMs = Math.max(notBeforeMs, resetMs)
+        rateLimitBlockedUntilMs = Math.max(rateLimitBlockedUntilMs, resetMs)
+      }
+    }
     refs.forEach((ref, index) => {
       const repository = (body as any)?.data?.[`ref${index}`]
       const pr = repository?.pullRequest
@@ -329,10 +346,13 @@ export function createGithubReviewFetcher(deps: GithubReviewFetcherDeps = {}): G
         results.set(refKey(ref), {
           status: "error",
           failure: {
-            kind: genericGraphError ? "graphql" : "shape",
-            message: genericGraphError
-              ? `GitHub GraphQL error: ${genericGraphError}`
+            kind: graphRateLimited ? "rate-limit" : genericGraphError ? "graphql" : "shape",
+            message: graphRateLimited
+              ? `GitHub API rate limit exhausted${graphResetAt ? `; resets at ${graphResetAt}` : ""}`
+              : genericGraphError
+                ? `GitHub GraphQL error: ${genericGraphError}`
               : `GitHub returned no accessible pull request for ${refKey(ref)}`,
+            ...(graphRateLimited && graphResetAt ? { retryAt: graphResetAt } : {}),
           },
         })
         return
@@ -355,6 +375,10 @@ export function createGithubReviewFetcher(deps: GithubReviewFetcherDeps = {}): G
     const entries = [...batch.values()]
     for (let offset = 0; offset < entries.length; offset += MAX_REFS_PER_REQUEST) {
       const chunk = entries.slice(offset, offset + MAX_REFS_PER_REQUEST)
+      if (offset > 0 && now() < rateLimitBlockedUntilMs) {
+        for (const entry of chunk) for (const resolve of entry.resolve) resolve({ status: "deferred" })
+        continue
+      }
       let results: Map<string, GithubReviewFetchResult>
       try {
         results = await fetchChunk(chunk.map((entry) => entry.ref))

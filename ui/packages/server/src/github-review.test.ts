@@ -135,6 +135,34 @@ test("review fetcher honors the real rate-limit reset without hammering GitHub",
   assert.equal(requestCalls, 1, "the reset guard suppresses another HTTP request")
 })
 
+test("review fetcher recognizes GraphQL's HTTP-200 rate-limit error shape", async () => {
+  const resetAt = "2026-07-24T17:10:00.000Z"
+  let requestCalls = 0
+  const fetcher = createGithubReviewFetcher({
+    getToken: async () => "token",
+    request: async () => {
+      requestCalls++
+      return response({
+        data: { ref0: null, rateLimit: { cost: 1, remaining: 0, resetAt, limit: 5_000 } },
+        errors: [{ message: "API rate limit exceeded" }],
+      })
+    },
+    now: () => Date.parse("2026-07-24T17:00:00Z"),
+  })
+
+  const exhausted = await fetcher(ref(544))
+  assert.deepEqual(exhausted, {
+    status: "error",
+    failure: {
+      kind: "rate-limit",
+      message: `GitHub API rate limit exhausted; resets at ${resetAt}`,
+      retryAt: resetAt,
+    },
+  })
+  assert.deepEqual(await fetcher(ref(544)), { status: "deferred" })
+  assert.equal(requestCalls, 1)
+})
+
 test("review fetcher invalidates a rejected token so the next batch asks gh again", async () => {
   let tokenCalls = 0
   let requestCalls = 0
