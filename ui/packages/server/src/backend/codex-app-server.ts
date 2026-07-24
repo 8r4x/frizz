@@ -32,8 +32,8 @@ import {
 import { nativeListenCodexAppServerHost } from "./codex-app-server-native.ts"
 
 // Foundation-only bridge. It is deliberately not an AgentBackend: no current/default Codex TUI
-// session can accidentally cross this boundary. Context exposes it only behind the explicit env flag.
-export const CODEX_APP_SERVER_FEATURE_FLAG = "FRAY_CODEX_APP_SERVER_BRIDGE"
+// session can accidentally cross this boundary. Context now wires it unconditionally
+// (codexAppServerBridgeEnabled() returns true) — Codex runs exclusively through this bridge.
 export const CODEX_APP_SERVER_PROVIDER = "codex-app-server"
 // Opt-in transport switch. Off = the hand-written daemon; on = `codex app-server --listen unix://`.
 // Read at construction, per process, so a restart is all it takes to move a project either way.
