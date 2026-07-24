@@ -394,11 +394,13 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
           continue
         }
         if (!this.initialized) {
-          // Control/telemetry ahead of the session init. It must still prove ownership; swallow it so
-          // the first event a consumer sees is the init, exactly as before.
+          // ONLY control/telemetry frames (command_lifecycle, rate_limit_event → kind "other")
+          // legitimately precede the session init. Anything substantive (assistant/user/result) before
+          // init is anomalous and still rejected, exactly as before — and the frame must prove ownership.
+          if (event.kind !== "other") throw new ClaudeAgentSdkProtocolError("Claude emitted a non-init event before session ownership")
           if (event.sessionId === undefined) throw new ClaudeAgentSdkProtocolError("Claude emitted a non-init event before session ownership")
           if (event.sessionId !== this.sessionId) throw new ClaudeAgentSdkProtocolError("Claude session ownership mismatch")
-          continue
+          continue // swallow so the first event a consumer sees is still the init
         }
         if (event.sessionId === undefined) throw new ClaudeAgentSdkProtocolError("Claude event is missing session ownership")
         if (event.sessionId !== this.sessionId) throw new ClaudeAgentSdkProtocolError("Claude event crossed session ownership")
