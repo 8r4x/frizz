@@ -1067,20 +1067,53 @@ test("limit: an unreadable usage endpoint holds the wake rather than guessing", 
   h.storage.close()
 })
 
-test("limit: a session pause never spends a usage-endpoint read", async () => {
+test("limit: a session pause with no account headroom still resumes from its own clock", async () => {
+  // The account-availability trigger consults the (cheap, cached) snapshot for a session limit too, but
+  // an uninformative/unavailable reading must never BLOCK the reliable text-clock resume.
   const h = limitHarness()
   h.storage.upsertSession(row("a"))
   h.tele.set("a", limitTele(sessionFault()))
-  let quotaCalls = 0
-  const s = h.make({ readQuota: async () => {
-    quotaCalls++
-    return { claude: { status: "unavailable" as const, windows: [] }, codex: { status: "unavailable" as const, windows: [] } }
-  } })
+  const s = h.make({ readQuota: async () =>
+    ({ claude: { status: "unavailable" as const, windows: [] }, codex: { status: "unavailable" as const, windows: [] } }) })
   await s.tick()
   h.clock.ms = SESSION_RESET_MS + 61_000
   await s.tick()
-  assert.deepEqual(h.resumes.map((r) => r.slug), ["a"])
-  assert.equal(quotaCalls, 0, "the limit message's own clock already answered; don't call the flaky endpoint")
+  assert.deepEqual(h.resumes.map((r) => r.slug), ["a"], "the message's own clock still answers when quota can't")
+  h.storage.close()
+})
+
+test("limit: account headroom on the blown window resumes a session pause BEFORE its own clock", async () => {
+  // The account-switch / raised-cap case: quota freed up on the signed-in account while the original
+  // 17:50 reset is still hours away. The paused thread should pick itself back up without waiting.
+  const h = limitHarness()
+  h.storage.upsertSession(row("a"))
+  h.tele.set("a", limitTele(sessionFault()))
+  const s = h.make({ readQuota: async () => ({
+    claude: { status: "ok" as const, windows: [{ key: "5h", label: "5h", usedPercent: 20, resetsAt: (Date.parse(SESSION_FAULT_AT) + 3_600_000) / 1000 }] },
+    codex: { status: "unavailable" as const, windows: [] },
+  }) })
+  await s.tick() // fault ~1s old: younger than the min-age, so a reading that could predate the fault is NOT trusted
+  assert.equal(h.resumes.length, 0, "a reading that might predate the fault must not resume into the wall it came from")
+  h.clock.ms = Date.parse(SESSION_FAULT_AT) + 3 * 60_000 // past the 2-min min-age, still hours before 17:50
+  await s.tick()
+  assert.deepEqual(h.resumes.map((r) => r.slug), ["a"], "freed-up quota resumes without waiting for the original clock")
+  h.storage.close()
+})
+
+test("limit: a still-near-full window does NOT trigger the account-availability resume", async () => {
+  // Jitter near 100% must never fire the headroom trigger — that would resume the fleet straight back
+  // into the wall. Only a drop below the floor counts.
+  const h = limitHarness()
+  h.storage.upsertSession(row("a"))
+  h.tele.set("a", limitTele(sessionFault()))
+  const s = h.make({ readQuota: async () => ({
+    claude: { status: "ok" as const, windows: [{ key: "5h", label: "5h", usedPercent: 90, resetsAt: (Date.parse(SESSION_FAULT_AT) + 3_600_000) / 1000 }] },
+    codex: { status: "unavailable" as const, windows: [] },
+  }) })
+  await s.tick()
+  h.clock.ms = Date.parse(SESSION_FAULT_AT) + 5 * 60_000 // well past the min-age, still before the 17:50 clock
+  await s.tick()
+  assert.deepEqual(h.resumes, [], "90% used is not headroom — no early resume; it waits for the real reset")
   h.storage.close()
 })
 
