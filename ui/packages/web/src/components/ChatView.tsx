@@ -2954,7 +2954,7 @@ export function BackgroundOpsStrip({
           label={s.label}
           state={s.state}
           density="sheet"
-          startedAt={s.startedAt}
+          lastActivityAt={s.lastActivityAt}
           onOpen={s.id ? () => pushSubAgentDrawer(slug, s.id!, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt }) : undefined}
           onDismiss={s.id ? () => dismiss.mutate(s.id!) : undefined}
         />
@@ -2966,7 +2966,7 @@ export function BackgroundOpsStrip({
           label={s.label}
           state={s.state}
           density="sheet"
-          startedAt={s.startedAt}
+          lastActivityAt={s.lastActivityAt}
           onOpen={s.id ? () => pushBackgroundShellDrawer(slug, s.id!, { label: s.label, startedAt: s.startedAt }) : undefined}
           onDismiss={s.id ? () => dismiss.mutate(s.id!) : undefined}
         />

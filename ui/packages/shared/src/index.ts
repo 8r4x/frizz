@@ -120,6 +120,12 @@ export const SubAgentView = z.object({
   // server that doesn't emit it yet → the drill-in drawer's entry point is simply not offered. Present
   // → the banner row / AgentBlock is clickable and resolves this exact child's transcript.
   id: z.string().optional(),
+  // ISO8601 of the child transcript's last append (its output file's mtime — the SAME signal that
+  // decides running vs stale). Surfaced so a row can show "last active 6 min ago": the state alone only
+  // says quiet-for-15-min, not HOW quiet. Optional — absent before the output path resolves, or on a
+  // pre-restart server. Minute-bucketed into the board signature server-side, so a running child's
+  // steadily-advancing mtime does not spam deltas.
+  lastActivityAt: z.string().optional(),
 })
 export type SubAgentView = z.infer<typeof SubAgentView>
 
@@ -134,6 +140,9 @@ export const BgShellView = z.object({
   startedAt: z.string(), // ISO8601 of the launch record
   state: z.enum(["running", "stale"]),
   id: z.string().optional(),
+  // ISO8601 of the shell output file's last write — "last active 6 min ago" for a quiet-but-live
+  // watcher. Optional (see SubAgentView.lastActivityAt).
+  lastActivityAt: z.string().optional(),
 })
 export type BgShellView = z.infer<typeof BgShellView>
 

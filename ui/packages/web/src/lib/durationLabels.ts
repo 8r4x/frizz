@@ -34,6 +34,18 @@ export function elapsedSince(startedAt: string | undefined): string {
   return formatElapsedMinutes(Math.floor((Date.now() - started) / 60_000))
 }
 
+// Compact "time since" for a dense status row: "just now", "6 min ago", "1 hr 3 min ago". Distinct
+// from elapsedSince (which reads as a DURATION — "running 6 min") by carrying the "ago" that marks it
+// as recency, not lifetime. `nowMs` is passed in so a live clock can drive it without re-reading Date.
+export function formatAgo(at: string | undefined, nowMs = Date.now()): string {
+  if (!at) return ""
+  const t = Date.parse(at)
+  if (!Number.isFinite(t)) return ""
+  const mins = Math.floor((nowMs - t) / 60_000)
+  if (mins < 1) return "just now"
+  return `${formatElapsedMinutes(mins)} ago`
+}
+
 export function formatCountdownSeconds(seconds: number): string {
   if (seconds < 60) return `${seconds} sec`
   if (seconds < 3600) return `${Math.floor(seconds / 60)} min ${String(seconds % 60).padStart(2, "0")} sec`

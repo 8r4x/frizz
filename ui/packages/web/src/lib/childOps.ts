@@ -1,5 +1,3 @@
-import { runningOperations } from "./operationIndicators.ts"
-
 // ── THE CHILD-OPERATION ROW VOCABULARY ───────────────────────────────────────────────────────────
 //
 // Four surfaces list a thread's CHILD operations — the sidebar rail's sub-agent rows, a queue card's
@@ -36,26 +34,27 @@ export const CHILD_OPEN_TITLE = { AGENT: "Open sub-agent transcript", SHELL: "Op
 export const CHILD_DISMISS_TITLE = "Dismiss — stop tracking this finished operation"
 export const CHILD_DISMISS_NOUN = { AGENT: "sub-agent", SHELL: "background shell" } as const
 
-// ── LIVENESS FILTERS — three surfaces, three policies, DELIBERATELY LISTED TOGETHER ──────────────
+// ── LIVENESS FILTERS — the surfaces' policies, in ONE place ──────────────────────────────────────
 //
-// The three surfaces do NOT agree on which children are worth showing, and this is the one place that
-// says so out loud. Behaviour here is the pre-existing behaviour of each site, preserved verbatim:
+// A child is worth showing while it is live OR stale — "stale" is not "gone", it is "running, but we
+// have not seen output in a while", still unresolved work hanging off the thread. The card USED to show
+// running-only, so a stale sub-agent vanished from its handoff card while the rail still dimmed it and
+// the drawer still listed it — the same cross-surface inconsistency the shared row was built to end
+// (maintainer ruling 2026-07-24: unify the card onto the rail's policy). Now:
 //
-//   card  — `running` only. A stale child vanishes from the queue card entirely.
-//   rail  — `running` OR `stale`, and only children carrying an `id`. A stale child dims; an id-less
-//           child (an old snapshot shape) is dropped.
+//   card  — running OR stale. Same set as the rail, minus the rail's id requirement: an id-less child
+//           still renders (non-interactive), never silently dropped.
+//   rail  — running OR stale, and only children carrying an `id` (its rows are always drill-in targets;
+//           an id-less child from an old snapshot shape has nothing to open, so the rail omits it).
 //   sheet — no filter at all. Everything the board reports gets a row.
-//
-// So one stale sub-agent is simultaneously invisible on its card, dimmed on the rail, and listed in the
-// drawer. Whether that is right is a PRODUCT question, not a refactor: unifying it would change what
-// three surfaces show. Until the maintainer rules, every caller routes through here so the divergence
-// is one function instead of three scattered predicates.
 export type ChildOpRecord = { readonly state: string; readonly id?: string }
+
+const liveOrStale = (op: ChildOpRecord): boolean => op.state === "running" || op.state === "stale"
 
 export function visibleChildOps<T extends ChildOpRecord>(ops: readonly T[], surface: "rail"): readonly (T & { id: string })[]
 export function visibleChildOps<T extends ChildOpRecord>(ops: readonly T[], surface: "card" | "sheet"): readonly T[]
 export function visibleChildOps<T extends ChildOpRecord>(ops: readonly T[], surface: "rail" | "card" | "sheet"): readonly T[] {
-  if (surface === "card") return runningOperations(ops)
-  if (surface === "rail") return ops.filter((op): op is T & { id: string } => Boolean(op.id) && (op.state === "running" || op.state === "stale"))
+  if (surface === "card") return ops.filter(liveOrStale)
+  if (surface === "rail") return ops.filter((op): op is T & { id: string } => Boolean(op.id) && liveOrStale(op))
   return ops
 }

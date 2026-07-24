@@ -17,7 +17,7 @@ function render(props: {
   label?: string
   state?: "running" | "stale"
   density: ChildOpDensity
-  startedAt?: string
+  lastActivityAt?: string
   parentSlug?: string
   onOpen?: () => void
   onDismiss?: () => void
@@ -27,7 +27,7 @@ function render(props: {
     kind: props.kind ?? "AGENT",
     label: props.label ?? "Audit the drawer ops strip",
     state: props.state ?? "running",
-    startedAt: props.startedAt,
+    lastActivityAt: props.lastActivityAt,
     ...props,
   }))
 }
@@ -75,28 +75,37 @@ test("the rail keeps its checkbox spinner, its indent and its tooltip override",
   assert.match(running, /pl-\[26px\]/)
   assert.match(running, /title="\[fray:opus-high\] Audit the drawer ops strip"/)
   assert.match(running, /data-subagent-parent="parent-thread"/)
-  // The rail is not an operations surface: no kind tag, no elapsed, no drill-in arrow.
+  // The rail is not an operations surface: no kind tag, no drill-in arrow.
   assert.doesNotMatch(running, /petite-caps/)
-  assert.doesNotMatch(render({ density: "rail", startedAt: TWELVE_MIN_AGO }), /12 min/)
 })
 
 test("the card keeps the pulsing queue indicator and stays free of ops chrome", () => {
-  const html = render({ density: "card", onOpen: () => {}, parentSlug: "parent-thread", startedAt: TWELVE_MIN_AGO })
+  const html = render({ density: "card", onOpen: () => {}, parentSlug: "parent-thread", lastActivityAt: TWELVE_MIN_AGO })
   assert.match(html, /data-running-indicator="queue-subagent"/)
   assert.match(html, /fray-live-dot--agent/)
   assert.match(html, /data-subagent-parent="parent-thread"/)
   assert.doesNotMatch(html, /petite-caps/, "a queue card names the work, it is not a second ops toolbar")
-  assert.doesNotMatch(html, /12 min/)
   assert.doesNotMatch(html, /<svg /, "the card must not borrow the rail's checkbox spinner")
 })
 
-test("the sheet is the full operations row: kind tag, elapsed and a hover drill-in", () => {
-  const html = render({ density: "sheet", onOpen: () => {}, startedAt: TWELVE_MIN_AGO })
+test("the sheet is the full operations row: kind tag and a hover drill-in", () => {
+  const html = render({ density: "sheet", onOpen: () => {}, lastActivityAt: TWELVE_MIN_AGO })
   assert.match(html, /data-running-indicator="operation"/)
   assert.match(html, /petite-caps[^"]*">AGENT</)
-  assert.match(html, /12 min/)
   assert.match(html, /<svg /, "the drill-in ArrowUpRight renders on a clickable ops row")
-  assert.doesNotMatch(render({ density: "sheet", startedAt: TWELVE_MIN_AGO }), /<svg /, "no drill-in arrow without onOpen")
+  assert.doesNotMatch(render({ density: "sheet", lastActivityAt: TWELVE_MIN_AGO }), /<svg /, "no drill-in arrow without onOpen")
+})
+
+test("the light-gray last-active reading renders on every density, and only when reported", () => {
+  for (const density of DENSITIES) {
+    const withReading = render({ density, lastActivityAt: TWELVE_MIN_AGO })
+    // "12 min ago" — the recency the running/stale mark alone can't give — in the muted reading tone.
+    assert.match(withReading, /12 min ago/, `${density} must render the last-active reading`)
+    assert.match(withReading, /text-muted\/40[^>]*>12 min ago</, `${density} reading must be the light-gray tone`)
+    assert.match(withReading, /title="Last active 12 min ago"/, `${density} reading carries the explicit tooltip`)
+    // A child that reports no activity instant gets NO reading — never a fabricated "just now".
+    assert.doesNotMatch(render({ density }), /min ago|just now/, `${density} must omit the reading when absent`)
+  }
 })
 
 test("a quiet SHELL breathes instead of going flat, on the ops row", () => {

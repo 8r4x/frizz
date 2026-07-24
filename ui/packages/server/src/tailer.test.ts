@@ -730,7 +730,7 @@ test("tailer: surfaces running vs stale sub-agents (via injected mtime) and clea
 
   h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z") // <15min since child mtime → running
   t.tick() // prime
-  assert.deepEqual(t.get("t")?.subAgents, [{ label: "child", startedAt: "2026-07-01T00:00:01.000Z", state: "running", subagentType: "fray:fray-opus-high", id: "toolu_bg" }])
+  assert.deepEqual(t.get("t")?.subAgents, [{ label: "child", startedAt: "2026-07-01T00:00:01.000Z", state: "running", subagentType: "fray:fray-opus-high", id: "toolu_bg", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
 
   h.clock.ms = Date.parse("2026-07-01T00:20:00.000Z") // >15min since child mtime (SUBAGENT_STALE_MS) → stale
   const before = h.changes.n
@@ -841,7 +841,7 @@ test("tailer: a dead pane clears its background shells — a shell cannot outliv
 
   h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z") // <5min since shell output → live
   t.tick()
-  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Watch CI", startedAt: "2026-07-01T00:00:01.000Z", state: "running" }])
+  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Watch CI", startedAt: "2026-07-01T00:00:01.000Z", state: "running", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
 
   // The agent process dies (its tmux pane went dead) WITHOUT a terminal notification landing for the
   // shell. The shell is a child of that process, so it died with it — the board must stop reporting it
@@ -877,7 +877,7 @@ test("tailer: a manual TaskStop clears a live background shell from the board vi
 
   h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
   t.tick()
-  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Boot isolated stack", startedAt: "2026-07-01T00:00:01.000Z", state: "running" }])
+  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Boot isolated stack", startedAt: "2026-07-01T00:00:01.000Z", state: "running", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
 
   // The worker TaskStops the shell (pane still alive). Its structured result is the terminal signal.
   appendFileSync(join(h.logDir, "sid.jsonl"), JSON.stringify(taskStopResult("ba3y11c3t", "npx tsx scripts/adhoc-stack.mjs")) + "\n")
@@ -952,7 +952,7 @@ test("tailer: a background shell stays running however long it is quiet; only it
 
   h.clock.ms = Date.parse("2026-07-01T00:40:00.000Z") // 40min quiet — an ordinary CI wait
   t.tick()
-  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_srv", label: "Run vite dev server", startedAt: "2026-07-01T00:00:01.000Z", state: "running" }])
+  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_srv", label: "Run vite dev server", startedAt: "2026-07-01T00:00:01.000Z", state: "running", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
 
   h.clock.ms = Date.parse("2026-07-01T08:00:00.000Z") // 8h quiet — a dev server left running; still "running"
   t.tick()

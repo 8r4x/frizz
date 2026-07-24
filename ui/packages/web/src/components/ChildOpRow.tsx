@@ -2,7 +2,8 @@ import type { ReactElement } from "react"
 import { ArrowUpRight, X } from "lucide-react"
 import { BoxSpinner } from "./BoxSpinner.tsx"
 import { isRunningOperation } from "../lib/operationIndicators.ts"
-import { elapsedSince } from "../lib/durationLabels.ts"
+import { formatAgo } from "../lib/durationLabels.ts"
+import { useNowMs } from "../lib/liveClock.ts"
 import {
   CHILD_ARROW,
   CHILD_ARROW_CLASS,
@@ -21,10 +22,12 @@ export type ChildOpKind = "AGENT" | "SHELL"
 //   rail  — the sidebar's indented child rows. The [ ]/[/] checkbox motif (BoxSpinner) that the whole
 //           rail speaks, at 12px, indented to clear the parent row's indicator column. NEVER swap this
 //           for the pulsing dot: matching the parent rows is the point.
-//   card  — a queue card's live child lines. The pulsing live dot, no kind tag, no elapsed: a handoff
-//           card names the work still running beneath it, it does not become a second ops toolbar.
-//   sheet — the drawer's background-ops strip. The full row: dot + petite-caps kind tag + label +
-//           elapsed + a hover drill-in arrow, because this IS the operations surface.
+//   card  — a queue card's live child lines. The pulsing live dot, no kind tag: a handoff card names
+//           the work still running beneath it, it does not become a second ops toolbar.
+//   sheet — the drawer's background-ops strip. The full row: dot + petite-caps kind tag + label + a
+//           hover drill-in arrow, because this IS the operations surface.
+// All three carry the light-gray "last active" reading when the child reports one — the recency the
+// running/stale mark alone can't give ("stale" only means quiet ≥15 min, not HOW long).
 export type ChildOpDensity = "rail" | "card" | "sheet"
 
 // ONE row for "a thing running underneath this thread", rendered identically everywhere it appears.
@@ -41,7 +44,7 @@ export function ChildOpRow({
   label,
   state,
   density,
-  startedAt,
+  lastActivityAt,
   parentSlug,
   onOpen,
   onDismiss,
@@ -51,8 +54,9 @@ export function ChildOpRow({
   label: string
   state: "running" | "stale"
   density: ChildOpDensity
-  // ISO start; only the "sheet" density has room to render an elapsed reading from it.
-  startedAt?: string
+  // ISO of the child's last transcript append (its output-file mtime). Rendered as a light-gray
+  // "6 min ago" reading, live-ticking; absent ⇒ no reading (never a fabricated one).
+  lastActivityAt?: string
   // Drill-in marker: keeps an open ThreadSheet for this slug from self-dismissing on the pointer-down,
   // so the child transcript STACKS over its parent instead of replacing it (see ThreadSheet).
   parentSlug?: string
@@ -68,7 +72,10 @@ export function ChildOpRow({
   const clickable = !!onOpen
   const rail = density === "rail"
   const sheet = density === "sheet"
-  const when = sheet ? elapsedSince(startedAt) : ""
+  // Live-ticking recency, on every density. useNowMs re-renders this row ~every 30s so the reading
+  // keeps counting up even while the board sends nothing (a steadily-quiet child pushes no delta).
+  const now = useNowMs()
+  const ago = formatAgo(lastActivityAt, now)
   const openTitle = CHILD_OPEN_TITLE[kind]
   const rowTitle = title ?? (clickable ? openTitle : undefined)
 
@@ -101,7 +108,7 @@ export function ChildOpRow({
       {indicator}
       {sheet && <span className="petite-caps shrink-0 text-[9.5px] text-muted/45">{kind}</span>}
       <span className={`min-w-0 truncate text-muted/70 ${rail ? "leading-[16px]" : clickable ? "group-hover:text-fg/80 group-hover:underline" : ""}`}>{label}</span>
-      {when && <span className="shrink-0 text-muted/40">{when}</span>}
+      {ago && <span className="shrink-0 text-muted/40" title={`Last active ${ago}`}>{ago}</span>}
       {sheet && clickable && <ArrowUpRight size={11} className="shrink-0 text-transparent transition-colors group-hover:text-muted/50" />}
     </>
   )

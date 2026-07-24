@@ -447,7 +447,7 @@ function SubAgentRows({ t }: { t: ThreadView }) {
           label={s.label}
           state={s.state}
           density="rail"
-          startedAt={s.startedAt}
+          lastActivityAt={s.lastActivityAt}
           parentSlug={t.id}
           onOpen={() => pushSubAgentDrawer(t.id, s.id, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt })}
           // The rail has no room for the worker-profile tag the ops strip can show, so it rides the tooltip.

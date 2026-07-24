@@ -82,6 +82,14 @@ const CLAUDE_PERMISSION_CONFIRM_POLLS = 3
 // AGENTS ONLY: a child appends on every step, so silence there is a real (if coarse) liveness signal.
 // A background SHELL has no such property and is not judged this way at all — see bgShellViews.
 const SUBAGENT_STALE_MS = 15 * 60_000
+// The minute bucket of an ISO instant, for the board signature: a child's "N min ago" reading only
+// changes when this changes, so folding this (not the raw mtime) into the sig means a steadily-active
+// child re-pushes at most once a minute. "" when absent/unparseable — an absent reading is stable.
+function activityMinute(at: string | undefined): string {
+  if (!at) return ""
+  const ms = Date.parse(at)
+  return Number.isFinite(ms) ? String(Math.floor(ms / 60_000)) : ""
+}
 // How long the transcript must be silent while a turn still looks in-flight before we spend a
 // tmux capture-pane to sniff for an interactive permission prompt. Keeps us from shelling out
 // every tick for a healthily-streaming turn; a real prompt only appears after a tool_use record
@@ -123,6 +131,7 @@ export interface SubAgentView {
   state: "running" | "stale"
   subagentType?: string // the dispatch's input.subagent_type verbatim (e.g. "fray:fray-opus-high"); absent when unset
   id: string // the dispatch tool_use id — the drill-in drawer's stable handle to this exact child
+  lastActivityAt?: string // ISO8601 of the child transcript's last append (its output-file mtime)
 }
 
 // A signal fence parsed from the FINAL assistant message (mirrors @fray-ui/shared ThreadFence; kept
@@ -317,6 +326,7 @@ export interface BgShellView {
   startedAt: string
   state: "running" | "stale"
   id?: string
+  lastActivityAt?: string // ISO8601 of the shell output file's last write
 }
 
 // A pending native AskUserQuestion (structured, capped). Mirrors @fray-ui/shared PendingAsk; `id` is
@@ -1509,13 +1519,23 @@ export function createTailer(deps: TailerDeps): Tailer {
     return m === undefined || nowMs - m > SUBAGENT_STALE_MS
   }
 
+  // The child's last-append instant (its output file's mtime, the same stat entryStale reads), as ISO
+  // for the surfaced view. Undefined before the path resolves or when the file no longer stats — the
+  // caller then simply omits lastActivityAt (an absent reading is correct; a fabricated one is not).
+  function entryLastActivity(e: SubAgentEntry): string | undefined {
+    if (!e.outputFile) return undefined
+    const m = mtimeMs(e.outputFile)
+    return m === undefined ? undefined : new Date(m).toISOString()
+  }
+
   // Derive the surfaced view of a session's live SUB-AGENTS (kind "agent"; insertion = dispatch order).
   function subAgentViews(state: TailState, nowMs: number): SubAgentView[] {
     if (state.subAgents.size === 0) return []
     const out: SubAgentView[] = []
     for (const e of state.subAgents.values()) {
       if (e.kind !== "agent") continue
-      out.push({ label: e.label, startedAt: e.startedAt, state: entryStale(e, nowMs) ? "stale" : "running", subagentType: e.subagentType, id: e.toolUseId })
+      const lastActivityAt = entryLastActivity(e)
+      out.push({ label: e.label, startedAt: e.startedAt, state: entryStale(e, nowMs) ? "stale" : "running", subagentType: e.subagentType, id: e.toolUseId, ...(lastActivityAt ? { lastActivityAt } : {}) })
     }
     return out
   }
@@ -1539,7 +1559,8 @@ export function createTailer(deps: TailerDeps): Tailer {
     const out: BgShellView[] = []
     for (const e of state.subAgents.values()) {
       if (e.kind !== "shell") continue
-      out.push({ label: e.label, startedAt: e.startedAt, state: "running", id: e.toolUseId })
+      const lastActivityAt = entryLastActivity(e)
+      out.push({ label: e.label, startedAt: e.startedAt, state: "running", id: e.toolUseId, ...(lastActivityAt ? { lastActivityAt } : {}) })
     }
     return out
   }
@@ -1548,9 +1569,13 @@ export function createTailer(deps: TailerDeps): Tailer {
   // so the tick marks the board dirty on any add/removal, a sub-agent running→stale flip (purely
   // time-based, no new record), or an ask appearing/clearing. Without it those changes would linger to
   // the next reconcile. (Shells no longer have a time-based flip, but their add/removal still counts.)
+  //
+  // lastActivityAt is folded in at MINUTE granularity, never raw: the reading is displayed as
+  // "N min ago", so a running child whose mtime advances every append only needs to re-push when its
+  // displayed minute would change — at most once a minute per active child, not once an append.
   function derivedSignature(state: TailState, nowMs: number): string {
-    const agents = subAgentViews(state, nowMs).map((v) => `A:${v.label}|${v.state}|${v.startedAt}`).join("")
-    const shells = bgShellViews(state).map((v) => `S:${v.label}|${v.state}|${v.startedAt}`).join("")
+    const agents = subAgentViews(state, nowMs).map((v) => `A:${v.label}|${v.state}|${v.startedAt}|${activityMinute(v.lastActivityAt)}`).join("")
+    const shells = bgShellViews(state).map((v) => `S:${v.label}|${v.state}|${v.startedAt}|${activityMinute(v.lastActivityAt)}`).join("")
     const ask = state.pendingAsk ? `Q:${state.pendingAsk.id}:${state.pendingAsk.questions.length}` : ""
     return `${agents}\n${shells}\n${ask}`
   }
