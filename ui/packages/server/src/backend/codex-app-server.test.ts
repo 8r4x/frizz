@@ -35,6 +35,9 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
   readonly clientResponses: Message[] = []
   private buffer = ""
   private activeTurn: { threadId: string; turnId: string } | null = null
+  private model = "gpt-5"
+  private effort: string | null = "high"
+  private sandboxPolicy: Record<string, unknown> = { type: "workspaceWrite", networkAccess: true }
   // When set, a turn/steer completes the turn (turn/completed) then rejects — modelling the turn
   // ending in the bridge's read→steer window, which must trigger followUp's start-fallback.
   rejectSteerAsEnded = false
@@ -175,6 +178,28 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
       this.activeTurn = { threadId: params.threadId, turnId }
       this.notify("turn/started", { threadId: params.threadId, turn: { id: turnId } })
       this.send({ id, result: { turn: { id: turnId } } })
+      return
+    }
+    if (message.method === "thread/settings/update") {
+      const params = message.params as {
+        threadId: string
+        model?: string | null
+        effort?: string | null
+        sandboxPolicy?: Record<string, unknown> | null
+      }
+      if (typeof params.model === "string") this.model = params.model
+      if ("effort" in params) this.effort = params.effort ?? null
+      if (params.sandboxPolicy) this.sandboxPolicy = params.sandboxPolicy
+      this.send({ id, result: {} })
+      this.notify("thread/settings/updated", {
+        threadId: params.threadId,
+        threadSettings: {
+          sandboxPolicy: this.sandboxPolicy,
+          approvalPolicy: "never",
+          model: this.model,
+          effort: this.effort,
+        },
+      })
       return
     }
     if (message.method === "turn/steer") {
@@ -349,6 +374,52 @@ test("bridge is the sole codex transport (always enabled) and negotiates exact i
   })
   assert.ok(h.processes[0]!.inbound.some((message) => message.method === "initialized"))
   assert.equal(h.processes[0]!.inbound.some((message) => "jsonrpc" in message), false)
+  h.close()
+})
+
+test("setProfile uses native thread settings and reports whether an existing turn keeps its old profile", async () => {
+  const h = harness()
+  const binding = await h.bridge.startDisposableSession({
+    threadSlug: "profile-thread",
+    sessionId: "profile-session",
+    cwd: h.dir,
+  })
+  const idle = await h.bridge.setProfile({
+    threadSlug: binding.threadSlug,
+    sessionId: binding.sessionId,
+    model: "gpt-5.6-terra",
+    effort: "high",
+  })
+  assert.deepEqual(idle, {
+    applied: true,
+    model: "gpt-5.6-terra",
+    effort: "high",
+    confirmedBy: "notification",
+    turnInFlight: false,
+  })
+
+  const process = h.processes[0]!
+  const firstUpdate = process.clientRequests.find((message) => message.method === "thread/settings/update")!
+  assert.deepEqual(firstUpdate.params, {
+    threadId: binding.codexThreadId,
+    model: "gpt-5.6-terra",
+    effort: "high",
+  })
+
+  await h.bridge.startTurn({
+    threadSlug: binding.threadSlug,
+    sessionId: binding.sessionId,
+    text: "Keep the current turn on its starting profile",
+  })
+  const duringTurn = await h.bridge.setProfile({
+    threadSlug: binding.threadSlug,
+    sessionId: binding.sessionId,
+    model: "gpt-5.6-luna",
+    effort: "medium",
+  })
+  assert.equal(duringTurn.applied, true)
+  assert.equal(duringTurn.confirmedBy, "notification")
+  assert.equal(duringTurn.turnInFlight, true)
   h.close()
 })
 

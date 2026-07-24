@@ -455,6 +455,7 @@ export const ThreadView = z.object({
   // target until both pending values are attached and readiness-proven for a new generation.
   profilePendingModel: z.string().optional(),
   profilePendingEffort: z.string().optional(),
+  profileChangeQueued: z.boolean().optional(),
   profileChangePending: z.boolean().optional(),
   // One durable runtime-control owner serializes reattach/resume/native-composer mutations. Unknown
   // future owner values still disable the composer rather than being treated as idle.
@@ -793,7 +794,7 @@ export const SetThreadProfileInput = z.object({
 }).strict()
 export type SetThreadProfileInput = z.infer<typeof SetThreadProfileInput>
 export const SetThreadProfileResult = z.object({
-  effect: z.enum(["applied", "next-resume"]),
+  effect: z.enum(["applied", "queued", "next-turn", "next-resume"]),
 })
 export type SetThreadProfileResult = z.infer<typeof SetThreadProfileResult>
 

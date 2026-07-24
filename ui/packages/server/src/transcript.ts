@@ -185,8 +185,10 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
     if (thisTs && (rec.type === "assistant" || rec.type === "user")) prevTs = thisTs
 
     // A QUEUED human follow-up's enqueue/removal (the completion <task-notification> queue-operations were
-    // already consumed above). `enqueue` emits a pending grayed bubble; a CONTENT-BEARING removal
-    // supersedes it (see below); the delivery itself is the `queued_command` attachment handled next.
+    // already consumed above). `enqueue` emits a pending grayed bubble. Removal records are deliberately
+    // not authoritative: Claude emits a content-bearing `remove` several seconds BEFORE the corresponding
+    // `queued_command` attachment, so deleting here makes the bubble vanish between its two queues.
+    // Explicit delivery evidence below resolves or removes it in place and preserves the enqueue sourceId.
     if (rec.type === "queue-operation") {
       const op = typeof rec.operation === "string" ? rec.operation : ""
       const content = typeof rec.content === "string" ? normalizeNewlines(rec.content) : ""
@@ -197,19 +199,6 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         const m: TranscriptMessage = { sourceId, role: "user", text: content, tools: [], parts: [], at: thisTs, queued: true }
         out.push(m)
         queuedPending.set(content, m)
-      } else if ((op === "remove" || op === "dequeue" || op === "popAll") && content.trim()) {
-        // A removal that ECHOES the queued text supersedes its pending bubble — either the message was
-        // cancelled before delivery, or (in sessions whose `remove` carries the text) it's the delivery
-        // handshake and the following attachment re-renders the delivered copy. Splice the pending bubble
-        // so we never render both. An EMPTY-content removal is the ordinary handshake and is deliberately
-        // IGNORED: matching it by anything but exact text could evict a genuinely-still-pending human
-        // bubble when an unrelated queue item (e.g. a sub-agent task-notification) is dequeued.
-        const m = queuedPending.get(content)
-        if (m) {
-          queuedPending.delete(content)
-          const i = out.indexOf(m)
-          if (i !== -1) out.splice(i, 1)
-        }
       }
       return
     }
