@@ -76,10 +76,18 @@ function bootServer(artifact, target, token, label) {
   return { child, out: () => output }
 }
 
+// FRAY_CODEX_NATIVE_LISTEN=1 swaps the hand-written daemon for `codex app-server --listen unix://`
+// (codex-app-server-native.ts). It reaches the booted runtimes through the `...process.env` spread in
+// bootServer, so running this harness with the flag set exercises that transport instead. The native
+// listener is ONE process rather than a daemon wrapping a child, so its pid stands in for both — every
+// assertion below then reads "the app-server outlived the runtime" exactly as it does for the daemon.
+const NATIVE = process.env.FRAY_CODEX_NATIVE_LISTEN === "1" || process.env.FRAY_CODEX_NATIVE_LISTEN === "true"
 const readRecord = () => {
-  const dir = join(stateDir, "codex-app-server")
+  const dir = join(stateDir, NATIVE ? "codex-app-server-native" : "codex-app-server")
   const files = existsSync(dir) ? readdirSync(dir) : []
-  return files.length ? JSON.parse(readFileSync(join(dir, files[0]), "utf8")) : null
+  if (!files.length) return null
+  const record = JSON.parse(readFileSync(join(dir, files[0]), "utf8"))
+  return NATIVE ? { ...record, daemonPid: record.listenerPid, childPid: record.listenerPid } : record
 }
 
 try {
