@@ -51,6 +51,8 @@ interface ContextState {
   tailerStopped: number
   permissionStarted: number
   permissionStopped: number
+  deliveryConfirmStarted: number
+  deliveryConfirmStopped: number
   schedulerStarted: number
   schedulerStopped: number
 }
@@ -111,6 +113,8 @@ function fixture(t: TestContext, controls: FixtureControls = {}) {
         tailerStopped: 0,
         permissionStarted: 0,
         permissionStopped: 0,
+        deliveryConfirmStarted: 0,
+        deliveryConfirmStopped: 0,
         schedulerStarted: 0,
         schedulerStopped: 0,
       }
@@ -120,6 +124,7 @@ function fixture(t: TestContext, controls: FixtureControls = {}) {
       let boardStopped: Promise<void> | undefined
       let tailerStopped = false
       let permissionStopped = false
+      let deliveryConfirmStopped = false
       const ctx = {
         bootId: randomUUID(),
         project,
@@ -161,6 +166,15 @@ function fixture(t: TestContext, controls: FixtureControls = {}) {
             if (permissionStopped) return
             permissionStopped = true
             state.permissionStopped++
+          },
+        },
+        deliveryConfirmer: {
+          tick() {},
+          start() { state.deliveryConfirmStarted++ },
+          stop() {
+            if (deliveryConfirmStopped) return
+            deliveryConfirmStopped = true
+            state.deliveryConfirmStopped++
           },
         },
         scheduler: {
@@ -256,6 +270,7 @@ function fixture(t: TestContext, controls: FixtureControls = {}) {
       assert.equal(state.boardStopped, 1, "created board/watcher stops exactly once")
       assert.equal(state.tailerStopped, 1, "created tailer stops exactly once")
       assert.equal(state.permissionStopped, 1, "created permission timer stops exactly once")
+      assert.equal(state.deliveryConfirmStopped, 1, "created delivery confirmer stops exactly once")
       assert.ok(state.schedulerStopped >= 1, "created scheduler receives a stop")
     }
     for (const server of httpServers) assert.equal(server.listening, false, "no fake listener remains live")
@@ -274,6 +289,7 @@ const allPhases: ServerStartupPhase[] = [
   "board producer",
   "tailer producer",
   "permission producer",
+  "delivery confirmer",
   "profile producer",
   "wake scheduler",
   "Vite",

@@ -227,7 +227,9 @@ test("resumeThread durably excludes a concurrent profile change until live injec
   let observedControl: string | null | undefined
   let competingArm: ReturnType<typeof storage.armProfileChange>
   const tx = fakeTmux(true)
-  tx.sendKeys = () => {
+  // Every live inject — single-line included — now runs through pasteText (the settled bracketed
+  // paste); hook THAT to observe the row while the injection is in flight.
+  tx.pasteText = () => {
     const owned = storage.getSession(slug)!
     observedControl = owned.runtime_control
     competingArm = storage.armProfileChange(slug, {
@@ -560,6 +562,26 @@ test("resumeThread leaves a non-archived thread's state untouched (no needless f
   assert.deepEqual(tmux.keyed, ["hi"])
   assert.equal(storage.getSession(slug)?.state, "open")
   assert.equal(sectionOf(threadIn(board.refresh(), slug)), "active")
+})
+
+test("a SINGLE-LINE follow-up is pasted+settled, never send-keys'd — that pair is the swallowed Enter", () => {
+  const { storage, board } = harness()
+  const slug = "single-line-steer"
+  storage.upsertSession(sessionRow(slug))
+  const used: string[] = []
+  const tx: ResumeTmux = {
+    isLive: () => true,
+    // `send-keys -l <text>` followed by a separate `send-keys Enter` is read out of the pty as ONE
+    // input burst by Claude Code, which folds the \r into the paste as a literal newline instead of
+    // submitting. Measured 16/20 swallowed mid-turn against a real claude 2.1.218 TUI.
+    sendKeys: () => void used.push("send-keys"),
+    pasteText: () => void used.push("paste"),
+    killSession: () => {},
+    ensureServer: () => {},
+    spawn: () => {},
+  }
+  resumeThread({ project: fakeProject("/tmp"), storage, board, getSettings: () => settings, tmux: tx }, slug, "one line, no newline")
+  assert.deepEqual(used, ["paste"])
 })
 
 test("resumeThread: a persisted per-thread permission overrides mutable global Settings", () => {
