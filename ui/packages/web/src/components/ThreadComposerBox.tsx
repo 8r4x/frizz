@@ -1,0 +1,121 @@
+import { useState, type ReactElement, type ReactNode } from "react"
+import { useSnapshot } from "valtio"
+import type { Backend } from "@fray-ui/shared"
+import { store } from "../store.ts"
+import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
+import { Composer } from "./Composer.tsx"
+import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
+import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
+import { parseAccountAlias } from "../lib/signIn.ts"
+import { useEagerFollowUp, type EagerFollowUpCallbacks } from "../lib/eagerComposerSubmission.ts"
+
+// THE prompt box for a registered thread — the single block every "steer this thread" surface renders.
+// The <Composer> leaf was already shared; the ~14 lines AROUND it were not, and the queue card's copy had
+// silently drifted: it never intercepted the `/login` / `/logout` aliases, so typing `/login` into a cue
+// card injected the literal string into the running worker's stdin while the same keystroke in the drawer
+// opened the sign-in modal. Everything that must not diverge now lives here exactly once:
+//
+//   · the follow-up DRAFT key (so the queue card and the drawer are the same textarea, and a draft typed
+//     in one is present in the other and survives a reload),
+//   · the `/login` | `/logout` alias intercept + its SignInModal / LogoutConfirmModal,
+//   · useThreadComposerControls (the model/effort footer and the backend busy fence),
+//   · the {controls.status} line under the box.
+//
+// The two call sites keep their DELIBERATE differences as props, never as a forked tree: the padding
+// wrapper (`className`), the running-operations rows rendered under the box (`ops` — the drawer passes
+// BackgroundOpsStrip, the queue passes its ⤷ sub-agent lines plus a narrowed strip), and the send itself
+// (`submitOverride`). Everything else is identical by construction.
+export function ThreadComposerBox({
+  slug,
+  surface,
+  placeholder,
+  className,
+  id,
+  ops,
+  submitOverride,
+}: {
+  slug: string
+  // Pure data- tag forwarded to the textarea. Also the two surfaces' only behavioral fork inside
+  // <Composer> itself (queueComposer owns Option-Enter); see lib/queueComposerKeyboard.ts.
+  surface: "queueComposer" | "chatComposer"
+  placeholder: string
+  // The ONLY padding/chrome difference between the call sites — the drawer's bordered panel footer vs the
+  // queue card's flush bottom block.
+  className?: string
+  // DOM id for the textarea. The drawer's is "followup-input": the terminal tab's "reply in chat" button
+  // focuses it by id (TerminalPane).
+  id?: string
+  // Running background operations, rendered INSIDE the padded box under the prompt so those rows hang
+  // tight off it. Composed by the caller — this component does not decide which ops a surface shows.
+  ops?: ReactNode
+  // Replaces the default eager follow-up send. The queue card passes its useLiveAnswering `sendMessage`,
+  // so the card's free-form reply and its "Send answers" reply are literally the same send — one
+  // controller, one optimistic card dissolve, one scroll policy (the queue suppresses the bottom pin;
+  // it fights card exit/reorder). Callers WITHOUT an answering controller (the drawer) omit it and get
+  // the plain eager follow-up. Deliberately not split into separate `onSent`/`scrollToBottom` props:
+  // the override already carries both, and a second copy of them here could only ever disagree.
+  submitOverride?: (text: string, callbacks: EagerFollowUpCallbacks) => void
+}): ReactElement {
+  const snap = useSnapshot(store)
+  const thread = snap.board?.threads.find((candidate) => candidate.id === slug)
+  const projectDir = useProjectDir()
+  const key = draftKey.followUp(projectDir, slug, thread?.sessionId)
+  const [message, setMessage, clearMessage] = useDraft(key)
+  const controls = useThreadComposerControls(slug)
+  const followUp = useEagerFollowUp(slug)
+  const [signInFor, setSignInFor] = useState<Backend | null>(null)
+  const [logoutFor, setLogoutFor] = useState<Backend | null>(null)
+
+  function send() {
+    const text = message.trim()
+    if (!text) return
+    // `/login` / `/logout` are fray-owned account actions for THIS thread's backend — invoked
+    // locally, never delivered to the worker as a prompt (a leading slash is not a stable provider
+    // command transport across the live-paste vs dead-resume lifecycles).
+    const alias = parseAccountAlias(text)
+    if (alias) {
+      clearMessage()
+      const backend: Backend = thread?.backend === "codex" ? "codex" : "claude"
+      if (alias === "login") setSignInFor(backend)
+      else setLogoutFor(backend)
+      return
+    }
+    const callbacks: EagerFollowUpCallbacks = {
+      onOptimistic: clearMessage,
+      // Never clobber a newer draft typed while the request was in flight.
+      onRollback: () => { if (!draftStore.get(key)) setMessage(message) },
+    }
+    if (submitOverride) submitOverride(text, callbacks)
+    else followUp.submit(text, callbacks)
+  }
+
+  return (
+    // `data-thread-action-bar` stays the drawer footer's stable anchor (fixtures/QA scripts measure the
+    // prompt-box inset from it); `data-thread-composer-box` addresses either surface's block.
+    <div
+      data-thread-composer-box={surface}
+      {...(surface === "chatComposer" ? { "data-thread-action-bar": "" } : {})}
+      className={className}
+    >
+      <Composer
+        id={id}
+        surface={surface}
+        value={message}
+        onChange={setMessage}
+        onSubmit={send}
+        placeholder={placeholder}
+        // NOT `|| followUp.pending`. The send is already committed locally (draft cleared, bubble
+        // appended, and in the queue the card has already begun dissolving), so gating the textarea on
+        // its round-trip only made the box go dead — and, because the browser blurs a disabled element,
+        // cost the caret — for the ~½s the tmux injection takes. What remains is a genuine backend
+        // fence: a permission/profile change owning the runtime.
+        busy={controls.busy}
+        footer={controls.footer}
+      />
+      {controls.status}
+      {ops}
+      {signInFor && <SignInModal backend={signInFor} onClose={() => setSignInFor(null)} onAuthed={() => setSignInFor(null)} />}
+      {logoutFor && <LogoutConfirmModal backend={logoutFor} onClose={() => setLogoutFor(null)} />}
+    </div>
+  )
+}
