@@ -830,8 +830,16 @@ function trackCompletions(state: TailState, rec: Record): void {
     // orphaned background shell — which has NO staleness clock — pulsed "running" forever, re-derived
     // identically on every restart (found 2026-07-23 on real nub threads). A non-terminal "running" ping
     // still retires nothing.
+    // A Monitor that hits its timeout_ms emits ONE notification carrying NO <status> (and no
+    // <tool-use-id>) — only an <event> with the harness's timeout sentinel. Without this the entry
+    // dangles as "running" forever (0 of 2 timeout notifications carried a status, session 54b37ebe).
+    // Key STRICTLY on the sentinel: ordinary Monitor progress events also have <event> and no <status>,
+    // so "missing status ⇒ terminal" would retire every live monitor on its first event. The sentinel
+    // is harness-emitted prose and could drift — same fragility as the launch-ack strings we already
+    // depend on ("Command running in background with ID:", "Monitor started (task").
+    const monitorTimedOut = block.includes("<event>[Monitor timed out")
     const terminal: "completed" | "failed" | "killed" | undefined =
-      status === "completed" || status === "failed" || status === "killed" ? status : status === "stopped" ? "killed" : undefined
+      status === "completed" || status === "failed" || status === "killed" ? status : status === "stopped" || monitorTimedOut ? "killed" : undefined
     if (!terminal) continue
     // ONE block can list MANY ops — the recovery notification names every orphan at once — and it may
     // carry tool-use-ids, only task-ids, or both (the recovery shape omits tool-use-ids entirely). Retire

@@ -11,14 +11,14 @@ import { useLiveAnswering } from "../lib/answering.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
 import { Message, NativeInputRequiredCard, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText } from "./ChatView.tsx"
 import { prefs } from "../lib/prefs.ts"
-import { Composer } from "./Composer.tsx"
-import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
+import { ThreadComposerBox } from "./ThreadComposerBox.tsx"
 import { BackgroundOpsStrip, ThreadSlugContext, QueueDismissContext } from "./ChatView.tsx"
 import { HeaderActions } from "./HeaderActions.tsx"
 import { ThreadLifecycleFooter } from "./ThreadLifecycleFooter.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
 import { QueueSubAgentLines } from "./QueueSubAgentLines.tsx"
+import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { LastActive } from "./LastActive.tsx"
 import { CopyTerminalCommandButton, useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
 import {
@@ -29,7 +29,6 @@ import {
   type TranscriptViewportAnchor,
 } from "../lib/transcriptPagination.ts"
 import type { TranscriptData } from "../hooks.ts"
-import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
 
 // The Queue: everything currently waiting on the human, rendered as a SCROLLING LIST of cards — every
 // pending item visible at once, one per card, in one vertical column that scrolls when it overflows.
@@ -167,11 +166,9 @@ function AwaitingBackgroundBanner({ thread, onSnooze, onSnoozeFailed }: {
           title="Hide this card until a sub-agent returns"
           className="flex shrink-0 items-center gap-1.5 rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] font-medium text-fg/80 outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45"
         >
-          {/* Optical nudge, measured not guessed: items-center aligns the two BOXES, but "Snooze" has no
-              descenders, so its ink (7.9px) sits high in the 12px font box while the hourglass ink (10px)
-              is centered in its own — leaving the icon reading 1.58px LOW. Line-height is not the cause
-              (it cancels out of the offset), so the fix is this nudge, not a leading change. */}
-          <Hourglass size={12} className="-translate-y-[1.5px]" />
+          {/* Measured, not guessed: the icon read 1.58px LOW here. See lib/iconAlign.ts for why box
+              centering leaves a descender-free label's ink high, and why leading-none is not the fix. */}
+          <Hourglass size={12} className={ICON_LABEL_NUDGE} />
           Snooze
         </button>
       </div>
@@ -658,9 +655,6 @@ function IntermediateSummary({ toolCount, stepCount, onExpand }: { toolCount: nu
 // memoized Message. `onResolve` takes the slug (stable useCallback in TodosView) so this card's props
 // never churn identity render-to-render.
 const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnresolve }: { thread: ThreadView; leaving: boolean; onResolve: (slug: string) => void; onUnresolve: (slug: string) => void }) {
-  const projectDir = useProjectDir()
-  const messageKey = draftKey.followUp(projectDir, thread.id, thread.sessionId)
-  const [message, setMessage, clearMessage] = useDraft(messageKey)
   const [collapsed, setCollapsed] = useState(false)
   // Higher-level (turn-level) collapse: the whole run of INTERMEDIATE steps between the pinned last
   // user message and the final agent message is hidden behind a single summary bar by default, so a
@@ -690,7 +684,6 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   const transcriptKeyRef = useRef<string | null>(null)
   const queryClient = useQueryClient()
   const copyTerminalCommand = useCopyTerminalCommand(thread.id)
-  const controls = useThreadComposerControls(thread.id)
   // Client view pref: how (or whether) to pin the current ask to the pane top. `off` → plain flow.
   const { stickyUserMessage } = useSnapshot(prefs)
 
@@ -942,12 +935,6 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
     ;(document.activeElement as HTMLElement | null)?.blur()
     onResolve(thread.id)
   }, { scrollToBottom: false })
-  const send = () => {
-    sendMessage(message, {
-      onOptimistic: clearMessage,
-      onRollback: () => { if (!draftStore.get(messageKey)) setMessage(message) },
-    })
-  }
 
   // Dismiss THIS card through the same user-initiated auto-scroll exit the footer/header/answer paths
   // use, exposed to the in-transcript fence buttons (done Mark-as-done, awaiting park) via context so
@@ -1197,43 +1184,44 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
           is the same prompt box in every state. Its spacing is deliberately ASYMMETRIC — 8px up to the
           last question block, 16px down to the prompt box — so it reads as hanging off the questions
           rather than hovering over the box. */}
-      <div className="shrink-0 px-5 pb-3 pt-0">
       {answerable && (
-        <div className="mb-4 flex items-center justify-end gap-2">
-          <button
-            disabled={!anyAnswered}
-            onClick={() => sendAnswers()}
-            onMouseDown={(e) => e.preventDefault()}
-            className="rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:hover:opacity-30"
-          >
-            Send answers
-          </button>
+        <div className="shrink-0 px-5 pt-0">
+          <div className="mb-4 flex items-center justify-end gap-2">
+            <button
+              disabled={!anyAnswered}
+              onClick={() => sendAnswers()}
+              onMouseDown={(e) => e.preventDefault()}
+              className="rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:hover:opacity-30"
+            >
+              Send answers
+            </button>
+          </div>
         </div>
       )}
-      <Composer
+      {/* THE standard prompt box — the exact block the drawer renders (ThreadActionBar), differing only
+          in its padding wrapper, the ops rows beneath it, and the send. `submitOverride` routes this
+          box through the card's own answering controller so a free-form reply and a "Send answers"
+          reply are one send: same optimistic dissolve, same suppressed bottom-pin. */}
+      <ThreadComposerBox
+        slug={thread.id}
         surface="queueComposer"
-        value={message}
-        onChange={setMessage}
-        onSubmit={send}
+        className="shrink-0 px-5 pb-3 pt-0"
         // With an open ask the box is the deliberate escape hatch, so say so — otherwise "Reply to the
         // agent…" reads as a second way to answer the question rather than a way around it.
         placeholder={answerable ? "Or skip the questions and reply…" : "Reply to the agent…"}
-        minHeight={44}
-        // NOT `|| sending`. The card already dissolves optimistically on send; locking the textarea for
-        // the injection round-trip on top of that just froze the last surface still on screen. `busy`
-        // is left to mean what it should: a backend fence owning this thread's runtime.
-        busy={controls.busy}
-        footer={controls.footer}
+        submitOverride={sendMessage}
+        ops={
+          <>
+            <QueueSubAgentLines slug={thread.id} subAgents={thread.subAgents ?? []} />
+            {/* Background shells / Monitors remain a runtime strip below the reply area. Live sub-agents are
+                intentionally excluded here because their compact ⤷ child lines sit directly above it.
+                It HANGS off the composer at the same pt-1.5 as those child lines — the prompt box's own
+                bottom padding already supplies the optical air, so a larger gap here reads as a break —
+                and carries its own pb so the last row still breathes before the lifecycle footer. */}
+            <BackgroundOpsStrip slug={thread.id} includeAgents={false} className="px-1 pb-2 pt-1.5" />
+          </>
+        }
       />
-      {controls.status}
-        <QueueSubAgentLines slug={thread.id} subAgents={thread.subAgents ?? []} />
-        {/* Background shells / Monitors remain a runtime strip below the reply area. Live sub-agents are
-            intentionally excluded here because their compact ⤷ child lines sit directly above it.
-            It HANGS off the composer at the same pt-1.5 as those child lines — the prompt box's own
-            bottom padding already supplies the optical air, so a larger gap here reads as a break —
-            and carries its own pb so the last row still breathes before the lifecycle footer. */}
-        <BackgroundOpsStrip slug={thread.id} includeAgents={false} className="px-1 pb-2 pt-1.5" />
-      </div>
       </>
       )}
       </div>
