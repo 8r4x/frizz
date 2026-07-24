@@ -1828,3 +1828,113 @@ test("bridge persistence refuses malformed or future authority schemas before sp
   futureInteractions.dispose()
   futureDb.close()
 })
+
+// ---- daemon lifecycle: what an attachment REPORTS about the stream it just joined ------------------
+
+/** A bridge harness whose host is scripted attachment-by-attachment: it decides `reattached`, the
+ *  `generation`, and how many lines the daemon had to drop while nobody was attached. Those three
+ *  fields are the entire input to the bridge's "did my turns survive?" decision. */
+function scriptedHostHarness(script: () => { generation: string; reattached: boolean; droppedWhileDetached: number }) {
+  const dir = mkdtempSync(join(tmpdir(), "fray-codex-attachment-"))
+  const dbPath = join(dir, "ui.db")
+  const db = new Database(dbPath)
+  db.pragma("journal_mode = WAL")
+  const now = new Date("2026-07-13T12:00:00.000Z")
+  let clientId = 0
+  const diagnostics: unknown[] = []
+  const interactions = createInteractionStore(db, { now: () => now, id: () => `interaction-${++clientId}` })
+  const processes: FakeAppServerProcess[] = []
+  const bridges: CodexAppServerBridge[] = []
+  const newBridge = () => {
+    const bridge = new CodexAppServerBridge({
+      projectId: "project-1",
+      projectDir: dir,
+      dbPath,
+      interactions,
+      codexBin: "/opt/codex",
+      host: async () => {
+        const process_ = new FakeAppServerProcess()
+        processes.push(process_)
+        const { generation, reattached, droppedWhileDetached } = script()
+        return { process: process_, generation, reattached, daemonPid: 4242, droppedWhileDetached }
+      },
+      now: () => now,
+      id: () => `client-message-${++clientId}`,
+      requestTimeoutMs: 1_000,
+      diagnostic: (event) => diagnostics.push(event),
+    })
+    bridges.push(bridge)
+    return bridge
+  }
+  return {
+    dir,
+    processes,
+    diagnostics,
+    newBridge,
+    close() {
+      for (const bridge of bridges.reverse()) bridge.close()
+      interactions.dispose()
+      db.close()
+    },
+  }
+}
+
+// The clean rejoin: same app-server, nothing lost. The turn is still RUNNING inside that process, so
+// touching it would be the bug — `thread/resume` against a live turn disturbs it and clearing
+// `current_turn_id` would orphan the `turn/completed` still on its way.
+test("a lossless reattach to the same app-server keeps the in-flight turn exactly as it was", async () => {
+  let plan = { generation: "gen-A", reattached: false, droppedWhileDetached: 0 }
+  const h = scriptedHostHarness(() => plan)
+  const bridge = h.newBridge()
+  const binding = await bridge.startDisposableSession({
+    threadSlug: "lossless", sessionId: "lossless-session", cwd: h.dir, ephemeral: false,
+  })
+  const { turnId } = await bridge.startTurn({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "Work" })
+  await waitFor(() => bridge.binding(binding.threadSlug, binding.sessionId)?.currentTurnId === turnId, "turn active")
+  bridge.close() // the fray runtime is recycled; the daemon and the turn keep going
+
+  plan = { generation: "gen-A", reattached: true, droppedWhileDetached: 0 }
+  const restarted = h.newBridge()
+  await restarted.resumeOwnedSession(binding.threadSlug, binding.sessionId)
+  const rejoined = restarted.binding(binding.threadSlug, binding.sessionId)!
+  assert.equal(rejoined.state, "active")
+  assert.equal(rejoined.currentTurnId, turnId, "the live turn is still ours; nothing was lost")
+  assert.equal(
+    h.processes[1]!.clientRequests.filter((message) => message.method === "thread/resume").length,
+    0,
+    "a live turn is never resumed out from under itself",
+  )
+  h.close()
+})
+
+// The daemon caps its detached queue and reports the overflow in `hello` SPECIFICALLY so the client
+// learns it must not trust the stream — and the client used to throw that control line away unread.
+// A dropped `turn/completed` under a `sameProcess` rejoin wedges `current_turn_id` forever, waiting on
+// an event the daemon already discarded. Losing events makes the rejoin a COLD one, by definition.
+test("a reattach that lost events is not a rejoin: the thread resumes instead of trusting the stream", async () => {
+  let plan = { generation: "gen-A", reattached: false, droppedWhileDetached: 0 }
+  const h = scriptedHostHarness(() => plan)
+  const bridge = h.newBridge()
+  const binding = await bridge.startDisposableSession({
+    threadSlug: "lossy", sessionId: "lossy-session", cwd: h.dir, ephemeral: false,
+  })
+  const { turnId } = await bridge.startTurn({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "Work" })
+  await waitFor(() => bridge.binding(binding.threadSlug, binding.sessionId)?.currentTurnId === turnId, "turn active")
+  bridge.close()
+
+  plan = { generation: "gen-A", reattached: true, droppedWhileDetached: 31 }
+  const restarted = h.newBridge()
+  await restarted.resumeOwnedSession(binding.threadSlug, binding.sessionId)
+  const rebound = restarted.binding(binding.threadSlug, binding.sessionId)!
+  assert.equal(rebound.state, "active")
+  assert.equal(rebound.currentTurnId, null, "a turn whose completion may have been dropped cannot stay current")
+  assert.ok(
+    h.processes[1]!.clientRequests.some((message) => message.method === "thread/resume"),
+    "the honest recovery for a holed stream is the cold path",
+  )
+  assert.ok(
+    h.diagnostics.some((event) => (event as Message).event === "daemon-events-dropped" && (event as Message).dropped === 31),
+    `the loss is reported, not swallowed — saw ${JSON.stringify(h.diagnostics)}`,
+  )
+  h.close()
+})

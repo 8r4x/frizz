@@ -5,17 +5,26 @@
 // in _live_appserver_restart_repro.mts.
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { mkdtempSync, writeFileSync, chmodSync, existsSync } from "node:fs"
+import { mkdtempSync, writeFileSync, chmodSync, existsSync, unlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
+import Database from "better-sqlite3"
+import { createInteractionStore } from "../interaction-store.ts"
 import {
+  codexAppServerDaemonRecordPath,
   codexAppServerSocketPath,
   daemonCodexAppServerHost,
   killCodexAppServerDaemon,
   liveDaemonRecord,
+  readDaemonRecord,
 } from "./codex-app-server-host.ts"
-import { CLIENT_CAPABILITIES, CLIENT_INFO } from "./codex-app-server.ts"
+import {
+  CLIENT_CAPABILITIES,
+  CLIENT_INFO,
+  CODEX_APP_SERVER_SUPPORTED_VERSION,
+  CodexAppServerBridge,
+} from "./codex-app-server.ts"
 
 // A stand-in for `codex app-server --stdio`: answers `initialize`, echoes a marker for `ping`, and
 // can be told to emit an unsolicited notification after a delay (the "a turn completed while nobody
@@ -34,6 +43,15 @@ process.stdin.on("data", (c) => {
       process.stdout.write(JSON.stringify({ id: m.id, result: { userAgent: "fray/0.144.6 (test)" } }) + "\\n")
     } else if (m.method === "ping") {
       process.stdout.write(JSON.stringify({ id: m.id, result: { sawId: m.id, echo: m.params && m.params.echo } }) + "\\n")
+    } else if (m.method === "flood") {
+      // Emit far more than the daemon's detached queue can hold, so the overflow it reports in
+      // \`hello\` is a real one rather than a number a test invented.
+      setTimeout(() => {
+        for (let i = 0; i < m.params.count; i++) {
+          process.stdout.write(JSON.stringify({ method: "turn/delta", params: { i } }) + "\\n")
+        }
+      }, m.params.afterMs)
+      process.stdout.write(JSON.stringify({ id: m.id, result: {} }) + "\\n")
     } else if (m.method === "emitLater") {
       setTimeout(() => {
         process.stdout.write(JSON.stringify({ method: "turn/completed", params: { marker: m.params.marker } }) + "\\n")
@@ -263,6 +281,297 @@ test("codex daemon: a daemon that cannot start falls back to an in-process app-s
     }
   } finally {
     console.error = consoleError
+    killCodexAppServerDaemon(h.stateDir, PROJECT)
+  }
+})
+
+// ---- lifecycle ownership --------------------------------------------------------------------------
+// fray adopted a long-lived process without adopting the work that goes with one: for a while
+// `killCodexAppServerDaemon` had ZERO production callers, so nothing in fray ever ended a daemon's
+// life. These drive the REAL daemon (and, for the version gate, the REAL bridge) through the two ways
+// a daemon has to be able to die.
+
+/** Like FAKE_APP_SERVER, but reports whatever version its sibling `codex-version` file held AT BOOT —
+ *  which is exactly how a real `codex` binary behaves when it is upgraded on disk. */
+const VERSIONED_FAKE_APP_SERVER = `#!/usr/bin/env node
+// Read from a sibling file at BOOT, not from the environment: the bridge hands the app-server only
+// its audited env allowlist, so an env-carried seam would silently vanish on the bridge's own path.
+const path = require("node:path")
+const version = require("node:fs").readFileSync(path.join(path.dirname(process.argv[1]), "codex-version"), "utf8").trim()
+let buf = ""
+process.stdin.on("data", (c) => {
+  buf += c
+  for (;;) {
+    const i = buf.indexOf("\\n"); if (i < 0) break
+    const line = buf.slice(0, i); buf = buf.slice(i + 1)
+    if (!line.trim()) continue
+    let m; try { m = JSON.parse(line) } catch { continue }
+    if (m.method === "initialize") {
+      process.stdout.write(JSON.stringify({ id: m.id, result: {
+        userAgent: "fray/" + version + " (test)",
+        codexHome: "/tmp/fake-codex-home",
+        platformFamily: "unix",
+        platformOs: "macos",
+      } }) + "\\n")
+    } else if (m.method === "thread/start" || m.method === "thread/resume") {
+      process.stdout.write(JSON.stringify({ id: m.id, result: { thread: { id: "codex-thread-1", sessionId: "codex-session-1", ephemeral: !!(m.params && m.params.ephemeral) } } }) + "\\n")
+    } else if (m.id !== undefined) {
+      process.stdout.write(JSON.stringify({ id: m.id, result: {} }) + "\\n")
+    }
+  }
+})
+process.stdin.resume()
+`
+
+function versionedHarness(initialVersion: string) {
+  const stateDir = mkdtempSync(join(tmpdir(), "fray-codex-skew-test-"))
+  const codexBin = join(stateDir, "fake-codex")
+  writeFileSync(codexBin, VERSIONED_FAKE_APP_SERVER)
+  chmodSync(codexBin, 0o755)
+  const versionFile = join(stateDir, "codex-version")
+  writeFileSync(versionFile, initialVersion)
+  return {
+    stateDir,
+    codexBin,
+    versionFile,
+    setInstalledVersion(version: string) { writeFileSync(versionFile, version) },
+    hostOptions() {
+      return options({ stateDir, codexBin })
+    },
+  }
+}
+
+function skewBridge(h: ReturnType<typeof versionedHarness>, diagnostics: unknown[]) {
+  const db = new Database(join(h.stateDir, "ui.db"))
+  db.pragma("journal_mode = WAL")
+  const interactions = createInteractionStore(db)
+  const bridge = new CodexAppServerBridge({
+    projectId: PROJECT,
+    projectDir: h.stateDir,
+    stateDir: h.stateDir,
+    dbPath: join(h.stateDir, "ui.db"),
+    interactions,
+    codexBin: h.codexBin,
+    requestTimeoutMs: 10_000,
+    diagnostic: (event) => diagnostics.push(event),
+  })
+  return { bridge, dispose() { bridge.close(); interactions.dispose(); db.close() } }
+}
+
+// THE version-skew wedge, end to end against a real daemon and a real bridge.
+//
+// The daemon performs `initialize` ONCE and caches the result for its whole life. So the ordinary
+// upgrade path — bump CODEX_APP_SERVER_SUPPORTED_VERSION, Update & Restart — leaves a surviving
+// daemon serving the OLD userAgent to every new fray generation. The bridge's version gate then
+// rejects every single connect, forever: the daemon re-arms its 6h idle timer on each client drop, so
+// a fray that keeps retrying keeps the wedged daemon alive indefinitely, and the symptom is
+// indistinguishable from Codex being completely down.
+//
+// Modelled by holding the SUPPORTED constant fixed (it is a constant) and moving the installed
+// binary: a daemon booted against an OLD codex, then codex upgraded on disk to the supported version.
+test("codex daemon: a daemon caching a stale handshake is reforked, not left to wedge every connect", async () => {
+  const h = versionedHarness("0.140.0")
+  const diagnostics: unknown[] = []
+  let bridge: ReturnType<typeof skewBridge> | undefined
+  try {
+    // A daemon from BEFORE the upgrade, with 0.140.0 cached in its handshake forever.
+    const stale = await daemonCodexAppServerHost(h.hostOptions())
+    const staleGeneration = stale.generation
+    stale.process.kill()
+    await delay(200)
+    assert.equal(liveDaemonRecord(h.stateDir, PROJECT)?.generation, staleGeneration, "the stale daemon outlived its client")
+
+    // codex is upgraded on disk to the version this fray supports. The daemon does not notice: it
+    // will answer `initialize` from its cache with 0.140.0 until something ends its life.
+    h.setInstalledVersion(CODEX_APP_SERVER_SUPPORTED_VERSION)
+
+    bridge = skewBridge(h, diagnostics)
+    const binding = await bridge.bridge.startDisposableSession({
+      threadSlug: "post-upgrade", sessionId: "post-upgrade-session", cwd: h.stateDir,
+    })
+    assert.ok(binding, "the bridge recovered and actually opened a thread")
+
+    assert.ok(
+      diagnostics.some((event) => (event as { event?: string }).event === "version-rejected"),
+      "the stale cached handshake really was rejected first",
+    )
+    assert.ok(
+      diagnostics.some((event) => (event as { event?: string }).event === "daemon-reforked"),
+      `the recovery is the refork, and it is announced — saw ${JSON.stringify(diagnostics)}`,
+    )
+    assert.ok(
+      diagnostics.some((event) => (event as { event?: string; version?: string }).event === "connected"
+        && (event as { version?: string }).version === CODEX_APP_SERVER_SUPPORTED_VERSION),
+      "and the fresh daemon reports the version actually installed",
+    )
+    const after = liveDaemonRecord(h.stateDir, PROJECT)
+    assert.ok(after, "a replacement daemon is running")
+    assert.notEqual(after!.generation, staleGeneration, "it is a NEW app-server process, not the wedged one")
+  } finally {
+    bridge?.dispose()
+    killCodexAppServerDaemon(h.stateDir, PROJECT)
+  }
+})
+
+// The other half, and the one that decides whether the recovery is safe to ship: a codex that is
+// GENUINELY unsupported must still fail LOUDLY. Once a freshly forked daemon has reported a version
+// we reject, there is no stale cache left to blame, so reforking again would only be a machine for
+// killing daemons — reject, refork, reject, forever, one dead app-server per attempt.
+test("codex daemon: a genuinely unsupported codex fails loudly and is never reforked in a loop", async () => {
+  const h = versionedHarness("0.1.0")
+  const diagnostics: unknown[] = []
+  let bridge: ReturnType<typeof skewBridge> | undefined
+  try {
+    const stale = await daemonCodexAppServerHost(h.hostOptions())
+    stale.process.kill()
+    await delay(200)
+
+    bridge = skewBridge(h, diagnostics)
+    for (const attempt of [1, 2, 3]) {
+      await assert.rejects(
+        bridge.bridge.startDisposableSession({
+          threadSlug: `bad-${attempt}`, sessionId: `bad-${attempt}-session`, cwd: h.stateDir,
+        }),
+        /unsupported Codex app-server version/,
+        `attempt ${attempt} fails loudly`,
+      )
+    }
+    const reforks = diagnostics.filter((event) => (event as { event?: string }).event === "daemon-reforked")
+    assert.equal(reforks.length, 1, `exactly one refork is spent proving the cache was not the problem — saw ${reforks.length}`)
+    assert.ok(
+      diagnostics.filter((event) => (event as { event?: string }).event === "version-rejected").length >= 3,
+      "and every attempt still reports the rejection",
+    )
+  } finally {
+    bridge?.dispose()
+    killCodexAppServerDaemon(h.stateDir, PROJECT)
+  }
+})
+
+/** Wait for a pid to be gone, or fail. Never a bare sleep: the point of these tests is the BOUND. */
+async function waitForExit(pid: number, withinMs: number, what: string): Promise<void> {
+  const deadline = Date.now() + withinMs
+  for (;;) {
+    try { process.kill(pid, 0) } catch { return }
+    if (Date.now() > deadline) assert.fail(`${what} (pid ${pid}) was still alive after ${withinMs}ms`)
+    await delay(25)
+  }
+}
+
+function alive(pid: number): boolean {
+  try { process.kill(pid, 0); return true } catch { return false }
+}
+
+// A daemon is discoverable ONLY through its record file — daemonCodexAppServerHost reads exactly that
+// one path — so a daemon whose record has vanished is unreachable forever and its `codex app-server`
+// (~150 MB, and still able to edit the filesystem) is pure waste for the remaining six hours of
+// IDLE_EXIT_MS. Nothing else collects these: the orphan reaper keys on FRAY_UI_THREAD, which this
+// per-PROJECT daemon does not carry, and it explicitly PROTECTS any process named `codex` as a
+// session root. Daemons forked from agent worktrees that were later deleted leaked exactly this way,
+// in pairs, and had to be reclaimed by hand.
+test("codex daemon: a daemon whose record has vanished collects itself, app-server and all", async () => {
+  const h = harness()
+  const attachment = await daemonCodexAppServerHost({ ...options(h), reachabilityCheckMs: 150 })
+  const record = liveDaemonRecord(h.stateDir, PROJECT)!
+  try {
+    attachment.process.kill() // detach the way a recycled fray runtime does
+    await delay(200)
+    assert.ok(alive(record.daemonPid), "still alive while its record stands: this is the restart window")
+
+    // The state dir went away — an agent worktree deleted, a project removed. Nobody can ever find
+    // this daemon again.
+    unlinkSync(codexAppServerDaemonRecordPath(h.stateDir, PROJECT))
+
+    await waitForExit(record.daemonPid, 5_000, "the unreachable daemon")
+    await waitForExit(record.childPid, 5_000, "its app-server child")
+    if (process.platform !== "win32") {
+      assert.equal(existsSync(codexAppServerSocketPath(h.stateDir, PROJECT)), false, "and it took its socket with it")
+    }
+  } finally {
+    killCodexAppServerDaemon(h.stateDir, PROJECT)
+  }
+})
+
+// The exact property the daemon exists for, stated as the thing self-collection must NEVER break. An
+// Update & Restart leaves the daemon unattached for as long as the new runtime takes to boot, and the
+// record sits untouched the whole time — so "nobody is attached" can never on its own be read as
+// "abandoned". This runs for many multiples of the check interval to make that specific.
+test("codex daemon: merely being unattached is NOT abandonment — the restart window never collects it", async () => {
+  const h = harness()
+  const first = await daemonCodexAppServerHost({ ...options(h), reachabilityCheckMs: 100 })
+  const record = liveDaemonRecord(h.stateDir, PROJECT)!
+  try {
+    first.process.kill()
+    await delay(2_000) // ~20 reachability checks with nobody attached at all
+
+    assert.ok(alive(record.daemonPid), "the daemon survived a long restart window")
+    assert.ok(alive(record.childPid), "and so did the app-server holding the in-flight turn")
+    const second = await daemonCodexAppServerHost({ ...options(h), reachabilityCheckMs: 100 })
+    assert.equal(second.reattached, true, "and the next fray generation still rejoins it")
+    assert.equal(second.generation, record.generation, "the SAME app-server process")
+    second.process.kill()
+  } finally {
+    killCodexAppServerDaemon(h.stateDir, PROJECT)
+  }
+})
+
+// Record and socket paths are DERIVED from (stateDir, projectId), so a successor daemon owns exactly
+// the same two names. A collecting corpse that unlinked them unconditionally would delete the LIVE
+// daemon's record and socket on its way out — turning a tidy-up into the very unreachability it
+// exists to prevent.
+test("codex daemon: a superseded daemon exits without taking its successor's record with it", async () => {
+  const h = harness()
+  const attachment = await daemonCodexAppServerHost({ ...options(h), reachabilityCheckMs: 150 })
+  const record = liveDaemonRecord(h.stateDir, PROJECT)!
+  try {
+    attachment.process.kill()
+    await delay(200)
+
+    // Stand in for a successor that forked and published its own record at the same derived path.
+    const successor = { ...record, daemonPid: process.pid, childPid: process.pid, generation: "successor-generation" }
+    writeFileSync(codexAppServerDaemonRecordPath(h.stateDir, PROJECT), JSON.stringify(successor))
+
+    await waitForExit(record.daemonPid, 5_000, "the superseded daemon")
+    const survivor = readDaemonRecord(h.stateDir, PROJECT)
+    assert.equal(survivor?.generation, "successor-generation", "the successor's record is untouched")
+    assert.equal(survivor?.daemonPid, process.pid)
+  } finally {
+    try { unlinkSync(codexAppServerDaemonRecordPath(h.stateDir, PROJECT)) } catch {}
+  }
+})
+
+// The daemon caps its detached queue and reports the overflow in `hello` — its own words: "mark the
+// overflow so the client learns it must not trust the stream". The client used to discard that
+// control line without parsing it, so the number was written by every daemon and read by nobody. The
+// bridge-side consequence (a lossy rejoin is not a `sameProcess` rejoin) is pinned in
+// codex-app-server.test.ts; this is the end of the wire that has to actually produce a number.
+test("codex daemon: an overflowing detached queue reports its losses on the next hello", async () => {
+  const h = harness()
+  try {
+    const first = await daemonCodexAppServerHost(options(h))
+    const c1 = client(first.process)
+    await c1.request("initialize", {})
+    // MAX_QUEUED_LINES is 20_000; this comfortably exceeds it once nobody is attached.
+    await c1.request("flood", { count: 25_000, afterMs: 400 })
+    first.process.kill()
+    await delay(2_000)
+
+    const second = await daemonCodexAppServerHost(options(h))
+    assert.equal(second.reattached, true)
+    assert.ok(
+      second.droppedWhileDetached > 0,
+      `the daemon told us the stream has holes in it — got ${second.droppedWhileDetached}`,
+    )
+    second.process.kill()
+
+    // …and a rejoin that lost NOTHING must still report zero, or the bridge would take the cold path
+    // on every ordinary restart and resume threads whose turns are alive and well.
+    await delay(300)
+    const third = await daemonCodexAppServerHost(options(h))
+    assert.equal(third.reattached, true)
+    assert.equal(third.droppedWhileDetached, 0, "a clean restart window loses nothing and says so")
+    third.process.kill()
+  } finally {
     killCodexAppServerDaemon(h.stateDir, PROJECT)
   }
 })
