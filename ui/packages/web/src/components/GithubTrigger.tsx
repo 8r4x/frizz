@@ -3,6 +3,15 @@ import { Github } from "lucide-react"
 import { rpc } from "../api/rpc.ts"
 import { openGithubPicker } from "../store.ts"
 
+// Whether the GitHub trigger will render at all. Callers that RESERVE LAYOUT for the trigger (the
+// Composer's `leftAction` slot shifts the paperclip over to make room) must gate on this and pass
+// nothing when it's false — a `<GithubTrigger />` element is truthy even when it renders null, so
+// passing it unconditionally reserves an empty hole where the icon would be.
+export function useGithubTriggerVisible(): boolean {
+  const status = useQuery({ queryKey: ["githubStatus"], queryFn: () => rpc.githubStatus() })
+  return Boolean(status.data?.inRepo && status.data.authed)
+}
+
 // The auth-gated door into the GitHub picker — a small GitHub icon that sits just LEFT of the dispatch
 // composer's send button (maintainer 2026-07-10: not a full-width pill). Renders ONLY when gh is authed
 // AND the project is a gh-resolvable GitHub repo — otherwise NOTHING (a hidden feature, not a disabled
@@ -11,8 +20,7 @@ import { openGithubPicker } from "../store.ts"
 // No profile gating: the picker carries its own model/effort selector, so an unloaded or unavailable
 // saved pair is something to FIX in there, not a reason to refuse to open.
 export function GithubTrigger({ className = "" }: { className?: string }) {
-  const status = useQuery({ queryKey: ["githubStatus"], queryFn: () => rpc.githubStatus() })
-  if (!status.data?.inRepo || !status.data.authed) return null
+  if (!useGithubTriggerVisible()) return null
   return (
     <button
       type="button"

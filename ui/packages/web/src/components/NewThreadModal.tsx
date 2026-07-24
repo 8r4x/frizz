@@ -6,7 +6,7 @@ import type { Backend, DispatchInput } from "@fray-ui/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast, store } from "../store.ts"
 import { Composer } from "./Composer.tsx"
-import { GithubTrigger } from "./GithubTrigger.tsx"
+import { GithubTrigger, useGithubTriggerVisible } from "./GithubTrigger.tsx"
 import { ProfileGridSelector } from "./ProfileGridSelector.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { dispatchProfileGroups } from "../lib/dispatchPreferences.ts"
@@ -32,6 +32,9 @@ export function DispatchForm({
 }) {
   // The one durable new-thread profile, shared with the GitHub picker's own selector.
   const { resolved, codexList, loadError: profileLoadError, saveProfile } = useDispatchProfile()
+  // Gate the leftAction slot itself, not just the icon: Composer reserves rail space whenever the
+  // prop is set, so a hidden GithubTrigger must mean NO prop — not a null-rendering element.
+  const githubTriggerVisible = useGithubTriggerVisible()
   const projectDir = useProjectDir()
   // Queue and modal are the same semantic new-thread composer. A plan gets a distinct intent because
   // dispatching it changes the worker's durable context.
@@ -189,7 +192,7 @@ export function DispatchForm({
         maxHeight={340}
         busy={dispatch.isPending}
         footer={footer}
-        leftAction={<GithubTrigger />}
+        leftAction={githubTriggerVisible ? <GithubTrigger /> : undefined}
       />
       {dispatch.isError && (
         <span className="px-0.5 text-[11px] text-red-400 truncate">{(dispatch.error as Error).message}</span>
