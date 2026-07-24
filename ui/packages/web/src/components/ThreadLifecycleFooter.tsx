@@ -6,6 +6,7 @@ import { showToast } from "../store.ts"
 import { threadLifecycleAvailability, completionArchivesImmediately, completionHoldSummary } from "../lib/threadLifecycle.ts"
 import { futureSnoozedUntil } from "../groups.ts"
 import { formatSnoozeWake } from "../lib/snooze.ts"
+import { CHILD_ARROW, CHILD_ARROW_CLASS } from "../lib/childOps.ts"
 import { SnoozeButton } from "./SnoozeButton.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { Dialog } from "./ui/Dialog.tsx"
@@ -200,7 +201,10 @@ function CompletionHoldBody({ hold }: { hold: CompletionHold | undefined }) {
           <ul className="flex flex-col gap-0.5">
             {group.items.map((item, index) => (
               <li key={`${item.label}-${index}`} className="flex min-w-0 items-baseline gap-1.5">
-                <span aria-hidden className="shrink-0 text-[11px] leading-none text-muted/40">⤷</span>
+                {/* The same ⤷ token every child row uses (lib/childOps.ts). This list is prose inside a
+                    dialog, not an operations surface, so it stops at the arrow: no liveness mark, no
+                    drill-in, no dismiss — hence the tokens rather than ChildOpRow itself. */}
+                <span aria-hidden className={CHILD_ARROW_CLASS}>{CHILD_ARROW}</span>
                 <span className="min-w-0 truncate text-fg/80">{item.label}</span>
                 {/* Stale is why we ask rather than proof of life: say so instead of implying either. */}
                 {item.stale && <span className="shrink-0 text-[11px] text-muted/60">no recent output</span>}

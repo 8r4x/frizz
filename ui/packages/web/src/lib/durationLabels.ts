@@ -22,6 +22,18 @@ export function formatFixedDuration(ms: number): string {
   return formatElapsedMinutes(mins)
 }
 
+// Human-friendly elapsed since an ISO timestamp, measured against NOW: "just now", "12 min",
+// "1 hr 3 min". Empty when absent or unparseable. Distinct from formatFixedDuration, which formats an
+// already-COMPLETED span (a dispatch→completion elapsed, in ms). This was written twice verbatim — in
+// ChatView's ops strip and in BackgroundShellSheet — while every other duration formatter already
+// lived here.
+export function elapsedSince(startedAt: string | undefined): string {
+  if (!startedAt) return ""
+  const started = Date.parse(startedAt)
+  if (!Number.isFinite(started)) return ""
+  return formatElapsedMinutes(Math.floor((Date.now() - started) / 60_000))
+}
+
 export function formatCountdownSeconds(seconds: number): string {
   if (seconds < 60) return `${seconds} sec`
   if (seconds < 3600) return `${Math.floor(seconds / 60)} min ${String(seconds % 60).padStart(2, "0")} sec`
