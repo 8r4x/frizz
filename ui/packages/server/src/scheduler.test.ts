@@ -1274,3 +1274,51 @@ test("snooze: a snooze wake and a fence wake for the same session get distinct d
   assert.equal(ids.length, 2, "both sources armed their own wake for this session")
   h.storage.close()
 })
+
+// A resume that fails ASYNCHRONOUSLY must retry exactly like one that throws synchronously.
+//
+// This is the codex-wake shape. context.ts delivers a codex wake over the app-server bridge, which is
+// inherently async, and it used to run that work in a DETACHED IIFE (`void (async () => …)().catch(…)`)
+// and return undefined immediately. The scheduler awaits `resume`, so it saw an instant success and
+// ACKED the delivery; the real bridge failure landed seconds later into a bare `.catch` and vanished —
+// no log, no retry, the wake lost forever. Claude's synchronous `resumeThread` throws straight into the
+// scheduler's catch and retries, so the bug was CODEX-ONLY and silent: an `awaiting timer:` or
+// limit-auto-resume codex thread could simply never wake.
+//
+// Returning the promise is the whole fix, and this test is what keeps it returned: revert to
+// fire-and-forget and the rejection never reaches the scheduler, so no retry happens and this fails.
+test("a resume that REJECTS asynchronously is retried, exactly like a synchronous throw", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("async-wake"))
+  h.tele.set("async-wake", tele(awaiting([{ kind: "timer", value: iso(h.clock.ms + 1_000) }])))
+
+  // The fence must be WITNESSED pending before it can fire (the boot-safety guard), so take a durable
+  // baseline while it is still in the future, then cross it.
+  await h.make().tick()
+  h.clock.ms += 2_000
+
+  let attempts = 0
+  const failing = h.make({
+    resume: () => {
+      attempts++
+      // No `throw` — an already-rejected promise, which is what an async bridge delivery produces.
+      return Promise.reject(new Error("codex app-server bridge unavailable"))
+    },
+  })
+  await failing.tick()
+  assert.equal(attempts, 1, "the due wake was attempted")
+  assert.equal(h.resumes.length, 0, "and it did not count as delivered")
+
+  // The lease expires, and a later generation redelivers it — proving the failure was never ACKed.
+  h.clock.ms += 30_001
+  const restarted = h.make({
+    resume: (slug, message) => {
+      attempts++
+      h.resumes.push({ slug, message })
+    },
+  })
+  await restarted.tick()
+  await restarted.tick()
+  assert.equal(attempts, 2, "the async rejection was retried, not swallowed")
+  assert.equal(h.resumes.length, 1, "and the retry delivered exactly once")
+})
