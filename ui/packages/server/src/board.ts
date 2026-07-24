@@ -310,9 +310,9 @@ export function deriveNeedsYou(
 // Whether a QUEUED thread's SOLE reason is "resting while its own background work is still live" — the
 // signal the client keys the awaiting-background card + event-Snooze on. True only when it is a live
 // handoff (deriveNeedsYou), it is at rest (turn-idle) with live own work, and NO stronger reason
-// outranks it (a native/typed ask, permission prompt, chat question, or done fence all render their own
-// card instead). An event-snoozed card returns false here too — deriveNeedsYou hides it, so it is not a
-// handoff at all. Kept adjacent to deriveNeedsYou and delegating to it so the two never drift.
+// outranks it (a native/typed ask, permission prompt, chat question, or ANY signal fence all render
+// their own card instead). An event-snoozed card returns false here too — deriveNeedsYou hides it, so
+// it is not a handoff at all. Kept adjacent to deriveNeedsYou and delegating to it so the two never drift.
 export function deriveAwaitingBackground(
   row: SessionRow,
   tele: SessionTelemetry | undefined,
@@ -324,7 +324,14 @@ export function deriveAwaitingBackground(
   if (runtime !== "turn-idle" || !hasLiveOwnWork(tele)) return false
   // Any hard human gate or completion signal outranks this reason → the thread cards as THAT, not here.
   if (hasActionableInteraction || tele?.pendingAsk || tele?.nativeInputRequired || tele?.pendingQuestion) return false
-  if (tele?.lastFence?.kind === "done") return false
+  // A signal fence — ```done OR ```awaiting — is the worker's OWN explicit statement about why it
+  // stopped, and it renders its own card in the transcript body. That is strictly more specific than
+  // "it has background work running", so it wins: show the fence card ALONE, never both. This is the
+  // pr-watch double-card fix (maintainer 2026-07-24): a pr-watch thread with a live sub-agent stays
+  // queued (deriveNeedsYou keeps it, since pr-watch is a visible handoff) but now cards as its "Arm
+  // watcher" fence, not as this banner. A parked human/timer fence never reached here anyway (it's
+  // Held, not queued); this only changes the non-parked awaiting fences (pr-watch, legacy, hintless).
+  if (tele?.lastFence?.kind === "done" || tele?.lastFence?.kind === "awaiting") return false
   return deriveNeedsYou(row, tele, runtime, hasActionableInteraction, nowMs, limitPause)
 }
 
@@ -538,12 +545,9 @@ function sessionThreadView(
     permissionMode,
     permissionPending,
     permissionChangePending: row.permission_pending !== null && row.permission_pending !== undefined,
-    profilePendingModel: row.profile_queued_model?.trim() || row.profile_pending_model?.trim() || undefined,
-    profilePendingEffort: row.profile_queued_effort?.trim() || row.profile_pending_effort?.trim() || undefined,
-    profileChangeQueued: row.runtime_control === "profile-queued",
+    profilePendingModel: row.profile_pending_model?.trim() || undefined,
+    profilePendingEffort: row.profile_pending_effort?.trim() || undefined,
     profileChangePending:
-      row.profile_queued_model !== null && row.profile_queued_model !== undefined ||
-      row.profile_queued_effort !== null && row.profile_queued_effort !== undefined ||
       row.profile_pending_model !== null && row.profile_pending_model !== undefined ||
       row.profile_pending_effort !== null && row.profile_pending_effort !== undefined,
     runtimeControlPending: row.runtime_control !== null && row.runtime_control !== undefined,
