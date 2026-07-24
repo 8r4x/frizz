@@ -9,7 +9,6 @@ import { prefs } from "../lib/prefs.ts"
 import { sectionThreads, partitionActive, needsAction, displayTitle, titleIsProvisional, isHeld, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil } from "../groups.ts"
 import { MarkAsButton } from "./MarkAsButton.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
-import { QuotaBar } from "./QuotaBar.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { ProviderMark } from "./ProviderMark.tsx"
 import { STATUS_CHIP } from "../lib/status.ts"
@@ -149,9 +148,9 @@ export function Sidebar() {
             this same box CENTERED as the whole screen (App hides the sidebar); the first dispatch
             shunts it here to the left. */}
         <div className="mb-5 shrink-0 px-0.5">
-          {/* A thin status strip floats directly above the prompt box: live connection dot + remaining
-              Claude/Codex subscription quota. */}
-          <QuotaBar />
+          {/* The quota chips used to float here, above the prompt box. Quota is ACCOUNT-global, not a
+              property of this composer, so they moved into the top-left StatusBar with the rest of the
+              global status. */}
           {/* The GitHub picker's door now lives INSIDE the dispatch composer (a small icon left of the
               send button — see DispatchForm/Composer leftAction); no separate pill here. */}
           <DispatchForm />

@@ -35,7 +35,8 @@ function Fixture() {
       <div inert={restarting}>
         {/* A focusable background control so QA can prove Tab cannot reach behind the scrim. */}
         <button type="button" data-testid="decoy" className="mb-4 rounded border border-border px-2 py-1">decoy</button>
-        <div className="ml-auto w-fit"><RestartFrayButton /></div>
+        {/* Left-aligned, mirroring the real top-left status-bar placement its popover anchors to. */}
+        <div className="w-fit"><RestartFrayButton /></div>
       </div>
     </main>
   )
