@@ -48,6 +48,10 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
   readonly version: string
   afterInitializeResponse?: () => void
   afterThreadStartResponse?: () => void
+  // What `thread/resume` reports about the thread's LIVE state: `{type:"active"}` while a turn is
+  // still running inside this app-server, `{type:"idle"}` once it has ended. Left undefined by
+  // default so the existing tests keep exercising the pre-status behavior of an older server.
+  resumeThreadStatus?: { type: string; activeFlags?: string[] }
 
   constructor(version = CODEX_APP_SERVER_SUPPORTED_VERSION) {
     super()
@@ -154,7 +158,12 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
       this.send({
         id,
         result: {
-          thread: { id: params.threadId, sessionId: `resumed-${params.threadId}`, ephemeral: false },
+          thread: {
+            id: params.threadId,
+            sessionId: `resumed-${params.threadId}`,
+            ephemeral: false,
+            ...(this.resumeThreadStatus ? { status: this.resumeThreadStatus } : {}),
+          },
           model: "gpt-5",
         },
       })
@@ -1845,6 +1854,7 @@ function scriptedHostHarness(script: () => { generation: string; reattached: boo
   const interactions = createInteractionStore(db, { now: () => now, id: () => `interaction-${++clientId}` })
   const processes: FakeAppServerProcess[] = []
   const bridges: CodexAppServerBridge[] = []
+  let nextResumeThreadStatus: { type: string; activeFlags?: string[] } | undefined
   const newBridge = () => {
     const bridge = new CodexAppServerBridge({
       projectId: "project-1",
@@ -1854,6 +1864,9 @@ function scriptedHostHarness(script: () => { generation: string; reattached: boo
       codexBin: "/opt/codex",
       host: async () => {
         const process_ = new FakeAppServerProcess()
+        // Applied at CREATION: the reconnect's process does not exist until the bridge connects, which
+        // is the same call whose reconciliation the status has to steer.
+        process_.resumeThreadStatus = nextResumeThreadStatus
         processes.push(process_)
         const { generation, reattached, droppedWhileDetached } = script()
         return { process: process_, generation, reattached, daemonPid: 4242, droppedWhileDetached }
@@ -1871,6 +1884,10 @@ function scriptedHostHarness(script: () => { generation: string; reattached: boo
     processes,
     diagnostics,
     newBridge,
+    /** What the NEXT app-server process reports for `thread.status` on `thread/resume`. */
+    resumeThreadStatus(status: { type: string; activeFlags?: string[] } | undefined) {
+      nextResumeThreadStatus = status
+    },
     close() {
       for (const bridge of bridges.reverse()) bridge.close()
       interactions.dispose()
@@ -1904,6 +1921,62 @@ test("a lossless reattach to the same app-server keeps the in-flight turn exactl
     0,
     "a live turn is never resumed out from under itself",
   )
+  h.close()
+})
+
+// ---- ground truth beats guessing: the two endings of a lossy rejoin -------------------------------
+// A transport that DROPS events while detached (`codex app-server --listen unix://`) can never infer
+// from the stream whether the turn it left behind is still running. Both guesses are wrong somewhere,
+// so the bridge asks: `thread/resume` reports `thread.status`, and these two tests pin BOTH answers.
+
+// Ending 1 — the turn FINISHED during the gap. Its `turn/completed` was dropped and is never coming,
+// so believing the stream would wedge `current_turn_id` forever. That is the 2026-07-22 incident.
+test("a lossy rejoin whose turn ended while detached settles the turn instead of wedging on it", async () => {
+  let plan = { generation: "gen-A", reattached: false, droppedWhileDetached: 0 }
+  const h = scriptedHostHarness(() => plan)
+  const bridge = h.newBridge()
+  const binding = await bridge.startDisposableSession({
+    threadSlug: "ended-in-gap", sessionId: "ended-in-gap-session", cwd: h.dir, ephemeral: false,
+  })
+  const { turnId } = await bridge.startTurn({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "Work" })
+  await waitFor(() => bridge.binding(binding.threadSlug, binding.sessionId)?.currentTurnId === turnId, "turn active")
+  bridge.close()
+
+  plan = { generation: "gen-A", reattached: true, droppedWhileDetached: 1 }
+  h.resumeThreadStatus({ type: "idle" })   // the app-server: that turn is over
+  const restarted = h.newBridge()
+  await restarted.resumeOwnedSession(binding.threadSlug, binding.sessionId)
+  const rebound = restarted.binding(binding.threadSlug, binding.sessionId)!
+  assert.equal(rebound.state, "active")
+  assert.equal(rebound.currentTurnId, null, "an ended turn must be retired, not waited on forever")
+  h.close()
+})
+
+// Ending 2 — the turn is STILL RUNNING. It outlived our restart inside the app-server, so retiring it
+// would cancel its cards and nudge a worker that was never interrupted; the reconnect must leave it
+// strictly alone beyond the `thread/resume` that re-subscribes this connection to its events.
+test("a lossy rejoin whose turn is still running leaves that turn alone and does not nudge it", async () => {
+  let plan = { generation: "gen-A", reattached: false, droppedWhileDetached: 0 }
+  const h = scriptedHostHarness(() => plan)
+  const bridge = h.newBridge()
+  const binding = await bridge.startDisposableSession({
+    threadSlug: "alive-across-gap", sessionId: "alive-across-gap-session", cwd: h.dir, ephemeral: false,
+  })
+  const { turnId } = await bridge.startTurn({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "Work" })
+  await waitFor(() => bridge.binding(binding.threadSlug, binding.sessionId)?.currentTurnId === turnId, "turn active")
+  bridge.close()
+
+  plan = { generation: "gen-A", reattached: true, droppedWhileDetached: 1 }
+  h.resumeThreadStatus({ type: "active", activeFlags: [] })   // still running
+  const restarted = h.newBridge()
+  await restarted.resumeOwnedSession(binding.threadSlug, binding.sessionId)
+  const rejoined = restarted.binding(binding.threadSlug, binding.sessionId)!
+  assert.equal(rejoined.state, "active")
+  assert.equal(rejoined.currentTurnId, turnId, "a turn the server says is RUNNING stays current")
+  // The nudge is issued from warmUp(); a live turn must not have been queued for one.
+  await restarted.warmUp()
+  const nudged = h.processes[1]!.clientRequests.filter((message) => message.method === "turn/start")
+  assert.equal(nudged.length, 0, `a running turn must never be nudged — saw ${JSON.stringify(nudged)}`)
   h.close()
 })
 

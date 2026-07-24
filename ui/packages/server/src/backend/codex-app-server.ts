@@ -1439,6 +1439,22 @@ const TurnSteerResponse = z.object({ turnId: Opaque }).passthrough()
 // authoritative read of live server state fray gets, and what keeps the binding's sandbox cache honest
 // whether the resume was cold (our override applied) or a live rejoin (our override was ignored).
 const ThreadResumeSandbox = z.object({ sandbox: z.object({ type: z.string().max(64) }).passthrough() }).passthrough()
+// GROUND TRUTH on a rejoin: `thread/resume` reports whether a turn is running RIGHT NOW.
+// `{"type":"active"}` while one is in flight — with `activeFlags:["waitingOnApproval"]` when it is
+// parked on an approval, which is still very much running — and `{"type":"idle"}` once it has ended.
+// Verified live against 0.144.6 in all three states (scripts/research/native-listen-detached.mjs).
+// This is what lets a reattaching bridge STOP GUESSING whether an in-flight turn survived: a transport
+// that drops events while detached (the native unix listener does; the daemon queues instead) cannot
+// infer it from the stream, but it can always just ask. Optional: a server that does not report a
+// status reads as "not provably live", which keeps the pre-existing conservative behavior.
+const ThreadResumeStatus = z.object({
+  thread: z.object({ status: z.object({ type: z.string().max(64) }).passthrough() }).passthrough(),
+}).passthrough()
+
+function resumedThreadHasLiveTurn(rawResponse: unknown): boolean {
+  const parsed = ThreadResumeStatus.safeParse(rawResponse)
+  return parsed.success && parsed.data.thread.status.type === "active"
+}
 // The ONLY reliable confirmation that a sandbox change took effect. Emitted after
 // `thread/settings/update` — but only when the settings ACTUALLY CHANGED.
 const ThreadSettingsUpdated = z.object({
@@ -2483,6 +2499,37 @@ export class CodexAppServerBridge {
         const response = ThreadResponse.parse(rawResponse)
         if (response.thread.id !== row.codex_thread_id || response.thread.ephemeral) throw new Error("resume ownership mismatch")
         const interruptedTurn = row.current_turn_id
+        // The resume RESPONSE settles what the stream could not: is that turn still running?
+        //
+        // A transport that DROPS events while nobody is attached (the native unix listener) cannot
+        // tell a completed turn from a live one by waiting — the `turn/completed` may already have
+        // been discarded. Guessing is wrong in both directions: assume live and a finished turn wedges
+        // `current_turn_id` forever; assume dead and a still-running turn gets its cards cancelled and
+        // a "your previous turn was interrupted" nudge it never earned. So ask. `thread/resume` is
+        // also the call that re-subscribes THIS connection to the thread's events (subscriptions are
+        // per-connection over the native listener), so the answer arrives on the one request that had
+        // to be made anyway.
+        //
+        // Only for a turn we still believe in, and only on unchanged capabilities — a capability
+        // revision bump means a different app-server binary, where nothing can still be running.
+        if (
+          interruptedTurn
+          && row.capability_revision === this.capabilityRevision
+          && resumedThreadHasLiveTurn(rawResponse)
+        ) {
+          this.db.prepare(`
+            UPDATE codex_app_server_session SET
+              codex_session_id = ?, connection_epoch = ?, state = 'active', updated_at = ?, sandbox = ?
+            WHERE fray_session_id = ?
+          `).run(
+            response.thread.sessionId,
+            this.connectionEpoch,
+            this.now().toISOString(),
+            effectiveResumeSandbox(rawResponse) ?? row.sandbox,
+            row.fray_session_id,
+          )
+          continue
+        }
         this.updateResumedBinding(row, response.thread.sessionId, effectiveResumeSandbox(rawResponse))
         // Record, don't nudge. Recovery is issued by warmUp() — see autoResumeInterruptedTurns().
         if (interruptedTurn) this.pendingAutoResume.set(row.fray_session_id, { row, interruptedTurn })

@@ -265,10 +265,15 @@ async function startListener(options: CodexAppServerHostOptions): Promise<Native
 // The daemon has neither problem: it holds ONE never-closing stdio connection to the app-server, so
 // its subscription never lapses and it can queue and count what it withheld. So where the daemon
 // reports a real overflow count, this host reports a fixed non-zero sentinel — "presume holes" — which
-// is what `sameProcess` in codex-app-server.ts consumes it as (`droppedWhileDetached === 0`). That
-// demotes every rejoin to the cold path: `thread/resume` per binding, which BOTH re-subscribes this
-// connection and returns the authoritative live state, plus the auto-resume nudge for a turn that
-// really did die. For this transport that cold path is not a fallback, it is the correct rejoin.
+// is what `sameProcess` in codex-app-server.ts consumes it as (`droppedWhileDetached === 0`).
+//
+// That is NOT this host guessing that the turn died. It routes the rejoin through `thread/resume`,
+// which is the one call that both re-subscribes this connection AND reports `thread.status` — so
+// reconcileOwnedSessions then reads the turn's real state off the answer instead of inferring it from
+// a stream that has holes: `{"type":"active"}` keeps the live turn exactly as it was, `{"type":"idle"}`
+// retires a turn whose `turn/completed` was dropped. Guessing either way is wrong somewhere; asking is
+// wrong nowhere, and only this transport is obliged to ask. For it the cold path is not a fallback, it
+// is the correct rejoin.
 const PRESUMED_LOSSY_REJOIN = 1
 
 /**
