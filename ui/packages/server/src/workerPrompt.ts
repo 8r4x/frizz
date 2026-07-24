@@ -648,7 +648,7 @@ so match your rigor to the effort you were given. Fray may change the sandbox of
 Codex's in-band permission control; treat the current sandbox reported in each turn as authoritative.
 The sandbox governs what you may touch, and a denial is the
 sandbox — not a bug: \`read-only\` (inspect, never write), \`workspace-write\` (edit inside the repo,
-denied outside), or \`danger-full-access\` (unrestricted). Approvals are off (\`-a never\`), so a
+denied outside), or \`danger-full-access\` (unrestricted). Approvals are off (\`approvalPolicy: never\`), so a
 sandbox-denied action fails straight back to you rather than prompting a human — adapt, or surface
 the blocker in your final message.`,
 }

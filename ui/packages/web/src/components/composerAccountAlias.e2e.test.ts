@@ -1,0 +1,142 @@
+import assert from "node:assert/strict"
+import test, { after, before } from "node:test"
+
+// D7 REGRESSION. `/login` and `/logout` are fray-owned account actions, intercepted at the composer
+// submit boundary and never delivered to the worker as prompt text. That intercept used to live only in
+// the drawer's ThreadActionBar: the queue cue card had its own send path with NO alias check, so typing
+// `/login` into a card pasted the literal string into the running agent's stdin. Both surfaces now render
+// the SAME components/ThreadComposerBox, which owns the intercept — these tests pin that from BOTH.
+//
+// Skipped unless a Vite URL serving the fixtures is provided (same pattern as the other *.e2e.test.ts
+// here): start `vite` in packages/web and set FRAY_COMPOSER_ALIAS_E2E_URL to its origin.
+//
+// ONE headless Chrome is shared across the whole file (via before/after) — a fresh browser per test is
+// wasteful and, on a loaded machine, times out. Each test wipes sessionStorage + reloads so the draft
+// cache never bleeds between cases.
+const baseUrl = process.env.FRAY_COMPOSER_ALIAS_E2E_URL
+
+const SLUG = "alias-thread"
+const QUEUE = 'textarea[data-surface="queueComposer"]'
+const CHAT = 'textarea[data-surface="chatComposer"]'
+
+type Worker = { sent: string[]; rpc: string[] }
+type PuppeteerModule = typeof import("puppeteer")
+type Browser = Awaited<ReturnType<PuppeteerModule["launch"]>>
+type Page = Awaited<ReturnType<Browser["newPage"]>>
+
+let browser: Browser | undefined
+let page: Page | undefined
+let errors: string[] = []
+
+before(async () => {
+  if (!baseUrl) return
+  const { default: puppeteer } = await import("puppeteer")
+  browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox", "--force-color-profile=srgb"] })
+  page = await browser.newPage()
+  page.setDefaultTimeout(60_000)
+  await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 1 })
+  page.on("console", (m) => { if (m.type() === "error" && !/404|favicon/i.test(m.text())) errors.push(m.text()) })
+  page.on("pageerror", (e) => errors.push(String(e)))
+})
+
+after(async () => { await browser?.close() })
+
+const sent = (): Promise<string[]> => page!.evaluate(() => (window as unknown as { __worker: Worker }).__worker.sent)
+const dialogText = (): Promise<string | null> =>
+  page!.evaluate(() => document.querySelector('[role="dialog"], [role="alertdialog"]')?.textContent ?? null)
+const boxValue = (sel: string): Promise<string> => page!.$eval(sel, (el) => (el as HTMLTextAreaElement).value)
+
+// A fresh surface with an empty draft cache — drafts are sessionStorage-backed and deliberately survive
+// navigation, so wipe + reload between cases.
+async function open(surface: "queue" | "drawer", box: string) {
+  errors = []
+  await page!.goto(`${baseUrl}/composer-alias-fixture.html?surface=${surface}`, { waitUntil: "networkidle2" })
+  await page!.evaluate(() => sessionStorage.clear())
+  await page!.reload({ waitUntil: "networkidle2" })
+  await page!.waitForSelector(box)
+}
+
+async function typeAndSend(selector: string, text: string) {
+  await page!.click(selector)
+  await page!.type(selector, text)
+  await page!.keyboard.press("Enter")
+  await new Promise((r) => setTimeout(r, 350))
+}
+
+async function dismissModal() {
+  await page!.keyboard.press("Escape")
+  await new Promise((r) => setTimeout(r, 300))
+}
+
+for (const surface of ["queue", "drawer"] as const) {
+  const box = surface === "queue" ? QUEUE : CHAT
+
+  test(`${surface} composer: /login opens the sign-in modal and never reaches the worker`, {
+    skip: !baseUrl,
+    timeout: 150_000,
+  }, async () => {
+    await open(surface, box)
+
+    await typeAndSend(box, "/login")
+    const modal = await dialogText()
+    assert.ok(modal, `the ${surface} composer must open a modal for /login`)
+    assert.match(modal, /Signed out of Claude/, "…and it must be the sign-in modal for this thread's backend")
+    assert.deepEqual(await sent(), [], "/login must NEVER be delivered to the worker")
+    assert.equal(await boxValue(box), "", "the intercepted alias clears the draft, exactly like a real send")
+
+    // An ORDINARY follow-up from the same box still reaches the worker — the intercept is narrow.
+    await dismissModal()
+    await typeAndSend(box, "ship it")
+    assert.deepEqual(await sent(), ["ship it"], "a plain follow-up is delivered untouched")
+    assert.deepEqual(errors, [], "no console/page errors during the alias flow")
+  })
+
+  test(`${surface} composer: /logout opens the sign-out confirm and never reaches the worker`, {
+    skip: !baseUrl,
+    timeout: 150_000,
+  }, async () => {
+    await open(surface, box)
+
+    await typeAndSend(box, "/logout")
+    const modal = await dialogText()
+    assert.ok(modal, `the ${surface} composer must open a modal for /logout`)
+    assert.match(modal, /Sign out of Claude\?/, "…and it must be the sign-out confirmation")
+    assert.deepEqual(await sent(), [], "/logout must NEVER be delivered to the worker")
+
+    // "/login please" is NOT an alias — fray does not confiscate syntax it cannot prove is a command.
+    await dismissModal()
+    await typeAndSend(box, "/login please")
+    assert.deepEqual(await sent(), ["/login please"], "only the exact alias is intercepted")
+    assert.deepEqual(errors, [], "no console/page errors during the alias flow")
+  })
+}
+
+test("the intercepted alias leaves the cue card mounted; an ordinary reply still dissolves it", {
+  skip: !baseUrl,
+  timeout: 150_000,
+}, async () => {
+  await open("queue", QUEUE)
+  await page!.waitForSelector(`[data-queue-card-root="${SLUG}"]`)
+
+  await typeAndSend(QUEUE, "/login")
+  assert.equal(
+    await page!.evaluate((slug) => document.querySelector(`[data-queue-card-root="${slug}"]`)?.getAttribute("data-queue-leaving") ?? "unmounted", SLUG),
+    "false",
+    "opening the sign-in modal must not dissolve the card out from under it",
+  )
+
+  await dismissModal()
+  // Sample the dissolve at the instant the send commits — the card flips data-queue-leaving="true", then
+  // unmounts after the exit budget. Either state proves the optimistic dissolve fired.
+  await page!.click(QUEUE)
+  await page!.type(QUEUE, "rotate in place")
+  await page!.keyboard.press("Enter")
+  await new Promise((r) => setTimeout(r, 120))
+  const mid = await page!.evaluate((slug) => document.querySelector(`[data-queue-card-root="${slug}"]`)?.getAttribute("data-queue-leaving") ?? "unmounted", SLUG)
+  await new Promise((r) => setTimeout(r, 500))
+  const settled = await page!.evaluate((slug) => document.querySelector(`[data-queue-card-root="${slug}"]`)?.getAttribute("data-queue-leaving") ?? "unmounted", SLUG)
+
+  assert.deepEqual(await sent(), ["rotate in place"], "the ordinary reply reaches the worker")
+  assert.ok(mid === "true" || settled === "unmounted", `a real reply fires the optimistic dissolve (mid=${mid} settled=${settled})`)
+  assert.deepEqual(errors, [], "no console/page errors during the dissolve flow")
+})

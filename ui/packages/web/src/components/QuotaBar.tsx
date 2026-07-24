@@ -8,15 +8,18 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
 import { SignInModal } from "./SignInModal.tsx"
 import { PROVIDER_LABEL } from "../lib/signIn.ts"
 
-// THE SIDEBAR QUOTA STRIP — a thin row floating directly above the dispatch box, one compact chip per
-// backend (Claude, Codex) showing REMAINING subscription quota as a battery-style meter. Click a chip
-// for the full per-window breakdown. The chip is ALSO the provider auth surface: a signed-out
-// provider shows the em dash and its popover leads with a Sign in button instead of a quota
-// breakdown a signed-out account can't have.
+// THE QUOTA CHIPS — the tail of the top-left StatusBar, one compact chip per backend (Claude, Codex)
+// showing REMAINING subscription quota as a battery-style meter. Click a chip for the full per-window
+// breakdown. The chip is ALSO the provider auth surface: a signed-out provider shows the em dash and
+// its popover leads with a Sign in button instead of a quota breakdown a signed-out account can't have.
 //
-// The live connection state is NOT repeated here: it already lives in the top-left IdentityMark (the
-// one canonical connection indicator). This strip used to carry a second "connected" dot+word, which
-// was pure redundancy sitting a few hundred px from the first — removed.
+// These used to float above the sidebar's dispatch box. Quota is ACCOUNT-global — it was never a
+// property of the composer it was parked on — so it now sits with the rest of the global status.
+// The chips carry no wrapper padding or justification of their own: StatusBar owns the layout, and a
+// chip that brought its own box would break the single-line rhythm.
+//
+// The live connection state is NOT repeated here: it lives in the same bar's IdentityMark (the one
+// canonical connection indicator), a few pixels to the left.
 //
 // Quota is polled (rpc.quota) rather than pushed on the board: it is ACCOUNT-global, not per-thread.
 // The server keeps the reading warm on its own 1-minute heartbeat (refreshClaudeQuotaInBackground), so
@@ -39,7 +42,7 @@ function deadline(ms: number, signal?: AbortSignal): AbortSignal {
   return signal ? AbortSignal.any([signal, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms)
 }
 
-export function QuotaBar() {
+export function QuotaChips() {
   const queryClient = useQueryClient()
   const recheckInFlight = useRef<Promise<void> | null>(null)
   const [rechecking, setRechecking] = useState(false)
@@ -82,7 +85,7 @@ export function QuotaBar() {
   }
 
   return (
-    <div data-quota-bar className="flex items-center justify-end gap-2.5 px-1.5 py-1 text-[11px]">
+    <div data-quota-bar className="flex shrink-0 items-center gap-2.5 text-[11px]">
       <QuotaChip backend="claude" quota={quota.data?.claude} auth={auth.data?.claude} loading={quota.isLoading} fetching={quota.isFetching || rechecking} onRecheck={() => recheck("claude")} />
       <QuotaChip backend="codex" quota={quota.data?.codex} auth={auth.data?.codex} loading={quota.isLoading} fetching={quota.isFetching || rechecking} onRecheck={() => recheck("codex")} />
     </div>
@@ -170,7 +173,9 @@ function QuotaChip({
             )}
           </button>
         </PopoverTrigger>
-        <PopoverContent side="top" align="end" className="w-[min(15rem,calc(100vw-1.5rem))] p-3 text-[11px] leading-relaxed text-fg">
+        {/* Drops DOWN from the bar. The chips sit at the very top of the viewport now, so the old
+            side="top" would have had nowhere to go but a collision flip on every single open. */}
+        <PopoverContent side="bottom" align="start" className="w-[min(15rem,calc(100vw-1.5rem))] p-3 text-[11px] leading-relaxed text-fg">
           <div className="mb-1.5 flex items-center gap-1.5 font-medium">
             <ProviderMark backend={backend} />
             <span>{providerLabel}</span>
