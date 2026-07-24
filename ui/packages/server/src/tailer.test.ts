@@ -444,6 +444,58 @@ test("applyRecord: a background AGENT hit by the SAME race is retired by the inl
   assert.equal(s.retiredSubAgents.get("toolu_ag")?.status, "completed", "an agent stays drillable in the ring")
 })
 
+test("applyRecord: a `stopped` RECOVERY notification retires EVERY orphaned sub-agent it names", () => {
+  // Real 2026-07-23 leak (nub thread review-nubjs-nub-500-2): a turn was interrupted with 3 background
+  // agents in flight, so no `completed` ever arrived. The NEXT session emitted ONE `stopped` recovery
+  // notification naming all 3 by their runtime task-id (agentId) with NO tool-use-id. The old guard
+  // dropped `stopped` outright — and even had it not, the single-.match() would have freed only the
+  // first id — so 2 of 3 leaked as `stale` sub-agents forever, and re-derived identically on every restart.
+  const s = newTailState("t", "sid-1", "/logs/sid-1.jsonl")
+  const agents: [string, string, string][] = [
+    ["toolu_a1", "aeb3c7711a80cb53d", "Empirical differential probe of PR 500"],
+    ["toolu_a2", "a46a90cfaf25b6264", "Impact analysis of PR 500 hook sites"],
+    ["toolu_a3", "a389ac8bce4621e32", "Decision-record cross-check for PR 500"],
+  ]
+  for (const [id, aid, desc] of agents) {
+    applyRecord(s, dispatch(id, desc))
+    // The mailbox ack captures the agentId as the entry's runtime task id — the ONLY key the recovery
+    // notification carries for it.
+    applyRecord(s, resultText(id, `Spawned successfully.\nagentId: ${aid}\nThe agent is now running.`))
+  }
+  assert.equal(s.subAgents.size, 3, "three live background agents after their launches")
+  applyRecord(s, stoppedRecovery(["aeb3c7711a80cb53d", "a46a90cfaf25b6264", "a389ac8bce4621e32"]))
+  assert.equal(s.subAgents.size, 0, "ALL three retire on the single stopped recovery notification")
+  assert.equal(s.retiredSubAgents.get("toolu_a1")?.status, "killed")
+  assert.equal(s.retiredSubAgents.get("toolu_a3")?.status, "killed", "not just the FIRST id in the block")
+})
+
+test("applyRecord: a `stopped` RECOVERY notification retires orphaned background SHELLS (which have no staleness clock)", () => {
+  // Real 2026-07-23 leak (nub thread cpu-and-memory-usage-is-insanely): background Bash shells that
+  // finished with no completion record showed "running" for 8+ HOURS. A shell has NO staleness fallback
+  // (run_in_background can't tell a CI watcher from a vite dev server), so ONLY a terminal signal clears
+  // it — and the `stopped` recovery IS that signal. The real block also carries an
+  // `__orphan_summary__:shell` sentinel task-id that must be SKIPPED, never mis-correlated.
+  const s = newTailState("t", "s", "/x")
+  const shells: [string, string][] = [["toolu_s1", "bet4w4tnm"], ["toolu_s2", "bjp84skrl"], ["toolu_s3", "bnj12ktmw"]]
+  for (const [id, tid] of shells) {
+    applyRecord(s, bashBg(id, "probe process tree", "ps aux"))
+    applyRecord(s, resultText(id, `Command running in background with ID: ${tid}. Output is being written to: /tmp/tasks/${tid}.output.`))
+  }
+  assert.equal(s.subAgents.size, 3, "three live background shells after their launches")
+  applyRecord(s, stoppedRecovery(["bet4w4tnm", "bjp84skrl", "bnj12ktmw"], "shell"))
+  assert.equal(s.subAgents.size, 0, "every orphaned shell retires; the __orphan_summary__ sentinel is a harmless skip")
+  assert.equal(s.retiredShells.get("toolu_s1")?.status, "killed")
+  assert.equal(s.retiredShells.get("toolu_s3")?.status, "killed")
+})
+
+test("applyRecord: a `stopped` recovery whose ids match nothing live is a no-op (never throws)", () => {
+  const s = newTailState("t", "s", "/x")
+  applyRecord(s, bashBg("toolu_live", "Watch CI", "gh run watch"))
+  applyRecord(s, resultText("toolu_live", "Command running in background with ID: bkeep. Output is being written to: /tmp/tasks/bkeep.output."))
+  applyRecord(s, stoppedRecovery(["bgone1", "bgone2"], "shell")) // ids for ops this session never tracked
+  assert.equal(s.subAgents.size, 1, "an unrelated recovery leaves a genuinely-live shell untouched")
+})
+
 test("applyRecord: a TaskStop that did NOT confirm success never retires a live op", () => {
   const s = newTailState("t", "s", "/x")
   applyRecord(s, bashBg("toolu_sh", "Watch CI", "gh run watch"))
@@ -472,6 +524,20 @@ function taskStopResult(taskId: string, command = "gh run watch") {
     type: "user",
     timestamp: "2026-07-01T00:00:08.000Z",
     message: { content: [{ type: "tool_result", tool_use_id: "toolu_stop", content: JSON.stringify({ message: `Successfully stopped task: ${taskId} (${command})`, task_id: taskId, task_type: "local_bash", command }) }] },
+  }
+}
+// A `stopped` RECOVERY notification: a NEW session's report for background ops the PREVIOUS process left
+// with no completion record. Corpus-real shape (nub sessions ccf8cda0 / 54b37ebe, 2026-07-23): ONE block
+// listing EVERY orphan's runtime task-id, NO tool-use-id, status "stopped" — and for shells an
+// `__orphan_summary__:shell` sentinel task-id (which correlates to nothing and must be skipped).
+function stoppedRecovery(taskIds: string[], kind: "agent" | "shell" = "agent") {
+  const ids = kind === "shell" ? [...taskIds, "__orphan_summary__:shell"] : taskIds
+  const body = ids.map((t) => `<task-id>${t}</task-id>`).join("\n")
+  return {
+    type: "queue-operation",
+    operation: "enqueue",
+    timestamp: "2026-07-01T00:05:00.000Z",
+    content: `<task-notification>\n${body}\n<status>stopped</status>\n<summary>These ops have no completion record and have been marked stopped. Task ids: ${taskIds.join(", ")}.</summary>\n</task-notification>`,
   }
 }
 // A completion notification that OMITS <tool-use-id> (some emitters do) — only the runtime <task-id>.
@@ -656,6 +722,43 @@ test("tailer: surfaces running vs stale sub-agents (via injected mtime) and clea
   t.tick()
   assert.deepEqual(t.get("t")?.subAgents, [])
   assert.ok(h.changes.n > before2, "clearing a sub-agent marks the board dirty")
+})
+
+test("tailer: a `stopped` recovery notification clears EVERY orphaned sub-agent through the real tick loop", () => {
+  // Integration form of the orphan-retirement fix, driven through createTailer.tick() (not applyRecord
+  // in isolation): three background agents left with no completion record, then the real multi-id
+  // `stopped` recovery notification appended — the whole live set must drain to empty and the board dirty.
+  const h = harness()
+  h.storage.upsertSession(row())
+  const agents: [string, string][] = [["toolu_a1", "aeb3c7711a80cb53d"], ["toolu_a2", "a46a90cfaf25b6264"], ["toolu_a3", "a389ac8bce4621e32"]]
+  const seeded: string[] = [IN_FLIGHT]
+  for (const [id, aid] of agents) {
+    seeded.push(JSON.stringify(dispatch(id, `orphan ${aid}`)))
+    seeded.push(JSON.stringify(resultText(id, `Spawned successfully.\nagentId: ${aid}\nThe agent is now running.`)))
+  }
+  fixture(h.logDir, "sid", seeded)
+  const childMtime = Date.parse("2026-07-01T00:00:02.000Z")
+  const t = createTailer({
+    project: { cwdSlug: "x" } as Project,
+    storage: h.storage,
+    bus: h.bus,
+    onChange: () => h.changes.n++,
+    now: () => h.clock.ms,
+    paneDead: () => h.dead.v,
+    capturePane: () => h.pane.text,
+    sessionLogDir: h.logDir,
+    mtimeMs: () => childMtime,
+  })
+
+  h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
+  t.tick() // prime
+  assert.equal(t.get("t")?.subAgents.length, 3, "three live background agents after prime")
+
+  appendFileSync(join(h.logDir, "sid.jsonl"), JSON.stringify(stoppedRecovery(["aeb3c7711a80cb53d", "a46a90cfaf25b6264", "a389ac8bce4621e32"])) + "\n")
+  const before = h.changes.n
+  t.tick()
+  assert.deepEqual(t.get("t")?.subAgents, [], "the single stopped recovery drains ALL three, not just the first")
+  assert.ok(h.changes.n > before, "clearing the orphans marks the board dirty")
 })
 
 test("tailer: a dead pane clears its background shells — a shell cannot outlive the agent process", () => {

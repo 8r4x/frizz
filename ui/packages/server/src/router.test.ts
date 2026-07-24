@@ -804,14 +804,16 @@ test("completeRegisteredThread requires confirmation for an executing turn or li
       turn: "idle" as const,
       subAgents: [{ id: "child-1", label: "Child", startedAt: "2026-07-15T00:00:00.000Z", state: "running" as const }],
     }
-    const staleShell = {
+    // A stale-only parent reads as at-rest — hasLiveBackgroundWork keeps it IN the queue, so Done must
+    // NOT contradict that with a "still running" warning. Only ACTIVELY-running work forces confirmation.
+    const staleChildOnly = {
       ...executing,
       turn: "idle" as const,
-      bgShells: [{ label: "Watch CI", startedAt: "2026-07-15T00:00:00.000Z", state: "stale" as const }],
+      subAgents: [{ id: "stale-1", label: "Silent past the staleness ceiling", startedAt: "2026-07-15T00:00:00.000Z", state: "stale" as const }],
     }
     assert.equal(completionNeedsConfirmation(executing), true)
     assert.equal(completionNeedsConfirmation(childWorking), true)
-    assert.equal(completionNeedsConfirmation(staleShell), true)
+    assert.equal(completionNeedsConfirmation(staleChildOnly), false, "a stale-only parent is at rest — Done proceeds, matching the queue rule")
 
     for (const [slug, telemetry] of [["executing-complete", executing], ["child-complete", childWorking]] as const) {
       const saved = { ...row(slug), exited: 0 }
@@ -851,22 +853,25 @@ test("completionConfirmationHold names WHY it declined: the executing turn plus 
     turn: "in-flight",
     subAgents: [
       { id: "a1", label: "Audit the resolver", startedAt: at, state: "running" as const },
-      { id: "a2", label: "Finished child", startedAt: at, state: "done" as unknown as "running" },
+      // A STALE child: its completion signal was lost AND its transcript has been silent past the
+      // 15-min ceiling. That reads as finished/dead, not working — and hasLiveBackgroundWork already
+      // keeps such a parent IN the queue as at-rest, so the Done dialog must not contradict it.
+      { id: "a2", label: "Silent past the staleness ceiling", startedAt: at, state: "stale" as const },
     ],
     bgShells: [
       { label: "Watch CI", startedAt: at, state: "running" as const },
-      { label: "vite dev", startedAt: at, state: "stale" as const },
     ],
   })
-  // Mid-turn AND owning children is one honest reading, not two competing ones — both travel.
+  // Mid-turn AND owning RUNNING children is one honest reading, not two competing ones — both travel.
+  // The stale sub-agent is NOT named: it is not something Done meaningfully still has to kill.
   assert.deepEqual(hold, {
     turnInFlight: true,
     unobservable: false,
     subAgents: [{ label: "Audit the resolver", state: "running" }],
     subAgentCount: 1,
-    bgShells: [{ label: "Watch CI", state: "running" }, { label: "vite dev", state: "stale" }],
-    bgShellCount: 2,
-  }, "only live ops are named; a settled child is not something Done is about to kill")
+    bgShells: [{ label: "Watch CI", state: "running" }],
+    bgShellCount: 1,
+  }, "only ACTIVELY-running ops are named; a stale child no longer holds Done, matching the queue rule")
 })
 
 test("completionConfirmationHold caps worker-authored labels but reports the untruncated count", () => {
