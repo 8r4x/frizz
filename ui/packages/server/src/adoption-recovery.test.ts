@@ -806,7 +806,11 @@ test("separate OS processes/connections contend on one durable reservation", asy
     import { setTimeout as wait } from "node:timers/promises";
     import { createStorage } from ${JSON.stringify(storageModule)};
     const storage = createStorage(${JSON.stringify(dbPath)});
-    while (!existsSync(${JSON.stringify(barrier)})) await wait(1);
+    // Deadline, not an unbounded spin: if the parent test dies before writing the marker, an orphaned
+    // child would otherwise wait forever holding the test runner's pipes open — one wedged child hangs
+    // the ENTIRE node --test run (bit for real on 2026-07-24 under load).
+    const deadlineMs = Date.now() + 60_000;
+    while (!existsSync(${JSON.stringify(barrier)})) { if (Date.now() >= deadlineMs) process.exit(97); await wait(1); }
     const won = storage.reserveAdoptionClaim({slug:"process-race",attemptToken:${JSON.stringify(attemptToken)},sessionId:${JSON.stringify(sessionId)},reservedAtMs:100,leaseExpiresAtMs:200});
     process.stdout.write(String(won));
     storage.close();
@@ -845,7 +849,11 @@ test("an OS process paused past its lease cannot spawn after recovery retires it
       sessionId:${JSON.stringify(sessionId)},reservedAtMs:100,leaseExpiresAtMs:200
     })) process.exit(91);
     writeFileSync(${JSON.stringify(ready)}, "ready");
-    while (!existsSync(${JSON.stringify(resume)})) await wait(1);
+    // Same orphan guard as the process-race child above: the parent's readiness deadline can throw
+    // before it ever writes the resume marker; without a deadline this child then spins forever and
+    // wedges the whole node --test run.
+    const deadlineMs = Date.now() + 60_000;
+    while (!existsSync(${JSON.stringify(resume)})) { if (Date.now() >= deadlineMs) process.exit(97); await wait(1); }
     const result = storage.withAdoptionSpawnFence(
       ${JSON.stringify(slug)}, ${JSON.stringify(attemptToken)}, 500,
       () => writeFileSync(${JSON.stringify(spawned)}, "new-session"),
