@@ -25,10 +25,6 @@ export function parsePrRef(value: string): PrRef | undefined {
   return { owner: m[1], repo: m[2].replace(/\.git$/, ""), number }
 }
 
-export function prRefKey(ref: PrRef): string {
-  return `${ref.owner}/${ref.repo}#${ref.number}`
-}
-
 // Which hints the operator can actually ARM. Only `timer` (a real future instant) and `pr-watch` (a
 // parseable PR) are machine-actionable. `human:` names a person, and the legacy pr/ci/session kinds are
 // presentation-only compatibility — none can be bound to a durable wait, so a confirmation against one
