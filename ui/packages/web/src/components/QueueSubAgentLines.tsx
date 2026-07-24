@@ -26,7 +26,10 @@ export function QueueSubAgentLines({ slug, subAgents }: { slug: string; subAgent
             title={open ? "Open sub-agent transcript" : undefined}
             className="group flex min-w-0 items-center gap-1.5 rounded-sm text-left text-[11.5px] text-muted/65 outline-none transition-colors enabled:hover:text-fg/85 disabled:cursor-default"
           >
-            <span aria-hidden className="shrink-0 text-[11px] leading-none text-muted/45">↳</span>
+            {/* The SAME ⤷ (U+2937) the sidebar's sub-agent rows, the drawer's operation lines and the
+                lifecycle footer use. A queue card sits directly above the ⤷ shell rows, so a second
+                down-right arrow here reads as two different affordances — keep this one glyph. */}
+            <span aria-hidden className="shrink-0 text-[11px] leading-none text-muted/45">⤷</span>
             <span aria-hidden className="fray-live-dot fray-live-dot--agent" data-running-indicator="queue-subagent" />
             <span className="min-w-0 truncate group-enabled:group-hover:underline">{agent.label}</span>
           </button>

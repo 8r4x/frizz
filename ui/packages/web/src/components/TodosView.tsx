@@ -1215,7 +1215,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
       {controls.status}
         <QueueSubAgentLines slug={thread.id} subAgents={thread.subAgents ?? []} />
         {/* Background shells / Monitors remain a runtime strip below the reply area. Live sub-agents are
-            intentionally excluded here because their compact ↳ child lines sit directly above it.
+            intentionally excluded here because their compact ⤷ child lines sit directly above it.
             It HANGS off the composer at the same pt-1.5 as those child lines — the prompt box's own
             bottom padding already supplies the optical air, so a larger gap here reads as a break —
             and carries its own pb so the last row still breathes before the lifecycle footer. */}
