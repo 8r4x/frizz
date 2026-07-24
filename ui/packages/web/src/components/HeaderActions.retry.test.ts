@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ThreadView } from "@fray-ui/shared"
 import { HeaderActions } from "./HeaderActions.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
@@ -17,10 +18,16 @@ import { offersRetry } from "../groups.ts"
 
 const base = { kind: "session", backend: "claude", title: "A worker", status: "active", subAgents: [] } as unknown as ThreadView
 
+// Retry is an ordinary eager send now (lib/retrySession → sendEagerFollowUp), so the pill writes its
+// optimistic bubble into the transcript cache and needs the client the app always provides.
 function header(extra: Partial<ThreadView>): string {
   const t = { ...base, id: "t", ...extra } as ThreadView
   return renderToStaticMarkup(
-    createElement(TooltipProvider, null, createElement(HeaderActions, { thread: t, onDone: () => {} })),
+    createElement(
+      QueryClientProvider,
+      { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) },
+      createElement(TooltipProvider, null, createElement(HeaderActions, { thread: t, onDone: () => {} })),
+    ),
   )
 }
 

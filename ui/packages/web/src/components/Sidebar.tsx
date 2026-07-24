@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
 import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, FileText, Github, Hourglass, Loader2, RotateCcw, Timer } from "lucide-react"
 import type { AwaitingHint, BoardSnapshot, PlanView, ThreadView } from "@fray-ui/shared"
@@ -383,6 +384,7 @@ export const ThreadRow = memo(function ThreadRow({
 // "Restart", because "restart" already means the fray control plane restarting itself
 // (RestartFrayButton) and the two must not blur.
 function RowRetryButton({ slug }: { slug: string }) {
+  const queryClient = useQueryClient()
   const [busy, setBusy] = useState(false)
   return (
     <Tooltip label="Retry — resume this session where it left off">
@@ -396,7 +398,7 @@ function RowRetryButton({ slug }: { slug: string }) {
         onClick={(e) => {
           e.stopPropagation()
           setBusy(true)
-          retrySession(slug).finally(() => setBusy(false))
+          retrySession(queryClient, slug).finally(() => setBusy(false))
         }}
         // Sized to the title's FIRST line (h-[19px], top-1 matches the row's pt-1) so it never exceeds
         // the row height. Quiet grey, no border/accent — the muted-icon idiom of the header actions. An
