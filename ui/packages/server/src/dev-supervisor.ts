@@ -118,7 +118,19 @@ export interface SupervisorShutdownHandlerOptions {
   error?: (line: string) => void
   /** Reclaim the control-plane child by force when the operator refuses to wait for the drain. */
   force?: () => void
+  /**
+   * How long after the first signal a repeat is still treated as the SAME stop rather than as an
+   * impatient operator. One Ctrl-C is delivered to every process in the foreground group, and a shell
+   * or npm-script wrapper forwards it again within the same tick — escalating on that would turn every
+   * ordinary graceful stop into a forced kill. See SUPERVISOR_ESCALATE_GRACE_MS.
+   */
+  escalateAfterMs?: number
+  /** Deterministic test seam. Production reads the monotonic clock. */
+  now?: () => number
 }
+
+/** A human cannot withdraw their patience in under half a second; a forwarded signal always does. */
+export const SUPERVISOR_ESCALATE_GRACE_MS = 500
 
 /**
  * Idempotent, permanently-installed signal/control handler for the durable supervisor owner.
@@ -130,17 +142,27 @@ export interface SupervisorShutdownHandlerOptions {
  * must not strand the project — and reports a non-zero code because the drain did not complete.
  */
 export function createSupervisorShutdownHandler(options: SupervisorShutdownHandlerOptions): () => void {
+  const now = options.now ?? (() => Date.now())
+  const escalateAfterMs = options.escalateAfterMs ?? SUPERVISOR_ESCALATE_GRACE_MS
+  let startedAt = 0
   let stopping = false
   let decided = false
   const decide = (code: number) => {
     if (decided) return
     decided = true
-    options.release()
+    try {
+      options.release()
+    } catch (error) {
+      // An abandoned drain can still hold the project's ownership guard. Releasing is best-effort;
+      // a failure here must never replace the exit with an unhandled stack over the operator's prompt.
+      options.error?.(`[fray-ui] could not release launch ownership: ${error instanceof Error ? error.message : error}`)
+    }
     options.exit(code)
   }
   return () => {
     if (stopping) {
-      if (decided) return
+      // Same stop, delivered twice (process group + a forwarding wrapper) — not an impatient operator.
+      if (decided || now() - startedAt < escalateAfterMs) return
       options.error?.("[fray-ui] second stop signal — abandoning the graceful drain")
       try {
         options.force?.()
@@ -151,6 +173,7 @@ export function createSupervisorShutdownHandler(options: SupervisorShutdownHandl
       return
     }
     stopping = true
+    startedAt = now()
     void options.close().then(
       () => decide(0),
       (error) => {

@@ -107,7 +107,11 @@ if (process.env.FRAY_SHUTDOWN_HARNESS === "launcher") {
     }
   }
 
-  const child = spawn(process.execPath, [resolve(uiDir, "node_modules/tsx/dist/cli.mjs"), resolve(scriptsDir, "verify-graceful-shutdown.mjs")], {
+  // Plain node, NOT the tsx CLI. A tsx wrapper re-spawns the real launcher and FORWARDS signals to
+  // it, so one Ctrl-C reached the launcher twice and the harness measured the wrapper's exit code
+  // rather than the launcher's. Node strips types natively, exactly as the dev supervisor's own
+  // fork(dev.ts) relies on, so the launcher runs directly and the signal accounting is honest.
+  const child = spawn(process.execPath, [resolve(scriptsDir, "verify-graceful-shutdown.mjs")], {
     cwd: uiDir,
     // Its own process group, so the driver can deliver a signal to the WHOLE group exactly the way a
     // terminal delivers Ctrl-C to its foreground group.

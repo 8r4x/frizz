@@ -13,6 +13,7 @@ import {
   DEV_CRASH_RETRY_MAX_MS,
   classifyDevChange,
   createSupervisorShutdownHandler,
+  SUPERVISOR_ESCALATE_GRACE_MS,
   defaultDevWatchRoots,
   devChildEnv,
   devConfigSyntaxError,
@@ -147,6 +148,7 @@ test("a second supervisor signal escalates once instead of waiting out the drain
   let releases = 0
   const exits: number[] = []
   const errors: string[] = []
+  let clock = 1_000
   let resolveClose!: () => void
   const closing = new Promise<void>((resolve) => { resolveClose = resolve })
   const stop = createSupervisorShutdownHandler({
@@ -155,13 +157,21 @@ test("a second supervisor signal escalates once instead of waiting out the drain
     release: () => { releases++ },
     exit: (code) => { exits.push(code) },
     error: (line) => { errors.push(line) },
+    now: () => clock,
   })
   stop()
+  // ONE Ctrl-C reaches every process in the foreground group, and a shell/npm wrapper forwards it
+  // again in the same tick. Those repeats are the same stop and must never force-kill anything.
   stop()
   stop()
-  // Exactly one graceful close was ever started, and exactly one forced reclaim answered the repeat.
-  assert.equal(closes, 1)
-  assert.equal(forces, 1)
+  assert.equal(forces, 0, "a same-instant repeat is one operator action, not an escalation")
+  assert.deepEqual(exits, [])
+
+  clock += SUPERVISOR_ESCALATE_GRACE_MS
+  stop()
+  stop()
+  assert.equal(closes, 1, "however many signals arrive, exactly one graceful close is ever started")
+  assert.equal(forces, 1, "and exactly one forced reclaim answers the repeat")
   // A forced exit still releases the tokenized launch owner — abandoning the drain must not strand
   // the project — and reports failure, because the drain did not complete.
   assert.equal(releases, 1)
@@ -902,4 +912,25 @@ test("private SDK runtime changes recycle only disposable children and recover w
     assert.equal(supervisor ? unsubscribed : true, true)
     rmSync(workspace, { recursive: true, force: true })
   }
+})
+
+// The escalation path runs while a drain still holds the project's ownership guard, so release() can
+// genuinely fail there. It must never replace the exit with an unhandled stack over the prompt.
+test("a forced supervisor stop still exits when releasing launch ownership throws", () => {
+  const exits: number[] = []
+  const errors: string[] = []
+  let clock = 0
+  const stop = createSupervisorShutdownHandler({
+    close: () => new Promise<void>(() => {}),
+    force: () => {},
+    release: () => { throw new Error("timed out waiting for the Fray project ownership guard") },
+    exit: (code) => { exits.push(code) },
+    error: (line) => { errors.push(line) },
+    now: () => clock,
+  })
+  stop()
+  clock += SUPERVISOR_ESCALATE_GRACE_MS
+  stop()
+  assert.deepEqual(exits, [1])
+  assert.ok(errors.some((line) => line.includes("could not release launch ownership")))
 })
