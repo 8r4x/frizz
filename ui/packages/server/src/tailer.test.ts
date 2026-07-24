@@ -370,6 +370,28 @@ test("applyRecord: a manual TaskStop clears a background Bash shell (the phantom
   assert.equal(s.retiredSubAgents.size, 0, "shells are display-only — nothing to retain")
 })
 
+test("applyRecord: a Monitor timeout notification (no <status>, no <tool-use-id>) retires the watcher; a progress event does NOT", () => {
+  // Corpus-real shapes (session 54b37ebe / bnmdbtlwx): a monitor that hits timeout_ms emits ONE
+  // notification carrying only <task-id> + the "[Monitor timed out" <event> sentinel — no status.
+  const monitorEvent = (taskId: string, event: string) => ({
+    type: "queue-operation",
+    operation: "enqueue",
+    timestamp: "2026-07-01T00:00:09.000Z",
+    content: `<task-notification>\n<task-id>${taskId}</task-id>\n<summary>Monitor event: "wait for agent sweep"</summary>\n<event>${event}</event>\n</task-notification>`,
+  })
+  const s = newTailState("t", "s", "/x")
+  applyRecord(s, monitorUse("toolu_mon", "wait for agent sweep", "test -f /tmp/marker", false))
+  applyRecord(s, resultText("toolu_mon", "Monitor started (task bnmdbtlwx, timeout 300s). You will be notified on each event."))
+  assert.equal(s.subAgents.get("toolu_mon")?.taskId, "bnmdbtlwx")
+  // An ordinary progress event ALSO has <event> and no <status> — it must never retire the watcher
+  // (the "missing status ⇒ terminal" trap would kill every live monitor on its first event).
+  applyRecord(s, monitorEvent("bnmdbtlwx", "DISK READY"))
+  assert.equal(s.subAgents.size, 1, "a status-less progress event must not retire a live monitor")
+  applyRecord(s, monitorEvent("bnmdbtlwx", "[Monitor timed out — re-arm if needed.]"))
+  assert.equal(s.subAgents.size, 0, "the timeout sentinel is terminal even with no <status>")
+  assert.equal(s.retiredShells.get("toolu_mon")?.status, "killed")
+})
+
 test("applyRecord: a manual TaskStop clears a Monitor (task-id parsed from the real '(task <id>' ack)", () => {
   const s = newTailState("t", "s", "/x")
   applyRecord(s, monitorUse("toolu_mon", "Watch PR checks", "gh pr checks 443 --watch"))
