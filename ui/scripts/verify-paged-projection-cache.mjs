@@ -11,7 +11,7 @@
 import { readFileSync, writeFileSync, mkdtempSync, rmSync, statSync, readdirSync } from "node:fs"
 import { tmpdir, homedir } from "node:os"
 import { join } from "node:path"
-import { projectClaudeTranscript, readLatestThreadTranscriptPage, __clearProjectionCacheForTests, MAX_MESSAGES } from "../packages/server/src/transcript.ts"
+import { projectClaudeTranscript, readLatestThreadTranscriptPage, readTranscript, __clearTranscriptCacheForTests, MAX_MESSAGES } from "../packages/server/src/transcript.ts"
 
 let failures = 0
 const check = (name, ok, detail = "") => {
@@ -55,7 +55,7 @@ const storage = {
 const cuts = [0.17, 0.39, 0.58, 0.71, 0.83, 0.94, 1].map((f) => Math.floor(full.length * f))
 let lastPage = null
 try {
-  __clearProjectionCacheForTests()
+  __clearTranscriptCacheForTests()
   const t0 = performance.now()
   for (const cut of cuts) {
     writeFileSync(filePath, full.subarray(0, cut))
@@ -65,7 +65,7 @@ try {
 
   // Reference: a cold one-shot projection of the SAME final bytes, through the same reader with an
   // empty cache.
-  __clearProjectionCacheForTests()
+  __clearTranscriptCacheForTests()
   const t1 = performance.now()
   const coldPage = readLatestThreadTranscriptPage(project, storage, "t")
   const coldMs = Math.round(performance.now() - t1)
@@ -96,13 +96,25 @@ try {
     JSON.stringify(coldPage.messages) === JSON.stringify(expectedTail),
     `cached ${coldPage.messages.length} vs one-shot tail ${expectedTail.length}`)
 
+  // The two readers must now SHARE one retained fold. Prove it two ways: readTranscript right after a
+  // paged read is a cache HIT (so it costs ~nothing rather than a second full fold), and it agrees with
+  // the paged page message-for-message over the window they have in common.
+  const tShared = performance.now()
+  const viaReadTranscript = readTranscript(project, SESSION_ID)
+  const sharedMs = Math.round(performance.now() - tShared)
+  check("readTranscript reuses the paged reader's fold (no second parse)", sharedMs * 4 < coldMs || coldMs < 40,
+    `readTranscript ${sharedMs}ms vs cold fold ${coldMs}ms`)
+  check("both readers project identical messages",
+    JSON.stringify(viaReadTranscript) === JSON.stringify(coldPage.messages),
+    `readTranscript ${viaReadTranscript.length} vs paged ${coldPage.messages.length}`)
+
   // NEGATIVE CONTROL: a rotated file (same path, new inode) must invalidate the fold rather than
   // append onto a stale projection.
   rmSync(filePath)
   const half = full.subarray(0, Math.floor(full.length * 0.4))
   writeFileSync(filePath, half)
   const rotated = readLatestThreadTranscriptPage(project, storage, "t")
-  __clearProjectionCacheForTests()
+  __clearTranscriptCacheForTests()
   const rotatedCold = readLatestThreadTranscriptPage(project, storage, "t")
   check("rotated/truncated file re-folds from byte 0 (negative control)",
     JSON.stringify(rotated.messages) === JSON.stringify(rotatedCold.messages),
