@@ -6,12 +6,14 @@ import { spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   acquireGlobalLaunchLock,
   choosePort,
   expectedOwnerHealth,
   liveWorkspaceOwner,
   parseCliArgs,
+  pidIsAlive,
   probeFray,
   readPreferredPort,
   resolveWorkspace,
@@ -33,6 +35,8 @@ import { createSupervisorShutdownHandler, startDevSupervisor } from "@fray-ui/se
 import { handoffToRegistrySuccessor, npmRegistryReleaseAdapter, planRegistryUpdate, PRODUCTION_REEXEC_FLAG } from "./production-update.ts";
 import { assertLaunchPrerequisites } from "./preflight.ts";
 
+/** How long an abandoned supervisor gets to drain on SIGTERM before it is SIGKILLed. */
+const ABANDON_GRACE_MS = 3_000;
 const PACKAGE_NAME = process.env.FRAY_REGISTRY_PACKAGE ?? "frayui";
 const PACKAGE_VERSION = process.env.npm_package_version ?? "0.0.1";
 const rawArgs = process.argv.slice(2);
@@ -65,6 +69,34 @@ const workspace: Workspace = (() => {
 process.chdir(workspace.root);
 const target = workspaceLaunchTarget(workspace);
 const expected = expectedOwnerHealth(target, readProjectLaunchOwner(workspace.stateDir));
+
+/**
+ * Terminate a detached supervisor this launcher started and then abandoned, and confirm it is gone.
+ * Signals the process GROUP (spawn used `detached: true`, so the child leads its own group and its
+ * forked control plane is in it) — SIGTERM for a clean drain, then SIGKILL once the grace expires.
+ * Best-effort by necessity, but it must never itself throw: the caller is already reporting a
+ * launch failure and that message is what the operator needs to see.
+ */
+async function abandonLaunchedChild(pid: number | undefined, port: number): Promise<void> {
+  if (!pid) return;
+  const signalGroup = (signal: NodeJS.Signals) => {
+    try { process.kill(-pid, signal); return true; } catch { /* group gone */ }
+    try { process.kill(pid, signal); return true; } catch { return false; }
+  };
+  if (!signalGroup("SIGTERM")) return;
+  const deadline = Date.now() + ABANDON_GRACE_MS;
+  while (Date.now() < deadline) {
+    if (!pidIsAlive(pid)) return;
+    await delay(100);
+  }
+  signalGroup("SIGKILL");
+  await delay(200);
+  if (pidIsAlive(pid)) {
+    console.error(
+      `fray: could not stop the abandoned Fray supervisor (pid ${pid}, port ${port}); stop it manually before retrying`,
+    );
+  }
+}
 
 async function existingPort(): Promise<number | undefined> {
   const owner = liveWorkspaceOwner(workspace.stateDir, target);
@@ -149,7 +181,23 @@ try {
     });
     child.unref();
     closeSync(log);
-    await waitForWorkspace(port, expectedOwnerHealth(target, readProjectLaunchOwner(workspace.stateDir)));
+    try {
+      // Progress-tracked: a boot that keeps reporting steps keeps the launcher's patience, so a large
+      // board on a busy machine is no longer indistinguishable from a wedge. See waitForWorkspace.
+      await waitForWorkspace(
+        port,
+        expectedOwnerHealth(target, readProjectLaunchOwner(workspace.stateDir)),
+        undefined,
+        { stateDir: workspace.stateDir },
+      );
+    } catch (error) {
+      // NEVER leave the child we gave up on. It is DETACHED and in its own process group, so without
+      // this it goes right on booting, binds the port it was told to use, publishes ownership, and
+      // contends with the operator's next attempt — they get the failure message AND a stray control
+      // plane. Signal the whole group so the supervisor's own forked child dies with it.
+      await abandonLaunchedChild(child.pid, port);
+      throw error;
+    }
     openOrPrint(port, false);
   } finally { release(); claim.lease.release(); }
 } catch (error) { fail(error); }

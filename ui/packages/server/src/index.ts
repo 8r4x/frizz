@@ -11,6 +11,7 @@ import {
   type AppContext,
   type ContextOptions,
   type ContextStartupFence,
+  type ContextStartupPhase,
 } from "./context.ts"
 import { createApp, type AppOptions } from "./app.ts"
 import { createTerminalServer, resolveThreadAttach } from "./terminal.ts"
@@ -36,6 +37,7 @@ import {
   type ProcessGeneration,
 } from "./project-launch.ts"
 import * as tmux from "./tmux.ts"
+import { createBootProgressPublisher } from "./boot-progress.ts"
 
 export const SERVER_SHUTDOWN_TIMEOUT_MS = 4_000
 export const SERVER_FORCE_EXIT_MS = 5_000
@@ -84,6 +86,12 @@ export interface StartServerRuntime {
     expected: { pid: number; processStart: string; publisherToken: string; ownerToken: string },
   ): boolean
   afterPhase?(phase: ServerStartupPhase): void | Promise<void>
+  /**
+   * Sub-phase reporter for the "context" phase. `createContext` is a single server phase but does
+   * most of the boot work inside it, so a boot-timing harness that only sees server phases reads a
+   * multi-second opaque block. Purely observational — never affects construction or rollback.
+   */
+  afterContextPhase?(phase: ContextStartupPhase): void
   shutdownDeadline?: ShutdownBarrierOptions["deadline"]
 }
 
@@ -314,6 +322,8 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   const effectiveOwnerToken = ownerToken ?? ownedLaunch!.token
 
   let startupPhase: ServerStartupPhase = "launch ownership"
+  // Named, incremental boot progress for whatever launcher is waiting on /health (boot-progress.ts).
+  const bootProgress = createBootProgressPublisher(project.stateDir)
   let ctx: AppContext | undefined
   let githubInit: Promise<void> | undefined
   let terminal: TerminalServer | undefined
@@ -519,6 +529,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     commit?: (value: T) => void,
   ): Promise<T> => {
     startupPhase = name
+    bootProgress(name)
     const value = await operation()
     // Publish a newly-created resource to the rollback ledger before an injected post-phase failure.
     commit?.(value)
@@ -534,6 +545,10 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         claudeBin: opts.claudeBin,
         project,
         startup: {
+          afterPhase: (p) => {
+            bootProgress(`context: ${p}`)
+            runtime.afterContextPhase?.(p)
+          },
           cleanupTimeoutMs: opts.shutdownTimeoutMs ?? SERVER_SHUTDOWN_TIMEOUT_MS,
           cleanupDiagnostic: diagnostic,
           cleanupDeadline: runtime.shutdownDeadline,
@@ -583,7 +598,12 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       (value) => { appSocket = value },
     )
     await phase("board producer", () => ctx!.board.start())
-    await phase("tailer producer", () => ctx!.tailer.start())
+    // The tailer's FIRST pass is the one boot step that can legitimately take minutes on a cold board
+    // of thousands of threads. Report its position so a waiting launcher can tell "working" from
+    // "wedged" instead of guessing with a stopwatch.
+    await phase("tailer producer", () => ctx!.tailer.start((done, total) => {
+      bootProgress(`tailer producer ${done}/${total}`)
+    }))
     await phase("permission producer", () => ctx!.permissionController.start())
     await phase("delivery confirmer", () => ctx!.deliveryConfirmer.start())
     await phase("profile producer", () => ctx!.profileController?.start())
@@ -715,10 +735,13 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       }
     }
     await runtime.afterPhase?.("signal handlers")
+    // The port is listening and /health answers: the launcher no longer needs the progress signal.
+    bootProgress.done()
 
     return { httpServer, ctx, port, close: beginClose, shutdownFence }
   } catch (startupError) {
     accepting = false
+    bootProgress.done()
     let cleanupError: unknown
     let reportedStartupError = startupError
     if (startupError instanceof ContextStartupError) {

@@ -14,6 +14,15 @@ import { normalizeObservedThreadModel, validateThreadProfile } from "./backend/t
 import { classifyLimitRecord } from "./backend/usage-limit.ts"
 import { parseDeliveryLedger, correlateDeliveryRecord, ageDeliveries, serializeDeliveryLedger, type DeliveryLedgerItem } from "./delivery-ledger.ts"
 import { createCodexSubAgentTracker, type CodexSubAgentTracker } from "./codex-subagents.ts"
+import {
+  createTailStateCache,
+  decodeTailState,
+  encodeTailState,
+  fenceMatches,
+  measureFence,
+  type TailCacheEntry,
+  type TailStateCache,
+} from "./tail-cache.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
 // (~/.claude/projects/<cwdSlug>/<session_id>.jsonl) to derive liveness telemetry — last activity
@@ -49,6 +58,9 @@ import { createCodexSubAgentTracker, type CodexSubAgentTracker } from "./codex-s
 
 const IDLE_BACKSTOP_MS = 5000
 const POLL_MS = 1000
+// Ceiling on the adaptive poll (see scheduleTick). A tick this expensive means something is badly
+// wrong, but the tailer is still the only source of turn/liveness telemetry — it must keep running.
+const MAX_POLL_MS = 10_000
 // Claude writes an untimestamped permission sidecar just before (or alongside) its footer redraw.
 // Give the footer the arrival poll plus two more redraw polls, then discard a stable mismatch so a
 // killed pane's late sidecar cannot cause a permanent capture-pane/SQLite hot loop.
@@ -86,6 +98,14 @@ const FOREIGN_MAX = 20
 // Foreign discovery is a readdir + per-file stat; too costly per 1s tick, so scan at most every 5th
 // tick (~5s) plus the very first tick. Between scans the last fresh set is reused verbatim.
 const FOREIGN_SCAN_EVERY = 5
+// How often the durable prime cache (tail-cache.ts) is written back for threads whose transcript grew.
+// The cache exists to make the NEXT boot cheap, so it only has to be roughly current: this bounds how
+// many appended bytes a boot can have to re-fold to at most one interval's worth per thread, while
+// keeping the steady-state cost to one small batched transaction per interval instead of one per tick.
+const CACHE_FLUSH_MS = 30_000
+// How often the FIRST pass reports its position (see Tailer.start). Frequent enough that a launcher
+// watching for progress never mistakes a working boot for a wedged one, coarse enough to cost nothing.
+const PRIME_PROGRESS_EVERY = 20
 // While a thread's transcript is still unresolved (missing past the grace window), re-run discovery at
 // most this often — the file may yet appear (a very late boot) or a drifted transcript may materialize.
 const DISCOVER_RETRY_MS = 15_000
@@ -1199,9 +1219,14 @@ export interface Tailer {
   // during the handoff. Any later backend record remains authoritative (for example a model/version
   // that rejects or coerces a requested mode).
   notePermissionMode?(slug: string, permissionMode: PermissionMode): void
-  start(): void
+  /**
+   * Derive current state immediately, then poll every POLL_MS. `onPrimeProgress` observes the FIRST
+   * pass only, once per PRIME_PROGRESS_EVERY rows — a cold board of thousands of threads spends real
+   * time in here, and the launcher waiting on /health needs to see that it is working, not wedged.
+   */
+  start(onPrimeProgress?: (done: number, total: number) => void): void
   stop(): void
-  tick(): void // exposed for tests + boot; the interval calls it every POLL_MS
+  tick(): void // exposed for tests + boot; the adaptive poll (scheduleTick) calls it otherwise
 }
 
 export interface TailerDeps {
@@ -1219,6 +1244,11 @@ export interface TailerDeps {
   // Batched pane text for the per-tick prefetch; defaults to tmux.capturePanes. A fixture that injects
   // only `capturePane` gets no batching (see createTailer) so existing per-slug fakes keep working.
   capturePanes?: (slugs: readonly string[]) => Map<string, string>
+  // "tmux does not list a pane for this slug" — the existence half of the batched inventory, kept
+  // separate from `paneDead` because a DEAD (remain-on-exit) pane still exists and still holds the
+  // boot-failure text captureStall wants. Defaults to the batched liveness map; a fixture that injects
+  // only the per-slug `capturePane` gets no absence check at all, exactly as before.
+  paneAbsent?: (slug: string) => boolean
   findExpectedAdoptionPane?: (expected: tmux.ExpectedAdoptionPane) => tmux.AdoptionPaneLookup
   captureExpectedAdoptionPane?: (expected: tmux.ExpectedAdoptionPane) => tmux.ExactPaneCapture
   sessionLogDir?: string // injectable transcript dir (tests); defaults to the Claude Code path
@@ -1239,6 +1269,10 @@ export interface TailerDeps {
   // tool-approval prompt. Injectable for tests; the default reads that file. Absent stateDir (narrow
   // test fixtures) → always undefined, so the pane-sniff regex fallback covers exactly as before.
   readPermMarker?: (slug: string) => PermMarker | undefined
+  // Durable prime cache (see tail-cache.ts). Defaults to a table in the project's own SQLite DB;
+  // pass `null` to disable it entirely, which restores the historical "fold every transcript from
+  // byte 0 on every boot" behaviour exactly (that is what the cache-off tests assert against).
+  tailCache?: TailStateCache | null
 }
 
 // The durable "blocked on <tool>" marker written by the worker's PermissionRequest hook. `at` is the
@@ -1303,14 +1337,35 @@ export function createTailer(deps: TailerDeps): Tailer {
   // inject only `capturePane`) ⇒ no batching, and every sniff falls back to the injected per-slug fake —
   // byte-identical to the pre-batch behavior.
   const capturePanes = deps.capturePanes ?? (deps.capturePane ? undefined : tmux.capturePanes)
+  const paneAbsent = deps.paneAbsent ?? (deps.capturePane ? undefined : (slug: string) => !tmux.paneSnapshotCached(slug))
   const findExpectedAdoptionPane = deps.findExpectedAdoptionPane ?? tmux.findExpectedAdoptionPane
   const captureExpectedAdoptionPane = deps.captureExpectedAdoptionPane ?? tmux.captureExpectedAdoptionPane
   const logDir = deps.sessionLogDir ?? defaultLogDir(deps.project)
   const mtimeMs = deps.mtimeMs ?? defaultMtimeMs
   const readPermMarker = deps.readPermMarker ?? defaultReadPermMarker(deps.project)
+  // The durable prime cache. `undefined` dep ⇒ open the default table in the project DB; `null` ⇒
+  // explicitly disabled. A storage stub with no `db` degrades to disabled rather than throwing.
+  const tailCache: TailStateCache | null = deps.tailCache === null
+    ? null
+    : deps.tailCache ?? (() => {
+        try {
+          return deps.storage.db ? createTailStateCache(deps.storage.db) : null
+        } catch {
+          return null
+        }
+      })()
+
+  // Resolved at most ONCE per row per tick. Every row asks for its binding at least twice (pane
+  // liveness and pane text), and each ask is two registry point-queries — 4 queries per row per second
+  // that can only ever return the same answer, since a tick describes one instant. Reset at the top of
+  // each tick alongside the pane caches.
+  let adoptionBindings = new Map<string, ReturnType<typeof adoptionRuntimeBinding>>()
 
   function adoptionBinding(row: SessionRow) {
+    const cached = adoptionBindings.get(row.slug)
+    if (cached) return cached
     const binding = adoptionRuntimeBinding(deps.storage, row)
+    adoptionBindings.set(row.slug, binding)
     return binding
   }
 
@@ -1357,11 +1412,25 @@ export function createTailer(deps: TailerDeps): Tailer {
   function capturePaneForRow(row: SessionRow): string {
     const binding = adoptionBinding(row)
     if (binding.kind === "unbound") {
-      if (!paneTextPrefetched) prefetchPaneText()
       const cached = paneTextCache?.get(row.slug)
-      // A miss (batch aborted before this slug, or the session appeared mid-tick) falls back to the
-      // single capture — correctness never depends on the prefetch landing.
-      return cached ?? capturePane(row.slug)
+      if (cached !== undefined) return cached
+      // ABSENCE FIRST, before any capture is attempted or prefetched. A slug the batched inventory does
+      // not list has NO PANE, so both the per-slug capture and the whole batch can only spend process
+      // spawns to produce the same empty string. Two distinct costs die here:
+      //   * boot: a thread whose last record left its turn mid-flight (a killed worker, a crashed CLI)
+      //     reads in-flight forever, so every boot sniffed every one of them — 22 doomed spawns, 2.4s.
+      //   * STEADY STATE: a boot-wedged thread (noTranscript) is sniffed on EVERY tick by design, and
+      //     asking on its behalf triggered a full batched capture of every OTHER pane too. Measured on
+      //     the maintainer's 20-session board: ~120ms of the ~210ms idle tick, every second, forever.
+      // The inventory is the same ≤900ms-old snapshot the tick's liveness already depends on, so this
+      // costs no extra subprocess of its own.
+      if (paneAbsent?.(row.slug)) return ""
+      if (!paneTextPrefetched) prefetchPaneText()
+      const batched = paneTextCache?.get(row.slug)
+      if (batched !== undefined) return batched
+      // Any other miss (batch aborted before this slug, or the session appeared mid-tick) falls back to
+      // the single capture — correctness never depends on the prefetch landing.
+      return capturePane(row.slug)
     }
     if (binding.kind === "conflict") return ""
     const captured = captureExpectedAdoptionPane(binding.claim)
@@ -1580,6 +1649,9 @@ export function createTailer(deps: TailerDeps): Tailer {
   let foreignFresh: { id: string; path: string }[] = []
   let foreignScanTick = 0
   let timer: NodeJS.Timeout | null = null
+  let stopped = false
+  // Set for the duration of the FIRST tick only (see start): the launcher's progress signal.
+  let primeProgress: ((done: number, total: number) => void) | undefined
 
   // Discover FOREIGN sessions: *.jsonl in the log dir whose stem is not any registered row's
   // session_id, touched within FOREIGN_FRESH_MS, most-recent-first, capped at FOREIGN_MAX. Registered
@@ -1626,6 +1698,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   // check, and NO notify / storage write — a foreign thread has no tmux session and no registry row.
   // Returns whether its derived telemetry changed (→ board dirty). Pushes to transcriptDirty on bytes.
   function tailForeign(state: TailState, nowMs: number, transcriptDirty: string[], backend: TailBackend): boolean {
+    const key = `foreign:${state.slug}`
     if (!state.primed) {
       const primeOffset = state.offset
       consume(state, backend)
@@ -1633,6 +1706,11 @@ export function createTailer(deps: TailerDeps): Tailer {
       state.turn = computeTurn(state, nowMs)
       state.subAgentsSig = derivedSignature(state, nowMs)
       state.primed = true
+      // Foreign maintainer terminals are the LARGEST transcripts on the board (a day of a human's own
+      // Claude session) and there are up to FOREIGN_MAX of them, so they are worth caching for exactly
+      // the same reason registered rows are.
+      if (state.offset !== primeOffset || !cacheHydrated.has(key)) cacheDirty.add(key)
+      cacheHydrated.delete(key)
       return true // surface the newly-discovered thread
     }
     const prevActivity = state.lastActivityAt
@@ -1642,7 +1720,10 @@ export function createTailer(deps: TailerDeps): Tailer {
     const prevPermissionMode = state.permissionMode
     const prevOffset = state.offset
     consume(state, backend)
-    if (state.offset !== prevOffset) transcriptDirty.push(state.slug)
+    if (state.offset !== prevOffset) {
+      transcriptDirty.push(state.slug)
+      cacheDirty.add(key)
+    }
     let dirty = false
     const nextTurn = computeTurn(state, nowMs)
     if (state.turn !== nextTurn) {
@@ -1733,6 +1814,134 @@ export function createTailer(deps: TailerDeps): Tailer {
       },
     }))
     return (line: string) => tracker.onLine(line)
+  }
+
+  // ---- durable prime cache (tail-cache.ts) ------------------------------------------------------
+  // Loaded lazily on the first tick, consumed once per slug. Entries that miss their fence are simply
+  // never applied: the row then folds from byte 0, exactly as it always did.
+  let cacheEntries: Map<string, TailCacheEntry> | null = null
+  // Slugs whose cached entry is stale (or absent) and must be (re)written at the next flush.
+  const cacheDirty = new Set<string>()
+  // Slugs that were restored from the cache on this boot — used to skip rewriting an entry that is
+  // already byte-accurate, so a warm boot of thousands of threads writes nothing at all.
+  const cacheHydrated = new Set<string>()
+  let cachePruned = false
+  let lastCacheFlushMs = 0
+
+  // Fields the cache must NEVER restore. Identity comes from the live registry row; the pane/discovery
+  // fields are re-derived by the prime branch on every boot and a stale value would suppress a genuine
+  // observation (a stall that must be captured, a discovery that must be retried).
+  const UNRESTORED_TAIL_FIELDS = new Set([
+    "slug", "sessionId", "nativeSessionId", "runtimeGeneration", "path", "foreign",
+    "primed", "permPrompt", "nativeInputRequired", "paneDead", "subAgentsSig",
+    "noTranscript", "nextDiscoverMs", "stallLogged",
+    "deliveryLedgerSeen", "unconfirmedPermissionMode", "unconfirmedPermissionPolls",
+  ])
+
+  // Registered slugs and FOREIGN thread ids live in separate namespaces (the tailer keeps two maps for
+  // exactly that reason), so they get separate key spaces in the one cache table too.
+  const cacheKey = (state: TailState): string => (state.foreign ? `foreign:${state.slug}` : state.slug)
+
+  // Restore a freshly-created state from the durable cache so the prime below resumes the fold at the
+  // cached byte offset instead of at 0. `row` is null for a foreign thread (it has no registry row).
+  // Returns true only when EVERY fence held. Any doubt — a different session/generation, a different
+  // transcript path, an open delivery ledger, a file whose inode/size/content moved under the cached
+  // prefix, an undecodable blob — returns false and leaves the state untouched, which is the full
+  // re-read.
+  function hydrateFromCache(state: TailState, row: SessionRow | null, nativeId: string): boolean {
+    if (!tailCache) return false
+    if (cacheEntries === null) cacheEntries = tailCache.load()
+    const key = cacheKey(state)
+    const entry = cacheEntries.get(key)
+    if (!entry) return false
+    cacheEntries.delete(key) // one shot: a rebind within this process must re-derive, not re-restore
+    if (
+      entry.sessionId !== (row ? row.session_id : state.sessionId) ||
+      entry.nativeSessionId !== nativeId ||
+      entry.runtimeGeneration !== (row ? row.runtime_generation ?? 0 : 0) ||
+      entry.path !== state.path
+    ) return false
+    // A row with an OPEN delivery ledger has follow-ups whose evidence may still be sitting in the
+    // prefix we would skip. Correlating those records is the ledger's whole job, so such a row keeps
+    // the full replay — there are only ever a handful, and they are the actively-steered threads.
+    if (row?.delivery_ledger) return false
+    // A CODEX row keeps the full replay too. This prime cache predates the codex sub-agent tracker
+    // (`state.codexSubAgents`, a live object with methods) and cannot round-trip it — a restored plain
+    // blob has no `.poll`. And resuming the parent fold mid-file would skip the `spawn_agent` records
+    // in [0, offset) the tracker rebuilds itself from. Codex threads full-replay exactly as before.
+    if (row?.backend === "codex") return false
+    const current = measureFence(entry.path, entry.offset)
+    if (!current || !fenceMatches(entry, current)) return false
+    const decoded = decodeTailState(entry.state)
+    if (!decoded) return false
+    if (decoded.offset !== entry.offset || typeof decoded.partial !== "string") return false
+    // The three Maps must have survived the round trip as Maps; a blob that says otherwise is corrupt.
+    for (const field of ["subAgents", "retiredSubAgents", "retiredShells"]) {
+      if (!(decoded[field] instanceof Map)) return false
+    }
+    // `Record` is shadowed in this module by the JSONL record interface — spell the index type out.
+    const target = state as unknown as { [key: string]: unknown }
+    for (const [key, value] of Object.entries(decoded)) {
+      if (UNRESTORED_TAIL_FIELDS.has(key)) continue
+      target[key] = value
+    }
+    cacheHydrated.add(key)
+    return true
+  }
+
+  // The durable record of `state` at its current byte cursor, or null when it must not be cached: a
+  // state bound to nothing yet, a row with an open delivery ledger, or a file that will not stat/read.
+  function cacheSnapshot(state: TailState, row: SessionRow | null): TailCacheEntry | null {
+    // Codex rows are never cached — the prime cache predates their live sub-agent tracker and cannot
+    // round-trip it (see hydrateFromCache). Never persisting them keeps hydrate a guaranteed miss.
+    if (state.offset <= 0 || row?.delivery_ledger || row?.backend === "codex") return null
+    const fence = measureFence(state.path, state.offset)
+    if (!fence) return null
+    return {
+      slug: cacheKey(state),
+      sessionId: state.sessionId,
+      nativeSessionId: state.nativeSessionId,
+      runtimeGeneration: state.runtimeGeneration,
+      path: state.path,
+      state: encodeTailState(state),
+      ...fence,
+    }
+  }
+
+  // Persist every dirty state in one transaction. Best-effort by construction — a failure costs the
+  // next boot its speedup and nothing else.
+  function flushCache(nowMs: number): void {
+    if (!tailCache) return
+    lastCacheFlushMs = nowMs
+    if (!cachePruned) {
+      cachePruned = true
+      try {
+        const live = new Set<string>()
+        for (const row of deps.storage.allSessions()) live.add(row.slug)
+        for (const id of foreignStates.keys()) live.add(`foreign:${id}`)
+        tailCache.prune(live)
+      } catch {
+        // a stale row can only ever fail its fence
+      }
+    }
+    if (cacheDirty.size === 0) return
+    const entries: TailCacheEntry[] = []
+    try {
+      for (const key of cacheDirty) {
+        const foreign = key.startsWith("foreign:")
+        const state = foreign ? foreignStates.get(key.slice("foreign:".length)) : states.get(key)
+        if (!state) continue
+        const row = foreign ? null : deps.storage.getSession(key) ?? null
+        if (!foreign && !row) continue
+        const entry = cacheSnapshot(state, row)
+        if (entry) entries.push(entry)
+      }
+    } catch {
+      // stop() flushes on the shutdown path; a registry that has already gone away must not turn a
+      // clean shutdown into a failed one. Whatever was collected before the fault is still written.
+    }
+    cacheDirty.clear()
+    tailCache.put(entries)
   }
 
   // Read whatever has been appended since our last offset, folding each complete line into the
@@ -1891,7 +2100,12 @@ export function createTailer(deps: TailerDeps): Tailer {
     // One batched pane capture per tick, filled lazily on the first sniff (see prefetchPaneText).
     paneTextCache = null
     paneTextPrefetched = false
-    for (const row of deps.storage.allSessions()) {
+    adoptionBindings = new Map()
+    const rows = deps.storage.allSessions()
+    let primed = 0
+    for (const row of rows) {
+      if (primeProgress && primed % PRIME_PROGRESS_EVERY === 0) primeProgress(primed, rows.length)
+      primed++
       // Per-row backend + the DISCOVERED transcript stem. Both backends decouple the transcript id from
       // the pinned session_id, via DIFFERENT columns (only one is ever set): codex pins its rollout id on
       // `agent_session_id` (post-dispatch discovery); claude caches a drifted stem on `transcript_id`
@@ -1913,6 +2127,10 @@ export function createTailer(deps: TailerDeps): Tailer {
         // placeholder until discovery pins it).
         const path = backend.transcriptPath(nativeId) ?? join(logDir, `${nativeId}.jsonl`)
         state = newTailState(row.slug, row.session_id, path, false, nativeId, runtimeGeneration)
+        // Resume the fold at the byte offset the last process reached, when the transcript can be
+        // PROVEN to still carry the prefix that produced it. On a miss the state stays fresh and the
+        // prime below folds from 0 — the historical path, unchanged.
+        hydrateFromCache(state, row, nativeId)
         states.set(row.slug, state)
       }
 
@@ -1951,6 +2169,10 @@ export function createTailer(deps: TailerDeps): Tailer {
         state.paneDead = paneDeadForRow(row)
         state.subAgentsSig = derivedSignature(state, nowMs)
         state.primed = true
+        // Cache what this prime derived, unless it came from the cache and consumed nothing — in which
+        // case the stored entry is already byte-accurate and rewriting it is pure work.
+        if (state.offset !== primeOffset || !cacheHydrated.has(row.slug)) cacheDirty.add(row.slug)
+        cacheHydrated.delete(row.slug)
         if (state.permissionMode) {
           const saved = PermissionMode.safeParse(row.permission_mode)
           const observedAt = state.permissionModeAt ? Date.parse(state.permissionModeAt) : NaN
@@ -2022,7 +2244,10 @@ export function createTailer(deps: TailerDeps): Tailer {
         }
       }
       if (state.aiTitle !== prevAiTitle) persistCodexAutoTitle(row, state, runtimeGeneration)
-      if (state.offset !== prevOffset) transcriptDirty.push(row.slug)
+      if (state.offset !== prevOffset) {
+        transcriptDirty.push(row.slug)
+        cacheDirty.add(row.slug) // the cached prefix is short by the bytes we just folded
+      }
 
       // turn transition (in-flight → idle): a completed turn. Mark unread + notify, gated on
       // last_read_at so a turn the user has already scrolled past doesn't re-badge.
@@ -2058,12 +2283,18 @@ export function createTailer(deps: TailerDeps): Tailer {
         state.nativeInputRequired = pane.nativeInputRequired
 
         // pane death (tmux remain-on-exit pane went dead) — the agent process exited.
-        const dead = paneDeadForRow(row)
-        if (dead && !state.paneDead) {
-          onPaneDeath(row)
-          dirty = true
+        // Asked only while the answer can still change anything. Once a row is stamped exited AND its
+        // pane has been observed dead, the death edge has already fired and nothing un-exits a row —
+        // so re-observing it every second buys nothing and costs the batched tmux inventory. On a board
+        // of finished threads this is what makes an idle tick cost NO subprocess at all.
+        if (row.exited !== 1 || !state.paneDead) {
+          const dead = paneDeadForRow(row)
+          if (dead && !state.paneDead) {
+            onPaneDeath(row)
+            dirty = true
+          }
+          state.paneDead = dead
         }
-        state.paneDead = dead
       }
 
       // live background ops + pending ask: a dispatch/completion/launch changes the set, a running→stale
@@ -2132,9 +2363,17 @@ export function createTailer(deps: TailerDeps): Tailer {
       let state = foreignStates.get(f.id)
       if (!state) {
         state = newTailState(f.id, f.id, f.path, true) // slug = session id = thread id for a foreign thread
+        hydrateFromCache(state, null, f.id)
         foreignStates.set(f.id, state)
       }
       if (tailForeign(state, nowMs, transcriptDirty, foreignBackend)) dirty = true
+    }
+
+    // Persist the prime cache. The FIRST tick always flushes (that is the boot the next one inherits);
+    // afterwards a growing transcript is written at most every CACHE_FLUSH_MS, so an active board costs
+    // one small batched transaction per interval rather than one per tick.
+    if (tailCache && (lastCacheFlushMs === 0 || nowMs - lastCacheFlushMs >= CACHE_FLUSH_MS)) {
+      flushCache(nowMs)
     }
 
     if (dirty) deps.onChange()
@@ -2183,12 +2422,16 @@ export function createTailer(deps: TailerDeps): Tailer {
   // That regression is invisible without a signal, so say it once per occurrence and name the board size.
   // Silent on a healthy board — this must never become log noise.
   let overBudgetTicks = 0
+  // Duration of the most recent tick — read by the self-scheduling poll below so a tick that costs more
+  // than its own period yields the event loop for at least as long as it just held it.
+  let lastTickMs = 0
   function tickWithBudget(): void {
     const started = performance.now()
     try {
       tick()
     } finally {
       const elapsed = performance.now() - started
+      lastTickMs = elapsed
       if (elapsed > POLL_MS) {
         overBudgetTicks++
         // Log the first, then decimate: a saturated server must not spend its remaining budget logging.
@@ -2200,6 +2443,24 @@ export function createTailer(deps: TailerDeps): Tailer {
         }
       }
     }
+  }
+
+  // SELF-SCHEDULING, not a fixed interval. A tick runs synchronously on the event loop, so a tick that
+  // costs more than POLL_MS on a fixed interval leaves ZERO idle time between ticks: the loop is held
+  // ~100% of the time and every RPC reply, board delta and transcript push queues behind it. That is
+  // the "sidebar won't update for a number of seconds" report — the server is not busy, it is starved.
+  // Scheduling the NEXT tick after the last one finishes, at a delay of at least what the last tick
+  // cost, bounds the tailer's duty cycle at ~50% no matter how slow a tick gets. It degrades to a
+  // slower poll under load instead of self-inflicting a stall, and returns to POLL_MS the moment ticks
+  // are cheap again — this is level-triggered off measured cost, with no state to get stuck in.
+  function scheduleTick(): void {
+    const delay = Math.min(MAX_POLL_MS, Math.max(POLL_MS, Math.round(lastTickMs)))
+    timer = setTimeout(() => {
+      timer = null
+      tickWithBudget()
+      if (!stopped) scheduleTick()
+    }, delay)
+    timer.unref?.()
   }
 
   function registeredStateIsCurrent(state: TailState): boolean {
@@ -2242,15 +2503,24 @@ export function createTailer(deps: TailerDeps): Tailer {
         state.unconfirmedPermissionPolls = undefined
       }
     },
-    start() {
+    start(onPrimeProgress) {
       if (timer) return
-      tick() // derive current state immediately (also restores state after a server restart)
-      timer = setInterval(tickWithBudget, POLL_MS)
-      timer.unref?.()
+      stopped = false
+      primeProgress = onPrimeProgress
+      try {
+        tick() // derive current state immediately (also restores state after a server restart)
+      } finally {
+        primeProgress = undefined
+      }
+      scheduleTick()
     },
     stop() {
-      if (timer) clearInterval(timer)
+      stopped = true
+      if (timer) clearTimeout(timer)
       timer = null
+      // A clean shutdown is the cheapest moment to make the next boot free: write back everything the
+      // periodic flush has not reached yet. A hard kill just costs that thread its delta re-read.
+      flushCache(now())
     },
     tick,
   }
