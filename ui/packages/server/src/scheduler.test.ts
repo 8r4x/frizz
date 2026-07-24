@@ -465,6 +465,51 @@ test("pr-watch: an APPROVAL is named specifically in the bump steer", async () =
   assert.match(h.resumes[0].message, /@dana/)
 })
 
+// The label fills a noun slot, so GitHub's verb-phrase wording ("requested changes") would read as
+// "New GitHub requested changes on acme/app#391 from @erin".
+test("pr-watch: CHANGES_REQUESTED is named as a noun, so the steer stays a grammatical sentence", async () => {
+  const h = harness()
+  const fenceAt = iso(h.clock.ms)
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: fenceAt })
+  h.review.result = []
+  await h.make().tick()
+
+  h.clock.ms += 10_000
+  h.review.result = [{ id: "review:cr", actor: "erin", actorType: "User", at: iso(h.clock.ms), kind: "review", reviewState: "CHANGES_REQUESTED" }]
+  const s = h.make()
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.equal(h.resumes[0].message, "👤 New GitHub change request on acme/app#391 from @erin. Read it and continue.")
+})
+
+// The steer is a NOTIFICATION that activity landed, never an instruction to change the PR's state.
+// "Re-open the PR and continue" meant "go read it", but a woken worker reads `gh pr reopen`: the real
+// wake on nubjs/nub#551 (a @vercel comment) burned a turn on the ambiguity, and the failure mode one
+// step past that is reopening a PR the maintainer closed deliberately.
+test("pr-watch: the bump steer never reads as an instruction to mutate the PR", async () => {
+  const h = harness()
+  const fenceAt = iso(h.clock.ms)
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "nubjs/nub#551" }])), lastActivityAt: fenceAt })
+  h.review.result = []
+  await h.make().tick()
+  assert.equal(h.resumes.length, 0)
+
+  h.clock.ms += 10_000
+  h.review.result = [{ id: "comment:vercel", actor: "vercel", actorType: "Bot", at: iso(h.clock.ms), kind: "comment" }]
+  const s = h.make()
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  const message = h.resumes[0].message
+  assert.match(message, /nubjs\/nub#551/)
+  assert.match(message, /@vercel/)
+  assert.doesNotMatch(message, /re-?open/i, "the steer must not order the worker to reopen the PR")
+  assert.doesNotMatch(message, /\b(close|merge|approve)\b/i, "nor any other PR state change")
+})
+
 test("pr-watch: 'Arm watcher' — a new-activity bump CLEARS the user snooze so the card re-surfaces", async () => {
   const h = harness()
   const fenceAt = iso(h.clock.ms)

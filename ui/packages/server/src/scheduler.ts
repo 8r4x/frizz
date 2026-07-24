@@ -616,11 +616,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // Name the activity for the bump steer. A review carries a GitHub `state`, so an APPROVAL or a
   // CHANGES_REQUESTED is called out specifically (the two the worker most needs to act on); a plain
   // review or a conversation comment reads generically. Falls back to "activity" for an unknown state.
+  // Every label fills a NOUN slot ("New GitHub ___ on owner/repo#N"), so GitHub's own verb-phrase
+  // wording for CHANGES_REQUESTED is nominalized rather than pasted in.
   function activityLabel(a: GithubReviewActivity): string {
     if (a.kind === "comment") return "comment"
     switch (a.reviewState?.toUpperCase()) {
       case "APPROVED": return "approval"
-      case "CHANGES_REQUESTED": return "requested changes"
+      case "CHANGES_REQUESTED": return "change request"
       case "COMMENTED": return "review comment"
       case "DISMISSED": return "dismissed review"
       default: return "review"
@@ -628,9 +630,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
 
   // The steer must never imply a person: an app filed most of what wakes this watcher.
+  //
+  // It must also never read as an instruction to MUTATE the PR. "Re-open the PR and continue" meant
+  // "open the PR again and read it", but a worker parses `gh pr reopen` — so the steer either burned a
+  // turn on the ambiguity or, worse, reopened a PR the maintainer closed on purpose. The wake is a
+  // NOTIFICATION; what to do about it is the worker's call. Keep the verb about reading, like the
+  // merged/closed/CI steers that just say "Continue."
   function activitySteer(a: GithubReviewActivity, ref: PrRef): string {
     const icon = isBotGithubActor(a) ? "🤖" : "👤"
-    return `${icon} New GitHub ${activityLabel(a)} on ${refKey(ref)} from @${a.actor}. Re-open the PR and continue.`
+    return `${icon} New GitHub ${activityLabel(a)} on ${refKey(ref)} from @${a.actor}. Read it and continue.`
   }
 
   function reviewVerdict(
