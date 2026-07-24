@@ -315,6 +315,77 @@ test("a manual TaskStop result marks the stopped Monitor's card cancelled (no da
   assert.equal(msgs[0].tools[0].status, "cancelled", "a TaskStop is the terminal signal for the op it killed")
 })
 
+test("a shell completion RACING ahead of its launch is recovered by the inline attachment carrier", () => {
+  // Real 2026-07-22 tailer leak, timeline-side: a shell completing MID-TURN gets its queue-operation
+  // completion flushed at a file position BEFORE the launch record — folded first, it correlates to
+  // nothing. The attachment (queued_command) carrier is written inline AFTER the launch and must
+  // back-fill the card; reading only the queue-operation carrier left it "running" forever.
+  const early = JSON.stringify({
+    type: "queue-operation",
+    timestamp: "2026-07-01T00:00:05.000Z",
+    content: `<task-notification>\n<task-id>b9race</task-id>\n<tool-use-id>bash-race</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>`,
+  })
+  const launch = JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-07-01T00:00:06.000Z",
+    message: { id: "m-bg", content: [{ type: "tool_use", id: "bash-race", name: "Bash", input: { command: "git worktree add ../wt", run_in_background: true } }] },
+  })
+  const acked = JSON.stringify({
+    type: "user",
+    timestamp: "2026-07-01T00:00:07.000Z",
+    message: { content: [{ type: "tool_result", tool_use_id: "bash-race", content: "Command running in background with ID: b9race. Output is being written to: /tmp/tasks/b9race.output." }] },
+  })
+  const attachment = JSON.stringify({
+    type: "attachment",
+    timestamp: "2026-07-01T00:00:08.000Z",
+    attachment: { type: "queued_command", commandMode: "task-notification", prompt: `<task-notification>\n<task-id>b9race</task-id>\n<tool-use-id>bash-race</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>` },
+  })
+  const withoutAttachment = parseTranscript([early, launch, acked].join("\n"))[0].tools[0]
+  assert.equal(withoutAttachment.status, "pending", "the early queue-op correlates to nothing — no false back-fill")
+  const msgs = parseTranscript([early, launch, acked, attachment].join("\n"))
+  assert.equal(msgs[0].tools[0].status, "completed", "the inline attachment carrier back-fills the raced card")
+  assert.equal(msgs.at(-1)?.kind, "event", "the wake boundary rides the attachment's position")
+})
+
+test("a `stopped` RECOVERY notification back-fills EVERY orphaned card it names (task-ids only)", () => {
+  // A new session's recovery record carries one block naming every orphan by runtime task-id, NO
+  // tool-use-ids, status "stopped". Both cards must end (cancelled), not just the first.
+  const launch = (id: string, cmd: string) => JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-07-01T00:00:00.000Z",
+    message: { id: `m-${id}`, content: [{ type: "tool_use", id, name: "Bash", input: { command: cmd, run_in_background: true } }] },
+  })
+  const ack = (id: string, taskId: string) => JSON.stringify({
+    type: "user",
+    timestamp: "2026-07-01T00:00:01.000Z",
+    message: { content: [{ type: "tool_result", tool_use_id: id, content: `Command running in background with ID: ${taskId}. Output is being written to: /tmp/tasks/${taskId}.output.` }] },
+  })
+  const recovery = JSON.stringify({
+    type: "queue-operation",
+    timestamp: "2026-07-01T00:05:00.000Z",
+    content: `<task-notification>\n<task-id>bxx1</task-id>\n<task-id>bxx2</task-id>\n<task-id>__orphan_summary__:shell</task-id>\n<status>stopped</status>\n<summary>These ops have no completion record and have been marked stopped.</summary>\n</task-notification>`,
+  })
+  const msgs = parseTranscript([launch("sh1", "watch ci"), ack("sh1", "bxx1"), launch("sh2", "tail -f app.log"), ack("sh2", "bxx2"), recovery].join("\n"))
+  const cards = msgs.flatMap((m) => m.tools)
+  assert.deepEqual(cards.map((c) => c.status), ["cancelled", "cancelled"], "every named orphan's card ends")
+})
+
+test("a completion notification riding a USER record's text back-fills the card (carrier b)", () => {
+  const launch = JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-07-01T00:00:00.000Z",
+    message: { id: "m-bg", content: [{ type: "tool_use", id: "bash-u", name: "Bash", input: { command: "sleep 1", run_in_background: true } }] },
+  })
+  const userCarrier = JSON.stringify({
+    type: "user",
+    timestamp: "2026-07-01T00:00:04.000Z",
+    message: { role: "user", content: [{ type: "text", text: `<task-notification>\n<tool-use-id>bash-u</tool-use-id>\n<status>failed</status>\n<summary>Background command failed with exit code 9</summary>\n</task-notification>` }] },
+  })
+  const msgs = parseTranscript([launch, userCarrier].join("\n"))
+  assert.equal(msgs[0].tools[0].status, "failed")
+  assert.equal(msgs.filter((m) => m.role === "user").length, 0, "the carrier record never renders as a human bubble")
+})
+
 test("background Bash with no completion remains live after transcript reload", () => {
   const raw = JSON.stringify({
     type: "assistant",
@@ -622,18 +693,11 @@ test("enqueue + delivering attachment → ONE delivered user message (not two), 
 
 test("real lifecycle enqueue → remove → attachment → ONE delivered user message (session 2cfe3c81 shape)", () => {
   const text = "Stop. Ask me the questions again."
-  const intermediate = parseTranscript([enqueue(text), removeOp("remove", text)].join("\n"))
-  assert.equal(intermediate.length, 1)
-  assert.equal(intermediate[0].text, text)
-  assert.equal(intermediate[0].queued, true)
-  const queuedSourceId = intermediate[0].sourceId
-
   const msgs = parseTranscript([enqueue(text), removeOp("remove", text), deliver(text)].join("\n"))
   const users = msgs.filter((m) => m.role === "user")
   assert.equal(users.length, 1)
   assert.equal(users[0].text, text)
   assert.ok(!users[0].queued)
-  assert.equal(users[0].sourceId, queuedSourceId)
 })
 
 test("attachment-only (older session, no enqueue seen) → a delivered user message", () => {

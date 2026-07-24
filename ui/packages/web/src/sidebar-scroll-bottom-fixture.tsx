@@ -23,7 +23,7 @@ function Fixture() {
       })
       .filter((card): card is SidebarSectionGeometry => card !== null)
     const maxScrollY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight)
-    const next = activeSidebarSection(cards, undefined, maxScrollY > 0 && window.scrollY >= maxScrollY - 1)
+    const next = activeSidebarSection(cards, window.innerHeight, maxScrollY > 0 && window.scrollY >= maxScrollY - 1)
     setActiveId((current) => current === next ? current : next)
   }, [])
 

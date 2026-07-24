@@ -223,82 +223,16 @@ test("a live thread whose profile was only ever OBSERVED can change model and ef
   blank.storage.close()
 })
 
-test("active work queues durably and a restarted controller applies it at the first safe idle boundary", async () => {
+test("active work does not arm, while an unproven provider failure stays durably locked", async () => {
   const active = harness({ tele: telemetry({ turn: "in-flight" }) })
   active.storage.upsertSession(session("active"))
   const activeController = createProfileController(active)
-  assert.deepEqual(
-    await activeController.request("active", { model: "sonnet", effort: "high" }),
-    { effect: "queued" },
-  )
+  await assert.rejects(activeController.request("active", { model: "sonnet", effort: "high" }), /require an idle thread/)
   assert.equal(active.storage.getSession("active")?.model, "opus")
   assert.equal(active.storage.getSession("active")?.profile_pending_model, null)
-  assert.equal(active.storage.getSession("active")?.profile_queued_model, "sonnet")
-  assert.equal(active.storage.getSession("active")?.profile_queued_effort, "high")
-  assert.equal(active.storage.getSession("active")?.runtime_control, "profile-queued")
-
-  // A new controller instance models a Fray restart while the request is queued. The durable row,
-  // not an in-memory callback, owns the eventual handoff.
-  active.currentTelemetry.value = telemetry({ turn: "idle" })
-  const restarted = createProfileController({
-    ...active,
-    reattach: async (slug, current, requested, onGeneration, onCheckpoint) => {
-      assert.deepEqual([slug, current, requested], [
-        "active",
-        { model: "opus", effort: "high" },
-        { model: "sonnet", effort: "high" },
-      ])
-      const row = active.storage.getSession(slug)!
-      const generation = active.storage.beginRuntimeGeneration(slug, {
-        sessionId: row.session_id,
-        generation: row.runtime_generation ?? 0,
-        permissionPending: null,
-        runtimeControl: "profile",
-      }, "2026-07-13T11:00:00.000Z")!
-      onGeneration?.(generation)
-      const handoffToken = randomUUID()
-      onCheckpoint?.({ phase: "target-ready", generation, handoffToken, identity: PANE })
-      return { generation, outcome: "target-ready" }
-    },
-  })
-  restarted.tick()
-  await settle()
-  await settle()
-  const applied = active.storage.getSession("active")!
-  assert.equal(applied.model, "sonnet")
-  assert.equal(applied.effort, "high")
-  assert.equal(applied.profile_queued_model, null)
-  assert.equal(applied.profile_pending_model, null)
-  assert.equal(applied.runtime_control, null)
+  assert.equal(active.storage.getSession("active")?.runtime_control, null)
   active.storage.close()
-})
 
-test("a rested parent keeps its queued profile behind a live sub-agent", async () => {
-  const h = harness({
-    tele: telemetry({
-      turn: "idle",
-      subAgents: [{
-        id: "child",
-        label: "still working",
-        startedAt: "2026-07-24T18:00:00.000Z",
-        state: "running",
-      }],
-    }),
-  })
-  h.storage.upsertSession(session("background-parent"))
-  const controller = createProfileController(h)
-  assert.deepEqual(
-    await controller.request("background-parent", { model: "fable", effort: "medium" }),
-    { effect: "queued" },
-  )
-  controller.tick()
-  await settle()
-  assert.equal(h.storage.getSession("background-parent")?.runtime_control, "profile-queued")
-  assert.equal(h.storage.getSession("background-parent")?.model, "opus")
-  h.storage.close()
-})
-
-test("an unproven provider failure stays durably locked", async () => {
   const failed = harness()
   failed.storage.upsertSession(session("failed"))
   const failedController = createProfileController({
