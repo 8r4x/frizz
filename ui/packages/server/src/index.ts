@@ -50,6 +50,7 @@ export type ServerStartupPhase =
   | "board producer"
   | "tailer producer"
   | "permission producer"
+  | "delivery confirmer"
   | "profile producer"
   | "wake scheduler"
   | "Vite"
@@ -364,6 +365,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   const cleanupTailer = createRetryableCleanup(() => ctx?.tailer.stop())
   const cleanupLoginUtility = createRetryableCleanup(() => ctx?.loginUtility?.stop())
   const cleanupPermission = createRetryableCleanup(() => ctx?.permissionController.stop())
+  const cleanupDeliveryConfirm = createRetryableCleanup(() => ctx?.deliveryConfirmer.stop())
   const cleanupProfile = createRetryableCleanup(() => ctx?.profileController?.stop())
   const cleanupSubscriptions = createRetryableCleanup(() => ctx?.stopSubscriptions())
   const cleanupScheduler = createRetryableCleanup(async () => { await ctx?.scheduler.stop() })
@@ -398,6 +400,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       // Kill any live login-attempt pane so OAuth bytes never outlive the server.
       { name: "login utility", run: cleanupLoginUtility },
       { name: "permission producer", run: cleanupPermission },
+      { name: "delivery confirmer", run: cleanupDeliveryConfirm },
       { name: "profile producer", run: cleanupProfile },
       { name: "context subscriptions", run: cleanupSubscriptions },
       { name: "wake scheduler", run: cleanupScheduler },
@@ -561,6 +564,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     await phase("board producer", () => ctx!.board.start())
     await phase("tailer producer", () => ctx!.tailer.start())
     await phase("permission producer", () => ctx!.permissionController.start())
+    await phase("delivery confirmer", () => ctx!.deliveryConfirmer.start())
     await phase("profile producer", () => ctx!.profileController?.start())
     if (process.env.FRAY_WAKERS_OFF !== "1") {
       await phase("wake scheduler", () => ctx!.scheduler.start())

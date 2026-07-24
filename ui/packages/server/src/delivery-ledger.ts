@@ -34,6 +34,10 @@ export interface DeliveryLedgerItem {
   state: DeliveryState
   at: string // ISO8601 — when fray accepted/injected the follow-up
   updatedAt: string
+  // How many times the submit-confirmer (delivery-confirm.ts) has re-sent a BARE Enter because this
+  // item was still provably sitting in the pane's composer. Absent on every pre-existing row; capped by
+  // MAX_SUBMIT_ATTEMPTS, after which the item is aged straight to `unconfirmed` so the drawer says so.
+  submitAttempts?: number
 }
 
 const norm = (s: string): string => s.replace(/\r\n?/g, "\n").trim()
