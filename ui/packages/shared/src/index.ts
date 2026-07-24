@@ -206,7 +206,7 @@ export type NativeInputRequired = z.infer<typeof NativeInputRequired>
 // `pr-watch: owner/repo#N` is the general PR watcher: the durable scheduler polls the PR and bumps the
 // worker on ANY new non-bot activity — a review, an approval, or a comment. It does NOT park the thread
 // in Held: a pr-watch thread stays a visible QUEUE handoff (the worker opened a PR and is watching it),
-// and new activity re-surfaces it. The human can park it via the card's "Arm watcher" button
+// and new activity re-surfaces it. The human can park it via the "Arm watcher" card's Snooze button
 // (a hold the next activity clears). Pair `pr-watch:` with `human:` only when the worker is genuinely
 // blocked on a NAMED reviewer — then `human:` supplies the Held/park while pr-watch supplies the cursor.
 export const AwaitingHint = z.object({
@@ -410,6 +410,14 @@ export const ThreadView = z.object({
   // Once every ordinary rest also queues, runtime=exited + needsYou is no longer enough for clients
   // to distinguish a failed worker from a clean completed process.
   crashed: z.boolean().optional(),
+  // The queued reason is "resting while its OWN background work (sub-agents / shells) is still live,
+  // with no human ask": the agent came to rest awaiting results it dispatched, not awaiting the human.
+  // The card renders the informational awaiting-background banner + an event-Snooze that hides it until
+  // the work returns (the parent re-rests). True only when this is the SOLE queue reason (no question /
+  // ask / native input / done fence outranks it) and no event-snooze is armed for the current rest.
+  // Optional like needsYou/crashed: absent ⇒ a pre-restart server or a non-session row; the client
+  // treats absence as false.
+  awaitingBackground: z.boolean().optional(),
   // Exact typed-interaction presence for this CURRENT registered session. The board already derives
   // this from the scoped durable journal to compute needsYou; exposing the reason lets React avoid a
   // pendingInteractions RPC for every unrelated question/completion card. Optional preserves rolling
@@ -795,6 +803,29 @@ export type SetThreadProfileResult = z.infer<typeof SetThreadProfileResult>
 // whole prompt; transcript normalization exposes only the generated lead above this line as
 // `displayText`. Namespacing + versioning make an ordinary HTML comment or markdown example inert.
 export const GITHUB_DISPATCH_UI_BOUNDARY = "<!-- fray-ui:github-dispatch-ui-boundary:v1 -->"
+
+// ---- WAKE-DELIVERY TOKEN (scheduler ↔ transcript) ------------------------------------------------
+// The scheduler appends this to every wake it delivers so the worker's own next user record proves the
+// delivery landed (the outbox ack is `lastUserText.includes(wakeDeliveryToken(id))`) — which is exactly
+// why the token must stay in the STORED text and can only ever be projected out for display.
+//
+// PRODUCER AND STRIPPER LIVE TOGETHER ON PURPOSE. The delivered message is recorded as an ordinary user
+// turn, and the chat renders user text VERBATIM (a pre-wrap bubble, not markdown), so an unstripped
+// token is shown to the human as literal `<!-- fray-wake:… -->`. A format change on one side without the
+// other silently brings that back; keeping the pair adjacent is the guard.
+export function wakeDeliveryToken(id: string): string {
+  return `<!-- fray-wake:${id} -->`
+}
+
+// Anchored to end-of-text with its leading blank line, matching how context.ts appends it. Requiring
+// that trailing position (rather than matching anywhere) keeps prose that merely quotes the token —
+// this comment's own wording, a bug report pasting one — intact in the bubble.
+const WAKE_DELIVERY_TOKEN_TAIL = /\n*<!-- fray-wake:[A-Za-z0-9_-]+ -->\s*$/
+
+// Display projection: the steer the human is meant to read, without the machine-facing token.
+export function stripWakeDeliveryToken(text: string): string {
+  return text.replace(WAKE_DELIVERY_TOKEN_TAIL, "")
+}
 
 // The server's gh-CLI availability signal. `installed`/`inRepo`/`nameWithOwner` are STABLE for the
 // process lifetime (resolved once at boot); `authed` can flip mid-session (the user runs

@@ -1,6 +1,6 @@
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
-import { PermissionMode, type Settings } from "@fray-ui/shared"
+import { PermissionMode, wakeDeliveryToken, type Settings } from "@fray-ui/shared"
 import { Bus, Emitter } from "./bus.ts"
 import { resolveProject, type Project } from "./project.ts"
 import { createStorage, type Storage } from "./storage.ts"
@@ -10,7 +10,7 @@ import { refreshClaudeQuotaInBackground } from "./backend/claude-quota.ts"
 import { createBoard, type BoardManager } from "./board.ts"
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
 import { createDispatcher, type Dispatcher } from "./dispatch.ts"
-import { createScheduler, wakeDeliveryToken, type Scheduler } from "./scheduler.ts"
+import { createScheduler, type Scheduler } from "./scheduler.ts"
 import {
   reattachThreadWithPermission,
   reattachThreadWithProfile,
@@ -57,6 +57,10 @@ const QUOTA_REFRESH_INTERVAL_MS = 60_000
 
 export type ContextStartupPhase =
   | "storage"
+  | "interaction expiry"
+  | "adoption reconcile"
+  | "orphan reaper"
+  | "session reconcile"
   | "subscriptions"
   | "Codex app-server bridge"
   | "tailer"
@@ -173,6 +177,14 @@ export interface ContextOptions {
 // server exit (or the agent finished/was killed) — stamp exited so the registry doesn't show a
 // forever-running ghost. Runtime is also derived live on each board build; this keeps the stored
 // column honest too.
+//
+// Liveness is asked through the BATCHED cache (one `list-panes -a` for the whole tmux server), not the
+// per-slug `tmux.isLive`. The uncached form is one subprocess per row, run synchronously, before the
+// server can listen: 165 rows measured 5.2-6.3s of pure process-spawn on the maintainer's board and
+// grows linearly with thread count — it was the larger half of the "context" boot phase. The truth
+// table is identical (missing session → dead, present-but-exited → dead, present-and-running → live);
+// the only difference is that every row now reads the same ≤900ms-old inventory, which for a
+// boot-time reconcile is the same instant.
 export function reconcileSessions(storage: Storage) {
   for (const row of storage.allSessions()) {
     // A codex app-server thread has NO tmux pane by construction — it lives in the detached bridge
@@ -182,7 +194,7 @@ export function reconcileSessions(storage: Storage) {
     if (row.codex_runtime === "app-server") continue
     const binding = adoptionRuntimeBinding(storage, row)
     const live = binding.kind === "unbound"
-      ? tmux.isLive(row.slug)
+      ? tmux.isLiveCached(row.slug)
       : binding.kind === "bound"
         ? (() => {
             const current = tmux.findExpectedAdoptionPane(binding.claim)
@@ -382,8 +394,10 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     board?.interactionChanged?.(change)
   }))
   storage.interactions.expireDue()
+  opts.startup?.afterPhase?.("interaction expiry")
 
   reconcileAdoptionClaims({ storage, projectDir: project.dir })
+  opts.startup?.afterPhase?.("adoption reconcile")
   // Permanent retired tokens are an active fence for pre-upgrade actors only if enforcement is
   // level-triggered. Sweep the single batched tmux inventory periodically so a late token pane is
   // killed within a bounded window even when no restart or new adoption occurs.
@@ -423,7 +437,9 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   if (!process.env.FRAY_ORPHAN_REAPER_OFF) {
     contextUnsubscribers.push(startOrphanReaper({ log: (m) => console.log(`[fray-ui] ${m}`) }))
   }
+  opts.startup?.afterPhase?.("orphan reaper")
   reconcileSessions(storage)
+  opts.startup?.afterPhase?.("session reconcile")
   opts.startup?.afterPhase?.("subscriptions")
 
   // The agent backends behind the spawn/resume/transcript seam (Codex-support epic). The ClaudeBackend's

@@ -249,6 +249,11 @@ export class RestartSupervisorProxy {
     const upstream = connect(childPort, "127.0.0.1")
     upstream.once("connect", () => {
       const headers = proxyHeaders(req, childPort)
+      // proxyHeaders drops the hop-by-hop `connection` header (right for the plain-HTTP handle()
+      // path). But a WebSocket upgrade REQUIRES it: without `Connection: Upgrade` the child's HTTP
+      // parser never emits 'upgrade', answers the SPA with 200, and the handshake fails — silently
+      // breaking the terminal and the /ws multiplex through the control-plane proxy. Restore it.
+      headers.connection = req.headers.connection ?? "Upgrade"
       const lines = [`${req.method ?? "GET"} ${req.url ?? "/"} HTTP/${req.httpVersion}`]
       for (const [name, value] of Object.entries(headers)) {
         if (value === undefined) continue

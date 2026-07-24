@@ -170,14 +170,32 @@ if (process.env.FRAY_SHUTDOWN_HARNESS === "launcher") {
   const WebSocket = wsmod.WebSocket ?? wsmod.default?.WebSocket ?? wsmod.default
   const ws = new WebSocket(`ws://127.0.0.1:${childPort}/ws`, { headers: { origin: childOrigin } })
   await new Promise((r, j) => { ws.once("open", r); ws.once("error", j) })
-  const rpc = Promise.allSettled(Array.from({ length: 8 }, () =>
-    fetch(`${origin}/rpc/board.snapshot`, {
+  // Two REAL procedures (router.ts) — a mistyped name answers 404 and proves nothing. The POST matters
+  // most: node completes a request WITH A BODY long before its response is written, so a POST is the
+  // only shape that catches a disconnect signal wired to the wrong event. `markRead` with an empty
+  // body is rejected by its own input schema, which is fine — a complete JSON error body is exactly
+  // what proves the response was not truncated. Nothing is mutated.
+  const rpcCalls = [
+    () => fetch(`${origin}/rpc/board`, { headers: { origin, "sec-fetch-site": "same-origin" } }),
+    () => fetch(`${origin}/rpc/markRead`, {
       method: "POST",
       headers: { origin, "content-type": "application/json" },
       body: "{}",
-    }).then((r) => r.text()),
-  ))
-  console.log("[verify] load in flight: 1 SSE board stream, 1 app socket, 8 RPC calls")
+    }),
+  ]
+  const callRpc = (i) => rpcCalls[i % rpcCalls.length]().then(async (r) => ({ status: r.status, body: await r.text() }))
+
+  // A shutdown fix that reaches into the response stream can truncate ORDINARY replies into a
+  // non-JSON 200, and no shutdown assertion would ever notice. Settle a batch first and parse every
+  // body: the request path must still be intact on a healthy server before any signal is sent.
+  const healthyRpc = await Promise.all(Array.from({ length: 8 }, (_, i) => callRpc(i)))
+  const brokenRpc = healthyRpc.filter((r) => {
+    try { JSON.parse(r.body); return false } catch { return true }
+  })
+  // A second batch is deliberately NOT awaited — these are still in flight when the signal lands. They
+  // may legitimately fail (the server is going away); what matters is that they never hang shutdown.
+  const rpc = Promise.allSettled(Array.from({ length: 8 }, (_, i) => callRpc(i)))
+  console.log(`[verify] load in flight: 1 SSE board stream, 1 app socket, 8 RPC calls (${healthyRpc.length - brokenRpc.length}/8 pre-signal RPCs returned valid JSON)`)
 
   // The Codex app-server daemon is DELIBERATELY detached and MUST outlive a shutdown — an in-flight
   // Codex turn survives a restart precisely because nothing here kills it. Record it so this harness
@@ -300,11 +318,15 @@ if (process.env.FRAY_SHUTDOWN_HARNESS === "launcher") {
     noisyLines: noisy,
     ownedPids: owned,
     survivingPids: survivors,
+    brokenRpcRepliesBeforeSignal: brokenRpc.length,
   }
   console.log(JSON.stringify(result, null, 2))
 
   rmSync(home, { recursive: true, force: true })
   const problems = []
+  if (brokenRpc.length > 0) {
+    problems.push(`${brokenRpc.length} healthy-server RPC reply/replies were not valid JSON: ${JSON.stringify(brokenRpc[0]).slice(0, 300)}`)
+  }
   if (codexDaemon && codexSurvived !== true) {
     problems.push(`the detached codex app-server daemon (pid ${codexDaemon.daemonPid}) was killed — it must survive`)
   }

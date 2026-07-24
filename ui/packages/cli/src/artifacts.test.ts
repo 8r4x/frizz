@@ -631,7 +631,10 @@ test("a real Nub/esbuild artifact boots its WebSocket-capable server and loads i
   } finally {
     if (child) await stopArtifactChild(child);
     releaseOwner?.();
-    rmSync(root, { recursive: true, force: true });
+    // The just-stopped server may still be flushing files under `root` when we remove it (a detached
+    // helper, a late fs handle), so a bare rmSync throws ENOTEMPTY under load and fails a test whose
+    // assertions already passed. maxRetries is node's native backoff for exactly EBUSY/ENOTEMPTY/EPERM.
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 });
 
