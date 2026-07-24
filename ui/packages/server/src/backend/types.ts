@@ -76,8 +76,10 @@ export interface NormalizedTail {
   lastUserText?: string // latest genuine human message (used to confirm wake-token delivery)
   lastFence?: FenceView // parsed by the shared fence grammar from the final message
   pendingQuestion: boolean
-  subAgents: SubAgentView[] // codex: always []
-  bgShells: BgShellView[] // codex: always []
+  // Live sub-agents. Claude fills these from its Agent dispatches (the tailer's trackDispatches); codex
+  // from its `spawn_agent` children (codex-subagents.ts). Both land in the same TailState maps.
+  subAgents: SubAgentView[]
+  bgShells: BgShellView[] // codex: always [] (codex has no background-shell tool)
   pendingAsk?: PendingAskData // codex: undefined
   authFault?: "authentication_rejected" // runtime provider-auth rejection (see FoldState.authFault)
   limitFault?: LimitFault // subscription window exhausted mid-turn (see FoldState.limitFault)
