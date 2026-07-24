@@ -2,9 +2,9 @@ import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 
 const execFileAsync = promisify(execFile)
-const GH_TIMEOUT_MS = 15_000
+const GH_TIMEOUT_MS = 30_000
 const GH_MAX_BUFFER = 1024 * 1024
-const REQUEST_TIMEOUT_MS = 15_000
+const REQUEST_TIMEOUT_MS = 30_000
 const MAX_REFS_PER_REQUEST = 20
 const RATE_LIMIT_RESERVE = 100
 
