@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { isValidAwaitingTimer, type QuotaSnapshot } from "@fray-ui/shared"
+import { isValidAwaitingTimer, wakeDeliveryToken, type QuotaSnapshot } from "@fray-ui/shared"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { FenceView } from "./tailer.ts"
@@ -9,8 +9,23 @@ import type { LimitFault } from "./backend/types.ts"
 import { limitPauseIsStale, quotaWindowKeyFor, quotaWindowRecovered, textResetInstant } from "./backend/usage-limit.ts"
 import { createWakeDeliveryStore, type WakeDelivery } from "./wake-store.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
+import {
+  createGithubReviewFetcher,
+  isNonBotGithubActivity,
+  isWakeworthyGithubActivity,
+  parseGithubReviewActivities,
+  type GithubReviewActivity,
+  type GithubReviewFetchResult,
+} from "./github-review.ts"
 
 const execFileAsync = promisify(execFile)
+
+export {
+  isNonBotGithubActivity,
+  isWakeworthyGithubActivity,
+  parseGithubReviewActivities,
+  type GithubReviewActivity,
+} from "./github-review.ts"
 
 // ---- DURABLE TIMER WAKER + PR-WATCH + LEGACY COMPATIBILITY ----------------------------------------
 // New workers use `awaiting` for a PR-activity watcher (`pr-watch:`), a specific external HUMAN gate
@@ -61,19 +76,6 @@ export interface WorkflowRun {
   createdAt?: string
 }
 
-// One review-relevant GitHub activity item. The default fetcher collects submitted PR reviews and PR
-// conversation comments. Tests inject this normalized shape directly; ids are source-namespaced and
-// stable, so a persisted seen-set is a durable cursor across process restarts.
-export interface GithubReviewActivity {
-  id: string
-  actor: string
-  actorType?: string
-  at?: string
-  kind: "review" | "comment"
-  // For a review node, its GitHub state (APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | …) so
-  // the bump steer can name an APPROVAL specifically. Absent on comments and on legacy cursors.
-  reviewState?: string
-}
 interface RollupEntry {
   status?: string // CheckRun: QUEUED | IN_PROGRESS | COMPLETED | PENDING | WAITING
   conclusion?: string // CheckRun: SUCCESS | FAILURE | NEUTRAL | CANCELLED | TIMED_OUT | ACTION_REQUIRED | SKIPPED | STALE
@@ -181,10 +183,6 @@ function fenceIdentity(hints: FenceView["hints"], fenceAt?: string): string {
 
 function wakeDeliveryId(slug: string, sessionId: string, fenceId: string): string {
   return createHash("sha256").update(slug).update("\0").update(sessionId).update("\0").update(fenceId).digest("hex")
-}
-
-export function wakeDeliveryToken(id: string): string {
-  return `<!-- fray-wake:${id} -->`
 }
 
 // ---- SOURCE 2: SUBSCRIPTION-LIMIT AUTO-RESUME -----------------------------------------------------
@@ -370,89 +368,6 @@ async function defaultFetchPr(ref: PrRef): Promise<PrStatus | undefined> {
   }
 }
 
-const REVIEW_QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
-  repository(owner: $owner, name: $repo) {
-    pullRequest(number: $number) {
-      reviews(last: 50) { nodes { id state submittedAt author { login __typename } } }
-      comments(last: 50) { nodes { id createdAt author { login __typename } } }
-    }
-  }
-}`
-
-// Pure GraphQL-shape normalizer. Missing authors/timestamps are tolerated; an absent PR or malformed
-// response yields [] rather than fabricating activity. Source-prefix ids prevent a review/comment id
-// collision inside the durable cursor.
-export function parseGithubReviewActivities(raw: unknown): GithubReviewActivity[] {
-  const pr = (raw as any)?.data?.repository?.pullRequest
-  if (!pr || typeof pr !== "object") return []
-  const out: GithubReviewActivity[] = []
-  const add = (nodes: unknown, kind: "review" | "comment", atKey: "submittedAt" | "createdAt") => {
-    if (!Array.isArray(nodes)) return
-    for (const node of nodes) {
-      if (!node || typeof node !== "object") continue
-      const n = node as Record<string, unknown>
-      const rawId = typeof n.id === "string" && n.id ? n.id : undefined
-      const author = n.author && typeof n.author === "object" ? (n.author as Record<string, unknown>) : undefined
-      const actor = typeof author?.login === "string" && author.login ? author.login : undefined
-      if (!rawId || !actor) continue
-      const actorType = typeof author?.__typename === "string" ? author.__typename : undefined
-      const at = typeof n[atKey] === "string" ? (n[atKey] as string) : undefined
-      const reviewState = kind === "review" && typeof n.state === "string" ? n.state : undefined
-      out.push({ id: `${kind}:${rawId}`, actor, actorType, at, kind, ...(reviewState ? { reviewState } : {}) })
-    }
-  }
-  add((pr as any)?.reviews?.nodes, "review", "submittedAt")
-  add((pr as any)?.comments?.nodes, "comment", "createdAt")
-  return out
-}
-
-export function isNonBotGithubActivity(a: GithubReviewActivity): boolean {
-  const type = a.actorType?.toLowerCase()
-  const login = a.actor.toLowerCase()
-  return type !== "bot" && !login.endsWith("[bot]")
-}
-
-// What a `pr-watch` wakes on. A submitted REVIEW is a deliberate review action whoever files it, and
-// the reviewer the worker is waiting for is increasingly a bot review AGENT (Pullfrog, Copilot,
-// CodeRabbit) that posts as `__typename: "Bot"` — so a review counts even from a bot. A bot COMMENT
-// does NOT: those are CI/deploy/dependency conversation noise (vercel "deployment ready",
-// github-actions, dependabot rebase notes), never the review the fence is parked for. Human comments
-// still count. (Filtering ALL bot activity is what silently swallowed a real Pullfrog review on
-// nubjs/nub#544 and left the watcher asleep — 2026-07-23.)
-export function isWakeworthyGithubActivity(a: GithubReviewActivity): boolean {
-  if (a.kind === "review") return true
-  return isNonBotGithubActivity(a)
-}
-
-// One GraphQL request per PR/poll supplies both submitted reviews and PR conversation comments. Bot
-// filtering happens after normalization so a bot can never satisfy the human-review gate. Any gh,
-// auth, rate-limit, or shape failure is indeterminate (undefined) and retried next poll.
-async function defaultFetchGithubReview(ref: PrRef): Promise<GithubReviewActivity[] | undefined> {
-  try {
-    const { stdout } = await execFileAsync(
-      "gh",
-      [
-        "api",
-        "graphql",
-        "-f",
-        `query=${REVIEW_QUERY}`,
-        "-F",
-        `owner=${ref.owner}`,
-        "-F",
-        `repo=${ref.repo}`,
-        "-F",
-        `number=${ref.number}`,
-      ],
-      { timeout: 15_000, maxBuffer: 8_000_000, env: { ...process.env, GH_PAGER: "cat", GH_PROMPT_DISABLED: "1" } },
-    )
-    const parsed = JSON.parse(stdout) as unknown
-    if (!(parsed as any)?.data?.repository?.pullRequest) return undefined
-    return parseGithubReviewActivities(parsed)
-  } catch {
-    return undefined
-  }
-}
-
 // Per-thread arming state for the CURRENT awaiting rest (reset when the fence identity changes/clears).
 interface ThreadWake {
   fenceId: string
@@ -498,7 +413,9 @@ export interface SchedulerDeps {
   // in tests that exercise the text path; a read that throws is treated as indeterminate.
   readQuota?: () => Promise<QuotaSnapshot>
   fetchPr?: (ref: PrRef) => Promise<PrStatus | undefined>
-  fetchGithubReview?: (ref: PrRef) => Promise<GithubReviewActivity[] | undefined>
+  // Tests may keep injecting the historical bare array/undefined result. Production uses the
+  // structured result so the scheduler can distinguish auth, timeout, network, API, and shape faults.
+  fetchGithubReview?: (ref: PrRef) => Promise<GithubReviewActivity[] | GithubReviewFetchResult | undefined>
   log?: (msg: string) => void
   tickMs?: number // how often to check (timers resolve at this cadence)
   pollMs?: number // minimum spacing between gh polls for a given thread's pr/ci hints
@@ -524,7 +441,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const now = deps.now ?? Date.now
   const autoResumeOnLimit = deps.autoResumeOnLimit ?? (() => true)
   const fetchPr = deps.fetchPr ?? defaultFetchPr
-  const fetchGithubReview = deps.fetchGithubReview ?? defaultFetchGithubReview
+  const fetchGithubReview = deps.fetchGithubReview ?? createGithubReviewFetcher({ now })
   const log = deps.log ?? ((m: string) => console.log(`[fray-ui] ${m}`))
   const tickMs = deps.tickMs ?? 10_000
   const pollMs = deps.pollMs ?? 60_000
@@ -537,6 +454,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const outbox = createWakeDeliveryStore(deps.storage.db)
 
   const threads = new Map<string, ThreadWake>() // slug → arming state
+  const reviewFailures = new Map<string, { signature: string; loggedAt: number; suppressed: number }>()
   // Compatibility for wakes fired by the pre-outbox scheduler during a rolling upgrade. New wakes
   // never enter this set; the durable wake_delivery table below owns their lifecycle.
   const fired = new Set<string>(loadFired())
@@ -769,6 +687,36 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   }
 
+  function normalizeReviewResult(
+    result: GithubReviewActivity[] | GithubReviewFetchResult | undefined,
+  ): GithubReviewFetchResult {
+    if (Array.isArray(result)) return { status: "ok", activity: result }
+    return result ?? {
+      status: "error",
+      failure: { kind: "shape", message: "GitHub review fetcher returned no result" },
+    }
+  }
+
+  function recordReviewFailure(key: string, slug: string, result: Extract<GithubReviewFetchResult, { status: "error" }>, at: number): void {
+    const signature = `${result.failure.kind}:${result.failure.message}`
+    const prior = reviewFailures.get(key)
+    if (prior?.signature === signature && at - prior.loggedAt < 15 * 60_000) {
+      prior.suppressed++
+      return
+    }
+    const suppressed = prior?.suppressed ? ` (${prior.suppressed} identical repeats suppressed)` : ""
+    log(`waker: GitHub review check failed for ${key} (${slug}) [${result.failure.kind}] — ${result.failure.message}${suppressed}`)
+    reviewFailures.set(key, { signature, loggedAt: at, suppressed: 0 })
+  }
+
+  function recordReviewSuccess(key: string, slug: string): void {
+    const prior = reviewFailures.get(key)
+    if (!prior) return
+    const suppressed = prior.suppressed ? `; ${prior.suppressed} identical repeats were suppressed` : ""
+    log(`waker: GitHub review check recovered for ${key} (${slug})${suppressed}`)
+    reviewFailures.delete(key)
+  }
+
   async function evalThread(slug: string, sessionId: string, fence: FenceView, nowMs: number, fenceAt?: string): Promise<void> {
     const actionable = fence.hints.filter(isActionable)
     if (actionable.length === 0) {
@@ -812,24 +760,35 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         if (h.kind === "pr" || h.kind === "ci") refs.set(refKey(ref), ref)
         if (isPrWatchHint(h.kind)) reviewRefs.set(refKey(ref), ref)
       }
-      for (const [k, ref] of refs) {
-        try {
-          const s = await fetchPr(ref)
-          if (s) st.prCache.set(k, s) // keep the last-known status on a transient failure
-          else log(`waker: gh check skipped for ${k} (${slug}) — gh unavailable / not authed / rate-limited`)
-        } catch (err) {
-          log(`waker: gh check errored for ${k} (${slug}): ${err instanceof Error ? err.message : String(err)}`)
-        }
-      }
-      for (const [k, ref] of reviewRefs) {
-        try {
-          const activity = await fetchGithubReview(ref)
-          if (activity) st.reviewCache.set(k, activity)
-          else log(`waker: GitHub review check skipped for ${k} (${slug}) — gh unavailable / not authed / rate-limited`)
-        } catch (err) {
-          log(`waker: GitHub review check errored for ${k} (${slug}): ${err instanceof Error ? err.message : String(err)}`)
-        }
-      }
+      await Promise.all([
+        ...[...refs].map(async ([k, ref]) => {
+          try {
+            const s = await fetchPr(ref)
+            if (s) st.prCache.set(k, s) // keep the last-known status on a transient failure
+            else log(`waker: gh check skipped for ${k} (${slug}) — gh unavailable / not authed / rate-limited`)
+          } catch (err) {
+            log(`waker: gh check errored for ${k} (${slug}): ${err instanceof Error ? err.message : String(err)}`)
+          }
+        }),
+        ...[...reviewRefs].map(async ([k, ref]) => {
+          try {
+            const result = normalizeReviewResult(await fetchGithubReview(ref))
+            if (result.status === "ok") {
+              st.reviewCache.set(k, result.activity)
+              recordReviewSuccess(k, slug)
+            } else if (result.status === "error") {
+              recordReviewFailure(k, slug, result, nowMs)
+            }
+            // `deferred` is the native fetcher's rate-budget guard. Keep the last-known cache and stay
+            // silent; this is intentional pacing, not a GitHub failure.
+          } catch (err) {
+            recordReviewFailure(k, slug, {
+              status: "error",
+              failure: { kind: "network", message: err instanceof Error ? err.message : String(err) },
+            }, nowMs)
+          }
+        }),
+      ])
     }
 
     for (const h of actionable) {
@@ -1125,6 +1084,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   async function runTick(): Promise<void> {
     const nowMs = now()
     const seen = new Set<string>()
+    const candidates: { row: SessionRow; fence: FenceView; fenceAt?: string }[] = []
     for (const row of deps.storage.allSessions()) {
       if (row.state === "archived" || row.archived === 1) continue // non-archived only
       const tele = deps.tailer.get(row.slug)
@@ -1132,13 +1092,21 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const fence = tele.lastFence
       if (!fence || fence.kind !== "awaiting" || !fence.hints.some(isActionable)) continue
       seen.add(row.slug)
+      candidates.push({ row, fence, fenceAt: tele.lastActivityAt })
+    }
+    // Evaluate candidate threads together. The production review fetcher uses the resulting same-turn
+    // calls to coalesce every distinct PR into one bounded GraphQL batch and to deduplicate duplicate
+    // refs. Per-thread state remains isolated by slug; shared durable writes are synchronous.
+    const candidateResults = await Promise.allSettled(candidates.map(async ({ row, fence, fenceAt }) => {
       try {
-        await evalThread(row.slug, row.session_id, fence, nowMs, tele.lastActivityAt)
+        await evalThread(row.slug, row.session_id, fence, nowMs, fenceAt)
       } catch (err) {
         if (err instanceof InjectedSchedulerCrash) throw err
         log(`waker: tick error for ${row.slug}: ${err instanceof Error ? err.message : String(err)}`)
       }
-    }
+    }))
+    const crashed = candidateResults.find((result): result is PromiseRejectedResult => result.status === "rejected")
+    if (crashed) throw crashed.reason
     // The awaiting fence vanished (superseded, archived, or no longer at rest): forget its arming +
     // persisted marker so a future re-await arms fresh and can fire again.
     for (const [slug, st] of [...threads]) {

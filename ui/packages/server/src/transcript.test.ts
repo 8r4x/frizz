@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir, homedir } from "node:os"
 import { join } from "node:path"
-import { GITHUB_DISPATCH_UI_BOUNDARY } from "@fray-ui/shared"
+import { GITHUB_DISPATCH_UI_BOUNDARY, wakeDeliveryToken } from "@fray-ui/shared"
 import {
   githubDispatchDisplayText,
   pageProjectedTranscript,
@@ -51,6 +51,57 @@ test("Claude GitHub dispatch retains full first-user text but exposes only the c
   )
   assert.match(message.text, /full worker template must remain available/)
   assert.doesNotMatch(message.displayText!, /worker template|github-dispatch-ui-boundary/)
+})
+
+// The scheduler's wake token rides a LATER user turn (a wake is by definition a resume), which is the
+// case the old first-message-only display gate never reached — so it reached the pre-wrap user bubble
+// and the human read a literal `<!-- fray-wake:… -->`. The steer above it must survive; the stored text
+// must keep the token, because the outbox acks a delivery by finding it in the worker's own record.
+const wakeSteer = "⏳ The session usage limit that interrupted you has reset. Continue exactly where you left off."
+const wakeId = "e9590807642cfee10b251fa5c230e3ba27f02f978475d883411a5c35e81d68c0"
+
+test("Claude wake delivery hides the wake token in the bubble while the stored text keeps it", () => {
+  const delivered = `${wakeSteer}\n\n${wakeDeliveryToken(wakeId)}`
+  const raw = [
+    JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:00.000Z", message: { content: "orientation\n\nTASK:\nthe original task" } }),
+    JSON.stringify({ type: "assistant", timestamp: "2026-07-01T00:00:05.000Z", message: { id: "m1", content: [{ type: "text", text: "on it" }] } }),
+    JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:10.000Z", message: { content: delivered } }),
+  ].join("\n")
+  const msgs = parseTranscript(raw)
+  const wake = msgs[msgs.length - 1]
+  assert.equal(wake.role, "user")
+  assert.equal(wake.text, delivered) // the ack (scheduler: lastUserText.includes(token)) depends on this
+  assert.equal(wake.displayText, wakeSteer)
+})
+
+test("a wake token riding a QUEUED follow-up is hidden too, and the pending bubble still resolves", () => {
+  const delivered = `${wakeSteer}\n\n${wakeDeliveryToken(wakeId)}`
+  const raw = [
+    JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:00.000Z", message: { content: "orientation\n\nTASK:\nthe original task" } }),
+    JSON.stringify({ type: "queue-operation", timestamp: "2026-07-01T00:00:05.000Z", operation: "enqueue", content: delivered }),
+    JSON.stringify({
+      type: "attachment", timestamp: "2026-07-01T00:00:09.000Z",
+      attachment: { type: "queued_command", prompt: delivered, origin: { kind: "human" }, commandMode: "prompt" },
+    }),
+  ].join("\n")
+  const msgs = parseTranscript(raw)
+  const queued = msgs.filter((m) => m.role === "user")
+  assert.equal(queued.length, 2, "the enqueue bubble resolves in place rather than emitting a second copy")
+  assert.equal(queued[1].queued, false)
+  assert.equal(queued[1].text, delivered)
+  assert.equal(queued[1].displayText, wakeSteer)
+})
+
+test("a wake token is projected out only from the delivery tail, never from quoted prose", () => {
+  const quoting = `Why is ${wakeDeliveryToken(wakeId)} showing up in the bubble?`
+  const raw = [
+    JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:00.000Z", message: { content: "orientation\n\nTASK:\nthe original task" } }),
+    JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:10.000Z", message: { content: quoting } }),
+  ].join("\n")
+  const msgs = parseTranscript(raw)
+  const asked = msgs[msgs.length - 1]
+  assert.equal(asked.text, quoting)
+  assert.equal(asked.displayText, undefined, "a mid-sentence token is the human's own words — leave the bubble alone")
 })
 
 test("GitHub display boundary is inert without the complete generated envelope", () => {
@@ -199,6 +250,69 @@ test("boundary wake label reads 'finished' on a clean exit and 'stopped' when ki
   assert.equal(done.text, "Background task «sleep 1» finished") // desc falls back to the command summary
   const killed = parseTranscript([launch("s2"), taskNotification("s2", "killed", "2026-07-01T00:00:02.000Z")].join("\n"))[1]
   assert.match(killed.text, /» stopped$/)
+})
+
+test("a Monitor card stays pending through launch ack + progress event; the timeout record ends it", () => {
+  // Corpus-real Monitor-timeout shape (session 54b37ebe / bnmdbtlwx): the timeout emits ONE
+  // notification with NO <status> and NO <tool-use-id> — only <task-id> + the "[Monitor timed out"
+  // <event> sentinel. Correlation rides the task id captured from the launch ack.
+  const launch = JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-07-01T00:00:00.000Z",
+    message: { id: "m-mon", content: [{ type: "tool_use", id: "mon-1", name: "Monitor", input: { command: "test -f /tmp/marker", description: "wait for agent sweep" } }] },
+  })
+  const acked = JSON.stringify({
+    type: "user",
+    timestamp: "2026-07-01T00:00:01.000Z",
+    message: { content: [{ type: "tool_result", tool_use_id: "mon-1", content: "Monitor started (task bnmdbtlwx, timeout 300s). You will be notified on each event." }] },
+  })
+  const monitorEvent = (event: string, at: string) => JSON.stringify({
+    type: "queue-operation",
+    timestamp: at,
+    content: `<task-notification>\n<task-id>bnmdbtlwx</task-id>\n<summary>Monitor event: "wait for agent sweep"</summary>\n<event>${event}</event>\n</task-notification>`,
+  })
+  // Launch ack must NOT complete the card (it is only an acknowledgement)…
+  const live = parseTranscript([launch, acked].join("\n"))[0].tools[0]
+  assert.equal(live.status, "pending")
+  assert.equal(live.backgroundState, "background")
+  // …and neither must an ordinary progress event (it also has <event> and no <status> — the trap).
+  const stillLive = parseTranscript([launch, acked, monitorEvent("DISK READY", "2026-07-01T00:02:00.000Z")].join("\n"))
+  assert.equal(stillLive[0].tools[0].status, "pending", "a status-less progress event must not end a live monitor")
+  assert.equal(stillLive.length, 1, "a progress event emits no boundary card")
+  // The timeout record reaches a terminal state and emits a labeled wake boundary.
+  const msgs = parseTranscript(
+    [launch, acked, monitorEvent("DISK READY", "2026-07-01T00:02:00.000Z"), monitorEvent("[Monitor timed out — re-arm if needed.]", "2026-07-01T00:05:00.000Z")].join("\n"),
+  )
+  assert.equal(msgs[0].tools[0].status, "cancelled")
+  assert.equal(msgs[0].tools[0].durationMs, 5 * 60_000) // launch (00:00) → timeout record (05:00)
+  const boundary = msgs[1]
+  assert.equal(boundary.kind, "event")
+  assert.equal(boundary.text, "Background task «wait for agent sweep» timed out")
+})
+
+test("a manual TaskStop result marks the stopped Monitor's card cancelled (no dangling pending card)", () => {
+  const launch = JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-07-01T00:00:00.000Z",
+    message: { id: "m-mon", content: [{ type: "tool_use", id: "mon-1", name: "Monitor", input: { command: "gh pr checks --watch", description: "Watch PR checks", persistent: true } }] },
+  })
+  const acked = JSON.stringify({
+    type: "user",
+    timestamp: "2026-07-01T00:00:01.000Z",
+    message: { content: [{ type: "tool_result", tool_use_id: "mon-1", content: "Monitor started (task b1ew0iy19, persistent — runs until TaskStop or session end)." }] },
+  })
+  const stopUse = JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-07-01T00:00:30.000Z",
+    message: { id: "m-stop", content: [{ type: "tool_use", id: "stop-1", name: "TaskStop", input: { task_id: "b1ew0iy19" } }] },
+  })
+  const stopResult = JSON.stringify({
+    type: "user",
+    timestamp: "2026-07-01T00:00:31.000Z",
+    message: { content: [{ type: "tool_result", tool_use_id: "stop-1", content: JSON.stringify({ message: "Successfully stopped task: b1ew0iy19 (gh pr checks --watch)", task_id: "b1ew0iy19", task_type: "monitor" }) }] },
+  })
+  const msgs = parseTranscript([launch, acked, stopUse, stopResult].join("\n"))
+  assert.equal(msgs[0].tools[0].status, "cancelled", "a TaskStop is the terminal signal for the op it killed")
 })
 
 test("background Bash with no completion remains live after transcript reload", () => {

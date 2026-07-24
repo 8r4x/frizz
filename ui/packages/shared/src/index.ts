@@ -805,6 +805,29 @@ export type SetThreadProfileResult = z.infer<typeof SetThreadProfileResult>
 // `displayText`. Namespacing + versioning make an ordinary HTML comment or markdown example inert.
 export const GITHUB_DISPATCH_UI_BOUNDARY = "<!-- fray-ui:github-dispatch-ui-boundary:v1 -->"
 
+// ---- WAKE-DELIVERY TOKEN (scheduler ↔ transcript) ------------------------------------------------
+// The scheduler appends this to every wake it delivers so the worker's own next user record proves the
+// delivery landed (the outbox ack is `lastUserText.includes(wakeDeliveryToken(id))`) — which is exactly
+// why the token must stay in the STORED text and can only ever be projected out for display.
+//
+// PRODUCER AND STRIPPER LIVE TOGETHER ON PURPOSE. The delivered message is recorded as an ordinary user
+// turn, and the chat renders user text VERBATIM (a pre-wrap bubble, not markdown), so an unstripped
+// token is shown to the human as literal `<!-- fray-wake:… -->`. A format change on one side without the
+// other silently brings that back; keeping the pair adjacent is the guard.
+export function wakeDeliveryToken(id: string): string {
+  return `<!-- fray-wake:${id} -->`
+}
+
+// Anchored to end-of-text with its leading blank line, matching how context.ts appends it. Requiring
+// that trailing position (rather than matching anywhere) keeps prose that merely quotes the token —
+// this comment's own wording, a bug report pasting one — intact in the bubble.
+const WAKE_DELIVERY_TOKEN_TAIL = /\n*<!-- fray-wake:[A-Za-z0-9_-]+ -->\s*$/
+
+// Display projection: the steer the human is meant to read, without the machine-facing token.
+export function stripWakeDeliveryToken(text: string): string {
+  return text.replace(WAKE_DELIVERY_TOKEN_TAIL, "")
+}
+
 // The server's gh-CLI availability signal. `installed`/`inRepo`/`nameWithOwner` are STABLE for the
 // process lifetime (resolved once at boot); `authed` can flip mid-session (the user runs
 // `gh auth login`) so it is re-checked live on each githubStatus query.

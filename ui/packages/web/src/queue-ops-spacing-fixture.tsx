@@ -44,7 +44,7 @@ const thread = {
   foreign: false,
   backend: "claude",
   permissionMode: "default",
-  // ?agents=1 puts live ↳ sub-agent lines directly above the ⤷ shell rows — the adjacency the
+  // ?agents=1 puts the live ⤷ sub-agent lines directly above the ⤷ shell rows — the adjacency the
   // strip's pt-1.5 is matched to, and the only state where the two lists' rhythm can be compared.
   subAgents: new URLSearchParams(location.search).get("agents") === "1"
     ? [{ id: "agent-a", label: "Diff the queue card against the drawer footer", startedAt: "2026-07-18T09:05:00.000Z", state: "running" }]

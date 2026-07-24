@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react"
 import { RefreshCw } from "lucide-react"
 import { canRestart, canUpdateRestart, FRAY_SUPERVISOR_STATUS_WAKE_EVENT, getFraySupervisorStatus, requestFrayRestart, requestFrayUpdateRestart } from "../api/restart.ts"
 import { showToast, store } from "../store.ts"
+import { STATUS_BAR_ACTION, STATUS_BAR_ICON } from "../lib/statusBar.ts"
 
 // RefreshCw's arrowheads advance clockwise, matching Tailwind's clockwise animate-spin keyframes.
 // Keep this exported contract covered by the focused component test when either icon or animation changes.
@@ -24,9 +25,12 @@ export function UpdateRestartPopover({
       id="update-restart-popover"
       role="tooltip"
       aria-label={action}
-      className="fixed left-3 right-3 top-12 z-50 w-auto rounded-xl border border-border-strong bg-elevated p-3.5 text-left font-sans shadow-xl shadow-black/45 sm:absolute sm:left-auto sm:right-0 sm:top-[calc(100%+0.65rem)] sm:w-[min(23rem,calc(100vw-1.5rem))]"
+      // Anchored to the button's LEFT edge and opening rightward: this control lives in the top-left
+      // status bar now, so the old right-0 anchor pushed a 23rem panel straight off the left of the
+      // viewport. The arrow tracks the same edge, centred on the 24px target.
+      className="fixed left-3 right-3 top-12 z-50 w-auto rounded-xl border border-border-strong bg-elevated p-3.5 text-left font-sans shadow-xl shadow-black/45 sm:absolute sm:right-auto sm:left-0 sm:top-[calc(100%+0.65rem)] sm:w-[min(23rem,calc(100vw-1.5rem))]"
     >
-      <span aria-hidden="true" className="absolute -top-1.5 right-7 h-3 w-3 rotate-45 border-l border-t border-border-strong bg-elevated" />
+      <span aria-hidden="true" className="absolute -top-1.5 left-1.5 h-3 w-3 rotate-45 border-l border-t border-border-strong bg-elevated" />
       <div className="relative flex items-center gap-2.5">
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-fg/10 text-fg">
           <RefreshCw aria-hidden="true" size={14} strokeWidth={2.25} />
@@ -58,12 +62,12 @@ export function RestartActionButton({
       aria-label={update ? "Update Fray" : "Restart Fray"}
       disabled={busy}
       aria-busy={busy || undefined}
-      className="inline-flex h-8 w-8 items-center justify-center rounded-md text-fg outline-none transition-colors hover:bg-panel focus-visible:ring-2 focus-visible:ring-fg/70 disabled:opacity-55"
+      className={STATUS_BAR_ACTION}
       onFocus={onFocus}
       onBlur={onBlur}
       onClick={onClick}
     >
-      <RefreshCw size={14} aria-hidden="true" className={busy ? "animate-spin" : undefined} />
+      <RefreshCw size={STATUS_BAR_ICON} aria-hidden="true" className={busy ? "animate-spin" : undefined} />
     </button>
   )
 }

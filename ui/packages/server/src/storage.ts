@@ -574,6 +574,19 @@ export function createStorage(dbPath: string): Storage {
           control_error = 'A model/effort change armed on the retired Codex tmux path was abandoned; set it again.'
       WHERE backend = 'codex' AND runtime_control IN ('profile-queued', 'profile')
     `)
+    // Heal every app-server codex row that was downgraded behind the operator's back. Until the fixes
+    // that ship with this line, a cold resume sent no sandbox/approval override, so the app-server
+    // applied the config.toml defaults (`workspace-write` + `on-request`) and the tailer then folded
+    // that observation back into permission_mode as if the operator had chosen it. `sandboxFor` reads
+    // this column, so the downgrade became self-perpetuating: the thread requested workspace-write on
+    // every later resume and stalled on an approval nobody was watching. Fray workers are dispatched
+    // non-interactively (WORKER_DISPATCH_PERMISSION.codex) and the per-thread picker was removed from
+    // the UI, so there is no operator choice left for this rewrite to overwrite.
+    db.exec(`
+      UPDATE session SET permission_mode = 'bypassPermissions'
+      WHERE backend = 'codex' AND codex_runtime = 'app-server'
+        AND (permission_mode IS NULL OR permission_mode <> 'bypassPermissions')
+    `)
   } catch {
     // best-effort
   }
