@@ -321,9 +321,13 @@ test("real collaboration shapes show targets/summaries, never encrypted messages
   assert.equal(spawned.name, "Spawn agent")
   assert.equal(spawned.detail, "reviewer")
   assert.equal(spawned.status, "failed")
-  assert.match(spawned.input ?? "", /gpt-5\.6-sol/)
-  assert.match(spawned.input ?? "", /reasoning_effort/)
+  // Model+effort ride the header's `subagentType` tag now (the codex analogue of Claude's
+  // `[fray:opus-high]`), so the dispatch cell reads at a glance instead of only inside the payload.
+  assert.equal(spawned.subagentType, "gpt-5.6-sol/high")
   assert.match(spawned.input ?? "", /fork_context/)
+  // This spawn was REJECTED, so no child exists: the card must not offer a drill-in that can only ever
+  // resolve to "unavailable". (The tailer's tracker discards the same dispatch on the same signal.)
+  assert.equal(spawned.agentId, undefined)
   assert.match(spawned.output ?? "", /thread limit reached/)
   assert.equal(waited.detail, "up to 20s")
   assert.equal(waited.output, "Timed out without an update")

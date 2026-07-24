@@ -507,6 +507,139 @@ export function parseCodexLine(line: string): NormalizedEvent[] {
   return []
 }
 
+// ---- codex MULTI-AGENT signals (sub-agent visibility) ----
+// Codex spawns real sub-agents (`spawn_agent`), each a CHILD THREAD with its own rollout file. None of
+// that maps onto NormalizedEvent — those events describe THIS session's turn, and a child's lifecycle
+// is a separate axis — so the tracker (codex-subagents.ts) consumes this parallel signal instead.
+//
+// Corpus-verified against every rollout under ~/.codex/sessions (550 files, 47 742 sub_agent_activity
+// records, 1414 list_agents outputs; surveyed 2026-07-23):
+//   • response_item/function_call name="spawn_agent" — arguments {task_name, model, reasoning_effort,
+//     agent_type, message}. `message` is FERNET-ENCRYPTED, so a codex dispatch has NO readable prompt.
+//   • event_msg/sub_agent_activity — ALWAYS keyed (agent_path, agent_thread_id, event_id, kind,
+//     occurred_at_ms). `kind` is one of exactly three values: "started" | "interacted" | "interrupted"
+//     — there is NO "completed" kind, which is why liveness comes from the child's own rollout.
+//     `event_id` is always the PARENT's tool call_id (spawn_agent→started, send_message/followup_task
+//     →interacted), so it joins a `started` back to the spawn that caused it.
+//   • `agent_thread_id` is the child's own codex rollout id → findRolloutsByIds locates its transcript.
+//   • list_agents output {agents:[{agent_name, agent_status}]} — an authoritative FULL snapshot.
+//     agent_status is "running" | "pending_init" | "interrupted" | {completed:…} | {errored:…}.
+export type CodexAgentStatus = "running" | "pending_init" | "interrupted" | "completed" | "errored"
+export type CodexSubAgentSignal =
+  // A spawn_agent CALL — the dispatch metadata, seen one record BEFORE its `started` confirmation.
+  | { kind: "spawn"; at?: string; callId: string; taskName?: string; model?: string; effort?: string; agentType?: string }
+  // A list_agents CALL. Carries nothing itself; the caller records the id so the OUTPUT record — which
+  // names no tool — can be attributed back to it (that is the only way to recognize a roster).
+  | { kind: "roster-call"; at?: string; callId: string }
+  // The spawn's RESULT. `ok:false` is a rejected dispatch (codex returns a bare error string, not JSON):
+  // no child was created and no `started` will ever arrive, so the pending dispatch must be discarded.
+  | { kind: "spawn-result"; at?: string; callId: string; ok: boolean }
+  // The child actually started — joins `callId` to the canonical agent path + the child's rollout id.
+  | { kind: "started"; at?: string; callId: string; path: string; threadId: string }
+  // The parent sent the child more work (send_message / followup_task): a finished child re-opens.
+  | { kind: "interacted"; at?: string; path: string; threadId: string }
+  | { kind: "interrupted"; at?: string; path: string; threadId: string }
+  // A list_agents snapshot — the only authoritative per-child status the PARENT rollout ever carries.
+  | { kind: "roster"; at?: string; agents: { path: string; status: CodexAgentStatus }[] }
+
+// Parse one rollout line into a multi-agent signal, or undefined for the ~99% that carry none.
+// Stateless EXCEPT for list_agents: its output arrives as a function_call_output keyed only by
+// call_id, so the caller passes the name it recorded for that id (see the tracker's `toolNames`).
+export function parseCodexSubAgentLine(line: string, toolNameFor: (callId: string) => string | undefined): CodexSubAgentSignal | undefined {
+  const s = line.trim()
+  if (!s) return undefined
+  // Cheap pre-filter: skip the JSON.parse for records that cannot possibly be a multi-agent signal.
+  // `function_call_output` has to be let through even though it names no tool — a tool RESULT is
+  // exactly where the spawn verdict and the list_agents roster live, and the name is recoverable only
+  // via the caller's call_id→name map. (Dropping outputs here was the bug that made every roster and
+  // every rejected spawn invisible.)
+  if (
+    !s.includes("sub_agent_activity") &&
+    !s.includes("spawn_agent") &&
+    !s.includes("list_agents") &&
+    !s.includes("function_call_output")
+  ) return undefined
+  let rec: { timestamp?: unknown; type?: unknown; payload?: unknown }
+  try {
+    const v = JSON.parse(s)
+    if (!v || typeof v !== "object") return undefined
+    rec = v as typeof rec
+  } catch {
+    return undefined
+  }
+  const at = typeof rec.timestamp === "string" ? rec.timestamp : undefined
+  const p = rec.payload && typeof rec.payload === "object" ? (rec.payload as Record<string, unknown>) : undefined
+  if (!p) return undefined
+  const pt = typeof p.type === "string" ? p.type : undefined
+
+  if (rec.type === "event_msg" && pt === "sub_agent_activity") {
+    const path = typeof p.agent_path === "string" ? p.agent_path : ""
+    const threadId = typeof p.agent_thread_id === "string" ? p.agent_thread_id : ""
+    const callId = typeof p.event_id === "string" ? p.event_id : ""
+    if (!path) return undefined
+    if (p.kind === "started") return threadId && callId ? { kind: "started", at, callId, path, threadId } : undefined
+    if (p.kind === "interacted") return { kind: "interacted", at, path, threadId }
+    if (p.kind === "interrupted") return { kind: "interrupted", at, path, threadId }
+    return undefined
+  }
+
+  if (rec.type !== "response_item") return undefined
+  const callId = typeof p.call_id === "string" ? p.call_id : ""
+  if (!callId) return undefined
+
+  if (pt === "function_call" && p.name === "list_agents") return { kind: "roster-call", at, callId }
+  if (pt === "function_call" && p.name === "spawn_agent") {
+    const args = parseToolArguments(p.arguments)
+    const a = args && typeof args === "object" && !Array.isArray(args) ? (args as Record<string, unknown>) : {}
+    const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined)
+    return { kind: "spawn", at, callId, taskName: str(a.task_name), model: str(a.model), effort: str(a.reasoning_effort), agentType: str(a.agent_type) }
+  }
+  if (pt !== "function_call_output") return undefined
+  const name = toolNameFor(callId)
+  if (name === "spawn_agent") {
+    // Success is `{"task_name":"/root/x","nickname":"Sartre"}`; a REJECTED dispatch is a bare sentence
+    // ("Full-history forked agents inherit the parent agent type…"). Only a task_name means a child exists.
+    const parsed = jsonOutput(p.output)
+    return { kind: "spawn-result", at, callId, ok: Boolean(parsed && typeof parsed.task_name === "string") }
+  }
+  if (name !== "list_agents") return undefined
+  const parsed = jsonOutput(p.output)
+  const rows = parsed && Array.isArray(parsed.agents) ? parsed.agents : undefined
+  if (!rows) return undefined
+  const agents: { path: string; status: CodexAgentStatus }[] = []
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue
+    const r = row as Record<string, unknown>
+    const path = typeof r.agent_name === "string" ? r.agent_name : ""
+    const status = codexAgentStatus(r.agent_status)
+    if (path && status) agents.push({ path, status })
+  }
+  return agents.length ? { kind: "roster", at, agents } : undefined
+}
+
+// A codex tool output is a JSON *string*; decode it to an object or give up (a plain-sentence error).
+function jsonOutput(output: unknown): Record<string, unknown> | undefined {
+  const text = typeof output === "string" ? output : undefined
+  if (!text || !text.trimStart().startsWith("{")) return undefined
+  try {
+    const v = JSON.parse(text)
+    return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// list_agents reports a terminal status as a SINGLE-KEY OBJECT carrying the child's final report
+// ({completed:"…"} / {errored:…}) and a non-terminal one as a bare string. Anything else → undefined
+// (an unknown status must not be guessed into "running", which would hold the thread Active forever).
+function codexAgentStatus(raw: unknown): CodexAgentStatus | undefined {
+  if (raw === "running" || raw === "pending_init" || raw === "interrupted") return raw
+  if (!raw || typeof raw !== "object") return undefined
+  if ("completed" in raw) return "completed"
+  if ("errored" in raw) return "errored"
+  return undefined
+}
+
 // A function_call's `arguments` is a JSON STRING (e.g. {"cmd":"cat x","workdir":"/p"}); parse it to the
 // object form (matching Claude tool-call input shape) or fall back to the raw string on any surprise.
 function parseToolArguments(args: unknown): unknown {
@@ -599,6 +732,27 @@ export function findRolloutById(sessionId: string, codexHome = defaultCodexHome(
     if (r.path.endsWith(suffix)) return r.path
   }
   return undefined
+}
+
+// BATCH form of findRolloutById: resolve many codex ids in ONE sessions-tree walk. A codex thread that
+// spawned N sub-agents needs N child rollouts located, and each is its own thread id — resolving them
+// one at a time would re-walk the (capped, but still recursive) tree N times on the very tick a fan-out
+// lands, and again on every restart replay. Unresolved ids are simply absent from the returned map.
+export function findRolloutsByIds(sessionIds: readonly string[], codexHome = defaultCodexHome()): Map<string, string> {
+  const out = new Map<string, string>()
+  const wanted = new Set(sessionIds.filter((id) => id))
+  if (!wanted.size) return out
+  for (const r of allRolloutsByMtime(codexHome)) {
+    for (const id of wanted) {
+      if (r.path.endsWith(`-${id}.jsonl`)) {
+        out.set(id, r.path)
+        wanted.delete(id)
+        break
+      }
+    }
+    if (!wanted.size) break
+  }
+  return out
 }
 
 export function createCodexBackend(opts: CodexBackendOptions = {}): AgentBackend {
