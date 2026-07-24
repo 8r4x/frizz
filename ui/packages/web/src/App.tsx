@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react"
 import { useSnapshot } from "valtio"
 import { useQuery } from "@tanstack/react-query"
-import { Settings as SettingsIcon } from "lucide-react"
 import { closeGithubPicker, store, seedBoard, threadBySlug, pushDrawer, topDrawer, topThreadSlug, showToast } from "./store.ts"
 import { useBoard } from "./hooks.ts"
 import { displayTitle } from "./groups.ts"
@@ -10,7 +9,8 @@ import { startRouter } from "./lib/router.ts"
 import { dismissOpenSelect } from "./lib/selectOverlay.ts"
 import { nextSidebarPresence, type SidebarPresence } from "./lib/sidebarPresence.ts"
 import { rpc } from "./api/rpc.ts"
-import { Sidebar, IdentityMark, projectIdentity } from "./components/Sidebar.tsx"
+import { Sidebar, projectIdentity } from "./components/Sidebar.tsx"
+import { StatusBar } from "./components/StatusBar.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { ThreadSheet } from "./components/ThreadSheet.tsx"
 import { SubAgentSheet } from "./components/SubAgentSheet.tsx"
@@ -24,7 +24,6 @@ import { SettingsDrawer } from "./components/SettingsDrawer.tsx"
 import { CommandPalette } from "./components/CommandPalette.tsx"
 import { StatusListView } from "./components/StatusListView.tsx"
 import { NoFray } from "./components/EmptyState.tsx"
-import { RestartFrayButton } from "./components/RestartFrayButton.tsx"
 import { RestartOverlay } from "./components/RestartOverlay.tsx"
 import { Toaster } from "./components/Toaster.tsx"
 import { FRAY_SUPERVISOR_STATUS_WAKE_EVENT, getFraySupervisorStatus } from "./api/restart.ts"
@@ -247,8 +246,12 @@ export function App() {
       {/* While restarting, the whole app subtree goes inert so nothing behind the scrim is focusable
           or clickable; the overlay is rendered as a sibling OUTSIDE it so it stays interactive. */}
       <div inert={snap.controlPlaneState === "restarting"}>
-        <div className="fixed top-3 right-3 z-20"><RestartFrayButton /></div>
+        {/* Same one bar as the live app. A repo without a .fray board still has an identity, a live
+            connection, quota and both recovery actions — and the gear needs its drawer mounted here
+            too, or it would be a dead control on this branch. */}
+        <StatusBar identity={identity} connection={snap.connection} boardFallback={snap.socketBoardFallback} />
         <NoFray dir={board.projectDir} />
+        {snap.showSettings && <SettingsDrawer />}
         <Toaster />
       </div>
     </TooltipProvider>
@@ -260,29 +263,15 @@ export function App() {
     {/* While restarting, the whole app subtree goes inert so nothing behind the scrim is focusable or
         clickable; the overlay above is a sibling OUTSIDE it so it stays interactive. */}
     <div inert={snap.controlPlaneState === "restarting"} className="relative min-h-screen bg-bg text-fg text-sm">
-      {/* Fixed corner chrome, as it always was: workspace identity + the New-thread pill top-left,
-          the Settings gear top-right. Everything else flows; the PAGE is the one and only scroll
-          container — a tall card simply runs off both edges. */}
-      <div className="fixed top-3 left-4 z-20 max-w-[40vw]">
-        <IdentityMark
-          identity={identity}
-          state={snap.connection}
-          boardFallback={snap.socketBoardFallback}
-        />
-      </div>
+      {/* Fixed chrome: ONE status bar in the upper-left carrying identity, connection, settings,
+          reload and both quota chips (see StatusBar.tsx). The top-right corner is deliberately empty
+          now — the settings/reload pair used to live there, a screen's width away from the identity
+          they describe. Everything else flows; the PAGE is the one and only scroll container — a tall
+          card simply runs off both edges. */}
+      <StatusBar identity={identity} connection={snap.connection} boardFallback={snap.socketBoardFallback} />
       {/* (The old fixed "New thread" pill moved INTO the sidebar's top — one entry point, same modal
           flow; the ⌘K palette's "New thread" item and the always-visible dispatch box are the
           other doors — deliberately NOT ⌘N, which belongs to the browser.) */}
-      <div className="fixed top-3 right-3 z-20 flex items-center gap-0.5">
-        <RestartFrayButton />
-        <button
-          title="Settings"
-          className="p-1.5 rounded text-fg hover:bg-panel"
-          onClick={() => (store.showSettings = true)}
-        >
-          <SettingsIcon size={16} />
-        </button>
-      </div>
 
       {/* CENTERED PAIR with a FIXED GUTTER: the floating sidebar column and the workpane sit side by
           side with one constant 52px gap (gap-13 — "space-around looked weird"; a fixed gutter reads
