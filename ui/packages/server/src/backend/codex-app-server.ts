@@ -135,13 +135,25 @@ export function codexSandboxModeOfPolicy(policy: { type?: unknown } | null | und
   }
 }
 
-// The approval policy fray establishes at `thread/start` (see startDisposableSession). It has to be
-// re-sent alongside `sandbox` on a COLD `thread/resume`, because those two params are coupled there:
-// passing only one resets the OTHER to the config.toml default. `thread/settings/update` does NOT have
-// that coupling — sending `sandboxPolicy` alone leaves `approvalPolicy` untouched (verified live: a
-// thread started `approvalPolicy: "untrusted"` still reported `"untrusted"` in the
-// `thread/settings/updated` payload after a sandboxPolicy-only update).
-const CODEX_RESUME_APPROVAL_POLICY = "on-request"
+// The approval policy fray establishes at `thread/start` (see startDisposableSession) and re-asserts on
+// every `thread/resume`. `never` is the ONLY correct value for a fray worker: nobody is watching the
+// pane, so an approval request is not a safety gate — it is a thread that stops working until a human
+// happens to open the dashboard. Under `never` a sandbox-denied action fails back to the model, which
+// can then adapt, say so, or ask the human in its own words; the sandbox stays the actual boundary.
+//
+// It has to be re-sent alongside `sandbox` on a COLD `thread/resume`, because those two params are
+// coupled there: passing only one resets the OTHER to the config.toml default (which is how threads
+// silently drifted back to `on-request` + `workspace-write` and then stalled on the very prompts this
+// value exists to prevent). `thread/settings/update` does NOT have that coupling — sending
+// `sandboxPolicy` alone leaves `approvalPolicy` untouched (verified live: a thread started
+// `approvalPolicy: "untrusted"` still reported `"untrusted"` in the `thread/settings/updated` payload
+// after a sandboxPolicy-only update).
+const CODEX_APPROVAL_POLICY = "never"
+// The sandbox a fray-owned codex thread runs under when nothing narrower was explicitly recorded. Every
+// fray-CREATED worker is dispatched at this level (WORKER_DISPATCH_PERMISSION.codex), and a resume that
+// cannot find a stated intent must land here rather than fall through to the config.toml default —
+// letting config.toml decide is what downgraded live threads mid-flight.
+const CODEX_DEFAULT_SANDBOX: CodexSandboxMode = "danger-full-access"
 // How long a confirmed sandbox change may take to come back as a notification, and how long we wait
 // for a notification we do NOT expect (the requested policy already being current emits nothing).
 const SANDBOX_CONFIRM_TIMEOUT_MS = 8_000
@@ -1709,7 +1721,7 @@ export class CodexAppServerBridge {
       const response = ThreadResponse.parse(await connection.request("thread/start", {
         cwd: input.cwd,
         model: input.model ?? null,
-        approvalPolicy: input.approvalPolicy ?? "on-request",
+        approvalPolicy: input.approvalPolicy ?? CODEX_APPROVAL_POLICY,
         approvalsReviewer: "user",
         ...(input.permissions
           ? { permissions: input.permissions }
@@ -2054,7 +2066,7 @@ export class CodexAppServerBridge {
       cwd: input.cwd,
       ephemeral: false,
       model: input.model,
-      sandbox: input.sandbox ?? "workspace-write",
+      sandbox: input.sandbox ?? CODEX_DEFAULT_SANDBOX,
       baseInstructions: input.baseInstructions,
       developerInstructions: input.developerInstructions,
       config: input.config,
@@ -2117,6 +2129,30 @@ export class CodexAppServerBridge {
     return {
       bridgeTurn: onThisConnection && (row.current_turn_id !== null || this.pendingTurnStarts.has(turnKey(row))),
       ownedSince: row.updated_at,
+    }
+  }
+
+  /**
+   * Cancel this thread's pending interactions that were delivered on a connection we no longer hold.
+   *
+   * `ownsInteraction` already fails them closed for the UI (they render "Runtime unavailable"), but a
+   * fail-closed card that nothing ever terminalizes is a card that never leaves the queue. A request
+   * whose connection is gone can never be answered: the response would be addressed to a dead socket,
+   * and the provider can only re-ask inside a new turn, whose logical request id differs by
+   * construction. Same reasoning as updateResumedBinding's turn-ended sweep, for the path that keeps
+   * the turn alive.
+   */
+  private retireOrphanedInteractions(row: BindingRow): void {
+    const scope = {
+      projectId: this.options.projectId,
+      threadSlug: row.thread_slug,
+      sessionId: row.fray_session_id,
+    }
+    for (const pending of this.options.interactions.listPending(scope)) {
+      const delivery = this.options.interactions.providerDelivery(scope, pending.id)
+      if (!delivery || delivery.provider !== CODEX_APP_SERVER_PROVIDER) continue
+      if (delivery.connectionEpoch === this.connectionEpoch) continue
+      this.options.interactions.invalidateProviderRequest(scope, pending.id, "provider-cancelled")
     }
   }
 
@@ -2487,6 +2523,13 @@ export class CodexAppServerBridge {
           UPDATE codex_app_server_session SET state = 'active', connection_epoch = ?, updated_at = ?
           WHERE fray_session_id = ?
         `).run(this.connectionEpoch, this.now().toISOString(), row.fray_session_id)
+        // The TURN survived our restart, but its in-flight approval did not: that request was issued on
+        // the client connection we just lost, and its rpc id means nothing on this new socket. Nothing
+        // retires those cards on this path — the thread stays bound and never takes the resume branch
+        // below — so they sat in the queue forever, rendering "Runtime unavailable" with no way to
+        // answer or dismiss them (live incident 2026-07-24: `we-need-to-revisit-the-sandboxing`). Retire
+        // them here, where we learn their connection is gone.
+        this.retireOrphanedInteractions(row)
         continue
       }
       try {
@@ -2636,27 +2679,35 @@ export class CodexAppServerBridge {
   }
 
   /**
-   * The `sandbox` + `approvalPolicy` pair to attach to a `thread/resume`, or `{}` when fray has no
-   * stated intent for this thread.
+   * The `sandbox` + `approvalPolicy` pair to attach to a `thread/resume`. ALWAYS a concrete pair.
    *
    * This is what finally makes "saved for the next resume" TRUE. Both params go together on purpose:
    * on a cold resume the app-server couples them — passing only `sandbox` resets `approvalPolicy` to
    * the config.toml default (and vice versa) — so sending one alone would silently retune approvals.
    * On a live rejoin the app-server ignores both, which is why the caller re-reads the effective
    * policy off the response instead of assuming this took.
+   *
+   * Sending NOTHING is not an option, and that was the bug. A resume with no override hands the
+   * decision to config.toml, whose defaults are `workspace-write` + `on-request` — so a thread
+   * dispatched at full access came back sandboxed AND interactive after its app-server died. It then
+   * hit an approval on its next write, and fray's observed-permission writeback recorded the
+   * downgrade as if it were the operator's own choice, making it permanent.
+   *
+   * The observed `sandbox` cache is deliberately NOT an intent source for the same reason: it records
+   * what some process (a terminal `codex resume`, a config default) last did to the SHARED rollout,
+   * never what fray asked for.
    */
   private resumeSandboxOverride(
     row: Pick<BindingRow, "thread_slug" | "fray_session_id" | "sandbox" | "intended_sandbox">,
-  ): { sandbox?: CodexSandboxMode; approvalPolicy?: string } {
-    // Order matters. `intended_sandbox` wins because it is the only record of the operator's intent
-    // that the tailer's observed-permission writeback cannot revert (see the field's own note).
-    // `sandboxFor` covers the threads this bridge has no intent for — a legacy row being adopted, or a
-    // binding written before this column existed. The observed cache is the last resort.
+  ): { sandbox: CodexSandboxMode; approvalPolicy: string } {
+    // `intended_sandbox` wins because it is the only record of an explicit narrowing (setSandbox writes
+    // it before the wire call, so it survives a change that could not be delivered). `sandboxFor` is the
+    // registry's stated intent for rows written before that column existed. Everything else is a fray
+    // worker, and a fray worker runs at CODEX_DEFAULT_SANDBOX.
     const intent = (isCodexSandboxMode(row.intended_sandbox) ? row.intended_sandbox : undefined)
       ?? this.options.sandboxFor?.(row.thread_slug, row.fray_session_id)
-      ?? (isCodexSandboxMode(row.sandbox) ? row.sandbox : undefined)
-    if (!intent) return {}
-    return { sandbox: intent, approvalPolicy: CODEX_RESUME_APPROVAL_POLICY }
+      ?? CODEX_DEFAULT_SANDBOX
+    return { sandbox: intent, approvalPolicy: CODEX_APPROVAL_POLICY }
   }
 
   /**

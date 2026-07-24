@@ -4,18 +4,11 @@ import { Copy, TerminalSquare, X } from "lucide-react"
 import { store, markDrawerClosing, removeDrawerAfterExit, showToast } from "../store.ts"
 import { registerDrawerClose } from "../lib/overlays.ts"
 import { useBackgroundShellOutput } from "../hooks.ts"
-import { formatElapsedMinutes } from "../lib/durationLabels.ts"
+import { elapsedSince } from "../lib/durationLabels.ts"
 
 const CLOSE_MS = 210
 function prefersReducedMotion() {
   return typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
-}
-
-function elapsed(startedAt: string | undefined): string {
-  if (!startedAt) return ""
-  const timestamp = Date.parse(startedAt)
-  if (!Number.isFinite(timestamp)) return ""
-  return formatElapsedMinutes(Math.floor((Date.now() - timestamp) / 60_000))
 }
 
 export function BackgroundShellSheet({
@@ -78,7 +71,7 @@ export function BackgroundShellSheet({
     setShown(true)
   }, [snap.drawers, id])
 
-  const age = elapsed(startedAt)
+  const age = elapsedSince(startedAt)
   const stateLabel = state === "running" ? `running${age ? ` ${age}` : ""}` : state === "done" ? "finished" : state === "gone" ? "unavailable" : ""
   const unavailable = query.isError || state === "gone"
 

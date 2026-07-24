@@ -7,6 +7,9 @@ import { store, openThread, scrollToQueueCard, pushSubAgentDrawer, pushPlanDrawe
 import { useBoard, asThreads } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
 import { sectionThreads, partitionActive, needsAction, displayTitle, titleIsProvisional, isHeld, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil } from "../groups.ts"
+import { BoxSpinner, STATUS_BOX } from "./BoxSpinner.tsx"
+import { ChildOpRow } from "./ChildOpRow.tsx"
+import { visibleChildOps } from "../lib/childOps.ts"
 import { MarkAsButton } from "./MarkAsButton.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
 import { Tooltip } from "./Tooltip.tsx"
@@ -283,10 +286,6 @@ export const ThreadRow = memo(function ThreadRow({
   active?: boolean
   onQueueNavigate?: (id: string) => void
 }) {
-  const subs = t.subAgents ?? []
-  const subLabel = subs.length === 1 ? subs[0].label : subs.length > 1 ? `${subs.length} sub-agents` : null
-  const singleType = subs.length === 1 ? subs[0].subagentType : undefined
-  const subTooltip = subs.map((s) => (s.subagentType ? `[${s.subagentType}] ${s.label}` : s.label)).join("\n")
   const foreign = !legacy && t.foreign === true
   // Held rows are uniformly grayed as a whole; provisional titles retain their local dim treatment.
   // A thread awaiting its OWN live sub-agent/Monitor is not Held and stays fully active.
@@ -311,7 +310,11 @@ export const ThreadRow = memo(function ThreadRow({
       : !legacy && t.lastFence?.kind === "awaiting"
         ? hintGloss(t.lastFence.hints)
         : null
-  const hasSubtitle = !held && (Boolean(t.activity) || subLabel !== null || gloss !== null)
+  // Live sub-agents get their OWN indented ⤷ rows below this one (SubAgentRows), so they must not also
+  // arm the subtitle: they used to, via a one-line "N sub-agents" summary that has since been replaced
+  // by those rows. The summary went; the truthiness term stayed — so a thread with sub-agents but no
+  // activity and no gloss opened an EMPTY subtitle <span>, a phantom spacer under the title.
+  const hasSubtitle = !held && (Boolean(t.activity) || gloss !== null)
   return (
     <div
       data-sidebar-item={t.id}
@@ -364,7 +367,6 @@ export const ThreadRow = memo(function ThreadRow({
               {t.activity && (
                 <span className="min-w-0 truncate text-muted/70" title={t.activity}>{t.activity}</span>
               )}
-
             </span>
           )}
         </span>
@@ -381,10 +383,10 @@ export const ThreadRow = memo(function ThreadRow({
           layout, so pointing at a row never reflows its wrapped title). `group-focus-within` keeps it
           reachable from the keyboard: focus the row button and the next Tab lands here. */}
       {canRestart && <RowRetryButton slug={t.id} />}
-      {/* RUNNING SUB-AGENT CHILD ROWS (maintainer 2026-07-09: render running sub-agents in the
-          sidebar). One indented row per live child under its parent thread — spinner while running,
-          faint when stale; click opens the sub-agent transcript drawer over the parent. Replaces the
-          old one-line ⤷ suffix. */}
+      {/* Live children render as SIBLING rows under this one, not inside it — see SubAgentRows, which
+          the rail's three sections mount directly after each ThreadRow (maintainer 2026-07-09: render
+          running sub-agents in the sidebar). They replaced an old one-line summary suffix that used to
+          live in this row's subtitle. */}
     </div>
   )
 })
@@ -422,35 +424,29 @@ function RowRetryButton({ slug }: { slug: string }) {
   )
 }
 
+// The rail's INDENTED child rows — the same shared ChildOpRow the queue cards and the drawer's ops
+// strip render, at "rail" density (the [ ]/[/] checkbox motif the rest of the rail speaks, indented to
+// clear the parent row's indicator column). The liveness policy is the rail's own and is deliberately
+// unchanged: running OR stale, and only children carrying an id (the drill-in drawer's RPC handle —
+// see lib/childOps.ts, which lists all three surfaces' divergent policies in one place).
 function SubAgentRows({ t }: { t: ThreadView }) {
-  // id is the drill-in drawer's RPC handle — a child without one (old snapshot shape) can't open, so
-  // it doesn't row.
-  const subs = (t.subAgents ?? []).filter((s): s is typeof s & { id: string } => Boolean(s.id) && (s.state === "running" || s.state === "stale"))
+  const subs = visibleChildOps(t.subAgents ?? [], "rail")
   if (subs.length === 0) return null
   return (
     <div className="flex flex-col">
       {subs.map((s) => (
-        <button
+        <ChildOpRow
           key={s.id}
-          // Marks this row as a drill-in for its parent thread: an open ThreadSheet for t.id sees
-          // the pointer-down land here and skips its outside-pointer self-dismiss, so the child
-          // sheet STACKS over the parent instead of replacing it (see ThreadSheet).
-          data-subagent-parent={t.id}
-          onClick={() => pushSubAgentDrawer(t.id, s.id, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt })}
-          className="group/sub flex min-w-0 items-center gap-2 rounded-md py-0.5 pl-[26px] pr-1.5 text-left transition-colors hover:bg-white/[0.04]"
+          kind="AGENT"
+          label={s.label}
+          state={s.state}
+          density="rail"
+          startedAt={s.startedAt}
+          parentSlug={t.id}
+          onOpen={() => pushSubAgentDrawer(t.id, s.id, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt })}
+          // The rail has no room for the worker-profile tag the ops strip can show, so it rides the tooltip.
           title={s.subagentType ? `[${s.subagentType}] ${s.label}` : s.label}
-        >
-          <span aria-hidden className="shrink-0 text-[11px] leading-none text-muted/45">⤷</span>
-          <span className="w-3.5 shrink-0 flex items-center justify-center">
-            {/* Same rounded-rect spinner SHAPE as the top-level rows, scaled down for the indented child. */}
-            {s.state === "running" ? (
-              <BoxSpinner size={12} />
-            ) : (
-              <span className="block h-1.5 w-1.5 rounded-full bg-muted/30" title="stale — no recent output" />
-            )}
-          </span>
-          <span className="min-w-0 truncate text-[11.5px] leading-[16px] text-muted/70">{s.label}</span>
-        </button>
+        />
       ))}
     </div>
   )
@@ -611,13 +607,14 @@ function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string |
   return { node: <StatusBox><Ellipsis size={11} className="text-muted/70" /></StatusBox>, tip: "At rest" }
 }
 
-// THE shared rounded-rect checkbox — the ONE outer shape every status glyph sits in.
-const BOX = 15
+// THE shared rounded-rect checkbox — the ONE outer shape every status glyph sits in. Its size and the
+// spinner that traces it live in ./BoxSpinner.tsx, because the indented child rows (ChildOpRow, "rail"
+// density) draw the same spinner and must not import their own parent module to get it.
 function StatusBox({ accent, children }: { accent?: boolean; children?: ReactNode }) {
   return (
     <span
       className={`inline-flex items-center justify-center rounded-[4px] border ${accent ? "border-accent/90" : "border-muted/45"}`}
-      style={{ width: BOX, height: BOX }}
+      style={{ width: STATUS_BOX, height: STATUS_BOX }}
     >
       {children}
     </span>
@@ -632,26 +629,6 @@ function Glyph({ ch, muted }: { ch: string; muted?: boolean }) {
     </span>
   )
 }
-// [/] IN PROGRESS — the rounded-RECT spinner: a faint full outline with a bright segment travelling the
-// perimeter (matches the checkbox shape instead of a circle — maintainer 2026-07-10). `size` lets the
-// indented sub-agent rows use a smaller one so the two spinners stay the same SHAPE at different scales.
-function BoxSpinner({ size = BOX }: { size?: number }) {
-  // Geometry MUST match StatusBox exactly (maintainer 2026-07-10: the spinner read "slightly smaller
-  // and bolder"). StatusBox is a 15px border-box with a 1px border and rounded-[4px] corners, so the
-  // border's outer edge sits at 0/15. To replicate that with a center-drawn SVG stroke: strokeWidth 1,
-  // inset the path by 0.5 (x=0.5, w=14) so the stroke's outer edge lands on the box edge, and rx=3.5
-  // (4px outer radius minus the 0.5 half-stroke). Perimeter of that rounded rect ≈ 50, so the dash sum
-  // stays 50. The faint base outline is toned to the checkbox's border-muted/45 weight.
-  return (
-    <svg width={size} height={size} viewBox="0 0 15 15" aria-hidden className="text-muted/85">
-      <rect x="0.5" y="0.5" width="14" height="14" rx="3.5" fill="none" stroke="currentColor" strokeOpacity="0.5" strokeWidth="1" />
-      <rect x="0.5" y="0.5" width="14" height="14" rx="3.5" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeDasharray="11 39">
-        <animate attributeName="stroke-dashoffset" from="50" to="0" dur="1.1s" repeatCount="indefinite" />
-      </rect>
-    </svg>
-  )
-}
-
 // The LEGACY (.fray status) row indicator — the vestigial status-keyed logic, kept only for the
 // read-only Legacy shelf.
 function legacyIndicatorFor(t: ThreadView): { node: ReactElement; tip: string | null } {

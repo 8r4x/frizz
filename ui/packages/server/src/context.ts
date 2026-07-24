@@ -282,6 +282,41 @@ function contextCleanupBarrier(
 }
 
 /**
+ * Deliver a scheduler wake to a CODEX thread over the app-server bridge — adopting a legacy tmux
+ * rollout first, then reactivating the persisted thread — exactly like the followUp RPC.
+ *
+ * Extracted from the scheduler `resume` closure so the promise contract below is directly testable.
+ * It MUST return the promise rather than detaching it: the scheduler AWAITS `resume` and owns the
+ * retry/supersede policy on rejection (scheduler.ts `deliverDue`). It previously ran this work in a
+ * `void (async () => …)().catch(() => {})` IIFE and returned `undefined` synchronously, so the
+ * scheduler saw an instant success and ACKED the delivery, while the real bridge failure landed
+ * seconds later into a bare catch and vanished — no log, no retry, the wake lost permanently.
+ * Claude's synchronous `resumeThread` throws straight into that same catch and retries correctly, so
+ * the defect was CODEX-ONLY and silent: an `awaiting timer:` or limit-auto-resume codex thread could
+ * simply never wake. See context.codex-wake.test.ts.
+ */
+export function deliverCodexWake(deps: {
+  bridge: Pick<CodexAppServerBridge, "adoptExternalRollout" | "binding" | "resumeOwnedSession" | "followUp">
+  storage: Pick<Storage, "setCodexRuntime">
+  cwd: string
+  row: { session_id: string; agent_session_id?: string | null; codex_runtime?: string | null }
+  slug: string
+  deliveryMessage: string
+  deliveryId: string
+}): Promise<void> {
+  const { bridge, storage, cwd, row, slug, deliveryMessage, deliveryId } = deps
+  return (async () => {
+    if (row.codex_runtime !== "app-server" && row.agent_session_id) {
+      await bridge.adoptExternalRollout({ threadSlug: slug, sessionId: row.session_id, codexThreadId: row.agent_session_id, cwd })
+      storage.setCodexRuntime(slug, "app-server")
+    }
+    const binding = bridge.binding(slug, row.session_id)
+    if (!binding || binding.state !== "active") await bridge.resumeOwnedSession(slug, row.session_id)
+    await bridge.followUp({ threadSlug: slug, sessionId: row.session_id, text: deliveryMessage, deliveryId })
+  })()
+}
+
+/**
  * Context construction is atomic to startServer: if any constructor/reconciliation step throws,
  * every already-created timer, observer, bridge, watcher and storage handle drains behind the same
  * bounded lifecycle barrier before the error crosses the ownership boundary.
@@ -602,16 +637,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
           process.stderr.write(`[fray] codex wake for ${slug} dropped: the app-server bridge is unavailable\n`)
           return
         }
-        void (async () => {
-          if (row.codex_runtime !== "app-server" && row.agent_session_id) {
-            await bridge.adoptExternalRollout({ threadSlug: slug, sessionId: row.session_id, codexThreadId: row.agent_session_id, cwd: project.dir })
-            storage.setCodexRuntime(slug, "app-server")
-          }
-          const binding = bridge.binding(slug, row.session_id)
-          if (!binding || binding.state !== "active") await bridge.resumeOwnedSession(slug, row.session_id)
-          await bridge.followUp({ threadSlug: slug, sessionId: row.session_id, text: deliveryMessage, deliveryId })
-        })().catch(() => { /* wake delivery is best-effort */ })
-        return
+        return deliverCodexWake({ bridge, storage, cwd: project.dir, row, slug, deliveryMessage, deliveryId })
       }
       resumeThread({ project, storage, board, getSettings: () => getSettings(storage), backendFor }, slug, deliveryMessage)
     },
