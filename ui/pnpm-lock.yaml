@@ -61,12 +61,6 @@ importers:
         specifier: ^3.24
         version: 3.25.76
     devDependencies:
-      '@tanstack/react-query':
-        specifier: ^5
-        version: 5.101.2(react@19.2.7)
-      react:
-        specifier: ^19
-        version: 19.2.7
       typescript:
         specifier: ^5.7
         version: 5.9.3
@@ -129,9 +123,6 @@ importers:
 
   packages/web:
     dependencies:
-      '@fray-ui/rpc':
-        specifier: workspace:*
-        version: link:../rpc
       '@fray-ui/shared':
         specifier: workspace:*
         version: link:../shared

@@ -10,17 +10,7 @@
     "hono": "^4.7",
     "zod": "^3.24"
   },
-  "peerDependencies": {
-    "@tanstack/react-query": "^5",
-    "react": "^19"
-  },
-  "peerDependenciesMeta": {
-    "@tanstack/react-query": { "optional": true },
-    "react": { "optional": true }
-  },
   "devDependencies": {
-    "@tanstack/react-query": "^5",
-    "react": "^19",
     "typescript": "^5.7"
   }
 }
