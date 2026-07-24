@@ -151,7 +151,7 @@ export function StateButton({
         aria-label="Mark as done"
         title="Mark as done"
         onMouseDown={(event) => event.preventDefault()}
-        className={`flex items-center gap-1.5 rounded-md font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-45 ${className}`}
+        className={`flex items-center gap-1 rounded-md font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-45 ${className}`}
       >
         <Check size={12} className={iconClassName} />
         Mark as done

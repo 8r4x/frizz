@@ -165,7 +165,7 @@ function AwaitingBackgroundBanner({ thread, onSnooze, onSnoozeFailed }: {
           // The white card-action fill (CARD_PRIMARY_BUTTON), same as the awaiting card's Snooze it
           // stacks under: parking is this banner's one verb, and the recessed outline it used to wear
           // read as a disabled affordance sitting right below an identical white one.
-          className={`flex shrink-0 items-center gap-1.5 rounded-md text-[11px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-45 ${CARD_PRIMARY_BUTTON}`}
+          className={`flex shrink-0 items-center gap-1 rounded-md text-[11px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-45 ${CARD_PRIMARY_BUTTON}`}
         >
           {/* Measured, not guessed: the icon read 1.58px LOW here. See lib/iconAlign.ts for why box
               centering leaves a descender-free label's ink high, and why leading-none is not the fix. */}

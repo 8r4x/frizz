@@ -2486,7 +2486,7 @@ function CardKind({
   tone?: string
 }) {
   return (
-    <div className={`mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide ${tone}`}>
+    <div className={`mb-1.5 flex items-center gap-1 text-[10px] uppercase tracking-wide ${tone}`}>
       <Icon size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} />
       {label}
     </div>
@@ -2561,7 +2561,7 @@ export function CardActions({ children, className = "" }: { children: ReactNode;
 export const CARD_PRIMARY_BUTTON = "bg-fg px-2.5 py-1 text-bg hover:opacity-90"
 // The same verb with the icon+label layout every card action uses. Cards differ only in what they pass
 // beyond this (shrink-0, a disabled treatment), never in the fill.
-const CARD_PRIMARY_ACTION = `flex shrink-0 items-center gap-1.5 rounded-md text-[11px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 ${CARD_PRIMARY_BUTTON}`
+const CARD_PRIMARY_ACTION = `flex shrink-0 items-center gap-1 rounded-md text-[11px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 ${CARD_PRIMARY_BUTTON}`
 
 // A ```question block, set off from the surrounding prose: rounded neutral border + slightly elevated
 // bg + a muted label (NOT yellow — that's the focus motif). The label + icon track the kind: a plain
@@ -3162,7 +3162,11 @@ export function PendingAskCard({ ask, onTerminal }: { ask: PendingAsk; onTermina
           onMouseDown={(e) => e.preventDefault()}
           className={CARD_PRIMARY_ACTION}
         >
-          <KeyRound size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} /> Copy terminal command
+          {/* No literal space before the label — the flex `gap` IS the spacing. A JSX space here
+              rendered as a real space character ON TOP of the gap and made this the widest icon/label
+              gap on the page by ~3px. */}
+          <KeyRound size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} />
+          Copy terminal command
         </button>
       </CardActions>
     </TranscriptCard>
@@ -3288,20 +3292,21 @@ function ApproveAction({ danger, disabled, onApprove }: { danger: boolean; disab
         setArmed(false)
         onApprove()
       }}
-      className={`flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-40 ${
+      className={`flex shrink-0 items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-40 ${
         armed ? "bg-red-500 text-white hover:opacity-90" : CARD_PRIMARY_BUTTON
       }`}
     >
+      {/* NO icon at rest (maintainer 2026-07-24: a shield on an Approve button is weird). The word is
+          the whole affordance, and the card's own APPROVAL eyebrow already carries the shield glyph —
+          repeating it on the button said nothing twice. The ARMED state keeps its warning triangle:
+          there the glyph is the message, not decoration. */}
       {armed ? (
         <>
           <AlertTriangle size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} />
           Click again to confirm
         </>
       ) : (
-        <>
-          <ShieldCheck size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} />
-          {APPROVE_LABEL}
-        </>
+        APPROVE_LABEL
       )}
     </button>
   )
