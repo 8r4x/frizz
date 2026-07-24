@@ -59,6 +59,7 @@ import { runThreadUpdate } from "./fray.ts"
 import { repairThreadFile } from "./repair.ts"
 import { resumeThread } from "./resume.ts"
 import { appendDelivery } from "./delivery-ledger.ts"
+import { flushStuckComposer } from "./delivery-confirm.ts"
 import {
   readEarlierThreadTranscriptPage,
   readLatestThreadTranscriptPage,
@@ -722,6 +723,11 @@ export function createRouter(ctx: AppContext) {
           ctx.board.refresh()
           return
         }
+        // Submit a PREVIOUS follow-up still stranded in the composer before pasting this one on top of
+        // it. Claude Code's TUI can swallow the Enter that follows a paste; when it does, the next
+        // paste lands directly after the stranded text and ONE message carrying both is what the agent
+        // reads. Free on the normal path — a row with no outstanding ledger item captures nothing.
+        await flushStuckComposer({ storage: ctx.storage, board: ctx.board }, input.slug)
         resumeThread({ project: ctx.project, storage: ctx.storage, board: ctx.board, getSettings: ctx.getSettings, backendFor: ctx.backendFor }, input.slug, input.message)
         // Injection accepted → open a delivery-ledger entry (Claude rows only; Codex has its own durable
         // queue above). From here the send is a tracked state machine: the tailer correlates the JSONL
