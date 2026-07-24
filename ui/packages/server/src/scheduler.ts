@@ -14,8 +14,10 @@ const execFileAsync = promisify(execFile)
 
 // ---- DURABLE TIMER WAKER + PR-WATCH + LEGACY COMPATIBILITY ----------------------------------------
 // New workers use `awaiting` for a PR-activity watcher (`pr-watch:`), a specific external HUMAN gate
-// (`human:`), or a wall-clock checkpoint (`timer:`). `pr-watch` wakes on ANY NEW non-bot activity on
-// the PR after this fence — a review, an approval, or a comment — while a registered timer remains
+// (`human:`), or a wall-clock checkpoint (`timer:`). `pr-watch` wakes on any NEW wake-worthy activity
+// on the PR after this fence — any submitted REVIEW (including a bot review agent like Pullfrog or
+// Copilot, the reviewer a worker most often waits for) or any non-bot COMMENT; bot conversation
+// comments (CI/deploy/dependency noise) are filtered — while a registered timer remains
 // durable across server/worker restarts and resumes when it crosses. Historical transcripts may still
 // carry `pr:`/`ci:` hints, so their existing
 // out-of-band wake behavior remains as a compatibility bridge. Other automated waits should instead
@@ -395,6 +397,18 @@ export function isNonBotGithubActivity(a: GithubReviewActivity): boolean {
   return type !== "bot" && !login.endsWith("[bot]")
 }
 
+// What a `pr-watch` wakes on. A submitted REVIEW is a deliberate review action whoever files it, and
+// the reviewer the worker is waiting for is increasingly a bot review AGENT (Pullfrog, Copilot,
+// CodeRabbit) that posts as `__typename: "Bot"` — so a review counts even from a bot. A bot COMMENT
+// does NOT: those are CI/deploy/dependency conversation noise (vercel "deployment ready",
+// github-actions, dependabot rebase notes), never the review the fence is parked for. Human comments
+// still count. (Filtering ALL bot activity is what silently swallowed a real Pullfrog review on
+// nubjs/nub#544 and left the watcher asleep — 2026-07-23.)
+export function isWakeworthyGithubActivity(a: GithubReviewActivity): boolean {
+  if (a.kind === "review") return true
+  return isNonBotGithubActivity(a)
+}
+
 // One GraphQL request per PR/poll supplies both submitted reviews and PR conversation comments. Bot
 // filtering happens after normalization so a bot can never satisfy the human-review gate. Any gh,
 // auth, rate-limit, or shape failure is indeterminate (undefined) and retried next poll.
@@ -564,7 +578,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
                 kind: p.kind,
                 ...(typeof p.reviewState === "string" ? { reviewState: p.reviewState } : {}),
               }
-              if (isNonBotGithubActivity(candidate)) pending = candidate
+              if (isWakeworthyGithubActivity(candidate)) pending = candidate
             }
           }
           reviews[k] = {
@@ -698,12 +712,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (prior?.pending) {
       return {
         met: true,
-        steer: `👤 New human GitHub ${activityLabel(prior.pending)} on ${refKey(ref)} from @${prior.pending.actor}. Re-open the PR and continue.`,
+        steer: `👤 New GitHub ${activityLabel(prior.pending)} on ${refKey(ref)} from @${prior.pending.actor}. Re-open the PR and continue.`,
         reason: `pr-watch ${refKey(ref)} by ${prior.pending.actor}`,
       }
     }
-    const human = activities
-      .filter(isNonBotGithubActivity)
+    const wakeworthy = activities
+      .filter(isWakeworthyGithubActivity)
       .sort((a, b) => {
         const at = Date.parse(b.at ?? "") - Date.parse(a.at ?? "")
         return Number.isFinite(at) && at !== 0 ? at : b.id.localeCompare(a.id)
@@ -711,7 +725,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     const priorSeen = new Set(prior?.seen ?? [])
     let fresh: GithubReviewActivity[]
     if (prior) {
-      fresh = human.filter((a) => !priorSeen.has(a.id))
+      fresh = wakeworthy.filter((a) => !priorSeen.has(a.id))
     } else {
       // A review may land between the final fence and this scheduler's first poll (or while the server
       // is restarting before the baseline is persisted). The fence timestamp lets a brand-new grammar
@@ -719,7 +733,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // telemetry is unavailable, baseline conservatively and wait for the next unseen id.
       const fenceMs = Date.parse(fenceAt ?? "")
       fresh = Number.isFinite(fenceMs)
-        ? human.filter((a) => {
+        ? wakeworthy.filter((a) => {
             const at = Date.parse(a.at ?? "")
             return Number.isFinite(at) && at > fenceMs
           })
@@ -728,14 +742,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // Persist the cursor BEFORE a possible resume. Union with the prior tail so a temporarily-shorter
     // API page cannot make an old id look new later; newest current ids win the bounded cap.
     if (fresh.length === 0) {
-      saveReviewCursor(persistKey, hintKey, [...human.map((a) => a.id), ...(prior?.seen ?? [])])
+      saveReviewCursor(persistKey, hintKey, [...wakeworthy.map((a) => a.id), ...(prior?.seen ?? [])])
       return undefined
     }
     const newest = fresh[0]
-    saveReviewCursor(persistKey, hintKey, [...human.map((a) => a.id), ...(prior?.seen ?? [])], newest)
+    saveReviewCursor(persistKey, hintKey, [...wakeworthy.map((a) => a.id), ...(prior?.seen ?? [])], newest)
     return {
       met: true,
-      steer: `👤 New human GitHub ${activityLabel(newest)} on ${refKey(ref)} from @${newest.actor}. Re-open the PR and continue.`,
+      steer: `👤 New GitHub ${activityLabel(newest)} on ${refKey(ref)} from @${newest.actor}. Re-open the PR and continue.`,
       reason: `pr-watch ${refKey(ref)} by ${newest.actor}`,
     }
   }
