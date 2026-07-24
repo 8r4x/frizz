@@ -139,6 +139,9 @@ export function createSupervisorShutdownHandler(options: SupervisorShutdownHandl
 const packagesDir = resolve(import.meta.dirname, "..", "..")
 const workspaceDir = resolve(packagesDir, "..")
 
+/** The one "restart" that is not a restart: the very first boot. Worded differently for humans. */
+const INITIAL_BOOT_REASON = "initial boot"
+
 /** Runtime source trees that can change the server-side API/control plane. Web source stays on Vite HMR. */
 export function defaultDevWatchRoots(): string[] {
   return [workspaceDir]
@@ -432,7 +435,7 @@ class Supervisor implements DevSupervisor {
       throw err
     }
 
-    this.requestRestart("initial boot", true)
+    this.requestRestart(INITIAL_BOOT_REASON, true)
   }
 
   private onWatch(err: Error | null, events: WatchEvent[]): void {
@@ -478,7 +481,13 @@ class Supervisor implements DevSupervisor {
     const run = () => {
       this.debounce = null
       const scope = this.reloadLauncher ? "control plane + launcher" : "control plane"
-      this.logLine(`[fray-ui] dev ${scope} restarting (${reason})`)
+      // "restarting (initial boot)" is a contradiction the operator has to decode mid-startup, and it
+      // reads like something already went wrong. On the first boot there is nothing to restart.
+      this.logLine(
+        reason === INITIAL_BOOT_REASON
+          ? `[fray-ui] starting Fray`
+          : `[fray-ui] restarting ${scope} — ${reason}`,
+      )
       this.writeStatus("restarting", reason)
       void this.restart()
     }

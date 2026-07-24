@@ -2107,24 +2107,31 @@ export function createTailer(deps: TailerDeps): Tailer {
   // board delta and transcript push the server owes a client while it runs. When it exceeds its own poll
   // period the server is, by definition, permanently behind — and the whole UI reads as laggy (the
   // 2026-07-23 report: "I mark something as done and the sidebar won't update for a number of seconds").
-  // That regression is invisible without a signal, so say it once per occurrence and name the board size.
-  // Silent on a healthy board — this must never become log noise.
+  // That regression is invisible without a signal — but the signal must not become the problem. A
+  // server that is PERMANENTLY over budget repeats this every tick forever; decimating by a fixed 1-in-30
+  // still produced ~58 long sentences by occurrence 1740, which is noise the operator cannot act on and
+  // which buries everything else in the log. Back off geometrically instead: the first report carries
+  // the full explanation, and later ones are terse and get rarer, so a chronic condition costs a
+  // handful of lines rather than hundreds while a NEW one is still reported immediately.
   let overBudgetTicks = 0
+  let nextReportAt = 1
   function tickWithBudget(): void {
     const started = performance.now()
     try {
       tick()
     } finally {
       const elapsed = performance.now() - started
-      if (elapsed > POLL_MS) {
-        overBudgetTicks++
-        // Log the first, then decimate: a saturated server must not spend its remaining budget logging.
-        if (overBudgetTicks === 1 || overBudgetTicks % 30 === 0) {
-          console.error(
-            `[fray-ui] tailer tick took ${Math.round(elapsed)}ms (poll ${POLL_MS}ms, ${states.size} sessions) — ` +
-            `the event loop is blocked for that long, so RPCs and board pushes are delayed (occurrence ${overBudgetTicks})`,
-          )
-        }
+      // NB: never `return` from this finally — it would swallow an exception thrown by tick().
+      if (elapsed > POLL_MS && ++overBudgetTicks === nextReportAt) {
+        nextReportAt = overBudgetTicks < 4 ? overBudgetTicks + 1 : overBudgetTicks * 4
+        console.error(
+          overBudgetTicks === 1
+            ? `[fray-ui] the tailer is running behind: one pass over ${states.size} sessions took ` +
+              `${Math.round(elapsed)}ms but it runs every ${POLL_MS}ms. It holds the event loop while it ` +
+              `works, so RPC replies and sidebar updates wait on it. Reporting less often from here.`
+            : `[fray-ui] tailer still behind — ${Math.round(elapsed)}ms for ${states.size} sessions ` +
+              `(${overBudgetTicks} slow passes so far)`,
+        )
       }
     }
   }

@@ -2,6 +2,7 @@ import { execFileSync, spawn as spawnChild } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:net";
+import { createServer as createHttpServer } from "node:http";
 import {
   existsSync,
   mkdirSync,
@@ -45,6 +46,7 @@ import {
   prepareBeforeGlobalLaunchLock,
   probeFray,
   readPreferredPort,
+  waitForWorkspace,
   requestFrayStop,
   resolveWorkspace,
   sourceWorkspaceDir,
@@ -1983,3 +1985,39 @@ test("concurrent installer processes publish only complete shims and clean up te
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// The foreground launch waits for health with NO deadline, on purpose. A flat timeout declared
+// failure on a merely-slow boot and left the child running and printing to the operator's terminal —
+// "slow" became "failed AND orphaned" (2026-07-23: a 21.6s idle boot took 35s+ under load and lost a
+// 30s race every time). Pin both halves: unbounded keeps waiting past where a finite deadline would
+// have given up, and a finite deadline still fails when one is deliberately asked for.
+test("waitForWorkspace: an unbounded wait outlasts a slow boot; a finite one still times out", async () => {
+  const expected = { projectId: "p-slow", projectDir: "/tmp/slow" }
+  let healthyAt = Date.now() + 900
+  const server = createHttpServer((_req, res) => {
+    if (Date.now() < healthyAt) {
+      res.writeHead(503)
+      res.end("not yet")
+      return
+    }
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ ok: true, bootId: "b1", ...expected }))
+  })
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r))
+  const port = (server.address() as { port: number }).port
+  try {
+    // A deadline shorter than the boot fails — the behaviour we removed from the launch path.
+    await assert.rejects(
+      waitForWorkspace(port, expected, 300),
+      /did not become healthy/,
+      "a finite deadline still reports a timeout when explicitly requested",
+    )
+    // Infinity does not: it is still polling when 300ms would have quit, and succeeds at ~900ms.
+    const started = Date.now()
+    const health = await waitForWorkspace(port, expected, Infinity)
+    assert.equal(health.projectId, "p-slow")
+    assert.ok(Date.now() - started >= 300, "it kept waiting past where the finite deadline gave up")
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})
