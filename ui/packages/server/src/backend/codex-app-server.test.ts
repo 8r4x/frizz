@@ -15,6 +15,7 @@ import {
   CodexAppServerBridge,
   codexAppServerEnvironment,
   codexAppServerBridgeEnabled,
+  selectCodexHostKind,
   type CodexAppServerProcess,
   type CodexAppServerSpawn,
 } from "./codex-app-server.ts"
@@ -2117,4 +2118,28 @@ test("a cold-recovery nudge tells the model its sub-agents died and to re-spawn 
   assert.match(text, /sub-agents do NOT survive/i, "the nudge must warn that sub-agents died")
   assert.match(text, /list_agents/, "the nudge must point at list_agents to re-establish them")
   h.close()
+})
+
+// Transport selection: native is the default everywhere it works (the app-server owns its socket and
+// truly outlives fray), the --stdio daemon stays the default only on win32 whose named-pipe path native
+// does not implement, an injected spawn is always the direct-child test transport, and the flag forces
+// either way. This is the flip that made a codex worker's app-server + sub-agents survive a daemon death.
+test("selectCodexHostKind: native is the default on macOS/Linux, daemon on Windows", () => {
+  assert.equal(selectCodexHostKind(undefined, "darwin", false), "native")
+  assert.equal(selectCodexHostKind(undefined, "linux", false), "native")
+  assert.equal(selectCodexHostKind(undefined, "win32", false), "daemon")
+})
+
+test("selectCodexHostKind: an injected spawn always wins (the test/harness transport)", () => {
+  assert.equal(selectCodexHostKind(undefined, "darwin", true), "direct")
+  assert.equal(selectCodexHostKind("1", "darwin", true), "direct")
+  assert.equal(selectCodexHostKind("0", "win32", true), "direct")
+})
+
+test("selectCodexHostKind: the flag forces the transport, and never selects native where it cannot run", () => {
+  assert.equal(selectCodexHostKind("0", "darwin", false), "daemon", "0 opts back to the daemon")
+  assert.equal(selectCodexHostKind("false", "linux", false), "daemon")
+  assert.equal(selectCodexHostKind("1", "linux", false), "native", "1 forces native where supported")
+  assert.equal(selectCodexHostKind("true", "darwin", false), "native")
+  assert.equal(selectCodexHostKind("1", "win32", false), "daemon", "native is never selected on win32, even forced")
 })

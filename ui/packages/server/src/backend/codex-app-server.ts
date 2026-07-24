@@ -39,9 +39,32 @@ export const CODEX_APP_SERVER_PROVIDER = "codex-app-server"
 // Opt-in transport switch. Off = the hand-written daemon; on = `codex app-server --listen unix://`.
 // Read at construction, per process, so a restart is all it takes to move a project either way.
 export const CODEX_NATIVE_LISTEN_FLAG = "FRAY_CODEX_NATIVE_LISTEN"
-function nativeListenEnabled(): boolean {
-  const value = process.env[CODEX_NATIVE_LISTEN_FLAG]
-  return value === "1" || value === "true"
+
+export type CodexHostKind = "native" | "daemon" | "direct"
+
+/**
+ * Which app-server transport a bridge uses.
+ *
+ * The DEFAULT is the native listener (`codex app-server --listen unix://`): the app-server owns its own
+ * socket, so it genuinely outlives every fray process and there is no fray-authored daemon in the middle
+ * that could die and take the app-server — and every sub-agent turn inside it — down with it. The
+ * hand-rolled `--stdio` daemon can only broker survival across a fray restart; across its OWN death
+ * (idle expiry, reachability self-collection, a signal, its child crashing) it kills the app-server. It
+ * stays the default ONLY on win32, whose named-pipe socket path the native transport does not implement.
+ *
+ * Overrides: an injected `spawn` is always the direct-child test transport; `FRAY_CODEX_NATIVE_LISTEN`
+ * forces the choice (`1`/`true` → native where supported, `0`/`false` → the daemon).
+ */
+export function selectCodexHostKind(
+  flagValue: string | undefined,
+  platform: NodeJS.Platform,
+  hasSpawn: boolean,
+): CodexHostKind {
+  if (hasSpawn) return "direct"
+  const nativeSupported = platform !== "win32"
+  if (flagValue === "0" || flagValue === "false") return "daemon"
+  if (flagValue === "1" || flagValue === "true") return nativeSupported ? "native" : "daemon"
+  return nativeSupported ? "native" : "daemon"
 }
 export const CODEX_APP_SERVER_SUPPORTED_VERSION = "0.144.6"
 // Upgrade policy: this is an exact protocol pin, never a semver range. Changing it requires a fresh
@@ -1571,14 +1594,15 @@ export class CodexAppServerBridge {
     this.makeId = options.id ?? randomUUID
     this.codexBin = options.codexBin ?? "codex"
     this.timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
-    // Production hosts the app-server in a DETACHED per-project daemon so it outlives this runtime
-    // (see codex-app-server-host.ts). An injected `spawn` — every unit test and the live harnesses —
-    // keeps the historical direct-child behavior, where each connect really is a new process.
-    // FRAY_CODEX_NATIVE_LISTEN=1 swaps the daemon for the app-server's OWN unix listener
-    // (codex-app-server-native.ts), which needs no fray-authored daemon process at all.
-    this.host = options.host ?? (options.spawn
-      ? directChildHost(options.spawn)
-      : nativeListenEnabled() ? nativeListenCodexAppServerHost : daemonCodexAppServerHost)
+    // Production hosts the app-server on its OWN unix listener (codex-app-server-native.ts) so it
+    // outlives this runtime with no fray-authored daemon that could kill it — see selectCodexHostKind
+    // for the per-platform default and the overrides. An injected `spawn` — every unit test and the
+    // live harnesses — keeps the historical direct-child behavior, where each connect is a new process.
+    const hostKind = selectCodexHostKind(process.env[CODEX_NATIVE_LISTEN_FLAG], process.platform, Boolean(options.spawn))
+    this.host = options.host ?? (
+      hostKind === "direct" ? directChildHost(options.spawn!)
+      : hostKind === "native" ? nativeListenCodexAppServerHost
+      : daemonCodexAppServerHost)
     this.db = new Database(options.dbPath)
     this.db.pragma("journal_mode = WAL")
     this.db.pragma("busy_timeout = 5000")
