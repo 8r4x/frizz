@@ -152,7 +152,10 @@ function AwaitingBackgroundBanner({ thread, onSnooze, onSnoozeFailed }: {
       <p className="text-fg/80">
         This agent has come to rest, but it’s awaiting the results from {what} it dispatched.
       </p>
-      <div className="flex items-center justify-between gap-3">
+      {/* Both items justify RIGHT (maintainer 2026-07-24): the explainer sits immediately left of the
+          button rather than being flung to the opposite edge by justify-between, so the sentence and the
+          control it describes read as one unit. */}
+      <div className="flex items-center justify-end gap-3">
         <span className="min-w-0 text-[11px] text-muted/70">
           It returns to the queue on its own when the work comes back.
         </span>
