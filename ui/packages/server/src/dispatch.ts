@@ -600,6 +600,12 @@ export interface DispatchDeps {
   // --json` for Claude, the local auth.json read for Codex). Absent (tests) ⇒ no preflight, so unit
   // tests never shell out or depend on the developer's real credential state.
   preflightAuth?: (kind: BackendKind) => Promise<ProviderAuth>
+  // Codex-only: is the `codex` executable actually runnable? Auth says a credential EXISTS; this says
+  // whether the binary the dispatch needs is installed. "missing" (a positive ENOENT) rejects EARLY,
+  // before any thread state, with a message that names the real problem instead of the deep
+  // "daemon exited before it became ready" a missing binary otherwise produces. Fails open on
+  // "unknown". Absent (tests) ⇒ no probe.
+  preflightCodexBinary?: () => Promise<"present" | "missing" | "unknown">
   // Durable adoption recovery seams. Production uses tmux's token-aware exact-pane implementation;
   // focused tests inject an in-memory private server and deterministic time.
   adoptionRuntime?: AdoptionRecoveryRuntime
@@ -705,6 +711,14 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // keeps the draft and opens the sign-in modal off the sentinel message.
       if (deps.preflightAuth && (await deps.preflightAuth(kind).catch((): ProviderAuth => "unknown")) === "signed-out") {
         throw new ProviderAuthRequiredError(kind)
+      }
+      // Codex needs the `codex` executable, not just a credential. Probe it here, in the same
+      // zero-trace window as the auth preflight, so a missing binary fails with an actionable message
+      // BEFORE any scratchpad/registry state is created — instead of proceeding to a deep app-server
+      // "daemon exited before it became ready". Fails open on "unknown" (see readCodexBinaryState).
+      if (kind === "codex" && deps.preflightCodexBinary &&
+        (await deps.preflightCodexBinary().catch((): "unknown" => "unknown")) === "missing") {
+        throw new Error("Codex is not installed, or the `codex` executable is not on PATH. Install the Codex CLI and retry.")
       }
       // Title: explicit human title, else the heuristic chop. (A headless `claude -p` titling pass
       // was tried and REMOVED — print mode is going away for Max subscription auth, which is the

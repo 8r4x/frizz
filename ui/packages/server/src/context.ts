@@ -19,7 +19,7 @@ import {
 } from "./resume.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
 import { createCodexBackend, codexSandbox } from "./backend/codex.ts"
-import { readClaudePreflightAuth, readCodexAuthState } from "./backend/auth-status.ts"
+import { readClaudePreflightAuth, readCodexAuthState, readCodexBinaryState } from "./backend/auth-status.ts"
 import { createLoginUtility, type LoginUtility } from "./login-utility.ts"
 import type { AgentBackend } from "./backend/types.ts"
 import { detectGithub, type GithubDetection } from "./github.ts"
@@ -617,6 +617,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
       kind === "codex"
         ? Promise.resolve(readCodexAuthState())
         : readClaudePreflightAuth({ claudeBin: opts.claudeBin, cwd: project.dir }),
+    preflightCodexBinary: () => readCodexBinaryState(opts.codexBin ?? "codex"),
   })
 
   // Durable timer waker + legacy pr/ci compatibility. Reuses the SAME resume path as followUp;

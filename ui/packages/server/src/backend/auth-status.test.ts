@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { parseClaudeAuthStatusJson, readAuthSnapshot, readClaudeAuthState, readClaudeAuthStatusCli, readClaudePreflightAuth, readCodexAuthState } from "./auth-status.ts"
+import { parseClaudeAuthStatusJson, readAuthSnapshot, readClaudeAuthState, readClaudeAuthStatusCli, readClaudePreflightAuth, readCodexAuthState, readCodexBinaryState } from "./auth-status.ts"
 
 // Codex reads env keys BEFORE the file, so a file-based test must run with those keys cleared or an
 // ambient OPENAI_API_KEY in the dev shell would mask the file logic. Clears + restores around fn.
@@ -238,4 +238,16 @@ test("readClaudePreflightAuth: a positive local signed-out is confirmed against 
     if (savedKeychain === undefined) delete process.env.FRAY_KEYCHAIN_DISABLED
     else process.env.FRAY_KEYCHAIN_DISABLED = savedKeychain
   }
+})
+
+test("readCodexBinaryState: present, ENOENT→missing, everything-else→unknown (fail open)", async () => {
+  // present: the exec resolves.
+  assert.equal(await readCodexBinaryState("codex", (async () => ({ stdout: "codex-cli 0.144.6\n", stderr: "" })) as never), "present")
+  // a positive ENOENT is the ONLY "missing".
+  const enoent = Object.assign(new Error("spawn codex ENOENT"), { code: "ENOENT" })
+  assert.equal(await readCodexBinaryState("codex", (async () => { throw enoent }) as never), "missing")
+  // a broken-but-present binary (non-zero exit) is NOT missing — fail open.
+  assert.equal(await readCodexBinaryState("codex", (async () => { throw Object.assign(new Error("exit 1"), { code: 1 }) }) as never), "unknown")
+  // a timeout is NOT missing — fail open, never trap a working-but-slow environment.
+  assert.equal(await readCodexBinaryState("codex", (async () => { throw Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }) }) as never), "unknown")
 })
