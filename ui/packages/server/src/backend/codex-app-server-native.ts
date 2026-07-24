@@ -23,7 +23,8 @@
 // path, its audited env allowlist, and its pinned `CODEX_APP_SERVER_SUPPORTED_VERSION`.
 //
 // KNOWN TRADE-OFF vs the daemon: while NO client is attached the app-server DROPS server->client
-// events rather than queueing them (`codex-app-server-daemon.ts` queues). See ../../../scripts/research/README.md.
+// events rather than queueing them (`codex-app-server-daemon.ts` queues). See the evidence in
+// ../../../../scripts/research/README.md.
 // A turn that ends during the gap is still recoverable — `thread/resume` reports
 // `thread.status: {"type":"idle"}` and `thread/turns/list` reports the turn `completed` — and a
 // pending approval is actively RE-ISSUED to the reattaching subscriber, which the queue never did
