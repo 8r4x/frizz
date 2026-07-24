@@ -17,6 +17,7 @@ import { splitQuestionBlocks, parseQuestionBlock, type QuestionKind, type BlockA
 import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
 import { parseAnswersMessage, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
+import { sendEagerFollowUp } from "../lib/eagerComposerSubmission.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { messagePresentationText } from "../lib/messagePresentation.ts"
@@ -2665,12 +2666,26 @@ export function ProviderFaultCard({
   retryText?: string
 }) {
   const [signIn, setSignIn] = useState(false)
+  const [retrying, setRetrying] = useState(false)
+  const queryClient = useQueryClient()
   const label = PROVIDER_LABEL[fault.backend]
-  const retry = useMutation({
-    mutationFn: (message: string) => rpc.followUp({ slug, sessionId: sessionId ?? "", message }),
-    onSuccess: () => showToast("Retrying with the previous message…"),
-    onError: (e) => showToast(`Retry failed: ${(e as Error).message.slice(0, 80)}`),
-  })
+  // Retry-after-sign-in is an ordinary follow-up like every other turn-starting action: eager so the
+  // thread paints as working and its message appears as a queued bubble the instant it's clicked, on
+  // the FIFO chain, and tracked by the delivery ledger. A retry sent while still signed out fails the
+  // send, whose rollback clears the optimistic state at once — no false lingering spinner. The local
+  // `retrying` flag only disables THIS button; the thread's feedback no longer waits on the round-trip.
+  const retry = (message: string) => {
+    setRetrying(true)
+    // sendEagerFollowUp does nothing (fires no callback) for an empty message. retryText is guarded
+    // truthy at the button, so today `started` is always true — but resetting on false keeps this card
+    // self-contained instead of trusting that external invariant to hold through a later refactor.
+    const started = sendEagerFollowUp(queryClient, slug, message, {
+      onSuccess: () => { setRetrying(false); showToast("Retrying with the previous message…") },
+      onRollback: () => setRetrying(false),
+      failureToast: (m) => `Retry failed: ${m.slice(0, 80)}`,
+    })
+    if (!started) setRetrying(false)
+  }
   return (
     <div data-provider-fault className="flex items-center gap-2.5 rounded-md border border-red-500/40 bg-panel-2 px-3 py-2 text-[12px]">
       <KeyRound size={13} className="shrink-0 text-red-400" />
@@ -2680,8 +2695,8 @@ export function ProviderFaultCard({
       </span>
       {retryText?.trim() && (
         <button
-          onClick={() => retry.mutate(retryText)}
-          disabled={retry.isPending}
+          onClick={() => retry(retryText)}
+          disabled={retrying}
           onMouseDown={(e) => e.preventDefault()}
           className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-fg/90 transition-colors hover:bg-panel hover:border-border-strong disabled:opacity-60"
         >
@@ -2726,11 +2741,23 @@ function limitResumeClock(unixSeconds: number): string {
 export function LimitPauseCard({ slug, sessionId, pause }: { slug: string; sessionId: string | undefined; pause: NonNullable<ThreadViewData["limitPause"]> }) {
   const label = PROVIDER_LABEL[pause.backend]
   const which = pause.window === "weekly" ? "weekly limit" : pause.window === "session" ? "session limit" : "usage limit"
-  const continueNow = useMutation({
-    mutationFn: () => rpc.followUp({ slug, sessionId: sessionId ?? "", message: "Continue exactly where you left off." }),
-    onSuccess: () => showToast("Continuing…"),
-    onError: (e) => showToast(`Continue failed: ${(e as Error).message.slice(0, 80)}`),
-  })
+  const [continuing, setContinuing] = useState(false)
+  const queryClient = useQueryClient()
+  // "Continue now" is a manual override of the auto-resume — a turn-starting action exactly like a
+  // steer, so it takes the same eager path: the row leaves the Held band for Active and its bubble
+  // appears the instant it's clicked, rather than after the injection round-trip. `continuing` disables
+  // only this button.
+  const continueNow = () => {
+    setContinuing(true)
+    // The message is a non-empty constant, so `started` is always true here; the reset-on-false is a
+    // belt-and-suspenders that keeps the button from sticking disabled if that ever changes.
+    const started = sendEagerFollowUp(queryClient, slug, "Continue exactly where you left off.", {
+      onSuccess: () => { setContinuing(false); showToast("Continuing…") },
+      onRollback: () => setContinuing(false),
+      failureToast: (m) => `Continue failed: ${m.slice(0, 80)}`,
+    })
+    if (!started) setContinuing(false)
+  }
   // items-center vertically centers the sentence and the button on the common single line: the button
   // is the tallest element, so the old items-start left it hanging below the text inside the card's
   // padding (the "garbage spacing"). flex-wrap + ml-auto still drop the button to its own line at a
@@ -2754,8 +2781,8 @@ export function LimitPauseCard({ slug, sessionId, pause }: { slug: string; sessi
         </span>
       </span>
       <button
-        onClick={() => continueNow.mutate()}
-        disabled={continueNow.isPending}
+        onClick={continueNow}
+        disabled={continuing}
         onMouseDown={(e) => e.preventDefault()}
         className="ml-auto shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-fg/90 transition-colors hover:bg-panel hover:border-border-strong disabled:opacity-60"
       >

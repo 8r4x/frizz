@@ -666,11 +666,12 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // The last TEXT-BEARING agent message — the agent's CURRENT standing signal, shown (text only) below
   // the collapse bar. Requires renderable PROSE (messageHasRenderableText), not just "renders something":
   // because this anchor is rendered `textOnly`, a trailing TOOLS-ONLY message (text "") has nothing to
-  // show, so it must NOT become the anchor. Requiring text also keeps this in lockstep with liveMsg
-  // (answering.ts: last assistant with non-empty text) — the live ```question that carries the answer
-  // chips. If this admitted a tools-only trailing message, that message would become `lastRenderedIdx`
-  // while the real question fell into the collapsed middle → its chips would vanish. queued sends and
-  // punctuation kinds (event / reasoning) are all text-less, so messageHasRenderableText excludes them.
+  // show, so it must NOT become the anchor. When the agent asked and then RESTED, this trailing text
+  // message IS the ```question that carries the answer chips; when the agent kept working past its ask
+  // (a background wake), the ask is answered per-message via answeringForMessage regardless of which
+  // message is the anchor. Admitting a tools-only trailing message would still be wrong — it would
+  // become `lastRenderedIdx` with nothing to show — so queued sends and punctuation kinds (event /
+  // reasoning), all text-less, are excluded by messageHasRenderableText.
   const lastRenderedIdx = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i]
@@ -870,7 +871,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // suppress the generic chat bottom-pin: it fights card exit/reorder. Both keyboard and button submits
   // run this same onSent, which dissolves the card in place — TodosView's unmount effect then
   // auto-scrolls the next card to the viewport top (like every user-initiated dismissal).
-  const { liveMsg, answering, answerable, anyAnswered, sendAnswers, sendMessage } = useLiveAnswering(thread.id, messages, () => {
+  const { answeringForMessage, answerable, anyAnswered, sendAnswers, sendMessage } = useLiveAnswering(thread.id, messages, () => {
     ;(document.activeElement as HTMLElement | null)?.blur()
     onResolve(thread.id)
   }, { scrollToBottom: false })
@@ -1061,7 +1062,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                   const textKey = m.sourceId ?? `legacy-${globalIdx}`
                   out.push(
                     <div key={textKey} data-transcript-source-id={textKey} className="flex flex-col">
-                      <Message m={m} dense textOnly answering={m === liveMsg ? answering : undefined} paired={paired[globalIdx]} />
+                      <Message m={m} dense textOnly answering={answeringForMessage(m)} paired={paired[globalIdx]} />
                     </div>,
                   )
                   // Text-only → the row ends in prose (tool band dropped), so the next gap is a full STEP.
@@ -1078,7 +1079,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                   <Message
                     m={m}
                     dense
-                    answering={m === liveMsg ? answering : undefined}
+                    answering={answeringForMessage(m)}
                     paired={paired[base + i]}
                     sticky={isSticky}
                   />

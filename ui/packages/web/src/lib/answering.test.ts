@@ -20,10 +20,19 @@ test("live-only: the trailing ask is answerable", () => {
   assert.equal(open[0].isLive, true)
 })
 
-test("live-only: a trailing prose turn AFTER the ask makes nothing answerable (historic behavior)", () => {
-  // The first substantive assistant message from the end has no ask → the live-only walk stops empty,
-  // even though an earlier message did ask. This is exactly the buried-question hole multiMessage fixes.
+test("live-only: an ask the agent BURIED by continuing to work stays answerable (queue card)", () => {
+  // The agent asked, then kept working (a background wake) with no human turn between — so a no-question
+  // assistant turn now trails the ask. The ask is only BURIED, not answered, so the live-only walk scans
+  // back past the no-question turn and surfaces it. Its isLive is false (a later substantive turn exists).
   const open = selectOpenAsks([ask("q1"), prose("meanwhile I did other work")], false)
+  assert.equal(open.length, 1)
+  assert.equal(open[0].identity, "q1")
+  assert.equal(open[0].isLive, false)
+})
+
+test("live-only: with NO ask trailing the last human turn, nothing is answerable", () => {
+  // Only genuine 'no open ask' (a plain agent turn, never a question) yields empty — not a buried ask.
+  const open = selectOpenAsks([user("do it"), prose("did the work, no question")], false)
   assert.equal(open.length, 0)
 })
 
