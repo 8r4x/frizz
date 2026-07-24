@@ -635,7 +635,7 @@ export function createRouter(ctx: AppContext) {
     dismissBackgroundOp: mutation({
       input: z.object({ slug: ThreadSlug, id: z.string() }).strict(),
       output: z.object({ dismissed: z.boolean() }),
-      handler: ({ input }) => ({ dismissed: ctx.tailer.dismissOp?.(input.slug, input.id) ?? false }),
+      handler: async ({ input }) => ({ dismissed: ctx.tailer.dismissOp?.(input.slug, input.id) ?? false }),
     }),
 
     dispatch: mutation({
