@@ -158,6 +158,25 @@ export async function readClaudeAuthStatusCli(opts?: {
   }
 }
 
+// The DISPATCH-PREFLIGHT Claude verdict — local credential first, CLI only to confirm a positive
+// local signed-out. Same shape as readAuthSnapshot's Claude arm below, and for the same reason, but
+// with the preflight's own fail-open rule: the CLI's verdict is returned AS-IS, so an "unknown" from
+// it still fails open (readAuthSnapshot instead lets the local signed-out stand, because a gate that
+// can't confirm should keep offering sign-in).
+//
+// This preflight is the FIRST thing dispatch() does — before the scratchpad, the worker prompt, tmux,
+// the registry — so anything it waits on is dead time between Enter and the worker existing at all.
+// Reaching for the CLI unconditionally put a fork+exec of a heavy binary doing a network round trip
+// on that path; under worker-fleet load it routinely blew its own 5s timeout and fell back to
+// "unknown", i.e. the common case paid five seconds to learn nothing. Measured under load: CLI
+// 5449ms → "unknown"; local read 674–1909ms → a definitive "authed". See also claude-quota.ts, which
+// is endpoint-first for exactly this reason. Do not put the CLI back on the signed-in path.
+export async function readClaudePreflightAuth(opts?: { claudeBin?: string; cwd?: string }): Promise<ProviderAuth> {
+  const local = await readClaudeAuthState()
+  if (local !== "signed-out") return local
+  return readClaudeAuthStatusCli({ claudeBin: opts?.claudeBin, ...(opts?.cwd ? { cwd: opts.cwd } : {}) })
+}
+
 // The per-provider auth snapshot the new-thread gate reads. Never throws — each provider degrades to
 // "unknown" independently, and the gate fails open on "unknown".
 //

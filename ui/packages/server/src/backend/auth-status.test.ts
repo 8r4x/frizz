@@ -1,9 +1,9 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { parseClaudeAuthStatusJson, readAuthSnapshot, readClaudeAuthState, readClaudeAuthStatusCli, readCodexAuthState } from "./auth-status.ts"
+import { parseClaudeAuthStatusJson, readAuthSnapshot, readClaudeAuthState, readClaudeAuthStatusCli, readClaudePreflightAuth, readCodexAuthState } from "./auth-status.ts"
 
 // Codex reads env keys BEFORE the file, so a file-based test must run with those keys cleared or an
 // ambient OPENAI_API_KEY in the dev shell would mask the file logic. Clears + restores around fn.
@@ -181,6 +181,56 @@ test("readAuthSnapshot: CLI overrides a local signed-out; local verdict stands w
       })
       // CLI unavailable → the positive local signed-out stands (never silently unknown).
       assert.equal((await readAuthSnapshot({ claudeBin: "/nonexistent/claude-absent" })).claude, "signed-out")
+    })
+  } finally {
+    if (savedConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = savedConfig
+    if (savedKeychain === undefined) delete process.env.FRAY_KEYCHAIN_DISABLED
+    else process.env.FRAY_KEYCHAIN_DISABLED = savedKeychain
+  }
+})
+
+// The dispatch preflight is the first thing dispatch() awaits, so what it shells out to is a latency
+// question as much as a correctness one. These pin BOTH: the verdicts, and — via a stub that records
+// whether it ran at all — that a signed-in user never pays for the CLI.
+test("readClaudePreflightAuth: a local credential answers alone; the CLI is never spawned", async () => {
+  const savedConfig = process.env.CLAUDE_CONFIG_DIR
+  try {
+    await withTmpAsync(async (dir) => {
+      process.env.CLAUDE_CONFIG_DIR = dir
+      writeFileSync(join(dir, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "tok" } }))
+      // A stub that TOUCHES a marker file if it is ever executed. The absence of that file is the
+      // whole point of this change: the CLI must not be on the signed-in path.
+      const marker = join(dir, "cli-ran")
+      await withStub(`touch ${marker}; echo '{"loggedIn": true}'`, async (bin) => {
+        assert.equal(await readClaudePreflightAuth({ claudeBin: bin }), "authed")
+        assert.equal(existsSync(marker), false, "the auth CLI must not run when a local credential exists")
+      })
+    })
+  } finally {
+    if (savedConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = savedConfig
+  }
+})
+
+test("readClaudePreflightAuth: a positive local signed-out is confirmed against the CLI, which fails open on unknown", async () => {
+  const savedConfig = process.env.CLAUDE_CONFIG_DIR
+  const savedKeychain = process.env.FRAY_KEYCHAIN_DISABLED
+  try {
+    await withTmpAsync(async (dir) => {
+      process.env.CLAUDE_CONFIG_DIR = dir // empty → local reader: signed-out
+      process.env.FRAY_KEYCHAIN_DISABLED = "1"
+      // A credential the file/keychain reader cannot see must not block a dispatch.
+      await withStub(`echo '{"loggedIn": true}'`, async (bin) => {
+        assert.equal(await readClaudePreflightAuth({ claudeBin: bin }), "authed")
+      })
+      // Genuinely signed out — this is the ONE verdict dispatch blocks on.
+      await withStub(`echo '{"loggedIn": false}'; exit 1`, async (bin) => {
+        assert.equal(await readClaudePreflightAuth({ claudeBin: bin }), "signed-out")
+      })
+      // Preflight-specific: an inconclusive CLI stays "unknown" so dispatch fails OPEN. (readAuthSnapshot
+      // deliberately differs here — a gate that cannot confirm should keep offering sign-in.)
+      assert.equal(await readClaudePreflightAuth({ claudeBin: "/nonexistent/claude-absent" }), "unknown")
     })
   } finally {
     if (savedConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
