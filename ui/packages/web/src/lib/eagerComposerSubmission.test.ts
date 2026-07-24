@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { beginEagerSubmission, enqueueThreadSend } from "./eagerComposerSubmission.ts"
+import { DELIVERY_RETRY_BACKOFF_MS, beginEagerSubmission, enqueueThreadSend, withDeliveryRetry } from "./eagerComposerSubmission.ts"
 
 test("eager composer submission clears and paints before its request settles", async () => {
   const order: string[] = []
@@ -86,4 +86,58 @@ test("separate threads do not queue behind each other", async () => {
   assert.deepEqual(events, ["gamma-start", "delta-done"])
   releaseAlpha()
   await alpha
+})
+
+// ── delivery retry ───────────────────────────────────────────────────────────────────────────────
+// A follow-up refused by a contention gate provably never reached the worker, so it is waited out
+// rather than handed back to the composer. These pin the two halves of that: what may be replayed,
+// and what must never be.
+const retryable = (message: string): Error =>
+  Object.assign(new Error(message), { retryableRpc: true })
+
+const instant = async (): Promise<void> => {}
+
+test("a contention refusal is retried in place instead of surfacing", async () => {
+  const attempts: number[] = []
+  let calls = 0
+  await withDeliveryRetry(
+    async () => {
+      attempts.push(++calls)
+      if (calls < 3) throw retryable("Another runtime control is in progress")
+    },
+    () => {},
+    instant,
+  )
+  assert.deepEqual(attempts, [1, 2, 3], "the send should land on the third attempt")
+})
+
+test("an AMBIGUOUS failure is never replayed — the text may already have crossed tmux", async () => {
+  let calls = 0
+  await assert.rejects(
+    withDeliveryRetry(async () => { calls++; throw new Error("network died mid-flight") }, () => {}, instant),
+    /network died mid-flight/,
+  )
+  assert.equal(calls, 1, "an unmarked failure must be surfaced, not re-sent")
+})
+
+test("retries are bounded — the composer gets the message back once they are exhausted", async () => {
+  let calls = 0
+  await assert.rejects(
+    withDeliveryRetry(async () => { calls++; throw retryable("still contended") }, () => {}, instant),
+    /still contended/,
+  )
+  assert.equal(calls, DELIVERY_RETRY_BACKOFF_MS.length + 1, "one initial attempt plus one per backoff step")
+})
+
+// The regression the operator saw as a queue card leaving, bouncing back, then leaving again: the
+// steer optimism was stamped once at Enter, so a delivery delayed by contention outlived its own hint.
+test("the steer optimism is re-anchored on every attempt, not just at submit", async () => {
+  let calls = 0
+  let anchors = 0
+  await withDeliveryRetry(
+    async () => { if (++calls < 3) throw retryable("contended") },
+    () => { anchors++ },
+    instant,
+  )
+  assert.equal(anchors, 3, "two backoff re-anchors plus one when the send finally landed")
 })

@@ -1321,3 +1321,61 @@ test("resumeThread threads the runtimeGate setting into the respawned worker pro
   check(false)
   check(true)
 })
+
+// ── replay safety ────────────────────────────────────────────────────────────────────────────────
+// A follow-up refused by a contention gate is REPLAYABLE, and the client relies on that verdict to
+// retry instead of handing the operator's message back. The licence is delivery safety, so what these
+// pin is not the message but the pairing: marked retryable AND provably nothing injected.
+test("a lost runtime-control CAS is marked retryable and injects nothing", () => {
+  const { storage, board } = harness()
+  const slug = "resume-cas-retryable"
+  storage.upsertSession(sessionRow(slug))
+  // A competing writer (the wakers scheduler, another tab, the submit-confirmer) already owns the row.
+  const owned = storage.getSession(slug)!
+  storage.beginRuntimeControl(slug, {
+    sessionId: owned.session_id,
+    nativeSessionId: owned.agent_session_id ?? null,
+    generation: owned.runtime_generation ?? 0,
+  }, "follow-up")
+
+  const tx = fakeTmux(true)
+  let injected = 0
+  tx.pasteText = () => { injected++ }
+
+  let raised: unknown
+  try {
+    resumeThread({ project: fakeProject("/tmp"), storage, board, getSettings: () => settings, tmux: tx }, slug, "continue")
+  } catch (error) { raised = error }
+
+  assert.equal(injected, 0, "a contention refusal must happen strictly upstream of the first tmux write")
+  assert.equal((raised as { retryableDelivery?: unknown })?.retryableDelivery, true,
+    "the client may only replay a send it is told took no effect")
+})
+
+test("a permission handoff refusal is retryable too — the send simply arrived mid-handoff", () => {
+  const { storage, board } = harness()
+  const slug = "resume-perm-retryable"
+  storage.upsertSession(sessionRow(slug))
+  const owned = storage.getSession(slug)!
+  storage.armProfileChange(slug, {
+    sessionId: owned.session_id,
+    nativeSessionId: owned.agent_session_id ?? null,
+    generation: owned.runtime_generation ?? 0,
+  }, { model: "opus", effort: "max" }, profileHandoff(
+    owned.agent_session_id ?? owned.session_id,
+    { model: owned.model ?? "sonnet", effort: owned.effort ?? "high" },
+    { model: "opus", effort: "max" },
+  ))
+
+  const tx = fakeTmux(true)
+  let injected = 0
+  tx.pasteText = () => { injected++ }
+
+  let raised: unknown
+  try {
+    resumeThread({ project: fakeProject("/tmp"), storage, board, getSettings: () => settings, tmux: tx }, slug, "continue")
+  } catch (error) { raised = error }
+
+  assert.equal(injected, 0)
+  assert.equal((raised as { retryableDelivery?: unknown })?.retryableDelivery, true)
+})

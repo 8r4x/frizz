@@ -58,7 +58,7 @@ import { appServerTurnStalled } from "./board.ts"
 import { runThreadUpdate } from "./fray.ts"
 import { repairThreadFile } from "./repair.ts"
 import { resumeThread } from "./resume.ts"
-import { appendDelivery } from "./delivery-ledger.ts"
+import { appendDelivery, hasDelivery } from "./delivery-ledger.ts"
 import { flushStuckComposer } from "./delivery-confirm.ts"
 import {
   readEarlierThreadTranscriptPage,
@@ -721,6 +721,21 @@ export function createRouter(ctx: AppContext) {
             effort: row.effort ?? undefined,
           })
           ctx.board.refresh()
+          return
+        }
+        // Idempotency for a REPLAYED deliveryId: if this exact send is already in the ledger, it
+        // provably reached the worker — answer success and inject nothing (and don't flush/re-inject).
+        //
+        // What actually guarantees the retry loop cannot double-send is the CLASSIFICATION, not this
+        // check: the client only replays an error typed RetryableDeliveryError, and every such throw is
+        // raised strictly upstream of the first tmux write, so a replayed send never had a first copy to
+        // duplicate. This dedup is defense-in-depth for replays from OTHER sources (a stale tab, an
+        // at-least-once transport). It deliberately does NOT cover a throw misclassified as retryable
+        // AFTER an injection: `appendDelivery` runs only once `resumeThread` returns, so such a throw
+        // leaves no ledger row and this check would miss it. Keeping every retryable throw pre-injection
+        // is therefore load-bearing, not optional.
+        if (input.deliveryId && row?.backend !== "codex" &&
+            hasDelivery(ctx.storage, input.slug, input.deliveryId)) {
           return
         }
         // Submit a PREVIOUS follow-up still stranded in the composer before pasting this one on top of
