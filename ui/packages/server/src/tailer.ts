@@ -1770,15 +1770,16 @@ export function createTailer(deps: TailerDeps): Tailer {
     "deliveryLedgerSeen", "unconfirmedPermissionMode", "unconfirmedPermissionPolls",
   ])
 
-  // Restore a freshly-created state from the durable cache so the prime below resumes the fold at the
-  // cached byte offset instead of at 0. Returns true only when EVERY fence held. Any doubt — a
-  // different session/generation, a different transcript path, an open delivery ledger, a file whose
-  // inode/size/content moved under the cached prefix, an undecodable blob — returns false and leaves
-  // the state untouched, which is the full re-read.
   // Registered slugs and FOREIGN thread ids live in separate namespaces (the tailer keeps two maps for
   // exactly that reason), so they get separate key spaces in the one cache table too.
   const cacheKey = (state: TailState): string => (state.foreign ? `foreign:${state.slug}` : state.slug)
 
+  // Restore a freshly-created state from the durable cache so the prime below resumes the fold at the
+  // cached byte offset instead of at 0. `row` is null for a foreign thread (it has no registry row).
+  // Returns true only when EVERY fence held. Any doubt — a different session/generation, a different
+  // transcript path, an open delivery ledger, a file whose inode/size/content moved under the cached
+  // prefix, an undecodable blob — returns false and leaves the state untouched, which is the full
+  // re-read.
   function hydrateFromCache(state: TailState, row: SessionRow | null, nativeId: string): boolean {
     if (!tailCache) return false
     if (cacheEntries === null) cacheEntries = tailCache.load()
@@ -1816,8 +1817,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   }
 
   // The durable record of `state` at its current byte cursor, or null when it must not be cached: a
-  // foreign thread (no registry row to fence against), a state bound to nothing yet, a row with an
-  // open delivery ledger, or a file that will not stat/read.
+  // state bound to nothing yet, a row with an open delivery ledger, or a file that will not stat/read.
   function cacheSnapshot(state: TailState, row: SessionRow | null): TailCacheEntry | null {
     if (state.offset <= 0 || row?.delivery_ledger) return null
     const fence = measureFence(state.path, state.offset)
