@@ -2085,3 +2085,36 @@ test("a same-process rejoin retires the approval orphaned on the connection it l
   assert.equal(h.interactions.listPending(scope).length, 0, "no unanswerable card is left in the queue")
   h.close()
 })
+
+// A sub-agent (spawn_agent) child is a turn INSIDE the app-server process, so it dies with it and
+// CANNOT be resumed — recovery of the children is the parent model's job. Before the nudge named this,
+// it recovered only when the model happened to notice ("three had returned, but six did not", the
+// 2026-07-24 loss). The cold-recovery nudge must state the failure mode and point at list_agents so
+// re-establishment is reliable rather than lucky.
+test("a cold-recovery nudge tells the model its sub-agents died and to re-spawn them", async () => {
+  let plan = { generation: "gen-A", reattached: false, droppedWhileDetached: 0 }
+  const h = scriptedHostHarness(() => plan)
+  const bridge = h.newBridge()
+  const binding = await bridge.startDisposableSession({
+    threadSlug: "orphaned-children", sessionId: "orphaned-children-session", cwd: h.dir, ephemeral: false,
+  })
+  const { turnId } = await bridge.startTurn({
+    threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "Orchestrate six sub-agents",
+  })
+  await waitFor(() => bridge.binding(binding.threadSlug, binding.sessionId)?.currentTurnId === turnId, "turn active")
+  bridge.close()
+
+  // The app-server DIED and a fresh one replaced it (new generation, fresh fork); its turn is gone.
+  plan = { generation: "gen-B", reattached: false, droppedWhileDetached: 0 }
+  h.resumeThreadStatus({ type: "idle" }) // the new app-server: that turn is over
+  const restarted = h.newBridge()
+  await restarted.warmUp()
+
+  const nudge = h.processes[1]!.clientRequests.find((message) => message.method === "turn/start")
+  assert.ok(nudge, "a recovery turn was auto-issued")
+  const input = (nudge!.params as Message).input as Array<{ text?: string }> | undefined
+  const text = input?.[0]?.text ?? ""
+  assert.match(text, /sub-agents do NOT survive/i, "the nudge must warn that sub-agents died")
+  assert.match(text, /list_agents/, "the nudge must point at list_agents to re-establish them")
+  h.close()
+})
