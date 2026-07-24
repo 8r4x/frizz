@@ -84,7 +84,18 @@ async function runSupervisor(port: number, token: string): Promise<never> {
   const owner = adoptProjectLaunchOwner(target, token, "supervisor");
   const env = projectLaunchEnvironment({ ...process.env, FRAY_PRODUCTION_SUPERVISOR: "1" }, target, owner.token);
   const webDist = join(import.meta.dirname, "..", "web-dist");
-  const childEntry = fileURLToPath(import.meta.resolve("@fray-ui/server/dev-child"));
+  // The registry package runs directly from what it ships, so it carries its own runtime closure
+  // (staged by scripts/prepare-package.mjs). The server SHELLS OUT to the board parser and every
+  // dispatched worker loads the plugin, so both must be pointed at the bundled copies — the
+  // monorepo-relative default in server/src/fray.ts resolves to a non-existent node_modules/cc path.
+  const runtimeDir = join(import.meta.dirname, "..", "runtime");
+  const scriptsDir = join(runtimeDir, "cc", "scripts", "fray");
+  const workerPluginDir = join(runtimeDir, "cc-worker");
+  // The published package runs as an esbuild bundle (dist/frayui.js); the server child and the
+  // detached daemon are emitted as sibling bundles in the same dist/ by scripts/build-package.mjs.
+  // Resolve the child beside this bundle rather than from @fray-ui/server (whose .ts cannot run
+  // under node_modules). In a source checkout this launcher is never executed — fray-dev uses index.ts.
+  const childEntry = fileURLToPath(new URL("./dev-child.js", import.meta.url));
   let plannedUpdate: Awaited<ReturnType<typeof planRegistryUpdate>> | undefined;
   const supervisor = await startDevSupervisor({
     port,
@@ -95,7 +106,7 @@ async function runSupervisor(port: number, token: string): Promise<never> {
     env,
     watch: false,
     childEntry,
-    childEnvironment: () => ({ FRAY_STABLE_WEB_DIST: webDist, FRAY_STABLE_ARTIFACT: `npm:${PACKAGE_NAME}@${PACKAGE_VERSION}` }),
+    childEnvironment: () => ({ FRAY_STABLE_WEB_DIST: webDist, FRAY_STABLE_ARTIFACT: `npm:${PACKAGE_NAME}@${PACKAGE_VERSION}`, FRAY_SCRIPTS_DIR: scriptsDir, FRAY_WORKER_PLUGIN_DIR: workerPluginDir }),
     updateRestart: async () => {
       try {
         const plan = await planRegistryUpdate(PACKAGE_NAME, PACKAGE_VERSION, npmRegistryReleaseAdapter);
