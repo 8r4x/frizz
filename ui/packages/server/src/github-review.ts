@@ -130,6 +130,8 @@ export function isNonBotGithubActivity(a: GithubReviewActivity): boolean {
   return type !== "bot" && !login.endsWith("[bot]")
 }
 
+// A submitted review is deliberate review activity even when the reviewer is an agent app such as
+// Pullfrog or Copilot. Bot conversation comments remain deploy/CI noise; human comments wake.
 export function isWakeworthyGithubActivity(a: GithubReviewActivity): boolean {
   if (a.kind === "review") return true
   return isNonBotGithubActivity(a)
@@ -271,6 +273,7 @@ export function createGithubReviewFetcher(deps: GithubReviewFetcherDeps = {}): G
       })
     } catch (error) {
       const timedOut = controller.signal.aborted || (error as { name?: unknown })?.name === "AbortError"
+      clearTimeout(timeout)
       const result: GithubReviewFetchResult = {
         status: "error",
         failure: {
@@ -282,21 +285,27 @@ export function createGithubReviewFetcher(deps: GithubReviewFetcherDeps = {}): G
       }
       for (const ref of refs) results.set(refKey(ref), result)
       return results
-    } finally {
-      clearTimeout(timeout)
     }
 
     let text: string
     try {
       text = await response.text()
     } catch (error) {
+      const timedOut = controller.signal.aborted || (error as { name?: unknown })?.name === "AbortError"
+      clearTimeout(timeout)
       const result: GithubReviewFetchResult = {
         status: "error",
-        failure: { kind: "network", message: `GitHub GraphQL response could not be read: ${conciseError(error)}` },
+        failure: {
+          kind: timedOut ? "timeout" : "network",
+          message: timedOut
+            ? `GitHub GraphQL response timed out after ${REQUEST_TIMEOUT_MS / 1000}s`
+            : `GitHub GraphQL response could not be read: ${conciseError(error)}`,
+        },
       }
       for (const ref of refs) results.set(refKey(ref), result)
       return results
     }
+    clearTimeout(timeout)
     const body = parseJson(text)
     if (!response.ok) {
       const failure = failureFromStatus(response.status, body, response.headers)
