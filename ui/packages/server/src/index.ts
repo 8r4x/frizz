@@ -365,7 +365,10 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   const cleanupTailer = createRetryableCleanup(() => ctx?.tailer.stop())
   const cleanupLoginUtility = createRetryableCleanup(() => ctx?.loginUtility?.stop())
   const cleanupPermission = createRetryableCleanup(() => ctx?.permissionController.stop())
-  const cleanupDeliveryConfirm = createRetryableCleanup(() => ctx?.deliveryConfirmer.stop())
+  // `?.` on the RESOURCE too, like loginUtility/profileController beside it. Every shutdown phase is
+  // requiredForStorage by default, so a TypeError here does not just log — it fails the whole barrier
+  // with "could not safely close storage", turning a recoverable startup failure into a wedged one.
+  const cleanupDeliveryConfirm = createRetryableCleanup(() => ctx?.deliveryConfirmer?.stop())
   const cleanupProfile = createRetryableCleanup(() => ctx?.profileController?.stop())
   const cleanupSubscriptions = createRetryableCleanup(() => ctx?.stopSubscriptions())
   const cleanupScheduler = createRetryableCleanup(async () => { await ctx?.scheduler.stop() })

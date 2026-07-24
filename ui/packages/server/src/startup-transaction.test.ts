@@ -51,6 +51,8 @@ interface ContextState {
   tailerStopped: number
   permissionStarted: number
   permissionStopped: number
+  deliveryConfirmerStarted: number
+  deliveryConfirmerStopped: number
   schedulerStarted: number
   schedulerStopped: number
 }
@@ -111,6 +113,8 @@ function fixture(t: TestContext, controls: FixtureControls = {}) {
         tailerStopped: 0,
         permissionStarted: 0,
         permissionStopped: 0,
+        deliveryConfirmerStarted: 0,
+        deliveryConfirmerStopped: 0,
         schedulerStarted: 0,
         schedulerStopped: 0,
       }
@@ -120,6 +124,7 @@ function fixture(t: TestContext, controls: FixtureControls = {}) {
       let boardStopped: Promise<void> | undefined
       let tailerStopped = false
       let permissionStopped = false
+      let deliveryConfirmerStopped = false
       const ctx = {
         bootId: randomUUID(),
         project,
@@ -161,6 +166,17 @@ function fixture(t: TestContext, controls: FixtureControls = {}) {
             if (permissionStopped) return
             permissionStopped = true
             state.permissionStopped++
+          },
+        },
+        // Real contexts always construct this (context.ts), and startServer starts it as its own
+        // rollback phase. Omitting it here made every unwind test fail on a TypeError rather than on
+        // the failure it meant to inject.
+        deliveryConfirmer: {
+          start() { state.deliveryConfirmerStarted++ },
+          stop() {
+            if (deliveryConfirmerStopped) return
+            deliveryConfirmerStopped = true
+            state.deliveryConfirmerStopped++
           },
         },
         scheduler: {
