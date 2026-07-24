@@ -23,6 +23,7 @@ import { shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { messagePresentationText } from "../lib/messagePresentation.ts"
 import { snoozePresetInstant, formatSnoozeWake } from "../lib/snooze.ts"
 import { AWAITING_FALLBACK_TITLE, AWAITING_PARK_BUTTON, awaitingHintSentence, awaitingParkAction, awaitingPresentationLine } from "../lib/awaitingPresentation.ts"
+import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { prefs } from "../lib/prefs.ts"
 import { canAdoptThread } from "../lib/adoption.ts"
 import { THREAD_TITLE_MAX_LENGTH, aiRenameAvailability, manualThreadTitleSeed, threadTitleToCommit } from "../lib/threadTitle.ts"
@@ -2585,7 +2586,7 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
       // "Done" label carries the meaning; no color needed.
       <div className="rounded-lg border border-border-strong bg-panel-2 px-4 py-3">
         <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted/70">
-          <Check size={12} className="shrink-0" /> Done
+          <Check size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} /> Done
         </div>
         {html && <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={{ __html: html }} />}
         {/* A white "Mark as done" button, deliberately redundant with the stable lifecycle footer — the
@@ -2612,7 +2613,7 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   return (
     <div className="min-w-0 rounded-lg border border-border-strong bg-panel-2 px-4 py-3">
       <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted/70">
-        <Hourglass size={12} className="shrink-0" /> {parkTitle}
+        <Hourglass size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} /> {parkTitle}
       </div>
       <div
         className={`md-inline min-w-0 text-[12px] leading-5 text-fg/85${wrap ? ` ${QUEUE_WRAP}` : ""}`}

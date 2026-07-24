@@ -19,6 +19,7 @@ import { ThreadLifecycleFooter } from "./ThreadLifecycleFooter.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
 import { QueueSubAgentLines } from "./QueueSubAgentLines.tsx"
+import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { LastActive } from "./LastActive.tsx"
 import { CopyTerminalCommandButton, useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
 import {
@@ -167,11 +168,9 @@ function AwaitingBackgroundBanner({ thread, onSnooze, onSnoozeFailed }: {
           title="Hide this card until a sub-agent returns"
           className="flex shrink-0 items-center gap-1.5 rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] font-medium text-fg/80 outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45"
         >
-          {/* Optical nudge, measured not guessed: items-center aligns the two BOXES, but "Snooze" has no
-              descenders, so its ink (7.9px) sits high in the 12px font box while the hourglass ink (10px)
-              is centered in its own — leaving the icon reading 1.58px LOW. Line-height is not the cause
-              (it cancels out of the offset), so the fix is this nudge, not a leading change. */}
-          <Hourglass size={12} className="-translate-y-[1.5px]" />
+          {/* Measured, not guessed: the icon read 1.58px LOW here. See lib/iconAlign.ts for why box
+              centering leaves a descender-free label's ink high, and why leading-none is not the fix. */}
+          <Hourglass size={12} className={ICON_LABEL_NUDGE} />
           Snooze
         </button>
       </div>
