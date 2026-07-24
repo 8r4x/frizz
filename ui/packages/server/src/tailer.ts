@@ -57,6 +57,9 @@ import {
 
 const IDLE_BACKSTOP_MS = 5000
 const POLL_MS = 1000
+// Ceiling on the adaptive poll (see scheduleTick). A tick this expensive means something is badly
+// wrong, but the tailer is still the only source of turn/liveness telemetry — it must keep running.
+const MAX_POLL_MS = 10_000
 // Claude writes an untimestamped permission sidecar just before (or alongside) its footer redraw.
 // Give the footer the arrival poll plus two more redraw polls, then discard a stable mismatch so a
 // killed pane's late sidecar cannot cause a permanent capture-pane/SQLite hot loop.
@@ -1320,8 +1323,17 @@ export function createTailer(deps: TailerDeps): Tailer {
         }
       })()
 
+  // Resolved at most ONCE per row per tick. Every row asks for its binding at least twice (pane
+  // liveness and pane text), and each ask is two registry point-queries — 4 queries per row per second
+  // that can only ever return the same answer, since a tick describes one instant. Reset at the top of
+  // each tick alongside the pane caches.
+  let adoptionBindings = new Map<string, ReturnType<typeof adoptionRuntimeBinding>>()
+
   function adoptionBinding(row: SessionRow) {
+    const cached = adoptionBindings.get(row.slug)
+    if (cached) return cached
     const binding = adoptionRuntimeBinding(deps.storage, row)
+    adoptionBindings.set(row.slug, binding)
     return binding
   }
 
@@ -1368,15 +1380,22 @@ export function createTailer(deps: TailerDeps): Tailer {
   function capturePaneForRow(row: SessionRow): string {
     const binding = adoptionBinding(row)
     if (binding.kind === "unbound") {
-      if (!paneTextPrefetched) prefetchPaneText()
       const cached = paneTextCache?.get(row.slug)
       if (cached !== undefined) return cached
-      // A slug the batched inventory does not list has NO PANE: a per-slug capture-pane on it can only
-      // spend a ~105ms process spawn to fail into the same empty string. That is not a rare case — a
-      // thread whose last record left the turn mid-flight (a killed worker, a crashed CLI) reads
-      // in-flight forever, so every boot sniffed every one of them. On the maintainer's board that was
-      // 22 doomed spawns = 2.4s of the tailer's first tick, and it grows with the thread count.
+      // ABSENCE FIRST, before any capture is attempted or prefetched. A slug the batched inventory does
+      // not list has NO PANE, so both the per-slug capture and the whole batch can only spend process
+      // spawns to produce the same empty string. Two distinct costs die here:
+      //   * boot: a thread whose last record left its turn mid-flight (a killed worker, a crashed CLI)
+      //     reads in-flight forever, so every boot sniffed every one of them — 22 doomed spawns, 2.4s.
+      //   * STEADY STATE: a boot-wedged thread (noTranscript) is sniffed on EVERY tick by design, and
+      //     asking on its behalf triggered a full batched capture of every OTHER pane too. Measured on
+      //     the maintainer's 20-session board: ~120ms of the ~210ms idle tick, every second, forever.
+      // The inventory is the same ≤900ms-old snapshot the tick's liveness already depends on, so this
+      // costs no extra subprocess of its own.
       if (paneAbsent?.(row.slug)) return ""
+      if (!paneTextPrefetched) prefetchPaneText()
+      const batched = paneTextCache?.get(row.slug)
+      if (batched !== undefined) return batched
       // Any other miss (batch aborted before this slug, or the session appeared mid-tick) falls back to
       // the single capture — correctness never depends on the prefetch landing.
       return capturePane(row.slug)
@@ -1597,6 +1616,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   let foreignFresh: { id: string; path: string }[] = []
   let foreignScanTick = 0
   let timer: NodeJS.Timeout | null = null
+  let stopped = false
   // Set for the duration of the FIRST tick only (see start): the launcher's progress signal.
   let primeProgress: ((done: number, total: number) => void) | undefined
 
@@ -2005,6 +2025,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     // One batched pane capture per tick, filled lazily on the first sniff (see prefetchPaneText).
     paneTextCache = null
     paneTextPrefetched = false
+    adoptionBindings = new Map()
     const rows = deps.storage.allSessions()
     let primed = 0
     for (const row of rows) {
@@ -2182,12 +2203,18 @@ export function createTailer(deps: TailerDeps): Tailer {
         state.nativeInputRequired = pane.nativeInputRequired
 
         // pane death (tmux remain-on-exit pane went dead) — the agent process exited.
-        const dead = paneDeadForRow(row)
-        if (dead && !state.paneDead) {
-          onPaneDeath(row)
-          dirty = true
+        // Asked only while the answer can still change anything. Once a row is stamped exited AND its
+        // pane has been observed dead, the death edge has already fired and nothing un-exits a row —
+        // so re-observing it every second buys nothing and costs the batched tmux inventory. On a board
+        // of finished threads this is what makes an idle tick cost NO subprocess at all.
+        if (row.exited !== 1 || !state.paneDead) {
+          const dead = paneDeadForRow(row)
+          if (dead && !state.paneDead) {
+            onPaneDeath(row)
+            dirty = true
+          }
+          state.paneDead = dead
         }
-        state.paneDead = dead
       }
 
       // live background ops + pending ask: a dispatch/completion/launch changes the set, a running→stale
@@ -2315,12 +2342,16 @@ export function createTailer(deps: TailerDeps): Tailer {
   // That regression is invisible without a signal, so say it once per occurrence and name the board size.
   // Silent on a healthy board — this must never become log noise.
   let overBudgetTicks = 0
+  // Duration of the most recent tick — read by the self-scheduling poll below so a tick that costs more
+  // than its own period yields the event loop for at least as long as it just held it.
+  let lastTickMs = 0
   function tickWithBudget(): void {
     const started = performance.now()
     try {
       tick()
     } finally {
       const elapsed = performance.now() - started
+      lastTickMs = elapsed
       if (elapsed > POLL_MS) {
         overBudgetTicks++
         // Log the first, then decimate: a saturated server must not spend its remaining budget logging.
@@ -2332,6 +2363,24 @@ export function createTailer(deps: TailerDeps): Tailer {
         }
       }
     }
+  }
+
+  // SELF-SCHEDULING, not a fixed interval. A tick runs synchronously on the event loop, so a tick that
+  // costs more than POLL_MS on a fixed interval leaves ZERO idle time between ticks: the loop is held
+  // ~100% of the time and every RPC reply, board delta and transcript push queues behind it. That is
+  // the "sidebar won't update for a number of seconds" report — the server is not busy, it is starved.
+  // Scheduling the NEXT tick after the last one finishes, at a delay of at least what the last tick
+  // cost, bounds the tailer's duty cycle at ~50% no matter how slow a tick gets. It degrades to a
+  // slower poll under load instead of self-inflicting a stall, and returns to POLL_MS the moment ticks
+  // are cheap again — this is level-triggered off measured cost, with no state to get stuck in.
+  function scheduleTick(): void {
+    const delay = Math.min(MAX_POLL_MS, Math.max(POLL_MS, Math.round(lastTickMs)))
+    timer = setTimeout(() => {
+      timer = null
+      tickWithBudget()
+      if (!stopped) scheduleTick()
+    }, delay)
+    timer.unref?.()
   }
 
   function registeredStateIsCurrent(state: TailState): boolean {
@@ -2376,20 +2425,21 @@ export function createTailer(deps: TailerDeps): Tailer {
     },
     start(onPrimeProgress) {
       if (timer) return
+      stopped = false
       primeProgress = onPrimeProgress
       try {
         tick() // derive current state immediately (also restores state after a server restart)
       } finally {
         primeProgress = undefined
       }
-      timer = setInterval(tickWithBudget, POLL_MS)
-      timer.unref?.()
+      scheduleTick()
     },
     stop() {
-      if (timer) clearInterval(timer)
+      stopped = true
+      if (timer) clearTimeout(timer)
       timer = null
       // A clean shutdown is the cheapest moment to make the next boot free: write back everything the
-      // interval flush has not reached yet. A hard kill just costs that thread its delta re-read.
+      // periodic flush has not reached yet. A hard kill just costs that thread its delta re-read.
       flushCache(now())
     },
     tick,

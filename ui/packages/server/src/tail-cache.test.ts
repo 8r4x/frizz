@@ -123,7 +123,7 @@ test("tail-cache fence: an append still matches; a truncation and a same-size re
   writeFileSync(path, "aaaa\nbbbb\ncccc\n")
   const before = statSync(path)
   const fd = openSync(path, "r+")
-  writeSync(fd, "zzzz", 0, 4, 0)
+  writeSync(fd, Buffer.from("zzzz"), 0, 4, 0)
   closeSync(fd)
   utimesSync(path, before.atime, before.mtime)
   const rewritten = measureFence(path, at)
