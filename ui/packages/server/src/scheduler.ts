@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { isValidAwaitingTimer, type QuotaSnapshot } from "@fray-ui/shared"
+import { isValidAwaitingTimer, wakeDeliveryToken, type QuotaSnapshot } from "@fray-ui/shared"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { FenceView } from "./tailer.ts"
@@ -181,10 +181,6 @@ function fenceIdentity(hints: FenceView["hints"], fenceAt?: string): string {
 
 function wakeDeliveryId(slug: string, sessionId: string, fenceId: string): string {
   return createHash("sha256").update(slug).update("\0").update(sessionId).update("\0").update(fenceId).digest("hex")
-}
-
-export function wakeDeliveryToken(id: string): string {
-  return `<!-- fray-wake:${id} -->`
 }
 
 // ---- SOURCE 2: SUBSCRIPTION-LIMIT AUTO-RESUME -----------------------------------------------------

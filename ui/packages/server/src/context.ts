@@ -1,6 +1,6 @@
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
-import { PermissionMode, type Settings } from "@fray-ui/shared"
+import { PermissionMode, wakeDeliveryToken, type Settings } from "@fray-ui/shared"
 import { Bus, Emitter } from "./bus.ts"
 import { resolveProject, type Project } from "./project.ts"
 import { createStorage, type Storage } from "./storage.ts"
@@ -10,7 +10,7 @@ import { refreshClaudeQuotaInBackground } from "./backend/claude-quota.ts"
 import { createBoard, type BoardManager } from "./board.ts"
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
 import { createDispatcher, type Dispatcher } from "./dispatch.ts"
-import { createScheduler, wakeDeliveryToken, type Scheduler } from "./scheduler.ts"
+import { createScheduler, type Scheduler } from "./scheduler.ts"
 import {
   reattachThreadWithPermission,
   reattachThreadWithProfile,

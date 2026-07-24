@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir, homedir } from "node:os"
 import { join } from "node:path"
-import { GITHUB_DISPATCH_UI_BOUNDARY } from "@fray-ui/shared"
+import { GITHUB_DISPATCH_UI_BOUNDARY, wakeDeliveryToken } from "@fray-ui/shared"
 import {
   githubDispatchDisplayText,
   pageProjectedTranscript,
@@ -51,6 +51,57 @@ test("Claude GitHub dispatch retains full first-user text but exposes only the c
   )
   assert.match(message.text, /full worker template must remain available/)
   assert.doesNotMatch(message.displayText!, /worker template|github-dispatch-ui-boundary/)
+})
+
+// The scheduler's wake token rides a LATER user turn (a wake is by definition a resume), which is the
+// case the old first-message-only display gate never reached — so it reached the pre-wrap user bubble
+// and the human read a literal `<!-- fray-wake:… -->`. The steer above it must survive; the stored text
+// must keep the token, because the outbox acks a delivery by finding it in the worker's own record.
+const wakeSteer = "⏳ The session usage limit that interrupted you has reset. Continue exactly where you left off."
+const wakeId = "e9590807642cfee10b251fa5c230e3ba27f02f978475d883411a5c35e81d68c0"
+
+test("Claude wake delivery hides the wake token in the bubble while the stored text keeps it", () => {
+  const delivered = `${wakeSteer}\n\n${wakeDeliveryToken(wakeId)}`
+  const raw = [
+    JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:00.000Z", message: { content: "orientation\n\nTASK:\nthe original task" } }),
+    JSON.stringify({ type: "assistant", timestamp: "2026-07-01T00:00:05.000Z", message: { id: "m1", content: [{ type: "text", text: "on it" }] } }),
+    JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:10.000Z", message: { content: delivered } }),
+  ].join("\n")
+  const msgs = parseTranscript(raw)
+  const wake = msgs[msgs.length - 1]
+  assert.equal(wake.role, "user")
+  assert.equal(wake.text, delivered) // the ack (scheduler: lastUserText.includes(token)) depends on this
+  assert.equal(wake.displayText, wakeSteer)
+})
+
+test("a wake token riding a QUEUED follow-up is hidden too, and the pending bubble still resolves", () => {
+  const delivered = `${wakeSteer}\n\n${wakeDeliveryToken(wakeId)}`
+  const raw = [
+    JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:00.000Z", message: { content: "orientation\n\nTASK:\nthe original task" } }),
+    JSON.stringify({ type: "queue-operation", timestamp: "2026-07-01T00:00:05.000Z", operation: "enqueue", content: delivered }),
+    JSON.stringify({
+      type: "attachment", timestamp: "2026-07-01T00:00:09.000Z",
+      attachment: { type: "queued_command", prompt: delivered, origin: { kind: "human" }, commandMode: "prompt" },
+    }),
+  ].join("\n")
+  const msgs = parseTranscript(raw)
+  const queued = msgs.filter((m) => m.role === "user")
+  assert.equal(queued.length, 2, "the enqueue bubble resolves in place rather than emitting a second copy")
+  assert.equal(queued[1].queued, false)
+  assert.equal(queued[1].text, delivered)
+  assert.equal(queued[1].displayText, wakeSteer)
+})
+
+test("a wake token is projected out only from the delivery tail, never from quoted prose", () => {
+  const quoting = `Why is ${wakeDeliveryToken(wakeId)} showing up in the bubble?`
+  const raw = [
+    JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:00.000Z", message: { content: "orientation\n\nTASK:\nthe original task" } }),
+    JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:10.000Z", message: { content: quoting } }),
+  ].join("\n")
+  const msgs = parseTranscript(raw)
+  const asked = msgs[msgs.length - 1]
+  assert.equal(asked.text, quoting)
+  assert.equal(asked.displayText, undefined, "a mid-sentence token is the human's own words — leave the bubble alone")
 })
 
 test("GitHub display boundary is inert without the complete generated envelope", () => {

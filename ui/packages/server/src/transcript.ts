@@ -7,6 +7,7 @@ import {
   GITHUB_DISPATCH_UI_BOUNDARY,
   ATTACHMENT_IMAGE_EXTENSIONS,
   attachmentExtension,
+  stripWakeDeliveryToken,
   type TranscriptMessage,
   type TranscriptPage,
   type TranscriptToolCall,
@@ -60,6 +61,19 @@ export function githubDispatchDisplayText(text: string): string | undefined {
   const head = text.slice(0, cut)
   const match = head.match(/^THREAD: [a-z0-9][a-z0-9-]*\n\n(Investigate this issue and make recommendations\n\n(?:Issue|PR) #\d+: [^\n]+\nRepository: [^\n]+\nURL: \S+)$/)
   return match?.[1]
+}
+
+// The display projection for ONE user turn — undefined when the stored text is already what to show.
+// Two independent reasons a user record can carry machine-facing tail, composed in order:
+//   • a generated GitHub dispatch (FIRST turn only — the envelope is what opens the thread);
+//   • the scheduler's wake-delivery token, which rides ANY turn a wake lands on. That's the case the
+//     old `out.length === 0` gate missed entirely: a wake is by definition a later turn, so its token
+//     reached the pre-wrap user bubble and rendered as literal `<!-- fray-wake:… -->`.
+// `text` is never narrowed — the outbox acks a delivery by finding that token in the worker's own
+// record, and persistence/search keep the full machine-facing prompt.
+function userDisplayText(text: string, first: boolean): string | undefined {
+  const projected = stripWakeDeliveryToken((first && githubDispatchDisplayText(text)) || text)
+  return projected === text ? undefined : projected
 }
 
 // Append a text block to a message's ordered parts, coalescing into a trailing text part (so several
@@ -194,7 +208,10 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         // Undelivered → a grayed "queued" user bubble (queued:true reuses the client's optimistic-send
         // styling). Do NOT reset lastAssistantId: this bubble is transient (it may be spliced out on
         // delivery), and the assistant-merge tail-role check already blocks merging across a live bubble.
-        const m: TranscriptMessage = { sourceId, role: "user", text: content, tools: [], parts: [], at: thisTs, queued: true }
+        // `text` stays the RAW queued content — it is the key `queuedPending` matches the delivery
+        // attachment against — so a wake token riding a queued follow-up is dropped only for display.
+        const queuedDisplay = userDisplayText(content, out.length === 0)
+        const m: TranscriptMessage = { sourceId, role: "user", text: content, ...(queuedDisplay ? { displayText: queuedDisplay } : {}), tools: [], parts: [], at: thisTs, queued: true }
         out.push(m)
         queuedPending.set(content, m)
       } else if ((op === "remove" || op === "dequeue" || op === "popAll") && content.trim()) {
@@ -232,7 +249,8 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         } else {
           // Attachment-only: an older session with no queue-operations, or an enqueue that scrolled out of
           // the render window. Emit the delivered message fresh at the attachment's position.
-          out.push({ sourceId, role: "user", text: prompt, tools: [], parts: [], at: thisTs })
+          const deliveredDisplay = userDisplayText(prompt, out.length === 0)
+          out.push({ sourceId, role: "user", text: prompt, ...(deliveredDisplay ? { displayText: deliveredDisplay } : {}), tools: [], parts: [], at: thisTs })
         }
         deliveredDedupe = prompt
         if (thisTs) prevTs = thisTs // a delivered human turn is substantive — it bounds the next thinking window
@@ -294,7 +312,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
           const cut = text.indexOf("\nTASK:\n")
           if (cut !== -1) text = text.slice(cut + "\nTASK:\n".length).trim()
         }
-        const displayText = out.length === 0 ? githubDispatchDisplayText(text) : undefined
+        const displayText = userDisplayText(text, out.length === 0)
         out.push({ sourceId, role: "user", text, ...(displayText ? { displayText } : {}), tools: [], parts: [], at: rec.timestamp })
         lastAssistantId = null
       }
@@ -1302,7 +1320,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
             if (cut !== -1) text = text.slice(cut + "\nTASK:\n".length).trim()
           }
           if (text) {
-            const displayText = out.length === 0 ? githubDispatchDisplayText(text) : undefined
+            const displayText = userDisplayText(text, out.length === 0)
             out.push({ sourceId, role: "user", text, ...(displayText ? { displayText } : {}), tools: [], parts: [], at: ev.at })
           }
           break

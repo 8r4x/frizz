@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
-import { GITHUB_DISPATCH_UI_BOUNDARY } from "@fray-ui/shared"
+import { GITHUB_DISPATCH_UI_BOUNDARY, wakeDeliveryToken } from "@fray-ui/shared"
 import { pageProjectedTranscript, parseCodexTranscript, projectCodexTranscript } from "./transcript.ts"
 import { CODEX_FIRST_FINAL_TITLE_TRANSPORT, CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT } from "./backend/codex.ts"
 
@@ -667,6 +667,22 @@ Adversarially audit the full diff, tests, and CI. This machine tail stays in the
   )
   assert.match(message.text, /machine tail stays in the transcript/)
   assert.doesNotMatch(message.displayText!, /machine tail|github-dispatch-ui-boundary/)
+})
+
+test("codex wake delivery hides the wake token in the bubble while the stored text keeps it", () => {
+  // Codex takes the SAME deliveryMessage over the app-server bridge, so it leaks the same way.
+  const steer = "⏳ The session usage limit that interrupted you has reset. Continue exactly where you left off."
+  const delivered = `${steer}\n\n${wakeDeliveryToken("e9590807642cfee10b251fa5c230e3ba27f02f978475d883411a5c35e81d68c0")}`
+  const raw = rollout([
+    { type: "event_msg", payload: { type: "user_message", message: "contract\nTASK:\nthe task\n\n<!-- fray-session:s1 -->" } },
+    { type: "event_msg", payload: { type: "agent_message", phase: "final_answer", message: "ok" } },
+    { type: "event_msg", payload: { type: "user_message", message: delivered } },
+  ])
+  const msgs = parseCodexTranscript(raw)
+  const wake = msgs[msgs.length - 1]
+  assert.equal(wake.role, "user")
+  assert.equal(wake.text, delivered)
+  assert.equal(wake.displayText, steer)
 })
 
 test("codex follow-up (resume) user message renders in full (no first-message strip, no sentinel)", () => {
