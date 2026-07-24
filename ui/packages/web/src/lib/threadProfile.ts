@@ -66,3 +66,12 @@ export function selectThreadProfileTarget(
     : next.defaultEffort
   return effort && next.efforts.includes(effort) ? { model: next.model, effort } : null
 }
+
+export function threadProfileEffectMessage(
+  effect: "applied" | "queued" | "next-turn" | "next-resume",
+): string {
+  if (effect === "applied") return "Model and effort applied"
+  if (effect === "queued") return "Model and effort queued — applies after the current work finishes"
+  if (effect === "next-turn") return "Model and effort applied — takes effect on the next turn"
+  return "Model and effort saved for the next resume"
+}

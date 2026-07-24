@@ -518,9 +518,12 @@ function sessionThreadView(
     permissionMode,
     permissionPending,
     permissionChangePending: row.permission_pending !== null && row.permission_pending !== undefined,
-    profilePendingModel: row.profile_pending_model?.trim() || undefined,
-    profilePendingEffort: row.profile_pending_effort?.trim() || undefined,
+    profilePendingModel: row.profile_queued_model?.trim() || row.profile_pending_model?.trim() || undefined,
+    profilePendingEffort: row.profile_queued_effort?.trim() || row.profile_pending_effort?.trim() || undefined,
+    profileChangeQueued: row.runtime_control === "profile-queued",
     profileChangePending:
+      row.profile_queued_model !== null && row.profile_queued_model !== undefined ||
+      row.profile_queued_effort !== null && row.profile_queued_effort !== undefined ||
       row.profile_pending_model !== null && row.profile_pending_model !== undefined ||
       row.profile_pending_effort !== null && row.profile_pending_effort !== undefined,
     runtimeControlPending: row.runtime_control !== null && row.runtime_control !== undefined,

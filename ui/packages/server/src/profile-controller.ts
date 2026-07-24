@@ -3,6 +3,7 @@ import type {
   ProfileChangeExpectation,
   ProfileHandoffBinding,
   ProfileHandoffJournal,
+  QueuedProfileExpectation,
   SessionRow,
   Storage,
 } from "./storage.ts"
@@ -33,7 +34,7 @@ export type ProfileRecoveryResult =
   | { outcome: "blocked"; error: string }
 
 export interface ProfileController {
-  request(slug: string, profile: { model: string; effort: string }): Promise<{ effect: "applied" | "next-resume" }>
+  request(slug: string, profile: { model: string; effort: string }): Promise<{ effect: "applied" | "queued" | "next-resume" }>
   tick(): void
   start(): void
   stop(): void
@@ -154,14 +155,116 @@ export function createProfileController(deps: ProfileControllerDeps): ProfileCon
     deps.board.refresh()
   }
 
+  function queuedExpectation(row: SessionRow): QueuedProfileExpectation | null {
+    const model = row.profile_queued_model?.trim()
+    const effort = row.profile_queued_effort?.trim()
+    if (!model || !effort || row.runtime_control !== "profile-queued") return null
+    return {
+      sessionId: row.session_id,
+      nativeSessionId: row.agent_session_id ?? null,
+      generation: row.runtime_generation ?? 0,
+      controlRevision: row.runtime_control_revision ?? 0,
+      model,
+      effort,
+    }
+  }
+
+  function rollbackProfile(row: SessionRow): {
+    persisted: { model: string; effort: string }
+    current: { model: string; effort: string }
+  } {
+    const persisted = { model: row.model?.trim() ?? "", effort: row.effort?.trim() ?? "" }
+    const observed = resolveSessionProfile(row, deps.tailer.get(row.slug))
+    return {
+      persisted,
+      current: resolveRollbackProfile(row.backend, observed.model ?? "", observed.effort ?? ""),
+    }
+  }
+
+  async function performHandoff(
+    row: SessionRow,
+    current: { model: string; effort: string },
+    requested: { model: string; effort: string },
+    queued?: QueuedProfileExpectation,
+  ): Promise<{ effect: "applied" }> {
+    if (!deps.reattach) throw new Error("Live profile changes are unavailable in this Fray server; restart Fray and retry")
+    const priorBinding = exactCurrentBinding(row)
+    if (!priorBinding) throw new Error("The current worker's exact pane identity could not be journaled; nothing was changed")
+
+    let journal: ProfileHandoffJournal = {
+      version: 1,
+      phase: "armed",
+      nativeSessionId: row.agent_session_id ?? row.session_id,
+      previous: { ...current, binding: priorBinding },
+      requested: { ...requested },
+    }
+    const armed = queued
+      ? deps.storage.promoteQueuedProfileChange(row.slug, queued, journal)
+      : deps.storage.armProfileChange(row.slug, {
+          sessionId: row.session_id,
+          nativeSessionId: row.agent_session_id ?? null,
+          generation: row.runtime_generation ?? 0,
+        }, requested, journal)
+    if (!armed) throw new Error("This thread changed or another runtime control started; its profile was not changed")
+    let expected = expectation(row, requested, armed)
+    deps.board.refresh()
+    try {
+      const result = await deps.reattach(
+        row.slug,
+        current,
+        requested,
+        (generation) => { expected = { ...expected, generation } },
+        (checkpoint) => {
+          const binding = checkpoint.identity ? {
+            kind: checkpoint.adoptionAttemptToken ? "adopted" as const : "standalone" as const,
+            ...checkpoint.identity,
+            ...(checkpoint.adoptionAttemptToken ? { adoptionAttemptToken: checkpoint.adoptionAttemptToken } : {}),
+            handoffToken: checkpoint.handoffToken,
+          } : undefined
+          const leg = { generation: checkpoint.generation, handoffToken: checkpoint.handoffToken, ...(binding ? { binding } : {}) }
+          journal = checkpoint.phase.startsWith("target")
+            ? { ...journal, phase: checkpoint.phase, target: leg }
+            : { ...journal, phase: checkpoint.phase, rollback: leg }
+          const serialized = deps.storage.checkpointProfileChange(row.slug, expected, journal)
+          if (!serialized) throw new Error("Profile handoff journal ownership changed before its runtime checkpoint")
+          expected = { ...expected, generation: checkpoint.generation, profileHandoff: serialized }
+        },
+      )
+      const currentRow = deps.storage.getSession(row.slug)
+      if (!currentRow) throw new Error("Profile change canceled because the thread was deleted")
+      expected = expectedFromRow(currentRow) ?? expected
+      if (result.outcome === "rollback-ready") {
+        const message = result.error ?? "Profile change failed; the previous profile was restored"
+        if (!deps.storage.restoreProfileChange(row.slug, expected, journal.previous, message.slice(0, 240))) {
+          throw new Error("The previous profile returned, but its durable recovery commit lost ownership")
+        }
+        deps.board.refresh()
+        throw new PersistedProfileControlError(message)
+      }
+      if (!deps.storage.commitProfileChange(row.slug, expected)) {
+        throw new Error("Profile change canceled because this process generation no longer owns the thread")
+      }
+      deps.board.refresh()
+      return { effect: "applied" }
+    } catch (error) {
+      if (error instanceof PersistedProfileControlError) throw error
+      const message = error instanceof Error ? error.message : String(error)
+      const currentRow = deps.storage.getSession(row.slug)
+      if (currentRow?.runtime_control === "profile") block(currentRow, `Profile handoff is locked for exact restart recovery: ${message}`)
+      throw new Error(message)
+    }
+  }
+
   async function request(
     slug: string,
     requested: { model: string; effort: string },
-  ): Promise<{ effect: "applied" | "next-resume" }> {
+  ): Promise<{ effect: "applied" | "queued" | "next-resume" }> {
     let row = deps.storage.getSession(slug)
     if (!row) throw new Error(`no session registered for ${slug}`)
     validateThreadProfile(row.backend, requested.model, requested.effort)
     if (row.runtime_control !== null && row.runtime_control !== undefined ||
+        row.profile_queued_model !== null && row.profile_queued_model !== undefined ||
+        row.profile_queued_effort !== null && row.profile_queued_effort !== undefined ||
         row.profile_pending_model !== null && row.profile_pending_model !== undefined ||
         row.profile_pending_effort !== null && row.profile_pending_effort !== undefined) {
       throw new Error("Another runtime profile/control change is already in progress for this thread")
@@ -194,9 +297,7 @@ export function createProfileController(deps: ProfileControllerDeps): ProfileCon
     // thread whose effort was never recorded must still perform a real handoff when the request names
     // that model's default effort, rather than short-circuit as "applied" while the live runtime keeps
     // an unknown effort.
-    const persisted = { model: row.model?.trim() ?? "", effort: row.effort?.trim() ?? "" }
-    const observed = resolveSessionProfile(row, deps.tailer.get(slug))
-    const current = resolveRollbackProfile(row.backend, observed.model ?? "", observed.effort ?? "")
+    const { persisted, current } = rollbackProfile(row)
     if (persisted.model === requested.model && persisted.effort === requested.effort) {
       deps.storage.setControlErrorIfCurrent(slug, row.session_id, row.runtime_generation ?? 0, null)
       deps.board.refresh()
@@ -213,78 +314,68 @@ export function createProfileController(deps: ProfileControllerDeps): ProfileCon
     if (tele.permPrompt || tele.pendingAsk || tele.nativeInputRequired) {
       throw new Error("Resolve the current terminal approval or question before changing model or effort")
     }
-    if (tele.turn !== "idle") throw new Error("Model and effort changes require an idle thread; wait for the current turn to finish")
     const unresolved = [...tele.subAgents, ...tele.bgShells].filter((op) => op.state === "running" || op.state === "stale").length
-    if (unresolved > 0) throw new Error(`Model and effort changes require no unresolved background work; wait for ${unresolved} operation${unresolved === 1 ? "" : "s"}`)
+    if (tele.turn !== "idle" || unresolved > 0) {
+      const queued = deps.storage.queueProfileChange(slug, {
+        sessionId: row.session_id,
+        nativeSessionId: row.agent_session_id ?? null,
+        generation: row.runtime_generation ?? 0,
+      }, requested)
+      if (!queued) throw new Error("This thread changed or another runtime control started; its profile was not queued")
+      deps.board.refresh()
+      return { effect: "queued" }
+    }
     const composer = inspectClaudeComposer(captureOwned(row) ?? "")
     if (composer.kind === "typed") throw new Error("Profile change blocked: submit or clear the existing Claude terminal draft")
     if (composer.kind !== "empty") throw new Error("Profile change blocked by the current terminal screen; return it to the idle prompt")
-    if (!deps.reattach) throw new Error("Live profile changes are unavailable in this Fray server; restart Fray and retry")
-    const priorBinding = exactCurrentBinding(row)
-    if (!priorBinding) throw new Error("The current worker's exact pane identity could not be journaled; nothing was changed")
-
-    let journal: ProfileHandoffJournal = {
-      version: 1,
-      phase: "armed",
-      nativeSessionId: row.agent_session_id ?? row.session_id,
-      previous: { ...current, binding: priorBinding },
-      requested: { ...requested },
-    }
-    const armed = deps.storage.armProfileChange(slug, {
-      sessionId: row.session_id,
-      nativeSessionId: row.agent_session_id ?? null,
-      generation: row.runtime_generation ?? 0,
-    }, requested, journal)
-    if (!armed) throw new Error("This thread changed or another runtime control started; its profile was not changed")
     active.add(slug)
-    let expected = expectation(row, requested, armed)
-    deps.board.refresh()
     try {
-      const result = await deps.reattach(
-        slug,
-        current,
-        requested,
-        (generation) => { expected = { ...expected, generation } },
-        (checkpoint) => {
-          const binding = checkpoint.identity ? {
-            kind: checkpoint.adoptionAttemptToken ? "adopted" as const : "standalone" as const,
-            ...checkpoint.identity,
-            ...(checkpoint.adoptionAttemptToken ? { adoptionAttemptToken: checkpoint.adoptionAttemptToken } : {}),
-            handoffToken: checkpoint.handoffToken,
-          } : undefined
-          const leg = { generation: checkpoint.generation, handoffToken: checkpoint.handoffToken, ...(binding ? { binding } : {}) }
-          journal = checkpoint.phase.startsWith("target")
-            ? { ...journal, phase: checkpoint.phase, target: leg }
-            : { ...journal, phase: checkpoint.phase, rollback: leg }
-          const serialized = deps.storage.checkpointProfileChange(slug, expected, journal)
-          if (!serialized) throw new Error("Profile handoff journal ownership changed before its runtime checkpoint")
-          expected = { ...expected, generation: checkpoint.generation, profileHandoff: serialized }
-        },
-      )
-      const currentRow = deps.storage.getSession(slug)
-      if (!currentRow) throw new Error("Profile change canceled because the thread was deleted")
-      expected = expectedFromRow(currentRow) ?? expected
-      if (result.outcome === "rollback-ready") {
-        const message = result.error ?? "Profile change failed; the previous profile was restored"
-        if (!deps.storage.restoreProfileChange(slug, expected, journal.previous, message.slice(0, 240))) {
-          throw new Error("The previous profile returned, but its durable recovery commit lost ownership")
-        }
-        deps.board.refresh()
-        throw new PersistedProfileControlError(message)
-      }
-      if (!deps.storage.commitProfileChange(slug, expected)) {
-        throw new Error("Profile change canceled because this process generation no longer owns the thread")
-      }
-      deps.board.refresh()
-      return { effect: "applied" }
-    } catch (error) {
-      if (error instanceof PersistedProfileControlError) throw error
-      const message = error instanceof Error ? error.message : String(error)
-      const currentRow = deps.storage.getSession(slug)
-      if (currentRow?.runtime_control === "profile") block(currentRow, `Profile handoff is locked for exact restart recovery: ${message}`)
-      throw new Error(message)
+      return await performHandoff(row, current, requested)
     } finally {
       active.delete(slug)
+    }
+  }
+
+  async function drainQueued(initial: SessionRow): Promise<void> {
+    active.add(initial.slug)
+    try {
+      let row = deps.storage.getSession(initial.slug)
+      let expected = row ? queuedExpectation(row) : null
+      if (!row || !expected || row.backend === "codex") return
+      const runtime = runtimeState(row)
+      if (runtime === "absent") {
+        if (deps.storage.commitQueuedProfileTarget(row.slug, expected)) deps.board.refresh()
+        return
+      }
+      if (runtime !== "live") return
+      deps.tailer.tick()
+      row = deps.storage.getSession(row.slug)
+      expected = row ? queuedExpectation(row) : null
+      if (!row || !expected || runtimeState(row) !== "live") return
+      const tele = deps.tailer.get(row.slug)
+      if (!tele || tele.permPrompt || tele.pendingAsk || tele.nativeInputRequired || tele.turn !== "idle") return
+      const unresolved = [...tele.subAgents, ...tele.bgShells].some((op) => op.state === "running" || op.state === "stale")
+      if (unresolved) return
+      if (inspectClaudeComposer(captureOwned(row) ?? "").kind !== "empty") return
+      const { persisted, current } = rollbackProfile(row)
+      if (persisted.model === expected.model && persisted.effort === expected.effort) {
+        if (deps.storage.commitQueuedProfileTarget(row.slug, expected)) deps.board.refresh()
+        return
+      }
+      await performHandoff(row, current, { model: expected.model, effort: expected.effort }, expected)
+    } catch (error) {
+      const current = deps.storage.getSession(initial.slug)
+      if (current?.runtime_control === "profile-queued") {
+        deps.storage.setControlErrorIfCurrent(
+          current.slug,
+          current.session_id,
+          current.runtime_generation ?? 0,
+          `Queued profile change is waiting: ${error instanceof Error ? error.message : String(error)}`.slice(0, 240),
+        )
+        deps.board.refresh()
+      }
+    } finally {
+      active.delete(initial.slug)
     }
   }
 
@@ -345,7 +436,12 @@ export function createProfileController(deps: ProfileControllerDeps): ProfileCon
 
   function tick(): void {
     for (const row of deps.storage.allSessions()) {
-      if (row.runtime_control !== "profile" || active.has(row.slug)) continue
+      if (active.has(row.slug)) continue
+      if (row.runtime_control === "profile-queued") {
+        void drainQueued(row)
+        continue
+      }
+      if (row.runtime_control !== "profile") continue
       // Recovery reattaches a tmux pane and reads it with the Claude composer parser, so it can only
       // ever succeed for Claude. Codex takes model/effort per turn through the app-server bridge and
       // never arms this handoff; boot already abandons any pre-cutover row that still holds one. Skip

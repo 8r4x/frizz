@@ -622,11 +622,18 @@ test("enqueue + delivering attachment → ONE delivered user message (not two), 
 
 test("real lifecycle enqueue → remove → attachment → ONE delivered user message (session 2cfe3c81 shape)", () => {
   const text = "Stop. Ask me the questions again."
+  const intermediate = parseTranscript([enqueue(text), removeOp("remove", text)].join("\n"))
+  assert.equal(intermediate.length, 1)
+  assert.equal(intermediate[0].text, text)
+  assert.equal(intermediate[0].queued, true)
+  const queuedSourceId = intermediate[0].sourceId
+
   const msgs = parseTranscript([enqueue(text), removeOp("remove", text), deliver(text)].join("\n"))
   const users = msgs.filter((m) => m.role === "user")
   assert.equal(users.length, 1)
   assert.equal(users[0].text, text)
   assert.ok(!users[0].queued)
+  assert.equal(users[0].sourceId, queuedSourceId)
 })
 
 test("attachment-only (older session, no enqueue seen) → a delivered user message", () => {
