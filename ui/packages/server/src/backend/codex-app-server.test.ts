@@ -35,6 +35,9 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
   readonly clientResponses: Message[] = []
   private buffer = ""
   private activeTurn: { threadId: string; turnId: string } | null = null
+  private model = "gpt-5"
+  private effort: string | null = "high"
+  private sandboxPolicy: Record<string, unknown> = { type: "workspaceWrite", networkAccess: true }
   // When set, a turn/steer completes the turn (turn/completed) then rejects — modelling the turn
   // ending in the bridge's read→steer window, which must trigger followUp's start-fallback.
   rejectSteerAsEnded = false
@@ -175,6 +178,28 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
       this.activeTurn = { threadId: params.threadId, turnId }
       this.notify("turn/started", { threadId: params.threadId, turn: { id: turnId } })
       this.send({ id, result: { turn: { id: turnId } } })
+      return
+    }
+    if (message.method === "thread/settings/update") {
+      const params = message.params as {
+        threadId: string
+        model?: string | null
+        effort?: string | null
+        sandboxPolicy?: Record<string, unknown> | null
+      }
+      if (typeof params.model === "string") this.model = params.model
+      if ("effort" in params) this.effort = params.effort ?? null
+      if (params.sandboxPolicy) this.sandboxPolicy = params.sandboxPolicy
+      this.send({ id, result: {} })
+      this.notify("thread/settings/updated", {
+        threadId: params.threadId,
+        threadSettings: {
+          sandboxPolicy: this.sandboxPolicy,
+          approvalPolicy: "never",
+          model: this.model,
+          effort: this.effort,
+        },
+      })
       return
     }
     if (message.method === "turn/steer") {
@@ -349,6 +374,52 @@ test("bridge is the sole codex transport (always enabled) and negotiates exact i
   })
   assert.ok(h.processes[0]!.inbound.some((message) => message.method === "initialized"))
   assert.equal(h.processes[0]!.inbound.some((message) => "jsonrpc" in message), false)
+  h.close()
+})
+
+test("setProfile uses native thread settings and reports whether an existing turn keeps its old profile", async () => {
+  const h = harness()
+  const binding = await h.bridge.startDisposableSession({
+    threadSlug: "profile-thread",
+    sessionId: "profile-session",
+    cwd: h.dir,
+  })
+  const idle = await h.bridge.setProfile({
+    threadSlug: binding.threadSlug,
+    sessionId: binding.sessionId,
+    model: "gpt-5.6-terra",
+    effort: "high",
+  })
+  assert.deepEqual(idle, {
+    applied: true,
+    model: "gpt-5.6-terra",
+    effort: "high",
+    confirmedBy: "notification",
+    turnInFlight: false,
+  })
+
+  const process = h.processes[0]!
+  const firstUpdate = process.clientRequests.find((message) => message.method === "thread/settings/update")!
+  assert.deepEqual(firstUpdate.params, {
+    threadId: binding.codexThreadId,
+    model: "gpt-5.6-terra",
+    effort: "high",
+  })
+
+  await h.bridge.startTurn({
+    threadSlug: binding.threadSlug,
+    sessionId: binding.sessionId,
+    text: "Keep the current turn on its starting profile",
+  })
+  const duringTurn = await h.bridge.setProfile({
+    threadSlug: binding.threadSlug,
+    sessionId: binding.sessionId,
+    model: "gpt-5.6-luna",
+    effort: "medium",
+  })
+  assert.equal(duringTurn.applied, true)
+  assert.equal(duringTurn.confirmedBy, "notification")
+  assert.equal(duringTurn.turnInFlight, true)
   h.close()
 })
 
@@ -1883,6 +1954,7 @@ function scriptedHostHarness(script: () => { generation: string; reattached: boo
     dir,
     processes,
     diagnostics,
+    interactions,
     newBridge,
     /** What the NEXT app-server process reports for `thread.status` on `thread/resume`. */
     resumeThreadStatus(status: { type: string; activeFlags?: string[] } | undefined) {
@@ -2009,5 +2081,78 @@ test("a reattach that lost events is not a rejoin: the thread resumes instead of
     h.diagnostics.some((event) => (event as Message).event === "daemon-events-dropped" && (event as Message).dropped === 31),
     `the loss is reported, not swallowed — saw ${JSON.stringify(h.diagnostics)}`,
   )
+  h.close()
+})
+
+// ---- non-interactive by construction ------------------------------------------------------------
+// A fray worker runs with nobody watching its pane, so an approval request is not a safety gate — it is
+// a thread that stops working until a human opens the dashboard hours later. These pin the two wire
+// moments where that guarantee is made, because the live incident came from BOTH being wrong: the
+// thread was started `on-request`, and its cold resume sent no policy at all.
+test("thread/start is non-interactive: approvals never, so a worker cannot stall on a modal", async () => {
+  const h = harness()
+  await h.bridge.startDisposableSession({
+    threadSlug: "never-thread", sessionId: "never-session", cwd: h.dir, sandbox: "danger-full-access",
+  })
+  const start = h.processes[0]!.clientRequests.find((message) => message.method === "thread/start")!
+  assert.equal((start.params as Message).approvalPolicy, "never")
+  assert.deepEqual((start.params as Message).sandbox, "danger-full-access")
+  h.close()
+})
+
+// The exact 2026-07-24 incident. `intended_sandbox` arrived as an additive ALTER, so every thread
+// dispatched before it exists with that column NULL. The override used to return `{}` for those, which
+// hands the decision to config.toml — whose defaults are `workspace-write` + `on-request`. A thread
+// dispatched at full access therefore came back sandboxed AND interactive after its app-server died,
+// then stalled on an approval per patch. A resume must always state the policy.
+test("a cold resume with NO recorded intent still states full access + approvals never", async () => {
+  const h = harness()
+  const binding = await h.bridge.startDisposableSession({
+    threadSlug: "legacy-thread", sessionId: "legacy-session", cwd: h.dir, ephemeral: false,
+    sandbox: "danger-full-access",
+  })
+  // Exactly what a pre-migration row looks like: no intent recorded anywhere.
+  h.db.prepare("UPDATE codex_app_server_session SET intended_sandbox = NULL, sandbox = NULL WHERE fray_session_id = ?")
+    .run(binding.sessionId)
+  h.processes[0]!.disconnect()
+  h.bridge.close()
+
+  const restarted = h.newBridge()
+  await restarted.resumeOwnedSession(binding.threadSlug, binding.sessionId)
+  const resume = h.processes[1]!.clientRequests.find((message) => message.method === "thread/resume")!
+  assert.equal((resume.params as Message).sandbox, "danger-full-access", "a worker with no stated intent is a full-access worker")
+  assert.equal((resume.params as Message).approvalPolicy, "never", "config.toml must never get to decide this")
+  h.close()
+})
+
+// The card that would not go away. A rejoin of the SAME app-server keeps the turn (correctly — it is
+// still running in there), but the approval it was blocked on was issued on the client connection we
+// just lost: its rpc id means nothing on the new socket, so it can never be answered. Nothing on this
+// path retired those cards, so they sat in the queue rendering "Runtime unavailable" forever.
+test("a same-process rejoin retires the approval orphaned on the connection it lost", async () => {
+  let plan = { generation: "gen-A", reattached: false, droppedWhileDetached: 0 }
+  const h = scriptedHostHarness(() => plan)
+  const bridge = h.newBridge()
+  const binding = await bridge.startDisposableSession({
+    threadSlug: "orphan", sessionId: "orphan-session", cwd: h.dir, ephemeral: false,
+  })
+  const { turnId } = await bridge.startTurn({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "Work" })
+  await waitFor(() => bridge.binding(binding.threadSlug, binding.sessionId)?.currentTurnId === turnId, "turn active")
+  const scope = { projectId: "project-1", threadSlug: binding.threadSlug, sessionId: binding.sessionId }
+  h.processes[0]!.request("orphan-approval", "item/commandExecution/requestApproval", commandParams(binding.codexThreadId, turnId))
+  await waitFor(() => h.interactions.listPending(scope).length === 1, "approval card raised")
+  const orphaned = h.interactions.listPending(scope)[0]!
+  bridge.close() // fray restarts; the daemon and its blocked turn keep going
+
+  plan = { generation: "gen-A", reattached: true, droppedWhileDetached: 0 }
+  const restarted = h.newBridge()
+  await restarted.resumeOwnedSession(binding.threadSlug, binding.sessionId)
+  assert.equal(
+    restarted.binding(binding.threadSlug, binding.sessionId)?.currentTurnId,
+    turnId,
+    "the live turn is still ours — retiring its card must not disturb it",
+  )
+  assert.equal(h.interactions.get(scope, orphaned.id)?.lifecycle, "cancelled")
+  assert.equal(h.interactions.listPending(scope).length, 0, "no unanswerable card is left in the queue")
   h.close()
 })

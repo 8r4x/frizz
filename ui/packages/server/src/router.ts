@@ -59,6 +59,7 @@ import { runThreadUpdate } from "./fray.ts"
 import { repairThreadFile } from "./repair.ts"
 import { resumeThread } from "./resume.ts"
 import { appendDelivery, hasDelivery } from "./delivery-ledger.ts"
+import { flushStuckComposer } from "./delivery-confirm.ts"
 import {
   readEarlierThreadTranscriptPage,
   readLatestThreadTranscriptPage,
@@ -723,7 +724,7 @@ export function createRouter(ctx: AppContext) {
           return
         }
         // Idempotency for a REPLAYED deliveryId: if this exact send is already in the ledger, it
-        // provably reached the worker — answer success and inject nothing.
+        // provably reached the worker — answer success and inject nothing (and don't flush/re-inject).
         //
         // What actually guarantees the retry loop cannot double-send is the CLASSIFICATION, not this
         // check: the client only replays an error typed RetryableDeliveryError, and every such throw is
@@ -737,6 +738,11 @@ export function createRouter(ctx: AppContext) {
             hasDelivery(ctx.storage, input.slug, input.deliveryId)) {
           return
         }
+        // Submit a PREVIOUS follow-up still stranded in the composer before pasting this one on top of
+        // it. Claude Code's TUI can swallow the Enter that follows a paste; when it does, the next
+        // paste lands directly after the stranded text and ONE message carrying both is what the agent
+        // reads. Free on the normal path — a row with no outstanding ledger item captures nothing.
+        await flushStuckComposer({ storage: ctx.storage, board: ctx.board }, input.slug)
         resumeThread({ project: ctx.project, storage: ctx.storage, board: ctx.board, getSettings: ctx.getSettings, backendFor: ctx.backendFor }, input.slug, input.message)
         // Injection accepted → open a delivery-ledger entry (Claude rows only; Codex has its own durable
         // queue above). From here the send is a tracked state machine: the tailer correlates the JSONL
@@ -816,8 +822,27 @@ export function createRouter(ctx: AppContext) {
         // controller is Claude-only now, so a legacy (unmigrated) codex row must not reach its reattach.
         const profRow = ctx.storage.getSession(input.slug)
         if (profRow?.backend === "codex") {
+          validateThreadProfile("codex", input.model, input.effort)
           ctx.storage.setProfile(input.slug, input.model, input.effort)
           ctx.board.refresh()
+          // `thread/settings/update` is Codex's native subsequent-turn queue. It accepts a change
+          // while a turn is running, but that turn keeps the profile it started with. Persisting
+          // first preserves the operator's intent even if this eager live update cannot be confirmed.
+          const bridge = ctx.codexAppServer
+          if (bridge && bridge.binding(input.slug, profRow.session_id)) {
+            try {
+              const applied = await bridge.setProfile({
+                threadSlug: input.slug,
+                sessionId: profRow.session_id,
+                model: input.model,
+                effort: input.effort,
+              })
+              if (applied.applied) return { effect: applied.turnInFlight ? "next-turn" as const : "applied" as const }
+            } catch {
+              // The persisted pair is still carried by the next cold resume/turn. Fall through to
+              // the conservative wording rather than claiming a live update the server did not prove.
+            }
+          }
           return { effect: "next-resume" as const }
         }
         if (!ctx.profileController) throw new Error("Runtime profile controls are unavailable; restart Fray and retry")

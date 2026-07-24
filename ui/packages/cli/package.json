@@ -4,6 +4,8 @@
   "private": false,
   "description": "Local orchestration surface for Fray projects — a per-repo web UI over your .fray/ agent threads",
   "keywords": ["fray", "claude", "claude-code", "agents", "orchestration", "tui"],
+  "license": "MIT",
+  "author": "Colin McDonnell",
   "homepage": "https://github.com/colinhacks/fray/tree/main/ui",
   "repository": { "type": "git", "url": "git+https://github.com/colinhacks/fray.git", "directory": "ui/packages/cli" },
   "engines": {

@@ -1,0 +1,79 @@
+import assert from "node:assert/strict"
+import { readFileSync, readdirSync } from "node:fs"
+import { join } from "node:path"
+import { fileURLToPath } from "node:url"
+import test from "node:test"
+
+// The "child of / branches from" affordance is ONE glyph: ⤷ (U+2937), established by the sidebar's
+// sub-agent rows and reused by the drawer's operation lines, the queue card's child lines and the
+// lifecycle footer. The queue card drifted to ↳ (U+21B3) when it was added, so a single queue card
+// rendered two different down-right arrows a few pixels apart.
+//
+// The original guard banned the WRONG glyph. This one is strictly stronger: the arrow is now a token
+// in lib/childOps.ts and NO OTHER SOURCE MAY SPELL EITHER ARROW IN RENDERED CODE AT ALL. A surface
+// cannot drift to the wrong arrow — or to a right-but-hand-copied one that later drifts — if it has no
+// literal to drift with. It has to import CHILD_ARROW, which is one string for everyone by construction.
+const CHILD_ARROW = "⤷"
+const WRONG_ARROW = "↳"
+const ARROWS = [CHILD_ARROW, WRONG_ARROW]
+
+const SRC = fileURLToPath(new URL("..", import.meta.url))
+const SELF = fileURLToPath(import.meta.url)
+// The token module DEFINES the glyph; this test NAMES both in order to search for them. Every other
+// web source must be arrow-free in the code it actually renders.
+const TOKENS = join(SRC, "lib", "childOps.ts")
+
+function sourceFiles(dir: string): string[] {
+  const out: string[] = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name)
+    if (entry.isDirectory()) out.push(...sourceFiles(path))
+    else if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) out.push(path)
+  }
+  return out
+}
+
+// COMMENTS may still name the glyph: several explain why a surface renders a child row, and a design
+// note is not a second source of truth. Strip line and block comments (the block form also covers JSX's
+// {/* … */}) so only rendered code is judged. The one blind spot this leaves — an arrow inside a string
+// that follows a `//` on the same line — is not reachable by anything that renders.
+function code(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "")
+}
+
+test("no web source outside lib/childOps.ts spells a child arrow — every surface imports the token", () => {
+  const offenders = sourceFiles(SRC)
+    .filter((path) => path !== SELF && path !== TOKENS)
+    .filter((path) => ARROWS.some((arrow) => code(readFileSync(path, "utf8")).includes(arrow)))
+    .map((path) => path.slice(SRC.length))
+  assert.deepEqual(
+    offenders,
+    [],
+    `a down-right arrow must never be written out in a component — import CHILD_ARROW from lib/childOps.ts: ${offenders.join(", ")}`,
+  )
+})
+
+test("the banned U+21B3 arrow appears nowhere at all, not even in a comment", () => {
+  const offenders = sourceFiles(SRC)
+    .filter((path) => path !== SELF && readFileSync(path, "utf8").includes(WRONG_ARROW))
+    .map((path) => path.slice(SRC.length))
+  assert.deepEqual(offenders, [], `U+21B3 ↳ must not appear in web sources — the child arrow is U+2937 ⤷: ${offenders.join(", ")}`)
+})
+
+test("lib/childOps.ts holds the one child-arrow token, and it is U+2937", () => {
+  const tokens = readFileSync(TOKENS, "utf8")
+  assert.match(tokens, /export const CHILD_ARROW = "⤷"/)
+  assert.ok(!tokens.includes(WRONG_ARROW), "the token module must not name the banned arrow")
+})
+
+test("every child-operation surface renders through the one shared row component", () => {
+  // ChildOpRow is the only renderer of a child row; these are its three adoption sites. A new surface
+  // that hand-rolled the row would already fail the arrow guard above — this pins the existing three so
+  // none of them quietly regresses back to a local copy.
+  for (const file of ["components/QueueSubAgentLines.tsx", "components/Sidebar.tsx", "components/ChatView.tsx"]) {
+    assert.match(readFileSync(join(SRC, file), "utf8"), /<ChildOpRow\b/, `${file} must render the shared ChildOpRow`)
+  }
+  // The completion-hold dialog lists children as PROSE inside a dialog, not as operation rows (no
+  // liveness mark, no drill-in, no dismiss), so it consumes the tokens directly rather than the row.
+  assert.match(readFileSync(join(SRC, "components/ThreadLifecycleFooter.tsx"), "utf8"), /CHILD_ARROW\b/)
+})

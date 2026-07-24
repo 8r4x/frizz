@@ -340,7 +340,11 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
           {bodyReady && route.kind === "found" ? (
             // Mark-as CONFIRMED (any status) → the drawer closes: the thread just left the state the
             // human was looking at it for (maintainer directive).
-            <ThreadView slug={slug} tab={effectiveTab} onTab={setTab} onStatusApplied={close} onClose={close} />
+            // `virtualized`: the drawer renders the transcript through the windowed renderer (the same
+            // one the standalone page uses) instead of mounting all ~300 messages eagerly. Opening a
+            // long chat used to build 6k+ DOM nodes and burn a ~300ms long task on the main thread
+            // before the sheet was usable.
+            <ThreadView slug={slug} tab={effectiveTab} onTab={setTab} onStatusApplied={close} onClose={close} virtualized />
           ) : bodyReady && route.kind === "missing" ? (
             <MissingThread slug={slug} onClose={close} />
           ) : (

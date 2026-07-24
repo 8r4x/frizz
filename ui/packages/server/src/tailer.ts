@@ -830,8 +830,16 @@ function trackCompletions(state: TailState, rec: Record): void {
     // orphaned background shell — which has NO staleness clock — pulsed "running" forever, re-derived
     // identically on every restart (found 2026-07-23 on real nub threads). A non-terminal "running" ping
     // still retires nothing.
+    // A Monitor that hits its timeout_ms emits ONE notification carrying NO <status> (and no
+    // <tool-use-id>) — only an <event> with the harness's timeout sentinel. Without this the entry
+    // dangles as "running" forever (0 of 2 timeout notifications carried a status, session 54b37ebe).
+    // Key STRICTLY on the sentinel: ordinary Monitor progress events also have <event> and no <status>,
+    // so "missing status ⇒ terminal" would retire every live monitor on its first event. The sentinel
+    // is harness-emitted prose and could drift — same fragility as the launch-ack strings we already
+    // depend on ("Command running in background with ID:", "Monitor started (task").
+    const monitorTimedOut = block.includes("<event>[Monitor timed out")
     const terminal: "completed" | "failed" | "killed" | undefined =
-      status === "completed" || status === "failed" || status === "killed" ? status : status === "stopped" ? "killed" : undefined
+      status === "completed" || status === "failed" || status === "killed" ? status : status === "stopped" || monitorTimedOut ? "killed" : undefined
     if (!terminal) continue
     // ONE block can list MANY ops — the recovery notification names every orphan at once — and it may
     // carry tool-use-ids, only task-ids, or both (the recovery shape omits tool-use-ids entirely). Retire
@@ -2215,7 +2223,14 @@ export function createTailer(deps: TailerDeps): Tailer {
           // (verified on both standalone TUIs). Preserve a valid exact launch mode across restart;
           // backfill only unknown legacy rows, or accept a timestamped Codex event from this process
           // generation. Incremental sidecars below still persist genuine live transitions.
-          const observedIsCurrent = !saved.success || (row.backend === "codex" && Number.isFinite(observedAt) && Number.isFinite(spawnedAt) && observedAt >= spawnedAt)
+          // An app-server thread is the ONE case where the rollout is not evidence about fray's thread:
+          // the same file is written by any terminal `codex resume` (config default `workspace-write`)
+          // and by the app-server's own config-defaulted cold resume. Folding that back over the stored
+          // mode does not just mis-DISPLAY the thread — `sandboxFor` reads this column, so the next cold
+          // resume then REQUESTS the downgraded sandbox, making a transient observation permanent. The
+          // bridge is the authority for those rows; only backfill a row whose mode is unknown.
+          const observedMayOverwrite = row.backend === "codex" && row.codex_runtime !== "app-server"
+          const observedIsCurrent = !saved.success || (observedMayOverwrite && Number.isFinite(observedAt) && Number.isFinite(spawnedAt) && observedAt >= spawnedAt)
           if (observedIsCurrent && (!saved.success || saved.data !== state.permissionMode)) {
             deps.storage.setObservedPermissionIfCurrent(
               row.slug,
@@ -2343,7 +2358,12 @@ export function createTailer(deps: TailerDeps): Tailer {
       const permissionRecordLanded = (state.permissionModeRevision ?? 0) !== prevPermissionRevision
       if (permissionRecordLanded && state.permissionMode) {
         if (row.backend === "codex") {
-          deps.storage.setObservedPermissionIfCurrent(row.slug, row.session_id, runtimeGeneration, state.permissionMode)
+          // Same authority split as the prime path above: for an app-server row the bridge owns the
+          // sandbox, and a rollout record written by some other reader of the shared file must not
+          // rewrite it. A row with no valid stored mode is still worth backfilling.
+          if (row.codex_runtime !== "app-server" || !PermissionMode.safeParse(row.permission_mode).success) {
+            deps.storage.setObservedPermissionIfCurrent(row.slug, row.session_id, runtimeGeneration, state.permissionMode)
+          }
         } else {
           state.unconfirmedPermissionMode = state.permissionMode
           state.unconfirmedPermissionPolls = 0

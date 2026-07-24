@@ -23,6 +23,7 @@ import { shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { messagePresentationText } from "../lib/messagePresentation.ts"
 import { snoozePresetInstant, formatSnoozeWake } from "../lib/snooze.ts"
 import { AWAITING_FALLBACK_TITLE, AWAITING_PARK_BUTTON, awaitingHintSentence, awaitingParkAction, awaitingPresentationLine } from "../lib/awaitingPresentation.ts"
+import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { prefs } from "../lib/prefs.ts"
 import { canAdoptThread } from "../lib/adoption.ts"
 import { THREAD_TITLE_MAX_LENGTH, aiRenameAvailability, manualThreadTitleSeed, threadTitleToCommit } from "../lib/threadTitle.ts"
@@ -33,8 +34,10 @@ import { ThreadLifecycleFooter, StateButton } from "./ThreadLifecycleFooter.tsx"
 import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { Tooltip } from "./Tooltip.tsx"
 import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
-import { hasRunningToolIndicator, isRunningOperation, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
-import { formatElapsedMinutes, formatFixedDuration, formatToolDuration } from "../lib/durationLabels.ts"
+import { hasRunningToolIndicator, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
+import { elapsedSince, formatFixedDuration, formatToolDuration } from "../lib/durationLabels.ts"
+import { visibleChildOps } from "../lib/childOps.ts"
+import { ChildOpRow } from "./ChildOpRow.tsx"
 import { TRANSCRIPT_META_LABEL_CLASS } from "../lib/transcriptMetaLabels.ts"
 import { InteractionStack } from "./InteractionCards.tsx"
 import { LastActive } from "./LastActive.tsx"
@@ -200,13 +203,15 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
       data-drawer-scroll-ready={q.isPending ? "false" : "true"}
       className="flex-1 min-h-0 flex flex-col overflow-hidden outline-none"
     >
-      {/* The scroll viewport's own coordinate frame: `relative` here (rather than on the scroller)
-          is what lets the floating overlay below sit still while the transcript scrolls. */}
+      {/* The scroll viewport's own coordinate frame: `relative` here (rather than on the scroller) is
+          what lets the floating "Jump to latest" overlay below sit still while the transcript scrolls.
+          The scroller itself carries data-virtualized-transcript-scroll — the drawer virtualizes now
+          too, so the old "standalone" name would be a lie. */}
       <div className="relative min-h-0 flex-1 flex flex-col">
       <div
         ref={transcriptRef}
         data-drawer-transcript-scroll
-        data-standalone-transcript={virtualized || undefined}
+        data-virtualized-transcript-scroll={virtualized || undefined}
         tabIndex={virtualized ? 0 : undefined}
         role={virtualized ? "region" : undefined}
         aria-label={virtualized ? "Thread conversation" : undefined}
@@ -225,6 +230,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
           nativeInputRequired={nativeInputRequired}
           running={running}
           copyTerminalCommand={copyTerminalCommand}
+          stickyUserMessage={stickyUserMessage}
           transportFallback={q.transportFallback}
           isFetching={q.isFetching}
           refresh={() => void q.refetch()}
@@ -439,6 +445,7 @@ function VirtualizedThreadTranscript({
   nativeInputRequired,
   running,
   copyTerminalCommand,
+  stickyUserMessage,
   transportFallback,
   isFetching,
   refresh,
@@ -460,6 +467,7 @@ function VirtualizedThreadTranscript({
   nativeInputRequired: NativeInputRequiredData | undefined
   running: boolean
   copyTerminalCommand: () => void
+  stickyUserMessage: boolean
   transportFallback: TranscriptTransportFallback
   isFetching: boolean
   refresh: () => void
@@ -510,6 +518,14 @@ function VirtualizedThreadTranscript({
     return next
   }, [beforeCursor, earlierError, hasEarlier, hasRuntimeStatus, loadingEarlier, messageRows, messages, transportFallback])
 
+  // Which row carries the CURRENT ASK — the message the `stickyUserMessage` pref pins to the pane top.
+  // -1 when the pref is off or the transcript has no landed user message yet; then nothing is hoisted
+  // and every row renders in the absolute layer exactly as it did before.
+  const stickyRowIndex = useMemo(() => {
+    if (!stickyUserMessage || lastUserIdx < 0) return -1
+    return rows.findIndex((row) => row.kind === "message" && row.messageIndex === lastUserIdx)
+  }, [lastUserIdx, rows, stickyUserMessage])
+
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => transcriptRef.current,
@@ -541,7 +557,11 @@ function VirtualizedThreadTranscript({
     const scroller = transcriptRef.current
     if (scroller) {
       const scrollerTop = scroller.getBoundingClientRect().top
-      const firstVisible = Array.from(scroller.querySelectorAll<HTMLElement>("[data-transcript-source-id]"))
+      // `:not([data-transcript-sticky])` is load-bearing: the pinned current-ask band floats AT the
+      // scroll-pane top, so it is always the first element whose bottom clears `scrollerTop` — anchoring
+      // to it would capture an invariant top and restore a zero correction, silently losing the reader's
+      // place across a prepend. Same invariant captureTranscriptViewportAnchor enforces on the queue.
+      const firstVisible = Array.from(scroller.querySelectorAll<HTMLElement>("[data-transcript-source-id]:not([data-transcript-sticky])"))
         .find((element) => element.getBoundingClientRect().bottom > scrollerTop + 1)
       const rowKey = firstVisible?.dataset.transcriptRowKey
       if (firstVisible && rowKey) {
@@ -647,6 +667,20 @@ function VirtualizedThreadTranscript({
 
   const virtualItems = virtualizer.getVirtualItems()
   const totalSize = virtualizer.getTotalSize()
+  // THE PINNED CURRENT ASK, virtualized. CSS `position: sticky` is inert on a virtual row: every row is
+  // `position: absolute` + translateY, so its containing block is a zero-height point and there is no
+  // range to stick over. So that ONE row is HOISTED out of the absolute layer and rendered in NORMAL
+  // FLOW — a spacer of exactly its measured `start`, then the row itself — which gives it the
+  // full-height scroll container as its containing block, i.e. precisely what the eager path's
+  // StickyUserBand relies on. It is still `measureElement`-registered under its own `data-index`, so
+  // the virtualizer sizes it from the real DOM exactly like any other row; it is simply always
+  // mounted (one extra message, and it must be, since a pinned message stays visible while its slot
+  // is far off screen). The absolute layer skips it below so it never renders twice.
+  const stickyRow = stickyRowIndex >= 0 ? rows[stickyRowIndex] : undefined
+  const stickyMessageRow = stickyRow?.kind === "message" ? stickyRow : undefined
+  // `measurementsCache` is the PUBLIC field holding what the private getMeasurements() returns; reading
+  // it here is safe because getVirtualItems() above already forced the memoized measure pass this render.
+  const stickyStart = stickyMessageRow ? virtualizer.measurementsCache[stickyRowIndex]?.start ?? 0 : 0
 
   return (
     <div
@@ -655,9 +689,42 @@ function VirtualizedThreadTranscript({
       className="relative w-full"
       style={{ height: totalSize }}
     >
+      {stickyMessageRow && (
+        <>
+          {/* Flow spacer — parks the pinned row at the same offset its absolute twin would have had, so
+              the transcript reads identically until the reader scrolls past it and it lifts to the top. */}
+          <div aria-hidden style={{ height: stickyStart }} />
+          {/* The pinned row is a SINGLE sticky layer — this IS the StickyUserBand for the virtualized
+              path (its classes are inlined here). It must be a direct child of the height:totalSize
+              container so `sticky top-0` has the full transcript as its containing block and can pin
+              across the whole scroll range; wrapping it in a short flow div would give it a tiny
+              containing block and it could never stick. Do NOT also render a nested StickyUserBand —
+              two stacked `sticky top-0` layers push the card down by the inner band's box (the 121px
+              gap that let transcript content bleed above the "pinned" card). `[&>*]:pointer-events-auto`
+              re-enables the bubble (hover-to-expand) while the full-width band stays click-through. */}
+          <div
+            key={stickyMessageRow.key}
+            ref={virtualizer.measureElement}
+            data-index={stickyRowIndex}
+            data-transcript-row-key={stickyMessageRow.key}
+            data-transcript-source-id={stickyMessageRow.message.sourceId}
+            data-transcript-sticky="true"
+            className="pointer-events-none [&>*]:pointer-events-auto sticky top-0 z-[9] flex w-full flex-col px-6 pt-3 pb-1.5"
+          >
+            <Message
+              m={stickyMessageRow.message}
+              answering={answeringForMessage(stickyMessageRow.message)}
+              showSendButton
+              paired={paired[stickyMessageRow.messageIndex]}
+              sticky
+            />
+          </div>
+        </>
+      )}
       {virtualItems.map((virtualRow) => {
         const row = rows[virtualRow.index]
         if (!row) return null
+        if (virtualRow.index === stickyRowIndex) return null
         return (
           <div
             key={row.key}
@@ -1707,7 +1774,7 @@ export function AgentBlock({
     const dur = agentElapsedMs !== undefined ? fmtDurationMs(agentElapsedMs) : ""
     stateLabel = `${verb}${dur ? ` ${dur}` : ""}`
   } else if (live) {
-    const e = elapsed(live.startedAt)
+    const e = elapsedSince(live.startedAt)
     stateLabel = live.state === "stale" ? "stale" : `running${e ? ` ${e}` : ""}`
   }
 
@@ -2519,7 +2586,7 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
       // "Done" label carries the meaning; no color needed.
       <div className="rounded-lg border border-border-strong bg-panel-2 px-4 py-3">
         <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted/70">
-          <Check size={12} className="shrink-0" /> Done
+          <Check size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} /> Done
         </div>
         {html && <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={{ __html: html }} />}
         {/* A white "Mark as done" button, deliberately redundant with the stable lifecycle footer — the
@@ -2546,7 +2613,7 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   return (
     <div className="min-w-0 rounded-lg border border-border-strong bg-panel-2 px-4 py-3">
       <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted/70">
-        <Hourglass size={12} className="shrink-0" /> {parkTitle}
+        <Hourglass size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} /> {parkTitle}
       </div>
       <div
         className={`md-inline min-w-0 text-[12px] leading-5 text-fg/85${wrap ? ` ${QUEUE_WRAP}` : ""}`}
@@ -2852,84 +2919,30 @@ export function BackgroundOpsStrip({
   if (total === 0) return null
   return (
     <div className={`flex flex-col gap-0.5 ${className}`} data-background-ops>
-      {agents.map((s, i) => (
-        <OpRow
+      {visibleChildOps(agents, "sheet").map((s, i) => (
+        <ChildOpRow
           key={`a${i}`}
           kind="AGENT"
           label={s.label}
           state={s.state}
+          density="sheet"
           startedAt={s.startedAt}
           onOpen={s.id ? () => pushSubAgentDrawer(slug, s.id!, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt }) : undefined}
           onDismiss={s.id ? () => dismiss.mutate(s.id!) : undefined}
         />
       ))}
-      {shells.map((s, i) => (
-        <OpRow
+      {visibleChildOps(shells, "sheet").map((s, i) => (
+        <ChildOpRow
           key={`s${i}`}
           kind="SHELL"
           label={s.label}
           state={s.state}
+          density="sheet"
           startedAt={s.startedAt}
           onOpen={s.id ? () => pushBackgroundShellDrawer(slug, s.id!, { label: s.label, startedAt: s.startedAt }) : undefined}
           onDismiss={s.id ? () => dismiss.mutate(s.id!) : undefined}
         />
       ))}
-    </div>
-  )
-}
-
-// One row of the ops strip: a live dot + petite-caps kind tag + label + elapsed. The dot has three
-// states — a bright accent pulse for a row with fresh output (running), a slow "breathing" dot for a
-// still-alive-but-quiet SHELL/Monitor (stale, but the process is live until its terminal signal), and
-// a flat gray dot for a stale AGENT (whose staleness can be a missed-completion fallback). Current rows
-// drill into their transcript/output (a hover arrow signals it); old snapshots without an id stay plain.
-function OpRow({ kind, label, state, startedAt, onOpen, onDismiss }: { kind: "AGENT" | "SHELL"; label: string; state: "running" | "stale"; startedAt: string; onOpen?: () => void; onDismiss?: () => void }) {
-  const when = elapsed(startedAt)
-  const clickable = !!onOpen
-  const content = (
-    <>
-      {/* ⤷ the SAME down-right arrow as the sidebar's sub-agent rows — a subtle, borderless list that
-          reads as ambient status hanging under the composer, not chrome (maintainer 2026-07-11). */}
-      <span aria-hidden className="shrink-0 text-[11px] leading-none text-muted/40">⤷</span>
-      <span className="flex w-[9px] shrink-0 justify-center">
-        {isRunningOperation(state) ? (
-          // A running SHELL pulses blue, a running sub-AGENT pulses the accent-yellow.
-          <span aria-hidden className={`fray-live-dot ${kind === "SHELL" ? "fray-live-dot--shell" : "fray-live-dot--agent"}`} data-running-indicator="operation" />
-        ) : kind === "SHELL" ? (
-          // A tracked background shell/Monitor is a LIVE process even when quiet (the entry only
-          // clears on its terminal notification) — so it breathes rather than showing a dead gray dot.
-          <span aria-hidden className="fray-live-dot-quiet fray-live-dot-quiet--shell" data-running-indicator="operation-quiet" title="running — no recent output" />
-        ) : (
-          <span className="block h-1.5 w-1.5 rounded-full bg-muted/25" title="stale — no recent output" />
-        )}
-      </span>
-      <span className="petite-caps shrink-0 text-[9.5px] text-muted/45">{kind}</span>
-      <span className={`min-w-0 truncate text-muted/70 ${clickable ? "group-hover:text-fg/80 group-hover:underline" : ""}`}>{label}</span>
-      {when && <span className="shrink-0 text-muted/40">{when}</span>}
-      {clickable && <ArrowUpRight size={11} className="shrink-0 text-transparent transition-colors group-hover:text-muted/50" />}
-    </>
-  )
-  // The label (drill-in) and the × are SIBLINGS inside one row group — a button can't nest inside a
-  // button. The × reveals on row hover/focus so it never competes with the label at rest.
-  const labelClass = `group flex min-w-0 flex-1 items-center gap-1.5 text-left text-[11.5px] ${clickable ? "cursor-pointer rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-fg/60" : ""}`
-  const title = kind === "AGENT" ? "Open sub-agent transcript" : "Open background shell output"
-  const labelEl = clickable
-    ? <button type="button" onClick={onOpen} onMouseDown={(e) => e.stopPropagation()} title={title} aria-label={`${title}: ${label}`} className={labelClass}>{content}</button>
-    : <div className={labelClass}>{content}</div>
-  if (!onDismiss) return labelEl
-  return (
-    <div className="group/op flex min-w-0 items-center gap-1" data-op-row>
-      {labelEl}
-      <button
-        type="button"
-        onClick={onDismiss}
-        onMouseDown={(e) => e.stopPropagation()}
-        title="Dismiss — stop tracking this finished operation"
-        aria-label={`Dismiss ${kind === "AGENT" ? "sub-agent" : "background shell"}: ${label}`}
-        className="shrink-0 rounded-sm p-0.5 text-muted/30 opacity-0 outline-none transition-opacity hover:text-fg/70 focus-visible:opacity-100 group-hover/op:opacity-100"
-      >
-        <X size={11} />
-      </button>
     </div>
   )
 }
@@ -2975,16 +2988,8 @@ export function PendingAskCard({ ask, onTerminal }: { ask: PendingAsk; onTermina
   )
 }
 
-// Human-friendly elapsed since an ISO timestamp: "just now", "12m", "1h 3m". Empty when unparseable.
-function elapsed(startedAt: string): string {
-  const t = Date.parse(startedAt)
-  if (!Number.isFinite(t)) return ""
-  const mins = Math.floor((Date.now() - t) / 60_000)
-  return formatElapsedMinutes(mins)
-}
-
 // Coarse duration for a FIXED span (a dispatch→completion elapsed, in ms): "<1m", "42m", "1h 3m".
-// Distinct from elapsed(), which measures an ISO start against now for a still-running child.
+// Distinct from elapsedSince(), which measures an ISO start against now for a still-running child.
 function fmtDurationMs(ms: number): string {
   return formatFixedDuration(ms)
 }

@@ -854,9 +854,16 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         permission_mode: permissionMode,
       })
 
-      // Respond immediately — the client switches views on the slug; the rebuild (a shell-out to
-      // the fray board scripts) fans out over SSE moments later.
-      void deps.board.rebuild().catch(() => {})
+      // Respond immediately — the client switches views on the slug; the rebuild fans out over the
+      // socket moments later.
+      //
+      // setImmediate, not a bare call: `rebuildOnce` is declared async but its body contains no
+      // await (expireDue → recomputeLegacyTerminalState → recomputePlans → assemble → publish are
+      // all synchronous, and the middle two stat the filesystem per registry row). So invoking it
+      // ran the WHOLE rebuild before the promise was returned, and `void` deferred nothing — the
+      // dispatch response sat behind a full board assembly over every session row. Handing it to the
+      // next tick is what the comment above always claimed the code did.
+      setImmediate(() => void deps.board.rebuild().catch(() => {}))
       return { slug, sessionId }
     },
 

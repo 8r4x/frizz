@@ -119,6 +119,10 @@ export function decideSubmit(
   return attempts >= MAX_SUBMIT_ATTEMPTS ? { kind: "exhausted", items: used } : { kind: "resend", items: used }
 }
 
+// How long a flushed Enter is given to clear the composer before the new follow-up is pasted anyway.
+// Measured composer-clear times on a real claude 2.1.218 TUI: p50 ~500ms, max 848ms over 20 sends.
+const FLUSH_SETTLE_MS = 900
+
 export interface DeliveryConfirmTerminal {
   capturePanes(slugs: readonly string[]): Map<string, string>
   sendKey(slug: string, key: "Enter"): void
@@ -140,15 +144,82 @@ export interface DeliveryConfirmer {
   stop(): void
 }
 
-export function createDeliveryConfirmer(deps: DeliveryConfirmerDeps): DeliveryConfirmer {
+// Submit a follow-up still stuck in the composer BEFORE pasting the next one on top of it.
+//
+// Without this, two steers sent closer together than the confirmer's grace window glue into one
+// message: the first Enter is swallowed, the second paste lands directly after the stranded text, and
+// the second Enter submits the pair. That is byte-for-byte the operator's `item(196) + item(183)` with
+// no separator, and it reproduced here — twice in ten sends — at a 700ms cadence even with the
+// confirmer running, because the next send beat the grace window.
+//
+// So the human-steer path checks first, and it is FREE on the normal path: a row with no outstanding
+// ledger item never captures a pane at all. The same exact-match gate applies — a composer holding
+// anything but fray's own unsent text is left completely alone, and only a bare Enter is ever sent.
+export async function flushStuckComposer(deps: DeliveryConfirmerDeps, slug: string): Promise<void> {
   const now = deps.now ?? Date.now
-  const terminal: DeliveryConfirmTerminal = deps.terminal ?? {
+  const terminal = deps.terminal ?? defaultTerminal()
+  const row = deps.storage.getSession(slug)
+  if (!row || row.backend === "codex" || row.codex_runtime === "app-server" || !row.delivery_ledger) return
+  const items = parseDeliveryLedger(row.delivery_ledger)
+  const candidates = items
+    .map((item, index) => ({ index, item }))
+    .filter(({ item }) => item.state !== "enqueued")
+    .map(({ index, item }) => ({ index, text: item.text }))
+  if (!candidates.length) return
+  const binding = adoptionRuntimeBinding(deps.storage, row)
+  if (binding.kind === "conflict") return
+  let pane: string
+  let press: () => boolean
+  try {
+    if (binding.kind === "unbound") {
+      pane = terminal.capturePanes([slug]).get(slug) ?? ""
+      press = () => {
+        try {
+          terminal.sendKey(slug, "Enter")
+          return true
+        } catch {
+          return false
+        }
+      }
+    } else {
+      const captured = terminal.captureExpectedAdoptionPane(binding.claim, false)
+      if (captured.kind !== "captured") return
+      pane = captured.text
+      press = () => terminal.sendKeyToExpectedAdoptionPane(binding.claim, "Enter")
+    }
+  } catch {
+    return
+  }
+  const composer = inspectClaudeComposer(pane)
+  // No grace window here, deliberately: we are about to paste on top of this composer either way, so
+  // the moment it provably holds our own unsent text, submitting it is strictly better than gluing to
+  // it. Every other guard is unchanged — typed-and-exactly-ours, and a bare Enter only.
+  if (composer.kind !== "typed") return
+  const used = composerAccountedBy(composer.text, candidates)
+  if (!used) return
+  const nowIso = new Date(now()).toISOString()
+  const next = items.map((item, index) =>
+    used.includes(index) ? { ...item, submitAttempts: (item.submitAttempts ?? 0) + 1, updatedAt: nowIso } : item,
+  )
+  deps.storage.setDeliveryLedger(slug, serializeDeliveryLedger(next))
+  press()
+  deps.board.refresh()
+  await new Promise((resolve) => setTimeout(resolve, FLUSH_SETTLE_MS))
+}
+
+function defaultTerminal(): DeliveryConfirmTerminal {
+  return {
     capturePanes: tmux.capturePanes,
     sendKey: tmux.sendKey,
     findExpectedAdoptionPane: tmux.findExpectedAdoptionPane,
     captureExpectedAdoptionPane: tmux.captureExpectedAdoptionPane,
     sendKeyToExpectedAdoptionPane: tmux.sendKeyToExpectedAdoptionPane,
   }
+}
+
+export function createDeliveryConfirmer(deps: DeliveryConfirmerDeps): DeliveryConfirmer {
+  const now = deps.now ?? Date.now
+  const terminal: DeliveryConfirmTerminal = deps.terminal ?? defaultTerminal()
   let timer: NodeJS.Timeout | null = null
 
   // Rows whose ledger holds an unreceipted follow-up old enough to be worth checking. Everything else

@@ -13,7 +13,7 @@ import {
 import { showToast, store } from "../store.ts"
 import { ProfileGridSelector } from "../components/ProfileGridSelector.tsx"
 import { Select } from "../components/ui/Select.tsx"
-import { threadProfileControlState } from "../lib/threadProfile.ts"
+import { threadProfileControlState, threadProfileEffectMessage } from "../lib/threadProfile.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
 
 // One control strip for every place a registered thread can be steered. This lives outside the
@@ -84,9 +84,7 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
 
   function changeProfile(target: { model: string; effort: string }) {
     profile.mutate(target, {
-      onSuccess: (result) => showToast(result.effect === "next-resume"
-        ? "Model and effort saved for the next resume"
-        : "Model and effort applied"),
+      onSuccess: (result) => showToast(threadProfileEffectMessage(result.effect)),
       onError: (e) => showToast(`Profile change failed: ${(e as Error).message.slice(0, 120)}`),
     })
   }
@@ -118,7 +116,9 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
           title={modelSelectable
             ? thread.runtime === "exited"
               ? "Saved per thread and applied when this conversation resumes"
-              : "Change this idle conversation's model and reasoning effort"
+              : backend === "codex"
+                ? "Change this conversation's model and effort; a running turn keeps the profile it started with"
+                : "Change this conversation's model and effort; active work queues the change until a safe idle boundary"
             : "The current live backend profile is unavailable; controls fail closed"}
           disabled={busy || !catalogLoaded || !modelSelectable || profiles.isError}
           compact
@@ -152,7 +152,7 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
         />
         {pendingModel && pendingEffort && (
           <span className="min-w-0 truncate text-[9px] text-muted/50">
-            → {pendingModel} · {pendingEffort} pending
+            → {pendingModel} · {pendingEffort} {thread.profileChangeQueued ? "queued" : "pending"}
           </span>
         )}
         {pendingLabel && (

@@ -3,8 +3,10 @@ import assert from "node:assert/strict"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { wakeDeliveryToken } from "@fray-ui/shared"
 import { createStorage, type Storage, type SessionRow } from "./storage.ts"
-import { createScheduler, parsePrRef, ghPrViewArgs, evalRollup, parseGithubReviewActivities, isNonBotGithubActivity, isWakeworthyGithubActivity, wakeDeliveryToken, type GithubReviewActivity, type PrRef, type PrStatus } from "./scheduler.ts"
+import { createScheduler, parsePrRef, ghPrViewArgs, evalRollup, parseGithubReviewActivities, isNonBotGithubActivity, isWakeworthyGithubActivity, type GithubReviewActivity, type PrRef, type PrStatus } from "./scheduler.ts"
+import { createGithubReviewFetcher } from "./github-review.ts"
 import { createWakeDeliveryStore } from "./wake-store.ts"
 import type { Tailer, SessionTelemetry, FenceView, TurnState } from "./tailer.ts"
 
@@ -493,6 +495,70 @@ test("pr-watch: 'Arm watcher' — a new-activity bump CLEARS the user snooze so 
   await s.tick()
   assert.equal(h.resumes.length, 1, "the bump resumed the worker")
   assert.equal(h.storage.getSession("r")?.snoozed_until, null, "the user snooze was cleared by the activity bump")
+})
+
+test("pr-watch: one scheduler tick batches distinct refs and deduplicates duplicate refs", async () => {
+  const h = harness()
+  const fenceAt = iso(h.clock.ms)
+  for (const [slug, pr] of [["first", 544], ["second", 549], ["duplicate", 544]] as const) {
+    h.storage.upsertSession(row(slug))
+    h.tele.set(slug, { ...tele(awaiting([{ kind: "pr-watch", value: `nubjs/nub#${pr}` }])), lastActivityAt: fenceAt })
+  }
+  let tokenCalls = 0
+  const requests: any[] = []
+  const fetchGithubReview = createGithubReviewFetcher({
+    getToken: async () => {
+      tokenCalls++
+      return "token"
+    },
+    request: async (_input, init) => {
+      const request = JSON.parse(String(init?.body))
+      requests.push(request)
+      return new Response(JSON.stringify({
+        data: {
+          ref0: { pullRequest: { reviews: { nodes: [] }, comments: { nodes: [] } } },
+          ref1: { pullRequest: { reviews: { nodes: [] }, comments: { nodes: [] } } },
+          rateLimit: { cost: 2, remaining: 4_000, resetAt: iso(h.clock.ms + 60 * 60_000), limit: 5_000 },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } })
+    },
+    now: () => h.clock.ms,
+  })
+
+  await h.make({ fetchGithubReview }).tick()
+  assert.equal(tokenCalls, 1)
+  assert.equal(requests.length, 1)
+  assert.deepEqual(Object.values(requests[0].variables).filter((value) => typeof value === "number").sort(), [544, 549])
+})
+
+test("pr-watch: precise failures are coalesced in logs and recovery is explicit", async () => {
+  const h = harness()
+  const fenceAt = iso(h.clock.ms)
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "nubjs/nub#544" }])), lastActivityAt: fenceAt })
+  const logs: string[] = []
+  let recovered = false
+  const scheduler = h.make({
+    log: (message) => logs.push(message),
+    fetchGithubReview: async () => recovered
+      ? { status: "ok", activity: [] }
+      : { status: "error", failure: { kind: "timeout", message: "GitHub GraphQL request timed out after 15s" } },
+  })
+
+  await scheduler.tick()
+  h.clock.ms += 60_000
+  await scheduler.tick()
+  assert.deepEqual(logs, [
+    "waker: GitHub review check failed for nubjs/nub#544 (r) [timeout] — GitHub GraphQL request timed out after 15s",
+  ])
+
+  recovered = true
+  h.clock.ms += 60_000
+  await scheduler.tick()
+  assert.deepEqual(logs, [
+    "waker: GitHub review check failed for nubjs/nub#544 (r) [timeout] — GitHub GraphQL request timed out after 15s",
+    "waker: GitHub review check recovered for nubjs/nub#544 (r); 1 identical repeats were suppressed",
+  ])
 })
 
 // ---- PR / CI transitions + graceful gh failure ----
@@ -1272,4 +1338,52 @@ test("snooze: a snooze wake and a fence wake for the same session get distinct d
   assert.equal(new Set(ids).size, ids.length, "no delivery-id collision between the snooze and fence sources")
   assert.equal(ids.length, 2, "both sources armed their own wake for this session")
   h.storage.close()
+})
+
+// A resume that fails ASYNCHRONOUSLY must retry exactly like one that throws synchronously.
+//
+// This is the codex-wake shape. context.ts delivers a codex wake over the app-server bridge, which is
+// inherently async, and it used to run that work in a DETACHED IIFE (`void (async () => …)().catch(…)`)
+// and return undefined immediately. The scheduler awaits `resume`, so it saw an instant success and
+// ACKED the delivery; the real bridge failure landed seconds later into a bare `.catch` and vanished —
+// no log, no retry, the wake lost forever. Claude's synchronous `resumeThread` throws straight into the
+// scheduler's catch and retries, so the bug was CODEX-ONLY and silent: an `awaiting timer:` or
+// limit-auto-resume codex thread could simply never wake.
+//
+// Returning the promise is the whole fix, and this test is what keeps it returned: revert to
+// fire-and-forget and the rejection never reaches the scheduler, so no retry happens and this fails.
+test("a resume that REJECTS asynchronously is retried, exactly like a synchronous throw", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("async-wake"))
+  h.tele.set("async-wake", tele(awaiting([{ kind: "timer", value: iso(h.clock.ms + 1_000) }])))
+
+  // The fence must be WITNESSED pending before it can fire (the boot-safety guard), so take a durable
+  // baseline while it is still in the future, then cross it.
+  await h.make().tick()
+  h.clock.ms += 2_000
+
+  let attempts = 0
+  const failing = h.make({
+    resume: () => {
+      attempts++
+      // No `throw` — an already-rejected promise, which is what an async bridge delivery produces.
+      return Promise.reject(new Error("codex app-server bridge unavailable"))
+    },
+  })
+  await failing.tick()
+  assert.equal(attempts, 1, "the due wake was attempted")
+  assert.equal(h.resumes.length, 0, "and it did not count as delivered")
+
+  // The lease expires, and a later generation redelivers it — proving the failure was never ACKed.
+  h.clock.ms += 30_001
+  const restarted = h.make({
+    resume: (slug, message) => {
+      attempts++
+      h.resumes.push({ slug, message })
+    },
+  })
+  await restarted.tick()
+  await restarted.tick()
+  assert.equal(attempts, 2, "the async rejection was retried, not swallowed")
+  assert.equal(h.resumes.length, 1, "and the retry delivered exactly once")
 })

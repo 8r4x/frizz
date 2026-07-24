@@ -7,6 +7,7 @@ import {
   GITHUB_DISPATCH_UI_BOUNDARY,
   ATTACHMENT_IMAGE_EXTENSIONS,
   attachmentExtension,
+  stripWakeDeliveryToken,
   type TranscriptMessage,
   type TranscriptPage,
   type TranscriptToolCall,
@@ -60,6 +61,19 @@ export function githubDispatchDisplayText(text: string): string | undefined {
   const head = text.slice(0, cut)
   const match = head.match(/^THREAD: [a-z0-9][a-z0-9-]*\n\n(Investigate this issue and make recommendations\n\n(?:Issue|PR) #\d+: [^\n]+\nRepository: [^\n]+\nURL: \S+)$/)
   return match?.[1]
+}
+
+// The display projection for ONE user turn — undefined when the stored text is already what to show.
+// Two independent reasons a user record can carry machine-facing tail, composed in order:
+//   • a generated GitHub dispatch (FIRST turn only — the envelope is what opens the thread);
+//   • the scheduler's wake-delivery token, which rides ANY turn a wake lands on. That's the case the
+//     old `out.length === 0` gate missed entirely: a wake is by definition a later turn, so its token
+//     reached the pre-wrap user bubble and rendered as literal `<!-- fray-wake:… -->`.
+// `text` is never narrowed — the outbox acks a delivery by finding that token in the worker's own
+// record, and persistence/search keep the full machine-facing prompt.
+function userDisplayText(text: string, first: boolean): string | undefined {
+  const projected = stripWakeDeliveryToken((first && githubDispatchDisplayText(text)) || text)
+  return projected === text ? undefined : projected
 }
 
 // Append a text block to a message's ordered parts, coalescing into a trailing text part (so several
@@ -118,6 +132,10 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
   // Background Bash launch ids are provider-native lifecycle keys. Their immediate tool_result is
   // only a launch acknowledgement; task-notification is the terminal observation.
   const backgroundShells = new Map<string, { at?: string; call: TranscriptToolCall }>()
+  // RUNTIME task id → tool_use id, captured from background launch acks (mirrors the tailer's
+  // launchTaskId). Needed because two terminal signals carry NO <tool-use-id>: the Monitor-timeout
+  // notification (task-id only) and a manual TaskStop result (task_id only).
+  const backgroundTaskIds = new Map<string, string>()
   // For "Thought for Ns" events: the previous SUBSTANTIVE (assistant/user) record's timestamp, and the
   // message id we last emitted a thinking event for (so a turn's several thinking records emit ≤1 line).
   let prevTs: string | undefined
@@ -154,7 +172,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
     // A sub-agent completion notification (a queue-operation record with a top-level <task-notification>
     // content string) re-renders the dispatch's AgentBlock card inline at its position (clickable into
     // the run-log drawer) and back-fills the original launch card's terminal state.
-    const ev = completionEvent(rec, agentDispatches, backgroundShells)
+    const ev = completionEvent(rec, agentDispatches, backgroundShells, backgroundTaskIds)
     if (ev) {
       ev.sourceId = sourceId
       out.push(ev)
@@ -185,8 +203,10 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
     if (thisTs && (rec.type === "assistant" || rec.type === "user")) prevTs = thisTs
 
     // A QUEUED human follow-up's enqueue/removal (the completion <task-notification> queue-operations were
-    // already consumed above). `enqueue` emits a pending grayed bubble; a CONTENT-BEARING removal
-    // supersedes it (see below); the delivery itself is the `queued_command` attachment handled next.
+    // already consumed above). `enqueue` emits a pending grayed bubble. Removal records are deliberately
+    // not authoritative: Claude emits a content-bearing `remove` several seconds BEFORE the corresponding
+    // `queued_command` attachment, so deleting here makes the bubble vanish between its two queues.
+    // Explicit delivery evidence below resolves or removes it in place and preserves the enqueue sourceId.
     if (rec.type === "queue-operation") {
       const op = typeof rec.operation === "string" ? rec.operation : ""
       const content = typeof rec.content === "string" ? normalizeNewlines(rec.content) : ""
@@ -194,22 +214,12 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         // Undelivered → a grayed "queued" user bubble (queued:true reuses the client's optimistic-send
         // styling). Do NOT reset lastAssistantId: this bubble is transient (it may be spliced out on
         // delivery), and the assistant-merge tail-role check already blocks merging across a live bubble.
-        const m: TranscriptMessage = { sourceId, role: "user", text: content, tools: [], parts: [], at: thisTs, queued: true }
+        // `text` stays the RAW queued content — it is the key `queuedPending` matches the delivery
+        // attachment against — so a wake token riding a queued follow-up is dropped only for display.
+        const queuedDisplay = userDisplayText(content, out.length === 0)
+        const m: TranscriptMessage = { sourceId, role: "user", text: content, ...(queuedDisplay ? { displayText: queuedDisplay } : {}), tools: [], parts: [], at: thisTs, queued: true }
         out.push(m)
         queuedPending.set(content, m)
-      } else if ((op === "remove" || op === "dequeue" || op === "popAll") && content.trim()) {
-        // A removal that ECHOES the queued text supersedes its pending bubble — either the message was
-        // cancelled before delivery, or (in sessions whose `remove` carries the text) it's the delivery
-        // handshake and the following attachment re-renders the delivered copy. Splice the pending bubble
-        // so we never render both. An EMPTY-content removal is the ordinary handshake and is deliberately
-        // IGNORED: matching it by anything but exact text could evict a genuinely-still-pending human
-        // bubble when an unrelated queue item (e.g. a sub-agent task-notification) is dequeued.
-        const m = queuedPending.get(content)
-        if (m) {
-          queuedPending.delete(content)
-          const i = out.indexOf(m)
-          if (i !== -1) out.splice(i, 1)
-        }
       }
       return
     }
@@ -232,7 +242,8 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         } else {
           // Attachment-only: an older session with no queue-operations, or an enqueue that scrolled out of
           // the render window. Emit the delivered message fresh at the attachment's position.
-          out.push({ sourceId, role: "user", text: prompt, tools: [], parts: [], at: thisTs })
+          const deliveredDisplay = userDisplayText(prompt, out.length === 0)
+          out.push({ sourceId, role: "user", text: prompt, ...(deliveredDisplay ? { displayText: deliveredDisplay } : {}), tools: [], parts: [], at: thisTs })
         }
         deliveredDedupe = prompt
         if (thisTs) prevTs = thisTs // a delivered human turn is substantive — it bounds the next thinking window
@@ -244,7 +255,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
     if (rec.type === "user") {
       // Back-fill any Read excerpts this record carries FIRST — a tool_result record is dropped as a
       // human bubble (isMeta / tool_result-only), but it still holds the file content we want to show.
-      attachToolResults(rec, pendingTools)
+      attachToolResults(rec, pendingTools, backgroundShells, backgroundTaskIds)
       // isMeta marks harness-injected user records (hook feedback, reminders, autonomous /loop
       // wakeups) — plumbing the human never typed, so it must not render as their bubble. But an
       // autonomous /loop wakeup is ENQUEUED like any follow-up (emitting a gray queued bubble),
@@ -294,7 +305,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
           const cut = text.indexOf("\nTASK:\n")
           if (cut !== -1) text = text.slice(cut + "\nTASK:\n".length).trim()
         }
-        const displayText = out.length === 0 ? githubDispatchDisplayText(text) : undefined
+        const displayText = userDisplayText(text, out.length === 0)
         out.push({ sourceId, role: "user", text, ...(displayText ? { displayText } : {}), tools: [], parts: [], at: rec.timestamp })
         lastAssistantId = null
       }
@@ -735,7 +746,12 @@ function cancelledToolResult(text: string): boolean {
 // bounded result pane. Successful edits suppress their redundant prose acknowledgement (the diff is
 // already the useful payload), while failures retain it. Agent's immediate result is only launch
 // metadata explicitly marked non-user-facing, so its card stays pending until completionEvent.
-function attachToolResults(rec: Raw, pending: Map<string, PendingClaudeTool>): void {
+function attachToolResults(
+  rec: Raw,
+  pending: Map<string, PendingClaudeTool>,
+  backgroundShells: Map<string, { at?: string; call: TranscriptToolCall }>,
+  backgroundTaskIds: Map<string, string>,
+): void {
   const content = rec.message?.content
   if (!Array.isArray(content)) return
   for (const b of content) {
@@ -744,6 +760,20 @@ function attachToolResults(rec: Raw, pending: Map<string, PendingClaudeTool>): v
     if (!entry) continue
     pending.delete(b.tool_use_id)
     const text = toolResultText(b.content)
+    // A manual TaskStop is a terminal signal for the op it killed — the SAME correlation the tailer
+    // reads (its structured result carries `task_id`; no notification ever follows). Without this a
+    // background card whose op was stopped by hand spins forever in the timeline.
+    if (text && /Successfully stopped task/.test(text)) {
+      const stoppedId = text.match(/"task_id"\s*:\s*"([^"]+)"/)?.[1]
+      const toolUseId = stoppedId ? backgroundTaskIds.get(stoppedId) : undefined
+      const shell = toolUseId ? backgroundShells.get(toolUseId) : undefined
+      if (toolUseId && shell) {
+        backgroundShells.delete(toolUseId)
+        shell.call.status = "cancelled"
+        const stoppedMs = elapsedBetween(shell.at, rec.timestamp)
+        if (stoppedMs !== undefined) shell.call.durationMs = stoppedMs
+      }
+    }
     // A successful Agent result is launch metadata, not child completion. Keep waiting for the
     // task-notification in that case. A launch error, however, may never produce a notification and
     // must not leave the card spinning forever.
@@ -751,7 +781,15 @@ function attachToolResults(rec: Raw, pending: Map<string, PendingClaudeTool>): v
       (entry.name === "Agent" || entry.calls.some((call) => call.backgroundState === "background")) &&
       b.is_error !== true &&
       !(text && (cancelledToolResult(text) || failedToolResult(text)))
-    ) continue
+    ) {
+      // Capture the launch ack's RUNTIME task id (Bash "…with ID: <id>", Monitor "(task <id>") so the
+      // tool-use-id-less terminal signals above/in completionEvent can still find this card.
+      const taskId =
+        text?.match(/Command running in background with ID:\s*(\S+)/)?.[1]?.replace(/\.$/, "") ??
+        text?.match(/Monitor started \(task\s+(\w+)/)?.[1]
+      if (taskId) backgroundTaskIds.set(taskId, b.tool_use_id)
+      continue
+    }
     // Claude reports tool failures with `is_error`; keep a narrow text fallback for older logs that
     // omitted the flag. An unanchored search misclassified successful output such as "0 failed".
     const failed = b.is_error === true || Boolean(text && /^(?:error|failed|permission denied)\b/i.test(text.trim()))
@@ -857,6 +895,15 @@ function toolCalls(block: any): TranscriptToolCall[] {
         }]
       }
     }
+    // A Monitor is ALWAYS a detached background watcher (Claude Code runs it detached; its launch
+    // result is only an ack). Mark it background so it registers in backgroundShells and its card
+    // stays truthfully "running" until the stream-end / timeout / TaskStop signal — the launch ack
+    // must never complete it.
+    if (name === "Monitor") {
+      // `desc` feeds the wake-boundary label («desc» timed out / stopped), same as a Bash description.
+      const desc = typeof input.description === "string" && input.description.trim() ? redactToolPayload(input.description.trim()).slice(0, 160) : undefined
+      return [{ name, detail, desc, input: renderToolInput(input), backgroundState: "background" }]
+    }
   }
 
   return [{ name, detail, input: renderToolInput(input) }]
@@ -901,7 +948,8 @@ function toolDetail(input: any): string | undefined {
 
 // A concise cause label for the turn-boundary line emitted when a background-shell completion wakes
 // the agent: "Background task «<desc>» exited N" (failed, exit code parsed from the notification
-// <summary>), "… finished" (completed), or "… stopped" (killed). `desc` prefers the Bash
+// <summary>), "… finished" (completed), "… stopped" (killed), or "… timed out" (a Monitor that hit
+// its timeout_ms — detected by the sentinel, since that record carries no status). `desc` prefers the Bash
 // `description`, falling back to the command summary; kept short so the divider label stays tidy.
 // The subject is the TASK, not the wake — the passive "Woken by …" spent the label's opening on the
 // one fact the divider's own position already conveys. "Background task" is deliberate, and NOT
@@ -912,7 +960,8 @@ function backgroundWakeLabel(call: TranscriptToolCall, status: string, raw: stri
   const rawDesc = (call.desc ?? call.detail ?? "background command").trim()
   const desc = rawDesc.length > 64 ? `${rawDesc.slice(0, 63)}…` : rawDesc
   let outcome: string
-  if (status === "completed") outcome = "finished"
+  if (raw.includes("<event>[Monitor timed out")) outcome = "timed out"
+  else if (status === "completed") outcome = "finished"
   else if (status === "killed") outcome = "stopped"
   else {
     const code = raw.match(/exit code (\d+)/)?.[1]
@@ -922,7 +971,8 @@ function backgroundWakeLabel(call: TranscriptToolCall, status: string, raw: stri
 }
 
 // A completion <task-notification> (rides a queue-operation record as a top-level `content` string;
-// only completed/failed/killed are terminal — a non-terminal "running" ping also exists). Two cases:
+// completed/failed/killed are terminal, plus the status-less Monitor-timeout record — a non-terminal
+// "running" ping and status-less Monitor progress events also exist). Two cases:
 //   • A tracked AGENT dispatch → re-render its AgentBlock card inline at the notification's position
 //     (clickable into the run-log drawer right there in the timeline) and back-fill the launch card.
 //   • A tracked background SHELL → back-fill the shell card's terminal state AND emit a `boundary` event
@@ -933,12 +983,26 @@ function completionEvent(
   rec: Raw,
   dispatches: Map<string, { at?: string; call: TranscriptToolCall }>,
   backgroundShells: Map<string, { at?: string; call: TranscriptToolCall }>,
+  backgroundTaskIds: Map<string, string>,
 ): TranscriptMessage | null {
   const raw = typeof rec.content === "string" ? rec.content : undefined
   if (!raw || !raw.includes("<task-notification>")) return null
-  const status = raw.match(/<status>([^<]*)<\/status>/)?.[1]
-  if (status !== "completed" && status !== "failed" && status !== "killed") return null
-  const id = raw.match(/<tool-use-id>([^<]*)<\/tool-use-id>/)?.[1]
+  const rawStatus = raw.match(/<status>([^<]*)<\/status>/)?.[1]
+  // A Monitor that hits its timeout_ms emits ONE notification with NO <status> and NO <tool-use-id> —
+  // only <task-id> + an <event> carrying the harness's timeout sentinel. Key STRICTLY on the sentinel:
+  // ordinary Monitor progress events also have <event> and no <status>, so "missing status ⇒ terminal"
+  // would retire every live monitor on its first event. The sentinel is harness prose and could drift —
+  // same fragility as the launch-ack strings this parser already depends on.
+  const timedOut = raw.includes("<event>[Monitor timed out")
+  const status = rawStatus === "completed" || rawStatus === "failed" || rawStatus === "killed" ? rawStatus : timedOut ? "killed" : undefined
+  if (!status) return null
+  const id =
+    raw.match(/<tool-use-id>([^<]*)<\/tool-use-id>/)?.[1] ??
+    // The timeout record's only correlation key is the runtime task id captured at launch.
+    (() => {
+      const taskId = raw.match(/<task-id>([^<]*)<\/task-id>/)?.[1]
+      return taskId ? backgroundTaskIds.get(taskId) : undefined
+    })()
   if (!id) return null
   const d = dispatches.get(id)
   if (!d) {
@@ -1023,6 +1087,36 @@ function readAppendedBytes(fd: number, from: number, to: number): Buffer {
   return filled === buf.length ? buf : buf.subarray(0, filled)
 }
 
+// Resolve the retained fold for a file, dropping a stale entry first. Shared by BOTH readers of a claude
+// JSONL — readTranscript (the /ws producer) and the paged reader's projectSnapshot — because they are
+// provably the same fold: each derives its identityPrefix from the very id that NAMES the file
+// (`claude:${id}` ↔ `.../${id}.jsonl`), so identityPrefix is a function of the path and one path-keyed
+// entry serves both. Before this they kept SEPARATE caches and folded the same 30 MB twice on a cold
+// drawer open — once for the RPC, once for the socket push — and retained two copies forever after.
+function retainedFoldEntry(path: string, identityPrefix: string, fileId: string, size: number): { entry: TranscriptCacheEntry; hit: boolean } {
+  let entry = transcriptCache.get(path)
+  // Drop a stale entry: the file shrank (truncation), rotated (new inode), or is being parsed under a
+  // different identity. Any of these means the retained fold no longer describes byte 0..size.
+  if (entry && (entry.identityPrefix !== identityPrefix || entry.fileId !== fileId || size < entry.bytesRead)) {
+    transcriptCache.delete(path)
+    entry = undefined
+  }
+  const hit = entry !== undefined
+  if (!entry) {
+    entry = { identityPrefix, fold: createTranscriptFold(identityPrefix), bytesRead: 0, decoder: new StringDecoder("utf8"), fileId }
+  } else {
+    transcriptCache.delete(path) // LRU touch — re-insert to move to the most-recently-used end.
+  }
+  transcriptCache.set(path, entry)
+  // Evict the least-recently-used entries beyond the cap (the first keys in insertion order).
+  while (transcriptCache.size > TRANSCRIPT_CACHE_CAP) {
+    const oldest = transcriptCache.keys().next().value
+    if (oldest === undefined) break
+    transcriptCache.delete(oldest)
+  }
+  return { entry, hit }
+}
+
 export function readTranscript(project: Project, sessionId: string): TranscriptMessage[] {
   const path = join(homedir(), ".claude", "projects", project.cwdSlug, `${sessionId}.jsonl`)
   const identityPrefix = `claude:${sessionId}`
@@ -1033,22 +1127,7 @@ export function readTranscript(project: Project, sessionId: string): TranscriptM
     const size = st.size
     const fileId = `${st.dev}:${st.ino}:${Math.trunc(st.birthtimeMs)}`
 
-    let entry = transcriptCache.get(path)
-    // Drop a stale entry: the file shrank (truncation), rotated (new inode), or is being parsed under a
-    // different identity. Any of these means the retained fold no longer describes byte 0..size.
-    if (entry && (entry.identityPrefix !== identityPrefix || entry.fileId !== fileId || size < entry.bytesRead)) {
-      transcriptCache.delete(path)
-      entry = undefined
-    }
-    const hit = entry !== undefined
-    if (!entry) {
-      entry = { identityPrefix, fold: createTranscriptFold(identityPrefix), bytesRead: 0, decoder: new StringDecoder("utf8"), fileId }
-      transcriptCache.set(path, entry)
-    } else {
-      // LRU touch — re-insert to move to the most-recently-used end.
-      transcriptCache.delete(path)
-      transcriptCache.set(path, entry)
-    }
+    const { entry, hit } = retainedFoldEntry(path, identityPrefix, fileId, size)
 
     if (size > entry.bytesRead) {
       const buf = readAppendedBytes(fd, entry.bytesRead, size)
@@ -1057,13 +1136,6 @@ export function readTranscript(project: Project, sessionId: string): TranscriptM
       if (chunk) entry.fold.ingest(chunk)
     }
     // size == bytesRead → no read, no ingest; the retained projection is already current.
-
-    // Evict the least-recently-used entries beyond the cap (the first keys in insertion order).
-    while (transcriptCache.size > TRANSCRIPT_CACHE_CAP) {
-      const oldest = transcriptCache.keys().next().value
-      if (oldest === undefined) break
-      transcriptCache.delete(oldest)
-    }
 
     const messages = entry.fold.messages()
     if (hit && process.env.FRAY_TRANSCRIPT_PARSE_VERIFY === "1" && Math.random() < PARSE_VERIFY_SAMPLE) {
@@ -1302,7 +1374,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
             if (cut !== -1) text = text.slice(cut + "\nTASK:\n".length).trim()
           }
           if (text) {
-            const displayText = out.length === 0 ? githubDispatchDisplayText(text) : undefined
+            const displayText = userDisplayText(text, out.length === 0)
             out.push({ sourceId, role: "user", text, ...(displayText ? { displayText } : {}), tools: [], parts: [], at: ev.at })
           }
           break
@@ -2082,7 +2154,20 @@ function fixedSnapshot(source: TranscriptSourceBinding): FixedTranscriptSnapshot
       .update(`${source.slug}\0${source.sessionId}\0${source.nativeId}\0${source.backend}\0${source.runtimeGeneration}\0${fileKey}`)
       .digest("base64url")
       .slice(0, 32)
-    return { ...source, raw: bytes.toString("utf8"), bytes, fileKey, transcriptKey }
+    // `raw` is LAZY: the cached projection below folds only the APPENDED byte range, so a warm read of a
+    // 30 MB transcript must never pay to materialize the whole file as a JS string. Only the codex
+    // projector (non-incremental) and a cold claude fold ever touch it.
+    let rawText: string | undefined
+    return {
+      ...source,
+      get raw() {
+        if (rawText === undefined) rawText = bytes.toString("utf8")
+        return rawText
+      },
+      bytes,
+      fileKey,
+      transcriptKey,
+    }
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") return undefined
     throw error
@@ -2091,15 +2176,60 @@ function fixedSnapshot(source: TranscriptSourceBinding): FixedTranscriptSnapshot
   }
 }
 
+// The paged reader's projection. readLatestThreadTranscriptPage used to re-fold the WHOLE JSONL from
+// byte 0 on every threadTranscript RPC — measured at 2.3–3.9s for a 30 MB session, synchronously on the
+// event loop, which is most of why opening a thread drawer sat on its spinner (9.4s observed; worse on a
+// busy board, where these queue behind each other and behind the tailer tick). It now shares the SAME
+// retained fold as readTranscript (see retainedFoldEntry): an unchanged file costs no parse work, a live
+// one costs only the appended delta, and the two readers no longer fold the same bytes twice.
 function projectSnapshot(snapshot: FixedTranscriptSnapshot): TranscriptMessage[] {
   const prefix = `${snapshot.backend}:${snapshot.nativeId}`
-  return snapshot.backend === "codex"
-    ? projectCodexTranscript(snapshot.raw, prefix)
-    : projectClaudeTranscript(snapshot.raw, prefix)
+  // The codex projector parses a rollout whole — no incremental fold to retain, and rollouts are small.
+  if (snapshot.backend === "codex") return projectCodexTranscript(snapshot.raw, prefix)
+
+  const { entry } = retainedFoldEntry(snapshot.path, prefix, snapshot.fileKey, snapshot.bytes.length)
+  if (snapshot.bytes.length > entry.bytesRead) {
+    const chunk = entry.decoder.write(snapshot.bytes.subarray(entry.bytesRead))
+    entry.bytesRead = snapshot.bytes.length
+    if (chunk) entry.fold.ingest(chunk)
+  }
+  // Deliberately NO finalize(): it is the one-shot path's trailing-partial flush and advances the fold
+  // past bytes a later ingest would then re-fold, duplicating messages. A complete final record that
+  // simply lacks its newline is still projected — the fold consumes it optimistically (tryConsumePartial)
+  // — so this matches both the readTranscript cache and, for settled files, the one-shot projection.
+
+  // Shallow copy: callers append synthetic tail rows (projectDeliveryLedger pushes queued bubbles into
+  // the array it is handed), which would otherwise pollute the RETAINED projection across reads.
+  return [...entry.fold.allMessages()]
 }
+
+// sha256 over the whole snapshot, memoized per file identity+length. Cursor minting hashes the ENTIRE
+// transcript on every latest-page read; at 30 MB that is real event-loop time to repeat for a file that
+// has not changed. Only the full-length digest is memoized — the cursor VALIDATION path digests an
+// arbitrary historical prefix, which is a one-off per request and stays uncached.
+const fullDigestCache = new Map<string, string>()
+const FULL_DIGEST_CACHE_CAP = 16
 
 function digestPrefix(bytes: Buffer, length = bytes.length): string {
   return createHash("sha256").update(bytes.subarray(0, length)).digest("base64url")
+}
+
+function fullDigest(snapshot: FixedTranscriptSnapshot): string {
+  const key = `${snapshot.fileKey}\0${snapshot.bytes.length}`
+  const hit = fullDigestCache.get(key)
+  if (hit !== undefined) {
+    fullDigestCache.delete(key)
+    fullDigestCache.set(key, hit)
+    return hit
+  }
+  const digest = digestPrefix(snapshot.bytes)
+  fullDigestCache.set(key, digest)
+  while (fullDigestCache.size > FULL_DIGEST_CACHE_CAP) {
+    const oldest = fullDigestCache.keys().next().value
+    if (oldest === undefined) break
+    fullDigestCache.delete(oldest)
+  }
+  return digest
 }
 
 function encodeTranscriptCursor(snapshot: FixedTranscriptSnapshot, anchorSourceId: string): string {
@@ -2112,7 +2242,7 @@ function encodeTranscriptCursor(snapshot: FixedTranscriptSnapshot, anchorSourceI
     runtimeGeneration: snapshot.runtimeGeneration,
     fileKey: snapshot.fileKey,
     snapshotBytes: snapshot.bytes.length,
-    prefixDigest: digestPrefix(snapshot.bytes),
+    prefixDigest: fullDigest(snapshot),
     anchorSourceId,
   }
   return Buffer.from(JSON.stringify(payload)).toString("base64url")
