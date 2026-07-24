@@ -903,6 +903,23 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
+    // Event-snooze the awaiting-background card: capture the CURRENT rest instant so the board hides the
+    // card until rested_at advances — the exact moment the thread's own sub-agent/shell returns and the
+    // worker comes to a new rest. No deadline, no scheduler, no reaper: the session stays alive (it is
+    // ALREADY resting) and the snooze expires itself on the next rest. Session-guarded so a stale tab
+    // cannot snooze whatever now owns the slug.
+    snoozeAwaitingBackground: mutation({
+      input: z.object({ slug: ThreadSlug, sessionId: z.string().min(1) }).strict(),
+      handler: async ({ input }) => {
+        const row = currentOwnedSession(input.slug, input.sessionId)
+        if (!row.rested_at) throw new Error("This thread is not at rest; nothing to snooze")
+        if (!ctx.storage.setBgSnoozeRestedAtIfCurrent(input.slug, row.session_id, row.runtime_generation ?? 0, row.rested_at)) {
+          throw new Error("This thread changed before it could be snoozed")
+        }
+        ctx.board.refresh()
+      },
+    }),
+
     // An awaiting fence is only a PROPOSAL. Confirming binds ONE exact final-message generation to
     // durable state; stale cards, malformed refs, elapsed timers, and in-flight workers fail closed.
     //

@@ -101,6 +101,10 @@ export interface Api {
   // than completing whatever now owns the slug.
   completeThread(input: { slug: string; sessionId: string; terminateLive?: boolean }): Promise<{ needsConfirmation: boolean; hold?: CompletionHold }>
   setThreadSnooze(input: SetThreadSnoozeInput): Promise<void>
+  // Event-snooze the awaiting-background card: hide it until the thread's own background work returns
+  // (the parent comes to a NEW rest). No deadline and no scheduler — the board re-surfaces it the moment
+  // rested_at advances. `sessionId` binds the click to the session the tab was looking at.
+  snoozeAwaitingBackground(input: { slug: string; sessionId: string }): Promise<void>
   // An awaiting fence is only a PROPOSAL — confirming binds ONE exact final-message generation to
   // durable state (the scheduled bump / the operator-confirmed wait).
   confirmAwaiting(input: ConfirmAwaitingInput): Promise<void>
@@ -191,6 +195,7 @@ export const PROCEDURES = {
   setThreadState: "mutation",
   completeThread: "mutation",
   setThreadSnooze: "mutation",
+  snoozeAwaitingBackground: "mutation",
   confirmAwaiting: "mutation",
   forgetThread: "mutation",
   planBody: "query",
