@@ -803,15 +803,32 @@ function trackCompletions(state: TailState, rec: Record): void {
   if (!raw || !raw.includes("<task-notification>")) return
   for (const block of raw.match(/<task-notification>[\s\S]*?<\/task-notification>/g) ?? []) {
     const status = block.match(/<status>([^<]*)<\/status>/)?.[1]
-    if (status !== "completed" && status !== "failed" && status !== "killed") continue
-    // Correlate by tool-use-id, then fall back to the runtime task-id (both ride the notification).
-    // Some emitters omit tool-use-id; before we captured task ids at launch that was a safe no-op, and
-    // now it RESOLVES against the entry's captured task id instead of leaking a phantom row.
-    const id = block.match(/<tool-use-id>([^<]*)<\/tool-use-id>/)?.[1]
-    const taskId = block.match(/<task-id>([^<]*)<\/task-id>/)?.[1]
-    const entry = (id ? state.subAgents.get(id) : undefined) ?? (taskId ? findLiveByTaskId(state, taskId) : undefined)
-    if (!entry) continue // not live (unknown id, or already retired by an earlier notify) — no-op
-    retireLive(state, entry, typeof rec.timestamp === "string" ? rec.timestamp : undefined, status)
+    // completed/failed/killed are the natural terminals. `stopped` is the RECOVERY notification a NEW
+    // session emits for background ops the PREVIOUS process left with no completion record ("… have been
+    // marked stopped") — the owning process is gone, so it is just as terminal; map it to killed.
+    // Dropping it (the old guard did) is exactly why an orphaned sub-agent lingered as `stale` and an
+    // orphaned background shell — which has NO staleness clock — pulsed "running" forever, re-derived
+    // identically on every restart (found 2026-07-23 on real nub threads). A non-terminal "running" ping
+    // still retires nothing.
+    const terminal: "completed" | "failed" | "killed" | undefined =
+      status === "completed" || status === "failed" || status === "killed" ? status : status === "stopped" ? "killed" : undefined
+    if (!terminal) continue
+    // ONE block can list MANY ops — the recovery notification names every orphan at once — and it may
+    // carry tool-use-ids, only task-ids, or both (the recovery shape omits tool-use-ids entirely). Retire
+    // EVERY correlated live entry, not just the first: the old single-.match() left all-but-one live, so a
+    // 3-agent recovery still leaked 2. Dedupe (a tool-use-id and a task-id can name the same entry) and
+    // collect before retiring, since retireLive mutates the map findLiveByTaskId scans.
+    const doomed = new Set<SubAgentEntry>()
+    for (const m of block.matchAll(/<tool-use-id>([^<]*)<\/tool-use-id>/g)) {
+      const entry = state.subAgents.get(m[1])
+      if (entry) doomed.add(entry)
+    }
+    for (const m of block.matchAll(/<task-id>([^<]*)<\/task-id>/g)) {
+      if (m[1].startsWith("__orphan_summary__")) continue // internal scan sentinel — correlates to nothing
+      const entry = findLiveByTaskId(state, m[1])
+      if (entry) doomed.add(entry)
+    }
+    for (const entry of doomed) retireLive(state, entry, typeof rec.timestamp === "string" ? rec.timestamp : undefined, terminal)
   }
 }
 
