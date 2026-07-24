@@ -4,7 +4,7 @@ import { useSnapshot } from "valtio"
 import * as RadixTabs from "@radix-ui/react-tabs"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight, FileText, Hash, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, ShieldCheck, Sparkles, X } from "lucide-react"
+import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight, FileText, Hash, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, ShieldCheck, Sparkles, X, type LucideIcon } from "lucide-react"
 import type { AwaitingHint, NativeInputRequired as NativeInputRequiredData, PendingAsk, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptToolCall } from "@fray-ui/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBoard, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
@@ -2393,6 +2393,47 @@ interface BlockInteractive {
   onSubmit: () => void
 }
 
+// ── The shared card chrome ────────────────────────────────────────────────────────────────────────
+// Every card the transcript sets off from the prose — the ```done / ```awaiting signal fences, a
+// ```question block, and the runtime banners (permission, provider fault, usage-limit pause, native
+// input) — wears the SAME two parts, so they read as one family rather than a pile of one-off shapes
+// (maintainer 2026-07-24: "I like the little checkmark with the Done label — we should have something
+// similar for all the other kinds of cards").
+
+// Part one: the kind header. A small glyph plus the kind in quiet uppercase, at the card's top-left.
+// It is the card's IDENTITY, so it never carries prose — the sentence belongs in the body below.
+function CardKind({
+  icon: Icon,
+  label,
+  tone = "text-muted/70",
+}: {
+  icon: LucideIcon
+  label: ReactNode
+  // The kind's own color language: muted by default, red for danger/fault, amber for a pause, accent
+  // for "this one is waiting on you".
+  tone?: string
+}) {
+  return (
+    <div className={`mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide ${tone}`}>
+      <Icon size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} />
+      {label}
+    </div>
+  )
+}
+
+// Part two: the action row, ALWAYS right-justified (maintainer 2026-07-24). A card's buttons are its
+// trailing verb; hung on the left they read as another paragraph of the body and every card disagreed
+// with every other about where to look for the action. Any explainer text passed as the first child
+// takes the leftover width (`flex-1 min-w-0`) and wraps its own lines there, so the button still
+// anchors the right edge on a narrow queue card instead of being pushed onto its own line.
+function CardActions({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <div className={`mt-3 flex flex-wrap items-center justify-end gap-x-2.5 gap-y-2 ${className}`}>{children}</div>
+}
+
+// The primary (light-on-dark) verb every card's main action wears — the done card's white
+// "Mark as done" chrome, shared so the awaiting card's "Snooze" matches it.
+const CARD_PRIMARY_BUTTON = "bg-fg px-2.5 py-1 text-bg hover:opacity-90"
+
 // A ```question block, set off from the surrounding prose: rounded neutral border + slightly elevated
 // bg + a muted label (NOT yellow — that's the focus motif). The label + icon track the kind: a plain
 // question shows a help glyph, an approval shows a shield, a `multi` block shows a checklist. A `danger`
@@ -2443,10 +2484,7 @@ export function QuestionBlockCard({
   const kindLabel = isMulti ? "select multiple" : isApproval ? "approval" : "question"
   return (
     <div className={`rounded-lg border px-4 py-3 ${isDanger ? "border-red-500/40 bg-red-500/[0.05]" : "border-border-strong bg-elevated"}`}>
-      <div className={`mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide ${isDanger ? "text-red-400" : "text-muted/70"}`}>
-        <KindIcon size={11} className="shrink-0" />
-        {kindLabel}
-      </div>
+      <CardKind icon={KindIcon} label={kindLabel} tone={isDanger ? "text-red-400" : undefined} />
       {html && <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={{ __html: html }} />}
       {(parsed.options.length > 0 || interactive) && (
         // Options stack in a SINGLE full-width column (maintainer 2026-07-10: a 2-col grid read as
@@ -2585,22 +2623,20 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
       // splash stood out as the only saturated color in the UI (maintainer 2026-07-10). The Check +
       // "Done" label carries the meaning; no color needed.
       <div className="rounded-lg border border-border-strong bg-panel-2 px-4 py-3">
-        <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted/70">
-          <Check size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} /> Done
-        </div>
+        <CardKind icon={Check} label="Done" />
         {html && <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={{ __html: html }} />}
         {/* A white "Mark as done" button, deliberately redundant with the stable lifecycle footer — the
             same completion mutation, styled as the primary (light-on-dark) verb. Only shown when the
             thread can actually take the action. */}
         {doneThread && (
-          <div className="mt-3">
+          <CardActions>
             <StateButton
               thread={doneThread}
-              className="bg-fg px-2.5 py-1 text-bg hover:opacity-90"
+              className={CARD_PRIMARY_BUTTON}
               onArchived={queueDismiss?.dismiss}
               onDismissCancel={queueDismiss?.cancel}
             />
-          </div>
+          </CardActions>
         )}
       </div>
     )
@@ -2612,9 +2648,7 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   const parkTitle = awaitingParkAction(hints)?.title ?? AWAITING_FALLBACK_TITLE
   return (
     <div className="min-w-0 rounded-lg border border-border-strong bg-panel-2 px-4 py-3">
-      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted/70">
-        <Hourglass size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} /> {parkTitle}
-      </div>
+      <CardKind icon={Hourglass} label={parkTitle} />
       <div
         className={`md-inline min-w-0 text-[12px] leading-5 text-fg/85${wrap ? ` ${QUEUE_WRAP}` : ""}`}
         dangerouslySetInnerHTML={{ __html: awaitingHtml }}
@@ -2654,10 +2688,12 @@ function AwaitingParkButton({ thread, hints }: { thread: ThreadViewData; hints: 
       .finally(() => setBusy(false))
   }
   return (
-    // Button first, explainer floated to its right. The explainer takes the remaining width and wraps
-    // its OWN lines there (flex-1 + min-w-0) instead of dropping below the button — on a narrow queue
-    // card a two-line sentence beside the button still reads as one control, a stacked one doesn't.
-    <div className="mt-3 flex items-center gap-x-2.5">
+    // Explainer first, button ANCHORED RIGHT — the same trailing-verb position the done card's
+    // Mark-as-done holds (maintainer 2026-07-24). The explainer takes the remaining width and wraps its
+    // OWN lines there (flex-1 + min-w-0) instead of pushing the button onto a line of its own: on a
+    // narrow queue card a two-line sentence beside the button still reads as one control.
+    <CardActions>
+      <span className="min-w-0 flex-1 text-[11px] leading-snug text-muted/70">{action.explainer}</span>
       <button
         type="button"
         onClick={apply}
@@ -2665,13 +2701,14 @@ function AwaitingParkButton({ thread, hints }: { thread: ThreadViewData; hints: 
         aria-label={AWAITING_PARK_BUTTON}
         title={action.explainer}
         onMouseDown={(e) => e.preventDefault()}
-        className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-panel px-2.5 py-1 text-[11px] font-medium text-fg/85 outline-none transition-colors hover:border-border-strong hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-45"
+        // Same white primary chrome as the done card's Mark-as-done: parking is this card's verb, and
+        // the recessed grey it used to wear read as a secondary/disabled affordance beside it.
+        className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md text-[11px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-45 ${CARD_PRIMARY_BUTTON}`}
       >
         {busy && <Loader2 size={11} className="animate-spin" />}
         {AWAITING_PARK_BUTTON}
       </button>
-      <span className="min-w-0 flex-1 text-[11px] leading-snug text-muted/70">{action.explainer}</span>
-    </div>
+    </CardActions>
   )
 }
 
@@ -2718,29 +2755,30 @@ export function ProviderFaultCard({
     if (!started) setRetrying(false)
   }
   return (
-    <div data-provider-fault className="flex items-center gap-2.5 rounded-md border border-red-500/40 bg-panel-2 px-3 py-2 text-[12px]">
-      <KeyRound size={13} className="shrink-0 text-red-400" />
-      <span className="min-w-0 flex-1 text-fg/90">
-        <span className="font-medium">{label} sign-in required</span> — the provider rejected this
-        session's credential. Sign in, then retry.
+    <div data-provider-fault className="rounded-lg border border-red-500/40 bg-panel-2 px-4 py-3 text-[12px]">
+      <CardKind icon={KeyRound} label={`${label} sign-in required`} tone="text-red-400" />
+      <span className="block min-w-0 text-fg/90">
+        The provider rejected this session's credential. Sign in, then retry.
       </span>
-      {retryText?.trim() && (
+      <CardActions>
+        {retryText?.trim() && (
+          <button
+            onClick={() => retry(retryText)}
+            disabled={retrying}
+            onMouseDown={(e) => e.preventDefault()}
+            className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-fg/90 transition-colors hover:bg-panel hover:border-border-strong disabled:opacity-60"
+          >
+            Retry
+          </button>
+        )}
         <button
-          onClick={() => retry(retryText)}
-          disabled={retrying}
+          onClick={() => setSignIn(true)}
           onMouseDown={(e) => e.preventDefault()}
-          className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-fg/90 transition-colors hover:bg-panel hover:border-border-strong disabled:opacity-60"
+          className="shrink-0 rounded-md bg-accent px-2 py-1 text-[11px] font-medium text-white transition-opacity hover:opacity-90"
         >
-          Retry
+          Sign in
         </button>
-      )}
-      <button
-        onClick={() => setSignIn(true)}
-        onMouseDown={(e) => e.preventDefault()}
-        className="shrink-0 rounded-md bg-accent px-2 py-1 text-[11px] font-medium text-white transition-opacity hover:opacity-90"
-      >
-        Sign in
-      </button>
+      </CardActions>
       {signIn && (
         <SignInModal
           backend={fault.backend}
@@ -2789,54 +2827,49 @@ export function LimitPauseCard({ slug, sessionId, pause }: { slug: string; sessi
     })
     if (!started) setContinuing(false)
   }
-  // items-center vertically centers the sentence and the button on the common single line: the button
-  // is the tallest element, so the old items-start left it hanging below the text inside the card's
-  // padding (the "garbage spacing"). flex-wrap + ml-auto still drop the button to its own line at a
-  // narrow width; the glyph and sentence are grouped (items-start + a 2px glyph nudge) so the hourglass
-  // stays on the FIRST line when the sentence wraps rather than floating to the middle of the block.
   return (
-    <div data-limit-pause className="flex flex-wrap items-center gap-x-2.5 gap-y-2 rounded-md border border-amber-500/40 bg-panel-2 px-3 py-2 text-[12px]">
+    <div data-limit-pause className="rounded-lg border border-amber-500/40 bg-panel-2 px-4 py-3 text-[12px]">
+      <CardKind icon={Hourglass} label={`Paused by the ${label} ${which}`} tone="text-amber-400" />
       {/* The provider's own "You've hit your session limit · resets …" line sits directly above this
           card (unlike an auth error, it is informative, so transcript.ts keeps its bubble). So this
           card says only what THAT line cannot: what fray is going to do about it. */}
-      <span className="flex min-w-[12rem] flex-1 items-start gap-2.5 text-fg/90">
-        <Hourglass size={13} className="mt-[2px] shrink-0 text-amber-400" />
-        <span>
-          <span className="font-medium">Paused by the {label} {which}</span>
-          {" — "}
-          {pause.autoResume
-            ? pause.resumesAt
-              ? `continuing automatically at ${limitResumeClock(pause.resumesAt)}.`
-              : "continuing automatically once the window resets."
-            : "continue it whenever you have capacity again."}
-        </span>
+      <span className="block min-w-0 text-fg/90">
+        {pause.autoResume
+          ? pause.resumesAt
+            ? `Continuing automatically at ${limitResumeClock(pause.resumesAt)}.`
+            : "Continuing automatically once the window resets."
+          : "Continue it whenever you have capacity again."}
       </span>
-      <button
-        onClick={continueNow}
-        disabled={continuing}
-        onMouseDown={(e) => e.preventDefault()}
-        className="ml-auto shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-fg/90 transition-colors hover:bg-panel hover:border-border-strong disabled:opacity-60"
-      >
-        Continue now
-      </button>
+      <CardActions>
+        <button
+          onClick={continueNow}
+          disabled={continuing}
+          onMouseDown={(e) => e.preventDefault()}
+          className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-fg/90 transition-colors hover:bg-panel hover:border-border-strong disabled:opacity-60"
+        >
+          Continue now
+        </button>
+      </CardActions>
     </div>
   )
 }
 
 export function PermPromptBanner({ onTerminal }: { onTerminal: () => void }) {
   return (
-    <div className="flex items-center gap-2.5 rounded-md border border-border-strong bg-panel-2 px-3 py-2 text-[12px]">
-      <KeyRound size={13} className="shrink-0 text-muted" />
-      <span className="min-w-0 flex-1 text-fg/90">
-        The agent is waiting on a <span className="font-medium">permission approval</span> — respond in your external terminal.
+    <div className="rounded-lg border border-border-strong bg-panel-2 px-4 py-3 text-[12px]">
+      <CardKind icon={KeyRound} label="Permission approval" />
+      <span className="block min-w-0 text-fg/90">
+        The agent is waiting on your approval — respond in your external terminal.
       </span>
-      <button
-        onClick={() => onTerminal()}
-        onMouseDown={(e) => e.preventDefault()}
-        className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-fg/90 transition-colors hover:bg-panel hover:border-border-strong"
-      >
-        Copy terminal command
-      </button>
+      <CardActions>
+        <button
+          onClick={() => onTerminal()}
+          onMouseDown={(e) => e.preventDefault()}
+          className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-fg/90 transition-colors hover:bg-panel hover:border-border-strong"
+        >
+          Copy terminal command
+        </button>
+      </CardActions>
     </div>
   )
 }
@@ -2855,15 +2888,10 @@ export function NativeInputRequiredCard({ input, onTerminal }: { input: NativeIn
           : "Choice required"
   return (
     <div data-native-input-required className="rounded-lg border border-accent/50 bg-accent/10 px-4 py-3 shadow-sm shadow-black/10">
-      <div className="flex items-start gap-2.5">
-        <AlertTriangle size={15} className="mt-0.5 shrink-0 text-accent" />
-        <div className="min-w-0 flex-1">
-          <div className="text-[10px] font-medium uppercase tracking-wide text-accent">{label}</div>
-          <div className="mt-1 text-[13px] font-medium leading-snug text-fg">{input.title}</div>
-          <div className="mt-1 text-[12px] leading-snug text-muted">Review and respond in your external terminal. Fray will not choose for you.</div>
-        </div>
-      </div>
-      <div className="mt-3 flex justify-end">
+      <CardKind icon={AlertTriangle} label={label} tone="font-medium text-accent" />
+      <div className="text-[13px] font-medium leading-snug text-fg">{input.title}</div>
+      <div className="mt-1 text-[12px] leading-snug text-muted">Review and respond in your external terminal. Fray will not choose for you.</div>
+      <CardActions>
         <button
           onClick={() => onTerminal()}
           onMouseDown={(e) => e.preventDefault()}
@@ -2871,7 +2899,7 @@ export function NativeInputRequiredCard({ input, onTerminal }: { input: NativeIn
         >
           Copy terminal command
         </button>
-      </div>
+      </CardActions>
     </div>
   )
 }
@@ -2954,9 +2982,7 @@ export function BackgroundOpsStrip({
 export function PendingAskCard({ ask, onTerminal }: { ask: PendingAsk; onTerminal: () => void }) {
   return (
     <div className="rounded-lg border border-accent/40 bg-accent/[0.06] px-4 py-3">
-      <div className="mb-2 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-accent/80">
-        <HelpCircle size={11} className="shrink-0" /> Waiting on your answer — in your external terminal
-      </div>
+      <CardKind icon={HelpCircle} label="Waiting on your answer — in your external terminal" tone="text-accent/80" />
       <div className="flex flex-col gap-3">
         {ask.questions.map((q, i) => (
           <div key={i} className="flex flex-col gap-1.5">
@@ -2977,13 +3003,15 @@ export function PendingAskCard({ ask, onTerminal }: { ask: PendingAsk; onTermina
           </div>
         ))}
       </div>
-      <button
-        onClick={() => onTerminal()}
-        onMouseDown={(e) => e.preventDefault()}
-        className="mt-3 flex items-center gap-1.5 rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95"
-      >
-        <KeyRound size={12} /> Copy terminal command
-      </button>
+      <CardActions>
+        <button
+          onClick={() => onTerminal()}
+          onMouseDown={(e) => e.preventDefault()}
+          className="flex items-center gap-1.5 rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95"
+        >
+          <KeyRound size={12} /> Copy terminal command
+        </button>
+      </CardActions>
     </div>
   )
 }
