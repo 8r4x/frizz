@@ -1,4 +1,5 @@
 import { createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
+import { createPortal } from "react-dom"
 import { useSnapshot } from "valtio"
 import * as RadixTabs from "@radix-ui/react-tabs"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -153,6 +154,10 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
   // The drawer transcript is the only scrolling region. The composer, selectors, and running
   // operation rows are siblings, so a long draft cannot push any footer control under a boundary.
   const transcriptRef = useRef<HTMLDivElement>(null)
+  // The "Jump to latest" affordance floats in the OUTER frame — a sibling of the scroller, not a
+  // child of it — so it is genuinely stationary while the transcript scrolls underneath. Held as
+  // state (not a ref) so the portal renders as soon as the node mounts.
+  const [jumpOverlay, setJumpOverlay] = useState<HTMLDivElement | null>(null)
   const count = q.data?.messages.length ?? 0
   useEffect(() => {
     if (virtualized) return
@@ -194,6 +199,9 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
       data-drawer-scroll-ready={q.isPending ? "false" : "true"}
       className="flex-1 min-h-0 flex flex-col overflow-hidden outline-none"
     >
+      {/* The scroll viewport's own coordinate frame: `relative` here (rather than on the scroller)
+          is what lets the floating overlay below sit still while the transcript scrolls. */}
+      <div className="relative min-h-0 flex-1 flex flex-col">
       <div
         ref={transcriptRef}
         data-drawer-transcript-scroll
@@ -225,6 +233,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
           loadingEarlier={loadingEarlier}
           earlierError={earlierError}
           loadEarlier={() => void loadEarlier()}
+          jumpOverlay={jumpOverlay}
         />
       ) : (
       <>
@@ -385,6 +394,15 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
       </>
       )}
       </div>
+      {/* Floating-affordance layer, pinned to the bottom-right of the scroll VIEWPORT. It is a
+          sibling of the scroller, so nothing here moves when the transcript scrolls; the layer
+          itself is click-through and only its children take pointer events. */}
+      <div
+        ref={setJumpOverlay}
+        data-transcript-overlay
+        className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-end p-4 [&>*]:pointer-events-auto"
+      />
+      </div>
       {/* This entire footer is deliberately non-scrolling: transcript history alone overflows. */}
       {/* Prompt box FIRST, then the background-ops strip UNDERNEATH it at the very bottom (maintainer
           2026-07-09): running sub-agents / shells / monitors sit below the composer, not above it. */}
@@ -429,6 +447,7 @@ function VirtualizedThreadTranscript({
   loadingEarlier,
   earlierError,
   loadEarlier,
+  jumpOverlay,
 }: {
   slug: string
   transcriptRef: React.RefObject<HTMLDivElement | null>
@@ -449,6 +468,7 @@ function VirtualizedThreadTranscript({
   loadingEarlier: boolean
   earlierError: string | null
   loadEarlier: () => void
+  jumpOverlay: HTMLElement | null
 }) {
   const messageRows = useMemo(() => buildVirtualTranscriptMessageRows(
     messages,
@@ -626,10 +646,6 @@ function VirtualizedThreadTranscript({
 
   const virtualItems = virtualizer.getVirtualItems()
   const totalSize = virtualizer.getTotalSize()
-  const jumpTop = Math.max(
-    12,
-    (virtualizer.scrollOffset ?? 0) + (virtualizer.scrollRect?.height ?? transcriptRef.current?.clientHeight ?? 0) - 48,
-  )
 
   return (
     <div
@@ -723,19 +739,29 @@ function VirtualizedThreadTranscript({
           </div>
         )
       })}
-      {!atEnd && (
-        <button
-          type="button"
-          data-jump-to-latest
-          onClick={() => virtualizer.scrollToEnd({ behavior: "smooth" })}
-          className="absolute right-4 z-20 flex items-center gap-1.5 rounded-full border border-border-strong bg-elevated px-3 py-1.5 text-[11px] font-medium text-fg shadow-lg shadow-black/30 hover:bg-panel-2"
-          style={{ top: jumpTop }}
-        >
-          <ArrowDown size={12} />
-          Jump to latest
-        </button>
-      )}
+      <JumpToLatest overlay={jumpOverlay} hidden={atEnd} onJump={() => virtualizer.scrollToEnd({ behavior: "smooth" })} />
     </div>
+  )
+}
+
+// "Jump to latest" belongs to the transcript's scroll STATE but not to its scroll CONTENT: it is
+// portalled into ChatView's viewport-anchored overlay so it simply floats, motionless, over the
+// scrolling column. (It used to render inside the virtualized content and chase the viewport by
+// recomputing a content-space `top` every render — which meant it drifted with the content on every
+// scroll and snapped back a frame later.)
+function JumpToLatest({ overlay, hidden, onJump }: { overlay: HTMLElement | null; hidden: boolean; onJump: () => void }) {
+  if (!overlay || hidden) return null
+  return createPortal(
+    <button
+      type="button"
+      data-jump-to-latest
+      onClick={onJump}
+      className="flex items-center gap-1.5 rounded-full border border-border-strong bg-elevated px-3 py-1.5 text-[11px] font-medium text-fg shadow-lg shadow-black/30 hover:bg-panel-2"
+    >
+      <ArrowDown size={12} />
+      Jump to latest
+    </button>,
+    overlay,
   )
 }
 
