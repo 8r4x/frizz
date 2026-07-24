@@ -293,11 +293,11 @@ export const ThreadRow = memo(function ThreadRow({
   // A thread awaiting its OWN live sub-agent/Monitor is not Held and stays fully active.
   const held = !legacy && isHeld(t)
   const dimLabel = !legacy && titleIsProvisional(t)
-  // A STALLED row — the [!] mark, i.e. the agent's process EXITED (mid-turn, or after resting without
-  // a done fence) — is the one row state with an obvious single next action, so it carries that verb
-  // inline instead of making you open the thread to find it. offersRetry IS `kind === "stalled"`
-  // (groups.ts), so this row's mark and this row's verb are the same decision and the queue card, which
-  // reads the same helper, can never disagree with the rail about a thread.
+  // The rows with an obvious single next action carry that verb INLINE, instead of making you open the
+  // thread to find it. offersRetry (groups.ts) picks them: a STALLED row (the [!] mark — process
+  // exited) AND a row HELD on a usage limit fray will auto-resume (the hourglass — a faster door to the
+  // in-drawer "Continue now" than waiting for the window). The queue card and drawer header read the
+  // SAME helper, so no surface can disagree with the rail about which threads offer Retry.
   const canRestart = !legacy && offersRetry(t)
   // Held rows collapse to a SINGLE LINE — no subtitle. The "what it's held for" detail (snooze/timer
   // wake time, human gate, review watch) lives ENTIRELY in the hourglass indicator's hover tooltip
@@ -377,10 +377,10 @@ export const ThreadRow = memo(function ThreadRow({
           <MarkAsButton slug={t.id} size="sm" />
         </div>
       )}
-      {/* ONE-CLICK RECOVERY on a stalled row. Hover-revealed and pinned to the row's right edge, over
-          the title's first line (it OVERLAYS rather than taking layout, so pointing at a row never
-          reflows its wrapped title). `group-focus-within` keeps it reachable from the keyboard: focus
-          the row button and the next Tab lands here. */}
+      {/* ONE-CLICK RECOVERY on a stalled OR usage-limit-held row (offersRetry). Hover-revealed and
+          pinned to the row's right edge, over the title's first line (it OVERLAYS rather than taking
+          layout, so pointing at a row never reflows its wrapped title). `group-focus-within` keeps it
+          reachable from the keyboard: focus the row button and the next Tab lands here. */}
       {canRestart && <RowRetryButton slug={t.id} />}
       {/* RUNNING SUB-AGENT CHILD ROWS (maintainer 2026-07-09: render running sub-agents in the
           sidebar). One indented row per live child under its parent thread — spinner while running,

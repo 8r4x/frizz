@@ -9,12 +9,12 @@ import { TooltipProvider } from "./Tooltip.tsx"
 import { offersRetry } from "../groups.ts"
 
 // HeaderActions is rendered by BOTH the queue card and the full thread drawer, so it is the last place
-// the Retry verb could disagree with the rail's yellow [!]. It used to: the drawer passed no
+// the Retry verb could disagree with the sidebar row about a thread. It used to: the drawer passed no
 // `showExitAction` and the component gated on raw `canRetry`, which ignores `state` — so every ARCHIVED
 // exited thread opened with a Retry pill while its rail row showed the muted [✓] (maintainer
 // 2026-07-23: "threads that appear to just have come to rest, but they have a retry button and they are
-// not yellow. They don't have an exclamation point"). It now gates on `offersRetry`, the same
-// derivation as the mark.
+// not yellow. They don't have an exclamation point"). It now gates on `offersRetry` — the ONE shared
+// derivation for the verb across every surface (stalled rows AND auto-resume usage-limit-held rows).
 
 const base = { kind: "session", backend: "claude", title: "A worker", status: "active", subAgents: [] } as unknown as ThreadView
 
@@ -43,6 +43,17 @@ test("the drawer/queue header offers Retry on a stalled thread — crashed or ex
   }
 })
 
+test("the header offers the same Retry on a thread HELD by an auto-resume usage limit", () => {
+  // A limit park keeps its hourglass mark, but the operator with capacity elsewhere gets the one-click
+  // continue here too — the same verb/RPC as a stall, a faster door than the in-body LimitPauseCard.
+  for (const [name, extra] of [
+    ["session limit", { runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: true } }],
+    ["weekly limit", { runtime: "exited", limitPause: { backend: "codex", window: "weekly", at: "2026-07-23T00:00:00.000Z", autoResume: true } }],
+  ] as [string, Partial<ThreadView>][]) {
+    assert.match(header(extra), RETRY, `a thread held on a ${name} must offer Retry`)
+  }
+})
+
 test("an ARCHIVED exited thread gets NO Retry — the 158-thread bug", () => {
   // The exact shape of every exited row on the real board when this was reported. `canRetry` is true
   // (the process IS gone and IS reattachable), but the thread is at rest on purpose, so the header must
@@ -63,7 +74,7 @@ test("no Retry on threads that are live, answered, finished, held, or read-only"
   }
 })
 
-test("the header's Retry is DEFINITIONALLY the stalled mark — one predicate, no surface-local gate", () => {
+test("the header's Retry is DEFINITIONALLY offersRetry — one predicate, no surface-local gate", () => {
   // Pins the invariant rather than a list: whatever offersRetry says, the rendered header must agree.
   // A future surface-local override (the old `showExitAction` escape hatch) breaks this test first.
   for (const extra of [
@@ -74,6 +85,8 @@ test("the header's Retry is DEFINITIONALLY the stalled mark — one predicate, n
     { runtime: "turn-idle" },
     { runtime: "running" },
     { runtime: "exited", foreign: true },
+    { runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: true } },
+    { runtime: "exited", snoozedUntil: "2999-01-01T00:00:00.000Z" },
   ] as Partial<ThreadView>[]) {
     const t = { ...base, id: "t", ...extra } as ThreadView
     assert.equal(RETRY.test(header(extra)), offersRetry(t), `${JSON.stringify(extra)}: header Retry must equal offersRetry`)

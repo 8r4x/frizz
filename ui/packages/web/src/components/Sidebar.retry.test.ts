@@ -7,12 +7,12 @@ import type { ThreadView } from "@fray-ui/shared"
 import { ThreadRow } from "./Sidebar.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
 
-// The sidebar's one-click recovery verb. It must appear on EXACTLY the rows that actually STOPPED and
-// can resume — a session whose PROCESS EXITED, whether it died mid-turn or exited after resting without
-// a done fence — and on exactly those rows it must ALSO paint the yellow [!] stalled mark. Never on a
-// row that is working, needs-input ([?], answered not retried), held, done, archived, or
-// read-only-foreign — on those "retry" either means nothing, has a better-suited affordance, or would
-// interrupt live work.
+// The sidebar's one-click recovery verb. It appears on the rows offersRetry picks: a session whose
+// PROCESS EXITED (mid-turn or at bare rest without a done fence — the yellow [!] stalled mark), AND a
+// session HELD on a usage limit fray will auto-resume (which keeps its hourglass mark — the verb is
+// shared, the glyph is not). Never on a row that is working, needs-input ([?], answered not retried),
+// held for some OTHER reason (a user snooze, a timer wait), done, archived, or read-only-foreign — on
+// those "retry" either means nothing, has a better-suited affordance, or would interrupt live work.
 
 const base = {
   kind: "session",
@@ -64,12 +64,28 @@ test("an exited-at-rest row (process gone, no done fence, not a crash) also gets
 // The stalled mark the operator looks for: the accent (yellow, #e8b923) checkbox around a bold "!".
 const STALLED_MARK = /border-accent\/90[\s\S]*?text-accent[^>]*>!</
 
-test("the Retry verb and the yellow [!] mark always ship together on the SAME row", () => {
+test("a usage-limit-HELD row gets the Retry button but keeps its HELD (hourglass) mark, not [!]", () => {
+  // The maintainer's ask (2026-07-23): a thread held because it hit its session limit should get the
+  // same one-click Retry as a stalled row. But it is a genuine wait (fray auto-resumes it), so it must
+  // NOT flip to the yellow [!] stall mark — the verb is shared, the glyph stays the held hourglass.
+  const limitHeld = { runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: true } } as Partial<ThreadView>
+  const html = row(limitHeld)
+  assert.match(html, /data-sidebar-retry="stalled-thread"/, "the held-on-a-limit row exposes the retry control")
+  assert.doesNotMatch(html, STALLED_MARK, "…yet does NOT wear the yellow [!] — it is held, not stalled")
+})
+
+test("a HELD row parked by something other than a limit (a user snooze) gets NO retry button", () => {
+  // Only the usage-limit park earns the widened verb; an intentional snooze has no stall to recover.
+  assert.doesNotMatch(row({ runtime: "exited", snoozedUntil: "2999-01-01T00:00:00.000Z" }), /data-sidebar-retry/)
+})
+
+test("on a STALLED row the Retry verb and the yellow [!] mark always ship together", () => {
   // THE REPORTED BUG (maintainer 2026-07-23): "the card in the queue has a retry button, but it's not
   // marked as stalled in the sidebar with the yellow and the exclamation point". The row's mark gated
   // on the server's `crashed` bit while the Retry verb gated on the process being gone, so an
   // exited-at-rest thread rendered a Retry button beside a calm "At rest" […]. ONE predicate now
-  // decides both — this pins the pairing on the rendered DOM, where the operator actually sees it.
+  // decides both FOR A STALL — this pins the pairing on the rendered DOM, where the operator actually
+  // sees it. (The usage-limit-held row above is the deliberate exception: Retry with a held glyph.)
   for (const [name, extra] of [
     ["exited mid-turn (crashed)", { runtime: "exited", crashed: true, needsYou: true }],
     ["exited at bare rest", { runtime: "exited", crashed: false }],

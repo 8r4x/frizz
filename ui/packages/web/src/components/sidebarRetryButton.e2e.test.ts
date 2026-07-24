@@ -31,10 +31,10 @@ test("hovering a stalled sidebar row reveals a Retry button that restarts the se
     await page.goto(`${baseUrl}/sidebar-retry-fixture.html`, { waitUntil: "networkidle0" })
     await page.waitForSelector('[data-sidebar-item="stalled-migration"]')
 
-    // The two STOPPED rows (a [!] crash and a […] exited-at-rest) carry a retry control; the live
-    // working row and the live turn-idle resting row must not.
+    // The two STOPPED rows (a [!] crash and a […] exited-at-rest) AND the usage-limit-HELD row carry a
+    // retry control; the live working row and the live turn-idle resting row must not.
     const retryCount = await page.$$eval("[data-sidebar-retry]", (els) => els.map((e) => e.getAttribute("data-sidebar-retry")))
-    assert.deepEqual(retryCount, ["stalled-migration", "exited-at-rest"], "exactly the two stopped rows carry Retry")
+    assert.deepEqual(retryCount, ["stalled-migration", "exited-at-rest", "limit-held"], "the two stopped rows and the limit-held row carry Retry")
 
     // Hidden at rest…
     assert.equal(await visible(retry), false, "the Retry button is hidden until the row is hovered")
@@ -63,10 +63,34 @@ test("hovering a stalled sidebar row reveals a Retry button that restarts the se
     const calls = await page.evaluate(() => JSON.parse(sessionStorage.getItem("followUpCalls") ?? "[]"))
     // retrySession resolves the session-guard id from the board; the fixture thread carries none, so
     // it sends "" (the server would fail a stale/absent row closed). The message is the shared constant.
-    assert.deepEqual(calls, [{ slug: "stalled-migration", sessionId: "", message: "Continue exactly where you left off." }])
+    // (The eager send also stamps a fresh `deliveryId` UUID — assert the stable fields, not that exact id.)
+    const stable = (c: Record<string, unknown>) => ({ slug: c.slug, sessionId: c.sessionId, message: c.message })
+    assert.deepEqual(stable(calls[0]), { slug: "stalled-migration", sessionId: "", message: "Continue exactly where you left off." })
 
     // The retry toast confirms it to the user.
     await page.waitForFunction(() => /Retrying/.test(document.body.innerText), { timeout: 5_000 })
+
+    // ── The usage-limit-HELD row: same one-click Retry, but it must NOT wear the yellow [!] stall mark.
+    const limitRetry = '[data-sidebar-retry="limit-held"]'
+    // It is HELD, not stalled: its indicator is the hourglass, so the accent [!] must be absent from the row.
+    const limitHasStallMark = await page.$eval('[data-sidebar-item="limit-held"]', (row) =>
+      Boolean(row.querySelector(".border-accent\\/90")) && /(?:^|>)!(?:<|$)/.test(row.innerHTML))
+    assert.equal(limitHasStallMark, false, "the limit-held row keeps its held glyph — no yellow [!] stall mark")
+
+    // Hidden until hover, revealed on hover — exactly like a stalled row.
+    assert.equal(await visible(limitRetry), false, "the limit-held Retry is hidden until its row is hovered")
+    await page.hover('[data-sidebar-item="limit-held"]')
+    await page.waitForFunction((sel) => {
+      const el = document.querySelector(sel)
+      return el ? getComputedStyle(el).display !== "none" : false
+    }, { timeout: 5_000 }, limitRetry)
+    assert.equal(await visible(limitRetry), true, "hovering the limit-held row reveals Retry")
+
+    // Clicking it fires the SAME recovery follow-up (the shared continue message) — a second RPC call.
+    await page.click(limitRetry)
+    await page.waitForFunction(() => JSON.parse(sessionStorage.getItem("followUpCalls") ?? "[]").length === 2, { timeout: 5_000 })
+    const allCalls = await page.evaluate(() => JSON.parse(sessionStorage.getItem("followUpCalls") ?? "[]"))
+    assert.deepEqual(stable(allCalls[1]), { slug: "limit-held", sessionId: "", message: "Continue exactly where you left off." })
 
     assert.deepEqual(errors, [])
     assert.deepEqual(notFound.filter((path) => path !== "/favicon.ico"), [])
