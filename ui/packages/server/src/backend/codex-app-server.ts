@@ -1474,6 +1474,8 @@ const ThreadSettingsUpdated = z.object({
   threadSettings: z.object({
     sandboxPolicy: z.object({ type: z.string().max(64) }).passthrough(),
     approvalPolicy: z.unknown().optional(),
+    model: z.string().min(1),
+    effort: z.string().min(1).nullable().optional(),
   }).passthrough(),
 }).passthrough()
 const TurnStarted = z.object({ threadId: Opaque, turn: z.object({ id: Opaque }).passthrough() }).strict()
@@ -1483,6 +1485,8 @@ const MAX_CORRELATED_FILE_ITEMS = 128
 interface ObservedThreadSettings {
   sandbox: CodexSandboxMode | undefined
   approvalPolicy: unknown
+  model: string
+  effort: string | null
 }
 
 export interface CodexSandboxChangeResult {
@@ -1504,6 +1508,16 @@ export interface CodexSandboxChangeResult {
    * refused, and reported the failure itself. So this is next-TURN, not next-resume, and the UI must
    * say so rather than claim the change reached work already executing.
    */
+  turnInFlight: boolean
+}
+
+export interface CodexProfileChangeResult {
+  /** True only when `thread/settings/updated` confirmed the complete requested pair. */
+  applied: boolean
+  model: string
+  effort: string
+  confirmedBy: "notification" | "unconfirmed"
+  /** An existing turn keeps the profile it started with; the confirmed pair applies after it ends. */
   turnInFlight: boolean
 }
 
@@ -1551,7 +1565,7 @@ export class CodexAppServerBridge {
   private readonly pendingTurnStarts = new Set<string>()
   /** Threads the last reconcile found dead mid-turn, awaiting warmUp()'s recovery sweep. */
   private readonly pendingAutoResume = new Map<string, { row: BindingRow; interruptedTurn: string }>()
-  /** One-shot `thread/settings/updated` listeners, keyed by codex thread id. See setSandbox(). */
+  /** One-shot `thread/settings/updated` listeners, keyed by codex thread id. */
   private readonly settingsWaiters = new Map<string, Set<(observed: ObservedThreadSettings | undefined) => void>>()
   private readonly correlatedFileItems = new Map<string, CorrelatedFileItem>()
   private activeOperations = 0
@@ -2760,6 +2774,7 @@ export class CodexAppServerBridge {
       const observedPromise = this.awaitSettingsUpdate(
         threadId,
         expectNotification ? SANDBOX_CONFIRM_TIMEOUT_MS : SANDBOX_NOOP_GRACE_MS,
+        (observed) => observed.sandbox === input.sandbox,
       )
       try {
         await connection.request("thread/settings/update", {
@@ -2786,7 +2801,66 @@ export class CodexAppServerBridge {
     }
   }
 
-  private awaitSettingsUpdate(threadId: string, timeoutMs: number): {
+  /**
+   * Change a loaded thread's model and effort for subsequent turns.
+   *
+   * Codex deliberately does not expose these fields on `turn/steer`: an in-flight turn keeps the
+   * profile it started with. `thread/settings/update` is the native queue boundary, and its
+   * `thread/settings/updated` notification is the only evidence that the complete pair landed.
+   */
+  async setProfile(input: {
+    threadSlug: string
+    sessionId: string
+    model: string
+    effort: string
+  }): Promise<CodexProfileChangeResult> {
+    const model = input.model.trim()
+    const effort = input.effort.trim()
+    if (!model || !effort) throw new Error("Codex model and effort are required")
+    const releaseOperation = this.beginOperation()
+    try {
+      if (!this.bindingForScope(input.threadSlug, input.sessionId)) {
+        throw new Error("Codex app-server profile change requires a bridge-owned session")
+      }
+      const connection = await this.ensureConnected()
+      let binding = this.bindingForScope(input.threadSlug, input.sessionId)
+      if (!binding) throw new Error("Codex app-server profile change requires a bridge-owned session")
+      if (binding.state !== "active" || binding.connection_epoch !== this.connectionEpoch) {
+        await this.resumeOwnedSession(input.threadSlug, input.sessionId)
+        binding = this.bindingForScope(input.threadSlug, input.sessionId)
+        if (!binding) throw new Error("Codex app-server session disappeared during profile change")
+      }
+      const threadId = binding.codex_thread_id
+      const turnInFlight = binding.current_turn_id !== null || this.pendingTurnStarts.has(turnKey(binding))
+      const observedPromise = this.awaitSettingsUpdate(
+        threadId,
+        SANDBOX_CONFIRM_TIMEOUT_MS,
+        (observed) => observed.model === model && observed.effort === effort,
+      )
+      try {
+        await connection.request("thread/settings/update", { threadId, model, effort })
+      } catch (error) {
+        observedPromise.cancel()
+        throw error
+      }
+      const observed = await observedPromise.promise
+      if (!observed) return { applied: false, model, effort, confirmedBy: "unconfirmed", turnInFlight }
+      if (observed.model !== model || observed.effort !== effort) {
+        throw new Error(
+          `Codex app-server reported ${observed.model}/${String(observed.effort ?? "unknown")} after a request for ${model}/${effort}`,
+        )
+      }
+      return { applied: true, model, effort, confirmedBy: "notification", turnInFlight }
+    } finally {
+      releaseOperation()
+    }
+  }
+
+  private awaitSettingsUpdate(
+    threadId: string,
+    timeoutMs: number,
+    accepts: (observed: ObservedThreadSettings) => boolean = () => true,
+  ): {
     promise: Promise<ObservedThreadSettings | undefined>
     cancel: () => void
   } {
@@ -2803,7 +2877,11 @@ export class CodexAppServerBridge {
     }
     const promise = new Promise<ObservedThreadSettings | undefined>((resolve) => {
       settle = resolve
-      listener = (observed) => { detach(); resolve(observed) }
+      listener = (observed) => {
+        if (observed && !accepts(observed)) return
+        detach()
+        resolve(observed)
+      }
       const set = this.settingsWaiters.get(threadId) ?? new Set()
       set.add(listener)
       this.settingsWaiters.set(threadId, set)
@@ -3288,6 +3366,8 @@ export class CodexAppServerBridge {
       const observed: ObservedThreadSettings = {
         sandbox: codexSandboxModeOfPolicy(parsed.data.threadSettings.sandboxPolicy),
         approvalPolicy: parsed.data.threadSettings.approvalPolicy,
+        model: parsed.data.threadSettings.model,
+        effort: parsed.data.threadSettings.effort ?? null,
       }
       // Keep the cache honest for EVERY thread, including ones changed by someone else's client.
       const binding = this.bindingForCodexThread(parsed.data.threadId)
