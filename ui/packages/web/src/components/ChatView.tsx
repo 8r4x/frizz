@@ -1307,7 +1307,7 @@ function ToolCardRouter({ t }: { t: CollapsedTool }) {
 
 type ToolStatus = NonNullable<TranscriptToolCall["status"]>
 
-export function ToolStatusMeta({ status, backgroundState, liveBackgroundState, exitCode, durationMs }: { status?: ToolStatus; backgroundState?: TranscriptToolCall["backgroundState"]; liveBackgroundState?: "running" | "stale"; exitCode?: number; durationMs?: number }) {
+export function ToolStatusMeta({ status, backgroundState, liveBackgroundState, exitCode, durationMs, indicator = "shell" }: { status?: ToolStatus; backgroundState?: TranscriptToolCall["backgroundState"]; liveBackgroundState?: "running" | "stale"; exitCode?: number; durationMs?: number; indicator?: "shell" | "agent" }) {
   if (!status && durationMs === undefined) return null
   const label =
     liveBackgroundState === "running"
@@ -1332,7 +1332,7 @@ export function ToolStatusMeta({ status, backgroundState, liveBackgroundState, e
   const tone = status === "failed" ? "fray-tool-failed" : status === "cancelled" ? "text-amber-400" : "text-muted/55"
   return (
     <span className={`petite-caps fray-tool-header-caps flex shrink-0 items-center gap-1 text-[11.5px] leading-none ${tone}`} title={title} aria-label={title}>
-      {(liveBackgroundState === "running" || hasRunningToolIndicator(status, backgroundState)) && <span aria-hidden className="fray-live-dot" data-running-indicator="tool-disclosure" />}
+      {(liveBackgroundState === "running" || hasRunningToolIndicator(status, backgroundState)) && <span aria-hidden className={`fray-live-dot fray-live-dot--${indicator}`} data-running-indicator="tool-disclosure" />}
       <span>{[label, duration].filter(Boolean).join(" · ")}</span>
     </span>
   )
@@ -1717,7 +1717,7 @@ export function AgentBlock({
         expanded={open}
         label={`${open ? "Collapse" : "Expand"} Agent prompt: ${title}`}
         onToggle={() => setOpen((v) => !v)}
-        meta={showStatusMeta && <ToolStatusMeta status={status} durationMs={durationMs} />}
+        meta={showStatusMeta && <ToolStatusMeta status={status} durationMs={durationMs} indicator="agent" />}
       >
         <span className="petite-caps fray-bash-label shrink-0">Agent</span>
         {canDrill ? (
@@ -1735,7 +1735,7 @@ export function AgentBlock({
         )}
         {subagentType && <span className="min-w-0 max-w-[9rem] truncate font-mono-keep text-[11px] text-muted/45">[{subagentType}]</span>}
         {stateLabel && <span className="shrink-0 text-[11px] text-muted/55 whitespace-nowrap">{stateLabel}</span>}
-        {running && <span aria-hidden className="fray-live-dot" data-running-indicator="subagent-disclosure" />}
+        {running && <span aria-hidden className="fray-live-dot fray-live-dot--agent" data-running-indicator="subagent-disclosure" />}
       </ToolDisclosureHeader>
       <div id={bodyId} hidden={!open}>
         {open && (
@@ -2829,11 +2829,12 @@ function OpRow({ kind, label, state, startedAt, onOpen }: { kind: "AGENT" | "SHE
       <span aria-hidden className="shrink-0 text-[11px] leading-none text-muted/40">⤷</span>
       <span className="flex w-[9px] shrink-0 justify-center">
         {isRunningOperation(state) ? (
-          <span aria-hidden className="fray-live-dot" data-running-indicator="operation" />
+          // A running SHELL pulses blue, a running sub-AGENT pulses the accent-yellow.
+          <span aria-hidden className={`fray-live-dot ${kind === "SHELL" ? "fray-live-dot--shell" : "fray-live-dot--agent"}`} data-running-indicator="operation" />
         ) : kind === "SHELL" ? (
           // A tracked background shell/Monitor is a LIVE process even when quiet (the entry only
           // clears on its terminal notification) — so it breathes rather than showing a dead gray dot.
-          <span aria-hidden className="fray-live-dot-quiet" data-running-indicator="operation-quiet" title="running — no recent output" />
+          <span aria-hidden className="fray-live-dot-quiet fray-live-dot-quiet--shell" data-running-indicator="operation-quiet" title="running — no recent output" />
         ) : (
           <span className="block h-1.5 w-1.5 rounded-full bg-muted/25" title="stale — no recent output" />
         )}
