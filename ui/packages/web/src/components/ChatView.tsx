@@ -2430,9 +2430,16 @@ function CardActions({ children, className = "" }: { children: ReactNode; classN
   return <div className={`mt-3 flex flex-wrap items-center justify-end gap-x-2.5 gap-y-2 ${className}`}>{children}</div>
 }
 
-// The primary (light-on-dark) verb every card's main action wears — the done card's white
-// "Mark as done" chrome, shared so the awaiting card's "Snooze" matches it.
-const CARD_PRIMARY_BUTTON = "bg-fg px-2.5 py-1 text-bg hover:opacity-90"
+// The primary (light-on-dark) verb EVERY card's main action wears — the done card's white
+// "Mark as done" chrome. Exported because this is a rule, not a per-card choice (maintainer 2026-07-24:
+// the buttons inside these cards should ALWAYS be white): a card is a request for one action, and the
+// recessed outlined chrome some of them wore read as a secondary — or worse, disabled — affordance.
+// The ONLY departure is a genuinely secondary sibling standing beside the primary (the provider-fault
+// card's "Retry" next to "Sign in"), which stays outlined so the pair keeps a hierarchy.
+export const CARD_PRIMARY_BUTTON = "bg-fg px-2.5 py-1 text-bg hover:opacity-90"
+// The same verb with the icon+label layout every card action uses. Cards differ only in what they pass
+// beyond this (shrink-0, a disabled treatment), never in the fill.
+const CARD_PRIMARY_ACTION = `flex shrink-0 items-center gap-1.5 rounded-md text-[11px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 ${CARD_PRIMARY_BUTTON}`
 
 // A ```question block, set off from the surrounding prose: rounded neutral border + slightly elevated
 // bg + a muted label (NOT yellow — that's the focus motif). The label + icon track the kind: a plain
@@ -2703,7 +2710,7 @@ function AwaitingParkButton({ thread, hints }: { thread: ThreadViewData; hints: 
         onMouseDown={(e) => e.preventDefault()}
         // Same white primary chrome as the done card's Mark-as-done: parking is this card's verb, and
         // the recessed grey it used to wear read as a secondary/disabled affordance beside it.
-        className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md text-[11px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-45 ${CARD_PRIMARY_BUTTON}`}
+        className={`whitespace-nowrap disabled:opacity-45 ${CARD_PRIMARY_ACTION}`}
       >
         {busy && <Loader2 size={11} className="animate-spin" />}
         {AWAITING_PARK_BUTTON}
@@ -2771,10 +2778,13 @@ export function ProviderFaultCard({
             Retry
           </button>
         )}
+        {/* The card's verb, so it wears the same white fill as every other card action. The accent
+            fill it used to have made it the one saturated button in the transcript — and the red kind
+            header + red border already carry the alarm, so the button did not need to repeat it. */}
         <button
           onClick={() => setSignIn(true)}
           onMouseDown={(e) => e.preventDefault()}
-          className="shrink-0 rounded-md bg-accent px-2 py-1 text-[11px] font-medium text-white transition-opacity hover:opacity-90"
+          className={CARD_PRIMARY_ACTION}
         >
           Sign in
         </button>
@@ -2845,7 +2855,7 @@ export function LimitPauseCard({ slug, sessionId, pause }: { slug: string; sessi
           onClick={continueNow}
           disabled={continuing}
           onMouseDown={(e) => e.preventDefault()}
-          className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-fg/90 transition-colors hover:bg-panel hover:border-border-strong disabled:opacity-60"
+          className={`disabled:opacity-45 ${CARD_PRIMARY_ACTION}`}
         >
           Continue now
         </button>
@@ -2865,7 +2875,7 @@ export function PermPromptBanner({ onTerminal }: { onTerminal: () => void }) {
         <button
           onClick={() => onTerminal()}
           onMouseDown={(e) => e.preventDefault()}
-          className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-fg/90 transition-colors hover:bg-panel hover:border-border-strong"
+          className={CARD_PRIMARY_ACTION}
         >
           Copy terminal command
         </button>
@@ -2895,7 +2905,7 @@ export function NativeInputRequiredCard({ input, onTerminal }: { input: NativeIn
         <button
           onClick={() => onTerminal()}
           onMouseDown={(e) => e.preventDefault()}
-          className="rounded-md border border-accent/50 bg-panel px-2.5 py-1.5 text-[11px] font-medium text-fg transition-colors hover:border-accent hover:bg-panel-2"
+          className={CARD_PRIMARY_ACTION}
         >
           Copy terminal command
         </button>
@@ -3007,7 +3017,7 @@ export function PendingAskCard({ ask, onTerminal }: { ask: PendingAsk; onTermina
         <button
           onClick={() => onTerminal()}
           onMouseDown={(e) => e.preventDefault()}
-          className="flex items-center gap-1.5 rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95"
+          className={CARD_PRIMARY_ACTION}
         >
           <KeyRound size={12} /> Copy terminal command
         </button>
