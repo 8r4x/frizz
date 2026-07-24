@@ -115,10 +115,12 @@ node <this-skill-dir>/scripts/review-watch.mjs --repo OWNER/REPO --pr NUMBER
   a complete successful exact-head set exits 0; a failure exits 2. Do not report CI success from a
   partial rollup. Retries are collapsed only by workflow name plus event, so distinct exact-head events
   such as `push` and `pull_request` both remain in that aggregate.
-- `review-watch` snapshots existing non-bot review/comment activity and exits only when it sees new
-  human activity. A restarted monitor takes a new baseline, so it is an active watch rather than a
+- `review-watch` snapshots existing review/comment activity and exits when it sees any new activity —
+  bot or human, since most PR review is now filed by an app and the review agents that post their
+  findings as a conversation comment are exactly what an actor filter drops.
+  A restarted monitor takes a new baseline, so it is an active watch rather than a
   durable cursor. When running inside Fray UI, a genuine external-human handoff may additionally use
-  the Fray-owned `human:` + `github-review:` durable scheduler gate; a `timer:` is only a deliberate
+  the Fray-owned `human:` + `pr-watch:` durable scheduler gate; a `timer:` is only a deliberate
   wall-clock recheck fallback.
 
 The Fray UI scheduler remains acceptable for its durable timer and `github-review` primitives and for

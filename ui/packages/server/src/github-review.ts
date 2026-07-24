@@ -124,17 +124,13 @@ export function parseGithubReviewActivities(raw: unknown): GithubReviewActivity[
   return out
 }
 
-export function isNonBotGithubActivity(a: GithubReviewActivity): boolean {
-  const type = a.actorType?.toLowerCase()
-  const login = a.actor.toLowerCase()
-  return type !== "bot" && !login.endsWith("[bot]")
-}
-
-// A submitted review is deliberate review activity even when the reviewer is an agent app such as
-// Pullfrog or Copilot. Bot conversation comments remain deploy/CI noise; human comments wake.
-export function isWakeworthyGithubActivity(a: GithubReviewActivity): boolean {
-  if (a.kind === "review") return true
-  return isNonBotGithubActivity(a)
+// Every new review and comment wakes the watcher, whoever filed it. Most PR review today arrives from
+// an app — Pullfrog, Copilot, CodeRabbit, Greptile — and the ones that post their findings as a
+// CONVERSATION COMMENT rather than a formal review were exactly what an actor-type filter swallowed.
+// Distinguishing "real" review from deploy/CI chatter by actor is not something this layer can do
+// correctly, and being asleep for a review is far more expensive than one spurious bump.
+export function isBotGithubActor(a: GithubReviewActivity): boolean {
+  return a.actorType?.toLowerCase() === "bot" || a.actor.toLowerCase().endsWith("[bot]")
 }
 
 function buildQuery(refs: GithubReviewRef[]): { query: string; variables: Record<string, string | number> } {

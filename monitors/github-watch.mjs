@@ -21,13 +21,13 @@ export function classifyChecks(checks) {
   return { state: failed ? "failed" : pending ? "pending" : "passed", checks }
 }
 
-export function humanReviewActivity(raw) {
+// Every review and comment counts, whoever filed it. Most PR review now arrives from an app —
+// Pullfrog, Copilot, CodeRabbit, Greptile — and the reviewers that post their findings as a
+// conversation comment are exactly what an actor-type filter used to throw away.
+export function reviewActivity(raw) {
   const pr = raw?.data?.repository?.pullRequest
   const nodes = [...(pr?.reviews?.nodes ?? []), ...(pr?.comments?.nodes ?? [])]
-  return new Set(nodes
-    .filter((node) => node?.author?.__typename !== "Bot" && !String(node?.author?.login ?? "").endsWith("[bot]"))
-    .map((node) => String(node.id))
-    .filter(Boolean))
+  return new Set(nodes.map((node) => String(node?.id ?? "")).filter(Boolean))
 }
 
 export function latestWorkflowRuns(runs) {

@@ -2667,7 +2667,7 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
 
 // The awaiting card's HUMAN-IN-THE-LOOP park button, sitting under the prose with its effect spelled
 // out in muted text beside it. The worker's ```awaiting fence already auto-arms the durable wake (a
-// `timer` fires at its instant; a `github-review` watcher wakes on new non-bot PR activity) AND
+// `timer` fires at its instant; a `pr-watch` watcher wakes on any new PR activity, bot or human) AND
 // already files the thread into the dimmed Held band — this button lets the human EXPLICITLY commit a
 // USER-OWNED snooze on top, so the park carries a concrete wake time and is durable across fence
 // changes. It NEVER suppresses the auto-armed wake: a user snooze is a board-presentation concern

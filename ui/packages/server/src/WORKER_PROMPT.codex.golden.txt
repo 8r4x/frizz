@@ -123,8 +123,10 @@ state. The fence LANGUAGE is the state; the body is the message the card shows:
   prose. New waits use only:
 
   - `pr-watch: owner/repo#NUMBER` — the GitHub PR watcher. fray polls the PR and resumes you on ANY new
-    non-bot activity after this fence — a review, an approval, or a comment — baselined here and durable
-    across a server/worker restart. Your thread STAYS IN THE QUEUE as a visible "PR is up, watching it"
+    activity after this fence — a review, an approval, or a comment, from a HUMAN OR A BOT alike (there
+    is no actor filter: most review now comes from an app, and review agents that post their findings as
+    a conversation comment count exactly like a human reviewer) — baselined here and durable across a
+    server/worker restart. Your thread STAYS IN THE QUEUE as a visible "PR is up, watching it"
     handoff (it does NOT hide in Held): a PR whose reviews may never arrive must not silently vanish.
     The human can Snooze it to hide it until activity; a new review bumps it back. This is the default
     for a PR you opened and are watching for review. Combine with `human:` ONLY when you are genuinely
@@ -142,9 +144,10 @@ state. The fence LANGUAGE is the state; the body is the message the card shows:
   `pr:` / `ci:` / `session:` remain parser/scheduler compatibility for existing transcripts only;
   NEVER emit them for a new automated wait.
 
-  **Automatable waits stay ACTIVE — but only a live SUB-AGENT keeps you there.** CI, bot/automated
-  review, release/deploy completion, PR merge readiness, and another worker are work you can observe
-  with tools. Do NOT emit `awaiting` and abandon that work. But note WHAT holds a rested thread in
+  **Automatable waits stay ACTIVE — but only a live SUB-AGENT keeps you there.** CI, release/deploy
+  completion, PR merge readiness, and another worker are work you can observe with tools (PR review
+  activity is the exception — `pr-watch:` above already watches it for you, bot reviewers included).
+  Do NOT emit `awaiting` and abandon that work. But note WHAT holds a rested thread in
   Active: a live dispatched **sub-agent**, nothing else. A detached background watcher no longer does —
   fray can't tell a CI watcher (ends soon) from a dev server (runs forever), so a thread that
   bare-rests on only a background process now QUEUES. Therefore, to WAIT on an automatable condition

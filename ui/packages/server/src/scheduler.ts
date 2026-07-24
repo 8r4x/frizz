@@ -11,8 +11,7 @@ import { createWakeDeliveryStore, type WakeDelivery } from "./wake-store.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
 import {
   createGithubReviewFetcher,
-  isNonBotGithubActivity,
-  isWakeworthyGithubActivity,
+  isBotGithubActor,
   parseGithubReviewActivities,
   type GithubReviewActivity,
   type GithubReviewFetchResult,
@@ -21,18 +20,17 @@ import {
 const execFileAsync = promisify(execFile)
 
 export {
-  isNonBotGithubActivity,
-  isWakeworthyGithubActivity,
+  isBotGithubActor,
   parseGithubReviewActivities,
   type GithubReviewActivity,
 } from "./github-review.ts"
 
 // ---- DURABLE TIMER WAKER + PR-WATCH + LEGACY COMPATIBILITY ----------------------------------------
 // New workers use `awaiting` for a PR-activity watcher (`pr-watch:`), a specific external HUMAN gate
-// (`human:`), or a wall-clock checkpoint (`timer:`). `pr-watch` wakes on any NEW wake-worthy activity
-// on the PR after this fence — any submitted REVIEW (including a bot review agent like Pullfrog or
-// Copilot, the reviewer a worker most often waits for) or any non-bot COMMENT; bot conversation
-// comments (CI/deploy/dependency noise) are filtered — while a registered timer remains
+// (`human:`), or a wall-clock checkpoint (`timer:`). `pr-watch` wakes on ANY new activity on the PR
+// after this fence — a review or a comment, from a human or a bot, with no actor filter whatsoever
+// (most review today is filed by an app, and the ones that post findings as a conversation comment
+// are precisely what a bot filter drops) — while a registered timer remains
 // durable across server/worker restarts and resumes when it crosses. Historical transcripts may still
 // carry `pr:`/`ci:` hints, so their existing
 // out-of-band wake behavior remains as a compatibility bridge. Other automated waits should instead
@@ -375,7 +373,7 @@ interface ThreadWake {
   fired: boolean // this rest already has a legacy fired marker or durable outbox row
   lastPollAt: number // last gh poll for this thread's pr/ci/review hints (throttle)
   prCache: Map<string, PrStatus> // last-known PR statuses, keyed by refKey (kept between polls)
-  reviewCache: Map<string, GithubReviewActivity[]> // current human+bot activity snapshot by ref
+  reviewCache: Map<string, GithubReviewActivity[]> // current review/comment activity snapshot by ref
 }
 
 const FIRED_CAP = 500 // legacy pre-outbox marker cap (read during rolling upgrade, never newly added)
@@ -385,7 +383,7 @@ const REVIEW_SEEN_CAP = 300
 interface ReviewCursor {
   baseline: true
   seen: string[]
-  // A newly-observed human event is recorded before the wake outbox is enqueued. If GitHub is
+  // A newly-observed event is recorded before the wake outbox is enqueued. If GitHub is
   // temporarily unavailable on restart, this cursor still reproduces the exact pending event; the
   // deterministic outbox id prevents a second delivery row for the same fence generation.
   pending?: GithubReviewActivity
@@ -503,7 +501,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
               typeof p.actor === "string" &&
               (p.kind === "review" || p.kind === "comment")
             ) {
-              const candidate: GithubReviewActivity = {
+              pending = {
                 id: p.id,
                 actor: p.actor,
                 actorType: typeof p.actorType === "string" ? p.actorType : undefined,
@@ -511,7 +509,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
                 kind: p.kind,
                 ...(typeof p.reviewState === "string" ? { reviewState: p.reviewState } : {}),
               }
-              if (isWakeworthyGithubActivity(candidate)) pending = candidate
             }
           }
           reviews[k] = {
@@ -630,6 +627,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   }
 
+  // The steer must never imply a person: an app filed most of what wakes this watcher.
+  function activitySteer(a: GithubReviewActivity, ref: PrRef): string {
+    const icon = isBotGithubActor(a) ? "🤖" : "👤"
+    return `${icon} New GitHub ${activityLabel(a)} on ${refKey(ref)} from @${a.actor}. Re-open the PR and continue.`
+  }
+
   function reviewVerdict(
     persistKey: string,
     hint: FenceView["hints"][number],
@@ -645,20 +648,19 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (prior?.pending) {
       return {
         met: true,
-        steer: `👤 New GitHub ${activityLabel(prior.pending)} on ${refKey(ref)} from @${prior.pending.actor}. Re-open the PR and continue.`,
+        steer: activitySteer(prior.pending, ref),
         reason: `pr-watch ${refKey(ref)} by ${prior.pending.actor}`,
       }
     }
-    const wakeworthy = activities
-      .filter(isWakeworthyGithubActivity)
-      .sort((a, b) => {
-        const at = Date.parse(b.at ?? "") - Date.parse(a.at ?? "")
-        return Number.isFinite(at) && at !== 0 ? at : b.id.localeCompare(a.id)
-      })
+    // No actor filter: every review and comment on the PR is a wake candidate.
+    const newestFirst = [...activities].sort((a, b) => {
+      const at = Date.parse(b.at ?? "") - Date.parse(a.at ?? "")
+      return Number.isFinite(at) && at !== 0 ? at : b.id.localeCompare(a.id)
+    })
     const priorSeen = new Set(prior?.seen ?? [])
     let fresh: GithubReviewActivity[]
     if (prior) {
-      fresh = wakeworthy.filter((a) => !priorSeen.has(a.id))
+      fresh = newestFirst.filter((a) => !priorSeen.has(a.id))
     } else {
       // A review may land between the final fence and this scheduler's first poll (or while the server
       // is restarting before the baseline is persisted). The fence timestamp lets a brand-new grammar
@@ -666,7 +668,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // telemetry is unavailable, baseline conservatively and wait for the next unseen id.
       const fenceMs = Date.parse(fenceAt ?? "")
       fresh = Number.isFinite(fenceMs)
-        ? wakeworthy.filter((a) => {
+        ? newestFirst.filter((a) => {
             const at = Date.parse(a.at ?? "")
             return Number.isFinite(at) && at > fenceMs
           })
@@ -675,14 +677,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // Persist the cursor BEFORE a possible resume. Union with the prior tail so a temporarily-shorter
     // API page cannot make an old id look new later; newest current ids win the bounded cap.
     if (fresh.length === 0) {
-      saveReviewCursor(persistKey, hintKey, [...wakeworthy.map((a) => a.id), ...(prior?.seen ?? [])])
+      saveReviewCursor(persistKey, hintKey, [...newestFirst.map((a) => a.id), ...(prior?.seen ?? [])])
       return undefined
     }
     const newest = fresh[0]
-    saveReviewCursor(persistKey, hintKey, [...wakeworthy.map((a) => a.id), ...(prior?.seen ?? [])], newest)
+    saveReviewCursor(persistKey, hintKey, [...newestFirst.map((a) => a.id), ...(prior?.seen ?? [])], newest)
     return {
       met: true,
-      steer: `👤 New GitHub ${activityLabel(newest)} on ${refKey(ref)} from @${newest.actor}. Re-open the PR and continue.`,
+      steer: activitySteer(newest, ref),
       reason: `pr-watch ${refKey(ref)} by ${newest.actor}`,
     }
   }
