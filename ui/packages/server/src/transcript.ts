@@ -1041,6 +1041,36 @@ function readAppendedBytes(fd: number, from: number, to: number): Buffer {
   return filled === buf.length ? buf : buf.subarray(0, filled)
 }
 
+// Resolve the retained fold for a file, dropping a stale entry first. Shared by BOTH readers of a claude
+// JSONL — readTranscript (the /ws producer) and the paged reader's projectSnapshot — because they are
+// provably the same fold: each derives its identityPrefix from the very id that NAMES the file
+// (`claude:${id}` ↔ `.../${id}.jsonl`), so identityPrefix is a function of the path and one path-keyed
+// entry serves both. Before this they kept SEPARATE caches and folded the same 30 MB twice on a cold
+// drawer open — once for the RPC, once for the socket push — and retained two copies forever after.
+function retainedFoldEntry(path: string, identityPrefix: string, fileId: string, size: number): { entry: TranscriptCacheEntry; hit: boolean } {
+  let entry = transcriptCache.get(path)
+  // Drop a stale entry: the file shrank (truncation), rotated (new inode), or is being parsed under a
+  // different identity. Any of these means the retained fold no longer describes byte 0..size.
+  if (entry && (entry.identityPrefix !== identityPrefix || entry.fileId !== fileId || size < entry.bytesRead)) {
+    transcriptCache.delete(path)
+    entry = undefined
+  }
+  const hit = entry !== undefined
+  if (!entry) {
+    entry = { identityPrefix, fold: createTranscriptFold(identityPrefix), bytesRead: 0, decoder: new StringDecoder("utf8"), fileId }
+  } else {
+    transcriptCache.delete(path) // LRU touch — re-insert to move to the most-recently-used end.
+  }
+  transcriptCache.set(path, entry)
+  // Evict the least-recently-used entries beyond the cap (the first keys in insertion order).
+  while (transcriptCache.size > TRANSCRIPT_CACHE_CAP) {
+    const oldest = transcriptCache.keys().next().value
+    if (oldest === undefined) break
+    transcriptCache.delete(oldest)
+  }
+  return { entry, hit }
+}
+
 export function readTranscript(project: Project, sessionId: string): TranscriptMessage[] {
   const path = join(homedir(), ".claude", "projects", project.cwdSlug, `${sessionId}.jsonl`)
   const identityPrefix = `claude:${sessionId}`
@@ -1051,22 +1081,7 @@ export function readTranscript(project: Project, sessionId: string): TranscriptM
     const size = st.size
     const fileId = `${st.dev}:${st.ino}:${Math.trunc(st.birthtimeMs)}`
 
-    let entry = transcriptCache.get(path)
-    // Drop a stale entry: the file shrank (truncation), rotated (new inode), or is being parsed under a
-    // different identity. Any of these means the retained fold no longer describes byte 0..size.
-    if (entry && (entry.identityPrefix !== identityPrefix || entry.fileId !== fileId || size < entry.bytesRead)) {
-      transcriptCache.delete(path)
-      entry = undefined
-    }
-    const hit = entry !== undefined
-    if (!entry) {
-      entry = { identityPrefix, fold: createTranscriptFold(identityPrefix), bytesRead: 0, decoder: new StringDecoder("utf8"), fileId }
-      transcriptCache.set(path, entry)
-    } else {
-      // LRU touch — re-insert to move to the most-recently-used end.
-      transcriptCache.delete(path)
-      transcriptCache.set(path, entry)
-    }
+    const { entry, hit } = retainedFoldEntry(path, identityPrefix, fileId, size)
 
     if (size > entry.bytesRead) {
       const buf = readAppendedBytes(fd, entry.bytesRead, size)
@@ -1075,13 +1090,6 @@ export function readTranscript(project: Project, sessionId: string): TranscriptM
       if (chunk) entry.fold.ingest(chunk)
     }
     // size == bytesRead → no read, no ingest; the retained projection is already current.
-
-    // Evict the least-recently-used entries beyond the cap (the first keys in insertion order).
-    while (transcriptCache.size > TRANSCRIPT_CACHE_CAP) {
-      const oldest = transcriptCache.keys().next().value
-      if (oldest === undefined) break
-      transcriptCache.delete(oldest)
-    }
 
     const messages = entry.fold.messages()
     if (hit && process.env.FRAY_TRANSCRIPT_PARSE_VERIFY === "1" && Math.random() < PARSE_VERIFY_SAMPLE) {
@@ -2100,7 +2108,20 @@ function fixedSnapshot(source: TranscriptSourceBinding): FixedTranscriptSnapshot
       .update(`${source.slug}\0${source.sessionId}\0${source.nativeId}\0${source.backend}\0${source.runtimeGeneration}\0${fileKey}`)
       .digest("base64url")
       .slice(0, 32)
-    return { ...source, raw: bytes.toString("utf8"), bytes, fileKey, transcriptKey }
+    // `raw` is LAZY: the cached projection below folds only the APPENDED byte range, so a warm read of a
+    // 30 MB transcript must never pay to materialize the whole file as a JS string. Only the codex
+    // projector (non-incremental) and a cold claude fold ever touch it.
+    let rawText: string | undefined
+    return {
+      ...source,
+      get raw() {
+        if (rawText === undefined) rawText = bytes.toString("utf8")
+        return rawText
+      },
+      bytes,
+      fileKey,
+      transcriptKey,
+    }
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") return undefined
     throw error
@@ -2109,15 +2130,60 @@ function fixedSnapshot(source: TranscriptSourceBinding): FixedTranscriptSnapshot
   }
 }
 
+// The paged reader's projection. readLatestThreadTranscriptPage used to re-fold the WHOLE JSONL from
+// byte 0 on every threadTranscript RPC — measured at 2.3–3.9s for a 30 MB session, synchronously on the
+// event loop, which is most of why opening a thread drawer sat on its spinner (9.4s observed; worse on a
+// busy board, where these queue behind each other and behind the tailer tick). It now shares the SAME
+// retained fold as readTranscript (see retainedFoldEntry): an unchanged file costs no parse work, a live
+// one costs only the appended delta, and the two readers no longer fold the same bytes twice.
 function projectSnapshot(snapshot: FixedTranscriptSnapshot): TranscriptMessage[] {
   const prefix = `${snapshot.backend}:${snapshot.nativeId}`
-  return snapshot.backend === "codex"
-    ? projectCodexTranscript(snapshot.raw, prefix)
-    : projectClaudeTranscript(snapshot.raw, prefix)
+  // The codex projector parses a rollout whole — no incremental fold to retain, and rollouts are small.
+  if (snapshot.backend === "codex") return projectCodexTranscript(snapshot.raw, prefix)
+
+  const { entry } = retainedFoldEntry(snapshot.path, prefix, snapshot.fileKey, snapshot.bytes.length)
+  if (snapshot.bytes.length > entry.bytesRead) {
+    const chunk = entry.decoder.write(snapshot.bytes.subarray(entry.bytesRead))
+    entry.bytesRead = snapshot.bytes.length
+    if (chunk) entry.fold.ingest(chunk)
+  }
+  // Deliberately NO finalize(): it is the one-shot path's trailing-partial flush and advances the fold
+  // past bytes a later ingest would then re-fold, duplicating messages. A complete final record that
+  // simply lacks its newline is still projected — the fold consumes it optimistically (tryConsumePartial)
+  // — so this matches both the readTranscript cache and, for settled files, the one-shot projection.
+
+  // Shallow copy: callers append synthetic tail rows (projectDeliveryLedger pushes queued bubbles into
+  // the array it is handed), which would otherwise pollute the RETAINED projection across reads.
+  return [...entry.fold.allMessages()]
 }
+
+// sha256 over the whole snapshot, memoized per file identity+length. Cursor minting hashes the ENTIRE
+// transcript on every latest-page read; at 30 MB that is real event-loop time to repeat for a file that
+// has not changed. Only the full-length digest is memoized — the cursor VALIDATION path digests an
+// arbitrary historical prefix, which is a one-off per request and stays uncached.
+const fullDigestCache = new Map<string, string>()
+const FULL_DIGEST_CACHE_CAP = 16
 
 function digestPrefix(bytes: Buffer, length = bytes.length): string {
   return createHash("sha256").update(bytes.subarray(0, length)).digest("base64url")
+}
+
+function fullDigest(snapshot: FixedTranscriptSnapshot): string {
+  const key = `${snapshot.fileKey}\0${snapshot.bytes.length}`
+  const hit = fullDigestCache.get(key)
+  if (hit !== undefined) {
+    fullDigestCache.delete(key)
+    fullDigestCache.set(key, hit)
+    return hit
+  }
+  const digest = digestPrefix(snapshot.bytes)
+  fullDigestCache.set(key, digest)
+  while (fullDigestCache.size > FULL_DIGEST_CACHE_CAP) {
+    const oldest = fullDigestCache.keys().next().value
+    if (oldest === undefined) break
+    fullDigestCache.delete(oldest)
+  }
+  return digest
 }
 
 function encodeTranscriptCursor(snapshot: FixedTranscriptSnapshot, anchorSourceId: string): string {
@@ -2130,7 +2196,7 @@ function encodeTranscriptCursor(snapshot: FixedTranscriptSnapshot, anchorSourceI
     runtimeGeneration: snapshot.runtimeGeneration,
     fileKey: snapshot.fileKey,
     snapshotBytes: snapshot.bytes.length,
-    prefixDigest: digestPrefix(snapshot.bytes),
+    prefixDigest: fullDigest(snapshot),
     anchorSourceId,
   }
   return Buffer.from(JSON.stringify(payload)).toString("base64url")
