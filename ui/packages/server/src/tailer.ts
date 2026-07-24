@@ -1831,14 +1831,19 @@ export function createTailer(deps: TailerDeps): Tailer {
     }
     if (cacheDirty.size === 0) return
     const entries: TailCacheEntry[] = []
-    for (const key of cacheDirty) {
-      const foreign = key.startsWith("foreign:")
-      const state = foreign ? foreignStates.get(key.slice("foreign:".length)) : states.get(key)
-      if (!state) continue
-      const row = foreign ? null : deps.storage.getSession(key) ?? null
-      if (!foreign && !row) continue
-      const entry = cacheSnapshot(state, row)
-      if (entry) entries.push(entry)
+    try {
+      for (const key of cacheDirty) {
+        const foreign = key.startsWith("foreign:")
+        const state = foreign ? foreignStates.get(key.slice("foreign:".length)) : states.get(key)
+        if (!state) continue
+        const row = foreign ? null : deps.storage.getSession(key) ?? null
+        if (!foreign && !row) continue
+        const entry = cacheSnapshot(state, row)
+        if (entry) entries.push(entry)
+      }
+    } catch {
+      // stop() flushes on the shutdown path; a registry that has already gone away must not turn a
+      // clean shutdown into a failed one. Whatever was collected before the fault is still written.
     }
     cacheDirty.clear()
     tailCache.put(entries)

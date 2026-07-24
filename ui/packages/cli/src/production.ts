@@ -7,9 +7,6 @@ import { closeSync, openSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-
-/** How long an abandoned supervisor gets to drain on SIGTERM before it is SIGKILLed. */
-const ABANDON_GRACE_MS = 3_000;
 import {
   acquireGlobalLaunchLock,
   choosePort,
@@ -38,6 +35,8 @@ import { createSupervisorShutdownHandler, startDevSupervisor } from "@fray-ui/se
 import { handoffToRegistrySuccessor, npmRegistryReleaseAdapter, planRegistryUpdate, PRODUCTION_REEXEC_FLAG } from "./production-update.ts";
 import { assertLaunchPrerequisites } from "./preflight.ts";
 
+/** How long an abandoned supervisor gets to drain on SIGTERM before it is SIGKILLed. */
+const ABANDON_GRACE_MS = 3_000;
 const PACKAGE_NAME = process.env.FRAY_REGISTRY_PACKAGE ?? "frayui";
 const PACKAGE_VERSION = process.env.npm_package_version ?? "0.0.1";
 const rawArgs = process.argv.slice(2);
