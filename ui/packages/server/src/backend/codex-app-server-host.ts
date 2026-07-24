@@ -13,7 +13,11 @@
 // the one production caller is the bridge's version-skew recovery: a daemon caches its `initialize`
 // handshake FOREVER, so after codex is upgraded on disk the cached userAgent fails the bridge's
 // version gate on every single connect and no amount of retrying can fix it. See
-// codex-app-server.ts's `connect()`.
+// codex-app-server.ts's `connect()`. Note that it ends the NATIVE listener too — that caller cannot
+// tell the transports apart, and an out-of-date listener wedges the gate exactly the same way.
+//
+// Shutdown is deliberately NOT such a caller, for either transport. Recycling fray must leave the
+// app-server (and its in-flight turns) running, which is the whole point of the split above.
 import { spawn } from "node:child_process"
 import { createConnection, type Socket } from "node:net"
 import { createHash, randomUUID } from "node:crypto"
@@ -22,6 +26,7 @@ import { join } from "node:path"
 import { PassThrough, Writable, type Readable } from "node:stream"
 import { StringDecoder } from "node:string_decoder"
 import { resolveDetachedDaemonEntry } from "../detached-daemons.ts"
+import { stopNativeListener } from "./codex-app-server-native.ts"
 import type { CodexAppServerProcess } from "./codex-app-server.ts"
 
 export interface CodexAppServerDaemonRecord {
@@ -135,14 +140,24 @@ export function killCodexAppServerDaemon(stateDir: string, projectId: string): v
 }
 
 /**
- * `killCodexAppServerDaemon`, then WAIT for the process to actually be gone.
+ * End whichever detached app-server host this project has, and WAIT for it to actually be gone.
  *
  * The wait is not politeness, it is correctness: a dying daemon's exit handler unlinks the record
  * and the socket, and both paths are DERIVED (same stateDir + projectId ⇒ same paths). Fork a
  * replacement before the old one finishes dying and the corpse deletes the new daemon's socket and
  * record on its way out, leaving a daemon nobody can ever find.
+ *
+ * It covers BOTH transports because its one caller — the bridge's version-skew recovery — has no idea
+ * which one is in play, and the wedge it recovers from is not the daemon's alone. The native listener
+ * (FRAY_CODEX_NATIVE_LISTEN, codex-app-server-native.ts) is a codex process spawned from the binary as
+ * it stood at spawn time, so after an upgrade on disk it keeps reporting the pre-upgrade userAgent on
+ * every reattach; leave it running and the "refork" reattaches to the very process that just failed
+ * the gate, fails identically, and the bridge stays wedged until someone kills the listener by hand.
+ * Each half is inert without its own record and a project can only have one, so calling both is
+ * precisely "stop the host that is actually there".
  */
 export async function stopCodexAppServerDaemon(stateDir: string, projectId: string, timeoutMs = 10_000): Promise<void> {
+  await stopNativeListener(stateDir, projectId, timeoutMs)
   const record = liveDaemonRecord(stateDir, projectId)
   killCodexAppServerDaemon(stateDir, projectId)
   if (!record) return

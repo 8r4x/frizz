@@ -100,12 +100,47 @@ export function liveNativeRecord(stateDir: string, projectId: string): NativeLis
   return null
 }
 
-/** Terminate the listener. Only for an explicit teardown — never for a restart. */
+/** Terminate the listener. Only for an explicit teardown — never for a restart: this transport's
+ *  entire value is that the listener OUTLIVES fray, so nothing on the shutdown path may call this.
+ *  Inert when there is no record, which is every project not on this transport. */
 export function killNativeListener(stateDir: string, projectId: string): void {
   const record = liveNativeRecord(stateDir, projectId)
   if (!record) return
   try { process.kill(record.listenerPid, "SIGTERM") } catch {}
   try { unlinkSync(nativeRecordPath(stateDir, projectId)) } catch {}
+}
+
+/**
+ * `killNativeListener`, then WAIT for the listener to actually be gone.
+ *
+ * The native sibling of `stopCodexAppServerDaemon`, and it exists for the same reason that one does:
+ * version skew. A listener is a codex process that was spawned from the binary as it stood at spawn
+ * time, so once codex is upgraded on disk every reattach re-runs `initialize` against the OLD build
+ * and reports the OLD userAgent. The bridge's version gate rejects it identically on every connect,
+ * and the only cure is to end the listener so the next attach spawns the new binary.
+ *
+ * The wait is correctness, not politeness: the socket path is DERIVED from stateDir + projectId, and
+ * the app-server unlinks it on its way out. Start a replacement before the old one has finished dying
+ * and the corpse unlinks the NEW listener's socket, leaving a record that looks live and a socket
+ * nothing can connect to.
+ */
+export async function stopNativeListener(stateDir: string, projectId: string, timeoutMs = 10_000): Promise<void> {
+  const record = liveNativeRecord(stateDir, projectId)
+  killNativeListener(stateDir, projectId)
+  if (!record) return
+  const deadline = Date.now() + timeoutMs
+  while (pidAlive(record.listenerPid) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  // A listener that ignored SIGTERM is worse than one that is merely stale: it still holds the socket.
+  // SIGKILL leaves the socket file behind unlinked-by-nobody, which `startListener` already clears
+  // once it has proven nothing is accepting on it.
+  if (pidAlive(record.listenerPid)) {
+    try { process.kill(record.listenerPid, "SIGKILL") } catch {}
+    while (pidAlive(record.listenerPid) && Date.now() < deadline + 2_000) {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+  }
 }
 
 /** True when something is actually accepting on `socketPath` right now. */

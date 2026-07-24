@@ -8,8 +8,9 @@
 // (`scripts/verify-artifact-daemon-closure.mjs` and `verify-artifact-restart-survival.mjs`, both run
 // with FRAY_CODEX_NATIVE_LISTEN=1).
 import assert from "node:assert/strict"
+import { spawn } from "node:child_process"
 import { createServer, type Server } from "node:http"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
@@ -20,6 +21,7 @@ import {
   nativeRecordPath,
   liveNativeRecord,
 } from "./codex-app-server-native.ts"
+import { stopCodexAppServerDaemon } from "./codex-app-server-host.ts"
 
 interface Fixture {
   stateDir: string
@@ -160,5 +162,52 @@ test("kill() detaches the attachment and leaves the listener running", async () 
     assert.equal(again.reattached, true)
     assert.equal(f.connections.length, 2, "a second attachment joins the SAME listener")
     again.process.kill()
+  } finally { f.cleanup() }
+})
+
+// ---- lifecycle ownership ---------------------------------------------------------------------------
+// The counterpart to the detach test above: fray must be able to END a listener it can start, or an
+// upgraded codex can never displace the process holding this project's socket. The one production
+// teardown is `stopCodexAppServerDaemon` (the bridge's version-skew refork), which cannot tell the
+// transports apart — so it is what this drives, not `killNativeListener` directly.
+
+const alive = (pid: number): boolean => {
+  try { process.kill(pid, 0); return true } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM" }
+}
+
+test("stopCodexAppServerDaemon ends a native listener and clears its record", async () => {
+  const f = await fixture()
+  // A REAL process to reap. The fixture's own record points at this test process, which we obviously
+  // must not SIGTERM, so re-point it at a child whose only job is to be killable.
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })
+  try {
+    await new Promise<void>((resolve) => child.once("spawn", resolve))
+    const pid = child.pid as number
+    writeFileSync(nativeRecordPath(f.stateDir, f.projectId), JSON.stringify({
+      projectId: f.projectId, generation: "gen-fixture", listenerPid: pid,
+      socketPath: f.socketPath, createdAt: new Date().toISOString(),
+    }))
+    assert.ok(liveNativeRecord(f.stateDir, f.projectId), "precondition: the listener reads as live")
+
+    await stopCodexAppServerDaemon(f.stateDir, f.projectId, 5_000)
+
+    // Gone for real, not merely signalled: the wait is what stops a replacement listener from being
+    // started into the corpse's socket-unlink.
+    assert.equal(alive(pid), false, "the listener process must actually be gone when the call returns")
+    assert.equal(existsSync(nativeRecordPath(f.stateDir, f.projectId)), false, "the record must be removed")
+    assert.equal(liveNativeRecord(f.stateDir, f.projectId), null, "nothing may still be discoverable")
+  } finally {
+    if (child.pid && alive(child.pid)) { try { process.kill(child.pid, "SIGKILL") } catch {} }
+    f.cleanup()
+  }
+})
+
+test("stopCodexAppServerDaemon is inert for a project with no listener and no daemon", async () => {
+  const f = await fixture()
+  try {
+    rmSync(nativeRecordPath(f.stateDir, f.projectId), { force: true })
+    // Must resolve, not throw: the refork path calls this before it knows which transport is in play,
+    // and the direct-child / in-process fallbacks own no detached process at all.
+    await stopCodexAppServerDaemon(f.stateDir, f.projectId, 1_000)
   } finally { f.cleanup() }
 })
