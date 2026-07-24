@@ -569,6 +569,41 @@ test("a queued follow-up between assistant turns leaves the assistant cards inta
   assert.equal(msgs.filter((m) => m.role === "assistant" && m.kind === undefined).length, 2) // …between two intact assistant turns
 })
 
+// An autonomous /loop wakeup is ENQUEUED like a human follow-up (gray bubble) but DELIVERED as an
+// isMeta harness record — not the human's words. The isMeta drop must also splice out the pending
+// queued bubble, or it lingers forever as a stuck "queued" message (thread review-nubjs-nub-515-2).
+const isMetaUser = (content: string, ts = "2026-07-01T00:00:02.000Z") =>
+  JSON.stringify({ type: "user", timestamp: ts, isMeta: true, message: { role: "user", content } })
+
+test("an isMeta-delivered queued wakeup (autonomous /loop) leaves NO stuck queued bubble", () => {
+  const text = "# Autonomous loop tick (dynamic pacing)\n\nRun the autonomous check."
+  const msgs = parseTranscript(
+    [
+      enqueue(text),
+      JSON.stringify({ type: "queue-operation", operation: "dequeue", timestamp: "2026-07-01T00:00:01.000Z" }),
+      isMetaUser(text),
+    ].join("\n"),
+  )
+  // Harness plumbing → neither a delivered bubble nor a lingering gray one.
+  assert.equal(msgs.filter((m) => m.role === "user").length, 0)
+  assert.equal(msgs.filter((m) => m.queued).length, 0)
+})
+
+test("an isMeta wakeup between assistant turns removes its bubble but keeps the assistant cards", () => {
+  const text = "# Autonomous loop check\n\nyou're invoked on a timer"
+  const msgs = parseTranscript(
+    [
+      asstBlock("m1", { type: "text", text: "resting" }),
+      enqueue(text),
+      JSON.stringify({ type: "queue-operation", operation: "dequeue", timestamp: "2026-07-01T00:00:01.000Z" }),
+      isMetaUser(text),
+      asstBlock("m2", { type: "text", text: "heartbeat tick" }),
+    ].join("\n"),
+  )
+  assert.equal(msgs.filter((m) => m.role === "user").length, 0) // wakeup bubble spliced out
+  assert.equal(msgs.filter((m) => m.role === "assistant" && m.kind === undefined).length, 2) // both turns intact
+})
+
 test("real Claude Code 2.1.207 SDK lifecycle dedupes its prompt and back-fills common tool results", () => {
   const prompt = "Exercise the disposable tool fixture."
   const raw = [

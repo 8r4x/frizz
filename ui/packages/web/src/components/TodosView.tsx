@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useSnapshot } from "valtio"
-import { ChevronsUpDown, Inbox } from "lucide-react"
+import { ChevronsUpDown, Hourglass, Inbox } from "lucide-react"
 import type { ThreadView, BoardSnapshot } from "@fray-ui/shared"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { pushDrawer, queueCardTargetY, showToast } from "../store.ts"
@@ -110,6 +110,66 @@ function resumeNativeAnchoring(): void {
   if (anchorSuspendCount > 0 && --anchorSuspendCount === 0) {
     document.documentElement.style.overflowAnchor = anchorPrevPolicy
   }
+}
+
+// The awaiting-background banner. A queued thread whose SOLE reason is "resting while its own dispatched
+// work (sub-agents / launched shells) is still live, no human ask" — it is awaiting results it kicked
+// off, not the human. This is a heads-up, not a request: it says what is cooking and offers a one-click
+// event-snooze that hides the card until the work returns (the parent comes to a NEW rest). NO session is
+// stopped — the thread is already at rest and stays alive; the card simply drops out of the queue and
+// re-surfaces on its own when a child returns. Distinct from the footer's wall-clock Snooze (a fixed
+// deadline); this one has no deadline and expires itself on the next rest.
+function AwaitingBackgroundBanner({ thread, onSnooze, onSnoozeFailed }: {
+  thread: ThreadView
+  onSnooze: () => void // optimistically dismiss the card (fade it out now)
+  onSnoozeFailed: () => void // reinstate the card if the server declines
+}) {
+  const [pending, setPending] = useState(false)
+  const agents = (thread.subAgents ?? []).filter((a) => a.state === "running").length
+  const shells = (thread.bgShells ?? []).filter((s) => s.state === "running").length
+  // Name what it is ACTUALLY waiting on: "sub-agents" is wrong for a shell-only thread (a launched dev
+  // server is not a child whose result you await), so fall back to a neutral noun when there are none.
+  const what = agents > 0
+    ? `${agents} sub-agent${agents === 1 ? "" : "s"}`
+    : `${shells} background task${shells === 1 ? "" : "s"}`
+  const snooze = () => {
+    setPending(true)
+    onSnooze() // fade the card immediately, like every other queue dismissal
+    rpc
+      .snoozeAwaitingBackground({ slug: thread.id, sessionId: thread.sessionId ?? "" })
+      .then(() => showToast("Snoozed until a sub-agent returns"))
+      .catch((error) => {
+        onSnoozeFailed() // roll the card back into the queue
+        showToast(`Couldn’t snooze: ${(error as Error).message.slice(0, 80)}`)
+        setPending(false)
+      })
+  }
+  return (
+    <div
+      data-awaiting-background
+      className="flex flex-col gap-2 rounded-md border border-border/70 bg-panel-2/40 px-3.5 py-3 text-[12px] leading-relaxed text-muted"
+    >
+      <p className="text-fg/80">
+        This agent has come to rest, but it’s awaiting the results from {what} it dispatched.
+      </p>
+      <div className="flex items-center justify-between gap-3">
+        <span className="min-w-0 text-[11px] text-muted/70">
+          It returns to the queue on its own when the work comes back.
+        </span>
+        <button
+          type="button"
+          onClick={snooze}
+          disabled={pending}
+          onMouseDown={(e) => e.preventDefault()}
+          title="Hide this card until a sub-agent returns"
+          className="flex shrink-0 items-center gap-1.5 rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] font-medium text-fg/80 outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45"
+        >
+          <Hourglass size={12} />
+          Snooze
+        </button>
+      </div>
+    </div>
+  )
 }
 
 // Keyboard: a card's inputs are ordinary DOM focus — click in to type, Esc blurs, Enter submits (the
@@ -997,6 +1057,10 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
         ) : thread.runtime === "perm-prompt" ? (
           <div className="mb-4">
             <PermPromptBanner onTerminal={copyTerminalCommand} />
+          </div>
+        ) : thread.awaitingBackground ? (
+          <div className="mb-4">
+            <AwaitingBackgroundBanner thread={thread} onSnooze={dismissThisCard} onSnoozeFailed={cancelThisCard} />
           </div>
         ) : null}
         {messages.length === 0 ? (

@@ -627,6 +627,17 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
+    // Manual dismiss (the × on a live sub-agent / background-shell row): retire the op from tracking as
+    // if its terminal signal had arrived. The escape hatch for a finished op whose completion was never
+    // recorded while its parent stays alive — the residual the `stopped` recovery cannot reach. Not a
+    // process kill (fray does not own the child processes); it clears the phantom row + its Done-warning
+    // count. `dismissed:false` when the id is not live (already gone / unknown) — the UI just refreshes.
+    dismissBackgroundOp: mutation({
+      input: z.object({ slug: ThreadSlug, id: z.string() }).strict(),
+      output: z.object({ dismissed: z.boolean() }),
+      handler: async ({ input }) => ({ dismissed: ctx.tailer.dismissOp?.(input.slug, input.id) ?? false }),
+    }),
+
     dispatch: mutation({
       input: DispatchInput,
       output: z.object({ slug: ThreadSlug, sessionId: z.string() }),
@@ -887,6 +898,23 @@ export function createRouter(ctx: AppContext) {
         // would leave the row still holding an operator confirmation it no longer wants.
         if (input.until === null) {
           ctx.storage.clearAwaitingWaitIfSession(input.slug, row.session_id, row.runtime_generation ?? 0)
+        }
+        ctx.board.refresh()
+      },
+    }),
+
+    // Event-snooze the awaiting-background card: capture the CURRENT rest instant so the board hides the
+    // card until rested_at advances — the exact moment the thread's own sub-agent/shell returns and the
+    // worker comes to a new rest. No deadline, no scheduler, no reaper: the session stays alive (it is
+    // ALREADY resting) and the snooze expires itself on the next rest. Session-guarded so a stale tab
+    // cannot snooze whatever now owns the slug.
+    snoozeAwaitingBackground: mutation({
+      input: z.object({ slug: ThreadSlug, sessionId: z.string().min(1) }).strict(),
+      handler: async ({ input }) => {
+        const row = currentOwnedSession(input.slug, input.sessionId)
+        if (!row.rested_at) throw new Error("This thread is not at rest; nothing to snooze")
+        if (!ctx.storage.setBgSnoozeRestedAtIfCurrent(input.slug, row.session_id, row.runtime_generation ?? 0, row.rested_at)) {
+          throw new Error("This thread changed before it could be snoozed")
         }
         ctx.board.refresh()
       },

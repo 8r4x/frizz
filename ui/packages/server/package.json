@@ -11,7 +11,8 @@
     "./project-launch": "./src/project-launch.ts",
     "./tmux-socket": "./src/tmux-socket.ts",
     "./dev-supervisor": "./src/dev-supervisor.ts",
-    "./dev-child": "./src/dev-child.ts"
+    "./dev-child": "./src/dev-child.ts",
+    "./boot-progress": "./src/boot-progress.ts"
   },
   "scripts": {
     "postinstall": "node -e \"try{require('node:fs').chmodSync(require.resolve('node-pty/package.json').replace('package.json','prebuilds/'+process.platform+'-'+process.arch+'/spawn-helper'),0o755)}catch{}\""

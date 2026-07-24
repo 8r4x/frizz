@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { InteractionRequest } from "@fray-ui/shared"
-import { appServerTurnStalled, createBoard, deriveNeedsYou, degradeIfNoTranscript, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle } from "./board.ts"
+import { appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfNoTranscript, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle } from "./board.ts"
 import { Bus } from "./bus.ts"
 import { createStorage } from "./storage.ts"
 import type { Project } from "./project.ts"
@@ -366,15 +366,43 @@ test("deriveNeedsYou: a parked human/timestamp awaiting fence stays out of the o
   assert.equal(deriveNeedsYou(row({ seen_at: LATER }), both, "turn-idle"), true)
 })
 
-test("deriveNeedsYou: every owned bare rest queues; a live SUB-AGENT holds in flight — a background shell does NOT", () => {
+test("deriveNeedsYou: every owned bare rest queues; a live SUB-AGENT/SHELL now cards as awaiting-background", () => {
   assert.equal(deriveNeedsYou(row({ seen_at: null, last_read_at: null }), tele({ lastActivityAt: LATER }), "turn-idle"), true)
   assert.equal(deriveNeedsYou(row({ seen_at: T0 }), tele({ lastActivityAt: LATER }), "turn-idle"), true, "viewing cannot clear rest")
   assert.equal(deriveNeedsYou(row({ seen_at: null }), tele({ turn: "idle", lastActivityAt: LATER }), "exited"), true)
-  // A live dispatched SUB-AGENT is the ONE thing that keeps a rested turn out of the queue.
-  assert.equal(deriveNeedsYou(row({ seen_at: null }), tele({ subAgents: [{ label: "c", startedAt: T0, state: "running", id: "a1" }], lastActivityAt: LATER }), "turn-idle"), false)
-  // A live background SHELL does NOT (maintainer 2026-07-22): run_in_background can't tell a CI watcher
-  // from an endless dev server, so a bare rest on only a background shell QUEUES like any other rest.
-  assert.equal(deriveNeedsYou(row(), tele({ bgShells: [{ label: "watch", startedAt: T0, state: "running" }] }), "turn-idle"), true)
+  // A rested turn with a live dispatched SUB-AGENT is now a VISIBLE awaiting-background handoff (it used
+  // to be silently excused). It stays queued until the human event-snoozes it (covered below).
+  assert.equal(deriveNeedsYou(row({ seen_at: null, rested_at: T0 }), tele({ subAgents: [{ label: "c", startedAt: T0, state: "running", id: "a1" }], lastActivityAt: LATER }), "turn-idle"), true)
+  // A live background SHELL cards the same way (it already queued as a bare rest before; now it carries
+  // the awaiting-background presentation + event-snooze instead of a plain rest card).
+  assert.equal(deriveNeedsYou(row({ rested_at: T0 }), tele({ bgShells: [{ label: "watch", startedAt: T0, state: "running" }] }), "turn-idle"), true)
+})
+
+test("deriveNeedsYou: the awaiting-background event-snooze hides the card until the parent re-rests", () => {
+  const child = tele({ subAgents: [{ label: "c", startedAt: T0, state: "running", id: "a1" }], lastActivityAt: LATER })
+  // Snooze captures the CURRENT rest instant. While rested_at still equals it, the card is hidden.
+  assert.equal(deriveNeedsYou(row({ rested_at: T0, bg_snooze_rested_at: T0 }), child, "turn-idle"), false, "snoozed for this rest")
+  // The parent came to a NEW rest (a sub-agent returned) → rested_at advanced past the snooze → re-surfaces.
+  assert.equal(deriveNeedsYou(row({ rested_at: LATER, bg_snooze_rested_at: T0 }), child, "turn-idle"), true, "re-rest clears the snooze")
+  // A snooze from a prior rest never applies to a different rest instant.
+  assert.equal(deriveNeedsYou(row({ rested_at: null, bg_snooze_rested_at: T0 }), child, "turn-idle"), true)
+})
+
+test("deriveAwaitingBackground: true only when own-work rest is the SOLE, unsnoozed queue reason", () => {
+  const child = tele({ subAgents: [{ label: "c", startedAt: T0, state: "running", id: "a1" }], lastActivityAt: LATER })
+  assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), child, "turn-idle"), true)
+  // A shell-only rest also qualifies.
+  assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), tele({ bgShells: [{ label: "w", startedAt: T0, state: "running" }] }), "turn-idle"), true)
+  // Any stronger reason renders its OWN card instead → not awaiting-background.
+  assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), tele({ ...child, pendingQuestion: true }), "turn-idle"), false, "a question outranks it")
+  assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), tele({ ...child, pendingAsk: { id: "x", questions: [] } }), "turn-idle"), false, "a native ask outranks it")
+  assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), tele({ ...child, lastFence: { kind: "done", body: "", hints: [] } }), "turn-idle"), false, "a done fence outranks it")
+  // An EXITED parent with a 'running' child is a crash, not this card.
+  assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), child, "exited"), false)
+  // No live own work → not this card.
+  assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), tele({ lastActivityAt: LATER }), "turn-idle"), false)
+  // Event-snoozed → hidden, so not a handoff at all.
+  assert.equal(deriveAwaitingBackground(row({ rested_at: T0, bg_snooze_rested_at: T0 }), child, "turn-idle"), false)
 })
 
 test("deriveNeedsYou: mid-turn never queues; once runtime reports rest the session is presented", () => {
@@ -398,8 +426,11 @@ test("deriveNeedsYou: an EXITED parent surfaces even when a SUB-AGENT still read
   // silently dangled: hasLiveBackgroundWork buried the exited row instead of queuing it (found 2026-07-21).
   const childRunning = tele({ subAgents: [{ label: "c", startedAt: T0, state: "running", id: "a1" }], lastActivityAt: LATER })
   assert.equal(deriveNeedsYou(row({ seen_at: LATER }), childRunning, "exited"), true, "dead parent w/ 'running' sub-agent surfaces")
-  // Regression guard for the live case: a LIVE parent (turn-idle) resting on a running child stays held.
-  assert.equal(deriveNeedsYou(row({ seen_at: T0 }), childRunning, "turn-idle"), false)
+  // The LIVE parent (turn-idle) resting on a running child now cards as awaiting-background (previously
+  // held/excused); the `runtime !== "exited"` guard is what keeps the EXITED crash case above distinct.
+  assert.equal(deriveNeedsYou(row({ seen_at: T0, rested_at: T0 }), childRunning, "turn-idle"), true)
+  assert.equal(deriveAwaitingBackground(row({ seen_at: T0, rested_at: T0 }), childRunning, "turn-idle"), true)
+  assert.equal(deriveAwaitingBackground(row({ seen_at: LATER }), childRunning, "exited"), false, "the exited crash is not an awaiting-background card")
   // A dead parent whose child has already gone STALE also surfaces — via bare rest, not the bgwork arm
   // (stale ≠ "running", so hasLiveBackgroundWork never buries it and it is not counted as live work).
   const childStale = tele({ subAgents: [{ label: "c", startedAt: T0, state: "stale", id: "a1" }], lastActivityAt: LATER })

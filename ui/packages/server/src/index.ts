@@ -11,6 +11,7 @@ import {
   type AppContext,
   type ContextOptions,
   type ContextStartupFence,
+  type ContextStartupPhase,
 } from "./context.ts"
 import { createApp, type AppOptions } from "./app.ts"
 import { createTerminalServer, resolveThreadAttach } from "./terminal.ts"
@@ -36,6 +37,7 @@ import {
   type ProcessGeneration,
 } from "./project-launch.ts"
 import * as tmux from "./tmux.ts"
+import { createBootProgressPublisher } from "./boot-progress.ts"
 
 export const SERVER_SHUTDOWN_TIMEOUT_MS = 4_000
 export const SERVER_FORCE_EXIT_MS = 5_000
@@ -84,6 +86,12 @@ export interface StartServerRuntime {
     expected: { pid: number; processStart: string; publisherToken: string; ownerToken: string },
   ): boolean
   afterPhase?(phase: ServerStartupPhase): void | Promise<void>
+  /**
+   * Sub-phase reporter for the "context" phase. `createContext` is a single server phase but does
+   * most of the boot work inside it, so a boot-timing harness that only sees server phases reads a
+   * multi-second opaque block. Purely observational — never affects construction or rollback.
+   */
+  afterContextPhase?(phase: ContextStartupPhase): void
   shutdownDeadline?: ShutdownBarrierOptions["deadline"]
 }
 
@@ -186,8 +194,9 @@ const MIME: Record<string, string> = {
 }
 
 // Bridge a node req/res through Hono's fetch handler (Web Request/Response). Streams the body so
-// SSE stays live. Adapted from gent's dev server.
-async function pipeToApp(
+// SSE stays live. Adapted from gent's dev server. Exported for pipe-to-app.test.ts, which drives it
+// against a real node http server + real fetch to pin the POST-body-truncation regression.
+export async function pipeToApp(
   app: ReturnType<typeof createApp>,
   req: IncomingMessage,
   res: ServerResponse,
@@ -195,7 +204,15 @@ async function pipeToApp(
   controller: AbortController,
 ) {
   const url = `http://127.0.0.1:${port}${req.url ?? "/"}`
-  req.on("close", () => controller.abort())
+  // Abort when the RESPONSE closes before it finished — a real client disconnect or a mid-stream SSE
+  // hangup — NOT when the request stream ends. Modern node (observed on v26.5.0) fires `close` on the
+  // IncomingMessage the instant a handler finishes consuming the request body, so keying the abort on
+  // `req`'s close aborted EVERY POST the moment `c.req.json()` drained it — before the response body was
+  // written — and every mutation came back as a 0-byte `application/json` chunked reply (dispatch,
+  // followUp, completeThread, settings: the whole write surface, dead). `res` closes only after
+  // `res.end()` flushes (writableFinished) on the happy path, and closes early with the body still
+  // unfinished exactly when the peer went away — which is the disconnect this abort exists to catch.
+  res.on("close", () => { if (!res.writableFinished) controller.abort() })
   const response = await app.fetch(
     new Request(url, {
       method: req.method,
@@ -306,6 +323,8 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   const effectiveOwnerToken = ownerToken ?? ownedLaunch!.token
 
   let startupPhase: ServerStartupPhase = "launch ownership"
+  // Named, incremental boot progress for whatever launcher is waiting on /health (boot-progress.ts).
+  const bootProgress = createBootProgressPublisher(project.stateDir)
   let ctx: AppContext | undefined
   let githubInit: Promise<void> | undefined
   let terminal: TerminalServer | undefined
@@ -511,6 +530,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     commit?: (value: T) => void,
   ): Promise<T> => {
     startupPhase = name
+    bootProgress(name)
     const value = await operation()
     // Publish a newly-created resource to the rollback ledger before an injected post-phase failure.
     commit?.(value)
@@ -526,6 +546,10 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         claudeBin: opts.claudeBin,
         project,
         startup: {
+          afterPhase: (p) => {
+            bootProgress(`context: ${p}`)
+            runtime.afterContextPhase?.(p)
+          },
           cleanupTimeoutMs: opts.shutdownTimeoutMs ?? SERVER_SHUTDOWN_TIMEOUT_MS,
           cleanupDiagnostic: diagnostic,
           cleanupDeadline: runtime.shutdownDeadline,
@@ -575,7 +599,12 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       (value) => { appSocket = value },
     )
     await phase("board producer", () => ctx!.board.start())
-    await phase("tailer producer", () => ctx!.tailer.start())
+    // The tailer's FIRST pass is the one boot step that can legitimately take minutes on a cold board
+    // of thousands of threads. Report its position so a waiting launcher can tell "working" from
+    // "wedged" instead of guessing with a stopwatch.
+    await phase("tailer producer", () => ctx!.tailer.start((done, total) => {
+      bootProgress(`tailer producer ${done}/${total}`)
+    }))
     await phase("permission producer", () => ctx!.permissionController.start())
     await phase("delivery confirmer", () => ctx!.deliveryConfirmer.start())
     await phase("profile producer", () => ctx!.profileController?.start())
@@ -707,10 +736,13 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       }
     }
     await runtime.afterPhase?.("signal handlers")
+    // The port is listening and /health answers: the launcher no longer needs the progress signal.
+    bootProgress.done()
 
     return { httpServer, ctx, port, close: beginClose, shutdownFence }
   } catch (startupError) {
     accepting = false
+    bootProgress.done()
     let cleanupError: unknown
     let reportedStartupError = startupError
     if (startupError instanceof ContextStartupError) {

@@ -39,6 +39,12 @@ export interface SessionRow {
   // re-surfaces, which is all a snooze ever did before). Non-NULL = the scheduler owns the expiry: it
   // bumps the thread with exactly this text, so the board must NOT clear such a row on elapse.
   snooze_prompt?: string | null
+  // Event-snooze for the awaiting-background card: the `rested_at` value captured when the human snoozed
+  // a "resting while its own sub-agents/shells run" card. The board hides that card while this equals the
+  // CURRENT rested_at (the same rest), and re-surfaces it the moment rested_at advances — i.e. the parent
+  // came to a new rest because a sub-agent/shell returned. NULL = no event-snooze armed. Distinct from
+  // snoozed_until (a wall-clock park owned by the scheduler); this one clears itself on the next rest.
+  bg_snooze_rested_at?: string | null
   // Operator confirmation for one exact final ```awaiting fence generation. The board/scheduler ignore a
   // transcript proposal unless these match its current fence identity.
   awaiting_fence_id?: string | null
@@ -307,6 +313,9 @@ export interface Storage {
   // Session-guarded park: writes only while the row is still this session+generation, so a stale card
   // cannot re-park a thread that has since been re-dispatched.
   setSnoozedUntilIfCurrent(slug: string, sessionId: string, generation: number, until: string | null): boolean
+  // Arm/clear the awaiting-background event-snooze. Session-guarded like the park above. `restedAt` is
+  // the rest instant the card is snoozed FOR; the board re-surfaces it once rested_at moves past this.
+  setBgSnoozeRestedAtIfCurrent(slug: string, sessionId: string, generation: number, restedAt: string | null): boolean
   // Operator confirmation of ONE exact awaiting fence; fails closed if the session/generation moved.
   confirmAwaitingWait(
     slug: string,
@@ -486,6 +495,7 @@ export function createStorage(dbPath: string): Storage {
     "state TEXT",
     "snoozed_until TEXT",
     "snooze_prompt TEXT",
+    "bg_snooze_rested_at TEXT",
     "awaiting_fence_id TEXT",
     "awaiting_confirmed_at TEXT",
     "meta TEXT",
@@ -787,6 +797,10 @@ export function createStorage(dbPath: string): Storage {
   // confirmation/park path, which never arms a scheduled bump.
   const snoozedUntilIfCurrentStmt = db.prepare(`
     UPDATE session SET snoozed_until = ?
+    WHERE slug = ? AND session_id = ? AND runtime_generation = ?
+  `)
+  const bgSnoozeRestedAtIfCurrentStmt = db.prepare(`
+    UPDATE session SET bg_snooze_rested_at = ?
     WHERE slug = ? AND session_id = ? AND runtime_generation = ?
   `)
   const confirmAwaitingWaitStmt = db.prepare(`
@@ -1387,6 +1401,8 @@ export function createStorage(dbPath: string): Storage {
       void snoozedUntilStmt.run(until, until === null ? null : prompt, slug),
     setSnoozedUntilIfCurrent: (slug, sessionId, generation, until) =>
       snoozedUntilIfCurrentStmt.run(until, slug, sessionId, generation).changes === 1,
+    setBgSnoozeRestedAtIfCurrent: (slug, sessionId, generation, restedAt) =>
+      bgSnoozeRestedAtIfCurrentStmt.run(restedAt, slug, sessionId, generation).changes === 1,
     confirmAwaitingWait: (slug, sessionId, generation, fenceId, confirmedAt, snoozedUntil) =>
       confirmAwaitingWaitStmt.run(fenceId, confirmedAt, snoozedUntil, slug, sessionId, generation).changes === 1,
     clearAwaitingWaitIfSession: (slug, sessionId, generation) =>

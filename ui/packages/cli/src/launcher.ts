@@ -21,6 +21,7 @@ import {
   type ProcessPlatformAdapter,
 } from "@fray-ui/server/project-launch";
 import { resolveProjectTmuxSocketSelection } from "@fray-ui/server/tmux-socket";
+import { readBootProgress } from "@fray-ui/server/boot-progress";
 import { DEFAULT_PORT } from "@fray-ui/shared";
 
 export { acquireGlobalLaunchLock, pidIsAlive };
@@ -91,6 +92,12 @@ export interface ExpectedFrayHealth {
 
 export const PORT_SCAN_COUNT = 100;
 export const LAUNCH_TIMEOUT_MS = 30_000;
+/**
+ * Hard ceiling on a progress-tracked wait. Only reached by a boot that keeps reporting progress but
+ * never becomes healthy — a pathological board, or a bug. Without it a wedged-but-chatty child would
+ * hold the launcher forever.
+ */
+export const LAUNCH_HARD_TIMEOUT_MS = 10 * 60_000;
 /** A first immutable artifact build can legitimately outlast the ordinary server-ready timeout. */
 export const FIRST_ARTIFACT_LAUNCH_LOCK_TIMEOUT_MS = 120_000;
 
@@ -519,37 +526,63 @@ export async function choosePort(
   );
 }
 
+export interface WaitForWorkspaceOptions {
+  /**
+   * The project state dir. When given, the wait tracks the control plane's published boot progress
+   * (boot-progress.ts) and the flat `timeoutMs` becomes a STALL window rather than a total budget:
+   * a boot that keeps reporting progress keeps its patience, up to `hardTimeoutMs`. Omit it to keep
+   * the historical flat deadline exactly.
+   */
+  stateDir?: string;
+  hardTimeoutMs?: number;
+}
+
 /**
- * Poll until the workspace answers /health.
+ * Wait for the control plane on `port` to answer /health as the expected owner.
  *
- * `timeoutMs` may be `Infinity`, and for the foreground launch it IS — deliberately. A flat deadline
- * here was actively harmful: on a loaded machine boot simply takes longer than any number we pick, so
- * the launcher would declare failure while the server was still coming up correctly, exit, and leave
- * its child running and printing to the operator's terminal. That converts "slow" into "failed AND
- * orphaned" (2026-07-23: a 21.6s idle boot took 35s+ under load and lost a 30s race every time).
- *
- * We do not need a clock, because we already have two better signals: the caller races this against
- * the supervisor's own exit (so a child that genuinely dies stops the wait immediately, with its real
- * error), and the launcher runs in the foreground, so Ctrl-C is the operator's escape. A timeout only
- * ever fired when both of those said everything was fine.
+ * WHY THIS IS NOT A FLAT DEADLINE. A launcher spawns the control plane detached and cannot see inside
+ * it, so a flat 30s budget silently conflates "something is wrong" with "this board is big and this
+ * machine is busy" — and the maintainer's own board hit that every time, printing "Fray did not become
+ * healthy" while a perfectly healthy child kept booting behind it. Elapsed time is not evidence of
+ * failure; a boot that has STOPPED MAKING PROGRESS is. So when the state dir is known, `timeoutMs` is
+ * spent from the last observed progress step rather than from the start, and the failure message names
+ * the phase the boot reached instead of only how long the launcher waited.
  */
 export async function waitForWorkspace(
   port: number,
   expected: ExpectedFrayHealth,
-  timeoutMs = LAUNCH_TIMEOUT_MS
+  timeoutMs = LAUNCH_TIMEOUT_MS,
+  options: WaitForWorkspaceOptions = {}
 ): Promise<FrayHealth> {
-  const unbounded = !Number.isFinite(timeoutMs);
-  const deadline = Date.now() + timeoutMs;
-  while (unbounded || Date.now() < deadline) {
+  const started = Date.now();
+  const hardDeadline = started + (options.hardTimeoutMs ?? LAUNCH_HARD_TIMEOUT_MS);
+  let stallDeadline = started + timeoutMs;
+  let lastStep = -1;
+  let lastPhase: string | undefined;
+  for (;;) {
     const health = await probeFray(port, expected);
     if (health) return health;
+    if (options.stateDir) {
+      const progress = readBootProgress(options.stateDir);
+      // Only a live publisher's ADVANCING counter buys patience. A leftover file from a dead boot has
+      // no live pid; a stuck one stops advancing. Either way the stall window closes on schedule.
+      if (progress && progress.step > lastStep && pidIsAlive(progress.pid)) {
+        lastStep = progress.step;
+        lastPhase = progress.phase;
+        stallDeadline = Date.now() + timeoutMs;
+      }
+    }
+    const now = Date.now();
+    if (now >= stallDeadline || now >= hardDeadline) {
+      const waited = Math.ceil((now - started) / 1000);
+      throw new Error(
+        lastPhase
+          ? `Fray did not become healthy on port ${port} after ${waited}s; its last reported boot step was "${lastPhase}" and it stopped making progress`
+          : `Fray did not become healthy on port ${port} within ${waited}s`
+      );
+    }
     await delay(150);
   }
-  throw new Error(
-    `Fray did not become healthy on port ${port} within ${Math.ceil(
-      timeoutMs / 1000
-    )}s`
-  );
 }
 
 export function sourceWorkspaceDir(env: NodeJS.ProcessEnv = process.env): string {

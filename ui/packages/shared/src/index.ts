@@ -410,6 +410,14 @@ export const ThreadView = z.object({
   // Once every ordinary rest also queues, runtime=exited + needsYou is no longer enough for clients
   // to distinguish a failed worker from a clean completed process.
   crashed: z.boolean().optional(),
+  // The queued reason is "resting while its OWN background work (sub-agents / shells) is still live,
+  // with no human ask": the agent came to rest awaiting results it dispatched, not awaiting the human.
+  // The card renders the informational awaiting-background banner + an event-Snooze that hides it until
+  // the work returns (the parent re-rests). True only when this is the SOLE queue reason (no question /
+  // ask / native input / done fence outranks it) and no event-snooze is armed for the current rest.
+  // Optional like needsYou/crashed: absent ⇒ a pre-restart server or a non-session row; the client
+  // treats absence as false.
+  awaitingBackground: z.boolean().optional(),
   // Exact typed-interaction presence for this CURRENT registered session. The board already derives
   // this from the scoped durable journal to compute needsYou; exposing the reason lets React avoid a
   // pendingInteractions RPC for every unrelated question/completion card. Optional preserves rolling

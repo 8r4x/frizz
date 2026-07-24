@@ -176,6 +176,27 @@ function hasLiveBackgroundWork(tele: SessionTelemetry | undefined): boolean {
   return Boolean(tele?.subAgents?.some((agent) => agent.state === "running"))
 }
 
+// The awaiting-background card's trigger: the thread's OWN dispatched work is still live — a sub-agent
+// OR a launched background shell. Broader than hasLiveBackgroundWork (which is sub-agents only, for the
+// crash net): a launched shell is still work the human may want SURFACED, and the never-returns problem
+// hasLiveBackgroundWork worried about (a vite dev server) is handled by the event-snooze rather than by
+// silently burying the card. This does NOT excuse a thread from the queue; it SELECTS the awaiting-
+// background handoff, which the human sees and can one-click snooze until the work returns.
+function hasLiveOwnWork(tele: SessionTelemetry | undefined): boolean {
+  return Boolean(
+    tele?.subAgents?.some((agent) => agent.state === "running") ||
+    tele?.bgShells?.some((shell) => shell.state === "running"),
+  )
+}
+
+// The awaiting-background event-snooze is armed for the CURRENT rest iff the captured rested_at still
+// equals the row's rested_at. rested_at only advances when the top-level turn comes to a NEW rest, so
+// any advance — the exact event of a sub-agent/shell returning and the worker acting on it — auto-clears
+// the snooze and re-surfaces the card. No scheduler, no reaper: the snooze expires itself on next rest.
+function bgSnoozeArmed(row: Pick<SessionRow, "bg_snooze_rested_at" | "rested_at">): boolean {
+  return row.bg_snooze_rested_at != null && row.rested_at != null && row.bg_snooze_rested_at === row.rested_at
+}
+
 // A declared wait excuses an idle thread from the queue only for a specific external-human gate or a
 // valid future scheduler instant. Legacy PR/CI/session hints, malformed/elapsed timers, and hintless
 // fences are agent-owned work; if the worker nevertheless comes to rest, the queue must surface that
@@ -237,15 +258,9 @@ export function deriveNeedsYou(
   // needing input surface automatically and STAY until resolved). The tailer clears pendingQuestion the
   // moment a newer user message lands (an answer/steer supersedes the fence), which is what dequeues it.
   if (tele?.pendingQuestion) return true
-  // A top-level turn that is resting only while its own dispatched SUB-AGENT still runs is still in
-  // flight, not a human handoff. Once that child clears, the next board refresh queues the bare rest.
-  // A background shell does NOT excuse the rest — see hasLiveBackgroundWork for why.
-  // This excuse holds ONLY while the parent pane is alive: a child cannot outlive the process that
-  // spawned it. A dead pane's SUB-AGENTS keep reading "running" until their transcript goes stale — or
-  // forever when the child's output file never resolved (subAgentViews has no paneDead guard). So an
-  // EXITED parent still showing "running" background work is a crash mid-background-work; surface it rather than bury it on stale
-  // child liveness (found 2026-07-21: such a thread silently dangled).
-  if (runtime !== "exited" && hasLiveBackgroundWork(tele)) return false
+  // Declared/limit parks are STRONGER excusals than the awaiting-background card below, so they are
+  // checked first: a worker that declared an awaiting-human fence, or is limit-paused with auto-resume
+  // promised, stays held even if a child of its is still live (it explicitly said what it is waiting on).
   if (hasParkedExternalWait(tele, nowMs)) return false
   // A thread parked by an exhausted subscription window is waiting on the clock, not on the human —
   // exactly like a timer wait — SO LONG AS fray is actually going to continue it. Excusing it keeps a
@@ -253,6 +268,16 @@ export function deriveNeedsYou(
   // (or the pause aged out), the promise is gone and it falls through to the ordinary handoff below,
   // which is the honest place for work only the human will restart.
   if (limitPause?.autoResume) return false
+  // A top-level turn that came to rest while its OWN dispatched work (sub-agents OR launched shells) is
+  // still live, with no human ask: it is awaiting results it dispatched, not the human. This is now a
+  // VISIBLE queue handoff — the informational awaiting-background card — so the human can see what's
+  // cooking, with a one-click event-snooze that hides it until the parent re-rests (a child returned).
+  // Previously a live sub-agent silently EXCUSED the rest (held, invisible); surfacing it instead is the
+  // whole point of this card. An EXITED parent with "running" children is a crash, not this card — the
+  // runtime!=="exited" guard drops it to the crash/bare-rest net below (a dead pane's children keep
+  // reading "running" until their transcript goes stale; the parent cannot actually still be waiting on
+  // them). A done fence outranks this: respect the worker's completion signal (show the done card).
+  if (runtime !== "exited" && hasLiveOwnWork(tele) && tele?.lastFence?.kind !== "done") return !bgSnoozeArmed(row)
   // A final ```done fence is a CHECKED completion handoff: show its success card in the queue until the
   // human explicitly Archives the thread. Like a question, merely viewing it does not resolve it. The
   // at-rest gate above prevents a stale fence from carding while a follow-up turn is still running.
@@ -260,6 +285,27 @@ export function deriveNeedsYou(
   // Bare rest is itself the handoff. It remains queued until the human explicitly sends more work,
   // snoozes it, or archives it; merely opening/seeing the thread cannot silently clear the card.
   return true
+}
+
+// Whether a QUEUED thread's SOLE reason is "resting while its own background work is still live" — the
+// signal the client keys the awaiting-background card + event-Snooze on. True only when it is a live
+// handoff (deriveNeedsYou), it is at rest (turn-idle) with live own work, and NO stronger reason
+// outranks it (a native/typed ask, permission prompt, chat question, or done fence all render their own
+// card instead). An event-snoozed card returns false here too — deriveNeedsYou hides it, so it is not a
+// handoff at all. Kept adjacent to deriveNeedsYou and delegating to it so the two never drift.
+export function deriveAwaitingBackground(
+  row: SessionRow,
+  tele: SessionTelemetry | undefined,
+  runtime: RuntimeState,
+  hasActionableInteraction = false,
+  nowMs = Date.now(),
+  limitPause: ThreadView["limitPause"] = undefined,
+): boolean {
+  if (runtime !== "turn-idle" || !hasLiveOwnWork(tele)) return false
+  // Any hard human gate or completion signal outranks this reason → the thread cards as THAT, not here.
+  if (hasActionableInteraction || tele?.pendingAsk || tele?.nativeInputRequired || tele?.pendingQuestion) return false
+  if (tele?.lastFence?.kind === "done") return false
+  return deriveNeedsYou(row, tele, runtime, hasActionableInteraction, nowMs, limitPause)
 }
 
 // The scratchpad path for a session, iff the file exists under the project dir (else undefined so the
@@ -398,6 +444,7 @@ function sessionThreadView(
   const archived = state === "archived"
   const limitPause = resolveLimitPause(row, tele, autoResumeOnLimit, nowMs)
   const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause)
+  const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause)
   // A pane that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
   // "running" (its parent is gone, so it cannot actually be live) — is a crash/stall, not a clean
   // handoff, so it cards as "stalled" not a bare "rest". Mirrors deriveNeedsYou's surfacing above.
@@ -456,6 +503,7 @@ function sessionThreadView(
     // already-delivered (or superseded) bump the row has not been swept clean of yet.
     snoozePrompt: snoozedUntil ? row.snooze_prompt ?? undefined : undefined,
     needsYou,
+    awaitingBackground,
     crashed,
     pendingInteraction: interactionPresence.pending,
     actionableInteraction: interactionPresence.needsUser,
