@@ -2827,6 +2827,13 @@ export function BackgroundOpsStrip({
     const id = setInterval(() => force((n) => n + 1), 30_000)
     return () => clearInterval(id)
   }, [total])
+  // Dismiss a finished-but-unsignalled op: the × retires it from tracking server-side (the board push
+  // then drops its row). Optimism is unnecessary — dismissOp calls onChange, so the removal arrives on
+  // the next board frame; on failure the row simply stays and the next frame reconciles.
+  const dismiss = useMutation({
+    mutationFn: (id: string) => rpc.dismissBackgroundOp({ slug, id }),
+    onError: (e) => showToast(`Dismiss failed: ${(e as Error).message.slice(0, 80)}`),
+  })
   if (total === 0) return null
   return (
     <div className={`flex flex-col gap-0.5 ${className}`} data-background-ops>
@@ -2838,6 +2845,7 @@ export function BackgroundOpsStrip({
           state={s.state}
           startedAt={s.startedAt}
           onOpen={s.id ? () => pushSubAgentDrawer(slug, s.id!, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt }) : undefined}
+          onDismiss={s.id ? () => dismiss.mutate(s.id!) : undefined}
         />
       ))}
       {shells.map((s, i) => (
@@ -2848,6 +2856,7 @@ export function BackgroundOpsStrip({
           state={s.state}
           startedAt={s.startedAt}
           onOpen={s.id ? () => pushBackgroundShellDrawer(slug, s.id!, { label: s.label, startedAt: s.startedAt }) : undefined}
+          onDismiss={s.id ? () => dismiss.mutate(s.id!) : undefined}
         />
       ))}
     </div>
@@ -2859,7 +2868,7 @@ export function BackgroundOpsStrip({
 // still-alive-but-quiet SHELL/Monitor (stale, but the process is live until its terminal signal), and
 // a flat gray dot for a stale AGENT (whose staleness can be a missed-completion fallback). Current rows
 // drill into their transcript/output (a hover arrow signals it); old snapshots without an id stay plain.
-function OpRow({ kind, label, state, startedAt, onOpen }: { kind: "AGENT" | "SHELL"; label: string; state: "running" | "stale"; startedAt: string; onOpen?: () => void }) {
+function OpRow({ kind, label, state, startedAt, onOpen, onDismiss }: { kind: "AGENT" | "SHELL"; label: string; state: "running" | "stale"; startedAt: string; onOpen?: () => void; onDismiss?: () => void }) {
   const when = elapsed(startedAt)
   const clickable = !!onOpen
   const content = (
@@ -2885,10 +2894,29 @@ function OpRow({ kind, label, state, startedAt, onOpen }: { kind: "AGENT" | "SHE
       {clickable && <ArrowUpRight size={11} className="shrink-0 text-transparent transition-colors group-hover:text-muted/50" />}
     </>
   )
-  const className = `group flex min-w-0 items-center gap-1.5 text-left text-[11.5px] ${clickable ? "cursor-pointer rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-fg/60" : ""}`
-  if (!clickable) return <div className={className}>{content}</div>
+  // The label (drill-in) and the × are SIBLINGS inside one row group — a button can't nest inside a
+  // button. The × reveals on row hover/focus so it never competes with the label at rest.
+  const labelClass = `group flex min-w-0 flex-1 items-center gap-1.5 text-left text-[11.5px] ${clickable ? "cursor-pointer rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-fg/60" : ""}`
   const title = kind === "AGENT" ? "Open sub-agent transcript" : "Open background shell output"
-  return <button type="button" onClick={onOpen} onMouseDown={(e) => e.stopPropagation()} title={title} aria-label={`${title}: ${label}`} className={className}>{content}</button>
+  const labelEl = clickable
+    ? <button type="button" onClick={onOpen} onMouseDown={(e) => e.stopPropagation()} title={title} aria-label={`${title}: ${label}`} className={labelClass}>{content}</button>
+    : <div className={labelClass}>{content}</div>
+  if (!onDismiss) return labelEl
+  return (
+    <div className="group/op flex min-w-0 items-center gap-1" data-op-row>
+      {labelEl}
+      <button
+        type="button"
+        onClick={onDismiss}
+        onMouseDown={(e) => e.stopPropagation()}
+        title="Dismiss — stop tracking this finished operation"
+        aria-label={`Dismiss ${kind === "AGENT" ? "sub-agent" : "background shell"}: ${label}`}
+        className="shrink-0 rounded-sm p-0.5 text-muted/30 opacity-0 outline-none transition-opacity hover:text-fg/70 focus-visible:opacity-100 group-hover/op:opacity-100"
+      >
+        <X size={11} />
+      </button>
+    </div>
+  )
 }
 
 // The read-only render of a PENDING native AskUserQuestion (the safety net for a session that bypassed

@@ -761,6 +761,43 @@ test("tailer: a `stopped` recovery notification clears EVERY orphaned sub-agent 
   assert.ok(h.changes.n > before, "clearing the orphans marks the board dirty")
 })
 
+test("tailer: dismissOp retires a live sub-agent AND a live shell by id, immediately, and is a no-op otherwise", () => {
+  // The manual × escape hatch: retire a signal-less op the human decided is finished, without waiting
+  // for a terminal record. Drives the real tailer so the removal reflects through get()/onChange.
+  const h = harness()
+  h.storage.upsertSession(row())
+  fixture(h.logDir, "sid", [
+    IN_FLIGHT,
+    JSON.stringify(dispatch("toolu_ag", "orphan agent")),
+    JSON.stringify(resultText("toolu_ag", "Spawned successfully.\nagentId: aOrphan\nThe agent is now running.")),
+    JSON.stringify(bashBg("toolu_sh", "wait for a signal that never comes", "sleep 99999")),
+    JSON.stringify(resultText("toolu_sh", "Command running in background with ID: bOrphan. Output is being written to: /tmp/tasks/bOrphan.output.")),
+  ])
+  const t = createTailer({
+    project: { cwdSlug: "x" } as Project,
+    storage: h.storage, bus: h.bus, onChange: () => h.changes.n++,
+    now: () => h.clock.ms, paneDead: () => h.dead.v, capturePane: () => h.pane.text,
+    sessionLogDir: h.logDir, mtimeMs: () => Date.parse("2026-07-01T00:00:02.000Z"),
+  })
+  h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
+  t.tick() // prime
+  assert.equal(t.get("t")?.subAgents.length, 1, "one live sub-agent")
+  assert.equal(t.get("t")?.bgShells.length, 1, "one live background shell")
+
+  assert.equal(t.dismissOp?.("nope", "toolu_ag"), false, "unknown slug → no-op")
+  assert.equal(t.dismissOp?.("t", "toolu_missing"), false, "unknown id → no-op")
+
+  const before = h.changes.n
+  assert.equal(t.dismissOp?.("t", "toolu_ag"), true, "dismissing the live agent reports success")
+  assert.ok(h.changes.n > before, "a dismiss reflects immediately (onChange), not only on the next tick")
+  assert.deepEqual(t.get("t")?.subAgents, [], "the agent leaves the live view at once")
+  assert.equal(t.subAgent("t", "toolu_ag")?.state, "done", "…and stays resolvable in the retained ring for its drawer")
+
+  assert.equal(t.dismissOp?.("t", "toolu_sh"), true, "dismissing the live shell reports success")
+  assert.deepEqual(t.get("t")?.bgShells, [], "the shell leaves the live view too")
+  assert.equal(t.dismissOp?.("t", "toolu_ag"), false, "a second dismiss of an already-retired op is a no-op")
+})
+
 test("tailer: a dead pane clears its background shells — a shell cannot outlive the agent process", () => {
   const h = harness()
   h.storage.upsertSession(row())

@@ -627,6 +627,17 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
+    // Manual dismiss (the × on a live sub-agent / background-shell row): retire the op from tracking as
+    // if its terminal signal had arrived. The escape hatch for a finished op whose completion was never
+    // recorded while its parent stays alive — the residual the `stopped` recovery cannot reach. Not a
+    // process kill (fray does not own the child processes); it clears the phantom row + its Done-warning
+    // count. `dismissed:false` when the id is not live (already gone / unknown) — the UI just refreshes.
+    dismissBackgroundOp: mutation({
+      input: z.object({ slug: ThreadSlug, id: z.string() }).strict(),
+      output: z.object({ dismissed: z.boolean() }),
+      handler: ({ input }) => ({ dismissed: ctx.tailer.dismissOp?.(input.slug, input.id) ?? false }),
+    }),
+
     dispatch: mutation({
       input: DispatchInput,
       output: z.object({ slug: ThreadSlug, sessionId: z.string() }),

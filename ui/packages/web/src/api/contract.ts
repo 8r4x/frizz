@@ -73,6 +73,9 @@ export interface Api {
   threadTranscriptEarlier(input: TranscriptEarlierInput): Promise<TranscriptPage>
   subAgentTranscript(input: { slug: string; id: string }): Promise<{ messages: TranscriptMessage[]; state: "running" | "stale" | "done" | "gone" }>
   backgroundShellOutput(input: { slug: string; id: string }): Promise<{ command: string | null; output: string; truncated: boolean; state: "running" | "done" | "gone" }>
+  // The × on a live sub-agent / background-shell row: retire the op from tracking. `dismissed:false`
+  // when the id is no longer live (already gone).
+  dismissBackgroundOp(input: { slug: string; id: string }): Promise<{ dismissed: boolean }>
   // Scoped typed requests are read/answered only for the current registered session. There is
   // deliberately no browser create method: provider adapters alone can journal a request.
   pendingInteractions(input: ListInteractionsInput): Promise<ListInteractionsResult>
@@ -172,6 +175,7 @@ export const PROCEDURES = {
   threadTranscriptEarlier: "query",
   subAgentTranscript: "query",
   backgroundShellOutput: "query",
+  dismissBackgroundOp: "mutation",
   pendingInteractions: "query",
   interactionGet: "query",
   interactionResolve: "mutation",

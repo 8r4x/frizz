@@ -1191,6 +1191,10 @@ export interface Tailer {
   subAgent(slug: string, id: string): { outputFile?: string; outputFormat?: "codex"; state: "running" | "stale" | "done" } | undefined
   // Read-only background-shell drawer lookup. Output content stays server-side until the scoped query.
   backgroundShell?(slug: string, id: string): { command?: string; outputFile?: string; state: "running" | "done" } | undefined
+  // Manual dismiss of a live background op (the × on an op row): retire it from tracking as if a
+  // terminal signal arrived. Returns false if it is not live (unknown id / already gone). Optional so
+  // an older server without it degrades gracefully.
+  dismissOp?(slug: string, id: string): boolean
   // Drop a session's in-memory tail state (registered + foreign) — called when its row is hard-deleted
   // (forgetSession) so a stale TailState bound to the gone transcript can't mis-tail a later same-slug
   // re-dispatch. A no-op for an unknown slug.
@@ -1487,6 +1491,25 @@ export function createTailer(deps: TailerDeps): Tailer {
     const dead = state.retiredShells.get(id)
     if (dead) return { command: dead.command, outputFile: dead.outputFile, state: "done" }
     return undefined
+  }
+
+  // Manual DISMISS (the × on a live op row): retire a live sub-agent/shell by its dispatch tool_use id
+  // exactly as a real terminal signal would — into the retained ring (so its drawer still resolves),
+  // status "killed" — so it leaves every live surface (banner, counts, completion-hold, sidebar) at
+  // once, and onChange() reflects that immediately instead of waiting for the next tick. This is the
+  // escape hatch for the ONE residual the `stopped` recovery can't reach: a finished op whose completion
+  // was never recorded while its parent stays alive. It is NOT a process kill — fray tracks these by
+  // folding the worker's transcript and does not own the child processes, so a genuinely-still-running
+  // child ends only when its owning pane dies; the × just stops fray showing a phantom. Returns whether
+  // an entry was actually live to dismiss (a no-op for an unknown/already-gone id).
+  function dismissOp(slug: string, id: string): boolean {
+    const state = states.get(slug)
+    if (!state || !registeredStateIsCurrent(state)) return false
+    const entry = state.subAgents.get(id)
+    if (!entry) return false
+    retireLive(state, entry, new Date(now()).toISOString(), "killed")
+    deps.onChange()
+    return true
   }
 
   interface PaneSniff {
@@ -2230,6 +2253,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     foreignIds: () => foreignFresh.map((f) => f.id),
     subAgent: subAgentLookup,
     backgroundShell: backgroundShellLookup,
+    dismissOp,
     forget(slug) {
       states.delete(slug)
       foreignStates.delete(slug)
