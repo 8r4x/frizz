@@ -84,6 +84,11 @@ export interface SessionRow {
   // A requested live permission change that has not yet been observed in backend telemetry. Kept
   // separately from permission_mode so the board never presents an optimistic selection as actual.
   permission_pending?: string | null
+  // When the OPERATOR last set permission_mode (ISO). Only setPermissionMode stamps it — never the
+  // tailer's observed write-back. The board prefers the saved value over an older observed telemetry
+  // reading when this is newer, so a codex sandbox change shows in the pill immediately instead of
+  // lagging until the next turn emits a fresh turn_context. Null on pre-migration and never-set rows.
+  permission_set_at?: string | null
   // An actionable reason a runtime control failed closed and cannot safely advance right now.
   control_error?: string | null
   // Durable Claude follow-up delivery ledger (delivery-ledger.ts): small JSON array of not-yet-
@@ -512,6 +517,7 @@ export function createStorage(dbPath: string): Storage {
     "profile_handoff TEXT",
     "permission_mode TEXT",
     "permission_pending TEXT",
+    "permission_set_at TEXT",
     "control_error TEXT",
     "delivery_ledger TEXT",
     "runtime_generation INTEGER NOT NULL DEFAULT 0",
@@ -913,7 +919,10 @@ export function createStorage(dbPath: string): Storage {
   const agentSessionStmt = db.prepare("UPDATE session SET agent_session_id = ? WHERE slug = ?")
   const codexRuntimeStmt = db.prepare("UPDATE session SET codex_runtime = ? WHERE slug = ?")
   const profileStmt = db.prepare("UPDATE session SET model = ?, effort = ? WHERE slug = ?")
-  const permissionModeStmt = db.prepare("UPDATE session SET permission_mode = ? WHERE slug = ?")
+  // Stamps permission_set_at alongside the mode: this is the OPERATOR's set-time, which the board uses
+  // to outrank an older observed telemetry reading (see resolveSessionPermission). The tailer's
+  // observed write-back uses observedPermissionIfCurrentStmt and deliberately does NOT touch it.
+  const permissionModeStmt = db.prepare("UPDATE session SET permission_mode = ?, permission_set_at = ? WHERE slug = ?")
   const permissionPendingStmt = db.prepare("UPDATE session SET permission_pending = ? WHERE slug = ?")
   const beginRuntimeControlStmt = db.prepare(`
     UPDATE session
@@ -1030,6 +1039,7 @@ export function createStorage(dbPath: string): Storage {
     profile_handoff: row.profile_handoff ?? null,
     permission_mode: row.permission_mode ?? null,
     permission_pending: row.permission_pending ?? null,
+    permission_set_at: row.permission_set_at ?? null,
     snoozed_until: row.snoozed_until ?? null,
     snooze_prompt: row.snooze_prompt ?? null,
     awaiting_fence_id: row.awaiting_fence_id ?? null,
@@ -1446,7 +1456,7 @@ export function createStorage(dbPath: string): Storage {
     setAgentSession: (slug, agentSessionId) => void agentSessionStmt.run(agentSessionId, slug),
     setCodexRuntime: (slug, runtime) => void codexRuntimeStmt.run(runtime, slug),
     setProfile: (slug, model, effort) => void profileStmt.run(model, effort, slug),
-    setPermissionMode: (slug, permissionMode) => void permissionModeStmt.run(permissionMode, slug),
+    setPermissionMode: (slug, permissionMode) => void permissionModeStmt.run(permissionMode, new Date().toISOString(), slug),
     setPermissionPending: (slug, permissionMode) => void permissionPendingStmt.run(permissionMode, slug),
     beginRuntimeControl: (slug, expected, kind) => {
       const changed = beginRuntimeControlStmt.run(

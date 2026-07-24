@@ -86,6 +86,56 @@ test("resolveSessionPermission: exposes only a persisted valid per-thread mode; 
   )
 })
 
+test("resolveSessionPermission: an eager operator sandbox change shows immediately, then converges to telemetry", () => {
+  const LATEST = "2026-07-09T12:00:00.000Z"
+  const EVEN_LATER = "2026-07-09T13:00:00.000Z"
+
+  // THE FIX: the operator flipped the sandbox at LATEST — AFTER the last observed turn_context (LATER,
+  // still reporting the OLD value). The pill must show the operator's just-saved intent, not the stale
+  // observed reading, instead of lagging a full turn.
+  assert.equal(
+    resolveSessionPermission(
+      row({ backend: "codex", spawned_at: T0, permission_mode: "bypassPermissions", permission_set_at: LATEST }),
+      tele({ permissionMode: "default", permissionModeAt: LATER }),
+    ),
+    "bypassPermissions",
+    "a just-set operator sandbox outranks an older observed turn_context",
+  )
+
+  // CONVERGENCE: once a genuinely newer turn emits a fresh turn_context (EVEN_LATER > LATEST), the
+  // observed value is authoritative again — the display converges, it does not diverge forever.
+  assert.equal(
+    resolveSessionPermission(
+      row({ backend: "codex", spawned_at: T0, permission_mode: "bypassPermissions", permission_set_at: LATEST }),
+      tele({ permissionMode: "bypassPermissions", permissionModeAt: EVEN_LATER }),
+    ),
+    "bypassPermissions",
+    "a newer turn re-establishes observed authority",
+  )
+
+  // NO REGRESSION: an OLD operator set-time (before the observed reading) must NOT override a fresh
+  // turn — this is the reattach/idle case the observed-wins rule exists for.
+  assert.equal(
+    resolveSessionPermission(
+      row({ backend: "codex", spawned_at: T0, permission_mode: "default", permission_set_at: T0 }),
+      tele({ permissionMode: "bypassPermissions", permissionModeAt: LATER }),
+    ),
+    "bypassPermissions",
+    "a stale set-time does not resurrect the saved value over a newer observed turn",
+  )
+
+  // CLAUDE UNAFFECTED: the set-time logic lives entirely inside the codex branch; Claude's telemetry
+  // stays authoritative-and-timely and its rules are unchanged even with a set-time present.
+  assert.equal(
+    resolveSessionPermission(
+      row({ backend: "claude", spawned_at: T0, permission_mode: "auto", permission_set_at: LATEST }),
+      tele({ permissionMode: "acceptEdits", permissionModeAt: LATER }),
+    ),
+    "auto",
+    "the durable saved Claude value wins regardless of set-time (Claude path untouched)",
+  )
+})
+
 test("resolveSessionTitle: a human title suppresses stale transcript names; generated fallbacks may use them", () => {
   assert.deepEqual(
     resolveSessionTitle(row({ title: "Human-readable thread title", title_auto: 0 }), tele({ aiTitle: "generated-slug" })),

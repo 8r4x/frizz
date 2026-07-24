@@ -365,7 +365,7 @@ export function resolveSessionProfile(
 }
 
 export function resolveSessionPermission(
-  row: Pick<SessionRow, "backend" | "spawned_at" | "permission_mode" | "permission_pending">,
+  row: Pick<SessionRow, "backend" | "spawned_at" | "permission_mode" | "permission_pending" | "permission_set_at">,
   tele?: Pick<SessionTelemetry, "permissionMode" | "permissionModeAt">,
 ): ThreadView["permissionMode"] {
   const saved = PermissionMode.safeParse(row.permission_mode)
@@ -380,6 +380,13 @@ export function resolveSessionPermission(
     const observedAt = tele?.permissionModeAt ? Date.parse(tele.permissionModeAt) : NaN
     const spawnedAt = Date.parse(row.spawned_at)
     if (tele?.permissionMode && Number.isFinite(observedAt) && Number.isFinite(spawnedAt) && observedAt >= spawnedAt) {
+      // …EXCEPT when the OPERATOR changed the sandbox eagerly (thread/settings/update) AFTER that
+      // observed reading. The change takes effect from the next turn, so no fresh turn_context exists
+      // yet and the last one still reports the OLD sandbox — showing it would lie about a change the
+      // operator just made. Prefer the saved intent until a genuinely newer turn re-establishes the
+      // observed value (then observedAt > setAt and this converges back to telemetry on its own).
+      const setAt = row.permission_set_at ? Date.parse(row.permission_set_at) : NaN
+      if (Number.isFinite(setAt) && setAt > observedAt) return normalize(saved.data)
       return normalize(tele.permissionMode)
     }
     return normalize(saved.data)

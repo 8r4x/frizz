@@ -854,3 +854,20 @@ test("setSnoozedUntilIfCurrent parks only the current session+generation and lea
   assert.equal(s.setSnoozedUntilIfCurrent("aw6", "sid", 0, "2099-07-14T08:45:00.000Z"), true)
   assert.equal(s.getSession("aw6")?.snoozed_until, "2099-07-14T08:45:00.000Z")
 })
+
+test("setPermissionMode stamps the operator set-time; the observed write-back never touches it", () => {
+  const s = store()
+  s.upsertSession(row({ slug: "px", backend: "codex", permission_mode: "default" }))
+  assert.equal(s.getSession("px")?.permission_set_at ?? null, null, "not stamped until the operator sets it")
+
+  s.setPermissionMode("px", "bypassPermissions")
+  const setAt = s.getSession("px")?.permission_set_at
+  assert.ok(setAt && !Number.isNaN(Date.parse(setAt)), "the operator set-time is stamped as an ISO instant")
+  assert.equal(s.getSession("px")?.permission_mode, "bypassPermissions")
+
+  // The tailer's observed write-back changes the mode but must NOT re-stamp the operator set-time,
+  // or the board's set-time-vs-observed comparison would always look freshly-operator-set.
+  const gen = s.getSession("px")?.runtime_generation ?? 0
+  s.setObservedPermissionIfCurrent("px", s.getSession("px")!.session_id, gen, "default")
+  assert.equal(s.getSession("px")?.permission_set_at, setAt, "observed write-back leaves permission_set_at untouched")
+})
