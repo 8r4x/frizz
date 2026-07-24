@@ -2641,23 +2641,27 @@ export function LimitPauseCard({ slug, sessionId, pause }: { slug: string; sessi
     onSuccess: () => showToast("Continuing…"),
     onError: (e) => showToast(`Continue failed: ${(e as Error).message.slice(0, 80)}`),
   })
-  // flex-wrap + a 12rem text floor: at a narrow width the button drops to its own line instead of
-  // squeezing the sentence into a 5-line ribbon. items-start pins the glyph to the FIRST line once the
-  // text wraps (centering it against a wrapped block leaves it floating beside line three).
+  // items-center vertically centers the sentence and the button on the common single line: the button
+  // is the tallest element, so the old items-start left it hanging below the text inside the card's
+  // padding (the "garbage spacing"). flex-wrap + ml-auto still drop the button to its own line at a
+  // narrow width; the glyph and sentence are grouped (items-start + a 2px glyph nudge) so the hourglass
+  // stays on the FIRST line when the sentence wraps rather than floating to the middle of the block.
   return (
-    <div data-limit-pause className="flex flex-wrap items-start gap-x-2.5 gap-y-2 rounded-md border border-amber-500/40 bg-panel-2 px-3 py-2 text-[12px]">
-      <Hourglass size={13} className="mt-[2px] shrink-0 text-amber-400" />
+    <div data-limit-pause className="flex flex-wrap items-center gap-x-2.5 gap-y-2 rounded-md border border-amber-500/40 bg-panel-2 px-3 py-2 text-[12px]">
       {/* The provider's own "You've hit your session limit · resets …" line sits directly above this
           card (unlike an auth error, it is informative, so transcript.ts keeps its bubble). So this
           card says only what THAT line cannot: what fray is going to do about it. */}
-      <span className="min-w-[12rem] flex-1 text-fg/90">
-        <span className="font-medium">Paused by the {label} {which}</span>
-        {" — "}
-        {pause.autoResume
-          ? pause.resumesAt
-            ? `continuing automatically at ${limitResumeClock(pause.resumesAt)}.`
-            : "continuing automatically once the window resets."
-          : "continue it whenever you have capacity again."}
+      <span className="flex min-w-[12rem] flex-1 items-start gap-2.5 text-fg/90">
+        <Hourglass size={13} className="mt-[2px] shrink-0 text-amber-400" />
+        <span>
+          <span className="font-medium">Paused by the {label} {which}</span>
+          {" — "}
+          {pause.autoResume
+            ? pause.resumesAt
+              ? `continuing automatically at ${limitResumeClock(pause.resumesAt)}.`
+              : "continuing automatically once the window resets."
+            : "continue it whenever you have capacity again."}
+        </span>
       </span>
       <button
         onClick={() => continueNow.mutate()}

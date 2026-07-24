@@ -18,10 +18,11 @@ import { PROVIDER_LABEL } from "../lib/signIn.ts"
 // one canonical connection indicator). This strip used to carry a second "connected" dot+word, which
 // was pure redundancy sitting a few hundred px from the first — removed.
 //
-// Quota is polled (rpc.quota) rather than pushed on the board: it is ACCOUNT-global, not per-thread,
-// and its sources are slow/rate-limited (Codex rollout tail; Claude Code's `/usage` command), so a
-// 60s poll with a long stale window is the right cadence while healthy. An
-// UNAVAILABLE read re-polls at 15s (a blip should self-heal in seconds, not a minute), and opening a
+// Quota is polled (rpc.quota) rather than pushed on the board: it is ACCOUNT-global, not per-thread.
+// The server keeps the reading warm on its own 1-minute heartbeat (refreshClaudeQuotaInBackground), so
+// this poll just reads that warm cache — a cheap local RPC, no provider round-trip — and a 30s cadence
+// keeps the chip tracking the cache within half a minute instead of drifting minutes stale during a
+// fast burn. An UNAVAILABLE read re-polls at 15s (a blip should self-heal in seconds), and opening a
 // chip's popover forces a fresh read of both quota and auth — the popover is the recheck.
 
 // Every quota/auth request carries an abort deadline. Without one, a single response the server never
@@ -50,7 +51,7 @@ export function QuotaBar() {
     refetchInterval: (query) => {
       const d = query.state.data
       const degraded = !d || d.claude.status !== "ok" || d.codex.status !== "ok"
-      return degraded ? 15_000 : 60_000
+      return degraded ? 15_000 : 30_000
     },
     staleTime: 10_000,
     refetchOnWindowFocus: true,

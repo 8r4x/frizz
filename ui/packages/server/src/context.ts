@@ -6,6 +6,7 @@ import { resolveProject, type Project } from "./project.ts"
 import { createStorage, type Storage } from "./storage.ts"
 import { getSettings, setSettings, resetSettings } from "./settings.ts"
 import { readQuota } from "./quota.ts"
+import { refreshClaudeQuotaInBackground } from "./backend/claude-quota.ts"
 import { createBoard, type BoardManager } from "./board.ts"
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
 import { createDispatcher, type Dispatcher } from "./dispatch.ts"
@@ -49,6 +50,10 @@ import {
 } from "./shutdown.ts"
 
 export const CONTEXT_STARTUP_CLEANUP_TIMEOUT_MS = 4_000
+
+// How often the server proactively refreshes the shared Claude quota cache (see the heartbeat wired
+// below). One cheap endpoint GET per minute per account keeps the sidebar chip reading fresh.
+const QUOTA_REFRESH_INTERVAL_MS = 60_000
 
 export type ContextStartupPhase =
   | "storage"
@@ -391,6 +396,22 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   }, ADOPTION_RECONCILE_INTERVAL_MS)
   adoptionReconcileTimer.unref?.()
   contextUnsubscribers.push(() => clearInterval(adoptionReconcileTimer))
+
+  // Keep the shared Claude quota cache warm on a fixed 1-minute cadence, independent of any browser
+  // poll, so the sidebar chip (and the scheduler's weekly-reset check) always reads a value ~1 minute
+  // old rather than the multi-minute-stale reading a purely read-driven cache served during a fast
+  // fleet burn. One cheap endpoint GET, on the same non-blocking background path a stale read kicks;
+  // the cross-process lock keeps N Fray windows to ~one request per minute per account. Gated on the
+  // same FRAY_WAKERS_OFF flag as the scheduler so a disposable adhoc/test stack never touches the real
+  // account with the real credential.
+  if (process.env.FRAY_WAKERS_OFF !== "1") {
+    void refreshClaudeQuotaInBackground(opts.claudeBin) // warm immediately so the first read is fresh
+    const quotaRefreshTimer = setInterval(() => {
+      void refreshClaudeQuotaInBackground(opts.claudeBin)
+    }, QUOTA_REFRESH_INTERVAL_MS)
+    quotaRefreshTimer.unref?.()
+    contextUnsubscribers.push(() => clearInterval(quotaRefreshTimer))
+  }
 
   // Reap this machine's leaked worker aux — verification browsers (agent-browser/chrome-devtools/
   // puppeteer) and MCP/dev servers that daemonized out of a stopped worker's tmux tree, so nothing

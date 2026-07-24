@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { parseCodexQuotaFromRollout } from "./codex-quota.ts"
-import { parseClaudeUsage, parseClaudeUsageOutput, tokenFromCredentialsJson, readClaudeQuota, claudeQuotaRefreshSettled } from "./claude-quota.ts"
+import { parseClaudeUsage, parseClaudeUsageOutput, tokenFromCredentialsJson, readClaudeQuota, refreshClaudeQuotaInBackground, claudeQuotaRefreshSettled } from "./claude-quota.ts"
 
 // ---- Codex rollout parsing ----
 
@@ -276,10 +276,35 @@ test("claude quota: healthy result is shared, while force performs a real rechec
     return usageEnvelope
   }
   assert.equal((await readClaudeQuota("claude-test", { cacheDir, readToken: noToken, now: () => 0, execUsage })).status, "ok")
-  assert.equal((await readClaudeQuota("claude-test", { cacheDir, readToken: noToken, now: () => 60_000, execUsage })).status, "ok")
+  // A second read comfortably within the 60s healthy TTL is served from the shared cache, no new call.
+  assert.equal((await readClaudeQuota("claude-test", { cacheDir, readToken: noToken, now: () => 30_000, execUsage })).status, "ok")
   assert.equal(calls, 1)
-  await readClaudeQuota("claude-test", { cacheDir, readToken: noToken, now: () => 60_001, execUsage }, { force: true })
+  await readClaudeQuota("claude-test", { cacheDir, readToken: noToken, now: () => 30_001, execUsage }, { force: true })
   assert.equal(calls, 2)
+}))
+
+test("claude quota: the proactive heartbeat warms the shared cache off the endpoint, no browser read, no CLI", () => withCache(async (cacheDir) => {
+  let cliCalls = 0
+  let percent = 30
+  const fetchImpl = (async () =>
+    new Response(JSON.stringify({ plan_type: "max", five_hour: { utilization: percent, reset_at: "2026-07-23T22:00:00Z" } }), { status: 200 })) as unknown as typeof fetch
+  const deps = { cacheDir, readToken: async () => "tok-live", fetchImpl, execUsage: async () => { cliCalls++; return usageEnvelope } }
+
+  // No foreground read has happened — the cache is cold. The heartbeat alone must populate it.
+  await refreshClaudeQuotaInBackground("claude-test", { ...deps, now: () => 0 })
+  await claudeQuotaRefreshSettled()
+  const warmed = await readClaudeQuota("claude-test", { ...deps, now: () => 0 })
+  assert.equal(warmed.status, "ok")
+  assert.equal(warmed.windows[0]?.usedPercent, 30)
+
+  // The value moves; a heartbeat past the 60s TTL rewrites the cache so the next read is fresh — all
+  // from the endpoint, never spawning the CLI.
+  percent = 85
+  await refreshClaudeQuotaInBackground("claude-test", { ...deps, now: () => 61_000 })
+  await claudeQuotaRefreshSettled()
+  const refreshed = await readClaudeQuota("claude-test", { ...deps, now: () => 61_000 })
+  assert.equal(refreshed.windows[0]?.usedPercent, 85)
+  assert.equal(cliCalls, 0)
 }))
 
 test("claude quota: concurrent project windows collapse onto one Claude Code invocation", () => withCache(async (cacheDir) => {

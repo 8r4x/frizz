@@ -26,7 +26,11 @@ const USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 const OAUTH_BETA = "oauth-2025-04-20"
 const USER_AGENT = "claude-code/2.0.0" // gates by product, not exact version
 const ENDPOINT_TIMEOUT_MS = 5000
-const OK_TTL_MS = 3 * 60_000
+// A healthy reading is trusted for one minute. The endpoint is one cheap ~200ms GET, and a proactive
+// server-side heartbeat (refreshClaudeQuotaInBackground, wired in context.ts) already keeps this cache
+// warm on a 60s cadence, so a lazy read reflects a value at most ~1 minute old instead of the multi-
+// minute lag a 3-minute TTL served while the fleet burned quota fast. FAIL keeps its tight 10s retry.
+const OK_TTL_MS = 60_000
 const FAIL_TTL_MS = 10_000
 const STALE_MAX_AGE_MS = 24 * 60 * 60_000
 // The CLI fallback boots a full Claude Code process; under load-80 a cold boot alone can blow well
@@ -421,6 +425,29 @@ function refreshSharedInBackground(paths: { data: string; lock: string }, claude
 /** Test seam: resolves once any in-flight background refreshes have settled. */
 export async function claudeQuotaRefreshSettled(): Promise<void> {
   await Promise.all([...backgroundRefreshes.values()])
+}
+
+// Proactively refresh the shared quota cache on a fixed schedule, independent of whether any browser is
+// polling. The freshness of the sidebar chip (and the scheduler's weekly-reset check) used to be a
+// side effect of someone READING the cache: with a 3-minute stale-while-revalidate TTL and a 60s
+// browser poll, the displayed reading could lag 3–4 minutes — long enough to blow past a limit during
+// a fast fleet burn without the chip ever warning. A server-side heartbeat calling this every minute
+// keeps the cache genuinely warm so every read is recent.
+//
+// It uses the SAME non-blocking background path a stale read kicks — endpoint-first, one in-flight
+// refresh per process, cross-process lock so N Fray windows make ~one request per minute per account,
+// and the CLI fallback only for the 401/403 token-refresh case it already owned. It NEVER blocks the
+// caller and swallows every failure (the last known-good reading rides until the next success).
+export async function refreshClaudeQuotaInBackground(claudeBin = "claude", deps: ClaudeQuotaDeps = {}): Promise<void> {
+  const now = (deps.now ?? Date.now)()
+  const configDir = claudeConfigDir()
+  const cacheDir = deps.cacheDir ?? join(homedir(), ".fray", "quota-cache")
+  try {
+    await mkdir(cacheDir, { recursive: true, mode: 0o700 })
+  } catch {
+    return // No shared cache dir → nothing to warm; a lazy read still has its own no-cache fallback.
+  }
+  refreshSharedInBackground(cachePaths(cacheDir, configDir), claudeBin, deps, now)
 }
 
 // The healthy cache is shared under ~/.fray so three project windows make one Claude Code request,

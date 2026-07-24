@@ -187,10 +187,9 @@ export function Sidebar() {
           {heldThreads.length > 0 && (
             <section aria-label="Held">
               <hr className="my-3 border-border/50" />
-              <div className="flex w-full items-center justify-between px-1.5 py-1 text-[11px] uppercase tracking-wide text-muted/55">
-                <span>Held</span>
-                <span className="tabular-nums">{heldThreads.length}</span>
-              </div>
+              {/* Non-collapsible: held work must stay glanceable. Same header component as Done/Plans
+                  so it matches them exactly (color, label position, count beside the label). */}
+              <SectionHeader label="Held" count={heldThreads.length} />
               {heldThreads.map((t) => (
                 <div key={t.id}>
                   <ThreadRow t={t} active={activeId === t.id} onQueueNavigate={navigateToQueueCard} />
@@ -237,19 +236,32 @@ export function Sidebar() {
   )
 }
 
-// A collapsible section header: a rotating caret, the label, and a right-justified count.
-function SectionHeader({ label, count, collapsed, onToggle }: { label: string; count: number; collapsed: boolean; onToggle: () => void }) {
-  return (
-    <button
-      onClick={onToggle}
-      className="flex w-full items-center gap-1 px-1.5 py-1 text-[11px] uppercase tracking-wide text-muted/70 transition-colors hover:text-fg"
-    >
-      <ChevronRight size={11} className={`transition-transform ${collapsed ? "" : "rotate-90"}`} />
+// A section header: an optional collapse caret, the label, and the count. ONE source of truth for
+// every band header (Held, Done, Plans) so they can never visually drift apart again. Omit onToggle
+// for a NON-collapsible section (Held): it renders as a static div with a caret-width spacer so its
+// label still aligns with the collapsible sections below it.
+export function SectionHeader({ label, count, collapsed, onToggle }: { label: string; count: number; collapsed?: boolean; onToggle?: () => void }) {
+  const inner = (
+    <>
+      {onToggle ? (
+        <ChevronRight size={11} className={`transition-transform ${collapsed ? "" : "rotate-90"}`} />
+      ) : (
+        // Reserve the caret's width so a non-collapsible label lines up with the collapsible ones.
+        <span className="w-[11px] shrink-0" aria-hidden />
+      )}
       <span>{label}</span>
       {/* Count rides right next to its label (not floated to the far edge) — it's meaningful data,
           not a margin ornament; raised contrast so it actually reads. */}
       <span className="ml-1.5 tabular-nums text-muted/60">{count}</span>
+    </>
+  )
+  const cls = "flex w-full items-center gap-1 px-1.5 py-1 text-[11px] uppercase tracking-wide text-muted/70"
+  return onToggle ? (
+    <button onClick={onToggle} className={`${cls} transition-colors hover:text-fg`}>
+      {inner}
     </button>
+  ) : (
+    <div className={cls}>{inner}</div>
   )
 }
 
