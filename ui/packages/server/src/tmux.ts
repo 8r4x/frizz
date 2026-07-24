@@ -1,4 +1,5 @@
-import { execFileSync } from "node:child_process"
+import { execFileSync, execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { isAbsolute, relative, resolve } from "node:path"
 import { randomUUID } from "node:crypto"
 import { tmuxSessionName } from "@fray-ui/shared"
@@ -10,6 +11,8 @@ import {
   tmuxProjectRootHash,
   validateTmuxSocketName,
 } from "./tmux-socket.ts"
+
+const execFileAsync = promisify(execFile)
 
 export { deriveLegacySocket, deriveProjectSocket, deriveSocket, deriveWorktreeSocket } from "./tmux-socket.ts"
 
@@ -505,7 +508,13 @@ export function capturePanes(slugs: readonly string[]): Map<string, string> {
   const out = new Map<string, string>()
   let pending = [...slugs]
   for (let round = 0; round < CAPTURE_BATCH_ROUNDS && pending.length > 0; round++) {
-    captureBatchRound(pending, out)
+    let text: string
+    try {
+      text = tmuxWithPartialOutput(...batchCaptureArgs(pending))
+    } catch {
+      break // nothing salvageable — the caller falls back to the per-slug capture
+    }
+    parseBatchFrames(text, pending, out)
     const next = pending.filter((slug) => !out.has(slug))
     if (next.length === pending.length) break // the very first slug failed — retrying it is pointless
     pending = next.slice(1) // drop the slug the list aborted on; the caller captures it individually
@@ -513,7 +522,29 @@ export function capturePanes(slugs: readonly string[]): Map<string, string> {
   return out
 }
 
-function captureBatchRound(slugs: readonly string[], out: Map<string, string>): void {
+// ASYNC sibling of capturePanes — byte-identical framing/salvage/retry, but the tmux subprocess runs
+// off the event loop (execFile, not execFileSync). The tailer prefetches panes through this so a
+// board's whole per-tick capture never blocks RPC replies and board pushes (measured 2026-07-23: the
+// synchronous batch was 1-4s of loop-blocking work on a busy board). One awaited subprocess per round.
+export async function capturePanesAsync(slugs: readonly string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  let pending = [...slugs]
+  for (let round = 0; round < CAPTURE_BATCH_ROUNDS && pending.length > 0; round++) {
+    let text: string
+    try {
+      text = await tmuxWithPartialOutputAsync(batchCaptureArgs(pending))
+    } catch {
+      break
+    }
+    parseBatchFrames(text, pending, out)
+    const next = pending.filter((slug) => !out.has(slug))
+    if (next.length === pending.length) break
+    pending = next.slice(1)
+  }
+  return out
+}
+
+function batchCaptureArgs(slugs: readonly string[]): string[] {
   const args: string[] = []
   for (const slug of slugs) {
     if (args.length > 0) args.push(";")
@@ -523,12 +554,10 @@ function captureBatchRound(slugs: readonly string[], out: Map<string, string>): 
     args.push(";", "capture-pane", "-p", "-t", exactSessionTarget(slug))
     args.push(";", "display-message", "-p", `${CAPTURE_SENTINEL}${CAPTURE_CLOSE}`)
   }
-  let text: string
-  try {
-    text = tmuxWithPartialOutput(...args)
-  } catch {
-    return // nothing salvageable — the caller falls back to the per-slug capture
-  }
+  return args
+}
+
+function parseBatchFrames(text: string, slugs: readonly string[], out: Map<string, string>): void {
   const wanted = new Set(slugs)
   const frames = text.split(CAPTURE_SENTINEL)
   for (let i = 0; i < frames.length; i++) {
@@ -551,6 +580,19 @@ function captureBatchRound(slugs: readonly string[], out: Map<string, string>): 
 function tmuxWithPartialOutput(...args: string[]): string {
   try {
     return execFileSync("tmux", ["-L", socket, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 })
+  } catch (error) {
+    const partial = (error as { stdout?: string | Buffer }).stdout
+    if (typeof partial === "string") return partial
+    if (partial) return partial.toString("utf8")
+    throw error
+  }
+}
+
+// Async sibling of tmuxWithPartialOutput: same aborted-command-list stdout salvage, off the event loop.
+async function tmuxWithPartialOutputAsync(args: readonly string[]): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync("tmux", ["-L", socket, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
+    return stdout
   } catch (error) {
     const partial = (error as { stdout?: string | Buffer }).stdout
     if (typeof partial === "string") return partial
@@ -1067,30 +1109,88 @@ export function isLive(slug: string): boolean {
 // A per-slug liveness question is one subprocess, and the hot paths ask it per-thread: the board's
 // deriveRuntime on every overlay refresh (one per thread) and the tailer's 1s tick (one per session
 // row). Those sync execs stacked up and starved the event loop — RPC latency climbed to many seconds
-// while any agent was streaming. One `list-panes -a` answers ALL sessions in a single subprocess;
-// cache it briefly (below the tailer's poll period) so each tick pays for one exec.
+// while any agent was streaming. One `list-panes -a` answers ALL sessions in a single subprocess.
+//
+// But even ONE subprocess is a synchronous fork/exec + tmux round-trip on the event loop, and the
+// tailer refreshes it EVERY tick (the 900ms TTL sits just under the 1s poll). On a loaded box that
+// single `list-panes -a` measured 60-270ms — and that time is a hard floor under every RPC reply and
+// board push the tick owes a client, on a board with ZERO activity (measured 2026-07-23). So the
+// refresh is ASYNC: the sync accessor serves the last snapshot immediately and, when it is stale,
+// kicks a background `execFile` that updates the cache off the blocking path. A ≤~1s-stale liveness
+// bit is already the contract (the TTL always allowed it); what changed is that acquiring the fresh
+// one no longer blocks the loop. Cold start and post-mutation invalidations still refresh
+// SYNCHRONOUSLY (see paneMap) so a spawn/kill caller that verifies liveness immediately reads truth.
 const LIVENESS_TTL_MS = 900
 let livenessAt = 0
 let livenessMap = new Map<string, PaneSnapshot>() // session name -> exact pane generation + dead bit
+// Bumped by invalidateLiveness so a background refresh that started against a now-stale reality (a
+// spawn/kill landed mid-flight) discards its result instead of clobbering the fresh sync snapshot.
+let livenessGen = 0
+let livenessRefreshing = false
+
+function parseLivenessOutput(text: string): Map<string, PaneSnapshot> {
+  const map = new Map<string, PaneSnapshot>()
+  for (const line of text.split("\n")) {
+    const parsed = parsePaneSnapshot(line)
+    if (!parsed) continue
+    // Fray owns single-pane sessions. If a future/manual session adds panes, prefer a live pane;
+    // an exact adoption binding still matches only its persisted tuple.
+    const current = map.get(parsed.name)
+    if (!current || (current.dead && !parsed.pane.dead)) map.set(parsed.name, parsed.pane)
+  }
+  return map
+}
+
+// Synchronous refresh — used ONLY on cold start (never-populated cache) and immediately after a
+// mutation invalidates it, where a caller needs the new reality in the same turn.
+function refreshLivenessSync(): void {
+  const gen = livenessGen
+  let map: Map<string, PaneSnapshot>
+  try {
+    map = parseLivenessOutput(tmux("list-panes", "-a", "-F", PANE_SNAPSHOT_FORMAT))
+  } catch {
+    map = new Map() // no tmux server → nothing live; the empty map reads as all-dead
+  }
+  if (gen === livenessGen) {
+    livenessMap = map
+    livenessAt = Date.now()
+  }
+}
+
+// Background refresh — the steady-state path. Never blocks the event loop; the tick keeps serving the
+// prior snapshot while this runs. Single-flight (livenessRefreshing) so a slow tmux can't stack execs.
+async function refreshLivenessAsync(): Promise<void> {
+  if (livenessRefreshing) return
+  livenessRefreshing = true
+  const gen = livenessGen
+  try {
+    const { stdout } = await execFileAsync(
+      "tmux",
+      ["-L", socket, "list-panes", "-a", "-F", PANE_SNAPSHOT_FORMAT],
+      { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+    )
+    if (gen === livenessGen) {
+      livenessMap = parseLivenessOutput(stdout)
+      livenessAt = Date.now()
+    }
+  } catch {
+    // no tmux server (or a transient failure) → treat as nothing live, but only if no mutation raced
+    if (gen === livenessGen) {
+      livenessMap = new Map()
+      livenessAt = Date.now()
+    }
+  } finally {
+    livenessRefreshing = false
+  }
+}
 
 function paneMap(): Map<string, PaneSnapshot> {
-  const now = Date.now()
-  if (now - livenessAt > LIVENESS_TTL_MS) {
-    const map = new Map<string, PaneSnapshot>()
-    try {
-      for (const line of tmux("list-panes", "-a", "-F", PANE_SNAPSHOT_FORMAT).split("\n")) {
-        const parsed = parsePaneSnapshot(line)
-        if (!parsed) continue
-        // Fray owns single-pane sessions. If a future/manual session adds panes, prefer a live pane;
-        // an exact adoption binding still matches only its persisted tuple.
-        const current = map.get(parsed.name)
-        if (!current || (current.dead && !parsed.pane.dead)) map.set(parsed.name, parsed.pane)
-      }
-    } catch {
-      // no tmux server → nothing live; the empty map reads as all-dead below
-    }
-    livenessMap = map
-    livenessAt = now
+  if (Date.now() - livenessAt > LIVENESS_TTL_MS) {
+    // livenessAt===0 means the cache is cold OR a mutation just invalidated it (invalidateLiveness
+    // resets it to 0): both demand the current truth in-hand, so refresh synchronously. Every other
+    // staleness is the ordinary 1s tick, refreshed in the background so the loop never blocks.
+    if (livenessAt === 0) refreshLivenessSync()
+    else void refreshLivenessAsync()
   }
   return livenessMap
 }
@@ -1121,9 +1221,13 @@ export function isExpectedAdoptionPaneLiveAnywhereCached(expected: ExpectedAdopt
 }
 
 // Test seam / post-mutation freshness: drop the cache so the next read re-lists (spawn/kill call
-// this so a just-created or just-killed session is visible immediately, not TTL-later).
+// this so a just-created or just-killed session is visible immediately, not TTL-later). Resetting
+// livenessAt to 0 also routes that next read through the SYNCHRONOUS refresh (paneMap), and bumping
+// the generation makes any in-flight BACKGROUND refresh — started against the pre-mutation server —
+// discard its now-stale result instead of overwriting the fresh sync snapshot.
 export function invalidateLiveness(): void {
   livenessAt = 0
+  livenessGen++
 }
 
 // Inject a single-line follow-up: send the text literally (-l, so no key interpretation),

@@ -6,7 +6,7 @@ import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { FenceView } from "./tailer.ts"
 import type { LimitFault } from "./backend/types.ts"
-import { limitPauseIsStale, quotaWindowRecovered, textResetInstant } from "./backend/usage-limit.ts"
+import { limitPauseIsStale, quotaWindowKeyFor, quotaWindowRecovered, textResetInstant } from "./backend/usage-limit.ts"
 import { createWakeDeliveryStore, type WakeDelivery } from "./wake-store.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
 
@@ -203,6 +203,21 @@ const LIMIT_HINT_PREFIX = "limit:"
 // Deliberate slack past the provider's stated reset. Their clock and ours are not the same clock, and
 // resuming a whole fleet one second early just re-hits the wall and burns every thread's wake.
 const LIMIT_RESUME_GRACE_MS = 60_000
+
+// The ACCOUNT-AVAILABILITY resume trigger (independent of the original window's own clock): a
+// limit-paused thread also resumes when the blown window is no longer near-full on the CURRENTLY
+// signed-in account — a fresh sign-in or a raised cap frees up quota the original clock knows nothing
+// about. Two stateless guards keep it from resuming straight back into the wall:
+//   • the FLOOR — a limit fault only happens at ~100% of the window, so requiring the current reading to
+//     sit at/below 85% is the genuine down-edge while ignoring tick-to-tick jitter near 100%.
+//   • the MIN FAULT AGE — the served quota reading can lag the fault by up to its cache TTL, and during
+//     a fast fleet burn the window climbs 85→100 in well under a minute, so a reading OLDER than the
+//     fault could still show pre-burn headroom. Only trusting the signal once the fault is comfortably
+//     older than that staleness guarantees the reading POST-dates the fault (a real recovery), not a
+//     stale pre-fault value. It adds no delay to the real case — an account switched hours after the
+//     fault clears this instantly — it only holds off the first couple of minutes.
+const LIMIT_RESUME_HEADROOM_PERCENT = 85
+const LIMIT_HEADROOM_MIN_FAULT_AGE_MS = 2 * 60_000
 
 // The generation id for one interruption. The limit record's timestamp is what makes it a generation:
 // a thread that resumes and gets cut off AGAIN produces a later `at`, hence a different delivery id,
@@ -888,21 +903,37 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     return out
   }
 
-  // Has this fault's window come back? Text first — it is exact, local, and free, and it covers the
-  // 5-hour session limit that is the common case. Only when the text can't say (every weekly limit)
-  // do we spend a usage-endpoint read. `undefined` = indeterminate: wait for a later tick rather than
-  // guessing, since guessing "recovered" resumes the fleet into a wall.
+  // Has this fault's window come back? Two independent triggers, whichever fires first:
+  //   (1) the ORIGINAL window RESET — its own reset clock (5-hour session: exact, local, free) or, for a
+  //       weekly whose text carries no date, the endpoint's window-identity roll.
+  //   (2) quota FREED UP on the current account — the blown window now reads below the headroom floor,
+  //       so a fresh sign-in or a raised cap made room even though the original clock hasn't passed
+  //       (guarded by the floor + min-fault-age; see LIMIT_RESUME_HEADROOM_PERCENT).
+  // `undefined` = indeterminate: wait for a later tick rather than guessing, since guessing "recovered"
+  // resumes the fleet into a wall.
   function limitRecovered(
     c: LimitCandidate,
     quota: QuotaSnapshot | undefined,
     nowMs: number,
   ): boolean | undefined {
     const faultAtMs = Date.parse(c.fault.at)
+    const provider = quota?.[c.backend]
+
+    // (2) Account-availability: the blown window is no longer near-full on the signed-in account. Only
+    // trusted once the fault is old enough that a warmed reading necessarily post-dates it (so we read a
+    // real recovery, not a stale pre-fault value) and only when the window sits below the floor (so
+    // jitter near 100% can't resume the fleet straight back into the wall).
+    if (provider?.status === "ok" && Number.isFinite(faultAtMs) && nowMs - faultAtMs >= LIMIT_HEADROOM_MIN_FAULT_AGE_MS) {
+      const key = quotaWindowKeyFor(c.fault.window)
+      const w = key ? provider.windows.find((x) => x.key === key) : undefined
+      if (w && typeof w.usedPercent === "number" && w.usedPercent <= LIMIT_RESUME_HEADROOM_PERCENT) return true
+    }
+
+    // (1) Original-window reset. Text first — exact, local, free, covers the common 5-hour session case.
     const textAt = c.fault.resetClock
       ? textResetInstant({ window: c.fault.window, resetClock: c.fault.resetClock }, faultAtMs)
       : undefined
     if (textAt !== undefined) return nowMs >= textAt + LIMIT_RESUME_GRACE_MS
-    const provider = quota?.[c.backend]
     if (!provider || provider.status !== "ok") return undefined
     const rolled = quotaWindowRecovered(provider.windows, c.fault.window, faultAtMs, nowMs)
     if (rolled !== true) return rolled
@@ -913,10 +944,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (!autoResumeOnLimit()) return
     const candidates = limitCandidates(nowMs)
     if (candidates.length === 0) return
-    // Only pay for a usage-endpoint read when at least one candidate actually needs one — a fleet of
-    // ordinary session limits resolves entirely from its own text.
+    // Read the heartbeat-warmed usage snapshot. The account-availability trigger needs it for EVERY
+    // candidate — a session limit included, now that a fresh sign-in or raised cap can free it before
+    // its own clock — and the weekly window-roll check needs it too. This is a cached read (the server
+    // keeps it warm on its own cadence), so a fleet parked on a limit doesn't hammer the endpoint.
     let quota: QuotaSnapshot | undefined
-    if (deps.readQuota && candidates.some((c) => limitRecovered(c, undefined, nowMs) === undefined)) {
+    if (deps.readQuota) {
       try {
         quota = await deps.readQuota()
       } catch (err) {

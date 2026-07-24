@@ -9,7 +9,3 @@ export const ThreadSlug = z.string()
   .max(THREAD_SLUG_MAX_CHARS)
   .regex(/^[a-z0-9][a-z0-9-]*$/)
 export type ThreadSlug = z.infer<typeof ThreadSlug>
-
-export function parseThreadSlug(value: unknown): ThreadSlug {
-  return ThreadSlug.parse(value)
-}
