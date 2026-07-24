@@ -252,6 +252,25 @@ async function startListener(options: CodexAppServerHostOptions): Promise<Native
   }
 }
 
+// Every reattach over this transport is LOSSY, and unlike the daemon it cannot say by how much.
+//
+// Two independent reasons, both verified against 0.144.6:
+//   1. The app-server DROPS server->client events while no client is attached — it has no queue, and
+//      no counter to report if it did.
+//   2. Subscriptions are PER-CONNECTION. `thread/start` and `thread/resume` "auto-subscribe you", and
+//      `thread/unsubscribe` removes "the current connection's subscription". A brand-new WebSocket is
+//      therefore subscribed to NOTHING, so a rejoin that skipped `thread/resume` would sit waiting on
+//      a `turn/completed` that this connection was never going to be sent.
+//
+// The daemon has neither problem: it holds ONE never-closing stdio connection to the app-server, so
+// its subscription never lapses and it can queue and count what it withheld. So where the daemon
+// reports a real overflow count, this host reports a fixed non-zero sentinel — "presume holes" — which
+// is what `sameProcess` in codex-app-server.ts consumes it as (`droppedWhileDetached === 0`). That
+// demotes every rejoin to the cold path: `thread/resume` per binding, which BOTH re-subscribes this
+// connection and returns the authoritative live state, plus the auto-resume nudge for a turn that
+// really did die. For this transport that cold path is not a fallback, it is the correct rejoin.
+const PRESUMED_LOSSY_REJOIN = 1
+
 /**
  * The native host: reattach to this project's listener, or start one if there is none.
  *
@@ -263,7 +282,13 @@ export const nativeListenCodexAppServerHost: CodexAppServerHost = async (options
   const existing = liveNativeRecord(options.stateDir, options.projectId)
   if (existing) {
     try {
-      return { process: await attach(existing, timeoutMs), generation: existing.generation, reattached: true, daemonPid: existing.listenerPid }
+      return {
+        process: await attach(existing, timeoutMs),
+        generation: existing.generation,
+        reattached: true,
+        daemonPid: existing.listenerPid,
+        droppedWhileDetached: PRESUMED_LOSSY_REJOIN,
+      }
     } catch {
       // The record outlived its socket. Drop it and start fresh rather than failing the connect.
       try { unlinkSync(nativeRecordPath(options.stateDir, options.projectId)) } catch {}
@@ -271,16 +296,29 @@ export const nativeListenCodexAppServerHost: CodexAppServerHost = async (options
   }
   try {
     const record = await startListener(options)
-    return { process: await attach(record, timeoutMs), generation: record.generation, reattached: false, daemonPid: record.listenerPid }
+    // A listener WE just started has no detached window behind it and nothing could have been missed.
+    return {
+      process: await attach(record, timeoutMs),
+      generation: record.generation,
+      reattached: false,
+      daemonPid: record.listenerPid,
+      droppedWhileDetached: 0,
+    }
   } catch (error) {
     // A concurrent fray may have won the bind between our probe and our spawn ("app-server control
     // socket is already in use"). Its record is authoritative; join it rather than fighting for it.
     const raced = liveNativeRecord(options.stateDir, options.projectId)
     if (raced) {
-      return { process: await attach(raced, timeoutMs), generation: raced.generation, reattached: true, daemonPid: raced.listenerPid }
+      return {
+        process: await attach(raced, timeoutMs),
+        generation: raced.generation,
+        reattached: true,
+        daemonPid: raced.listenerPid,
+        droppedWhileDetached: PRESUMED_LOSSY_REJOIN,
+      }
     }
     console.error(`[fray-ui] codex app-server native listener unavailable (${(error as Error).message}); falling back to an in-process app-server — turns will NOT survive a fray restart`)
     const child = spawn(options.codexBin, ["app-server", "--stdio"], { cwd: options.cwd, env: options.env, stdio: ["pipe", "pipe", "pipe"] })
-    return { process: child as unknown as CodexAppServerProcess, generation: randomUUID(), reattached: false, daemonPid: process.pid }
+    return { process: child as unknown as CodexAppServerProcess, generation: randomUUID(), reattached: false, daemonPid: process.pid, droppedWhileDetached: 0 }
   }
 }

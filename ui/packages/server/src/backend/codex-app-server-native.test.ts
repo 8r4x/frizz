@@ -95,6 +95,11 @@ test("reattaches to an existing listener without offering permessage-deflate", a
     await settle()
     assert.equal(attachment.reattached, true, "an existing live record must be joined, not replaced")
     assert.equal(attachment.generation, "gen-fixture", "the generation identifies the PROCESS and must survive a reattach")
+    // A rejoin over this transport is ALWAYS lossy: the app-server drops events while unattached, and
+    // subscriptions are per-connection so this brand-new socket is subscribed to nothing yet. Claiming
+    // 0 here would let the bridge take the warm path and wait forever on a `turn/completed` it was
+    // never going to be sent. See PRESUMED_LOSSY_REJOIN.
+    assert.ok(attachment.droppedWhileDetached > 0, "a reattach must never claim to be lossless")
     assert.equal(f.connections.length, 1)
     // The single most brittle detail in this transport: `ws` offers permessage-deflate by default and
     // codex's tungstenite rejects the ENTIRE upgrade over it ("Missing, duplicated or incorrect header
