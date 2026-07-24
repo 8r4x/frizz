@@ -109,7 +109,9 @@ function handleHostControl(message) {
     if (!systemInitSent) {
       systemInitSent = true
       if (scenario !== "no-init") emitSystemInit()
-      if (scenario === "duplicate-init") setTimeout(emitSystemInit, 25)
+      // Real claude re-emits init at the start of every streaming turn (same session), then keeps
+      // streaming — model that: a benign re-init followed by a normal result the consumer still sees.
+      if (scenario === "duplicate-init") setTimeout(() => { emitSystemInit(); emitResult("survived the re-init") }, 25)
       if (scenario === "diagnostic") emitHostileDiagnostic()
     }
     return

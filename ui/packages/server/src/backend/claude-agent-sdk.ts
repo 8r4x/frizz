@@ -378,17 +378,31 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
     try {
       for await (const raw of this.sdkQuery) {
         const event = mapSdkMessage(raw)
-        if (!this.initialized) {
-          if (event.kind !== "init") throw new ClaudeAgentSdkProtocolError("Claude emitted a non-init event before session ownership")
+        // Session OWNERSHIP is the invariant to protect: every event that names a session must name
+        // OURS. What the earlier rules got wrong — because they were calibrated to the fake test CLI,
+        // not a real claude — is TWO benign things real claude does in streaming mode: it re-emits
+        // `init` at the start of EVERY turn (same session id), and it brackets turns with control
+        // frames (`command_lifecycle`, `rate_limit_event`) that can precede the first init. Both carry
+        // the owned session id, so they are safe to accept; only a genuinely cross-session or
+        // unattributed event is rejected.
+        if (event.kind === "init") {
           if (event.sessionId !== this.sessionId) throw new ClaudeAgentSdkProtocolError("Claude session ownership mismatch")
+          if (this.initialized) continue // per-turn re-init of the SAME session — a control marker, not a new session
           this.initialized = true
           this.resolveReady(event)
-        } else {
-          if (event.kind === "init") throw new ClaudeAgentSdkProtocolError("Claude emitted a duplicate init event")
-          if (event.sessionId === undefined) throw new ClaudeAgentSdkProtocolError("Claude event is missing session ownership")
-          if (event.sessionId !== this.sessionId) throw new ClaudeAgentSdkProtocolError("Claude event crossed session ownership")
-          this.observeProviderProgress(event)
+          this.output.push(event)
+          continue
         }
+        if (!this.initialized) {
+          // Control/telemetry ahead of the session init. It must still prove ownership; swallow it so
+          // the first event a consumer sees is the init, exactly as before.
+          if (event.sessionId === undefined) throw new ClaudeAgentSdkProtocolError("Claude emitted a non-init event before session ownership")
+          if (event.sessionId !== this.sessionId) throw new ClaudeAgentSdkProtocolError("Claude session ownership mismatch")
+          continue
+        }
+        if (event.sessionId === undefined) throw new ClaudeAgentSdkProtocolError("Claude event is missing session ownership")
+        if (event.sessionId !== this.sessionId) throw new ClaudeAgentSdkProtocolError("Claude event crossed session ownership")
+        this.observeProviderProgress(event)
         this.output.push(event)
       }
       if (!this.initialized) throw new ClaudeAgentSdkProtocolError("Claude ended before session initialization")

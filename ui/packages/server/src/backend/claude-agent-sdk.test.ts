@@ -175,13 +175,16 @@ test("initialization capabilities remain hidden when the provider never establis
   await assert.rejects(initialization)
 })
 
-test("duplicate init is rejected after the one ownership-establishing event", { timeout: 10_000 }, async () => {
+test("a same-session re-init is tolerated (real claude re-emits init every turn) and the stream continues", { timeout: 10_000 }, async () => {
   const harness = startHarness("duplicate-init")
   try {
     await harness.handle.ready()
     const init = await harness.handle.next()
     assert.equal(init.value?.kind, "init")
-    await assert.rejects(harness.handle.next(), /duplicate init/)
+    // The provider re-emits init for the SAME session at each turn; it is swallowed (not surfaced, not
+    // fatal), and the next genuine event — the result — is delivered normally.
+    const next = await harness.handle.next()
+    assert.equal(next.value?.kind, "result")
   } finally {
     await harness.close()
   }
