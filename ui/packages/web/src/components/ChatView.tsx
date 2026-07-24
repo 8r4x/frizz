@@ -1165,9 +1165,13 @@ function collapseTools(tools: TranscriptMessage["tools"]): CollapsedTool[] {
     } else if (t.read) {
       // A Read that shipped an excerpt renders as its own expandable card — never folds into a ×N run.
       out.push({ name: t.name, detail: t.detail, read: t.read, status: t.status, durationMs: t.durationMs, count: 1 })
-    } else if (t.prompt) {
-      // An Agent dispatch renders as its own expandable card — never folds into a ×N run.
-      out.push({ name: t.name, detail: t.detail, prompt: t.prompt, subagentType: t.subagentType, agentId: t.agentId, agentStatus: t.agentStatus, agentElapsedMs: t.agentElapsedMs, output: t.output, status: t.status, durationMs: t.durationMs, count: 1 })
+    } else if (t.prompt || t.agentId) {
+      // An Agent dispatch renders as its own expandable card — never folds into a ×N run. Keyed on
+      // EITHER signal, the same pair ToolCardRouter renders on: a Claude dispatch brings a prompt, a
+      // codex one brings only the correlation id (its dispatch message is encrypted) and carries the
+      // call's own `input` as the expandable body. Keying on the prompt alone dropped agentId here,
+      // silently demoting every codex dispatch to a generic card even after the router accepted it.
+      out.push({ name: t.name, detail: t.detail, prompt: t.prompt, input: t.input, subagentType: t.subagentType, agentId: t.agentId, agentStatus: t.agentStatus, agentElapsedMs: t.agentElapsedMs, output: t.output, status: t.status, durationMs: t.durationMs, count: 1 })
     } else if (t.sendTo !== undefined || t.sendBody !== undefined) {
       // A SendMessage (peer message) renders as its own SendMessageCard — never folds into a ×N run.
       out.push({ name: t.name, detail: t.detail, sendTo: t.sendTo, sendSummary: t.sendSummary, sendBody: t.sendBody, sendType: t.sendType, status: t.status, durationMs: t.durationMs, count: 1 })
@@ -1295,7 +1299,10 @@ function ToolCardRouter({ t }: { t: CollapsedTool }) {
     return <BashBlock command={t.command} desc={t.desc ?? t.detail} output={t.output} status={t.status} backgroundState={t.backgroundState} liveBackgroundState={liveBackgroundState} exitCode={t.exitCode} cwd={t.cwd} sessionId={t.sessionId} durationMs={t.durationMs} />
   }
   if (t.read) return <ReadBlock detail={t.detail} read={t.read} status={t.status} durationMs={t.durationMs} />
-  if (t.prompt) return <AgentBlock detail={t.detail} prompt={t.prompt} subagentType={t.subagentType} agentId={t.agentId} agentStatus={t.agentStatus} agentElapsedMs={t.agentElapsedMs} status={t.status} durationMs={t.durationMs} output={t.output} />
+  // A dispatch renders as an AgentBlock on EITHER signal: a prompt (Claude) or just the correlation id
+  // (codex — it encrypts the dispatch message, so there is no prompt to show, but the child is still
+  // tracked and drillable). Gating on the prompt alone left every codex sub-agent as a mute generic card.
+  if (t.prompt || t.agentId) return <AgentBlock detail={t.detail} prompt={t.prompt} input={t.input} subagentType={t.subagentType} agentId={t.agentId} agentStatus={t.agentStatus} agentElapsedMs={t.agentElapsedMs} status={t.status} durationMs={t.durationMs} output={t.output} />
   if (t.sendTo !== undefined || t.sendBody !== undefined) return <SendMessageCard to={t.sendTo} summary={t.sendSummary} body={t.sendBody ?? ""} type={t.sendType} status={t.status} durationMs={t.durationMs} />
   if (t.outputImage) return <ToolImageCard name={t.name} detail={t.detail} outputImage={t.outputImage} output={t.output} status={t.status} durationMs={t.durationMs} />
   if (t.sentImages || t.sentFiles) return <SentFilesCard images={t.sentImages ?? []} files={t.sentFiles ?? []} caption={t.caption} status={t.status} durationMs={t.durationMs} />
@@ -1652,6 +1659,7 @@ const AGENT_MAX_LINES = 16
 export function AgentBlock({
   detail,
   prompt,
+  input,
   subagentType,
   agentId,
   agentStatus,
@@ -1661,7 +1669,11 @@ export function AgentBlock({
   output,
 }: {
   detail?: string
-  prompt: string
+  // The dispatch prompt — absent for a CODEX dispatch, whose message the provider encrypts. The card
+  // then falls back to the call's own input (fork/agent-type details); the header, the live state, and
+  // the drill-in all work identically either way.
+  prompt?: string
+  input?: string
   subagentType?: string
   agentId?: string
   agentStatus?: "completed" | "failed" | "killed"
@@ -1673,7 +1685,8 @@ export function AgentBlock({
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const bodyId = useId()
-  const lineCount = useMemo(() => prompt.split("\n").length, [prompt])
+  const body = prompt ?? input
+  const lineCount = useMemo(() => (body ? body.split("\n").length : 0), [body])
   const long = lineCount > AGENT_MAX_LINES
   const slug = useContext(ThreadSlugContext)
   const board = useBoard()
@@ -1715,7 +1728,7 @@ export function AgentBlock({
         className="fray-bash-header"
         controls={bodyId}
         expanded={open}
-        label={`${open ? "Collapse" : "Expand"} Agent prompt: ${title}`}
+        label={`${open ? "Collapse" : "Expand"} Agent dispatch: ${title}`}
         onToggle={() => setOpen((v) => !v)}
         meta={showStatusMeta && <ToolStatusMeta status={status} durationMs={durationMs} indicator="agent" />}
       >
@@ -1740,7 +1753,7 @@ export function AgentBlock({
       <div id={bodyId} hidden={!open}>
         {open && (
           <>
-            <pre className={`fray-bash-body${long && !expanded ? " fray-bash-clamp" : ""}`}>{prompt}</pre>
+            {body && <pre className={`fray-bash-body${long && !expanded ? " fray-bash-clamp" : ""}`}>{body}</pre>}
             {long && (
               <button
                 type="button"
