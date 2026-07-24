@@ -167,7 +167,11 @@ function AwaitingBackgroundBanner({ thread, onSnooze, onSnoozeFailed }: {
           title="Hide this card until a sub-agent returns"
           className="flex shrink-0 items-center gap-1.5 rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] font-medium text-fg/80 outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45"
         >
-          <Hourglass size={12} />
+          {/* Optical nudge, measured not guessed: items-center aligns the two BOXES, but "Snooze" has no
+              descenders, so its ink (7.9px) sits high in the 12px font box while the hourglass ink (10px)
+              is centered in its own — leaving the icon reading 1.58px LOW. Line-height is not the cause
+              (it cancels out of the offset), so the fix is this nudge, not a leading change. */}
+          <Hourglass size={12} className="-translate-y-[1.5px]" />
           Snooze
         </button>
       </div>
@@ -1061,10 +1065,6 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
           <div className="mb-4">
             <PermPromptBanner onTerminal={copyTerminalCommand} />
           </div>
-        ) : thread.awaitingBackground ? (
-          <div className="mb-4">
-            <AwaitingBackgroundBanner thread={thread} onSnooze={dismissThisCard} onSnoozeFailed={cancelThisCard} />
-          </div>
         ) : null}
         {messages.length === 0 ? (
           <p className="text-[13px] text-muted">{q.isLoading ? "Loading…" : thread.statusText || "No message yet."}</p>
@@ -1172,6 +1172,19 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
               })
               return out
             })()}
+          </div>
+        )}
+        {/* AFTER the transcript, not before it (maintainer 2026-07-24). This banner describes the state
+            the thread reached by resting at the END of that transcript — it is the newest thing on the
+            card, so it belongs at the bottom, adjacent to the composer, where every other trailing
+            control lives. Above the messages it read as a header for a turn that hadn't happened yet.
+            The gates above (pendingAsk / nativeInputRequired / perm-prompt) stay pinned at the top: they
+            exist precisely because the turn parked mid-tool_use and there IS no message to sit under.
+            No priority guard needed here — deriveAwaitingBackground already returns false for every one
+            of those states (board.ts). */}
+        {thread.awaitingBackground && (
+          <div className="mt-4">
+            <AwaitingBackgroundBanner thread={thread} onSnooze={dismissThisCard} onSnoozeFailed={cancelThisCard} />
           </div>
         )}
       </div>
