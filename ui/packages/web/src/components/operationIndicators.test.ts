@@ -38,10 +38,24 @@ test("live background telemetry overrides a completed launch wrapper without bor
   assert.equal(liveBackgroundOperationState({ name: "Interrupt process", backgroundState: "background", detail: "session 35985" }, operations), undefined)
 })
 
-test("reduced motion keeps live work visible as a static yellow ring", () => {
+test("reduced motion keeps live work visible as a static ring in its own hue", () => {
   const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8")
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/)
-  assert.match(css, /\.fray-live-dot \{ animation: none; background: transparent; border: 2px solid var\(--color-accent\); box-shadow: none; \}/)
+  // The static ring is recolored through the same --live-dot variable as the animated dot, so a
+  // reduced-motion shell keeps its blue ring and a sub-agent its accent-yellow one.
+  assert.match(css, /\.fray-live-dot \{ animation: none; background: transparent; border: 2px solid var\(--live-dot\); box-shadow: none; \}/)
+})
+
+test("running shells pulse blue and running sub-agents pulse the accent-yellow", () => {
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8")
+  // A distinct blue token, kept separate from the accent.
+  assert.match(css, /--color-shell:\s*#[0-9a-fA-F]{3,8};/)
+  // The live dot defaults to the accent-yellow (sub-agent) and the --shell modifier swaps in the blue.
+  assert.match(css, /\.fray-live-dot \{[^}]*--live-dot: var\(--color-accent\)/)
+  assert.match(css, /\.fray-live-dot--shell \{ --live-dot: var\(--color-shell\); \}/)
+  assert.match(css, /\.fray-live-dot--agent \{ --live-dot: var\(--color-accent\); \}/)
+  // The quiet-but-alive shell dot follows the shell blue too.
+  assert.match(css, /\.fray-live-dot-quiet--shell \{ --live-dot: var\(--color-shell\); \}/)
 })
 
 test("a quiet-but-alive background shell breathes, and stays visible as a static ring under reduced motion", () => {

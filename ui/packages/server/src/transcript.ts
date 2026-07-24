@@ -1199,7 +1199,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
         }
         case "tool-call": {
           const m = openAssistant(ev.at, sourceId)
-          const call = codexToolCall(ev.name, ev.input)
+          const call = codexToolCall(ev.name, ev.input, ev.id)
           call.status = "pending"
           const isPoll = call.name === "Poll process" && call.sessionId !== undefined
           const owner = isPoll ? shellSessions.get(String(call.sessionId)) : undefined
@@ -1340,11 +1340,11 @@ export function parseCodexTranscript(raw: string, identityPrefix = "codex"): Tra
 // Decode only static strings/structure from that wrapper (never evaluate it), then normalize both
 // protocols onto the same Bash/Edit/generic card family. Unknown calls retain capped input, so the
 // renderer always has something more useful than a bare tool name.
-function codexToolCall(name: string, input: unknown): TranscriptToolCall {
+function codexToolCall(name: string, input: unknown, callId?: string): TranscriptToolCall {
   if (name === "exec" && typeof input === "string") return codexExecWrapperCall(input)
 
   const obj = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : {}
-  const direct = codexDirectToolCall(name, obj)
+  const direct = codexDirectToolCall(name, obj, callId)
   if (direct) return direct
   const cmd = extractShellCommand(obj)
   if (cmd) {
@@ -1364,14 +1364,21 @@ function codexToolCall(name: string, input: unknown): TranscriptToolCall {
   }
 }
 
-function codexDirectToolCall(name: string, obj: Record<string, unknown>): TranscriptToolCall | undefined {
+function codexDirectToolCall(name: string, obj: Record<string, unknown>, callId?: string): TranscriptToolCall | undefined {
   const target = strField(obj.target)
   switch (name) {
     case "spawn_agent":
+      // The dispatch call_id is the SAME key the tailer tracks this child under (it is
+      // sub_agent_activity's `event_id`), so handing it over as `agentId` makes the card a drill-in
+      // AgentBlock — click through to the child's own transcript. Codex encrypts the dispatch
+      // `message`, so unlike a Claude Agent block there is NO prompt to expand; the model+effort cell
+      // rides `subagentType` and the tool input keeps the fork/service details.
       return {
         name: "Spawn agent",
         detail: strField(obj.task_name) ?? "sub-agent",
-        input: compactFields(obj, ["model", "reasoning_effort", "fork_context", "fork_turns"]),
+        subagentType: codexAgentCell(obj),
+        agentId: callId,
+        input: compactFields(obj, ["agent_type", "fork_context", "fork_turns", "service_tier"]),
       }
     case "send_message":
       return { name: "Send message", detail: target }
@@ -1390,6 +1397,14 @@ function codexDirectToolCall(name: string, obj: Record<string, unknown>): Transc
     default:
       return undefined
   }
+}
+
+// A codex dispatch's model+effort cell ("gpt-5.6-terra/high"), the analogue of a Claude dispatch's
+// `subagent_type` tag. Matches the label codex-subagents.ts puts on the live tracked entry.
+function codexAgentCell(obj: Record<string, unknown>): string | undefined {
+  const model = strField(obj.model)
+  const effort = strField(obj.reasoning_effort)
+  return model && effort ? `${model}/${effort}` : (model ?? effort)
 }
 
 function compactFields(obj: Record<string, unknown>, keys: string[]): string | undefined {
@@ -1861,6 +1876,10 @@ function unifiedToolResult(text: string): CodexToolResult | undefined {
 
 function applyCodexToolResult(call: TranscriptToolCall, result: CodexToolResult): void {
   call.status = result.status
+  // A REJECTED spawn (codex answers with a bare error sentence) created no child, so drop the drill-in
+  // id — otherwise the card offers a clickable title that can only ever resolve to "unavailable". The
+  // tailer's tracker discards the same dispatch on the same signal.
+  if (call.name === "Spawn agent" && result.status === "failed") call.agentId = undefined
   if (result.exitCode !== undefined) call.exitCode = result.exitCode
   if (result.durationMs !== undefined) call.durationMs = result.durationMs
   if (result.sessionId !== undefined) {

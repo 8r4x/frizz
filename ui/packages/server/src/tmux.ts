@@ -701,6 +701,14 @@ function sendTextWithKeyToPane(
   }
 }
 
+// A BARE key into an adopted worker's pane, authorized by the same immutable pane tuple every other
+// exact action uses. Deliberately carries NO text: this is the submit-confirmer's re-press for a
+// follow-up whose Enter the TUI swallowed (delivery-confirm.ts), and re-pasting the message is exactly
+// the double-send that path must be incapable of.
+export function sendKeyToExpectedAdoptionPane(expected: ExpectedAdoptionPane, key: "Enter"): boolean {
+  return exactPaneAction(expected, `send-keys -t ${expected.pane_id} ${key}`)
+}
+
 function exactPaneAction(expected: ExpectedAdoptionPane, command: string, onMiss = ""): boolean {
   const condition = expectedAdoptionCondition(expected)
   if (!condition || expected.pane_id === null) return false

@@ -48,6 +48,7 @@ if (process.env.FRAY_DEV_CHILD === "1") {
 
   const stop = createSupervisorShutdownHandler({
     close: () => supervisor.close(),
+    force: () => supervisor.forceStop(),
     release: () => { launchOwner.release() },
     exit: (code) => process.exit(code),
     error: (line) => console.error(line),

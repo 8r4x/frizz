@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { BoardSnapshot, ThreadView } from "@fray-ui/shared"
-import { ThreadRow } from "./components/Sidebar.tsx"
+import { SectionHeader, ThreadRow } from "./components/Sidebar.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
@@ -60,7 +61,19 @@ const snoozeThread = {
   snoozedUntil: snoozeAt,
 } as unknown as ThreadView
 
-store.board = { threads: [timerThread, snoozeThread] } as BoardSnapshot
+// Row C — a worker whose turn was cut off by the subscription SESSION limit; fray will auto-resume it
+// when the window resets. It keeps the held hourglass, but (unlike A and B) it carries the same
+// hover-revealed Retry as a stalled row, so an operator with capacity elsewhere can continue it now.
+const limitAt = Math.floor((Date.now() + 42 * 60_000) / 1000) // "resets in ~42 min"
+const limitThread = {
+  ...base,
+  id: "refactor-usage-endpoint",
+  title: "Refactor the usage-limit endpoint",
+  runtime: "exited",
+  limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", resumesAt: limitAt, autoResume: true },
+} as unknown as ThreadView
+
+store.board = { threads: [timerThread, snoozeThread, limitThread] } as BoardSnapshot
 
 function HeldBand() {
   // Mirrors the real Sidebar HELD section markup (hr + label + count) so the visual context matches;
@@ -68,22 +81,26 @@ function HeldBand() {
   return (
     <section aria-label="Held">
       <hr className="my-3 border-border/50" />
-      <div className="flex w-full items-center justify-between px-1.5 py-1 text-[11px] uppercase tracking-wide text-muted/55">
-        <span>Held</span>
-        <span className="tabular-nums">2</span>
-      </div>
+      <SectionHeader label="Held" count={3} />
       <ThreadRow t={timerThread} />
       <ThreadRow t={snoozeThread} />
+      <ThreadRow t={limitThread} />
     </section>
   )
 }
 
+// The usage-limit row now renders RowRetryButton, whose Retry is an ordinary eager send
+// (lib/retrySession → sendEagerFollowUp) and so reads the query client the real app always provides.
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+
 createRoot(document.getElementById("root")!).render(
-  <TooltipProvider>
-    <main className="min-h-screen bg-bg px-10 py-10 text-fg">
-      <div data-sidebar-rail className="w-[clamp(320px,34vw,680px)]">
-        <HeldBand />
-      </div>
-    </main>
-  </TooltipProvider>,
+  <QueryClientProvider client={queryClient}>
+    <TooltipProvider>
+      <main className="min-h-screen bg-bg px-10 py-10 text-fg">
+        <div data-sidebar-rail className="w-[clamp(320px,34vw,680px)]">
+          <HeldBand />
+        </div>
+      </main>
+    </TooltipProvider>
+  </QueryClientProvider>,
 )

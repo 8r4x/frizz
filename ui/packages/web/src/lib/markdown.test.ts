@@ -1,13 +1,14 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { Marked } from "marked"
-import { stripFrontmatter, strikethroughTokenizer } from "./markdown.ts"
+import { stripFrontmatter, MARKDOWN_OPTIONS } from "./markdown.ts"
 
-// mdToHtml's sanitizer needs a DOM, so the render path is exercised in the browser
-// (markdown-strikethrough-fixture + markdownStrikethrough.e2e.test.ts). These drive the one piece
-// that is pure — the tokenizer the real instance is built with — through marked's real inline pass.
-const render = (md: string) =>
-  new Marked({ breaks: true, tokenizer: strikethroughTokenizer }).parseInline(md, { async: false }) as string
+// mdToHtml's sanitizer needs a DOM, so the sanitizing half is exercised in the browser
+// (markdownSanitizer.e2e.test.ts / markdownStrikethrough.e2e.test.ts). What runs here is the pure
+// half — the app's real marked configuration, driven straight.
+const marked = new Marked(MARKDOWN_OPTIONS)
+const render = (md: string) => marked.parseInline(md, { async: false }) as string
+const renderBlock = (md: string) => (marked.parse(md, { async: false }) as string).trim()
 
 // The bug: marked's GFM opener is `~~?`, so a lone `~` opened a strikethrough. Agent prose is full of
 // approximation and home-path tildes, and two on one line struck out everything between them.
@@ -32,6 +33,20 @@ test("strikethrough: the ~~two-tilde~~ form still strikes, and still nests inlin
   assert.equal(render("~~a **b** c~~"), "<del>a <strong>b</strong> c</del>")
   assert.equal(render("~~first~~ then ~single~ then ~~second~~"),
     "<del>first</del> then ~single~ then <del>second</del>")
+})
+
+// The sanitizer half of these behaviours is pinned in markdownSanitizer.e2e.test.ts (it needs a DOM);
+// what's checkable here is that marked EMITS the markup the sanitizer now has to preserve.
+test("task-list items emit a state-carrying marker, not a bare bullet", () => {
+  const html = renderBlock("- [x] shipped\n- [ ] pending")
+  assert.match(html, /<span class="md-task md-task-checked"><\/span> shipped/)
+  assert.match(html, /<span class="md-task"><\/span> pending/)
+  assert.doesNotMatch(html, /<input/, "an interactive control has no place in a transcript")
+})
+
+test("a list that does not start at 1 emits its own numbering", () => {
+  assert.match(renderBlock("17. first\n18. second"), /^<ol start="17">/)
+  assert.match(renderBlock("1. first\n2. second"), /^<ol>/)
 })
 
 test("strikethrough: non-strikethrough tilde shapes are unchanged", () => {

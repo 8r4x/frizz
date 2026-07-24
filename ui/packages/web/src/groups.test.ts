@@ -164,9 +164,18 @@ const RETRY_CONTRACT: { name: string; over: Partial<ThreadView>; kind: string; r
   { name: "archived", over: { state: "archived", needsYou: true, crashed: true, runtime: "exited" }, kind: "archived", retry: false },
   { name: "foreign (read-only — nothing fray can restart)", over: { foreign: true, crashed: true, needsYou: true, runtime: "exited" }, kind: "rest", retry: false },
   { name: "registry lost the row (runtime none — not reattachable)", over: { needsYou: true, crashed: true, runtime: "none" }, kind: "rest", retry: false },
+  // ── HELD by a usage limit fray will auto-resume: keeps the hourglass mark, but ALSO offers Retry ──
+  // (maintainer 2026-07-23) — the one-click continue is a faster door to the in-drawer "Continue now".
+  { name: "held on a session limit (auto-resume) — retry without the [!]", over: { runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "held", retry: true },
+  { name: "held on a weekly limit (auto-resume) — same one-click continue", over: { runtime: "exited", limitPause: { backend: "codex", window: "weekly", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "held", retry: true },
+  // A limit pause fray will NOT auto-resume is not held — it fell through to the ordinary handoff, and
+  // with its process exited it is a plain stall, already carrying Retry via the stalled branch.
+  { name: "limit pause without auto-resume — plain stall, not a held park", over: { needsYou: true, runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: false } }, kind: "stalled", retry: true },
+  // A FOREIGN read-only session parked on a limit still reads as held, but is nothing fray can restart.
+  { name: "foreign held on a limit — read-only, no retry", over: { foreign: true, runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "held", retry: false },
 ]
 
-test("offersRetry: the sidebar/queue retry gate is exactly the stalled (process-exited) state", () => {
+test("offersRetry: the retry gate is the stalled state PLUS the auto-resume usage-limit park", () => {
   for (const { name, over, kind, retry } of RETRY_CONTRACT) {
     const t = thread({ kind: "session", ...over })
     assert.equal(sessionIndicatorKind(t), kind, `${name}: sidebar indicator`)
@@ -175,18 +184,26 @@ test("offersRetry: the sidebar/queue retry gate is exactly the stalled (process-
   assert.equal(offersRetry(thread({ kind: "legacy", crashed: true, runtime: "exited" })), false, "legacy: no provider runtime")
 })
 
-test("the queue card and the sidebar row can never disagree: retry ⇔ the stalled [!] mark", () => {
-  // The ONE invariant behind the bug. Both surfaces call offersRetry, and offersRetry IS
-  // `sessionIndicatorKind === "stalled"` — so a card showing Retry always has a yellow-[!] rail row,
-  // and a rail row showing [!] always has a card Retry. Re-widening the gate breaks this test first.
+test("every surface shares the ONE offersRetry derivation — the retry verb is stalled OR limit-held", () => {
+  // The load-bearing invariant is that the sidebar row, queue card, and drawer header ALL read
+  // offersRetry, so no two can disagree about a thread (the drift bug, maintainer 2026-07-23, twice).
+  // The verb is DELIBERATELY broader than the yellow [!]: a usage-limit park keeps its hourglass mark
+  // yet still offers the one-click continue. So the pairing to pin is retry ⇔ (stalled OR limit-held),
+  // NOT retry ⇔ stalled — and a held row that offers retry must be a limit park, never a snooze/timer.
   for (const { name, over } of RETRY_CONTRACT) {
     const t = thread({ kind: "session", ...over })
+    const kind = sessionIndicatorKind(t)
+    const limitHeld = kind === "held" && t.foreign !== true && Boolean(t.limitPause?.autoResume)
     assert.equal(
       offersRetry(t),
-      sessionIndicatorKind(t) === "stalled",
-      `${name}: the queue card's Retry and the sidebar's stalled mark must be the same decision`,
+      kind === "stalled" || limitHeld,
+      `${name}: Retry is offered on exactly the stalled and auto-resume-limit-held rows`,
     )
   }
+  // A held row parked by something OTHER than a limit fray will auto-resume (a user snooze, a timer
+  // wait) must NEVER offer Retry — those are intentional parks with no stall to recover.
+  assert.equal(offersRetry(thread({ kind: "session", runtime: "exited", snoozedUntil: "2999-01-01T00:00:00.000Z" })), false, "snooze-held: no retry")
+  assert.equal(sessionIndicatorKind(thread({ kind: "session", runtime: "exited", snoozedUntil: "2999-01-01T00:00:00.000Z" })), "held", "snooze-held: still held")
 })
 
 test("queued: legacy rows NEVER card (only session threads enter the queue)", () => {

@@ -25,6 +25,11 @@ const SOURCE = resolve(import.meta.dirname, "..")
 const PORT = Number(process.env.VERIFY_PORT ?? 4941)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const log = (...a) => console.log("[verify]", ...a)
+// FRAY_CODEX_NATIVE_LISTEN=1 swaps the hand-written daemon for `codex app-server --listen unix://`
+// (codex-app-server-native.ts). It reaches the booted runtime through this script's own environment,
+// so the same closure assertions run against either transport — only the record dir differs.
+const NATIVE = process.env.FRAY_CODEX_NATIVE_LISTEN === "1" || process.env.FRAY_CODEX_NATIVE_LISTEN === "true"
+const RECORD_DIR = NATIVE ? "codex-app-server-native" : "codex-app-server"
 let failures = 0
 const check = (ok, label, detail = "") => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${label}${detail ? ` — ${detail}` : ""}`)
@@ -115,15 +120,15 @@ try {
   check(!!dispatched?.slug, "codex dispatch succeeded through the bundled artifact", JSON.stringify(dispatched).slice(0, 400))
   const { slug, sessionId } = dispatched
 
-  // The on-disk record proves the DETACHED daemon really forked, not the in-process fallback.
-  const recordDir = join(stateDir, "codex-app-server")
+  // The on-disk record proves a DETACHED host really started, not the in-process fallback.
+  const recordDir = join(stateDir, RECORD_DIR)
   let records = []
   for (let i = 0; i < 80; i++) {
     records = existsSync(recordDir) ? readdirSync(recordDir) : []
     if (records.length) break
     await sleep(250)
   }
-  check(records.length > 0, "the DETACHED daemon forked and published its record", `${recordDir} → ${records.join(",") || "(empty)"}`)
+  check(records.length > 0, `the DETACHED ${NATIVE ? "native listener" : "daemon"} started and published its record`, `${recordDir} → ${records.join(",") || "(empty)"}`)
 
   // A fray-created codex worker is headless: it must launch at danger-full-access, because a
   // restrictive sandbox just stalls an unattended worker on a modal nobody is watching.
@@ -182,10 +187,10 @@ try {
   // Kill only the daemon THIS run forked, read from its own record — never a broad pkill, which
   // would take out other agents' servers on this machine.
   try {
-    const dir = join(stateDir, "codex-app-server")
+    const dir = join(stateDir, RECORD_DIR)
     for (const file of existsSync(dir) ? readdirSync(dir) : []) {
       const rec = JSON.parse(readFileSync(join(dir, file), "utf8"))
-      for (const pid of [rec.childPid, rec.daemonPid]) { if (pid) { try { process.kill(pid, "SIGKILL") } catch {} } }
+      for (const pid of [rec.childPid, rec.daemonPid, rec.listenerPid]) { if (pid) { try { process.kill(pid, "SIGKILL") } catch {} } }
     }
   } catch {}
   rmSync(root, { recursive: true, force: true })

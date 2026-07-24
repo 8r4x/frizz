@@ -936,12 +936,13 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
           )}
         </div>
         {/* SHARED navigation actions: collapse and open-in-drawer, plus Retry — which HeaderActions
-            itself now gates on `offersRetry` (= `sessionIndicatorKind(t) === "stalled"`), the very same
-            derivation that paints this thread's sidebar row with the yellow [!]. Sharing that ONE
-            predicate across every surface is load-bearing: each time a surface kept its own gate, a
-            thread ended up carrying a Retry button while reading as calm at-rest elsewhere (maintainer
-            2026-07-23, twice). A card that stalled out is the one queue state with an obvious recovery
-            verb, so it surfaces here rather than forcing you to open the thread; other lifecycle actions
+            itself now gates on `offersRetry` (stalled OR usage-limit-held; groups.ts). Queue cards only
+            ever exist for needsYou threads, and a usage-limit park is NOT needsYou, so the only
+            offersRetry case that cards here is a STALL — its sidebar row wears the yellow [!]. Sharing
+            that ONE predicate across every surface is load-bearing: each time a surface kept its own
+            gate, a thread ended up carrying a Retry button while reading as calm at-rest elsewhere
+            (maintainer 2026-07-23, twice). A card that stalled out is the one queue state with an obvious
+            recovery verb, so it surfaces here rather than forcing you to open the thread; other lifecycle actions
             (Mark as done / Snooze) stay in the footer. (Rename lives by the title in the thread drawer,
             not here — the queue is a triage surface.) Open-thread slides in the side drawer — an
             overlay, NOT a nav switch, so the queue scroll/selection stays put. */}

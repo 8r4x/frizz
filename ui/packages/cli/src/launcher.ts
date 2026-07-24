@@ -519,13 +519,28 @@ export async function choosePort(
   );
 }
 
+/**
+ * Poll until the workspace answers /health.
+ *
+ * `timeoutMs` may be `Infinity`, and for the foreground launch it IS — deliberately. A flat deadline
+ * here was actively harmful: on a loaded machine boot simply takes longer than any number we pick, so
+ * the launcher would declare failure while the server was still coming up correctly, exit, and leave
+ * its child running and printing to the operator's terminal. That converts "slow" into "failed AND
+ * orphaned" (2026-07-23: a 21.6s idle boot took 35s+ under load and lost a 30s race every time).
+ *
+ * We do not need a clock, because we already have two better signals: the caller races this against
+ * the supervisor's own exit (so a child that genuinely dies stops the wait immediately, with its real
+ * error), and the launcher runs in the foreground, so Ctrl-C is the operator's escape. A timeout only
+ * ever fired when both of those said everything was fine.
+ */
 export async function waitForWorkspace(
   port: number,
   expected: ExpectedFrayHealth,
   timeoutMs = LAUNCH_TIMEOUT_MS
 ): Promise<FrayHealth> {
+  const unbounded = !Number.isFinite(timeoutMs);
   const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  while (unbounded || Date.now() < deadline) {
     const health = await probeFray(port, expected);
     if (health) return health;
     await delay(150);

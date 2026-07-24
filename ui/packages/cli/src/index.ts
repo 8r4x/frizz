@@ -103,11 +103,12 @@ try {
     ? workspaceFromLaunchTarget(pinned!)
     : resolveWorkspace(options.repoPath);
 } catch (error) {
-  startupProgress?.fail(
-    `Fray startup failed: ${
-      error instanceof Error ? error.message : String(error)
-    }`
-  );
+  // Report ONCE — `fail()` prints too, and doing both showed the operator the same sentence twice
+  // under two prefixes, which reads like two separate failures.
+  if (startupProgress) {
+    startupProgress.fail(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
   fail(error);
 }
 process.chdir(workspace.root);
@@ -299,6 +300,7 @@ async function runSupervisor(
   }
   const stop = createSupervisorShutdownHandler({
     close: () => supervisor.close(),
+    force: () => supervisor.forceStop(),
     release: () => {
       launchOwner.release();
     },
@@ -704,7 +706,11 @@ try {
     // From here the forked control-plane child logs to the same TTY. Go line-oriented so its
     // records (and the supervisor's own) land on their own rows instead of gluing onto the spinner.
     startupProgress?.beginConcurrentLogs("Waiting for Fray server health");
-    await Promise.race([waitForWorkspace(port, ownedHealth), running]);
+    // No deadline: the race against `running` already ends this the moment the control plane really
+    // dies, and Ctrl-C ends it the moment the operator loses patience. A clock could only fire while
+    // both of those said things were fine — i.e. on a slow-but-healthy boot, which is exactly when
+    // giving up is wrong.
+    await Promise.race([waitForWorkspace(port, ownedHealth, Infinity), running]);
     // Hold the allocation/startup lock until the port is actually listening, then release it before the
     // foreground server lifetime. Concurrent repositories therefore allocate distinct ports without
     // serializing their running UI servers.

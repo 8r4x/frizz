@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { BoardSnapshot, ThreadView } from "@fray-ui/shared"
 import { ThreadRow } from "./components/Sidebar.tsx"
 import { Toaster } from "./components/Toaster.tsx"
@@ -6,10 +7,11 @@ import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
 
-// The sidebar's one-click recovery verb: a STOPPED row (an exited session) exposes a hover-revealed
-// Retry on its right edge. This fixture renders the REAL ThreadRow for two stopped rows — a [!] stalled
-// crash AND a […] exited-at-rest (process gone, no done fence) — plus, for contrast, a live working row
-// and a live turn-idle resting row (neither may grow the button). Clicking Retry POSTs the ordinary
+// The sidebar's one-click recovery verb: a STOPPED row (an exited session) — and a row HELD on a usage
+// limit fray will auto-resume — expose a hover-revealed Retry on the right edge. This fixture renders
+// the REAL ThreadRow for the two stopped rows (a [!] stalled crash AND a […] exited-at-rest) and the
+// usage-limit-held row (which keeps its hourglass mark, not [!]), plus — for contrast — a live working
+// row and a live turn-idle resting row (neither may grow the button). Clicking Retry POSTs the ordinary
 // follow-up; we stub /rpc/followUp so the click drives the real retrySession → showToast → Toaster path
 // end to end and records that the RPC actually fired.
 
@@ -23,6 +25,11 @@ window.fetch = async (input, init) => {
     log.push(body)
     window.sessionStorage.setItem("followUpCalls", JSON.stringify(log))
     return new Response(JSON.stringify({ result: null }), { headers: { "content-type": "application/json" } })
+  }
+  // Retry is an ordinary eager send, which also fires markRead for the slug — stub it so the click path
+  // runs clean (no stray 404) exactly as it does against the real server.
+  if (url.pathname === "/rpc/markRead") {
+    return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
   }
   return nativeFetch(input, init)
 }
@@ -66,6 +73,20 @@ const exitedAtRestThread = {
   needsYou: true,
 } as unknown as ThreadView
 
+// A worker HELD because it hit its session limit, which fray will auto-resume when the window resets.
+// It keeps the HELD (hourglass) mark — NOT the yellow [!] — yet still gets the same hover Retry, a
+// faster continue than waiting for the reset (maintainer 2026-07-23).
+const limitHeldThread = {
+  ...base,
+  id: "limit-held",
+  title: "Rework the session-limit banner",
+  runtime: "exited",
+  status: "active",
+  crashed: false,
+  needsYou: false,
+  limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: true },
+} as unknown as ThreadView
+
 // A live worker — spinner, NO retry (retrying would interrupt real work).
 const workingThread = {
   ...base,
@@ -88,18 +109,23 @@ const restingThread = {
   needsYou: false,
 } as unknown as ThreadView
 
-store.board = { threads: [stalledThread, exitedAtRestThread, workingThread, restingThread] } as BoardSnapshot
+store.board = { threads: [stalledThread, exitedAtRestThread, limitHeldThread, workingThread, restingThread] } as BoardSnapshot
 
+// Retry is an ordinary eager send now (lib/retrySession → sendEagerFollowUp), so it writes the
+// optimistic bubble into the transcript cache — the row needs a real client, exactly as the app gives it.
 createRoot(document.getElementById("root")!).render(
-  <TooltipProvider>
-    <main className="min-h-screen bg-bg px-10 py-10 text-fg">
-      <div data-sidebar-rail className="w-[clamp(320px,34vw,680px)]">
-        <ThreadRow t={stalledThread} />
-        <ThreadRow t={exitedAtRestThread} />
-        <ThreadRow t={workingThread} />
-        <ThreadRow t={restingThread} />
-      </div>
-      <Toaster />
-    </main>
-  </TooltipProvider>,
+  <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+    <TooltipProvider>
+      <main className="min-h-screen bg-bg px-10 py-10 text-fg">
+        <div data-sidebar-rail className="w-[clamp(320px,34vw,680px)]">
+          <ThreadRow t={stalledThread} />
+          <ThreadRow t={exitedAtRestThread} />
+          <ThreadRow t={limitHeldThread} />
+          <ThreadRow t={workingThread} />
+          <ThreadRow t={restingThread} />
+        </div>
+        <Toaster />
+      </main>
+    </TooltipProvider>
+  </QueryClientProvider>,
 )

@@ -227,7 +227,11 @@ test("resumeThread durably excludes a concurrent profile change until live injec
   let observedControl: string | null | undefined
   let competingArm: ReturnType<typeof storage.armProfileChange>
   const tx = fakeTmux(true)
-  tx.sendKeys = () => {
+  // Observe the path live injection ACTUALLY takes. It moved from `sendKeys` (send-keys -l plus a
+  // separate Enter, which the TUI folds into one burst and swallows) to `pasteText` (bracketed paste
+  // + a blocking settle). Stubbing the retired verb made this assert against a call that no longer
+  // happens; the interlock being asserted is unchanged.
+  tx.pasteText = () => {
     const owned = storage.getSession(slug)!
     observedControl = owned.runtime_control
     competingArm = storage.armProfileChange(slug, {

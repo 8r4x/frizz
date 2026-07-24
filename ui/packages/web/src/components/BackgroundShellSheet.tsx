@@ -135,7 +135,7 @@ export function BackgroundShellSheet({
               <section>
                 <div className="mb-2 flex items-center gap-2">
                   <h2 className="petite-caps text-[10px] text-muted/65">Output</h2>
-                  {state === "running" && <span aria-hidden className="fray-live-dot" data-running-indicator="shell-drawer" />}
+                  {state === "running" && <span aria-hidden className="fray-live-dot fray-live-dot--shell" data-running-indicator="shell-drawer" />}
                   {query.data?.truncated && <span className="text-[10.5px] text-muted/50">Showing latest 512 KB</span>}
                 </div>
                 {output ? (

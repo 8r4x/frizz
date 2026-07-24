@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createStorage, type Storage, type SessionRow } from "./storage.ts"
-import { createScheduler, parsePrRef, ghPrViewArgs, evalRollup, parseGithubReviewActivities, wakeDeliveryToken, type GithubReviewActivity, type PrRef, type PrStatus } from "./scheduler.ts"
+import { createScheduler, parsePrRef, ghPrViewArgs, evalRollup, parseGithubReviewActivities, isNonBotGithubActivity, isWakeworthyGithubActivity, wakeDeliveryToken, type GithubReviewActivity, type PrRef, type PrStatus } from "./scheduler.ts"
 import { createWakeDeliveryStore } from "./wake-store.ts"
 import type { Tailer, SessionTelemetry, FenceView, TurnState } from "./tailer.ts"
 
@@ -46,6 +46,22 @@ test("GitHub review GraphQL normalization preserves actor type for bot filtering
     ["review:R1", "alice", "User", "review", "APPROVED"],
     ["comment:C1", "dependabot[bot]", "Bot", "comment", undefined], // comments carry no review state
   ])
+})
+
+test("wake-worthiness: any review wakes (incl. a bot review agent); only non-bot comments wake", () => {
+  const mk = (over: Partial<GithubReviewActivity>): GithubReviewActivity => ({ id: "x", actor: "a", kind: "review", ...over })
+  // Reviews wake regardless of who filed them — a human, a "[bot]" login, or a __typename:"Bot" app.
+  assert.equal(isWakeworthyGithubActivity(mk({ kind: "review", actor: "alice", actorType: "User" })), true)
+  assert.equal(isWakeworthyGithubActivity(mk({ kind: "review", actor: "pullfrog", actorType: "Bot" })), true)
+  assert.equal(isWakeworthyGithubActivity(mk({ kind: "review", actor: "copilot-pull-request-reviewer", actorType: "Bot" })), true)
+  assert.equal(isWakeworthyGithubActivity(mk({ kind: "review", actor: "dependabot[bot]" })), true)
+  // Comments wake only from a human — a bot comment is CI/deploy/dependency noise.
+  assert.equal(isWakeworthyGithubActivity(mk({ kind: "comment", actor: "carol", actorType: "User" })), true)
+  assert.equal(isWakeworthyGithubActivity(mk({ kind: "comment", actor: "vercel[bot]", actorType: "Bot" })), false)
+  assert.equal(isWakeworthyGithubActivity(mk({ kind: "comment", actor: "github-actions[bot]" })), false)
+  // isNonBotGithubActivity remains a pure bot check (used for the comment gate).
+  assert.equal(isNonBotGithubActivity(mk({ actor: "pullfrog", actorType: "Bot" })), false)
+  assert.equal(isNonBotGithubActivity(mk({ actor: "alice", actorType: "User" })), true)
 })
 
 test("evalRollup: empty → pending; all-complete → done; in-progress → pending; failure → done+failed", () => {
@@ -293,7 +309,7 @@ test("registered future timer crosses during server downtime and fires exactly o
   assert.equal(h.resumes.length, 1)
 })
 
-test("pr-watch baselines existing activity, ignores bots, then wakes once on a new human review across restart", async () => {
+test("pr-watch baselines existing activity, ignores bot comments, then wakes once on a new human review across restart", async () => {
   const h = harness()
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
@@ -309,8 +325,9 @@ test("pr-watch baselines existing activity, ignores bots, then wakes once on a n
   await h.make().tick() // persist baseline, no wake for existing review
   assert.equal(h.resumes.length, 0)
 
+  // A bot CONVERSATION COMMENT (vercel deploy status) is CI/deploy noise — never a wake.
   h.review.result = [
-    { id: "review:bot", actor: "dependabot[bot]", actorType: "Bot", at: iso(h.clock.ms + 1000), kind: "review" },
+    { id: "comment:bot", actor: "vercel[bot]", actorType: "Bot", at: iso(h.clock.ms + 1000), kind: "comment" },
     old,
   ]
   await h.make().tick()
@@ -326,6 +343,44 @@ test("pr-watch baselines existing activity, ignores bots, then wakes once on a n
   await restarted.tick()
   assert.equal(h.resumes.length, 1)
   assert.match(h.resumes[0].message, /@bob/)
+})
+
+test("pr-watch: a bot review AGENT's review (Pullfrog/Copilot) wakes the watcher — a review is the signal whoever files it", async () => {
+  const h = harness()
+  const fenceAt = iso(h.clock.ms)
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "nubjs/nub#544" }])), lastActivityAt: fenceAt })
+  h.review.result = [] // no prior activity to baseline
+  await h.make().tick()
+  assert.equal(h.resumes.length, 0)
+
+  // Pullfrog (the maintainer's own review agent) submits its review as a GitHub App — __typename "Bot".
+  // The old all-bots filter swallowed exactly this and left the watcher asleep (nubjs/nub#544).
+  h.clock.ms += 10_000
+  h.review.result = [{ id: "review:pf", actor: "pullfrog", actorType: "Bot", at: iso(h.clock.ms), kind: "review", reviewState: "COMMENTED" }]
+  const s = h.make()
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 1, "the bot review agent's review woke the watcher")
+  assert.match(h.resumes[0].message, /@pullfrog/)
+  assert.doesNotMatch(h.resumes[0].message, /human/, "the steer no longer claims the reviewer is human")
+})
+
+test("pr-watch: a bot COMMENT (CI/deploy noise) does NOT wake the watcher", async () => {
+  const h = harness()
+  const fenceAt = iso(h.clock.ms)
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "nubjs/nub#544" }])), lastActivityAt: fenceAt })
+  h.review.result = []
+  await h.make().tick()
+  assert.equal(h.resumes.length, 0)
+
+  h.clock.ms += 10_000
+  h.review.result = [{ id: "comment:vercel", actor: "vercel[bot]", actorType: "Bot", at: iso(h.clock.ms), kind: "comment" }]
+  const s = h.make()
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 0, "a bot conversation comment is CI/deploy noise, not a review")
 })
 
 test("pr-watch retries a failed resume from its durable pending cursor across restart and network loss", async () => {

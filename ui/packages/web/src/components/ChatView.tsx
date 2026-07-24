@@ -1,4 +1,5 @@
 import { createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
+import { createPortal } from "react-dom"
 import { useSnapshot } from "valtio"
 import * as RadixTabs from "@radix-ui/react-tabs"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -153,6 +154,10 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
   // The drawer transcript is the only scrolling region. The composer, selectors, and running
   // operation rows are siblings, so a long draft cannot push any footer control under a boundary.
   const transcriptRef = useRef<HTMLDivElement>(null)
+  // The "Jump to latest" affordance floats in the OUTER frame — a sibling of the scroller, not a
+  // child of it — so it is genuinely stationary while the transcript scrolls underneath. Held as
+  // state (not a ref) so the portal renders as soon as the node mounts.
+  const [jumpOverlay, setJumpOverlay] = useState<HTMLDivElement | null>(null)
   const count = q.data?.messages.length ?? 0
   useEffect(() => {
     if (virtualized) return
@@ -194,8 +199,11 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
       data-drawer-scroll-ready={q.isPending ? "false" : "true"}
       className="flex-1 min-h-0 flex flex-col overflow-hidden outline-none"
     >
-      {/* data-virtualized-transcript-scroll marks the WINDOWED renderer, not a surface — the drawer
-          virtualizes too now, so the old "standalone" name would be a lie. */}
+      {/* The scroll viewport's own coordinate frame: `relative` here (rather than on the scroller) is
+          what lets the floating "Jump to latest" overlay below sit still while the transcript scrolls.
+          The scroller itself carries data-virtualized-transcript-scroll — the drawer virtualizes now
+          too, so the old "standalone" name would be a lie. */}
+      <div className="relative min-h-0 flex-1 flex flex-col">
       <div
         ref={transcriptRef}
         data-drawer-transcript-scroll
@@ -228,6 +236,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
           loadingEarlier={loadingEarlier}
           earlierError={earlierError}
           loadEarlier={() => void loadEarlier()}
+          jumpOverlay={jumpOverlay}
         />
       ) : (
       <>
@@ -388,6 +397,15 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
       </>
       )}
       </div>
+      {/* Floating-affordance layer, pinned to the bottom-right of the scroll VIEWPORT. It is a
+          sibling of the scroller, so nothing here moves when the transcript scrolls; the layer
+          itself is click-through and only its children take pointer events. */}
+      <div
+        ref={setJumpOverlay}
+        data-transcript-overlay
+        className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-end p-4 [&>*]:pointer-events-auto"
+      />
+      </div>
       {/* This entire footer is deliberately non-scrolling: transcript history alone overflows. */}
       {/* Prompt box FIRST, then the background-ops strip UNDERNEATH it at the very bottom (maintainer
           2026-07-09): running sub-agents / shells / monitors sit below the composer, not above it. */}
@@ -433,6 +451,7 @@ function VirtualizedThreadTranscript({
   loadingEarlier,
   earlierError,
   loadEarlier,
+  jumpOverlay,
 }: {
   slug: string
   transcriptRef: React.RefObject<HTMLDivElement | null>
@@ -454,6 +473,7 @@ function VirtualizedThreadTranscript({
   loadingEarlier: boolean
   earlierError: string | null
   loadEarlier: () => void
+  jumpOverlay: HTMLElement | null
 }) {
   const messageRows = useMemo(() => buildVirtualTranscriptMessageRows(
     messages,
@@ -643,10 +663,6 @@ function VirtualizedThreadTranscript({
 
   const virtualItems = virtualizer.getVirtualItems()
   const totalSize = virtualizer.getTotalSize()
-  const jumpTop = Math.max(
-    12,
-    (virtualizer.scrollOffset ?? 0) + (virtualizer.scrollRect?.height ?? transcriptRef.current?.clientHeight ?? 0) - 48,
-  )
   // THE PINNED CURRENT ASK, virtualized. CSS `position: sticky` is inert on a virtual row: every row is
   // `position: absolute` + translateY, so its containing block is a zero-height point and there is no
   // range to stick over. So that ONE row is HOISTED out of the absolute layer and rendered in NORMAL
@@ -787,19 +803,29 @@ function VirtualizedThreadTranscript({
           </div>
         )
       })}
-      {!atEnd && (
-        <button
-          type="button"
-          data-jump-to-latest
-          onClick={() => virtualizer.scrollToEnd({ behavior: "smooth" })}
-          className="absolute right-4 z-20 flex items-center gap-1.5 rounded-full border border-border-strong bg-elevated px-3 py-1.5 text-[11px] font-medium text-fg shadow-lg shadow-black/30 hover:bg-panel-2"
-          style={{ top: jumpTop }}
-        >
-          <ArrowDown size={12} />
-          Jump to latest
-        </button>
-      )}
+      <JumpToLatest overlay={jumpOverlay} hidden={atEnd} onJump={() => virtualizer.scrollToEnd({ behavior: "smooth" })} />
     </div>
+  )
+}
+
+// "Jump to latest" belongs to the transcript's scroll STATE but not to its scroll CONTENT: it is
+// portalled into ChatView's viewport-anchored overlay so it simply floats, motionless, over the
+// scrolling column. (It used to render inside the virtualized content and chase the viewport by
+// recomputing a content-space `top` every render — which meant it drifted with the content on every
+// scroll and snapped back a frame later.)
+function JumpToLatest({ overlay, hidden, onJump }: { overlay: HTMLElement | null; hidden: boolean; onJump: () => void }) {
+  if (!overlay || hidden) return null
+  return createPortal(
+    <button
+      type="button"
+      data-jump-to-latest
+      onClick={onJump}
+      className="flex items-center gap-1.5 rounded-full border border-border-strong bg-elevated px-3 py-1.5 text-[11px] font-medium text-fg shadow-lg shadow-black/30 hover:bg-panel-2"
+    >
+      <ArrowDown size={12} />
+      Jump to latest
+    </button>,
+    overlay,
   )
 }
 
@@ -1345,7 +1371,7 @@ function ToolCardRouter({ t }: { t: CollapsedTool }) {
 
 type ToolStatus = NonNullable<TranscriptToolCall["status"]>
 
-export function ToolStatusMeta({ status, backgroundState, liveBackgroundState, exitCode, durationMs }: { status?: ToolStatus; backgroundState?: TranscriptToolCall["backgroundState"]; liveBackgroundState?: "running" | "stale"; exitCode?: number; durationMs?: number }) {
+export function ToolStatusMeta({ status, backgroundState, liveBackgroundState, exitCode, durationMs, indicator = "shell" }: { status?: ToolStatus; backgroundState?: TranscriptToolCall["backgroundState"]; liveBackgroundState?: "running" | "stale"; exitCode?: number; durationMs?: number; indicator?: "shell" | "agent" }) {
   if (!status && durationMs === undefined) return null
   const label =
     liveBackgroundState === "running"
@@ -1370,7 +1396,7 @@ export function ToolStatusMeta({ status, backgroundState, liveBackgroundState, e
   const tone = status === "failed" ? "fray-tool-failed" : status === "cancelled" ? "text-amber-400" : "text-muted/55"
   return (
     <span className={`petite-caps fray-tool-header-caps flex shrink-0 items-center gap-1 text-[11.5px] leading-none ${tone}`} title={title} aria-label={title}>
-      {(liveBackgroundState === "running" || hasRunningToolIndicator(status, backgroundState)) && <span aria-hidden className="fray-live-dot" data-running-indicator="tool-disclosure" />}
+      {(liveBackgroundState === "running" || hasRunningToolIndicator(status, backgroundState)) && <span aria-hidden className={`fray-live-dot fray-live-dot--${indicator}`} data-running-indicator="tool-disclosure" />}
       <span>{[label, duration].filter(Boolean).join(" · ")}</span>
     </span>
   )
@@ -1755,7 +1781,7 @@ export function AgentBlock({
         expanded={open}
         label={`${open ? "Collapse" : "Expand"} Agent prompt: ${title}`}
         onToggle={() => setOpen((v) => !v)}
-        meta={showStatusMeta && <ToolStatusMeta status={status} durationMs={durationMs} />}
+        meta={showStatusMeta && <ToolStatusMeta status={status} durationMs={durationMs} indicator="agent" />}
       >
         <span className="petite-caps fray-bash-label shrink-0">Agent</span>
         {canDrill ? (
@@ -1773,7 +1799,7 @@ export function AgentBlock({
         )}
         {subagentType && <span className="min-w-0 max-w-[9rem] truncate font-mono-keep text-[11px] text-muted/45">[{subagentType}]</span>}
         {stateLabel && <span className="shrink-0 text-[11px] text-muted/55 whitespace-nowrap">{stateLabel}</span>}
-        {running && <span aria-hidden className="fray-live-dot" data-running-indicator="subagent-disclosure" />}
+        {running && <span aria-hidden className="fray-live-dot fray-live-dot--agent" data-running-indicator="subagent-disclosure" />}
       </ToolDisclosureHeader>
       <div id={bodyId} hidden={!open}>
         {open && (
@@ -2705,23 +2731,27 @@ export function LimitPauseCard({ slug, sessionId, pause }: { slug: string; sessi
     onSuccess: () => showToast("Continuing…"),
     onError: (e) => showToast(`Continue failed: ${(e as Error).message.slice(0, 80)}`),
   })
-  // flex-wrap + a 12rem text floor: at a narrow width the button drops to its own line instead of
-  // squeezing the sentence into a 5-line ribbon. items-start pins the glyph to the FIRST line once the
-  // text wraps (centering it against a wrapped block leaves it floating beside line three).
+  // items-center vertically centers the sentence and the button on the common single line: the button
+  // is the tallest element, so the old items-start left it hanging below the text inside the card's
+  // padding (the "garbage spacing"). flex-wrap + ml-auto still drop the button to its own line at a
+  // narrow width; the glyph and sentence are grouped (items-start + a 2px glyph nudge) so the hourglass
+  // stays on the FIRST line when the sentence wraps rather than floating to the middle of the block.
   return (
-    <div data-limit-pause className="flex flex-wrap items-start gap-x-2.5 gap-y-2 rounded-md border border-amber-500/40 bg-panel-2 px-3 py-2 text-[12px]">
-      <Hourglass size={13} className="mt-[2px] shrink-0 text-amber-400" />
+    <div data-limit-pause className="flex flex-wrap items-center gap-x-2.5 gap-y-2 rounded-md border border-amber-500/40 bg-panel-2 px-3 py-2 text-[12px]">
       {/* The provider's own "You've hit your session limit · resets …" line sits directly above this
           card (unlike an auth error, it is informative, so transcript.ts keeps its bubble). So this
           card says only what THAT line cannot: what fray is going to do about it. */}
-      <span className="min-w-[12rem] flex-1 text-fg/90">
-        <span className="font-medium">Paused by the {label} {which}</span>
-        {" — "}
-        {pause.autoResume
-          ? pause.resumesAt
-            ? `continuing automatically at ${limitResumeClock(pause.resumesAt)}.`
-            : "continuing automatically once the window resets."
-          : "continue it whenever you have capacity again."}
+      <span className="flex min-w-[12rem] flex-1 items-start gap-2.5 text-fg/90">
+        <Hourglass size={13} className="mt-[2px] shrink-0 text-amber-400" />
+        <span>
+          <span className="font-medium">Paused by the {label} {which}</span>
+          {" — "}
+          {pause.autoResume
+            ? pause.resumesAt
+              ? `continuing automatically at ${limitResumeClock(pause.resumesAt)}.`
+              : "continuing automatically once the window resets."
+            : "continue it whenever you have capacity again."}
+        </span>
       </span>
       <button
         onClick={() => continueNow.mutate()}
@@ -2863,11 +2893,12 @@ function OpRow({ kind, label, state, startedAt, onOpen }: { kind: "AGENT" | "SHE
       <span aria-hidden className="shrink-0 text-[11px] leading-none text-muted/40">⤷</span>
       <span className="flex w-[9px] shrink-0 justify-center">
         {isRunningOperation(state) ? (
-          <span aria-hidden className="fray-live-dot" data-running-indicator="operation" />
+          // A running SHELL pulses blue, a running sub-AGENT pulses the accent-yellow.
+          <span aria-hidden className={`fray-live-dot ${kind === "SHELL" ? "fray-live-dot--shell" : "fray-live-dot--agent"}`} data-running-indicator="operation" />
         ) : kind === "SHELL" ? (
           // A tracked background shell/Monitor is a LIVE process even when quiet (the entry only
           // clears on its terminal notification) — so it breathes rather than showing a dead gray dot.
-          <span aria-hidden className="fray-live-dot-quiet" data-running-indicator="operation-quiet" title="running — no recent output" />
+          <span aria-hidden className="fray-live-dot-quiet fray-live-dot-quiet--shell" data-running-indicator="operation-quiet" title="running — no recent output" />
         ) : (
           <span className="block h-1.5 w-1.5 rounded-full bg-muted/25" title="stale — no recent output" />
         )}

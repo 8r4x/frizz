@@ -1,4 +1,5 @@
 import { useState, type ComponentType } from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { ArrowUpRight, ChevronsDownUp, ChevronsUpDown, FileText, Loader2, RotateCcw } from "lucide-react"
 import type { ThreadView } from "@fray-ui/shared"
 import { Tooltip } from "./Tooltip.tsx"
@@ -13,11 +14,12 @@ export { STALLED_RETRY_MESSAGE } from "../lib/retrySession.ts"
 // THE shared whole-thread action icons, rendered IDENTICALLY by the queue card header and the thread
 // header so the two can never drift. Order left→right runs least→most important, so the primary verb
 // sits at the far RIGHT. The verbs SPLIT on kind:
-//   • SESSION (non-foreign): doc/open navigation, plus Retry on exactly the STALLED threads —
-//     `offersRetry`, which IS `sessionIndicatorKind === "stalled"`, the very same derivation behind the
-//     rail's yellow [!]. Every surface that renders this component agrees by construction, so the verb
-//     and the mark can never disagree about one thread. Other lifecycle verbs (Mark as done / Snooze)
-//     live in ThreadLifecycleFooter; rename lives next to the title in ThreadHeader.
+//   • SESSION (non-foreign): doc/open navigation, plus Retry on exactly the threads `offersRetry`
+//     picks — the STALLED ones (the rail's yellow [!]) and the ones HELD on a usage limit fray will
+//     auto-resume (the hourglass, offered the same one-click continue). Every surface that renders this
+//     component reads that same derivation, so the verb can never disagree between the card, the header
+//     and the rail. Other lifecycle verbs (Mark as done / Snooze) live in ThreadLifecycleFooter; rename
+//     lives next to the title in ThreadHeader.
 //   • SESSION (foreign): read-only. Only the doc/open NAVIGATION affordances — no kill/archive.
 //   • LEGACY (kind !== "session"): the vestigial Mark-as split button, exactly as before.
 export function HeaderActions({
@@ -60,11 +62,11 @@ export function HeaderActions({
       {onDoc && <IconBtn label="Fray document" icon={FileText} size={14} onClick={onDoc} />}
       {onOpen && <IconBtn label="Open thread" icon={ArrowUpRight} size={14} onClick={onOpen} />}
       {isSession ? (
-        // A STALLED session (its process is gone with the work unfinished) leads with recovery — Retry
-        // is the only exit-state verb here; clearing a finished row is the footer's job (Mark as done /
-        // Snooze). offersRetry already excludes foreign (read-only) sessions, and — the point of the
-        // 2026-07-23 fix — archived and done-fenced ones, which are at rest on purpose and must not
-        // advertise a recovery verb their rail row does not also mark.
+        // A STALLED session (process gone, work unfinished) or one HELD on an auto-resume usage limit
+        // leads with recovery — Retry is the only exit/wait-state verb here; clearing a finished row is
+        // the footer's job (Mark as done / Snooze). offersRetry already excludes foreign (read-only)
+        // sessions, and — the point of the 2026-07-23 fix — archived and done-fenced ones, which are at
+        // rest on purpose and must not advertise a recovery verb their rail row does not also mark.
         offersRetry(thread) ? <RetryButton slug={thread.id} /> : null
       ) : (
         <div className="ml-1">
@@ -84,11 +86,14 @@ export function HeaderActions({
 
 // Retry uses the same authoritative recovery path as any other follow-up (see lib/retrySession).
 function RetryButton({ slug }: { slug: string }) {
+  const queryClient = useQueryClient()
   const [busy, setBusy] = useState(false)
   const apply = () => {
     setBusy(true)
-    // retrySession now resolves the session id from the board and passes it to the guarded followUp.
-    retrySession(slug).finally(() => setBusy(false))
+    // retrySession is now an ordinary eager send: the thread paints as working and its retry message
+    // appears as a queued bubble the instant this is clicked, so this local `busy` is only about THIS
+    // button's own icon — the thread's feedback no longer waits on the round-trip.
+    retrySession(queryClient, slug).finally(() => setBusy(false))
   }
   return (
     <Tooltip label="Retry — resume this session where it left off">

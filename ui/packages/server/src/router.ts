@@ -63,6 +63,7 @@ import {
   readEarlierThreadTranscriptPage,
   readLatestThreadTranscriptPage,
   readTranscriptFile,
+  readCodexTranscriptFile,
 } from "./transcript.ts"
 import { openExternalUrl } from "./open-external.ts"
 import { openLocalFile, resolveOpenableFile } from "./local-file.ts"
@@ -596,7 +597,10 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const info = ctx.tailer.subAgent(input.slug, input.id)
         if (!info) return { messages: [], state: "gone" as const }
-        const messages = info.outputFile ? readTranscriptFile(info.outputFile) : []
+        // A CODEX sub-agent is itself a codex thread, so its "output file" is a rollout in codex's own
+        // schema — parse it with the codex reader or the drawer renders an empty pane.
+        const read = info.outputFormat === "codex" ? readCodexTranscriptFile : readTranscriptFile
+        const messages = info.outputFile ? read(info.outputFile) : []
         return { messages, state: info.state }
       },
     }),

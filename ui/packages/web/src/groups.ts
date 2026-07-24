@@ -405,10 +405,22 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
 }
 
 // Whether a thread offers the Retry verb — on EVERY surface: the sidebar rail row, the queue card,
-// AND the full thread drawer's header. This is DEFINITIONALLY the stalled mark: the yellow [!] and the
-// Retry verb are ONE decision with ONE derivation, so no two surfaces can drift apart again. NEVER
-// re-widen this to "stalled OR <something else>"; if a state should offer Retry, make
-// sessionIndicatorKind call it stalled.
+// AND the full thread drawer's header. The load-bearing invariant is that all three surfaces read
+// THIS ONE predicate, so no two of them can ever drift apart about a single thread (each time a
+// surface kept its own gate, one ended up showing Retry while reading as calm at-rest elsewhere —
+// maintainer 2026-07-23, twice).
+//
+// Two states earn Retry, and they wear DIFFERENT sidebar marks — the verb is shared, the glyph is not:
+//   • STALLED — the process is gone with the work unfinished (yellow [!]). The classic case.
+//   • HELD by a usage limit fray will auto-resume (the hourglass, NOT [!]). A limit park is a genuine
+//     wait — fray continues it itself once the window resets — so it keeps its held glyph and its
+//     dimmed Held band. But the operator with capacity elsewhere shouldn't have to wait, so it ALSO
+//     gets the one-click Retry: the same verb, message and RPC as a stall (retrySession sends the very
+//     "Continue exactly where you left off." the in-drawer LimitPauseCard already offers), just a
+//     faster door to it from the rail (maintainer 2026-07-23: held-on-a-limit rows want the same
+//     one-click retry as stalled rows). This is why offersRetry is NOT simply `kind === "stalled"`.
+// A non-auto-resume limit pause is not held at all: if its process exited it is already "stalled"
+// above, so it already carries Retry — only the auto-resume-HELD case needed widening here.
 //
 // The drawer used to be deliberately broader — raw `canRetry` (ANY exited owned session) — on the
 // theory that the full view should show every recovery option. That was wrong twice over, and it is
@@ -418,7 +430,13 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
 // yellow, no exclamation point". Nothing is lost by narrowing: the drawer has a composer, and sending
 // an archived or done thread a message is already how you reopen it (see StateButton).
 export function offersRetry(t: ThreadView): boolean {
-  return sessionIndicatorKind(t) === "stalled"
+  const kind = sessionIndicatorKind(t)
+  if (kind === "stalled") return true
+  // A usage-limit park fray will auto-resume — the ONE held state with an obvious manual shortcut.
+  // Gated on the RESOLVED "held" kind (not raw isHeld) so a higher-priority state that stole the row
+  // — a fresh ask, live work — never sprouts a Retry, and on non-foreign so it stays a session fray
+  // can actually restart.
+  return kind === "held" && t.foreign !== true && Boolean(t.limitPause?.autoResume)
 }
 
 export function sectionOf(t: ThreadView): SectionKey | null {

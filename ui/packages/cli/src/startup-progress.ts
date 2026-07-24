@@ -3,6 +3,10 @@ export interface StartupProgressOutput {
   write(chunk: string): boolean;
 }
 
+/** Don't narrate a boot that finishes promptly; only speak up once the wait is notable. */
+const PASSIVE_HEARTBEAT_AFTER_MS = 15_000;
+const PASSIVE_HEARTBEAT_EVERY_MS = 15_000;
+
 export interface StartupProgressOptions {
   output?: StartupProgressOutput;
   /** Kept configurable so the formatter can be tested without waiting for a real clock. */
@@ -28,6 +32,7 @@ export class StartupProgress {
   // Passive mode drops the open animated line and prints settled, newline-terminated status rows so
   // concurrent logs land cleanly on their own lines. Non-TTY output is already line-oriented.
   private passive = false;
+  private lastPassiveNote = 0;
 
   constructor({ output = process.stdout, tickMs }: StartupProgressOptions = {}) {
     this.output = output;
@@ -79,7 +84,19 @@ export class StartupProgress {
   private renderHeartbeat(): void {
     if (!this.current) return;
     // A passive TTY phase must not repaint an animated line; concurrent logs own the screen now.
-    if (this.passive && this.tty) return;
+    // But it must still say something occasionally: the health wait is deliberately UNBOUNDED (a
+    // deadline there declared failure on a merely-slow boot and orphaned the child), so on a loaded
+    // machine this phase can legitimately run for minutes. Silence would read as a hang. Print a
+    // settled, newline-terminated row — safe to interleave with the child's own logs — and only
+    // after the wait has gone on long enough to be worth mentioning.
+    if (this.passive && this.tty) {
+      const waited = Date.now() - this.startedAt;
+      if (waited < PASSIVE_HEARTBEAT_AFTER_MS) return;
+      if (waited - this.lastPassiveNote < PASSIVE_HEARTBEAT_EVERY_MS) return;
+      this.lastPassiveNote = waited;
+      this.output.write(`⋯ ${this.current} — ${this.elapsed()} so far (Ctrl-C to stop)\n`);
+      return;
+    }
     this.render(false);
   }
 

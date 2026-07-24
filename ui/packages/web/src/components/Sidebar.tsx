@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
 import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, FileText, Github, Hourglass, Loader2, RotateCcw, Timer } from "lucide-react"
 import type { AwaitingHint, BoardSnapshot, PlanView, ThreadView } from "@fray-ui/shared"
@@ -14,7 +15,7 @@ import { ProviderMark } from "./ProviderMark.tsx"
 import { STATUS_CHIP } from "../lib/status.ts"
 import { retrySession } from "../lib/retrySession.ts"
 import { formatSnoozedUntil, formatSnoozeWake, formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
-import { isOptimisticallySteering, useSteeredAt } from "../lib/steering.ts"
+import { useOptimisticallySteered } from "../lib/steering.ts"
 import { activeSidebarSection, railRevealDelta, type SidebarSectionGeometry } from "../lib/sidebarScrollspy.ts"
 import type { ReactElement, ReactNode } from "react"
 
@@ -41,7 +42,13 @@ import type { ReactElement, ReactNode } from "react"
 export function Sidebar() {
   const snap = useSnapshot(store)
   const board = useBoard()
-  const all = asThreads(board?.threads ?? [])
+  // A just-sent steer is folded into the board BEFORE anything is derived from it, so the row's
+  // spinner and its POSITION land together. Consulting the hint further down (in the indicator alone,
+  // as this once did) left the two disagreeing for the whole injection + tailer round-trip: the row
+  // spun while still sitting in the queue-ordered rested band, below the rule, and hopped up to the
+  // running band seconds later — measured at 2.0s here with an instantaneous fixture worker, longer in
+  // production. See lib/steering.ts.
+  const all = useOptimisticallySteered(asThreads(board?.threads ?? []))
   const sections = sectionThreads(all, useSnapshot(prefs).queueOrder)
   const plans = (board?.plans ?? []) as PlanView[]
   const collapsed = snap.sidebarCollapsed
@@ -180,10 +187,9 @@ export function Sidebar() {
           {heldThreads.length > 0 && (
             <section aria-label="Held">
               <hr className="my-3 border-border/50" />
-              <div className="flex w-full items-center justify-between px-1.5 py-1 text-[11px] uppercase tracking-wide text-muted/55">
-                <span>Held</span>
-                <span className="tabular-nums">{heldThreads.length}</span>
-              </div>
+              {/* Non-collapsible: held work must stay glanceable. Same header component as Done/Plans
+                  so it matches them exactly (color, label position, count beside the label). */}
+              <SectionHeader label="Held" count={heldThreads.length} />
               {heldThreads.map((t) => (
                 <div key={t.id}>
                   <ThreadRow t={t} active={activeId === t.id} onQueueNavigate={navigateToQueueCard} />
@@ -230,19 +236,32 @@ export function Sidebar() {
   )
 }
 
-// A collapsible section header: a rotating caret, the label, and a right-justified count.
-function SectionHeader({ label, count, collapsed, onToggle }: { label: string; count: number; collapsed: boolean; onToggle: () => void }) {
-  return (
-    <button
-      onClick={onToggle}
-      className="flex w-full items-center gap-1 px-1.5 py-1 text-[11px] uppercase tracking-wide text-muted/70 transition-colors hover:text-fg"
-    >
-      <ChevronRight size={11} className={`transition-transform ${collapsed ? "" : "rotate-90"}`} />
+// A section header: an optional collapse caret, the label, and the count. ONE source of truth for
+// every band header (Held, Done, Plans) so they can never visually drift apart again. Omit onToggle
+// for a NON-collapsible section (Held): it renders as a static div with a caret-width spacer so its
+// label still aligns with the collapsible sections below it.
+export function SectionHeader({ label, count, collapsed, onToggle }: { label: string; count: number; collapsed?: boolean; onToggle?: () => void }) {
+  const inner = (
+    <>
+      {onToggle ? (
+        <ChevronRight size={11} className={`transition-transform ${collapsed ? "" : "rotate-90"}`} />
+      ) : (
+        // Reserve the caret's width so a non-collapsible label lines up with the collapsible ones.
+        <span className="w-[11px] shrink-0" aria-hidden />
+      )}
       <span>{label}</span>
       {/* Count rides right next to its label (not floated to the far edge) — it's meaningful data,
           not a margin ornament; raised contrast so it actually reads. */}
       <span className="ml-1.5 tabular-nums text-muted/60">{count}</span>
+    </>
+  )
+  const cls = "flex w-full items-center gap-1 px-1.5 py-1 text-[11px] uppercase tracking-wide text-muted/70"
+  return onToggle ? (
+    <button onClick={onToggle} className={`${cls} transition-colors hover:text-fg`}>
+      {inner}
     </button>
+  ) : (
+    <div className={cls}>{inner}</div>
   )
 }
 
@@ -274,11 +293,11 @@ export const ThreadRow = memo(function ThreadRow({
   // A thread awaiting its OWN live sub-agent/Monitor is not Held and stays fully active.
   const held = !legacy && isHeld(t)
   const dimLabel = !legacy && titleIsProvisional(t)
-  // A STALLED row — the [!] mark, i.e. the agent's process EXITED (mid-turn, or after resting without
-  // a done fence) — is the one row state with an obvious single next action, so it carries that verb
-  // inline instead of making you open the thread to find it. offersRetry IS `kind === "stalled"`
-  // (groups.ts), so this row's mark and this row's verb are the same decision and the queue card, which
-  // reads the same helper, can never disagree with the rail about a thread.
+  // The rows with an obvious single next action carry that verb INLINE, instead of making you open the
+  // thread to find it. offersRetry (groups.ts) picks them: a STALLED row (the [!] mark — process
+  // exited) AND a row HELD on a usage limit fray will auto-resume (the hourglass — a faster door to the
+  // in-drawer "Continue now" than waiting for the window). The queue card and drawer header read the
+  // SAME helper, so no surface can disagree with the rail about which threads offer Retry.
   const canRestart = !legacy && offersRetry(t)
   // Held rows collapse to a SINGLE LINE — no subtitle. The "what it's held for" detail (snooze/timer
   // wake time, human gate, review watch) lives ENTIRELY in the hourglass indicator's hover tooltip
@@ -358,10 +377,10 @@ export const ThreadRow = memo(function ThreadRow({
           <MarkAsButton slug={t.id} size="sm" />
         </div>
       )}
-      {/* ONE-CLICK RECOVERY on a stalled row. Hover-revealed and pinned to the row's right edge, over
-          the title's first line (it OVERLAYS rather than taking layout, so pointing at a row never
-          reflows its wrapped title). `group-focus-within` keeps it reachable from the keyboard: focus
-          the row button and the next Tab lands here. */}
+      {/* ONE-CLICK RECOVERY on a stalled OR usage-limit-held row (offersRetry). Hover-revealed and
+          pinned to the row's right edge, over the title's first line (it OVERLAYS rather than taking
+          layout, so pointing at a row never reflows its wrapped title). `group-focus-within` keeps it
+          reachable from the keyboard: focus the row button and the next Tab lands here. */}
       {canRestart && <RowRetryButton slug={t.id} />}
       {/* RUNNING SUB-AGENT CHILD ROWS (maintainer 2026-07-09: render running sub-agents in the
           sidebar). One indented row per live child under its parent thread — spinner while running,
@@ -377,6 +396,7 @@ export const ThreadRow = memo(function ThreadRow({
 // "Restart", because "restart" already means the fray control plane restarting itself
 // (RestartFrayButton) and the two must not blur.
 function RowRetryButton({ slug }: { slug: string }) {
+  const queryClient = useQueryClient()
   const [busy, setBusy] = useState(false)
   return (
     <Tooltip label="Retry — resume this session where it left off">
@@ -390,7 +410,7 @@ function RowRetryButton({ slug }: { slug: string }) {
         onClick={(e) => {
           e.stopPropagation()
           setBusy(true)
-          retrySession(slug).finally(() => setBusy(false))
+          retrySession(queryClient, slug).finally(() => setBusy(false))
         }}
         // Sized to the title's FIRST line (h-[19px], top-1 matches the row's pt-1) so it never exceeds
         // the row height. Quiet grey, no border/accent — the muted-icon idiom of the header actions. An
@@ -496,16 +516,11 @@ const ATTENTION = 9
 // Each indicator carries a terse hover tooltip naming the state it signals. The faint "at rest" dot
 // gets none. A plain wrapper <span> is the tooltip trigger (a real DOM node Radix can ref).
 export function ThreadIndicator({ t, legacy }: { t: ThreadView; legacy?: boolean }) {
-  // A just-sent steer paints the rail's spinner immediately. Without it the row keeps its old mark —
-  // often the very "?" the human just answered — for the whole injection round-trip plus however long
-  // the tailer takes to notice the worker's turn, which is the difference between "sent" and "ignored".
-  // Server truth reclaims the row the instant it has anything to say (see isOptimisticallySteering).
-  const steeredAt = useSteeredAt()[t.id]
-  const { node, tip } = legacy
-    ? legacyIndicatorFor(t)
-    : isOptimisticallySteering(t, steeredAt)
-      ? { node: <BoxSpinner />, tip: "Working" }
-      : sessionIndicatorFor(t)
+  // No steer special-case here anymore: Sidebar overlays a just-sent steer onto the thread itself
+  // (useOptimisticallySteered), so `t` already reads as running and the ordinary derivation returns
+  // the spinner — the same one decision that put the row in the running band. When this hook consulted
+  // the hint on its own, the glyph and the placement were two rules and drifted apart on every steer.
+  const { node, tip } = legacy ? legacyIndicatorFor(t) : sessionIndicatorFor(t)
   if (!tip) return node
   return (
     <Tooltip label={tip} side="left">

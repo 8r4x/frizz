@@ -1,0 +1,82 @@
+import assert from "node:assert/strict"
+import test from "node:test"
+
+const baseUrl = process.env.FRAY_MARKDOWN_SANITIZER_E2E_URL
+
+// lib/markdown.ts sanitizes in a real DOM, so this is the only place its behaviour can be pinned.
+// Half the value is the XSS battery: `walk` UNWRAPS a disallowed tag rather than deleting its subtree
+// (deleting silently ate the rest of any block containing `Promise<void>` or a `<sessionId>`
+// placeholder), and every escape route out of that widened rule is re-checked here.
+test("the markdown sanitizer keeps authored meaning and blocks every scripted escape", {
+  skip: !baseUrl,
+  timeout: 60_000,
+}, async () => {
+  const { default: puppeteer } = await import("puppeteer")
+  const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox", "--force-color-profile=srgb"] })
+  const pageErrors: string[] = []
+  try {
+    const page = await browser.newPage()
+    page.on("pageerror", (error) => pageErrors.push(String(error)))
+    await page.goto(`${baseUrl}/markdown-sanitizer-fixture.html`, { waitUntil: "domcontentloaded" })
+    await page.waitForSelector("[data-case=tasklist]")
+    // NOTE: no named function expressions in here. tsx/esbuild rewrites `const f = () => …` with a
+    // `__name` keep-names shim that does not exist inside the page, and evaluate dies on it.
+    const seen = await page.evaluate(() => {
+      const handlers: string[] = []
+      for (const el of document.querySelectorAll("*"))
+        for (const attr of el.attributes) if (/^on/i.test(attr.name)) handlers.push(`${el.tagName}@${attr.name}`)
+      return {
+        pwned: (window as Window & { __pwned?: string }).__pwned ?? null,
+        handlers,
+        // shape
+        taskBoxes: Array.from(document.querySelectorAll("[data-case=tasklist] .md-task")).map((n) => n.className),
+        looseBoxes: Array.from(document.querySelectorAll("[data-case=tasklist-loose] li > p > .md-task")).map((n) => n.className),
+        olStart: document.querySelector("[data-case=olstart] ol")?.getAttribute("start") ?? null,
+        headAlign: Array.from(document.querySelectorAll("[data-case=align] th")).map((n) => getComputedStyle(n).textAlign),
+        genericText: document.querySelector("[data-case=generic]")?.textContent?.trim(),
+        placeholderText: document.querySelector("[data-case=placeholder]")?.textContent?.trim(),
+        detailsText: document.querySelector("[data-case=details]")?.textContent?.replace(/\s+/g, " ").trim(),
+        // xss — every one of these must keep the trailing prose and drop the payload
+        xss: Object.fromEntries(Array.from(document.querySelectorAll("[data-case^=x-]")).map((n) => [
+          n.getAttribute("data-case")!,
+          { text: n.textContent?.replace(/\s+/g, " ").trim(), html: n.innerHTML },
+        ])),
+      }
+    })
+
+    // --- nothing executed, nothing scriptable survived ---
+    assert.equal(seen.pwned, null, "no probe payload may run")
+    assert.deepEqual(seen.handlers, [], "no event-handler attribute may survive sanitizing")
+    for (const [id, out] of Object.entries(seen.xss)) {
+      assert.doesNotMatch(out.html, /<(script|style|iframe|object|embed|svg|noscript|template|form|input)\b/i, `${id}: dangerous element`)
+      assert.doesNotMatch(out.html, /\son[a-z]+=/i, `${id}: event handler`)
+      assert.doesNotMatch(out.html, /javascript:/i, `${id}: javascript: url`)
+    }
+    // a dangerous element takes its content with it; anything else keeps its text
+    assert.equal(seen.xss["x-script"].text, "after")
+    assert.equal(seen.xss["x-style"].text, "after")
+    assert.equal(seen.xss["x-div-script"].text, "kept", "the div unwraps, only the script's content dies")
+    assert.equal(seen.xss["x-unknown-handler"].text, "visible text", "an unknown tag unwraps, keeping its text")
+    assert.equal(seen.xss["x-deep"].text, "deep text", "unwrapping recurses into salvaged children")
+    assert.equal(seen.xss["x-jsurl"].text, "click")
+    assert.equal(seen.xss["x-olstart"].html.includes("start="), false, "a non-numeric start is dropped")
+    assert.equal(seen.xss["x-tdalign"].html.includes("align="), false, "a bogus align is dropped")
+
+    // --- authored meaning survives ---
+    assert.deepEqual(seen.taskBoxes, ["md-task md-task-checked", "md-task"], "checked state must be visible")
+    assert.deepEqual(seen.looseBoxes, ["md-task md-task-checked", "md-task"], "loose task items too")
+    assert.equal(seen.olStart, "17", "a list that starts at 17 keeps its numbering")
+    assert.deepEqual(seen.headAlign, ["left", "center", "right"], "GFM column alignment is honored")
+    assert.equal(seen.genericText, "The handler returns Promise and then logs the slug.",
+      "a tag-shaped token must not delete the rest of the sentence")
+    // The two `<…>` tokens are consumed by the HTML parser (as on GitHub); what must NOT happen is the
+    // old behaviour, where everything after the first one was deleted and only "Write to " survived.
+    assert.equal(seen.placeholderText, "Write to /.jsonl and restart the tailer.",
+      "consecutive placeholders must not delete the rest of the sentence")
+    assert.match(seen.detailsText ?? "", /The stack was 40 frames deep/, "a non-allowlisted wrapper keeps its content")
+
+    assert.deepEqual(pageErrors, [])
+  } finally {
+    await browser.close()
+  }
+})

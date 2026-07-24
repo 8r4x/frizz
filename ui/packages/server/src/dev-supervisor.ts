@@ -107,6 +107,8 @@ export interface DevSupervisor {
   readonly stopRequested: Promise<void>
   currentBoot(): DevBoot | null
   close(): Promise<void>
+  /** Abandon a graceful drain and reclaim the control-plane child by force. */
+  forceStop(): void
 }
 
 export interface SupervisorShutdownHandlerOptions {
@@ -114,23 +116,69 @@ export interface SupervisorShutdownHandlerOptions {
   release: () => void
   exit: (code: number) => void
   error?: (line: string) => void
+  /** Reclaim the control-plane child by force when the operator refuses to wait for the drain. */
+  force?: () => void
+  /**
+   * How long after the first signal a repeat is still treated as the SAME stop rather than as an
+   * impatient operator. One Ctrl-C is delivered to every process in the foreground group, and a shell
+   * or npm-script wrapper forwards it again within the same tick — escalating on that would turn every
+   * ordinary graceful stop into a forced kill. See SUPERVISOR_ESCALATE_GRACE_MS.
+   */
+  escalateAfterMs?: number
+  /** Deterministic test seam. Production reads the monotonic clock. */
+  now?: () => number
 }
 
-/** Idempotent, permanently-installed signal/control handler for the durable supervisor owner. */
+/** A human cannot withdraw their patience in under half a second; a forwarded signal always does. */
+export const SUPERVISOR_ESCALATE_GRACE_MS = 500
+
+/**
+ * Idempotent, permanently-installed signal/control handler for the durable supervisor owner.
+ *
+ * The FIRST signal starts exactly one graceful close, however many arrive. A SECOND signal is the
+ * operator saying they will not wait: escalate instead of swallowing it, so a wedged control-plane
+ * child (whose reclaim is otherwise bounded only by CHILD_STOP_TIMEOUT_MS) can never look like a
+ * launcher that ignores Ctrl-C. Escalation still releases the tokenized launch owner — a forced exit
+ * must not strand the project — and reports a non-zero code because the drain did not complete.
+ */
 export function createSupervisorShutdownHandler(options: SupervisorShutdownHandlerOptions): () => void {
+  const now = options.now ?? (() => Date.now())
+  const escalateAfterMs = options.escalateAfterMs ?? SUPERVISOR_ESCALATE_GRACE_MS
+  let startedAt = 0
   let stopping = false
+  let decided = false
+  const decide = (code: number) => {
+    if (decided) return
+    decided = true
+    try {
+      options.release()
+    } catch (error) {
+      // An abandoned drain can still hold the project's ownership guard. Releasing is best-effort;
+      // a failure here must never replace the exit with an unhandled stack over the operator's prompt.
+      options.error?.(`[fray-ui] could not release launch ownership: ${error instanceof Error ? error.message : error}`)
+    }
+    options.exit(code)
+  }
   return () => {
-    if (stopping) return
+    if (stopping) {
+      // Same stop, delivered twice (process group + a forwarding wrapper) — not an impatient operator.
+      if (decided || now() - startedAt < escalateAfterMs) return
+      options.error?.("[fray-ui] second stop signal — abandoning the graceful drain")
+      try {
+        options.force?.()
+      } catch (error) {
+        options.error?.(`[fray-ui] forced supervisor stop failed: ${error instanceof Error ? error.message : error}`)
+      }
+      decide(1)
+      return
+    }
     stopping = true
+    startedAt = now()
     void options.close().then(
-      () => {
-        options.release()
-        options.exit(0)
-      },
+      () => decide(0),
       (error) => {
         options.error?.(`[fray-ui] supervisor shutdown failed: ${error instanceof Error ? error.message : error}`)
-        options.release()
-        options.exit(1)
+        decide(1)
       },
     )
   }
@@ -138,6 +186,9 @@ export function createSupervisorShutdownHandler(options: SupervisorShutdownHandl
 
 const packagesDir = resolve(import.meta.dirname, "..", "..")
 const workspaceDir = resolve(packagesDir, "..")
+
+/** The one "restart" that is not a restart: the very first boot. Worded differently for humans. */
+const INITIAL_BOOT_REASON = "initial boot"
 
 /** Runtime source trees that can change the server-side API/control plane. Web source stays on Vite HMR. */
 export function defaultDevWatchRoots(): string[] {
@@ -432,7 +483,7 @@ class Supervisor implements DevSupervisor {
       throw err
     }
 
-    this.requestRestart("initial boot", true)
+    this.requestRestart(INITIAL_BOOT_REASON, true)
   }
 
   private onWatch(err: Error | null, events: WatchEvent[]): void {
@@ -478,7 +529,13 @@ class Supervisor implements DevSupervisor {
     const run = () => {
       this.debounce = null
       const scope = this.reloadLauncher ? "control plane + launcher" : "control plane"
-      this.logLine(`[fray-ui] dev ${scope} restarting (${reason})`)
+      // "restarting (initial boot)" is a contradiction the operator has to decode mid-startup, and it
+      // reads like something already went wrong. On the first boot there is nothing to restart.
+      this.logLine(
+        reason === INITIAL_BOOT_REASON
+          ? `[fray-ui] starting Fray`
+          : `[fray-ui] restarting ${scope} — ${reason}`,
+      )
       this.writeStatus("restarting", reason)
       void this.restart()
     }
@@ -835,6 +892,24 @@ class Supervisor implements DevSupervisor {
     if (this.stopping === child) this.stopping = null
     this.boot = null
     this.activeChildEnvironment = {}
+  }
+
+  /**
+   * Second-Ctrl-C escalation. `stopChild` waits up to CHILD_STOP_TIMEOUT_MS for a clean drain; an
+   * operator who signals again has withdrawn that patience, so take the control plane down now. The
+   * child owns only Fray's own handles — worker tmux sessions and the detached Codex app-server
+   * daemon are keyed project resources in their own process trees and deliberately survive this.
+   */
+  forceStop(): void {
+    this.closed = true
+    const child = this.child
+    if (!child) return
+    this.errorLine(`[fray-ui] force-stopping control plane (pid ${child.pid ?? "?"})`)
+    try {
+      child.kill("SIGKILL")
+    } catch {
+      // Already gone; the exit handler has done, or will do, the bookkeeping.
+    }
   }
 
   async close(): Promise<void> {

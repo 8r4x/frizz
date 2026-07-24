@@ -13,6 +13,7 @@ import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { normalizeObservedThreadModel, validateThreadProfile } from "./backend/thread-profiles.ts"
 import { classifyLimitRecord } from "./backend/usage-limit.ts"
 import { parseDeliveryLedger, correlateDeliveryRecord, ageDeliveries, serializeDeliveryLedger, type DeliveryLedgerItem } from "./delivery-ledger.ts"
+import { createCodexSubAgentTracker, type CodexSubAgentTracker } from "./codex-subagents.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
 // (~/.claude/projects/<cwdSlug>/<session_id>.jsonl) to derive liveness telemetry — last activity
@@ -280,6 +281,9 @@ interface SubAgentEntry {
   command?: string // shell only: raw launch command for the read-only output drawer
   subagentType?: string // the dispatch's input.subagent_type verbatim (agents only; may be absent)
   outputFile?: string // the child/shell's output path (from the launch tool_result); its mtime = liveness
+  // Transcript SCHEMA of `outputFile` when it isn't Claude's own JSONL. A codex sub-agent's output file
+  // is the CHILD's codex rollout, which the drill-in drawer must parse with the codex reader instead.
+  outputFormat?: "codex"
   // The RUNTIME task id (Bash "…with ID: <id>", Monitor "(task <id>…)", Agent "agentId: <id>"), parsed
   // from the launch ack. This is the ONE identifier a `TaskStop` references (its `input.task_id`) and
   // it also rides every natural completion notification as `<task-id>` — so it is the correlation key
@@ -322,6 +326,7 @@ interface RetiredSubAgent {
   label: string
   subagentType?: string
   outputFile?: string
+  outputFormat?: "codex" // see SubAgentEntry.outputFormat
   finishedAt?: string // ISO8601 of the completion notification
   status: "completed" | "failed" | "killed"
 }
@@ -365,6 +370,10 @@ export interface TailState extends FoldState {
   subAgents: Map<string, SubAgentEntry>
   // completed sub-agents retained for drawer review (bounded ring; NOT surfaced live) — see above
   retiredSubAgents: Map<string, RetiredSubAgent>
+  // CODEX rows only: the sub-agent tracker that fills the two maps above from `spawn_agent` /
+  // sub_agent_activity / list_agents plus each child rollout's own turn brackets (codex-subagents.ts).
+  // Claude fills them from `trackDispatches` instead, so this stays undefined there.
+  codexSubAgents?: CodexSubAgentTracker
   // completed shells retained so an already-open output drawer can render the terminal tail.
   retiredShells: Map<string, RetiredShell>
   // a pending native AskUserQuestion the session is frozen on (no tool_result yet), else undefined
@@ -659,6 +668,7 @@ function retireToRing(state: TailState, entry: SubAgentEntry, finishedAt: string
     label: entry.label,
     subagentType: entry.subagentType,
     outputFile: entry.outputFile,
+    outputFormat: entry.outputFormat,
     finishedAt,
     status,
   })
@@ -1097,7 +1107,9 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
     case "tool-call":
     case "tool-result":
       // Agent activity mid-turn: it advanced the activity clock (above) but doesn't move the turn
-      // (still bracketed in-flight) or the preview. Codex has no sub-agent/bg-shell tracking to fold;
+      // (still bracketed in-flight) or the preview. Codex's sub-agent tracking rides its own per-line
+      // seam (codex-subagents.ts) rather than this union, since a CHILD's lifecycle is a different axis
+      // from this session's turn — and codex has no background-shell concept at all;
       // Claude's rich tool tracking rides applyRecord, never this path. NOTE (deliberate divergence
       // from applyRecord's user arm): a tool-result does NOT clear lastFence/lastAssistantHasQuestion —
       // tool activity is mid-turn (a user-message re-open already cleared any prior-turn fence, and the
@@ -1157,7 +1169,9 @@ export interface Tailer {
   foreignIds(): string[]
   // Drill-in drawer lookup: a tracked or retained sub-agent's transcript path + state, or undefined if
   // unknown (never dispatched, or aged out of the retained ring). The router maps undefined → "gone".
-  subAgent(slug: string, id: string): { outputFile?: string; state: "running" | "stale" | "done" } | undefined
+  // `outputFormat` tells the reader which schema the file is: absent = Claude JSONL, "codex" = the
+  // child's codex rollout (a codex sub-agent is itself a codex thread).
+  subAgent(slug: string, id: string): { outputFile?: string; outputFormat?: "codex"; state: "running" | "stale" | "done" } | undefined
   // Read-only background-shell drawer lookup. Output content stays server-side until the scoped query.
   backgroundShell?(slug: string, id: string): { command?: string; outputFile?: string; state: "running" | "done" } | undefined
   // Drop a session's in-memory tail state (registered + foreign) — called when its row is hard-deleted
@@ -1191,6 +1205,7 @@ export interface TailerDeps {
   findExpectedAdoptionPane?: (expected: tmux.ExpectedAdoptionPane) => tmux.AdoptionPaneLookup
   captureExpectedAdoptionPane?: (expected: tmux.ExpectedAdoptionPane) => tmux.ExactPaneCapture
   sessionLogDir?: string // injectable transcript dir (tests); defaults to the Claude Code path
+  codexHome?: string // injectable $CODEX_HOME (tests); where a codex sub-agent's child rollout is located
   mtimeMs?: (path: string) => number | undefined // injectable file mtime (tests); a sub-agent transcript's staleness clock
   // The agent backend that locates + folds a session's transcript (Codex-support epic). Injected by
   // the composition layer as a ClaudeBackend; when absent (tests) the tailer folds with its own
@@ -1434,13 +1449,14 @@ export function createTailer(deps: TailerDeps): Tailer {
   // the drill-in drawer's server-side lookup. Checks the LIVE map first (running/stale), then the
   // RETAINED ring (a completed child kept for review → "done"). Undefined only when the id is unknown
   // to both (never dispatched, or aged out of the ring) → the router maps that to "gone".
-  function subAgentLookup(slug: string, id: string): { outputFile?: string; state: "running" | "stale" | "done" } | undefined {
+  function subAgentLookup(slug: string, id: string): { outputFile?: string; outputFormat?: "codex"; state: "running" | "stale" | "done" } | undefined {
     const state = states.get(slug)
     if (!state || !registeredStateIsCurrent(state)) return undefined
+    // `outputFormat` is spread in only when set, so a Claude child's lookup shape is byte-identical.
     const live = state.subAgents.get(id)
-    if (live) return { outputFile: live.outputFile, state: entryStale(live, now()) ? "stale" : "running" }
+    if (live) return { outputFile: live.outputFile, ...(live.outputFormat ? { outputFormat: live.outputFormat } : {}), state: entryStale(live, now()) ? "stale" : "running" }
     const dead = state.retiredSubAgents.get(id)
-    if (dead) return { outputFile: dead.outputFile, state: "done" }
+    if (dead) return { outputFile: dead.outputFile, ...(dead.outputFormat ? { outputFormat: dead.outputFormat } : {}), state: "done" }
     return undefined
   }
 
@@ -1667,6 +1683,41 @@ export function createTailer(deps: TailerDeps): Tailer {
     }
   }
 
+  // The CODEX counterpart of trackDispatches: codex's sub-agent signals (`spawn_agent`,
+  // sub_agent_activity, list_agents) live on their own axis rather than in NormalizedEvent, so they
+  // ride the same per-line `consume(..., onLine)` seam the delivery ledger uses — and the two never
+  // collide, because ledgerFold is claude-only and this is codex-only. The tracker writes straight
+  // into this state's live/retired maps, so the board strip, hasLiveOps, the completion-hold dialog
+  // and the drill-in drawer all light up for codex with no further plumbing. Returns undefined for a
+  // claude row (one string compare) so the claude path is byte-identical.
+  function codexSubAgentOnLine(row: SessionRow, state: TailState): ((line: string) => void) | undefined {
+    if (row.backend !== "codex") return undefined
+    const tracker = (state.codexSubAgents ??= createCodexSubAgentTracker({
+      codexHome: deps.codexHome,
+      sink: {
+        setLive: (id, e) => {
+          const previous = state.subAgents.get(id)
+          state.subAgents.set(id, {
+            kind: "agent",
+            toolUseId: id,
+            label: e.label,
+            startedAt: e.startedAt,
+            subagentType: e.subagentType,
+            // Only ever set once the child's rollout is located; until then the entry is live with no
+            // file, which entryStale correctly reads as "just starting up", not stale.
+            outputFile: e.outputFile ?? previous?.outputFile,
+            outputFormat: "codex",
+          })
+        },
+        retire: (id, finishedAt, status) => {
+          const entry = state.subAgents.get(id)
+          if (entry) retireLive(state, entry, finishedAt, status)
+        },
+      },
+    }))
+    return (line: string) => tracker.onLine(line)
+  }
+
   // Read whatever has been appended since our last offset, folding each complete line into the
   // derivation. Handles: file-not-yet-created (ENOENT → skip), truncation/rotation (size < offset
   // → re-read from 0), and a trailing partial line (buffered until its newline arrives).
@@ -1863,7 +1914,8 @@ export function createTailer(deps: TailerDeps): Tailer {
       if (!state.primed) {
         const primeOffset = state.offset
         const primeLedger = ledgerFold(row, nowMs)
-        consume(state, backend, primeLedger.onLine)
+        consume(state, backend, primeLedger.onLine ?? codexSubAgentOnLine(row, state))
+        state.codexSubAgents?.poll(nowMs)
         const primedLedger = primeLedger.finish()
         state.deliveryLedgerSeen = primedLedger.changed ? primedLedger.value : row.delivery_ledger ?? null
         if (primedLedger.changed) transcriptDirty.push(row.slug)
@@ -1922,7 +1974,11 @@ export function createTailer(deps: TailerDeps): Tailer {
       const rowLedger = row.delivery_ledger ?? null
       const ledgerDrifted = rowLedger !== (state.deliveryLedgerSeen ?? null) // a router write with no JSONL advance
       const ledger = ledgerFold(row, nowMs)
-      consume(state, backend, ledger.onLine)
+      consume(state, backend, ledger.onLine ?? codexSubAgentOnLine(row, state))
+      // Child rollouts advance on their OWN clock, so poll every tick — not only when the parent
+      // appended. This is what flips a finished codex child out of the live set (and, once every
+      // child is done, releases the thread from Active into the queue).
+      state.codexSubAgents?.poll(nowMs)
       const ledgerResult = ledger.finish()
       state.deliveryLedgerSeen = ledgerResult.changed ? ledgerResult.value : rowLedger
       if (ledgerDrifted || ledgerResult.changed) {

@@ -17,6 +17,10 @@
   --color-accent: #e8b923;
   --color-live: #4ac97e;
   --color-idle: #6b7280;
+  /* Live-work indicators split by runtime concern: a background SHELL/Monitor pulses blue, a
+     sub-agent pulses the accent-yellow. The blue is a clear azure, kept distinct from --color-live
+     green and the accent gold so the two live states never blur. */
+  --color-shell: #4a9eff;
 
   --font-mono: ui-monospace, "JetBrains Mono", "Fira Code", "SF Mono", "Cascadia Mono", Consolas,
     Menlo, "DejaVu Sans Mono", monospace;
@@ -147,17 +151,24 @@ html[data-font="sans"] .fray-bash .md-body {
   height: 6px;
   flex: 0 0 auto;
   border-radius: 9999px;
-  background: var(--color-accent);
+  /* One local hue drives the fill, the ring, AND the pulse halo so a recolored dot stays one color
+     across the whole animation. Defaults to the accent-yellow (a sub-agent); the --shell modifier
+     swaps in blue for a background shell/Monitor. */
+  --live-dot: var(--color-accent);
+  background: var(--live-dot);
   /* Keep the motion cue close to the mark. At high browser zoom the former 4px pulse read as a
      second, much larger circle rather than a quiet live-state halo. */
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 28%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--live-dot) 28%, transparent);
   animation: fray-live-pulse 1.25s ease-in-out infinite;
 }
+/* Two runtime concerns, two hues: background shells pulse blue, sub-agents pulse the accent-yellow. */
+.fray-live-dot--shell { --live-dot: var(--color-shell); }
+.fray-live-dot--agent { --live-dot: var(--color-accent); }
 @keyframes fray-live-pulse {
-  50% { opacity: 0.62; box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 14%, transparent); }
+  50% { opacity: 0.62; box-shadow: 0 0 0 2px color-mix(in srgb, var(--live-dot) 14%, transparent); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .fray-live-dot { animation: none; background: transparent; border: 2px solid var(--color-accent); box-shadow: none; }
+  .fray-live-dot { animation: none; background: transparent; border: 2px solid var(--live-dot); box-shadow: none; }
 }
 
 /* QUIET-LIVE dot: a background subshell / Monitor that is still a live process but has not touched its
@@ -171,15 +182,19 @@ html[data-font="sans"] .fray-bash .md-body {
   height: 6px;
   flex: 0 0 auto;
   border-radius: 9999px;
-  background: color-mix(in srgb, var(--color-accent) 55%, var(--color-muted));
+  /* Quiet-live is a SHELL state (a dev server/Monitor waiting), so it inherits the same shell-blue
+     hue as the bright shell dot — just muted toward gray. Keeps the accent-yellow default for safety. */
+  --live-dot: var(--color-accent);
+  background: color-mix(in srgb, var(--live-dot) 55%, var(--color-muted));
   animation: fray-live-breathe 2.6s ease-in-out infinite;
 }
+.fray-live-dot-quiet--shell { --live-dot: var(--color-shell); }
 @keyframes fray-live-breathe {
   0%, 100% { opacity: 0.4; transform: scale(0.82); }
   50% { opacity: 0.9; transform: scale(1); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .fray-live-dot-quiet { animation: none; opacity: 1; transform: none; background: transparent; border: 1.5px solid color-mix(in srgb, var(--color-accent) 55%, var(--color-muted)); }
+  .fray-live-dot-quiet { animation: none; opacity: 1; transform: none; background: transparent; border: 1.5px solid color-mix(in srgb, var(--live-dot) 55%, var(--color-muted)); }
 }
 @supports not (font-variant-caps: all-petite-caps) {
   .petite-caps {
@@ -399,6 +414,43 @@ a[href] {
 .md-body li::marker {
   color: var(--color-muted);
 }
+/* GFM task lists. lib/markdown.ts renders the checkbox as an inert `.md-task` span (marked's real
+   `<input>` is neither in the render allowlist nor appropriate inside a transcript), so the box is
+   drawn here and the item drops its own bullet. `> p >` catches the loose-list shape, where the span
+   lands inside a paragraph. */
+.md-body li:has(> .md-task),
+.md-body li:has(> p > .md-task) {
+  list-style: none;
+}
+/* Hangs in the gutter the disc marker vacated, so the item's text starts — and WRAPS — at exactly the
+   same x as a plain bullet's: the box's own margins sum with its width to zero advance
+   (-1.25 + 0.85 + 0.4). */
+.md-body .md-task {
+  display: inline-block;
+  position: relative;
+  width: 0.85em;
+  height: 0.85em;
+  margin-left: -1.25em;
+  margin-right: 0.4em;
+  vertical-align: -0.06em;
+  border: 1px solid var(--color-muted);
+  border-radius: 3px;
+}
+.md-body .md-task-checked {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+}
+.md-body .md-task-checked::after {
+  content: "";
+  position: absolute;
+  left: 0.28em;
+  top: 0.09em;
+  width: 0.2em;
+  height: 0.42em;
+  border: solid var(--color-bg);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
 .md-body a {
   color: var(--color-accent);
   text-decoration: underline;
@@ -537,6 +589,16 @@ a[href] {
   border: 1px solid var(--color-border);
   padding: 0.32em 0.55em;
   text-align: left;
+}
+/* GFM column alignment (`| :---: |`). marked emits it as the `align` presentation attribute, which the
+   blanket `text-align: left` above outranks — so honor it explicitly. */
+.md-body th[align="center"],
+.md-body td[align="center"] {
+  text-align: center;
+}
+.md-body th[align="right"],
+.md-body td[align="right"] {
+  text-align: right;
 }
 .md-body th {
   background: var(--color-panel-2);

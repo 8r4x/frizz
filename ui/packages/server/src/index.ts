@@ -50,6 +50,7 @@ export type ServerStartupPhase =
   | "board producer"
   | "tailer producer"
   | "permission producer"
+  | "delivery confirmer"
   | "profile producer"
   | "wake scheduler"
   | "Vite"
@@ -212,10 +213,20 @@ async function pipeToApp(
   res.writeHead(response.status, Object.fromEntries(response.headers.entries()))
   if (response.body) {
     const reader = response.body.getReader()
+    // CANCELLING THIS READER IS THE ONLY WAY TO STOP A STREAMING HANDLER ON NODE. Hono wires
+    // `c.req.raw.signal` → `stream.abort()` only on old Bun (helper/streaming/sse.ts); everywhere else
+    // a handler learns its consumer is gone solely through the response stream's `cancel`. Aborting the
+    // request controller alone therefore told /events nothing: its `stream.onAbort` never fired, so its
+    // 10s heartbeat and bus subscription ran forever and THIS promise never settled — which is exactly
+    // why the "http requests" phase could never drain and every Ctrl-C reported a phase timeout and a
+    // blocked storage close. Cancel on abort, so shutdown (and a vanished client) really ends the stream.
+    const cancel = () => { void reader.cancel().catch(() => undefined) }
+    if (controller.signal.aborted) cancel()
+    else controller.signal.addEventListener("abort", cancel, { once: true })
     try {
       for (;;) {
         const { done, value } = await reader.read()
-        if (done || !res.writable) break
+        if (done || !res.writable || controller.signal.aborted) break
         res.write(value)
       }
     } catch {
@@ -364,6 +375,10 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   const cleanupTailer = createRetryableCleanup(() => ctx?.tailer.stop())
   const cleanupLoginUtility = createRetryableCleanup(() => ctx?.loginUtility?.stop())
   const cleanupPermission = createRetryableCleanup(() => ctx?.permissionController.stop())
+  // `?.` on the RESOURCE too, like loginUtility/profileController beside it. Every shutdown phase is
+  // requiredForStorage by default, so a TypeError here does not just log — it fails the whole barrier
+  // with "could not safely close storage", turning a recoverable startup failure into a wedged one.
+  const cleanupDeliveryConfirm = createRetryableCleanup(() => ctx?.deliveryConfirmer?.stop())
   const cleanupProfile = createRetryableCleanup(() => ctx?.profileController?.stop())
   const cleanupSubscriptions = createRetryableCleanup(() => ctx?.stopSubscriptions())
   const cleanupScheduler = createRetryableCleanup(async () => { await ctx?.scheduler.stop() })
@@ -398,6 +413,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       // Kill any live login-attempt pane so OAuth bytes never outlive the server.
       { name: "login utility", run: cleanupLoginUtility },
       { name: "permission producer", run: cleanupPermission },
+      { name: "delivery confirmer", run: cleanupDeliveryConfirm },
       { name: "profile producer", run: cleanupProfile },
       { name: "context subscriptions", run: cleanupSubscriptions },
       { name: "wake scheduler", run: cleanupScheduler },
@@ -561,6 +577,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     await phase("board producer", () => ctx!.board.start())
     await phase("tailer producer", () => ctx!.tailer.start())
     await phase("permission producer", () => ctx!.permissionController.start())
+    await phase("delivery confirmer", () => ctx!.deliveryConfirmer.start())
     await phase("profile producer", () => ctx!.profileController?.start())
     if (process.env.FRAY_WAKERS_OFF !== "1") {
       await phase("wake scheduler", () => ctx!.scheduler.start())

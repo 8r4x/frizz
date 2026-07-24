@@ -6,6 +6,7 @@ import { resolveProject, type Project } from "./project.ts"
 import { createStorage, type Storage } from "./storage.ts"
 import { getSettings, setSettings, resetSettings } from "./settings.ts"
 import { readQuota } from "./quota.ts"
+import { refreshClaudeQuotaInBackground } from "./backend/claude-quota.ts"
 import { createBoard, type BoardManager } from "./board.ts"
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
 import { createDispatcher, type Dispatcher } from "./dispatch.ts"
@@ -24,6 +25,7 @@ import type { AgentBackend } from "./backend/types.ts"
 import { detectGithub, type GithubDetection } from "./github.ts"
 import * as tmux from "./tmux.ts"
 import { createPermissionController, type PermissionController } from "./permission-controller.ts"
+import { createDeliveryConfirmer, type DeliveryConfirmer } from "./delivery-confirm.ts"
 import { createProfileController, type ProfileController } from "./profile-controller.ts"
 import type { InteractionStore } from "./interaction-store.ts"
 import {
@@ -48,6 +50,10 @@ import {
 } from "./shutdown.ts"
 
 export const CONTEXT_STARTUP_CLEANUP_TIMEOUT_MS = 4_000
+
+// How often the server proactively refreshes the shared Claude quota cache (see the heartbeat wired
+// below). One cheap endpoint GET per minute per account keeps the sidebar chip reading fresh.
+const QUOTA_REFRESH_INTERVAL_MS = 60_000
 
 export type ContextStartupPhase =
   | "storage"
@@ -123,6 +129,9 @@ export interface AppContext {
   // conversation with backend-native launch flags; busy/ambiguous states fail explicitly.
   permissionController: PermissionController
   profileController?: ProfileController
+  // Proves an injected Claude follow-up was actually SUBMITTED, and re-presses Enter when the TUI
+  // swallowed it and fray's own text is provably still sitting in the composer (delivery-confirm.ts).
+  deliveryConfirmer: DeliveryConfirmer
   // Detach storage-owned observers before board/storage teardown. Idempotent and synchronous so a
   // deferred interaction notification cannot enqueue fresh board work during the shutdown drain.
   stopSubscriptions(): void
@@ -203,11 +212,13 @@ interface PartialContextResources {
   scheduler?: Scheduler
   permissionController?: PermissionController
   profileController?: ProfileController
+  deliveryConfirmer?: DeliveryConfirmer
 }
 
 interface PartialContextCleanup {
   tailer(): Promise<void>
   permissionController(): Promise<void>
+  deliveryConfirmer(): Promise<void>
   profileController(): Promise<void>
   subscriptions(): Promise<void>
   scheduler(): Promise<void>
@@ -220,6 +231,7 @@ function partialContextCleanup(resources: PartialContextResources): PartialConte
   return {
     tailer: createRetryableCleanup(() => resources.tailer?.stop()),
     permissionController: createRetryableCleanup(() => resources.permissionController?.stop()),
+    deliveryConfirmer: createRetryableCleanup(() => resources.deliveryConfirmer?.stop()),
     profileController: createRetryableCleanup(() => resources.profileController?.stop()),
     subscriptions: createRetryableCleanup(() => resources.stopSubscriptions?.()),
     scheduler: createRetryableCleanup(async () => { await resources.scheduler?.stop() }),
@@ -243,6 +255,7 @@ function contextCleanupBarrier(
     phases: [
       { name: "context tailer", run: cleanup.tailer },
       { name: "context permission producer", run: cleanup.permissionController },
+      { name: "context delivery confirmer", run: cleanup.deliveryConfirmer },
       { name: "context profile producer", run: cleanup.profileController },
       { name: "context subscriptions", run: cleanup.subscriptions },
       { name: "context wake scheduler", run: cleanup.scheduler },
@@ -384,6 +397,22 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   adoptionReconcileTimer.unref?.()
   contextUnsubscribers.push(() => clearInterval(adoptionReconcileTimer))
 
+  // Keep the shared Claude quota cache warm on a fixed 1-minute cadence, independent of any browser
+  // poll, so the sidebar chip (and the scheduler's weekly-reset check) always reads a value ~1 minute
+  // old rather than the multi-minute-stale reading a purely read-driven cache served during a fast
+  // fleet burn. One cheap endpoint GET, on the same non-blocking background path a stale read kicks;
+  // the cross-process lock keeps N Fray windows to ~one request per minute per account. Gated on the
+  // same FRAY_WAKERS_OFF flag as the scheduler so a disposable adhoc/test stack never touches the real
+  // account with the real credential.
+  if (process.env.FRAY_WAKERS_OFF !== "1") {
+    void refreshClaudeQuotaInBackground(opts.claudeBin) // warm immediately so the first read is fresh
+    const quotaRefreshTimer = setInterval(() => {
+      void refreshClaudeQuotaInBackground(opts.claudeBin)
+    }, QUOTA_REFRESH_INTERVAL_MS)
+    quotaRefreshTimer.unref?.()
+    contextUnsubscribers.push(() => clearInterval(quotaRefreshTimer))
+  }
+
   // Reap this machine's leaked worker aux — verification browsers (agent-browser/chrome-devtools/
   // puppeteer) and MCP/dev servers that daemonized out of a stopped worker's tmux tree, so nothing
   // else ever collects them. A sweep on startup clears accumulated leaks; the interval catches new
@@ -492,6 +521,8 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   })
   resources.permissionController = permissionController
   opts.startup?.afterPhase?.("permission producer")
+  const deliveryConfirmer = createDeliveryConfirmer({ storage, board })
+  resources.deliveryConfirmer = deliveryConfirmer
   const profileController = createProfileController({
     storage,
     tailer,
@@ -586,6 +617,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     scheduler,
     permissionController,
     profileController,
+    deliveryConfirmer,
     stopSubscriptions,
     backendFor,
     getSettings: () => getSettings(storage),

@@ -27,7 +27,7 @@ export function QueueSubAgentLines({ slug, subAgents }: { slug: string; subAgent
             className="group flex min-w-0 items-center gap-1.5 rounded-sm text-left text-[11.5px] text-muted/65 outline-none transition-colors enabled:hover:text-fg/85 disabled:cursor-default"
           >
             <span aria-hidden className="shrink-0 text-[11px] leading-none text-muted/45">↳</span>
-            <span aria-hidden className="fray-live-dot" data-running-indicator="queue-subagent" />
+            <span aria-hidden className="fray-live-dot fray-live-dot--agent" data-running-indicator="queue-subagent" />
             <span className="min-w-0 truncate group-enabled:group-hover:underline">{agent.label}</span>
           </button>
         )
