@@ -345,7 +345,7 @@ function scratchpadPathIfExists(projectDir: string, sessionId: string): string |
 // A REGISTERED session thread's view (id = row.slug). Runtime via the shared deriveRuntime (tmux-aware);
 // telemetry fields mirror the legacy path; title provenance is resolved before the snapshot is emitted.
 export function resolveSessionProfile(
-  row: Pick<SessionRow, "backend" | "model" | "effort" | "spawned_at">,
+  row: Pick<SessionRow, "backend" | "model" | "effort" | "spawned_at" | "profile_set_at">,
   tele: Pick<SessionTelemetry, "model" | "effort" | "profileAt"> | undefined,
 ): { model?: string; effort?: string } {
   const persistedModel = row.model?.trim() || undefined
@@ -355,7 +355,15 @@ export function resolveSessionProfile(
   // A transcript is replayed from byte zero whenever a runtime generation changes. A persisted launch
   // target therefore remains authoritative until a genuinely post-spawn profile record arrives; old
   // turn_context/assistant records must not snap the controls back after reattach or server restart.
-  const observedIsCurrent = Number.isFinite(observedAt) && Number.isFinite(spawnedAt) && observedAt >= spawnedAt
+  // SIBLING of resolveSessionPermission's set-time rule (permission_set_at): a codex model/effort
+  // change made eagerly through setThreadProfile takes effect from the next turn, so no fresh
+  // turn_context exists yet and the last one still reports the OLD profile. When the OPERATOR set the
+  // profile AFTER that observed reading, prefer the saved intent so the visible composer selector shows
+  // the pick immediately; a genuinely newer turn (observedAt > setAt) re-establishes observed authority,
+  // so it converges on its own. Claude never sets profile_set_at (setProfileTargetIfCurrent), so unchanged.
+  const setAt = row.profile_set_at ? Date.parse(row.profile_set_at) : NaN
+  const supersededByOperatorSet = Number.isFinite(setAt) && setAt > observedAt
+  const observedIsCurrent = Number.isFinite(observedAt) && Number.isFinite(spawnedAt) && observedAt >= spawnedAt && !supersededByOperatorSet
   const observedModel = tele?.model
     ? normalizeObservedThreadModel(row.backend ?? "claude", tele.model) ?? tele.model.trim()
     : undefined

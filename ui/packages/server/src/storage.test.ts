@@ -871,3 +871,20 @@ test("setPermissionMode stamps the operator set-time; the observed write-back ne
   s.setObservedPermissionIfCurrent("px", s.getSession("px")!.session_id, gen, "default")
   assert.equal(s.getSession("px")?.permission_set_at, setAt, "observed write-back leaves permission_set_at untouched")
 })
+
+test("setProfile stamps the operator set-time; the observed write-back never touches it", () => {
+  const s = store()
+  s.upsertSession(row({ slug: "pf", backend: "codex", model: "gpt-5.6-sol", effort: "xhigh" }))
+  assert.equal(s.getSession("pf")?.profile_set_at ?? null, null, "not stamped until the operator sets it")
+
+  s.setProfile("pf", "gpt-5.6-sol", "low")
+  const setAt = s.getSession("pf")?.profile_set_at
+  assert.ok(setAt && !Number.isNaN(Date.parse(setAt)), "the operator set-time is stamped as an ISO instant")
+  assert.equal(s.getSession("pf")?.effort, "low")
+
+  // The tailer's observed profile write-back changes model/effort but must NOT re-stamp the set-time,
+  // or the board's set-time-vs-observed comparison would always look freshly-operator-set.
+  const gen = s.getSession("pf")?.runtime_generation ?? 0
+  s.setObservedProfileIfCurrent("pf", { sessionId: s.getSession("pf")!.session_id, generation: gen }, { model: "gpt-5.6-sol", effort: "xhigh" })
+  assert.equal(s.getSession("pf")?.profile_set_at, setAt, "observed write-back leaves profile_set_at untouched")
+})

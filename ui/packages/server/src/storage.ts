@@ -73,6 +73,12 @@ export interface SessionRow {
   // and rollback-safe until the replacement generation reaches a proven idle composer.
   profile_pending_model?: string | null
   profile_pending_effort?: string | null
+  // When the OPERATOR last set model/effort (ISO). Sibling of permission_set_at: only setProfile (the
+  // codex-only setThreadProfile path) stamps it — never the tailer's observed write-back. The board
+  // prefers the saved model/effort over an older observed turn_context when this is newer, so a codex
+  // model/effort change shows on the composer selector immediately instead of snapping back to the
+  // stale value until the next turn. Null on pre-migration, never-set, and Claude rows.
+  profile_set_at?: string | null
   profile_revision?: number
   // Versioned crash journal for an in-flight model/effort reattach. This remains populated while
   // runtime_control='profile'; restart recovery must prove one exact runtime before clearing either.
@@ -518,6 +524,7 @@ export function createStorage(dbPath: string): Storage {
     "permission_mode TEXT",
     "permission_pending TEXT",
     "permission_set_at TEXT",
+    "profile_set_at TEXT",
     "control_error TEXT",
     "delivery_ledger TEXT",
     "runtime_generation INTEGER NOT NULL DEFAULT 0",
@@ -918,7 +925,10 @@ export function createStorage(dbPath: string): Storage {
   const backendStmt = db.prepare("UPDATE session SET backend = ? WHERE slug = ?")
   const agentSessionStmt = db.prepare("UPDATE session SET agent_session_id = ? WHERE slug = ?")
   const codexRuntimeStmt = db.prepare("UPDATE session SET codex_runtime = ? WHERE slug = ?")
-  const profileStmt = db.prepare("UPDATE session SET model = ?, effort = ? WHERE slug = ?")
+  // Stamps profile_set_at alongside model/effort: the OPERATOR's set-time (the codex setThreadProfile
+  // path), which the board uses to outrank an older observed turn_context so a just-picked model/effort
+  // shows on the composer selector immediately (see resolveSessionProfile). Sibling of permissionModeStmt.
+  const profileStmt = db.prepare("UPDATE session SET model = ?, effort = ?, profile_set_at = ? WHERE slug = ?")
   // Stamps permission_set_at alongside the mode: this is the OPERATOR's set-time, which the board uses
   // to outrank an older observed telemetry reading (see resolveSessionPermission). The tailer's
   // observed write-back uses observedPermissionIfCurrentStmt and deliberately does NOT touch it.
@@ -1035,6 +1045,7 @@ export function createStorage(dbPath: string): Storage {
     effort: row.effort ?? null,
     profile_pending_model: row.profile_pending_model ?? null,
     profile_pending_effort: row.profile_pending_effort ?? null,
+    profile_set_at: row.profile_set_at ?? null,
     profile_revision: row.profile_revision ?? 0,
     profile_handoff: row.profile_handoff ?? null,
     permission_mode: row.permission_mode ?? null,
@@ -1455,7 +1466,7 @@ export function createStorage(dbPath: string): Storage {
     setBackend: (slug, backend) => void backendStmt.run(backend, slug),
     setAgentSession: (slug, agentSessionId) => void agentSessionStmt.run(agentSessionId, slug),
     setCodexRuntime: (slug, runtime) => void codexRuntimeStmt.run(runtime, slug),
-    setProfile: (slug, model, effort) => void profileStmt.run(model, effort, slug),
+    setProfile: (slug, model, effort) => void profileStmt.run(model, effort, new Date().toISOString(), slug),
     setPermissionMode: (slug, permissionMode) => void permissionModeStmt.run(permissionMode, new Date().toISOString(), slug),
     setPermissionPending: (slug, permissionMode) => void permissionPendingStmt.run(permissionMode, slug),
     beginRuntimeControl: (slug, expected, kind) => {

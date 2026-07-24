@@ -54,6 +54,44 @@ test("resolveSessionProfile: only post-spawn telemetry can supersede a pinned la
   )
 })
 
+test("resolveSessionProfile: an eager operator model/effort change shows immediately, then converges", () => {
+  const LATEST = "2026-07-09T12:00:00.000Z"
+  const EVEN_LATER = "2026-07-09T13:00:00.000Z"
+
+  // THE FIX (sibling of the sandbox pill): the operator picked low at LATEST — AFTER the last observed
+  // turn_context (LATER, still reporting the OLD xhigh). The visible composer selector must show the
+  // just-saved pick, not the stale observed reading, instead of snapping back for a full turn.
+  assert.deepEqual(
+    resolveSessionProfile(
+      row({ backend: "codex", model: "gpt-5.6-sol", effort: "low", spawned_at: T0, profile_set_at: LATEST }),
+      tele({ model: "gpt-5.6-sol", effort: "xhigh", profileAt: LATER }),
+    ),
+    { model: "gpt-5.6-sol", effort: "low" },
+    "a just-picked codex model/effort outranks an older observed turn_context",
+  )
+
+  // CONVERGENCE: a genuinely newer turn (EVEN_LATER > LATEST) re-establishes observed authority.
+  assert.deepEqual(
+    resolveSessionProfile(
+      row({ backend: "codex", model: "gpt-5.6-sol", effort: "low", spawned_at: T0, profile_set_at: LATEST }),
+      tele({ model: "gpt-5.6-sol", effort: "xhigh", profileAt: EVEN_LATER }),
+    ),
+    { model: "gpt-5.6-sol", effort: "xhigh" },
+    "a newer turn re-establishes observed authority",
+  )
+
+  // NO REGRESSION: a stale set-time (before the observed reading) must NOT resurrect the saved value
+  // over a fresh turn — this is the reattach/idle case the observed-wins rule exists for.
+  assert.deepEqual(
+    resolveSessionProfile(
+      row({ backend: "codex", model: "gpt-5.6-sol", effort: "high", spawned_at: T0, profile_set_at: T0 }),
+      tele({ model: "gpt-5.6-sol", effort: "xhigh", profileAt: LATER }),
+    ),
+    { model: "gpt-5.6-sol", effort: "xhigh" },
+    "a stale set-time does not resurrect the saved profile over a newer observed turn",
+  )
+})
+
 test("resolveSessionPermission: exposes only a persisted valid per-thread mode; legacy/unknown stays unknown", () => {
   assert.equal(resolveSessionPermission(row({ permission_mode: "bypassPermissions" })), "bypassPermissions")
   assert.equal(resolveSessionPermission(row({ permission_mode: null })), undefined)
