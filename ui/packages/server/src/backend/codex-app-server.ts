@@ -29,11 +29,19 @@ import {
   stopCodexAppServerDaemon,
   type CodexAppServerHost,
 } from "./codex-app-server-host.ts"
+import { nativeListenCodexAppServerHost } from "./codex-app-server-native.ts"
 
 // Foundation-only bridge. It is deliberately not an AgentBackend: no current/default Codex TUI
 // session can accidentally cross this boundary. Context exposes it only behind the explicit env flag.
 export const CODEX_APP_SERVER_FEATURE_FLAG = "FRAY_CODEX_APP_SERVER_BRIDGE"
 export const CODEX_APP_SERVER_PROVIDER = "codex-app-server"
+// Opt-in transport switch. Off = the hand-written daemon; on = `codex app-server --listen unix://`.
+// Read at construction, per process, so a restart is all it takes to move a project either way.
+export const CODEX_NATIVE_LISTEN_FLAG = "FRAY_CODEX_NATIVE_LISTEN"
+function nativeListenEnabled(): boolean {
+  const value = process.env[CODEX_NATIVE_LISTEN_FLAG]
+  return value === "1" || value === "true"
+}
 export const CODEX_APP_SERVER_SUPPORTED_VERSION = "0.144.6"
 // Upgrade policy: this is an exact protocol pin, never a semver range. Changing it requires a fresh
 // generated-protocol audit plus a source audit at the matching immutable Rust tag/commit, then a new
@@ -1531,7 +1539,11 @@ export class CodexAppServerBridge {
     // Production hosts the app-server in a DETACHED per-project daemon so it outlives this runtime
     // (see codex-app-server-host.ts). An injected `spawn` — every unit test and the live harnesses —
     // keeps the historical direct-child behavior, where each connect really is a new process.
-    this.host = options.host ?? (options.spawn ? directChildHost(options.spawn) : daemonCodexAppServerHost)
+    // FRAY_CODEX_NATIVE_LISTEN=1 swaps the daemon for the app-server's OWN unix listener
+    // (codex-app-server-native.ts), which needs no fray-authored daemon process at all.
+    this.host = options.host ?? (options.spawn
+      ? directChildHost(options.spawn)
+      : nativeListenEnabled() ? nativeListenCodexAppServerHost : daemonCodexAppServerHost)
     this.db = new Database(options.dbPath)
     this.db.pragma("journal_mode = WAL")
     this.db.pragma("busy_timeout = 5000")
