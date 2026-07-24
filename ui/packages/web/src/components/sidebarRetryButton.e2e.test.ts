@@ -61,11 +61,18 @@ test("hovering a stalled sidebar row reveals a Retry button that restarts the se
     await page.click(retry)
     await page.waitForFunction(() => JSON.parse(sessionStorage.getItem("followUpCalls") ?? "[]").length === 1, { timeout: 5_000 })
     const calls = await page.evaluate(() => JSON.parse(sessionStorage.getItem("followUpCalls") ?? "[]"))
-    // retrySession resolves the session-guard id from the board; the fixture thread carries none, so
-    // it sends "" (the server would fail a stale/absent row closed). The message is the shared constant.
-    // (The eager send also stamps a fresh `deliveryId` UUID — assert the stable fields, not that exact id.)
-    const stable = (c: Record<string, unknown>) => ({ slug: c.slug, sessionId: c.sessionId, message: c.message })
-    assert.deepEqual(stable(calls[0]), { slug: "stalled-migration", sessionId: "", message: "Continue exactly where you left off." })
+    // retrySession is now an ordinary eager send (lib/retrySession → sendEagerFollowUp), so the body
+    // carries a `deliveryId` — the delivery-ledger handle the old direct call omitted, which is exactly
+    // what let a retry ghost. sendEagerFollowUp resolves the session-guard id from the live board; the
+    // fixture thread carries none, so it sends "" (the server fails a stale/absent row closed). The
+    // message is the shared restart constant.
+    assert.equal(calls.length, 1, "exactly one recovery follow-up fires")
+    const [call] = calls
+    assert.equal(call.slug, "stalled-migration")
+    assert.equal(call.sessionId, "")
+    assert.equal(call.message, "Continue exactly where you left off.")
+    assert.equal(typeof call.deliveryId, "string", "it went through the eager path — a ledger deliveryId rides the send")
+    assert.ok(call.deliveryId.length > 0, "…and it is non-empty")
 
     // The retry toast confirms it to the user.
     await page.waitForFunction(() => /Retrying/.test(document.body.innerText), { timeout: 5_000 })

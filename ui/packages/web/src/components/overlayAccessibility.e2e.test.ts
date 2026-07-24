@@ -47,22 +47,6 @@ test("dialog portals, nested Select Escape, and thread tabs keep their keyboard 
     await page.waitForFunction(() => !document.querySelector("[role=dialog]"))
   }
 
-  // The model/effort selector is a portaled DropdownMenu (role=menu), not a Select (role=listbox), so
-  // it unwinds through its own layer: the first Escape closes only the menu, the next closes the sheet.
-  async function dismissMenuThenDialog(): Promise<void> {
-    await page.keyboard.press("Escape")
-    await page.waitForFunction(() => !document.querySelector("[role=menu]"))
-    assert.ok(await page.$("[role=dialog]"), "the menu Escape must leave its parent dialog open")
-    // Radix restores the portaled menu's trigger on a queued focus-scope cleanup. Wait for that layer
-    // to settle before exercising the next, intentionally separate Escape.
-    await page.waitForFunction(
-      () => document.activeElement?.getAttribute("aria-label") === "Thread model and effort",
-      { polling: 50, timeout: 5_000 },
-    )
-    await page.keyboard.press("Escape")
-    await page.waitForFunction(() => !document.querySelector("[role=dialog]"))
-  }
-
   async function reverseTab(): Promise<void> {
     await page.keyboard.down("Shift")
     await page.keyboard.press("Tab")
@@ -152,15 +136,15 @@ test("dialog portals, nested Select Escape, and thread tabs keep their keyboard 
     await page.keyboard.press("ArrowLeft")
     await page.waitForFunction(() => document.querySelector('[role=tab][aria-selected="true"]')?.textContent?.trim() === "Chat")
 
-    // The live-thread model/effort menu is portaled outside the dialog DOM. Escape still dismisses
+    // The live-thread permission Select is portaled outside the dialog DOM. Escape still dismisses
     // only that highest layer; the next Escape closes the sheet and rewrites the route to root.
-    const profileMenu = await page.waitForSelector('[role="dialog"] button[aria-label="Thread model and effort"]:not([disabled])')
-    assert.ok(profileMenu)
-    await profileMenu.focus()
+    const permission = await page.waitForSelector('[role="dialog"] button[aria-label="Thread permission mode"]:not([disabled])')
+    assert.ok(permission)
+    await permission.focus()
     await page.keyboard.press("Enter")
-    await page.waitForSelector("[role=menu]")
-    assert.ok(await page.$("[role=dialog]"), "opening a portaled menu must leave its parent sheet mounted")
-    await dismissMenuThenDialog()
+    await page.waitForSelector("[role=listbox]")
+    assert.ok(await page.$("[role=dialog]"), "opening a portaled Select must leave its parent sheet mounted")
+    await dismissSelectThenDialog()
     await page.waitForFunction(() => location.pathname === "/")
 
     // Repeat the essential portal/focus checks at the requested compact viewport.

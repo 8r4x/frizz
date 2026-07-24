@@ -117,12 +117,9 @@ export function BackgroundShellSheet({
         <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
           {unavailable ? (
             <div className="flex h-full items-center justify-center px-8 text-center text-[13px] text-muted">Background shell output is no longer available.</div>
+          ) : query.isLoading ? (
+            <div className="flex h-full items-center justify-center"><span className="block h-5 w-5 animate-spin rounded-full border-2 border-muted/50 border-t-transparent" /></div>
           ) : (
-            // The drawer body is NEVER gated behind a full-height spinner: a slow first fetch (HTTP pool
-            // contention on a busy instance) then reads as "stuck rendering forever" behind a context-free
-            // spinner, when the truth is simply "no output has arrived yet". Render the structure up front and
-            // state the real situation in the output pane — the <pre> itself lays out a full 512 KB in <35ms,
-            // so nothing here is slow to render; the wait is always for the data, and we say so.
             <div className="flex flex-col gap-5">
               <section>
                 <div className="mb-2 flex items-center justify-between gap-3">
@@ -133,7 +130,7 @@ export function BackgroundShellSheet({
                     </button>
                   )}
                 </div>
-                <pre data-background-shell-command className="font-mono-keep overflow-x-auto whitespace-pre-wrap break-words rounded-md border border-border bg-bg/75 px-3 py-2.5 text-[12px] leading-relaxed text-fg/85">{command || (query.isLoading ? "Loading…" : "Command unavailable for this background operation.")}</pre>
+                <pre data-background-shell-command className="font-mono-keep overflow-x-auto whitespace-pre-wrap break-words rounded-md border border-border bg-bg/75 px-3 py-2.5 text-[12px] leading-relaxed text-fg/85">{command || "Command unavailable for this background operation."}</pre>
               </section>
               <section>
                 <div className="mb-2 flex items-center gap-2">
@@ -144,8 +141,8 @@ export function BackgroundShellSheet({
                 {output ? (
                   <pre data-background-shell-output className="font-mono-keep min-h-40 whitespace-pre-wrap break-words rounded-md border border-border bg-[#090b10] px-3 py-3 text-[12px] leading-relaxed text-fg/85">{output}</pre>
                 ) : (
-                  <div data-background-shell-output className="flex min-h-40 items-center justify-center rounded-md border border-border bg-[#090b10] px-4 text-center text-[12px] text-muted/60">
-                    {state === "done" ? "No output was captured." : "No output yet."}
+                  <div data-background-shell-output className="flex min-h-40 items-center justify-center rounded-md border border-border bg-[#090b10] px-4 text-[12px] text-muted/60">
+                    {state === "running" ? "Waiting for output…" : "No output was captured."}
                   </div>
                 )}
               </section>
