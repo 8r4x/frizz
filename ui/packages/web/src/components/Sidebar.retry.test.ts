@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ThreadView } from "@fray-ui/shared"
 import { ThreadRow } from "./Sidebar.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
@@ -21,9 +22,18 @@ const base = {
   subAgents: [],
 } as unknown as ThreadView
 
+// Retry is an ordinary eager send (lib/retrySession → sendEagerFollowUp), so the button writes its
+// optimistic bubble into the transcript cache and needs a real client — the same one the app always
+// provides. Rendering without it is how a row would blow up in production, so the harness supplies it.
 function row(extra: Partial<ThreadView>) {
   const t = { ...base, id: "stalled-thread", ...extra } as ThreadView
-  return renderToStaticMarkup(createElement(TooltipProvider, null, createElement(ThreadRow, { t })))
+  return renderToStaticMarkup(
+    createElement(
+      QueryClientProvider,
+      { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) },
+      createElement(TooltipProvider, null, createElement(ThreadRow, { t })),
+    ),
+  )
 }
 
 const STALLED = { runtime: "exited", crashed: true, needsYou: true } as Partial<ThreadView>

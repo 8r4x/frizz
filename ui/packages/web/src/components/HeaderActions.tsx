@@ -1,4 +1,5 @@
 import { useState, type ComponentType } from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { ArrowUpRight, ChevronsDownUp, ChevronsUpDown, FileText, Loader2, RotateCcw } from "lucide-react"
 import type { ThreadView } from "@fray-ui/shared"
 import { Tooltip } from "./Tooltip.tsx"
@@ -84,11 +85,14 @@ export function HeaderActions({
 
 // Retry uses the same authoritative recovery path as any other follow-up (see lib/retrySession).
 function RetryButton({ slug }: { slug: string }) {
+  const queryClient = useQueryClient()
   const [busy, setBusy] = useState(false)
   const apply = () => {
     setBusy(true)
-    // retrySession now resolves the session id from the board and passes it to the guarded followUp.
-    retrySession(slug).finally(() => setBusy(false))
+    // retrySession is now an ordinary eager send: the thread paints as working and its retry message
+    // appears as a queued bubble the instant this is clicked, so this local `busy` is only about THIS
+    // button's own icon — the thread's feedback no longer waits on the round-trip.
+    retrySession(queryClient, slug).finally(() => setBusy(false))
   }
   return (
     <Tooltip label="Retry — resume this session where it left off">

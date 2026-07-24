@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { BoardSnapshot, ThreadView } from "@fray-ui/shared"
 import { ThreadRow } from "./components/Sidebar.tsx"
 import { Toaster } from "./components/Toaster.tsx"
@@ -90,16 +91,20 @@ const restingThread = {
 
 store.board = { threads: [stalledThread, exitedAtRestThread, workingThread, restingThread] } as BoardSnapshot
 
+// Retry is an ordinary eager send now (lib/retrySession → sendEagerFollowUp), so it writes the
+// optimistic bubble into the transcript cache — the row needs a real client, exactly as the app gives it.
 createRoot(document.getElementById("root")!).render(
-  <TooltipProvider>
-    <main className="min-h-screen bg-bg px-10 py-10 text-fg">
-      <div data-sidebar-rail className="w-[clamp(320px,34vw,680px)]">
-        <ThreadRow t={stalledThread} />
-        <ThreadRow t={exitedAtRestThread} />
-        <ThreadRow t={workingThread} />
-        <ThreadRow t={restingThread} />
-      </div>
-      <Toaster />
-    </main>
-  </TooltipProvider>,
+  <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+    <TooltipProvider>
+      <main className="min-h-screen bg-bg px-10 py-10 text-fg">
+        <div data-sidebar-rail className="w-[clamp(320px,34vw,680px)]">
+          <ThreadRow t={stalledThread} />
+          <ThreadRow t={exitedAtRestThread} />
+          <ThreadRow t={workingThread} />
+          <ThreadRow t={restingThread} />
+        </div>
+        <Toaster />
+      </main>
+    </TooltipProvider>
+  </QueryClientProvider>,
 )
