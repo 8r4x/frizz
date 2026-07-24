@@ -273,11 +273,15 @@ export function completionConfirmationHold(telemetry: SessionTelemetry | undefin
   // immediate Done transition; neither is evidence of an executing model/tool turn.
   if (telemetry.permPrompt || telemetry.nativeInputRequired || telemetry.pendingAsk) return undefined
 
-  // An idle parent can still have a background child/shell doing work. `stale` is not proof that
-  // it has stopped, so retain the confirmation safeguard rather than silently killing it. Both lists
-  // are collected even for an in-flight turn: "mid-turn AND two children running" is the honest
-  // reading, and stopping early would hide half of what Done is about to kill.
-  const busy = (op: { state: "running" | "stale" }) => op.state === "running" || op.state === "stale"
+  // Only ACTIVELY-running work holds Done back. A `stale` sub-agent — its completion signal lost AND its
+  // transcript silent past the 15-min staleness ceiling (which already clears Claude's 600s foreground
+  // cap) — is far closer to finished/dead than to working, and counting it here contradicted the queue:
+  // hasLiveBackgroundWork (board.ts) holds a thread out of the queue on `running` ONLY, so a stale-only
+  // parent read as at-rest in the rail yet Mark-as-done warned it was busy. The two must agree, so match
+  // it — running only. (bgShells have no stale state; this narrows sub-agents, leaves shells unchanged.)
+  // The real orphan case that used to strand stale rows here now retires at its `stopped` recovery
+  // notification (see trackCompletions), so those never reach this filter at all.
+  const busy = (op: { state: "running" | "stale" }) => op.state === "running"
   const subAgents = telemetry.subAgents.filter(busy)
   const bgShells = telemetry.bgShells.filter(busy)
   const turnInFlight = telemetry.turn === "in-flight"
