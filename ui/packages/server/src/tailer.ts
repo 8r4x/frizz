@@ -1195,7 +1195,7 @@ export interface Tailer {
    */
   start(onPrimeProgress?: (done: number, total: number) => void): void
   stop(): void
-  tick(): void // exposed for tests + boot; the interval calls it every POLL_MS
+  tick(): void // exposed for tests + boot; the adaptive poll (scheduleTick) calls it otherwise
 }
 
 export interface TailerDeps {
