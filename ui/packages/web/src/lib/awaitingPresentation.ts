@@ -1,19 +1,29 @@
 import { canonicalSnoozeInstant, isValidAwaitingTimer, type AwaitingHint } from "@fray-ui/shared"
 import { formatSnoozeWake } from "./snooze.ts"
 
-/** What the awaiting card's park button offers for these hints, or null when no hint is parkable
+/** The awaiting card's TITLE when no hint is parkable (legacy pr/ci/session, or an elapsed/malformed
+ *  timer) — the card still wants the heading its `done` sibling has, it just has nothing to offer. */
+export const AWAITING_FALLBACK_TITLE = "Awaiting"
+
+/** The verb every park button wears. It is deliberately ONE word for every kind: the card's TITLE
+ *  already names the specific wait ("Arm watcher"), and the explainer already spells out the effect,
+ *  so the button only has to say what it does (maintainer 2026-07-24). */
+export const AWAITING_PARK_BUTTON = "Snooze"
+
+/** What the awaiting card's park control offers for these hints, or null when no hint is parkable
  *  (legacy pr/ci/session, or an elapsed/malformed timer) — there is then nothing to confirm.
  *
- *  A future `timer` → "Confirm snooze" until that exact instant; `pr-watch` → "Arm watcher" — the
- *  opt-in "hand this to the watcher and hide it", since a pr-watch card is a VISIBLE queue handoff by
- *  default; a plain `human` gate → "Confirm snooze". For pr-watch/human there's no declared time, so
- *  the caller parks for the user's default snooze preset — for pr-watch that preset is only a SAFETY
- *  timeout: the scheduler clears the snooze the moment new PR activity arrives (scheduler.ts, the
- *  clear-snooze-on-pr-watch-wake), so ACTIVITY is the real wake and the timeout just guards against a
- *  dead PR hiding forever. Signalled by a null `timerUntil`.
+ *  `title` is the card's HEADING, not a button label: a future `timer` → "Scheduled snooze" to that
+ *  exact instant; `pr-watch` → "Arm watcher" — the opt-in "hand this to the watcher and hide it",
+ *  since a pr-watch card is a VISIBLE queue handoff by default; a plain `human` gate → "Awaiting
+ *  human". For pr-watch/human there's no declared time, so the caller parks for the user's default
+ *  snooze preset — for pr-watch that preset is only a SAFETY timeout: the scheduler clears the snooze
+ *  the moment new PR activity arrives (scheduler.ts, the clear-snooze-on-pr-watch-wake), so ACTIVITY
+ *  is the real wake and the timeout just guards against a dead PR hiding forever. Signalled by a null
+ *  `timerUntil`, and why pr-watch's explainer names PR activity rather than a clock.
  *
- *  NB the label is user-facing framing, not literal mechanics: the scheduler polls a pr-watch thread
- *  whether or not this button was pressed (it auto-arms off the fence). What the button actually does
+ *  NB the title is user-facing framing, not literal mechanics: the scheduler polls a pr-watch thread
+ *  whether or not the button was pressed (it auto-arms off the fence). What the button actually does
  *  is PARK the visible card and let the watcher bring it back — "Arm watcher" is how the maintainer
  *  wants that handoff to read.
  *
@@ -23,13 +33,25 @@ import { formatSnoozeWake } from "./snooze.ts"
 export function awaitingParkAction(
   hints: readonly AwaitingHint[],
   nowMs = Date.now(),
-): { label: string; toastVerb: string; timerUntil: string | null } | null {
+): { title: string; explainer: string; toastVerb: string; timerUntil: string | null } | null {
+  const dismiss = "This will dismiss the card from the queue until"
   const timerUntil = hints
     .flatMap((hint) => (hint.kind === "timer" ? [canonicalSnoozeInstant(hint.value)] : []))
     .find((instant): instant is string => instant !== null && Date.parse(instant) > nowMs)
-  if (timerUntil) return { label: "Confirm snooze", toastVerb: "Snoozed", timerUntil }
-  if (hints.some((hint) => hint.kind === "pr-watch")) return { label: "Arm watcher", toastVerb: "Watcher armed", timerUntil: null }
-  if (hints.some((hint) => hint.kind === "human")) return { label: "Confirm snooze", toastVerb: "Snoozed", timerUntil: null }
+  if (timerUntil) {
+    return {
+      title: "Scheduled snooze",
+      explainer: `${dismiss} ${lowerCalendarLead(formatSnoozeWake(timerUntil, nowMs))}.`,
+      toastVerb: "Snoozed",
+      timerUntil,
+    }
+  }
+  if (hints.some((hint) => hint.kind === "pr-watch")) {
+    return { title: "Arm watcher", explainer: `${dismiss} PR activity is detected.`, toastVerb: "Watcher armed", timerUntil: null }
+  }
+  if (hints.some((hint) => hint.kind === "human")) {
+    return { title: "Awaiting human", explainer: `${dismiss} your default snooze elapses.`, toastVerb: "Snoozed", timerUntil: null }
+  }
   return null
 }
 

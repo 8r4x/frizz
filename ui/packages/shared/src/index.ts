@@ -206,7 +206,7 @@ export type NativeInputRequired = z.infer<typeof NativeInputRequired>
 // `pr-watch: owner/repo#N` is the general PR watcher: the durable scheduler polls the PR and bumps the
 // worker on ANY new non-bot activity — a review, an approval, or a comment. It does NOT park the thread
 // in Held: a pr-watch thread stays a visible QUEUE handoff (the worker opened a PR and is watching it),
-// and new activity re-surfaces it. The human can park it via the card's "Arm watcher" button
+// and new activity re-surfaces it. The human can park it via the "Arm watcher" card's Snooze button
 // (a hold the next activity clears). Pair `pr-watch:` with `human:` only when the worker is genuinely
 // blocked on a NAMED reviewer — then `human:` supplies the Held/park while pr-watch supplies the cursor.
 export const AwaitingHint = z.object({

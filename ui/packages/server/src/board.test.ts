@@ -550,7 +550,7 @@ test("deriveNeedsYou: only truthful human/future-timer waits excuse rest; machin
     tele({ lastFence: { kind: "awaiting", body: "", hints: [{ kind, value }] } })
   assert.equal(deriveNeedsYou(row(), waiting("human", "Alice review"), "turn-idle", false, now), false)
   // pr-watch does NOT park: it's a visible queue handoff (a PR whose reviews may never arrive must not
-  // vanish). The scheduler still polls + bumps it; the human hides it via "Arm watcher". (2026-07-22)
+  // vanish). The scheduler still polls + bumps it; the human hides it via the "Arm watcher" card. (2026-07-22)
   assert.equal(deriveNeedsYou(row(), waiting("pr-watch", "owner/repo#1"), "turn-idle", false, now), true, "pr-watch queues, never Held")
   assert.equal(deriveNeedsYou(row(), waiting("timer", "2026-07-14T12:00:00Z"), "turn-idle", false, now), false)
   assert.equal(deriveNeedsYou(row(), waiting("timer", "2026-07-12T12:00:00Z"), "turn-idle", false, now), true)

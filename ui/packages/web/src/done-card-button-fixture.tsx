@@ -9,9 +9,10 @@ import "./styles.css"
 // sets in production:
 //   • the done card's white "Mark as done" button (completeThread; ?mode=executing → needsConfirmation
 //     → the End-session dialog path)
-//   • the awaiting card's compact confirm-park button, one per parkable kind (timer → "Confirm snooze"
-//     to the exact instant; pr-watch → "Arm watcher"; human → "Confirm snooze"). Each applies
-//     a user snooze via setThreadSnooze.
+//   • the awaiting card's "Snooze" park button, one per parkable kind — the kind picks the card TITLE
+//     and the muted explainer beside the button (timer → "Scheduled snooze" to the exact instant;
+//     pr-watch → "Arm watcher"; human → "Awaiting human"). Each applies a user snooze via
+//     setThreadSnooze.
 // RPC is mocked like completion-lifecycle-fixture so nothing real is hit.
 const mode = new URLSearchParams(window.location.search).get("mode") === "executing" ? "executing" : "resting"
 const nativeFetch = window.fetch.bind(window)

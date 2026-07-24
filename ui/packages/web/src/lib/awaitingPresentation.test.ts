@@ -1,7 +1,13 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { SetThreadSnoozeInput } from "@fray-ui/shared"
-import { awaitingHintSentence, awaitingParkAction, awaitingPresentationLine } from "./awaitingPresentation.ts"
+import {
+  AWAITING_FALLBACK_TITLE,
+  AWAITING_PARK_BUTTON,
+  awaitingHintSentence,
+  awaitingParkAction,
+  awaitingPresentationLine,
+} from "./awaitingPresentation.ts"
 
 const now = Date.parse("2026-07-21T18:00:00.000Z")
 
@@ -41,10 +47,28 @@ test("pr-watch: watcher sentence + an 'Arm watcher' park action (parks the card 
     "Watch acme/app#391 for new reviews, approvals, or comments",
   )
   assert.deepEqual(awaitingParkAction([{ kind: "pr-watch", value: "acme/app#391" }], now), {
-    label: "Arm watcher",
+    title: "Arm watcher",
+    explainer: "This will dismiss the card from the queue until PR activity is detected.",
     toastVerb: "Watcher armed",
     timerUntil: null,
   })
+})
+
+// The card's HEADING names the wait and the muted explainer names the effect, so the button itself is
+// one word for every kind (maintainer 2026-07-24: "Arm watcher" read as a verb when it was a title).
+// Each explainer must state the real wake, which for pr-watch is ACTIVITY — not the safety timeout.
+test("every parkable kind carries a card title and an explainer naming what actually re-surfaces it", () => {
+  assert.equal(AWAITING_PARK_BUTTON, "Snooze")
+  assert.equal(AWAITING_FALLBACK_TITLE, "Awaiting")
+  const timer = awaitingParkAction([{ kind: "timer", value: "2026-07-21T21:00:00Z" }], now)
+  assert.equal(timer?.title, "Scheduled snooze")
+  assert.match(timer?.explainer ?? "", /^This will dismiss the card from the queue until today at .+\.$/)
+  assert.equal(
+    awaitingParkAction([{ kind: "human", value: "Alice to approve" }], now)?.explainer,
+    "This will dismiss the card from the queue until your default snooze elapses.",
+  )
+  // No parkable hint → no action at all, so the card falls back to the plain "Awaiting" heading.
+  assert.equal(awaitingParkAction([{ kind: "ci", value: "build 9" }], now), null)
 })
 
 test("legacy hints degrade to readable text and an empty hint set stays empty", () => {
@@ -54,7 +78,7 @@ test("legacy hints degrade to readable text and an empty hint set stays empty", 
   assert.equal(awaitingHintSentence([], now), null)
 })
 
-// The fence grammar is looser than the durable snooze grammar, so "Confirm snooze" used to POST the
+// The fence grammar is looser than the durable snooze grammar, so the timer park used to POST the
 // raw hint and get a zod 400 back for every timer written the way the worker contract documents it
 // (`2026-07-24T17:00:00Z`, no milliseconds). Each park target is checked against the real RPC schema.
 test("a park target is always an instant setThreadSnooze accepts, whatever shape the fence used", () => {
@@ -67,7 +91,7 @@ test("a park target is always an instant setThreadSnooze accepts, whatever shape
     ["2026-07-21T21:00:00.123456789Z", "2026-07-21T21:00:00.123Z"], // sub-ms precision truncates
   ]) {
     const action = awaitingParkAction([{ kind: "timer", value }], now)
-    assert.equal(action?.label, "Confirm snooze", value)
+    assert.equal(action?.title, "Scheduled snooze", value)
     assert.equal(action?.timerUntil, expected, value)
     assert.equal(SetThreadSnoozeInput.safeParse({ slug: "t", sessionId: "s", until: action?.timerUntil }).success, true, value)
   }
@@ -75,12 +99,14 @@ test("a park target is always an instant setThreadSnooze accepts, whatever shape
 
 test("park kinds without a declared instant defer to the caller's preset, and unparkable hints offer nothing", () => {
   assert.deepEqual(awaitingParkAction([{ kind: "pr-watch", value: "owner/repo#42" }], now), {
-    label: "Arm watcher",
+    title: "Arm watcher",
+    explainer: "This will dismiss the card from the queue until PR activity is detected.",
     toastVerb: "Watcher armed",
     timerUntil: null,
   })
   assert.deepEqual(awaitingParkAction([{ kind: "human", value: "Alice to approve" }], now), {
-    label: "Confirm snooze",
+    title: "Awaiting human",
+    explainer: "This will dismiss the card from the queue until your default snooze elapses.",
     toastVerb: "Snoozed",
     timerUntil: null,
   })

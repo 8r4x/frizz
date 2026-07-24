@@ -22,7 +22,7 @@ import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { messagePresentationText } from "../lib/messagePresentation.ts"
 import { snoozePresetInstant, formatSnoozeWake } from "../lib/snooze.ts"
-import { awaitingHintSentence, awaitingParkAction, awaitingPresentationLine } from "../lib/awaitingPresentation.ts"
+import { AWAITING_FALLBACK_TITLE, AWAITING_PARK_BUTTON, awaitingHintSentence, awaitingParkAction, awaitingPresentationLine } from "../lib/awaitingPresentation.ts"
 import { prefs } from "../lib/prefs.ts"
 import { canAdoptThread } from "../lib/adoption.ts"
 import { THREAD_TITLE_MAX_LENGTH, aiRenameAvailability, manualThreadTitleSeed, threadTitleToCommit } from "../lib/threadTitle.ts"
@@ -2481,8 +2481,9 @@ export function QuestionBlockCard({
 
 // A SIGNAL fence rendered as a card in place of the raw ```done / ```awaiting block (the fence
 // language IS the state; the body is the message). `done` → a compact presentation-only success card;
-// its thread's Archive lives in the stable lifecycle footer. `awaiting` → one compact handoff row:
-// body prose plus one plain-English action summary (with legacy pr/ci/session support).
+// its thread's Archive lives in the stable lifecycle footer. `awaiting` → the SAME card shape: a
+// heading naming the wait ("Arm watcher"), the body prose plus one plain-English action summary (with
+// legacy pr/ci/session support), then the park button + its explainer.
 export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKind; body: string; hints: AwaitingHint[]; wrap?: boolean }) {
   const html = useMemo(() => (body ? mdToHtml(body) : ""), [body])
   const awaitingHint = awaitingHintSentence(hints)
@@ -2537,10 +2538,18 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
       </div>
     )
   }
+  // Same chrome as the done card above — heading, then the prose, then the action. The heading names
+  // the WAIT ("Arm watcher"), which is what the old right-rail button label was doing badly: it read
+  // as the button's verb when it was really the card's identity (maintainer 2026-07-24). With no
+  // parkable hint there's no action to name, so it falls back to a plain "Awaiting".
+  const parkTitle = awaitingParkAction(hints)?.title ?? AWAITING_FALLBACK_TITLE
   return (
-    <div className="flex min-w-0 items-stretch rounded-lg border border-border-strong bg-panel-2">
+    <div className="min-w-0 rounded-lg border border-border-strong bg-panel-2 px-4 py-3">
+      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted/70">
+        <Hourglass size={12} className="shrink-0" /> {parkTitle}
+      </div>
       <div
-        className={`md-inline min-w-0 flex-1 content-center px-3 py-2 text-[12px] leading-5 text-fg/85${wrap ? ` ${QUEUE_WRAP}` : ""}`}
+        className={`md-inline min-w-0 text-[12px] leading-5 text-fg/85${wrap ? ` ${QUEUE_WRAP}` : ""}`}
         dangerouslySetInnerHTML={{ __html: awaitingHtml }}
       />
       {canAct && fenceThread && <AwaitingParkButton thread={fenceThread} hints={hints} />}
@@ -2548,13 +2557,15 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   )
 }
 
-// The awaiting card's white HUMAN-IN-THE-LOOP park button. The worker's ```awaiting fence already
-// auto-arms the durable wake (a `timer` fires at its instant; a `github-review` watcher wakes on new
-// non-bot PR activity) AND already files the thread into the dimmed Held band — this button lets the
-// human EXPLICITLY commit a USER-OWNED snooze on top, so the park carries a concrete wake time and is
-// durable across fence changes. It NEVER suppresses the auto-armed wake: a user snooze is a
-// board-presentation concern only (board.ts), independent of the scheduler. Its kind → label + snooze
-// target policy lives in lib/awaitingPresentation.ts (awaitingParkAction), where it is unit-tested.
+// The awaiting card's HUMAN-IN-THE-LOOP park button, sitting under the prose with its effect spelled
+// out in muted text beside it. The worker's ```awaiting fence already auto-arms the durable wake (a
+// `timer` fires at its instant; a `github-review` watcher wakes on new non-bot PR activity) AND
+// already files the thread into the dimmed Held band — this button lets the human EXPLICITLY commit a
+// USER-OWNED snooze on top, so the park carries a concrete wake time and is durable across fence
+// changes. It NEVER suppresses the auto-armed wake: a user snooze is a board-presentation concern
+// only (board.ts), independent of the scheduler. The button says only "Snooze"; its kind → title +
+// explainer + snooze target policy lives in lib/awaitingPresentation.ts (awaitingParkAction), where
+// it is unit-tested.
 function AwaitingParkButton({ thread, hints }: { thread: ThreadViewData; hints: readonly AwaitingHint[] }) {
   const [busy, setBusy] = useState(false)
   // On the queue, confirming the park dismisses THIS card through the user-initiated auto-scroll exit
@@ -2576,19 +2587,23 @@ function AwaitingParkButton({ thread, hints }: { thread: ThreadViewData; hints: 
       .finally(() => setBusy(false))
   }
   return (
-    <div className="flex shrink-0 items-center justify-end border-l border-border px-2 py-1.5">
+    // Button first, explainer floated to its right. The explainer takes the remaining width and wraps
+    // its OWN lines there (flex-1 + min-w-0) instead of dropping below the button — on a narrow queue
+    // card a two-line sentence beside the button still reads as one control, a stacked one doesn't.
+    <div className="mt-3 flex items-center gap-x-2.5">
       <button
         type="button"
         onClick={apply}
         disabled={busy}
-        aria-label={action.label}
-        title={action.label}
+        aria-label={AWAITING_PARK_BUTTON}
+        title={action.explainer}
         onMouseDown={(e) => e.preventDefault()}
-        className="flex items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-panel px-2 py-1 text-[11px] font-medium text-fg/85 outline-none transition-colors hover:border-border-strong hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-45"
+        className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-panel px-2.5 py-1 text-[11px] font-medium text-fg/85 outline-none transition-colors hover:border-border-strong hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-45"
       >
         {busy && <Loader2 size={11} className="animate-spin" />}
-        {action.label}
+        {AWAITING_PARK_BUTTON}
       </button>
+      <span className="min-w-0 flex-1 text-[11px] leading-snug text-muted/70">{action.explainer}</span>
     </div>
   )
 }
