@@ -2,9 +2,8 @@
 // child and serves its JSON-RPC over a local socket, so the app-server OUTLIVES the disposable fray
 // runtime that spawned it — which is what makes an in-flight codex turn survive Update & Restart.
 // It buys Codex the immunity a Claude thread already has from running inside TMUX, whose server is
-// likewise not a child of fray. (An older session-broker-daemon.ts once did this for PTY sessions;
-// it is dead code with no production importer — see detached-daemons.ts — so tmux, not that broker,
-// is why Claude threads live through a restart.)
+// likewise not a child of fray. (An older PTY session broker once did this for PTY sessions; it was
+// removed as dead code, so tmux — not that broker — is why Claude threads live through a restart.)
 //
 // Before this existed the app-server was an ordinary stdio child of the runtime: every restart
 // SIGTERMed it and every in-flight turn died mid-sentence with no `task_complete`, no `turn_aborted`
