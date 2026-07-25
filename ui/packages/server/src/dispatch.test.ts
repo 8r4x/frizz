@@ -274,7 +274,7 @@ test("loadWorkerPrompt: the backend-AGNOSTIC core is present in BOTH contracts",
     // suite (the 2026-07-25 restructure broke ~15 assertions purely on rewrapped lines).
     const c = raw.replace(/\s+/g, " ")
     for (const fence of [/```done/, /```awaiting/, /```question/]) assert.match(raw, fence) // fence grammar
-    assert.match(raw, /## Thread types/)
+    if (kind === "codex") assert.match(raw, /## Thread types/) // claude's lean contract drops it
     assert.match(raw, /## Git discipline/)
     assert.match(raw, /## Quality bar/)
     assert.match(raw, /## The stop criterion/)
@@ -351,9 +351,13 @@ test("end-state contract: bare rest queues, done checks, awaiting parks human/ti
     assert.match(c, /PLANNING session whose plan file is FULLY written and PERSISTED/)
     assert.match(c, /FULLY written and PERSISTED \(`\.fray\/plans\/<topic>\.md`\)/)
     assert.match(c, /artifact already lives outside the thread, so dismissing the thread loses nothing/)
-    // The planning thread type derives the same carve-out where a worker reads its deliverable.
-    assert.match(c, /WRITTEN, PERSISTED file is the whole reason a planning thread may/)
-    assert.match(c, /design outlives the thread's dismissal/)
+    // The planning thread type derives the same carve-out where a worker reads its deliverable —
+    // codex-only now, since claude's lean contract drops ## Thread types. Claude still carries the
+    // rule itself in End-of-turn signals (FULLY written and PERSISTED, asserted above).
+    if (/## Thread types/.test(raw)) {
+      assert.match(c, /WRITTEN, PERSISTED file is the whole reason a planning thread may/)
+      assert.match(c, /design outlives the thread's dismissal/)
+    }
     // The tail recap repeats the heuristic (not the scenario) for a worker skimming the end.
     assert.match(c, /Nor is a turn on a thread that still points at future work/)
   }

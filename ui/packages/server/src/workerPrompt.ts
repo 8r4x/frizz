@@ -222,11 +222,18 @@ as your next user message, possibly as terse as "1: A, 2: B".`
 const STOP_CRITERION = `## The stop criterion
 
 **Your default is to DECIDE.** A reversible call costs minutes to redo; a round-trip to the human costs
-hours. If it is derivable from the code, the conventions, or ordinary engineering judgment, it is
-yours — make it, say which way you went, and keep moving. Never hand back a question you could have
-answered, and never ask permission to do the work you were dispatched to do: "want me to fix it?" on a
-bug you were sent to fix, or on a low-risk fix you already recommend, is not a question — it is the
-job. Finish it and report what you did.
+hours — they may not read your question for hours, and the whole effort sits idle until they do. If it
+is derivable from the code, the conventions, or ordinary engineering judgment, it is yours: make it,
+say which way you went, and keep moving.
+
+**The test that catches almost every bad question: if you are about to mark one option
+\`(recommended)\`, you already know the answer — so implement it instead of asking.** Writing a
+confident rationale for your own recommendation is proof the decision was yours to make. The same goes
+for "want me to fix it?" on a bug you were dispatched to fix or noticed on the way, "should I also
+handle X?" where X is obviously in scope, and any question about a name, a default value, a file
+location, an error message, a flag spelling, or which of two equivalent designs to use. Those are
+granular implementation calls. Make them, note the notable ones in your handoff, and move on — a
+decision the human can see and reverse in a line of code is not worth an hours-long stall.
 
 Stop only when a wrong guess would be BOTH costly AND hard to undo:
 
@@ -512,15 +519,19 @@ advice is evidence to judge, not a verdict to copy. Depth scales with blast radi
 }
 
 export function buildWorkerPrompt(kind: BackendKind = "claude", { runtimeGate = true }: { runtimeGate?: boolean } = {}): string {
+  // Claude gets the LEAN list: fray mechanics + the autonomy anchor + the gate, and nothing that
+  // merely narrates good engineering. Codex keeps its own THREAD_EXECUTION (its bounded-delegation
+  // policy lives there) and TRIVIAL_PROMPTS. See the SIZING note at the top of this file.
+  const lean = kind === "claude"
   const sections: (string | null)[] = [
     INTRO,
     DEFER,
-    OPENING,
+    lean ? null : OPENING,
     SIGNALS,
     SCRATCHPAD[kind],
     BACKEND[kind],
     SPAWN_THREAD,
-    THREAD_EXECUTION[kind],
+    lean ? null : THREAD_EXECUTION[kind],
     AGENT_COMPLETION,
     runtimeGate ? RUNTIME_GATE : null,
     VISUAL_EVIDENCE,
@@ -528,7 +539,7 @@ export function buildWorkerPrompt(kind: BackendKind = "claude", { runtimeGate = 
     QUALITY_BAR,
     QUESTIONS,
     STOP_CRITERION,
-    TRIVIAL_PROMPTS,
+    lean ? null : TRIVIAL_PROMPTS,
   ]
   let out = sections.filter((s): s is string => s != null).join("\n\n")
   for (const [token, value] of Object.entries(INLINE[kind])) out = out.replaceAll(`{{FRAY_${token}}}`, value)
