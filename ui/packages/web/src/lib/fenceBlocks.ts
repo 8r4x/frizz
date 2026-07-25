@@ -8,7 +8,7 @@
 // actions live in a stable footer), `awaiting` = a compact parked human/timer handoff. Distinct
 // from ```question blocks (their own machinery in questionBlocks.ts) — those never match here.
 
-import type { AwaitingHint } from "@fray-ui/shared"
+import { insideFence, type AwaitingHint } from "@fray-ui/shared"
 
 export type FenceKind = "done" | "awaiting"
 
@@ -54,9 +54,17 @@ export function parseFenceBody(raw: string, kind: FenceKind): { body: string; hi
 // Prose runs that are whitespace-only are dropped (a fence never leads/trails with an empty prose slot).
 export function splitFenceBlocks(text: string): FenceSegment[] {
   const segments: FenceSegment[] = []
+  // A fence nested inside another code fence is being QUOTED (a worker showing the human what a ```done
+  // block looks like), so it stays in the prose run and renders as the code block it is — see the same
+  // guard in questionBlocks.ts.
+  const quoted = insideFence(text)
   let lastIndex = 0
   FENCE_BLOCK.lastIndex = 0
   for (let m = FENCE_BLOCK.exec(text); m !== null; m = FENCE_BLOCK.exec(text)) {
+    if (quoted(m.index)) {
+      FENCE_BLOCK.lastIndex = m.index + 1
+      continue
+    }
     const prose = text.slice(lastIndex, m.index)
     if (prose.trim()) segments.push({ kind: "prose", text: prose })
     const fenceKind = m[1] as FenceKind
@@ -70,8 +78,8 @@ export function splitFenceBlocks(text: string): FenceSegment[] {
 }
 
 // True when a message carries at least one signal fence — the cheap check ChatView uses to decide a
-// message renders a fence card rather than the raw block.
+// message renders a fence card rather than the raw block. Goes through the splitter so a QUOTED fence
+// (one nested in a code block) can never answer yes.
 export function hasFence(text: string): boolean {
-  FENCE_BLOCK.lastIndex = 0
-  return FENCE_BLOCK.test(text)
+  return splitFenceBlocks(text).some((s) => s.kind === "fence")
 }

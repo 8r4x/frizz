@@ -103,6 +103,17 @@ test("hasFence detects done and awaiting, ignores question/plain", () => {
   assert.equal(hasFence("no fences here"), false)
 })
 
+test("a signal fence QUOTED inside a code fence is prose, not a card", () => {
+  // A worker explaining the protocol wraps its sample in a ```` fence; hoisting the sample into a card
+  // also orphans the enclosing delimiters, whose unterminated fence swallows the rest of the message.
+  const t4 = "`".repeat(4)
+  const text = `Write it like this:\n\n${t4}\n\`\`\`done\n- Landed the fix.\n\`\`\`\n${t4}\n\nThat's the whole grammar.`
+  assert.deepEqual(splitFenceBlocks(text).map((s) => s.kind), ["prose"])
+  assert.equal(hasFence(text), false)
+  // …but a real fence after the quoted sample still lands.
+  assert.equal(hasFence(`${text}\n\n\`\`\`done\n- Actually landed it.\n\`\`\``), true)
+})
+
 test("an empty done body is allowed (body may be '')", () => {
   const segs = splitFenceBlocks("```done\n\n```")
   assert.deepEqual(segs, [{ kind: "fence", fenceKind: "done", body: "", hints: [] }])

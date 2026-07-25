@@ -1,4 +1,4 @@
-import { createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef, type CSSProperties, type ReactNode } from "react"
+import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef, type CSSProperties, type ReactNode } from "react"
 import { createPortal } from "react-dom"
 import { useSnapshot } from "valtio"
 import * as RadixTabs from "@radix-ui/react-tabs"
@@ -2760,8 +2760,19 @@ export function QuestionBlockCard({
         // the free-text row keeps col-span-full so the "something else…" answer gets the whole line.
         <div className="mt-2 grid grid-cols-1 gap-1.5">
           {parsed.options.map((opt, i) => (
+            <Fragment key={i}>
+              {/* A group heading the worker wrote between choices ("Melee family:" over D–F). It rides
+                  WITH its option rather than being stranded below the chips as unanswerable prose, and
+                  wears the SAME body treatment as the context above — the FIRST group's heading is just
+                  the tail of that context, so a muted caption here would make two identical things
+                  render differently in one card. */}
+              {parsed.optionHeadings?.[i] && (
+                <div
+                  className={`md-body mt-1${wrap ? ` ${QUEUE_WRAP}` : ""}`}
+                  dangerouslySetInnerHTML={{ __html: mdInlineToHtml(parsed.optionHeadings[i]!.split("\n").join(" ")) }}
+                />
+              )}
             <Chip
-              key={i}
               label={opt}
               multi={isMulti}
               // The recommendation renders INSIDE its option as a badge (not as a caption below);
@@ -2785,6 +2796,7 @@ export function QuestionBlockCard({
                 if (taRef.current && document.activeElement === taRef.current) taRef.current.blur()
               }}
             />
+            </Fragment>
           ))}
           {/* The free-text answer IS the final option — but it SPANS THE FULL WIDTH (col-span-full)
               below the multi-column options, and is an auto-growing textarea (see taRef effect above)

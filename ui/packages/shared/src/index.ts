@@ -965,6 +965,7 @@ export type BoardDelta = Extract<ServerEvent, { type: "board-delta" }>
 
 // Pure delta engine + client apply/decision helpers (kept in a sibling module, re-exported here so
 // `@fray-ui/shared` stays the single entry point).
+export * from "./code-fences.ts"
 export * from "./delta.ts"
 export * from "./interactions.ts"
 export * from "./thread-slug.ts"

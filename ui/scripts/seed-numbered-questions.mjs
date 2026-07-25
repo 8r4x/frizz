@@ -139,9 +139,57 @@ const user = (text) => ({
 // number is the only pointer a scrolled-up reader has and so must still render.
 const UNPAIRED_ANSWERS = ["Answers:", "1. A. SQLite — transactional", "2. B. JSON file — zero deps"].join("\n")
 
+// GROUPED options: the worker sorts its choices under prose headings. The heading used to END the run,
+// stranding D–F below the chips as unanswerable prose.
+const GROUPED_ASK = [
+  "```question",
+  "**Package name — brainstorm.** All of these are available on npm. Grouped by the metaphor:",
+  "",
+  "Thread / loom family (fray = a frayed thread):",
+  "- A. **frayloom** — keeps the `fray` lineage + a loom weaves many threads into one board (recommended: brand continuity)",
+  "- B. **warp** — the taut lengthwise loom threads. ⚠️ collides with **Warp.dev**.",
+  "- C. **selvage** — the fabric edge that literally *doesn't fray*.",
+  "",
+  "Melee family (fray = a scrap/brawl of agents):",
+  "- D. **melee** — a direct synonym for \"fray\": the scrum of agents.",
+  "- E. **fracas** — a noisy, disorderly fray.",
+  "- F. **tussle** — a scrappy, informal fray.",
+  "",
+  "Also still open from before: `frayui`, `frayhq`, `frayboard`.",
+  "```",
+].join("\n")
+
+// A worker DOCUMENTING the protocol: the sample is wrapped in a ```` fence, so it must render as a code
+// block. It used to be hoisted into a live card, orphaning the ```` delimiters — whose unterminated
+// fence then swallowed every word after it.
+const T4 = "`".repeat(4)
+const QUOTED_ASK = [
+  "The grammar is one fenced block per question:",
+  "",
+  T4,
+  "```question",
+  "Should the settings store use SQLite or a JSON file?",
+  "",
+  "- A. SQLite — transactional (recommended)",
+  "- B. JSON file — zero deps",
+  "```",
+  T4,
+  "",
+  "That trailing sentence must render as ordinary prose, not inside a code block.",
+  "",
+  "```question",
+  "Ready for me to write that into the worker prompt?",
+  "",
+  "- A. Yes — add it (recommended)",
+  "- B. Not yet",
+  "```",
+].join("\n")
+
 const THREADS = [
   { slug: "q-numbered", title: "Numbered question lines", records: [user("TASK:\nsandbox grammar"), assistant("q-numbered", NUMBERED_ASK)] },
   { slug: "q-two", title: "Two numbered blocks, answered live", records: [user("TASK:\nsandbox grammar"), assistant("q-two", NUMBERED_ASK)] },
+  { slug: "q-grouped", title: "Options under group headings", records: [user("TASK:\npackage name"), assistant("q-grouped", GROUPED_ASK)] },
+  { slug: "q-quoted", title: "A quoted sample plus a real ask", records: [user("TASK:\ndocument the grammar"), assistant("q-quoted", QUOTED_ASK)] },
   {
     slug: "q-unpaired",
     title: "Answers with no question to pair",

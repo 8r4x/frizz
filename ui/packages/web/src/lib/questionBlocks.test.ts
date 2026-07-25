@@ -90,6 +90,33 @@ test("a normal (non-question) code fence is left in prose", () => {
   assert.deepEqual(splitQuestionBlocks(text), [{ kind: "prose", text }])
 })
 
+// ---- a QUOTED opener is not an ask ----
+// Documenting the protocol means showing the syntax, and the correct authoring form wraps the sample in
+// a ```` fence. Hoisting that sample out into a live answerable card ALSO strands the enclosing ````
+// delimiters as prose, whose unterminated fence then swallows the rest of the message (2026-07-25).
+
+const TICK4 = "`".repeat(4)
+
+test("a ```question sample inside a ```` fence stays prose — no phantom card", () => {
+  const text = `${TICK4}\n\`\`\`question\nShip it?\n\n- A. Yes\n- B. No\n\`\`\`\n${TICK4}\n\nTrailing prose.`
+  const segs = splitQuestionBlocks(text)
+  assert.deepEqual(segs.map((s) => s.kind), ["prose"])
+  assert.equal(segs[0].text, text) // the whole thing renders as the code block it is
+})
+
+test("a ```question sample inside a ```markdown fence stays prose", () => {
+  const segs = splitQuestionBlocks("```markdown\n```question\nShip it?\n- A. Yes\n```\n```")
+  assert.deepEqual(segs.map((s) => s.kind), ["prose"])
+})
+
+test("a REAL question after a quoted sample is still found", () => {
+  const text = `Here is the syntax:\n\n${TICK4}\n\`\`\`question\nExample?\n- A. Yes\n\`\`\`\n${TICK4}\n\n\`\`\`question\nSo: ship it?\n\n- A. Yes\n- B. No\n\`\`\``
+  const segs = splitQuestionBlocks(text)
+  const asks = segs.filter((s) => s.kind === "question")
+  assert.equal(asks.length, 1)
+  assert.equal(asks[0].kind === "question" && asks[0].text, "So: ship it?\n\n- A. Yes\n- B. No")
+})
+
 // ---- parseQuestionBlock: choice detection ----
 
 test("lettered options (markdown list form) → chips, stripped from context", () => {
@@ -195,6 +222,64 @@ test("a run that does NOT open a list is left alone — a skipped letter never e
 test("options that legitimately start at B are not re-read as question + list", () => {
   const p = parseQuestionBlock("Pick one:\n- B. Foo\n- C. Bar", "question")
   assert.deepEqual(p.options, ["B. Foo", "C. Bar"])
+})
+
+// ---- grouped options: a prose heading between choices doesn't end the run ----
+
+test("a group heading between C and D keeps ALL SIX options answerable", () => {
+  const body =
+    "Package name — brainstorm.\n\n" +
+    "Thread / loom family (fray = a frayed thread):\n" +
+    "- A. **frayloom** — keeps the lineage\n" +
+    "- B. **warp** — the taut loom threads\n" +
+    "- C. **selvage** — the edge that doesn't fray\n\n" +
+    "Melee family (fray = a scrap/brawl of agents):\n" +
+    "- D. **melee** — a direct synonym\n" +
+    "- E. **fracas** — a noisy fray\n" +
+    "- F. **tussle** — a scrappy fray\n\n" +
+    "Also still open: `frayui`, `frayhq`."
+  const p = parseQuestionBlock(body, "question")
+  assert.deepEqual(p.options.map(optionId), ["A", "B", "C", "D", "E", "F"])
+  assert.equal(p.options[3], "D. **melee** — a direct synonym")
+  // The heading rides WITH the option it introduces instead of being stranded below the chips.
+  assert.equal(p.optionHeadings?.[3], "Melee family (fray = a scrap/brawl of agents):")
+  assert.equal(p.optionHeadings?.[0], undefined)
+  assert.equal(p.contextMd, "Package name — brainstorm.\n\nThread / loom family (fray = a frayed thread):")
+  assert.equal(p.trailingMd, "Also still open: `frayui`, `frayhq`.")
+})
+
+test("a SECOND question's list restarts at A, so the run still ends at the first set", () => {
+  // Two asks crammed into one block: the heading rule must not weld them into one six-option menu.
+  const body =
+    "Two scope calls:\n\n" +
+    "**1. Which formats?**\n- A. Safe tier\n- B. Safe tier + office\n\n" +
+    "**2. Should I proceed?**\n- A. Implement now\n- B. Stop here"
+  const p = parseQuestionBlock(body, "question")
+  assert.deepEqual(p.options, ["A. Safe tier", "B. Safe tier + office"])
+  assert.equal(p.optionHeadings, undefined)
+  assert.match(p.trailingMd ?? "", /^\*\*2\. Should I proceed\?\*\*/)
+})
+
+test("a numbered list after lettered options is trailing prose, not a continuation", () => {
+  const body = "Approve the plan?\n\n- A. Approve all three\n- B. Adjust one\n\nThe three calls:\n1. SURFACE — config-only\n2. STREAMING — pipe bridge"
+  const p = parseQuestionBlock(body, "approval")
+  assert.deepEqual(p.options, ["A. Approve all three", "B. Adjust one"])
+  assert.equal(p.trailingMd, "The three calls:\n1. SURFACE — config-only\n2. STREAMING — pipe bridge")
+})
+
+test("a Recommendation line always closes the choices, even with more options below", () => {
+  const body = "Pick:\n- A. One\n- B. Two\n\nRecommendation: A\n\n- C. A later, unrelated list item"
+  const p = parseQuestionBlock(body, "question")
+  assert.deepEqual(p.options, ["A. One", "B. Two"])
+  assert.equal(p.recommendation, "Recommendation: A")
+})
+
+test("prose between a numbered question line and its options still finds the options", () => {
+  // The question line is demoted, which empties the run — the real list sits below the prose.
+  const body = "9. How is host loopback exposed?\nThe knot is nested runs.\n- A. Require an explicit target\n- B. Keep current"
+  const p = parseQuestionBlock(body, "question")
+  assert.equal(p.contextMd, "9. How is host loopback exposed?\nThe knot is nested runs.")
+  assert.deepEqual(p.options, ["A. Require an explicit target", "B. Keep current"])
 })
 
 test("no trailing option run → freetext-only (empty options), whole body is context", () => {

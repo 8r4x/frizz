@@ -2,6 +2,8 @@
 // one off as an answerable card WITHIN the message's narrative flow (prose stays in place). Pure
 // string logic, no DOM — unit-testable.
 
+import { insideFence } from "@fray-ui/shared"
+
 // The three answer MODES a ```question block can carry (the info-string picks one):
 //   question — single-select (radio feel) OR freetext; the default.
 //   approval — a go/no-go gate (same single-select semantics, gate styling).
@@ -60,9 +62,18 @@ function parseInfoString(info: string | undefined): { kind: QuestionKind; danger
 
 export function splitQuestionBlocks(text: string): MessageSegment[] {
   const segments: MessageSegment[] = []
+  // An opener that sits INSIDE a fenced code block is being QUOTED, not asked — a worker documenting
+  // the protocol wraps its sample in a ```` fence. Hoisting that sample into a live answerable card also
+  // strands the enclosing delimiters as orphan prose, whose unterminated fence then swallows the rest of
+  // the message (maintainer 2026-07-25). Left in the prose run, it renders as the code block it is.
+  const quoted = insideFence(text)
   let lastIndex = 0
   QUESTION_BLOCK.lastIndex = 0
   for (let m = QUESTION_BLOCK.exec(text); m !== null; m = QUESTION_BLOCK.exec(text)) {
+    if (quoted(m.index)) {
+      QUESTION_BLOCK.lastIndex = m.index + 1 // rescan from just past the opener, never skip what it spanned
+      continue
+    }
     const prose = text.slice(lastIndex, m.index)
     if (prose.trim()) segments.push({ kind: "prose", text: prose })
     const { kind, danger } = parseInfoString(m[1])
@@ -96,6 +107,11 @@ export interface ParsedQuestion {
   // Prose that follows the option run (a worker often adds a "Note: …" footnote AFTER the choices).
   // Rendered BELOW the chips so the options stay answerable instead of the trailing prose swallowing them.
   trailingMd?: string
+  // Group headings INSIDE the option run, parallel to `options`: a worker who groups its choices
+  // ("Thread / loom family:" over A–C, "Melee family:" over D–F) writes a prose line between them.
+  // `optionHeadings[i]` is the prose that introduces option i (undefined for most). Present only when
+  // the run actually carries one, so the common case stays a plain option list.
+  optionHeadings?: (string | undefined)[]
 }
 
 // An option line: an optional markdown list marker (workers write options as `- A. …`), then a single
@@ -184,16 +200,23 @@ export function stripRecommendedMarker(label: string): { label: string; recommen
 export function parseQuestionBlock(body: string, kind: QuestionKind, danger = false): ParsedQuestion {
   const lines = body.split("\n").map((l) => l.replace(/\r$/, ""))
 
-  // First maximal run of option lines (consecutive OPTION_RE lines; interspersed blanks don't break it).
-  const optLines: number[] = []
-  let runEnd = -1
-  for (let i = 0; i < lines.length; i++) {
-    if (OPTION_RE.test(lines[i])) {
-      optLines.push(i)
-      runEnd = i
-    } else if (optLines.length > 0 && lines[i].trim() !== "") {
-      break // a non-blank, non-option line ends the run
+  // The candidate run: option lines from `from` on. Blank lines never break it, and neither does a prose
+  // line whose NEXT option CONTINUES the sequence — workers group their choices under headings
+  // ("Thread / loom family:" over A–C, "Melee family:" over D–F), and ending the run at the heading
+  // stranded D–F in the trailing prose as unanswerable text. The id check is what keeps that safe: a
+  // second question's list restarts at A, which does not follow C, so the run still ends there. A
+  // "Recommendation: …" line always closes the choices.
+  const nextOptionAfter = (i: number) => lines.findIndex((l, j) => j > i && OPTION_RE.test(l))
+  const scanRun = (from: number): number[] => {
+    const run: number[] = []
+    for (let i = from; i < lines.length; i++) {
+      if (OPTION_RE.test(lines[i])) { run.push(i); continue }
+      if (run.length === 0 || lines[i].trim() === "") continue // before the run, or a blank inside it
+      if (REC_RE.test(lines[i])) break
+      const next = nextOptionAfter(i)
+      if (next === -1 || !follows(lineId(lines[run[run.length - 1]]), lineId(lines[next]))) break
     }
+    return run
   }
 
   // Read the candidate run as a LIST, because OPTION_RE alone cannot tell a choice from a line that
@@ -204,35 +227,52 @@ export function parseQuestionBlock(body: string, kind: QuestionKind, danger = fa
   // ids keep counting up; if that trailing sequence opens at A/1 it is the real choice list, and
   // everything above it is question prose. A run whose tail does NOT open a list (a typo'd "A, C", a list
   // that starts at B) is left exactly as it was — never eat a genuine choice to invent a question.
-  let first = 0
-  for (let k = optLines.length - 1; k > 0; k--) {
-    if (!follows(lineId(lines[optLines[k - 1]]), lineId(lines[optLines[k]]))) {
-      first = isListOrigin(lineId(lines[optLines[k]])) ? k : 0
-      break
+  const listStart = (run: number[]): number => {
+    for (let k = run.length - 1; k > 0; k--) {
+      if (!follows(lineId(lines[run[k - 1]]), lineId(lines[run[k]]))) {
+        return isListOrigin(lineId(lines[run[k]])) ? k : 0
+      }
     }
+    // A block whose whole content is one bare "3. What should `<tmp>` mean?" is a freetext question in a
+    // numbered batch, not a one-item menu — a single choice is never a choice. Needs the marker check: a
+    // lone "- A. Approve as-is" IS a (degenerate) option, and prose above it means the question is
+    // already there, so only an unmarkered line that opens the block is demoted.
+    if (run.length === 1 && !/^\s*[-*+]\s/.test(lines[run[0]]) && !lines.slice(0, run[0]).some((l) => l.trim())) return 1
+    return 0
   }
-  // A block whose whole content is one bare "3. What should `<tmp>` mean?" is a freetext question in a
-  // numbered batch, not a one-item menu — a single choice is never a choice. Needs the marker check: a
-  // lone "- A. Approve as-is" IS a (degenerate) option, and prose above it means the question is already
-  // there, so only an unmarkered line that opens the block is demoted.
-  if (optLines.length === 1 && !/^\s*[-*+]\s/.test(lines[optLines[0]]) && !lines.slice(0, optLines[0]).some((l) => l.trim())) first = 1
 
-  if (first >= optLines.length) return { kind, danger, contextMd: body, options: [], recommendedIdx: null }
-  const runStart = optLines[first]
+  // Demoting the leading line can consume the whole run ("9. How is loopback exposed?" with the choices
+  // below a line of prose, so the run never reached them) — then look for the real list underneath it.
+  let optLines: number[] = []
+  for (let from = 0; from < lines.length; ) {
+    const run = scanRun(from)
+    if (run.length === 0) break
+    const first = listStart(run)
+    if (first < run.length) { optLines = run.slice(first); break }
+    from = run[0] + 1
+  }
+
+  if (optLines.length === 0) return { kind, danger, contextMd: body, options: [], recommendedIdx: null }
+  const runStart = optLines[0]
+  const runEnd = optLines[optLines.length - 1]
 
   // PRIMARY recommendation signal: the word "recommended" on an option line. Strip the marker from each
   // label (the badge conveys it) and remember the FIRST flagged option + its inline rationale.
   const options: string[] = []
   let recommendedIdx: number | null = null
   let recommendedNote: string | undefined
-  for (let i = runStart; i <= runEnd; i++) {
-    if (!OPTION_RE.test(lines[i])) continue
+  // Prose the run absorbed (a group heading) belongs to the option it introduces, so the chips can carry
+  // it as a caption instead of it vanishing between them.
+  const optionHeadings: (string | undefined)[] = []
+  for (const [k, i] of optLines.entries()) {
     const { label, recommended, note } = stripRecommendedMarker(optionText(lines[i]))
     if (recommended && recommendedIdx === null) {
       recommendedIdx = options.length
       recommendedNote = note
     }
     options.push(label)
+    const between = k === 0 ? [] : lines.slice(optLines[k - 1] + 1, i).filter((l) => l.trim())
+    optionHeadings.push(between.length ? between.join("\n") : undefined)
   }
 
   const trim = (arr: string[]) => {
@@ -261,7 +301,10 @@ export function parseQuestionBlock(body: string, kind: QuestionKind, danger = fa
     if (recommendedIdx !== null) recommendedNote = recommendation
   }
 
-  return { kind, danger, contextMd, options, recommendedIdx, recommendedNote, recommendation, trailingMd }
+  return {
+    kind, danger, contextMd, options, recommendedIdx, recommendedNote, recommendation, trailingMd,
+    ...(optionHeadings.some(Boolean) ? { optionHeadings } : {}),
+  }
 }
 
 // Leading markdown emphasis/backticks a worker may wrap an identifier in (`**B**`, `_B_`, `` `B` ``).
