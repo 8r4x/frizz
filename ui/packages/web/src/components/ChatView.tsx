@@ -381,6 +381,14 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
             ) : running ? (
               <WorkingIndicator since={thread?.lastUserAt} />
             ) : null}
+            {/* SIBLING of the chain above, not a branch in it. Those are mutually exclusive because they
+                all describe the ONE thing currently blocking; a policy decision blocks nothing and can
+                coexist with any of them, so it must not compete for the same slot. */}
+            {thread?.permPolicy ? (
+              <div className="mt-3">
+                <PermPolicyNote policy={thread.permPolicy} denies={thread.permDenies} />
+              </div>
+            ) : null}
             {/* No thread-level Send button anymore: each question-bearing message renders its OWN bottom
                 Send button (Message's showSendButton), scoped to just that message's blocks (each block's
                 ⌘-Enter also submits that message). Answering is now one message at a time by design. */}
@@ -991,6 +999,12 @@ function VirtualizedThreadTranscript({
                   <PermPromptBanner onTerminal={copyTerminalCommand} />
                 ) : running ? (
                   <WorkingIndicator since={thread?.lastUserAt} />
+                ) : null}
+                {/* Sibling, not a branch — see the runtime-status block above. */}
+                {thread?.permPolicy ? (
+                  <div className="mt-3">
+                    <PermPolicyNote policy={thread.permPolicy} denies={thread.permDenies} />
+                  </div>
                 ) : null}
               </div>
             ) : (
