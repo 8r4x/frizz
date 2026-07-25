@@ -1312,3 +1312,14 @@ test("an EMPTY-content removal is still ignored (the ordinary handshake)", () =>
   assert.equal(mine.length, 1)
   assert.equal(mine[0].queued, true, "a contentless handshake must not resolve anything")
 })
+
+test("an enqueued message survives its LEDGER entry being dropped", () => {
+  // ageDeliveries now expires an `enqueued` ledger item after an hour so it cannot be immortal. That
+  // must never take the message with it: the transcript renders the bubble from Claude Code's own
+  // enqueue record, independently of fray's synthetic projection.
+  const text = "check the ACL cleanup"
+  const msgs = parseTranscript(enqueueLine(text))
+  const mine = msgs.filter((m) => m.role === "user" && m.text === text)
+  assert.equal(mine.length, 1, "the enqueue record alone must render the message")
+  assert.equal(mine[0].queued, true)
+})
