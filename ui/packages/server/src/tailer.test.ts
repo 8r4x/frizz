@@ -7,7 +7,7 @@ import { createStorage, type Storage, type SessionRow } from "./storage.ts"
 import { Bus } from "./bus.ts"
 import type { ServerEvent } from "@fray-ui/shared"
 import { permMarkerPath, type Project } from "./project.ts"
-import { parseLine, applyRecord, applyEvent, computeTurn, newTailState, createTailer, matchesPermPrompt, detectClaudeBootModal, hasQuestionBlock, isClaudeAuthErrorText, isRealUserMessage, parseSignalFence, FOREIGN_FRESH_MS } from "./tailer.ts"
+import { parseLine, applyRecord, applyEvent, computeTurn, newTailState, createTailer, matchesPermPrompt, detectClaudeBootModal, hasQuestionBlock, isClaudeAuthErrorText, isRealUserMessage, parseSignalFence, markerDecision, FOREIGN_FRESH_MS } from "./tailer.ts"
 import type { AgentBackend, NormalizedEvent } from "./backend/types.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
 import { createCodexBackend } from "./backend/codex.ts"
@@ -1013,6 +1013,15 @@ test("hasQuestionBlock: detects a fenced ```question block; rejects prose and a 
   assert.equal(hasQuestionBlock("just prose, no fence at all"), false)
   assert.equal(hasQuestionBlock("```js\nconst q = 'question'\n```"), false) // a plain code fence is not a question
   assert.equal(hasQuestionBlock(undefined), false)
+  // A worker DOCUMENTING the protocol wraps its sample in an outer ```` fence. That is a quotation, not
+  // an ask — flagging it parks the thread in "awaiting you" over an example.
+  const t4 = "`".repeat(4)
+  assert.equal(hasQuestionBlock(`Write it like this:\n\n${t4}\n\`\`\`question\nShip it?\n\n- A. Yes\n\`\`\`\n${t4}\n\nThat's the grammar.`), false)
+  // …and a real ask alongside the quoted sample still counts.
+  assert.equal(
+    hasQuestionBlock(`${t4}\n\`\`\`question\nExample?\n\`\`\`\n${t4}\n\n\`\`\`question\nSo: ship it?\n\n- A. Yes\n\`\`\``),
+    true,
+  )
 })
 
 test("applyRecord: a ```question block sets lastAssistantHasQuestion; a real user reply clears it", () => {
@@ -1370,6 +1379,50 @@ test("tailer: a fresh PermissionRequest marker sets permPrompt immediately (no q
   assert.equal(t.get("t")?.turn, "in-flight")
   assert.equal(t.get("t")?.permPrompt, true, "the structured marker blocks the thread on the human")
   assert.equal(h.pane.reads, 0, "the precise marker needs no pane capture")
+})
+
+// The policy hook (cc-worker/hooks/perm-policy.mjs) records what it DID with the request. A request it
+// resolved itself never blocked a human, so it must not card as "Needs you" — otherwise every
+// auto-approval would flash the thread onto the queue for the tick before the transcript advances.
+for (const decision of ["allow", "deny"] as const) {
+  test(`tailer: a policy-${decision} marker is NOT a human block (nobody was ever asked)`, () => {
+    const h = harness()
+    h.storage.upsertSession(row())
+    fixture(h.logDir, "sid", [IN_FLIGHT, TOOL])
+    h.clock.ms = Date.parse("2026-07-01T00:00:01.500Z") // fresh marker, would block if deferred
+    const t = makeTailer(h, { readPermMarker: () => permMarker("2026-07-01T00:00:05.000Z", { decision }) })
+    t.tick()
+    assert.equal(t.get("t")?.permPrompt, false, `a ${decision} decision resolved the request unattended`)
+  })
+}
+
+test("tailer: a policy-defer marker IS a human block (the prompt was left for a person)", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  fixture(h.logDir, "sid", [IN_FLIGHT, TOOL])
+  h.clock.ms = Date.parse("2026-07-01T00:00:01.500Z")
+  const t = makeTailer(h, { readPermMarker: () => permMarker("2026-07-01T00:00:05.000Z", { decision: "defer" }) })
+  t.tick()
+  assert.equal(t.get("t")?.permPrompt, true)
+})
+
+// BACK-COMPAT: markers written by the observe-only plugin build carry no `decision`. Those must keep
+// blocking exactly as they always did — falling back to "already approved" would hide a real stall.
+test("tailer: a decision-less marker (older plugin build) still blocks", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  fixture(h.logDir, "sid", [IN_FLIGHT, TOOL])
+  h.clock.ms = Date.parse("2026-07-01T00:00:01.500Z")
+  const t = makeTailer(h, { readPermMarker: () => permMarker("2026-07-01T00:00:05.000Z") })
+  t.tick()
+  assert.equal(t.get("t")?.permPrompt, true, "no decision ⇒ treat as deferred, exactly as before")
+})
+
+test("markerDecision: unrecognized values degrade to defer, never to allow", () => {
+  assert.equal(markerDecision({ decision: undefined }), "defer")
+  assert.equal(markerDecision({ decision: "wat" as never }), "defer")
+  assert.equal(markerDecision({ decision: "allow" }), "allow")
+  assert.equal(markerDecision({ decision: "deny" }), "deny")
 })
 
 test("tailer: a marker older than the last transcript activity is superseded (request resolved)", () => {

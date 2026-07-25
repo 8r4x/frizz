@@ -172,8 +172,9 @@ export function resolveProject(cwd = process.cwd(), home = homedir(), env: NodeJ
   }
 }
 
-// Where a worker's PermissionRequest hook (cc-worker/hooks/perm-observe.mjs) drops its durable
-// "blocked on <tool>" marker, and where the tailer reads it. Injected to the worker as env
+// Where a worker's PermissionRequest hook (cc-worker/hooks/perm-policy.mjs) drops its durable
+// permission-request marker — the policy decision plus the request it decided about — and where the
+// tailer reads it (only a DEFERRED decision counts as a human block). Injected to the worker as env
 // `FRAY_PERM_DIR` at spawn; the hook appends `<slug>.json`. Co-located under the per-project stateDir
 // (server-owned, worktree-independent) so the exact dir the server scans is the exact dir the worker
 // writes. The CONTRACT with the plugin hook is only (env var name, `<slug>.json` filename) — the hook
