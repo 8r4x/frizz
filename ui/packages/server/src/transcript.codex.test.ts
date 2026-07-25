@@ -486,7 +486,7 @@ test("real wrapped web and image calls expose the query/path without image blobs
 })
 
 // A minimal well-formed rollout builder for synthetic shapes (session_meta is sidecar → skipped).
-function rollout(lines: Array<{ type: string; payload: Record<string, unknown> }>): string {
+function rollout(lines: Array<{ type: string; payload?: Record<string, unknown>; timestamp?: string }>): string {
   return lines.map((l) => JSON.stringify({ timestamp: "2026-07-11T00:00:00.000Z", ...l })).join("\n")
 }
 
@@ -723,6 +723,57 @@ test("codex turn-end: the ordinary case never double-renders the final answer ec
   ])
   const a = parseCodexTranscript(raw).find((m) => m.role === "assistant")!
   assert.equal(a.text, "the answer") // exactly once
+})
+
+// ---- context compaction (the provider-neutral divider; claude's half lives in transcript.test.ts) ----
+
+const tokenCount = (total: number, at: string) => ({ type: "event_msg", payload: { type: "token_count", info: { last_token_usage: { total_tokens: total } } }, timestamp: at })
+const compacted = (at: string) => ({ type: "compacted", payload: { message: "", replacement_history: [] }, timestamp: at })
+
+test("codex compaction renders a boundary divider bracketed by the token readings either side of it", () => {
+  const raw = rollout([
+    { type: "event_msg", payload: { type: "user_message", message: "keep going" } },
+    { type: "event_msg", payload: { type: "task_started" } },
+    { type: "event_msg", payload: { type: "agent_message", phase: "commentary", message: "before the squeeze" } },
+    tokenCount(242492, "2026-07-11T00:10:00.000Z"),
+    compacted("2026-07-11T00:11:00.000Z"),
+    tokenCount(37045, "2026-07-11T00:12:00.000Z"),
+    { type: "event_msg", payload: { type: "agent_message", phase: "final_answer", message: "after the squeeze" } },
+  ])
+  const msgs = parseCodexTranscript(raw)
+  const i = msgs.findIndex((m) => m.kind === "event")
+  assert.ok(i > 0, "the compaction emits a message")
+  assert.equal(msgs[i].boundary, true) // the centered divider rule, not a quiet inline label
+  assert.equal(msgs[i].text, "Context compacted — 242k → 37k tokens")
+  assert.equal(msgs[i].at, "2026-07-11T00:11:00.000Z") // positioned at the compaction, not at the reading after it
+  // Compaction lands MID-turn: the text either side of it must stay on its own side of the divider.
+  assert.equal(msgs[i - 1].text, "before the squeeze")
+  assert.equal(msgs[i + 1].text, "after the squeeze")
+})
+
+test("codex compaction with no usable readings degrades to the bare label (never a fabricated bracket)", () => {
+  // No token_count before → nothing to compare; and a reading that did not SHRINK is stale, not evidence
+  // (one rollout in 2282 across the corpus reports the same number twice).
+  const noPre = parseCodexTranscript(rollout([compacted("2026-07-11T00:11:00.000Z"), tokenCount(37045, "2026-07-11T00:12:00.000Z")]))
+  assert.equal(noPre[0].text, "Context compacted")
+  const unshrunk = parseCodexTranscript(
+    rollout([tokenCount(13222, "2026-07-11T00:10:00.000Z"), compacted("2026-07-11T00:11:00.000Z"), tokenCount(13222, "2026-07-11T00:12:00.000Z")]),
+  )
+  assert.equal(unshrunk[0].text, "Context compacted")
+})
+
+test("codex reasoning after a compaction opens a FRESH block below the divider", () => {
+  const raw = rollout([
+    { type: "event_msg", payload: { type: "task_started" } },
+    { type: "response_item", payload: { type: "reasoning", summary: [{ type: "summary_text", text: "**Before**" }] } },
+    tokenCount(242492, "2026-07-11T00:10:00.000Z"),
+    compacted("2026-07-11T00:11:00.000Z"),
+    tokenCount(37045, "2026-07-11T00:12:00.000Z"),
+    { type: "response_item", payload: { type: "reasoning", summary: [{ type: "summary_text", text: "**After**" }] } },
+  ])
+  const msgs = parseCodexTranscript(raw)
+  const kinds = msgs.map((m) => `${m.kind}:${m.text}`)
+  assert.deepEqual(kinds, ["reasoning:**Before**", "event:Context compacted — 242k → 37k tokens", "reasoning:**After**"])
 })
 
 test("codex parser is defensive: empty input, blank/malformed lines, and sidecar-only records → no throw", () => {

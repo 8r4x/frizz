@@ -437,6 +437,7 @@ interface Record {
   type?: string
   timestamp?: string
   isMeta?: boolean // `/rename <title>` reminder record: CLI metadata, not a user/model turn
+  isCompactSummary?: boolean // the carry-over summary claude writes as a user record after compacting
   aiTitle?: string // present only on ai-title sidecar records
   customTitle?: string // present only on custom-title records (written by /rename)
   permissionMode?: unknown // present only on Claude permission-mode sidecars
@@ -979,6 +980,11 @@ export function applyRecord(state: TailState, rec: Record): void {
   // Treating that as a real user record leaves an idle session falsely in-flight forever because no
   // assistant record follows. It is sidecar metadata: no activity, turn, fence, or row-order change.
   const metaUserRec = type === "user" && rec.isMeta === true
+  // After compacting, claude injects the carry-over summary as an ORDINARY user record (no isMeta, no
+  // promptSource) — so without this it reads as the human typing a 20 000-character message, which jumps
+  // the row to the top of the board on motion the human never caused. It IS a re-invoking record (the
+  // model resumes from the summary), so it keeps the in-flight flip; it just may not touch lastUserAt.
+  const compactSummaryRec = type === "user" && rec.isCompactSummary === true
   if (typeof rec.timestamp === "string" && (type === "assistant" || (type === "user" && !metaUserRec) || type === "system")) {
     state.lastActivityAt = rec.timestamp
   }
@@ -1065,7 +1071,7 @@ export function applyRecord(state: TailState, rec: Record): void {
     // is agent activity (excluded by isRealUserMessage); a system record (peer/notification) is
     // machine motion the human didn't cause — neither may jump the row to the top (the one part of the
     // earlier over-fix that WAS a real bug).
-    if (!systemUserRec && typeof rec.timestamp === "string" && isRealUserMessage(rec.message?.content)) state.lastUserAt = rec.timestamp
+    if (!systemUserRec && !compactSummaryRec && typeof rec.timestamp === "string" && isRealUserMessage(rec.message?.content)) state.lastUserAt = rec.timestamp
     trackLaunchResults(state, rec) // resolve a background dispatch's transcript path from its launch result
     trackStops(state, rec) // a manual TaskStop is a terminal signal — retire the op it killed
     clearAskOnResult(state, rec) // the AskUserQuestion answer landed → clear the pending ask
@@ -1112,8 +1118,10 @@ function applyFinalText(state: FoldState, text: string): void {
 // (see the NOTE on NormalizedEvent in backend/types.ts).
 export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
   // Every timestamped event advances the activity clock (events map 1:1 to substantive lines; only the
-  // untimestamped `title` lacks an `at`). Folded in file order, so the latest `at` wins.
-  if ("at" in ev && typeof ev.at === "string") state.lastActivityAt = ev.at
+  // untimestamped `title` lacks an `at`). Folded in file order, so the latest `at` wins. `context-usage`
+  // is the exception: it is telemetry that always RIDES a real event which moves the clock itself, so
+  // letting it move the clock would only add a way for pure bookkeeping to mask a stall.
+  if ("at" in ev && typeof ev.at === "string" && ev.kind !== "context-usage") state.lastActivityAt = ev.at
   switch (ev.kind) {
     case "turn-start":
       // A turn opened → the agent is working.
@@ -1174,6 +1182,18 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
     case "title":
       // The backend's own session auto-title (codex thread title / Claude ai-title). Never touches turn.
       state.aiTitle = ev.title
+      break
+    case "compaction":
+      // The harness rewrote the context. It is real session motion (codex spends ~100s in it with no
+      // other record, which is exactly the silence a stall read would misjudge — hence the activity-clock
+      // bump above), but it is the HARNESS's work, not the agent's: it brackets no turn, produces no
+      // text, and must never move the preview, the fence, or the row-order key. Rendering is the
+      // transcript projection's job (a compaction divider); the fold only needs to not be fooled by it.
+      state.sawRecords = true
+      break
+    case "context-usage":
+      // Pure telemetry — see the activity-clock note above. Consumed only by the transcript projection,
+      // which brackets a compaction with the readings either side of it.
       break
   }
 }

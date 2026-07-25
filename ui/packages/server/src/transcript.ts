@@ -40,6 +40,29 @@ export function isInjectedNoise(text: string): boolean {
   return NOISE_PREFIXES.some((p) => t.startsWith(p))
 }
 
+// ---- context compaction ------------------------------------------------------------------------
+// BOTH providers rewrite a long conversation into a summary and drop everything above it, and until
+// this landed neither said so in the chat: claude's carry-over summary rendered as a 20 000-character
+// user bubble the human never typed, and codex's compaction rendered as nothing at all. It is the one
+// event that explains why an agent suddenly re-reads its scratchpad or forgets what was just agreed,
+// so it earns the boundary divider — the same affordance an external wake uses (see EventLine).
+// One label, both providers: the token bracket is what makes the loss concrete.
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${Math.round(n / 1_000)}k`
+  return String(n)
+}
+// The pre→post bracket is shown only when it is REAL evidence of shrinkage. Codex derives it from the
+// token_count readings either side of the event and one rollout in 2282 reported the same number twice
+// (a stale pre-reading); an unshrunk "13k → 13k" is noise, so it degrades to the bare label instead.
+function compactionLabel(preTokens?: number, postTokens?: number): string {
+  const shrank = preTokens !== undefined && postTokens !== undefined && postTokens < preTokens
+  return shrank ? `Context compacted — ${formatTokens(preTokens!)} → ${formatTokens(postTokens!)} tokens` : "Context compacted"
+}
+function compactionMessage(sourceId: string, at: string | undefined, preTokens?: number, postTokens?: number): TranscriptMessage {
+  return { sourceId, role: "assistant", kind: "event", boundary: true, text: compactionLabel(preTokens, postTokens), tools: [], parts: [], at }
+}
+
 // Normalize line endings to LF. A human follow-up injected through the agent's TERMINAL round-trips with
 // CARRIAGE-RETURN separators (the tty translates newlines to \r), so a multi-line message — notably the
 // composed "Answers:\r1. …\r2. …" — arrives CR-separated. The client renders user text in a
@@ -207,6 +230,18 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
     // notification records do not).
     if (thisTs && (rec.type === "assistant" || rec.type === "user")) prevTs = thisTs
 
+    // CONTEXT COMPACTION — everything above this line left the agent's context. Claude writes the
+    // boundary as its own system record and hands us the exact token bracket; the ~20 000-character
+    // carry-over summary that follows is dropped in the user arm below.
+    if (rec.type === "system" && rec.subtype === "compact_boundary") {
+      const meta = rec.compactMetadata
+      const pre = typeof meta?.preTokens === "number" ? meta.preTokens : undefined
+      const post = typeof meta?.postTokens === "number" ? meta.postTokens : undefined
+      out.push(compactionMessage(sourceId, thisTs, pre, post))
+      lastAssistantId = null // the divider breaks the assistant-record merge chain
+      return
+    }
+
     // A QUEUED human follow-up's enqueue/removal (the completion <task-notification> queue-operations were
     // already consumed above). `enqueue` emits a pending grayed bubble; a CONTENT-BEARING removal
     // supersedes it (see below); the delivery itself is the `queued_command` attachment handled next.
@@ -279,6 +314,11 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
       // The enqueue can't know the eventual delivery is harness plumbing, so its bubble would linger
       // as a stuck "queued" message forever. Splice out any pending bubble this record resolves
       // BEFORE returning; the enqueue's own text key matches (verified byte-identical in practice).
+      // The carry-over summary claude writes after compacting ("This session is being continued from a
+      // previous conversation…") is addressed to the AGENT, not to the reader: ~20 000 characters of
+      // machine-facing recap that rendered as a giant bubble attributed to the human. The compact_boundary
+      // divider above already says what happened, at the right position.
+      if (rec.isCompactSummary === true) return
       if (rec.isMeta === true) {
         const metaText = userText(rec)
         if (metaText) {
@@ -1284,6 +1324,12 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
   // label. Tool-EXECUTION time never lands here: it's the gap on a function_call_output, not on a
   // reasoning record, so it's excluded. The large idle between turns sits on a turn-start, also excluded.
   let prevEventAt: string | undefined
+  // Context-compaction bracket. Codex records the event but measures nothing, so the size of the loss
+  // comes from the token_count readings on either side: `lastContextTokens` is the newest reading seen,
+  // and a compaction divider stays in `openCompaction` only until the NEXT reading arrives (always the
+  // very next telemetry record — 2282/2282 across the corpus) to be rewritten with the real bracket.
+  let lastContextTokens: number | undefined
+  let openCompaction: { message: TranscriptMessage; preTokens?: number } | null = null
   // Codex may omit Fray's requested first-final marker, then provide one on a later finalized
   // response. Strip an exact first-line marker from every final so a valid recovery signal never
   // leaks into rendered prose. Ordinary examples remain literal unless they occupy that control slot.
@@ -1422,6 +1468,29 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
           }
           break
         }
+        case "compaction": {
+          // Everything above left the model's context. Emitted as the SAME boundary divider claude's
+          // compaction uses, so one affordance means one thing in both providers' transcripts. Closing
+          // `cur`/`turnReasoning` matters here: compaction lands MID-turn, and without it the turn's
+          // later text and reasoning steps would keep appending to blocks that now sit ABOVE the
+          // divider — content rendered on the wrong side of the boundary it happened after.
+          const m = compactionMessage(sourceId, ev.at, lastContextTokens, undefined)
+          out.push(m)
+          openCompaction = { message: m, preTokens: lastContextTokens }
+          cur = null
+          turnReasoning = null
+          break
+        }
+        case "context-usage": {
+          // The first reading AFTER a compaction is its post-size — rewrite the divider in place with the
+          // real bracket. Ordinary readings just advance the running context size for the next compaction.
+          if (openCompaction) {
+            openCompaction.message.text = compactionLabel(openCompaction.preTokens, ev.tokens)
+            openCompaction = null
+          }
+          lastContextTokens = ev.tokens
+          break
+        }
         case "turn-start":
           sawFinalAnswer = false // a fresh turn opens; a later final_answer sets this
           turnReasoning = null // …and its reasoning steps coalesce into a new block
@@ -1446,7 +1515,10 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
           break
       }
       // Advance the previous-event clock for the NEXT reasoning step's thinking-gap measurement.
-      if ("at" in ev && typeof ev.at === "string") prevEventAt = ev.at
+      // `context-usage` is excluded deliberately: it is bookkeeping emitted at the same instant as the
+      // response it accounts for, so letting it start the clock would silently shorten every measured
+      // thinking window that happened to have a token_count in front of it.
+      if ("at" in ev && typeof ev.at === "string" && ev.kind !== "context-usage") prevEventAt = ev.at
     }
   }
 

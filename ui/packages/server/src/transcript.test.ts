@@ -1189,6 +1189,51 @@ test("pagination cursor survives restart-like replay and concurrent append, but 
   }
 })
 
+// ---- context compaction (codex's half of the same divider lives in transcript.codex.test.ts) ----
+// Shapes captured from real sessions (2026-07-24: 103 compact_boundary records across 48 files under
+// ~/.claude/projects — 100 auto, 3 manual, all carrying compactMetadata).
+test("claude compaction renders a boundary divider carrying its token bracket, and the carry-over summary is DROPPED", () => {
+  const raw = [
+    JSON.stringify({ type: "user", timestamp: "2026-07-21T00:00:00.000Z", message: { content: [{ type: "text", text: "keep going" }] } }),
+    JSON.stringify({
+      type: "system",
+      subtype: "compact_boundary",
+      content: "Conversation compacted",
+      compactMetadata: { trigger: "auto", preTokens: 978420, postTokens: 18954, durationMs: 182710 },
+      timestamp: "2026-07-21T00:05:00.000Z",
+    }),
+    // The ~20 000-character recap claude addresses to ITSELF after compacting. It is a plain user record
+    // — no isMeta, no promptSource — so without the isCompactSummary drop it renders as a giant bubble
+    // attributed to the human.
+    JSON.stringify({
+      type: "user",
+      isCompactSummary: true,
+      timestamp: "2026-07-21T00:05:01.000Z",
+      message: { role: "user", content: [{ type: "text", text: "This session is being continued from a previous conversation that ran out of context.\n\nSummary:\n1. Primary Request…" }] },
+    }),
+    JSON.stringify({ type: "assistant", timestamp: "2026-07-21T00:05:30.000Z", message: { id: "m9", content: [{ type: "text", text: "Let me re-read my scratchpad." }] } }),
+  ].join("\n")
+  const msgs = projectClaudeTranscript(raw)
+  assert.deepEqual(
+    msgs.map((m) => `${m.role}/${m.kind ?? "message"}:${m.text}`),
+    [
+      "user/message:keep going",
+      "assistant/event:Context compacted — 978k → 19k tokens",
+      "assistant/message:Let me re-read my scratchpad.",
+    ],
+  )
+  assert.equal(msgs[1].boundary, true) // the centered divider rule
+  assert.equal(msgs[1].at, "2026-07-21T00:05:00.000Z")
+})
+
+test("claude compaction without usable metadata still renders the divider (bare label, never a guessed bracket)", () => {
+  const raw = JSON.stringify({ type: "system", subtype: "compact_boundary", content: "Conversation compacted", timestamp: "2026-07-21T00:05:00.000Z" })
+  const msgs = projectClaudeTranscript(raw)
+  assert.equal(msgs.length, 1)
+  assert.equal(msgs[0].text, "Context compacted")
+  assert.equal(msgs[0].boundary, true)
+})
+
 test("a synthetic provider AUTH-error record renders NO assistant bubble (the recovery card is its only surface)", () => {
   const raw = [
     JSON.stringify({ type: "user", timestamp: "2026-07-21T00:00:00.000Z", message: { content: [{ type: "text", text: "Say hello." }] } }),
