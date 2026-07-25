@@ -75,6 +75,12 @@ const EXPLICIT_CLAUDE_ENV_KEYS = new Set<string>([
   "ANTHROPIC_AUTH_TOKEN",
   "ANTHROPIC_BASE_URL",
   "CLAUDE_CODE_OAUTH_TOKEN",
+  // fray worker-environment vars: the cc-worker plugin hooks gate on these (deny-ask, perm-observe,
+  // agent-dispatch). Non-sensitive fray-internal values — the slug + the perm-marker dir + the project
+  // dir — that make the broker's loaded plugin behave like the tmux worker's.
+  "FRAY_UI_THREAD",
+  "FRAY_PERM_DIR",
+  "CLAUDE_PROJECT_DIR",
 ])
 const MAX_ENV_ENTRIES = 512
 const MAX_ENV_VALUE_BYTES = 128 * 1024
@@ -104,6 +110,15 @@ export interface ClaudeQueryStartOptions {
   appendSystemPrompt?: string
   model?: string
   effort?: string
+  // The fray WORKER ENVIRONMENT — the SDK equivalents of the tmux path's --plugin-dir / --mcp-config /
+  // --allowedTools. Without these a broker session is a bare SDK worker: no fray:<model>-<effort>
+  // sub-agent profiles, no fray MCP (spawn_thread), no chrome-devtools (the browser gate), and none of
+  // the cc-worker hooks (deny-ask/deny-plan/agent-bind). `pluginDir` loads the local cc-worker plugin
+  // (agents + hooks); `mcpServers` mounts the stdio MCP servers; `allowedTools` pre-approves them so a
+  // headless worker never blocks on a tool it has nobody to approve.
+  pluginDir?: string
+  mcpServers?: Record<string, { type?: "stdio"; command: string; args?: string[]; env?: Record<string, string> }>
+  allowedTools?: string[]
 }
 
 export interface ClaudeQueryHandle extends AsyncIterable<ClaudeQueryEvent> {
@@ -560,6 +575,13 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       canUseTool,
       onElicitation,
       settingSources: [],
+      // The fray worker environment (see ClaudeQueryStartOptions): load the local cc-worker plugin so a
+      // broker session gets the fray sub-agent profiles + hooks, mount the MCP servers (fray +
+      // chrome-devtools), and pre-approve them. settingSources stays [] so ONLY this plugin loads, not
+      // the user's global settings.
+      ...(options.pluginDir ? { plugins: [{ type: "local" as const, path: options.pluginDir }] } : {}),
+      ...(options.mcpServers ? { mcpServers: options.mcpServers } : {}),
+      ...(options.allowedTools ? { allowedTools: options.allowedTools } : {}),
       persistSession: options.persistSession ?? false,
       // Keep Claude's default (preset) system prompt and APPEND the fray worker contract, the SDK
       // equivalent of the tmux path's --append-system-prompt-file.
@@ -1089,7 +1111,14 @@ function mapControlInitialization(raw: SDKControlInitializeResponse): ClaudeCont
       aliases: command.aliases === undefined ? [] : boundedStringArray(command.aliases, `initialization.commands[${index}].aliases`, 32),
     }
   })
+  // The init `agents` array shape varies by claude version: newer builds emit a bare string per agent
+  // name (e.g. "fray:haiku"), older ones an object {name, description, model}. Handle both, or a
+  // string-shaped build silently reports 16 empty-name agents (which is exactly what masked the loaded
+  // fray sub-agent profiles during the broker worker-environment bring-up).
   const agents: ClaudeAgentCapability[] = boundedArray(raw.agents, "initialization.agents", 128).map((entry, index) => {
+    if (typeof entry === "string") {
+      return { name: safeText(entry, `initialization.agents[${index}]`, 512), description: "", model: undefined }
+    }
     const agent = objectValue(entry, `initialization.agents[${index}]`)
     return {
       name: safeText(agent.name, `initialization.agents[${index}].name`, 512),

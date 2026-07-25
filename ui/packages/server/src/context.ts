@@ -2,14 +2,14 @@ import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { PermissionMode, wakeDeliveryToken, type Settings } from "@fray-ui/shared"
 import { Bus, Emitter } from "./bus.ts"
-import { resolveProject, type Project } from "./project.ts"
+import { resolveProject, permRequestDir, type Project } from "./project.ts"
 import { createStorage, isHeadlessRow, type Storage } from "./storage.ts"
 import { getSettings, setSettings, resetSettings } from "./settings.ts"
 import { readQuota } from "./quota.ts"
 import { refreshClaudeQuotaInBackground } from "./backend/claude-quota.ts"
 import { createBoard, type BoardManager } from "./board.ts"
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
-import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frayConfigBlock, type Dispatcher } from "./dispatch.ts"
+import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frayConfigBlock, claudeMcpConfig, resolveFrayMcp, workerPluginDir, type Dispatcher } from "./dispatch.ts"
 import { createScheduler, type Scheduler } from "./scheduler.ts"
 import {
   reattachThreadWithPermission,
@@ -591,6 +591,14 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         stateDir: project.stateDir,
         executablePath: opts.claudeBin ?? "claude",
         env: Object.fromEntries(Object.entries(process.env).filter(([, v]) => v != null)) as Record<string, string>,
+        // The fray worker environment — the SDK equivalent of the tmux path's --plugin-dir / --mcp-config.
+        // Computed ONCE here (constant per project) and applied on every broker fork so a broker worker
+        // gets the fray sub-agent profiles, the fray + chrome-devtools MCP, and the cc-worker hooks.
+        workerEnv: {
+          pluginDir: workerPluginDir(),
+          ...claudeMcpConfig(resolveFrayMcp(project.stateDir)),
+          permDir: permRequestDir(project),
+        },
       })
     : undefined
   resources.claudeBroker = claudeBroker

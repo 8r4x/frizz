@@ -30,6 +30,17 @@ export interface ClaudeBrokerBridgeDeps {
   executablePath: string
   /** Base env; the broker forwards only the SDK-allowlisted subset to claude. */
   env: Record<string, string>
+  /** The fray WORKER ENVIRONMENT — constant per project, applied on every fork so a dispatch AND a
+   *  dead-daemon cold-resume both rebuild it. `pluginDir` loads the cc-worker plugin (fray sub-agent
+   *  profiles + hooks); `mcpServers`/`allowedTools` mount + pre-approve the fray + chrome-devtools MCP;
+   *  `permDir` is the per-project perm-marker dir the hooks write to (paired with the per-thread slug at
+   *  attach time). Absent ⇒ a bare SDK worker (the pre-cutover behavior). */
+  workerEnv?: {
+    pluginDir?: string
+    mcpServers?: Record<string, { type?: "stdio"; command: string; args?: string[]; env?: Record<string, string> }>
+    allowedTools?: string[]
+    permDir?: string
+  }
   /** Decide a tool-permission request. Defaults to auto-allow. Later: journal to the InteractionStore. */
   decidePermission?: (slug: string, sessionId: string, request: ClaudePermissionRequest) => Promise<ClaudePermissionDecision>
   /** Observe the session/transcript event stream (board liveness / telemetry). Optional. */
@@ -74,9 +85,16 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
   const sessions = new Map<string, ActiveSession>() // keyed by slug — one active session per thread
 
   const attach = async (slug: string, sessionId: string, cwd: string, permissionMode: ClaudeBrokerConfig["permissionMode"], fork: ForkOpts = {}): Promise<ActiveSession> => {
-    // fork opts (system prompt / model / effort) apply only when this call FORKS a fresh daemon; when
-    // it adopts a live one (fray restart), the running session already carries them.
-    const { record } = await adoptOrForkBroker({ stateDir: deps.stateDir, cwd, sessionId, executablePath: deps.executablePath, permissionMode, env: deps.env, ...fork })
+    // fork opts (system prompt / model / effort / resume) AND the worker environment apply only when this
+    // call FORKS a fresh daemon; when it adopts a live one (fray restart), the running session already
+    // carries them. FRAY_UI_THREAD is per-thread (the slug), so it's stamped here, not in deps.workerEnv.
+    const we = deps.workerEnv
+    const workerEnv: Record<string, string> = { FRAY_UI_THREAD: slug, ...(we?.permDir ? { FRAY_PERM_DIR: we.permDir } : {}) }
+    const { record } = await adoptOrForkBroker({
+      stateDir: deps.stateDir, cwd, sessionId, executablePath: deps.executablePath, permissionMode, env: deps.env,
+      pluginDir: we?.pluginDir, mcpServers: we?.mcpServers, allowedTools: we?.allowedTools, workerEnv,
+      ...fork,
+    })
     const client = connectClaudeBroker(record.socketPath, {
       onEvent: (event) => deps.onEvent?.(slug, sessionId, event),
       onPermissionRequest: (requestId, request) => {

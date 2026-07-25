@@ -40,6 +40,15 @@ export interface ClaudeBrokerConfig {
   /** Resume the session from its on-disk transcript instead of starting a fresh one. Set when a
    *  follow-up cold-starts a daemon after the previous one died (the live-daemon reconnect never forks). */
   resume?: boolean
+  /** The fray WORKER ENVIRONMENT — the SDK equivalents of the tmux path's plugin/MCP injection. Without
+   *  these a broker worker is bare: no fray sub-agent profiles, no fray/chrome-devtools MCP, no cc-worker
+   *  hooks. `pluginDir` loads the local cc-worker plugin; `mcpServers`/`allowedTools` mount + pre-approve
+   *  the MCP servers; `workerEnv` carries the per-thread fray vars the plugin hooks gate on (FRAY_UI_THREAD,
+   *  FRAY_PERM_DIR) — merged into the SDK env AFTER the ambient allowlist. */
+  pluginDir?: string
+  mcpServers?: Record<string, { type?: "stdio"; command: string; args?: string[]; env?: Record<string, string> }>
+  allowedTools?: string[]
+  workerEnv?: Record<string, string>
   /** When set, the daemon writes a discovery record here after its socket is listening. */
   recordPath?: string
   /** Stable identity of THIS app-server process — unchanged across fray restarts, new only when the
@@ -77,11 +86,16 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     cwd: config.cwd,
     session: config.resume ? { kind: "resume", sessionId: config.sessionId } : { kind: "new", sessionId: config.sessionId },
     permissionMode: config.permissionMode ?? "default",
-    env: Object.fromEntries(ENV_ALLOWLIST.filter((k) => config.env[k] != null).map((k) => [k, config.env[k]!])),
+    // Ambient env is allowlist-filtered; the fray worker vars (FRAY_UI_THREAD, FRAY_PERM_DIR) ride
+    // workerEnv and are merged on top so the loaded cc-worker hooks actually activate.
+    env: { ...Object.fromEntries(ENV_ALLOWLIST.filter((k) => config.env[k] != null).map((k) => [k, config.env[k]!])), ...(config.workerEnv ?? {}) },
     persistSession: true, // write the tailer-readable transcript JSONL
     appendSystemPrompt: config.appendSystemPrompt,
     model: config.model,
     effort: config.effort,
+    pluginDir: config.pluginDir,
+    mcpServers: config.mcpServers,
+    allowedTools: config.allowedTools,
     canUseTool: async (request) => {
       const requestId = `perm-${++permSeq}`
       return await new Promise<ClaudePermissionDecision>((resolve) => {

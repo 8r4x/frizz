@@ -49,6 +49,11 @@ export interface ForkBrokerOptions {
   effort?: string
   /** Resume the on-disk session instead of starting fresh (dead-daemon follow-up cold start). */
   resume?: boolean
+  /** The fray worker environment (plugin + MCP + per-thread fray vars) — see ClaudeBrokerConfig. */
+  pluginDir?: string
+  mcpServers?: Record<string, { type?: "stdio"; command: string; args?: string[]; env?: Record<string, string> }>
+  allowedTools?: string[]
+  workerEnv?: Record<string, string>
   /** Override the daemon entry (tests). Defaults to the bundled/sibling claude-agent-broker. */
   daemonEntry?: string
   timeoutMs?: number
@@ -64,6 +69,8 @@ export function forkBroker(options: ForkBrokerOptions): Promise<BrokerRecord> {
     permissionMode: options.permissionMode, env: options.env, recordPath, generation: randomUUID(),
     appendSystemPrompt: options.appendSystemPrompt, model: options.model, effort: options.effort,
     resume: options.resume,
+    pluginDir: options.pluginDir, mcpServers: options.mcpServers, allowedTools: options.allowedTools,
+    workerEnv: options.workerEnv,
   }
   const entry = options.daemonEntry ?? resolveDetachedDaemonEntry(import.meta.url, "claude-agent-broker")
   const child = spawn(process.execPath, [entry], {

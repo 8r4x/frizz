@@ -432,28 +432,46 @@ export function resolveFrayMcp(
 // machine — parity with the codex backend's `-c` injection, same CHROME_DEVTOOLS_MCP spec); the
 // server-level `mcp__chrome-devtools` rule pre-approves every tool it exposes. The unified `fray`
 // server rides along when its descriptor resolved, pre-approved the same server-level way.
-export function claudeMcpFlags(mcp?: FrayMcp): string[] {
-  const servers: Record<string, unknown> = {
+export interface ClaudeMcpStdioConfig { command: string; args?: string[]; env?: Record<string, string> }
+export interface ClaudeMcpConfig { mcpServers: Record<string, ClaudeMcpStdioConfig>; allowedTools: string[] }
+
+// The structured fray MCP mount, shared by the tmux CLI path (rendered to --mcp-config/--allowedTools
+// flags below) AND the broker SDK path (passed straight into query()'s mcpServers/allowedTools). One
+// source of truth so both transports mount the SAME servers with the SAME pre-approvals.
+export function claudeMcpConfig(mcp?: FrayMcp): ClaudeMcpConfig {
+  const mcpServers: Record<string, ClaudeMcpStdioConfig> = {
     [CHROME_DEVTOOLS_MCP.name]: { command: CHROME_DEVTOOLS_MCP.command, args: [...CHROME_DEVTOOLS_MCP.args] },
   }
-  const allowed = [`mcp__${CHROME_DEVTOOLS_MCP.name}`]
+  const allowedTools = [`mcp__${CHROME_DEVTOOLS_MCP.name}`]
   if (mcp) {
     // command is the ABSOLUTE node path (process.execPath — the node running the fray server), NOT bare
     // "node": Claude spawns the MCP-server process itself, and a worker's PATH varies by launch context
     // (a GUI-launched tmux, a login-shell difference) — if `node` isn't on it, the MCP server never
     // starts and the tool silently never appears in the worker. An absolute path removes that dependency.
-    servers[FRAY_MCP.name] = { command: process.execPath, args: [mcp.scriptPath], env: { FRAY_STATE_DIR: mcp.stateDir } }
+    mcpServers[FRAY_MCP.name] = { command: process.execPath, args: [mcp.scriptPath], env: { FRAY_STATE_DIR: mcp.stateDir } }
     // Server-level, like chrome-devtools above: every tool the unified fray server exposes (today
     // `mcp__fray__spawn_thread`) is pre-approved, so adding one never needs an allow-list edit.
-    allowed.push(`mcp__${FRAY_MCP.name}`)
+    allowedTools.push(`mcp__${FRAY_MCP.name}`)
   }
-  const config = JSON.stringify({ mcpServers: servers })
+  return { mcpServers, allowedTools }
+}
+
+// Claude flags that mount the fray-injected MCP servers via ONE inline `--mcp-config` JSON and
+// PRE-APPROVE their tools (`--allowedTools`) so a headless worker never blocks on a permission prompt
+// it has nobody to answer. execvp runs the argv with NO shell (tmux.ts), so the JSON travels literally.
+// chrome-devtools is ALWAYS mounted (the runtime release gate needs a browser out of the box on any
+// machine — parity with the codex backend's `-c` injection, same CHROME_DEVTOOLS_MCP spec); the
+// server-level `mcp__chrome-devtools` rule pre-approves every tool it exposes. The unified `fray`
+// server rides along when its descriptor resolved, pre-approved the same server-level way.
+export function claudeMcpFlags(mcp?: FrayMcp): string[] {
+  const { mcpServers, allowedTools } = claudeMcpConfig(mcp)
+  const config = JSON.stringify({ mcpServers })
   // ONE comma-joined `--allowedTools=` in EQUALS form: the flag is VARIADIC, so a space-separated
   // value with a positional right behind it (e.g. the minimal no-system-prompt argv, where the prompt
   // directly follows) would be swallowed as a second rule. The equals form binds exactly one token —
   // immune to argv reordering. Verified live: `claude -p --allowedTools=mcp__chrome-devtools <prompt>`
   // runs the tools unprompted with the prompt surviving as the positional.
-  return ["--mcp-config", config, `--allowedTools=${allowed.join(",")}`]
+  return ["--mcp-config", config, `--allowedTools=${allowedTools.join(",")}`]
 }
 
 // The `claude` argv for a fresh dispatch. session-id is PINNED so we can resume the exact
