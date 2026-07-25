@@ -130,7 +130,9 @@ test("any buried answer → self-describing quoted form (does NOT match parseAns
     answered: [{ isLive: false, question: "Which database?", answer: "Postgres" }],
   })
   assert.equal(wire, 'Answers to earlier questions:\n1. “Which database?” → Postgres')
-  assert.doesNotMatch(wire.split("\n")[0], /^Answers:$/) // stays a plain bubble, never a false answers-card
+  // Never the historic header — this batch's rows must NOT go through the numbered lookback pairing
+  // (they can span several messages). parseBuriedAnswersMessage reads them straight into the card.
+  assert.doesNotMatch(wire.split("\n")[0], /^Answers:$/)
 })
 
 test("mixed live + buried answers → self-describing form for the whole batch", () => {

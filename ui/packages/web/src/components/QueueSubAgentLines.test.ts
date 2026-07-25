@@ -4,7 +4,7 @@ import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { QueueSubAgentLines } from "./QueueSubAgentLines.tsx"
 
-test("queue cards show running child work without profile or stale rows", () => {
+test("queue cards show BOTH running and stale child work, with the dispatch's model+effort", () => {
   const html = renderToStaticMarkup(createElement(QueueSubAgentLines, {
     slug: "parent-thread",
     subAgents: [
@@ -27,6 +27,17 @@ test("queue cards show running child work without profile or stale rows", () => 
   assert.match(html, /data-queue-subagents/)
   assert.match(html, /Complete GVS fix differential repro/)
   assert.match(html, /data-running-indicator="queue-subagent"/)
-  assert.doesNotMatch(html, /fray:opus-xhigh/)
-  assert.doesNotMatch(html, /Old differential repro|stale/)
+  // The dispatch's cell reads as the model+effort PAIR, not the raw slug (maintainer 2026-07-24) — the
+  // same `model › effort` form the prompt box's own profile control uses one line above these rows.
+  assert.match(html, /\[opus › xhigh\]/)
+  assert.doesNotMatch(html, />fray:opus-xhigh</)
+  // …and the raw slug stays reachable as the tag's tooltip, so nothing about the dispatch is lost.
+  assert.match(html, /title="fray:opus-xhigh"/)
+  // A child dispatched with no `subagent_type` has no pair to name and gets no tag — never a guess.
+  assert.equal(html.match(/data-agent-profile/g)?.length, 1)
+  // A STALE child now renders on the card too (maintainer ruling 2026-07-24): a stale child is
+  // unresolved work, not gone, and hiding it made the card claim "done underneath" while the rail
+  // still showed it. It gets the flat stale dot, not the pulsing running indicator.
+  assert.match(html, /Old differential repro/)
+  assert.match(html, /stale — no recent output/)
 })

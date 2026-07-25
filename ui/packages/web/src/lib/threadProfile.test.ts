@@ -1,11 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import {
-  selectThreadProfileTarget,
-  threadProfileControlState,
-  threadProfileEffectMessage,
-  threadProfileLabel,
-} from "./threadProfile.ts"
+import { selectThreadProfileTarget, threadProfileControlState, threadProfileLabel } from "./threadProfile.ts"
 
 test("threadProfileLabel: shows the pinned model and effort compactly", () => {
   assert.equal(threadProfileLabel("opus", "high"), "opus · high")
@@ -74,17 +69,4 @@ test("threadProfileControlState: a live thread with a known model but unknown ef
   const known = threadProfileControlState(options, "sonnet", "high", false)
   assert.equal(known.modelSelectable, true)
   assert.equal(known.effortSelectable, true)
-})
-
-test("threadProfileEffectMessage: distinguishes a queued Claude handoff from Codex next-turn settings", () => {
-  assert.equal(threadProfileEffectMessage("applied"), "Model and effort applied")
-  assert.equal(
-    threadProfileEffectMessage("queued"),
-    "Model and effort queued — applies after the current work finishes",
-  )
-  assert.equal(
-    threadProfileEffectMessage("next-turn"),
-    "Model and effort applied — takes effect on the next turn",
-  )
-  assert.equal(threadProfileEffectMessage("next-resume"), "Model and effort saved for the next resume")
 })

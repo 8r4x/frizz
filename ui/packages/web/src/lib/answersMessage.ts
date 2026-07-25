@@ -13,6 +13,14 @@ import { splitQuestionBlocks, parseQuestionBlock } from "./questionBlocks.ts"
 // bubble, which is correct.) Detection is deliberately strict: the FIRST non-empty line must be exactly
 // "Answers:", and the body must be numbered "N. …" lines. Anything else returns null and the caller
 // falls back to the plain bubble — degrade safely, never lose text.
+//
+// composeAnswerWire has a SECOND form for a batch that answers a BURIED ask (see parseBuriedAnswersMessage):
+//
+//   Answers to earlier questions:
+//   1. “<question>” → <answer>
+//
+// which carries its own questions inline and so needs no lookback pairing at all. `parseAnswersCard`
+// is the entry point that accepts either.
 
 export interface ParsedAnswer {
   n: number
@@ -60,6 +68,57 @@ export function parseAnswersMessage(text: string): ParsedAnswer[] | null {
   return out
 }
 
+const BURIED_HEADER = "Answers to earlier questions:"
+const BURIED_ROW = /^(\d+)\.\s+[“"](.*?)[”"]\s+→\s+(.*)$/
+
+// Parse composeAnswerWire's SELF-DESCRIBING form — the one it emits when any answer in the batch targets
+// a BURIED ask (a question the agent scrolled past by continuing to work), where a bare "N." would be
+// ambiguous about WHICH turn's question it answers:
+//
+//   Answers to earlier questions:
+//   1. “Should the settings store use SQLite?” → A. SQLite
+//
+// This form is self-contained: each row quotes its own question, so — unlike the "Answers:" form — it
+// needs NO lookback and no block-number correlation. That matters, because a buried batch can answer
+// questions from SEVERAL different messages at once, which the numbered lookback (pairAnswersMessage)
+// could only ever mislabel. Parsing here rather than there is what lets these rows render as the same
+// structured card instead of a raw run-on bubble. Same strict/degrade-safely discipline as above: the
+// first non-empty line must be the header verbatim, every row must quote-then-arrow, and anything else
+// returns null so the caller keeps the plain bubble.
+export function parseBuriedAnswersMessage(text: string): PairedAnswer[] | null {
+  if (!text) return null
+  const lines = text.replace(/\r\n?/g, "\n").split("\n") // CR/CRLF → LF (terminal-injected follow-ups)
+  let i = 0
+  while (i < lines.length && !lines[i].trim()) i++
+  if (i >= lines.length || lines[i].trim() !== BURIED_HEADER) return null
+  i++
+
+  const out: PairedAnswer[] = []
+  for (; i < lines.length; i++) {
+    const line = lines[i]
+    const m = line.match(BURIED_ROW)
+    if (m) {
+      const question = m[2].trim()
+      out.push(question ? { n: Number(m[1]), answer: m[3], question } : { n: Number(m[1]), answer: m[3] })
+    } else if (out.length > 0) {
+      const last = out[out.length - 1] // a multi-line answer's continuation — keep the break
+      last.answer = last.answer ? `${last.answer}\n${line}` : line
+    } else if (line.trim()) {
+      return null // non-empty, non-row content before ANY row → not our format
+    }
+  }
+
+  if (out.length === 0) return null
+  for (const a of out) a.answer = a.answer.replace(/\s+$/, "")
+  return out
+}
+
+// Either composed-answer form → card rows. The lookback-free entry point, for a caller that renders one
+// message without the surrounding list (the sub-agent sheet); list call sites go through pairAllAnswers.
+export function parseAnswersCard(text: string): PairedAnswer[] | null {
+  return parseBuriedAnswersMessage(text) ?? parseAnswersMessage(text)
+}
+
 // The minimal structural slice of a transcript message the pairing needs — role/kind/text only, so the
 // function stays pure and testable without the shared schema (TranscriptMessage satisfies it).
 export interface MsgLike {
@@ -86,6 +145,10 @@ export interface MsgLike {
 export function pairAnswersMessage(messages: readonly MsgLike[], index: number): PairedAnswer[] | null {
   const msg = messages[index]
   if (!msg || msg.role !== "user" || msg.kind === "event") return null
+  // The buried form already quotes each question — take it verbatim and skip the lookback entirely
+  // (its rows can answer several different messages, which the numbered correlation below can't model).
+  const buried = parseBuriedAnswersMessage(msg.text)
+  if (buried) return buried
   const answers = parseAnswersMessage(msg.text)
   if (!answers) return null
 

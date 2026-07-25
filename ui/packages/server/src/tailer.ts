@@ -1,7 +1,7 @@
 import { statSync, openSync, readSync, closeSync, readdirSync, mkdirSync, writeFileSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { homedir, tmpdir } from "node:os"
-import { PermissionMode } from "@fray-ui/shared"
+import { insideFence, PermissionMode } from "@fray-ui/shared"
 import type { Bus } from "./bus.ts"
 import { permMarkerPath, type Project } from "./project.ts"
 import { isHeadlessRow } from "./storage.ts"
@@ -83,6 +83,14 @@ const CLAUDE_PERMISSION_CONFIRM_POLLS = 3
 // AGENTS ONLY: a child appends on every step, so silence there is a real (if coarse) liveness signal.
 // A background SHELL has no such property and is not judged this way at all — see bgShellViews.
 const SUBAGENT_STALE_MS = 15 * 60_000
+// The minute bucket of an ISO instant, for the board signature: a child's "N min ago" reading only
+// changes when this changes, so folding this (not the raw mtime) into the sig means a steadily-active
+// child re-pushes at most once a minute. "" when absent/unparseable — an absent reading is stable.
+function activityMinute(at: string | undefined): string {
+  if (!at) return ""
+  const ms = Date.parse(at)
+  return Number.isFinite(ms) ? String(Math.floor(ms / 60_000)) : ""
+}
 // How long the transcript must be silent while a turn still looks in-flight before we spend a
 // tmux capture-pane to sniff for an interactive permission prompt. Keeps us from shelling out
 // every tick for a healthily-streaming turn; a real prompt only appears after a tool_use record
@@ -124,6 +132,7 @@ export interface SubAgentView {
   state: "running" | "stale"
   subagentType?: string // the dispatch's input.subagent_type verbatim (e.g. "fray:fray-opus-high"); absent when unset
   id: string // the dispatch tool_use id — the drill-in drawer's stable handle to this exact child
+  lastActivityAt?: string // ISO8601 of the child transcript's last append (its output-file mtime)
 }
 
 // A signal fence parsed from the FINAL assistant message (mirrors @fray-ui/shared ThreadFence; kept
@@ -318,6 +327,7 @@ export interface BgShellView {
   startedAt: string
   state: "running" | "stale"
   id?: string
+  lastActivityAt?: string // ISO8601 of the shell output file's last write
 }
 
 // A pending native AskUserQuestion (structured, capped). Mirrors @fray-ui/shared PendingAsk; `id` is
@@ -428,6 +438,7 @@ interface Record {
   type?: string
   timestamp?: string
   isMeta?: boolean // `/rename <title>` reminder record: CLI metadata, not a user/model turn
+  isCompactSummary?: boolean // the carry-over summary claude writes as a user record after compacting
   aiTitle?: string // present only on ai-title sidecar records
   customTitle?: string // present only on custom-title records (written by /rename)
   permissionMode?: unknown // present only on Claude permission-mode sidecars
@@ -531,9 +542,21 @@ function previewText(raw: string): string | undefined {
 // net: a worker that asked the human IN CHAT but never flipped its thread file to blocked.
 // Info-string grammar mirrors the web exactly: one or more space-separated tokens (```question
 // approval danger) — the old single-token form silently missed multi-token gates the prompt teaches.
-const QUESTION_BLOCK_RE = /^```question(?:[ \t]+[A-Za-z][^\r\n]*?)?[ \t]*\r?\n[\s\S]*?\r?\n```[ \t]*$/m
+// A QUOTED opener never counts: a worker documenting the protocol wraps its sample in an outer ````
+// fence, and flagging that as a live ask parks the thread in "awaiting you" over an example. The
+// fenced-interior scan is the one piece genuinely SHARED with the web (@fray-ui/shared) rather than
+// mirrored — the renderer and this flag must agree on what an opener is. `parseSignalFence` needs no
+// such guard: its end-anchor already rejects any fence that isn't the final content of the message.
+const QUESTION_BLOCK_RE = /^```question(?:[ \t]+[A-Za-z][^\r\n]*?)?[ \t]*\r?\n[\s\S]*?\r?\n```[ \t]*$/gm
 export function hasQuestionBlock(text: string | undefined): boolean {
-  return typeof text === "string" && QUESTION_BLOCK_RE.test(text)
+  if (typeof text !== "string") return false
+  const quoted = insideFence(text)
+  QUESTION_BLOCK_RE.lastIndex = 0
+  for (let m = QUESTION_BLOCK_RE.exec(text); m !== null; m = QUESTION_BLOCK_RE.exec(text)) {
+    if (!quoted(m.index)) return true
+    QUESTION_BLOCK_RE.lastIndex = m.index + 1
+  }
+  return false
 }
 
 // ---- signal-fence grammar (maintainer-settled) ----
@@ -970,6 +993,11 @@ export function applyRecord(state: TailState, rec: Record): void {
   // Treating that as a real user record leaves an idle session falsely in-flight forever because no
   // assistant record follows. It is sidecar metadata: no activity, turn, fence, or row-order change.
   const metaUserRec = type === "user" && rec.isMeta === true
+  // After compacting, claude injects the carry-over summary as an ORDINARY user record (no isMeta, no
+  // promptSource) — so without this it reads as the human typing a 20 000-character message, which jumps
+  // the row to the top of the board on motion the human never caused. It IS a re-invoking record (the
+  // model resumes from the summary), so it keeps the in-flight flip; it just may not touch lastUserAt.
+  const compactSummaryRec = type === "user" && rec.isCompactSummary === true
   if (typeof rec.timestamp === "string" && (type === "assistant" || (type === "user" && !metaUserRec) || type === "system")) {
     state.lastActivityAt = rec.timestamp
   }
@@ -1056,7 +1084,7 @@ export function applyRecord(state: TailState, rec: Record): void {
     // is agent activity (excluded by isRealUserMessage); a system record (peer/notification) is
     // machine motion the human didn't cause — neither may jump the row to the top (the one part of the
     // earlier over-fix that WAS a real bug).
-    if (!systemUserRec && typeof rec.timestamp === "string" && isRealUserMessage(rec.message?.content)) state.lastUserAt = rec.timestamp
+    if (!systemUserRec && !compactSummaryRec && typeof rec.timestamp === "string" && isRealUserMessage(rec.message?.content)) state.lastUserAt = rec.timestamp
     trackLaunchResults(state, rec) // resolve a background dispatch's transcript path from its launch result
     trackStops(state, rec) // a manual TaskStop is a terminal signal — retire the op it killed
     clearAskOnResult(state, rec) // the AskUserQuestion answer landed → clear the pending ask
@@ -1103,8 +1131,10 @@ function applyFinalText(state: FoldState, text: string): void {
 // (see the NOTE on NormalizedEvent in backend/types.ts).
 export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
   // Every timestamped event advances the activity clock (events map 1:1 to substantive lines; only the
-  // untimestamped `title` lacks an `at`). Folded in file order, so the latest `at` wins.
-  if ("at" in ev && typeof ev.at === "string") state.lastActivityAt = ev.at
+  // untimestamped `title` lacks an `at`). Folded in file order, so the latest `at` wins. `context-usage`
+  // is the exception: it is telemetry that always RIDES a real event which moves the clock itself, so
+  // letting it move the clock would only add a way for pure bookkeeping to mask a stall.
+  if ("at" in ev && typeof ev.at === "string" && ev.kind !== "context-usage") state.lastActivityAt = ev.at
   switch (ev.kind) {
     case "turn-start":
       // A turn opened → the agent is working.
@@ -1165,6 +1195,18 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
     case "title":
       // The backend's own session auto-title (codex thread title / Claude ai-title). Never touches turn.
       state.aiTitle = ev.title
+      break
+    case "compaction":
+      // The harness rewrote the context. It is real session motion (codex spends ~100s in it with no
+      // other record, which is exactly the silence a stall read would misjudge — hence the activity-clock
+      // bump above), but it is the HARNESS's work, not the agent's: it brackets no turn, produces no
+      // text, and must never move the preview, the fence, or the row-order key. Rendering is the
+      // transcript projection's job (a compaction divider); the fold only needs to not be fooled by it.
+      state.sawRecords = true
+      break
+    case "context-usage":
+      // Pure telemetry — see the activity-clock note above. Consumed only by the transcript projection,
+      // which brackets a compaction with the readings either side of it.
       break
   }
 }
@@ -1510,13 +1552,23 @@ export function createTailer(deps: TailerDeps): Tailer {
     return m === undefined || nowMs - m > SUBAGENT_STALE_MS
   }
 
+  // The child's last-append instant (its output file's mtime, the same stat entryStale reads), as ISO
+  // for the surfaced view. Undefined before the path resolves or when the file no longer stats — the
+  // caller then simply omits lastActivityAt (an absent reading is correct; a fabricated one is not).
+  function entryLastActivity(e: SubAgentEntry): string | undefined {
+    if (!e.outputFile) return undefined
+    const m = mtimeMs(e.outputFile)
+    return m === undefined ? undefined : new Date(m).toISOString()
+  }
+
   // Derive the surfaced view of a session's live SUB-AGENTS (kind "agent"; insertion = dispatch order).
   function subAgentViews(state: TailState, nowMs: number): SubAgentView[] {
     if (state.subAgents.size === 0) return []
     const out: SubAgentView[] = []
     for (const e of state.subAgents.values()) {
       if (e.kind !== "agent") continue
-      out.push({ label: e.label, startedAt: e.startedAt, state: entryStale(e, nowMs) ? "stale" : "running", subagentType: e.subagentType, id: e.toolUseId })
+      const lastActivityAt = entryLastActivity(e)
+      out.push({ label: e.label, startedAt: e.startedAt, state: entryStale(e, nowMs) ? "stale" : "running", subagentType: e.subagentType, id: e.toolUseId, ...(lastActivityAt ? { lastActivityAt } : {}) })
     }
     return out
   }
@@ -1540,7 +1592,8 @@ export function createTailer(deps: TailerDeps): Tailer {
     const out: BgShellView[] = []
     for (const e of state.subAgents.values()) {
       if (e.kind !== "shell") continue
-      out.push({ label: e.label, startedAt: e.startedAt, state: "running", id: e.toolUseId })
+      const lastActivityAt = entryLastActivity(e)
+      out.push({ label: e.label, startedAt: e.startedAt, state: "running", id: e.toolUseId, ...(lastActivityAt ? { lastActivityAt } : {}) })
     }
     return out
   }
@@ -1549,9 +1602,13 @@ export function createTailer(deps: TailerDeps): Tailer {
   // so the tick marks the board dirty on any add/removal, a sub-agent running→stale flip (purely
   // time-based, no new record), or an ask appearing/clearing. Without it those changes would linger to
   // the next reconcile. (Shells no longer have a time-based flip, but their add/removal still counts.)
+  //
+  // lastActivityAt is folded in at MINUTE granularity, never raw: the reading is displayed as
+  // "N min ago", so a running child whose mtime advances every append only needs to re-push when its
+  // displayed minute would change — at most once a minute per active child, not once an append.
   function derivedSignature(state: TailState, nowMs: number): string {
-    const agents = subAgentViews(state, nowMs).map((v) => `A:${v.label}|${v.state}|${v.startedAt}`).join("")
-    const shells = bgShellViews(state).map((v) => `S:${v.label}|${v.state}|${v.startedAt}`).join("")
+    const agents = subAgentViews(state, nowMs).map((v) => `A:${v.label}|${v.state}|${v.startedAt}|${activityMinute(v.lastActivityAt)}`).join("")
+    const shells = bgShellViews(state).map((v) => `S:${v.label}|${v.state}|${v.startedAt}|${activityMinute(v.lastActivityAt)}`).join("")
     const ask = state.pendingAsk ? `Q:${state.pendingAsk.id}:${state.pendingAsk.questions.length}` : ""
     return `${agents}\n${shells}\n${ask}`
   }

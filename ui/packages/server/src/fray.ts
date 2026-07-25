@@ -73,8 +73,10 @@ function directFrayRoot(projectDir: string): string | null {
   }
 }
 
-// Whether the project has been fray-bootstrapped (.fray/ exists). When absent the board is
-// empty and we never invoke the CLI (it would just print a "no .fray/" notice).
+// Whether `.fray/` exists. This is a STORAGE capability probe (plans, scratchpads, the legacy CLI —
+// which would just print a "no .fray/" notice), NOT a board-existence check: threads are session-first
+// and live in the ui.db registry, so a project with no `.fray/` can still have a full board, and
+// dispatch creates the directory on its way (see writeScratchpad).
 export function frayDirExists(projectDir: string): boolean {
   return directFrayRoot(projectDir) !== null
 }

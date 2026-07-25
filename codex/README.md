@@ -180,12 +180,12 @@ after its absolute command and terminal event/exit semantics are validated; inva
 a visible configuration error, never silently shadowed by Fray. Agents never choose a monitor merely
 by filename. The bundled copies are the fallback and use active, owned `gh` CLI monitoring rather than treating `awaiting ci:` or a partial
 `gh pr checks` rollup as a wake mechanism. The CI monitor combines PR checks with workflow runs for
-the exact head SHA: `ACTION_REQUIRED` fork gates are pending, not green. The review monitor wakes only
-on new non-bot activity after its baseline. Neither script exposes GitHub credentials or detaches a
+the exact head SHA: `ACTION_REQUIRED` fork gates are pending, not green. The review monitor wakes on
+any new review or comment after its baseline, bot or human. Neither script exposes GitHub credentials or detaches a
 process; cancelling the worker cancels its monitor, and restarting launches a new owned monitor.
 
 Fray UI's server scheduler remains the durable fallback for wall-clock `timer:` and external-human
-`human:` + `github-review:` gates. It is not a substitute for an active CI monitor or evidence that
+`human:` + `pr-watch:` gates. It is not a substitute for an active CI monitor or evidence that
 the full CI matrix passed.
 
 Codex keeps the selected monitor in one persistent `exec_command` / `write_stdin` session. A routed

@@ -76,9 +76,9 @@ session ends; a restart creates a fresh owned watch.
 A PR needs an external maintainer's response after all local work is complete.
 
 Expected: run one explicitly selected `review-watch.mjs` monitor in the persistent Codex session, which
-baselines existing non-bot review/comment activity and wakes on a new human event. A Luna child is
+baselines existing review/comment activity and wakes on any new event, bot or human. A Luna child is
 optional only for genuine parent concurrency. If this is a Fray UI handoff that must outlive the active
-watch, pair the external-human gate with durable `human:` + `github-review:`; use `timer:` only for a
+watch, pair the external-human gate with durable `human:` + `pr-watch:`; use `timer:` only for a
 named wall-clock recheck. Never call a generic CI/review `awaiting` fence a durable monitor.
 
 ### Clean up browser QA without disturbing other agents

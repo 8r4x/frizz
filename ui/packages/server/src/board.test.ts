@@ -54,6 +54,44 @@ test("resolveSessionProfile: only post-spawn telemetry can supersede a pinned la
   )
 })
 
+test("resolveSessionProfile: an eager operator model/effort change shows immediately, then converges", () => {
+  const LATEST = "2026-07-09T12:00:00.000Z"
+  const EVEN_LATER = "2026-07-09T13:00:00.000Z"
+
+  // THE FIX (sibling of the sandbox pill): the operator picked low at LATEST — AFTER the last observed
+  // turn_context (LATER, still reporting the OLD xhigh). The visible composer selector must show the
+  // just-saved pick, not the stale observed reading, instead of snapping back for a full turn.
+  assert.deepEqual(
+    resolveSessionProfile(
+      row({ backend: "codex", model: "gpt-5.6-sol", effort: "low", spawned_at: T0, profile_set_at: LATEST }),
+      tele({ model: "gpt-5.6-sol", effort: "xhigh", profileAt: LATER }),
+    ),
+    { model: "gpt-5.6-sol", effort: "low" },
+    "a just-picked codex model/effort outranks an older observed turn_context",
+  )
+
+  // CONVERGENCE: a genuinely newer turn (EVEN_LATER > LATEST) re-establishes observed authority.
+  assert.deepEqual(
+    resolveSessionProfile(
+      row({ backend: "codex", model: "gpt-5.6-sol", effort: "low", spawned_at: T0, profile_set_at: LATEST }),
+      tele({ model: "gpt-5.6-sol", effort: "xhigh", profileAt: EVEN_LATER }),
+    ),
+    { model: "gpt-5.6-sol", effort: "xhigh" },
+    "a newer turn re-establishes observed authority",
+  )
+
+  // NO REGRESSION: a stale set-time (before the observed reading) must NOT resurrect the saved value
+  // over a fresh turn — this is the reattach/idle case the observed-wins rule exists for.
+  assert.deepEqual(
+    resolveSessionProfile(
+      row({ backend: "codex", model: "gpt-5.6-sol", effort: "high", spawned_at: T0, profile_set_at: T0 }),
+      tele({ model: "gpt-5.6-sol", effort: "xhigh", profileAt: LATER }),
+    ),
+    { model: "gpt-5.6-sol", effort: "xhigh" },
+    "a stale set-time does not resurrect the saved profile over a newer observed turn",
+  )
+})
+
 test("resolveSessionPermission: exposes only a persisted valid per-thread mode; legacy/unknown stays unknown", () => {
   assert.equal(resolveSessionPermission(row({ permission_mode: "bypassPermissions" })), "bypassPermissions")
   assert.equal(resolveSessionPermission(row({ permission_mode: null })), undefined)
@@ -86,22 +124,84 @@ test("resolveSessionPermission: exposes only a persisted valid per-thread mode; 
   )
 })
 
+test("resolveSessionPermission: an eager operator sandbox change shows immediately, then converges to telemetry", () => {
+  const LATEST = "2026-07-09T12:00:00.000Z"
+  const EVEN_LATER = "2026-07-09T13:00:00.000Z"
+
+  // THE FIX: the operator flipped the sandbox at LATEST — AFTER the last observed turn_context (LATER,
+  // still reporting the OLD value). The pill must show the operator's just-saved intent, not the stale
+  // observed reading, instead of lagging a full turn.
+  assert.equal(
+    resolveSessionPermission(
+      row({ backend: "codex", spawned_at: T0, permission_mode: "bypassPermissions", permission_set_at: LATEST }),
+      tele({ permissionMode: "default", permissionModeAt: LATER }),
+    ),
+    "bypassPermissions",
+    "a just-set operator sandbox outranks an older observed turn_context",
+  )
+
+  // CONVERGENCE: once a genuinely newer turn emits a fresh turn_context (EVEN_LATER > LATEST), the
+  // observed value is authoritative again — the display converges, it does not diverge forever.
+  assert.equal(
+    resolveSessionPermission(
+      row({ backend: "codex", spawned_at: T0, permission_mode: "bypassPermissions", permission_set_at: LATEST }),
+      tele({ permissionMode: "bypassPermissions", permissionModeAt: EVEN_LATER }),
+    ),
+    "bypassPermissions",
+    "a newer turn re-establishes observed authority",
+  )
+
+  // NO REGRESSION: an OLD operator set-time (before the observed reading) must NOT override a fresh
+  // turn — this is the reattach/idle case the observed-wins rule exists for.
+  assert.equal(
+    resolveSessionPermission(
+      row({ backend: "codex", spawned_at: T0, permission_mode: "default", permission_set_at: T0 }),
+      tele({ permissionMode: "bypassPermissions", permissionModeAt: LATER }),
+    ),
+    "bypassPermissions",
+    "a stale set-time does not resurrect the saved value over a newer observed turn",
+  )
+
+  // CLAUDE UNAFFECTED: the set-time logic lives entirely inside the codex branch; Claude's telemetry
+  // stays authoritative-and-timely and its rules are unchanged even with a set-time present.
+  assert.equal(
+    resolveSessionPermission(
+      row({ backend: "claude", spawned_at: T0, permission_mode: "auto", permission_set_at: LATEST }),
+      tele({ permissionMode: "acceptEdits", permissionModeAt: LATER }),
+    ),
+    "auto",
+    "the durable saved Claude value wins regardless of set-time (Claude path untouched)",
+  )
+})
+
 test("resolveSessionTitle: a human title suppresses stale transcript names; generated fallbacks may use them", () => {
   assert.deepEqual(
-    resolveSessionTitle(row({ title: "Human-readable thread title", title_auto: 0 }), tele({ aiTitle: "generated-slug" })),
-    { title: "Human-readable thread title", titleAuto: false, aiTitle: undefined },
+    resolveSessionTitle(row({ title: "Human-readable thread title", title_auto: 0, title_locked: 1 }), tele({ aiTitle: "generated-slug" })),
+    { title: "Human-readable thread title", titleAuto: false, titleLocked: true, aiTitle: undefined },
   )
   assert.deepEqual(
     resolveSessionTitle(row({ title: "generated-slug", title_auto: 1 }), tele({ aiTitle: "Useful backend title" })),
-    { title: "generated-slug", titleAuto: true, aiTitle: "Useful backend title" },
+    { title: "generated-slug", titleAuto: true, titleLocked: false, aiTitle: "Useful backend title" },
   )
   assert.deepEqual(
     resolveSessionTitle(
       row({ title: "Original fallback", title_auto: 1 }),
       tele({ customTitle: "rejected-native-slug", customTitleRevision: 1 }),
     ),
-    { title: "Original fallback", titleAuto: true, aiTitle: undefined },
+    { title: "Original fallback", titleAuto: true, titleLocked: false, aiTitle: undefined },
     "an unconfirmed custom-title cannot reach board display/notification or paired-file sync",
+  )
+  // The point of the split: a title a dispatch CALLER hard-coded reads as a real name (titleAuto false,
+  // so no "Spinning up…"/"Untitled" placeholder) yet still carries the worker's aiTitle on the wire.
+  assert.deepEqual(
+    resolveSessionTitle(row({ title: "Investigate acme/app#391", title_auto: 0, title_locked: 0 }), tele({ aiTitle: "Cache key collides on normalized ids" })),
+    { title: "Investigate acme/app#391", titleAuto: false, titleLocked: false, aiTitle: "Cache key collides on normalized ids" },
+  )
+  // A row written before the split has no title_locked at all. Its non-guessed title must keep reading
+  // as the human's, or every legacy rename would silently reopen to backend telemetry.
+  assert.deepEqual(
+    resolveSessionTitle(row({ title: "Legacy renamed thread", title_auto: 0 }), tele({ aiTitle: "generated-slug" })),
+    { title: "Legacy renamed thread", titleAuto: false, titleLocked: true, aiTitle: undefined },
   )
 })
 
@@ -128,6 +228,30 @@ test("deriveNeedsYou: a scoped typed interaction queues immediately, independent
   assert.equal(deriveNeedsYou(row(), tele({ turn: "idle" }), "turn-idle", true), true)
   assert.equal(deriveNeedsYou(row(), tele({ turn: "idle" }), "exited", true), true)
   assert.equal(deriveNeedsYou(row(), tele({ turn: "in-flight" }), "running", false), false)
+})
+
+// A delivered-but-unobserved human follow-up (delivery ledger pending/enqueued) means the human just
+// responded, so the thread must leave the queue from SERVER TRUTH — this is what stops a steered card
+// bouncing back when the client's 12s optimism expires before the tailer catches up under load.
+const ledger = (state: "pending" | "enqueued" | "unconfirmed") =>
+  JSON.stringify([{ id: "d1", text: "keep going", state, at: new Date(T0).toISOString(), updatedAt: new Date(T0).toISOString() }])
+
+test("deriveNeedsYou: a fresh delivered follow-up dequeues a question the tailer has not yet cleared", () => {
+  const asking = tele({ pendingQuestion: true, lastActivityAt: T0 })
+  assert.equal(deriveNeedsYou(row(), asking, "turn-idle"), true, "baseline: an unanswered question queues")
+  assert.equal(deriveNeedsYou(row({ delivery_ledger: ledger("pending") }), asking, "turn-idle"), false, "a pending delivery is the human's answer")
+  assert.equal(deriveNeedsYou(row({ delivery_ledger: ledger("enqueued") }), asking, "turn-idle"), false, "Claude Code's own queue holds it")
+})
+
+test("deriveNeedsYou: an UNCONFIRMED delivery does not dequeue — the human may need to re-drive it", () => {
+  assert.equal(deriveNeedsYou(row({ delivery_ledger: ledger("unconfirmed") }), tele({ pendingQuestion: true }), "turn-idle"), true)
+})
+
+test("deriveNeedsYou: a fresh delivery never hides a crash or a hard live ask", () => {
+  // A follow-up delivered to a worker that then died mid-turn is still a stall the human must see.
+  assert.equal(deriveNeedsYou(row({ delivery_ledger: ledger("pending") }), tele({ turn: "in-flight" }), "exited"), true)
+  // A native pendingAsk outranks a delivery (the gate sits above it) — the ask is a different channel.
+  assert.equal(deriveNeedsYou(row({ delivery_ledger: ledger("pending") }), tele({ pendingAsk: { id: "x", questions: [] } }), "turn-idle"), true)
 })
 
 test("board interaction presence cache follows the exact session and rechecks after terminal edges", async () => {

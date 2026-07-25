@@ -102,6 +102,28 @@ export function readCodexAuthState(codexHome = defaultCodexHome()): ProviderAuth
   return apiKey || accessToken ? "authed" : "signed-out"
 }
 
+// Is the `codex` executable actually runnable? Auth (auth.json/env) says a credential EXISTS; it says
+// nothing about whether the binary a codex dispatch needs is installed. When it is not, the dispatch
+// otherwise proceeds to create thread state and only then fails deep in the app-server with "daemon
+// exited before it became ready" — a first-run footgun for a public launch, where a user may be signed
+// in via env but never installed the CLI.
+//
+// FAIL OPEN, exactly like the auth reader: return "missing" ONLY on a positive ENOENT from the spawn.
+// A timeout, a permission error, a non-zero exit (a broken-but-present binary) — anything short of
+// "the OS could not find it" — is "unknown", so a slow or weird environment never blocks a working
+// user. `codex --version` exits immediately; never probe with `codex app-server`, which hangs.
+export async function readCodexBinaryState(
+  codexBin = "codex",
+  exec: typeof execFileAsync = execFileAsync,
+): Promise<"present" | "missing" | "unknown"> {
+  try {
+    await exec(codexBin, ["--version"], { timeout: 5_000 })
+    return "present"
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "unknown"
+  }
+}
+
 // Dispatch preflight rejection: the server refuses to create ANY thread state (scratchpad, tmux
 // session, registry row) for a provider that is positively signed out. The message is a stable
 // sentinel the web client parses to open the sign-in modal instead of a generic failure toast.

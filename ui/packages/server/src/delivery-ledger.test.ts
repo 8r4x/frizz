@@ -11,6 +11,7 @@ import {
   UNCONFIRMED_DROP_MS,
   type DeliveryLedgerItem,
 } from "./delivery-ledger.ts"
+import { encodeDeliveryMarker } from "./delivery-marker.ts"
 
 const T0 = Date.parse("2026-07-21T12:00:00.000Z")
 const iso = (ms: number) => new Date(ms).toISOString()
@@ -147,6 +148,202 @@ test("a SHORT send is never resolved by merely appearing inside an unrelated mes
   const rec = { type: "user", timestamp: iso(T0 + 1000), message: { content: "ok, please continue with the plan" } }
   // Same array identity: nothing matched, so the caller writes nothing back to the row.
   assert.equal(correlateDeliveryRecord(items, rec, iso(T0 + 1000)), items)
+})
+
+// ---- channel rewrites (the "Delivery unconfirmed" bug class) ----
+// The steer channel is tmux `paste-buffer` (LF→CR) composed with Claude Code's TUI paste handler
+// (CR/CRLF→LF, TAB→four spaces). Measured against a live claude 2.1.219 TUI driven through fray's own
+// paste sequence: a tab becomes four spaces and a CRLF becomes TWO newlines. Both classes stranded a
+// send that the agent had already read. TABBED below is the maintainer's own stranded text
+// (2026-07-25, `were-taking-over-from-another-agent`).
+const TABBED = '> <tmp>: "r"\tno, but lossy vs intent\tsilently widens to rw on both\nWhy does this happen?'
+const EXPANDED = TABBED.replace(/\t/g, "    ")
+// The measured composition, applied the way the real channel applies it.
+const throughChannel = (s: string) => s.replace(/\r\n|\r/g, "\n\n").replace(/\t/g, "    ")
+
+test("a CRLF send survives the channel doubling its line breaks", () => {
+  const text = "Review the sandbox design.\r\nThe ACL cleanup matters most.\r\nShip it when green."
+  const out = correlateDeliveryRecord(
+    [item({ text })],
+    { type: "user", message: { role: "user", content: throughChannel(text) }, timestamp: iso(T0 + 40) },
+    iso(T0 + 40),
+  )
+  assert.deepEqual(out, [])
+})
+
+test("tabs and CRLF together still deliver", () => {
+  const text = "col1\tcol2\r\nrow2\tvalue\r\nand a closing line of prose"
+  const out = correlateDeliveryRecord(
+    [item({ text })],
+    { type: "user", message: { role: "user", content: throughChannel(text) }, timestamp: iso(T0 + 40) },
+    iso(T0 + 40),
+  )
+  assert.deepEqual(out, [])
+})
+
+test("a re-wrapped record (line breaks moved entirely) still delivers", () => {
+  // Invariance, not channel-modelling: a future rewrite that re-flows lines must not resurrect the bug.
+  const text = "the quick brown fox jumps over the lazy dog and keeps running"
+  const rewrapped = "the quick brown fox\njumps over the lazy\ndog and keeps running"
+  const out = correlateDeliveryRecord(
+    [item({ text })],
+    { type: "user", message: { role: "user", content: rewrapped }, timestamp: iso(T0 + 40) },
+    iso(T0 + 40),
+  )
+  assert.deepEqual(out, [])
+})
+
+test("a user record whose tabs the TUI expanded still delivers the item", () => {
+  const out = correlateDeliveryRecord(
+    [item({ text: TABBED })],
+    { type: "user", message: { role: "user", content: EXPANDED }, timestamp: iso(T0 + 34) },
+    iso(T0 + 34),
+  )
+  assert.deepEqual(out, [])
+})
+
+test("a tab-expanded enqueue record still receipts the item", () => {
+  const out = correlateDeliveryRecord(
+    [item({ text: TABBED })],
+    { type: "queue-operation", operation: "enqueue", content: EXPANDED, timestamp: iso(T0 + 500) },
+    iso(T0 + 500),
+  )
+  assert.equal(out[0].state, "enqueued")
+})
+
+test("tab expansion does not break the merged-submission composition", () => {
+  const a = item({ id: "d-a", text: "the first long follow-up\tthe composer swallowed" })
+  const b = item({ id: "d-b", text: "the second follow-up\twhose Enter submitted both" })
+  const rec = merged(a.text.replace(/\t/g, "    "), b.text.replace(/\t/g, "    "), "\n")
+  assert.deepEqual(correlateDeliveryRecord([a, b], rec, iso(T0 + 1000)).map((i) => i.state), ["enqueued", "enqueued"])
+})
+
+test("the projection dedups against an already-delivered copy whose tabs were expanded", () => {
+  // Without this the ledger appends a SECOND, amber copy of a message the transcript already renders —
+  // the duplicate bubble the operator actually saw.
+  const out = projectDeliveryLedger([msg({ text: EXPANDED, sourceId: "s:5" })], [item({ text: TABBED })])
+  assert.equal(out.length, 1)
+  assert.equal(out[0].deliveryId, undefined)
+})
+
+test("differing WORDS are still never matched — only whitespace is forgiven", () => {
+  const items = [item({ text: "restart\tthe server" })]
+  const rec = { type: "user", timestamp: iso(T0 + 1000), message: { content: "restart    the  daemon" } }
+  assert.equal(correlateDeliveryRecord(items, rec, iso(T0 + 1000)), items)
+})
+
+test("a SHORT send is still never resolved by appearing inside an unrelated message, tabs or not", () => {
+  const items = [item({ text: "\tcontinue" })]
+  const rec = { type: "user", timestamp: iso(T0 + 1000), message: { content: "ok, please    continue with the plan" } }
+  assert.equal(correlateDeliveryRecord(items, rec, iso(T0 + 1000)), items)
+})
+
+// ---- identity: the invisible delivery marker ----
+// Text correlation is inference over a channel that rewrites bytes. The marker replaces it with an id
+// lookup, so a send is confirmed even when the recorded text no longer resembles what fray sent.
+const marked = (id: string, text: string) => text + encodeDeliveryMarker(id)
+
+test("a record whose TEXT was destroyed still delivers, because the marker identifies it", () => {
+  // The strongest statement of the fix: nothing about this prose matches, and it resolves anyway.
+  const it = item({ id: "d-x", text: "restart the daemon and re-run the suite" })
+  const rec = { type: "user", timestamp: iso(T0 + 40), message: { content: marked("d-x", "totally different prose the channel invented") } }
+  assert.deepEqual(correlateDeliveryRecord([it], rec, iso(T0 + 40)), [])
+})
+
+test("a marked enqueue receipts the item by id", () => {
+  const out = correlateDeliveryRecord(
+    [item({ id: "d-x" })],
+    { type: "queue-operation", operation: "enqueue", content: marked("d-x", "fix the bug"), timestamp: iso(T0 + 500) },
+    iso(T0 + 500),
+  )
+  assert.equal(out[0].state, "enqueued")
+})
+
+test("a glued submission resolves EVERY send by its own marker", () => {
+  const a = item({ id: "d-a", text: "the first follow-up" })
+  const b = item({ id: "d-b", text: "the second follow-up" })
+  const glued = marked("d-a", a.text) + "\n" + marked("d-b", b.text)
+  assert.deepEqual(correlateDeliveryRecord([a, b], { type: "user", timestamp: iso(T0 + 40), message: { content: glued } }, iso(T0 + 40)), [])
+})
+
+test("a marker for a DIFFERENT send never resolves this one", () => {
+  const it = item({ id: "d-mine", text: "my send" })
+  const rec = { type: "user", timestamp: iso(T0 + 40), message: { content: marked("d-someone-else", "unrelated text") } }
+  const out = correlateDeliveryRecord([it], rec, iso(T0 + 40))
+  assert.equal(out.length, 1)
+  assert.equal(out[0].state, "pending")
+})
+
+test("a marker is still refused when the record PREDATES the send (replay safety holds)", () => {
+  const it = item({ id: "d-x" })
+  const rec = { type: "user", timestamp: iso(T0 - 60_000), message: { content: marked("d-x", "fix the bug") } }
+  assert.equal(correlateDeliveryRecord([it], rec, iso(T0)).length, 1)
+})
+
+test("a MIXED record — one marked send glued ahead of an unmarked one — resolves both", () => {
+  // The upgrade case: an item already in flight when this shipped carries no marker, and must still be
+  // confirmed by text from the same record that identifies its marked neighbour by id.
+  const a = item({ id: "d-a", text: "the freshly marked follow-up that fray stamped" })
+  const b = item({ id: "d-b", text: "an older in-flight send with no marker at all" })
+  const glued = marked("d-a", a.text) + "\n" + b.text
+  assert.deepEqual(correlateDeliveryRecord([a, b], { type: "user", timestamp: iso(T0 + 40), message: { content: glued } }, iso(T0 + 40)), [])
+})
+
+test("the projection dedups a delivered copy whose marker the renderer already stripped", () => {
+  const it = item({ id: "d-x", text: "a marked send" })
+  const out = projectDeliveryLedger([msg({ text: "a marked send", sourceId: "s:5" })], [it])
+  assert.equal(out.length, 1)
+  assert.equal(out[0].deliveryId, undefined)
+})
+
+test("the projection dedups against a copy that STILL carries the raw marker", () => {
+  const it = item({ id: "d-x", text: "a marked send" })
+  const out = projectDeliveryLedger([msg({ text: marked("d-x", "a marked send"), sourceId: "s:5" })], [it])
+  assert.equal(out.length, 1)
+})
+
+// ---- dequeue ----
+// Claude Code emits `queue-operation remove` (content-bearing, 2398/2398 in the corpus) the moment it
+// takes a message OUT of its queue and into the turn — 1 to 19 records before the queued_command
+// attachment fray used to wait for. For that window the send was already being worked on while fray
+// still rendered it queued, which pins it below the working indicator.
+test("a content-bearing remove resolves the item at DEQUEUE, not at the later attachment", () => {
+  const out = correlateDeliveryRecord(
+    [item({ state: "enqueued" })],
+    { type: "queue-operation", operation: "remove", content: "fix the bug", timestamp: iso(T0 + 9000) },
+    iso(T0 + 9000),
+  )
+  assert.deepEqual(out, [])
+})
+
+test("a dequeue resolves by MARKER even when the echoed text was rewritten", () => {
+  const it = item({ id: "d-x", state: "enqueued", text: "col1\tcol2\r\nand some prose to follow" })
+  const echoed = ("col1\tcol2\r\nand some prose to follow" + encodeDeliveryMarker("d-x")).replace(/\r\n/g, "\n\n").replace(/\t/g, "    ")
+  const out = correlateDeliveryRecord([it], { type: "queue-operation", operation: "remove", content: echoed, timestamp: iso(T0 + 9000) }, iso(T0 + 9000))
+  assert.deepEqual(out, [])
+})
+
+test("a CONTENTLESS remove/dequeue is never evidence (the bare handshake)", () => {
+  // All 1032 `dequeue` records in the corpus carry no content; an empty handshake cannot be attributed
+  // to any particular send, so it must leave the ledger untouched.
+  const items = [item({ state: "enqueued" })]
+  assert.equal(correlateDeliveryRecord(items, { type: "queue-operation", operation: "dequeue", timestamp: iso(T0 + 9000) }, iso(T0 + 9000)), items)
+  assert.equal(correlateDeliveryRecord(items, { type: "queue-operation", operation: "remove", content: "   ", timestamp: iso(T0 + 9000) }, iso(T0 + 9000)), items)
+})
+
+test("a remove for SOMEONE ELSE's queue entry leaves our send alone", () => {
+  const items = [item({ state: "enqueued", text: "my steer" })]
+  const rec = { type: "queue-operation", operation: "remove", content: "<task-notification>a sub-agent finished</task-notification>", timestamp: iso(T0 + 9000) }
+  assert.equal(correlateDeliveryRecord(items, rec, iso(T0 + 9000)), items)
+})
+
+test("an enqueued item is no longer immortal — it drops after the same hour as unconfirmed", () => {
+  // It used to age never and drop never, so ONE missed delivery record left a gray bubble pinned below
+  // the working indicator for the life of the row.
+  assert.deepEqual(ageDeliveries([item({ state: "enqueued" })], T0 + UNCONFIRMED_DROP_MS + 1000), [])
+  // …but a queue entry inside a legitimately long turn is still left completely alone.
+  const live = [item({ state: "enqueued" })]
+  assert.equal(ageDeliveries(live, T0 + PENDING_TIMEOUT_MS * 10), live)
 })
 
 test("aging is identity-stable when nothing changes", () => {

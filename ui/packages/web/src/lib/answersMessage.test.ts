@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { parseAnswersMessage, pairAnswersMessage, pairAllAnswers, type MsgLike } from "./answersMessage.ts"
+import { parseAnswersMessage, parseBuriedAnswersMessage, parseAnswersCard, pairAnswersMessage, pairAllAnswers, type MsgLike } from "./answersMessage.ts"
 
 test("parses the multi-block composed-answer format into numbered rows", () => {
   const parsed = parseAnswersMessage("Answers:\n1. B. Hard-error with an install hint\n2. A. Preload it")
@@ -50,6 +50,54 @@ test("prose that merely contains the word Answers is not misdetected", () => {
 test("empty / whitespace input returns null", () => {
   assert.equal(parseAnswersMessage(""), null)
   assert.equal(parseAnswersMessage("   \n  "), null)
+})
+
+// ---- parseBuriedAnswersMessage (composeAnswerWire's self-describing form) ----
+
+test("parses the buried form's quoted question and answer into card rows", () => {
+  const parsed = parseBuriedAnswersMessage('Answers to earlier questions:\n1. “Which database?” → A. Postgres\n2. “Ship it?” → B. Hold')
+  assert.deepEqual(parsed, [
+    { n: 1, answer: "A. Postgres", question: "Which database?" },
+    { n: 2, answer: "B. Hold", question: "Ship it?" },
+  ])
+})
+
+test("an answer containing its own arrow keeps everything after the FIRST quote-arrow", () => {
+  const parsed = parseBuriedAnswersMessage('Answers to earlier questions:\n1. “Which flow?” → A. draft → review → merge')
+  assert.equal(parsed?.[0].question, "Which flow?")
+  assert.equal(parsed?.[0].answer, "A. draft → review → merge")
+})
+
+test("a multi-line buried answer folds its continuation lines in", () => {
+  const parsed = parseBuriedAnswersMessage('Answers to earlier questions:\n1. “Why?” → because\nof this\n2. “And?” → sure')
+  assert.equal(parsed?.length, 2)
+  assert.equal(parsed?.[0].answer, "because\nof this")
+  assert.equal(parsed?.[1].answer, "sure")
+})
+
+test("an empty quoted question leaves the row unpaired (the numbered fallback, never an empty label)", () => {
+  const parsed = parseBuriedAnswersMessage('Answers to earlier questions:\n1. “” → A. Postgres')
+  assert.deepEqual(parsed, [{ n: 1, answer: "A. Postgres" }])
+})
+
+test("CR-separated buried form parses (terminal-injected follow-up)", () => {
+  const parsed = parseBuriedAnswersMessage('Answers to earlier questions:\r1. “Q?” → A')
+  assert.deepEqual(parsed, [{ n: 1, answer: "A", question: "Q?" }])
+})
+
+test("buried detection is strict: wrong header, or rows without the quote-arrow, → null", () => {
+  assert.equal(parseBuriedAnswersMessage('Answers to earlier questions: sort of\n1. “Q?” → A'), null)
+  assert.equal(parseBuriedAnswersMessage("Answers to earlier questions:\n1. just an answer"), null)
+  assert.equal(parseBuriedAnswersMessage("Answers to earlier questions:\nprose first\n1. “Q?” → A"), null)
+  assert.equal(parseBuriedAnswersMessage("Answers to earlier questions:"), null)
+  assert.equal(parseBuriedAnswersMessage("Answers:\n1. A"), null) // the live form is the other parser's
+  assert.equal(parseBuriedAnswersMessage(""), null)
+})
+
+test("parseAnswersCard accepts either wire form", () => {
+  assert.equal(parseAnswersCard('Answers to earlier questions:\n1. “Q?” → A')?.[0].question, "Q?")
+  assert.equal(parseAnswersCard("Answers:\n1. A")?.[0].answer, "A")
+  assert.equal(parseAnswersCard("plain follow-up"), null)
 })
 
 // ---- pairAnswersMessage (question↔answer correlation for the AnswersCard) ----
@@ -134,4 +182,22 @@ test("pairAllAnswers: null at ordinary indices, pairing at answers indices", () 
   const all = pairAllAnswers(msgs)
   assert.deepEqual([all[0], all[1]], [null, null])
   assert.equal(all[2]?.[0].question, "Pick?")
+})
+
+test("the buried form pairs from its OWN quoted questions, ignoring the lookback entirely", () => {
+  // Two asks buried behind an intervening human turn — the lookback would stop at that turn and drop
+  // every question (or, worse, number-map onto the nearest ask). The inline quotes win instead.
+  const msgs = [
+    qmsg("Old ask — which database?\n- A. Postgres"),
+    user("actually hold on"),
+    qmsg("Newer ask — ship it?\n- A. Yes"),
+    asst("still working…"),
+    user('Answers to earlier questions:\n1. “Old ask — which database?” → A. Postgres\n2. “Newer ask — ship it?” → A. Yes'),
+  ]
+  const paired = pairAnswersMessage(msgs, 4)
+  assert.equal(paired?.length, 2)
+  assert.equal(paired?.[0].question, "Old ask — which database?")
+  assert.equal(paired?.[0].answer, "A. Postgres")
+  assert.equal(paired?.[1].question, "Newer ask — ship it?")
+  assert.equal(paired?.[1].answer, "A. Yes")
 })

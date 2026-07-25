@@ -1208,11 +1208,8 @@ export function paneSnapshotCached(slug: string): PaneSnapshot | null {
   return paneMap().get(tmuxSessionName(slug)) ?? null
 }
 
-export function isExpectedAdoptionPaneLiveCached(slug: string, expected: ExpectedAdoptionPane): boolean {
-  const pane = paneSnapshotCached(slug)
-  return Boolean(pane && !pane.dead && sameExpectedPane(expected, pane))
-}
-
+// Adopted panes are matched by their exact tuple ANYWHERE on the tmux server, never by the slug's own
+// session name: an adopted pane lives in the operator's own tmux session, whose name fray does not own.
 export function isExpectedAdoptionPaneLiveAnywhereCached(expected: ExpectedAdoptionPane): boolean {
   for (const pane of paneMap().values()) {
     if (!pane.dead && sameExpectedPane(expected, pane)) return true

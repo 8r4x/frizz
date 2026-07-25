@@ -409,6 +409,31 @@ test("parseCodexLine: unified custom-tool content blocks flatten to ordered text
   assert.doesNotMatch(ev.text, /"type":"input_text"/)
 })
 
+// Shapes captured from the real corpus (2026-07-24: 2282 `compacted` records across 355 rollouts under
+// ~/.codex/sessions/2026; `payload.message` empty in every one, a token_count immediately before in 2281
+// and immediately after in 2282). Written inline rather than fixtured because a real record's
+// `replacement_history` is the whole prior conversation.
+test("parseCodexLine: the top-level `compacted` envelope is a compaction event (codex measures no tokens)", () => {
+  const line = JSON.stringify({
+    timestamp: "2026-07-20T22:12:57.947Z",
+    type: "compacted",
+    payload: { message: "", replacement_history: [{ type: "message", role: "developer", content: [] }] },
+  })
+  assert.deepEqual(parseCodexLine(line), [{ kind: "compaction", at: "2026-07-20T22:12:57.947Z" }])
+  // Defensive: the envelope alone is the signal, so a payload-less variant still reports the event.
+  assert.deepEqual(parseCodexLine(JSON.stringify({ timestamp: "2026-07-20T22:12:57.947Z", type: "compacted" })), [
+    { kind: "compaction", at: "2026-07-20T22:12:57.947Z" },
+  ])
+})
+
+test("parseCodexLine: token_count reports the LAST request's total as context usage; a shapeless one yields nothing", () => {
+  const tokenCount = (info: unknown) => JSON.stringify({ timestamp: "2026-07-20T22:11:14.818Z", type: "event_msg", payload: { type: "token_count", info } })
+  const ev = parseCodexLine(tokenCount({ last_token_usage: { input_tokens: 242204, output_tokens: 288, total_tokens: 242492 }, model_context_window: 258400 }))
+  assert.deepEqual(ev, [{ kind: "context-usage", at: "2026-07-20T22:11:14.818Z", tokens: 242492 }])
+  assert.deepEqual(parseCodexLine(tokenCount({ last_token_usage: {} })), [])
+  assert.deepEqual(parseCodexLine(tokenCount(null)), [])
+})
+
 test("parseCodexLine: NO DOUBLE COUNT — response_item/message (the assistant/prompt echo) yields nothing", () => {
   const asstEcho = firstLineOf((r) => r.type === "response_item" && r.payload?.type === "message" && r.payload?.role === "assistant")
   const userEcho = firstLineOf((r) => r.type === "response_item" && r.payload?.type === "message" && r.payload?.role === "user")
@@ -497,6 +522,10 @@ test("parseCodexLine over the full 2-turn fixture: event counts match the raw re
   assert.equal(count("tool-call"), 5)
   assert.equal(count("tool-result"), 5)
   assert.equal(count("user-message"), 2)
+  // the fixture's 6 token_count records — telemetry the fold ignores and the transcript uses only to
+  // bracket a compaction (this fixture has none, so no compaction event).
+  assert.equal(count("context-usage"), 6)
+  assert.equal(count("compaction"), 0)
   // exactly one final answer per turn
   assert.equal(evs.filter((e) => e.kind === "assistant-text" && (e as any).final).length, 2)
 })

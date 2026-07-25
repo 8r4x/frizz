@@ -19,7 +19,7 @@ import {
 } from "./resume.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
 import { createCodexBackend, codexSandbox } from "./backend/codex.ts"
-import { readClaudePreflightAuth, readCodexAuthState } from "./backend/auth-status.ts"
+import { readClaudePreflightAuth, readCodexAuthState, readCodexBinaryState } from "./backend/auth-status.ts"
 import { createLoginUtility, type LoginUtility } from "./login-utility.ts"
 import type { AgentBackend } from "./backend/types.ts"
 import { detectGithub, type GithubDetection } from "./github.ts"
@@ -34,6 +34,7 @@ import {
   type CodexAppServerBridge,
   type CodexSandboxMode,
 } from "./backend/codex-app-server.ts"
+import { createCodexDiagnosticSink } from "./backend/codex-app-server-diagnostics.ts"
 import {
   claudeBrokerBridgeEnabled,
   createClaudeAgentBrokerBridge,
@@ -544,6 +545,10 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         dbPath,
         interactions: storage.interactions,
         codexBin: opts.codexBin,
+        // Persist the bridge's lifecycle events so a mid-turn daemon death is diagnosable after the
+        // fact. Before this the diagnostic sink was unset and every death — the six-sub-agent loss
+        // included — was an unattributable "the thread went quiet." See codex-app-server-diagnostics.ts.
+        diagnostic: createCodexDiagnosticSink(project.stateDir, project.id),
         // Never wake a thread the human has already put away: a restart-recovery nudge is only for a
         // thread that is still open and still theirs to come back to.
         shouldAutoResume: (slug) => {
@@ -698,6 +703,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
       kind === "codex"
         ? Promise.resolve(readCodexAuthState())
         : readClaudePreflightAuth({ claudeBin: opts.claudeBin, cwd: project.dir }),
+    preflightCodexBinary: () => readCodexBinaryState(opts.codexBin ?? "codex"),
   })
 
   // Durable timer waker + legacy pr/ci compatibility. Reuses the SAME resume path as followUp;

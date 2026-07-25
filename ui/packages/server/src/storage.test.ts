@@ -277,37 +277,6 @@ test("session profile: model/effort round-trip and survive a resume-style upsert
   assert.equal(saved.effort, "ultra")
 })
 
-test("queued profile targets survive restart and promote or commit only for their exact owner", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-storage-profile-queue-"))
-  const path = join(dir, "ui.db")
-  let s = createStorage(path)
-  s.upsertSession(row({ slug: "queued-profile", backend: "claude", model: "opus", effort: "high" }))
-  const queued = s.queueProfileChange("queued-profile", {
-    sessionId: "sid",
-    nativeSessionId: null,
-    generation: 0,
-  }, { model: "fable", effort: "medium" })
-  assert.ok(queued)
-  assert.equal(s.getSession("queued-profile")?.runtime_control, "profile-queued")
-  assert.equal(s.getSession("queued-profile")?.profile_queued_model, "fable")
-  assert.equal(s.beginRuntimeControl("queued-profile", {
-    sessionId: "sid",
-    nativeSessionId: null,
-    generation: 0,
-  }, "follow-up"), null, "a queued profile owns the runtime-control lane")
-  s.close()
-
-  s = createStorage(path)
-  assert.equal(s.commitQueuedProfileTarget("queued-profile", { ...queued!, controlRevision: queued!.controlRevision + 1 }), false)
-  assert.equal(s.commitQueuedProfileTarget("queued-profile", queued!), true)
-  const committed = s.getSession("queued-profile")!
-  assert.equal(committed.model, "fable")
-  assert.equal(committed.effort, "medium")
-  assert.equal(committed.profile_queued_model, null)
-  assert.equal(committed.runtime_control, null)
-  s.close()
-})
-
 test("profile target/pending/revision and runtime control commit as one exact-owned CAS", () => {
   const s = store()
   s.upsertSession(row({
@@ -469,10 +438,8 @@ test("boot abandons a codex row still holding the retired tmux profile handoff",
   const path = join(dir, "ui.db")
   const s = createStorage(path)
   s.upsertSession(row({ slug: "codex-stuck" }))
-  s.upsertSession(row({ slug: "codex-queued", session_id: "sid-codex-queued" }))
   s.upsertSession(row({ slug: "claude-stuck", session_id: "sid-claude" }))
   s.setBackend("codex-stuck", "codex")
-  s.setBackend("codex-queued", "codex")
   s.setBackend("claude-stuck", "claude")
   s.close()
 
@@ -481,11 +448,6 @@ test("boot abandons a codex row still holding the retired tmux profile handoff",
     UPDATE session
     SET runtime_control = 'profile', profile_pending_model = 'gpt-5.6-sol',
         profile_pending_effort = 'high', profile_handoff = '{"version":1,"phase":"armed"}'
-    WHERE slug IN ('codex-stuck', 'claude-stuck');
-    UPDATE session
-    SET runtime_control = 'profile-queued', profile_queued_model = 'gpt-5.6-luna',
-        profile_queued_effort = 'medium'
-    WHERE slug = 'codex-queued'
   `)
   sqlite.close()
 
@@ -496,10 +458,6 @@ test("boot abandons a codex row still holding the retired tmux profile handoff",
   assert.equal(codex.profile_pending_effort ?? null, null)
   assert.equal(codex.profile_handoff ?? null, null, "and so is its journal")
   assert.match(codex.control_error ?? "", /armed on the retired Codex tmux path/, "the operator is told why it vanished")
-  const queued = reopened.getSession("codex-queued")!
-  assert.equal(queued.runtime_control ?? null, null, "a stale Codex queue is also released")
-  assert.equal(queued.profile_queued_model ?? null, null)
-  assert.equal(queued.profile_queued_effort ?? null, null)
 
   const claude = reopened.getSession("claude-stuck")!
   assert.equal(claude.runtime_control, "profile", "a CLAUDE handoff still recovers normally")
@@ -760,6 +718,89 @@ test("automatic title CAS persists provenance and rejects manual, native-session
   s.close()
 })
 
+test("a dispatch title a CALLER hard-coded is displayable but replaceable; only a human's locks", () => {
+  const s = store()
+  // What the GitHub batch and `mcp__fray__spawn_thread` write: a real-looking name (title_auto 0, so the
+  // UI never hides it behind a placeholder) that no human chose (title_locked 0).
+  s.upsertSession(row({
+    slug: "gh-thread",
+    session_id: "fray-session",
+    runtime_generation: 0,
+    title: "Investigate acme/app#391",
+    title_auto: 0,
+    title_locked: 0,
+  }))
+  s.setBackend("gh-thread", "codex")
+  s.setAgentSession("gh-thread", "codex-native")
+  const expected = { sessionId: "fray-session", nativeSessionId: "codex-native", runtimeGeneration: 0 }
+
+  assert.equal(s.setAutoTitleIfCurrent("gh-thread", "Cache key collides on normalized ids", expected), true)
+  assert.equal(s.getSession("gh-thread")?.title, "Cache key collides on normalized ids")
+  assert.equal(s.getSession("gh-thread")?.title_auto, 0, "the row still holds a real name, not a guess")
+  assert.equal(s.getSession("gh-thread")?.title_locked, 0, "and stays open to a better native title")
+
+  // The human renaming it is the ONLY thing that locks — and it locks against every later signal.
+  s.setTitle("gh-thread", "Resolver cache bug")
+  assert.equal(s.getSession("gh-thread")?.title_locked, 1)
+  assert.equal(s.setAutoTitleIfCurrent("gh-thread", "Late generated title", expected), false)
+  assert.equal(s.getSession("gh-thread")?.title, "Resolver cache bug")
+  s.close()
+})
+
+test("a row written without title_locked keeps the pre-split rule: any non-guessed title is the human's", () => {
+  const s = store()
+  // Every pre-existing caller (and every fixture) omits the column. Absent must read as LOCKED for a
+  // real title and UNLOCKED for a machine guess, or the split would silently reopen legacy renames.
+  s.upsertSession(row({ slug: "legacy-named", session_id: "sid-a", title: "Legacy renamed thread", title_auto: 0 }))
+  s.upsertSession(row({ slug: "legacy-guess", session_id: "sid-b", title: "fix the parser bug", title_auto: 1 }))
+  assert.equal(s.getSession("legacy-named")?.title_locked, 1)
+  assert.equal(s.getSession("legacy-guess")?.title_locked, 0)
+
+  assert.equal(
+    s.setAutoTitleIfCurrent("legacy-named", "generated-slug", { sessionId: "sid-a", nativeSessionId: null, runtimeGeneration: 0 }),
+    false,
+  )
+  assert.equal(
+    s.setAutoTitleIfCurrent("legacy-guess", "Parser fix", { sessionId: "sid-b", nativeSessionId: null, runtimeGeneration: 0 }),
+    true,
+  )
+  s.close()
+})
+
+test("the title_locked migration backfills conservatively and its boot repair is idempotent", () => {
+  const dbPath = join(mkdtempSync(join(tmpdir(), "fray-title-lock-")), "ui.db")
+  const first = createStorage(dbPath)
+  first.upsertSession(row({ slug: "named", session_id: "sid-a", title: "Human name", title_auto: 0, title_locked: 1 }))
+  first.upsertSession(row({ slug: "guessed", session_id: "sid-b", title: "raw prompt chop", title_auto: 1, title_locked: 0 }))
+  first.upsertSession(row({ slug: "caller", session_id: "sid-c", title: "Investigate acme/app#391", title_auto: 0, title_locked: 0 }))
+  first.close()
+
+  // Rewind to the real pre-split shape — a DB whose session table has no title_locked at all.
+  const raw = new Database(dbPath)
+  raw.exec("ALTER TABLE session DROP COLUMN title_locked")
+  raw.close()
+
+  // Reopening runs the ADD COLUMN + repair exactly as a server upgrade does. Both titles a human owns
+  // (explicit and legacy) come back LOCKED from the conservative DEFAULT; only the machine guess is
+  // unlocked by the repair. The caller-titled row is indistinguishable from a rename at this point and
+  // is correctly locked — the feature applies to threads dispatched from here on, and nothing that
+  // predates it silently loosens.
+  const upgraded = createStorage(dbPath)
+  assert.equal(upgraded.getSession("named")?.title_locked, 1)
+  assert.equal(upgraded.getSession("guessed")?.title_locked, 0)
+  assert.equal(upgraded.getSession("caller")?.title_locked, 1)
+  // A fresh dispatch under the new schema, then another restart: the repair must NOT re-lock it. A
+  // repair written the other way round (`SET title_locked = 1 WHERE title_auto = 0`) would silently
+  // undo this feature on every server restart, which is why it keys on the guess flag instead.
+  upgraded.upsertSession(row({ slug: "fresh", session_id: "sid-d", title: "Review acme/app#12", title_auto: 0, title_locked: 0 }))
+  upgraded.close()
+
+  const restarted = createStorage(dbPath)
+  assert.equal(restarted.getSession("fresh")?.title_locked, 0, "a restart never re-locks a caller's dispatch title")
+  assert.equal(restarted.getSession("named")?.title_locked, 1)
+  restarted.close()
+})
+
 test("forgetSession: DELETEs the row and returns it; the slug is gone", () => {
   const s = store()
   s.upsertSession(row({ slug: "phantom", session_id: "sid-1" }))
@@ -895,4 +936,38 @@ test("setSnoozedUntilIfCurrent parks only the current session+generation and lea
   assert.equal(s.setSnoozedUntilIfCurrent("aw6", "stale", 0, "2099-07-14T08:45:00.000Z"), false)
   assert.equal(s.setSnoozedUntilIfCurrent("aw6", "sid", 0, "2099-07-14T08:45:00.000Z"), true)
   assert.equal(s.getSession("aw6")?.snoozed_until, "2099-07-14T08:45:00.000Z")
+})
+
+test("setPermissionMode stamps the operator set-time; the observed write-back never touches it", () => {
+  const s = store()
+  s.upsertSession(row({ slug: "px", backend: "codex", permission_mode: "default" }))
+  assert.equal(s.getSession("px")?.permission_set_at ?? null, null, "not stamped until the operator sets it")
+
+  s.setPermissionMode("px", "bypassPermissions")
+  const setAt = s.getSession("px")?.permission_set_at
+  assert.ok(setAt && !Number.isNaN(Date.parse(setAt)), "the operator set-time is stamped as an ISO instant")
+  assert.equal(s.getSession("px")?.permission_mode, "bypassPermissions")
+
+  // The tailer's observed write-back changes the mode but must NOT re-stamp the operator set-time,
+  // or the board's set-time-vs-observed comparison would always look freshly-operator-set.
+  const gen = s.getSession("px")?.runtime_generation ?? 0
+  s.setObservedPermissionIfCurrent("px", s.getSession("px")!.session_id, gen, "default")
+  assert.equal(s.getSession("px")?.permission_set_at, setAt, "observed write-back leaves permission_set_at untouched")
+})
+
+test("setProfile stamps the operator set-time; the observed write-back never touches it", () => {
+  const s = store()
+  s.upsertSession(row({ slug: "pf", backend: "codex", model: "gpt-5.6-sol", effort: "xhigh" }))
+  assert.equal(s.getSession("pf")?.profile_set_at ?? null, null, "not stamped until the operator sets it")
+
+  s.setProfile("pf", "gpt-5.6-sol", "low")
+  const setAt = s.getSession("pf")?.profile_set_at
+  assert.ok(setAt && !Number.isNaN(Date.parse(setAt)), "the operator set-time is stamped as an ISO instant")
+  assert.equal(s.getSession("pf")?.effort, "low")
+
+  // The tailer's observed profile write-back changes model/effort but must NOT re-stamp the set-time,
+  // or the board's set-time-vs-observed comparison would always look freshly-operator-set.
+  const gen = s.getSession("pf")?.runtime_generation ?? 0
+  s.setObservedProfileIfCurrent("pf", { sessionId: s.getSession("pf")!.session_id, generation: gen }, { model: "gpt-5.6-sol", effort: "xhigh" })
+  assert.equal(s.getSession("pf")?.profile_set_at, setAt, "observed write-back leaves profile_set_at untouched")
 })

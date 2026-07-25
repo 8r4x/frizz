@@ -1,11 +1,13 @@
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useSnapshot } from "valtio"
-import { store, markDrawerClosing, removeDrawerAfterExit } from "../store.ts"
+import { store } from "../store.ts"
 import { useBoard } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
 import { displayTitle } from "../groups.ts"
-import { registerDrawerClose, registerDrawerFocus } from "../lib/overlays.ts"
+import { registerDrawerFocus } from "../lib/overlays.ts"
+import { useSheetLayer } from "./ui/Sheet.tsx"
+import { SHEET_PANEL_CLASS, SHEET_SCRIM_CLASS, sheetWidth } from "../lib/sheet.ts"
 import {
   clampThreadTab,
   readThreadTab,
@@ -22,10 +24,6 @@ import { ThreadView, type ThreadTab } from "./ChatView.tsx"
 // showing a thread's FULL view as an OVERLAY — the queue (and any layers below) keep their scroll and
 // state; closing just reveals what's underneath. Chat/Terminal is LOCAL to the layer. `depth` insets
 // each successive layer a step further from the right edge so the stack reads as a stack.
-const CLOSE_MS = 210
-function prefersReducedMotion() {
-  return typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
-}
 
 function useNarrowDrawer(): boolean {
   const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 800px)").matches)
@@ -40,12 +38,11 @@ function useNarrowDrawer(): boolean {
 }
 
 export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id: number; slug: string; depth: number; widthDepth: number; initiallyOpen?: boolean }) {
-  // URL-created sheets exist before the first React paint. They must begin visible: waiting for a
-  // post-mount animation frame left a full-screen opacity-0 backdrop mounted indefinitely on a cold
-  // page, so the first apparent sidebar click actually closed that invisible sheet. Interaction-
-  // created sheets retain the slide-in below.
-  const [shown, setShown] = useState(initiallyOpen === true)
-  const closingRef = useRef(false)
+  // URL-created sheets exist before the first React paint. They must begin visible (initiallyOpen):
+  // waiting for a post-mount animation frame left a full-screen opacity-0 backdrop mounted indefinitely
+  // on a cold page, so the first apparent sidebar click actually closed that invisible sheet.
+  // useSheetLayer owns the slide-in/close/re-arm/Esc-registration exactly as the plain sheets do.
+  const { shown, close, closingRef } = useSheetLayer(id, initiallyOpen === true)
   // INSTANT OPEN: the sheet frame + spinner paint immediately; the heavy body (ChatView — a 100KB+
   // transcript, markdown, diff highlighting) is deferred until AFTER the first paint so click→visible
   // isn't gated on rendering it. The spinner covers the one-frame gap.
@@ -53,7 +50,6 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
   const scrollerRef = useRef<HTMLDivElement>(null)
   const initialScrollRef = useRef<DrawerInitialScrollCoordinator | null>(null)
   const drawerSnap = useSnapshot(store)
-  const drawerClosing = drawerSnap.drawers.find((drawer) => drawer.id === id)?.closing === true
   const activeDrawer = [...drawerSnap.drawers].reverse().find((drawer) => !drawer.closing)
   const isTopDrawer = activeDrawer?.id === id
   const narrow = useNarrowDrawer()
@@ -68,14 +64,6 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
       if (opener?.isConnected) opener.focus({ preventScroll: true })
     }, 0)
   }, [])
-
-  // A rapid second open cancels the exit in the store. Re-arm the mounted sheet and leave its old
-  // timeout harmless (removeDrawerAfterExit only removes entries that are still closing).
-  useEffect(() => {
-    if (drawerClosing || !closingRef.current) return
-    closingRef.current = false
-    setShown(true)
-  }, [drawerClosing])
 
   // Opening a thread IS reading it: record seen/read telemetry without acknowledging its lifecycle
   // handoff (resting queue cards stay present until follow-up, Snooze, or Archive). Re-fire only when
@@ -208,31 +196,23 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
     tab,
   ])
 
-  // Slide the frame in on the next frame; defer the heavy body one MORE frame so the shell paints
-  // first (instant open) and the transcript render doesn't gate click→visible.
+  // Defer the heavy body (ChatView) one frame past the shell's own slide-in (useSheetLayer flips
+  // `shown` on the first frame) so click→visible isn't gated on rendering a 100KB+ transcript. Same
+  // 120ms RAF-starvation backstop as the shell: a background/occluded tab can report visibilityState
+  // "visible" while starving requestAnimationFrame, and the body must still reveal.
   useEffect(() => {
     if (initiallyOpen) return
-    let raf2 = 0
-    let bodyShown = false
-    // Background/occluded Chrome windows can report `visibilityState === "visible"` while starving
-    // requestAnimationFrame entirely. Do not leave an interaction-opened sheet as an invisible,
-    // click-swallowing backdrop forever; the timer is only a starvation fallback.
-    const fallback = window.setTimeout(() => {
-      if (bodyShown || closingRef.current) return
-      bodyShown = true
-      setShown(true)
+    let done = false
+    const reveal = () => {
+      if (done || closingRef.current) return
+      done = true
       setBodyReady(true)
-    }, 120)
+    }
+    let raf2 = 0
     const raf1 = requestAnimationFrame(() => {
-      if (closingRef.current) return
-      setShown(true)
-      raf2 = requestAnimationFrame(() => {
-        if (closingRef.current) return
-        bodyShown = true
-        window.clearTimeout(fallback)
-        setBodyReady(true)
-      })
+      raf2 = requestAnimationFrame(reveal)
     })
+    const fallback = window.setTimeout(reveal, 120)
     return () => {
       window.clearTimeout(fallback)
       cancelAnimationFrame(raf1)
@@ -252,23 +232,6 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
     return () => cancelAnimationFrame(frame)
   }, [bodyReady])
 
-  function close() {
-    if (closingRef.current) return
-    closingRef.current = true
-    markDrawerClosing(id) // stop URL/topThreadSlug counting this layer the instant it slides out
-    setShown(false)
-    window.setTimeout(() => {
-      removeDrawerAfterExit(id)
-    }, prefersReducedMotion() ? 0 : CLOSE_MS)
-  }
-
-  // Register the animated close for App's Esc handler (topmost-first unwinding).
-  useEffect(() => {
-    registerDrawerClose(id, close)
-    return () => registerDrawerClose(id, null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id])
-
   useEffect(() => {
     registerDrawerFocus(id, () => {
       const initial = scrollerRef.current?.querySelector<HTMLElement>("[data-dialog-initial-focus]") ?? scrollerRef.current
@@ -281,7 +244,7 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
     <RadixDialog.Root modal={narrow} open onOpenChange={(open) => { if (!open) close() }}>
       <RadixDialog.Portal>
         <RadixDialog.Overlay
-          className={`fixed inset-0 bg-black/40 backdrop-blur-[1px] transition-opacity duration-200 ease-out motion-reduce:transition-none ${shown ? "opacity-100" : "opacity-0"}`}
+          className={`${SHEET_SCRIM_CLASS} ${shown ? "opacity-100" : "opacity-0"}`}
           style={{ zIndex: 50 + depth * 2 }}
         />
         <RadixDialog.Content
@@ -331,8 +294,8 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
             const initial = el?.querySelector<HTMLElement>("[data-dialog-initial-focus]") ?? el
             initial?.focus({ preventScroll: true })
           }}
-          className={`fixed right-0 top-0 h-full flex flex-col overflow-hidden border-l border-border bg-panel shadow-2xl shadow-black/50 outline-none transition-transform duration-200 ease-out motion-reduce:transition-none ${shown ? "translate-x-0" : "translate-x-full"}`}
-          style={{ zIndex: 51 + depth * 2, width: `min(${720 - widthDepth * 28}px, ${80 - widthDepth * 4}vw)` }}
+          className={`fixed right-0 top-0 overflow-hidden outline-none ${SHEET_PANEL_CLASS} ${shown ? "translate-x-0" : "translate-x-full"}`}
+          style={{ zIndex: 51 + depth * 2, width: sheetWidth(widthDepth) }}
         >
           <RadixDialog.Title className="sr-only">
             {route.kind === "found" ? `Thread: ${displayTitle(route.thread)}` : `Thread: ${slug}`}

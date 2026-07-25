@@ -2,6 +2,8 @@
 // one off as an answerable card WITHIN the message's narrative flow (prose stays in place). Pure
 // string logic, no DOM — unit-testable.
 
+import { insideFence } from "@fray-ui/shared"
+
 // The three answer MODES a ```question block can carry (the info-string picks one):
 //   question — single-select (radio feel) OR freetext; the default.
 //   approval — a go/no-go gate (same single-select semantics, gate styling).
@@ -24,6 +26,12 @@ export type MessageAnswering = {
   onChip: (blockIdx: number, optIdx: number, optText: string) => void
   onText: (blockIdx: number, text: string) => void
   onSubmit: () => void // ⌘-Enter from any block input, or this message's Send button, composes + sends
+  // ONE-CLICK answer for a block (the approval gate's action buttons): set this block's answer AND send,
+  // in a single gesture. It cannot be expressed as onChip-then-onSubmit — onChip goes through setState,
+  // so a submit fired in the same handler would compose from the PRE-click answers and drop the choice.
+  // The answer is passed through as an override instead, and any sibling block the human already filled
+  // still rides along.
+  onInstantAnswer: (blockIdx: number, answer: string) => void
   anyAnswered: boolean // at least one of THIS message's blocks is filled → its Send button is enabled
   sending: boolean // a send is in flight → disable this message's Send button
 }
@@ -54,9 +62,18 @@ function parseInfoString(info: string | undefined): { kind: QuestionKind; danger
 
 export function splitQuestionBlocks(text: string): MessageSegment[] {
   const segments: MessageSegment[] = []
+  // An opener that sits INSIDE a fenced code block is being QUOTED, not asked — a worker documenting
+  // the protocol wraps its sample in a ```` fence. Hoisting that sample into a live answerable card also
+  // strands the enclosing delimiters as orphan prose, whose unterminated fence then swallows the rest of
+  // the message (maintainer 2026-07-25). Left in the prose run, it renders as the code block it is.
+  const quoted = insideFence(text)
   let lastIndex = 0
   QUESTION_BLOCK.lastIndex = 0
   for (let m = QUESTION_BLOCK.exec(text); m !== null; m = QUESTION_BLOCK.exec(text)) {
+    if (quoted(m.index)) {
+      QUESTION_BLOCK.lastIndex = m.index + 1 // rescan from just past the opener, never skip what it spanned
+      continue
+    }
     const prose = text.slice(lastIndex, m.index)
     if (prose.trim()) segments.push({ kind: "prose", text: prose })
     const { kind, danger } = parseInfoString(m[1])
@@ -90,6 +107,11 @@ export interface ParsedQuestion {
   // Prose that follows the option run (a worker often adds a "Note: …" footnote AFTER the choices).
   // Rendered BELOW the chips so the options stay answerable instead of the trailing prose swallowing them.
   trailingMd?: string
+  // Group headings INSIDE the option run, parallel to `options`: a worker who groups its choices
+  // ("Thread / loom family:" over A–C, "Melee family:" over D–F) writes a prose line between them.
+  // `optionHeadings[i]` is the prose that introduces option i (undefined for most). Present only when
+  // the run actually carries one, so the common case stays a plain option list.
+  optionHeadings?: (string | undefined)[]
 }
 
 // An option line: an optional markdown list marker (workers write options as `- A. …`), then a single
@@ -101,6 +123,22 @@ const REC_RE = /^\s*recommendation\b/i
 function optionText(line: string): string {
   return line.trim().replace(/^[-*+]\s+/, "")
 }
+
+// An option-looking line's leading identifier, uppercased ("- C. Does …" → "C", "3) Ten" → "3").
+function lineId(line: string): string {
+  return optionText(line).match(/^([A-Za-z]|\d+)[.)]/)?.[1].toUpperCase() ?? ""
+}
+
+// Is `b` the identifier that COMES NEXT after `a` in a choice list ("A"→"B", "1"→"2")? Letters and
+// numbers never continue each other.
+function follows(a: string, b: string): boolean {
+  if (/^\d+$/.test(a)) return /^\d+$/.test(b) && Number(b) === Number(a) + 1
+  return /^[A-Z]$/.test(a) && /^[A-Z]$/.test(b) && b.charCodeAt(0) === a.charCodeAt(0) + 1
+}
+
+// The only identifiers a choice list can OPEN with. A "list" that starts at C is a fragment of
+// something else, not a set of choices.
+const isListOrigin = (id: string) => id === "A" || id === "1"
 
 // The inline "recommended" marker — the PRIMARY, single-source-of-truth way a worker flags the
 // recommended option: the word "recommended" appearing ON that option's line (no separate letter-matched
@@ -157,35 +195,84 @@ export function stripRecommendedMarker(label: string): { label: string; recommen
 // and dropped every chip. Now: context = prose BEFORE the run; the run = the chips; prose AFTER the run
 // = `trailingMd` (rendered below the chips); a "Recommendation: …" line anywhere after the run is the
 // muted rec note. Blank lines WITHIN the run are tolerated. No option run → a freetext-only question.
+// The run is then read as a LIST (see below) so a question line that merely LOOKS like an option — the
+// numbering workers give their questions across a batch — stays the question.
 export function parseQuestionBlock(body: string, kind: QuestionKind, danger = false): ParsedQuestion {
   const lines = body.split("\n").map((l) => l.replace(/\r$/, ""))
 
-  // First maximal run of option lines (consecutive OPTION_RE lines; interspersed blanks don't break it).
-  let runStart = -1
-  let runEnd = -1
-  for (let i = 0; i < lines.length; i++) {
-    if (OPTION_RE.test(lines[i])) {
-      if (runStart === -1) runStart = i
-      runEnd = i
-    } else if (runStart !== -1 && lines[i].trim() !== "") {
-      break // a non-blank, non-option line ends the run
+  // The candidate run: option lines from `from` on. Blank lines never break it, and neither does a prose
+  // line whose NEXT option CONTINUES the sequence — workers group their choices under headings
+  // ("Thread / loom family:" over A–C, "Melee family:" over D–F), and ending the run at the heading
+  // stranded D–F in the trailing prose as unanswerable text. The id check is what keeps that safe: a
+  // second question's list restarts at A, which does not follow C, so the run still ends there. A
+  // "Recommendation: …" line always closes the choices.
+  const nextOptionAfter = (i: number) => lines.findIndex((l, j) => j > i && OPTION_RE.test(l))
+  const scanRun = (from: number): number[] => {
+    const run: number[] = []
+    for (let i = from; i < lines.length; i++) {
+      if (OPTION_RE.test(lines[i])) { run.push(i); continue }
+      if (run.length === 0 || lines[i].trim() === "") continue // before the run, or a blank inside it
+      if (REC_RE.test(lines[i])) break
+      const next = nextOptionAfter(i)
+      if (next === -1 || !follows(lineId(lines[run[run.length - 1]]), lineId(lines[next]))) break
     }
+    return run
   }
-  if (runStart === -1) return { kind, danger, contextMd: body, options: [], recommendedIdx: null }
+
+  // Read the candidate run as a LIST, because OPTION_RE alone cannot tell a choice from a line that
+  // merely opens with an identifier. When a handoff carries several question blocks, workers number the
+  // QUESTION too ("C. Does `brokerTo` imply net access?", "9. How is loopback exposed?") and lead with a
+  // numbered plan before the choices — both were chipped as options, leaving the card with no question at
+  // all and a freetext row that repeated the last letter. So: walk back from the LAST option while the
+  // ids keep counting up; if that trailing sequence opens at A/1 it is the real choice list, and
+  // everything above it is question prose. A run whose tail does NOT open a list (a typo'd "A, C", a list
+  // that starts at B) is left exactly as it was — never eat a genuine choice to invent a question.
+  const listStart = (run: number[]): number => {
+    for (let k = run.length - 1; k > 0; k--) {
+      if (!follows(lineId(lines[run[k - 1]]), lineId(lines[run[k]]))) {
+        return isListOrigin(lineId(lines[run[k]])) ? k : 0
+      }
+    }
+    // A block whose whole content is one bare "3. What should `<tmp>` mean?" is a freetext question in a
+    // numbered batch, not a one-item menu — a single choice is never a choice. Needs the marker check: a
+    // lone "- A. Approve as-is" IS a (degenerate) option, and prose above it means the question is
+    // already there, so only an unmarkered line that opens the block is demoted.
+    if (run.length === 1 && !/^\s*[-*+]\s/.test(lines[run[0]]) && !lines.slice(0, run[0]).some((l) => l.trim())) return 1
+    return 0
+  }
+
+  // Demoting the leading line can consume the whole run ("9. How is loopback exposed?" with the choices
+  // below a line of prose, so the run never reached them) — then look for the real list underneath it.
+  let optLines: number[] = []
+  for (let from = 0; from < lines.length; ) {
+    const run = scanRun(from)
+    if (run.length === 0) break
+    const first = listStart(run)
+    if (first < run.length) { optLines = run.slice(first); break }
+    from = run[0] + 1
+  }
+
+  if (optLines.length === 0) return { kind, danger, contextMd: body, options: [], recommendedIdx: null }
+  const runStart = optLines[0]
+  const runEnd = optLines[optLines.length - 1]
 
   // PRIMARY recommendation signal: the word "recommended" on an option line. Strip the marker from each
   // label (the badge conveys it) and remember the FIRST flagged option + its inline rationale.
   const options: string[] = []
   let recommendedIdx: number | null = null
   let recommendedNote: string | undefined
-  for (let i = runStart; i <= runEnd; i++) {
-    if (!OPTION_RE.test(lines[i])) continue
+  // Prose the run absorbed (a group heading) belongs to the option it introduces, so the chips can carry
+  // it as a caption instead of it vanishing between them.
+  const optionHeadings: (string | undefined)[] = []
+  for (const [k, i] of optLines.entries()) {
     const { label, recommended, note } = stripRecommendedMarker(optionText(lines[i]))
     if (recommended && recommendedIdx === null) {
       recommendedIdx = options.length
       recommendedNote = note
     }
     options.push(label)
+    const between = k === 0 ? [] : lines.slice(optLines[k - 1] + 1, i).filter((l) => l.trim())
+    optionHeadings.push(between.length ? between.join("\n") : undefined)
   }
 
   const trim = (arr: string[]) => {
@@ -214,7 +301,10 @@ export function parseQuestionBlock(body: string, kind: QuestionKind, danger = fa
     if (recommendedIdx !== null) recommendedNote = recommendation
   }
 
-  return { kind, danger, contextMd, options, recommendedIdx, recommendedNote, recommendation, trailingMd }
+  return {
+    kind, danger, contextMd, options, recommendedIdx, recommendedNote, recommendation, trailingMd,
+    ...(optionHeadings.some(Boolean) ? { optionHeadings } : {}),
+  }
 }
 
 // Leading markdown emphasis/backticks a worker may wrap an identifier in (`**B**`, `_B_`, `` `B` ``).
@@ -250,6 +340,56 @@ export function recommendedIndex(recommendation: string | undefined, options: st
 export function optionId(opt: string): string {
   const m = opt.match(/^\s*([A-Za-z]|\d+)[.)]/)
   return m ? m[1].toUpperCase() : opt.trim()
+}
+
+const OPTION_ID_PREFIX = /^\s*(?:[A-Za-z]|\d+)[.)]\s*/
+
+// An option's text WITHOUT its "A."/"1)" id — the label for an approval block's action buttons, which
+// read as verbs ("Approve as-is") rather than menu entries ("A. Approve as-is"). Display only: the
+// answer actually SENT is always the full option text, so the wire format matches a chip click exactly.
+export function optionVerb(opt: string): string {
+  return opt.replace(OPTION_ID_PREFIX, "").trim() || opt.trim()
+}
+
+// ---- approval affirmative detection ----
+// An approval gate's options are a go and a decline. Which is which CANNOT be read off position: the
+// prompt's examples lead with the go ("- A. Do it" / "- B. Hold"), but nothing enforces it, and putting
+// a primary "approve" button on an option that actually says "Hold" would send the opposite of what the
+// human clicked — on a `danger` gate, catastrophically. So classify by the option's OWN words, and
+// return null whenever the reading is not clean (the caller then renders every action equal-weight).
+
+// The leading VERB CLAUSE — text before the first dash/colon separator, id prefix and markdown emphasis
+// removed. Classification reads only this: "Hold — I'll wait for a green run" must be judged on "Hold",
+// not on a rationale that may well contain the word "merge" (and vice-versa).
+function leadingClause(option: string): string {
+  return option
+    .replace(OPTION_ID_PREFIX, "")
+    .replace(/[*_`~]/g, "")
+    .split(/\s+[—–]\s+|\s+-\s+|\s*[:;]\s+/)[0]
+    .trim()
+}
+
+const AFFIRMATIVE_LEAD =
+  /^(?:approve|approved|accept|yes|yep|ok|okay|do it|go|go ahead|proceed|ship|send it|merge|land|publish|apply|confirm|continue|lgtm|sounds good)\b/i
+const NEGATIVE_LEAD =
+  /^(?:hold|no|nope|not yet|wait|stop|cancel|abort|don'?t|do not|decline|reject|skip|defer|revert|pause|leave|keep)\b/i
+
+// The option that means GO, or null when there is no clean reading. `recommendedIdx` is the agent's own
+// marked recommendation (see parseQuestionBlock) and acts as both tiebreak and veto:
+//   · several affirmatives — the canonical gate has two ("Approve as-is" / "Approve with edits") — the
+//     recommended one wins, else the FIRST (the unqualified go).
+//   · the agent recommends a NON-affirmative ("Hold — wait for green") → null. A primary "Do it" must
+//     never out-shout the agent's own advice to decline; the Recommended badge carries the signal alone.
+export function approvalAffirmativeIndex(options: readonly string[], recommendedIdx: number | null = null): number | null {
+  const affirmative: number[] = []
+  for (let i = 0; i < options.length; i++) {
+    const clause = leadingClause(options[i])
+    if (NEGATIVE_LEAD.test(clause)) continue // a decline is never the go, whatever else the line says
+    if (AFFIRMATIVE_LEAD.test(clause)) affirmative.push(i)
+  }
+  if (affirmative.length === 0) return null
+  if (recommendedIdx !== null) return affirmative.includes(recommendedIdx) ? recommendedIdx : null
+  return affirmative[0]
 }
 
 // Compose ONE block's final answer string from its selection + freetext — the single source of truth

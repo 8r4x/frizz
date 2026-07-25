@@ -18,6 +18,7 @@ import {
 import type { BoardManager } from "./board.ts"
 import type { AgentBackend } from "./backend/types.ts"
 import { inspectClaudeComposer } from "./permission-controller.ts"
+import { encodeDeliveryMarker } from "./delivery-marker.ts"
 import {
   buildClaudeResumeCommand,
   claudeWorkerEnvironment,
@@ -51,6 +52,27 @@ export class TerminalDeliveryError extends Error {
   constructor(message: string) {
     super(message)
     this.name = "TerminalDeliveryError"
+  }
+}
+
+/**
+ * A follow-up/wake that was refused BEFORE any byte of it could reach a worker, by a contention gate
+ * that a later attempt can find open: a permission/profile handoff owning the runtime, a lost
+ * runtime-control CAS (two follow-ups racing the same row), an adoption identity fray could not verify
+ * this instant, or a lifecycle CAS that moved under us.
+ *
+ * The distinction that matters is DELIVERY SAFETY, not the sentence: every site raising this sits
+ * strictly upstream of the first tmux write, so a caller retrying it CANNOT double-send. That is the
+ * entire licence for `sendEagerFollowUp` to retry instead of handing the operator's message back —
+ * an ambiguous failure (text may have crossed tmux before a later step threw) must stay an ordinary
+ * Error so it is never replayed. `retryableDelivery` is duck-typed for the same reason
+ * `terminalDelivery` is: the RPC layer reads it without importing this module.
+ */
+export class RetryableDeliveryError extends Error {
+  readonly retryableDelivery = true
+  constructor(message: string) {
+    super(message)
+    this.name = "RetryableDeliveryError"
   }
 }
 
@@ -1081,7 +1103,7 @@ export async function recoverThreadProfileHandoff(
   }
 }
 
-function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string): void {
+function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string, deliveryId?: string): void {
   const tx = deps.tmux ?? tmux
   const row = deps.storage.getSession(slug)
   if (!row) throw new Error(`no session registered for ${slug}`)
@@ -1094,19 +1116,19 @@ function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string): voi
   // This barrier is deliberately before unarchive, live injection, and dead spawn. Any non-NULL
   // value — including a future/corrupt mode — is durable ownership held by the permission controller.
   if (row.permission_pending !== null && row.permission_pending !== undefined) {
-    throw new Error("A permission change is in progress; wait for it to finish before sending a follow-up")
+    throw new RetryableDeliveryError("A permission change is in progress; wait for it to finish before sending a follow-up")
   }
   if (row.profile_pending_model !== null && row.profile_pending_model !== undefined ||
       row.profile_pending_effort !== null && row.profile_pending_effort !== undefined) {
-    throw new Error("A model/effort change is in progress; wait for it to finish before sending a follow-up")
+    throw new RetryableDeliveryError("A model/effort change is in progress; wait for it to finish before sending a follow-up")
   }
   if (row.runtime_control !== null && row.runtime_control !== undefined &&
       row.runtime_control !== "follow-up") {
-    throw new Error("Another runtime control is in progress; wait for it to finish before sending a follow-up")
+    throw new RetryableDeliveryError("Another runtime control is in progress; wait for it to finish before sending a follow-up")
   }
   const runtimeBinding = adoptionRuntimeBinding(deps.storage, row)
   if (runtimeBinding.kind === "conflict") {
-    throw new Error("This thread has a competing adoption attempt; no worker was contacted")
+    throw new RetryableDeliveryError("This thread has a competing adoption attempt; no worker was contacted")
   }
   // A bump/resume REACTIVATES an archived thread: the maintainer messaging an Inactive (archived)
   // thread expects it back in Active. Un-archive UP FRONT — before the live/dead branch — so BOTH the
@@ -1119,24 +1141,30 @@ function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string): voi
   // un-hides a thread on an EXPLICIT human bump, never auto-resurrects a deliberately-shelved one.)
   if (row.state === "archived" || row.archived === 1) {
     if (!deps.storage.setStateIfCurrent(slug, row.session_id, row.runtime_generation ?? 0, "open")) {
-      throw new Error("This thread changed before it could be reopened; no worker was contacted")
+      throw new RetryableDeliveryError("This thread changed before it could be reopened; no worker was contacted")
     }
     deps.board.refresh()
   }
+  // Stamp the send with its invisible delivery marker (delivery-marker.ts) for the COMPOSER paths only.
+  // Those are the ones whose bytes the tmux+TUI paste channel rewrites, which is what makes text-based
+  // delivery confirmation guesswork; the marker turns it into an id lookup. The dead-session resume
+  // below deliberately goes unmarked: it hands the text to the backend as argv, where nothing rewrites
+  // it and a zero-width payload would only be one more thing for a shell to mangle.
+  const marked = deliveryId ? message + encodeDeliveryMarker(deliveryId) : message
   const adoption = runtimeBinding.kind === "bound" ? runtimeBinding.claim : undefined
   const adoptionLookup = adoption ? tx.findExpectedAdoptionPane?.(adoption) : undefined
   if (adoption && !adoptionLookup) {
-    throw new Error("This adopted thread's exact runtime identity could not be verified; retry after Fray reconnects")
+    throw new RetryableDeliveryError("This adopted thread's exact runtime identity could not be verified; retry after Fray reconnects")
   }
   if (adoptionLookup?.kind === "unknown") {
-    throw new Error("This adopted thread's exact runtime identity could not be verified; retry")
+    throw new RetryableDeliveryError("This adopted thread's exact runtime identity could not be verified; retry")
   }
   const live = adoption
     ? adoptionLookup?.kind === "found" && !adoptionLookup.pane.dead
     : tx.isLive(slug)
   if (live) {
     if (adoption) {
-      if (tx.sendTextToExpectedAdoptionPane?.(adoption, message, true) !== true) {
+      if (tx.sendTextToExpectedAdoptionPane?.(adoption, marked, true) !== true) {
         throw new Error("This adopted worker changed before the follow-up could be submitted")
       }
     } else {
@@ -1152,7 +1180,7 @@ function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string): voi
       // pasteText (bracketed paste + a blocking run-shell settle + Enter) produced 20 clean records
       // and zero concatenations. The settle is what buys the separation: it forces the Enter into a
       // read() the TUI cannot fold into the paste.
-      tx.pasteText(slug, message)
+      tx.pasteText(slug, marked)
     }
     return
   }
@@ -1170,7 +1198,7 @@ function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string): voi
       if (composer.kind !== "empty") {
         throw new Error("The compatible legacy worker has an existing draft; it was left untouched")
       }
-      if (tx.sendTextToCompatibleLegacyWorker?.(legacy.worker, message) !== true) {
+      if (tx.sendTextToCompatibleLegacyWorker?.(legacy.worker, marked) !== true) {
         throw new Error("The compatible legacy worker changed before the follow-up could be submitted")
       }
       // The provider received the atomic paste+Enter.  This is a new runtime observation, not a
@@ -1335,23 +1363,23 @@ function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string): voi
   deps.board.refresh() // storage-only change — overlay is enough
 }
 
-export function resumeThread(deps: ResumeDeps, slug: string, message: string): void {
+export function resumeThread(deps: ResumeDeps, slug: string, message: string, deliveryId?: string): void {
   const initial = deps.storage.getSession(slug)
   if (!initial) throw new Error(`no session registered for ${slug}`)
   // Preserve the specific, actionable errors from the inner path before trying the durable claim.
   // These checks are repeated after claiming; the SQLite CAS is still the actual race barrier.
   if (initial.permission_pending !== null && initial.permission_pending !== undefined) {
-    throw new Error("A permission change is in progress; wait for it to finish before sending a follow-up")
+    throw new RetryableDeliveryError("A permission change is in progress; wait for it to finish before sending a follow-up")
   }
   if (initial.profile_pending_model !== null && initial.profile_pending_model !== undefined ||
       initial.profile_pending_effort !== null && initial.profile_pending_effort !== undefined) {
-    throw new Error("A model/effort change is in progress; wait for it to finish before sending a follow-up")
+    throw new RetryableDeliveryError("A model/effort change is in progress; wait for it to finish before sending a follow-up")
   }
   if (adoptionRuntimeBinding(deps.storage, initial).kind === "conflict") {
-    throw new Error("This thread has a competing adoption attempt; no worker was contacted")
+    throw new RetryableDeliveryError("This thread has a competing adoption attempt; no worker was contacted")
   }
   if (initial.runtime_control !== null && initial.runtime_control !== undefined) {
-    throw new Error("Another runtime control is in progress; wait for it to finish before sending a follow-up")
+    throw new RetryableDeliveryError("Another runtime control is in progress; wait for it to finish before sending a follow-up")
   }
   const controlRevision = deps.storage.beginRuntimeControl(slug, {
     sessionId: initial.session_id,
@@ -1359,10 +1387,13 @@ export function resumeThread(deps: ResumeDeps, slug: string, message: string): v
     generation: initial.runtime_generation ?? 0,
   }, "follow-up")
   if (controlRevision === null) {
-    throw new Error("This thread changed or another runtime control started; no follow-up was sent")
+    // The exact race the client's per-slug FIFO cannot cover: a SECOND writer (the wakers scheduler,
+    // another tab, the submit-confirmer) held the row for the ~300-800ms this injection needed. Nothing
+    // was sent, so the operator's message is replayable — see RetryableDeliveryError.
+    throw new RetryableDeliveryError("This thread changed or another runtime control started; no follow-up was sent")
   }
   try {
-    resumeThreadOwned(deps, slug, message)
+    resumeThreadOwned(deps, slug, message, deliveryId)
   } finally {
     const current = deps.storage.getSession(slug)
     if (current?.session_id === initial.session_id && deps.storage.releaseRuntimeControl(slug, {

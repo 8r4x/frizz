@@ -9,7 +9,7 @@ import { useBoard, asThreads, useTranscript } from "../hooks.ts"
 import { orderQueue, queued, displayTitle, lastActiveLabelAt } from "../groups.ts"
 import { useLiveAnswering } from "../lib/answering.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
-import { Message, NativeInputRequiredCard, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText } from "./ChatView.tsx"
+import { CARD_BODY, CARD_PRIMARY_BUTTON, CardActions, Message, NativeInputRequiredCard, PermPromptBanner, PendingAskCard, StickyUserBand, TranscriptCard, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText } from "./ChatView.tsx"
 import { prefs } from "../lib/prefs.ts"
 import { ThreadComposerBox } from "./ThreadComposerBox.tsx"
 import { BackgroundOpsStrip, ThreadSlugContext, QueueDismissContext } from "./ChatView.tsx"
@@ -144,35 +144,36 @@ function AwaitingBackgroundBanner({ thread, onSnooze, onSnoozeFailed }: {
       })
   }
   return (
-    <div
-      data-awaiting-background
-      className="flex flex-col gap-2 rounded-md border border-border/70 bg-panel-2/40 px-3.5 py-3 text-[12px] leading-relaxed text-muted"
-    >
-      <p className="text-fg/80">
-        This agent has come to rest, but it’s awaiting the results from {what} it dispatched.
+    // The SAME shell as every transcript card (ChatView.TranscriptCard). This banner stacks directly
+    // under an awaiting fence card on a queue card, and it used to be a visibly different object there
+    // — smaller radius, a washed-out fill, its own padding, no kind header — for the same job.
+    <TranscriptCard data-awaiting-background icon={Hourglass} label="Awaiting background work">
+      {/* Both sentences are BODY text (maintainer 2026-07-24): the self-return is a fact about the
+          thread, not a caption for the button, so it reads as prose rather than as a label the Snooze
+          control drags around with it. The button then owns its row alone. */}
+      <p className={CARD_BODY}>
+        This agent has come to rest, but it’s awaiting the results from {what} it dispatched. It returns
+        to the queue on its own when the work comes back.
       </p>
-      {/* Both items justify RIGHT (maintainer 2026-07-24): the explainer sits immediately left of the
-          button rather than being flung to the opposite edge by justify-between, so the sentence and the
-          control it describes read as one unit. */}
-      <div className="flex items-center justify-end gap-3">
-        <span className="min-w-0 text-[11px] text-muted/70">
-          It returns to the queue on its own when the work comes back.
-        </span>
+      <CardActions>
         <button
           type="button"
           onClick={snooze}
           disabled={pending}
           onMouseDown={(e) => e.preventDefault()}
           title="Hide this card until a sub-agent returns"
-          className="flex shrink-0 items-center gap-1.5 rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] font-medium text-fg/80 outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45"
+          // The white card-action fill (CARD_PRIMARY_BUTTON), same as the awaiting card's Snooze it
+          // stacks under: parking is this banner's one verb, and the recessed outline it used to wear
+          // read as a disabled affordance sitting right below an identical white one.
+          className={`flex shrink-0 items-center gap-1 rounded-md text-[11px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-45 ${CARD_PRIMARY_BUTTON}`}
         >
           {/* Measured, not guessed: the icon read 1.58px LOW here. See lib/iconAlign.ts for why box
               centering leaves a descender-free label's ink high, and why leading-none is not the fix. */}
           <Hourglass size={12} className={ICON_LABEL_NUDGE} />
           Snooze
         </button>
-      </div>
-    </div>
+      </CardActions>
+    </TranscriptCard>
   )
 }
 

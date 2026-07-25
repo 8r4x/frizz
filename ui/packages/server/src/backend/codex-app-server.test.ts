@@ -15,6 +15,7 @@ import {
   CodexAppServerBridge,
   codexAppServerEnvironment,
   codexAppServerBridgeEnabled,
+  selectCodexHostKind,
   type CodexAppServerProcess,
   type CodexAppServerSpawn,
 } from "./codex-app-server.ts"
@@ -35,9 +36,6 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
   readonly clientResponses: Message[] = []
   private buffer = ""
   private activeTurn: { threadId: string; turnId: string } | null = null
-  private model = "gpt-5"
-  private effort: string | null = "high"
-  private sandboxPolicy: Record<string, unknown> = { type: "workspaceWrite", networkAccess: true }
   // When set, a turn/steer completes the turn (turn/completed) then rejects — modelling the turn
   // ending in the bridge's read→steer window, which must trigger followUp's start-fallback.
   rejectSteerAsEnded = false
@@ -178,28 +176,6 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
       this.activeTurn = { threadId: params.threadId, turnId }
       this.notify("turn/started", { threadId: params.threadId, turn: { id: turnId } })
       this.send({ id, result: { turn: { id: turnId } } })
-      return
-    }
-    if (message.method === "thread/settings/update") {
-      const params = message.params as {
-        threadId: string
-        model?: string | null
-        effort?: string | null
-        sandboxPolicy?: Record<string, unknown> | null
-      }
-      if (typeof params.model === "string") this.model = params.model
-      if ("effort" in params) this.effort = params.effort ?? null
-      if (params.sandboxPolicy) this.sandboxPolicy = params.sandboxPolicy
-      this.send({ id, result: {} })
-      this.notify("thread/settings/updated", {
-        threadId: params.threadId,
-        threadSettings: {
-          sandboxPolicy: this.sandboxPolicy,
-          approvalPolicy: "never",
-          model: this.model,
-          effort: this.effort,
-        },
-      })
       return
     }
     if (message.method === "turn/steer") {
@@ -374,52 +350,6 @@ test("bridge is the sole codex transport (always enabled) and negotiates exact i
   })
   assert.ok(h.processes[0]!.inbound.some((message) => message.method === "initialized"))
   assert.equal(h.processes[0]!.inbound.some((message) => "jsonrpc" in message), false)
-  h.close()
-})
-
-test("setProfile uses native thread settings and reports whether an existing turn keeps its old profile", async () => {
-  const h = harness()
-  const binding = await h.bridge.startDisposableSession({
-    threadSlug: "profile-thread",
-    sessionId: "profile-session",
-    cwd: h.dir,
-  })
-  const idle = await h.bridge.setProfile({
-    threadSlug: binding.threadSlug,
-    sessionId: binding.sessionId,
-    model: "gpt-5.6-terra",
-    effort: "high",
-  })
-  assert.deepEqual(idle, {
-    applied: true,
-    model: "gpt-5.6-terra",
-    effort: "high",
-    confirmedBy: "notification",
-    turnInFlight: false,
-  })
-
-  const process = h.processes[0]!
-  const firstUpdate = process.clientRequests.find((message) => message.method === "thread/settings/update")!
-  assert.deepEqual(firstUpdate.params, {
-    threadId: binding.codexThreadId,
-    model: "gpt-5.6-terra",
-    effort: "high",
-  })
-
-  await h.bridge.startTurn({
-    threadSlug: binding.threadSlug,
-    sessionId: binding.sessionId,
-    text: "Keep the current turn on its starting profile",
-  })
-  const duringTurn = await h.bridge.setProfile({
-    threadSlug: binding.threadSlug,
-    sessionId: binding.sessionId,
-    model: "gpt-5.6-luna",
-    effort: "medium",
-  })
-  assert.equal(duringTurn.applied, true)
-  assert.equal(duringTurn.confirmedBy, "notification")
-  assert.equal(duringTurn.turnInFlight, true)
   h.close()
 })
 
@@ -2155,4 +2085,61 @@ test("a same-process rejoin retires the approval orphaned on the connection it l
   assert.equal(h.interactions.get(scope, orphaned.id)?.lifecycle, "cancelled")
   assert.equal(h.interactions.listPending(scope).length, 0, "no unanswerable card is left in the queue")
   h.close()
+})
+
+// A sub-agent (spawn_agent) child is a turn INSIDE the app-server process, so it dies with it and
+// CANNOT be resumed — recovery of the children is the parent model's job. Before the nudge named this,
+// it recovered only when the model happened to notice ("three had returned, but six did not", the
+// 2026-07-24 loss). The cold-recovery nudge must state the failure mode and point at list_agents so
+// re-establishment is reliable rather than lucky.
+test("a cold-recovery nudge tells the model its sub-agents died and to re-spawn them", async () => {
+  let plan = { generation: "gen-A", reattached: false, droppedWhileDetached: 0 }
+  const h = scriptedHostHarness(() => plan)
+  const bridge = h.newBridge()
+  const binding = await bridge.startDisposableSession({
+    threadSlug: "orphaned-children", sessionId: "orphaned-children-session", cwd: h.dir, ephemeral: false,
+  })
+  const { turnId } = await bridge.startTurn({
+    threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "Orchestrate six sub-agents",
+  })
+  await waitFor(() => bridge.binding(binding.threadSlug, binding.sessionId)?.currentTurnId === turnId, "turn active")
+  bridge.close()
+
+  // The app-server DIED and a fresh one replaced it (new generation, fresh fork); its turn is gone.
+  plan = { generation: "gen-B", reattached: false, droppedWhileDetached: 0 }
+  h.resumeThreadStatus({ type: "idle" }) // the new app-server: that turn is over
+  const restarted = h.newBridge()
+  await restarted.warmUp()
+
+  const nudge = h.processes[1]!.clientRequests.find((message) => message.method === "turn/start")
+  assert.ok(nudge, "a recovery turn was auto-issued")
+  const input = (nudge!.params as Message).input as Array<{ text?: string }> | undefined
+  const text = input?.[0]?.text ?? ""
+  assert.match(text, /sub-agents do NOT survive/i, "the nudge must warn that sub-agents died")
+  assert.match(text, /list_agents/, "the nudge must point at list_agents to re-establish them")
+  h.close()
+})
+
+// Transport selection: native is the default everywhere it works (the app-server owns its socket and
+// truly outlives fray), the --stdio daemon stays the default only on win32 whose named-pipe path native
+// does not implement, an injected spawn is always the direct-child test transport, and the flag forces
+// either way. This is the flip that made a codex worker's app-server + sub-agents survive a daemon death.
+test("selectCodexHostKind: native is the default on macOS/Linux, daemon on Windows", () => {
+  assert.equal(selectCodexHostKind(undefined, "darwin", false), "native")
+  assert.equal(selectCodexHostKind(undefined, "linux", false), "native")
+  assert.equal(selectCodexHostKind(undefined, "win32", false), "daemon")
+})
+
+test("selectCodexHostKind: an injected spawn always wins (the test/harness transport)", () => {
+  assert.equal(selectCodexHostKind(undefined, "darwin", true), "direct")
+  assert.equal(selectCodexHostKind("1", "darwin", true), "direct")
+  assert.equal(selectCodexHostKind("0", "win32", true), "direct")
+})
+
+test("selectCodexHostKind: the flag forces the transport, and never selects native where it cannot run", () => {
+  assert.equal(selectCodexHostKind("0", "darwin", false), "daemon", "0 opts back to the daemon")
+  assert.equal(selectCodexHostKind("false", "linux", false), "daemon")
+  assert.equal(selectCodexHostKind("1", "linux", false), "native", "1 forces native where supported")
+  assert.equal(selectCodexHostKind("true", "darwin", false), "native")
+  assert.equal(selectCodexHostKind("1", "win32", false), "daemon", "native is never selected on win32, even forced")
 })

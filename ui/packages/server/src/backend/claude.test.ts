@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { createClaudeBackend, parseClaudeLine } from "./claude.ts"
 import { newTailState, computeTurn } from "../tailer.ts"
-import { buildClaudeCommand, buildClaudeResumeCommand, loadWorkerPrompt, workerPluginDir } from "../dispatch.ts"
+import { buildClaudeCommand, buildClaudeResumeCommand, claudeWorkerEnvironment, loadWorkerPrompt, WORKER_MAX_WEB_SEARCHES, workerPluginDir } from "../dispatch.ts"
 import { spawnWithRunner } from "../tmux.ts"
 
 // ---- parseClaudeLine: the normalized VIEW of a Claude JSONL line (codex-facing seam; NOT the
@@ -79,6 +79,7 @@ test("createClaudeBackend: buildSpawn pins the session id + prompt and clears in
   assert.deepEqual(env, {
     CLAUDE_CODE_SUBAGENT_MODEL: "",
     CLAUDE_CODE_EFFORT_LEVEL: "",
+    CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION: String(WORKER_MAX_WEB_SEARCHES),
   })
   assert.deepEqual(prewrite, [])
 })
@@ -91,8 +92,9 @@ test("createClaudeBackend sanitizes both spawn and resume without replacing Clau
     assert.deepEqual(built.env, {
       CLAUDE_CODE_SUBAGENT_MODEL: "",
       CLAUDE_CODE_EFFORT_LEVEL: "",
+      CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION: String(WORKER_MAX_WEB_SEARCHES),
     })
-    assert.equal("CLAUDE_CONFIG_DIR" in built.env, false, "only the two profile override variables are replaced")
+    assert.equal("CLAUDE_CONFIG_DIR" in built.env, false, "auth/config variables are never replaced")
   }
 })
 
@@ -107,7 +109,40 @@ test("Claude worker profile sanitization reaches the tmux launch environment", (
   const launch = calls[0] ?? []
   assert.ok(launch.includes("CLAUDE_CODE_SUBAGENT_MODEL="))
   assert.ok(launch.includes("CLAUDE_CODE_EFFORT_LEVEL="))
+  assert.ok(launch.includes(`CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION=${WORKER_MAX_WEB_SEARCHES}`))
   assert.equal(launch.some((entry) => entry.startsWith("CLAUDE_CONFIG_DIR=")), false)
+})
+
+// Claude Code's WebSearch tool stops searching after `CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION`
+// calls (default 200) and returns a budget-exhausted string instead of results — a ceiling a
+// research-heavy worker reaches but a chat session does not. Verified against the real 2.1.220
+// binary: with the cap at 1 the second WebSearch returned "this session has used its web search
+// budget (1 of 1 WebSearch calls)", and the value parses as `int({min:1,digitsOnly:true})`, so a
+// non-digit override is silently discarded by Claude Code back to 200 rather than honored.
+test("claudeWorkerEnvironment: lifts the WebSearch budget and honors only a well-formed operator override", () => {
+  const original = process.env.CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION
+  try {
+    delete process.env.CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION
+    assert.equal(claudeWorkerEnvironment().CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION, String(WORKER_MAX_WEB_SEARCHES))
+    assert.ok(WORKER_MAX_WEB_SEARCHES > 200, "the whole point is to clear Claude Code's 200 default")
+
+    process.env.CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION = "750"
+    assert.equal(claudeWorkerEnvironment().CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION, "750", "operator policy wins")
+
+    // Each of these is rejected by Claude Code's own parser, so passing it through would silently
+    // DROP the worker back to 200 — the fray default is the safer answer for every one of them.
+    for (const bad of ["", "0", "-5", "1_000", "1e5", "20 ", "abc", "12.5", "+7"]) {
+      process.env.CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION = bad
+      assert.equal(
+        claudeWorkerEnvironment().CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION,
+        String(WORKER_MAX_WEB_SEARCHES),
+        `malformed override ${JSON.stringify(bad)} must fall back to the fray default`,
+      )
+    }
+  } finally {
+    if (original === undefined) delete process.env.CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION
+    else process.env.CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION = original
+  }
 })
 
 test("createClaudeBackend: buildResume produces `-r <sessionId> <message>` and coerces plan mode to auto", () => {

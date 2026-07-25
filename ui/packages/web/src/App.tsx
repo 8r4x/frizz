@@ -23,7 +23,6 @@ import { PlanDrawer } from "./components/PlanDrawer.tsx"
 import { SettingsDrawer } from "./components/SettingsDrawer.tsx"
 import { CommandPalette } from "./components/CommandPalette.tsx"
 import { StatusListView } from "./components/StatusListView.tsx"
-import { NoFray } from "./components/EmptyState.tsx"
 import { RestartOverlay } from "./components/RestartOverlay.tsx"
 import { Toaster } from "./components/Toaster.tsx"
 import { FRAY_SUPERVISOR_STATUS_WAKE_EVENT, getFraySupervisorStatus } from "./api/restart.ts"
@@ -240,23 +239,13 @@ export function App() {
     document.title = standalone ? (projectLabel ?? "fray") : projectLabel ? `fray · ${projectLabel}` : "fray"
   }, [projectLabel])
 
-  if (board && !board.frayActive) return (
-    <TooltipProvider>
-      <RestartOverlay open={snap.controlPlaneState === "restarting"} message={snap.controlPlaneMessage} />
-      {/* While restarting, the whole app subtree goes inert so nothing behind the scrim is focusable
-          or clickable; the overlay is rendered as a sibling OUTSIDE it so it stays interactive. */}
-      <div inert={snap.controlPlaneState === "restarting"}>
-        {/* Same one bar as the live app. A repo without a .fray board still has an identity, a live
-            connection, quota and both recovery actions — and the gear needs its drawer mounted here
-            too, or it would be a dead control on this branch. */}
-        <StatusBar identity={identity} connection={snap.connection} boardFallback={snap.socketBoardFallback} />
-        <NoFray dir={board.projectDir} />
-        {snap.showSettings && <SettingsDrawer />}
-        <Toaster />
-      </div>
-    </TooltipProvider>
-  )
-
+  // NOTE: there is deliberately NO "this repo has no .fray/" branch here. Threads are session-first
+  // (the registry in ui.db IS the board); `.fray/` only holds scratchpads and plans, and dispatch
+  // creates it on the way (writeScratchpad → ensureSafeDirectDirectory). Gating the shell on it
+  // inverted the fresh-repo experience: a repo with an EMPTY `.fray/` got the real first-run view,
+  // while a repo without one got a dead end that said "dispatch a first thread" with no composer to
+  // do it in. A `.fray`-less repo is simply a board with zero threads — TodosView's `nothingAtAll`
+  // branch already renders exactly the right thing for it (centered prompt box, sidebar hidden).
   return (
     <TooltipProvider>
     <RestartOverlay open={snap.controlPlaneState === "restarting"} message={snap.controlPlaneMessage} />

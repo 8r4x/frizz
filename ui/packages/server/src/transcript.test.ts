@@ -315,6 +315,77 @@ test("a manual TaskStop result marks the stopped Monitor's card cancelled (no da
   assert.equal(msgs[0].tools[0].status, "cancelled", "a TaskStop is the terminal signal for the op it killed")
 })
 
+test("a shell completion RACING ahead of its launch is recovered by the inline attachment carrier", () => {
+  // Real 2026-07-22 tailer leak, timeline-side: a shell completing MID-TURN gets its queue-operation
+  // completion flushed at a file position BEFORE the launch record — folded first, it correlates to
+  // nothing. The attachment (queued_command) carrier is written inline AFTER the launch and must
+  // back-fill the card; reading only the queue-operation carrier left it "running" forever.
+  const early = JSON.stringify({
+    type: "queue-operation",
+    timestamp: "2026-07-01T00:00:05.000Z",
+    content: `<task-notification>\n<task-id>b9race</task-id>\n<tool-use-id>bash-race</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>`,
+  })
+  const launch = JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-07-01T00:00:06.000Z",
+    message: { id: "m-bg", content: [{ type: "tool_use", id: "bash-race", name: "Bash", input: { command: "git worktree add ../wt", run_in_background: true } }] },
+  })
+  const acked = JSON.stringify({
+    type: "user",
+    timestamp: "2026-07-01T00:00:07.000Z",
+    message: { content: [{ type: "tool_result", tool_use_id: "bash-race", content: "Command running in background with ID: b9race. Output is being written to: /tmp/tasks/b9race.output." }] },
+  })
+  const attachment = JSON.stringify({
+    type: "attachment",
+    timestamp: "2026-07-01T00:00:08.000Z",
+    attachment: { type: "queued_command", commandMode: "task-notification", prompt: `<task-notification>\n<task-id>b9race</task-id>\n<tool-use-id>bash-race</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>` },
+  })
+  const withoutAttachment = parseTranscript([early, launch, acked].join("\n"))[0].tools[0]
+  assert.equal(withoutAttachment.status, "pending", "the early queue-op correlates to nothing — no false back-fill")
+  const msgs = parseTranscript([early, launch, acked, attachment].join("\n"))
+  assert.equal(msgs[0].tools[0].status, "completed", "the inline attachment carrier back-fills the raced card")
+  assert.equal(msgs.at(-1)?.kind, "event", "the wake boundary rides the attachment's position")
+})
+
+test("a `stopped` RECOVERY notification back-fills EVERY orphaned card it names (task-ids only)", () => {
+  // A new session's recovery record carries one block naming every orphan by runtime task-id, NO
+  // tool-use-ids, status "stopped". Both cards must end (cancelled), not just the first.
+  const launch = (id: string, cmd: string) => JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-07-01T00:00:00.000Z",
+    message: { id: `m-${id}`, content: [{ type: "tool_use", id, name: "Bash", input: { command: cmd, run_in_background: true } }] },
+  })
+  const ack = (id: string, taskId: string) => JSON.stringify({
+    type: "user",
+    timestamp: "2026-07-01T00:00:01.000Z",
+    message: { content: [{ type: "tool_result", tool_use_id: id, content: `Command running in background with ID: ${taskId}. Output is being written to: /tmp/tasks/${taskId}.output.` }] },
+  })
+  const recovery = JSON.stringify({
+    type: "queue-operation",
+    timestamp: "2026-07-01T00:05:00.000Z",
+    content: `<task-notification>\n<task-id>bxx1</task-id>\n<task-id>bxx2</task-id>\n<task-id>__orphan_summary__:shell</task-id>\n<status>stopped</status>\n<summary>These ops have no completion record and have been marked stopped.</summary>\n</task-notification>`,
+  })
+  const msgs = parseTranscript([launch("sh1", "watch ci"), ack("sh1", "bxx1"), launch("sh2", "tail -f app.log"), ack("sh2", "bxx2"), recovery].join("\n"))
+  const cards = msgs.flatMap((m) => m.tools)
+  assert.deepEqual(cards.map((c) => c.status), ["cancelled", "cancelled"], "every named orphan's card ends")
+})
+
+test("a completion notification riding a USER record's text back-fills the card (carrier b)", () => {
+  const launch = JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-07-01T00:00:00.000Z",
+    message: { id: "m-bg", content: [{ type: "tool_use", id: "bash-u", name: "Bash", input: { command: "sleep 1", run_in_background: true } }] },
+  })
+  const userCarrier = JSON.stringify({
+    type: "user",
+    timestamp: "2026-07-01T00:00:04.000Z",
+    message: { role: "user", content: [{ type: "text", text: `<task-notification>\n<tool-use-id>bash-u</tool-use-id>\n<status>failed</status>\n<summary>Background command failed with exit code 9</summary>\n</task-notification>` }] },
+  })
+  const msgs = parseTranscript([launch, userCarrier].join("\n"))
+  assert.equal(msgs[0].tools[0].status, "failed")
+  assert.equal(msgs.filter((m) => m.role === "user").length, 0, "the carrier record never renders as a human bubble")
+})
+
 test("background Bash with no completion remains live after transcript reload", () => {
   const raw = JSON.stringify({
     type: "assistant",
@@ -622,18 +693,11 @@ test("enqueue + delivering attachment → ONE delivered user message (not two), 
 
 test("real lifecycle enqueue → remove → attachment → ONE delivered user message (session 2cfe3c81 shape)", () => {
   const text = "Stop. Ask me the questions again."
-  const intermediate = parseTranscript([enqueue(text), removeOp("remove", text)].join("\n"))
-  assert.equal(intermediate.length, 1)
-  assert.equal(intermediate[0].text, text)
-  assert.equal(intermediate[0].queued, true)
-  const queuedSourceId = intermediate[0].sourceId
-
   const msgs = parseTranscript([enqueue(text), removeOp("remove", text), deliver(text)].join("\n"))
   const users = msgs.filter((m) => m.role === "user")
   assert.equal(users.length, 1)
   assert.equal(users[0].text, text)
   assert.ok(!users[0].queued)
-  assert.equal(users[0].sourceId, queuedSourceId)
 })
 
 test("attachment-only (older session, no enqueue seen) → a delivered user message", () => {
@@ -1125,6 +1189,51 @@ test("pagination cursor survives restart-like replay and concurrent append, but 
   }
 })
 
+// ---- context compaction (codex's half of the same divider lives in transcript.codex.test.ts) ----
+// Shapes captured from real sessions (2026-07-24: 103 compact_boundary records across 48 files under
+// ~/.claude/projects — 100 auto, 3 manual, all carrying compactMetadata).
+test("claude compaction renders a boundary divider carrying its token bracket, and the carry-over summary is DROPPED", () => {
+  const raw = [
+    JSON.stringify({ type: "user", timestamp: "2026-07-21T00:00:00.000Z", message: { content: [{ type: "text", text: "keep going" }] } }),
+    JSON.stringify({
+      type: "system",
+      subtype: "compact_boundary",
+      content: "Conversation compacted",
+      compactMetadata: { trigger: "auto", preTokens: 978420, postTokens: 18954, durationMs: 182710 },
+      timestamp: "2026-07-21T00:05:00.000Z",
+    }),
+    // The ~20 000-character recap claude addresses to ITSELF after compacting. It is a plain user record
+    // — no isMeta, no promptSource — so without the isCompactSummary drop it renders as a giant bubble
+    // attributed to the human.
+    JSON.stringify({
+      type: "user",
+      isCompactSummary: true,
+      timestamp: "2026-07-21T00:05:01.000Z",
+      message: { role: "user", content: [{ type: "text", text: "This session is being continued from a previous conversation that ran out of context.\n\nSummary:\n1. Primary Request…" }] },
+    }),
+    JSON.stringify({ type: "assistant", timestamp: "2026-07-21T00:05:30.000Z", message: { id: "m9", content: [{ type: "text", text: "Let me re-read my scratchpad." }] } }),
+  ].join("\n")
+  const msgs = projectClaudeTranscript(raw)
+  assert.deepEqual(
+    msgs.map((m) => `${m.role}/${m.kind ?? "message"}:${m.text}`),
+    [
+      "user/message:keep going",
+      "assistant/event:Context compacted — 978k → 19k tokens",
+      "assistant/message:Let me re-read my scratchpad.",
+    ],
+  )
+  assert.equal(msgs[1].boundary, true) // the centered divider rule
+  assert.equal(msgs[1].at, "2026-07-21T00:05:00.000Z")
+})
+
+test("claude compaction without usable metadata still renders the divider (bare label, never a guessed bracket)", () => {
+  const raw = JSON.stringify({ type: "system", subtype: "compact_boundary", content: "Conversation compacted", timestamp: "2026-07-21T00:05:00.000Z" })
+  const msgs = projectClaudeTranscript(raw)
+  assert.equal(msgs.length, 1)
+  assert.equal(msgs[0].text, "Context compacted")
+  assert.equal(msgs[0].boundary, true)
+})
+
 test("a synthetic provider AUTH-error record renders NO assistant bubble (the recovery card is its only surface)", () => {
   const raw = [
     JSON.stringify({ type: "user", timestamp: "2026-07-21T00:00:00.000Z", message: { content: [{ type: "text", text: "Say hello." }] } }),
@@ -1138,4 +1247,79 @@ test("a synthetic provider AUTH-error record renders NO assistant bubble (the re
     JSON.stringify({ type: "assistant", isApiErrorMessage: true, timestamp: "2026-07-21T00:00:02.000Z", message: { model: "<synthetic>", content: [{ type: "text", text: "API Error: 529 Overloaded" }] } }),
   ].join("\n")
   assert.equal(projectClaudeTranscript(overloaded).some((m) => /529 Overloaded/.test(m.text)), true)
+})
+
+// ---- a queued message must NEVER disappear from the transcript ----
+// Measured against the real corpus: Claude Code emits `queue-operation remove` at the moment it
+// DEQUEUES a message, and the `queued_command` attachment that carries the delivered copy lands 1 to 19
+// records later (p50 2, over 263 dequeues). The parser used to SPLICE the queued bubble out on that
+// removal and wait for the attachment to re-render it — so the message vanished from the chat in
+// between, and vanished FOREVER when the attachment's prompt was array-shaped (an image-bearing
+// follow-up), because only the string shape was read.
+const enqueueLine = (content: string, ts = "2026-07-01T00:00:05.000Z") =>
+  JSON.stringify({ type: "queue-operation", timestamp: ts, operation: "enqueue", content })
+const removeLine = (content: string, ts = "2026-07-01T00:00:09.000Z") =>
+  JSON.stringify({ type: "queue-operation", timestamp: ts, operation: "remove", content })
+const deliverLine = (prompt: unknown, ts = "2026-07-01T00:00:10.000Z") =>
+  JSON.stringify({
+    type: "attachment", timestamp: ts,
+    attachment: { type: "queued_command", commandMode: "prompt", origin: { kind: "human" }, prompt },
+  })
+const assistantLine = (text: string, ts = "2026-07-01T00:00:09.500Z") =>
+  JSON.stringify({ type: "assistant", timestamp: ts, message: { id: "a1", content: [{ type: "text", text }] } })
+
+test("a dequeued message stays in the transcript in the WINDOW before its delivery record", () => {
+  const text = "check the ACL cleanup"
+  // The transcript as it exists between the dequeue and the attachment — the vanish window.
+  const msgs = parseTranscript([enqueueLine(text), removeLine(text), assistantLine("working on it")].join("\n"))
+  const mine = msgs.filter((m) => m.role === "user" && m.text === text)
+  assert.equal(mine.length, 1, "the message must still be rendered")
+  assert.equal(mine[0].queued, false, "and no longer queued — it has been dequeued into the turn")
+})
+
+test("the delivery record resolves the SAME bubble rather than adding a second copy", () => {
+  const text = "check the ACL cleanup"
+  const msgs = parseTranscript([enqueueLine(text), removeLine(text), deliverLine(text)].join("\n"))
+  assert.equal(msgs.filter((m) => m.role === "user" && m.text === text).length, 1)
+})
+
+test("an IMAGE-bearing queued message survives — its delivery prompt is array-shaped", () => {
+  // This is the permanent vanish: enqueue renders it, remove spliced it out, and the array-shaped
+  // prompt was skipped entirely, so the message was gone for good.
+  const text = "the sidebar doesn't reach the bottom [Image #11]"
+  const prompt = [{ type: "text", text }, { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBOR" } }]
+  const msgs = parseTranscript([enqueueLine(text), removeLine(text), deliverLine(prompt)].join("\n"))
+  const mine = msgs.filter((m) => m.role === "user" && m.text === text)
+  assert.equal(mine.length, 1, "the image-bearing message must still be rendered")
+  assert.equal(mine[0].queued, false)
+})
+
+test("a dequeued message renders ABOVE the assistant work that follows it", () => {
+  // `queued` messages are pinned below the working indicator by ChatView, so a message still flagged
+  // queued shows UNDER the spinner that is answering it. Once dequeued it must sit above that work.
+  const text = "check the ACL cleanup"
+  const msgs = parseTranscript([enqueueLine(text), removeLine(text), assistantLine("on it")].join("\n"))
+  const mine = msgs.findIndex((m) => m.role === "user" && m.text === text)
+  const work = msgs.findIndex((m) => m.role === "assistant")
+  assert.ok(mine >= 0 && work > mine, "the delivered message must precede the assistant work")
+})
+
+test("an EMPTY-content removal is still ignored (the ordinary handshake)", () => {
+  const text = "check the ACL cleanup"
+  const empty = JSON.stringify({ type: "queue-operation", timestamp: "2026-07-01T00:00:09.000Z", operation: "dequeue", content: "" })
+  const msgs = parseTranscript([enqueueLine(text), empty].join("\n"))
+  const mine = msgs.filter((m) => m.role === "user" && m.text === text)
+  assert.equal(mine.length, 1)
+  assert.equal(mine[0].queued, true, "a contentless handshake must not resolve anything")
+})
+
+test("an enqueued message survives its LEDGER entry being dropped", () => {
+  // ageDeliveries now expires an `enqueued` ledger item after an hour so it cannot be immortal. That
+  // must never take the message with it: the transcript renders the bubble from Claude Code's own
+  // enqueue record, independently of fray's synthetic projection.
+  const text = "check the ACL cleanup"
+  const msgs = parseTranscript(enqueueLine(text))
+  const mine = msgs.filter((m) => m.role === "user" && m.text === text)
+  assert.equal(mine.length, 1, "the enqueue record alone must render the message")
+  assert.equal(mine[0].queued, true)
 })

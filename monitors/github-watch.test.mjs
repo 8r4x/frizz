@@ -5,7 +5,7 @@ import { spawn, spawnSync } from "node:child_process"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { classifyChecks, gh, humanReviewActivity, latestWorkflowRuns, parseArgs, PROTOCOL, report } from "./github-watch.mjs"
+import { classifyChecks, gh, latestWorkflowRuns, parseArgs, PROTOCOL, report, reviewActivity } from "./github-watch.mjs"
 
 test("CI classifier keeps fork-gated action_required checks pending", () => {
   assert.equal(classifyChecks([{ state: "SUCCESS" }, { state: "ACTION_REQUIRED" }]).state, "pending")
@@ -13,12 +13,12 @@ test("CI classifier keeps fork-gated action_required checks pending", () => {
   assert.equal(classifyChecks([{ state: "FAILURE" }]).state, "failed")
 })
 
-test("review activity excludes bot nodes and preserves human ids", () => {
-  const ids = humanReviewActivity({ data: { repository: { pullRequest: {
-    reviews: { nodes: [{ id: "human", author: { login: "ana", __typename: "User" } }] },
-    comments: { nodes: [{ id: "bot", author: { login: "dependabot[bot]", __typename: "Bot" } }] },
+test("review activity counts every review and comment, bot or human", () => {
+  const ids = reviewActivity({ data: { repository: { pullRequest: {
+    reviews: { nodes: [{ id: "human" }, { id: "app-review" }] },
+    comments: { nodes: [{ id: "bot-comment" }] },
   } } } })
-  assert.deepEqual([...ids], ["human"])
+  assert.deepEqual([...ids], ["human", "app-review", "bot-comment"])
 })
 
 test("latest workflow run replaces retries but aggregates every exact-head workflow event", () => {
@@ -161,13 +161,15 @@ count=0
 [ -f "$count_file" ] && count=$(/bin/cat "$count_file")
 count=$((count + 1))
 echo "$count" > "$count_file"
-if [ "$count" -eq 1 ]; then echo '{"data":{"repository":{"pullRequest":{"reviews":{"nodes":[{"id":"old","author":{"login":"ana","__typename":"User"}}]},"comments":{"nodes":[]}}}}}'; else echo '{"data":{"repository":{"pullRequest":{"reviews":{"nodes":[{"id":"old","author":{"login":"ana","__typename":"User"}},{"id":"new","author":{"login":"bea","__typename":"User"}}]},"comments":{"nodes":[]}}}}}'; fi
+if [ "$count" -eq 1 ]; then echo '{"data":{"repository":{"pullRequest":{"reviews":{"nodes":[{"id":"old"}]},"comments":{"nodes":[]}}}}}'; else echo '{"data":{"repository":{"pullRequest":{"reviews":{"nodes":[{"id":"old"}]},"comments":{"nodes":[{"id":"new"}]}}}}}'; fi
 `)
   chmodSync(gh, 0o755)
   return dir
 }
 
-test("review --once emits an armed status and a live watch wakes only for new human activity", async () => {
+// The second poll adds a CONVERSATION COMMENT — the shape a review app (CodeRabbit, Greptile) posts
+// and the one the old bot filter dropped. It must wake the watch like any other new activity.
+test("review --once emits an armed status and a live watch wakes for any new activity", async () => {
   const review = fileURLToPath(new URL("./review-watch.mjs", import.meta.url))
   const onceDir = fakeReviewGhDir()
   try {
@@ -185,7 +187,7 @@ test("review --once emits an armed status and a live watch wakes only for new hu
     const code = await new Promise((resolve) => child.once("close", resolve))
     assert.equal(code, 0)
     const events = stdout.trim().split("\n").map(JSON.parse)
-    assert.deepEqual(events.map((event) => [event.type, event.state]), [["status", "armed"], ["terminal", "new-human-activity"]])
+    assert.deepEqual(events.map((event) => [event.type, event.state]), [["status", "armed"], ["terminal", "new-activity"]])
     assert.deepEqual(events[1].ids, ["new"])
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })

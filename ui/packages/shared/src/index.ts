@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { InteractionLifecycle, InteractionOpaqueId, InteractionRevision, InteractionThreadSlug } from "./interactions.ts"
-import { THREAD_SLUG_MAX_CHARS, ThreadSlug } from "./thread-slug.ts"
+import { ThreadSlug } from "./thread-slug.ts"
 
 // ---- Attachment intake (drag/drop, paste, file picker) ----
 // The "safe tier": formats an agent's Read/file tool consumes with NO conversion step, so a dropped
@@ -120,6 +120,12 @@ export const SubAgentView = z.object({
   // server that doesn't emit it yet → the drill-in drawer's entry point is simply not offered. Present
   // → the banner row / AgentBlock is clickable and resolves this exact child's transcript.
   id: z.string().optional(),
+  // ISO8601 of the child transcript's last append (its output file's mtime — the SAME signal that
+  // decides running vs stale). Surfaced so a row can show "last active 6 min ago": the state alone only
+  // says quiet-for-15-min, not HOW quiet. Optional — absent before the output path resolves, or on a
+  // pre-restart server. Minute-bucketed into the board signature server-side, so a running child's
+  // steadily-advancing mtime does not spam deltas.
+  lastActivityAt: z.string().optional(),
 })
 export type SubAgentView = z.infer<typeof SubAgentView>
 
@@ -134,6 +140,9 @@ export const BgShellView = z.object({
   startedAt: z.string(), // ISO8601 of the launch record
   state: z.enum(["running", "stale"]),
   id: z.string().optional(),
+  // ISO8601 of the shell output file's last write — "last active 6 min ago" for a quiet-but-live
+  // watcher. Optional (see SubAgentView.lastActivityAt).
+  lastActivityAt: z.string().optional(),
 })
 export type BgShellView = z.infer<typeof BgShellView>
 
@@ -204,7 +213,8 @@ export type NativeInputRequired = z.infer<typeof NativeInputRequired>
 // bare-rest queue handoff, which is harmless.)
 //
 // `pr-watch: owner/repo#N` is the general PR watcher: the durable scheduler polls the PR and bumps the
-// worker on ANY new non-bot activity — a review, an approval, or a comment. It does NOT park the thread
+// worker on ANY new activity — a review, an approval, or a comment, from a human or a bot alike (most
+// review today is filed by an app, so there is no actor filter). It does NOT park the thread
 // in Held: a pr-watch thread stays a visible QUEUE handoff (the worker opened a PR and is watching it),
 // and new activity re-surfaces it. The human can park it via the "Arm watcher" card's Snooze button
 // (a hold the next activity clears). Pair `pr-watch:` with `human:` only when the worker is genuinely
@@ -348,6 +358,14 @@ export const ThreadView = z.object({
   // then shows a "Spinning up a thread…" placeholder instead of the guess until aiTitle lands. Optional
   // (absent ⇒ legacy/slim row) so old snapshots parse; absent is treated as "not provisional".
   titleAuto: z.boolean().optional(),
+  // True when a HUMAN named this thread (rename / native /rename / an adopted file heading) and no
+  // backend auto-title may replace it. FALSE is the interesting case: a title hard-coded by a dispatch
+  // CALLER — `Investigate acme/app#391`, a parent agent's guess through spawn_thread — reads as a real
+  // name (titleAuto false) yet still yields to the worker's own aiTitle, which is usually the more
+  // informative one. Optional (absent ⇒ legacy/slim row): the display then derives it the pre-split way,
+  // treating any non-guessed title as the human's. The server enforces this too by withholding aiTitle
+  // from a locked row; the client keeps its own copy so a stale record can never win on either side.
+  titleLocked: z.boolean().optional(),
   // Live background sub-agents the worker dispatched (tailer-derived). Defaults to [] so an old
   // snapshot/row (or a pre-restart server that doesn't emit the field yet) parses without breaking.
   subAgents: z.array(SubAgentView).default([]),
@@ -455,7 +473,6 @@ export const ThreadView = z.object({
   // target until both pending values are attached and readiness-proven for a new generation.
   profilePendingModel: z.string().optional(),
   profilePendingEffort: z.string().optional(),
-  profileChangeQueued: z.boolean().optional(),
   profileChangePending: z.boolean().optional(),
   // One durable runtime-control owner serializes reattach/resume/native-composer mutations. Unknown
   // future owner values still disable the composer rather than being treated as idle.
@@ -489,7 +506,10 @@ export const BoardSnapshot = z.object({
   projectDir: z.string(),
   projectName: z.string(),
   projectLabel: z.string(), // "owner/repo" from the git origin remote; falls back to projectName
-  frayActive: z.boolean(), // .fray/ exists
+  // (No `.fray/ exists` bit here on purpose. Threads are session-first — the ui.db registry IS the
+  // board — so `.fray/` presence says nothing about whether this project has one. Its only consumer
+  // was a shell gate that dead-ended `.fray`-less repos; the server still probes the directory
+  // locally where it genuinely matters, for plan/scratchpad storage.)
   threads: z.array(ThreadView),
   errors: z.array(z.string()),
   warnings: z.array(z.string()),
@@ -794,7 +814,7 @@ export const SetThreadProfileInput = z.object({
 }).strict()
 export type SetThreadProfileInput = z.infer<typeof SetThreadProfileInput>
 export const SetThreadProfileResult = z.object({
-  effect: z.enum(["applied", "queued", "next-turn", "next-resume"]),
+  effect: z.enum(["applied", "next-resume"]),
 })
 export type SetThreadProfileResult = z.infer<typeof SetThreadProfileResult>
 
@@ -888,7 +908,6 @@ export const BoardMeta = z.object({
   projectDir: z.string(),
   projectName: z.string(),
   projectLabel: z.string(),
-  frayActive: z.boolean(),
   errors: z.array(z.string()),
   warnings: z.array(z.string()),
   // Structured mirror of `errors` (see BoardErrorItem), diffed + shipped with the rest of the board
@@ -946,6 +965,7 @@ export type BoardDelta = Extract<ServerEvent, { type: "board-delta" }>
 
 // Pure delta engine + client apply/decision helpers (kept in a sibling module, re-exported here so
 // `@fray-ui/shared` stays the single entry point).
+export * from "./code-fences.ts"
 export * from "./delta.ts"
 export * from "./interactions.ts"
 export * from "./thread-slug.ts"
@@ -1153,7 +1173,6 @@ export type TermClientMsg = { t: "input"; d: string } | { t: "resize"; cols: num
 // Keep the wire identifier aligned with every server-owned thread slug. Besides bounding retained
 // subscription state, the shape excludes path separators/control text before it can reach transcript
 // lookup code. Foreign session ids are UUID-shaped and remain valid under this grammar.
-export const SOCKET_TRANSCRIPT_SLUG_MAX_CHARS = THREAD_SLUG_MAX_CHARS
 export const SocketTranscriptSlug = ThreadSlug
 export const SocketClientMsg = z.discriminatedUnion("t", [
   z.object({ t: z.literal("sub"), topic: z.literal("transcript"), slug: SocketTranscriptSlug }).strict(),

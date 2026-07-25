@@ -469,8 +469,31 @@ test("sectionThreads: only human/future-timer waits partition into Held; live an
 
 test("displayTitle: an explicit human title wins over stale backend AI-title and slug fallbacks", () => {
   assert.equal(
+    displayTitle(thread({ id: "generated-slug", title: "Human-readable thread title", titleAuto: false, titleLocked: true, aiTitle: "generated-slug" })),
+    "Human-readable thread title",
+  )
+  // A pre-split row carries no titleLocked; its real-looking title must still read as the human's.
+  assert.equal(
     displayTitle(thread({ id: "generated-slug", title: "Human-readable thread title", titleAuto: false, aiTitle: "generated-slug" })),
     "Human-readable thread title",
+  )
+})
+
+test("displayTitle: a title a dispatch CALLER hard-coded shows until the worker names the thread itself", () => {
+  // `Investigate acme/app#391` (GitHub batch) / a parent agent's spawn_thread guess: a real name, so no
+  // "Spinning up…" placeholder, but nobody human chose it.
+  const hardCoded = { id: "investigate-acme-app-391", title: "Investigate acme/app#391", titleAuto: false, titleLocked: false }
+  assert.equal(titleIsProvisional(thread({ ...hardCoded, spawnedAt: new Date().toISOString() })), false)
+  assert.equal(displayTitle(thread(hardCoded)), "Investigate acme/app#391")
+  // …and the moment the worker reports what the task actually is, that wins.
+  assert.equal(
+    displayTitle(thread({ ...hardCoded, aiTitle: "Cache key collides on normalized ids" })),
+    "Cache key collides on normalized ids",
+  )
+  // Renaming it locks it again — a later/stale backend record can no longer displace the human's choice.
+  assert.equal(
+    displayTitle(thread({ ...hardCoded, title: "Resolver cache bug", titleLocked: true, aiTitle: "generated-slug" })),
+    "Resolver cache bug",
   )
 })
 

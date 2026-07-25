@@ -7,30 +7,41 @@ import { canRetry } from "./lib/status.ts"
 // The title to SHOW for a thread: prefer trustworthy backend title telemetry once it exists, else the
 // provenance-aware stored title. One place so every render site (sidebar, palette, header) agrees.
 // The narrow Pick accepts a valtio readonly snapshot as readily as a plain ThreadView.
-export function displayTitle(t: Pick<ThreadView, "title" | "aiTitle" | "id" | "titleAuto" | "spawnedAt" | "backend" | "runtime">): string {
+export function displayTitle(t: Pick<ThreadView, "title" | "aiTitle" | "id" | "titleAuto" | "titleLocked" | "spawnedAt" | "backend" | "runtime">): string {
   // A machine-guessed dispatch title (titleAuto) with no aiTitle yet is NOT a real name — show the
   // "Spinning up…" placeholder while the session is genuinely just spinning up (maintainer 2026-07-10:
   // "do not try to guess at the thread title"). But that's BOUNDED (see titleIsProvisional): a session
   // Claude that never yields an aiTitle falls back after its bounded window; Codex uses live runtime
   // state and the neutral fallback below.
   if (titleIsProvisional(t)) return SPINNING_UP_TITLE
+  // The worker's OWN name for its task wins over whatever the row was seeded with — unless a human has
+  // claimed the name, in which case a stale/slug-shaped backend record must never displace it.
+  if (t.aiTitle?.trim() && !titleIsHumanOwned(t)) return readableMachineTitle(t.aiTitle)
   // Codex's TUI has no native automatic naming event. Fray asks the first finalized response for a
   // hidden title signal; omission or malformed syntax must stay neutral rather than exposing either
   // the stored legacy prompt heuristic or a provider-recorded raw initial prompt.
   if (t.backend === "codex" && t.titleAuto === true && !t.aiTitle?.trim()) return UNTITLED_THREAD_TITLE
-  // `titleAuto === false` means the stored title came from a human (dispatch title or explicit rename),
-  // so it wins even if a later/stale transcript record carries an aiTitle equal to the slug. Unknown
-  // legacy rows retain the historical aiTitle-first fallback because their provenance is unavailable.
+  // `titleAuto === false` means the stored title is a real name, not the prompt chop — a human rename,
+  // or a caller's dispatch title standing in until the worker names the thread itself. Unknown legacy
+  // rows retain the historical aiTitle-first fallback because their provenance is unavailable.
   if (t.titleAuto === false && t.title.trim()) return t.title
   // For machine-titled rows, an internal slug is not a display title. This is especially important
   // around native `/rename`: if Claude fails to emit a custom title, the header must keep a neutral
   // name rather than presenting the session identifier as though rename succeeded. Legacy rows
   // (unknown titleAuto) retain the historical id fallback.
-  if (t.aiTitle?.trim()) return readableMachineTitle(t.aiTitle)
   if (t.title.trim() && !(t.titleAuto === true && t.title.trim() === t.id)) {
     return t.titleAuto === true ? readableMachineTitle(t.title) : t.title.trim()
   }
   return t.titleAuto === true ? UNTITLED_THREAD_TITLE : t.id
+}
+
+// Has a HUMAN claimed this thread's name? Only then does the stored title outrank the backend's own
+// aiTitle. Mirrors the server's `sessionTitleLocked` exactly, including its fallback: a row with no
+// `titleLocked` predates the split, so any non-guessed title there is read as the human's. That
+// fallback is what keeps a legacy rename safe, and what makes `titleLocked: false` — written only by a
+// dispatch whose title a CALLER hard-coded — the sole way a real-looking title stays replaceable.
+function titleIsHumanOwned(t: Pick<ThreadView, "titleAuto" | "titleLocked">): boolean {
+  return t.titleLocked ?? t.titleAuto === false
 }
 
 // Backend-generated titles are not human metadata. Claude's native auto-rename currently reports a

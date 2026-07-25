@@ -118,7 +118,6 @@ function harness(tailer: Tailer = noopTailer) {
     projectDir: dir,
     projectName: "test",
     projectLabel: "test",
-    frayActive: false,
     threads: [],
     errors: [],
     warnings: [],
@@ -448,47 +447,6 @@ test("setThreadPermission/setThreadProfile RPC: a legacy codex row persists and 
   assert.equal(saved.model, "gpt-5.6-sol")
   assert.equal(saved.effort, "high")
   assert.equal(saved.runtime_control ?? null, null, "no durable tmux runtime control was armed")
-  h.storage.close()
-})
-
-test("setThreadProfile RPC: an app-server Codex thread applies natively and reports next-turn during work", async () => {
-  const h = harness()
-  const slug = "live-codex-profile"
-  h.storage.upsertSession({ ...row(slug), exited: 0, model: "gpt-5.6-sol", effort: "high" })
-  h.storage.setBackend(slug, "codex")
-  h.storage.setCodexRuntime(slug, "app-server")
-  h.addExitedThread(slug)
-  h.snapshot.threads.at(-1)!.runtime = "running"
-
-  const calls: unknown[] = []
-  ;(h.ctx as { codexAppServer?: unknown }).codexAppServer = {
-    binding: () => ({ codexThreadId: "native-thread" }),
-    setProfile: async (input: unknown) => {
-      calls.push(input)
-      return {
-        applied: true,
-        model: "gpt-5.6-luna",
-        effort: "medium",
-        confirmedBy: "notification",
-        turnInFlight: true,
-      }
-    },
-  }
-
-  assert.deepEqual(
-    await h.router.setThreadProfile.handler({
-      input: { slug, model: "gpt-5.6-luna", effort: "medium" },
-    }),
-    { effect: "next-turn" },
-  )
-  assert.deepEqual(calls, [{
-    threadSlug: slug,
-    sessionId: `sid-${slug}`,
-    model: "gpt-5.6-luna",
-    effort: "medium",
-  }])
-  assert.equal(h.storage.getSession(slug)?.model, "gpt-5.6-luna")
-  assert.equal(h.storage.getSession(slug)?.effort, "medium")
   h.storage.close()
 })
 

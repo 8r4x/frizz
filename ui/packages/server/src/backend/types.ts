@@ -48,6 +48,15 @@ export type NormalizedEvent =
   | { kind: "tool-result"; at?: string; id: string; text: string }
   | { kind: "reasoning"; at?: string; text: string } // model-reasoning SUMMARY (Codex plaintext summary[]; Claude thinking is redacted → never emitted)
   | { kind: "title"; title: string } // backend's own session auto-title (ai-title / codex thread title)
+  // Context COMPACTION: the harness replaced the conversation with a summary, so everything above this
+  // point is gone from the agent's context. Both providers record it (Claude: a system/compact_boundary
+  // record carrying preTokens/postTokens; codex: a top-level `compacted` envelope carrying none), which
+  // is why the token fields are optional — a backend that doesn't measure it still reports the event.
+  | { kind: "compaction"; at?: string; preTokens?: number; postTokens?: number }
+  // Tokens occupying the model's context after its latest request (codex token_count). Pure telemetry:
+  // it moves no turn state. It exists so a consumer can bracket a compaction it can't measure directly —
+  // the codex reading is the token_count immediately before/after the `compacted` envelope.
+  | { kind: "context-usage"; at?: string; tokens: number }
 
 // The shape a backend's fold produces per session — the SAME shape board.ts already consumes as
 // SessionTelemetry, minus `permPrompt` (which is pane-sniffed live, not folded from the transcript).

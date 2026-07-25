@@ -1,30 +1,70 @@
 export type SidebarSectionGeometry = { id: string; top: number; bottom: number }
 
-// The queue deliberately aligns navigated card borders at 12px. Reading the active section from that
-// same sightline makes the rail marker match what the reader experiences, rather than whichever card
-// happens to have the largest visible area after an async transcript resize.
-export const SIDEBAR_SPY_REFERENCE_TOP = 12
+// How much of the viewport a card must cover to take the rail from a taller card still hanging above
+// it. Half the screen is the point where the reader has demonstrably moved on (maintainer 2026-07-24).
+export const SIDEBAR_SPY_COVERAGE = 0.5
 
+// Which queue card the rail's reading rule points at, from card geometry alone.
+//
+// COVERAGE, not a reading line. This used to pick whichever card crossed a 12px line at the very top
+// of the viewport, which meant a tall card kept the rail until it had scrolled ENTIRELY off screen —
+// the reader could be looking at a full screen of the next card while the rail still marked the last
+// one. The rule now is: the FIRST card that is either wholly on screen or already covering half the
+// viewport, and only if no earlier card is still showing more of itself than that.
+//
+// The two clauses cover the two shapes a queue takes. Cards TALLER than the viewport hand over at the
+// halfway point, exactly when the newcomer becomes the bigger half of the screen. Cards SHORTER than
+// the viewport hand over when the previous one starts leaving, so the topmost fully-readable card
+// holds the rail — which is also what makes a click-to-card landing stick, since that lands the target
+// whole at the top of the screen.
+//
+// Geometry is the CARD ROOT, not the queue slot: the slot carries ~80px of inter-card gutter, and
+// crediting a card for empty space would let a card that is visually gone still count as "wholly on
+// screen".
 export function activeSidebarSection(
   sections: readonly SidebarSectionGeometry[],
-  referenceTop = SIDEBAR_SPY_REFERENCE_TOP,
+  viewportHeight: number,
   atDocumentBottom = false,
 ): string | null {
-  // A short final card can never reach the 12px reading line: the browser has exhausted its scroll
-  // range first. At that real boundary, its visible final card is the reader's current queue item.
-  // Keep this exceptional rule out of normal scrolling so an upcoming final card cannot steal the
-  // rail merely because it is nearest to the viewport bottom.
-  if (atDocumentBottom) {
-    const finalVisible = [...sections].reverse().find((section) => section.bottom > 0)
-    if (finalVisible) return finalVisible.id
+  const onScreen = sections
+    .map((section) => ({
+      id: section.id,
+      height: Math.max(0, section.bottom - section.top),
+      visible: Math.min(section.bottom, viewportHeight) - Math.max(section.top, 0),
+    }))
+    .filter((card) => card.visible > 0)
+  if (!onScreen.length) return null
+  // A short final card can never win on coverage: the browser has exhausted its scroll range while a
+  // taller predecessor still fills most of the screen. At that real boundary the reader has arrived at
+  // the last queue item, so it takes the rail. Kept out of normal scrolling so an upcoming final card
+  // cannot claim the rail merely for being near the viewport bottom.
+  if (atDocumentBottom) return onScreen[onScreen.length - 1].id
+  const dominant = viewportHeight * SIDEBAR_SPY_COVERAGE
+  let leader = onScreen[0]
+  for (const card of onScreen) {
+    if (card.visible > leader.visible) leader = card
+    // `>= leader.visible` (the running maximum, this card included) keeps a small card lower down from
+    // stealing the rail just for fitting on screen while more of a partly-scrolled card is still shown.
+    if (card.visible >= Math.min(dominant, card.height) && card.visible >= leader.visible) return card.id
   }
-  const visible = sections.filter((section) => section.bottom > referenceTop)
-  if (!visible.length) return null
-  const containing = visible.find((section) => section.top <= referenceTop)
-  if (containing) return containing.id
-  return visible.reduce((nearest, section) =>
-    Math.abs(section.top - referenceTop) < Math.abs(nearest.top - referenceTop) ? section : nearest,
-  ).id
+  return leader.id
+}
+
+// A click on a sidebar row scrolls to that row's queue card and pins the rail to it, so the rail can't
+// flicker through the cards the jump passes over. This decides when the pin lets go: when the card has
+// arrived at the landing, when it is gone, or when the reader has scrolled away from where the click
+// left them. That last clause is what keeps a pin from outliving its click — the LAST card of a short
+// queue can never reach the landing, because the document runs out of scroll first, and the rail used to
+// stay frozen on it however far back up the queue the reader scrolled.
+export function queueNavigationSettled(
+  target: SidebarSectionGeometry | undefined,
+  scrollY: number,
+  landedY: number,
+  landingTop: number,
+): boolean {
+  if (!target) return true
+  if (target.top <= landingTop && target.bottom > landingTop) return true
+  return Math.abs(scrollY - landedY) > 1
 }
 
 // Keep the active marker reachable without disturbing the page's scroll position. The result is a

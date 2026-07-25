@@ -353,6 +353,9 @@ function skewBridge(h: ReturnType<typeof versionedHarness>, diagnostics: unknown
     interactions,
     codexBin: h.codexBin,
     requestTimeoutMs: 10_000,
+    // These tests are specifically the DAEMON's cached-handshake wedge; native is now the default
+    // transport, so pin the daemon host explicitly rather than inheriting the flip.
+    host: daemonCodexAppServerHost,
     diagnostic: (event) => diagnostics.push(event),
   })
   return { bridge, dispose() { bridge.close(); interactions.dispose(); db.close() } }

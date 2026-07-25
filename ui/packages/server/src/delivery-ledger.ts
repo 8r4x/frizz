@@ -1,5 +1,6 @@
 import type { TranscriptMessage } from "@fray-ui/shared"
 import type { Storage } from "./storage.ts"
+import { decodeDeliveryMarkers, deliveryTag, stripDeliveryMarkers } from "./delivery-marker.ts"
 
 // ── The Claude follow-up delivery ledger ───────────────────────────────────────────────────────────────
 // Fray's Claude steer path used to be fire-and-forget: tmux keys went into the pane and the ONLY record
@@ -40,7 +41,38 @@ export interface DeliveryLedgerItem {
   submitAttempts?: number
 }
 
-const norm = (s: string): string => s.replace(/\r\n?/g, "\n").trim()
+// The form every text comparison in this module runs in.
+//
+// The steer channel REWRITES fray's bytes before they reach the JSONL, so the text fray sent and the
+// text the transcript records are not equal and an exact compare strands the send as `unconfirmed`
+// forever. The channel is a COMPOSITION of two rewriters fray does not own — tmux `paste-buffer`
+// (LF→CR) and Claude Code's TUI paste handler (`/\r\n|\r/`→`\n`, `\t`→four spaces) — and measuring it
+// against a live claude 2.1.219 TUI, driven through fray's own paste sequence, showed:
+//
+//     sent          recorded          note
+//     \t            "    "            four spaces, not a tab stop
+//     \r\n          \n\n              the line break DOUBLES (CR→LF then LF→newline)
+//     \r            \n
+//     trailing " ", unicode, nbsp, long unwrapped lines — preserved verbatim
+//
+// Two distinct classes, not one. The maintainer hit the tab class (2026-07-25,
+// `were-taking-over-from-another-agent`: a 1448-char send with two tabs recorded as 1454 chars with
+// none, 34ms after the send, and still marked unconfirmed at the 60s timeout). The CRLF class is worse
+// and just as reachable — anything pasted from a Windows-authored source or many web textareas — and a
+// comparison that preserved line COUNT still stranded it.
+//
+// So do not model the channel; be INVARIANT to it. Every whitespace run — spaces, tabs, newlines alike
+// — collapses to a single space, which is stable under every rewrite above and under any future
+// re-flow in the same family (a re-wrap, a trailing-space trim, a different tab width). What actually
+// keeps this safe is unchanged and lives elsewhere: evidence must be CONTEMPORANEOUS, a mid-record
+// match must clear COMPOSED_ANCHOR_MIN, and composition consumes items in order. Precedent: the far
+// more dangerous decision in this system — whether to press Enter on a live composer — has always been
+// gated on FULL whitespace removal (`squash` in delivery-confirm.ts). Applied to BOTH sides of every
+// comparison, so the composition offsets in matchComposedText stay internally consistent.
+//
+// What this deliberately does NOT forgive: differing WORDS. A send whose text the channel altered
+// beyond whitespace still ages to `unconfirmed`, which is the warning doing its job.
+const canon = (s: string): string => s.replace(/\s+/g, " ").trim()
 
 function isItem(v: unknown): v is DeliveryLedgerItem {
   if (!v || typeof v !== "object") return false
@@ -75,6 +107,34 @@ export function appendDelivery(storage: Storage, slug: string, item: { id: strin
   items.push({ id: item.id, text: item.text, state: "pending", at, updatedAt: at })
   while (items.length > MAX_LEDGER_ITEMS) items.shift()
   storage.setDeliveryLedger(slug, serializeDeliveryLedger(items))
+}
+
+// Has this exact send already been recorded as delivered? The entry is written only once
+// `resumeThread` returns, so a hit is positive evidence the text crossed into the worker. This makes a
+// replayed deliveryId a no-op — defense-in-depth against a replay from any source (a stale tab, an
+// at-least-once transport). It is NOT what makes the client retry safe: because the append trails the
+// injection, a hit only ever exists for an ALREADY-delivered send, never for the pre-injection refusals
+// the client actually replays. Keeping every retryable throw upstream of the first write is the real
+// guarantee; a miss here proves nothing.
+export function hasDelivery(storage: Storage, slug: string, id: string): boolean {
+  const row = storage.getSession(slug)
+  if (!row) return false
+  return parseDeliveryLedger(row.delivery_ledger).some((item) => item.id === id)
+}
+
+// The text of a `queued_command` attachment's prompt. A typed follow-up carries a bare string; one the
+// human attached an image to carries an ARRAY of content blocks, with the words in the `text` ones —
+// 10 such in this machine's corpus, every one text+image. Both readers (correlation here, rendering in
+// transcript.ts) share this so a send with a screenshot attached behaves exactly like a typed one.
+// Lives here rather than in transcript.ts because transcript.ts already imports this module.
+export function attachmentPromptText(prompt: unknown): string {
+  if (typeof prompt === "string") return prompt
+  if (!Array.isArray(prompt)) return ""
+  return prompt
+    .filter((b): b is { type: string; text: string } =>
+      Boolean(b) && (b as { type?: unknown }).type === "text" && typeof (b as { text?: unknown }).text === "string")
+    .map((b) => b.text)
+    .join("\n")
 }
 
 // Extract the plain text of a user record (string content, or the joined text blocks) — mirrors the
@@ -118,11 +178,33 @@ export function correlateDeliveryRecord(
   // the composer can hold a paste for minutes before the TUI submits it). An enqueue record is positive
   // proof the message reached Claude Code's queue, so it must clear the amber warning whenever it lands.
   if (r.type === "queue-operation" && r.operation === "enqueue" && typeof r.content === "string") {
-    const matched = matchComposedText(items, norm(r.content), contemporaneous)
+    const matched = accountFor(items, r.content, contemporaneous)
     if (matched.size === 0) return items
     return items.map((item, index) =>
       matched.has(index) && item.state !== "enqueued" ? { ...item, state: "enqueued", updatedAt: nowIso } : item,
     )
+  }
+
+  // DEQUEUE — Claude Code taking the message back OUT of its own queue and into the turn.
+  //
+  // fray used to learn this only from the `queued_command` attachment that follows, and the gap is real:
+  // across 263 dequeues in this machine's transcripts the attachment lands 1 to 19 records later (p50 2,
+  // p95 6). For that whole window the send is already being worked on while fray still renders it as a
+  // gray queued bubble — which the chat pins BELOW the working indicator, so the spinner appears above
+  // the very message it is answering. Resolving on the dequeue closes the window.
+  //
+  // `remove` is the usable signal: all 2398 in the corpus carry their content, so they can be
+  // correlated. The `dequeue` operation is NOT — all 1032 of them carry no content at all, and a bare
+  // handshake cannot be attributed to a specific send. `popAll` never appeared.
+  //
+  // A content-bearing `remove` is also what a CANCELLATION looks like (the human ESC-ing a queued
+  // message in the terminal). Dropping the item is right either way: the message is provably no longer
+  // queued, so continuing to render fray's own synthetic bubble for it would be a lie in both readings,
+  // and the transcript's own records go on telling the true story.
+  if (r.type === "queue-operation" && r.operation === "remove" && typeof r.content === "string" && r.content.trim()) {
+    const dequeued = accountFor(items, r.content, contemporaneous)
+    if (dequeued.size === 0) return items
+    return items.filter((_, index) => !dequeued.has(index))
   }
 
   // Delivery into the agent's context: the queued_command attachment (mid-turn/turn-start pickup) or a
@@ -131,17 +213,63 @@ export function correlateDeliveryRecord(
   let deliveredText: string | null = null
   if (r.type === "attachment") {
     const att = r.attachment as { type?: unknown; commandMode?: unknown; prompt?: unknown } | undefined
-    if (att?.type === "queued_command" && att.commandMode === "prompt" && typeof att.prompt === "string") {
-      deliveredText = norm(att.prompt)
+    if (att?.type === "queued_command" && att.commandMode === "prompt") {
+      // Array-shaped for an image-bearing follow-up; the same reader the transcript uses, so a send
+      // with a screenshot attached correlates exactly like a typed one.
+      const text = attachmentPromptText(att.prompt)
+      if (text) deliveredText = text
     }
   } else if (r.type === "user" && r.isMeta !== true) {
     const text = userRecordText(r)
-    if (text) deliveredText = norm(text)
+    if (text) deliveredText = text
   }
   if (deliveredText === null) return items
-  const delivered = matchComposedText(items, deliveredText, contemporaneous)
+  const delivered = accountFor(items, deliveredText, contemporaneous)
   if (delivered.size === 0) return items
   return items.filter((_, index) => !delivered.has(index))
+}
+
+// Which ledger items one evidence record accounts for — BY IDENTITY first, by text only as the fallback.
+//
+// fray stamps every follow-up it pastes with an invisible marker carrying that send's deliveryId
+// (delivery-marker.ts), so the normal path is an exact lookup: no prose is compared at all and no
+// rewrite of the surrounding text — tab expansion, CRLF doubling, a re-wrap, a future mangling nobody
+// has met yet — can break it. A record that glues several sends together carries every constituent's
+// marker, so all of them resolve from the one record.
+//
+// The text path remains for everything a marker cannot cover: sends already in flight when this shipped,
+// adopted/foreign panes, and any send whose marker the channel destroyed. It runs on the STRIPPED text
+// so a marker never perturbs the comparison.
+export function accountFor(
+  items: readonly DeliveryLedgerItem[],
+  recordText: string,
+  contemporaneous: (item: DeliveryLedgerItem) => boolean,
+): Set<number> {
+  const matched = new Set<number>()
+  const tags = decodeDeliveryMarkers(recordText)
+  if (tags.length) {
+    const wanted = new Set(tags)
+    // A tag held by more than one outstanding item is ambiguous — refuse the shortcut for those and let
+    // the text path decide, rather than resolving an arbitrary one of them.
+    const owners = new Map<number, number[]>()
+    items.forEach((item, index) => {
+      const tag = deliveryTag(item.id)
+      if (wanted.has(tag)) owners.set(tag, [...(owners.get(tag) ?? []), index])
+    })
+    for (const [, indexes] of owners) {
+      if (indexes.length !== 1) continue
+      const index = indexes[0]
+      if (contemporaneous(items[index])) matched.add(index)
+    }
+  }
+  // The text path then runs over the WHOLE ledger, not just the leftovers. Letting it re-consume an
+  // item a marker already resolved costs nothing (both sides union into one set) and is what keeps a
+  // MIXED record working: when a marked send is glued ahead of an unmarked one, the composition still
+  // walks the marked text first and so meets the unmarked item at a clean prefix boundary.
+  for (const index of matchComposedText(items, canon(stripDeliveryMarkers(recordText)), contemporaneous)) {
+    matched.add(index)
+  }
+  return matched
 }
 
 // A merged submission's constituent text must be at least this long before it may be matched at a
@@ -185,7 +313,7 @@ export function matchComposedText(
     if (matched.has(index)) return null
     const item = items[index]
     if (!contemporaneous(item)) return null
-    const text = norm(item.text)
+    const text = canon(item.text)
     return text || null
   }
   for (let guard = 0; guard < items.length && rest.length > 0; guard++) {
@@ -206,7 +334,9 @@ export function matchComposedText(
     if (!hit) break
     matched.add(hit.index)
     anchored = true
-    rest = rest.slice(hit.at + hit.length).replace(/^\n+/, "")
+    // Any whitespace the composer left at the seam is separator, not content — the same argument that
+    // already let a newline be skipped here, widened to match the canonical form above.
+    rest = rest.slice(hit.at + hit.length).replace(/^\s+/, "")
   }
   return matched
 }
@@ -229,6 +359,17 @@ export function ageDeliveries(items: DeliveryLedgerItem[], nowMs: number): Deliv
       changed = true // dropped
       continue
     }
+    // `enqueued` used to be IMMORTAL: nothing aged it and nothing dropped it, so a single missed
+    // delivery record left a gray queued bubble pinned below the working indicator for the life of the
+    // row — the "it still says queued long after the agent answered it" report. The reasoning for never
+    // timing it out was sound (a mid-turn queue legitimately lasts as long as the turn) but it left no
+    // escape hatch at all. Give it the same hour the unconfirmed items get: past that, a queue entry is
+    // not a live queue entry, and the transcript's own records are a better witness than fray's
+    // synthetic bubble. This only stops PROJECTING it; nothing about the real message is touched.
+    if (item.state === "enqueued" && Number.isFinite(born) && nowMs - born > UNCONFIRMED_DROP_MS) {
+      changed = true // dropped
+      continue
+    }
     next.push(item)
   }
   return changed ? next : items
@@ -244,11 +385,16 @@ export function ageDeliveries(items: DeliveryLedgerItem[], nowMs: number): Deliv
 export function projectDeliveryLedger(messages: TranscriptMessage[], items: DeliveryLedgerItem[]): TranscriptMessage[] {
   if (!items.length) return messages
   for (const item of items) {
-    const text = norm(item.text)
+    const text = canon(item.text)
+    const tag = deliveryTag(item.id)
     let handled = false
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i]
-      if (m.role !== "user" || norm(m.text) !== text) continue
+      if (m.role !== "user") continue
+      // Same order as correlation: identity if the rendered copy still carries our marker, text
+      // otherwise. Transcript text is stripped for display before it reaches here, so in practice this
+      // is the text compare — the tag check costs nothing and covers any surface that keeps the raw.
+      if (!decodeDeliveryMarkers(m.text).includes(tag) && canon(stripDeliveryMarkers(m.text)) !== text) continue
       if (m.queued) {
         m.deliveryId = item.id
         m.deliveryState = item.state

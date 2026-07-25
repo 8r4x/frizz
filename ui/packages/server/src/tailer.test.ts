@@ -68,6 +68,25 @@ test("applyRecord: a system-origin user record (peer / task-notification) RE-INV
   assert.equal(s.lastUserAt, restedUserAt) // ROW ORDER unchanged — a notification never jumps the row
 })
 
+test("applyRecord: claude's post-compaction carry-over summary re-invokes but never reorders the row", () => {
+  const s = newTailState("t", "sid", "/x")
+  applyRecord(s, { type: "user", timestamp: "2026-07-01T00:00:00.000Z", message: { content: [{ type: "text", text: "keep going" }] } })
+  assert.equal(s.lastUserAt, "2026-07-01T00:00:00.000Z")
+  applyRecord(s, { type: "system", timestamp: "2026-07-01T00:05:00.000Z" })
+  // The recap claude writes to ITSELF after compacting: an ordinary-looking user record (no isMeta, no
+  // promptSource) carrying ~20 000 characters. Read as a human turn it jumps the thread to the top of
+  // the board on motion the human never caused.
+  applyRecord(s, {
+    type: "user",
+    timestamp: "2026-07-01T00:05:01.000Z",
+    isCompactSummary: true,
+    message: { content: [{ type: "text", text: "This session is being continued from a previous conversation…" }] },
+  })
+  assert.equal(s.lastKind, "user") // still re-invoking: the model resumes from the summary → shimmer
+  assert.equal(s.lastActivityAt, "2026-07-01T00:05:01.000Z") // the transcript did grow
+  assert.equal(s.lastUserAt, "2026-07-01T00:00:00.000Z") // ROW ORDER unchanged
+})
+
 test("applyRecord: caps preview at 200 chars with an ellipsis", () => {
   const s = newTailState("t", "sid", "/x")
   applyRecord(s, { type: "assistant", message: { stop_reason: "end_turn", content: [{ type: "text", text: "x".repeat(500) }] } })
@@ -171,6 +190,23 @@ test("applyEvent: only a GENUINE user-message bumps lastUserAt; a synthetic one 
   assert.equal(s.turn, "in-flight")
   assert.equal(s.lastUserAt, "2026-07-01T00:00:00.000Z") // NOT bumped to 00:05
   assert.equal(s.lastActivityAt, "2026-07-01T00:00:05.000Z") // but activity clock did advance
+})
+
+test("applyEvent: a compaction is harness motion — it advances the clock but moves no turn, preview or fence", () => {
+  const s = newTailState("t", "s", "/x")
+  applyEvent(s, { kind: "turn-start", at: "2026-07-01T00:00:00.000Z" })
+  applyEvent(s, { kind: "assistant-text", at: "2026-07-01T00:00:01.000Z", text: "still working", final: false })
+  // Codex spends ~100s inside a compaction writing no other record — the exact silence a stall read
+  // would misjudge — so the event has to advance the activity clock without ending the turn.
+  applyEvent(s, { kind: "compaction", at: "2026-07-01T00:01:41.000Z" })
+  assert.equal(s.turn, "in-flight")
+  assert.equal(s.lastActivityAt, "2026-07-01T00:01:41.000Z")
+  assert.equal(s.lastAssistant, "still working") // the preview is untouched by harness work
+  assert.equal(s.lastUserAt, undefined)
+  // Usage telemetry rides real events that move the clock themselves, so it never moves it alone.
+  applyEvent(s, { kind: "context-usage", at: "2026-07-01T00:02:00.000Z", tokens: 37045 })
+  assert.equal(s.lastActivityAt, "2026-07-01T00:01:41.000Z")
+  assert.equal(s.turn, "in-flight")
 })
 
 test("applyEvent: lastUserText and lastUserAt stay paired when a genuine user event has no text", () => {
@@ -730,7 +766,7 @@ test("tailer: surfaces running vs stale sub-agents (via injected mtime) and clea
 
   h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z") // <15min since child mtime → running
   t.tick() // prime
-  assert.deepEqual(t.get("t")?.subAgents, [{ label: "child", startedAt: "2026-07-01T00:00:01.000Z", state: "running", subagentType: "fray:fray-opus-high", id: "toolu_bg" }])
+  assert.deepEqual(t.get("t")?.subAgents, [{ label: "child", startedAt: "2026-07-01T00:00:01.000Z", state: "running", subagentType: "fray:fray-opus-high", id: "toolu_bg", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
 
   h.clock.ms = Date.parse("2026-07-01T00:20:00.000Z") // >15min since child mtime (SUBAGENT_STALE_MS) → stale
   const before = h.changes.n
@@ -841,7 +877,7 @@ test("tailer: a dead pane clears its background shells — a shell cannot outliv
 
   h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z") // <5min since shell output → live
   t.tick()
-  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Watch CI", startedAt: "2026-07-01T00:00:01.000Z", state: "running" }])
+  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Watch CI", startedAt: "2026-07-01T00:00:01.000Z", state: "running", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
 
   // The agent process dies (its tmux pane went dead) WITHOUT a terminal notification landing for the
   // shell. The shell is a child of that process, so it died with it — the board must stop reporting it
@@ -877,7 +913,7 @@ test("tailer: a manual TaskStop clears a live background shell from the board vi
 
   h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
   t.tick()
-  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Boot isolated stack", startedAt: "2026-07-01T00:00:01.000Z", state: "running" }])
+  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Boot isolated stack", startedAt: "2026-07-01T00:00:01.000Z", state: "running", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
 
   // The worker TaskStops the shell (pane still alive). Its structured result is the terminal signal.
   appendFileSync(join(h.logDir, "sid.jsonl"), JSON.stringify(taskStopResult("ba3y11c3t", "npx tsx scripts/adhoc-stack.mjs")) + "\n")
@@ -952,7 +988,7 @@ test("tailer: a background shell stays running however long it is quiet; only it
 
   h.clock.ms = Date.parse("2026-07-01T00:40:00.000Z") // 40min quiet — an ordinary CI wait
   t.tick()
-  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_srv", label: "Run vite dev server", startedAt: "2026-07-01T00:00:01.000Z", state: "running" }])
+  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_srv", label: "Run vite dev server", startedAt: "2026-07-01T00:00:01.000Z", state: "running", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
 
   h.clock.ms = Date.parse("2026-07-01T08:00:00.000Z") // 8h quiet — a dev server left running; still "running"
   t.tick()
@@ -977,6 +1013,15 @@ test("hasQuestionBlock: detects a fenced ```question block; rejects prose and a 
   assert.equal(hasQuestionBlock("just prose, no fence at all"), false)
   assert.equal(hasQuestionBlock("```js\nconst q = 'question'\n```"), false) // a plain code fence is not a question
   assert.equal(hasQuestionBlock(undefined), false)
+  // A worker DOCUMENTING the protocol wraps its sample in an outer ```` fence. That is a quotation, not
+  // an ask — flagging it parks the thread in "awaiting you" over an example.
+  const t4 = "`".repeat(4)
+  assert.equal(hasQuestionBlock(`Write it like this:\n\n${t4}\n\`\`\`question\nShip it?\n\n- A. Yes\n\`\`\`\n${t4}\n\nThat's the grammar.`), false)
+  // …and a real ask alongside the quoted sample still counts.
+  assert.equal(
+    hasQuestionBlock(`${t4}\n\`\`\`question\nExample?\n\`\`\`\n${t4}\n\n\`\`\`question\nSo: ship it?\n\n- A. Yes\n\`\`\``),
+    true,
+  )
 })
 
 test("applyRecord: a ```question block sets lastAssistantHasQuestion; a real user reply clears it", () => {

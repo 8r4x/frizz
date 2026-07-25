@@ -1,11 +1,17 @@
 import { useState } from "react"
 import { createRoot } from "react-dom/client"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { BoardSnapshot, ThreadView } from "@fray-ui/shared"
 import { AgentBlock, BackgroundOpsStrip, ThreadSlugContext, ToolStatusMeta } from "./components/ChatView.tsx"
 import { QueueSubAgentLines } from "./components/QueueSubAgentLines.tsx"
+import { ChildOpRow } from "./components/ChildOpRow.tsx"
 import { ToolDisclosureHeader } from "./components/ToolDisclosureHeader.ts"
 import { store } from "./store.ts"
 import "./styles.css"
+
+// The last-active reading is relative to NOW, so seed it that way rather than with a frozen date — a
+// child that last wrote 6 min ago should read "6 min ago" whenever the fixture is opened.
+const agoIso = (minutes: number): string => new Date(Date.now() - minutes * 60_000).toISOString()
 
 const thread: ThreadView = {
   id: "operation-indicators",
@@ -26,17 +32,22 @@ const thread: ThreadView = {
   pendingQuestion: false,
   kind: "session",
   foreign: false,
+  // The `subagentType` spread is the MODEL+EFFORT tag's coverage: a fray cell, a codex cell (parsed
+  // through its slash), a named agent type that carries no profile and so must show NO tag, and a long
+  // label that has to truncate AROUND the tag rather than squeeze it out.
   subAgents: [
-    { id: "agent-a", label: "Inspect logs", startedAt: "2026-07-14T10:00:00.000Z", state: "running" },
-    { id: "agent-b", label: "Run regression suite", startedAt: "2026-07-14T10:01:00.000Z", state: "running" },
-    { id: "agent-stale", label: "Prior investigation", startedAt: "2026-07-14T09:00:00.000Z", state: "stale" },
+    { id: "agent-a", label: "Inspect logs", startedAt: "2026-07-14T10:00:00.000Z", state: "running", subagentType: "fray:opus-xhigh", lastActivityAt: agoIso(0) },
+    { id: "agent-b", label: "Run regression suite", startedAt: "2026-07-14T10:01:00.000Z", state: "running", subagentType: "worker gpt-5.6-terra/high", lastActivityAt: agoIso(6) },
+    { id: "agent-long", label: "Sweep every call site of the renamed board projection helper for stale imports", startedAt: "2026-07-14T10:02:00.000Z", state: "running", subagentType: "fray:sonnet-medium", lastActivityAt: agoIso(2) },
+    { id: "agent-plain", label: "Explore the resume path", startedAt: "2026-07-14T10:03:00.000Z", state: "running", subagentType: "general-purpose", lastActivityAt: agoIso(3) },
+    { id: "agent-stale", label: "Prior investigation", startedAt: "2026-07-14T09:00:00.000Z", state: "stale", subagentType: "fray:haiku", lastActivityAt: agoIso(42) },
   ],
   bgShells: [
-    { label: "Watch CI", startedAt: "2026-07-14T10:00:00.000Z", state: "running" },
-    { label: "Tail build log", startedAt: "2026-07-14T10:01:00.000Z", state: "running" },
+    { label: "Watch CI", startedAt: "2026-07-14T10:00:00.000Z", state: "running", lastActivityAt: agoIso(1) },
+    { label: "Tail build log", startedAt: "2026-07-14T10:01:00.000Z", state: "running", lastActivityAt: agoIso(0) },
     // Alive but quiet: a dev server waiting for requests, and a Monitor (which has no output file, so
     // it is ALWAYS reported stale). Both are live processes — they breathe, never a dead gray dot.
-    { label: "Dev server (waiting, no recent output)", startedAt: "2026-07-14T09:00:00.000Z", state: "stale" },
+    { label: "Dev server (waiting, no recent output)", startedAt: "2026-07-14T09:00:00.000Z", state: "stale", lastActivityAt: agoIso(78) },
     { label: "Monitor: PR checks", startedAt: "2026-07-14T09:30:00.000Z", state: "stale" },
   ],
 }
@@ -64,7 +75,10 @@ function DisclosureFixture({ running }: { running: boolean }) {
   )
 }
 
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+
 createRoot(document.getElementById("root")!).render(
+  <QueryClientProvider client={queryClient}>
   <main className="mx-auto flex min-h-screen w-full max-w-xl flex-col gap-5 px-5 py-10">
     <header>
       <p className="petite-caps text-[11px] text-accent">Fixture</p>
@@ -77,7 +91,19 @@ createRoot(document.getElementById("root")!).render(
     </section>
     <section className="rounded-lg border border-border bg-panel p-4">
       <h2 className="text-sm font-medium">Queue sub-agents</h2>
+      {/* The card now lists the STALE child too (it reads "42 min ago"), not just the two running ones. */}
       <QueueSubAgentLines slug={thread.id} subAgents={thread.subAgents} />
+    </section>
+    <section data-rail-rows className="rounded-lg border border-border bg-panel p-4">
+      <h2 className="text-sm font-medium">Sidebar rail rows</h2>
+      {/* The rail density of the same shared row — checkbox spinner + the light-gray last-active reading. */}
+      <div className="mt-3 flex flex-col">
+        {/* subagentType is passed here too, to prove the RAIL still renders no tag: it has no room, and
+            its type reading stays in the row tooltip. */}
+        {thread.subAgents.map((s) => (
+          <ChildOpRow key={s.id} kind="AGENT" label={s.label} state={s.state} density="rail" lastActivityAt={s.lastActivityAt} subagentType={s.subagentType} onOpen={() => {}} />
+        ))}
+      </div>
     </section>
     <section className="rounded-lg border border-border bg-panel p-4">
       <h2 className="text-sm font-medium">Tool disclosures</h2>
@@ -116,5 +142,6 @@ createRoot(document.getElementById("root")!).render(
         <DisclosureFixture running={false} />
       </div>
     </section>
-  </main>,
+  </main>
+  </QueryClientProvider>,
 )

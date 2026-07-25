@@ -145,6 +145,28 @@ used the production argv form instead of a hand-quoted string. Replicate product
 
 ---
 
+## 3b. Browser process hygiene — you share this machine
+
+Other agents run QA concurrently against the same machine. Everything you start, you own by exact
+identity, and you clean up only YOUR identity.
+
+- **One browser instance per task, not per screenshot.** Reuse a single uniquely named owned session /
+  target / harness instance for every desktop and narrow check in the task.
+- **Arrange cleanup before launch** — a `finally`, a shell `trap`, or equivalent — so an interrupted or
+  failed QA pass still tears down. Verify the exact owned session/target and its helper-process tree are
+  gone before you rest.
+- **NEVER use a global close, and never a broad `pkill -f`.** `close_all_pages`, a bare
+  `pkill -f chrome`, or killing by name will take out another agent's live QA and dev servers. Kill by
+  the exact PID / session id you created.
+- Never leave a Chrome DevTools MCP helper, `agent-browser` daemon, puppeteer browser, or
+  Chrome/Chromium helper process running after the task that started it.
+
+Optical review is part of the pass, not a follow-up: icons beside text must be optically vertically
+centered, and placement, truncation, and wrapping must be checked by looking at the screenshot — box
+model numbers alone are not a pass.
+
+---
+
 ## 4. Before you rest
 
 - Kill every background stack you booted (temp HOME auto-cleans on SIGTERM).

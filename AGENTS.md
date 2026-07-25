@@ -14,17 +14,28 @@ pushing a PR is not. (`FRAY.md` states this in full; it is repeated here because
 `AGENTS.md` fresh every session and sub-agents load it, whereas the fray worker contract can be frozen
 at session start.)
 
+Git hygiene does NOT matter here — the only thing that matters is getting your changes onto local
+`main`. Many agents (and the human) work in parallel against the same repo constantly, so `main` moves
+under you and the shared working tree is often dirty with someone else's in-progress edits. Do not let
+that block you and do not wait it out: commit whatever is in the working tree first (an intermediate
+`git add -A && git commit -m "wip: snapshot in-flight work"` is fine — committing another agent's
+uncommitted changes to unblock your merge is EXPECTED, not a violation), then merge your branch in and
+resolve conflicts favoring a correct build of your own change. A messy history, a WIP commit that mixes
+several agents' work, an ugly merge — all fine. Never `git stash` in the shared tree (it corrupts
+concurrent agents), never force-discard someone's committed work, and never stall a landing on "the
+tree isn't clean." Keep merging into `main`.
+
 # Web UI completion rule
 
-For any user-visible web UI change, work is not complete until end-to-end Chrome or Chromium QA has exercised the affected workflow. Prefer Chrome DevTools MCP when it is available to the current provider. If it is unavailable or unsuitable, use `agent-browser` or this repository's Puppeteer harness as an explicit fallback; each path must produce the same real-browser evidence. Capture and inspect multiple screenshots covering the meaningful states: before and after, desktop and relevant narrow/mobile widths, plus open menus, drawers, hover, selected, loading, or error states when applicable. Check the browser console and page errors, and inspect visual results optically—not only by box-model measurements. Icons beside text must be optically vertically centered, and placement, truncation, and wrapping must be verified.
+For any user-visible web UI change, work is not complete until end-to-end Chrome or Chromium QA has
+exercised the affected workflow. Unit, typecheck, and build tests do not substitute for it. The handoff
+must carry the inspected screenshots, console/page-error evidence, the optical-review result, and
+explicit browser-cleanup confirmation. This does not apply to purely non-UI changes.
 
-Unit, typecheck, and build tests do not substitute for this visual Chrome QA. The final handoff must include paths to the inspected screenshot evidence. This rule does not apply to purely non-UI changes.
-
-# Browser process hygiene
-
-Browser cleanup is a mandatory part of end-to-end QA. Reuse one uniquely named owned browser session, target, or harness instance for all desktop and narrow/mobile checks in a task; do not create a new browser instance per screenshot or assertion. Every task that starts a browser must arrange cleanup in a `finally`/shell `trap` or equivalent path before launch, including on QA failure or interruption. Before returning, verify that its exact owned session/target or harness instance and its owned browser/helper-process tree are gone.
-
-Chrome DevTools MCP is the preferred QA tool when available. Never leave a Chrome DevTools MCP helper, `agent-browser` daemon, Puppeteer browser, or Chrome/Chromium helper process running after the task that created it. Do not use global browser/session/target close operations while another agent may be performing active QA; each agent owns and cleans up only its exact session, target, or process tree. A UI handoff is incomplete unless it includes screenshot paths, console/page-error evidence, optical-review results, and explicit browser-cleanup confirmation.
+**Load the `adhoc-cdp` skill for how** — the isolated disposable stack, the headless screenshot paths
+(Chrome DevTools MCP preferred, `ui/scripts/shot.mjs` as the reliable background fallback), which states
+and widths to capture, browser process hygiene (one owned instance per task; never a global close or a
+broad `pkill`), and how to embed evidence so fray renders it inline.
 
 # Copy capitalization: sentence case, never title case
 

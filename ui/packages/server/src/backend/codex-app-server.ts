@@ -26,6 +26,7 @@ import { redactCredentialSyntax } from "../credential-redaction.ts"
 import {
   daemonCodexAppServerHost,
   directChildHost,
+  readDaemonExitBreadcrumb,
   stopCodexAppServerDaemon,
   type CodexAppServerHost,
 } from "./codex-app-server-host.ts"
@@ -38,9 +39,32 @@ export const CODEX_APP_SERVER_PROVIDER = "codex-app-server"
 // Opt-in transport switch. Off = the hand-written daemon; on = `codex app-server --listen unix://`.
 // Read at construction, per process, so a restart is all it takes to move a project either way.
 export const CODEX_NATIVE_LISTEN_FLAG = "FRAY_CODEX_NATIVE_LISTEN"
-function nativeListenEnabled(): boolean {
-  const value = process.env[CODEX_NATIVE_LISTEN_FLAG]
-  return value === "1" || value === "true"
+
+export type CodexHostKind = "native" | "daemon" | "direct"
+
+/**
+ * Which app-server transport a bridge uses.
+ *
+ * The DEFAULT is the native listener (`codex app-server --listen unix://`): the app-server owns its own
+ * socket, so it genuinely outlives every fray process and there is no fray-authored daemon in the middle
+ * that could die and take the app-server — and every sub-agent turn inside it — down with it. The
+ * hand-rolled `--stdio` daemon can only broker survival across a fray restart; across its OWN death
+ * (idle expiry, reachability self-collection, a signal, its child crashing) it kills the app-server. It
+ * stays the default ONLY on win32, whose named-pipe socket path the native transport does not implement.
+ *
+ * Overrides: an injected `spawn` is always the direct-child test transport; `FRAY_CODEX_NATIVE_LISTEN`
+ * forces the choice (`1`/`true` → native where supported, `0`/`false` → the daemon).
+ */
+export function selectCodexHostKind(
+  flagValue: string | undefined,
+  platform: NodeJS.Platform,
+  hasSpawn: boolean,
+): CodexHostKind {
+  if (hasSpawn) return "direct"
+  const nativeSupported = platform !== "win32"
+  if (flagValue === "0" || flagValue === "false") return "daemon"
+  if (flagValue === "1" || flagValue === "true") return nativeSupported ? "native" : "daemon"
+  return nativeSupported ? "native" : "daemon"
 }
 export const CODEX_APP_SERVER_SUPPORTED_VERSION = "0.144.6"
 // Upgrade policy: this is an exact protocol pin, never a semver range. Changing it requires a fresh
@@ -399,6 +423,12 @@ export type CodexAppServerDiagnostic =
   | { event: "turn-auto-resumed"; threadSlug: string; interruptedTurnId: string }
   | { event: "daemon-reforked"; reason: string }
   | { event: "daemon-events-dropped"; dropped: number }
+  // The app-server this bridge had been talking to is gone and a fresh one replaced it — every turn
+  // that was running inside it (parents AND their sub-agents) died. `deathReason` is the dead daemon's
+  // own exit breadcrumb when it left one (`app-server-exited-code-*`, `self-collected-*`, `signal-*`,
+  // …), or "unknown" when it vanished without writing one. This is the event that finally makes a
+  // mid-turn daemon death attributable instead of an opaque disconnect.
+  | { event: "daemon-replaced"; previousGeneration: string; deathReason: string; deathAt: string | undefined }
 
 class RpcProtocolError extends Error {
   readonly code: number
@@ -1474,8 +1504,6 @@ const ThreadSettingsUpdated = z.object({
   threadSettings: z.object({
     sandboxPolicy: z.object({ type: z.string().max(64) }).passthrough(),
     approvalPolicy: z.unknown().optional(),
-    model: z.string().min(1),
-    effort: z.string().min(1).nullable().optional(),
   }).passthrough(),
 }).passthrough()
 const TurnStarted = z.object({ threadId: Opaque, turn: z.object({ id: Opaque }).passthrough() }).strict()
@@ -1485,8 +1513,6 @@ const MAX_CORRELATED_FILE_ITEMS = 128
 interface ObservedThreadSettings {
   sandbox: CodexSandboxMode | undefined
   approvalPolicy: unknown
-  model: string
-  effort: string | null
 }
 
 export interface CodexSandboxChangeResult {
@@ -1508,16 +1534,6 @@ export interface CodexSandboxChangeResult {
    * refused, and reported the failure itself. So this is next-TURN, not next-resume, and the UI must
    * say so rather than claim the change reached work already executing.
    */
-  turnInFlight: boolean
-}
-
-export interface CodexProfileChangeResult {
-  /** True only when `thread/settings/updated` confirmed the complete requested pair. */
-  applied: boolean
-  model: string
-  effort: string
-  confirmedBy: "notification" | "unconfirmed"
-  /** An existing turn keeps the profile it started with; the confirmed pair applies after it ends. */
   turnInFlight: boolean
 }
 
@@ -1565,7 +1581,7 @@ export class CodexAppServerBridge {
   private readonly pendingTurnStarts = new Set<string>()
   /** Threads the last reconcile found dead mid-turn, awaiting warmUp()'s recovery sweep. */
   private readonly pendingAutoResume = new Map<string, { row: BindingRow; interruptedTurn: string }>()
-  /** One-shot `thread/settings/updated` listeners, keyed by codex thread id. */
+  /** One-shot `thread/settings/updated` listeners, keyed by codex thread id. See setSandbox(). */
   private readonly settingsWaiters = new Map<string, Set<(observed: ObservedThreadSettings | undefined) => void>>()
   private readonly correlatedFileItems = new Map<string, CorrelatedFileItem>()
   private activeOperations = 0
@@ -1578,14 +1594,15 @@ export class CodexAppServerBridge {
     this.makeId = options.id ?? randomUUID
     this.codexBin = options.codexBin ?? "codex"
     this.timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
-    // Production hosts the app-server in a DETACHED per-project daemon so it outlives this runtime
-    // (see codex-app-server-host.ts). An injected `spawn` — every unit test and the live harnesses —
-    // keeps the historical direct-child behavior, where each connect really is a new process.
-    // FRAY_CODEX_NATIVE_LISTEN=1 swaps the daemon for the app-server's OWN unix listener
-    // (codex-app-server-native.ts), which needs no fray-authored daemon process at all.
-    this.host = options.host ?? (options.spawn
-      ? directChildHost(options.spawn)
-      : nativeListenEnabled() ? nativeListenCodexAppServerHost : daemonCodexAppServerHost)
+    // Production hosts the app-server on its OWN unix listener (codex-app-server-native.ts) so it
+    // outlives this runtime with no fray-authored daemon that could kill it — see selectCodexHostKind
+    // for the per-platform default and the overrides. An injected `spawn` — every unit test and the
+    // live harnesses — keeps the historical direct-child behavior, where each connect is a new process.
+    const hostKind = selectCodexHostKind(process.env[CODEX_NATIVE_LISTEN_FLAG], process.platform, Boolean(options.spawn))
+    this.host = options.host ?? (
+      hostKind === "direct" ? directChildHost(options.spawn!)
+      : hostKind === "native" ? nativeListenCodexAppServerHost
+      : daemonCodexAppServerHost)
     this.db = new Database(options.dbPath)
     this.db.pragma("journal_mode = WAL")
     this.db.pragma("busy_timeout = 5000")
@@ -2453,7 +2470,7 @@ export class CodexAppServerBridge {
           SET connection_epoch = ?, capability_revision = ?, protocol_fingerprint = ?, daemon_generation = ?
           WHERE singleton = 1
         `).run(connectionEpoch, capabilityRevision, PROTOCOL_FINGERPRINT, attachment.generation)
-        return { connectionEpoch, capabilityRevision, sameProcess }
+        return { connectionEpoch, capabilityRevision, sameProcess, previousGeneration: meta.daemon_generation }
       })()
       this.connectionEpoch = negotiated.connectionEpoch
       this.capabilityRevision = negotiated.capabilityRevision
@@ -2465,6 +2482,20 @@ export class CodexAppServerBridge {
       this.options.diagnostic?.({ event: "connected", version, connectionEpoch: this.connectionEpoch })
       if (attachment.droppedWhileDetached > 0) {
         this.options.diagnostic?.({ event: "daemon-events-dropped", dropped: attachment.droppedWhileDetached })
+      }
+      // A NEW app-server took the place of the one we were bound to: the previous generation — and every
+      // turn inside it — is gone. Attribute it from the dead daemon's own exit breadcrumb so the death
+      // is diagnosable instead of an opaque disconnect. Only when a prior generation actually existed
+      // and it genuinely changed; a first-ever connect (previousGeneration === "") is not a death.
+      if (!negotiated.sameProcess && negotiated.previousGeneration && negotiated.previousGeneration !== attachment.generation) {
+        const breadcrumb = readDaemonExitBreadcrumb(this.options.stateDir ?? this.options.projectDir, this.options.projectId)
+        const matched = breadcrumb?.generation === negotiated.previousGeneration ? breadcrumb : undefined
+        this.options.diagnostic?.({
+          event: "daemon-replaced",
+          previousGeneration: negotiated.previousGeneration,
+          deathReason: matched?.reason ?? "unknown",
+          deathAt: matched?.at || undefined,
+        })
       }
       await this.reconcileOwnedSessions(connection, negotiated.sameProcess)
       if (this.connection !== connection) throw new Error("Codex app-server disconnected during session reconciliation")
@@ -2600,11 +2631,25 @@ export class CodexAppServerBridge {
   // NOT a replay of the original prompt: the dead turn may have half-applied a patch or half-run a
   // command, so re-running it could duplicate side effects. Tell the worker what happened and let it
   // re-establish its own footing.
+  //
+  // The sub-agent paragraph is load-bearing. A `spawn_agent` child is a turn INSIDE the same
+  // app-server process, so it died with it — and fray cannot resume it (thread/resume never revives a
+  // running turn). Recovery of the children is therefore the PARENT model's job, and before this it
+  // depended on the model happening to notice: the 2026-07-24 loss ("three had returned, but six did
+  // not") only recovered because the model, on its own, thought to re-spawn. Naming the failure mode
+  // explicitly makes that re-establishment reliable instead of lucky. `list_agents` is codex's own
+  // authoritative snapshot, so it is the correct thing to point at.
   private static readonly RESTART_RECOVERY_NUDGE = [
     "[fray] Your previous turn was interrupted: the Codex app-server process running it exited (a Fray",
     "restart or a crash). This was not a decision by you or the human, and nothing you had already done",
     "was rolled back — but any command or edit that was in flight at that moment may not have finished.",
     "Re-check the state of your work before trusting it, then continue from where you left off.",
+    "",
+    "IMPORTANT — sub-agents do NOT survive this. Any agents you had dispatched with spawn_agent were",
+    "running inside that same process and died with it; their in-flight work is gone and cannot be",
+    "resumed. If you were orchestrating sub-agents, call list_agents to see which are actually still",
+    "alive, then re-spawn every one you still need before continuing. Do not assume a child is running",
+    "just because you dispatched it earlier.",
   ].join("\n")
 
   private static readonly MAX_AUTO_RESUMES = 3
@@ -2774,7 +2819,6 @@ export class CodexAppServerBridge {
       const observedPromise = this.awaitSettingsUpdate(
         threadId,
         expectNotification ? SANDBOX_CONFIRM_TIMEOUT_MS : SANDBOX_NOOP_GRACE_MS,
-        (observed) => observed.sandbox === input.sandbox,
       )
       try {
         await connection.request("thread/settings/update", {
@@ -2801,66 +2845,7 @@ export class CodexAppServerBridge {
     }
   }
 
-  /**
-   * Change a loaded thread's model and effort for subsequent turns.
-   *
-   * Codex deliberately does not expose these fields on `turn/steer`: an in-flight turn keeps the
-   * profile it started with. `thread/settings/update` is the native queue boundary, and its
-   * `thread/settings/updated` notification is the only evidence that the complete pair landed.
-   */
-  async setProfile(input: {
-    threadSlug: string
-    sessionId: string
-    model: string
-    effort: string
-  }): Promise<CodexProfileChangeResult> {
-    const model = input.model.trim()
-    const effort = input.effort.trim()
-    if (!model || !effort) throw new Error("Codex model and effort are required")
-    const releaseOperation = this.beginOperation()
-    try {
-      if (!this.bindingForScope(input.threadSlug, input.sessionId)) {
-        throw new Error("Codex app-server profile change requires a bridge-owned session")
-      }
-      const connection = await this.ensureConnected()
-      let binding = this.bindingForScope(input.threadSlug, input.sessionId)
-      if (!binding) throw new Error("Codex app-server profile change requires a bridge-owned session")
-      if (binding.state !== "active" || binding.connection_epoch !== this.connectionEpoch) {
-        await this.resumeOwnedSession(input.threadSlug, input.sessionId)
-        binding = this.bindingForScope(input.threadSlug, input.sessionId)
-        if (!binding) throw new Error("Codex app-server session disappeared during profile change")
-      }
-      const threadId = binding.codex_thread_id
-      const turnInFlight = binding.current_turn_id !== null || this.pendingTurnStarts.has(turnKey(binding))
-      const observedPromise = this.awaitSettingsUpdate(
-        threadId,
-        SANDBOX_CONFIRM_TIMEOUT_MS,
-        (observed) => observed.model === model && observed.effort === effort,
-      )
-      try {
-        await connection.request("thread/settings/update", { threadId, model, effort })
-      } catch (error) {
-        observedPromise.cancel()
-        throw error
-      }
-      const observed = await observedPromise.promise
-      if (!observed) return { applied: false, model, effort, confirmedBy: "unconfirmed", turnInFlight }
-      if (observed.model !== model || observed.effort !== effort) {
-        throw new Error(
-          `Codex app-server reported ${observed.model}/${String(observed.effort ?? "unknown")} after a request for ${model}/${effort}`,
-        )
-      }
-      return { applied: true, model, effort, confirmedBy: "notification", turnInFlight }
-    } finally {
-      releaseOperation()
-    }
-  }
-
-  private awaitSettingsUpdate(
-    threadId: string,
-    timeoutMs: number,
-    accepts: (observed: ObservedThreadSettings) => boolean = () => true,
-  ): {
+  private awaitSettingsUpdate(threadId: string, timeoutMs: number): {
     promise: Promise<ObservedThreadSettings | undefined>
     cancel: () => void
   } {
@@ -2877,11 +2862,7 @@ export class CodexAppServerBridge {
     }
     const promise = new Promise<ObservedThreadSettings | undefined>((resolve) => {
       settle = resolve
-      listener = (observed) => {
-        if (observed && !accepts(observed)) return
-        detach()
-        resolve(observed)
-      }
+      listener = (observed) => { detach(); resolve(observed) }
       const set = this.settingsWaiters.get(threadId) ?? new Set()
       set.add(listener)
       this.settingsWaiters.set(threadId, set)
@@ -3366,8 +3347,6 @@ export class CodexAppServerBridge {
       const observed: ObservedThreadSettings = {
         sandbox: codexSandboxModeOfPolicy(parsed.data.threadSettings.sandboxPolicy),
         approvalPolicy: parsed.data.threadSettings.approvalPolicy,
-        model: parsed.data.threadSettings.model,
-        effort: parsed.data.threadSettings.effort ?? null,
       }
       // Keep the cache honest for EVERY thread, including ones changed by someone else's client.
       const binding = this.bindingForCodexThread(parsed.data.threadId)

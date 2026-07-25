@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { splitQuestionBlocks, parseQuestionBlock, composeBlockAnswer, optionId, recommendedIndex } from "./questionBlocks.ts"
+import { splitQuestionBlocks, parseQuestionBlock, composeBlockAnswer, optionId, optionVerb, approvalAffirmativeIndex, recommendedIndex } from "./questionBlocks.ts"
 
 // ---- splitQuestionBlocks ----
 
@@ -90,6 +90,33 @@ test("a normal (non-question) code fence is left in prose", () => {
   assert.deepEqual(splitQuestionBlocks(text), [{ kind: "prose", text }])
 })
 
+// ---- a QUOTED opener is not an ask ----
+// Documenting the protocol means showing the syntax, and the correct authoring form wraps the sample in
+// a ```` fence. Hoisting that sample out into a live answerable card ALSO strands the enclosing ````
+// delimiters as prose, whose unterminated fence then swallows the rest of the message (2026-07-25).
+
+const TICK4 = "`".repeat(4)
+
+test("a ```question sample inside a ```` fence stays prose — no phantom card", () => {
+  const text = `${TICK4}\n\`\`\`question\nShip it?\n\n- A. Yes\n- B. No\n\`\`\`\n${TICK4}\n\nTrailing prose.`
+  const segs = splitQuestionBlocks(text)
+  assert.deepEqual(segs.map((s) => s.kind), ["prose"])
+  assert.equal(segs[0].text, text) // the whole thing renders as the code block it is
+})
+
+test("a ```question sample inside a ```markdown fence stays prose", () => {
+  const segs = splitQuestionBlocks("```markdown\n```question\nShip it?\n- A. Yes\n```\n```")
+  assert.deepEqual(segs.map((s) => s.kind), ["prose"])
+})
+
+test("a REAL question after a quoted sample is still found", () => {
+  const text = `Here is the syntax:\n\n${TICK4}\n\`\`\`question\nExample?\n- A. Yes\n\`\`\`\n${TICK4}\n\n\`\`\`question\nSo: ship it?\n\n- A. Yes\n- B. No\n\`\`\``
+  const segs = splitQuestionBlocks(text)
+  const asks = segs.filter((s) => s.kind === "question")
+  assert.equal(asks.length, 1)
+  assert.equal(asks[0].kind === "question" && asks[0].text, "So: ship it?\n\n- A. Yes\n- B. No")
+})
+
 // ---- parseQuestionBlock: choice detection ----
 
 test("lettered options (markdown list form) → chips, stripped from context", () => {
@@ -128,6 +155,131 @@ test("numbered options → chips", () => {
   const p = parseQuestionBlock(body, "question")
   assert.equal(p.contextMd, "How many retries?")
   assert.deepEqual(p.options, ["1. Zero", "2. Three", "3. Ten"])
+})
+
+// ---- the question line is never an option ----
+// A handoff carrying several blocks makes workers number the QUESTION too ("C. Does `brokerTo` …?"),
+// which OPTION_RE cannot tell from a choice: the question was chipped as option 0, the card rendered NO
+// question at all, and the freetext row re-used the letter (options ended at B → placeholder "C.").
+// Every case below is a verbatim shape from the transcript corpus on this machine.
+
+test("a LETTER-numbered question line is context, not the first option", () => {
+  const body = "C. Does `brokerTo` imply net access to the host?\n\n- A. No — the host must also be in `net` (recommended)\n- B. Yes — listing a host auto-allows it"
+  const p = parseQuestionBlock(body, "question")
+  assert.equal(p.contextMd, "C. Does `brokerTo` imply net access to the host?")
+  assert.deepEqual(p.options, ["A. No — the host must also be in `net`", "B. Yes — listing a host auto-allows it"])
+  assert.equal(p.recommendedIdx, 0) // the recommendation follows the option, not the old off-by-one index
+})
+
+test("a question numbered with the SAME letter its options start at is still context", () => {
+  const body = "A. What does `...` become?\n\n- A. Repurpose it\n- B. Drop it\n- C. Keep it"
+  const p = parseQuestionBlock(body, "question")
+  assert.equal(p.contextMd, "A. What does `...` become?")
+  assert.deepEqual(p.options, ["A. Repurpose it", "B. Drop it", "C. Keep it"])
+})
+
+test("a NUMBER-numbered question line is context, even against numbered options", () => {
+  const body = "3. What should `<tmp>` mean?\n\n1. A private writable per-run directory\n2. The OS shared temp dir"
+  const p = parseQuestionBlock(body, "question")
+  assert.equal(p.contextMd, "3. What should `<tmp>` mean?")
+  assert.deepEqual(p.options, ["1. A private writable per-run directory", "2. The OS shared temp dir"])
+})
+
+test("a numbered PLAN above the choices stays prose (the whole lead-in is context)", () => {
+  const body = "Retire the existing PRs? The plan:\n\n1. Sync local `main`\n2. Re-land the four fixes\n3. Close the redundant PRs\n\n- A. Yes — do the full plan\n- B. Hold"
+  const p = parseQuestionBlock(body, "question")
+  assert.equal(p.contextMd, "Retire the existing PRs? The plan:\n\n1. Sync local `main`\n2. Re-land the four fixes\n3. Close the redundant PRs")
+  assert.deepEqual(p.options, ["A. Yes — do the full plan", "B. Hold"])
+})
+
+test("a numbered question with NO options is a freetext question, not a one-option card", () => {
+  const p = parseQuestionBlock("4. Which name do you want?", "question")
+  assert.deepEqual(p.options, [])
+  assert.equal(p.contextMd, "4. Which name do you want?")
+})
+
+test("a block that OPENS with a real option run keeps every option (no question to demote)", () => {
+  // "A." opens the list and "B." continues it, so nothing here is a question — eating option A to invent
+  // one would silently lose a choice.
+  const p = parseQuestionBlock("- A. Approve as-is\n- B. Approve with edits", "approval")
+  assert.deepEqual(p.options, ["A. Approve as-is", "B. Approve with edits"])
+  assert.equal(p.contextMd, "")
+})
+
+test("a lone MARKED option is still an option (only a bare leading line is demoted)", () => {
+  const p = parseQuestionBlock("- A. Approve as-is", "approval")
+  assert.deepEqual(p.options, ["A. Approve as-is"])
+})
+
+test("a run that does NOT open a list is left alone — a skipped letter never eats a choice", () => {
+  // "A, C" is a typo'd list, not a question above a list: demoting A would drop a real option, so the
+  // ambiguous case keeps the old behavior.
+  const p = parseQuestionBlock("Pick one:\n- A. Foo\n- C. Bar", "question")
+  assert.deepEqual(p.options, ["A. Foo", "C. Bar"])
+  assert.equal(p.contextMd, "Pick one:")
+})
+
+test("options that legitimately start at B are not re-read as question + list", () => {
+  const p = parseQuestionBlock("Pick one:\n- B. Foo\n- C. Bar", "question")
+  assert.deepEqual(p.options, ["B. Foo", "C. Bar"])
+})
+
+// ---- grouped options: a prose heading between choices doesn't end the run ----
+
+test("a group heading between C and D keeps ALL SIX options answerable", () => {
+  const body =
+    "Package name — brainstorm.\n\n" +
+    "Thread / loom family (fray = a frayed thread):\n" +
+    "- A. **frayloom** — keeps the lineage\n" +
+    "- B. **warp** — the taut loom threads\n" +
+    "- C. **selvage** — the edge that doesn't fray\n\n" +
+    "Melee family (fray = a scrap/brawl of agents):\n" +
+    "- D. **melee** — a direct synonym\n" +
+    "- E. **fracas** — a noisy fray\n" +
+    "- F. **tussle** — a scrappy fray\n\n" +
+    "Also still open: `frayui`, `frayhq`."
+  const p = parseQuestionBlock(body, "question")
+  assert.deepEqual(p.options.map(optionId), ["A", "B", "C", "D", "E", "F"])
+  assert.equal(p.options[3], "D. **melee** — a direct synonym")
+  // The heading rides WITH the option it introduces instead of being stranded below the chips.
+  assert.equal(p.optionHeadings?.[3], "Melee family (fray = a scrap/brawl of agents):")
+  assert.equal(p.optionHeadings?.[0], undefined)
+  assert.equal(p.contextMd, "Package name — brainstorm.\n\nThread / loom family (fray = a frayed thread):")
+  assert.equal(p.trailingMd, "Also still open: `frayui`, `frayhq`.")
+})
+
+test("a SECOND question's list restarts at A, so the run still ends at the first set", () => {
+  // Two asks crammed into one block: the heading rule must not weld them into one six-option menu.
+  const body =
+    "Two scope calls:\n\n" +
+    "**1. Which formats?**\n- A. Safe tier\n- B. Safe tier + office\n\n" +
+    "**2. Should I proceed?**\n- A. Implement now\n- B. Stop here"
+  const p = parseQuestionBlock(body, "question")
+  assert.deepEqual(p.options, ["A. Safe tier", "B. Safe tier + office"])
+  assert.equal(p.optionHeadings, undefined)
+  assert.match(p.trailingMd ?? "", /^\*\*2\. Should I proceed\?\*\*/)
+})
+
+test("a numbered list after lettered options is trailing prose, not a continuation", () => {
+  const body = "Approve the plan?\n\n- A. Approve all three\n- B. Adjust one\n\nThe three calls:\n1. SURFACE — config-only\n2. STREAMING — pipe bridge"
+  const p = parseQuestionBlock(body, "approval")
+  assert.deepEqual(p.options, ["A. Approve all three", "B. Adjust one"])
+  assert.equal(p.trailingMd, "The three calls:\n1. SURFACE — config-only\n2. STREAMING — pipe bridge")
+})
+
+test("a Recommendation line always closes the choices, even with more options below", () => {
+  const body = "Pick:\n- A. One\n- B. Two\n\nRecommendation: A\n\n- C. A later, unrelated list item"
+  const p = parseQuestionBlock(body, "question")
+  assert.deepEqual(p.options, ["A. One", "B. Two"])
+  assert.equal(p.recommendation, "Recommendation: A")
+})
+
+test("prose between a numbered question line and its options still finds the options", () => {
+  // The question line is demoted, which empties the run — the real list sits below the prose.
+  const body = "9. How is host loopback exposed?\nThe knot is nested runs.\n- A. Require an explicit target\n- B. Keep current"
+  const p = parseQuestionBlock(body, "question")
+  assert.equal(p.contextMd, "9. How is host loopback exposed?\nThe knot is nested runs.")
+  assert.deepEqual(p.options, ["A. Require an explicit target", "B. Keep current"])
 })
 
 test("no trailing option run → freetext-only (empty options), whole body is context", () => {
@@ -342,4 +494,87 @@ test("inline marker with no space before the paren, preserving the label's own b
   const p = parseQuestionBlock("Flag?\n\n- A. Use `--strict`(recommended)\n- B. Use `--safe`", "question")
   assert.deepEqual(p.options, ["A. Use `--strict`", "B. Use `--safe`"])
   assert.equal(p.recommendedIdx, 0)
+})
+
+// ---- optionVerb ----
+
+test("optionVerb strips the option id so an action button reads as a verb", () => {
+  assert.equal(optionVerb("A. Approve as-is"), "Approve as-is")
+  assert.equal(optionVerb("- B. Hold"), "- B. Hold") // the list marker is stripped upstream, not here
+  assert.equal(optionVerb("3) Ship it"), "Ship it")
+  assert.equal(optionVerb("Approve"), "Approve") // no id → unchanged
+  assert.equal(optionVerb("A."), "A.") // nothing left after the id → keep the original, never empty
+})
+
+// ---- approvalAffirmativeIndex ----
+// The correctness-critical piece: a primary "go" button rendered on an option that actually says
+// "Hold" would send the OPPOSITE of what the human clicked. Position is never trusted.
+
+test("the canonical approval gate: two affirmatives → the first (unqualified) go is primary", () => {
+  const { options, recommendedIdx } = parseQuestionBlock(
+    "Ready to create CONTRIBUTING.md?\n\n- A. Approve as-is\n- B. Approve with edits — tell me what to change",
+    "approval",
+  )
+  assert.equal(approvalAffirmativeIndex(options, recommendedIdx), 0)
+})
+
+test("the canonical danger gate: 'Do it' is affirmative, 'Hold' is not", () => {
+  const { options, recommendedIdx } = parseQuestionBlock(
+    "Force-merge PR #391?\n\n- A. Do it — the failure is the known-flaky timeout\n- B. Hold — I'll wait for a green run",
+    "approval",
+    true,
+  )
+  assert.equal(approvalAffirmativeIndex(options, recommendedIdx), 0)
+})
+
+test("POSITION IS NOT TRUSTED: a gate that leads with the decline still marks the real go", () => {
+  const { options } = parseQuestionBlock("Ship?\n\n- A. Hold — wait for green\n- B. Approve and merge", "approval")
+  assert.equal(approvalAffirmativeIndex(options, null), 1)
+})
+
+test("classification reads the leading CLAUSE, not a rationale that happens to contain a verb", () => {
+  // "Hold" leads; the rationale mentions merging — must NOT read as affirmative.
+  const { options } = parseQuestionBlock("Ship?\n\n- A. Hold — do not merge until CI is green\n- B. Approve", "approval")
+  assert.equal(approvalAffirmativeIndex(options, null), 1)
+  // Symmetrically, an affirmative whose rationale mentions holding stays affirmative.
+  const b = parseQuestionBlock("Ship?\n\n- A. Merge now — no reason to hold\n- B. Wait", "approval")
+  assert.equal(approvalAffirmativeIndex(b.options, null), 0)
+})
+
+test("no recognizable affirmative → null (every action stays equal-weight, no invented primary)", () => {
+  const { options } = parseQuestionBlock("Which store?\n\n- A. SQLite\n- B. JSON file", "approval")
+  assert.equal(approvalAffirmativeIndex(options, null), null)
+})
+
+test("the recommendation is a TIEBREAK among affirmatives", () => {
+  const { options, recommendedIdx } = parseQuestionBlock(
+    "Ready?\n\n- A. Approve as-is\n- B. Approve with edits (recommended)",
+    "approval",
+  )
+  assert.equal(recommendedIdx, 1)
+  assert.equal(approvalAffirmativeIndex(options, recommendedIdx), 1)
+})
+
+test("the recommendation is a VETO: an agent advising HOLD never gets out-shouted by a primary go", () => {
+  const { options, recommendedIdx } = parseQuestionBlock(
+    "Force-merge?\n\n- A. Do it — the check is flaky\n- B. Hold — wait for a green run (recommended)",
+    "approval",
+    true,
+  )
+  assert.equal(recommendedIdx, 1)
+  assert.equal(approvalAffirmativeIndex(options, recommendedIdx), null)
+})
+
+test("markdown emphasis around the verb doesn't defeat classification", () => {
+  const { options } = parseQuestionBlock("Ship?\n\n- A. **Approve** — land it\n- B. `Hold`", "approval")
+  assert.equal(approvalAffirmativeIndex(options, null), 0)
+})
+
+test("a negative lead always loses, even when the same line also reads affirmative", () => {
+  const { options } = parseQuestionBlock("Ship?\n\n- A. Don't approve yet\n- B. Approve", "approval")
+  assert.equal(approvalAffirmativeIndex(options, null), 1)
+})
+
+test("empty options → null (never indexes into nothing)", () => {
+  assert.equal(approvalAffirmativeIndex([], null), null)
 })

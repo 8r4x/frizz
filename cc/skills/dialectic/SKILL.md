@@ -19,7 +19,7 @@ Do NOT use it for a **clear, low-stakes, or already-decided** question. If the a
 
 This is hard judgment work: the debaters must research, reason adversarially, and know when a concession is honest. Tier accordingly (per the fray model policy):
 
-- **The two L2 debaters:** the sophisticated tier at HIGH+ effort — **Fable when available, else Opus** (Fable 5 is currently unavailable and hard-fails, so today that means `fray-opus-high` / `fray-opus-xhigh`; use `fray-fable-high` once Fable is back). Never a cheap tier — a confidently-wrong debater poisons the whole exercise.
+- **The two L2 debaters:** the sophisticated tier at HIGH+ effort — **Opus** (`fray-opus-high` / `fray-opus-xhigh`, or `fray-opus-max` for a genuinely brutal call). Opus 5 is now as good as Fable and cheaper, so Opus is the top tier here too — don't reach for `fray-fable-*` because the debate feels high-intensity; buy the extra rigor with EFFORT instead. Never a cheap tier — a confidently-wrong debater poisons the whole exercise.
 - **The L1 relay/synthesis (you, or a dispatched lead):** also top tier — judging whether a concession is *genuine* and isolating the true crux is the hardest judgment in the loop.
 
 Dispatch each debater through a fray profile (`subagent_type: fray-opus-high`, etc.), one at a time (serial — each round needs the previous round's output).

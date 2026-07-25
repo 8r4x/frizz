@@ -474,6 +474,17 @@ export function claudeMcpFlags(mcp?: FrayMcp): string[] {
   return ["--mcp-config", config, `--allowedTools=${allowedTools.join(",")}`]
 }
 
+// A fray worker runs under a dashboard, not a live chat, so a BLOCKING question tool would hang the
+// session invisibly — there is nobody at the keyboard to click it. Remove it at spawn rather than
+// arguing against it in prose: the contract used to spend a paragraph on "NEVER invoke it" AND a
+// PreToolUse hook denied it, three mechanisms for one prohibition. Taking the tool away is the cheap
+// one, and it makes the other two unnecessary (the hook stays as belt-and-braces for a session that
+// somehow reaches the tool anyway). EQUALS form for the same reason as --allowedTools: the flag is
+// variadic and a space-separated value would swallow the positional prompt behind it.
+export function workerDisallowedToolFlags(): string[] {
+  return ["--disallowedTools=AskUserQuestion"]
+}
+
 // The `claude` argv for a fresh dispatch. session-id is PINNED so we can resume the exact
 // conversation later. claudeBin is injectable so tests build the command without spawning.
 export function buildClaudeCommand(opts: {
@@ -496,6 +507,7 @@ export function buildClaudeCommand(opts: {
   if (opts.effort) argv.push("--effort", opts.effort)
   if (opts.pluginDir) argv.push("--plugin-dir", opts.pluginDir)
   argv.push(...claudeMcpFlags(opts.frayMcp))
+  argv.push(...workerDisallowedToolFlags())
   // The fixed worker norms live in the SYSTEM prompt: rebuilt on every invocation (incl. resume)
   // and immune to compaction, unlike a first user message.
   const worker = opts.workerPrompt ?? loadWorkerPrompt()
@@ -530,14 +542,40 @@ export function workerPluginDir(): string | undefined {
   return resolveWorkerPluginDir()
 }
 
+// Claude Code caps WebSearch at 200 calls per SESSION (verified in the 2.1.220 bundle:
+// `CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION ?? 200`, enforced in the WebSearch tool against a
+// `taskRegistry` counter). A fray worker is long-lived and research-heavy — it burns that budget on
+// work a chat session never would — and past the cap the tool stops searching and merely returns
+// "this session has used its web search budget", which reads to the model as a dead end rather than
+// as a quota. Raise it far enough that a real effort never hits it, while keeping a finite backstop
+// against a runaway search loop; Claude Code has no unlimited sentinel, so a large integer is the
+// only expression of "effectively uncapped".
+export const WORKER_MAX_WEB_SEARCHES = 10000
+
+// Claude Code parses this variable as a strictly-digits integer >= 1 (`int({min:1,digitsOnly:true})`)
+// and silently falls back to the 200 default on anything else, so an operator override is honored
+// only in exactly that shape.
+function workerMaxWebSearches(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION
+  if (override !== undefined && /^[1-9][0-9]*$/.test(override)) return override
+  return String(WORKER_MAX_WEB_SEARCHES)
+}
+
 // Claude Code reads these inherited process variables as sub-agent profile defaults. A Fray worker
 // chooses its profile explicitly through the launch argv and plugin agent profiles, so let neither
 // a shell nor a globally configured Claude session silently replace that selection. Empty tmux
 // environment entries override inherited values while preserving every auth/config variable.
+//
+// The web-search cap is the deliberate exception to that masking: a profile override hijacks the
+// worker's identity, but a cap is operator policy, so an explicitly configured one is passed through
+// rather than overridden. It is always set EXPLICITLY (never left to inheritance) because a tmux pane
+// inherits the tmux SERVER's environment — captured whenever that server first started, which may
+// predate the current fray process by days.
 export function claudeWorkerEnvironment(): Record<string, string> {
   return {
     CLAUDE_CODE_SUBAGENT_MODEL: "",
     CLAUDE_CODE_EFFORT_LEVEL: "",
+    CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION: workerMaxWebSearches(),
   }
 }
 
@@ -563,6 +601,7 @@ export function buildClaudeResumeCommand(opts: {
   if (opts.effort) argv.push("--effort", opts.effort)
   if (opts.pluginDir) argv.push("--plugin-dir", opts.pluginDir)
   argv.push(...claudeMcpFlags(opts.frayMcp))
+  argv.push(...workerDisallowedToolFlags())
   // The system prompt is rebuilt per invocation — the resume must re-carry the worker norms too.
   // Same file-based path as buildClaudeCommand (see systemPromptFlags): inline would blow tmux's
   // command-length limit.
@@ -622,6 +661,12 @@ export interface DispatchDeps {
   // --json` for Claude, the local auth.json read for Codex). Absent (tests) ⇒ no preflight, so unit
   // tests never shell out or depend on the developer's real credential state.
   preflightAuth?: (kind: BackendKind) => Promise<ProviderAuth>
+  // Codex-only: is the `codex` executable actually runnable? Auth says a credential EXISTS; this says
+  // whether the binary the dispatch needs is installed. "missing" (a positive ENOENT) rejects EARLY,
+  // before any thread state, with a message that names the real problem instead of the deep
+  // "daemon exited before it became ready" a missing binary otherwise produces. Fails open on
+  // "unknown". Absent (tests) ⇒ no probe.
+  preflightCodexBinary?: () => Promise<"present" | "missing" | "unknown">
   // Durable adoption recovery seams. Production uses tmux's token-aware exact-pane implementation;
   // focused tests inject an in-memory private server and deterministic time.
   adoptionRuntime?: AdoptionRecoveryRuntime
@@ -728,6 +773,14 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       if (deps.preflightAuth && (await deps.preflightAuth(kind).catch((): ProviderAuth => "unknown")) === "signed-out") {
         throw new ProviderAuthRequiredError(kind)
       }
+      // Codex needs the `codex` executable, not just a credential. Probe it here, in the same
+      // zero-trace window as the auth preflight, so a missing binary fails with an actionable message
+      // BEFORE any scratchpad/registry state is created — instead of proceeding to a deep app-server
+      // "daemon exited before it became ready". Fails open on "unknown" (see readCodexBinaryState).
+      if (kind === "codex" && deps.preflightCodexBinary &&
+        (await deps.preflightCodexBinary().catch((): "unknown" => "unknown")) === "missing") {
+        throw new Error("Codex is not installed, or the `codex` executable is not on PATH. Install the Codex CLI and retry.")
+      }
       // Title: explicit human title, else the heuristic chop. (A headless `claude -p` titling pass
       // was tried and REMOVED — print mode is going away for Max subscription auth, which is the
       // whole reason the workers run as interactive tmux sessions. Claude's own evolving ai-title
@@ -795,6 +848,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             archived: 0,
             rested_at: null,
             title_auto: input.title?.trim() ? 0 : 1,
+            title_locked: 0, // a caller's hard-coded title is not a human's — the worker may rename it
             title: registryTitle,
             state: "open",
             meta: null,
@@ -921,10 +975,13 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         unread: 0,
         exited: 0,
         archived: 0,
-        // No explicit human title → backend telemetry becomes the display name; Claude retains its
-        // historical fallback.
+        // Backend telemetry becomes the display name either way. Without a caller title the stored
+        // text is a machine guess the UI must not present as a name (title_auto); WITH one it reads as
+        // a real name until the worker supplies a better one — never as a human's choice, so it stays
+        // unlocked. Claude retains its historical fallback.
         rested_at: null,
         title_auto: input.title?.trim() ? 0 : 1,
+        title_locked: 0,
         title: registryTitle,
         state: "open",
         meta: null,
@@ -1168,6 +1225,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         archived: 0,
         rested_at: null,
         title_auto: 0, // adopted threads keep their file title
+        title_locked: 1, // …and that heading is human-authored, so no auto-title may overwrite it
         title: null,
         state: "open",
         meta: null,

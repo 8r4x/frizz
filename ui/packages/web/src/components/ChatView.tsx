@@ -1,10 +1,10 @@
-import { createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react"
+import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef, type CSSProperties, type ReactNode } from "react"
 import { createPortal } from "react-dom"
 import { useSnapshot } from "valtio"
 import * as RadixTabs from "@radix-ui/react-tabs"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight, FileText, Hash, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, ShieldCheck, Sparkles, X } from "lucide-react"
+import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight, FileText, Hash, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, ShieldCheck, Sparkles, X, type LucideIcon } from "lucide-react"
 import type { AwaitingHint, NativeInputRequired as NativeInputRequiredData, PendingAsk, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptToolCall } from "@fray-ui/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBoard, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
@@ -13,9 +13,9 @@ import { displayTitle, lastActiveLabelAt } from "../groups.ts"
 import { mdToHtml, mdInlineToHtml, stripFrontmatter } from "../lib/markdown.ts"
 import { splitProseAttachments } from "../lib/imagePaths.ts"
 import { DiffBlock, PathLink } from "./DiffBlock.tsx"
-import { splitQuestionBlocks, parseQuestionBlock, type QuestionKind, type BlockAnswer, type MessageAnswering } from "../lib/questionBlocks.ts"
+import { splitQuestionBlocks, parseQuestionBlock, approvalAffirmativeIndex, type QuestionKind, type BlockAnswer, type MessageAnswering } from "../lib/questionBlocks.ts"
 import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
-import { parseAnswersMessage, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
+import { parseAnswersCard, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
 import { sendEagerFollowUp } from "../lib/eagerComposerSubmission.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
@@ -47,7 +47,7 @@ import { SignInModal } from "./SignInModal.tsx"
 import { PROVIDER_LABEL } from "../lib/signIn.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
-import { buildVirtualTranscriptMessageRows, earlierLoadGate, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
+import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
 
 // Answer types moved to lib/questionBlocks.ts (shared by the queue card, the thread view, and the
@@ -206,7 +206,15 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
       {/* The scroll viewport's own coordinate frame: `relative` here (rather than on the scroller) is
           what lets the floating "Jump to latest" overlay below sit still while the transcript scrolls.
           The scroller itself carries data-virtualized-transcript-scroll — the drawer virtualizes now
-          too, so the old "standalone" name would be a lie. */}
+          too, so the old "standalone" name would be a lie.
+
+          `[overflow-anchor:none]` on the scroller below leaves ONE authority over its offset. The
+          virtualizer already corrects scrollTop itself every time a row above the reader is re-measured;
+          Chrome's native scroll anchoring corrects it too, off its own anchor node, and neither knows
+          about the other — so both firing on one layout change moves the reader by that correction
+          TWICE. TodosView suspends native anchoring around exactly this hazard for the queue
+          (suspendNativeAnchoring, "THE one owner"); the drawer transcript is the same hazard and was
+          simply never given the same treatment. */}
       <div className="relative min-h-0 flex-1 flex flex-col">
       <div
         ref={transcriptRef}
@@ -216,7 +224,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
         role={virtualized ? "region" : undefined}
         aria-label={virtualized ? "Thread conversation" : undefined}
         aria-busy={virtualized && loadingEarlier ? true : undefined}
-        className="relative min-h-0 flex-1 overflow-y-auto outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-fg/60"
+        className="relative min-h-0 flex-1 overflow-y-auto outline-none [overflow-anchor:none] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-fg/60"
       >
       {virtualized && count > 0 ? (
         <VirtualizedThreadTranscript
@@ -425,6 +433,28 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
   )
 }
 
+// How long after a wheel/touch/key gesture the reader still owns the scroller. Long enough to cover
+// trackpad momentum between discrete events, short enough that it never outlives the gesture itself.
+const READER_GESTURE_MS = 700
+
+// How long a pin move owns the scroller while the row it un-pinned re-expands. The re-expansion lands
+// on a ResizeObserver pass one or more frames after the commit, so the restore has to outlive the
+// commit — but it must stay far under READER_GESTURE_MS, since a reader who scrolls during it should
+// win the moment it ends.
+const PIN_RESTORE_MS = 250
+
+// Opt-in drift diagnostic: `localStorage["fray.debugScroll"] = "1"`, then reload.
+//
+// The mid-scroll drift this file works to prevent does NOT reproduce headlessly — a scripted wheel has
+// no momentum, and a seeded transcript has no images or async-settling cards — so a harness that goes
+// green proves only that it did not reproduce, not that the reader is safe. This is the way to catch a
+// real occurrence on the machine where it happens: it warns whenever the row under the reader's eye
+// moves while the reader is not touching the scroller, and names the pin at that moment, so a live
+// sighting comes with its size and its trigger instead of "it jumped again".
+const DEBUG_SCROLL = (() => {
+  try { return localStorage.getItem("fray.debugScroll") === "1" } catch { return false }
+})()
+
 type TranscriptTransportFallback = ReturnType<typeof useTranscript>["transportFallback"]
 type VirtualThreadRow =
   | { key: "interactions"; kind: "interactions" }
@@ -544,14 +574,28 @@ function VirtualizedThreadTranscript({
     paddingEnd: 20,
     anchorTo: "end",
     followOnAppend: true,
-    scrollEndThreshold: 240,
+    scrollEndThreshold: TAIL_FOLLOW_PX,
   })
   const [atEnd, setAtEnd] = useState(true)
+  // Tail-follow state, in refs because syncTailFollow runs from layout/observer/listener callbacks that
+  // must read CURRENT values, not ones closed over from the render that scheduled them.
+  const followingTailRef = useRef(true)
+  const tailHeightRef = useRef(-1)
+  const readerScrollUntilRef = useRef(0)
+  // The virtualizer's total-size box. Its height IS getTotalSize(), so observing it catches every way
+  // the transcript can grow: a row inserted at its estimate, and each later measurement correction.
+  const contentRef = useRef<HTMLDivElement>(null)
   const tailReadyRef = useRef(false)
   const readerMovedRef = useRef(false)
   const nearTopLoadArmedRef = useRef(true)
   const pendingPrependAnchorRef = useRef<{ rowKey: string; viewportTop: number } | null>(null)
   const initialTranscriptKeyRef = useRef<string | undefined>(undefined)
+  // THE PIN MOVE (see the layout effect below). `readerAnchorRef` is refreshed at the END of every
+  // tail-follow pass, so a layout effect that runs BEFORE that pass still reads the PREVIOUS commit's
+  // position — which is exactly the place a pin move has to put the reader back.
+  const readerAnchorRef = useRef<{ rowKey: string; viewportTop: number } | null>(null)
+  const pinnedRowKeyRef = useRef<string | undefined>(undefined)
+  const pinRestoreUntilRef = useRef(0)
 
   const requestEarlier = useCallback(() => {
     const scroller = transcriptRef.current
@@ -616,12 +660,156 @@ function VirtualizedThreadTranscript({
     }
   }, [loadingEarlier, messageRows.length, transcriptRef])
 
+  // Where the reader is actually looking: the first row whose box reaches the pane top, and the offset
+  // it sits at. `:not([data-transcript-sticky])` for the same reason requestEarlier needs it — the
+  // pinned band floats AT the pane top, so anchoring to it would capture an invariant top and restore a
+  // zero correction, silently losing the reader's place.
+  const captureReaderAnchor = useCallback((): { rowKey: string; viewportTop: number } | null => {
+    const scroller = transcriptRef.current
+    if (!scroller) return null
+    const scrollerTop = scroller.getBoundingClientRect().top
+    const first = Array.from(scroller.querySelectorAll<HTMLElement>("[data-transcript-row-key]:not([data-transcript-sticky])"))
+      .find((element) => element.getBoundingClientRect().bottom > scrollerTop + 1)
+    const rowKey = first?.dataset.transcriptRowKey
+    if (!first || !rowKey) return null
+    return { rowKey, viewportTop: first.getBoundingClientRect().top - scrollerTop }
+  }, [transcriptRef])
+
+  // Put a remembered anchor back under the reader's eye. ABSOLUTE, not a delta: it scrolls to wherever
+  // that row now is, so running it after some other corrector already got it right is a no-op rather
+  // than a second correction.
+  const alignToAnchor = useCallback((anchor: { rowKey: string; viewportTop: number }) => {
+    const scroller = transcriptRef.current
+    if (!scroller) return
+    const row = Array.from(scroller.querySelectorAll<HTMLElement>("[data-transcript-row-key]"))
+      .find((element) => element.dataset.transcriptRowKey === anchor.rowKey && element.dataset.transcriptSticky !== "true")
+    if (!row) return
+    const nextTop = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+    scroller.scrollTop += nextTop - anchor.viewportTop
+  }, [transcriptRef])
+
+  // THE PIN MOVE — the one transcript event that resizes a row ABOVE a reader parked mid-thread.
+  //
+  // A queued follow-up being DELIVERED is the only thing that moves the current ask: a queued bubble is
+  // excluded from lastUserIdx, so an enqueue can't move it and no assistant reply ever can. When it
+  // moves, the row that WAS pinned drops out of the hoisted flow layer back into the absolute one and
+  // re-renders FULL SIZE instead of the collapsed pinned card — measured at 218px → 366px on a real
+  // thread, and every row below it moved by exactly that 148px. A reader reading the agent's output
+  // sits BELOW the ask, so that growth is ABOVE them, and staying put depends entirely on the resize
+  // being compensated — which the virtualizer skips outright while the reader is scrolling up
+  // (virtual-core resizeItem: `!itemSizeCache.has(key) || scrollDirection !== "backward"`), and which
+  // the browser's own scroll anchoring used to duplicate. A fixed-size shove, only on a delivery,
+  // depending on what the reader happened to be doing — i.e. sporadic.
+  //
+  // So don't depend on the compensation. Remember where the reader was and put them back, across the
+  // next frames, because the re-expansion lands on a later ResizeObserver pass and not in this commit.
+  // The pinned row's KEY, not its index — an index shifts under every insert, so it would report a "pin
+  // move" on any append. (stickyMessageRow itself is derived further down, after the measure pass.)
+  const pinnedRowKey = stickyRowIndex >= 0 ? rows[stickyRowIndex]?.key : undefined
+  useLayoutEffect(() => {
+    const nextKey = pinnedRowKey
+    const previousKey = pinnedRowKeyRef.current
+    pinnedRowKeyRef.current = nextKey
+    // First commit establishes the baseline; a reader AT the tail is tail-follow's to move, not ours.
+    if (previousKey === undefined || previousKey === nextKey || followingTailRef.current) return
+    const anchor = readerAnchorRef.current
+    if (!anchor || pendingPrependAnchorRef.current) return
+    // Claim the scroller for this beat so the tail-follow pass leaves the offset alone while the row
+    // above settles (it reconciles against a scroll height that is mid-change until it does).
+    pinRestoreUntilRef.current = performance.now() + PIN_RESTORE_MS
+    alignToAnchor(anchor)
+    let secondFrame = 0
+    let thirdFrame = 0
+    const firstFrame = requestAnimationFrame(() => {
+      alignToAnchor(anchor)
+      secondFrame = requestAnimationFrame(() => {
+        alignToAnchor(anchor)
+        thirdFrame = requestAnimationFrame(() => {
+          alignToAnchor(anchor)
+          pinRestoreUntilRef.current = 0
+        })
+      })
+    })
+    return () => {
+      cancelAnimationFrame(firstFrame)
+      cancelAnimationFrame(secondFrame)
+      cancelAnimationFrame(thirdFrame)
+      pinRestoreUntilRef.current = 0
+    }
+  }, [alignToAnchor, pinnedRowKey])
+
+  // TAIL FOLLOW — keep a reader who is AT the bottom at the bottom as the conversation grows.
+  //
+  // TanStack's own `followOnAppend` cannot do this job here: it only fires when the count grows AND the
+  // LAST row's key changes (virtual-core setOptions). A live thread's last row is almost never a
+  // message — it's the runtime-status row (Working…) or a queued bubble — so a landing reply is
+  // INSERTED ABOVE a tail whose key never changes and the follow silently no-ops. `resizeItem` then
+  // PRESERVES the distance from the end while the row measures, so the gap that opened at insert time
+  // is held forever: the reader is left exactly one row ESTIMATE short of the bottom (122px for a
+  // message; ~50-70px for a queued→landed flip, which leaves the row count unchanged and so cannot
+  // trigger the library follow at all) — the "it auto-scrolled but stopped 50px short" bug.
+  //
+  // So own it. Reconciled by nextTailFollow (which decides reader-moved vs content-grew) and driven
+  // from three places, because content settles across several frames: the scroll listener, every
+  // commit, and every resize of the virtualizer's total-size box.
+  const syncTailFollow = useCallback(() => {
+    const scroller = transcriptRef.current
+    // A prepend in flight owns the scroller: "load earlier" grows the content by a whole page and
+    // restores the reader's anchor across the next two frames. Following that growth would race it.
+    if (!scroller || pendingPrependAnchorRef.current) return
+    // Same for a pin restore: the row above the reader is mid-re-expansion, so the scroll height this
+    // would reconcile against is a value in transit. Let the restore land, then resume — and do NOT
+    // refresh the reader anchor from a position it is still correcting.
+    if (performance.now() < pinRestoreUntilRef.current) return
+    const next = nextTailFollow({
+      scrollTop: scroller.scrollTop,
+      scrollHeight: scroller.scrollHeight,
+      clientHeight: scroller.clientHeight,
+      previousScrollHeight: tailHeightRef.current,
+      following: followingTailRef.current,
+      readerMoved: performance.now() < readerScrollUntilRef.current,
+    })
+    followingTailRef.current = next.following
+    if (next.scrollTop !== null) scroller.scrollTop = next.scrollTop
+    tailHeightRef.current = scroller.scrollHeight
+    // "Jump to latest" is exactly the negation of attachment, so the affordance can never disagree
+    // with the behavior — and it no longer flickers for one frame while a message lands.
+    setAtEnd((current) => current === next.following ? current : next.following)
+    // Did the row under the reader's eye move while they weren't touching anything? (see DEBUG_SCROLL)
+    if (DEBUG_SCROLL && !next.following && performance.now() >= readerScrollUntilRef.current) {
+      const previous = readerAnchorRef.current
+      const row = previous && Array.from(scroller.querySelectorAll<HTMLElement>("[data-transcript-row-key]"))
+        .find((element) => element.dataset.transcriptRowKey === previous.rowKey && element.dataset.transcriptSticky !== "true")
+      if (previous && row) {
+        const drift = Math.round(row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - previous.viewportTop)
+        if (Math.abs(drift) > 2) console.warn(`[fray] transcript moved ${drift}px under a still reader — pin=${pinnedRowKeyRef.current ?? "none"} row=${previous.rowKey}`)
+      }
+    }
+    // LAST: refresh where the reader is looking. This runs on every commit, every settle and every
+    // scroll, so the pin-move effect above — which is declared EARLIER and therefore runs before this
+    // pass — always reads the position from before the pin moved.
+    readerAnchorRef.current = captureReaderAnchor() ?? readerAnchorRef.current
+  }, [captureReaderAnchor, transcriptRef])
+
+  // Every commit: a row that just mounted at its ESTIMATED height has already pushed the bottom away.
+  // A layout effect (not an effect) so the correction lands in the same frame — no visible slip.
+  useLayoutEffect(syncTailFollow)
+
+  // Every settle after that: TanStack measures the real DOM one or more frames later, and a big
+  // markdown/tool row can keep growing for several. The observed box's height IS getTotalSize().
+  useEffect(() => {
+    const content = contentRef.current
+    if (!content) return
+    const observer = new ResizeObserver(syncTailFollow)
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [syncTailFollow])
+
   useEffect(() => {
     const scroller = transcriptRef.current
     if (!scroller) return
     const inspect = () => {
-      const nextAtEnd = virtualizer.isAtEnd(240)
-      setAtEnd((current) => current === nextAtEnd ? current : nextAtEnd)
+      syncTailFollow()
       const gate = earlierLoadGate({
         armed: nearTopLoadArmedRef.current,
         scrollTop: scroller.scrollTop,
@@ -632,8 +820,11 @@ function VirtualizedThreadTranscript({
       nearTopLoadArmedRef.current = gate.armed
       if (gate.shouldLoad) requestEarlier()
     }
+    // A gesture is in flight: for the next beat, treat every scroll as the READER's, so a transcript
+    // that happens to be growing at that moment can't claim the movement and haul them back down.
     const markReaderIntent = () => {
       readerMovedRef.current = true
+      readerScrollUntilRef.current = performance.now() + READER_GESTURE_MS
       requestAnimationFrame(inspect)
     }
     const markKeyboardIntent = (event: KeyboardEvent) => {
@@ -652,6 +843,7 @@ function VirtualizedThreadTranscript({
     scroller.addEventListener("scroll", inspect, { passive: true })
     scroller.addEventListener("wheel", markWheelIntent, { passive: true })
     scroller.addEventListener("touchstart", markTouchIntent, { passive: true })
+    scroller.addEventListener("touchmove", markTouchIntent, { passive: true })
     scroller.addEventListener("pointerdown", markReaderIntent, { passive: true })
     scroller.addEventListener("keydown", markKeyboardIntent)
     const frame = requestAnimationFrame(inspect)
@@ -660,10 +852,11 @@ function VirtualizedThreadTranscript({
       scroller.removeEventListener("scroll", inspect)
       scroller.removeEventListener("wheel", markWheelIntent)
       scroller.removeEventListener("touchstart", markTouchIntent)
+      scroller.removeEventListener("touchmove", markTouchIntent)
       scroller.removeEventListener("pointerdown", markReaderIntent)
       scroller.removeEventListener("keydown", markKeyboardIntent)
     }
-  }, [hasEarlier, loadingEarlier, requestEarlier, transcriptRef, virtualizer])
+  }, [hasEarlier, loadingEarlier, requestEarlier, syncTailFollow, transcriptRef])
 
   const virtualItems = virtualizer.getVirtualItems()
   const totalSize = virtualizer.getTotalSize()
@@ -684,6 +877,7 @@ function VirtualizedThreadTranscript({
 
   return (
     <div
+      ref={contentRef}
       data-virtualized-transcript
       data-virtual-row-count={virtualItems.length}
       className="relative w-full"
@@ -2051,7 +2245,7 @@ function UserBubble({ text, queued, sticky, deliveryUnconfirmed, sourceId }: { t
 // `answering` is undefined for all but the live message (and identity-stable via useLiveAnswering's
 // useMemo unless answers/blocks actually changed), `dense` is a constant. So only the message whose
 // inputs really changed re-renders; everything else bails out at the memo boundary.
-// `paired` is the precomputed question↔answer pairing for an "Answers:" user message (see
+// `paired` is the precomputed question↔answer pairing for a composed-answer user message (see
 // pairAllAnswers — computed at the LIST level because the lookback needs the whole message list, which
 // a per-message component deliberately doesn't get). Memo-friendly by construction: it's null (a stable
 // primitive) for every ordinary message, so only actual answers-messages ever see a prop change.
@@ -2073,10 +2267,11 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     // bubble honors \n but not a lone \r → the breaks collapse into a run-on. Normalize for BOTH render
     // paths (the server does this too, but this is the definitive per-surface guarantee for user text).
     const text = messagePresentationText(m).replace(/\r\n?/g, "\n")
-    // OUR OWN composed multi-block answer ("Answers:\n1. …\n2. …", from useLiveAnswering.sendAnswers)
+    // OUR OWN composed multi-block answer — either wire form ("Answers:\n1. …\n2. …" for the live ask,
+    // "Answers to earlier questions:\n1. “Q” → A" for a buried one, both from useLiveAnswering.sendAnswers)
     // renders as a structured answers card echoing the question component — not a flat run-on bubble.
     // Non-matching text (and a parse hiccup → null) falls back to the plain bubble; text is never lost.
-    const answers = paired !== undefined ? paired : parseAnswersMessage(text)
+    const answers = paired !== undefined ? paired : parseAnswersCard(text)
     if (answers) return <AnswersCard answers={answers} queued={m.queued} sourceId={m.sourceId} />
     return <UserBubble text={text} queued={m.queued} sticky={sticky} deliveryUnconfirmed={m.deliveryState === "unconfirmed"} sourceId={m.sourceId} />
   }
@@ -2129,6 +2324,8 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
               onChip: (optIdx: number, optText: string) => answering.onChip(bi, optIdx, optText),
               onText: (text: string) => answering.onText(bi, text),
               onSubmit: answering.onSubmit,
+              onInstantAnswer: (answer: string) => answering.onInstantAnswer(bi, answer),
+              sending: answering.sending,
             }
           : undefined
         blocks.push(<QuestionBlockCard key={`${keyBase}-${fi}-q${si}`} raw={seg.text} questionKind={seg.questionKind} danger={seg.danger} interactive={interactive} wrap={dense} />)
@@ -2205,6 +2402,10 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
 // (count mismatch / no question message found — `question` undefined) degrades to the numbered layout,
 // where the number still points a scrolled-up reader at the right block. Answers keep
 // whitespace-pre-wrap so a multi-line answer's breaks survive.
+// The row number shows ONLY in that fallback. With the question ON the row the question IS the label,
+// and a second number can only COMPETE with whatever numbering the worker used inside the question text:
+// a batch answering a BURIED ask renumbers its rows from 1 (they may span several messages), so
+// answering questions 9–11 of an earlier ask rendered "1" against a question that reads "9. …".
 function AnswersCard({ answers, queued, sourceId }: { answers: PairedAnswer[]; queued?: boolean; sourceId?: string }) {
   return (
     <div data-fray-msg={sourceId} className={`group/msg relative self-end flex w-full max-w-[85%] flex-col items-end ${queued ? "opacity-50" : ""}`}>
@@ -2218,18 +2419,14 @@ function AnswersCard({ answers, queued, sourceId }: { answers: PairedAnswer[]; q
           {answers.map((a, i) => (
             <div key={i} className="flex flex-col gap-1">
               {a.question && (
-                <div className="flex items-start gap-2">
-                  <span className="mt-px shrink-0 text-[10px] uppercase tabular-nums tracking-wide text-muted/70">{a.n}</span>
-                  <span title={a.question} className="line-clamp-2 min-w-0 flex-1 text-[11px] leading-snug text-muted">
-                    {a.question}
-                  </span>
+                <div title={a.question} className="line-clamp-2 min-w-0 text-[11px] leading-snug text-muted">
+                  {a.question}
                 </div>
               )}
               <div className="flex items-start gap-2">
-                {/* With a question line the number lives up there; an invisible twin keeps the chip aligned. */}
-                <span className={`mt-1.5 shrink-0 text-[10px] uppercase tabular-nums tracking-wide text-muted/70 ${a.question ? "invisible" : ""}`}>
-                  {a.n}
-                </span>
+                {!a.question && (
+                  <span className="mt-1.5 shrink-0 text-[10px] uppercase tabular-nums tracking-wide text-muted/70">{a.n}</span>
+                )}
                 {/* Neutral recessed chip — a SETTLED answer, not "awaiting you". The bright yellow accent
                     is reserved solely for the awaiting-you motif (see styles.css); a past choice reads
                     quiet: a darker inset panel with a soft left rule to still mark it as the reply. */}
@@ -2391,7 +2588,109 @@ interface BlockInteractive {
   onChip: (optIdx: number, optText: string) => void
   onText: (text: string) => void
   onSubmit: () => void
+  // Answer THIS block and send in one gesture — the approval gate's action buttons (see ApprovalActions).
+  onInstantAnswer: (answer: string) => void
+  // A send is already in flight — the approval actions disable so a double-click can't fire twice.
+  sending: boolean
 }
+
+// ── The shared card chrome ────────────────────────────────────────────────────────────────────────
+// Every card the transcript sets off from the prose — the ```done / ```awaiting signal fences, a
+// ```question block, and the runtime banners (permission, provider fault, usage-limit pause, native
+// input) — wears the SAME two parts, so they read as one family rather than a pile of one-off shapes
+// (maintainer 2026-07-24: "I like the little checkmark with the Done label — we should have something
+// similar for all the other kinds of cards").
+
+// Part one: the kind header. A small glyph plus the kind in quiet uppercase, at the card's top-left.
+// It is the card's IDENTITY, so it never carries prose — the sentence belongs in the body below.
+function CardKind({
+  icon: Icon,
+  label,
+  tone = "text-muted/70",
+}: {
+  icon: LucideIcon
+  label: ReactNode
+  // The kind's own color language: muted by default, red for danger/fault, amber for a pause, accent
+  // for "this one is waiting on you".
+  tone?: string
+}) {
+  return (
+    <div className={`mb-1.5 flex items-center gap-1 text-[10px] uppercase tracking-wide ${tone}`}>
+      <Icon size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} />
+      {label}
+    </div>
+  )
+}
+
+// The card's MEANING, and the ONLY thing allowed to vary between kinds (maintainer 2026-07-24: the
+// styling across kinds was "vastly different… almost no consistency"). Every card is otherwise the
+// same shell — same fill, same border weight, same padding, same body scale, same action row — so a
+// tone is a two-token swap on the border and the kind header, never a different card:
+//   neutral   — a statement of fact (done, awaiting, a question)
+//   attention — the agent is BLOCKED on you, answerable only in your external terminal
+//   caution   — fray paused itself and will continue on its own (a usage limit)
+//   danger    — something is broken or the action is irreversible (sign-in fault, a destructive gate)
+//
+// Only THREE border colors, though: `caution` keeps the neutral border and says its piece in an amber
+// kind header. Its amber and the accent gold sit ~15° apart on the wheel, so as two lit borders they
+// were indistinguishable — and a self-resolving pause must never compete for the eye with "your agent
+// is stuck waiting on you". Border = how loud; the header = what it is.
+type CardTone = "neutral" | "attention" | "caution" | "danger"
+const CARD_TONES: Record<CardTone, { border: string; kind: string }> = {
+  neutral: { border: "border-border-strong", kind: "text-muted/70" },
+  attention: { border: "border-accent/45", kind: "text-accent/80" },
+  caution: { border: "border-border-strong", kind: "text-amber-400" },
+  danger: { border: "border-red-500/45", kind: "text-red-400" },
+}
+
+// Part two: the SHELL. One rounded panel-2 card at one padding for every kind. Cards used to disagree
+// about all three of fill (panel-2 / elevated / an accent or red wash), border color, and whether they
+// carried a shadow — which is what made nine sibling cards read as nine unrelated shapes.
+export function TranscriptCard({
+  tone = "neutral",
+  icon,
+  label,
+  children,
+  className = "",
+  ...rest
+}: {
+  tone?: CardTone
+  icon: LucideIcon
+  label: ReactNode
+  children: ReactNode
+  className?: string
+} & Omit<ComponentPropsWithoutRef<"div">, "children" | "className">) {
+  return (
+    <div {...rest} className={`min-w-0 rounded-lg border ${CARD_TONES[tone].border} bg-panel-2 px-4 py-3 ${className}`}>
+      <CardKind icon={icon} label={label} tone={CARD_TONES[tone].kind} />
+      {children}
+    </div>
+  )
+}
+
+// Part three: the body copy. One scale for every card's sentence, so a two-line explanation in one
+// card is not visibly larger than the same sentence in the card above it.
+export const CARD_BODY = "block min-w-0 text-[12px] leading-5 text-fg/85"
+
+// Part two: the action row, ALWAYS right-justified (maintainer 2026-07-24). A card's buttons are its
+// trailing verb; hung on the left they read as another paragraph of the body and every card disagreed
+// with every other about where to look for the action. Any explainer text passed as the first child
+// takes the leftover width (`flex-1 min-w-0`) and wraps its own lines there, so the button still
+// anchors the right edge on a narrow queue card instead of being pushed onto its own line.
+export function CardActions({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <div className={`mt-3 flex flex-wrap items-center justify-end gap-x-2.5 gap-y-2 ${className}`}>{children}</div>
+}
+
+// The primary (light-on-dark) verb EVERY card's main action wears — the done card's white
+// "Mark as done" chrome. Exported because this is a rule, not a per-card choice (maintainer 2026-07-24:
+// the buttons inside these cards should ALWAYS be white): a card is a request for one action, and the
+// recessed outlined chrome some of them wore read as a secondary — or worse, disabled — affordance.
+// The ONLY departure is a genuinely secondary sibling standing beside the primary (the provider-fault
+// card's "Retry" next to "Sign in"), which stays outlined so the pair keeps a hierarchy.
+export const CARD_PRIMARY_BUTTON = "bg-fg px-2.5 py-1 text-bg hover:opacity-90"
+// The same verb with the icon+label layout every card action uses. Cards differ only in what they pass
+// beyond this (shrink-0, a disabled treatment), never in the fill.
+const CARD_PRIMARY_ACTION = `flex shrink-0 items-center gap-1 rounded-md text-[11px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 ${CARD_PRIMARY_BUTTON}`
 
 // A ```question block, set off from the surrounding prose: rounded neutral border + slightly elevated
 // bg + a muted label (NOT yellow — that's the focus motif). The label + icon track the kind: a plain
@@ -2441,21 +2740,39 @@ export function QuestionBlockCard({
   }, [freetext])
   const KindIcon = isDanger ? AlertTriangle : isMulti ? ListChecks : isApproval ? ShieldCheck : HelpCircle
   const kindLabel = isMulti ? "select multiple" : isApproval ? "approval" : "question"
+  // An APPROVAL gate is a YES, not a menu (maintainer 2026-07-24). It renders as ONE "Approve" button
+  // in the standard trailing action row — no chips, no in-card answer box. Anything other than yes is
+  // a sentence, and the prompt box at the bottom of the card is already the place to write one. What
+  // goes ON THE WIRE is still the gate's own affirmative option verbatim when the worker declared one
+  // (approvalAffirmativeIndex reads the option's WORDS, never its position, so a "- A. Hold" gate can
+  // never send a decline as an approval), so the worker sees the exact string a chip would have sent.
+  const approvalAnswer = useMemo(() => {
+    if (!isApproval) return null
+    const idx = approvalAffirmativeIndex(parsed.options, recIdx)
+    return idx === null ? APPROVE_LABEL : parsed.options[idx]
+  }, [isApproval, parsed.options, recIdx])
   return (
-    <div className={`rounded-lg border px-4 py-3 ${isDanger ? "border-red-500/40 bg-red-500/[0.05]" : "border-border-strong bg-elevated"}`}>
-      <div className={`mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide ${isDanger ? "text-red-400" : "text-muted/70"}`}>
-        <KindIcon size={11} className="shrink-0" />
-        {kindLabel}
-      </div>
+    <TranscriptCard tone={isDanger ? "danger" : "neutral"} icon={KindIcon} label={kindLabel}>
       {html && <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={{ __html: html }} />}
-      {(parsed.options.length > 0 || interactive) && (
+      {!isApproval && (parsed.options.length > 0 || interactive) && (
         // Options stack in a SINGLE full-width column (maintainer 2026-07-10: a 2-col grid read as
         // ragged, uneven columns with dead whitespace once option text got long). One chip per row;
         // the free-text row keeps col-span-full so the "something else…" answer gets the whole line.
         <div className="mt-2 grid grid-cols-1 gap-1.5">
           {parsed.options.map((opt, i) => (
+            <Fragment key={i}>
+              {/* A group heading the worker wrote between choices ("Melee family:" over D–F). It rides
+                  WITH its option rather than being stranded below the chips as unanswerable prose, and
+                  wears the SAME body treatment as the context above — the FIRST group's heading is just
+                  the tail of that context, so a muted caption here would make two identical things
+                  render differently in one card. */}
+              {parsed.optionHeadings?.[i] && (
+                <div
+                  className={`md-body mt-1${wrap ? ` ${QUEUE_WRAP}` : ""}`}
+                  dangerouslySetInnerHTML={{ __html: mdInlineToHtml(parsed.optionHeadings[i]!.split("\n").join(" ")) }}
+                />
+              )}
             <Chip
-              key={i}
               label={opt}
               multi={isMulti}
               // The recommendation renders INSIDE its option as a badge (not as a caption below);
@@ -2479,6 +2796,7 @@ export function QuestionBlockCard({
                 if (taRef.current && document.activeElement === taRef.current) taRef.current.blur()
               }}
             />
+            </Fragment>
           ))}
           {/* The free-text answer IS the final option — but it SPANS THE FULL WIDTH (col-span-full)
               below the multi-column options, and is an auto-growing textarea (see taRef effect above)
@@ -2542,7 +2860,17 @@ export function QuestionBlockCard({
       {parsed.recommendation && recIdx === null && (
         <div className="md-inline mt-1.5 text-[11px] text-muted/70" dangerouslySetInnerHTML={{ __html: recHtml }} />
       )}
-    </div>
+      {/* The gate's single verb, in the SAME trailing action row every other card puts its action in. */}
+      {isApproval && approvalAnswer !== null && (
+        <CardActions>
+          <ApproveAction
+            danger={isDanger}
+            disabled={!interactive || !!interactive.sending}
+            onApprove={() => interactive?.onInstantAnswer(approvalAnswer)}
+          />
+        </CardActions>
+      )}
+    </TranscriptCard>
   )
 }
 
@@ -2581,52 +2909,46 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   const doneThread = canAct && fenceThread ? fenceThread : doneThreadRef.current
   if (fenceKind === "done") {
     return (
-      // NEUTRAL chrome (same quiet card family as the awaiting card / permission banner) — the green
-      // splash stood out as the only saturated color in the UI (maintainer 2026-07-10). The Check +
-      // "Done" label carries the meaning; no color needed.
-      <div className="rounded-lg border border-border-strong bg-panel-2 px-4 py-3">
-        <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted/70">
-          <Check size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} /> Done
-        </div>
+      // NEUTRAL tone — the green splash stood out as the only saturated color in the UI (maintainer
+      // 2026-07-10). The Check + "Done" label carries the meaning; no color needed.
+      <TranscriptCard icon={Check} label="Done">
         {html && <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={{ __html: html }} />}
         {/* A white "Mark as done" button, deliberately redundant with the stable lifecycle footer — the
             same completion mutation, styled as the primary (light-on-dark) verb. Only shown when the
             thread can actually take the action. */}
         {doneThread && (
-          <div className="mt-3">
+          <CardActions>
             <StateButton
               thread={doneThread}
-              className="bg-fg px-2.5 py-1 text-bg hover:opacity-90"
+              className={`text-[11px] ${CARD_PRIMARY_BUTTON}`}
+              iconClassName={ICON_LABEL_NUDGE}
               onArchived={queueDismiss?.dismiss}
               onDismissCancel={queueDismiss?.cancel}
             />
-          </div>
+          </CardActions>
         )}
-      </div>
+      </TranscriptCard>
     )
   }
-  // Same chrome as the done card above — heading, then the prose, then the action. The heading names
+  // Same shell as the done card above — heading, then the prose, then the action. The heading names
   // the WAIT ("Arm watcher"), which is what the old right-rail button label was doing badly: it read
   // as the button's verb when it was really the card's identity (maintainer 2026-07-24). With no
   // parkable hint there's no action to name, so it falls back to a plain "Awaiting".
   const parkTitle = awaitingParkAction(hints)?.title ?? AWAITING_FALLBACK_TITLE
   return (
-    <div className="min-w-0 rounded-lg border border-border-strong bg-panel-2 px-4 py-3">
-      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted/70">
-        <Hourglass size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} /> {parkTitle}
-      </div>
+    <TranscriptCard icon={Hourglass} label={parkTitle}>
       <div
-        className={`md-inline min-w-0 text-[12px] leading-5 text-fg/85${wrap ? ` ${QUEUE_WRAP}` : ""}`}
+        className={`md-inline ${CARD_BODY}${wrap ? ` ${QUEUE_WRAP}` : ""}`}
         dangerouslySetInnerHTML={{ __html: awaitingHtml }}
       />
       {canAct && fenceThread && <AwaitingParkButton thread={fenceThread} hints={hints} />}
-    </div>
+    </TranscriptCard>
   )
 }
 
 // The awaiting card's HUMAN-IN-THE-LOOP park button, sitting under the prose with its effect spelled
 // out in muted text beside it. The worker's ```awaiting fence already auto-arms the durable wake (a
-// `timer` fires at its instant; a `github-review` watcher wakes on new non-bot PR activity) AND
+// `timer` fires at its instant; a `pr-watch` watcher wakes on any new PR activity, bot or human) AND
 // already files the thread into the dimmed Held band — this button lets the human EXPLICITLY commit a
 // USER-OWNED snooze on top, so the park carries a concrete wake time and is durable across fence
 // changes. It NEVER suppresses the auto-armed wake: a user snooze is a board-presentation concern
@@ -2654,10 +2976,12 @@ function AwaitingParkButton({ thread, hints }: { thread: ThreadViewData; hints: 
       .finally(() => setBusy(false))
   }
   return (
-    // Button first, explainer floated to its right. The explainer takes the remaining width and wraps
-    // its OWN lines there (flex-1 + min-w-0) instead of dropping below the button — on a narrow queue
-    // card a two-line sentence beside the button still reads as one control, a stacked one doesn't.
-    <div className="mt-3 flex items-center gap-x-2.5">
+    // Explainer first, button ANCHORED RIGHT — the same trailing-verb position the done card's
+    // Mark-as-done holds (maintainer 2026-07-24). The explainer takes the remaining width and wraps its
+    // OWN lines there (flex-1 + min-w-0) instead of pushing the button onto a line of its own: on a
+    // narrow queue card a two-line sentence beside the button still reads as one control.
+    <CardActions>
+      <span className="min-w-0 flex-1 text-[11px] leading-snug text-muted/70">{action.explainer}</span>
       <button
         type="button"
         onClick={apply}
@@ -2665,13 +2989,14 @@ function AwaitingParkButton({ thread, hints }: { thread: ThreadViewData; hints: 
         aria-label={AWAITING_PARK_BUTTON}
         title={action.explainer}
         onMouseDown={(e) => e.preventDefault()}
-        className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-panel px-2.5 py-1 text-[11px] font-medium text-fg/85 outline-none transition-colors hover:border-border-strong hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-45"
+        // Same white primary chrome as the done card's Mark-as-done: parking is this card's verb, and
+        // the recessed grey it used to wear read as a secondary/disabled affordance beside it.
+        className={`whitespace-nowrap disabled:opacity-45 ${CARD_PRIMARY_ACTION}`}
       >
         {busy && <Loader2 size={11} className="animate-spin" />}
         {AWAITING_PARK_BUTTON}
       </button>
-      <span className="min-w-0 flex-1 text-[11px] leading-snug text-muted/70">{action.explainer}</span>
-    </div>
+    </CardActions>
   )
 }
 
@@ -2718,29 +3043,32 @@ export function ProviderFaultCard({
     if (!started) setRetrying(false)
   }
   return (
-    <div data-provider-fault className="flex items-center gap-2.5 rounded-md border border-red-500/40 bg-panel-2 px-3 py-2 text-[12px]">
-      <KeyRound size={13} className="shrink-0 text-red-400" />
-      <span className="min-w-0 flex-1 text-fg/90">
-        <span className="font-medium">{label} sign-in required</span> — the provider rejected this
-        session's credential. Sign in, then retry.
+    <TranscriptCard data-provider-fault tone="danger" icon={KeyRound} label={`${label} sign-in required`}>
+      <span className={CARD_BODY}>
+        The provider rejected this session's credential. Sign in, then retry.
       </span>
-      {retryText?.trim() && (
+      <CardActions>
+        {retryText?.trim() && (
+          <button
+            onClick={() => retry(retryText)}
+            disabled={retrying}
+            onMouseDown={(e) => e.preventDefault()}
+            className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-fg/90 transition-colors hover:bg-panel hover:border-border-strong disabled:opacity-60"
+          >
+            Retry
+          </button>
+        )}
+        {/* The card's verb, so it wears the same white fill as every other card action. The accent
+            fill it used to have made it the one saturated button in the transcript — and the red kind
+            header + red border already carry the alarm, so the button did not need to repeat it. */}
         <button
-          onClick={() => retry(retryText)}
-          disabled={retrying}
+          onClick={() => setSignIn(true)}
           onMouseDown={(e) => e.preventDefault()}
-          className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-fg/90 transition-colors hover:bg-panel hover:border-border-strong disabled:opacity-60"
+          className={CARD_PRIMARY_ACTION}
         >
-          Retry
+          Sign in
         </button>
-      )}
-      <button
-        onClick={() => setSignIn(true)}
-        onMouseDown={(e) => e.preventDefault()}
-        className="shrink-0 rounded-md bg-accent px-2 py-1 text-[11px] font-medium text-white transition-opacity hover:opacity-90"
-      >
-        Sign in
-      </button>
+      </CardActions>
       {signIn && (
         <SignInModal
           backend={fault.backend}
@@ -2748,7 +3076,7 @@ export function ProviderFaultCard({
           onAuthed={() => setSignIn(false)}
         />
       )}
-    </div>
+    </TranscriptCard>
   )
 }
 
@@ -2789,55 +3117,51 @@ export function LimitPauseCard({ slug, sessionId, pause }: { slug: string; sessi
     })
     if (!started) setContinuing(false)
   }
-  // items-center vertically centers the sentence and the button on the common single line: the button
-  // is the tallest element, so the old items-start left it hanging below the text inside the card's
-  // padding (the "garbage spacing"). flex-wrap + ml-auto still drop the button to its own line at a
-  // narrow width; the glyph and sentence are grouped (items-start + a 2px glyph nudge) so the hourglass
-  // stays on the FIRST line when the sentence wraps rather than floating to the middle of the block.
   return (
-    <div data-limit-pause className="flex flex-wrap items-center gap-x-2.5 gap-y-2 rounded-md border border-amber-500/40 bg-panel-2 px-3 py-2 text-[12px]">
+    <TranscriptCard data-limit-pause tone="caution" icon={Hourglass} label={`Paused by the ${label} ${which}`}>
       {/* The provider's own "You've hit your session limit · resets …" line sits directly above this
           card (unlike an auth error, it is informative, so transcript.ts keeps its bubble). So this
           card says only what THAT line cannot: what fray is going to do about it. */}
-      <span className="flex min-w-[12rem] flex-1 items-start gap-2.5 text-fg/90">
-        <Hourglass size={13} className="mt-[2px] shrink-0 text-amber-400" />
-        <span>
-          <span className="font-medium">Paused by the {label} {which}</span>
-          {" — "}
-          {pause.autoResume
-            ? pause.resumesAt
-              ? `continuing automatically at ${limitResumeClock(pause.resumesAt)}.`
-              : "continuing automatically once the window resets."
-            : "continue it whenever you have capacity again."}
-        </span>
+      <span className={CARD_BODY}>
+        {pause.autoResume
+          ? pause.resumesAt
+            ? `Continuing automatically at ${limitResumeClock(pause.resumesAt)}.`
+            : "Continuing automatically once the window resets."
+          : "Continue it whenever you have capacity again."}
       </span>
-      <button
-        onClick={continueNow}
-        disabled={continuing}
-        onMouseDown={(e) => e.preventDefault()}
-        className="ml-auto shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-fg/90 transition-colors hover:bg-panel hover:border-border-strong disabled:opacity-60"
-      >
-        Continue now
-      </button>
-    </div>
+      <CardActions>
+        <button
+          onClick={continueNow}
+          disabled={continuing}
+          onMouseDown={(e) => e.preventDefault()}
+          className={`disabled:opacity-45 ${CARD_PRIMARY_ACTION}`}
+        >
+          Continue now
+        </button>
+      </CardActions>
+    </TranscriptCard>
   )
 }
 
+// ATTENTION tone, like the two native-input cards below it: all three mean the same thing — the agent
+// is blocked on you and the only place to answer is your external terminal — and they used to wear
+// three different treatments (neutral / accent+shadow / accent wash) for that one meaning.
 export function PermPromptBanner({ onTerminal }: { onTerminal: () => void }) {
   return (
-    <div className="flex items-center gap-2.5 rounded-md border border-border-strong bg-panel-2 px-3 py-2 text-[12px]">
-      <KeyRound size={13} className="shrink-0 text-muted" />
-      <span className="min-w-0 flex-1 text-fg/90">
-        The agent is waiting on a <span className="font-medium">permission approval</span> — respond in your external terminal.
+    <TranscriptCard tone="attention" icon={KeyRound} label="Permission approval">
+      <span className={CARD_BODY}>
+        The agent is waiting on your approval — respond in your external terminal.
       </span>
-      <button
-        onClick={() => onTerminal()}
-        onMouseDown={(e) => e.preventDefault()}
-        className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-fg/90 transition-colors hover:bg-panel hover:border-border-strong"
-      >
-        Copy terminal command
-      </button>
-    </div>
+      <CardActions>
+        <button
+          onClick={() => onTerminal()}
+          onMouseDown={(e) => e.preventDefault()}
+          className={CARD_PRIMARY_ACTION}
+        >
+          Copy terminal command
+        </button>
+      </CardActions>
+    </TranscriptCard>
   )
 }
 
@@ -2854,25 +3178,22 @@ export function NativeInputRequiredCard({ input, onTerminal }: { input: NativeIn
           ? "Confirmation required"
           : "Choice required"
   return (
-    <div data-native-input-required className="rounded-lg border border-accent/50 bg-accent/10 px-4 py-3 shadow-sm shadow-black/10">
-      <div className="flex items-start gap-2.5">
-        <AlertTriangle size={15} className="mt-0.5 shrink-0 text-accent" />
-        <div className="min-w-0 flex-1">
-          <div className="text-[10px] font-medium uppercase tracking-wide text-accent">{label}</div>
-          <div className="mt-1 text-[13px] font-medium leading-snug text-fg">{input.title}</div>
-          <div className="mt-1 text-[12px] leading-snug text-muted">Review and respond in your external terminal. Fray will not choose for you.</div>
-        </div>
-      </div>
-      <div className="mt-3 flex justify-end">
+    <TranscriptCard data-native-input-required tone="attention" icon={AlertTriangle} label={label}>
+      {/* The modal's own title is the one line here that carries weight — it's the thing being asked.
+          It stays at the body scale and earns its emphasis from the medium weight and full-strength
+          fg, not from a larger size that made this card's copy visibly bigger than every sibling's. */}
+      <div className="min-w-0 text-[12px] font-medium leading-5 text-fg">{input.title}</div>
+      <div className="mt-1 text-[12px] leading-5 text-muted">Review and respond in your external terminal. Fray will not choose for you.</div>
+      <CardActions>
         <button
           onClick={() => onTerminal()}
           onMouseDown={(e) => e.preventDefault()}
-          className="rounded-md border border-accent/50 bg-panel px-2.5 py-1.5 text-[11px] font-medium text-fg transition-colors hover:border-accent hover:bg-panel-2"
+          className={CARD_PRIMARY_ACTION}
         >
           Copy terminal command
         </button>
-      </div>
-    </div>
+      </CardActions>
+    </TranscriptCard>
   )
 }
 
@@ -2926,7 +3247,8 @@ export function BackgroundOpsStrip({
           label={s.label}
           state={s.state}
           density="sheet"
-          startedAt={s.startedAt}
+          lastActivityAt={s.lastActivityAt}
+          subagentType={s.subagentType}
           onOpen={s.id ? () => pushSubAgentDrawer(slug, s.id!, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt }) : undefined}
           onDismiss={s.id ? () => dismiss.mutate(s.id!) : undefined}
         />
@@ -2938,7 +3260,7 @@ export function BackgroundOpsStrip({
           label={s.label}
           state={s.state}
           density="sheet"
-          startedAt={s.startedAt}
+          lastActivityAt={s.lastActivityAt}
           onOpen={s.id ? () => pushBackgroundShellDrawer(slug, s.id!, { label: s.label, startedAt: s.startedAt }) : undefined}
           onDismiss={s.id ? () => dismiss.mutate(s.id!) : undefined}
         />
@@ -2953,20 +3275,19 @@ export function BackgroundOpsStrip({
 // the ONE affordance copies an external-terminal command, where the dialog can actually be answered.
 export function PendingAskCard({ ask, onTerminal }: { ask: PendingAsk; onTerminal: () => void }) {
   return (
-    <div className="rounded-lg border border-accent/40 bg-accent/[0.06] px-4 py-3">
-      <div className="mb-2 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-accent/80">
-        <HelpCircle size={11} className="shrink-0" /> Waiting on your answer — in your external terminal
-      </div>
+    <TranscriptCard tone="attention" icon={HelpCircle} label="Waiting on your answer — in your external terminal">
       <div className="flex flex-col gap-3">
         {ask.questions.map((q, i) => (
           <div key={i} className="flex flex-col gap-1.5">
             {q.header && <div className="text-[10px] uppercase tracking-wide text-muted/55">{q.header}</div>}
-            <div className="text-[13px] font-medium text-fg/90">{q.question}</div>
+            <div className="min-w-0 text-[12px] font-medium leading-5 text-fg">{q.question}</div>
             {q.options.length > 0 && (
               <div className="flex flex-col gap-1">
                 {q.options.map((o, j) => (
                   // A non-interactive OPTION ROW (clearly display-only — no hover, no cursor-pointer).
-                  <div key={j} className="rounded-md border border-border bg-panel-2 px-2.5 py-1.5 text-[12px] text-fg/80">
+                  // `bg-elevated`, one step above the card's own panel-2 fill — the same relationship the
+                  // question card's chips have to their card, so a row reads as a row on every surface.
+                  <div key={j} className="rounded-md border border-border bg-elevated px-2.5 py-1.5 text-[12px] text-fg/80">
                     <span className="font-medium text-fg/90">{o.label}</span>
                     {o.description && <span className="text-muted/70"> — {o.description}</span>}
                   </div>
@@ -2977,14 +3298,20 @@ export function PendingAskCard({ ask, onTerminal }: { ask: PendingAsk; onTermina
           </div>
         ))}
       </div>
-      <button
-        onClick={() => onTerminal()}
-        onMouseDown={(e) => e.preventDefault()}
-        className="mt-3 flex items-center gap-1.5 rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95"
-      >
-        <KeyRound size={12} /> Copy terminal command
-      </button>
-    </div>
+      <CardActions>
+        <button
+          onClick={() => onTerminal()}
+          onMouseDown={(e) => e.preventDefault()}
+          className={CARD_PRIMARY_ACTION}
+        >
+          {/* No literal space before the label — the flex `gap` IS the spacing. A JSX space here
+              rendered as a real space character ON TOP of the gap and made this the widest icon/label
+              gap on the page by ~3px. */}
+          <KeyRound size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} />
+          Copy terminal command
+        </button>
+      </CardActions>
+    </TranscriptCard>
   )
 }
 
@@ -3075,6 +3402,58 @@ function nextOptionId(options: string[]): string {
 // recommendedIndex (rec-line → option index) now lives in ../lib/questionBlocks.ts alongside the rest
 // of the question parsing, so it's covered by the pure-logic unit tests.
 
+// The approval gate's ONE verb. A gate is a YES/NO, and its yes is the whole point — so it is a single
+// "Approve" button in the card's trailing action row, wearing the same white fill as every other card
+// action rather than a bespoke row of option-shaped buttons (maintainer 2026-07-24: an approval card
+// "should literally just be one button that says Approve, and that's it"). Anything that is not yes is
+// a sentence, and the prompt box at the bottom of the card is already where you write one.
+//
+// DANGER gates arm instead of firing: the first click re-labels the button and only the second sends,
+// so an irreversible force-merge or delete can't ride a stray click on a queue card. The arm lapses on
+// its own so no button sits loaded, and only the ARMED state goes red — a resting button is white like
+// every sibling, and the card's red border + red kind header already say this one is destructive.
+const APPROVE_LABEL = "Approve"
+function ApproveAction({ danger, disabled, onApprove }: { danger: boolean; disabled: boolean; onApprove: () => void }) {
+  const [armed, setArmed] = useState(false)
+  useEffect(() => {
+    if (!armed) return
+    const id = setTimeout(() => setArmed(false), 5000)
+    return () => clearTimeout(id)
+  }, [armed])
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      aria-label={APPROVE_LABEL}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => {
+        if (danger && !armed) {
+          setArmed(true)
+          return
+        }
+        setArmed(false)
+        onApprove()
+      }}
+      className={`flex shrink-0 items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-40 ${
+        armed ? "bg-red-500 text-white hover:opacity-90" : CARD_PRIMARY_BUTTON
+      }`}
+    >
+      {/* NO icon at rest (maintainer 2026-07-24: a shield on an Approve button is weird). The word is
+          the whole affordance, and the card's own APPROVAL eyebrow already carries the shield glyph —
+          repeating it on the button said nothing twice. The ARMED state keeps its warning triangle:
+          there the glyph is the message, not decoration. */}
+      {armed ? (
+        <>
+          <AlertTriangle size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} />
+          Click again to confirm
+        </>
+      ) : (
+        APPROVE_LABEL
+      )}
+    </button>
+  )
+}
+
 // A single answer choice: a left-aligned neutral button; when selected it takes the subtle accent
 // border (focus-adjacent selection). A `multi` chip additionally carries a checkbox square (empty →
 // checked) so the "toggle several" affordance reads unmistakably as multi-select vs the single-select
@@ -3114,7 +3493,9 @@ function Chip({
           ? "border-accent bg-accent/10 text-fg"
           : disabled
             ? "cursor-default border-border text-muted/80"
-            : "border-border text-fg/90 hover:bg-panel-2 hover:border-border-strong"
+            // hover lands on `elevated`, one step above the card's own panel-2 fill — hovering to
+            // panel-2 was invisible once every card standardized on that fill.
+            : "border-border text-fg/90 hover:bg-elevated hover:border-border-strong"
       }`}
     >
       {multi && (
@@ -3132,7 +3513,13 @@ function Chip({
           column. The badge must precede the label in source order for the float to take effect. */}
       <span className="min-w-0 flex-1">
         {recommended && (
-          <span className="float-right ml-2 mt-px rounded-full border border-border-strong px-1.5 py-px text-[9.5px] uppercase tracking-wide text-muted">
+          // Optically centred on the option text's CAP BLOCK, not on its line box. Measured on the
+          // rendered page: the pill's ink centre sat 1.88px (sans) / 1.80px (mono) BELOW the label's,
+          // because a 9.5px pill inside a 12px line resolves a shorter line box and lands its baseline
+          // 1px low. Unlike the icon nudge this is font-INDEPENDENT — both sides scale with the same
+          // font — so it is a constant, and 2px lands on a whole device pixel at 2× DPR. `translate`
+          // (not a margin) so the float's exclusion area, and therefore the text wrap, is untouched.
+          <span className="float-right ml-2 mt-px -translate-y-[2px] rounded-full border border-border-strong px-1.5 py-px text-[9.5px] uppercase tracking-wide text-muted">
             Recommended
           </span>
         )}

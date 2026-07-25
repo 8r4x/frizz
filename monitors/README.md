@@ -29,12 +29,13 @@ and 3 for an invocation, missing-`gh`, or GitHub/auth error. Those errors are te
 silent retry loop. Each `gh` invocation has a 30-second bound and at most three attempts with bounded
 250ms/500ms backoff before that terminal error. SIGINT/SIGTERM emits one terminal `cancelled` event
 and exits 130. `--help` is the sole stdout exception: it prints plain usage text and exits 0. A `--once`
-pending snapshot exits 0 without a terminal event. Review exits 0 for new human activity; its
+pending snapshot exits 0 without a terminal event. Review exits 0 for new activity; its
 `--once` baseline is a status snapshot.
 
 `ci-watch` combines `gh pr checks` with newest workflow runs for the PR's exact head SHA.
 `ACTION_REQUIRED`, queued, and in-progress work are pending, never success. `review-watch` baselines
-non-bot reviews/comments and wakes only for new human activity after that baseline. Workflow runs are
+every review and comment and wakes for any new one after that baseline, whoever filed it — there is no
+bot filter, because most PR review now arrives from an app. Workflow runs are
 collapsed only by `(workflow name, event)`: retries of the same workflow event replace older runs, while
 different events on the same exact head (for example `push` and `pull_request`) both contribute to the
 aggregate verdict.

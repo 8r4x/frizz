@@ -9,12 +9,13 @@ import type { BoardSnapshot, ThreadView, RuntimeState, PlanView } from "@fray-ui
 import { BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isValidAwaitingTimer, type PermissionMode as PermissionModeValue } from "@fray-ui/shared"
 import type { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
-import { isHeadlessRow, isBrokerClaudeRow } from "./storage.ts"
+import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked } from "./storage.ts"
 import type { Storage, SessionRow } from "./storage.ts"
 import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import type { Tailer, SessionTelemetry } from "./tailer.ts"
 import type { InteractionChange } from "./interaction-store.ts"
 import { frayDirExists } from "./fray.ts"
+import { parseDeliveryLedger } from "./delivery-ledger.ts"
 import * as tmux from "./tmux.ts"
 import { effectivePermissionMode, resolveLegacyThreadFile, scratchpadRelPath } from "./dispatch.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
@@ -222,6 +223,14 @@ function hasParkedExternalWait(tele: SessionTelemetry | undefined, nowMs: number
 // to rest. A user-owned snooze temporarily suppresses every queue reason—including a concrete ask,
 // permission prompt, or crash—then the exact deadline restores the still-current reason. Truthful
 // external waits place ordinary rest in Held without writing lifecycle state.
+// A Claude follow-up fray has delivered but the transcript has not yet reflected: it lives in the
+// delivery ledger as `pending` (injected, no JSONL evidence yet) or `enqueued` (positively receipted by
+// Claude Code's own queue). Both mean the human's message is handled and in flight. `unconfirmed` is
+// NOT fresh — fray could not confirm that send, so it must stay visible for the human to re-drive.
+function hasFreshDelivery(row: SessionRow): boolean {
+  return parseDeliveryLedger(row.delivery_ledger).some((d) => d.state === "pending" || d.state === "enqueued")
+}
+
 export function deriveNeedsYou(
   row: SessionRow,
   tele: SessionTelemetry | undefined,
@@ -253,6 +262,17 @@ export function deriveNeedsYou(
   // interaction-clearance would bury it forever after one view). The legacy needsAction had this net
   // (active/planning + exited/none); deriveNeedsYou dropped it — restored here (found 2026-07-09).
   if (runtime === "exited" && tele?.turn === "in-flight") return true
+  // A human follow-up fray has DELIVERED but the transcript has not YET reflected — the tailer folds
+  // JSONL on a poll that runs seconds behind under load — sits in the delivery ledger as pending or
+  // enqueued. The human has already responded, so the thread is NOT awaiting them: suppress it here,
+  // from SERVER TRUTH, so a card the operator just steered leaves the queue and STAYS gone until the
+  // turn is observed — instead of bouncing back when the client's 12s optimism expires first (the
+  // "reappears after ~10s, then leaves again" flicker). This is the durable, reload-safe complement to
+  // the client's optimistic steer. Placed AFTER the crash net (a delivered follow-up to a worker that
+  // then died must still surface) and the hard live asks, but before the at-rest reasons a steer
+  // resolves (a question, a done handoff, bare rest). `unconfirmed` is excluded on purpose: a send fray
+  // could not confirm is one the human may need to re-drive, so the ledger's own aging re-surfaces it.
+  if (hasFreshDelivery(row)) return false
   // An unanswered ```question fence in the last assistant message is an EXPLICIT ask — a hard queue
   // member exactly like a native pendingAsk, NOT subject to interaction-clearance. VIEWING a question
   // is not ANSWERING it, so seen_at must never drop it off the stack (the whole point is that threads
@@ -326,7 +346,7 @@ function scratchpadPathIfExists(projectDir: string, sessionId: string): string |
 // A REGISTERED session thread's view (id = row.slug). Runtime via the shared deriveRuntime (tmux-aware);
 // telemetry fields mirror the legacy path; title provenance is resolved before the snapshot is emitted.
 export function resolveSessionProfile(
-  row: Pick<SessionRow, "backend" | "model" | "effort" | "spawned_at">,
+  row: Pick<SessionRow, "backend" | "model" | "effort" | "spawned_at" | "profile_set_at">,
   tele: Pick<SessionTelemetry, "model" | "effort" | "profileAt"> | undefined,
 ): { model?: string; effort?: string } {
   const persistedModel = row.model?.trim() || undefined
@@ -336,7 +356,15 @@ export function resolveSessionProfile(
   // A transcript is replayed from byte zero whenever a runtime generation changes. A persisted launch
   // target therefore remains authoritative until a genuinely post-spawn profile record arrives; old
   // turn_context/assistant records must not snap the controls back after reattach or server restart.
-  const observedIsCurrent = Number.isFinite(observedAt) && Number.isFinite(spawnedAt) && observedAt >= spawnedAt
+  // SIBLING of resolveSessionPermission's set-time rule (permission_set_at): a codex model/effort
+  // change made eagerly through setThreadProfile takes effect from the next turn, so no fresh
+  // turn_context exists yet and the last one still reports the OLD profile. When the OPERATOR set the
+  // profile AFTER that observed reading, prefer the saved intent so the visible composer selector shows
+  // the pick immediately; a genuinely newer turn (observedAt > setAt) re-establishes observed authority,
+  // so it converges on its own. Claude never sets profile_set_at (setProfileTargetIfCurrent), so unchanged.
+  const setAt = row.profile_set_at ? Date.parse(row.profile_set_at) : NaN
+  const supersededByOperatorSet = Number.isFinite(setAt) && setAt > observedAt
+  const observedIsCurrent = Number.isFinite(observedAt) && Number.isFinite(spawnedAt) && observedAt >= spawnedAt && !supersededByOperatorSet
   const observedModel = tele?.model
     ? normalizeObservedThreadModel(row.backend ?? "claude", tele.model) ?? tele.model.trim()
     : undefined
@@ -346,7 +374,7 @@ export function resolveSessionProfile(
 }
 
 export function resolveSessionPermission(
-  row: Pick<SessionRow, "backend" | "spawned_at" | "permission_mode" | "permission_pending">,
+  row: Pick<SessionRow, "backend" | "spawned_at" | "permission_mode" | "permission_pending" | "permission_set_at">,
   tele?: Pick<SessionTelemetry, "permissionMode" | "permissionModeAt">,
 ): ThreadView["permissionMode"] {
   const saved = PermissionMode.safeParse(row.permission_mode)
@@ -361,6 +389,13 @@ export function resolveSessionPermission(
     const observedAt = tele?.permissionModeAt ? Date.parse(tele.permissionModeAt) : NaN
     const spawnedAt = Date.parse(row.spawned_at)
     if (tele?.permissionMode && Number.isFinite(observedAt) && Number.isFinite(spawnedAt) && observedAt >= spawnedAt) {
+      // …EXCEPT when the OPERATOR changed the sandbox eagerly (thread/settings/update) AFTER that
+      // observed reading. The change takes effect from the next turn, so no fresh turn_context exists
+      // yet and the last one still reports the OLD sandbox — showing it would lie about a change the
+      // operator just made. Prefer the saved intent until a genuinely newer turn re-establishes the
+      // observed value (then observedAt > setAt and this converges back to telemetry on its own).
+      const setAt = row.permission_set_at ? Date.parse(row.permission_set_at) : NaN
+      if (Number.isFinite(setAt) && setAt > observedAt) return normalize(saved.data)
       return normalize(tele.permissionMode)
     }
     return normalize(saved.data)
@@ -407,19 +442,22 @@ export function resolveLimitPause(
 }
 
 
-// Title provenance is resolved server-side as well as in the web display helper. A transcript title
-// is eligible only while the registry says the stored fallback was machine-generated; once a human
-// commits a title (setTitle atomically clears title_auto), no later tail tick can put aiTitle back on
-// the wire as a competing display value.
+// Title provenance is resolved server-side as well as in the web display helper. A transcript title is
+// eligible while the registry says nothing HUMAN has claimed the name; once a human commits one
+// (setTitle atomically locks it), no later tail tick can put aiTitle back on the wire as a competing
+// display value. Note the two flags are independent here: a title hard-coded by a dispatch caller is
+// not a guess (titleAuto false, so the UI shows it verbatim while the session spins up) yet is still
+// unlocked, so the worker's own aiTitle rides the wire and wins the moment it exists.
 export function resolveSessionTitle(
-  row: Pick<SessionRow, "title" | "title_auto">,
+  row: Pick<SessionRow, "title" | "title_auto" | "title_locked">,
   tele: Pick<SessionTelemetry, "aiTitle"> | undefined,
-): Pick<ThreadView, "title" | "titleAuto" | "aiTitle"> {
-  const titleAuto = row.title_auto === 1
+): Pick<ThreadView, "title" | "titleAuto" | "titleLocked" | "aiTitle"> {
+  const locked = sessionTitleLocked(row)
   return {
     title: row.title ?? "",
-    titleAuto,
-    aiTitle: titleAuto ? tele?.aiTitle : undefined,
+    titleAuto: row.title_auto === 1,
+    titleLocked: locked,
+    aiTitle: locked ? undefined : tele?.aiTitle,
   }
 }
 
@@ -717,7 +755,8 @@ export function createBoard(
 
   // Assemble a snapshot from registered sessions + plan artifacts. Unregistered legacy files and
   // foreign transcripts are excluded before any legacy parser is invoked, so they cannot contribute a
-  // row, queue card, warning, or error. `frayActive` remains a capability bit for plan/scratch storage.
+  // row, queue card, warning, or error. `.fray/` presence is deliberately NOT reported: it gates only
+  // plan/scratchpad storage (probed locally where that matters), never whether this project has a board.
   function assemble(): BoardSnapshot {
     // One clock sample owns every snooze decision in this snapshot: expiry clearing, visibility,
     // needs-you derivation, and timer selection cannot disagree at a deadline boundary.
@@ -726,13 +765,11 @@ export function createBoard(
     // This runs on every edge-triggered refresh as well as the level-triggered reconcile.
     storage.clearExpiredSnoozes(new Date(assembledAtMs).toISOString())
     const base = { projectDir: project.dir, projectName: project.name, projectLabel: project.label }
-    const frayActive = frayDirExists(project.dir)
     const sessionThreads = buildSessionThreads(assembledAtMs)
     armSnoozeWake(sessionThreads, assembledAtMs)
     notifyNeedsYou(sessionThreads)
     return {
       ...base,
-      frayActive,
       threads: sessionThreads,
       errors: [],
       warnings: [],

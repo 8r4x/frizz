@@ -420,6 +420,11 @@ export function parseCodexLine(line: string): NormalizedEvent[] {
   const at = typeof rec.timestamp === "string" ? rec.timestamp : undefined
   const type = rec.type
   const payload = rec.payload
+  // Context compaction. A TOP-LEVEL envelope (not event_msg/response_item): everything before it left
+  // the model's context, replaced by payload.replacement_history. Checked before the payload guard —
+  // the event is the whole signal, and its payload carries nothing we render (`message` is empty in all
+  // 2282 records across the 355 rollouts that have one; the replacement history is opaque/encrypted).
+  if (type === "compacted") return [{ kind: "compaction", at }]
   if (!payload || typeof payload !== "object") return []
   const p = payload as Record<string, unknown>
   const pt = typeof p.type === "string" ? p.type : undefined
@@ -450,6 +455,15 @@ export function parseCodexLine(line: string): NormalizedEvent[] {
         // the final answer may carry a done/awaiting excusal fence (a quoted fence in commentary must
         // never excuse the thread — applyEvent's final:false arm refreshes only the preview).
         return [{ kind: "assistant-text", at, text, final: p.phase === "final_answer" }]
+      }
+      // Per-request usage telemetry. `last_token_usage.total_tokens` is what the LAST request actually
+      // carried — i.e. the size of the context at that moment — which is the reading codex's own TUI
+      // uses for its remaining-context meter. Only the compaction bracket consumes it today.
+      case "token_count": {
+        const info = p.info && typeof p.info === "object" ? (p.info as Record<string, unknown>) : undefined
+        const last = info?.last_token_usage && typeof info.last_token_usage === "object" ? (info.last_token_usage as Record<string, unknown>) : undefined
+        const tokens = typeof last?.total_tokens === "number" ? last.total_tokens : undefined
+        return tokens === undefined ? [] : [{ kind: "context-usage", at, tokens }]
       }
       case "user_message": {
         const text = typeof p.message === "string" ? p.message : undefined

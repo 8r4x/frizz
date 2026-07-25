@@ -56,6 +56,7 @@ function harness(options: {
   readBoard?: (threads: readonly FrayThread[], dir: string) => FrayBoard | Promise<FrayBoard>
   adoptionRuntime?: AdoptionRecoveryRuntime
   preflightAuth?: (kind: string) => Promise<"authed" | "signed-out" | "unknown">
+  preflightCodexBinary?: () => Promise<"present" | "missing" | "unknown">
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "fray-adopt-"))
   const storage = createStorage(join(dir, "ui.db"))
@@ -129,6 +130,7 @@ function harness(options: {
     killSession: (slug) => void killedNames.push(slug),
     adoptionRuntime: options.adoptionRuntime,
     preflightAuth: options.preflightAuth,
+    preflightCodexBinary: options.preflightCodexBinary,
   })
 
   const discoverLegacy = (slug: string, over: Partial<FrayThread> = {}) => {
@@ -687,6 +689,46 @@ test("signed-out preflight rejects dispatch before scratch, tmux, and storage", 
   assert.equal(h.ensureCalls(), 0)
   // Zero trace: no scratchpad tree, no registry row.
   assert.equal(existsSync(join(h.dir, ".fray")), false)
+})
+
+test("a missing codex binary rejects a codex dispatch early, before any thread state", async () => {
+  const probed: number[] = []
+  const h = harness({
+    preflightAuth: async () => "authed", // credential is fine; the BINARY is what's missing
+    preflightCodexBinary: async () => { probed.push(1); return "missing" },
+  })
+  await assert.rejects(
+    h.dispatcher.dispatch({ prompt: "start a codex thread" }, { backend: "codex" }),
+    /Codex is not installed.*not on PATH/,
+  )
+  assert.equal(probed.length, 1, "the binary was probed")
+  assert.equal(h.spawned.length, 0)
+  // Zero trace, exactly like the signed-out gate: no scratchpad, no registry row.
+  assert.equal(existsSync(join(h.dir, ".fray")), false)
+})
+
+test("codex dispatch proceeds when the binary probe is uncertain — fail OPEN, never trap a working user", async () => {
+  // "unknown" (a timeout, a permission error, anything short of ENOENT) must NOT block. It reaches the
+  // bridge, which is absent in this harness, so it fails THERE — proving the binary gate let it past.
+  const h = harness({
+    preflightAuth: async () => "authed",
+    preflightCodexBinary: async () => "unknown",
+  })
+  await assert.rejects(
+    h.dispatcher.dispatch({ prompt: "start a codex thread" }, { backend: "codex" }),
+    /Codex app-server is unavailable|could not start/,
+  )
+})
+
+test("the codex binary probe is codex-only — a claude dispatch never runs it", async () => {
+  let probed = false
+  const h = harness({
+    preflightAuth: async () => "authed",
+    preflightCodexBinary: async () => { probed = true; return "missing" },
+  })
+  // A claude dispatch with an available binary path should not consult the codex probe at all.
+  await h.dispatcher.dispatch({ prompt: "claude thread" }).catch(() => {})
+  assert.equal(probed, false, "the codex binary probe must not run for a claude dispatch")
 })
 
 test("signed-out preflight names the codex backend when the dispatch targets codex", async () => {

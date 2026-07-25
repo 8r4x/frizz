@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
 import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, FileText, Github, Hourglass, Loader2, RotateCcw, Timer } from "lucide-react"
 import type { AwaitingHint, BoardSnapshot, PlanView, ThreadView } from "@fray-ui/shared"
-import { store, openThread, scrollToQueueCard, pushSubAgentDrawer, pushPlanDrawer, type ConnectionState } from "../store.ts"
+import { store, openThread, scrollToQueueCard, pushSubAgentDrawer, pushPlanDrawer, QUEUE_CARD_VIEWPORT_TOP, type ConnectionState } from "../store.ts"
 import { useBoard, asThreads } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
 import { sectionThreads, partitionActive, needsAction, displayTitle, titleIsProvisional, isHeld, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil } from "../groups.ts"
@@ -18,7 +18,7 @@ import { STATUS_CHIP } from "../lib/status.ts"
 import { retrySession } from "../lib/retrySession.ts"
 import { formatSnoozedUntil, formatSnoozeWake, formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
 import { useOptimisticallySteered } from "../lib/steering.ts"
-import { activeSidebarSection, railRevealDelta, type SidebarSectionGeometry } from "../lib/sidebarScrollspy.ts"
+import { activeSidebarSection, queueNavigationSettled, railRevealDelta, type SidebarSectionGeometry } from "../lib/sidebarScrollspy.ts"
 import type { ReactElement, ReactNode } from "react"
 
 // THE LEFT SIDEBAR — the thread list as a FLOATING column (no border, no fill: it floats in the
@@ -59,29 +59,34 @@ export function Sidebar() {
   const inactiveThreads = sections.inactive
   const railRef = useRef<HTMLDivElement>(null)
   const [activeId, setActiveId] = useState<string | null>(null)
-  const pendingNavigation = useRef<string | null>(null)
+  // A click-to-card navigation in flight: the row that was clicked, plus where its scroll landed. Both
+  // halves matter — see the release conditions in syncActiveSection.
+  const pendingNavigation = useRef<{ id: string; landedY: number } | null>(null)
 
   const syncActiveSection = useCallback(() => {
     const items = [...document.querySelectorAll<HTMLElement>("[data-queue-card][data-queue-leaving=\"false\"]")]
       .map((element) => {
         const id = element.dataset.queueCard
         if (!id) return null
-        const { top, bottom } = element.getBoundingClientRect()
+        // The BORDERED ROOT, not the slot: the slot also spans the ~80px inter-card gutter and its
+        // hairline rule, and the reading rule below is decided by how much of a CARD is on screen.
+        const card = element.querySelector<HTMLElement>("[data-queue-card-root]") ?? element
+        const { top, bottom } = card.getBoundingClientRect()
         return { id, top, bottom } satisfies SidebarSectionGeometry
       })
       .filter((item): item is SidebarSectionGeometry => item !== null)
     const pending = pendingNavigation.current
     if (pending) {
-      const target = items.find((item) => item.id === pending)
-      if (target && target.top <= 12 && target.bottom > 12) pendingNavigation.current = null
-      else if (target) {
-        setActiveId(pending)
+      const target = items.find((item) => item.id === pending.id)
+      if (queueNavigationSettled(target, window.scrollY, pending.landedY, QUEUE_CARD_VIEWPORT_TOP)) pendingNavigation.current = null
+      else {
+        setActiveId(pending.id)
         return
-      } else pendingNavigation.current = null
+      }
     }
     const maxScrollY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight)
     const atDocumentBottom = maxScrollY > 0 && window.scrollY >= maxScrollY - 1
-    const nextActiveId = activeSidebarSection(items, undefined, atDocumentBottom)
+    const nextActiveId = activeSidebarSection(items, window.innerHeight, atDocumentBottom)
     // Scroll/resize observations can fire several times per frame. Preserve the same primitive
     // state value to avoid a needless row-tree update when the selected card has not changed.
     setActiveId((current) => current === nextActiveId ? current : nextActiveId)
@@ -128,8 +133,9 @@ export function Sidebar() {
     if (Math.abs(delta) > 0.5) rail.scrollTop += delta
   }, [activeId])
 
+  // Called AFTER scrollToQueueCard's synchronous window.scrollTo, so scrollY is already the landing.
   const navigateToQueueCard = useCallback((id: string) => {
-    pendingNavigation.current = id
+    pendingNavigation.current = { id, landedY: window.scrollY }
     setActiveId(id)
   }, [])
 
@@ -441,7 +447,7 @@ function SubAgentRows({ t }: { t: ThreadView }) {
           label={s.label}
           state={s.state}
           density="rail"
-          startedAt={s.startedAt}
+          lastActivityAt={s.lastActivityAt}
           parentSlug={t.id}
           onOpen={() => pushSubAgentDrawer(t.id, s.id, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt })}
           // The rail has no room for the worker-profile tag the ops strip can show, so it rides the tooltip.
