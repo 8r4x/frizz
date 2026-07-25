@@ -1248,3 +1248,67 @@ test("a synthetic provider AUTH-error record renders NO assistant bubble (the re
   ].join("\n")
   assert.equal(projectClaudeTranscript(overloaded).some((m) => /529 Overloaded/.test(m.text)), true)
 })
+
+// ---- a queued message must NEVER disappear from the transcript ----
+// Measured against the real corpus: Claude Code emits `queue-operation remove` at the moment it
+// DEQUEUES a message, and the `queued_command` attachment that carries the delivered copy lands 1 to 19
+// records later (p50 2, over 263 dequeues). The parser used to SPLICE the queued bubble out on that
+// removal and wait for the attachment to re-render it — so the message vanished from the chat in
+// between, and vanished FOREVER when the attachment's prompt was array-shaped (an image-bearing
+// follow-up), because only the string shape was read.
+const enqueueLine = (content: string, ts = "2026-07-01T00:00:05.000Z") =>
+  JSON.stringify({ type: "queue-operation", timestamp: ts, operation: "enqueue", content })
+const removeLine = (content: string, ts = "2026-07-01T00:00:09.000Z") =>
+  JSON.stringify({ type: "queue-operation", timestamp: ts, operation: "remove", content })
+const deliverLine = (prompt: unknown, ts = "2026-07-01T00:00:10.000Z") =>
+  JSON.stringify({
+    type: "attachment", timestamp: ts,
+    attachment: { type: "queued_command", commandMode: "prompt", origin: { kind: "human" }, prompt },
+  })
+const assistantLine = (text: string, ts = "2026-07-01T00:00:09.500Z") =>
+  JSON.stringify({ type: "assistant", timestamp: ts, message: { id: "a1", content: [{ type: "text", text }] } })
+
+test("a dequeued message stays in the transcript in the WINDOW before its delivery record", () => {
+  const text = "check the ACL cleanup"
+  // The transcript as it exists between the dequeue and the attachment — the vanish window.
+  const msgs = parseTranscript([enqueueLine(text), removeLine(text), assistantLine("working on it")].join("\n"))
+  const mine = msgs.filter((m) => m.role === "user" && m.text === text)
+  assert.equal(mine.length, 1, "the message must still be rendered")
+  assert.equal(mine[0].queued, false, "and no longer queued — it has been dequeued into the turn")
+})
+
+test("the delivery record resolves the SAME bubble rather than adding a second copy", () => {
+  const text = "check the ACL cleanup"
+  const msgs = parseTranscript([enqueueLine(text), removeLine(text), deliverLine(text)].join("\n"))
+  assert.equal(msgs.filter((m) => m.role === "user" && m.text === text).length, 1)
+})
+
+test("an IMAGE-bearing queued message survives — its delivery prompt is array-shaped", () => {
+  // This is the permanent vanish: enqueue renders it, remove spliced it out, and the array-shaped
+  // prompt was skipped entirely, so the message was gone for good.
+  const text = "the sidebar doesn't reach the bottom [Image #11]"
+  const prompt = [{ type: "text", text }, { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBOR" } }]
+  const msgs = parseTranscript([enqueueLine(text), removeLine(text), deliverLine(prompt)].join("\n"))
+  const mine = msgs.filter((m) => m.role === "user" && m.text === text)
+  assert.equal(mine.length, 1, "the image-bearing message must still be rendered")
+  assert.equal(mine[0].queued, false)
+})
+
+test("a dequeued message renders ABOVE the assistant work that follows it", () => {
+  // `queued` messages are pinned below the working indicator by ChatView, so a message still flagged
+  // queued shows UNDER the spinner that is answering it. Once dequeued it must sit above that work.
+  const text = "check the ACL cleanup"
+  const msgs = parseTranscript([enqueueLine(text), removeLine(text), assistantLine("on it")].join("\n"))
+  const mine = msgs.findIndex((m) => m.role === "user" && m.text === text)
+  const work = msgs.findIndex((m) => m.role === "assistant")
+  assert.ok(mine >= 0 && work > mine, "the delivered message must precede the assistant work")
+})
+
+test("an EMPTY-content removal is still ignored (the ordinary handshake)", () => {
+  const text = "check the ACL cleanup"
+  const empty = JSON.stringify({ type: "queue-operation", timestamp: "2026-07-01T00:00:09.000Z", operation: "dequeue", content: "" })
+  const msgs = parseTranscript([enqueueLine(text), empty].join("\n"))
+  const mine = msgs.filter((m) => m.role === "user" && m.text === text)
+  assert.equal(mine.length, 1)
+  assert.equal(mine[0].queued, true, "a contentless handshake must not resolve anything")
+})

@@ -122,6 +122,21 @@ export function hasDelivery(storage: Storage, slug: string, id: string): boolean
   return parseDeliveryLedger(row.delivery_ledger).some((item) => item.id === id)
 }
 
+// The text of a `queued_command` attachment's prompt. A typed follow-up carries a bare string; one the
+// human attached an image to carries an ARRAY of content blocks, with the words in the `text` ones —
+// 10 such in this machine's corpus, every one text+image. Both readers (correlation here, rendering in
+// transcript.ts) share this so a send with a screenshot attached behaves exactly like a typed one.
+// Lives here rather than in transcript.ts because transcript.ts already imports this module.
+export function attachmentPromptText(prompt: unknown): string {
+  if (typeof prompt === "string") return prompt
+  if (!Array.isArray(prompt)) return ""
+  return prompt
+    .filter((b): b is { type: string; text: string } =>
+      Boolean(b) && (b as { type?: unknown }).type === "text" && typeof (b as { text?: unknown }).text === "string")
+    .map((b) => b.text)
+    .join("\n")
+}
+
 // Extract the plain text of a user record (string content, or the joined text blocks) — mirrors the
 // transcript parser's reading, minimally.
 function userRecordText(rec: Record<string, unknown>): string {
@@ -198,8 +213,11 @@ export function correlateDeliveryRecord(
   let deliveredText: string | null = null
   if (r.type === "attachment") {
     const att = r.attachment as { type?: unknown; commandMode?: unknown; prompt?: unknown } | undefined
-    if (att?.type === "queued_command" && att.commandMode === "prompt" && typeof att.prompt === "string") {
-      deliveredText = att.prompt
+    if (att?.type === "queued_command" && att.commandMode === "prompt") {
+      // Array-shaped for an image-bearing follow-up; the same reader the transcript uses, so a send
+      // with a screenshot attached correlates exactly like a typed one.
+      const text = attachmentPromptText(att.prompt)
+      if (text) deliveredText = text
     }
   } else if (r.type === "user" && r.isMeta !== true) {
     const text = userRecordText(r)

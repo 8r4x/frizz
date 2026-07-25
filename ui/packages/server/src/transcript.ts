@@ -15,7 +15,7 @@ import {
 import type { Project } from "./project.ts"
 import type { Storage } from "./storage.ts"
 import type { AgentBackend, NormalizedEvent } from "./backend/types.ts"
-import { parseDeliveryLedger, projectDeliveryLedger } from "./delivery-ledger.ts"
+import { parseDeliveryLedger, projectDeliveryLedger, attachmentPromptText } from "./delivery-ledger.ts"
 import { stripDeliveryMarkers } from "./delivery-marker.ts"
 import { CODEX_FIRST_FINAL_TITLE_TRANSPORT, CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT, parseCodexLine, createCodexBackend, extractCodexFrayTitle } from "./backend/codex.ts"
 import { discoverTranscriptId, DISCOVERY_GRACE_MS } from "./discover.ts"
@@ -264,18 +264,27 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         out.push(m)
         queuedPending.set(content, m)
       } else if ((op === "remove" || op === "dequeue" || op === "popAll") && content.trim()) {
-        // A removal that ECHOES the queued text supersedes its pending bubble — either the message was
-        // cancelled before delivery, or (in sessions whose `remove` carries the text) it's the delivery
-        // handshake and the following attachment re-renders the delivered copy. Splice the pending bubble
-        // so we never render both. An EMPTY-content removal is the ordinary handshake and is deliberately
-        // IGNORED: matching it by anything but exact text could evict a genuinely-still-pending human
-        // bubble when an unrelated queue item (e.g. a sub-agent task-notification) is dequeued.
+        // A content-bearing removal is Claude Code DEQUEUEING the message into the turn. Resolve the
+        // bubble IN PLACE — un-gray it where the human sent it — and leave it registered so the
+        // `queued_command` attachment that follows re-resolves the SAME object instead of pushing a
+        // second copy.
+        //
+        // This used to SPLICE the bubble out and rely on that attachment to re-render it, which made the
+        // message VANISH from the chat — briefly for everyone (the attachment lands 1 to 19 records
+        // later, p50 2, measured over 263 dequeues), and PERMANENTLY for any queued message carrying an
+        // image, because that attachment's `prompt` is an array of content blocks and the delivery
+        // branch below only accepted a string, so the re-render never happened at all. A sent message
+        // must never disappear from the transcript once it has been queued.
+        //
+        // The splice existed for CANCELLATION (the human ESC-ing a queued message). Across all 533
+        // transcripts on this machine there are 517 content-bearing removals and every one is followed
+        // by its delivery — the three that first looked like cancellations were image-bearing messages
+        // whose attachment this parser was silently dropping. So the case it protected against does not
+        // appear in practice, while the vanish it caused does. An EMPTY-content removal remains ignored:
+        // it is the ordinary handshake and matching it by anything but exact text could evict a
+        // genuinely-still-pending bubble when an unrelated queue item is dequeued.
         const m = queuedPending.get(content)
-        if (m) {
-          queuedPending.delete(content)
-          const i = out.indexOf(m)
-          if (i !== -1) out.splice(i, 1)
-        }
+        if (m) m.queued = false
       }
       return
     }
@@ -287,7 +296,11 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
     // "task-notification" — a sub-agent completion materialized the same way) are harness plumbing → skip.
     if (rec.type === "attachment" && rec.attachment?.type === "queued_command") {
       const att = rec.attachment
-      const prompt = typeof att.prompt === "string" ? normalizeNewlines(att.prompt) : ""
+      // `prompt` is a plain string for a typed message but an ARRAY of content blocks when the human
+      // attached an image to a queued follow-up (10 such in this machine's corpus, every one
+      // text+image). Reading only the string shape dropped those on the floor entirely — combined with
+      // the removal above, an image-bearing queued message disappeared from the chat for good.
+      const prompt = normalizeNewlines(attachmentPromptText(att.prompt))
       if (prompt.trim() && att.origin?.kind === "human" && att.commandMode === "prompt" && !isInjectedNoise(prompt)) {
         const pending = queuedPending.get(prompt)
         if (pending) {
