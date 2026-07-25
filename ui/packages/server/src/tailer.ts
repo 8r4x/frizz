@@ -1325,15 +1325,33 @@ export interface TailerDeps {
   tailCache?: TailStateCache | null
 }
 
-// The durable "blocked on <tool>" marker written by the worker's PermissionRequest hook. `at` is the
-// ISO time the request was created; the tailer treats the marker as an ACTIVE block only while `at` is
-// newer than the last transcript activity (a resolved request always advances the transcript past it).
+// The durable permission-request marker written by the worker's PermissionRequest hook
+// (cc-worker/hooks/perm-policy.mjs). `at` is the ISO time the request was created; the tailer treats
+// the marker as an ACTIVE block only while `at` is newer than the last transcript activity (a resolved
+// request always advances the transcript past it) AND the policy hook DEFERRED it to a human.
+//
+// `decision` is what the policy hook did with the request: "allow"/"deny" mean it already resolved it
+// unattended and NO human is blocked; only "defer" is a real block. The field is OPTIONAL because a
+// marker written by an older plugin build (the observe-only era, which never decided) has none — those
+// are read as "defer", preserving the historical behavior exactly. rule/reason/command are display
+// provenance for the dashboard: which rule decided, why, and (for Bash) the command it decided about.
+export type PermDecision = "allow" | "deny" | "defer"
 export interface PermMarker {
   slug: string
   tool: string | null
   promptId: string | null
   permissionMode: string | null
   at: string
+  decision?: PermDecision
+  rule?: string
+  reason?: string
+  command?: string
+}
+
+// A marker's effective decision. Absent/unrecognized ⇒ "defer": an old or malformed marker must fall
+// back to "a human is blocked", never to "already approved" (which would hide a real stall).
+export function markerDecision(marker: Pick<PermMarker, "decision">): PermDecision {
+  return marker.decision === "allow" || marker.decision === "deny" ? marker.decision : "defer"
 }
 
 function isPermMarker(v: unknown): v is PermMarker {
@@ -1667,15 +1685,20 @@ export function createTailer(deps: TailerDeps): Tailer {
     return a?.kind === b?.kind && a?.title === b?.title
   }
 
-  // A live PermissionRequest marker (Claude workers with the fray plugin) is an ACTIVE block iff its
-  // timestamp is newer than the last transcript activity — a resolved request always advances the
-  // transcript past it. The caller gates this on turn === "in-flight" (a real block is always mid
-  // tool_use) and on the row being non-codex, which both bounds the per-tick file read to actively-
-  // working Claude sessions and means a stale marker on a crashed/exited pane is inert (deriveRuntime
-  // returns "exited" before it ever consults permPrompt).
+  // A live PermissionRequest marker (Claude workers with the fray plugin) is an ACTIVE block iff the
+  // policy hook DEFERRED it to a human AND its timestamp is newer than the last transcript activity —
+  // a resolved request always advances the transcript past it. The caller gates this on
+  // turn === "in-flight" (a real block is always mid tool_use) and on the row being non-codex, which
+  // both bounds the per-tick file read to actively-working Claude sessions and means a stale marker on
+  // a crashed/exited pane is inert (deriveRuntime returns "exited" before it ever consults permPrompt).
   function permMarkerBlocks(state: TailState, row: SessionRow): boolean {
     const marker = readPermMarker(row.slug)
     if (!marker) return false
+    // Policy-resolved requests are NOT human blocks. perm-policy.mjs records what it did, so an
+    // auto-approved (or auto-denied) request leaves a marker exactly like a deferred one does — without
+    // this gate every auto-approval would flash the thread onto "Needs you" for the tick before the
+    // transcript advances past it, which is the very stall this hook exists to remove.
+    if (markerDecision(marker) !== "defer") return false
     const at = Date.parse(marker.at)
     if (!Number.isFinite(at)) return false
     // Stale-generation guard: a marker written BEFORE this process generation's spawn belongs to an
