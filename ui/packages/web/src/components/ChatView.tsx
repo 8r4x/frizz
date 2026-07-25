@@ -2402,6 +2402,10 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
 // (count mismatch / no question message found — `question` undefined) degrades to the numbered layout,
 // where the number still points a scrolled-up reader at the right block. Answers keep
 // whitespace-pre-wrap so a multi-line answer's breaks survive.
+// The row number shows ONLY in that fallback. With the question ON the row the question IS the label,
+// and a second number can only COMPETE with whatever numbering the worker used inside the question text:
+// a batch answering a BURIED ask renumbers its rows from 1 (they may span several messages), so
+// answering questions 9–11 of an earlier ask rendered "1" against a question that reads "9. …".
 function AnswersCard({ answers, queued, sourceId }: { answers: PairedAnswer[]; queued?: boolean; sourceId?: string }) {
   return (
     <div data-fray-msg={sourceId} className={`group/msg relative self-end flex w-full max-w-[85%] flex-col items-end ${queued ? "opacity-50" : ""}`}>
@@ -2415,18 +2419,14 @@ function AnswersCard({ answers, queued, sourceId }: { answers: PairedAnswer[]; q
           {answers.map((a, i) => (
             <div key={i} className="flex flex-col gap-1">
               {a.question && (
-                <div className="flex items-start gap-2">
-                  <span className="mt-px shrink-0 text-[10px] uppercase tabular-nums tracking-wide text-muted/70">{a.n}</span>
-                  <span title={a.question} className="line-clamp-2 min-w-0 flex-1 text-[11px] leading-snug text-muted">
-                    {a.question}
-                  </span>
+                <div title={a.question} className="line-clamp-2 min-w-0 text-[11px] leading-snug text-muted">
+                  {a.question}
                 </div>
               )}
               <div className="flex items-start gap-2">
-                {/* With a question line the number lives up there; an invisible twin keeps the chip aligned. */}
-                <span className={`mt-1.5 shrink-0 text-[10px] uppercase tabular-nums tracking-wide text-muted/70 ${a.question ? "invisible" : ""}`}>
-                  {a.n}
-                </span>
+                {!a.question && (
+                  <span className="mt-1.5 shrink-0 text-[10px] uppercase tabular-nums tracking-wide text-muted/70">{a.n}</span>
+                )}
                 {/* Neutral recessed chip — a SETTLED answer, not "awaiting you". The bright yellow accent
                     is reserved solely for the awaiting-you motif (see styles.css); a past choice reads
                     quiet: a darker inset panel with a soft left rule to still mark it as the reply. */}
