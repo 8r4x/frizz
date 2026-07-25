@@ -170,6 +170,28 @@ export function correlateDeliveryRecord(
     )
   }
 
+  // DEQUEUE — Claude Code taking the message back OUT of its own queue and into the turn.
+  //
+  // fray used to learn this only from the `queued_command` attachment that follows, and the gap is real:
+  // across 263 dequeues in this machine's transcripts the attachment lands 1 to 19 records later (p50 2,
+  // p95 6). For that whole window the send is already being worked on while fray still renders it as a
+  // gray queued bubble — which the chat pins BELOW the working indicator, so the spinner appears above
+  // the very message it is answering. Resolving on the dequeue closes the window.
+  //
+  // `remove` is the usable signal: all 2398 in the corpus carry their content, so they can be
+  // correlated. The `dequeue` operation is NOT — all 1032 of them carry no content at all, and a bare
+  // handshake cannot be attributed to a specific send. `popAll` never appeared.
+  //
+  // A content-bearing `remove` is also what a CANCELLATION looks like (the human ESC-ing a queued
+  // message in the terminal). Dropping the item is right either way: the message is provably no longer
+  // queued, so continuing to render fray's own synthetic bubble for it would be a lie in both readings,
+  // and the transcript's own records go on telling the true story.
+  if (r.type === "queue-operation" && r.operation === "remove" && typeof r.content === "string" && r.content.trim()) {
+    const dequeued = accountFor(items, r.content, contemporaneous)
+    if (dequeued.size === 0) return items
+    return items.filter((_, index) => !dequeued.has(index))
+  }
+
   // Delivery into the agent's context: the queued_command attachment (mid-turn/turn-start pickup) or a
   // plain user record (idle submit / dead-session resume / the 2.1.207 print-path shape). Either one
   // resolves the item — delivered items leave the ledger; the real transcript record renders from here.
@@ -316,6 +338,17 @@ export function ageDeliveries(items: DeliveryLedgerItem[], nowMs: number): Deliv
       continue
     }
     if (item.state === "unconfirmed" && Number.isFinite(born) && nowMs - born > UNCONFIRMED_DROP_MS) {
+      changed = true // dropped
+      continue
+    }
+    // `enqueued` used to be IMMORTAL: nothing aged it and nothing dropped it, so a single missed
+    // delivery record left a gray queued bubble pinned below the working indicator for the life of the
+    // row — the "it still says queued long after the agent answered it" report. The reasoning for never
+    // timing it out was sound (a mid-turn queue legitimately lasts as long as the turn) but it left no
+    // escape hatch at all. Give it the same hour the unconfirmed items get: past that, a queue entry is
+    // not a live queue entry, and the transcript's own records are a better witness than fray's
+    // synthetic bubble. This only stops PROJECTING it; nothing about the real message is touched.
+    if (item.state === "enqueued" && Number.isFinite(born) && nowMs - born > UNCONFIRMED_DROP_MS) {
       changed = true // dropped
       continue
     }

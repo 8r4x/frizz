@@ -302,6 +302,50 @@ test("the projection dedups against a copy that STILL carries the raw marker", (
   assert.equal(out.length, 1)
 })
 
+// ---- dequeue ----
+// Claude Code emits `queue-operation remove` (content-bearing, 2398/2398 in the corpus) the moment it
+// takes a message OUT of its queue and into the turn — 1 to 19 records before the queued_command
+// attachment fray used to wait for. For that window the send was already being worked on while fray
+// still rendered it queued, which pins it below the working indicator.
+test("a content-bearing remove resolves the item at DEQUEUE, not at the later attachment", () => {
+  const out = correlateDeliveryRecord(
+    [item({ state: "enqueued" })],
+    { type: "queue-operation", operation: "remove", content: "fix the bug", timestamp: iso(T0 + 9000) },
+    iso(T0 + 9000),
+  )
+  assert.deepEqual(out, [])
+})
+
+test("a dequeue resolves by MARKER even when the echoed text was rewritten", () => {
+  const it = item({ id: "d-x", state: "enqueued", text: "col1\tcol2\r\nand some prose to follow" })
+  const echoed = ("col1\tcol2\r\nand some prose to follow" + encodeDeliveryMarker("d-x")).replace(/\r\n/g, "\n\n").replace(/\t/g, "    ")
+  const out = correlateDeliveryRecord([it], { type: "queue-operation", operation: "remove", content: echoed, timestamp: iso(T0 + 9000) }, iso(T0 + 9000))
+  assert.deepEqual(out, [])
+})
+
+test("a CONTENTLESS remove/dequeue is never evidence (the bare handshake)", () => {
+  // All 1032 `dequeue` records in the corpus carry no content; an empty handshake cannot be attributed
+  // to any particular send, so it must leave the ledger untouched.
+  const items = [item({ state: "enqueued" })]
+  assert.equal(correlateDeliveryRecord(items, { type: "queue-operation", operation: "dequeue", timestamp: iso(T0 + 9000) }, iso(T0 + 9000)), items)
+  assert.equal(correlateDeliveryRecord(items, { type: "queue-operation", operation: "remove", content: "   ", timestamp: iso(T0 + 9000) }, iso(T0 + 9000)), items)
+})
+
+test("a remove for SOMEONE ELSE's queue entry leaves our send alone", () => {
+  const items = [item({ state: "enqueued", text: "my steer" })]
+  const rec = { type: "queue-operation", operation: "remove", content: "<task-notification>a sub-agent finished</task-notification>", timestamp: iso(T0 + 9000) }
+  assert.equal(correlateDeliveryRecord(items, rec, iso(T0 + 9000)), items)
+})
+
+test("an enqueued item is no longer immortal — it drops after the same hour as unconfirmed", () => {
+  // It used to age never and drop never, so ONE missed delivery record left a gray bubble pinned below
+  // the working indicator for the life of the row.
+  assert.deepEqual(ageDeliveries([item({ state: "enqueued" })], T0 + UNCONFIRMED_DROP_MS + 1000), [])
+  // …but a queue entry inside a legitimately long turn is still left completely alone.
+  const live = [item({ state: "enqueued" })]
+  assert.equal(ageDeliveries(live, T0 + PENDING_TIMEOUT_MS * 10), live)
+})
+
 test("aging is identity-stable when nothing changes", () => {
   const items = [item({ state: "enqueued" })]
   assert.equal(ageDeliveries(items, T0 + 5000), items)
