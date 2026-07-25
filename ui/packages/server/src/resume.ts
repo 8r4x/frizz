@@ -17,6 +17,7 @@ import type {
 import type { BoardManager } from "./board.ts"
 import type { AgentBackend } from "./backend/types.ts"
 import { inspectClaudeComposer } from "./permission-controller.ts"
+import { encodeDeliveryMarker } from "./delivery-marker.ts"
 import {
   buildClaudeResumeCommand,
   claudeWorkerEnvironment,
@@ -1101,7 +1102,7 @@ export async function recoverThreadProfileHandoff(
   }
 }
 
-function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string): void {
+function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string, deliveryId?: string): void {
   const tx = deps.tmux ?? tmux
   const row = deps.storage.getSession(slug)
   if (!row) throw new Error(`no session registered for ${slug}`)
@@ -1137,6 +1138,12 @@ function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string): voi
     }
     deps.board.refresh()
   }
+  // Stamp the send with its invisible delivery marker (delivery-marker.ts) for the COMPOSER paths only.
+  // Those are the ones whose bytes the tmux+TUI paste channel rewrites, which is what makes text-based
+  // delivery confirmation guesswork; the marker turns it into an id lookup. The dead-session resume
+  // below deliberately goes unmarked: it hands the text to the backend as argv, where nothing rewrites
+  // it and a zero-width payload would only be one more thing for a shell to mangle.
+  const marked = deliveryId ? message + encodeDeliveryMarker(deliveryId) : message
   const adoption = runtimeBinding.kind === "bound" ? runtimeBinding.claim : undefined
   const adoptionLookup = adoption ? tx.findExpectedAdoptionPane?.(adoption) : undefined
   if (adoption && !adoptionLookup) {
@@ -1150,7 +1157,7 @@ function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string): voi
     : tx.isLive(slug)
   if (live) {
     if (adoption) {
-      if (tx.sendTextToExpectedAdoptionPane?.(adoption, message, true) !== true) {
+      if (tx.sendTextToExpectedAdoptionPane?.(adoption, marked, true) !== true) {
         throw new Error("This adopted worker changed before the follow-up could be submitted")
       }
     } else {
@@ -1166,7 +1173,7 @@ function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string): voi
       // pasteText (bracketed paste + a blocking run-shell settle + Enter) produced 20 clean records
       // and zero concatenations. The settle is what buys the separation: it forces the Enter into a
       // read() the TUI cannot fold into the paste.
-      tx.pasteText(slug, message)
+      tx.pasteText(slug, marked)
     }
     return
   }
@@ -1184,7 +1191,7 @@ function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string): voi
       if (composer.kind !== "empty") {
         throw new Error("The compatible legacy worker has an existing draft; it was left untouched")
       }
-      if (tx.sendTextToCompatibleLegacyWorker?.(legacy.worker, message) !== true) {
+      if (tx.sendTextToCompatibleLegacyWorker?.(legacy.worker, marked) !== true) {
         throw new Error("The compatible legacy worker changed before the follow-up could be submitted")
       }
       // The provider received the atomic paste+Enter.  This is a new runtime observation, not a
@@ -1349,7 +1356,7 @@ function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string): voi
   deps.board.refresh() // storage-only change — overlay is enough
 }
 
-export function resumeThread(deps: ResumeDeps, slug: string, message: string): void {
+export function resumeThread(deps: ResumeDeps, slug: string, message: string, deliveryId?: string): void {
   const initial = deps.storage.getSession(slug)
   if (!initial) throw new Error(`no session registered for ${slug}`)
   // Preserve the specific, actionable errors from the inner path before trying the durable claim.
@@ -1379,7 +1386,7 @@ export function resumeThread(deps: ResumeDeps, slug: string, message: string): v
     throw new RetryableDeliveryError("This thread changed or another runtime control started; no follow-up was sent")
   }
   try {
-    resumeThreadOwned(deps, slug, message)
+    resumeThreadOwned(deps, slug, message, deliveryId)
   } finally {
     const current = deps.storage.getSession(slug)
     if (current?.session_id === initial.session_id && deps.storage.releaseRuntimeControl(slug, {

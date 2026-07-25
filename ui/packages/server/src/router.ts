@@ -743,7 +743,11 @@ export function createRouter(ctx: AppContext) {
         // paste lands directly after the stranded text and ONE message carrying both is what the agent
         // reads. Free on the normal path — a row with no outstanding ledger item captures nothing.
         await flushStuckComposer({ storage: ctx.storage, board: ctx.board }, input.slug)
-        resumeThread({ project: ctx.project, storage: ctx.storage, board: ctx.board, getSettings: ctx.getSettings, backendFor: ctx.backendFor }, input.slug, input.message)
+        // The deliveryId rides along so the composer paths can stamp the send with its invisible marker
+        // (delivery-marker.ts) — that is what lets the tailer confirm delivery by IDENTITY instead of by
+        // comparing prose the tmux+TUI paste channel is free to rewrite. Codex never takes this path.
+        resumeThread({ project: ctx.project, storage: ctx.storage, board: ctx.board, getSettings: ctx.getSettings, backendFor: ctx.backendFor }, input.slug, input.message,
+          input.deliveryId && row?.backend !== "codex" ? input.deliveryId : undefined)
         // Injection accepted → open a delivery-ledger entry (Claude rows only; Codex has its own durable
         // queue above). From here the send is a tracked state machine: the tailer correlates the JSONL
         // evidence and the transcript projection renders the queued bubble as SERVER truth — reload-safe,

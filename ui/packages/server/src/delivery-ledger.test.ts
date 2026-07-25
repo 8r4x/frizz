@@ -11,6 +11,7 @@ import {
   UNCONFIRMED_DROP_MS,
   type DeliveryLedgerItem,
 } from "./delivery-ledger.ts"
+import { encodeDeliveryMarker } from "./delivery-marker.ts"
 
 const T0 = Date.parse("2026-07-21T12:00:00.000Z")
 const iso = (ms: number) => new Date(ms).toISOString()
@@ -235,6 +236,70 @@ test("a SHORT send is still never resolved by appearing inside an unrelated mess
   const items = [item({ text: "\tcontinue" })]
   const rec = { type: "user", timestamp: iso(T0 + 1000), message: { content: "ok, please    continue with the plan" } }
   assert.equal(correlateDeliveryRecord(items, rec, iso(T0 + 1000)), items)
+})
+
+// ---- identity: the invisible delivery marker ----
+// Text correlation is inference over a channel that rewrites bytes. The marker replaces it with an id
+// lookup, so a send is confirmed even when the recorded text no longer resembles what fray sent.
+const marked = (id: string, text: string) => text + encodeDeliveryMarker(id)
+
+test("a record whose TEXT was destroyed still delivers, because the marker identifies it", () => {
+  // The strongest statement of the fix: nothing about this prose matches, and it resolves anyway.
+  const it = item({ id: "d-x", text: "restart the daemon and re-run the suite" })
+  const rec = { type: "user", timestamp: iso(T0 + 40), message: { content: marked("d-x", "totally different prose the channel invented") } }
+  assert.deepEqual(correlateDeliveryRecord([it], rec, iso(T0 + 40)), [])
+})
+
+test("a marked enqueue receipts the item by id", () => {
+  const out = correlateDeliveryRecord(
+    [item({ id: "d-x" })],
+    { type: "queue-operation", operation: "enqueue", content: marked("d-x", "fix the bug"), timestamp: iso(T0 + 500) },
+    iso(T0 + 500),
+  )
+  assert.equal(out[0].state, "enqueued")
+})
+
+test("a glued submission resolves EVERY send by its own marker", () => {
+  const a = item({ id: "d-a", text: "the first follow-up" })
+  const b = item({ id: "d-b", text: "the second follow-up" })
+  const glued = marked("d-a", a.text) + "\n" + marked("d-b", b.text)
+  assert.deepEqual(correlateDeliveryRecord([a, b], { type: "user", timestamp: iso(T0 + 40), message: { content: glued } }, iso(T0 + 40)), [])
+})
+
+test("a marker for a DIFFERENT send never resolves this one", () => {
+  const it = item({ id: "d-mine", text: "my send" })
+  const rec = { type: "user", timestamp: iso(T0 + 40), message: { content: marked("d-someone-else", "unrelated text") } }
+  const out = correlateDeliveryRecord([it], rec, iso(T0 + 40))
+  assert.equal(out.length, 1)
+  assert.equal(out[0].state, "pending")
+})
+
+test("a marker is still refused when the record PREDATES the send (replay safety holds)", () => {
+  const it = item({ id: "d-x" })
+  const rec = { type: "user", timestamp: iso(T0 - 60_000), message: { content: marked("d-x", "fix the bug") } }
+  assert.equal(correlateDeliveryRecord([it], rec, iso(T0)).length, 1)
+})
+
+test("a MIXED record — one marked send glued ahead of an unmarked one — resolves both", () => {
+  // The upgrade case: an item already in flight when this shipped carries no marker, and must still be
+  // confirmed by text from the same record that identifies its marked neighbour by id.
+  const a = item({ id: "d-a", text: "the freshly marked follow-up that fray stamped" })
+  const b = item({ id: "d-b", text: "an older in-flight send with no marker at all" })
+  const glued = marked("d-a", a.text) + "\n" + b.text
+  assert.deepEqual(correlateDeliveryRecord([a, b], { type: "user", timestamp: iso(T0 + 40), message: { content: glued } }, iso(T0 + 40)), [])
+})
+
+test("the projection dedups a delivered copy whose marker the renderer already stripped", () => {
+  const it = item({ id: "d-x", text: "a marked send" })
+  const out = projectDeliveryLedger([msg({ text: "a marked send", sourceId: "s:5" })], [it])
+  assert.equal(out.length, 1)
+  assert.equal(out[0].deliveryId, undefined)
+})
+
+test("the projection dedups against a copy that STILL carries the raw marker", () => {
+  const it = item({ id: "d-x", text: "a marked send" })
+  const out = projectDeliveryLedger([msg({ text: marked("d-x", "a marked send"), sourceId: "s:5" })], [it])
+  assert.equal(out.length, 1)
 })
 
 test("aging is identity-stable when nothing changes", () => {

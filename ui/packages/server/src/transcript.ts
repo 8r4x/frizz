@@ -16,6 +16,7 @@ import type { Project } from "./project.ts"
 import type { Storage } from "./storage.ts"
 import type { AgentBackend, NormalizedEvent } from "./backend/types.ts"
 import { parseDeliveryLedger, projectDeliveryLedger } from "./delivery-ledger.ts"
+import { stripDeliveryMarkers } from "./delivery-marker.ts"
 import { CODEX_FIRST_FINAL_TITLE_TRANSPORT, CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT, parseCodexLine, createCodexBackend, extractCodexFrayTitle } from "./backend/codex.ts"
 import { discoverTranscriptId, DISCOVERY_GRACE_MS } from "./discover.ts"
 import { isClaudeAuthErrorText } from "./tailer.ts"
@@ -70,7 +71,11 @@ function compactionMessage(sourceId: string, at: string | undefined, preTokens?:
 // into a run-on. Normalizing here fixes every downstream consumer at once (render, the answers-card
 // detection, AND the client's optimistic-vs-server text match, which compares raw strings).
 function normalizeNewlines(s: string): string {
-  return s.replace(/\r\n?/g, "\n")
+  // Also drop fray's invisible delivery marker (delivery-marker.ts). Every path that turns a raw record
+  // into rendered text funnels through here, so stripping once makes the marker unobservable to the
+  // human — in the drawer, in search, in copied text — while the correlator upstream still reads it off
+  // the RAW record. A no-op (single `includes`) for the overwhelming majority of text, which is unmarked.
+  return stripDeliveryMarkers(s).replace(/\r\n?/g, "\n")
 }
 
 // Display-only projection for the FIRST user turn of a generated GitHub dispatch. Deliberately

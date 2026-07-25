@@ -2,6 +2,7 @@ import type { BoardManager } from "./board.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import * as tmux from "./tmux.ts"
 import { inspectClaudeComposer } from "./permission-controller.ts"
+import { stripDeliveryMarkers } from "./delivery-marker.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import {
   parseDeliveryLedger,
@@ -58,7 +59,10 @@ export const MAX_SUBMIT_ATTEMPTS = 3
 // against what fray sent, so a composer containing one is never auto-submitted.
 const PASTE_CHIP_RE = /\[Pasted text #\d+(?: \+\d+ lines?)?\]/
 
-const squash = (value: string): string => value.replace(/\s+/g, "")
+// Strip the invisible delivery marker BEFORE squashing. The marker's codepoints are deliberately not
+// matched by `\s`, so without this the pane (which holds fray's stamped text) would never equal the
+// ledger item (which holds the clean text) and the stuck-composer re-press would silently stop working.
+const squash = (value: string): string => stripDeliveryMarkers(value).replace(/\s+/g, "")
 
 export type SubmitDecision =
   | { kind: "idle" } // composer holds nothing of ours (empty, a human draft, a modal, a paste chip)

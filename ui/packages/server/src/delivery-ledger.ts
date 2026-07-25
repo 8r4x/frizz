@@ -1,5 +1,6 @@
 import type { TranscriptMessage } from "@fray-ui/shared"
 import type { Storage } from "./storage.ts"
+import { decodeDeliveryMarkers, deliveryTag, stripDeliveryMarkers } from "./delivery-marker.ts"
 
 // ── The Claude follow-up delivery ledger ───────────────────────────────────────────────────────────────
 // Fray's Claude steer path used to be fire-and-forget: tmux keys went into the pane and the ONLY record
@@ -162,7 +163,7 @@ export function correlateDeliveryRecord(
   // the composer can hold a paste for minutes before the TUI submits it). An enqueue record is positive
   // proof the message reached Claude Code's queue, so it must clear the amber warning whenever it lands.
   if (r.type === "queue-operation" && r.operation === "enqueue" && typeof r.content === "string") {
-    const matched = matchComposedText(items, canon(r.content), contemporaneous)
+    const matched = accountFor(items, r.content, contemporaneous)
     if (matched.size === 0) return items
     return items.map((item, index) =>
       matched.has(index) && item.state !== "enqueued" ? { ...item, state: "enqueued", updatedAt: nowIso } : item,
@@ -176,16 +177,59 @@ export function correlateDeliveryRecord(
   if (r.type === "attachment") {
     const att = r.attachment as { type?: unknown; commandMode?: unknown; prompt?: unknown } | undefined
     if (att?.type === "queued_command" && att.commandMode === "prompt" && typeof att.prompt === "string") {
-      deliveredText = canon(att.prompt)
+      deliveredText = att.prompt
     }
   } else if (r.type === "user" && r.isMeta !== true) {
     const text = userRecordText(r)
-    if (text) deliveredText = canon(text)
+    if (text) deliveredText = text
   }
   if (deliveredText === null) return items
-  const delivered = matchComposedText(items, deliveredText, contemporaneous)
+  const delivered = accountFor(items, deliveredText, contemporaneous)
   if (delivered.size === 0) return items
   return items.filter((_, index) => !delivered.has(index))
+}
+
+// Which ledger items one evidence record accounts for — BY IDENTITY first, by text only as the fallback.
+//
+// fray stamps every follow-up it pastes with an invisible marker carrying that send's deliveryId
+// (delivery-marker.ts), so the normal path is an exact lookup: no prose is compared at all and no
+// rewrite of the surrounding text — tab expansion, CRLF doubling, a re-wrap, a future mangling nobody
+// has met yet — can break it. A record that glues several sends together carries every constituent's
+// marker, so all of them resolve from the one record.
+//
+// The text path remains for everything a marker cannot cover: sends already in flight when this shipped,
+// adopted/foreign panes, and any send whose marker the channel destroyed. It runs on the STRIPPED text
+// so a marker never perturbs the comparison.
+export function accountFor(
+  items: readonly DeliveryLedgerItem[],
+  recordText: string,
+  contemporaneous: (item: DeliveryLedgerItem) => boolean,
+): Set<number> {
+  const matched = new Set<number>()
+  const tags = decodeDeliveryMarkers(recordText)
+  if (tags.length) {
+    const wanted = new Set(tags)
+    // A tag held by more than one outstanding item is ambiguous — refuse the shortcut for those and let
+    // the text path decide, rather than resolving an arbitrary one of them.
+    const owners = new Map<number, number[]>()
+    items.forEach((item, index) => {
+      const tag = deliveryTag(item.id)
+      if (wanted.has(tag)) owners.set(tag, [...(owners.get(tag) ?? []), index])
+    })
+    for (const [, indexes] of owners) {
+      if (indexes.length !== 1) continue
+      const index = indexes[0]
+      if (contemporaneous(items[index])) matched.add(index)
+    }
+  }
+  // The text path then runs over the WHOLE ledger, not just the leftovers. Letting it re-consume an
+  // item a marker already resolved costs nothing (both sides union into one set) and is what keeps a
+  // MIXED record working: when a marked send is glued ahead of an unmarked one, the composition still
+  // walks the marked text first and so meets the unmarked item at a clean prefix boundary.
+  for (const index of matchComposedText(items, canon(stripDeliveryMarkers(recordText)), contemporaneous)) {
+    matched.add(index)
+  }
+  return matched
 }
 
 // A merged submission's constituent text must be at least this long before it may be matched at a
@@ -291,10 +335,15 @@ export function projectDeliveryLedger(messages: TranscriptMessage[], items: Deli
   if (!items.length) return messages
   for (const item of items) {
     const text = canon(item.text)
+    const tag = deliveryTag(item.id)
     let handled = false
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i]
-      if (m.role !== "user" || canon(m.text) !== text) continue
+      if (m.role !== "user") continue
+      // Same order as correlation: identity if the rendered copy still carries our marker, text
+      // otherwise. Transcript text is stripped for display before it reaches here, so in practice this
+      // is the text compare — the tag check costs nothing and covers any surface that keeps the raw.
+      if (!decodeDeliveryMarkers(m.text).includes(tag) && canon(stripDeliveryMarkers(m.text)) !== text) continue
       if (m.queued) {
         m.deliveryId = item.id
         m.deliveryState = item.state
