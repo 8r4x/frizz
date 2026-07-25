@@ -149,14 +149,48 @@ test("a SHORT send is never resolved by merely appearing inside an unrelated mes
   assert.equal(correlateDeliveryRecord(items, rec, iso(T0 + 1000)), items)
 })
 
-// ---- tab expansion (the second "Delivery unconfirmed" bug) ----
-// Claude Code's TUI expands a TAB in a bracketed paste to spaces before the text reaches the JSONL, so
-// the send fray recorded and the record it must be matched against are not byte-equal. Bytes below are
-// the maintainer's own stranded send (2026-07-25, `were-taking-over-from-another-agent`): the ledger's
-// two tabs each arrived as four spaces, and the item went amber 60s later even though a `user` record
-// carrying the message landed 34ms after the send.
+// ---- channel rewrites (the "Delivery unconfirmed" bug class) ----
+// The steer channel is tmux `paste-buffer` (LF→CR) composed with Claude Code's TUI paste handler
+// (CR/CRLF→LF, TAB→four spaces). Measured against a live claude 2.1.219 TUI driven through fray's own
+// paste sequence: a tab becomes four spaces and a CRLF becomes TWO newlines. Both classes stranded a
+// send that the agent had already read. TABBED below is the maintainer's own stranded text
+// (2026-07-25, `were-taking-over-from-another-agent`).
 const TABBED = '> <tmp>: "r"\tno, but lossy vs intent\tsilently widens to rw on both\nWhy does this happen?'
 const EXPANDED = TABBED.replace(/\t/g, "    ")
+// The measured composition, applied the way the real channel applies it.
+const throughChannel = (s: string) => s.replace(/\r\n|\r/g, "\n\n").replace(/\t/g, "    ")
+
+test("a CRLF send survives the channel doubling its line breaks", () => {
+  const text = "Review the sandbox design.\r\nThe ACL cleanup matters most.\r\nShip it when green."
+  const out = correlateDeliveryRecord(
+    [item({ text })],
+    { type: "user", message: { role: "user", content: throughChannel(text) }, timestamp: iso(T0 + 40) },
+    iso(T0 + 40),
+  )
+  assert.deepEqual(out, [])
+})
+
+test("tabs and CRLF together still deliver", () => {
+  const text = "col1\tcol2\r\nrow2\tvalue\r\nand a closing line of prose"
+  const out = correlateDeliveryRecord(
+    [item({ text })],
+    { type: "user", message: { role: "user", content: throughChannel(text) }, timestamp: iso(T0 + 40) },
+    iso(T0 + 40),
+  )
+  assert.deepEqual(out, [])
+})
+
+test("a re-wrapped record (line breaks moved entirely) still delivers", () => {
+  // Invariance, not channel-modelling: a future rewrite that re-flows lines must not resurrect the bug.
+  const text = "the quick brown fox jumps over the lazy dog and keeps running"
+  const rewrapped = "the quick brown fox\njumps over the lazy\ndog and keeps running"
+  const out = correlateDeliveryRecord(
+    [item({ text })],
+    { type: "user", message: { role: "user", content: rewrapped }, timestamp: iso(T0 + 40) },
+    iso(T0 + 40),
+  )
+  assert.deepEqual(out, [])
+})
 
 test("a user record whose tabs the TUI expanded still delivers the item", () => {
   const out = correlateDeliveryRecord(
@@ -191,7 +225,7 @@ test("the projection dedups against an already-delivered copy whose tabs were ex
   assert.equal(out[0].deliveryId, undefined)
 })
 
-test("differing WORDS are still never matched — only whitespace width is forgiven", () => {
+test("differing WORDS are still never matched — only whitespace is forgiven", () => {
   const items = [item({ text: "restart\tthe server" })]
   const rec = { type: "user", timestamp: iso(T0 + 1000), message: { content: "restart    the  daemon" } }
   assert.equal(correlateDeliveryRecord(items, rec, iso(T0 + 1000)), items)

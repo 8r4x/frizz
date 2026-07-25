@@ -42,23 +42,36 @@ export interface DeliveryLedgerItem {
 
 // The form every text comparison in this module runs in.
 //
-// Claude Code's TUI REWRITES a bracketed paste before it ever reaches the JSONL: a literal TAB is
-// expanded to spaces. So the bytes fray sent and the bytes the transcript records are NOT equal, and an
-// exact compare strands the send as `unconfirmed` forever. Observed on the maintainer's own thread
-// (2026-07-25, `were-taking-over-from-another-agent`): a 1448-char follow-up carrying two tabs was
-// recorded as a 1454-char `user` record carrying none — written 34 milliseconds after the send, read and
-// acted on by the agent — and still went amber at the 60s timeout, because 1448 !== 1454. Expansion is
-// specific to the PASTE path: across 3,872 human records in this machine's transcripts the only
-// tab-bearing ones are session-start dispatch prompts and Claude's own task-notification enqueues, which
-// never pass through the composer.
+// The steer channel REWRITES fray's bytes before they reach the JSONL, so the text fray sent and the
+// text the transcript records are not equal and an exact compare strands the send as `unconfirmed`
+// forever. The channel is a COMPOSITION of two rewriters fray does not own — tmux `paste-buffer`
+// (LF→CR) and Claude Code's TUI paste handler (`/\r\n|\r/`→`\n`, `\t`→four spaces) — and measuring it
+// against a live claude 2.1.219 TUI, driven through fray's own paste sequence, showed:
 //
-// So compare blind to horizontal-whitespace WIDTH — runs of spaces/tabs collapse to one space, and any
-// hugging a newline disappear — which is agnostic to how many spaces a tab becomes, or whether a given
-// build expands it at all. Line STRUCTURE is preserved (a newline never collapses), keeping this far
-// stricter than delivery-confirm.ts's composer check, which drops whitespace outright. It is applied to
-// BOTH sides of every comparison, so the composition offsets in matchComposedText stay consistent.
-const canon = (s: string): string =>
-  s.replace(/\r\n?/g, "\n").replace(/[^\S\n]+/g, " ").replace(/ ?\n ?/g, "\n").trim()
+//     sent          recorded          note
+//     \t            "    "            four spaces, not a tab stop
+//     \r\n          \n\n              the line break DOUBLES (CR→LF then LF→newline)
+//     \r            \n
+//     trailing " ", unicode, nbsp, long unwrapped lines — preserved verbatim
+//
+// Two distinct classes, not one. The maintainer hit the tab class (2026-07-25,
+// `were-taking-over-from-another-agent`: a 1448-char send with two tabs recorded as 1454 chars with
+// none, 34ms after the send, and still marked unconfirmed at the 60s timeout). The CRLF class is worse
+// and just as reachable — anything pasted from a Windows-authored source or many web textareas — and a
+// comparison that preserved line COUNT still stranded it.
+//
+// So do not model the channel; be INVARIANT to it. Every whitespace run — spaces, tabs, newlines alike
+// — collapses to a single space, which is stable under every rewrite above and under any future
+// re-flow in the same family (a re-wrap, a trailing-space trim, a different tab width). What actually
+// keeps this safe is unchanged and lives elsewhere: evidence must be CONTEMPORANEOUS, a mid-record
+// match must clear COMPOSED_ANCHOR_MIN, and composition consumes items in order. Precedent: the far
+// more dangerous decision in this system — whether to press Enter on a live composer — has always been
+// gated on FULL whitespace removal (`squash` in delivery-confirm.ts). Applied to BOTH sides of every
+// comparison, so the composition offsets in matchComposedText stay internally consistent.
+//
+// What this deliberately does NOT forgive: differing WORDS. A send whose text the channel altered
+// beyond whitespace still ages to `unconfirmed`, which is the warning doing its job.
+const canon = (s: string): string => s.replace(/\s+/g, " ").trim()
 
 function isItem(v: unknown): v is DeliveryLedgerItem {
   if (!v || typeof v !== "object") return false
