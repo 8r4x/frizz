@@ -358,6 +358,14 @@ export const ThreadView = z.object({
   // then shows a "Spinning up a thread…" placeholder instead of the guess until aiTitle lands. Optional
   // (absent ⇒ legacy/slim row) so old snapshots parse; absent is treated as "not provisional".
   titleAuto: z.boolean().optional(),
+  // True when a HUMAN named this thread (rename / native /rename / an adopted file heading) and no
+  // backend auto-title may replace it. FALSE is the interesting case: a title hard-coded by a dispatch
+  // CALLER — `Investigate acme/app#391`, a parent agent's guess through spawn_thread — reads as a real
+  // name (titleAuto false) yet still yields to the worker's own aiTitle, which is usually the more
+  // informative one. Optional (absent ⇒ legacy/slim row): the display then derives it the pre-split way,
+  // treating any non-guessed title as the human's. The server enforces this too by withholding aiTitle
+  // from a locked row; the client keeps its own copy so a stale record can never win on either side.
+  titleLocked: z.boolean().optional(),
   // Live background sub-agents the worker dispatched (tailer-derived). Defaults to [] so an old
   // snapshot/row (or a pre-restart server that doesn't emit the field yet) parses without breaking.
   subAgents: z.array(SubAgentView).default([]),
@@ -498,7 +506,10 @@ export const BoardSnapshot = z.object({
   projectDir: z.string(),
   projectName: z.string(),
   projectLabel: z.string(), // "owner/repo" from the git origin remote; falls back to projectName
-  frayActive: z.boolean(), // .fray/ exists
+  // (No `.fray/ exists` bit here on purpose. Threads are session-first — the ui.db registry IS the
+  // board — so `.fray/` presence says nothing about whether this project has one. Its only consumer
+  // was a shell gate that dead-ended `.fray`-less repos; the server still probes the directory
+  // locally where it genuinely matters, for plan/scratchpad storage.)
   threads: z.array(ThreadView),
   errors: z.array(z.string()),
   warnings: z.array(z.string()),
@@ -897,7 +908,6 @@ export const BoardMeta = z.object({
   projectDir: z.string(),
   projectName: z.string(),
   projectLabel: z.string(),
-  frayActive: z.boolean(),
   errors: z.array(z.string()),
   warnings: z.array(z.string()),
   // Structured mirror of `errors` (see BoardErrorItem), diffed + shipped with the rest of the board

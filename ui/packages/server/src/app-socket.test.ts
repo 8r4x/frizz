@@ -57,7 +57,6 @@ const board: BoardSnapshot = {
   projectDir: "/x",
   projectName: "x",
   projectLabel: "x/x",
-  frayActive: true,
   threads: [],
   errors: [],
   warnings: [],

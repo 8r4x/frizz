@@ -149,7 +149,6 @@ test("socket transport bounds oversized frames and only resets reconnect backoff
     projectDir: "/fixture",
     projectName: "fixture",
     projectLabel: "fixture/fixture",
-    frayActive: true,
     threads: [],
     errors: [],
     warnings: [],

@@ -118,7 +118,6 @@ function harness(tailer: Tailer = noopTailer) {
     projectDir: dir,
     projectName: "test",
     projectLabel: "test",
-    frayActive: false,
     threads: [],
     errors: [],
     warnings: [],

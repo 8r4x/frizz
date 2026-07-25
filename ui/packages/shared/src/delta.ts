@@ -16,7 +16,6 @@ function metaOf(b: BoardSnapshot): BoardMeta {
     projectDir: b.projectDir,
     projectName: b.projectName,
     projectLabel: b.projectLabel,
-    frayActive: b.frayActive,
     errors: b.errors,
     warnings: b.warnings,
     // Normalize undefined→[] so metaS serialization is stable (an absent vs empty errorItems never
@@ -94,7 +93,6 @@ export function applyBoardDelta(board: BoardSnapshot, delta: Pick<BoardDelta, "u
     board.projectDir = delta.meta.projectDir
     board.projectName = delta.meta.projectName
     board.projectLabel = delta.meta.projectLabel
-    board.frayActive = delta.meta.frayActive
     board.errors = delta.meta.errors
     board.warnings = delta.meta.warnings
     board.errorItems = delta.meta.errorItems

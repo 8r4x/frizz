@@ -30,7 +30,7 @@ function thread(id: string, over: Partial<ThreadView> = {}): ThreadView {
 }
 
 function board(threads: ThreadView[], over: Partial<BoardSnapshot> = {}): BoardSnapshot {
-  return { projectDir: "/p", projectName: "p", projectLabel: "o/p", frayActive: true, threads, errors: [], warnings: [], ...over }
+  return { projectDir: "/p", projectName: "p", projectLabel: "o/p", threads, errors: [], warnings: [], ...over }
 }
 
 // Per-thread content equivalence, ORDER-INDEPENDENT (the client re-sorts every render, so array
@@ -41,7 +41,6 @@ function assertBoardEquiv(actual: BoardSnapshot, expected: BoardSnapshot) {
   assert.equal(actual.projectDir, expected.projectDir)
   assert.equal(actual.projectName, expected.projectName)
   assert.equal(actual.projectLabel, expected.projectLabel)
-  assert.equal(actual.frayActive, expected.frayActive)
   assert.deepEqual(actual.errors, expected.errors)
   assert.deepEqual(actual.warnings, expected.warnings)
 }

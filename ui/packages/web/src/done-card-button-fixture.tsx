@@ -89,7 +89,6 @@ const board: BoardSnapshot = {
   projectDir: "/tmp/fixture",
   projectName: "fixture",
   projectLabel: "fixture/fixture",
-  frayActive: true,
   threads: [...[...cards, ...queueCards].map((c) => baseThread(c.slug, c.label)), agentThread],
   errors: [],
   warnings: [],

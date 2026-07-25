@@ -94,7 +94,6 @@ const board: BoardSnapshot = {
   projectDir: "/tmp/fixture",
   projectName: "fixture",
   projectLabel: "fixture/fixture",
-  frayActive: true,
   threads: fences.map((f) => thread(f.slug, f.label)),
   errors: [],
   warnings: [],

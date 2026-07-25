@@ -26,7 +26,6 @@ function realRouter() {
     projectDir: dir,
     projectName: "test",
     projectLabel: "test",
-    frayActive: false,
     threads: [],
     errors: [],
     warnings: [],

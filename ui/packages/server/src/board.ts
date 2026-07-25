@@ -740,7 +740,8 @@ export function createBoard(
 
   // Assemble a snapshot from registered sessions + plan artifacts. Unregistered legacy files and
   // foreign transcripts are excluded before any legacy parser is invoked, so they cannot contribute a
-  // row, queue card, warning, or error. `frayActive` remains a capability bit for plan/scratch storage.
+  // row, queue card, warning, or error. `.fray/` presence is deliberately NOT reported: it gates only
+  // plan/scratchpad storage (probed locally where that matters), never whether this project has a board.
   function assemble(): BoardSnapshot {
     // One clock sample owns every snooze decision in this snapshot: expiry clearing, visibility,
     // needs-you derivation, and timer selection cannot disagree at a deadline boundary.
@@ -749,13 +750,11 @@ export function createBoard(
     // This runs on every edge-triggered refresh as well as the level-triggered reconcile.
     storage.clearExpiredSnoozes(new Date(assembledAtMs).toISOString())
     const base = { projectDir: project.dir, projectName: project.name, projectLabel: project.label }
-    const frayActive = frayDirExists(project.dir)
     const sessionThreads = buildSessionThreads(assembledAtMs)
     armSnoozeWake(sessionThreads, assembledAtMs)
     notifyNeedsYou(sessionThreads)
     return {
       ...base,
-      frayActive,
       threads: sessionThreads,
       errors: [],
       warnings: [],
