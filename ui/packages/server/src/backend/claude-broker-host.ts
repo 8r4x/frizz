@@ -3,10 +3,26 @@
 // codex-app-server-host.ts (fork/record/adopt), keyed per Claude session id (one broker per thread).
 import { spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
-import { mkdirSync, readFileSync, unlinkSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { accessSync, constants as fsConstants, mkdirSync, readFileSync, unlinkSync } from "node:fs"
+import { delimiter, dirname, isAbsolute, join } from "node:path"
 import { resolveDetachedDaemonEntry } from "../detached-daemons.ts"
 import type { BrokerRecord, ClaudeBrokerConfig } from "./claude-agent-broker.ts"
+
+// The Claude Agent SDK REQUIRES an absolute `pathToClaudeCodeExecutable` (validateExecutablePath rejects
+// a bare name), unlike the tmux path where execvp resolves "claude" on PATH. When the dispatch layer
+// hands us a bare "claude" (the default when no --claude-bin is configured — the promoted-artifact case),
+// resolve it to an absolute path on PATH here, or the forked daemon dies on startup ("executablePath must
+// be absolute") before it can publish its record and every dispatch times out with "did not become ready".
+export function resolveClaudeExecutableAbsolute(bin: string | undefined, env: NodeJS.ProcessEnv = process.env): string {
+  const candidate = bin && bin.length > 0 ? bin : "claude"
+  if (isAbsolute(candidate)) return candidate
+  for (const dir of (env.PATH ?? "").split(delimiter)) {
+    if (!dir) continue
+    const full = join(dir, candidate)
+    try { accessSync(full, fsConstants.X_OK); return full } catch { /* try next PATH entry */ }
+  }
+  throw new Error(`Claude session broker: could not resolve '${candidate}' to an absolute executable path on PATH (the SDK requires one)`)
+}
 
 /** Short, collision-resistant socket path (unix sockets cap ~104 bytes on macOS/BSD). */
 export function claudeBrokerSocketPath(stateDir: string, sessionId: string): string {

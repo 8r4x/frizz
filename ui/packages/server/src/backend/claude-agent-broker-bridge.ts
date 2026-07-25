@@ -5,7 +5,7 @@
 // auto-allow, honoring the thread's permission mode — matching today's tmux `--permission-mode auto`;
 // wiring these to the dashboard InteractionStore is the next slice), and sends follow-up turns.
 import { randomUUID } from "node:crypto"
-import { adoptOrForkBroker, killBroker, liveBrokerRecord, claudeBrokerRecordPath } from "./claude-broker-host.ts"
+import { adoptOrForkBroker, killBroker, liveBrokerRecord, claudeBrokerRecordPath, resolveClaudeExecutableAbsolute } from "./claude-broker-host.ts"
 import { connectClaudeBroker, type ClaudeBrokerClient } from "./claude-broker-client.ts"
 import type { ClaudePermissionDecision, ClaudePermissionRequest, ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
 import type { ClaudeBrokerConfig } from "./claude-agent-broker.ts"
@@ -95,6 +95,9 @@ export interface ClaudeAgentBrokerBridge {
 
 export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): ClaudeAgentBrokerBridge {
   const sessions = new Map<string, ActiveSession>() // keyed by slug — one active session per thread
+  // Resolve the claude executable to an ABSOLUTE path ONCE: the SDK the forked daemon runs rejects a bare
+  // name (unlike the tmux execvp path), and a bare "claude" is the default on a promoted artifact.
+  const executablePath = resolveClaudeExecutableAbsolute(deps.executablePath, deps.env)
 
   // Pending tool-permission escalations awaiting a human dashboard decision, keyed by interaction id.
   // The daemon holds the actual canUseTool promise (and re-delivers it on reconnect), so this only needs
@@ -136,7 +139,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     const we = deps.workerEnv
     const workerEnv: Record<string, string> = { FRAY_UI_THREAD: slug, ...(we?.permDir ? { FRAY_PERM_DIR: we.permDir } : {}) }
     const { record } = await adoptOrForkBroker({
-      stateDir: deps.stateDir, cwd, sessionId, executablePath: deps.executablePath, permissionMode, env: deps.env,
+      stateDir: deps.stateDir, cwd, sessionId, executablePath, permissionMode, env: deps.env,
       pluginDir: we?.pluginDir, mcpServers: we?.mcpServers, allowedTools: we?.allowedTools, workerEnv,
       ...fork,
     })
