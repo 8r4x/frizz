@@ -277,6 +277,9 @@ test("threadTerminalCommand attaches to a LIVE pane instead of resuming a second
     })
   } finally {
     try { execFileSync("tmux", ["-L", socket, "kill-server"], { stdio: "ignore" }) } catch { /* already gone */ }
+    // kill-server stops the server but LEAVES the socket file, so a test that runs on every suite
+    // invocation would silently litter one dead socket per run into the shared tmux dir. Unlink ours.
+    try { rmSync(join(process.env.TMUX_TMPDIR || "/tmp", `tmux-${process.getuid?.() ?? 0}`, socket), { force: true }) } catch { /* best effort */ }
     tmuxModule.setSocket(previousSocket)
     h.storage.close()
     rmSync(h.dir, { recursive: true, force: true })
