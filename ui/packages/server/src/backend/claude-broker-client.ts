@@ -47,9 +47,14 @@ export function connectClaudeBroker(
   let sock: net.Socket | null = null
   let closed = false
   let buf = ""
+  const outbound: string[] = [] // frames queued while not connected (e.g. the first prompt sent right after spawn)
   let firstConnectDeadline = Date.now() + (options.connectDeadlineMs ?? 30_000)
 
-  const send = (frame: unknown): void => { if (sock && !sock.destroyed) sock.write(JSON.stringify(frame) + "\n") }
+  const send = (frame: unknown): void => {
+    const line = JSON.stringify(frame) + "\n"
+    if (sock && !sock.destroyed) sock.write(line)
+    else outbound.push(line)
+  }
 
   const onData = (chunk: Buffer): void => {
     buf += chunk
@@ -70,7 +75,7 @@ export function connectClaudeBroker(
   const connect = (): void => {
     if (closed) return
     const next = net.connect(socketPath)
-    next.on("connect", () => { sock = next; buf = ""; firstConnectDeadline = Number.POSITIVE_INFINITY; handlers.onConnect?.() })
+    next.on("connect", () => { sock = next; buf = ""; firstConnectDeadline = Number.POSITIVE_INFINITY; while (outbound.length) next.write(outbound.shift()!); handlers.onConnect?.() })
     next.on("data", onData)
     const drop = (): void => {
       if (next === sock) { sock = null; handlers.onDisconnect?.() }

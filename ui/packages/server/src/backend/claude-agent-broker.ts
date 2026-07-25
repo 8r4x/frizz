@@ -121,7 +121,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     if (config.recordPath && owner === process.pid) { try { unlinkSync(config.recordPath) } catch {} }
     if (!(published && owner !== null && owner !== process.pid) && published && process.platform !== "win32") { try { unlinkSync(config.socketPath) } catch {} }
     try { client?.destroy() } catch {}
-    try { server.closeAllConnections?.() } catch {}
+    try { (server as { closeAllConnections?: () => void }).closeAllConnections?.() } catch {}
     try { server.close() } catch {}
     await handle.close().catch(() => {})
     if (config.recordPath) process.exit(code) // standalone daemon
