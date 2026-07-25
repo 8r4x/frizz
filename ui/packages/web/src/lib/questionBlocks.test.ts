@@ -130,6 +130,73 @@ test("numbered options → chips", () => {
   assert.deepEqual(p.options, ["1. Zero", "2. Three", "3. Ten"])
 })
 
+// ---- the question line is never an option ----
+// A handoff carrying several blocks makes workers number the QUESTION too ("C. Does `brokerTo` …?"),
+// which OPTION_RE cannot tell from a choice: the question was chipped as option 0, the card rendered NO
+// question at all, and the freetext row re-used the letter (options ended at B → placeholder "C.").
+// Every case below is a verbatim shape from the transcript corpus on this machine.
+
+test("a LETTER-numbered question line is context, not the first option", () => {
+  const body = "C. Does `brokerTo` imply net access to the host?\n\n- A. No — the host must also be in `net` (recommended)\n- B. Yes — listing a host auto-allows it"
+  const p = parseQuestionBlock(body, "question")
+  assert.equal(p.contextMd, "C. Does `brokerTo` imply net access to the host?")
+  assert.deepEqual(p.options, ["A. No — the host must also be in `net`", "B. Yes — listing a host auto-allows it"])
+  assert.equal(p.recommendedIdx, 0) // the recommendation follows the option, not the old off-by-one index
+})
+
+test("a question numbered with the SAME letter its options start at is still context", () => {
+  const body = "A. What does `...` become?\n\n- A. Repurpose it\n- B. Drop it\n- C. Keep it"
+  const p = parseQuestionBlock(body, "question")
+  assert.equal(p.contextMd, "A. What does `...` become?")
+  assert.deepEqual(p.options, ["A. Repurpose it", "B. Drop it", "C. Keep it"])
+})
+
+test("a NUMBER-numbered question line is context, even against numbered options", () => {
+  const body = "3. What should `<tmp>` mean?\n\n1. A private writable per-run directory\n2. The OS shared temp dir"
+  const p = parseQuestionBlock(body, "question")
+  assert.equal(p.contextMd, "3. What should `<tmp>` mean?")
+  assert.deepEqual(p.options, ["1. A private writable per-run directory", "2. The OS shared temp dir"])
+})
+
+test("a numbered PLAN above the choices stays prose (the whole lead-in is context)", () => {
+  const body = "Retire the existing PRs? The plan:\n\n1. Sync local `main`\n2. Re-land the four fixes\n3. Close the redundant PRs\n\n- A. Yes — do the full plan\n- B. Hold"
+  const p = parseQuestionBlock(body, "question")
+  assert.equal(p.contextMd, "Retire the existing PRs? The plan:\n\n1. Sync local `main`\n2. Re-land the four fixes\n3. Close the redundant PRs")
+  assert.deepEqual(p.options, ["A. Yes — do the full plan", "B. Hold"])
+})
+
+test("a numbered question with NO options is a freetext question, not a one-option card", () => {
+  const p = parseQuestionBlock("4. Which name do you want?", "question")
+  assert.deepEqual(p.options, [])
+  assert.equal(p.contextMd, "4. Which name do you want?")
+})
+
+test("a block that OPENS with a real option run keeps every option (no question to demote)", () => {
+  // "A." opens the list and "B." continues it, so nothing here is a question — eating option A to invent
+  // one would silently lose a choice.
+  const p = parseQuestionBlock("- A. Approve as-is\n- B. Approve with edits", "approval")
+  assert.deepEqual(p.options, ["A. Approve as-is", "B. Approve with edits"])
+  assert.equal(p.contextMd, "")
+})
+
+test("a lone MARKED option is still an option (only a bare leading line is demoted)", () => {
+  const p = parseQuestionBlock("- A. Approve as-is", "approval")
+  assert.deepEqual(p.options, ["A. Approve as-is"])
+})
+
+test("a run that does NOT open a list is left alone — a skipped letter never eats a choice", () => {
+  // "A, C" is a typo'd list, not a question above a list: demoting A would drop a real option, so the
+  // ambiguous case keeps the old behavior.
+  const p = parseQuestionBlock("Pick one:\n- A. Foo\n- C. Bar", "question")
+  assert.deepEqual(p.options, ["A. Foo", "C. Bar"])
+  assert.equal(p.contextMd, "Pick one:")
+})
+
+test("options that legitimately start at B are not re-read as question + list", () => {
+  const p = parseQuestionBlock("Pick one:\n- B. Foo\n- C. Bar", "question")
+  assert.deepEqual(p.options, ["B. Foo", "C. Bar"])
+})
+
 test("no trailing option run → freetext-only (empty options), whole body is context", () => {
   const body = "What should I name the flag? Give me a short kebab-case string."
   const p = parseQuestionBlock(body, "question")

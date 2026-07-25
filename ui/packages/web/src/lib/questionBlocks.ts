@@ -108,6 +108,22 @@ function optionText(line: string): string {
   return line.trim().replace(/^[-*+]\s+/, "")
 }
 
+// An option-looking line's leading identifier, uppercased ("- C. Does …" → "C", "3) Ten" → "3").
+function lineId(line: string): string {
+  return optionText(line).match(/^([A-Za-z]|\d+)[.)]/)?.[1].toUpperCase() ?? ""
+}
+
+// Is `b` the identifier that COMES NEXT after `a` in a choice list ("A"→"B", "1"→"2")? Letters and
+// numbers never continue each other.
+function follows(a: string, b: string): boolean {
+  if (/^\d+$/.test(a)) return /^\d+$/.test(b) && Number(b) === Number(a) + 1
+  return /^[A-Z]$/.test(a) && /^[A-Z]$/.test(b) && b.charCodeAt(0) === a.charCodeAt(0) + 1
+}
+
+// The only identifiers a choice list can OPEN with. A "list" that starts at C is a fragment of
+// something else, not a set of choices.
+const isListOrigin = (id: string) => id === "A" || id === "1"
+
 // The inline "recommended" marker — the PRIMARY, single-source-of-truth way a worker flags the
 // recommended option: the word "recommended" appearing ON that option's line (no separate letter-matched
 // line to drift out of sync). Detection is intentionally permissive (just the word, case-insensitive,
@@ -163,21 +179,46 @@ export function stripRecommendedMarker(label: string): { label: string; recommen
 // and dropped every chip. Now: context = prose BEFORE the run; the run = the chips; prose AFTER the run
 // = `trailingMd` (rendered below the chips); a "Recommendation: …" line anywhere after the run is the
 // muted rec note. Blank lines WITHIN the run are tolerated. No option run → a freetext-only question.
+// The run is then read as a LIST (see below) so a question line that merely LOOKS like an option — the
+// numbering workers give their questions across a batch — stays the question.
 export function parseQuestionBlock(body: string, kind: QuestionKind, danger = false): ParsedQuestion {
   const lines = body.split("\n").map((l) => l.replace(/\r$/, ""))
 
   // First maximal run of option lines (consecutive OPTION_RE lines; interspersed blanks don't break it).
-  let runStart = -1
+  const optLines: number[] = []
   let runEnd = -1
   for (let i = 0; i < lines.length; i++) {
     if (OPTION_RE.test(lines[i])) {
-      if (runStart === -1) runStart = i
+      optLines.push(i)
       runEnd = i
-    } else if (runStart !== -1 && lines[i].trim() !== "") {
+    } else if (optLines.length > 0 && lines[i].trim() !== "") {
       break // a non-blank, non-option line ends the run
     }
   }
-  if (runStart === -1) return { kind, danger, contextMd: body, options: [], recommendedIdx: null }
+
+  // Read the candidate run as a LIST, because OPTION_RE alone cannot tell a choice from a line that
+  // merely opens with an identifier. When a handoff carries several question blocks, workers number the
+  // QUESTION too ("C. Does `brokerTo` imply net access?", "9. How is loopback exposed?") and lead with a
+  // numbered plan before the choices — both were chipped as options, leaving the card with no question at
+  // all and a freetext row that repeated the last letter. So: walk back from the LAST option while the
+  // ids keep counting up; if that trailing sequence opens at A/1 it is the real choice list, and
+  // everything above it is question prose. A run whose tail does NOT open a list (a typo'd "A, C", a list
+  // that starts at B) is left exactly as it was — never eat a genuine choice to invent a question.
+  let first = 0
+  for (let k = optLines.length - 1; k > 0; k--) {
+    if (!follows(lineId(lines[optLines[k - 1]]), lineId(lines[optLines[k]]))) {
+      first = isListOrigin(lineId(lines[optLines[k]])) ? k : 0
+      break
+    }
+  }
+  // A block whose whole content is one bare "3. What should `<tmp>` mean?" is a freetext question in a
+  // numbered batch, not a one-item menu — a single choice is never a choice. Needs the marker check: a
+  // lone "- A. Approve as-is" IS a (degenerate) option, and prose above it means the question is already
+  // there, so only an unmarkered line that opens the block is demoted.
+  if (optLines.length === 1 && !/^\s*[-*+]\s/.test(lines[optLines[0]]) && !lines.slice(0, optLines[0]).some((l) => l.trim())) first = 1
+
+  if (first >= optLines.length) return { kind, danger, contextMd: body, options: [], recommendedIdx: null }
+  const runStart = optLines[first]
 
   // PRIMARY recommendation signal: the word "recommended" on an option line. Strip the marker from each
   // label (the badge conveys it) and remember the FIRST flagged option + its inline rationale.
