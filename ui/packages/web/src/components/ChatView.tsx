@@ -206,7 +206,15 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
       {/* The scroll viewport's own coordinate frame: `relative` here (rather than on the scroller) is
           what lets the floating "Jump to latest" overlay below sit still while the transcript scrolls.
           The scroller itself carries data-virtualized-transcript-scroll — the drawer virtualizes now
-          too, so the old "standalone" name would be a lie. */}
+          too, so the old "standalone" name would be a lie.
+
+          `[overflow-anchor:none]` on the scroller below leaves ONE authority over its offset. The
+          virtualizer already corrects scrollTop itself every time a row above the reader is re-measured;
+          Chrome's native scroll anchoring corrects it too, off its own anchor node, and neither knows
+          about the other — so both firing on one layout change moves the reader by that correction
+          TWICE. TodosView suspends native anchoring around exactly this hazard for the queue
+          (suspendNativeAnchoring, "THE one owner"); the drawer transcript is the same hazard and was
+          simply never given the same treatment. */}
       <div className="relative min-h-0 flex-1 flex flex-col">
       <div
         ref={transcriptRef}
@@ -216,7 +224,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
         role={virtualized ? "region" : undefined}
         aria-label={virtualized ? "Thread conversation" : undefined}
         aria-busy={virtualized && loadingEarlier ? true : undefined}
-        className="relative min-h-0 flex-1 overflow-y-auto outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-fg/60"
+        className="relative min-h-0 flex-1 overflow-y-auto outline-none [overflow-anchor:none] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-fg/60"
       >
       {virtualized && count > 0 ? (
         <VirtualizedThreadTranscript
@@ -429,6 +437,24 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
 // trackpad momentum between discrete events, short enough that it never outlives the gesture itself.
 const READER_GESTURE_MS = 700
 
+// How long a pin move owns the scroller while the row it un-pinned re-expands. The re-expansion lands
+// on a ResizeObserver pass one or more frames after the commit, so the restore has to outlive the
+// commit — but it must stay far under READER_GESTURE_MS, since a reader who scrolls during it should
+// win the moment it ends.
+const PIN_RESTORE_MS = 250
+
+// Opt-in drift diagnostic: `localStorage["fray.debugScroll"] = "1"`, then reload.
+//
+// The mid-scroll drift this file works to prevent does NOT reproduce headlessly — a scripted wheel has
+// no momentum, and a seeded transcript has no images or async-settling cards — so a harness that goes
+// green proves only that it did not reproduce, not that the reader is safe. This is the way to catch a
+// real occurrence on the machine where it happens: it warns whenever the row under the reader's eye
+// moves while the reader is not touching the scroller, and names the pin at that moment, so a live
+// sighting comes with its size and its trigger instead of "it jumped again".
+const DEBUG_SCROLL = (() => {
+  try { return localStorage.getItem("fray.debugScroll") === "1" } catch { return false }
+})()
+
 type TranscriptTransportFallback = ReturnType<typeof useTranscript>["transportFallback"]
 type VirtualThreadRow =
   | { key: "interactions"; kind: "interactions" }
@@ -564,6 +590,12 @@ function VirtualizedThreadTranscript({
   const nearTopLoadArmedRef = useRef(true)
   const pendingPrependAnchorRef = useRef<{ rowKey: string; viewportTop: number } | null>(null)
   const initialTranscriptKeyRef = useRef<string | undefined>(undefined)
+  // THE PIN MOVE (see the layout effect below). `readerAnchorRef` is refreshed at the END of every
+  // tail-follow pass, so a layout effect that runs BEFORE that pass still reads the PREVIOUS commit's
+  // position — which is exactly the place a pin move has to put the reader back.
+  const readerAnchorRef = useRef<{ rowKey: string; viewportTop: number } | null>(null)
+  const pinnedRowKeyRef = useRef<string | undefined>(undefined)
+  const pinRestoreUntilRef = useRef(0)
 
   const requestEarlier = useCallback(() => {
     const scroller = transcriptRef.current
@@ -628,6 +660,84 @@ function VirtualizedThreadTranscript({
     }
   }, [loadingEarlier, messageRows.length, transcriptRef])
 
+  // Where the reader is actually looking: the first row whose box reaches the pane top, and the offset
+  // it sits at. `:not([data-transcript-sticky])` for the same reason requestEarlier needs it — the
+  // pinned band floats AT the pane top, so anchoring to it would capture an invariant top and restore a
+  // zero correction, silently losing the reader's place.
+  const captureReaderAnchor = useCallback((): { rowKey: string; viewportTop: number } | null => {
+    const scroller = transcriptRef.current
+    if (!scroller) return null
+    const scrollerTop = scroller.getBoundingClientRect().top
+    const first = Array.from(scroller.querySelectorAll<HTMLElement>("[data-transcript-row-key]:not([data-transcript-sticky])"))
+      .find((element) => element.getBoundingClientRect().bottom > scrollerTop + 1)
+    const rowKey = first?.dataset.transcriptRowKey
+    if (!first || !rowKey) return null
+    return { rowKey, viewportTop: first.getBoundingClientRect().top - scrollerTop }
+  }, [transcriptRef])
+
+  // Put a remembered anchor back under the reader's eye. ABSOLUTE, not a delta: it scrolls to wherever
+  // that row now is, so running it after some other corrector already got it right is a no-op rather
+  // than a second correction.
+  const alignToAnchor = useCallback((anchor: { rowKey: string; viewportTop: number }) => {
+    const scroller = transcriptRef.current
+    if (!scroller) return
+    const row = Array.from(scroller.querySelectorAll<HTMLElement>("[data-transcript-row-key]"))
+      .find((element) => element.dataset.transcriptRowKey === anchor.rowKey && element.dataset.transcriptSticky !== "true")
+    if (!row) return
+    const nextTop = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+    scroller.scrollTop += nextTop - anchor.viewportTop
+  }, [transcriptRef])
+
+  // THE PIN MOVE — the one transcript event that resizes a row ABOVE a reader parked mid-thread.
+  //
+  // A queued follow-up being DELIVERED is the only thing that moves the current ask: a queued bubble is
+  // excluded from lastUserIdx, so an enqueue can't move it and no assistant reply ever can. When it
+  // moves, the row that WAS pinned drops out of the hoisted flow layer back into the absolute one and
+  // re-renders FULL SIZE instead of the collapsed pinned card — measured at 218px → 366px on a real
+  // thread, and every row below it moved by exactly that 148px. A reader reading the agent's output
+  // sits BELOW the ask, so that growth is ABOVE them, and staying put depends entirely on the resize
+  // being compensated — which the virtualizer skips outright while the reader is scrolling up
+  // (virtual-core resizeItem: `!itemSizeCache.has(key) || scrollDirection !== "backward"`), and which
+  // the browser's own scroll anchoring used to duplicate. A fixed-size shove, only on a delivery,
+  // depending on what the reader happened to be doing — i.e. sporadic.
+  //
+  // So don't depend on the compensation. Remember where the reader was and put them back, across the
+  // next frames, because the re-expansion lands on a later ResizeObserver pass and not in this commit.
+  // The pinned row's KEY, not its index — an index shifts under every insert, so it would report a "pin
+  // move" on any append. (stickyMessageRow itself is derived further down, after the measure pass.)
+  const pinnedRowKey = stickyRowIndex >= 0 ? rows[stickyRowIndex]?.key : undefined
+  useLayoutEffect(() => {
+    const nextKey = pinnedRowKey
+    const previousKey = pinnedRowKeyRef.current
+    pinnedRowKeyRef.current = nextKey
+    // First commit establishes the baseline; a reader AT the tail is tail-follow's to move, not ours.
+    if (previousKey === undefined || previousKey === nextKey || followingTailRef.current) return
+    const anchor = readerAnchorRef.current
+    if (!anchor || pendingPrependAnchorRef.current) return
+    // Claim the scroller for this beat so the tail-follow pass leaves the offset alone while the row
+    // above settles (it reconciles against a scroll height that is mid-change until it does).
+    pinRestoreUntilRef.current = performance.now() + PIN_RESTORE_MS
+    alignToAnchor(anchor)
+    let secondFrame = 0
+    let thirdFrame = 0
+    const firstFrame = requestAnimationFrame(() => {
+      alignToAnchor(anchor)
+      secondFrame = requestAnimationFrame(() => {
+        alignToAnchor(anchor)
+        thirdFrame = requestAnimationFrame(() => {
+          alignToAnchor(anchor)
+          pinRestoreUntilRef.current = 0
+        })
+      })
+    })
+    return () => {
+      cancelAnimationFrame(firstFrame)
+      cancelAnimationFrame(secondFrame)
+      cancelAnimationFrame(thirdFrame)
+      pinRestoreUntilRef.current = 0
+    }
+  }, [alignToAnchor, pinnedRowKey])
+
   // TAIL FOLLOW — keep a reader who is AT the bottom at the bottom as the conversation grows.
   //
   // TanStack's own `followOnAppend` cannot do this job here: it only fires when the count grows AND the
@@ -647,6 +757,10 @@ function VirtualizedThreadTranscript({
     // A prepend in flight owns the scroller: "load earlier" grows the content by a whole page and
     // restores the reader's anchor across the next two frames. Following that growth would race it.
     if (!scroller || pendingPrependAnchorRef.current) return
+    // Same for a pin restore: the row above the reader is mid-re-expansion, so the scroll height this
+    // would reconcile against is a value in transit. Let the restore land, then resume — and do NOT
+    // refresh the reader anchor from a position it is still correcting.
+    if (performance.now() < pinRestoreUntilRef.current) return
     const next = nextTailFollow({
       scrollTop: scroller.scrollTop,
       scrollHeight: scroller.scrollHeight,
@@ -661,7 +775,21 @@ function VirtualizedThreadTranscript({
     // "Jump to latest" is exactly the negation of attachment, so the affordance can never disagree
     // with the behavior — and it no longer flickers for one frame while a message lands.
     setAtEnd((current) => current === next.following ? current : next.following)
-  }, [transcriptRef])
+    // Did the row under the reader's eye move while they weren't touching anything? (see DEBUG_SCROLL)
+    if (DEBUG_SCROLL && !next.following && performance.now() >= readerScrollUntilRef.current) {
+      const previous = readerAnchorRef.current
+      const row = previous && Array.from(scroller.querySelectorAll<HTMLElement>("[data-transcript-row-key]"))
+        .find((element) => element.dataset.transcriptRowKey === previous.rowKey && element.dataset.transcriptSticky !== "true")
+      if (previous && row) {
+        const drift = Math.round(row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - previous.viewportTop)
+        if (Math.abs(drift) > 2) console.warn(`[fray] transcript moved ${drift}px under a still reader — pin=${pinnedRowKeyRef.current ?? "none"} row=${previous.rowKey}`)
+      }
+    }
+    // LAST: refresh where the reader is looking. This runs on every commit, every settle and every
+    // scroll, so the pin-move effect above — which is declared EARLIER and therefore runs before this
+    // pass — always reads the position from before the pin moved.
+    readerAnchorRef.current = captureReaderAnchor() ?? readerAnchorRef.current
+  }, [captureReaderAnchor, transcriptRef])
 
   // Every commit: a row that just mounted at its ESTIMATED height has already pushed the bottom away.
   // A layout effect (not an effect) so the correction lands in the same frame — no visible slip.
