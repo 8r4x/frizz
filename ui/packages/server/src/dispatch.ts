@@ -813,6 +813,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             archived: 0,
             rested_at: null,
             title_auto: input.title?.trim() ? 0 : 1,
+            title_locked: 0, // a caller's hard-coded title is not a human's — the worker may rename it
             title: registryTitle,
             state: "open",
             meta: null,
@@ -879,10 +880,13 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         unread: 0,
         exited: 0,
         archived: 0,
-        // No explicit human title → backend telemetry becomes the display name; Claude retains its
-        // historical fallback.
+        // Backend telemetry becomes the display name either way. Without a caller title the stored
+        // text is a machine guess the UI must not present as a name (title_auto); WITH one it reads as
+        // a real name until the worker supplies a better one — never as a human's choice, so it stays
+        // unlocked. Claude retains its historical fallback.
         rested_at: null,
         title_auto: input.title?.trim() ? 0 : 1,
+        title_locked: 0,
         title: registryTitle,
         state: "open",
         meta: null,
@@ -1126,6 +1130,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         archived: 0,
         rested_at: null,
         title_auto: 0, // adopted threads keep their file title
+        title_locked: 1, // …and that heading is human-authored, so no auto-title may overwrite it
         title: null,
         state: "open",
         meta: null,

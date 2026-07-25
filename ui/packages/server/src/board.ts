@@ -9,6 +9,7 @@ import type { BoardSnapshot, ThreadView, RuntimeState, PlanView } from "@fray-ui
 import { BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isValidAwaitingTimer, type PermissionMode as PermissionModeValue } from "@fray-ui/shared"
 import type { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
+import { sessionTitleLocked } from "./storage.ts"
 import type { Storage, SessionRow } from "./storage.ts"
 import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import type { Tailer, SessionTelemetry } from "./tailer.ts"
@@ -441,19 +442,22 @@ export function resolveLimitPause(
 }
 
 
-// Title provenance is resolved server-side as well as in the web display helper. A transcript title
-// is eligible only while the registry says the stored fallback was machine-generated; once a human
-// commits a title (setTitle atomically clears title_auto), no later tail tick can put aiTitle back on
-// the wire as a competing display value.
+// Title provenance is resolved server-side as well as in the web display helper. A transcript title is
+// eligible while the registry says nothing HUMAN has claimed the name; once a human commits one
+// (setTitle atomically locks it), no later tail tick can put aiTitle back on the wire as a competing
+// display value. Note the two flags are independent here: a title hard-coded by a dispatch caller is
+// not a guess (titleAuto false, so the UI shows it verbatim while the session spins up) yet is still
+// unlocked, so the worker's own aiTitle rides the wire and wins the moment it exists.
 export function resolveSessionTitle(
-  row: Pick<SessionRow, "title" | "title_auto">,
+  row: Pick<SessionRow, "title" | "title_auto" | "title_locked">,
   tele: Pick<SessionTelemetry, "aiTitle"> | undefined,
-): Pick<ThreadView, "title" | "titleAuto" | "aiTitle"> {
-  const titleAuto = row.title_auto === 1
+): Pick<ThreadView, "title" | "titleAuto" | "titleLocked" | "aiTitle"> {
+  const locked = sessionTitleLocked(row)
   return {
     title: row.title ?? "",
-    titleAuto,
-    aiTitle: titleAuto ? tele?.aiTitle : undefined,
+    titleAuto: row.title_auto === 1,
+    titleLocked: locked,
+    aiTitle: locked ? undefined : tele?.aiTitle,
   }
 }
 

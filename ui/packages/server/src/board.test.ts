@@ -176,20 +176,32 @@ test("resolveSessionPermission: an eager operator sandbox change shows immediate
 
 test("resolveSessionTitle: a human title suppresses stale transcript names; generated fallbacks may use them", () => {
   assert.deepEqual(
-    resolveSessionTitle(row({ title: "Human-readable thread title", title_auto: 0 }), tele({ aiTitle: "generated-slug" })),
-    { title: "Human-readable thread title", titleAuto: false, aiTitle: undefined },
+    resolveSessionTitle(row({ title: "Human-readable thread title", title_auto: 0, title_locked: 1 }), tele({ aiTitle: "generated-slug" })),
+    { title: "Human-readable thread title", titleAuto: false, titleLocked: true, aiTitle: undefined },
   )
   assert.deepEqual(
     resolveSessionTitle(row({ title: "generated-slug", title_auto: 1 }), tele({ aiTitle: "Useful backend title" })),
-    { title: "generated-slug", titleAuto: true, aiTitle: "Useful backend title" },
+    { title: "generated-slug", titleAuto: true, titleLocked: false, aiTitle: "Useful backend title" },
   )
   assert.deepEqual(
     resolveSessionTitle(
       row({ title: "Original fallback", title_auto: 1 }),
       tele({ customTitle: "rejected-native-slug", customTitleRevision: 1 }),
     ),
-    { title: "Original fallback", titleAuto: true, aiTitle: undefined },
+    { title: "Original fallback", titleAuto: true, titleLocked: false, aiTitle: undefined },
     "an unconfirmed custom-title cannot reach board display/notification or paired-file sync",
+  )
+  // The point of the split: a title a dispatch CALLER hard-coded reads as a real name (titleAuto false,
+  // so no "Spinning up…"/"Untitled" placeholder) yet still carries the worker's aiTitle on the wire.
+  assert.deepEqual(
+    resolveSessionTitle(row({ title: "Investigate acme/app#391", title_auto: 0, title_locked: 0 }), tele({ aiTitle: "Cache key collides on normalized ids" })),
+    { title: "Investigate acme/app#391", titleAuto: false, titleLocked: false, aiTitle: "Cache key collides on normalized ids" },
+  )
+  // A row written before the split has no title_locked at all. Its non-guessed title must keep reading
+  // as the human's, or every legacy rename would silently reopen to backend telemetry.
+  assert.deepEqual(
+    resolveSessionTitle(row({ title: "Legacy renamed thread", title_auto: 0 }), tele({ aiTitle: "generated-slug" })),
+    { title: "Legacy renamed thread", titleAuto: false, titleLocked: true, aiTitle: undefined },
   )
 })
 

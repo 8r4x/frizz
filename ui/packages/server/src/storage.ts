@@ -17,7 +17,20 @@ export interface SessionRow {
   exited: number // 0 | 1
   archived: number // 0 | 1 — user hid the row from the nav; any respawn/resume un-archives
   rested_at: string | null // ISO8601 — when the agent last came to REST (turn end / pane death); drives nav order
-  title_auto: number // 0 | 1 — no explicit user title at dispatch, so ai-title syncs into the file
+  // 0 | 1 — the stored `title` is a machine GUESS (the prompt chop), not a real name. Display-only:
+  // it is what makes the UI show "Spinning up…"/"Untitled thread" instead of an internal-looking slug.
+  // It does NOT decide whether a later machine title may land — that is `title_locked` below.
+  title_auto: number
+  // 0 | 1 — a HUMAN named this thread (explicit rename, native /rename, or an adopted `.fray/<slug>.md`
+  // heading), so no backend auto-title may ever replace it. A title HARD-CODED by a dispatch CALLER is
+  // NOT this: `Investigate acme/app#391` from the GitHub batch, or a parent agent's guess through
+  // `mcp__fray__spawn_thread`, is shown as a real name (title_auto = 0) yet stays replaceable, because
+  // the worker's own title for the task is nearly always the more informative one. The human-facing
+  // new-thread composer has no title field at all, so a dispatch title never means "a human typed this".
+  // INVARIANT, relied on by the idempotent boot repair: title_locked = 1 ⇒ title_auto = 0.
+  // Optional in the TS shape so the many pre-existing row literals keep their old semantics — absent
+  // reads as "locked unless the title was a machine guess" (see sessionTitleLocked).
+  title_locked?: number
   // ---- session-first columns (2026-07-09; all nullable — additive migration under a live server) ----
   title: string | null // dispatch title (new dispatches have no thread FILE to hold it); display prefers aiTitle
   // The filename stem of the DISCOVERED transcript when it drifted off the pinned `<session_id>.jsonl`
@@ -110,6 +123,15 @@ export interface SessionRow {
   // Codex transport: NULL/'tmux' = legacy interactive-TUI-in-tmux; 'app-server' = a bridge-owned
   // JSON-RPC session. Only meaningful for backend='codex' rows.
   codex_runtime?: string | null
+}
+
+// Is this row's title off-limits to the backend's own auto-title? The column is authoritative once
+// written; an ABSENT value (a pre-migration row read through a partial Pick, or one of the many test
+// row literals) falls back to the pre-`title_locked` rule — every non-guessed title was locked — so
+// nothing that predates the split silently loosens. The registry, the board's aiTitle overlay, and the
+// auto-title CAS all decide through this one predicate.
+export function sessionTitleLocked(row: Pick<SessionRow, "title_auto" | "title_locked">): boolean {
+  return (row.title_locked ?? (row.title_auto === 1 ? 0 : 1)) === 1
 }
 
 export interface RuntimeExpectation {
@@ -342,8 +364,9 @@ export interface Storage {
   // each refresh and at its exact wake timer so restart/reload cannot leave a stale Held marker behind.
   // A snooze carrying a prompt survives its deadline until the scheduler has delivered its bump.
   clearExpiredSnoozes(now: string): number
-  // Persist an EXPLICIT human title. The flag flip is atomic with the text write so no board refresh,
-  // transcript ai-title, resume upsert, or server restart can see the new title as machine-generated.
+  // Persist an EXPLICIT human title and LOCK it against every backend auto-title. The flag flips are
+  // atomic with the text write so no board refresh, transcript ai-title, resume upsert, or server
+  // restart can see the new title as machine-generated or still replaceable.
   setTitle(slug: string, title: string): void
   // AI rename is asynchronous. Commit only if this is still the same session with the same title
   // provenance captured at start, so a later manual rename/re-dispatch always wins.
@@ -352,9 +375,11 @@ export interface Storage {
     title: string,
     expected: { sessionId: string; title: string | null; titleAuto: number },
   ): boolean
-  // Persist an automatically-derived title without changing its provenance. The full runtime identity
-  // and title_auto guard make a late transcript fold harmless after manual rename, resume, or same-slug
-  // replacement; a later trustworthy native auto-title may still supersede this fallback.
+  // Persist an automatically-derived title without changing its display provenance. The full runtime
+  // identity and the title_locked guard make a late transcript fold harmless after manual rename,
+  // resume, or same-slug replacement; a later trustworthy native auto-title may still supersede this
+  // fallback. Deliberately NOT gated on title_auto: an uninformative title hard-coded by a dispatch
+  // CALLER is displayable-but-replaceable, and this is the write that replaces it.
   setAutoTitleIfCurrent(slug: string, title: string, expected: AutoTitleExpectation): boolean
   // Hard-delete a session row — the "Dismiss/forget" verb for a phantom the user wants GONE, not merely
   // shelved (Archive only sets state='archived'). DELETEs the registry row AND records a TOMBSTONE on its
@@ -501,6 +526,11 @@ export function createStorage(dbPath: string): Storage {
   for (const col of [
     "archived INTEGER NOT NULL DEFAULT 0",
     "title_auto INTEGER NOT NULL DEFAULT 0",
+    // Defaults LOCKED so the ADD COLUMN backfill is conservative: every row that predates the split
+    // keeps exactly its old behavior, and any write path that forgets the column fails safe (a title
+    // that can't be replaced, never one that's silently overwritten). The boot repair below then
+    // unlocks the machine-guessed ones.
+    "title_locked INTEGER NOT NULL DEFAULT 1",
     "rested_at TEXT",
     "title TEXT",
     "state TEXT",
@@ -544,6 +574,12 @@ export function createStorage(dbPath: string): Storage {
   // into the new lifecycle column. Only fills NULLs — an explicit later state write always wins.
   try {
     db.exec("UPDATE session SET state = 'archived' WHERE archived = 1 AND state IS NULL")
+    // Unlock the machine-guessed titles the conservative DEFAULT 1 above just locked. Safe to re-run on
+    // EVERY boot — not merely at first migration — because every writer that locks a title also clears
+    // title_auto, so `title_locked = 1 AND title_auto = 1` is a state nothing can legitimately produce.
+    // (A boot repair that re-LOCKED instead would be the dangerous direction: it would silently re-lock
+    // each newly dispatched caller-titled row on the next restart.)
+    db.exec("UPDATE session SET title_locked = 0 WHERE title_auto = 1")
     // The tmux codex composer is gone, and with it every writer AND releaser of its durable
     // 'codex-input' runtime lock. A row that still holds one was locked by the retired subsystem and
     // nothing can ever clear it again: the board reports runtimeControlPending forever, which fences
@@ -592,8 +628,8 @@ export function createStorage(dbPath: string): Storage {
   const selOne = db.prepare<[string], SessionRow>("SELECT * FROM session WHERE slug = ?")
   const selAll = db.prepare<[], SessionRow>("SELECT * FROM session")
   const upsertStmt = db.prepare(`
-    INSERT INTO session (slug, session_id, tmux_name, spawned_at, last_read_at, unread, exited, title_auto, title, state, snoozed_until, snooze_prompt, awaiting_fence_id, awaiting_confirmed_at, meta, seen_at, plan_path, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, control_error, runtime_generation, runtime_control, runtime_control_revision)
-    VALUES (@slug, @session_id, @tmux_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title, @state, @snoozed_until, @snooze_prompt, @awaiting_fence_id, @awaiting_confirmed_at, @meta, @seen_at, @plan_path, @transcript_id, @model, @effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision)
+    INSERT INTO session (slug, session_id, tmux_name, spawned_at, last_read_at, unread, exited, title_auto, title_locked, title, state, snoozed_until, snooze_prompt, awaiting_fence_id, awaiting_confirmed_at, meta, seen_at, plan_path, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, control_error, runtime_generation, runtime_control, runtime_control_revision)
+    VALUES (@slug, @session_id, @tmux_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title_locked, @title, @state, @snoozed_until, @snooze_prompt, @awaiting_fence_id, @awaiting_confirmed_at, @meta, @seen_at, @plan_path, @transcript_id, @model, @effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision)
     ON CONFLICT(slug) DO UPDATE SET
       session_id = excluded.session_id,
       tmux_name  = excluded.tmux_name,
@@ -602,6 +638,7 @@ export function createStorage(dbPath: string): Storage {
       unread = excluded.unread,
       exited = excluded.exited,
       title_auto = excluded.title_auto,
+      title_locked = excluded.title_locked,
       title = excluded.title,
       snoozed_until = excluded.snoozed_until,
       -- Always moves WITH the instant: a spread row carries both, a re-dispatch clears both. An armed
@@ -642,7 +679,7 @@ export function createStorage(dbPath: string): Storage {
   const insertSessionIfAbsentStmt = db.prepare(`
     INSERT INTO session (
       slug, session_id, tmux_name, spawned_at, last_read_at, unread, exited, archived, rested_at,
-      title_auto, title, transcript_id, state, snoozed_until, snooze_prompt, awaiting_fence_id, awaiting_confirmed_at,
+      title_auto, title_locked, title, transcript_id, state, snoozed_until, snooze_prompt, awaiting_fence_id, awaiting_confirmed_at,
       meta, seen_at, plan_path, backend, agent_session_id,
       model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff,
       permission_mode, permission_pending, control_error,
@@ -650,7 +687,7 @@ export function createStorage(dbPath: string): Storage {
     )
     VALUES (
       @slug, @session_id, @tmux_name, @spawned_at, @last_read_at, @unread, @exited, @archived,
-      @rested_at, @title_auto, @title, @transcript_id, @state, @snoozed_until, @snooze_prompt,
+      @rested_at, @title_auto, @title_locked, @title, @transcript_id, @state, @snoozed_until, @snooze_prompt,
       @awaiting_fence_id, @awaiting_confirmed_at, @meta, @seen_at, @plan_path,
       @backend, @agent_session_id, @model, @effort, @profile_pending_model,
       @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending,
@@ -852,14 +889,19 @@ export function createStorage(dbPath: string): Storage {
     UPDATE session SET snoozed_until = NULL
     WHERE snoozed_until IS NOT NULL AND snoozed_until <= ? AND snooze_prompt IS NULL
   `)
-  const titleStmt = db.prepare("UPDATE session SET title = ?, title_auto = 0 WHERE slug = ?")
+  // Both human-title writers LOCK as they write: the text, the "not a guess" flag, and the lock move in
+  // one statement, so no concurrent tail tick can land a backend auto-title between them.
+  const titleStmt = db.prepare("UPDATE session SET title = ?, title_auto = 0, title_locked = 1 WHERE slug = ?")
   const titleCasStmt = db.prepare(
-    "UPDATE session SET title = ?, title_auto = 0 WHERE slug = ? AND session_id = ? AND title IS ? AND title_auto = ?",
+    "UPDATE session SET title = ?, title_auto = 0, title_locked = 1 WHERE slug = ? AND session_id = ? AND title IS ? AND title_auto = ?",
   )
+  // Gated on the LOCK, not on title_auto: a caller-supplied dispatch title (`Investigate acme/app#391`,
+  // a parent agent's guess) is unlocked, so the worker's own title supersedes it. title_auto is left
+  // alone — the row's DISPLAY provenance is unchanged by which machine produced the current text.
   const autoTitleCasStmt = db.prepare(`
     UPDATE session SET title = ?
     WHERE slug = ? AND session_id = ? AND agent_session_id IS ?
-      AND runtime_generation = ? AND title_auto = 1
+      AND runtime_generation = ? AND title_locked = 0
   `)
   const delSession = db.prepare("DELETE FROM session WHERE slug = ?")
   const putTomb = db.prepare("INSERT OR IGNORE INTO tombstone (transcript_id, slug, forgotten_at) VALUES (?, ?, ?)")
@@ -1039,6 +1081,7 @@ export function createStorage(dbPath: string): Storage {
 
   const normalizeSessionRow = (row: SessionRow) => ({
     ...row,
+    title_locked: sessionTitleLocked(row) ? 1 : 0,
     backend: row.backend ?? "claude",
     agent_session_id: row.agent_session_id ?? null,
     model: row.model ?? null,
