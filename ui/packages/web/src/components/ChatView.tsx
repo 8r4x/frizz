@@ -15,7 +15,7 @@ import { splitProseAttachments } from "../lib/imagePaths.ts"
 import { DiffBlock, PathLink } from "./DiffBlock.tsx"
 import { splitQuestionBlocks, parseQuestionBlock, approvalAffirmativeIndex, type QuestionKind, type BlockAnswer, type MessageAnswering } from "../lib/questionBlocks.ts"
 import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
-import { parseAnswersMessage, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
+import { parseAnswersCard, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
 import { sendEagerFollowUp } from "../lib/eagerComposerSubmission.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
@@ -2117,7 +2117,7 @@ function UserBubble({ text, queued, sticky, deliveryUnconfirmed, sourceId }: { t
 // `answering` is undefined for all but the live message (and identity-stable via useLiveAnswering's
 // useMemo unless answers/blocks actually changed), `dense` is a constant. So only the message whose
 // inputs really changed re-renders; everything else bails out at the memo boundary.
-// `paired` is the precomputed question↔answer pairing for an "Answers:" user message (see
+// `paired` is the precomputed question↔answer pairing for a composed-answer user message (see
 // pairAllAnswers — computed at the LIST level because the lookback needs the whole message list, which
 // a per-message component deliberately doesn't get). Memo-friendly by construction: it's null (a stable
 // primitive) for every ordinary message, so only actual answers-messages ever see a prop change.
@@ -2139,10 +2139,11 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     // bubble honors \n but not a lone \r → the breaks collapse into a run-on. Normalize for BOTH render
     // paths (the server does this too, but this is the definitive per-surface guarantee for user text).
     const text = messagePresentationText(m).replace(/\r\n?/g, "\n")
-    // OUR OWN composed multi-block answer ("Answers:\n1. …\n2. …", from useLiveAnswering.sendAnswers)
+    // OUR OWN composed multi-block answer — either wire form ("Answers:\n1. …\n2. …" for the live ask,
+    // "Answers to earlier questions:\n1. “Q” → A" for a buried one, both from useLiveAnswering.sendAnswers)
     // renders as a structured answers card echoing the question component — not a flat run-on bubble.
     // Non-matching text (and a parse hiccup → null) falls back to the plain bubble; text is never lost.
-    const answers = paired !== undefined ? paired : parseAnswersMessage(text)
+    const answers = paired !== undefined ? paired : parseAnswersCard(text)
     if (answers) return <AnswersCard answers={answers} queued={m.queued} sourceId={m.sourceId} />
     return <UserBubble text={text} queued={m.queued} sticky={sticky} deliveryUnconfirmed={m.deliveryState === "unconfirmed"} sourceId={m.sourceId} />
   }

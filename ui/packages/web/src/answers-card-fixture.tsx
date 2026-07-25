@@ -19,6 +19,22 @@ const m = {
   parts: [],
 } as unknown as TranscriptMessage
 
+// The BURIED-ask wire form — composeAnswerWire's self-describing shape, which quotes each question inline
+// because the ask is no longer the last turn. It reaches the card through parseBuriedAnswersMessage (no
+// `paired` prop here — the fixture deliberately exercises Message's own parse), where it used to fall
+// through to a raw run-on bubble. `paired={null}` on the second copy forces that old bubble path, so the
+// two renderings sit side by side.
+const buried = {
+  sourceId: "u2",
+  role: "user",
+  text:
+    "Answers to earlier questions:\n" +
+    "1. “Should the settings store use SQLite or a JSON file?” → A. SQLite\n" +
+    "2. “Ready to create CONTRIBUTING.md with the draft above?” → B. Approve with edits — drop the badge row",
+  tools: [],
+  parts: [],
+} as unknown as TranscriptMessage
+
 function Fixture() {
   return (
     <div className="mx-auto my-8 flex w-[min(560px,calc(100%-32px))] flex-col gap-6">
@@ -32,6 +48,24 @@ function Fixture() {
         <div className="mb-2 text-[11px] uppercase tracking-wide text-muted/70">Answers card (dense / queue width)</div>
         <div className="flex w-[380px] flex-col rounded-lg border border-border bg-panel p-4">
           <Message m={m} paired={paired} dense />
+        </div>
+      </div>
+      <div>
+        <div className="mb-2 text-[11px] uppercase tracking-wide text-muted/70">Buried-ask answers (thread width)</div>
+        <div className="flex flex-col rounded-lg border border-border bg-panel p-4">
+          <Message m={buried} />
+        </div>
+      </div>
+      <div>
+        <div className="mb-2 text-[11px] uppercase tracking-wide text-muted/70">Buried-ask answers (dense / queue width)</div>
+        <div className="flex w-[380px] flex-col rounded-lg border border-border bg-panel p-4">
+          <Message m={buried} dense />
+        </div>
+      </div>
+      <div>
+        <div className="mb-2 text-[11px] uppercase tracking-wide text-muted/70">Before — the same text as a raw bubble</div>
+        <div className="flex flex-col rounded-lg border border-border bg-panel p-4">
+          <Message m={buried} paired={null} />
         </div>
       </div>
     </div>
