@@ -40,8 +40,9 @@ async function runCase(decisionId: string, expectBehavior: "allow" | "deny") {
     const [rec] = store.listPending(scope)
     assert.equal(rec.provider.kind, "claude", "interaction is attributed to the claude broker")
     assert.equal(rec.payload.kind, "permission-approval", "escalation renders as an approval card")
-    assert.ok(rec.allowedDecisions.some((d) => d.id === "claude-allow" && d.semantic === "approve"))
-    assert.ok(rec.allowedDecisions.some((d) => d.id === "claude-deny" && d.semantic === "deny"))
+    // The IDs must be the fray web's canonical permission verbs, else the approval buttons don't render.
+    assert.ok(rec.allowedDecisions.some((d) => d.id === "grant-turn" && d.semantic === "approve"))
+    assert.ok(rec.allowedDecisions.some((d) => d.id === "deny" && d.semantic === "deny"))
     // The daemon must NOT have proceeded before the human decides.
     assert.equal(results, 0, "the tool call is gated until the human decides")
 
@@ -63,9 +64,9 @@ async function runCase(decisionId: string, expectBehavior: "allow" | "deny") {
 }
 
 test("broker routes a permission escalation to the InteractionStore and APPROVES on the human decision", { timeout: 25_000 }, async () => {
-  await runCase("claude-allow", "allow")
+  await runCase("grant-turn", "allow")
 })
 
 test("broker routes a permission escalation and DENIES on the human decision", { timeout: 25_000 }, async () => {
-  await runCase("claude-deny", "deny")
+  await runCase("deny", "deny")
 })

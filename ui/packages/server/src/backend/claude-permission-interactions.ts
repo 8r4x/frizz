@@ -13,15 +13,19 @@ import {
 import { redactCredentialSyntax } from "../credential-redaction.ts"
 import type { ClaudePermissionDecision, ClaudePermissionRequest } from "./claude-agent-sdk-protocol.ts"
 
+// The decision IDs the fray web CANONICALIZES for a permission-approval card (typedInteractions.ts
+// specFor): the security verb is a fixed vocabulary, not provider-chosen, so an unrecognized id renders
+// NO button ("N advertised choices cannot be safely… shown"). `grant-turn` = approve-once, `deny` = deny.
 export const CLAUDE_PERMISSION_DECISIONS = {
-  allow: "claude-allow",
-  deny: "claude-deny",
+  allow: "grant-turn",
+  deny: "deny",
 } as const
 
 // The two decisions every Claude tool-approval offers. Durable/session-scoped grants are a later
-// refinement; a single-turn allow/deny is the safe, complete first contract.
+// refinement; a single-turn grant/deny is the safe, complete first contract. Labels come from the web's
+// canonical spec ("Grant for turn" / "Deny"); the ones here are the provider-context fallback.
 const ALLOWED_DECISIONS: InteractionRequestType["allowedDecisions"] = [
-  { id: CLAUDE_PERMISSION_DECISIONS.allow, semantic: "approve", label: "Approve", description: "Allow this tool call to run once." },
+  { id: CLAUDE_PERMISSION_DECISIONS.allow, semantic: "approve", label: "Grant for turn", description: "Allow this tool call to run once." },
   { id: CLAUDE_PERMISSION_DECISIONS.deny, semantic: "deny", label: "Deny", description: "Block this tool call." },
 ]
 
@@ -82,6 +86,6 @@ export function buildClaudePermissionInteraction(
 /** Map a resolved interaction's decision id to the Claude decision the daemon applies. Anything that is
  *  not an explicit approve is treated as a deny — fail closed. */
 export function claudePermissionDecisionFor(decisionId: string | undefined): ClaudePermissionDecision {
-  if (decisionId === CLAUDE_PERMISSION_DECISIONS.allow) return { behavior: "allow" }
+  if (decisionId === CLAUDE_PERMISSION_DECISIONS.allow || decisionId === "grant-session") return { behavior: "allow" }
   return { behavior: "deny", message: "The operator denied this tool call." }
 }
