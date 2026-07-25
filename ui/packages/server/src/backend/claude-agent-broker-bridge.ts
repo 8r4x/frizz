@@ -12,13 +12,13 @@ import type { ClaudeBrokerConfig } from "./claude-agent-broker.ts"
 import type { InteractionSessionScope, InteractionStore } from "../interaction-store.ts"
 import { buildClaudePermissionInteraction, claudePermissionDecisionFor } from "./claude-permission-interactions.ts"
 
-/** Gate for routing Claude dispatch through the session broker instead of the tmux TUI. The broker is
- *  now the DEFAULT Claude transport (cutover proven end-to-end: worker environment ported — fray
- *  sub-agent profiles, fray + chrome-devtools MCP, cc-worker hooks — dashboard permission approvals,
- *  ownerless reconnect across a fray restart). Set FRAY_CLAUDE_BROKER_BRIDGE=0 to fall back to the
- *  legacy tmux TUI transport for Claude. */
+/** Gate for routing Claude dispatch through the session broker instead of the tmux TUI. Opt-in
+ *  (FRAY_CLAUDE_BROKER_BRIDGE=1) while the PROMOTED-ARTIFACT path is being fixed: the default flip was
+ *  reverted after the broker dispatched fine from dev/source but failed on a promoted artifact ("Starting
+ *  thread…" hang). tmux stays the default so Claude dispatch works; flip back to default-on only once a
+ *  broker thread is verified end-to-end on a real promoted artifact, not just the dev stack. */
 export function claudeBrokerBridgeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.FRAY_CLAUDE_BROKER_BRIDGE !== "0"
+  return env.FRAY_CLAUDE_BROKER_BRIDGE === "1"
 }
 
 export interface ClaudeBrokerBinding {
