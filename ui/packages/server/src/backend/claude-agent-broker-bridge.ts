@@ -9,6 +9,8 @@ import { adoptOrForkBroker, killBroker, liveBrokerRecord, claudeBrokerRecordPath
 import { connectClaudeBroker, type ClaudeBrokerClient } from "./claude-broker-client.ts"
 import type { ClaudePermissionDecision, ClaudePermissionRequest, ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
 import type { ClaudeBrokerConfig } from "./claude-agent-broker.ts"
+import type { InteractionSessionScope, InteractionStore } from "../interaction-store.ts"
+import { buildClaudePermissionInteraction, claudePermissionDecisionFor } from "./claude-permission-interactions.ts"
 
 /** Gate for routing Claude dispatch through the session broker instead of the tmux TUI. Off by
  *  default until the cutover is proven end-to-end in a live server. */
@@ -41,7 +43,14 @@ export interface ClaudeBrokerBridgeDeps {
     allowedTools?: string[]
     permDir?: string
   }
-  /** Decide a tool-permission request. Defaults to auto-allow. Later: journal to the InteractionStore. */
+  /** The dashboard InteractionStore + this project's id. When present, a Claude tool-permission
+   *  escalation (canUseTool, which under "auto" fires only for classifier-flagged risky calls) is
+   *  journaled as an approval interaction and gated on the human's dashboard decision. Absent ⇒ the
+   *  `decidePermission` hook (default auto-allow) decides — the pre-cutover behavior. */
+  interactions?: InteractionStore
+  projectId?: string
+  /** Decide a tool-permission request when NOT routing to the dashboard (tests / interactions absent).
+   *  Defaults to auto-allow, honoring the thread's permission mode — matching today's tmux `auto`. */
   decidePermission?: (slug: string, sessionId: string, request: ClaudePermissionRequest) => Promise<ClaudePermissionDecision>
   /** Observe the session/transcript event stream (board liveness / telemetry). Optional. */
   onEvent?: (slug: string, sessionId: string, event: ClaudeQueryEvent) => void
@@ -84,6 +93,39 @@ export interface ClaudeAgentBrokerBridge {
 export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): ClaudeAgentBrokerBridge {
   const sessions = new Map<string, ActiveSession>() // keyed by slug — one active session per thread
 
+  // Pending tool-permission escalations awaiting a human dashboard decision, keyed by interaction id.
+  // The daemon holds the actual canUseTool promise (and re-delivers it on reconnect), so this only needs
+  // the live client + the daemon's requestId to answer against once the human resolves the interaction.
+  const pendingPerms = new Map<string, { client: ClaudeBrokerClient; requestId: string; scope: InteractionSessionScope }>()
+
+  // Route a Claude tool-permission escalation to the dashboard: reuse the still-pending journal entry on
+  // a reconnect re-delivery, else journal a fresh approval interaction. Failure to represent/journal fails
+  // CLOSED (deny) — a permission we can't put in front of a human must not silently run.
+  const routePermissionToDashboard = (slug: string, sessionId: string, cwd: string, requestId: string, request: ClaudePermissionRequest, client: ClaudeBrokerClient): void => {
+    const store = deps.interactions!, projectId = deps.projectId!
+    const scope: InteractionSessionScope = { projectId, threadSlug: slug, sessionId }
+    const existing = store.listPending(scope).find((r) => r.providerRequestId === requestId)
+    if (existing) { pendingPerms.set(existing.id, { client, requestId, scope }); return }
+    const req = buildClaudePermissionInteraction(request, { projectId, threadSlug: slug, sessionId, cwd })
+    if (!req) { client.answerPermission(requestId, { behavior: "deny", message: "This tool call could not be represented for approval." }); return }
+    let id: string
+    try { id = store.create(req).interaction.id } catch { client.answerPermission(requestId, { behavior: "deny", message: "The approval request could not be recorded." }); return }
+    pendingPerms.set(id, { client, requestId, scope })
+  }
+
+  // A resolved/cancelled/expired approval interaction → the decision the daemon applies. The daemon is
+  // the durable holder of the canUseTool promise, so this simply relays the answer over the live socket.
+  const unsubInteractions = deps.interactions?.subscribe((change) => {
+    const pending = pendingPerms.get(change.interactionId)
+    if (!pending || change.lifecycle === "pending") return
+    const record = deps.interactions!.get(pending.scope, change.interactionId)
+    const decision = change.lifecycle === "resolved"
+      ? claudePermissionDecisionFor(record?.resolution?.decisionId)
+      : { behavior: "deny" as const, message: "This approval was withdrawn." }
+    pending.client.answerPermission(pending.requestId, decision)
+    pendingPerms.delete(change.interactionId)
+  })
+
   const attach = async (slug: string, sessionId: string, cwd: string, permissionMode: ClaudeBrokerConfig["permissionMode"], fork: ForkOpts = {}): Promise<ActiveSession> => {
     // fork opts (system prompt / model / effort / resume) AND the worker environment apply only when this
     // call FORKS a fresh daemon; when it adopts a live one (fray restart), the running session already
@@ -98,6 +140,12 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     const client = connectClaudeBroker(record.socketPath, {
       onEvent: (event) => deps.onEvent?.(slug, sessionId, event),
       onPermissionRequest: (requestId, request) => {
+        // Dashboard routing when the store is wired; else the decision hook / auto-allow (tests).
+        if (deps.interactions && deps.projectId) {
+          try { routePermissionToDashboard(slug, sessionId, cwd, requestId, request, client) }
+          catch { client.answerPermission(requestId, { behavior: "deny", message: "permission routing failed" }) }
+          return
+        }
         void (deps.decidePermission?.(slug, sessionId, request) ?? Promise.resolve<ClaudePermissionDecision>({ behavior: "allow" }))
           .then((decision) => client.answerPermission(requestId, decision))
           .catch(() => client.answerPermission(requestId, { behavior: "deny", message: "permission decision failed" }))
@@ -153,6 +201,6 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       return s !== undefined
     },
 
-    close() { for (const s of sessions.values()) s.client.close(); sessions.clear() },
+    close() { unsubInteractions?.(); pendingPerms.clear(); for (const s of sessions.values()) s.client.close(); sessions.clear() },
   }
 }

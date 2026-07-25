@@ -591,6 +591,10 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         stateDir: project.stateDir,
         executablePath: opts.claudeBin ?? "claude",
         env: Object.fromEntries(Object.entries(process.env).filter(([, v]) => v != null)) as Record<string, string>,
+        // Route Claude tool-permission escalations to the dashboard approval UI (provider-neutral
+        // InteractionStore; the same store + web cards codex approvals use).
+        interactions: storage.interactions,
+        projectId: project.id,
         // The fray worker environment — the SDK equivalent of the tmux path's --plugin-dir / --mcp-config.
         // Computed ONCE here (constant per project) and applied on every broker fork so a broker worker
         // gets the fray sub-agent profiles, the fray + chrome-devtools MCP, and the cc-worker hooks.
