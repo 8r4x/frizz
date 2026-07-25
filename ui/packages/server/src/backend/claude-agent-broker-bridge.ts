@@ -12,13 +12,13 @@ import type { ClaudeBrokerConfig } from "./claude-agent-broker.ts"
 import type { InteractionSessionScope, InteractionStore } from "../interaction-store.ts"
 import { buildClaudePermissionInteraction, claudePermissionDecisionFor } from "./claude-permission-interactions.ts"
 
-/** Gate for routing Claude dispatch through the session broker instead of the tmux TUI. Opt-in
- *  (FRAY_CLAUDE_BROKER_BRIDGE=1) while the PROMOTED-ARTIFACT path is being fixed: the default flip was
- *  reverted after the broker dispatched fine from dev/source but failed on a promoted artifact ("Starting
- *  thread…" hang). tmux stays the default so Claude dispatch works; flip back to default-on only once a
- *  broker thread is verified end-to-end on a real promoted artifact, not just the dev stack. */
+/** Gate for routing Claude dispatch through the session broker instead of the tmux TUI. Default ON
+ *  (opt out with FRAY_CLAUDE_BROKER_BRIDGE=0). Verified end-to-end on a real PROMOTED ARTIFACT (not just
+ *  the dev stack): a dispatched broker thread starts its daemon and the agent replies. The promoted-
+ *  artifact regression was the SDK requiring an absolute claude executable (a bare "claude" crashed the
+ *  daemon before it published its record) — fixed in resolveClaudeExecutableAbsolute. */
 export function claudeBrokerBridgeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.FRAY_CLAUDE_BROKER_BRIDGE === "1"
+  return env.FRAY_CLAUDE_BROKER_BRIDGE !== "0"
 }
 
 export interface ClaudeBrokerBinding {
