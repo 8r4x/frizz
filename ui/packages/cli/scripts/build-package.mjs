@@ -4,16 +4,20 @@
 // compiled JS. esbuild absorbs the CLI, server and every workspace/JS dependency into self-contained
 // ESM bundles; only the native loaders stay external and are installed as real dependencies.
 //
-// Three real entry FILES are emitted because each is executed as its OWN `node <file>` process:
+// Real entry FILES are emitted because each is executed as its OWN `node <file>` process:
 //   - frayui.js                    the bin / production launcher (production.ts)
 //   - dev-child.js                 the server child the supervisor spawns (dev-supervisor childEntry)
-//   - codex-app-server-daemon.js   a detached daemon spawned as its own process (detached-daemons.ts)
-// production.ts resolves the child beside itself (./dev-child.js) and dev-child resolves the daemon
-// beside itself (./codex-app-server-daemon.js), so all three MUST land in the same dist/ directory.
+//   - one .js per DETACHED_DAEMON_ENTRIES — each a detached daemon spawned as its own process
+//     (codex-app-server-daemon.js, claude-agent-broker.js — the Claude session broker).
+// production.ts resolves the child beside itself (./dev-child.js) and dev-child resolves each daemon
+// beside itself (./<daemon>.js), so ALL of them MUST land in the same dist/ directory. The daemon list
+// is DERIVED from detached-daemons.ts (the single source of truth) so a newly-added daemon can never be
+// silently dropped from the published bundle — the exact class of packaging bug that comment warns of.
 import { basename, dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { rmSync, existsSync } from "node:fs"
 import { build } from "esbuild"
+import { DETACHED_DAEMON_ENTRIES, detachedDaemonOutputName } from "../../server/src/detached-daemons.ts"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const cli = resolve(here, "..")
@@ -43,7 +47,10 @@ rmSync(dist, { recursive: true, force: true })
 const entries = {
   "frayui.js": "packages/cli/src/production.ts",
   "dev-child.js": "packages/server/src/dev-child.ts",
-  "codex-app-server-daemon.js": "packages/server/src/backend/codex-app-server-daemon.ts",
+}
+// Every detached daemon ships as its own real sibling .js — derived, never hand-listed.
+for (const entry of DETACHED_DAEMON_ENTRIES) {
+  entries[detachedDaemonOutputName(entry)] = entry
 }
 
 for (const [outName, entry] of Object.entries(entries)) {

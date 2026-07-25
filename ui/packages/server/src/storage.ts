@@ -123,6 +123,27 @@ export interface SessionRow {
   // Codex transport: NULL/'tmux' = legacy interactive-TUI-in-tmux; 'app-server' = a bridge-owned
   // JSON-RPC session. Only meaningful for backend='codex' rows.
   codex_runtime?: string | null
+  // Claude transport: NULL/'tmux' = interactive-TUI-in-tmux; 'broker' = a session-broker-owned Agent
+  // SDK session. Only meaningful for backend='claude' rows.
+  claude_runtime?: string | null
+}
+
+/**
+ * A HEADLESS thread has no tmux pane: input goes through a bridge, liveness comes from the bridge /
+ * the on-disk transcript, and nothing captures a pane. Both bridge-owned transports are headless —
+ * codex over its app-server, claude over its session broker. Use this wherever the intent is "does
+ * this thread live in a tmux pane?" rather than a codex- or claude-specific branch.
+ */
+export function isHeadlessRow(row: Pick<SessionRow, "backend" | "codex_runtime" | "claude_runtime">): boolean {
+  return (row.backend === "codex" && row.codex_runtime === "app-server") ||
+    (row.backend === "claude" && row.claude_runtime === "broker")
+}
+
+/** A Claude row whose session lives in the detached broker daemon (no tmux pane). Stamped
+ *  claude_runtime="broker" at dispatch and never migrated, so — unlike legacy codex rows — the runtime
+ *  column is authoritative from birth. The Claude twin of isAppServerCodexRow. */
+export function isBrokerClaudeRow(row: Pick<SessionRow, "backend" | "claude_runtime">): boolean {
+  return row.backend === "claude" && row.claude_runtime === "broker"
 }
 
 // Is this row's title off-limits to the backend's own auto-title? The column is authoritative once
@@ -403,6 +424,7 @@ export interface Storage {
   setBackend(slug: string, backend: string): void
   setAgentSession(slug: string, agentSessionId: string): void
   setCodexRuntime(slug: string, runtime: string): void
+  setClaudeRuntime(slug: string, runtime: string): void
   setProfile(slug: string, model: string, effort: string): void
   setPermissionMode(slug: string, permissionMode: string): void
   setPermissionPending(slug: string, permissionMode: string | null): void
@@ -563,6 +585,9 @@ export function createStorage(dbPath: string): Storage {
     // Codex transport discriminator: NULL/'tmux' = the legacy interactive-TUI path; 'app-server' = a
     // bridge-owned JSON-RPC session (input via turn/start|steer, liveness from the bridge not a pane).
     "codex_runtime TEXT",
+    // Claude transport discriminator: NULL/'tmux' = the interactive-TUI path in a tmux pane; 'broker'
+    // = a session-broker-owned Agent SDK session (input via the bridge, liveness from it, not a pane).
+    "claude_runtime TEXT",
   ]) {
     try {
       db.exec(`ALTER TABLE session ADD COLUMN ${col}`)
@@ -967,6 +992,7 @@ export function createStorage(dbPath: string): Storage {
   const backendStmt = db.prepare("UPDATE session SET backend = ? WHERE slug = ?")
   const agentSessionStmt = db.prepare("UPDATE session SET agent_session_id = ? WHERE slug = ?")
   const codexRuntimeStmt = db.prepare("UPDATE session SET codex_runtime = ? WHERE slug = ?")
+  const claudeRuntimeStmt = db.prepare("UPDATE session SET claude_runtime = ? WHERE slug = ?")
   // Stamps profile_set_at alongside model/effort: the OPERATOR's set-time (the codex setThreadProfile
   // path), which the board uses to outrank an older observed turn_context so a just-picked model/effort
   // shows on the composer selector immediately (see resolveSessionProfile). Sibling of permissionModeStmt.
@@ -1104,6 +1130,7 @@ export function createStorage(dbPath: string): Storage {
     runtime_control: row.runtime_control ?? null,
     runtime_control_revision: row.runtime_control_revision ?? 0,
     codex_runtime: row.codex_runtime ?? null,
+    claude_runtime: row.claude_runtime ?? null,
   })
 
   const getAdoptionRuntimeSnapshot = db.transaction((slug: string) => ({
@@ -1509,6 +1536,7 @@ export function createStorage(dbPath: string): Storage {
     setBackend: (slug, backend) => void backendStmt.run(backend, slug),
     setAgentSession: (slug, agentSessionId) => void agentSessionStmt.run(agentSessionId, slug),
     setCodexRuntime: (slug, runtime) => void codexRuntimeStmt.run(runtime, slug),
+    setClaudeRuntime: (slug, runtime) => void claudeRuntimeStmt.run(runtime, slug),
     setProfile: (slug, model, effort) => void profileStmt.run(model, effort, new Date().toISOString(), slug),
     setPermissionMode: (slug, permissionMode) => void permissionModeStmt.run(permissionMode, new Date().toISOString(), slug),
     setPermissionPending: (slug, permissionMode) => void permissionPendingStmt.run(permissionMode, slug),

@@ -21,7 +21,11 @@ import { fileURLToPath } from "node:url"
 /** Every module spawned as its own node process, as a path relative to the `ui` workspace root. */
 export const DETACHED_DAEMON_ENTRIES = [
   "packages/server/src/backend/codex-app-server-daemon.ts",
-  // Deliberately SHORT. One thing is pointedly absent:
+  // The Claude session broker: owns a live Claude Agent SDK session and serves a socket, so the
+  // session survives a fray restart (fray reconnects instead of cold resume-from-disk). Forked by
+  // claude-broker-host.ts; run as its own `node <file>` process, so it must ship as a real sibling .js.
+  "packages/server/src/backend/claude-agent-broker.ts",
+  // Deliberately SHORT beyond these. One thing is pointedly absent:
   //
   //   dev-bootstrap.ts — see the exemption in dev-supervisor.ts. Emitting it woke a control-plane
   //     path that had been dead in artifacts since artifacts existed, and that path is not safe to

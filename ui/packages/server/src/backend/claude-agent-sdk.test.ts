@@ -175,13 +175,58 @@ test("initialization capabilities remain hidden when the provider never establis
   await assert.rejects(initialization)
 })
 
-test("duplicate init is rejected after the one ownership-establishing event", { timeout: 10_000 }, async () => {
+test("a same-session re-init is tolerated (real claude re-emits init every turn) and the stream continues", { timeout: 10_000 }, async () => {
   const harness = startHarness("duplicate-init")
   try {
     await harness.handle.ready()
     const init = await harness.handle.next()
     assert.equal(init.value?.kind, "init")
-    await assert.rejects(harness.handle.next(), /duplicate init/)
+    // The provider re-emits init for the SAME session at each turn; it is swallowed (not surfaced, not
+    // fatal), and the next genuine event — the result — is delivered normally.
+    const next = await harness.handle.next()
+    assert.equal(next.value?.kind, "result")
+  } finally {
+    await harness.close()
+  }
+})
+
+test("control frames that precede the session init are tolerated (same session) and init still owns the stream", { timeout: 10_000 }, async () => {
+  const harness = startHarness("preinit-control")
+  try {
+    const ready = await harness.handle.ready()
+    assert.equal(ready.kind, "init") // the pre-init control frame was swallowed; init resolved ready
+    const init = await harness.handle.next()
+    assert.equal(init.value?.kind, "init") // and init is still the FIRST event a consumer sees
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a pre-init control frame from a DIFFERENT session is rejected (ownership before init)", { timeout: 10_000 }, async () => {
+  const harness = startHarness("preinit-mismatch")
+  try {
+    await assert.rejects(harness.handle.ready(), /session ownership mismatch/)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a SUBSTANTIVE event before init is rejected even from the owned session", { timeout: 10_000 }, async () => {
+  const harness = startHarness("preinit-substantive")
+  try {
+    await assert.rejects(harness.handle.ready(), /non-init event before session ownership/)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a re-init that switches to a different session id is rejected", { timeout: 10_000 }, async () => {
+  const harness = startHarness("cross-session-reinit")
+  try {
+    await harness.handle.ready()
+    const init = await harness.handle.next()
+    assert.equal(init.value?.kind, "init")
+    await assert.rejects(harness.handle.next(), /session ownership mismatch/)
   } finally {
     await harness.close()
   }

@@ -75,6 +75,12 @@ const EXPLICIT_CLAUDE_ENV_KEYS = new Set<string>([
   "ANTHROPIC_AUTH_TOKEN",
   "ANTHROPIC_BASE_URL",
   "CLAUDE_CODE_OAUTH_TOKEN",
+  // fray worker-environment vars: the cc-worker plugin hooks gate on these (deny-ask, perm-observe,
+  // agent-dispatch). Non-sensitive fray-internal values — the slug + the perm-marker dir + the project
+  // dir — that make the broker's loaded plugin behave like the tmux worker's.
+  "FRAY_UI_THREAD",
+  "FRAY_PERM_DIR",
+  "CLAUDE_PROJECT_DIR",
 ])
 const MAX_ENV_ENTRIES = 512
 const MAX_ENV_VALUE_BYTES = 128 * 1024
@@ -95,6 +101,24 @@ export interface ClaudeQueryStartOptions {
   canUseTool?: ClaudeCanUseTool
   onElicitation?: ClaudeOnElicitation
   onDiagnostic?: (event: ClaudeDiagnostic) => void
+  // When true, claude writes its transcript to ~/.claude/projects/<cwdSlug>/<sessionId>.jsonl — the
+  // exact file the tailer reads for liveness + the UI transcript. The broker sets this; the default
+  // stays false so nothing that used this as a standalone foundation starts persisting unexpectedly.
+  persistSession?: boolean
+  // Text APPENDED to Claude's default (preset) system prompt — how the fray worker contract rides the
+  // SDK path, the equivalent of the tmux path's --append-system-prompt-file.
+  appendSystemPrompt?: string
+  model?: string
+  effort?: string
+  // The fray WORKER ENVIRONMENT — the SDK equivalents of the tmux path's --plugin-dir / --mcp-config /
+  // --allowedTools. Without these a broker session is a bare SDK worker: no fray:<model>-<effort>
+  // sub-agent profiles, no fray MCP (spawn_thread), no chrome-devtools (the browser gate), and none of
+  // the cc-worker hooks (deny-ask/deny-plan/agent-bind). `pluginDir` loads the local cc-worker plugin
+  // (agents + hooks); `mcpServers` mounts the stdio MCP servers; `allowedTools` pre-approves them so a
+  // headless worker never blocks on a tool it has nobody to approve.
+  pluginDir?: string
+  mcpServers?: Record<string, { type?: "stdio"; command: string; args?: string[]; env?: Record<string, string> }>
+  allowedTools?: string[]
 }
 
 export interface ClaudeQueryHandle extends AsyncIterable<ClaudeQueryEvent> {
@@ -378,17 +402,33 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
     try {
       for await (const raw of this.sdkQuery) {
         const event = mapSdkMessage(raw)
-        if (!this.initialized) {
-          if (event.kind !== "init") throw new ClaudeAgentSdkProtocolError("Claude emitted a non-init event before session ownership")
+        // Session OWNERSHIP is the invariant to protect: every event that names a session must name
+        // OURS. What the earlier rules got wrong — because they were calibrated to the fake test CLI,
+        // not a real claude — is TWO benign things real claude does in streaming mode: it re-emits
+        // `init` at the start of EVERY turn (same session id), and it brackets turns with control
+        // frames (`command_lifecycle`, `rate_limit_event`) that can precede the first init. Both carry
+        // the owned session id, so they are safe to accept; only a genuinely cross-session or
+        // unattributed event is rejected.
+        if (event.kind === "init") {
           if (event.sessionId !== this.sessionId) throw new ClaudeAgentSdkProtocolError("Claude session ownership mismatch")
+          if (this.initialized) continue // per-turn re-init of the SAME session — a control marker, not a new session
           this.initialized = true
           this.resolveReady(event)
-        } else {
-          if (event.kind === "init") throw new ClaudeAgentSdkProtocolError("Claude emitted a duplicate init event")
-          if (event.sessionId === undefined) throw new ClaudeAgentSdkProtocolError("Claude event is missing session ownership")
-          if (event.sessionId !== this.sessionId) throw new ClaudeAgentSdkProtocolError("Claude event crossed session ownership")
-          this.observeProviderProgress(event)
+          this.output.push(event)
+          continue
         }
+        if (!this.initialized) {
+          // ONLY control/telemetry frames (command_lifecycle, rate_limit_event → kind "other")
+          // legitimately precede the session init. Anything substantive (assistant/user/result) before
+          // init is anomalous and still rejected, exactly as before — and the frame must prove ownership.
+          if (event.kind !== "other") throw new ClaudeAgentSdkProtocolError("Claude emitted a non-init event before session ownership")
+          if (event.sessionId === undefined) throw new ClaudeAgentSdkProtocolError("Claude emitted a non-init event before session ownership")
+          if (event.sessionId !== this.sessionId) throw new ClaudeAgentSdkProtocolError("Claude session ownership mismatch")
+          continue // swallow so the first event a consumer sees is still the init
+        }
+        if (event.sessionId === undefined) throw new ClaudeAgentSdkProtocolError("Claude event is missing session ownership")
+        if (event.sessionId !== this.sessionId) throw new ClaudeAgentSdkProtocolError("Claude event crossed session ownership")
+        this.observeProviderProgress(event)
         this.output.push(event)
       }
       if (!this.initialized) throw new ClaudeAgentSdkProtocolError("Claude ended before session initialization")
@@ -535,7 +575,19 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       canUseTool,
       onElicitation,
       settingSources: [],
-      persistSession: false,
+      // The fray worker environment (see ClaudeQueryStartOptions): load the local cc-worker plugin so a
+      // broker session gets the fray sub-agent profiles + hooks, mount the MCP servers (fray +
+      // chrome-devtools), and pre-approve them. settingSources stays [] so ONLY this plugin loads, not
+      // the user's global settings.
+      ...(options.pluginDir ? { plugins: [{ type: "local" as const, path: options.pluginDir }] } : {}),
+      ...(options.mcpServers ? { mcpServers: options.mcpServers } : {}),
+      ...(options.allowedTools ? { allowedTools: options.allowedTools } : {}),
+      persistSession: options.persistSession ?? false,
+      // Keep Claude's default (preset) system prompt and APPEND the fray worker contract, the SDK
+      // equivalent of the tmux path's --append-system-prompt-file.
+      ...(options.appendSystemPrompt ? { systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: options.appendSystemPrompt } } : {}),
+      ...(options.model ? { model: options.model } : {}),
+      ...(options.effort ? { effort: options.effort as "low" | "medium" | "high" | "xhigh" | "max" } : {}),
       stderr(data) {
         const redacted = redact(data)
         diagnostic?.({ kind: "stderr", ...redacted })
@@ -1059,7 +1111,14 @@ function mapControlInitialization(raw: SDKControlInitializeResponse): ClaudeCont
       aliases: command.aliases === undefined ? [] : boundedStringArray(command.aliases, `initialization.commands[${index}].aliases`, 32),
     }
   })
+  // The init `agents` array shape varies by claude version: newer builds emit a bare string per agent
+  // name (e.g. "fray:haiku"), older ones an object {name, description, model}. Handle both, or a
+  // string-shaped build silently reports 16 empty-name agents (which is exactly what masked the loaded
+  // fray sub-agent profiles during the broker worker-environment bring-up).
   const agents: ClaudeAgentCapability[] = boundedArray(raw.agents, "initialization.agents", 128).map((entry, index) => {
+    if (typeof entry === "string") {
+      return { name: safeText(entry, `initialization.agents[${index}]`, 512), description: "", model: undefined }
+    }
     const agent = objectValue(entry, `initialization.agents[${index}]`)
     return {
       name: safeText(agent.name, `initialization.agents[${index}].name`, 512),

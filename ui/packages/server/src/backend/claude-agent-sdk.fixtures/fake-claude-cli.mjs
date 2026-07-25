@@ -108,8 +108,16 @@ function handleHostControl(message) {
     respond(message.request_id, initializationPayload(), pending)
     if (!systemInitSent) {
       systemInitSent = true
+      // Frames that precede the session init (real claude brackets each turn with control frames).
+      if (scenario === "preinit-control") emitControlFrame(sessionId) // benign: same session, kind "other"
+      if (scenario === "preinit-mismatch") emitControlFrame("00000000-0000-4000-8000-000000000097") // foreign session
+      if (scenario === "preinit-substantive") emitAssistant("premature assistant before init") // anomalous, must reject
       if (scenario !== "no-init") emitSystemInit()
-      if (scenario === "duplicate-init") setTimeout(emitSystemInit, 25)
+      // Real claude re-emits init at the start of every streaming turn (same session), then keeps
+      // streaming — model that: a benign re-init followed by a normal result the consumer still sees.
+      if (scenario === "duplicate-init") setTimeout(() => { emitSystemInit(); emitResult("survived the re-init") }, 25)
+      // A re-init that switches to a DIFFERENT session id is a session-crossing attempt and must reject.
+      if (scenario === "cross-session-reinit") setTimeout(() => emitRawInit("00000000-0000-4000-8000-000000000096"), 25)
       if (scenario === "diagnostic") emitHostileDiagnostic()
     }
     return
@@ -460,6 +468,22 @@ function emitSystemInit() {
     capabilities: scenario === "controls-no-receipt" ? [] : ["interrupt_receipt_v1", "future_unknown_capability"],
     uuid: "20000000-0000-4000-8000-000000000001",
     session_id: sessionId,
+  })
+}
+
+// A control/telemetry frame (like real claude's command_lifecycle): an unknown `type` that the
+// backend maps to kind "other". `sid` lets a scenario forge a foreign session id.
+function emitControlFrame(sid) {
+  send({ type: "command_lifecycle", uuid: "40000000-0000-4000-8000-000000000009", session_id: sid })
+}
+
+// A second init carrying an arbitrary session id — used to prove a session-switching re-init rejects.
+function emitRawInit(sid) {
+  send({
+    type: "system", subtype: "init", apiKeySource: "temporary", claude_code_version: "2.1.207",
+    cwd: process.cwd(), tools: ["Bash"], mcp_servers: [], model: "claude-sonnet-test",
+    permissionMode: "default", slash_commands: [], output_style: "default", skills: [], plugins: [],
+    capabilities: [], uuid: "20000000-0000-4000-8000-000000000009", session_id: sid,
   })
 }
 

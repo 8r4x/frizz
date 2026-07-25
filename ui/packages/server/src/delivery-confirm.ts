@@ -1,5 +1,5 @@
 import type { BoardManager } from "./board.ts"
-import type { SessionRow, Storage } from "./storage.ts"
+import { isHeadlessRow, type SessionRow, type Storage } from "./storage.ts"
 import * as tmux from "./tmux.ts"
 import { inspectClaudeComposer } from "./permission-controller.ts"
 import { stripDeliveryMarkers } from "./delivery-marker.ts"
@@ -163,7 +163,10 @@ export async function flushStuckComposer(deps: DeliveryConfirmerDeps, slug: stri
   const now = deps.now ?? Date.now
   const terminal = deps.terminal ?? defaultTerminal()
   const row = deps.storage.getSession(slug)
-  if (!row || row.backend === "codex" || row.codex_runtime === "app-server" || !row.delivery_ledger) return
+  // Headless rows (codex app-server, broker Claude) have NO tmux composer to flush — never send them a
+  // pane keystroke. They don't accrue ledger items today, but this guards against a keystroke to a
+  // nonexistent pane regardless.
+  if (!row || row.backend === "codex" || isHeadlessRow(row) || !row.delivery_ledger) return
   const items = parseDeliveryLedger(row.delivery_ledger)
   const candidates = items
     .map((item, index) => ({ index, item }))
@@ -232,7 +235,7 @@ export function createDeliveryConfirmer(deps: DeliveryConfirmerDeps): DeliveryCo
     const out: { row: SessionRow; items: DeliveryLedgerItem[] }[] = []
     for (const row of deps.storage.allSessions()) {
       if (row.backend === "codex") continue // the app-server bridge owns codex delivery end to end
-      if (row.codex_runtime === "app-server") continue // headless: no composer to inspect
+      if (isHeadlessRow(row)) continue // headless (codex app-server / broker claude): no composer to inspect
       if (!row.delivery_ledger) continue
       const items = parseDeliveryLedger(row.delivery_ledger)
       const ripe = items.some((item) => {

@@ -2,14 +2,14 @@ import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { PermissionMode, wakeDeliveryToken, type Settings } from "@fray-ui/shared"
 import { Bus, Emitter } from "./bus.ts"
-import { resolveProject, type Project } from "./project.ts"
-import { createStorage, type Storage } from "./storage.ts"
+import { resolveProject, permRequestDir, type Project } from "./project.ts"
+import { createStorage, isHeadlessRow, type Storage } from "./storage.ts"
 import { getSettings, setSettings, resetSettings } from "./settings.ts"
 import { readQuota } from "./quota.ts"
 import { refreshClaudeQuotaInBackground } from "./backend/claude-quota.ts"
 import { createBoard, type BoardManager } from "./board.ts"
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
-import { createDispatcher, type Dispatcher } from "./dispatch.ts"
+import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frayConfigBlock, claudeMcpConfig, resolveFrayMcp, workerPluginDir, type Dispatcher } from "./dispatch.ts"
 import { createScheduler, type Scheduler } from "./scheduler.ts"
 import {
   reattachThreadWithPermission,
@@ -35,6 +35,12 @@ import {
   type CodexSandboxMode,
 } from "./backend/codex-app-server.ts"
 import { createCodexDiagnosticSink } from "./backend/codex-app-server-diagnostics.ts"
+import {
+  claudeBrokerBridgeEnabled,
+  createClaudeAgentBrokerBridge,
+  type ClaudeAgentBrokerBridge,
+} from "./backend/claude-agent-broker-bridge.ts"
+import type { ClaudePermissionMode } from "./backend/claude-agent-sdk-protocol.ts"
 import {
   ADOPTION_RECONCILE_INTERVAL_MS,
   adoptionRuntimeBinding,
@@ -119,6 +125,8 @@ export interface AppContext {
   // Experimental foundation for NEW bridge-owned Codex sessions only. Undefined by default; it is
   // never selected by backendFor and therefore cannot migrate or control an existing TUI session.
   codexAppServer?: CodexAppServerBridge
+  // Session-broker bridge for Claude (the tmux-TUI replacement). Undefined unless the broker flag is on.
+  claudeBroker?: ClaudeAgentBrokerBridge
   board: BoardManager
   tailer: Tailer
   dispatcher: Dispatcher
@@ -188,11 +196,12 @@ export interface ContextOptions {
 // boot-time reconcile is the same instant.
 export function reconcileSessions(storage: Storage) {
   for (const row of storage.allSessions()) {
-    // A codex app-server thread has NO tmux pane by construction — it lives in the detached bridge
-    // daemon. Sniffing tmux for it would stamp `exited` on every healthy headless thread at every
-    // boot, which is exactly the trap deriveRuntime() in board.ts refuses to fall into. Its liveness
-    // is the bridge's turn state, resolved live on each board build; leave the stored column alone.
-    if (row.codex_runtime === "app-server") continue
+    // A headless thread (codex app-server OR broker Claude) has NO tmux pane by construction — it lives
+    // in a detached daemon that OUTLIVES fray. Sniffing tmux for it would stamp `exited` on every healthy
+    // headless thread at every boot — the exact trap deriveRuntime() in board.ts refuses to fall into, and
+    // for the broker it would destroy the whole ownerless-reconnect premise. Its liveness is resolved live
+    // on each board build (the bridge's turn state / the daemon record); leave the stored column alone.
+    if (isHeadlessRow(row)) continue
     const binding = adoptionRuntimeBinding(storage, row)
     const live = binding.kind === "unbound"
       ? tmux.isLiveCached(row.slug)
@@ -220,6 +229,7 @@ interface PartialContextResources {
   storage?: Storage
   stopSubscriptions?: () => void
   codexAppServer?: CodexAppServerBridge
+  claudeBroker?: ClaudeAgentBrokerBridge
   board?: BoardManager
   tailer?: Tailer
   scheduler?: Scheduler
@@ -237,6 +247,7 @@ interface PartialContextCleanup {
   scheduler(): Promise<void>
   board(): Promise<void>
   codexAppServer(): Promise<void>
+  claudeBroker(): Promise<void>
   storage(): Promise<void>
 }
 
@@ -250,6 +261,7 @@ function partialContextCleanup(resources: PartialContextResources): PartialConte
     scheduler: createRetryableCleanup(async () => { await resources.scheduler?.stop() }),
     board: createRetryableCleanup(async () => { await resources.board?.stop() }),
     codexAppServer: createRetryableCleanup(async () => { await resources.codexAppServer?.shutdown() }),
+    claudeBroker: createRetryableCleanup(async () => { resources.claudeBroker?.close() }),
     storage: createRetryableCleanup(() => resources.storage?.close()),
   }
 }
@@ -276,6 +288,10 @@ function contextCleanupBarrier(
       {
         name: "context Codex app-server bridge",
         run: cleanup.codexAppServer,
+      },
+      {
+        name: "context Claude broker bridge",
+        run: cleanup.claudeBroker,
       },
     ],
     closeStorage: cleanup.storage,
@@ -315,6 +331,39 @@ export function deliverCodexWake(deps: {
     if (!binding || binding.state !== "active") await bridge.resumeOwnedSession(slug, row.session_id)
     await bridge.followUp({ threadSlug: slug, sessionId: row.session_id, text: deliveryMessage, deliveryId })
   })()
+}
+
+/**
+ * A scheduled wake (awaiting-timer, limit-auto-resume) for a broker-backed Claude thread. The broker
+ * has no tmux pane, so the tmux `resumeThread` path would misfire; route through the bridge, which
+ * reconnects the live daemon's socket or cold-resumes a dead one. Returns the promise so the scheduler
+ * owns the retry/supersede policy (see deliverCodexWake for why detaching it loses the wake silently).
+ * The worker system prompt is rebuilt so a cold resume re-applies it (ignored when the daemon is live).
+ */
+export function deliverClaudeBrokerWake(deps: {
+  bridge: Pick<ClaudeAgentBrokerBridge, "followUp">
+  slug: string
+  cwd: string
+  runtimeGate: boolean
+  row: { session_id: string; plan_path?: string | null; model?: string | null; effort?: string | null; permission_mode?: string | null }
+  deliveryMessage: string
+}): Promise<void> {
+  const { bridge, slug, cwd, runtimeGate, row, deliveryMessage } = deps
+  const appendSystemPrompt = [
+    loadWorkerPrompt("claude", runtimeGate),
+    scratchpadOrientation(row.session_id, row.plan_path, "claude"),
+    frayConfigBlock(cwd),
+  ].filter(Boolean).join("\n\n")
+  return bridge.followUp({
+    threadSlug: slug,
+    sessionId: row.session_id,
+    cwd,
+    text: deliveryMessage,
+    permissionMode: (row.permission_mode as ClaudePermissionMode | null) ?? undefined,
+    appendSystemPrompt,
+    model: row.model ?? undefined,
+    effort: row.effort ?? undefined,
+  })
 }
 
 /**
@@ -539,6 +588,39 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   void codexAppServer?.warmUp()
   opts.startup?.afterPhase?.("Codex app-server bridge")
 
+  // Claude session-broker bridge — the tmux-TUI replacement for Claude. Off unless the flag is set;
+  // when off, backendFor + dispatch stay byte-identical to the tmux path. Permissions auto-allow for
+  // now (matching today's `--permission-mode auto`); dashboard approval routing is the next slice.
+  const claudeBroker = claudeBrokerBridgeEnabled()
+    ? createClaudeAgentBrokerBridge({
+        stateDir: project.stateDir,
+        executablePath: opts.claudeBin ?? "claude",
+        env: Object.fromEntries(Object.entries(process.env).filter(([, v]) => v != null)) as Record<string, string>,
+        // Route Claude tool-permission escalations to the dashboard approval UI (provider-neutral
+        // InteractionStore; the same store + web cards codex approvals use).
+        interactions: storage.interactions,
+        projectId: project.id,
+        // The fray worker environment — the SDK equivalent of the tmux path's --plugin-dir / --mcp-config.
+        // Computed ONCE here (constant per project) and applied on every broker fork so a broker worker
+        // gets the fray sub-agent profiles, the fray + chrome-devtools MCP, and the cc-worker hooks.
+        workerEnv: {
+          pluginDir: workerPluginDir(),
+          ...claudeMcpConfig(resolveFrayMcp(project.stateDir)),
+          permDir: permRequestDir(project),
+        },
+      })
+    : undefined
+  resources.claudeBroker = claudeBroker
+  if (claudeBroker) {
+    contextUnsubscribers.push(storage.subscribeSessionLifecycle((event) => {
+      claudeBroker.releaseSession(
+        event.previous.slug,
+        event.previous.session_id,
+        event.type === "replaced" ? "session-replaced" : "session-deleted",
+      )
+    }))
+  }
+
   // The tailer derives turn/liveness telemetry and, on a state change, asks the board for an
   // OVERLAY-ONLY refresh (tailer changes never alter .fray content — the full shell-out rebuild
   // here was the source of multi-second RPC stalls). Late-bound `board` breaks the cycle.
@@ -559,6 +641,9 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // such a thread on `running` and never queues it (live stall 2026-07-22).
   board = createBoard(project, storage, bus, tailer, bootId, {
     codexTurnLiveness: (slug, sessionId) => codexAppServer?.turnLiveness(slug, sessionId),
+    // Headless-stall signal for a broker row: the ownerless daemon's record. Absent bridge ⇒ default
+    // "alive" so a bridge-less server never falsely crash-cards a broker row (there are none anyway).
+    claudeBrokerDaemonAlive: claudeBroker ? (sessionId) => claudeBroker.isDaemonAlive(sessionId) : undefined,
   })
   resources.board = board
   opts.startup?.afterPhase?.("board watcher")
@@ -609,6 +694,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     claudeBin: opts.claudeBin,
     backendFor,
     codexAppServer,
+    claudeBroker,
     // Auth preflight (claude-auth plan, Slice A): Claude reads its local credential and confirms only
     // a positive signed-out against its CLI (readClaudePreflightAuth — the comment there records why
     // the CLI must not sit on the signed-in path); Codex reads the local auth.json/env. Both block
@@ -646,6 +732,22 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         }
         return deliverCodexWake({ bridge, storage, cwd: project.dir, row, slug, deliveryMessage, deliveryId })
       }
+      // Broker Claude wake: no tmux pane — deliver over the bridge (reconnect the live daemon or
+      // cold-resume a dead one), exactly like the followUp RPC. Never reaches the tmux resumeThread path.
+      if (row?.backend === "claude" && row.claude_runtime === "broker") {
+        if (!claudeBroker) {
+          process.stderr.write(`[fray] claude-broker wake for ${slug} dropped: the session broker is unavailable\n`)
+          return
+        }
+        return deliverClaudeBrokerWake({
+          bridge: claudeBroker,
+          slug,
+          cwd: project.dir,
+          runtimeGate: getSettings(storage).runtimeGate !== false,
+          row,
+          deliveryMessage,
+        })
+      }
       resumeThread({ project, storage, board, getSettings: () => getSettings(storage), backendFor }, slug, deliveryMessage)
     },
   })
@@ -660,6 +762,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     storage,
     interactions: storage.interactions,
     codexAppServer,
+    claudeBroker,
     board,
     tailer,
     dispatcher,

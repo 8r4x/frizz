@@ -9,7 +9,7 @@ import type { BoardSnapshot, ThreadView, RuntimeState, PlanView } from "@fray-ui
 import { BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isValidAwaitingTimer, type PermissionMode as PermissionModeValue } from "@fray-ui/shared"
 import type { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
-import { sessionTitleLocked } from "./storage.ts"
+import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked } from "./storage.ts"
 import type { Storage, SessionRow } from "./storage.ts"
 import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import type { Tailer, SessionTelemetry } from "./tailer.ts"
@@ -84,7 +84,7 @@ function deriveRuntime(
   // App-server codex sessions have NO tmux pane. A persisted bridge thread is always resumable, so
   // liveness is never "is a pane alive" — it's the rollout-tailed turn state. Deriving from tmux here
   // would mark every headless thread "exited" (and, mid-turn, trip the crash-net). Never do that.
-  if (row.codex_runtime === "app-server") {
+  if (isHeadlessRow(row)) {
     if (permPrompt) return "perm-prompt"
     if (turn === "idle") return "turn-idle"
     // Mid-turn with nobody driving it: the process that owned this turn is gone. Reuse "exited" so the
@@ -471,20 +471,23 @@ function sessionThreadView(
   nowMs: number,
   autoResumeOnLimit: boolean,
   codexTurnLiveness: CodexTurnLivenessReader,
+  claudeBrokerDaemonAlive: ClaudeBrokerLivenessReader,
 ): ThreadView {
+  // A headless thread mid-turn with nobody driving it is a crash/stall, not a rest. For codex that is
+  // an app-server that stopped advancing the rollout; for the broker it is a dead ownerless daemon (its
+  // liveness is the daemon record, resolved live). Either way the (exited + in-flight) pair trips the
+  // crash-net so the thread cards as "Stalled" instead of spinning `running` forever.
+  const headlessStalled =
+    row.codex_runtime === "app-server"
+      ? appServerTurnStalled(codexTurnLiveness(row.slug, row.session_id), tele?.lastActivityAt, nowMs)
+      : isBrokerClaudeRow(row)
+      ? !claudeBrokerDaemonAlive(row.session_id)
+      : false
   // App-server threads write their rollout synchronously at thread/start, so a transient "no transcript
   // yet" must not degrade a healthy headless thread to the "exited"/stalled crash affordance.
   const runtime = degradeIfNoTranscript(
-    deriveRuntime(
-      row.slug,
-      row,
-      storage,
-      tele?.turn,
-      tele?.permPrompt ?? false,
-      row.codex_runtime === "app-server" &&
-        appServerTurnStalled(codexTurnLiveness(row.slug, row.session_id), tele?.lastActivityAt, nowMs),
-    ),
-    row.codex_runtime === "app-server" ? false : tele?.noTranscript,
+    deriveRuntime(row.slug, row, storage, tele?.turn, tele?.permPrompt ?? false, headlessStalled),
+    isHeadlessRow(row) ? false : tele?.noTranscript,
   )
   const state = effectiveSessionState(row, registeredLegacyTerminal)
   const archived = state === "archived"
@@ -621,10 +624,16 @@ export type CodexTurnLivenessReader = (
   sessionId: string,
 ) => { bridgeTurn: boolean; ownedSince: string } | undefined
 
+// Whether a broker-Claude session's ownerless daemon is running right now — the headless-stall signal
+// for a broker row (its parallel of codexTurnLiveness). Absent (tests / bridge-less server) ⇒ assume
+// alive, so a healthy broker row is never falsely carded as a crash.
+export type ClaudeBrokerLivenessReader = (sessionId: string) => boolean
+
 export interface BoardManagerDeps {
   subscribe?: typeof watcher.subscribe
   now?: () => number
   codexTurnLiveness?: CodexTurnLivenessReader
+  claudeBrokerDaemonAlive?: ClaudeBrokerLivenessReader
 }
 
 export function createBoard(
@@ -638,6 +647,7 @@ export function createBoard(
   const subscribe = deps.subscribe ?? watcher.subscribe
   const now = deps.now ?? Date.now
   const codexTurnLiveness = deps.codexTurnLiveness ?? (() => undefined)
+  const claudeBrokerDaemonAlive = deps.claudeBrokerDaemonAlive ?? (() => true)
   let cached: BoardSnapshot | null = null
   let parcelSub: watcher.AsyncSubscription | null = null
   let watchSetup: Promise<void> | null = null
@@ -734,6 +744,7 @@ export function createBoard(
         nowMs,
         autoResumeOnLimit,
         codexTurnLiveness,
+        claudeBrokerDaemonAlive,
       ))
     }
     for (const key of pendingInteractionCache.keys()) {
