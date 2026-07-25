@@ -8,7 +8,9 @@ import { ChildOpRow } from "./ChildOpRow.tsx"
 // the rail's policy — a stale child is unresolved work, not gone, and a card that hid it read as "done
 // underneath" while the rail still showed it); background shells/Monitors remain in BackgroundOpsStrip
 // below as a separate runtime concern. The row itself is the shared ChildOpRow at "card" density — the
-// same component, tokens and glyph the sidebar rail and the drawer's ops strip render.
+// same component, tokens and glyph the sidebar rail and the drawer's ops strip render, including the
+// dispatch's model+effort reading (maintainer 2026-07-24: the pulsing rows under the prompt box must
+// say WHICH model at WHAT effort, not just that something is running).
 export function QueueSubAgentLines({ slug, subAgents }: { slug: string; subAgents: readonly SubAgentView[] }) {
   const visible = visibleChildOps(subAgents, "card")
   if (visible.length === 0) return null
@@ -22,6 +24,7 @@ export function QueueSubAgentLines({ slug, subAgents }: { slug: string; subAgent
           state={agent.state}
           density="card"
           lastActivityAt={agent.lastActivityAt}
+          subagentType={agent.subagentType}
           parentSlug={slug}
           onOpen={agent.id ? () => pushSubAgentDrawer(slug, agent.id!, { label: agent.label, subagentType: agent.subagentType, startedAt: agent.startedAt }) : undefined}
         />

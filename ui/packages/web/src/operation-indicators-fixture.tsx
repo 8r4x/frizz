@@ -32,10 +32,15 @@ const thread: ThreadView = {
   pendingQuestion: false,
   kind: "session",
   foreign: false,
+  // The `subagentType` spread is the MODEL+EFFORT tag's coverage: a fray cell, a codex cell (parsed
+  // through its slash), a named agent type that carries no profile and so must show NO tag, and a long
+  // label that has to truncate AROUND the tag rather than squeeze it out.
   subAgents: [
-    { id: "agent-a", label: "Inspect logs", startedAt: "2026-07-14T10:00:00.000Z", state: "running", lastActivityAt: agoIso(0) },
-    { id: "agent-b", label: "Run regression suite", startedAt: "2026-07-14T10:01:00.000Z", state: "running", lastActivityAt: agoIso(6) },
-    { id: "agent-stale", label: "Prior investigation", startedAt: "2026-07-14T09:00:00.000Z", state: "stale", lastActivityAt: agoIso(42) },
+    { id: "agent-a", label: "Inspect logs", startedAt: "2026-07-14T10:00:00.000Z", state: "running", subagentType: "fray:opus-xhigh", lastActivityAt: agoIso(0) },
+    { id: "agent-b", label: "Run regression suite", startedAt: "2026-07-14T10:01:00.000Z", state: "running", subagentType: "worker gpt-5.6-terra/high", lastActivityAt: agoIso(6) },
+    { id: "agent-long", label: "Sweep every call site of the renamed board projection helper for stale imports", startedAt: "2026-07-14T10:02:00.000Z", state: "running", subagentType: "fray:sonnet-medium", lastActivityAt: agoIso(2) },
+    { id: "agent-plain", label: "Explore the resume path", startedAt: "2026-07-14T10:03:00.000Z", state: "running", subagentType: "general-purpose", lastActivityAt: agoIso(3) },
+    { id: "agent-stale", label: "Prior investigation", startedAt: "2026-07-14T09:00:00.000Z", state: "stale", subagentType: "fray:haiku", lastActivityAt: agoIso(42) },
   ],
   bgShells: [
     { label: "Watch CI", startedAt: "2026-07-14T10:00:00.000Z", state: "running", lastActivityAt: agoIso(1) },
@@ -93,8 +98,10 @@ createRoot(document.getElementById("root")!).render(
       <h2 className="text-sm font-medium">Sidebar rail rows</h2>
       {/* The rail density of the same shared row — checkbox spinner + the light-gray last-active reading. */}
       <div className="mt-3 flex flex-col">
+        {/* subagentType is passed here too, to prove the RAIL still renders no tag: it has no room, and
+            its type reading stays in the row tooltip. */}
         {thread.subAgents.map((s) => (
-          <ChildOpRow key={s.id} kind="AGENT" label={s.label} state={s.state} density="rail" lastActivityAt={s.lastActivityAt} onOpen={() => {}} />
+          <ChildOpRow key={s.id} kind="AGENT" label={s.label} state={s.state} density="rail" lastActivityAt={s.lastActivityAt} subagentType={s.subagentType} onOpen={() => {}} />
         ))}
       </div>
     </section>

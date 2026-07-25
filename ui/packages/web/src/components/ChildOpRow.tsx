@@ -2,6 +2,7 @@ import type { ReactElement } from "react"
 import { ArrowUpRight, X } from "lucide-react"
 import { BoxSpinner } from "./BoxSpinner.tsx"
 import { isRunningOperation } from "../lib/operationIndicators.ts"
+import { agentProfileLabel } from "../lib/agentProfile.ts"
 import { formatAgo } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import {
@@ -21,11 +22,16 @@ export type ChildOpKind = "AGENT" | "SHELL"
 // differences between the three places a child row appears — not styling preference:
 //   rail  — the sidebar's indented child rows. The [ ]/[/] checkbox motif (BoxSpinner) that the whole
 //           rail speaks, at 12px, indented to clear the parent row's indicator column. NEVER swap this
-//           for the pulsing dot: matching the parent rows is the point.
-//   card  — a queue card's live child lines. The pulsing live dot, no kind tag: a handoff card names
-//           the work still running beneath it, it does not become a second ops toolbar.
-//   sheet — the drawer's background-ops strip. The full row: dot + petite-caps kind tag + label + a
-//           hover drill-in arrow, because this IS the operations surface.
+//           for the pulsing dot: matching the parent rows is the point. No room for a tag of any kind,
+//           so the sidebar keeps carrying the raw subagent type in its tooltip instead.
+//   card  — a queue card's live child lines. The pulsing live dot and the model+effort tag, but no kind
+//           tag: a handoff card names the work still running beneath it, it does not become a second
+//           ops toolbar.
+//   sheet — the drawer's background-ops strip. The full row: dot + petite-caps kind tag + label +
+//           model+effort tag + a hover drill-in arrow, because this IS the operations surface.
+// Both prompt-box densities (card, sheet) carry the MODEL+EFFORT reading (maintainer 2026-07-24): the
+// pulsing rows under a prompt box say what is running, and "which model, at what effort" is half of
+// that — read in the same `model › effort` form the prompt box's own profile control uses one line up.
 // All three carry the light-gray "last active" reading when the child reports one — the recency the
 // running/stale mark alone can't give ("stale" only means quiet ≥15 min, not HOW long).
 export type ChildOpDensity = "rail" | "card" | "sheet"
@@ -45,6 +51,7 @@ export function ChildOpRow({
   state,
   density,
   lastActivityAt,
+  subagentType,
   parentSlug,
   onOpen,
   onDismiss,
@@ -57,6 +64,10 @@ export function ChildOpRow({
   // ISO of the child's last transcript append (its output-file mtime). Rendered as a light-gray
   // "6 min ago" reading, live-ticking; absent ⇒ no reading (never a fabricated one).
   lastActivityAt?: string
+  // The AGENT dispatch's `subagent_type`, verbatim. Read for its model+effort pair only (see
+  // lib/agentProfile.ts); a string carrying no recognizable pair renders no tag. A SHELL has no
+  // profile, so callers leave it unset there.
+  subagentType?: string
   // Drill-in marker: keeps an open ThreadSheet for this slug from self-dismissing on the pointer-down,
   // so the child transcript STACKS over its parent instead of replacing it (see ThreadSheet).
   parentSlug?: string
@@ -78,6 +89,9 @@ export function ChildOpRow({
   const ago = formatAgo(lastActivityAt, now)
   const openTitle = CHILD_OPEN_TITLE[kind]
   const rowTitle = title ?? (clickable ? openTitle : undefined)
+  // The rail has no horizontal room for it (its type tag lives in the row tooltip); the two prompt-box
+  // densities do, and are exactly where the reading is wanted.
+  const profile = rail ? undefined : agentProfileLabel(subagentType)
 
   // The liveness mark. The rail speaks the rail's checkbox language; the card and the drawer share the
   // pulsing-dot language, in a fixed-width column so their labels line up across both surfaces.
@@ -108,6 +122,12 @@ export function ChildOpRow({
       {indicator}
       {sheet && <span className="petite-caps shrink-0 text-[9.5px] text-muted/45">{kind}</span>}
       <span className={`min-w-0 truncate text-muted/70 ${rail ? "leading-[16px]" : clickable ? "group-hover:text-fg/80 group-hover:underline" : ""}`}>{label}</span>
+      {/* Bracketed and AFTER the label — the transcript AgentBlock's own "<title> [fray:opus-high]"
+          treatment for this exact datum. The brackets are load-bearing: label and tag share a type size
+          and differ only in alpha, so without them "…for edge cases opus › high" reads as one run-on
+          phrase. `shrink-0` so a long label truncates AROUND the pair instead of ellipsizing a model
+          name into garbage. Tooltip keeps the raw dispatch string. */}
+      {profile && <span className="shrink-0 text-muted/55" title={subagentType} data-agent-profile>[{profile}]</span>}
       {ago && <span className="shrink-0 text-muted/40" title={`Last active ${ago}`}>{ago}</span>}
       {sheet && clickable && <ArrowUpRight size={11} className="shrink-0 text-transparent transition-colors group-hover:text-muted/50" />}
     </>

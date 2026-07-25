@@ -3108,6 +3108,7 @@ export function BackgroundOpsStrip({
           state={s.state}
           density="sheet"
           lastActivityAt={s.lastActivityAt}
+          subagentType={s.subagentType}
           onOpen={s.id ? () => pushSubAgentDrawer(slug, s.id!, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt }) : undefined}
           onDismiss={s.id ? () => dismiss.mutate(s.id!) : undefined}
         />
