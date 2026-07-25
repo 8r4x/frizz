@@ -12,10 +12,13 @@ import type { ClaudeBrokerConfig } from "./claude-agent-broker.ts"
 import type { InteractionSessionScope, InteractionStore } from "../interaction-store.ts"
 import { buildClaudePermissionInteraction, claudePermissionDecisionFor } from "./claude-permission-interactions.ts"
 
-/** Gate for routing Claude dispatch through the session broker instead of the tmux TUI. Off by
- *  default until the cutover is proven end-to-end in a live server. */
+/** Gate for routing Claude dispatch through the session broker instead of the tmux TUI. The broker is
+ *  now the DEFAULT Claude transport (cutover proven end-to-end: worker environment ported — fray
+ *  sub-agent profiles, fray + chrome-devtools MCP, cc-worker hooks — dashboard permission approvals,
+ *  ownerless reconnect across a fray restart). Set FRAY_CLAUDE_BROKER_BRIDGE=0 to fall back to the
+ *  legacy tmux TUI transport for Claude. */
 export function claudeBrokerBridgeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.FRAY_CLAUDE_BROKER_BRIDGE === "1"
+  return env.FRAY_CLAUDE_BROKER_BRIDGE !== "0"
 }
 
 export interface ClaudeBrokerBinding {
