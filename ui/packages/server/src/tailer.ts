@@ -151,6 +151,11 @@ export interface FenceView {
 export interface SessionTelemetry extends NormalizedTail {
   turn: TurnState
   permPrompt: boolean // paused on an interactive permission prompt (pane-sniffed; no jsonl signal)
+  // The last allow/deny fray's permission POLICY made for this thread, and how many denials it has
+  // made this session. Purely informational — a policy decision never blocks anyone, which is exactly
+  // why it needs surfacing: it is otherwise invisible.
+  permPolicy?: PermPolicyView
+  permDenies?: number
   // A verified backend-native modal that blocks transcript progress. Its fixed presentation-safe
   // title/kind are the ONLY pane-derived data exposed; option/detail content never leaves the server.
   nativeInputRequired?: NativeInputRequiredData
@@ -414,6 +419,8 @@ export interface TailState extends FoldState {
   primed: boolean // first tick restores state WITHOUT firing transition notifies (boot/restart)
   permPrompt: boolean // last pane-sniff verdict (see matchesPermPrompt)
   nativeInputRequired?: NativeInputRequiredData // last structured native-modal verdict
+  permPolicy?: PermPolicyView // last allow/deny from the worker's permission policy (display only)
+  permDenies?: number // how many policy DENIALS this thread has accumulated
   paneDead: boolean
   // ---- read-side transcript discovery (registered rows only; foreign states never touch these) ----
   // The pinned `<session_id>.jsonl` never appeared and discovery found no drifted transcript: a boot
@@ -1355,6 +1362,18 @@ export function markerDecision(marker: Pick<PermMarker, "decision">): PermDecisi
   return marker.decision === "allow" || marker.decision === "deny" ? marker.decision : "defer"
 }
 
+// The last policy decision fray OBSERVED for a thread, for display. Only allow/deny appear here — a
+// deferred request is already fully represented by permPrompt ("Needs you"), so repeating it would be
+// noise. `command` is present for Bash only and is display text, not a re-executable string.
+export interface PermPolicyView {
+  decision: "allow" | "deny"
+  rule: string
+  reason: string
+  tool: string | null
+  at: string
+  command?: string
+}
+
 function isPermMarker(v: unknown): v is PermMarker {
   if (!v || typeof v !== "object") return false
   const m = v as Partial<PermMarker>
@@ -1695,6 +1714,29 @@ export function createTailer(deps: TailerDeps): Tailer {
   function permMarkerBlocks(state: TailState, row: SessionRow): boolean {
     const marker = readPermMarker(row.slug)
     if (!marker) return false
+    // RETAIN the policy's own decision for display, separately from the block verdict below. This is
+    // the only durable record an auto-approval leaves anywhere: Claude Code renders "Allowed by
+    // PermissionRequest hook" in the pane but writes NOTHING about an allow to the transcript
+    // (verified 2026-07-25), so without this the dashboard could never say what fray approved or why.
+    // Retained on the state rather than recomputed per tick, so it survives the turn ending — a
+    // decision stays readable after the worker moves on.
+    // KNOWN BOUND (documented, not hidden): the hook keeps ONE marker per thread, overwritten by the
+    // next request, so this is the LAST decision observed, not a full history. Denials additionally
+    // land in the transcript permanently (the model reads the refusal), which is the consequential half.
+    if (marker.decision === "allow" || marker.decision === "deny") {
+      const at = Date.parse(marker.at)
+      if (Number.isFinite(at) && at !== Date.parse(state.permPolicy?.at ?? "")) {
+        state.permPolicy = {
+          decision: marker.decision,
+          rule: marker.rule ?? "unknown",
+          reason: marker.reason ?? "",
+          tool: marker.tool ?? null,
+          at: marker.at,
+          ...(marker.command ? { command: marker.command } : {}),
+        }
+        if (marker.decision === "deny") state.permDenies = (state.permDenies ?? 0) + 1
+      }
+    }
     // Policy-resolved requests are NOT human blocks. perm-policy.mjs records what it did, so an
     // auto-approved (or auto-denied) request leaves a marker exactly like a deferred one does — without
     // this gate every auto-approval would flash the thread onto "Needs you" for the tick before the
@@ -1872,13 +1914,28 @@ export function createTailer(deps: TailerDeps): Tailer {
   // Delivery-ledger fold for one registered CLAUDE row's tick: `onLine` correlates each appended JSONL
   // record against the row's pending follow-ups (delivery-ledger.ts); `finish()` ages the items
   // (pending→unconfirmed timeout, unconfirmed drop) and persists any transition, returning true so the
-  // caller re-projects the transcript + dirties the board. Codex rows (the app-server bridge dedups
-  // their delivery on deliveryId) and rows with an empty ledger cost one null check.
+  // caller re-projects the transcript + dirties the board. Rows with an empty ledger cost one null
+  // check. CODEX rows fold too now: their ledger entry is a rendering guarantee for the queued bubble
+  // (the app-server bridge still owns delivery and dedups on deliveryId), and correlateDeliveryRecord
+  // recognises the rollout's own user-message shape so the entry drops the moment codex materialises
+  // the message.
+  // The delivery-ledger fold and the codex sub-agent tracker were mutually exclusive while the ledger
+  // was claude-only; a codex row now runs BOTH, so the single per-line hook `consume` accepts has to
+  // carry them together. Returns undefined when neither applies, so the common path is unchanged.
+  function chainOnLine(
+    a: ((line: string) => void) | undefined,
+    b: ((line: string) => void) | undefined,
+  ): ((line: string) => void) | undefined {
+    if (!a) return b
+    if (!b) return a
+    return (line: string) => { a(line); b(line) }
+  }
+
   function ledgerFold(
     row: SessionRow,
     nowMs: number,
   ): { onLine?: (line: string) => void; finish: () => { changed: boolean; value: string | null } } {
-    if (row.backend === "codex" || !row.delivery_ledger) {
+    if (!row.delivery_ledger) {
       return { finish: () => ({ changed: false, value: null }) }
     }
     let items: DeliveryLedgerItem[] = parseDeliveryLedger(row.delivery_ledger)
@@ -2272,7 +2329,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       if (!state.primed) {
         const primeOffset = state.offset
         const primeLedger = ledgerFold(row, nowMs)
-        consume(state, backend, primeLedger.onLine ?? codexSubAgentOnLine(row, state))
+        consume(state, backend, chainOnLine(primeLedger.onLine, codexSubAgentOnLine(row, state)))
         state.codexSubAgents?.poll(nowMs)
         const primedLedger = primeLedger.finish()
         state.deliveryLedgerSeen = primedLedger.changed ? primedLedger.value : row.delivery_ledger ?? null
@@ -2343,7 +2400,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       const rowLedger = row.delivery_ledger ?? null
       const ledgerDrifted = rowLedger !== (state.deliveryLedgerSeen ?? null) // a router write with no JSONL advance
       const ledger = ledgerFold(row, nowMs)
-      consume(state, backend, ledger.onLine ?? codexSubAgentOnLine(row, state))
+      consume(state, backend, chainOnLine(ledger.onLine, codexSubAgentOnLine(row, state)))
       // Child rollouts advance on their OWN clock, so poll every tick — not only when the parent
       // appended. This is what flips a finished codex child out of the live set (and, once every
       // child is done, releases the thread from Active into the queue).
@@ -2626,7 +2683,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // an unanswered ```question fence (a user reply clears the flag and flips the turn in-flight).
       const pendingQuestion = s.turn === "idle" && s.lastAssistantHasQuestion
       const nowMs = now()
-      return { turn: s.turn, permPrompt: s.permPrompt, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), bgShells: bgShellViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault }
+      return { turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), bgShells: bgShellViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.

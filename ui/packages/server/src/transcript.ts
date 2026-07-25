@@ -2493,8 +2493,11 @@ export function readLatestThreadTranscriptPage(
   // The latest window carries the delivery-ledger projection (same as readThreadTranscript): a tracked
   // follow-up renders as its gray queued bubble at the tail even before any JSONL evidence exists. The
   // LATEST page only — earlier pages are settled history a pending send can never belong to.
+  // Codex included: its ledger entry is the ONLY thing rendering a just-sent steer until the rollout
+  // materialises it, and this paginated reader is what the drawer loads with — excluding codex here
+  // meant the bubble was present over the socket push but ABSENT on load and on every refetch.
   const row = storage.getSession(slug)
-  const pageMessages = row && row.backend !== "codex"
+  const pageMessages = row
     ? projectDeliveryLedger(projected.slice(start), parseDeliveryLedger(row.delivery_ledger))
     : projected.slice(start)
   return {
@@ -2579,7 +2582,12 @@ export function readThreadTranscript(
       const backend = backendFor?.("codex") ?? defaultCodexBackend()
       const nativeId = row.agent_session_id ?? row.session_id
       const path = backend.transcriptPath(nativeId)
-      return path ? readCodexTranscriptFile(path, nativeId) : []
+      // Codex carries the ledger too, for RENDERING only — see the append in router.followUp. Without
+      // this a just-sent steer lives solely in the client's optimistic bubble, which the ghost floor
+      // retires after the transcript advances 60s; the rollout is slower than that often enough to
+      // matter (8 of 75 measured sends).
+      const codexLedger = parseDeliveryLedger(row.delivery_ledger)
+      return projectDeliveryLedger(path ? readCodexTranscriptFile(path, nativeId) : [], codexLedger)
     }
     // Claude rows carry the follow-up delivery ledger: project every not-yet-delivered send as its gray
     // queued bubble (server truth — reload-safe; the client's optimistic copy consumes it by deliveryId).

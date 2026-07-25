@@ -98,13 +98,22 @@ export function serializeDeliveryLedger(items: DeliveryLedgerItem[]): string | n
 // Record a freshly accepted follow-up. Idempotent on id (an RPC retry must not double-project), capped
 // so a wedged session can't grow the row without bound (oldest evicted first — they're the stalest
 // unconfirmed sends, and the terminal is their recovery surface).
-export function appendDelivery(storage: Storage, slug: string, item: { id: string; text: string; now?: number }): void {
+// `state` defaults to `pending` — a Claude send is fire-into-a-composer and has no receipt until the
+// JSONL shows one. A CODEX send passes `enqueued` instead, because the app-server RPC returning a turn
+// id IS the receipt: the provider has positively accepted the text. That distinction matters beyond
+// bookkeeping — `pending` is what ages into the amber "check the terminal" warning, and a codex
+// app-server thread has no terminal composer to check, so it must never enter that state.
+export function appendDelivery(
+  storage: Storage,
+  slug: string,
+  item: { id: string; text: string; now?: number; state?: DeliveryState },
+): void {
   const row = storage.getSession(slug)
   if (!row) return
   const items = parseDeliveryLedger(row.delivery_ledger)
   if (items.some((existing) => existing.id === item.id)) return
   const at = new Date(item.now ?? Date.now()).toISOString()
-  items.push({ id: item.id, text: item.text, state: "pending", at, updatedAt: at })
+  items.push({ id: item.id, text: item.text, state: item.state ?? "pending", at, updatedAt: at })
   while (items.length > MAX_LEDGER_ITEMS) items.shift()
   storage.setDeliveryLedger(slug, serializeDeliveryLedger(items))
 }
@@ -150,6 +159,33 @@ function userRecordText(rec: Record<string, unknown>): string {
       .join("\n")
   }
   return ""
+}
+
+// A codex rollout's own user-message records. Codex writes the human turn TWICE in two shapes, and both
+// count as evidence the text reached it:
+//   • `event_msg` / `user_message`  — payload.message, a plain string. This is the one the transcript
+//     renderer treats as the authoritative human turn (see backend/codex.ts), 232 in this corpus.
+//   • `response_item` / `message` role:"user" — payload.content[], the model-facing copy, 424 here.
+// Deliberately narrow on both so a claude record can never fall down this branch, and vice versa.
+function isCodexUserMessage(r: Record<string, unknown>): boolean {
+  const payload = r.payload as { type?: unknown; role?: unknown } | undefined
+  if (!payload) return false
+  if (r.type === "event_msg" && payload.type === "user_message") return true
+  return payload.type === "message" && payload.role === "user"
+}
+
+function codexUserMessageText(r: Record<string, unknown>): string {
+  const payload = r.payload as { content?: unknown; message?: unknown } | undefined
+  if (typeof payload?.message === "string") return payload.message
+  const content = payload?.content
+  if (typeof content === "string") return content
+  if (!Array.isArray(content)) return ""
+  return content
+    .filter((b): b is { type: string; text: string } =>
+      Boolean(b) && typeof (b as { text?: unknown }).text === "string" &&
+      ((b as { type?: unknown }).type === "input_text" || (b as { type?: unknown }).type === "text"))
+    .map((b) => b.text)
+    .join("\n")
 }
 
 // Fold ONE freshly appended JSONL record into the ledger. Pure: returns the same array when nothing
@@ -221,6 +257,14 @@ export function correlateDeliveryRecord(
     }
   } else if (r.type === "user" && r.isMeta !== true) {
     const text = userRecordText(r)
+    if (text) deliveredText = text
+  } else if (isCodexUserMessage(r)) {
+    // CODEX rollout shape: {timestamp, type:"response_item", payload:{type:"message", role:"user",
+    // content:[{type:"input_text", text}]}}. The app-server RPC already receipted this send, so the
+    // ledger item exists only to render the bubble until the rollout materialises it — which measured
+    // 3.3s at p50 but 71s, 212s and 4.6h in the tail, well past the client ghost floor that would
+    // otherwise retire the only copy of the message on screen.
+    const text = codexUserMessageText(r)
     if (text) deliveredText = text
   }
   if (deliveredText === null) return items

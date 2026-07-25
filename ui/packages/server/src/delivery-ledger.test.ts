@@ -375,3 +375,42 @@ test("an already-delivered copy suppresses projection entirely (prune race)", ()
   assert.equal(out.length, 1)
   assert.equal(out[0].deliveryId, undefined)
 })
+
+// ---- codex: the ledger as a RENDERING guarantee ----
+// Codex has no provider-side queue and no tmux composer, so its ledger entry exists only to keep the
+// queued bubble on screen until the rollout materialises the message. Measured against fray's own
+// delivery records: 8 of 75 codex sends took longer than the client's 60s ghost floor to appear (steers
+// at 71s, 212s and 4.6h), so without this the only copy of the message could be retired from the drawer.
+const codexUser = (text: string, at: number) => ({
+  timestamp: iso(at), type: "response_item",
+  payload: { type: "message", role: "user", content: [{ type: "input_text", text }] },
+})
+
+test("a codex rollout user message resolves its ledger entry", () => {
+  const out = correlateDeliveryRecord([item({ state: "enqueued" })], codexUser("fix the bug", T0 + 3000), iso(T0 + 3000))
+  assert.deepEqual(out, [])
+})
+
+test("a codex entry resolves by MARKER-free whitespace invariance too", () => {
+  const it = item({ state: "enqueued", text: "col1\tcol2\r\nsecond line of the steer" })
+  const rec = codexUser("col1    col2\n\nsecond line of the steer", T0 + 3000)
+  assert.deepEqual(correlateDeliveryRecord([it], rec, iso(T0 + 3000)), [])
+})
+
+test("a codex entry opens ENQUEUED so it can never age into the amber warning", () => {
+  // `pending` is what becomes `unconfirmed` ("check the terminal") — meaningless for an app-server
+  // thread, which has no terminal composer. Enqueued skips that path entirely.
+  const enqueued = [item({ state: "enqueued" })]
+  assert.equal(ageDeliveries(enqueued, T0 + PENDING_TIMEOUT_MS + 5000), enqueued)
+  assert.equal(ageDeliveries(enqueued, T0 + PENDING_TIMEOUT_MS + 5000)[0].state, "enqueued")
+})
+
+test("an unrelated codex user message leaves the entry alone", () => {
+  const items = [item({ state: "enqueued", text: "my steer" })]
+  assert.equal(correlateDeliveryRecord(items, codexUser("something else entirely", T0 + 3000), iso(T0 + 3000)), items)
+})
+
+test("a codex record predating the send is still not evidence", () => {
+  const items = [item({ state: "enqueued" })]
+  assert.equal(correlateDeliveryRecord(items, codexUser("fix the bug", T0 - 60_000), iso(T0)), items)
+})
