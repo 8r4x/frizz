@@ -60,9 +60,11 @@ const SPAWN_THREAD = {
         type: "string",
         description:
           "REQUIRED — pick by the NEW task's complexity; there is no default. For the `claude` backend: " +
-          "`opus` (hardest reasoning, architecture, subtle correctness/security, adversarial review, the " +
-          "fix that must land), `sonnet` (ordinary substantive implementation/research), `haiku` (simple, " +
-          "fully-specified mechanical work), `fable` (fastest/cheapest — ONLY trivial throwaway tasks). For " +
+          "`opus` (the TOP tier — hardest reasoning, architecture, subtle correctness/security, adversarial " +
+          "review, the fix that must land), `sonnet` (ordinary substantive implementation/research), `haiku` " +
+          "(simple, fully-specified mechanical work). Do NOT pick `fable`: Opus 5 is just as good and cheaper, " +
+          "so a high-intensity task takes `opus` at a higher `effort`, not a different model — `fable` only " +
+          "when the human explicitly asks for it. For " +
           "the `codex` backend use a codex model id instead (e.g. `gpt-5.6-sol`/`gpt-5.6-terra`/`gpt-5.6-luna`). " +
           "Match the model to the backend you choose. Bias toward Opus/a strong model when the task is " +
           "non-trivial or its outcome is load-bearing.",
@@ -138,7 +140,7 @@ async function spawnThread(args) {
   // model (e.g. the project's cheap default) is exactly the bug this guards. Enforced server-side too,
   // not only in the tool schema, so a lenient client can't skip the decision.
   const model = typeof args.model === "string" ? args.model.trim() : ""
-  if (!model) throw new Error("`model` is required — choose one by the new task's complexity (claude: opus/sonnet/haiku/fable; codex: a gpt-5.6 model id). There is no default.")
+  if (!model) throw new Error("`model` is required — choose one by the new task's complexity (claude: opus/sonnet/haiku, opus being the top tier; codex: a gpt-5.6 model id). There is no default.")
   const effort = typeof args.effort === "string" ? args.effort.trim() : ""
   if (!effort) throw new Error("`effort` is required — choose one by complexity (low/medium/high/xhigh/max). There is no default.")
 

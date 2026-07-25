@@ -496,6 +496,12 @@ const BACKEND: Record<BackendKind, string> = {
   for the single hardest problems. BIAS HARD toward Opus when unsure — cost is the lesser risk; a
   confidently-wrong cheap-tier verdict you then act on is the bigger one. Re-verify any cheap-tier
   load-bearing claim yourself.
+- **Opus is the TOP of the ladder — there is no tier above it, and the hardest work does NOT earn a
+  different model.** Opus 5 matches Fable's quality and costs less, so \`fray:fable-*\` is not the
+  reach for a gnarly bug, an architectural call, or an adversarial review: those are exactly what
+  \`fray:opus-xhigh\` / \`fray:opus-max\` are for. When a task feels too hard for the tier you picked,
+  raise the EFFORT (\`high\` → \`xhigh\` → \`max\`) — never swap the model up to Fable. The profiles
+  exist, but do not route work through them unless the human explicitly asks for Fable.
 
 ## Automated waits in Claude Code
 
