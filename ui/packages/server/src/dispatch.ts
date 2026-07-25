@@ -20,6 +20,7 @@ import { CHROME_DEVTOOLS_MCP, FRAY_MCP } from "./backend/types.ts"
 import { buildWorkerPrompt } from "./workerPrompt.ts"
 import { codexSandbox, CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS } from "./backend/codex.ts"
 import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
+import { claudeBrokerBridgeEnabled, type ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
 import { ProviderAuthRequiredError } from "./backend/auth-status.ts"
 import { readBoard, type FrayBoard, type FrayThread } from "./fray.ts"
 import * as tmux from "./tmux.ts"
@@ -591,6 +592,9 @@ export interface DispatchDeps {
   // (persisted session + turn/start); there is no tmux TUI transport. Absent ⇒ a codex dispatch fails
   // loudly rather than falling back to a retired path.
   codexAppServer?: CodexAppServerBridge
+  // The Claude session-broker bridge (context.ts). When present + the broker flag is on, a claude
+  // dispatch runs over the broker (headless, no tmux pane) instead of the interactive TUI.
+  claudeBroker?: ClaudeAgentBrokerBridge
   // Failure cleanup targets only the exact freshly-spawned slug. Injectable so timeout tests can prove
   // no neighboring tmux session is touched.
   killSession?: typeof tmux.killSession
@@ -797,6 +801,66 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           try { bridge.releaseSession(slug, sessionId, "session-deleted") } catch { /* best-effort */ }
           cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
           throw new Error(`Codex app-server could not start this thread: ${(err as Error).message}. Check that \`codex\` is installed and its app-server protocol matches the pinned revision (re-pin if you upgraded codex).`)
+        }
+      }
+
+      // Claude session-broker transport: a DETACHED daemon owns the Claude Agent SDK session over a
+      // local socket, so the session OUTLIVES fray — a restart reconnects to the LIVE session instead
+      // of cold resume-from-disk — while keeping structured TYPED permissions (no tmux pane, no PTY, no
+      // TUI scraping). Gated behind FRAY_CLAUDE_BROKER_BRIDGE until the cutover is proven live; when off
+      // (or the bridge is absent, e.g. tests), claude falls through to the tmux path below, byte-identical
+      // to before. The worker contract + scratchpad orientation ride the appended system prompt, and
+      // persistSession makes the daemon write the tailer-readable transcript JSONL — read exactly like
+      // any tmux claude thread — so the board/tailer treat this row as headless via isHeadlessRow.
+      if (kind === "claude" && deps.claudeBroker && claudeBrokerBridgeEnabled()) {
+        const bridge = deps.claudeBroker
+        const appendSystemPrompt = [
+          loadWorkerPrompt("claude", runtimeGate),
+          scratchpadOrientation(sessionId, planPath, kind),
+          frayConfigBlock(deps.project.dir),
+        ].filter(Boolean).join("\n\n")
+        try {
+          await bridge.spawnDispatch({
+            threadSlug: slug,
+            sessionId,
+            cwd: deps.project.dir,
+            prompt,
+            permissionMode,
+            appendSystemPrompt,
+            model,
+            effort,
+          })
+          deps.storage.upsertSession({
+            slug,
+            session_id: sessionId,
+            tmux_name: tmuxSessionName(slug),
+            spawned_at: new Date().toISOString(),
+            last_read_at: null,
+            unread: 0,
+            exited: 0,
+            archived: 0,
+            rested_at: null,
+            title_auto: input.title?.trim() ? 0 : 1,
+            title: registryTitle,
+            state: "open",
+            meta: null,
+            seen_at: null,
+            plan_path: planPath,
+            transcript_id: null,
+            model: model ?? null,
+            effort: effort ?? null,
+            permission_mode: permissionMode,
+          })
+          deps.storage.setBackend(slug, "claude")
+          deps.storage.setClaudeRuntime(slug, "broker")
+          void deps.board.rebuild().catch(() => {})
+          return { slug, sessionId }
+        } catch (err) {
+          // No tmux fallback once we've committed to the broker for this dispatch: fail LOUDLY and leave
+          // no trace. Release any partial daemon binding and roll back the scratchpad.
+          try { bridge.releaseSession(slug, sessionId, "session-deleted") } catch { /* best-effort */ }
+          cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
+          throw new Error(`Claude session broker could not start this thread: ${(err as Error).message}.`)
         }
       }
 

@@ -44,6 +44,11 @@ export interface ForkBrokerOptions {
   executablePath: string
   permissionMode?: ClaudeBrokerConfig["permissionMode"]
   env: Record<string, string>
+  appendSystemPrompt?: string
+  model?: string
+  effort?: string
+  /** Resume the on-disk session instead of starting fresh (dead-daemon follow-up cold start). */
+  resume?: boolean
   /** Override the daemon entry (tests). Defaults to the bundled/sibling claude-agent-broker. */
   daemonEntry?: string
   timeoutMs?: number
@@ -57,6 +62,8 @@ export function forkBroker(options: ForkBrokerOptions): Promise<BrokerRecord> {
   const config: ClaudeBrokerConfig = {
     socketPath, cwd: options.cwd, sessionId: options.sessionId, executablePath: options.executablePath,
     permissionMode: options.permissionMode, env: options.env, recordPath, generation: randomUUID(),
+    appendSystemPrompt: options.appendSystemPrompt, model: options.model, effort: options.effort,
+    resume: options.resume,
   }
   const entry = options.daemonEntry ?? resolveDetachedDaemonEntry(import.meta.url, "claude-agent-broker")
   const child = spawn(process.execPath, [entry], {
@@ -87,10 +94,12 @@ export async function adoptOrForkBroker(options: ForkBrokerOptions): Promise<{ r
   return { record: await forkBroker(options), reattached: false }
 }
 
-/** Best-effort terminate: SIGTERM the daemon and drop its record. Detach (client.close) is NOT this. */
-export function killBroker(stateDir: string, sessionId: string): void {
+/** Best-effort terminate: SIGTERM the daemon and drop its record. Detach (client.close) is NOT this.
+ *  Returns whether a live daemon record was present (i.e. there was something to stop). */
+export function killBroker(stateDir: string, sessionId: string): boolean {
   const recordPath = claudeBrokerRecordPath(stateDir, sessionId)
-  const record = readBrokerRecord(recordPath)
+  const record = liveBrokerRecord(recordPath)
   if (record) { try { process.kill(record.daemonPid, "SIGTERM") } catch {} }
   try { unlinkSync(recordPath) } catch {}
+  return record !== null
 }

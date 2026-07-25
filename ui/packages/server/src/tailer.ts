@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os"
 import { PermissionMode } from "@fray-ui/shared"
 import type { Bus } from "./bus.ts"
 import { permMarkerPath, type Project } from "./project.ts"
+import { isHeadlessRow } from "./storage.ts"
 import type { Storage, SessionRow } from "./storage.ts"
 import { discoverTranscriptId, DISCOVERY_GRACE_MS } from "./discover.ts"
 import type { AgentBackend, FoldState, NativeInputRequiredData, NormalizedEvent, NormalizedTail } from "./backend/types.ts"
@@ -1407,7 +1408,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   function paneTextPrefetchSlugs(): string[] {
     const slugs: string[] = []
     for (const row of deps.storage.allSessions()) {
-      if (row.codex_runtime === "app-server") continue // headless: no pane to capture
+      if (isHeadlessRow(row)) continue // headless (codex app-server / claude broker): no pane to capture
       if (adoptionBinding(row).kind !== "unbound") continue // adopted rows capture by exact pane tuple
       // A command list ABORTS at its first bad target, so only ask for panes tmux actually knows. The
       // liveness map is already cached, so this filter is free. A dead-but-present pane is kept —
@@ -2318,7 +2319,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // "missing pane" must NOT read as process death. Native approvals arrive via the bridge's
       // InteractionStore (surfaced through interactionPresence), not a scraped modal; rest is stamped
       // by onTurnDone off the rollout, not onPaneDeath.
-      if (row.codex_runtime !== "app-server") {
+      if (!isHeadlessRow(row)) {
         const pane = sniffPane(
           state,
           row,
@@ -2364,7 +2365,9 @@ export function createTailer(deps: TailerDeps): Tailer {
           if (row.codex_runtime !== "app-server" || !PermissionMode.safeParse(row.permission_mode).success) {
             deps.storage.setObservedPermissionIfCurrent(row.slug, row.session_id, runtimeGeneration, state.permissionMode)
           }
-        } else {
+        } else if (!isHeadlessRow(row)) {
+          // TUI claude confirms a pane-scraped mode; a headless broker claude gets its mode from the
+          // bridge, so it never enters the unconfirmed-poll dance.
           state.unconfirmedPermissionMode = state.permissionMode
           state.unconfirmedPermissionPolls = 0
         }

@@ -99,6 +99,11 @@ export interface ClaudeQueryStartOptions {
   // exact file the tailer reads for liveness + the UI transcript. The broker sets this; the default
   // stays false so nothing that used this as a standalone foundation starts persisting unexpectedly.
   persistSession?: boolean
+  // Text APPENDED to Claude's default (preset) system prompt — how the fray worker contract rides the
+  // SDK path, the equivalent of the tmux path's --append-system-prompt-file.
+  appendSystemPrompt?: string
+  model?: string
+  effort?: string
 }
 
 export interface ClaudeQueryHandle extends AsyncIterable<ClaudeQueryEvent> {
@@ -556,6 +561,11 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       onElicitation,
       settingSources: [],
       persistSession: options.persistSession ?? false,
+      // Keep Claude's default (preset) system prompt and APPEND the fray worker contract, the SDK
+      // equivalent of the tmux path's --append-system-prompt-file.
+      ...(options.appendSystemPrompt ? { systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: options.appendSystemPrompt } } : {}),
+      ...(options.model ? { model: options.model } : {}),
+      ...(options.effort ? { effort: options.effort as "low" | "medium" | "high" | "xhigh" | "max" } : {}),
       stderr(data) {
         const redacted = redact(data)
         diagnostic?.({ kind: "stderr", ...redacted })

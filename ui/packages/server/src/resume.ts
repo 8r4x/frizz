@@ -7,12 +7,13 @@ import {
   type Settings,
 } from "@fray-ui/shared"
 import { PERM_DIR_ENV, permRequestDir, type Project } from "./project.ts"
-import type {
-  ProfileChangeExpectation,
-  ProfileHandoffBinding,
-  ProfileHandoffJournal,
-  SessionRow,
-  Storage,
+import {
+  isBrokerClaudeRow,
+  type ProfileChangeExpectation,
+  type ProfileHandoffBinding,
+  type ProfileHandoffJournal,
+  type SessionRow,
+  type Storage,
 } from "./storage.ts"
 import type { BoardManager } from "./board.ts"
 import type { AgentBackend } from "./backend/types.ts"
@@ -1084,6 +1085,12 @@ function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string): voi
   const tx = deps.tmux ?? tmux
   const row = deps.storage.getSession(slug)
   if (!row) throw new Error(`no session registered for ${slug}`)
+  // A broker Claude session lives in a detached daemon, NOT a tmux pane. Every caller (the followUp RPC,
+  // the wake scheduler) branches such rows to the bridge BEFORE reaching here; this is the loud backstop
+  // so a future caller that forgets can never silently `claude -r` a stray tmux pane over a live session.
+  if (isBrokerClaudeRow(row)) {
+    throw new Error(`${slug} is a broker-backed Claude thread; it must resume through the session broker, not tmux`)
+  }
   // This barrier is deliberately before unarchive, live injection, and dead spawn. Any non-NULL
   // value — including a future/corrupt mode — is durable ownership held by the permission controller.
   if (row.permission_pending !== null && row.permission_pending !== undefined) {

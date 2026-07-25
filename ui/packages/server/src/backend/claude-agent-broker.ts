@@ -20,6 +20,7 @@ import type {
   ClaudeDiagnostic,
   ClaudeInputMessage,
   ClaudePermissionDecision,
+  ClaudePermissionMode,
   ClaudePermissionRequest,
   ClaudeQueryEvent,
 } from "./claude-agent-sdk-protocol.ts"
@@ -29,9 +30,16 @@ export interface ClaudeBrokerConfig {
   cwd: string
   sessionId: string
   executablePath: string
-  permissionMode?: "default" | "acceptEdits" | "bypassPermissions" | "plan"
+  permissionMode?: ClaudePermissionMode
   /** Allowlisted keys only — the SDK validates and rejects anything else. */
   env: Record<string, string>
+  /** Appended to Claude's default system prompt — carries the fray worker contract. */
+  appendSystemPrompt?: string
+  model?: string
+  effort?: string
+  /** Resume the session from its on-disk transcript instead of starting a fresh one. Set when a
+   *  follow-up cold-starts a daemon after the previous one died (the live-daemon reconnect never forks). */
+  resume?: boolean
   /** When set, the daemon writes a discovery record here after its socket is listening. */
   recordPath?: string
   /** Stable identity of THIS app-server process — unchanged across fray restarts, new only when the
@@ -67,10 +75,13 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   const factory = createClaudeQueryFactory({ enabled: true, executablePath: config.executablePath })
   const handle = factory.start({
     cwd: config.cwd,
-    session: { kind: "new", sessionId: config.sessionId },
+    session: config.resume ? { kind: "resume", sessionId: config.sessionId } : { kind: "new", sessionId: config.sessionId },
     permissionMode: config.permissionMode ?? "default",
     env: Object.fromEntries(ENV_ALLOWLIST.filter((k) => config.env[k] != null).map((k) => [k, config.env[k]!])),
     persistSession: true, // write the tailer-readable transcript JSONL
+    appendSystemPrompt: config.appendSystemPrompt,
+    model: config.model,
+    effort: config.effort,
     canUseTool: async (request) => {
       const requestId = `perm-${++permSeq}`
       return await new Promise<ClaudePermissionDecision>((resolve) => {
