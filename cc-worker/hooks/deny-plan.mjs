@@ -13,9 +13,12 @@
 //
 // PLAN-MODE SOFTLOCK — why this denies UNCONDITIONALLY when gated: a session genuinely IN plan mode
 // is read-only until ExitPlanMode is approved, so denying ExitPlanMode there would SOFTLOCK it
-// (can't exit → can't edit → can't even follow the "write to the thread" redirect). This hook CANNOT
-// tell if the session is in plan mode: the PermissionRequest input carries NO permission-mode signal
-// (session_id / cwd / hook_event_name only — Claude Code hooks docs). The fix is at the SOURCE
+// (can't exit → can't edit → can't even follow the "write to the thread" redirect). This hook does not
+// branch on the session's mode. (An earlier note here claimed the PermissionRequest input carries no
+// permission-mode signal — that is FALSE and was corrected 2026-07-25: the payload carries
+// `permission_mode`, `tool_name`, and `tool_input`, which is exactly what the sibling perm-policy.mjs
+// keys its rules on. The unconditional deny is kept because the SOURCE fix below makes plan mode
+// unreachable for a fray worker anyway, not because the signal is unavailable.) The fix is at the SOURCE
 // instead — fray-ui NEVER spawns a worker in plan mode (dispatch.ts coerces `--permission-mode plan`
 // → `auto` in both command builders), so a real fray-ui worker is never in plan mode and this deny
 // only ever meets a SPURIOUS ExitPlanMode call (nothing to exit → deny + redirect is correct). A

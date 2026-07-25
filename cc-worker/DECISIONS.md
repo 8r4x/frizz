@@ -234,6 +234,50 @@ shell-out, so they take effect on the next board rebuild with NO server restart.
   an invokable tool in the `-p` harness either, so both hooks were verified by piping their exact hook
   payloads rather than by driving a live prompt.)
 
+### `hooks/perm-policy.mjs` — the worker's permission policy (2026-07-25)
+
+Replaces the observe-only `perm-observe.mjs`. Same registration (PermissionRequest, matcher `*`), but
+it now DECIDES: allow / deny / defer, first match wins.
+
+WHY IT DECIDES. fray dispatches Claude workers at `--permission-mode auto`
+(`WORKER_DISPATCH_PERMISSION`), and `auto` is **not** non-interactive — its classifier still raises a
+prompt for anything it judges risky. With nobody at the keyboard that parks a thread invisibly; one sat
+blocked on a `git push` for over a day. The blunt alternative was dispatching at `bypassPermissions`,
+which was deliberately NOT chosen: bypass removes the decision POINT, so nothing can ever inspect a
+request again. Keeping `auto` and deciding here preserves the seam — and Claude Code labels the outcome
+in the pane ("Allowed by PermissionRequest hook"), so an auto-approval stays attributable rather than
+being indistinguishable from bypass.
+
+THE TABLE ships UNIVERSAL rules only; this plugin loads for every project fray drives, so a rule that
+is right for one repo is wrong for the next. `catastrophic-delete` and `raw-disk-write` deny outright
+(strictly safer than bypass, which would have allowed both). `restrictive-mode` DEFERS whenever
+`permission_mode !== "auto"`, which is what makes a genuine lower-permission mode usable: move a thread
+to `default` with the live permission control and its prompts come back. `FRAY_PERM_POLICY=review`
+defers everything. Fail-safe INVERTS the old observer's fail-open — for a hook that can APPROVE, any
+error must fall back to asking, never to allowing.
+
+PAYLOAD (verified live, correcting an earlier note that claimed otherwise): the PermissionRequest hook
+input carries `session_id`, `transcript_path`, `cwd`, `prompt_id`, `permission_mode`, `effort`,
+`hook_event_name`, `tool_name`, `tool_input`, and `permission_suggestions`. That is enough for a real
+per-tool/per-command policy. Allow JSON is
+`{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","updatedInput":<tool_input>}}}`.
+
+KNOWN LIMIT: an explicit `ask` RULE outranks this hook. `"permissions":{"ask":["Bash(git push:*)"]}`
+raises a prompt an `allow` here does not override — Claude Code says so on the prompt itself. Isolated
+against a hook that allows unconditionally (it prompted too), so this is Claude Code precedence, not a
+defect, and arguably correct: an explicit human rule should beat a blanket policy. A repo carrying
+`ask` rules can therefore still park a worker; the fix is that repo's settings.
+
+MARKER: `<stateDir>/perm-requests/<slug>.json` now carries `decision` / `rule` / `reason` / `command`
+alongside the original fields. The tailer treats ONLY a deferred request as a human block (an
+auto-resolved one must never card as "Needs you"), and surfaces the last allow/deny as `permPolicy` —
+the only durable record an approval leaves anywhere, since allows are never written to the transcript.
+A marker with no `decision` (an older plugin build) still blocks exactly as before.
+
+VERIFICATION: `ui/scripts/verify-perm-marker.mjs` runs the REAL hook the way Claude Code does and
+asserts every branch. The allow path was additionally driven against a REAL interactive `claude` (it
+cannot be exercised under `claude -p`, where PermissionRequest hooks do not fire).
+
 ### The `--settings` permission floor — BUILT, verified, then deliberately REMOVED (2026-07-08)
 A `--settings` permission FLOOR was added to `ui/dispatch.ts` (`WORKER_DENY_SETTINGS =
 {"permissions":{"deny":["AskUserQuestion","ExitPlanMode"]}}`, both command builders) and verified to
@@ -255,9 +299,8 @@ reasoning is worth keeping (it corrects the earlier "floor first, hooks failover
 ### Plan-mode softlock fix (2026-07-08)
 A worker in plan mode that calls `ExitPlanMode` would be denied by deny-plan — but plan mode ALSO
 blocks file edits, so the redirect ("write the plan into your thread") is impossible to follow: a
-softlock. The PermissionRequest hook input carries **no** permission-mode signal (session_id / cwd /
-hook_event_name only), so deny-plan cannot detect plan mode to pass through. Fixed at the SOURCE
-instead: `ui/dispatch.ts` `workerPermissionMode()` coerces `--permission-mode plan` → `auto` inside
+softlock. deny-plan does not branch on the session's mode, so it cannot pass plan mode through. Fixed
+at the SOURCE instead: `ui/dispatch.ts` `workerPermissionMode()` coerces `--permission-mode plan` → `auto` inside
 BOTH command builders (so dispatch, adopt, AND resume never spawn a worker in plan mode). Workers plan
 by writing the plan into the thread + `status: needs-human` (the contract), which has no plan-mode
 requirement — so nothing is lost. deny-plan then denies `ExitPlanMode` UNCONDITIONALLY when gated:
