@@ -511,14 +511,40 @@ export function workerPluginDir(): string | undefined {
   return resolveWorkerPluginDir()
 }
 
+// Claude Code caps WebSearch at 200 calls per SESSION (verified in the 2.1.220 bundle:
+// `CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION ?? 200`, enforced in the WebSearch tool against a
+// `taskRegistry` counter). A fray worker is long-lived and research-heavy — it burns that budget on
+// work a chat session never would — and past the cap the tool stops searching and merely returns
+// "this session has used its web search budget", which reads to the model as a dead end rather than
+// as a quota. Raise it far enough that a real effort never hits it, while keeping a finite backstop
+// against a runaway search loop; Claude Code has no unlimited sentinel, so a large integer is the
+// only expression of "effectively uncapped".
+export const WORKER_MAX_WEB_SEARCHES = 10000
+
+// Claude Code parses this variable as a strictly-digits integer >= 1 (`int({min:1,digitsOnly:true})`)
+// and silently falls back to the 200 default on anything else, so an operator override is honored
+// only in exactly that shape.
+function workerMaxWebSearches(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION
+  if (override !== undefined && /^[1-9][0-9]*$/.test(override)) return override
+  return String(WORKER_MAX_WEB_SEARCHES)
+}
+
 // Claude Code reads these inherited process variables as sub-agent profile defaults. A Fray worker
 // chooses its profile explicitly through the launch argv and plugin agent profiles, so let neither
 // a shell nor a globally configured Claude session silently replace that selection. Empty tmux
 // environment entries override inherited values while preserving every auth/config variable.
+//
+// The web-search cap is the deliberate exception to that masking: a profile override hijacks the
+// worker's identity, but a cap is operator policy, so an explicitly configured one is passed through
+// rather than overridden. It is always set EXPLICITLY (never left to inheritance) because a tmux pane
+// inherits the tmux SERVER's environment — captured whenever that server first started, which may
+// predate the current fray process by days.
 export function claudeWorkerEnvironment(): Record<string, string> {
   return {
     CLAUDE_CODE_SUBAGENT_MODEL: "",
     CLAUDE_CODE_EFFORT_LEVEL: "",
+    CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION: workerMaxWebSearches(),
   }
 }
 
