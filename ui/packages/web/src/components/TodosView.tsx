@@ -9,7 +9,7 @@ import { useBoard, asThreads, useTranscript } from "../hooks.ts"
 import { orderQueue, queued, displayTitle, lastActiveLabelAt } from "../groups.ts"
 import { useLiveAnswering } from "../lib/answering.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
-import { CARD_BODY, CARD_PRIMARY_BUTTON, CardActions, Message, NativeInputRequiredCard, PermPromptBanner, PendingAskCard, StickyUserBand, TranscriptCard, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText } from "./ChatView.tsx"
+import { CARD_BODY, CARD_PRIMARY_BUTTON, CardActions, Message, NativeInputRequiredCard, PermPolicyNote, PermPromptBanner, PendingAskCard, StickyUserBand, TranscriptCard, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText } from "./ChatView.tsx"
 import { prefs } from "../lib/prefs.ts"
 import { ThreadComposerBox } from "./ThreadComposerBox.tsx"
 import { BackgroundOpsStrip, ThreadSlugContext, QueueDismissContext } from "./ChatView.tsx"
@@ -1052,6 +1052,13 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
         ) : thread.runtime === "perm-prompt" ? (
           <div className="mb-4">
             <PermPromptBanner onTerminal={copyTerminalCommand} />
+          </div>
+        ) : null}
+        {/* What fray's permission policy decided on the worker's behalf. Sits BELOW the gates above:
+            those are things waiting on the human, this is something already handled for them. */}
+        {thread.permPolicy ? (
+          <div className="mb-4">
+            <PermPolicyNote policy={thread.permPolicy} denies={thread.permDenies} />
           </div>
         ) : null}
         {messages.length === 0 ? (

@@ -7,6 +7,7 @@ import {
   LimitPauseCard,
   NativeInputRequiredCard,
   PendingAskCard,
+  PermPolicyNote,
   PermPromptBanner,
   ProviderFaultCard,
   QuestionBlockCard,
@@ -159,6 +160,45 @@ function Fixture() {
         <p className="petite-caps mt-4 text-[10px] text-accent">Runtime banners</p>
         <Section label="permission prompt">
           <PermPromptBanner onTerminal={() => {}} />
+        </Section>
+        {/* Both weights of the policy note, adjacent on purpose: the denial must read as something to
+            look at while the approval must not compete with the transcript around it. */}
+        <Section label="permission policy — denied">
+          <PermPolicyNote
+            policy={{
+              decision: "deny",
+              rule: "catastrophic-delete",
+              reason: "Refused: this recursively force-deletes a root-level or home directory, which is unrecoverable. If you genuinely need to remove a large tree, target an explicit project-relative path instead.",
+              tool: "Bash",
+              command: "rm -rf ~",
+              at: new Date().toISOString(),
+            }}
+            denies={2}
+          />
+        </Section>
+        <Section label="permission policy — auto-approved">
+          <PermPolicyNote
+            policy={{
+              decision: "allow",
+              rule: "worker-autonomy",
+              reason: "Unattended fray worker: approved automatically because no human is watching the terminal to answer a prompt.",
+              tool: "Bash",
+              command: "git push origin HEAD:main",
+              at: new Date().toISOString(),
+            }}
+          />
+        </Section>
+        <Section label="permission policy — auto-approved (long command, wrapping)">
+          <PermPolicyNote
+            policy={{
+              decision: "allow",
+              rule: "worker-autonomy",
+              reason: "Unattended fray worker.",
+              tool: "Bash",
+              command: "cd ~/.cache/nub/worktrees/canary-debug && git fetch origin && git rebase origin/main && git push origin HEAD:main --follow-tags",
+              at: new Date().toISOString(),
+            }}
+          />
         </Section>
         <Section label="provider fault (sign-in required)">
           <ProviderFaultCard

@@ -567,6 +567,8 @@ function sessionThreadView(
     permissionMode,
     permissionPending,
     permissionChangePending: row.permission_pending !== null && row.permission_pending !== undefined,
+    permPolicy: tele?.permPolicy,
+    permDenies: tele?.permDenies,
     profilePendingModel: row.profile_pending_model?.trim() || undefined,
     profilePendingEffort: row.profile_pending_effort?.trim() || undefined,
     profileChangePending:

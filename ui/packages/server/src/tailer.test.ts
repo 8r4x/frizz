@@ -1418,6 +1418,60 @@ test("tailer: a decision-less marker (older plugin build) still blocks", () => {
   assert.equal(t.get("t")?.permPrompt, true, "no decision ⇒ treat as deferred, exactly as before")
 })
 
+// An auto-approval is written NOWHERE else — Claude Code renders "Allowed by PermissionRequest hook"
+// in the pane and puts nothing in the transcript — so if the tailer does not retain it, the dashboard
+// can never say what fray approved on the human's behalf.
+test("tailer: an allow decision is retained for display (the only record an approval leaves)", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  fixture(h.logDir, "sid", [IN_FLIGHT, TOOL])
+  h.clock.ms = Date.parse("2026-07-01T00:00:01.500Z")
+  const t = makeTailer(h, {
+    readPermMarker: () => permMarker("2026-07-01T00:00:05.000Z", {
+      decision: "allow", rule: "worker-autonomy", reason: "unattended", command: "git push origin HEAD:main",
+    }),
+  })
+  t.tick()
+  assert.equal(t.get("t")?.permPrompt, false, "an approval never blocks")
+  assert.equal(t.get("t")?.permPolicy?.decision, "allow")
+  assert.equal(t.get("t")?.permPolicy?.rule, "worker-autonomy")
+  assert.equal(t.get("t")?.permPolicy?.command, "git push origin HEAD:main")
+  assert.equal(t.get("t")?.permDenies, undefined, "an approval is not a denial")
+})
+
+test("tailer: a deny decision is retained and counted", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  fixture(h.logDir, "sid", [IN_FLIGHT, TOOL])
+  h.clock.ms = Date.parse("2026-07-01T00:00:01.500Z")
+  const t = makeTailer(h, {
+    readPermMarker: () => permMarker("2026-07-01T00:00:05.000Z", {
+      decision: "deny", rule: "catastrophic-delete", reason: "unrecoverable", command: "rm -rf ~",
+    }),
+  })
+  t.tick()
+  assert.equal(t.get("t")?.permPrompt, false, "a policy denial never blocks a human either")
+  assert.equal(t.get("t")?.permPolicy?.decision, "deny")
+  assert.equal(t.get("t")?.permDenies, 1)
+  // Re-ticking the SAME marker must not inflate the count — the tick rate would otherwise turn one
+  // denial into dozens.
+  t.tick()
+  assert.equal(t.get("t")?.permDenies, 1, "the same decision is counted once, not once per tick")
+})
+
+// A DEFERRED request is already fully represented by permPrompt/"Needs you". Repeating it as a policy
+// note would double-report the same event in two different voices.
+test("tailer: a deferred request produces no policy note", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  fixture(h.logDir, "sid", [IN_FLIGHT, TOOL])
+  h.clock.ms = Date.parse("2026-07-01T00:00:01.500Z")
+  const t = makeTailer(h, { readPermMarker: () => permMarker("2026-07-01T00:00:05.000Z", { decision: "defer" }) })
+  t.tick()
+  assert.equal(t.get("t")?.permPrompt, true)
+  assert.equal(t.get("t")?.permPolicy, undefined)
+})
+
 test("markerDecision: unrecognized values degrade to defer, never to allow", () => {
   assert.equal(markerDecision({ decision: undefined }), "defer")
   assert.equal(markerDecision({ decision: "wat" as never }), "defer")

@@ -3165,6 +3165,47 @@ export function PermPromptBanner({ onTerminal }: { onTerminal: () => void }) {
   )
 }
 
+// What fray's permission POLICY did on the worker's behalf (cc-worker/hooks/perm-policy.mjs).
+//
+// This exists because a policy decision is otherwise INVISIBLE. Nobody was prompted, nothing blocked,
+// and an auto-approval is never written to the transcript — Claude Code renders "Allowed by
+// PermissionRequest hook" in the terminal and stores nothing. Without this the honest description of
+// the feature would be "fray silently approves things for you", which is not a trade anyone should
+// make blind.
+//
+// Weighted by consequence, deliberately. A DENIAL is rare and changes what the worker can do, so it
+// gets a real card. An approval is routine and would be pure noise as a card, so it is one quiet line
+// — enough to answer "is this thread auto-approving?" without competing with the transcript.
+export function PermPolicyNote({ policy, denies }: { policy: NonNullable<ThreadViewData["permPolicy"]>; denies?: number }) {
+  const what = [policy.tool, policy.command].filter(Boolean).join(": ")
+  if (policy.decision === "deny") {
+    return (
+      <TranscriptCard tone="caution" icon={AlertTriangle} label="Blocked by fray's permission policy">
+        {/* The refused command leads on its own line — it is the thing you actually need to see — and
+            the reason follows as prose. The reason is the same text the WORKER was given, so it
+            already opens with "Refused:"; prefixing it here too read as a stutter. */}
+        {what ? <code className="mb-1.5 block min-w-0 break-all rounded bg-panel px-1.5 py-1 text-[11px] text-fg/85">{what}</code> : null}
+        <span className={CARD_BODY}>{policy.reason}</span>
+        <span className="mt-1.5 block text-[11px] text-muted">
+          Rule <code className="rounded bg-panel px-1 py-0.5">{policy.rule}</code>
+          {denies && denies > 1 ? ` · ${denies} denials this session` : ""}
+        </span>
+      </TranscriptCard>
+    )
+  }
+  return (
+    <div className="flex min-w-0 items-start gap-1.5 text-[11px] leading-5 text-muted">
+      <ShieldCheck size={12} strokeWidth={1.8} className="mt-[5px] shrink-0" />
+      <span className="min-w-0">
+        {/* The COMMAND may break anywhere — it is long by nature and forcing it whole would overflow a
+            narrow pane. The RULE name must not: split across lines its pill reads as two fragments. */}
+        Auto-approved{what ? <> <code className="rounded bg-panel-2 px-1 py-0.5 text-[10.5px]">{what}</code></> : null}
+        {" · "}rule <code className="whitespace-nowrap rounded bg-panel-2 px-1 py-0.5 text-[10.5px]">{policy.rule}</code>
+      </span>
+    </div>
+  )
+}
+
 // A verified Codex-native modal is also invisible to the rollout, but unlike the legacy boolean
 // permission sniff we know its coarse family. Keep it prominent and explicit about the trust boundary:
 // Fray never copies option/payload detail into Chat and never chooses an answer on the user's behalf.
