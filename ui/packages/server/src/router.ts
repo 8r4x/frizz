@@ -87,7 +87,7 @@ import { getDispatchPreferences, setDispatchPreference } from "./dispatch-prefer
 import { isBrokerClaudeRow, type SessionRow, type Storage } from "./storage.ts"
 import type { SessionTelemetry } from "./tailer.ts"
 import { resolvePlanFile, deletePlanFile } from "./plan-files.ts"
-import { providerResumeCommand } from "./external-terminal.ts"
+import { providerResumeCommand, tmuxAttachCommand } from "./external-terminal.ts"
 import { readBackgroundShellOutput } from "./background-shell-output.ts"
 
 const SlugInput = z.object({ slug: ThreadSlug }).strict()
@@ -754,6 +754,18 @@ export function createRouter(ctx: AppContext) {
             model: row.model ?? undefined,
             effort: row.effort ?? undefined,
           })
+          // Codex gets a ledger entry too — as SERVER TRUTH for the queued bubble, not as a delivery
+          // guess: the bridge already dedups on deliveryId and its return IS the receipt, so the item
+          // opens `enqueued` and can never age into the amber "check the terminal" warning (there is no
+          // terminal composer on an app-server thread). Without it the ONLY thing rendering a just-sent
+          // codex steer is the client's optimistic bubble, and mergeOptimistic's ghost floor retires
+          // that once the transcript advances 60s past it — measured against fray's own delivery
+          // records, 8 of 75 codex sends took longer than that to appear in the rollout (steers at 71s,
+          // 212s and 4.6h), so the message could vanish from the drawer entirely. The tailer drops the
+          // item the moment the rollout materialises the message.
+          if (input.deliveryId) {
+            appendDelivery(ctx.storage, input.slug, { id: input.deliveryId, text: input.message, state: "enqueued" })
+          }
           ctx.board.refresh()
           return
         }
@@ -1145,16 +1157,31 @@ export function createRouter(ctx: AppContext) {
     // is offered in every runtime state, live too. An absent/replaced row fails closed.
     threadTerminalCommand: query({
       input: SlugInput,
-      output: z.object({ command: z.string().nullable(), mode: z.enum(["resume", "unavailable"]), reason: z.string().nullable() }),
+      output: z.object({ command: z.string().nullable(), mode: z.enum(["attach", "resume", "unavailable"]), reason: z.string().nullable() }),
       handler: async ({ input }) => {
         const row = ctx.storage.getSession(input.slug)
         if (!row) {
           throw new Error("No Fray-owned terminal session is available for this thread")
         }
-        // Resuming the SAME session from another terminal is safe and supported by both CLIs whether or
-        // not Fray is still driving it (a live session simply gets a second attached view; cards in the
-        // queue are at rest anyway). So offer the command in every runtime state, gated only on a real
-        // provider-native id existing — no paternalistic "wait for it to exit" block.
+        // A LIVE pane gets an ATTACH, not a resume. `<cli> resume` is not a second view of a running
+        // session — it starts a SEPARATE process that replays the transcript — so it structurally
+        // cannot show live runtime state, and the state a human most often opens a terminal to deal
+        // with is exactly that: a permission prompt the worker is parked on, which is never written to
+        // the transcript at all. Handing back a resume there sends the human to a terminal that looks
+        // idle while the real worker stays wedged, and any work they do in it silently diverges from
+        // the process fray is still tracking. Attach while we own the pane; resume only once it is gone.
+        // UNCACHED liveness on purpose: this runs once per hover/click, not on a hot path, and a
+        // ≤1s-stale cache bit here would hand back the WRONG command — a resume for a pane that is
+        // still live, which is exactly the failure being fixed. One exec buys a correct answer.
+        if (row.exited !== 1 && tmux.isLive(input.slug)) {
+          return {
+            command: tmuxAttachCommand(tmux.socketName(), row.tmux_name),
+            mode: "attach" as const,
+            reason: null,
+          }
+        }
+        // No live pane: the session only exists as a transcript now, so a resume is the honest offer.
+        // Gated only on a real provider-native id existing — no paternalistic "wait for it" block.
         const backend = row.backend
         if (backend === "claude" || backend === "codex") {
           // Claude pins session_id via --session-id, so its native id IS session_id. Codex mints its OWN

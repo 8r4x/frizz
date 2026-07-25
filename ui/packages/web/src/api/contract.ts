@@ -119,7 +119,7 @@ export interface Api {
   threadScratchpad(input: { slug: string }): Promise<{ markdown: string }>
   // Server-authoritative, shell-safe provider resume command for a registered Fray-owned session.
   // A live Fray-owned runtime is deliberately unavailable: a second provider client is uncoordinated.
-  threadTerminalCommand(input: { slug: string }): Promise<{ command: string | null; mode: "resume" | "unavailable"; reason: string | null }>
+  threadTerminalCommand(input: { slug: string }): Promise<{ command: string | null; mode: "attach" | "resume" | "unavailable"; reason: string | null }>
   openExternal(input: { url: string }): Promise<void>
   openLocalFile(input: { path: string; image?: boolean }): Promise<{ action: "opened" | "copy"; path: string }>
   // Classify path references (as they appear in inline code) → canonical openable path, or null when the

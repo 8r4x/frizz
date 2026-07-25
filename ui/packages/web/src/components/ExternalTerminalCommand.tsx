@@ -6,8 +6,20 @@ import { createCopyCommandFeedback } from "../lib/copyCommandFeedback.ts"
 import { showToast } from "../store.ts"
 import { Tooltip } from "./Tooltip.tsx"
 
-const COPIED_TOAST = "Provider resume command copied"
-const COPY_FAILED_TOAST = "Could not copy provider resume command"
+// The command is one of TWO genuinely different things, and pasting the wrong one wastes real time:
+// an ATTACH joins the live pane (shows an in-flight turn and any permission prompt the worker is
+// parked on), a RESUME starts a separate process off the transcript and can show neither. So the
+// label and the toast name which one you are getting rather than calling both "resume".
+const COPY_FAILED_TOAST = "Could not copy terminal command"
+type TerminalMode = "attach" | "resume"
+const COPIED_TOAST: Record<TerminalMode, string> = {
+  attach: "Attach command copied",
+  resume: "Resume command copied",
+}
+const BUTTON_LABEL: Record<TerminalMode, string> = {
+  attach: "Copy command to attach to this thread's live terminal",
+  resume: "Copy command to resume this thread in a new terminal",
+}
 
 // react-query cache key for a thread's resolved resume command. It is prefetched on hover/focus (see
 // CopyTerminalCommandButton) so the CLICK can write it SYNCHRONOUSLY — no server round-trip inside the
@@ -16,11 +28,13 @@ const COPY_FAILED_TOAST = "Could not copy provider resume command"
 // "copied" check stops lagging a full round-trip behind the click.
 const terminalCommandKey = (slug: string) => ["terminalCommand", slug] as const
 
-// Resolve the provider resume command, surfacing the server's reason when there is none to copy.
-function resolveTerminalCommand(slug: string): Promise<string> {
+// Resolve the terminal command, surfacing the server's reason when there is none to copy. Carries the
+// MODE alongside the text so the label/toast can name what it actually is.
+interface ResolvedTerminalCommand { command: string; mode: TerminalMode }
+function resolveTerminalCommand(slug: string): Promise<ResolvedTerminalCommand> {
   return rpc.threadTerminalCommand({ slug }).then((result) => {
     if (!result.command) throw new Error(result.reason ?? "No verified provider session is available to resume")
-    return result.command
+    return { command: result.command, mode: result.mode === "attach" ? "attach" : "resume" }
   })
 }
 
@@ -31,17 +45,19 @@ function resolveTerminalCommand(slug: string): Promise<string> {
 // within the gesture and fed a promise, and the browser keeps activation alive while it resolves. A
 // rejecting item-promise rejects `write` with the SAME error, so the "no resumable session yet" reason
 // still reaches the toast. Older engines without async-ClipboardItem support fall back to fetch-then-writeText.
-async function copyResumeCommandAsync(slug: string): Promise<void> {
-  const commandPromise = resolveTerminalCommand(slug)
+async function copyResumeCommandAsync(slug: string): Promise<TerminalMode> {
+  const resolved = resolveTerminalCommand(slug)
   if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
     await navigator.clipboard.write([
-      new ClipboardItem({ "text/plain": commandPromise.then((command) => new Blob([command], { type: "text/plain" })) }),
+      new ClipboardItem({ "text/plain": resolved.then(({ command }) => new Blob([command], { type: "text/plain" })) }),
     ])
-    return
+    // The clipboard already holds it; awaiting the same settled promise only reads back the mode.
+    return (await resolved).mode
   }
-  const command = await commandPromise
+  const { command, mode } = await resolved
   if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable; copy the command from a secure Fray page")
   await navigator.clipboard.writeText(command)
+  return mode
 }
 
 interface CopyCallbacks {
@@ -54,9 +70,9 @@ export function useCopyTerminalCommand(slug: string): (callbacks?: CopyCallbacks
     mutationFn: () => copyResumeCommandAsync(slug),
   })
   return (callbacks) => copy.mutate(undefined, {
-    onSuccess: () => {
+    onSuccess: (mode) => {
       callbacks?.onSuccess?.()
-      showToast(COPIED_TOAST)
+      showToast(COPIED_TOAST[mode])
     },
     onError: (error) => {
       callbacks?.onError?.()
@@ -102,12 +118,12 @@ export function CopyTerminalCommandButton({ slug }: { slug: string }) {
   // once writeText actually resolves — honest, but effectively instant since the value is already in hand;
   // a genuine failure toasts and leaves no check. COLD cache: the activation-safe async path, unchanged.
   function handleCopy() {
-    const command = queryClient.getQueryData<string>(terminalCommandKey(slug))
-    if (command && navigator.clipboard?.writeText) {
-      void navigator.clipboard.writeText(command).then(
+    const resolved = queryClient.getQueryData<ResolvedTerminalCommand>(terminalCommandKey(slug))
+    if (resolved && navigator.clipboard?.writeText) {
+      void navigator.clipboard.writeText(resolved.command).then(
         () => {
           feedback.current?.begin()
-          showToast(COPIED_TOAST)
+          showToast(COPIED_TOAST[resolved.mode])
         },
         () => showToast(COPY_FAILED_TOAST, { duration: 7000 }),
       )
@@ -116,7 +132,12 @@ export function CopyTerminalCommandButton({ slug }: { slug: string }) {
     copyAsync({ onSuccess: () => feedback.current?.begin() })
   }
 
-  const label = copied ? "Provider resume command copied" : "Copy provider resume command"
+  // The prefetch usually settles long before the click, so the label names the real mode. Before it
+  // resolves there is nothing truthful to promise, so it stays generic rather than guessing "resume".
+  const prefetched = queryClient.getQueryData<ResolvedTerminalCommand>(terminalCommandKey(slug))
+  const label = copied
+    ? (prefetched ? COPIED_TOAST[prefetched.mode] : "Terminal command copied")
+    : (prefetched ? BUTTON_LABEL[prefetched.mode] : "Copy terminal command")
   return (
     <Tooltip label={label}>
       <button

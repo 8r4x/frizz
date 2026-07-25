@@ -1,5 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -30,7 +31,8 @@ import type { Project } from "./project.ts"
 import type { Tailer } from "./tailer.ts"
 import { createPermissionController } from "./permission-controller.ts"
 import { writeScratchpad } from "./dispatch.ts"
-import { providerResumeCommand, shellQuote } from "./external-terminal.ts"
+import { providerResumeCommand, shellQuote, tmuxAttachCommand } from "./external-terminal.ts"
+import * as tmuxModule from "./tmux.ts"
 
 test("provider resume command is shell-safe", () => {
   assert.equal(shellQuote("fray's socket"), "'fray'\"'\"'s socket'")
@@ -212,13 +214,14 @@ test("threadTerminalCommand offers the verified provider resume command in every
       "Codex resumes its provider rollout ID directly from the owned registry row",
     )
 
-    // Resuming a live session in another terminal is safe + supported, so the command is offered while
-    // Fray still drives it — no paternalistic "wait for it to exit" block.
+    // The row is exited (no pane left to attach to), so a resume is the honest offer regardless of what
+    // the board snapshot says the runtime is — the command is still offered, never gated on "wait for
+    // it to exit". The live-pane case gets an ATTACH instead; see the real-tmux test below.
     h.snapshot.threads.at(-1)!.runtime = "turn-idle"
     assert.deepEqual(
       await h.router.threadTerminalCommand.handler({ input: { slug: "codex-resume" } }),
       expected,
-      "a live/turn-idle session still yields the resume command",
+      "an exited row yields the resume command",
     )
 
     // Codex before its rollout id is discovered has no resumable native id — the Fray UUID would not
@@ -241,6 +244,40 @@ test("threadTerminalCommand offers the verified provider resume command in every
       /No Fray-owned terminal session is available/,
     )
   } finally {
+    h.storage.close()
+    rmSync(h.dir, { recursive: true, force: true })
+  }
+})
+
+// A LIVE pane must yield an ATTACH, never a resume. Driven against a REAL tmux server, because the
+// whole point is the tmux liveness answer — a stubbed one would prove nothing about the branch that
+// matters. `<cli> resume` starts a SEPARATE process off the transcript, so handing it back for a live
+// worker sends the human to a terminal that cannot show the in-flight turn or the permission prompt
+// the worker is parked on (that prompt is never written to the transcript at all).
+test("threadTerminalCommand attaches to a LIVE pane instead of resuming a second process", () => {
+  const socket = `fray-test-attach-${process.pid}`
+  const previousSocket = tmuxModule.socketName()
+  const h = harness()
+  const slug = "live-worker"
+  try {
+    tmuxModule.setSocket(socket)
+    // A real session whose command is still running — the exact precondition the branch keys on.
+    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `fray-${slug}`, "sleep 120"])
+    h.storage.upsertSession({ ...row(slug), exited: 0 })
+
+    assert.equal(tmuxModule.isLive(slug), true, "precondition: the harness really did create a live pane")
+    const result = h.router.threadTerminalCommand.handler({ input: { slug } }) as unknown as Promise<{ command: string; mode: string }>
+    return result.then((r) => {
+      assert.equal(r.mode, "attach")
+      assert.equal(r.command, tmuxAttachCommand(socket, `fray-${slug}`))
+      // The `=` is load-bearing: without it tmux resolves by PREFIX and a human can land in a
+      // neighbouring `<slug>-2` worker's terminal.
+      assert.match(r.command, /attach -t '=fray-live-worker'/)
+      assert.ok(!r.command.includes("--resume"), "a live pane must never hand back a resume")
+    })
+  } finally {
+    try { execFileSync("tmux", ["-L", socket, "kill-server"], { stdio: "ignore" }) } catch { /* already gone */ }
+    tmuxModule.setSocket(previousSocket)
     h.storage.close()
     rmSync(h.dir, { recursive: true, force: true })
   }
