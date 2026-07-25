@@ -171,11 +171,12 @@ test("loadWorkerPrompt: no unresolved {{FRAY_*}} markers survive in either backe
 })
 
 test("loadWorkerPrompt(claude) carries the Claude-Code-only guidance", () => {
-  const c = loadWorkerPrompt("claude")
+  const raw = loadWorkerPrompt("claude")
+  const c = raw.replace(/\s+/g, " ") // pin content, not line-wrap
   assert.match(c, /a top-level `claude` session/)
   assert.match(c, /`claude -r`/)
   assert.match(c, /## Sub-agents/)
-  assert.match(c, /Always plain Agent tool \+ `run_in_background: true`/)
+  assert.match(c, /plain Agent tool \+ `run_in_background: true`/)
   assert.match(c, /namespaced string `fray:<model>-<effort>`/)
   assert.match(c, /the shared blackboard for your sub-agents/)
   // Claude fray workers have NO fork option (`subagent_type: "fork"` does not resolve); say so
@@ -268,23 +269,24 @@ test("loadWorkerPrompt(codex) never turns an ordinary thread label into uncondit
 
 test("loadWorkerPrompt: the backend-AGNOSTIC core is present in BOTH contracts", () => {
   for (const kind of ["claude", "codex"] as const) {
-    const c = loadWorkerPrompt(kind)
-    assert.match(c, /```done/) // fence grammar
-    assert.match(c, /```awaiting/)
-    assert.match(c, /```question/)
-    assert.match(c, /## Thread types/)
-    assert.match(c, /## Git discipline/)
-    assert.match(c, /## Quality bar/)
-    assert.match(c, /## The stop criterion/)
+    const raw = loadWorkerPrompt(kind)
+    // Whitespace-normalized: these pin CONTENT, not line-wrap. Reflowing a paragraph must not fail the
+    // suite (the 2026-07-25 restructure broke ~15 assertions purely on rewrapped lines).
+    const c = raw.replace(/\s+/g, " ")
+    for (const fence of [/```done/, /```awaiting/, /```question/]) assert.match(raw, fence) // fence grammar
+    assert.match(raw, /## Thread types/)
+    assert.match(raw, /## Git discipline/)
+    assert.match(raw, /## Quality bar/)
+    assert.match(raw, /## The stop criterion/)
     assert.match(c, /human: <actor \+ exact review\/approval>/) // current awaiting grammar
     assert.match(c, /timer: <ISO-8601 instant>/)
     assert.match(c, /`pr:` \/ `ci:` \/ `session:` remain/) // legacy readability is explicit
-    assert.match(c, /## Agent completion invariant/)
+    assert.match(raw, /## Agent completion invariant/)
     assert.match(c, /let it run to its terminal return/)
     assert.match(c, /partially applied edits, tests, and owned processes/)
-    assert.match(c, /only the affected service, never by stopping\n?a writer/)
+    assert.match(c, /only the affected service, never by stopping a writer/)
     assert.match(c, /!\[descriptive alt\]\(\/absolute\/path\.png\)/)
-    assert.match(c, /eligible absolute local image paths through\n?its guarded local-image proxy/)
+    assert.match(c, /eligible absolute local image paths through its guarded local-image proxy/)
   }
 })
 
@@ -294,7 +296,8 @@ test("awaiting re-entry: every worker-contract surface requires a fresh fence af
   // human turn clears lastFence in the tailer, so merely saying "already parked" cannot restore the
   // state: the worker must make a fresh decision, then repeat a current human/timer fence or re-arm
   // the active backend wait for an automatable condition.
-  for (const c of [loadWorkerPrompt("claude"), loadWorkerPrompt("codex")]) {
+  for (const raw of [loadWorkerPrompt("claude"), loadWorkerPrompt("codex")]) {
+    const c = raw.replace(/\s+/g, " ") // pin content, not line-wrap
     assert.match(c, /back to awaiting/)
     assert.match(c, /already parked/)
     assert.match(c, /re-emit/)
@@ -304,11 +307,13 @@ test("awaiting re-entry: every worker-contract surface requires a fresh fence af
 })
 
 test("end-state contract: bare rest queues, done checks, awaiting parks human/timer only", () => {
-  for (const c of [loadWorkerPrompt("claude"), loadWorkerPrompt("codex")]) {
-    assert.match(c, /bare rest[^\n]*(?:ordinary handoff|queues)/i)
+  // Whitespace-normalized throughout: these pin the RULES, not the line-wrap.
+  for (const raw of [loadWorkerPrompt("claude"), loadWorkerPrompt("codex")]) {
+    const c = raw.replace(/\s+/g, " ")
+    assert.match(c, /bare rest[^.]*(?:ordinary handoff|queues)/i)
     assert.match(c, /(?:enters|enter)[\s\S]{0,80}queue/i)
     assert.match(c, /(?:question|permission)[\s\S]{0,100}higher.priority/i)
-    assert.match(c, /checked success card[^\n]*queue/)
+    assert.match(c, /checked success card[^.]*queue/)
     assert.match(c, /until the human (?:explicitly )?(?:A|a)rchives? it/)
     // done is gated on LANDED work — merged, not merely committed/pushed/PR-opened (an open PR parks
     // on awaiting until it merges); a pre-fix bug/issue investigation never earns it, while a
@@ -316,50 +321,54 @@ test("end-state contract: bare rest queues, done checks, awaiting parks human/ti
     assert.match(c, /COMPLETED\s+the effort's real work/)
     assert.match(c, /code LANDED on the project's mainline/)
     assert.match(c, /Code written but not LANDED is not done/)
-    assert.match(c, /open PR — however green[\s\S]{0,80}still ahead of the\s+merge/)
+    assert.match(c, /open PR is work still ahead of the merge/)
     assert.match(c, /`done` waits for the MERGE/)
-    assert.match(c, /`pr-watch:` so fray\s+watches the PR/)
+    assert.match(c, /park the PR on[\s\S]{0,40}`pr-watch:`/)
     // The git-discipline + implementation-thread surfaces must not contradict it by fencing on a PR.
-    assert.match(c, /Opening the PR does NOT finish the thread — the MERGE\s+does/)
+    assert.match(c, /Opening the PR does NOT finish the thread — the MERGE does/)
     assert.doesNotMatch(c, /done ` fence naming the PR\/paths/)
     assert.doesNotMatch(c, /changes sitting uncommitted/)
     assert.match(c, /investigat(?:ed|ing|ion)[\s\S]{0,300}NOT `?done`?/i)
     assert.match(c, /research or audit EFFORT[\s\S]{0,200}earns `done`/)
     assert.match(c, /awaiting[\s\S]{0,140}(?:human|timestamp)/i)
-    assert.match(c, /(?:CI|automatable)[\s\S]{0,180}(?:stay active|active wait|live operation)/i)
+    assert.match(c, /(?:CI|automatable)[\s\S]{0,180}(?:stay ACTIVE|stay active|active wait|live operation)/i)
     // `done` is taught as a DISMISSAL, not a summary: its card is the one-click path into Inactive
     // (groups.ts), so anything living only in the conversation dies with the thread. The rule is the
     // intent-level heuristic — "points at future work AT ALL" → bare rest — not a scenario list, and
     // the planning carve-out is DERIVED from it (the artifact outlives the thread), never asserted
     // as an arbitrary exception (done-is-a-dismissal).
+    //
+    // The 2026-07-25 restructure CUT the rhetorical scaffolding that used to carry this ("ask one
+    // question before you fence: if this thread is never opened again…", "Two instances worth
+    // naming", "the clearest case of all"). Those were rationale, not rules. The operative rules
+    // below are what must survive; do not re-add the essay to satisfy a test.
     assert.match(c, /`done` is a DISMISSAL, not a summary/)
     assert.match(c, /files the thread away where nobody looks again/)
-    assert.match(c, /if this thread\s+is never opened again, is anything lost\?/)
     assert.match(c, /points at future work AT ALL/)
-    assert.match(c, /Uncertain is not done\./)
-    // Unlanded code and the live code-change discussion are taught as INSTANCES of the heuristic,
-    // not as their own free-standing rules.
-    assert.match(c, /Two instances worth naming/)
-    assert.match(c, /live\s+discussion about code changes\*\* is the clearest case of all/)
-    assert.match(c, /The ONE exception[\s\S]{0,140}PLANNING session/)
+    assert.match(c, /[Uu]ncertain is not done/)
+    // Unlanded code and the live code-change discussion remain INSTANCES of the heuristic.
+    assert.match(c, /live code-change discussion/)
+    assert.match(c, /PLANNING session whose plan file is FULLY written and PERSISTED/)
     assert.match(c, /FULLY written and PERSISTED \(`\.fray\/plans\/<topic>\.md`\)/)
     assert.match(c, /artifact already lives outside the thread, so dismissing the thread loses nothing/)
     // The planning thread type derives the same carve-out where a worker reads its deliverable.
     assert.match(c, /WRITTEN, PERSISTED file is the whole reason a planning thread may/)
     assert.match(c, /design outlives the thread's dismissal/)
-    // The Rules recap repeats the heuristic (not the scenario) for a worker skimming the tail.
+    // The tail recap repeats the heuristic (not the scenario) for a worker skimming the end.
     assert.match(c, /Nor is a turn on a thread that still points at future work/)
   }
   // The runtime re-grounding carries the same intent in one line (slim, not a second contract copy).
-  assert.match(SESSION_SEED, /```done is a DISMISSAL \(its card files the thread away where nobody looks again\)/)
+  assert.match(SESSION_SEED, /```done[^;]*is a DISMISSAL \(its card files the thread away where nobody looks again\)/)
   assert.match(SESSION_SEED, /points at future work AT ALL[^;]*bare rest instead, and uncertain is not done/)
   assert.match(SESSION_SEED, /because that artifact outlives the thread/)
-  assert.match(SESSION_SEED, /never when the thread still points at future work/)
   assert.match(SESSION_SEED, /code LANDED on the mainline — an open PR is NOT done, park it on ```awaiting until it MERGES/)
   assert.doesNotMatch(SESSION_SEED, /BARE REST[^\n]*quiet/i)
   assert.doesNotMatch(SESSION_SEED, /```done \/ ```awaiting excuse/)
-  assert.match(SESSION_SEED, /```done queues a checked completion until Archive and is a DISMISSAL — completed work only[\s\S]{0,200}; ```awaiting parks only a human:\/timer: gate/)
   assert.match(SESSION_SEED, /real work is COMPLETE/)
+  // The seed now also carries the autonomy anchor — the single most-violated norm in practice
+  // (measured: 25% of threads opened with a permission-gate question). See workerPrompt.ts header.
+  assert.match(SESSION_SEED, /DECIDE rather than ask/)
+  assert.match(SESSION_SEED, /asking permission to do the work you were dispatched to do is not a question/)
 })
 
 test("session-seed is a SLIM runtime pointer, not a fourth full contract copy", () => {
@@ -428,7 +437,8 @@ test("runtime release gate: the settings toggle includes or excises the whole mo
 })
 
 test("visual-evidence handoffs: provider contracts keep embeds safe, useful, and interpretable", () => {
-  for (const c of [loadWorkerPrompt("claude"), loadWorkerPrompt("codex")]) {
+  for (const raw of [loadWorkerPrompt("claude"), loadWorkerPrompt("codex")]) {
+    const c = raw.replace(/\s+/g, " ") // pin content, not line-wrap
     assert.match(c, /meaningful alt text/i)
     assert.match(c, /eligible workspace[\s\S]{0,80}allowlisted image files/i)
     assert.match(c, /outside that safe boundary[\s\S]{0,80}non-navigable/i)

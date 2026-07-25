@@ -294,7 +294,7 @@ test("buildClaudeCommand: pins session-id, permission mode, optional model/effor
   })
   // Every dispatch mounts chrome-devtools (+ its equals-form pre-approval) — see claudeMcpFlags.
   const CDT_CFG = JSON.stringify({ mcpServers: { "chrome-devtools": { command: "npx", args: ["-y", "chrome-devtools-mcp@latest", "--experimentalPageIdRouting", "--isolated", "--no-usage-statistics"] } } })
-  const CDT_FLAGS = ["--mcp-config", CDT_CFG, "--allowedTools=mcp__chrome-devtools"]
+  const CDT_FLAGS = ["--mcp-config", CDT_CFG, "--allowedTools=mcp__chrome-devtools", "--disallowedTools=AskUserQuestion"]
   assert.deepEqual(base, ["sleep", "--session-id", "uuid-1", "--permission-mode", "acceptEdits", ...CDT_FLAGS, "hello"])
 
   const full = buildClaudeCommand({
@@ -341,7 +341,7 @@ test("buildClaudeCommand: pins session-id, permission mode, optional model/effor
 test("buildClaudeResumeCommand: -r <sessionId> with the follow-up + worker system prompt", () => {
   const cmd = buildClaudeResumeCommand({ sessionId: "sid", permissionMode: "acceptEdits", message: "more", workerPrompt: "" })
   const RESUME_CDT_CFG = JSON.stringify({ mcpServers: { "chrome-devtools": { command: "npx", args: ["-y", "chrome-devtools-mcp@latest", "--experimentalPageIdRouting", "--isolated", "--no-usage-statistics"] } } })
-  assert.deepEqual(cmd, ["claude", "--permission-mode", "acceptEdits", "--mcp-config", RESUME_CDT_CFG, "--allowedTools=mcp__chrome-devtools", "-r", "sid", "more"])
+  assert.deepEqual(cmd, ["claude", "--permission-mode", "acceptEdits", "--mcp-config", RESUME_CDT_CFG, "--allowedTools=mcp__chrome-devtools", "--disallowedTools=AskUserQuestion", "-r", "sid", "more"])
   // Resume re-carries the worker norms (system prompt is rebuilt per invocation) via the file flag.
   const dflt = buildClaudeResumeCommand({ sessionId: "sid", permissionMode: "auto", message: "m" })
   assert.ok(dflt.includes("--append-system-prompt-file"))
@@ -349,9 +349,11 @@ test("buildClaudeResumeCommand: -r <sessionId> with the follow-up + worker syste
   assert.ok(system.startsWith("You are a dispatched worker agent"))
   // A dead-session follow-up rebuilds the system prompt, so the awaiting re-entry invariant must ride
   // the ACTUAL `claude -r` invocation—not live only in a companion skill the worker may not reload.
-  assert.match(system, /back to awaiting/)
-  assert.match(system, /NEVER say it is "already parked"/)
-  assert.match(system, /MUST re-emit a fresh terminal/)
+  // Whitespace-normalized: pin the RULE, not the line-wrap.
+  const flat = system.replace(/\s+/g, " ")
+  assert.match(flat, /back to awaiting/)
+  assert.match(flat, /never answer that it is already parked/)
+  assert.match(flat, /re-emit a fresh/)
 })
 
 test("build*Command: extraSystemPrompt is appended AFTER the worker norms in the system prompt", () => {

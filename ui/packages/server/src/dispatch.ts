@@ -455,6 +455,17 @@ export function claudeMcpFlags(mcp?: FrayMcp): string[] {
   return ["--mcp-config", config, `--allowedTools=${allowed.join(",")}`]
 }
 
+// A fray worker runs under a dashboard, not a live chat, so a BLOCKING question tool would hang the
+// session invisibly — there is nobody at the keyboard to click it. Remove it at spawn rather than
+// arguing against it in prose: the contract used to spend a paragraph on "NEVER invoke it" AND a
+// PreToolUse hook denied it, three mechanisms for one prohibition. Taking the tool away is the cheap
+// one, and it makes the other two unnecessary (the hook stays as belt-and-braces for a session that
+// somehow reaches the tool anyway). EQUALS form for the same reason as --allowedTools: the flag is
+// variadic and a space-separated value would swallow the positional prompt behind it.
+export function workerDisallowedToolFlags(): string[] {
+  return ["--disallowedTools=AskUserQuestion"]
+}
+
 // The `claude` argv for a fresh dispatch. session-id is PINNED so we can resume the exact
 // conversation later. claudeBin is injectable so tests build the command without spawning.
 export function buildClaudeCommand(opts: {
@@ -477,6 +488,7 @@ export function buildClaudeCommand(opts: {
   if (opts.effort) argv.push("--effort", opts.effort)
   if (opts.pluginDir) argv.push("--plugin-dir", opts.pluginDir)
   argv.push(...claudeMcpFlags(opts.frayMcp))
+  argv.push(...workerDisallowedToolFlags())
   // The fixed worker norms live in the SYSTEM prompt: rebuilt on every invocation (incl. resume)
   // and immune to compaction, unlike a first user message.
   const worker = opts.workerPrompt ?? loadWorkerPrompt()
@@ -570,6 +582,7 @@ export function buildClaudeResumeCommand(opts: {
   if (opts.effort) argv.push("--effort", opts.effort)
   if (opts.pluginDir) argv.push("--plugin-dir", opts.pluginDir)
   argv.push(...claudeMcpFlags(opts.frayMcp))
+  argv.push(...workerDisallowedToolFlags())
   // The system prompt is rebuilt per invocation — the resume must re-carry the worker norms too.
   // Same file-based path as buildClaudeCommand (see systemPromptFlags): inline would blow tmux's
   // command-length limit.
