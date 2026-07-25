@@ -793,9 +793,18 @@ export function createRouter(ctx: AppContext) {
             model: row.model ?? undefined,
             effort: row.effort ?? undefined,
           })
-          // No delivery ledger for the broker (as for codex): the ledger is a tmux-TUI reliability
-          // mechanism — flush-stuck-composer + pane-inspected receipt — and the broker has no composer.
-          // The message is handed straight to the SDK and lands in the transcript JSONL the tailer follows.
+          // The ledger's RELIABILITY half is indeed tmux-only — flush-stuck-composer and the
+          // pane-inspected receipt are skipped for a headless row (isHeadlessRow gates both), and no
+          // delivery marker is stamped because nothing rewrites bytes on the way to the SDK. But its
+          // RENDERING half applies here exactly as it does to codex: until the JSONL carries the
+          // message, the only thing showing the human their own just-sent steer is the client's
+          // optimistic bubble, and mergeOptimistic's ghost floor retires that once the transcript
+          // advances 60s past it. So open an entry — `enqueued`, because the SDK call returning IS the
+          // receipt, which also keeps it out of the amber "check the terminal" state that would be
+          // meaningless on a thread with no terminal. The tailer drops it as soon as the record lands.
+          if (input.deliveryId) {
+            appendDelivery(ctx.storage, input.slug, { id: input.deliveryId, text: input.message, state: "enqueued" })
+          }
           ctx.board.refresh()
           return
         }
