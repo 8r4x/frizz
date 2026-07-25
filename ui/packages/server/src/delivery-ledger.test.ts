@@ -149,6 +149,60 @@ test("a SHORT send is never resolved by merely appearing inside an unrelated mes
   assert.equal(correlateDeliveryRecord(items, rec, iso(T0 + 1000)), items)
 })
 
+// ---- tab expansion (the second "Delivery unconfirmed" bug) ----
+// Claude Code's TUI expands a TAB in a bracketed paste to spaces before the text reaches the JSONL, so
+// the send fray recorded and the record it must be matched against are not byte-equal. Bytes below are
+// the maintainer's own stranded send (2026-07-25, `were-taking-over-from-another-agent`): the ledger's
+// two tabs each arrived as four spaces, and the item went amber 60s later even though a `user` record
+// carrying the message landed 34ms after the send.
+const TABBED = '> <tmp>: "r"\tno, but lossy vs intent\tsilently widens to rw on both\nWhy does this happen?'
+const EXPANDED = TABBED.replace(/\t/g, "    ")
+
+test("a user record whose tabs the TUI expanded still delivers the item", () => {
+  const out = correlateDeliveryRecord(
+    [item({ text: TABBED })],
+    { type: "user", message: { role: "user", content: EXPANDED }, timestamp: iso(T0 + 34) },
+    iso(T0 + 34),
+  )
+  assert.deepEqual(out, [])
+})
+
+test("a tab-expanded enqueue record still receipts the item", () => {
+  const out = correlateDeliveryRecord(
+    [item({ text: TABBED })],
+    { type: "queue-operation", operation: "enqueue", content: EXPANDED, timestamp: iso(T0 + 500) },
+    iso(T0 + 500),
+  )
+  assert.equal(out[0].state, "enqueued")
+})
+
+test("tab expansion does not break the merged-submission composition", () => {
+  const a = item({ id: "d-a", text: "the first long follow-up\tthe composer swallowed" })
+  const b = item({ id: "d-b", text: "the second follow-up\twhose Enter submitted both" })
+  const rec = merged(a.text.replace(/\t/g, "    "), b.text.replace(/\t/g, "    "), "\n")
+  assert.deepEqual(correlateDeliveryRecord([a, b], rec, iso(T0 + 1000)).map((i) => i.state), ["enqueued", "enqueued"])
+})
+
+test("the projection dedups against an already-delivered copy whose tabs were expanded", () => {
+  // Without this the ledger appends a SECOND, amber copy of a message the transcript already renders —
+  // the duplicate bubble the operator actually saw.
+  const out = projectDeliveryLedger([msg({ text: EXPANDED, sourceId: "s:5" })], [item({ text: TABBED })])
+  assert.equal(out.length, 1)
+  assert.equal(out[0].deliveryId, undefined)
+})
+
+test("differing WORDS are still never matched — only whitespace width is forgiven", () => {
+  const items = [item({ text: "restart\tthe server" })]
+  const rec = { type: "user", timestamp: iso(T0 + 1000), message: { content: "restart    the  daemon" } }
+  assert.equal(correlateDeliveryRecord(items, rec, iso(T0 + 1000)), items)
+})
+
+test("a SHORT send is still never resolved by appearing inside an unrelated message, tabs or not", () => {
+  const items = [item({ text: "\tcontinue" })]
+  const rec = { type: "user", timestamp: iso(T0 + 1000), message: { content: "ok, please    continue with the plan" } }
+  assert.equal(correlateDeliveryRecord(items, rec, iso(T0 + 1000)), items)
+})
+
 test("aging is identity-stable when nothing changes", () => {
   const items = [item({ state: "enqueued" })]
   assert.equal(ageDeliveries(items, T0 + 5000), items)

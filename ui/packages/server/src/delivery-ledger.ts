@@ -40,7 +40,25 @@ export interface DeliveryLedgerItem {
   submitAttempts?: number
 }
 
-const norm = (s: string): string => s.replace(/\r\n?/g, "\n").trim()
+// The form every text comparison in this module runs in.
+//
+// Claude Code's TUI REWRITES a bracketed paste before it ever reaches the JSONL: a literal TAB is
+// expanded to spaces. So the bytes fray sent and the bytes the transcript records are NOT equal, and an
+// exact compare strands the send as `unconfirmed` forever. Observed on the maintainer's own thread
+// (2026-07-25, `were-taking-over-from-another-agent`): a 1448-char follow-up carrying two tabs was
+// recorded as a 1454-char `user` record carrying none — written 34 milliseconds after the send, read and
+// acted on by the agent — and still went amber at the 60s timeout, because 1448 !== 1454. Expansion is
+// specific to the PASTE path: across 3,872 human records in this machine's transcripts the only
+// tab-bearing ones are session-start dispatch prompts and Claude's own task-notification enqueues, which
+// never pass through the composer.
+//
+// So compare blind to horizontal-whitespace WIDTH — runs of spaces/tabs collapse to one space, and any
+// hugging a newline disappear — which is agnostic to how many spaces a tab becomes, or whether a given
+// build expands it at all. Line STRUCTURE is preserved (a newline never collapses), keeping this far
+// stricter than delivery-confirm.ts's composer check, which drops whitespace outright. It is applied to
+// BOTH sides of every comparison, so the composition offsets in matchComposedText stay consistent.
+const canon = (s: string): string =>
+  s.replace(/\r\n?/g, "\n").replace(/[^\S\n]+/g, " ").replace(/ ?\n ?/g, "\n").trim()
 
 function isItem(v: unknown): v is DeliveryLedgerItem {
   if (!v || typeof v !== "object") return false
@@ -131,7 +149,7 @@ export function correlateDeliveryRecord(
   // the composer can hold a paste for minutes before the TUI submits it). An enqueue record is positive
   // proof the message reached Claude Code's queue, so it must clear the amber warning whenever it lands.
   if (r.type === "queue-operation" && r.operation === "enqueue" && typeof r.content === "string") {
-    const matched = matchComposedText(items, norm(r.content), contemporaneous)
+    const matched = matchComposedText(items, canon(r.content), contemporaneous)
     if (matched.size === 0) return items
     return items.map((item, index) =>
       matched.has(index) && item.state !== "enqueued" ? { ...item, state: "enqueued", updatedAt: nowIso } : item,
@@ -145,11 +163,11 @@ export function correlateDeliveryRecord(
   if (r.type === "attachment") {
     const att = r.attachment as { type?: unknown; commandMode?: unknown; prompt?: unknown } | undefined
     if (att?.type === "queued_command" && att.commandMode === "prompt" && typeof att.prompt === "string") {
-      deliveredText = norm(att.prompt)
+      deliveredText = canon(att.prompt)
     }
   } else if (r.type === "user" && r.isMeta !== true) {
     const text = userRecordText(r)
-    if (text) deliveredText = norm(text)
+    if (text) deliveredText = canon(text)
   }
   if (deliveredText === null) return items
   const delivered = matchComposedText(items, deliveredText, contemporaneous)
@@ -198,7 +216,7 @@ export function matchComposedText(
     if (matched.has(index)) return null
     const item = items[index]
     if (!contemporaneous(item)) return null
-    const text = norm(item.text)
+    const text = canon(item.text)
     return text || null
   }
   for (let guard = 0; guard < items.length && rest.length > 0; guard++) {
@@ -219,7 +237,9 @@ export function matchComposedText(
     if (!hit) break
     matched.add(hit.index)
     anchored = true
-    rest = rest.slice(hit.at + hit.length).replace(/^\n+/, "")
+    // Any whitespace the composer left at the seam is separator, not content — the same argument that
+    // already let a newline be skipped here, widened to match the canonical form above.
+    rest = rest.slice(hit.at + hit.length).replace(/^\s+/, "")
   }
   return matched
 }
@@ -257,11 +277,11 @@ export function ageDeliveries(items: DeliveryLedgerItem[], nowMs: number): Deliv
 export function projectDeliveryLedger(messages: TranscriptMessage[], items: DeliveryLedgerItem[]): TranscriptMessage[] {
   if (!items.length) return messages
   for (const item of items) {
-    const text = norm(item.text)
+    const text = canon(item.text)
     let handled = false
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i]
-      if (m.role !== "user" || norm(m.text) !== text) continue
+      if (m.role !== "user" || canon(m.text) !== text) continue
       if (m.queued) {
         m.deliveryId = item.id
         m.deliveryState = item.state
