@@ -7,6 +7,7 @@ import { accessSync, constants as fsConstants, mkdirSync, readFileSync, unlinkSy
 import { delimiter, dirname, isAbsolute, join } from "node:path"
 import { resolveDetachedDaemonEntry } from "../detached-daemons.ts"
 import type { BrokerRecord, ClaudeBrokerConfig } from "./claude-agent-broker.ts"
+import { claudeBrokerDiagnosticLogPath } from "./claude-broker-diagnostics.ts"
 
 // The Claude Agent SDK REQUIRES an absolute `pathToClaudeCodeExecutable` (validateExecutablePath rejects
 // a bare name), unlike the tmux path where execvp resolves "claude" on PATH. When the dispatch layer
@@ -83,6 +84,9 @@ export function forkBroker(options: ForkBrokerOptions): Promise<BrokerRecord> {
   const config: ClaudeBrokerConfig = {
     socketPath, cwd: options.cwd, sessionId: options.sessionId, executablePath: options.executablePath,
     permissionMode: options.permissionMode, env: options.env, recordPath, generation: randomUUID(),
+    // The daemon writes its own death forensics here. Same dir as the record, so a session's socket,
+    // record and diagnostics stay together and a project teardown removes all three.
+    diagnosticLogPath: claudeBrokerDiagnosticLogPath(options.stateDir, options.sessionId),
     appendSystemPrompt: options.appendSystemPrompt, model: options.model, effort: options.effort,
     resume: options.resume,
     pluginDir: options.pluginDir, mcpServers: options.mcpServers, allowedTools: options.allowedTools,

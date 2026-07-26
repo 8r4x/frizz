@@ -7,7 +7,7 @@
 import { randomUUID } from "node:crypto"
 import { adoptOrForkBroker, killBroker, liveBrokerRecord, claudeBrokerRecordPath, resolveClaudeExecutableAbsolute } from "./claude-broker-host.ts"
 import { connectClaudeBroker, type ClaudeBrokerClient } from "./claude-broker-client.ts"
-import type { ClaudePermissionDecision, ClaudePermissionRequest, ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
+import type { ClaudeDiagnostic, ClaudePermissionDecision, ClaudePermissionRequest, ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
 import type { ClaudeBrokerConfig } from "./claude-agent-broker.ts"
 import type { InteractionSessionScope, InteractionStore } from "../interaction-store.ts"
 import { buildClaudePermissionInteraction, claudePermissionDecisionFor } from "./claude-permission-interactions.ts"
@@ -57,6 +57,11 @@ export interface ClaudeBrokerBridgeDeps {
   decidePermission?: (slug: string, sessionId: string, request: ClaudePermissionRequest) => Promise<ClaudePermissionDecision>
   /** Observe the session/transcript event stream (board liveness / telemetry). Optional. */
   onEvent?: (slug: string, sessionId: string, event: ClaudeQueryEvent) => void
+  /** Observe daemon lifecycle/stderr diagnostics from a LIVE socket. The durable copy is written by
+   *  the daemon itself (claude-broker-diagnostics.ts) precisely because this relay only reaches a fray
+   *  that is attached at the time — which a crash during a restart is not. Optional; for a live
+   *  consumer, not for forensics. */
+  onDiagnostic?: (slug: string, sessionId: string, diagnostic: ClaudeDiagnostic) => void
 }
 
 export interface ClaudeSpawnDispatchInput {
@@ -145,6 +150,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     })
     const client = connectClaudeBroker(record.socketPath, {
       onEvent: (event) => deps.onEvent?.(slug, sessionId, event),
+      onDiagnostic: (diagnostic) => deps.onDiagnostic?.(slug, sessionId, diagnostic),
       onPermissionRequest: (requestId, request) => {
         // Dashboard routing when the store is wired; else the decision hook / auto-allow (tests).
         if (deps.interactions && deps.projectId) {
