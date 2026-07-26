@@ -121,6 +121,17 @@ export interface ClaudeQueryStartOptions {
   pluginDir?: string
   mcpServers?: Record<string, { type?: "stdio"; command: string; args?: string[]; env?: Record<string, string> }>
   allowedTools?: string[]
+  // Which of Claude Code's own settings layers the session loads — and, critically, whether it reads
+  // the PROJECT's `CLAUDE.md` / `AGENTS.md` and `.claude/skills` at all.
+  //
+  // Default `["project", "local"]`: the repo fray is dispatched INTO gets its own conventions in front
+  // of the worker, which is what every one of those files assumes ("This binds EVERY agent that
+  // touches this repo"). Deliberately NOT `"user"` — the operator's personal `~/.claude` config is
+  // theirs, not something a dispatched worker should silently inherit.
+  //
+  // Pass `[]` for a hermetic session that sees no project config at all (what the standalone SDK
+  // foundation used before the broker became a real worker transport).
+  settingSources?: Array<"user" | "project" | "local">
 }
 
 export interface ClaudeQueryHandle extends AsyncIterable<ClaudeQueryEvent> {
@@ -603,11 +614,16 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       ...(options.session.kind === "new" ? { sessionId } : { resume: sessionId }),
       canUseTool,
       onElicitation,
-      settingSources: [],
+      // PROJECT + LOCAL by default — see ClaudeQueryStartOptions.settingSources. `[]` was correct while
+      // this was a standalone foundation nothing dispatched through; once the broker became the DEFAULT
+      // Claude transport it silently stopped every worker from seeing the repo's own `CLAUDE.md` /
+      // `AGENTS.md` and its `.claude/skills`. Measured differential in the fray repo, one variable:
+      // this factory answered `NO-CLAUDE-MD` where a plain `claude -p` in the same cwd answered
+      // "# No pull requests — land on local `main`". `"user"` stays OUT on purpose (see the field docs).
+      settingSources: options.settingSources ?? ["project", "local"],
       // The fray worker environment (see ClaudeQueryStartOptions): load the local cc-worker plugin so a
       // broker session gets the fray sub-agent profiles + hooks, mount the MCP servers (fray +
-      // chrome-devtools), and pre-approve them. settingSources stays [] so ONLY this plugin loads, not
-      // the user's global settings.
+      // chrome-devtools), and pre-approve them.
       ...(options.pluginDir ? { plugins: [{ type: "local" as const, path: options.pluginDir }] } : {}),
       ...(options.mcpServers ? { mcpServers: options.mcpServers } : {}),
       ...(options.allowedTools ? { allowedTools: options.allowedTools } : {}),
