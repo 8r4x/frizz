@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os"
 import { insideFence, PermissionMode } from "@fray-ui/shared"
 import type { Bus } from "./bus.ts"
 import { permMarkerPath, type Project } from "./project.ts"
-import { isBrokerClaudeRow, isHeadlessRow } from "./storage.ts"
+import { isHeadlessRow } from "./storage.ts"
 import type { Storage, SessionRow } from "./storage.ts"
 import { discoverTranscriptId, DISCOVERY_GRACE_MS } from "./discover.ts"
 import type { AgentBackend, FoldState, NativeInputRequiredData, NormalizedEvent, NormalizedTail } from "./backend/types.ts"
@@ -12,7 +12,6 @@ import * as tmux from "./tmux.ts"
 import { detectClaudePermissionMode } from "./permission-controller.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { normalizeObservedThreadModel, validateThreadProfile } from "./backend/thread-profiles.ts"
-import { resolveRuntimeTurn } from "./backend/claude-runtime-ingest.ts"
 import { classifyLimitRecord } from "./backend/usage-limit.ts"
 import { parseDeliveryLedger, correlateDeliveryRecord, ageDeliveries, serializeDeliveryLedger, type DeliveryLedgerItem } from "./delivery-ledger.ts"
 import { createCodexSubAgentTracker, type CodexSubAgentTracker } from "./codex-subagents.ts"
@@ -1221,21 +1220,6 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
 
 // Derive the turn state from the folded tail (see the header heuristic). `nowMs` drives only the
 // unknown-stop-reason backstop; a clear end_turn/tool_use is time-independent.
-// computeTurn's answer PLUS whether the "in-flight" it returned is real evidence or the 5s backstop
-// still running out. Only the backstop case is a guess, and it is the only case a runtime turn signal
-// is permitted to short-circuit (see resolveRuntimeTurn in backend/claude-runtime-ingest.ts).
-export function computeTurnDetailed(state: TailState, nowMs: number): { turn: TurnState; backstopped: boolean } {
-  if (state.lastKind === "assistant") {
-    if (state.lastStopReason === "end_turn") return { turn: "idle", backstopped: false }
-    if (state.lastStopReason === "tool_use") return { turn: "in-flight", backstopped: false }
-    // unknown/missing stop_reason: only the 5s-silence backstop can call it idle
-    const at = state.lastActivityAt ? Date.parse(state.lastActivityAt) : NaN
-    if (Number.isFinite(at) && nowMs - at > IDLE_BACKSTOP_MS) return { turn: "idle", backstopped: false }
-    return { turn: "in-flight", backstopped: true }
-  }
-  return { turn: computeTurn(state, nowMs), backstopped: false }
-}
-
 export function computeTurn(state: TailState, nowMs: number): TurnState {
   if (state.lastKind === "assistant") {
     if (state.lastStopReason === "end_turn") return "idle"
@@ -1305,13 +1289,6 @@ export interface Tailer {
   start(onPrimeProgress?: (done: number, total: number) => void): void
   stop(): void
   tick(): void // exposed for tests + boot; the adaptive poll (scheduleTick) calls it otherwise
-  /**
-   * "Something changed — re-read now." Coalesced and throttled to the same duty-cycle floor the
-   * adaptive poll uses, so it is safe to call on every runtime event. Called by the Claude broker's
-   * event ingest (backend/claude-runtime-ingest.ts); a tailer nobody nudges behaves exactly as before.
-   * Optional for the same reason `dismissOp` is — a narrow test stub of this interface need not have it.
-   */
-  nudge?(): void
 }
 
 export interface TailerDeps {
@@ -1354,13 +1331,6 @@ export interface TailerDeps {
   // pass `null` to disable it entirely, which restores the historical "fold every transcript from
   // byte 0 on every boot" behaviour exactly (that is what the cache-off tests assert against).
   tailCache?: TailStateCache | null
-  // The SDK's OWN reading of a headless Claude session's turn, from the broker event stream
-  // (backend/claude-runtime-ingest.ts). The tailer's fold infers turn state from `stop_reason` and
-  // falls back to a 5s silence guess when that is missing; this is the provider saying it outright.
-  // Consulted ONLY through resolveRuntimeTurn, which is deliberately forbidden from overriding folded
-  // evidence — see the invariant documented there. Absent (tmux threads, tests, bridge-less server) ⇒
-  // the fold decides alone, byte-identical to before.
-  runtimeTurn?: (sessionId: string) => "running" | "settled" | undefined
 }
 
 // The durable permission-request marker written by the worker's PermissionRequest hook
@@ -1477,15 +1447,6 @@ export function createTailer(deps: TailerDeps): Tailer {
   // that can only ever return the same answer, since a tick describes one instant. Reset at the top of
   // each tick alongside the pane caches.
   let adoptionBindings = new Map<string, ReturnType<typeof adoptionRuntimeBinding>>()
-
-  // The turn a row is IN, folding in the provider's own reading when there is one. For every row
-  // without a runtime signal — every tmux thread, every codex row, every test fixture — this is
-  // exactly `computeTurn(state, nowMs)`.
-  function turnFor(row: SessionRow, state: TailState, nowMs: number): TurnState {
-    const detailed = computeTurnDetailed(state, nowMs)
-    if (!deps.runtimeTurn || !isBrokerClaudeRow(row)) return detailed.turn
-    return resolveRuntimeTurn(detailed.turn, detailed.backstopped, deps.runtimeTurn(row.session_id))
-  }
 
   function adoptionBinding(row: SessionRow) {
     const cached = adoptionBindings.get(row.slug)
@@ -2375,7 +2336,7 @@ export function createTailer(deps: TailerDeps): Tailer {
         if (primedLedger.changed) transcriptDirty.push(row.slug)
         persistCodexAutoTitle(row, state, runtimeGeneration)
         if (state.offset !== primeOffset) transcriptDirty.push(row.slug)
-        state.turn = turnFor(row, state, nowMs)
+        state.turn = computeTurn(state, nowMs)
         const pane = sniffPane(
           state,
           row,
@@ -2477,7 +2438,7 @@ export function createTailer(deps: TailerDeps): Tailer {
 
       // turn transition (in-flight → idle): a completed turn. Mark unread + notify, gated on
       // last_read_at so a turn the user has already scrolled past doesn't re-badge.
-      const nextTurn = turnFor(row, state, nowMs)
+      const nextTurn = computeTurn(state, nowMs)
       if (prevTurn !== nextTurn) {
         if (prevTurn === "in-flight" && nextTurn === "idle") {
           onTurnDone(row, state)
@@ -2670,7 +2631,6 @@ export function createTailer(deps: TailerDeps): Tailer {
     } finally {
       const elapsed = performance.now() - started
       lastTickMs = elapsed
-      lastTickEndedAtMs = now()
       if (elapsed > POLL_MS) {
         overBudgetTicks++
         // Log the first, then decimate: a saturated server must not spend its remaining budget logging.
@@ -2700,40 +2660,6 @@ export function createTailer(deps: TailerDeps): Tailer {
       if (!stopped) scheduleTick()
     }, delay)
     timer.unref?.()
-  }
-
-  // ---- Event-driven nudge (the poll's latency floor, removed) ---------------------------------------
-  // The adaptive poll above is level-triggered: it re-reads every session on a 1–10s cadence whether or
-  // not anything happened, and a thread that just finished its turn waits out the remainder of that
-  // cadence before the board moves. The Claude broker already knows the instant a session changed —
-  // it receives the SDK's typed event stream — so a runtime event calls nudge() and the tick runs now.
-  //
-  // Two properties keep this from becoming its own stability problem:
-  //  * COALESCED. A turn emits many events in a burst; one pending nudge covers all of them, because
-  //    the tick is whole-board anyway. Cost is bounded by the throttle below, not by event rate.
-  //  * DUTY-CYCLE PRESERVING. scheduleTick deliberately bounds the tailer at ~50% of the event loop by
-  //    never starting a tick sooner than the last one cost. The nudge inherits that exact floor, so a
-  //    chatty session can never starve RPCs and board pushes the way a fixed interval could.
-  const NUDGE_MS = 25
-  let nudgeTimer: NodeJS.Timeout | null = null
-  let lastTickEndedAtMs = 0
-
-  function nudge(): void {
-    if (stopped || nudgeTimer) return
-    // Same floor scheduleTick uses: at least NUDGE_MS, and never sooner after the previous tick than
-    // that tick cost to run.
-    const earliest = lastTickEndedAtMs + Math.max(NUDGE_MS, Math.round(lastTickMs))
-    const delay = Math.max(NUDGE_MS, earliest - now())
-    nudgeTimer = setTimeout(() => {
-      nudgeTimer = null
-      if (stopped) return
-      // Take over the poll's slot rather than running alongside it: clear the pending scheduled tick,
-      // run now, then restart the regular cadence from this moment.
-      if (timer) { clearTimeout(timer); timer = null }
-      tickWithBudget()
-      if (!stopped) scheduleTick()
-    }, delay)
-    nudgeTimer.unref?.()
   }
 
   function registeredStateIsCurrent(state: TailState): boolean {
@@ -2792,14 +2718,11 @@ export function createTailer(deps: TailerDeps): Tailer {
       stopped = true
       if (timer) clearTimeout(timer)
       timer = null
-      if (nudgeTimer) clearTimeout(nudgeTimer)
-      nudgeTimer = null
       // A clean shutdown is the cheapest moment to make the next boot free: write back everything the
       // periodic flush has not reached yet. A hard kill just costs that thread its delta re-read.
       flushCache(now())
     },
     tick,
-    nudge,
   }
 }
 

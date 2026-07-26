@@ -13,9 +13,9 @@
 // exit, reachability self-collection). The recovered session-broker daemon's NAIVE unconditional
 // cleanup is exactly the corpse-deletes-successor bug this guards against.
 import net from "node:net"
-import { readFileSync, unlinkSync, writeFileSync } from "node:fs"
+import { readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs"
 import { randomUUID } from "node:crypto"
-import { pathToFileURL } from "node:url"
+import { fileURLToPath } from "node:url"
 import { createClaudeQueryFactory } from "./claude-agent-sdk.ts"
 import type {
   ClaudeDiagnostic,
@@ -176,12 +176,29 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   return { close: async () => { await shutdown(0) }, sessionId: handle.sessionId, generation }
 }
 
+/** Was node pointed AT THIS FILE, rather than this module being imported by something else?
+ *
+ *  Both sides go through realpath because the two are not otherwise comparable: node resolves ESM
+ *  module URLs through the real path, while `process.argv[1]` is whatever string the spawner passed.
+ *  On macOS a daemon spawned under a temp dir arrives as `/var/folders/…` and reports itself as
+ *  `/private/var/folders/…` — a naive URL comparison silently answers "not the entry point" there,
+ *  which is precisely the artifact-vs-dev divergence class that has bitten this daemon before. */
+function startedAsProcessEntry(): boolean {
+  const entry = process.argv[1]
+  if (!entry) return false
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(entry)
+  } catch {
+    return false
+  }
+}
+
 // Standalone daemon entry: `node claude-agent-broker.ts` with config in FRAY_CLAUDE_BROKER.
 if (process.env.FRAY_CLAUDE_BROKER) {
   const config = JSON.parse(process.env.FRAY_CLAUDE_BROKER) as ClaudeBrokerConfig
   for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(sig, () => process.exit(0))
   runClaudeBroker(config)
-} else if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+} else if (startedAsProcessEntry()) {
   // Node was pointed AT THIS FILE and there is no configuration to broker. Exiting 0 here reports
   // success for a session that never started — the silent-death shape the detached-daemon closure
   // test exists to catch, and the reason that test has been red. Codex's daemon already fails this

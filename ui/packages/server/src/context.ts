@@ -40,7 +40,6 @@ import {
   createClaudeAgentBrokerBridge,
   type ClaudeAgentBrokerBridge,
 } from "./backend/claude-agent-broker-bridge.ts"
-import { createClaudeRuntimeIngest, type ClaudeRuntimeIngest } from "./backend/claude-runtime-ingest.ts"
 import type { ClaudePermissionMode } from "./backend/claude-agent-sdk-protocol.ts"
 import {
   ADOPTION_RECONCILE_INTERVAL_MS,
@@ -231,7 +230,6 @@ interface PartialContextResources {
   stopSubscriptions?: () => void
   codexAppServer?: CodexAppServerBridge
   claudeBroker?: ClaudeAgentBrokerBridge
-  claudeRuntimeIngest?: ClaudeRuntimeIngest
   board?: BoardManager
   tailer?: Tailer
   scheduler?: Scheduler
@@ -263,7 +261,7 @@ function partialContextCleanup(resources: PartialContextResources): PartialConte
     scheduler: createRetryableCleanup(async () => { await resources.scheduler?.stop() }),
     board: createRetryableCleanup(async () => { await resources.board?.stop() }),
     codexAppServer: createRetryableCleanup(async () => { await resources.codexAppServer?.shutdown() }),
-    claudeBroker: createRetryableCleanup(async () => { resources.claudeBroker?.close(); resources.claudeRuntimeIngest?.close() }),
+    claudeBroker: createRetryableCleanup(async () => { resources.claudeBroker?.close() }),
     storage: createRetryableCleanup(() => resources.storage?.close()),
   }
 }
@@ -590,22 +588,11 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   void codexAppServer?.warmUp()
   opts.startup?.afterPhase?.("Codex app-server bridge")
 
-  // The consumer for the broker's structured event stream. Until this existed the bridge forwarded
-  // every SDK event to a `deps.onEvent` nobody supplied, so the whole stream was dropped and the
-  // tailer re-derived the same state by polling the SDK's JSONL off disk on a 1–10s tick. The ingest
-  // does not replace that fold — it nudges it (re-read NOW, not on the next tick) and supplies the
-  // provider's own turn reading, which the fold may consult but never be overridden by. See
-  // backend/claude-runtime-ingest.ts. Created BEFORE the bridge because the bridge takes its handler;
-  // its nudge target is the tailer, created below, so `tailer` is late-bound the same way `board` is.
-  const claudeRuntimeIngest = claudeBrokerBridgeEnabled() ? createClaudeRuntimeIngest({ nudge: () => tailer.nudge?.() }) : undefined
-  resources.claudeRuntimeIngest = claudeRuntimeIngest
-
   // Claude session-broker bridge — the tmux-TUI replacement for Claude. Off unless the flag is set;
   // when off, backendFor + dispatch stay byte-identical to the tmux path. Permissions auto-allow for
   // now (matching today's `--permission-mode auto`); dashboard approval routing is the next slice.
   const claudeBroker = claudeBrokerBridgeEnabled()
     ? createClaudeAgentBrokerBridge({
-        onEvent: (slug, sessionId, event) => claudeRuntimeIngest?.onEvent(slug, sessionId, event),
         stateDir: project.stateDir,
         executablePath: opts.claudeBin ?? "claude",
         env: Object.fromEntries(Object.entries(process.env).filter(([, v]) => v != null)) as Record<string, string>,
@@ -631,9 +618,6 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         event.previous.session_id,
         event.type === "replaced" ? "session-replaced" : "session-deleted",
       )
-      // Drop the runtime turn reading with the session it described. A replaced session reuses the
-      // slug, so a stale "running" left behind here would be consulted for the NEW session's row.
-      claudeRuntimeIngest?.release(event.previous.session_id)
     }))
   }
 
@@ -649,9 +633,6 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     backendFor,
     onChange: () => board.refresh(),
     onTranscriptChange: (slugs) => transcriptChange.emit(slugs),
-    // The SDK's own turn reading for headless broker rows, so the fold's 5s unknown-stop_reason guess
-    // does not have to run out before a finished turn reaches the queue.
-    runtimeTurn: claudeRuntimeIngest ? (sessionId) => claudeRuntimeIngest.liveness(sessionId)?.turn : undefined,
   })
   resources.tailer = tailer
   opts.startup?.afterPhase?.("tailer")
