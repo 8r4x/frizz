@@ -2,7 +2,7 @@
 // (no real claude, no network — fast and deterministic). Proves the broker↔client typed socket
 // protocol, the permission round-trip over the socket, and — the reason the broker exists —
 // reconnect with a PENDING permission re-delivered to a fresh client.
-import { chmodSync, copyFileSync, mkdtempSync, rmSync } from "node:fs"
+import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -37,13 +37,30 @@ function clientWith(socketPath: string): { client: ClaudeBrokerClient; cap: Capt
   }
 }
 
-function startBroker(scenario: string): { socketPath: string; close: () => Promise<void>; dir: string } {
+function startBroker(scenario: string, extra: Partial<Parameters<typeof runClaudeBroker>[0]> = {}): { socketPath: string; close: () => Promise<void>; dir: string } {
   const dir = mkdtempSync(join(tmpdir(), "cbroker-"))
   const exe = join(dir, `fake-claude--${scenario}.mjs`)
   copyFileSync(fakeCli, exe); chmodSync(exe, 0o700)
   const socketPath = shortSocket()
-  const broker = runClaudeBroker({ socketPath, cwd: dir, sessionId: randomUUID(), executablePath: exe, permissionMode: "default", env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" } })
+  const broker = runClaudeBroker({ socketPath, cwd: dir, sessionId: randomUUID(), executablePath: exe, permissionMode: "default", env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" }, ...extra })
   return { socketPath, close: async () => { await broker.close(); rmSync(dir, { recursive: true, force: true }) }, dir }
+}
+
+// The fake CLI writes one JSON record per line beside its executable; `session-title` rows are the
+// `generate_session_title` control requests the broker issued.
+function captureRows(dir: string): { kind: string; description?: string; persist?: boolean }[] {
+  try {
+    return readFileSync(join(dir, "capture.jsonl"), "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l))
+  } catch { return [] }
+}
+async function waitForRows(dir: string, predicate: (rows: ReturnType<typeof captureRows>) => boolean, ms = 5_000): Promise<ReturnType<typeof captureRows>> {
+  const deadline = Date.now() + ms
+  for (;;) {
+    const rows = captureRows(dir)
+    if (predicate(rows)) return rows
+    if (Date.now() > deadline) return rows
+    await new Promise((r) => setTimeout(r, 50))
+  }
 }
 
 test("broker relays a typed permission request and forwards the decision", { timeout: 15_000 }, async () => {
@@ -83,5 +100,68 @@ test("a pending permission is re-delivered to a client that reconnects (the brok
     const result = await c2.waitEvent((e) => e.kind === "result")
     assert.equal(result.kind, "result", "the session continued after reconnect")
     c2.client.close()
+  } finally { await b.close() }
+})
+
+// ─── The session title ────────────────────────────────────────────────────────────────────────────
+// Claude Code titles a session by itself on the first user message — EXCEPT on the Agent-SDK
+// transport with a SessionStart hook registered, which is exactly the broker's configuration (it
+// always loads the cc-worker plugin). Bisected live against 2.1.220: a plugin carrying only a no-op
+// SessionStart hook produces NO `ai-title` record, the same plugin with only PreToolUse/PostToolUse/
+// PermissionRequest hooks titles normally. So the broker ASKS, and the board stops falling back to a
+// truncation of the raw dispatch prompt.
+test("the broker asks Claude to title the session from the first dispatch prompt", { timeout: 15_000 }, async () => {
+  const b = startBroker("basic")
+  try {
+    const c = clientWith(b.socketPath)
+    await new Promise((r) => setTimeout(r, 300))
+    c.client.sendInput({ id: randomUUID(), text: "Fix the login button on mobile" })
+    const rows = await waitForRows(b.dir, (r) => r.some((row) => row.kind === "session-title"))
+    const titles = rows.filter((row) => row.kind === "session-title")
+    assert.equal(titles.length, 1, "exactly one title request")
+    assert.equal(titles[0].description, "Fix the login button on mobile", "titled from the dispatch prompt")
+    assert.equal(titles[0].persist, true, "persisted — an unpersisted title never reaches the transcript fray reads")
+    c.client.close()
+  } finally { await b.close() }
+})
+
+test("a follow-up never retitles the thread", { timeout: 15_000 }, async () => {
+  const b = startBroker("basic")
+  try {
+    const c = clientWith(b.socketPath)
+    await new Promise((r) => setTimeout(r, 300))
+    c.client.sendInput({ id: randomUUID(), text: "first prompt" })
+    await waitForRows(b.dir, (r) => r.some((row) => row.kind === "session-title"))
+    c.client.sendInput({ id: randomUUID(), text: "and now something completely different" })
+    await new Promise((r) => setTimeout(r, 600))
+    const titles = captureRows(b.dir).filter((row) => row.kind === "session-title")
+    assert.equal(titles.length, 1, "still exactly one title request")
+    assert.equal(titles[0].description, "first prompt")
+    c.client.close()
+  } finally { await b.close() }
+})
+
+test("a resumed session keeps the title its transcript already carries", { timeout: 15_000 }, async () => {
+  const b = startBroker("basic", { resume: true })
+  try {
+    const c = clientWith(b.socketPath)
+    await new Promise((r) => setTimeout(r, 300))
+    c.client.sendInput({ id: randomUUID(), text: "carry on where we left off" })
+    await new Promise((r) => setTimeout(r, 600))
+    assert.equal(captureRows(b.dir).filter((row) => row.kind === "session-title").length, 0, "no title request on resume")
+    c.client.close()
+  } finally { await b.close() }
+})
+
+test("a failed title request neither throws nor stops the turn", { timeout: 15_000 }, async () => {
+  const b = startBroker("title-failure")
+  try {
+    const c = clientWith(b.socketPath)
+    await new Promise((r) => setTimeout(r, 300))
+    c.client.sendInput({ id: randomUUID(), text: "do the thing" })
+    const result = await c.waitEvent((e) => e.kind === "result")
+    assert.equal(result.kind, "result", "the turn completed despite the title request failing")
+    assert.ok(captureRows(b.dir).some((row) => row.kind === "session-title"), "the title request was made")
+    c.client.close()
   } finally { await b.close() }
 })

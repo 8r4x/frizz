@@ -121,6 +121,36 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     },
   })
 
+  // ASK Claude to name the session, once, from the dispatch prompt.
+  //
+  // Claude Code normally titles a session by itself on the first user message and appends an
+  // `ai-title` record to the session JSONL — the record fray's tailer folds into the board's
+  // `aiTitle`, and without which the board shows "Spinning up a thread…" for 60s and then falls back
+  // to a truncation of the raw dispatch prompt forever. That automatic titling is SUPPRESSED on the
+  // Agent-SDK (headless) transport whenever a `SessionStart` hook is registered — and fray's broker
+  // always loads the cc-worker plugin, whose hooks.json registers SessionStart. Bisected live against
+  // 2.1.220: a plugin carrying ONLY a no-op `SessionStart` hook yields NO ai-title and never even
+  // dispatches the titler's API request, while the same plugin carrying only PreToolUse / PostToolUse
+  // / PermissionRequest hooks titles normally. It is provider behavior fray cannot switch off without
+  // giving up the worker seeding, so the broker asks explicitly instead: the SDK's
+  // `generate_session_title` control request with `persist: true` runs the SAME titler and writes the
+  // SAME `ai-title` record, so nothing downstream of the JSONL changes.
+  //
+  // Fired on the FIRST input only, and only for a session this daemon STARTED: a resume re-attaches to
+  // a transcript that already carries its title, and a follow-up must never rename the thread.
+  // Deliberately not awaited by the caller (a title must never delay the turn) but tracked here so a
+  // failure is a diagnostic rather than an unhandled rejection.
+  let titleSeeded = config.resume === true
+  const seedSessionTitle = (message: ClaudeInputMessage): void => {
+    if (titleSeeded) return
+    const text = typeof message?.text === "string" ? message.text.trim() : ""
+    if (!text) return
+    titleSeeded = true
+    void handle.generateSessionTitle(text).catch((error: unknown) => {
+      writeDiagnostic?.({ kind: "stderr", message: `session-title request failed: ${error instanceof Error ? error.message : String(error)}`, truncated: false })
+    })
+  }
+
   // The session ending (claude exits) tears the daemon down — there is nothing left to hold.
   const pump = (async () => { for await (const event of handle) emitEvent(event) })().then(() => shutdown(0)).catch(() => shutdown(0))
 
@@ -137,7 +167,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
       for (let nl = buf.indexOf("\n"); nl >= 0; nl = buf.indexOf("\n")) {
         const line = buf.slice(0, nl); buf = buf.slice(nl + 1); if (!line.trim()) continue
         let msg: Record<string, unknown>; try { msg = JSON.parse(line) } catch { continue }
-        if (msg.t === "input") void handle.send(msg.message as ClaudeInputMessage).catch(() => {})
+        if (msg.t === "input") { const message = msg.message as ClaudeInputMessage; void handle.send(message).catch(() => {}); seedSessionTitle(message) }
         else if (msg.t === "permission") { const e = pendingPermissions.get(msg.requestId as string); if (e) { pendingPermissions.delete(msg.requestId as string); e.resolve(msg.decision as ClaudePermissionDecision) } }
         else if (msg.t === "interrupt") void handle.interrupt().catch(() => {})
         else if (msg.t === "set-mode") void handle.setPermissionMode(msg.mode as never).catch(() => {})

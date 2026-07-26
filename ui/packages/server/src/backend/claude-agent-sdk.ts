@@ -87,6 +87,8 @@ const MAX_ENV_VALUE_BYTES = 128 * 1024
 const MAX_ENV_TOTAL_BYTES = 1024 * 1024
 const MAX_PERMISSION_REQUESTS = 128
 const MAX_ELICITATION_CALLBACKS = 128
+const MAX_SESSION_TITLE_DESCRIPTION_BYTES = 64 * 1024
+const MAX_SESSION_TITLE_BYTES = 2 * 1024
 const NUB_NODE_SHIM_PATH_SEGMENT = /(?:^|[\\/])nub-node-shim-[^\\/]+$/
 
 export type ClaudeSessionSelection =
@@ -130,6 +132,10 @@ export interface ClaudeQueryHandle extends AsyncIterable<ClaudeQueryEvent> {
   reinitialize(): Promise<ClaudeControlInitialization>
   interrupt(): Promise<ClaudeInterruptReceipt | undefined>
   setPermissionMode(mode: ClaudePermissionMode): Promise<void>
+  // Ask the provider to name the session from `description` and PERSIST the name as the `ai-title`
+  // record fray's tailer reads. See CLAUDE_TITLE_NEEDS_EXPLICIT_REQUEST below for why the broker has
+  // to ask instead of letting Claude title the session on its own.
+  generateSessionTitle(description: string): Promise<string | undefined>
   close(): Promise<void>
 }
 
@@ -370,6 +376,29 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
     await this.ready()
     this.assertOpen()
     await this.awaitOpenControl(this.sdkQuery.setPermissionMode(parsedMode))
+  }
+
+  async generateSessionTitle(description: string): Promise<string | undefined> {
+    this.assertOpen()
+    // The titler summarizes the text it is given; a whole dispatch prompt is fine (and is what makes
+    // the title about the TASK) but it must not become an unbounded control frame.
+    const text = safeText(description, "sessionTitle.description", MAX_SESSION_TITLE_DESCRIPTION_BYTES).trim()
+    if (!text) throw new ClaudeAgentSdkProtocolError("sessionTitle.description must not be empty")
+    await this.ready()
+    this.assertOpen()
+    const provider = this.sdkQuery as unknown as {
+      generateSessionTitle?: (description: string, options?: { persist?: boolean }) => Promise<string | null | undefined>
+    }
+    // Present at runtime in @anthropic-ai/claude-agent-sdk 0.3.207 but absent from its .d.ts, so the
+    // capability is probed rather than assumed — an SDK bump that drops it must fail loudly here, not
+    // throw an opaque "not a function" out of a background title request.
+    if (typeof provider.generateSessionTitle !== "function") {
+      throw new ClaudeAgentSdkProtocolError("Claude session-title generation is unavailable")
+    }
+    const title = await this.awaitOpenControl(provider.generateSessionTitle(text, { persist: true }))
+    if (typeof title !== "string") return undefined
+    const clean = safeText(title, "sessionTitle.title", MAX_SESSION_TITLE_BYTES).trim()
+    return clean === "" ? undefined : clean
   }
 
   close(): Promise<void> {

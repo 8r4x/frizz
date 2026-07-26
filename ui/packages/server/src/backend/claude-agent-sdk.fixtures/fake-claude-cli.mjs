@@ -133,6 +133,15 @@ function handleHostControl(message) {
     respond(message.request_id, {})
     return
   }
+  // Real claude names the session from `description` and, when `persist` is set, appends the
+  // `ai-title` transcript record fray reads. The fake only needs to prove the REQUEST is made once,
+  // with the dispatch prompt and persistence on, so it records and echoes a derived title.
+  if (request.subtype === "generate_session_title") {
+    record({ kind: "session-title", description: request.description, persist: request.persist })
+    if (scenario === "title-failure") return respondError(message.request_id, "title generation unavailable")
+    respond(message.request_id, { title: `titled: ${String(request.description ?? "").slice(0, 40)}` })
+    return
+  }
   respondError(message.request_id, `unsupported fake control subtype ${String(request.subtype)}`)
 }
 
