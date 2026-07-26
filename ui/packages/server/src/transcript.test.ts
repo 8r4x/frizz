@@ -3,8 +3,9 @@ import assert from "node:assert/strict"
 import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir, homedir } from "node:os"
 import { join } from "node:path"
-import { GITHUB_DISPATCH_UI_BOUNDARY, wakeDeliveryToken } from "@fray-ui/shared"
+import { DISPATCH_TASK_BANNER_MARKER, GITHUB_DISPATCH_UI_BOUNDARY, wakeDeliveryToken } from "@fray-ui/shared"
 import {
+  frayDispatchDisplayText,
   githubDispatchDisplayText,
   pageProjectedTranscript,
   projectClaudeTranscript,
@@ -38,13 +39,16 @@ ${GITHUB_DISPATCH_UI_BOUNDARY}
 You are triaging a GitHub issue. This full worker template must remain available.`
 
 test("Claude GitHub dispatch retains full first-user text but exposes only the compact generated lead", () => {
+  // The GitHub envelope rides BELOW fray's dispatch banner, so the two projections compose: peel fray's
+  // envelope first, then the GitHub template. `text` keeps every byte the worker actually received.
+  const content = `scratchpad orientation${DISPATCH_TASK_BANNER_MARKER}${githubTask}`
   const raw = JSON.stringify({
     type: "user",
     timestamp: "2026-07-01T00:00:00.000Z",
-    message: { content: `scratchpad orientation\n\nTASK:\n${githubTask}` },
+    message: { content },
   })
   const [message] = parseTranscript(raw)
-  assert.equal(message.text, githubTask)
+  assert.equal(message.text, content)
   assert.equal(
     message.displayText,
     "Investigate this issue and make recommendations\n\nIssue #326: Support multiple accounts\nRepository: cli/cli\nURL: https://github.com/cli/cli/issues/326",
@@ -102,6 +106,44 @@ test("a wake token is projected out only from the delivery tail, never from quot
   const asked = msgs[msgs.length - 1]
   assert.equal(asked.text, quoting)
   assert.equal(asked.displayText, undefined, "a mid-sentence token is the human's own words — leave the bubble alone")
+})
+
+// fray's own dispatch envelope. The bubble shows the operator's prompt and nothing else — on the plain
+// `user` record the tmux runtime writes AND on the `queue-operation` enqueue record the broker writes.
+test("fray dispatch envelope is projected out of the first bubble on every record shape", () => {
+  const task = "Fix the thing.\n\nWith a second paragraph."
+  const composed = `Your scratchpad is \`.fray/threads/sid/scratch.md\` — …${DISPATCH_TASK_BANNER_MARKER}${task}`
+
+  assert.equal(frayDispatchDisplayText(composed), task)
+  assert.equal(frayDispatchDisplayText("just a follow-up steer"), undefined)
+
+  const asUser = JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:00.000Z", message: { content: composed } })
+  assert.equal(parseTranscript(asUser)[0].displayText, task)
+
+  const asEnqueue = JSON.stringify({ type: "queue-operation", timestamp: "2026-07-01T00:00:00.000Z", operation: "enqueue", content: composed })
+  const [queued] = parseTranscript(asEnqueue)
+  assert.equal(queued.displayText, task)
+  assert.equal(queued.text, composed, "the raw content is the key the delivery attachment matches on")
+})
+
+// Threads dispatched before 2026-07-26 carry the retired envelope: an explanation line and a bare
+// `TASK:` marker BELOW the banner. Their transcripts must still render as they always did.
+test("the retired below-the-banner TASK: envelope still renders as just the task", () => {
+  const task = "Fix the thing."
+  const legacyTail = "Everything ABOVE this line is fray system orientation. Everything BELOW the `TASK:` marker is the human operator's own prompt, verbatim."
+  const legacy = `orientation${DISPATCH_TASK_BANNER_MARKER}${legacyTail}\n\nTASK:\n${task}`
+  assert.equal(frayDispatchDisplayText(legacy), task)
+
+  // …and the era before the banner existed at all, which was the bare marker alone.
+  assert.equal(frayDispatchDisplayText(`orientation\n\nTASK:\n${task}`), task)
+})
+
+// The retired preamble is matched EXACTLY, so a current dispatch whose task legitimately contains a
+// "TASK:" line of its own is shown whole rather than truncated at it.
+test("a task that itself contains a TASK: line is never truncated at it", () => {
+  const task = "Rename the header.\n\nTASK:\nthis line is part of what the operator wrote"
+  const composed = `orientation${DISPATCH_TASK_BANNER_MARKER}${task}`
+  assert.equal(frayDispatchDisplayText(composed), task)
 })
 
 test("GitHub display boundary is inert without the complete generated envelope", () => {

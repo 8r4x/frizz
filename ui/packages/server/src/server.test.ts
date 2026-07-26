@@ -261,7 +261,7 @@ test("composePrompt: scratchpad orientation + custom instructions + task (no thr
   assert.ok(!out.includes("status: blocked"))
   assert.ok(out.includes("PROJECT INSTRUCTIONS (from the human operator):\nPREAMBLE_TEXT"))
   assert.ok(!composePrompt("s", "x", "").includes("PROJECT INSTRUCTIONS"))
-  assert.ok(out.includes("TASK:\nDo the thing."))
+  assert.ok(out.endsWith("\n\nDo the thing.")) // the task is the tail, directly below the banner
 })
 
 test("scratchpadOrientation: scratchpad line always; PLAN line only when a plan is associated", () => {
@@ -391,7 +391,7 @@ test("dispatch: writes a scratchpad (not a thread file), argv carries the scratc
   assert.ok(systemPromptOf(cmd).includes(`SCRATCHPAD: .fray/threads/${sessionId}/scratch.md`))
   const userPrompt = cmd[cmd.length - 1]
   assert.ok(userPrompt.includes(`.fray/threads/${sessionId}/scratch.md`))
-  assert.ok(userPrompt.includes("TASK:\nDo the thing."))
+  assert.ok(userPrompt.endsWith("\n\nDo the thing.")) // the task is the tail, directly below the banner
   assert.ok(!userPrompt.includes("You own"))
   assert.equal(h.spawned[0].env?.FRAY_UI_THREAD, slug)
 

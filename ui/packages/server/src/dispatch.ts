@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url"
 import { createHash, randomUUID } from "node:crypto"
 import {
   AdoptThreadInput,
+  DISPATCH_TASK_BANNER_MARKER,
   DispatchInput,
   THREAD_SLUG_MAX_CHARS,
   ThreadSlug,
@@ -285,25 +286,13 @@ export function composePrompt(sessionId: string, prompt: string, customInstructi
   const custom = customInstructions.trim()
     ? `\n\nPROJECT INSTRUCTIONS (from the human operator):\n${customInstructions.trim()}`
     : ""
-  // The banner makes the system→human handoff unmistakable to the worker; the bare `\nTASK:\n` line
-  // stays IMMEDIATELY before the prompt because both transcript parsers cut the first user message on
-  // its first occurrence to display only the human's words (transcript.ts). The banner must therefore
-  // never contain that exact newline-delimited token.
-  const demarcation = [
-    "",
-    "",
-    "",
-    "",
-    "===============================================================",
-    "======================    YOUR TASK    ========================",
-    "===============================================================",
-    "",
-    "Everything ABOVE this line is fray system orientation. Everything BELOW the `TASK:` marker is the human operator's own prompt, verbatim.",
-    "",
-    "TASK:",
-    "",
-  ].join("\n")
-  return `${scratch}${custom}${demarcation}${prompt}`
+  // The banner makes the system→human handoff unmistakable to the worker, and NOTHING of fray's is
+  // allowed below it: the framing note goes here, ABOVE, so everything past the banner is the
+  // operator's prompt byte for byte. That is also what the transcript projectors cut on
+  // (DISPATCH_TASK_BANNER_MARKER), so the first chat bubble shows the operator's words alone.
+  const handoff =
+    "\n\nEverything above the banner below is fray system orientation. Everything below it is the human operator's own prompt, verbatim — that, and nothing else, is your task."
+  return `${scratch}${custom}${handoff}\n\n\n${DISPATCH_TASK_BANNER_MARKER}${prompt}`
 }
 
 // The SYSTEM-level scratchpad orientation (survives compaction, rebuilds on every resume): a scratchpad

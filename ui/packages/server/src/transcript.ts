@@ -4,6 +4,7 @@ import { StringDecoder } from "node:string_decoder"
 import { join } from "node:path"
 import { homedir, tmpdir } from "node:os"
 import {
+  DISPATCH_TASK_BANNER_MARKER,
   GITHUB_DISPATCH_UI_BOUNDARY,
   ATTACHMENT_IMAGE_EXTENSIONS,
   attachmentExtension,
@@ -91,16 +92,56 @@ export function githubDispatchDisplayText(text: string): string | undefined {
   return match?.[1]
 }
 
+// The retired first-prompt envelope. Until 2026-07-26 composePrompt put an explanation line and a bare
+// `TASK:` marker BELOW the banner, and that marker — not the banner — was the display cut. Recognizing
+// the exact retired preamble (rather than just hunting for `\nTASK:\n` below the banner) is what keeps a
+// NEW dispatch whose task legitimately contains a "TASK:" line from being truncated at it.
+const LEGACY_TASK_MARKER = "\nTASK:\n"
+const LEGACY_BANNER_PREAMBLE =
+  "Everything ABOVE this line is fray system orientation. Everything BELOW the `TASK:` marker is the human operator's own prompt, verbatim."
+
+// Display-only projection for the FIRST user turn of a fray dispatch: strip fray's own envelope
+// (scratchpad orientation + project instructions + the YOUR TASK banner) so the bubble is the human
+// operator's prompt and nothing else. Everything below DISPATCH_TASK_BANNER_MARKER is verbatim theirs.
+//
+// This is the ONLY place the envelope is cut, which is the point: a broker thread's first prompt
+// arrives as a `queue-operation` enqueue record, a tmux thread's as an ordinary `user` record, and a
+// resumed one as a `queued_command` attachment. The old cut lived inline in the plain-`user` arm alone,
+// so under the broker the whole composed prompt — orientation, instructions, banner and all — rendered
+// in the chat bubble. Returns undefined when `text` carries no envelope (any turn but the first).
+export function frayDispatchDisplayText(text: string): string | undefined {
+  const cut = text.indexOf(DISPATCH_TASK_BANNER_MARKER)
+  if (cut === -1) {
+    // Pre-banner dispatches carried the bare marker with no banner at all.
+    const legacy = text.indexOf(LEGACY_TASK_MARKER)
+    return legacy === -1 ? undefined : text.slice(legacy + LEGACY_TASK_MARKER.length).trim()
+  }
+  const below = text.slice(cut + DISPATCH_TASK_BANNER_MARKER.length)
+  if (below.startsWith(LEGACY_BANNER_PREAMBLE)) {
+    const legacy = below.indexOf(LEGACY_TASK_MARKER)
+    if (legacy !== -1) return below.slice(legacy + LEGACY_TASK_MARKER.length).trim()
+  }
+  return below.trim()
+}
+
 // The display projection for ONE user turn — undefined when the stored text is already what to show.
-// Two independent reasons a user record can carry machine-facing tail, composed in order:
-//   • a generated GitHub dispatch (FIRST turn only — the envelope is what opens the thread);
+// Three independent reasons a user record can carry machine-facing text, composed in order:
+//   • fray's own dispatch envelope (FIRST turn only — orientation + instructions above the banner);
+//   • a generated GitHub dispatch (FIRST turn only — the envelope is what opens the thread). It sits
+//     BELOW fray's banner, so it is peeled from the remainder, not from the raw record;
 //   • the scheduler's wake-delivery token, which rides ANY turn a wake lands on. That's the case the
 //     old `out.length === 0` gate missed entirely: a wake is by definition a later turn, so its token
 //     reached the pre-wrap user bubble and rendered as literal `<!-- fray-wake:… -->`.
 // `text` is never narrowed — the outbox acks a delivery by finding that token in the worker's own
-// record, and persistence/search keep the full machine-facing prompt.
+// record, the queued-bubble map keys on the raw enqueued content, and persistence/search keep the full
+// machine-facing prompt.
 function userDisplayText(text: string, first: boolean): string | undefined {
-  const projected = stripWakeDeliveryToken((first && githubDispatchDisplayText(text)) || text)
+  let projected = text
+  if (first) {
+    projected = frayDispatchDisplayText(projected) ?? projected
+    projected = githubDispatchDisplayText(projected) ?? projected
+  }
+  projected = stripWakeDeliveryToken(projected)
   return projected === text ? undefined : projected
 }
 
@@ -373,12 +414,9 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
           return
         }
         deliveredDedupe = null
-        // The first user message is the composed dispatch prompt (fixed worker prompt + thread
-        // contract + TASK). Only the TASK is the human's words — show just that.
-        if (out.length === 0) {
-          const cut = text.indexOf("\nTASK:\n")
-          if (cut !== -1) text = text.slice(cut + "\nTASK:\n".length).trim()
-        }
+        // The first user message is the composed dispatch prompt (scratchpad orientation + project
+        // instructions + banner + TASK). Only what sits below the banner is the human's words — that
+        // narrowing is a DISPLAY projection (userDisplayText), never a rewrite of the stored text.
         const displayText = userDisplayText(text, out.length === 0)
         out.push({ sourceId, role: "user", text, ...(displayText ? { displayText } : {}), tools: [], parts: [], at: rec.timestamp })
         lastAssistantId = null
@@ -1474,12 +1512,9 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
           if (out.length === 0) text = stripCodexFirstPromptTitleTransport(text)
           text = stripCodexSentinel(text)
           if (!text || isInjectedNoise(text)) break
-          // The first user message is the composed dispatch prompt (worker contract + orientation + TASK
-          // + sentinel). Only the TASK is the human's words — mirror parseTranscript's first-message strip.
-          if (out.length === 0) {
-            const cut = text.indexOf("\nTASK:\n")
-            if (cut !== -1) text = text.slice(cut + "\nTASK:\n".length).trim()
-          }
+          // The first user message is the composed dispatch prompt (orientation + banner + TASK +
+          // sentinel). Only what sits below the banner is the human's words, and — as in parseTranscript
+          // — that narrowing is a DISPLAY projection, so the stored text keeps the machine-facing prompt.
           if (text) {
             const displayText = userDisplayText(text, out.length === 0)
             out.push({ sourceId, role: "user", text, ...(displayText ? { displayText } : {}), tools: [], parts: [], at: ev.at })

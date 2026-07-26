@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { DISPATCH_TASK_BANNER_MARKER } from "@fray-ui/shared"
 import { buildClaudeCommand, loadWorkerPrompt, composePrompt, resolveWorkerPluginDir, scratchpadOrientation, scratchpadContent, workerPluginDir, frayConfigBlock } from "./dispatch.ts"
 import { parseTranscript } from "./transcript.ts"
 import { CHROME_DEVTOOLS_MCP, FRAY_MCP } from "./backend/types.ts"
@@ -463,12 +464,12 @@ test("composePrompt(claude) keeps the sub-agent blackboard framing; codex drops 
   assert.doesNotMatch(codex, /sub-agent/)
   assert.doesNotMatch(codex, /blackboard/)
   assert.match(codex, /compaction-proof working memory/)
-  assert.match(codex, /TASK:\ndo the thing/) // the task still rides through
+  assert.ok(codex.endsWith("do the thing")) // the task still rides through, and rides through LAST
 })
 
 // ---- composePrompt: the system→human handoff carries a loud demarcation banner ----
 
-test("composePrompt separates fray orientation from the human's prompt with a banner, and the transcript strip still shows only the task", () => {
+test("composePrompt puts NOTHING of fray's below the banner — the operator's prompt is the whole tail", () => {
   const task = "Fix the thing.\n\nWith a second paragraph."
   const composed = composePrompt("sid", task, "Always run lint.", "claude")
 
@@ -477,19 +478,39 @@ test("composePrompt separates fray orientation from the human's prompt with a ba
   assert.notEqual(banner, -1)
   assert.ok(composed.indexOf("PROJECT INSTRUCTIONS") < banner)
   assert.match(composed, /\n\n\n\n=+\n=+ {4}YOUR TASK {4}=+\n=+\n/)
-  // The machine marker stays IMMEDIATELY before the prompt (the parsers cut on its first occurrence),
-  // and the banner introduces no earlier occurrence of it.
-  assert.ok(composed.endsWith(`\nTASK:\n${task}`))
-  assert.equal(composed.indexOf("\nTASK:\n"), composed.lastIndexOf("\nTASK:\n"))
+  // THE property the banner exists for: below it is the operator's prompt, byte for byte. The framing
+  // note that used to sit underneath now sits above, and the bare `TASK:` marker is gone entirely.
+  assert.ok(composed.endsWith(`${DISPATCH_TASK_BANNER_MARKER}${task}`))
+  assert.equal(composed.indexOf(DISPATCH_TASK_BANNER_MARKER), composed.lastIndexOf(DISPATCH_TASK_BANNER_MARKER))
+  assert.ok(!composed.includes("\nTASK:\n"))
+  assert.ok(composed.indexOf("fray system orientation") < banner)
 
-  // Round-trip through the real parser: the UI's first user message is exactly the human's words.
+  // Round-trip through the real parser: the UI's first user message shows exactly the human's words,
+  // while the stored text keeps the whole machine-facing prompt the worker actually received.
   const raw = JSON.stringify({
     type: "user",
     timestamp: "2026-07-01T00:00:00.000Z",
     message: { content: composed },
   })
   const [message] = parseTranscript(raw)
-  assert.equal(message.text, task)
+  assert.equal(message.displayText, task)
+  assert.equal(message.text, composed)
+})
+
+// The broker runtime delivers the dispatch prompt as a `queue-operation` enqueue record, NOT as a plain
+// `user` record — which is how the whole composed prompt (orientation, project instructions, banner and
+// all) ended up rendered in the first chat bubble of every broker thread.
+test("composePrompt round-trips through the BROKER's enqueue record with the same bubble", () => {
+  const task = "run `claude rc` in this repo"
+  const composed = composePrompt("sid", task, "", "claude")
+  const raw = [
+    JSON.stringify({ type: "queue-operation", timestamp: "2026-07-01T00:00:00.000Z", operation: "enqueue", content: composed }),
+    JSON.stringify({ type: "queue-operation", timestamp: "2026-07-01T00:00:00.100Z", operation: "dequeue", content: composed }),
+  ].join("\n")
+  const [message] = parseTranscript(raw)
+  assert.equal(message.displayText, task)
+  assert.equal(message.text, composed) // the raw content stays the queued-bubble map's key
+  assert.equal(message.queued, false)
 })
 
 // ---- scratchpadOrientation: the SYSTEM-level line is backend-aware ----

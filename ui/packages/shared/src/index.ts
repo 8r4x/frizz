@@ -832,6 +832,26 @@ export const SetThreadProfileResult = z.object({
 })
 export type SetThreadProfileResult = z.infer<typeof SetThreadProfileResult>
 
+// ---- DISPATCH TASK BANNER (composer ↔ transcript) -------------------------------------------------
+// The loud fence fray puts between its own dispatch orientation and the human operator's prompt. It is
+// BOTH the worker's system→human handoff cue and the transcript's display boundary, so it lives here,
+// next to the other exact presentation markers, rather than in either consumer.
+//
+// The rule the banner buys is: NOTHING of fray's sits below it. Everything the worker needs to be told
+// about the framing goes ABOVE — below the banner is the operator's prompt, byte for byte, and the
+// first user bubble shows exactly that. (Until 2026-07-26 an explanation line and a bare `TASK:` marker
+// sat between the banner and the prompt; that marker was the display cut, which is why the retired
+// envelope is still recognized in transcript.ts.)
+export const DISPATCH_TASK_BANNER = [
+  "===============================================================",
+  "======================    YOUR TASK    ========================",
+  "===============================================================",
+].join("\n")
+
+// The exact cut: the banner on its own lines, followed by one blank line, then the prompt. Requiring
+// the surrounding newlines keeps a banner quoted inside prose from being read as the boundary.
+export const DISPATCH_TASK_BANNER_MARKER = `\n${DISPATCH_TASK_BANNER}\n\n`
+
 // ---- GitHub-first batch dispatch (server ↔ web mirror; wrapper in server/github.ts) ----
 
 // Exact, versioned presentation boundary in a GitHub batch-dispatch prompt. The worker receives the
@@ -981,7 +1001,9 @@ export type BoardDelta = Extract<ServerEvent, { type: "board-delta" }>
 // `@fray-ui/shared` stays the single entry point).
 export * from "./code-fences.ts"
 export * from "./delta.ts"
+export * from "./drainable-worker.ts"
 export * from "./interactions.ts"
+export * from "./receipt-bus.ts"
 export * from "./thread-slug.ts"
 
 // ---- Rendered conversation (parsed mechanically from the session JSONL — no AI) ----

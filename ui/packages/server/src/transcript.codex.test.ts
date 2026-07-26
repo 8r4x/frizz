@@ -622,28 +622,33 @@ test("codex first user message preserves the task while stripping only Fray disp
   const composed = `WORKER CONTRACT stuff\n\nscratchpad orientation\n\nSome preamble\nTASK:\nActually do the thing\n\n${CODEX_FIRST_FINAL_TITLE_TRANSPORT}\n\n<!-- fray-session:01234567-89ab-cdef-0123-456789abcdef -->`
   const raw = rollout([{ type: "event_msg", payload: { type: "user_message", message: composed } }])
   const msgs = parseCodexTranscript(raw)
-  assert.equal(msgs[0].text, "Actually do the thing")
+  // The dispatch scaffolding is a DISPLAY projection: the bubble is the task, the stored text keeps the
+  // machine-facing prompt. (The title trailer and sentinel are genuinely removed — they are Fray's own
+  // transport, not something the worker was ever meant to read back.)
+  assert.equal(msgs[0].displayText, "Actually do the thing")
+  assert.match(msgs[0].text, /^WORKER CONTRACT stuff/)
+  assert.doesNotMatch(msgs[0].text, /FRAY TITLE TRANSPORT|fray-session:/)
 })
 
 test("codex first user message strips the exact legacy H1 title trailer without rewriting old transcripts", () => {
   const task = "Keep this human task exactly as written."
   const composed = `WORKER CONTRACT stuff\n\nTASK:\n${task}\n\n${CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT}\n\n<!-- fray-session:01234567-89ab-cdef-0123-456789abcdef -->`
   const [message] = parseCodexTranscript(rollout([{ type: "event_msg", payload: { type: "user_message", message: composed } }]))
-  assert.equal(message.text, task)
+  assert.equal(message.displayText, task)
   assert.doesNotMatch(message.text, /FRAY TITLE TRANSPORT|# Title/)
 
   const almostGenerated = `${task}\n\n${CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT}\n\n<!-- fray-session:not-a-uuid -->`
   const [ordinary] = parseCodexTranscript(rollout([{ type: "event_msg", payload: { type: "user_message", message: `contract\nTASK:\n${almostGenerated}` } }]))
   // The general sentinel stripper still hides the discovery comment, but the invalid UUID must not
   // authorize removal of the adjacent title-looking human prose.
-  assert.equal(ordinary.text, `${task}\n\n${CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT}`)
+  assert.equal(ordinary.displayText, `${task}\n\n${CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT}`)
 })
 
 test("codex first user message retains ordinary title-transport-like prose", () => {
   const task = `${CODEX_FIRST_FINAL_TITLE_TRANSPORT}\n\nThis sentence is part of the human task.`
   const raw = rollout([{ type: "event_msg", payload: { type: "user_message", message: `contract\nTASK:\n${task}\n\n<!-- fray-session:01234567-89ab-cdef-0123-456789abcdef -->` } }])
   const [message] = parseCodexTranscript(raw)
-  assert.equal(message.text, task)
+  assert.equal(message.displayText, task)
 })
 
 test("codex GitHub dispatch keeps the full worker tail in text and presents the compact lead", () => {
@@ -660,7 +665,7 @@ ${GITHUB_DISPATCH_UI_BOUNDARY}
 Adversarially audit the full diff, tests, and CI. This machine tail stays in the transcript.`
   const composed = `worker contract\n\nTASK:\n${task}\n\n<!-- fray-session:abc-123 -->`
   const [message] = parseCodexTranscript(rollout([{ type: "event_msg", payload: { type: "user_message", message: composed } }]))
-  assert.equal(message.text, task)
+  // Both envelopes peel for display — fray's dispatch scaffolding, then the GitHub template.
   assert.equal(
     message.displayText,
     "Investigate this issue and make recommendations\n\nPR #13844: perf(status): O(1) map lookup\nRepository: cli/cli\nURL: https://github.com/cli/cli/pull/13844",
@@ -696,8 +701,9 @@ test("codex follow-up (resume) user message renders in full (no first-message st
     msgs.map((m) => m.role),
     ["user", "assistant", "user"],
   )
-  assert.equal(msgs[0].text, "the task")
+  assert.equal(msgs[0].displayText, "the task")
   assert.equal(msgs[2].text, "now also handle the edge case")
+  assert.equal(msgs[2].displayText, undefined, "a follow-up carries no dispatch envelope to project out")
 })
 
 test("codex turn-end fallback: a commentary-only turn's answer (only on task_complete) is surfaced, not dropped", () => {
