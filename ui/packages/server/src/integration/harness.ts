@@ -96,7 +96,7 @@ export function createIntegrationHarness(): IntegrationHarness {
     paneDead: () => false,
     capturePane: () => "",
     onChange: () => { refreshes++; board.refresh() },
-    runtimeTurn: (sessionId) => ingest.liveness(sessionId)?.turn,
+    runtimeLiveness: (sessionId) => ingest.liveness(sessionId),
   })
 
   const board = createBoard(project, storage, bus, tailer, "integration-boot", {

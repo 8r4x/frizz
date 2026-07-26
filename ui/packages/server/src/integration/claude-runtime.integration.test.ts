@@ -197,6 +197,59 @@ test("integration: receipts name each milestone, and drain means the ingest is f
   }
 })
 
+test("integration: the fold catches up when the provider's event beats its own disk write", async () => {
+  // THE case the promoted-artifact measurement caught, and the reason chaseRuntime exists. Measured
+  // against a real broker session (backend/_live_broker_ingest.mts): the SDK emitted `assistant` and
+  // `result` with the transcript still at its previous size, and the record landed ~100-140ms later.
+  // A single nudge on the event therefore folds NOTHING, and before the chase the change sat until the
+  // next 1s poll — which is exactly what the artifact showed (~920ms, i.e. no improvement at all).
+  //
+  // Real timers here on purpose: the whole point is that the tick has to run AGAIN, later, without
+  // anything else prompting it. `settle()` (which ticks by hand) would hide the bug completely.
+  const h = createIntegrationHarness()
+  try {
+    const s = h.dispatch("iota")
+    h.telemetry("iota") // prime; nothing calls tick() by hand past this line
+
+    // The events arrive first, describing a turn whose records are not on disk yet.
+    s.play(event(userEvent("go", s.sessionId)), event(assistantEvent("all done", s.sessionId)), event(resultEvent(s.sessionId)))
+    await h.ingest.drain()
+
+    // …and the writes land a beat later, with NO event to announce them.
+    await new Promise((r) => setTimeout(r, 60))
+    s.play(record(userRecord("go", T0)), record(assistantRecord("all done", "end_turn", T1)))
+
+    const deadline = Date.now() + 2_000
+    while (h.tailer.get("iota")?.lastAssistant !== "all done" && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    assert.equal(h.tailer.get("iota")?.lastAssistant, "all done", "the chase re-read after the write landed")
+    assert.equal(h.tailer.get("iota")?.turn, "idle")
+  } finally {
+    h.close()
+  }
+})
+
+test("integration: the chase is bounded — events that never produce a record stop nudging", async () => {
+  // The other half of the contract: `init` and the system sidecars bump the provider's event count
+  // without ever writing a record the fold can consume. Chasing those forever would turn a quiet
+  // session into a permanent tick loop, which is a worse stability problem than the latency.
+  const h = createIntegrationHarness()
+  try {
+    const s = h.dispatch("kappa")
+    h.telemetry("kappa")
+    s.play(event({ kind: "other", type: "system", sessionId: s.sessionId }))
+    await h.ingest.drain()
+
+    await new Promise((r) => setTimeout(r, 900)) // ≫ RUNTIME_CHASE_MAX × the ~25ms nudge floor
+    const settled = h.boardRefreshes()
+    await new Promise((r) => setTimeout(r, 300))
+    assert.equal(h.boardRefreshes(), settled, "the chase gave up rather than nudging forever")
+  } finally {
+    h.close()
+  }
+})
+
 test("integration: a runtime event drives a tailer re-read with no poll tick at all", async () => {
   // The latency claim, asserted against the REAL nudge path — real timers, no tailer.tick() call.
   // Before this the same assertion would have had to wait out POLL_MS (1s) at best and MAX_POLL_MS
