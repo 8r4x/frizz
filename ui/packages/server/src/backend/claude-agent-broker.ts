@@ -15,6 +15,7 @@
 import net from "node:net"
 import { readFileSync, unlinkSync, writeFileSync } from "node:fs"
 import { randomUUID } from "node:crypto"
+import { pathToFileURL } from "node:url"
 import { createClaudeQueryFactory } from "./claude-agent-sdk.ts"
 import type {
   ClaudeDiagnostic,
@@ -180,4 +181,14 @@ if (process.env.FRAY_CLAUDE_BROKER) {
   const config = JSON.parse(process.env.FRAY_CLAUDE_BROKER) as ClaudeBrokerConfig
   for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(sig, () => process.exit(0))
   runClaudeBroker(config)
+} else if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  // Node was pointed AT THIS FILE and there is no configuration to broker. Exiting 0 here reports
+  // success for a session that never started — the silent-death shape the detached-daemon closure
+  // test exists to catch, and the reason that test has been red. Codex's daemon already fails this
+  // way (readConfig throws when FRAY_CODEX_APP_SERVER_DAEMON is absent); match it.
+  //
+  // Gated on being the process ENTRY POINT, not merely on the env being absent: claude-broker-host
+  // spawns `node <this file>` so argv[1] is exactly this module, while a test that IMPORTS
+  // runClaudeBroker runs under the test runner's argv[1] and must keep loading cleanly.
+  throw new Error("claude session broker started without FRAY_CLAUDE_BROKER")
 }
