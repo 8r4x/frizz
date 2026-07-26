@@ -18,6 +18,20 @@ import type { ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
 const fakeCli = fileURLToPath(new URL("./claude-agent-sdk.fixtures/fake-claude-cli.mjs", import.meta.url))
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+// SIGKILL reaches the DAEMON, not the claude process it forked — which keeps appending to its capture
+// log for a few more milliseconds. A one-shot recursive rm loses that race intermittently (ENOTEMPTY:
+// a file reappears between readdir and rmdir), so retry briefly instead of failing a green test on
+// teardown noise.
+async function rmEventually(dir: string, ms = 3_000): Promise<void> {
+  const deadline = Date.now() + ms
+  for (;;) {
+    try { rmSync(dir, { recursive: true, force: true }); return } catch (error) {
+      if (Date.now() > deadline) throw error
+      await sleep(50)
+    }
+  }
+}
+
 async function runCase(decisionId: string, expectBehavior: "allow" | "deny") {
   const dir = mkdtempSync(join(tmpdir(), "cbrk-perm-"))
   const exe = join(dir, "fake-claude--permission.mjs")
@@ -59,7 +73,7 @@ async function runCase(decisionId: string, expectBehavior: "allow" | "deny") {
     bridge.releaseSession(slug, sessionId, "session-deleted")
     bridge.close()
     try { const r = readBrokerRecord(claudeBrokerRecordPath(dir, sessionId)); if (r) process.kill(r.daemonPid, "SIGKILL") } catch {}
-    rmSync(dir, { recursive: true, force: true })
+    await rmEventually(dir)
   }
 }
 
