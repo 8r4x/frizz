@@ -13,11 +13,12 @@
 // Launched by ensureCodexAppServerDaemon() in codex-app-server-host.ts, which passes its whole config
 // as JSON in FRAY_CODEX_APP_SERVER_DAEMON. This process has no stdio (stdio:"ignore"); its only
 // interface is the socket and the on-disk record file.
-import { execFile, spawn } from "node:child_process"
-import { connect as connectSocket, createServer, type Socket } from "node:net"
-import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { spawn } from "node:child_process"
+import { createServer, type Socket } from "node:net"
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
+import { dirname } from "node:path"
 import { StringDecoder } from "node:string_decoder"
+import { sweepStaleSockets } from "./stale-socket-sweep.ts"
 
 interface DaemonConfig {
   projectId: string
@@ -285,45 +286,11 @@ function main(): void {
 
   // ---- stale socket sweep -------------------------------------------------------------------------
   // A daemon that was SIGKILLed, or that skipped its cleanup because a successor owned the record,
-  // leaves its unix socket FILE behind forever — nothing ever revisits these paths, and the host only
-  // ever considers the one path belonging to the project it is connecting for. They are inert, but
-  // they accumulate (23 on this machine, 9 of them ownerless).
-  //
-  // Safety is the entire design. Merely CONNECTING to a socket that is live would evict that daemon's
-  // real client — the accept handler destroys the previous socket — so a path any process still
-  // references is never probed at all: `lsof -U` names every unix-socket endpoint on the machine, and
-  // only a path absent from that list is touched. The probe must then be REFUSED (kernel proof that no
-  // listener is bound) before anything is unlinked. No lsof, or lsof failing ⇒ sweep nothing.
-  const sweepStaleSockets = (): void => {
-    if (process.platform === "win32") return
-    const dir = dirname(config.socketPath)
-    let candidates: string[]
-    try {
-      candidates = readdirSync(dir)
-        .filter((name) => name.startsWith("fray-codex-") && name.endsWith(".sock"))
-        .map((name) => join(dir, name))
-        .filter((path) => path !== config.socketPath)
-    } catch { return }
-    if (candidates.length === 0) return
-    execFile("lsof", ["-U", "-F", "n"], { timeout: 30_000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
-      if (!stdout) return // lsof absent or produced nothing: we have no evidence, so we touch nothing
-      if (error && !stdout.includes("fray-codex-")) return
-      const referenced = new Set<string>()
-      for (const line of stdout.split("\n")) if (line.startsWith("n/")) referenced.add(line.slice(1))
-      for (const path of candidates) {
-        if (referenced.has(path)) continue
-        const probe = connectSocket(path)
-        probe.unref?.()
-        probe.on("connect", () => probe.destroy()) // live after all — lsof was wrong; leave it alone
-        probe.on("error", (probeError: NodeJS.ErrnoException) => {
-          probe.destroy()
-          if (probeError.code === "ECONNREFUSED" || probeError.code === "ENOENT") {
-            try { unlinkSync(path) } catch {}
-          }
-        })
-      }
-    }).unref?.()
-  }
+  // leaves its unix socket FILE behind forever. The rules that make collecting them safe — and the
+  // reason connecting to one is itself destructive — live in stale-socket-sweep.ts, shared with the
+  // Claude broker's sockets, which leak the same way for the same reasons.
+  const sweepOwnFamily = (): void =>
+    sweepStaleSockets({ dir: dirname(config.socketPath), prefix: "fray-codex-", keep: [config.socketPath] })
 
   const startListening = (): void => {
     // A stale unix socket from a crashed prior daemon would block listen(); named pipes need no unlink.
@@ -336,7 +303,7 @@ function main(): void {
       const reachability = setInterval(checkReachable, config.reachabilityCheckMs ?? REACHABILITY_CHECK_MS)
       reachability.unref?.()
       // Off the critical path on purpose: the client is already being served by now.
-      setTimeout(sweepStaleSockets, 5_000).unref?.()
+      setTimeout(sweepOwnFamily, 5_000).unref?.()
     })
   }
 

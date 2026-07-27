@@ -12,6 +12,10 @@
 // session root (Agent sub-agents are in-process), so this is exact and socket-agnostic (it protects
 // a live adhoc-stack's workers automatically, since their roots are alive on the machine).
 //
+// It also collects one non-process leak of the same shape, on its own much slower timer: the unix
+// SOCKET FILES dead Claude session brokers leave in $TMPDIR (see the stale-socket sweep at the bottom
+// of this file). Same story — an artifact of a worker that is gone, which nothing else revisits.
+//
 // SAFETY — the reaper only ever kills an AUXILIARY process whose slug is live NOWHERE. It never
 // touches: a session root (`claude`/`codex`, or anything bearing `--session-id`), a tmux server
 // (they carry the first thread's slug in env but are shared infrastructure), the reaper's own
@@ -20,6 +24,9 @@
 // enumeration failure fails CLOSED (reap nothing). An age guard skips just-spawned processes.
 
 import { execFileSync } from "node:child_process"
+import { dirname } from "node:path"
+import { claudeBrokerSocketPath } from "./backend/claude-broker-host.ts"
+import { sweepStaleSockets } from "./backend/stale-socket-sweep.ts"
 
 export const ORPHAN_REAP_INTERVAL_MS = 60_000
 export const ORPHAN_MIN_AGE_MS = 120_000
@@ -322,7 +329,41 @@ export function sweepOrphansOnce(deps: SweepDeps = {}): SweepResult {
   return { reaped, deadSlugs, liveSlugs }
 }
 
-/** Start the startup + periodic sweep. Returns a stop handle. Timer is unref'd (never holds the loop open). */
+// ── Stale broker sockets (files, not processes) ───────────────────────────────────────────────────
+//
+// A Claude session broker that was SIGKILLed, or whose record a successor had already taken, leaves
+// its socket FILE in $TMPDIR forever: the host only ever derives the one path belonging to the session
+// it is connecting for, so nothing revisits the rest. Measured on this machine 2026-07-27: ~119 dead
+// `fray-claude-*.sock` against ~4 live. The codex daemon already collects its own family on every
+// daemon start; the broker has no equivalent moment, and its litter is the larger pile — so it is
+// collected HERE, from the one long-lived process the board always has.
+//
+// The rules that make this safe — never even CONNECT to a socket some process still references, and
+// unlink only on a kernel-refused probe — live in backend/stale-socket-sweep.ts. Nothing here decides
+// what is dead.
+//
+// Deliberately on its OWN, much slower timer rather than inside sweepOrphansOnce(): that function is
+// the tested unit and its `ps` call count is asserted, while this pass spawns a machine-wide `lsof -U`
+// that has no business running once a minute for a leak measured in a handful of files per hour.
+export const STALE_SOCKET_SWEEP_INTERVAL_MS = 10 * 60_000
+/** Off the critical path of server startup — nothing waits on housekeeping. */
+const STALE_SOCKET_SWEEP_DELAY_MS = 30_000
+
+// Both mirror claudeBrokerSocketPath() in backend/claude-broker-host.ts. The DIRECTORY is derived from
+// that builder rather than restating `$TMPDIR`, so the two cannot drift apart; the PREFIX is named here
+// because the module exports no constant for it. A wrong directory or prefix finds no candidates and
+// sweeps nothing, which is the safe direction to fail.
+const CLAUDE_BROKER_SOCKET_PREFIX = "fray-claude-"
+
+function sweepStaleBrokerSockets(): void {
+  try {
+    sweepStaleSockets({ dir: dirname(claudeBrokerSocketPath("", "")), prefix: CLAUDE_BROKER_SOCKET_PREFIX })
+  } catch {
+    // housekeeping is never allowed to perturb the reaper
+  }
+}
+
+/** Start the startup + periodic sweep. Returns a stop handle. Timers are unref'd (never hold the loop open). */
 export function startOrphanReaper(deps: SweepDeps & { intervalMs?: number } = {}): () => void {
   const intervalMs = deps.intervalMs ?? ORPHAN_REAP_INTERVAL_MS
   try {
@@ -338,5 +379,9 @@ export function startOrphanReaper(deps: SweepDeps & { intervalMs?: number } = {}
     }
   }, intervalMs)
   timer.unref?.()
-  return () => clearInterval(timer)
+  const socketDelay = setTimeout(sweepStaleBrokerSockets, STALE_SOCKET_SWEEP_DELAY_MS)
+  socketDelay.unref?.()
+  const socketTimer = setInterval(sweepStaleBrokerSockets, STALE_SOCKET_SWEEP_INTERVAL_MS)
+  socketTimer.unref?.()
+  return () => { clearInterval(timer); clearTimeout(socketDelay); clearInterval(socketTimer) }
 }
