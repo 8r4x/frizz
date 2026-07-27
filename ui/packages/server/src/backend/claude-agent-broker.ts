@@ -17,7 +17,7 @@ import { readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { createClaudeQueryFactory } from "./claude-agent-sdk.ts"
-import { createClaudeBrokerDiagnosticWriter } from "./claude-broker-diagnostics.ts"
+import { createClaudeBrokerDiagnosticWriter, createClaudeBrokerExitWriter, type ClaudeBrokerExitReason } from "./claude-broker-diagnostics.ts"
 import type {
   ClaudeDiagnostic,
   ClaudeInputMessage,
@@ -92,6 +92,14 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
 
   const writeDiagnostic = config.diagnosticLogPath
     ? createClaudeBrokerDiagnosticWriter(config.diagnosticLogPath, { daemonPid: process.pid, generation })
+    : undefined
+  // WHY this daemon ended, written by the daemon on its way out. The bridge only ever observes an
+  // absent record + a closed socket, which is the same picture for an idle collection, a SIGTERM, a
+  // self-collection and a crash — so without this every broker death reported as the generic "the
+  // thread went quiet." Same file as the diagnostics above, so the stderr that preceded a death and
+  // the death itself read as one story. See ClaudeBrokerExitReason for the vocabulary.
+  const writeExit = config.diagnosticLogPath
+    ? createClaudeBrokerExitWriter(config.diagnosticLogPath, { daemonPid: process.pid, generation })
     : undefined
 
   const factory = createClaudeQueryFactory({ enabled: true, executablePath: config.executablePath })
@@ -183,28 +191,34 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   // so pulling with next() is exactly what `for await` did — it just lets ONE bad event be survivable.
   // Bounded: a stream that keeps throwing is genuinely broken, and retrying it forever would spin the
   // daemon at 100% CPU, which is a worse failure than the one being fixed.
-  const pump = (async () => {
+  const pump = (async (): Promise<{ reason: ClaudeBrokerExitReason; detail?: string }> => {
     let consecutiveErrors = 0
     for (;;) {
       let next: IteratorResult<ClaudeQueryEvent>
       try {
         next = await handle.next()
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
         writeDiagnostic?.({
           kind: "stderr",
-          message: `event stream error ${++consecutiveErrors}/${EVENT_ERROR_TOLERANCE} (session continues): ${error instanceof Error ? error.message : String(error)}`,
+          message: `event stream error ${++consecutiveErrors}/${EVENT_ERROR_TOLERANCE} (session continues): ${message}`,
           truncated: false,
         })
-        if (consecutiveErrors >= EVENT_ERROR_TOLERANCE) return // genuinely broken → end the session
+        // genuinely broken → end the session, and say which of the two endings this was: a stream that
+        // kept throwing is a very different post-mortem from claude simply exiting.
+        if (consecutiveErrors >= EVENT_ERROR_TOLERANCE) return { reason: "session-stream-broken", detail: message }
         continue
       }
       consecutiveErrors = 0
-      if (next.done) return
+      if (next.done) return { reason: "session-stream-ended" }
       emitEvent(next.value)
     }
-  })().then(() => shutdown(0)).catch(() => shutdown(0))
+  })().then(
+    (end) => shutdown(0, end.reason, end.detail),
+    (error) => shutdown(0, "event-pump-failed", error instanceof Error ? error.message : String(error)),
+  )
 
-  const armIdle = () => { if (client) return; clearTimeout(idleTimer); idleTimer = setTimeout(() => shutdown(0), IDLE_EXIT_MS) }
+  const armIdle = () => { if (client) return; clearTimeout(idleTimer); idleTimer = setTimeout(() => shutdown(0, "idle-timeout"), IDLE_EXIT_MS) }
 
   const server = net.createServer((sock) => {
     client = sock; clearTimeout(idleTimer)
@@ -232,8 +246,13 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     try { return (JSON.parse(readFileSync(config.recordPath, "utf8")) as BrokerRecord).daemonPid } catch { return null }
   }
   let closed = false
-  async function shutdown(code: number): Promise<void> {
+  // `reason` is recorded FIRST, before any teardown: `handle.close()` below can hang on a wedged CLI,
+  // and a breadcrumb that only lands after a clean teardown is missing from exactly the deaths worth
+  // attributing. Best-effort by construction (createClaudeBrokerExitWriter swallows everything), so
+  // this can never be what stops a shutdown.
+  async function shutdown(code: number, reason: ClaudeBrokerExitReason, detail?: string): Promise<void> {
     if (closed) return; closed = true
+    writeExit?.(reason, detail)
     clearTimeout(idleTimer); clearInterval(reach)
     // Owner-checked cleanup: never delete a successor's record/socket. A corpse whose record was
     // already overwritten must leave the live daemon's socket alone.
@@ -253,7 +272,9 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     if (client || !config.recordPath) { strikes = 0; return }
     const owner = recordOwner()
     if (owner === process.pid) { strikes = 0; return }
-    if (++strikes >= REACHABILITY_STRIKES) void shutdown(0)
+    // Undiscoverable and unattached: a successor stole the record, or a sweep removed it. If a turn was
+    // mid-flight this is where it dies, and this reason is the fingerprint of that class of loss.
+    if (++strikes >= REACHABILITY_STRIKES) void shutdown(0, "self-collected-record-reassigned")
   }, REACHABILITY_CHECK_MS)
   if (reach.unref) reach.unref()
 
@@ -263,8 +284,9 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   // running by this point, so this is also the moment it leaks. Record the cause, then shut down.
   // Reachable via a swept stateDir, EACCES, a >104-byte socket path on macOS, or an EADDRINUSE race.
   server.on("error", (error) => {
-    writeDiagnostic?.({ kind: "lifecycle", phase: "crashed", message: `socket listen failed: ${error instanceof Error ? error.message : String(error)}` })
-    void shutdown(1)
+    const message = error instanceof Error ? error.message : String(error)
+    writeDiagnostic?.({ kind: "lifecycle", phase: "crashed", message: `socket listen failed: ${message}` })
+    void shutdown(1, "socket-listen-failed", message)
   })
   try { unlinkSync(config.socketPath) } catch {} // sweep a stale unix socket before binding
   server.listen(config.socketPath, () => {
@@ -276,7 +298,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     armIdle()
   })
 
-  return { close: async () => { await shutdown(0) }, sessionId: handle.sessionId, generation }
+  return { close: async () => { await shutdown(0, "fray-requested") }, sessionId: handle.sessionId, generation }
 }
 
 /** Was node pointed AT THIS FILE, rather than this module being imported by something else?
@@ -299,8 +321,24 @@ function startedAsProcessEntry(): boolean {
 // Standalone daemon entry: `node claude-agent-broker.ts` with config in FRAY_CLAUDE_BROKER.
 if (process.env.FRAY_CLAUDE_BROKER) {
   const config = JSON.parse(process.env.FRAY_CLAUDE_BROKER) as ClaudeBrokerConfig
-  for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(sig, () => process.exit(0))
-  runClaudeBroker(config)
+  // A signal exits IMMEDIATELY and deliberately — it must not wait on a teardown that can hang — so it
+  // never reaches shutdown()'s breadcrumb and used to leave no trace whatsoever. That covers fray's own
+  // killBroker (SIGTERM), an operator `kill`, and an OS shutdown: the three most common broker deaths
+  // there are. Record the cause synchronously first; the handler is registered BEFORE the broker starts
+  // (so a signal during startup is still attributed) and resolves the generation lazily.
+  let running: RunningBroker | undefined
+  for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
+    process.on(sig, () => {
+      if (config.diagnosticLogPath) {
+        createClaudeBrokerExitWriter(config.diagnosticLogPath, {
+          daemonPid: process.pid,
+          generation: running?.generation ?? config.generation ?? "",
+        })(`signal-${sig}`)
+      }
+      process.exit(0)
+    })
+  }
+  running = runClaudeBroker(config)
 } else if (startedAsProcessEntry()) {
   // Node was pointed AT THIS FILE and there is no configuration to broker. Exiting 0 here reports
   // success for a session that never started — the silent-death shape the detached-daemon closure

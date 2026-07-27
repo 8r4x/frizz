@@ -161,7 +161,11 @@ test("a failed title request neither throws nor stops the turn", { timeout: 15_0
     c.client.sendInput({ id: randomUUID(), text: "do the thing" })
     const result = await c.waitEvent((e) => e.kind === "result")
     assert.equal(result.kind, "result", "the turn completed despite the title request failing")
-    assert.ok(captureRows(b.dir).some((row) => row.kind === "session-title"), "the title request was made")
+    // The title request is deliberately NOT awaited by the turn, so it races the result event: under
+    // load the turn can complete before the fake CLI has flushed its capture row. Wait for the row
+    // instead of sampling it — the assertion is that the request happened, not that it happened first.
+    const rows = await waitForRows(b.dir, (r) => r.some((row) => row.kind === "session-title"))
+    assert.ok(rows.some((row) => row.kind === "session-title"), "the title request was made")
     c.client.close()
   } finally { await b.close() }
 })

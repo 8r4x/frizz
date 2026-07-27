@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import { PermissionMode, wakeDeliveryToken, type Settings } from "@fray-ui/shared"
 import { Bus, Emitter } from "./bus.ts"
 import { resolveProject, permRequestDir, type Project } from "./project.ts"
-import { createStorage, isHeadlessRow, type Storage } from "./storage.ts"
+import { createStorage, isBrokerClaudeRow, isHeadlessRow, type Storage } from "./storage.ts"
 import { getSettings, setSettings, resetSettings } from "./settings.ts"
 import { readQuota } from "./quota.ts"
 import { refreshClaudeQuotaInBackground } from "./backend/claude-quota.ts"
@@ -71,6 +71,7 @@ export type ContextStartupPhase =
   | "session reconcile"
   | "subscriptions"
   | "Codex app-server bridge"
+  | "Claude broker bridge"
   | "tailer"
   | "board watcher"
   | "permission producer"
@@ -621,6 +622,23 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
           ...claudeMcpConfig(resolveFrayMcp(project.stateDir)),
           permDir: permRequestDir(project),
         },
+        // Which broker threads warmUp() may reattach at boot. Same predicate codex's shouldAutoResume
+        // applies: never wake a thread the human has already put away — a boot reattach is only for a
+        // thread that is still open and still theirs to come back to. Broker-backed rows only; a tmux
+        // claude row has no daemon and a codex row is the other bridge's business.
+        ownedSessions: () =>
+          storage.allSessions()
+            .filter((row) => isBrokerClaudeRow(row) && row.state !== "archived" && row.archived !== 1)
+            .map((row) => ({ threadSlug: row.slug, sessionId: row.session_id, cwd: project.dir })),
+        // A broker daemon that died while fray was down is invisible to the live relay — the bridge
+        // synthesizes the diagnostic from the dead daemon's own exit record, and this is where it
+        // becomes readable. The server log is the right surface: it is what an operator (and the next
+        // agent debugging a lost thread) already greps when a thread goes quiet, and it costs one line
+        // per death rather than a card nobody asked for.
+        onDiagnostic: (slug, _sessionId, diagnostic) => {
+          if (diagnostic.kind !== "lifecycle" || diagnostic.phase !== "crashed") return
+          console.log(`[fray-ui] claude broker ${slug}: ${diagnostic.message ?? "died without a recorded cause"}`)
+        },
       })
     : undefined
   resources.claudeBroker = claudeBroker
@@ -636,6 +654,16 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
       claudeRuntimeIngest?.release(event.previous.session_id)
     }))
   }
+  // Rejoin every broker daemon this project left running, now rather than on the next dispatch or
+  // follow-up. The broker adopted purely lazily, so after a restart a turn still running inside a
+  // detached daemon had nobody observing it: its queued events went unread (no ingest reading, no
+  // tailer nudge), and — the real bug — a tool-permission escalation raised while fray was down stayed
+  // held in the daemon, so no approval card appeared and the thread read as hung until a human poked
+  // it. The daemon re-delivers those pending requests on reconnect; this is what reconnects.
+  // Fire-and-forget, exactly like codex's above: a broker being unavailable must never fail or delay a
+  // boot.
+  void claudeBroker?.warmUp()
+  opts.startup?.afterPhase?.("Claude broker bridge")
 
   // The tailer derives turn/liveness telemetry and, on a state change, asks the board for an
   // OVERLAY-ONLY refresh (tailer changes never alter .fray content — the full shell-out rebuild

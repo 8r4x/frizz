@@ -5,10 +5,11 @@
 // auto-allow, honoring the thread's permission mode — matching today's tmux `--permission-mode auto`;
 // wiring these to the dashboard InteractionStore is the next slice), and sends follow-up turns.
 import { randomUUID } from "node:crypto"
-import { adoptOrForkBroker, killBroker, liveBrokerRecord, claudeBrokerRecordPath, resolveClaudeExecutableAbsolute } from "./claude-broker-host.ts"
+import { adoptOrForkBroker, killBroker, liveBrokerRecord, liveBrokerRecords, claudeBrokerRecordPath, resolveClaudeExecutableAbsolute } from "./claude-broker-host.ts"
 import { connectClaudeBroker, type ClaudeBrokerClient } from "./claude-broker-client.ts"
+import { describeClaudeBrokerExit, readClaudeBrokerExit, type ClaudeBrokerExitRecord } from "./claude-broker-diagnostics.ts"
 import type { ClaudeDiagnostic, ClaudePermissionDecision, ClaudePermissionRequest, ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
-import type { ClaudeBrokerConfig } from "./claude-agent-broker.ts"
+import type { BrokerRecord, ClaudeBrokerConfig } from "./claude-agent-broker.ts"
 import type { InteractionSessionScope, InteractionStore } from "../interaction-store.ts"
 import {
   CLAUDE_ASK_USER_QUESTION_TOOL,
@@ -68,8 +69,17 @@ export interface ClaudeBrokerBridgeDeps {
   /** Observe daemon lifecycle/stderr diagnostics from a LIVE socket. The durable copy is written by
    *  the daemon itself (claude-broker-diagnostics.ts) precisely because this relay only reaches a fray
    *  that is attached at the time — which a crash during a restart is not. Optional; for a live
-   *  consumer, not for forensics. */
+   *  consumer, not for forensics.
+   *
+   *  The bridge ALSO synthesizes a `{lifecycle, crashed}` diagnostic here the moment it discovers a
+   *  daemon that died while nobody was attached, carrying the dead daemon's own recorded exit reason —
+   *  the one death this live relay structurally cannot observe on its own. */
   onDiagnostic?: (slug: string, sessionId: string, diagnostic: ClaudeDiagnostic) => void
+  /** The broker-backed threads this fray owns and may reattach at boot — supplied by context.ts from
+   *  the registry, already filtered to rows that are still OPEN and not archived (the same predicate
+   *  codex's `shouldAutoResume` applies). Absent ⇒ `warmUp()` is a no-op, which is what every test and
+   *  every registry-less harness wants. */
+  ownedSessions?: () => Array<{ threadSlug: string; sessionId: string; cwd: string }>
 }
 
 export interface ClaudeSpawnDispatchInput {
@@ -97,11 +107,37 @@ export interface ClaudeAgentBrokerBridge {
    *  died, we cold-start a fresh daemon that RESUMES the on-disk transcript — so the resume context
    *  (worker system prompt + profile) must be re-supplied, exactly like the tmux `claude -r` path. */
   followUp(input: { threadSlug: string; sessionId: string; cwd: string; text: string; permissionMode?: ClaudeBrokerConfig["permissionMode"]; appendSystemPrompt?: string; model?: string; effort?: string }): Promise<void>
+  /**
+   * Reattach at boot to every broker daemon this project left running, without waiting for someone to
+   * touch the thread.
+   *
+   * The codex bridge has done this since its daemon started outliving fray, and its doc comment names
+   * the bug: a turn still running inside a detached daemon has nobody observing it, so a perfectly
+   * healthy surviving turn cards as stalled. The broker adopted LAZILY — only `spawnDispatch` and
+   * `followUp` ever called `attach` — so after a fray restart:
+   *
+   *  - the daemon's event backlog (queued, not dropped, while detached) sits unread, so the runtime
+   *    ingest has no reading of the turn and never nudges the tailer;
+   *  - a tool-permission escalation raised while fray was down stays held in the daemon. It IS
+   *    re-delivered on reconnect, but nothing reconnects — so no approval card appears, the turn stays
+   *    blocked on a promise nobody can answer, and the thread reads as hung until a human pokes it.
+   *
+   * Fire-and-forget by contract: a broker that cannot be reached must never fail or delay a boot, so
+   * every step here swallows its own failure and the next real dispatch/follow-up retries exactly as
+   * it did before. Only ADOPTS — it never forks. A daemon that died between the record enumeration and
+   * the connect must cold-start under a real dispatch that supplies the resume context, never here.
+   */
+  warmUp(): Promise<void>
   binding(threadSlug: string, sessionId: string): ClaudeBrokerBinding | undefined
   /** Whether an ownerless daemon for this session is running right now — the board's liveness/stall
    *  signal for a headless broker row (the parallel of codex's turnLiveness), independent of whether
    *  THIS fray process currently holds a live socket to it. */
   isDaemonAlive(sessionId: string): boolean
+  /** What the daemon for this session recorded on its way out, when one is not running now. The
+   *  attribution behind a headless stall: `isDaemonAlive` says the thread is dead, this says why
+   *  (idle-timeout / signal-SIGTERM / self-collected-record-reassigned / …). `null` means it left no
+   *  record at all — killed outright, or a daemon older than exit breadcrumbs. */
+  daemonExit(sessionId: string): ClaudeBrokerExitRecord | null
   releaseSession(threadSlug: string, sessionId: string, reason: "session-replaced" | "session-deleted"): boolean
   close(): void
 }
@@ -175,25 +211,23 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     pendingPerms.delete(change.interactionId)
   })
 
-  const attach = async (slug: string, sessionId: string, cwd: string, permissionMode: ClaudeBrokerConfig["permissionMode"], fork: ForkOpts = {}): Promise<ActiveSession> => {
-    // fork opts (system prompt / model / effort / resume) AND the worker environment apply only when this
-    // call FORKS a fresh daemon; when it adopts a live one (fray restart), the running session already
-    // carries them. FRAY_UI_THREAD is per-thread (the slug), so it's stamped here, not in deps.workerEnv.
-    const we = deps.workerEnv
-    const workerEnv: Record<string, string> = {
-      FRAY_UI_THREAD: slug,
-      ...(we?.permDir ? { FRAY_PERM_DIR: we.permDir } : {}),
-      // The cc-worker plugin's PreToolUse hook DENIES AskUserQuestion, because on the tmux path a
-      // blocking question freezes a headless worker where nobody can answer it. On the broker path
-      // fray CAN answer it — the call becomes a dashboard question card — so the hook is told to stand
-      // down, but only when a store is actually wired to render and resolve the card.
-      ...(deps.interactions && deps.projectId ? { FRAY_NATIVE_ASK: "1" } : {}),
-    }
-    const { record } = await adoptOrForkBroker({
-      stateDir: deps.stateDir, cwd, sessionId, executablePath, permissionMode, env: deps.env,
-      pluginDir: we?.pluginDir, mcpServers: we?.mcpServers, allowedTools: we?.allowedTools, workerEnv,
-      ...fork,
-    })
+  // The daemon deaths already reported through onDiagnostic, keyed by session id + the dead daemon's
+  // generation. A death is a one-time fact; re-announcing it on every later follow-up would turn an
+  // attribution into noise.
+  const reportedDeaths = new Set<string>()
+  const reportDeath = (slug: string, sessionId: string): void => {
+    if (!deps.onDiagnostic) return
+    let exit: ClaudeBrokerExitRecord | null = null
+    try { exit = readClaudeBrokerExit(deps.stateDir, sessionId) } catch { /* forensics degrade, never throw */ }
+    const key = `${sessionId}\0${exit?.generation ?? ""}\0${exit?.at ?? ""}`
+    if (reportedDeaths.has(key)) return
+    reportedDeaths.add(key)
+    try { deps.onDiagnostic(slug, sessionId, { kind: "lifecycle", phase: "crashed", message: describeClaudeBrokerExit(exit) }) } catch { /* informational */ }
+  }
+
+  // Wire a client onto a broker record and register the session. Shared by the fork/adopt path
+  // (`attach`) and the boot reattach (`warmUp`), which must NEVER fork.
+  const bind = (slug: string, sessionId: string, cwd: string, record: BrokerRecord): ActiveSession => {
     const client = connectClaudeBroker(record.socketPath, {
       onEvent: (event) => deps.onEvent?.(slug, sessionId, event),
       onDiagnostic: (diagnostic) => deps.onDiagnostic?.(slug, sessionId, diagnostic),
@@ -214,9 +248,52 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     return session
   }
 
+  const attach = async (slug: string, sessionId: string, cwd: string, permissionMode: ClaudeBrokerConfig["permissionMode"], fork: ForkOpts = {}): Promise<ActiveSession> => {
+    // fork opts (system prompt / model / effort / resume) AND the worker environment apply only when this
+    // call FORKS a fresh daemon; when it adopts a live one (fray restart), the running session already
+    // carries them. FRAY_UI_THREAD is per-thread (the slug), so it's stamped here, not in deps.workerEnv.
+    const we = deps.workerEnv
+    const workerEnv: Record<string, string> = {
+      FRAY_UI_THREAD: slug,
+      ...(we?.permDir ? { FRAY_PERM_DIR: we.permDir } : {}),
+      // The cc-worker plugin's PreToolUse hook DENIES AskUserQuestion, because on the tmux path a
+      // blocking question freezes a headless worker where nobody can answer it. On the broker path
+      // fray CAN answer it — the call becomes a dashboard question card — so the hook is told to stand
+      // down, but only when a store is actually wired to render and resolve the card.
+      ...(deps.interactions && deps.projectId ? { FRAY_NATIVE_ASK: "1" } : {}),
+    }
+    const { record, reattached } = await adoptOrForkBroker({
+      stateDir: deps.stateDir, cwd, sessionId, executablePath, permissionMode, env: deps.env,
+      pluginDir: we?.pluginDir, mcpServers: we?.mcpServers, allowedTools: we?.allowedTools, workerEnv,
+      ...fork,
+    })
+    // A RESUME that had to cold-start is the moment fray discovers a daemon died while nobody was
+    // watching — the one death the live diagnostic relay structurally cannot see. Attribute it from the
+    // dead daemon's own exit record now, while the record is still on disk, rather than leaving the
+    // operator with "the thread went quiet". A fresh dispatch (no resume) is not a death: there was
+    // never a daemon to lose.
+    if (!reattached && fork.resume) reportDeath(slug, sessionId)
+    return bind(slug, sessionId, cwd, record)
+  }
+
   const current = (slug: string, sessionId: string): ActiveSession | undefined => {
     const s = sessions.get(slug)
     return s && s.sessionId === sessionId ? s : undefined
+  }
+
+  // Is the daemon behind a session we HOLD still the one we are holding?
+  //
+  // The client reconnects forever by design (that is what carries fray across a daemon socket blip),
+  // so a held ActiveSession outlives the daemon it points at: `client.connected()` goes false, the
+  // session stays in the map, and `sendInput` queues the message in `outbound` where it waits for a
+  // socket that will never come back. A follow-up sent to a thread whose daemon died therefore
+  // vanished silently — the thread simply never answered, which is precisely the "went quiet" this
+  // work exists to eliminate. Keyed on the daemon RECORD and its generation rather than on socket
+  // connectivity: a LIVE daemon whose socket is momentarily flapping must be kept (the client
+  // reconnects to it), while a dead daemon — or a successor that took the record — must not be.
+  const holdsLiveDaemon = (session: ActiveSession): boolean => {
+    const record = liveBrokerRecord(claudeBrokerRecordPath(deps.stateDir, session.sessionId))
+    return record !== null && record.generation === session.generation
   }
 
   return {
@@ -233,11 +310,40 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       // Reattach if we don't already hold this session live (fray restarted, or it was detached). The
       // fork opts carry resume:true + the rebuilt system prompt so a DEAD daemon cold-resumes with the
       // worker contract re-applied; when the daemon is still alive they are ignored (socket reconnect).
-      const session = current(input.threadSlug, input.sessionId) ?? await attach(
+      //
+      // "Hold it live" means the DAEMON is still there, not merely that this bridge has an entry for the
+      // slug — see holdsLiveDaemon. A held session whose daemon died is dropped (and its endlessly
+      // retrying client closed) so this cold-resumes instead of queueing the operator's message into a
+      // socket that never returns.
+      let held = current(input.threadSlug, input.sessionId)
+      if (held && !holdsLiveDaemon(held)) { held.client.close(); sessions.delete(input.threadSlug); held = undefined }
+      const session = held ?? await attach(
         input.threadSlug, input.sessionId, input.cwd, input.permissionMode ?? "default",
         { resume: true, appendSystemPrompt: input.appendSystemPrompt, model: input.model, effort: input.effort },
       )
       session.client.sendInput({ id: randomUUID(), text: input.text })
+    },
+
+    async warmUp() {
+      let owned: Array<{ threadSlug: string; sessionId: string; cwd: string }>
+      try { owned = deps.ownedSessions?.() ?? [] } catch { return }
+      if (owned.length === 0) return
+      // Enumerate the LIVE daemons once and index them, rather than stat-ing a record per registry row:
+      // a project accumulates hundreds of rows and runs a handful of daemons.
+      let live: Map<string, BrokerRecord>
+      try { live = new Map(liveBrokerRecords(deps.stateDir).map((record) => [record.sessionId, record])) } catch { return }
+      if (live.size === 0) return
+      for (const target of owned) {
+        const record = live.get(target.sessionId)
+        if (!record) continue // no daemon to adopt; a follow-up cold-resumes and attributes the death
+        if (current(target.threadSlug, target.sessionId)) continue // already held (a re-entrant warmUp)
+        // `bind`, not `attach`: adopting must never be able to FORK. Between the enumeration above and
+        // here the daemon could have exited, and adoptOrForkBroker would then cold-start a `{kind:"new"}`
+        // session on the same id — a fresh empty session writing over a real thread's transcript, at
+        // boot, with nobody asking for it. Connecting to a socket that has since gone away simply fails
+        // and retries, which is the harmless direction.
+        try { bind(target.threadSlug, target.sessionId, target.cwd, record) } catch { /* a boot never fails on a broker */ }
+      }
     },
 
     binding(threadSlug, sessionId) {
@@ -247,6 +353,10 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
 
     isDaemonAlive(sessionId) {
       return liveBrokerRecord(claudeBrokerRecordPath(deps.stateDir, sessionId)) !== null
+    },
+
+    daemonExit(sessionId) {
+      try { return readClaudeBrokerExit(deps.stateDir, sessionId) } catch { return null }
     },
 
     releaseSession(threadSlug, sessionId) {

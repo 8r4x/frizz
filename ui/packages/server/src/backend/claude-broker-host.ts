@@ -3,7 +3,7 @@
 // codex-app-server-host.ts (fork/record/adopt), keyed per Claude session id (one broker per thread).
 import { spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
-import { accessSync, constants as fsConstants, mkdirSync, readFileSync, unlinkSync } from "node:fs"
+import { accessSync, constants as fsConstants, mkdirSync, readFileSync, readdirSync, unlinkSync } from "node:fs"
 import { delimiter, dirname, isAbsolute, join } from "node:path"
 import { resolveDetachedDaemonEntry } from "../detached-daemons.ts"
 import type { BrokerRecord, ClaudeBrokerConfig } from "./claude-agent-broker.ts"
@@ -52,6 +52,26 @@ export function liveBrokerRecord(recordPath: string): BrokerRecord | null {
   if (record && pidAlive(record.daemonPid)) return record
   if (record) { try { unlinkSync(recordPath) } catch {} }
   return null
+}
+
+/** Every broker daemon under this state dir that is still running — the set a booting fray can adopt.
+ *
+ *  Enumerates the record DIRECTORY rather than probing one path per registry row: the record filename
+ *  is a hash of the session id and cannot be inverted, and at boot the live set (a handful of daemons)
+ *  is tiny next to a project's session history (hundreds of rows). Stale records are pruned on the way
+ *  through, exactly as a single liveBrokerRecord read does. Never throws — a project that has never run
+ *  a broker has no such directory, and that is simply "none". */
+export function liveBrokerRecords(stateDir: string): BrokerRecord[] {
+  const dir = join(stateDir, "claude-broker")
+  let names: string[]
+  try { names = readdirSync(dir) } catch { return [] }
+  const out: BrokerRecord[] = []
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue // the .diagnostics.log files live here too
+    const record = liveBrokerRecord(join(dir, name))
+    if (record) out.push(record)
+  }
+  return out
 }
 
 export interface ForkBrokerOptions {
