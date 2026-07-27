@@ -57,11 +57,14 @@ const prose = (paras, label) => Array.from({ length: paras }, (_, i) =>
   `**${label} ¶${i + 1}.** Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua, quis nostrud exercitation ullamco laboris nisi.`).join("\n\n")
 
 // > 300 projected messages on purpose: the window must already be FULL before the first append, so each
-// append slides it. 200 settled exchanges = 400 messages, then a live turn to park inside.
+// append slides it. The settled prefix is deliberately TERSE — it only has to exist, to occupy row slots
+// and to have a height that the trim can remove. Fat prose there costs peak memory during the initial
+// render of 300 messages, and this machine OOM-kills the stack at that peak (three runs lost to it).
+// The LIVE turn at the end is where the reader parks, so those messages stay substantial.
 const seed = []
-for (let i = 0; i < 200; i++) {
+for (let i = 0; i < 160; i++) {
   seed.push(user(`TASK:\nAsk ${i + 1}: earlier settled exchange.`))
-  seed.push(assistant(prose(1 + (i % 3), `Reply ${i + 1}`), "end_turn"))
+  seed.push(assistant(`Reply ${i + 1}: settled, and long enough to occupy a row of its own.`, "end_turn"))
 }
 seed.push(user(`TASK:\n${prose(3, "The standing ask")}`))
 for (let i = 0; i < 12; i++) seed.push(assistant(prose(2 + (i % 3), `Working step ${i + 1}`)))
@@ -120,11 +123,10 @@ try {
       scrollHeight: el.scrollHeight,
       distance: Math.round(el.scrollHeight - el.scrollTop - el.clientHeight),
       jumpVisible: Boolean(document.querySelector("[data-jump-to-latest]")),
-      // Mechanism instrumentation: which row is at index 0, whether the "Load earlier messages" row is
-      // still there, and how tall the virtualizer thinks the whole transcript is.
-      firstRowKey: boxEl.querySelector("[data-index='0']")?.dataset.transcriptRowKey ?? null,
-      hasEarlierRow: Array.from(boxEl.querySelectorAll("[data-transcript-row-key]")).some((r) => (r.dataset.transcriptRowKey ?? "").startsWith("earlier-history")),
+      // The virtualizer's own total-size box. Growing while the anchor row's Y FALLS and scrollTop is
+      // frozen is the signature of the head trim: content was removed above the reader.
       totalHeight: Math.round(parseFloat(boxEl.style.height || "0")),
+      rendered: boxEl.querySelectorAll("[data-transcript-row-key]").length,
     }
   }, key ?? null)
 
@@ -145,14 +147,10 @@ try {
   check(`the reader is parked ${m.distance}px above the bottom, detached`, m.distance > 300 && m.jumpVisible, `distance=${m.distance} jump=${m.jumpVisible}`)
   const anchorKey = m.key
   let lastY = m.y
-  let lastFirst = m.firstRowKey
-  let lastEarlierRow = m.hasEarlierRow
-  console.log(`parked: anchor=${anchorKey} y=${lastY} distance=${m.distance} scrollTop=${m.scrollTop} firstRow=${m.firstRowKey} earlierRow=${m.hasEarlierRow} totalHeight=${m.totalHeight}`)
+  console.log(`parked: anchor=${anchorKey} y=${lastY} distance=${m.distance} scrollTop=${m.scrollTop} totalHeight=${m.totalHeight}`)
   await page.screenshot({ path: join(shotDir, "windowslide-0-parked.png") })
 
   const drifts = []
-  const headChanges = []
-  let earlierRowLostAt = null
   let vanished = null
   for (let i = 0; i < appends; i++) {
     // Alternate the two real shapes: a tool call merged into the tail message, and a fresh message
@@ -165,23 +163,14 @@ try {
     }
     await settle(420)
     const after = await probe(anchorKey)
-    if (lastEarlierRow && !after.hasEarlierRow && earlierRowLostAt === null) earlierRowLostAt = i
-    if (after.firstRowKey !== lastFirst) headChanges.push({ i, from: lastFirst, to: after.firstRowKey })
     if (!after.found) { vanished = i; break }
     const drift = after.y - lastY
     if (Math.abs(drift) > 2) {
       drifts.push({ i, drift })
-      console.log(`  DRIFT ${drift > 0 ? "+" : ""}${drift}px after append ${i} (${i % 2 === 0 ? "merged tool call" : "new message"}) — y ${lastY}→${after.y}, scrollTop ${after.scrollTop}, distance ${after.distance}, totalHeight ${after.totalHeight}, firstRow=${after.firstRowKey}, earlierRow=${after.hasEarlierRow}`)
+      console.log(`  DRIFT ${drift > 0 ? "+" : ""}${drift}px after append ${i} (${i % 2 === 0 ? "merged tool call" : "new message"}) — y ${lastY}→${after.y}, scrollTop ${after.scrollTop}, distance ${after.distance}, totalHeight ${after.totalHeight}`)
       lastY = after.y
     }
-    lastFirst = after.firstRowKey
-    lastEarlierRow = after.hasEarlierRow
   }
-  console.log(`\nhead churn: index-0 row key changed ${headChanges.length}× during ${appends} appends`)
-  for (const h of headChanges.slice(0, 6)) console.log(`  append ${h.i}: ${h.from} → ${h.to}`)
-  check("the 'Load earlier messages' row survives a live push on a saturated window",
-    earlierRowLostAt === null,
-    earlierRowLostAt === null ? "" : `it disappeared at append ${earlierRowLostAt} — the push dropped hasEarlier from the cached page`)
 
   const last = await api.query("threadTranscript", { slug: SLUG })
   check("the window really did SLIDE while we watched (not passing vacuously)",
@@ -194,6 +183,20 @@ try {
     drifts.length === 0 && vanished === null,
     `${drifts.length} drifting appends${vanished !== null ? `; anchor row left the render window at append ${vanished}` : ""}`)
   check("the reader is still detached at the end", m.jumpVisible, `jump=${m.jumpVisible} distance=${m.distance}`)
+
+  // THE ENVELOPE, end to end. A push carries messages only; if the reconciler dropped the page envelope
+  // (as it used to on any slid window) then `hasEarlier`/`beforeCursor`/`transcriptKey` are gone and the
+  // reader can NEVER recover the history the slide trimmed — loadEarlier needs the cursor and the key.
+  // The observable proof is that riding to the top still pulls earlier messages in.
+  const beforeTop = await probe()
+  await page.evaluate(() => { const el = document.querySelector("[data-drawer-transcript-scroll]"); el.scrollTop = 0 })
+  await page.mouse.wheel({ deltaY: -120 })
+  await settle(3000)
+  const afterTop = await probe()
+  check("after all those pushes the reader can still pull earlier history (the page envelope survived)",
+    afterTop.totalHeight > beforeTop.totalHeight,
+    `transcript total height ${beforeTop.totalHeight} → ${afterTop.totalHeight}px after riding to the top`)
+  await page.screenshot({ path: join(shotDir, "windowslide-2-loaded-earlier.png") })
   check("no console or page errors", errors.length === 0, errors.slice(0, 3).join(" | "))
   console.log(`\nscreenshots → ${shotDir}/windowslide-*.png`)
 } finally {

@@ -78,6 +78,25 @@ test("growing content leaves a reader who scrolled away exactly where they are",
   )
 })
 
+test("a reader who nudged up even a couple of lines is not attached", () => {
+  // The rule the reader expects, literally: if the bottom of the transcript is not at the bottom of the
+  // pane, nothing that lands may move them. 24px is smaller than a single wheel notch and used to count
+  // as "at the tail" — one append dragged such a reader 346px back down.
+  for (const nudge of [8, 24, 64, 240]) {
+    assert.deepEqual(nextTailFollow(view(2000, nudge)), { following: false, scrollTop: null }, `${nudge}px up must detach`)
+    // …and content landing afterwards must leave them exactly where they are.
+    assert.deepEqual(
+      nextTailFollow(view(2122, nudge + 122, { previousScrollHeight: 2000, following: false })),
+      { following: false, scrollTop: null },
+    )
+  }
+})
+
+test("the attachment band stays a rounding epsilon, not a comfort zone", () => {
+  // Guards the constant itself: anything a reader could deliberately scroll to must be outside it.
+  assert.ok(TAIL_FOLLOW_PX <= 4, `TAIL_FOLLOW_PX must stay sub-perceptual, got ${TAIL_FOLLOW_PX}`)
+})
+
 test("a reader-driven scroll reclassifies attachment but never writes back", () => {
   // Same scroll height ⇒ only the reader can have moved, so the distance is their intent. Beyond the
   // threshold detaches; inside it stays attached — and NEITHER writes, or the wheel gets fought.

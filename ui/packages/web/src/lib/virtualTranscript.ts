@@ -12,10 +12,15 @@ export interface VirtualTranscriptMessageRow {
 // whether new content pins the reader to the bottom. The invariant the reader actually perceives is
 // "if the jump button is hidden, I am attached" — two thresholds would break exactly that.
 //
-// Small ON PURPOSE (it was 240, a third of a pane): this is the distance at which a landing message
-// still hauls the reader to the bottom, so a generous band means someone who nudged up a few lines to
-// re-read something gets yanked back mid-turn. It only has to absorb fractional layout and a nudge.
-export const TAIL_FOLLOW_PX = 64
+// This is a ROUNDING EPSILON, not a comfort band. It was 240 (a third of a pane), then 64; at both sizes
+// a reader who nudged up a line or two to re-read something still counted as attached, so the next thing
+// to land hauled them back to the bottom — measured at 24px above the bottom, a single append dragged the
+// reader 346px (scripts/verify-full-nudge-threshold.mjs). The rule the reader expects is the literal one:
+// if the bottom of the transcript is not at the bottom of the pane, nothing may move them. So the band has
+// to cover only what a reader CANNOT have chosen — the sub-pixel residue that fractional layout and
+// device-pixel rounding leave at the genuine bottom, which is where the `distance <= 1` write guard below
+// already draws the line. A wheel notch is 40px+, so every deliberate scroll now detaches.
+export const TAIL_FOLLOW_PX = 4
 
 export interface TailFollowInput {
   scrollTop: number

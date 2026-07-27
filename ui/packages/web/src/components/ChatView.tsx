@@ -775,20 +775,28 @@ function VirtualizedThreadTranscript({
     if (!tailReadyRef.current || followingTailRef.current || pendingPrependAnchorRef.current) return
     const anchor = readerAnchorRef.current
     if (!anchor) return
-    anchorRestoreUntilRef.current = performance.now() + ANCHOR_RESTORE_MS
+    // Deliberately NO scroller claim here, unlike the pin move. A trim lands on EVERY append once the
+    // window is full — several times a second on a live turn — and a 250ms claim that often would keep
+    // syncTailFollow from refreshing the reader anchor at all, so a reader who scrolled mid-stream would be
+    // realigned to where they were BEFORE they moved: their own scroll undone by the next append. Letting
+    // the anchor refresh on every pass instead makes this restore a fixed point, and the follow-ups below
+    // re-read it, so the reader's live intent always wins.
     alignToAnchor(anchor)
+    // The rows below the removed ones re-measure on later ResizeObserver passes, so hold once more across
+    // the next frames — against the reader's CURRENT anchor, and never while their own gesture is in flight.
+    const holdStill = () => {
+      if (performance.now() < readerScrollUntilRef.current) return
+      const current = readerAnchorRef.current
+      if (current) alignToAnchor(current)
+    }
     let secondFrame = 0
     const firstFrame = requestAnimationFrame(() => {
-      alignToAnchor(anchor)
-      secondFrame = requestAnimationFrame(() => {
-        alignToAnchor(anchor)
-        anchorRestoreUntilRef.current = 0
-      })
+      holdStill()
+      secondFrame = requestAnimationFrame(holdStill)
     })
     return () => {
       cancelAnimationFrame(firstFrame)
       cancelAnimationFrame(secondFrame)
-      anchorRestoreUntilRef.current = 0
     }
   }, [alignToAnchor, firstMessageKey])
 
