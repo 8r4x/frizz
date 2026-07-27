@@ -9,9 +9,6 @@ import {
   subtreeKillOrder,
   parseEtimeMs,
   enumerateProcs,
-  parseCpuTimeMs,
-  detectRunawayAux,
-  summarizeRunaways,
   reapSubtrees,
   sweepOrphansOnce,
   type ProcRow,
@@ -253,54 +250,4 @@ test("reapSubtrees never signals a protected or live-slug pid even if seeded", (
   const killed: number[] = []
   reapSubtrees([200], rows, new Set(), new Set(["live"]), (p) => killed.push(p))
   assert.deepEqual(killed, [200]) // 201 is a session root → dropped
-})
-
-// ---- Runaway detection (report-only; the reaper never kills a LIVE thread's work) ----
-
-test("parseCpuTimeMs handles ps's [dd-]hh:mm:ss[.ff] accumulated-CPU format", () => {
-  assert.equal(parseCpuTimeMs("0:00.50"), 500)
-  assert.equal(parseCpuTimeMs("1:30"), 90_000)
-  assert.equal(parseCpuTimeMs("2:03:04"), (2 * 3600 + 3 * 60 + 4) * 1000)
-  assert.equal(parseCpuTimeMs("1-00:00:00"), 86_400_000)
-  assert.equal(parseCpuTimeMs("garbage"), 0, "unparseable is 0, so it can never be reported")
-  assert.equal(parseCpuTimeMs(""), 0)
-})
-
-test("detectRunawayAux names a LIVE thread's long-burning aux, and nothing else", () => {
-  const HOUR = 3_600_000
-  const rows: ProcRow[] = [
-    // the runaway: 2h old, 1.9h of CPU ⇒ ~0.95 cores sustained
-    { pid: 10, ppid: 1, ageMs: 2 * HOUR, command: "node build.js", slug: "busy" },
-    // the agent itself — never a runaway, it is the thing the operator asked for
-    { pid: 11, ppid: 1, ageMs: 2 * HOUR, command: "claude --session-id A", slug: "busy" },
-    // a healthy aux: same age, almost no CPU
-    { pid: 12, ppid: 11, ageMs: 2 * HOUR, command: "node watch.js", slug: "busy" },
-    // busy but far too young to judge
-    { pid: 13, ppid: 11, ageMs: 60_000, command: "node quick.js", slug: "busy" },
-    // busy, but its thread is DEAD — that is the reaper's business, not this report's
-    { pid: 14, ppid: 1, ageMs: 2 * HOUR, command: "node zombie.js", slug: "gone" },
-    // untagged: not ours
-    { pid: 15, ppid: 1, ageMs: 2 * HOUR, command: "node someone-else.js", slug: null },
-  ]
-  const cpu = ["10 1:54:00", "11 1:54:00", "12 0:03.00", "13 0:59.00", "14 1:54:00", "15 1:54:00"].join("\n")
-  const out = detectRunawayAux(rows, new Set(["busy"]), () => cpu)
-  assert.deepEqual(out.map((r) => r.pid), [10])
-  assert.ok(out[0].cores > 0.9 && out[0].cores < 1.0, `cores was ${out[0].cores}`)
-})
-
-test("detectRunawayAux fails silent when ps is unavailable — telemetry never perturbs the sweep", () => {
-  const rows: ProcRow[] = [{ pid: 1, ppid: 0, ageMs: 9_999_999, command: "node x.js", slug: "s" }]
-  assert.deepEqual(detectRunawayAux(rows, new Set(["s"]), () => { throw new Error("no ps") }), [])
-})
-
-test("summarizeRunaways reports per THREAD, summing cores, worst first", () => {
-  const HOUR = 3_600_000
-  const lines = summarizeRunaways([
-    { pid: 1, slug: "hot", ageMs: 4 * HOUR, cpuMs: 4 * HOUR, cores: 1 },
-    { pid: 2, slug: "hot", ageMs: 2 * HOUR, cpuMs: 2 * HOUR, cores: 1 },
-    { pid: 3, slug: "warm", ageMs: 1 * HOUR, cpuMs: 0.6 * HOUR, cores: 0.6 },
-  ])
-  assert.equal(lines.length, 2, "one line per thread, not per process")
-  assert.match(lines[0], /thread "hot" is holding ~2\.0 core\(s\) across 2 background process\(es\), oldest 4\.0h/)
-  assert.match(lines[1], /thread "warm"/)
 })

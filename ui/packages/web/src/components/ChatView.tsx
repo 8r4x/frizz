@@ -13,13 +13,13 @@ import { displayTitle, lastActiveLabelAt } from "../groups.ts"
 import { mdToHtml, mdInlineToHtml, stripFrontmatter } from "../lib/markdown.ts"
 import { splitProseAttachments } from "../lib/imagePaths.ts"
 import { DiffBlock, PathLink } from "./DiffBlock.tsx"
-import { splitQuestionBlocks, parseQuestionBlock, approvalAffirmativeIndex, type QuestionKind, type BlockAnswer, type MessageAnswering } from "../lib/questionBlocks.ts"
+import { splitQuestionBlocks, parseQuestionBlock, type QuestionKind, type BlockAnswer, type MessageAnswering } from "../lib/questionBlocks.ts"
 import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
 import { parseAnswersCard, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
 import { sendEagerFollowUp } from "../lib/eagerComposerSubmission.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
-import { shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
+import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { messagePresentationText } from "../lib/messagePresentation.ts"
 import { snoozePresetInstant, formatSnoozeWake } from "../lib/snooze.ts"
 import { AWAITING_FALLBACK_TITLE, AWAITING_PARK_BUTTON, awaitingHintSentence, awaitingParkAction, awaitingPresentationLine } from "../lib/awaitingPresentation.ts"
@@ -2338,8 +2338,6 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
               onChip: (optIdx: number, optText: string) => answering.onChip(bi, optIdx, optText),
               onText: (text: string) => answering.onText(bi, text),
               onSubmit: answering.onSubmit,
-              onInstantAnswer: (answer: string) => answering.onInstantAnswer(bi, answer),
-              sending: answering.sending,
             }
           : undefined
         blocks.push(<QuestionBlockCard key={`${keyBase}-${fi}-q${si}`} raw={seg.text} questionKind={seg.questionKind} danger={seg.danger} interactive={interactive} wrap={dense} />)
@@ -2602,10 +2600,6 @@ interface BlockInteractive {
   onChip: (optIdx: number, optText: string) => void
   onText: (text: string) => void
   onSubmit: () => void
-  // Answer THIS block and send in one gesture — the approval gate's action buttons (see ApprovalActions).
-  onInstantAnswer: (answer: string) => void
-  // A send is already in flight — the approval actions disable so a double-click can't fire twice.
-  sending: boolean
 }
 
 // ── The shared card chrome ────────────────────────────────────────────────────────────────────────
@@ -2708,13 +2702,15 @@ const CARD_PRIMARY_ACTION = `flex shrink-0 items-center gap-1 rounded-md text-[1
 
 // A ```question block, set off from the surrounding prose: rounded neutral border + slightly elevated
 // bg + a muted label (NOT yellow — that's the focus motif). The label + icon track the kind: a plain
-// question shows a help glyph, an approval shows a shield, a `multi` block shows a checklist. A `danger`
-// block (the destructive approval gate — force-merge, deletion, rollback) layers the app's red risk
-// language (the same text-red-400 family the bypass permission mode uses) with a warning glyph.
+// question shows a help glyph, a `multi` block shows a checklist. A `danger` block (the destructive
+// gate — force-merge, deletion, rollback) layers the app's red risk language (the same text-red-400
+// family the bypass permission mode uses) with a warning glyph.
 // The context renders as markdown; the convention-parsed trailing options render as choice chips (radio
 // feel for single-select, toggleable checkboxes for `multi`) and the "Recommendation:" line as a muted
-// note. When `interactive` is present (the live message), chips are clickable and a one-line freetext
-// input appears; otherwise everything is read-only.
+// note. When `interactive` is present (the live message), chips are clickable and a freetext textarea
+// appears; otherwise everything is read-only. EVERY kind stages its answer the same way — pick a chip
+// and/or type, then Send answers. Nothing in a question card sends on a single click (maintainer
+// 2026-07-26: the old approval gate's one-click Approve was the lone exception and it is gone).
 export function QuestionBlockCard({
   raw,
   questionKind,
@@ -2733,7 +2729,6 @@ export function QuestionBlockCard({
   const trailingHtml = useMemo(() => (parsed.trailingMd ? mdToHtml(parsed.trailingMd) : ""), [parsed.trailingMd])
   const recIdx = parsed.recommendedIdx
   const recHtml = useMemo(() => (parsed.recommendation ? mdInlineToHtml(parsed.recommendation) : ""), [parsed.recommendation])
-  const isApproval = parsed.kind === "approval"
   const isMulti = parsed.kind === "multi"
   const isDanger = parsed.danger
   const chosen = interactive?.answer.chosen ?? null
@@ -2752,23 +2747,12 @@ export function QuestionBlockCard({
     // hidden). `offsetHeight - clientHeight` is the vertical border delta measured at height:auto.
     ta.style.height = `${ta.scrollHeight + ta.offsetHeight - ta.clientHeight}px`
   }, [freetext])
-  const KindIcon = isDanger ? AlertTriangle : isMulti ? ListChecks : isApproval ? ShieldCheck : HelpCircle
-  const kindLabel = isMulti ? "select multiple" : isApproval ? "approval" : "question"
-  // An APPROVAL gate is a YES, not a menu (maintainer 2026-07-24). It renders as ONE "Approve" button
-  // in the standard trailing action row — no chips, no in-card answer box. Anything other than yes is
-  // a sentence, and the prompt box at the bottom of the card is already the place to write one. What
-  // goes ON THE WIRE is still the gate's own affirmative option verbatim when the worker declared one
-  // (approvalAffirmativeIndex reads the option's WORDS, never its position, so a "- A. Hold" gate can
-  // never send a decline as an approval), so the worker sees the exact string a chip would have sent.
-  const approvalAnswer = useMemo(() => {
-    if (!isApproval) return null
-    const idx = approvalAffirmativeIndex(parsed.options, recIdx)
-    return idx === null ? APPROVE_LABEL : parsed.options[idx]
-  }, [isApproval, parsed.options, recIdx])
+  const KindIcon = isDanger ? AlertTriangle : isMulti ? ListChecks : HelpCircle
+  const kindLabel = isMulti ? "select multiple" : "question"
   return (
     <TranscriptCard tone={isDanger ? "danger" : "neutral"} icon={KindIcon} label={kindLabel}>
       {html && <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={{ __html: html }} />}
-      {!isApproval && (parsed.options.length > 0 || interactive) && (
+      {(parsed.options.length > 0 || interactive) && (
         // Options stack in a SINGLE full-width column (maintainer 2026-07-10: a 2-col grid read as
         // ragged, uneven columns with dead whitespace once option text got long). One chip per row;
         // the free-text row keeps col-span-full so the "something else…" answer gets the whole line.
@@ -2833,14 +2817,17 @@ export function QuestionBlockCard({
                   e.currentTarget.blur()
                   return
                 }
-                if (shouldSubmitComposerEnter({
+                // Enter writes a NEWLINE here (the browser default — this box is a staged form field,
+                // not a composer); ⌘/Ctrl-Enter is the send. See shouldSubmitStagedEnter.
+                if (shouldSubmitStagedEnter({
                   key: e.key,
                   altKey: e.altKey,
                   ctrlKey: e.ctrlKey,
                   metaKey: e.metaKey,
                   shiftKey: e.shiftKey,
                   isComposing: e.nativeEvent.isComposing,
-                }, true)) {
+                  keyCode: e.nativeEvent.keyCode,
+                })) {
                   e.preventDefault()
                   interactive.onSubmit()
                 }
@@ -2873,16 +2860,6 @@ export function QuestionBlockCard({
       {/* The caption fallback survives ONLY when the recommendation didn't match an option. */}
       {parsed.recommendation && recIdx === null && (
         <div className="md-inline mt-1.5 text-[11px] text-muted/70" dangerouslySetInnerHTML={{ __html: recHtml }} />
-      )}
-      {/* The gate's single verb, in the SAME trailing action row every other card puts its action in. */}
-      {isApproval && approvalAnswer !== null && (
-        <CardActions>
-          <ApproveAction
-            danger={isDanger}
-            disabled={!interactive || !!interactive.sending}
-            onApprove={() => interactive?.onInstantAnswer(approvalAnswer)}
-          />
-        </CardActions>
       )}
     </TranscriptCard>
   )
@@ -3456,58 +3433,6 @@ function nextOptionId(options: string[]): string {
 
 // recommendedIndex (rec-line → option index) now lives in ../lib/questionBlocks.ts alongside the rest
 // of the question parsing, so it's covered by the pure-logic unit tests.
-
-// The approval gate's ONE verb. A gate is a YES/NO, and its yes is the whole point — so it is a single
-// "Approve" button in the card's trailing action row, wearing the same white fill as every other card
-// action rather than a bespoke row of option-shaped buttons (maintainer 2026-07-24: an approval card
-// "should literally just be one button that says Approve, and that's it"). Anything that is not yes is
-// a sentence, and the prompt box at the bottom of the card is already where you write one.
-//
-// DANGER gates arm instead of firing: the first click re-labels the button and only the second sends,
-// so an irreversible force-merge or delete can't ride a stray click on a queue card. The arm lapses on
-// its own so no button sits loaded, and only the ARMED state goes red — a resting button is white like
-// every sibling, and the card's red border + red kind header already say this one is destructive.
-const APPROVE_LABEL = "Approve"
-function ApproveAction({ danger, disabled, onApprove }: { danger: boolean; disabled: boolean; onApprove: () => void }) {
-  const [armed, setArmed] = useState(false)
-  useEffect(() => {
-    if (!armed) return
-    const id = setTimeout(() => setArmed(false), 5000)
-    return () => clearTimeout(id)
-  }, [armed])
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      aria-label={APPROVE_LABEL}
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={() => {
-        if (danger && !armed) {
-          setArmed(true)
-          return
-        }
-        setArmed(false)
-        onApprove()
-      }}
-      className={`flex shrink-0 items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-40 ${
-        armed ? "bg-red-500 text-white hover:opacity-90" : CARD_PRIMARY_BUTTON
-      }`}
-    >
-      {/* NO icon at rest (maintainer 2026-07-24: a shield on an Approve button is weird). The word is
-          the whole affordance, and the card's own APPROVAL eyebrow already carries the shield glyph —
-          repeating it on the button said nothing twice. The ARMED state keeps its warning triangle:
-          there the glyph is the message, not decoration. */}
-      {armed ? (
-        <>
-          <AlertTriangle size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} />
-          Click again to confirm
-        </>
-      ) : (
-        APPROVE_LABEL
-      )}
-    </button>
-  )
-}
 
 // A single answer choice: a left-aligned neutral button; when selected it takes the subtle accent
 // border (focus-adjacent selection). A `multi` chip additionally carries a checkbox square (empty →
