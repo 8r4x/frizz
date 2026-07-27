@@ -322,7 +322,7 @@ Post NOTHING to GitHub (no review, no comment, no approve/merge) unless the huma
 read-only; produce the review as your final message.
 
 Handback: put your review in your FINAL MESSAGE and close with a \`\`\`done\`\`\` fence listing the
-completed audit/evidence, or use a \`\`\`question approval\`\`\` if you want a go/no-go on posting the
+completed audit/evidence, or use a two-option \`\`\`question\`\`\` if you want a go/no-go on posting the
 review to GitHub.`
 
 // --- Pure templater (unit-tested seam) ---

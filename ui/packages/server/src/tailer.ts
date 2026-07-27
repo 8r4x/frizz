@@ -555,11 +555,13 @@ function previewText(raw: string): string | undefined {
 
 // Minimal server-side MIRROR of the web's ```question fence convention (web/src/lib/questionBlocks.ts
 // QUESTION_BLOCK) — a presence check only, not a full parse: an opening ```question line (optional
-// kind info-string like `approval`), its body, then a closing ``` line. Kept in sync BY HAND (the
+// kind info-string like `multi`), its body, then a closing ``` line. Kept in sync BY HAND (the
 // architecture forbids importing web code into the server). Drives the derived pending-question safety
 // net: a worker that asked the human IN CHAT but never flipped its thread file to blocked.
 // Info-string grammar mirrors the web exactly: one or more space-separated tokens (```question
-// approval danger) — the old single-token form silently missed multi-token gates the prompt teaches.
+// multi danger) — the old single-token form silently missed multi-token gates the prompt teaches.
+// It matches on SHAPE, never on the token set, so a retired token (`approval`) or a future one still
+// registers as an ask here exactly as it still renders as a card in the web.
 // A QUOTED opener never counts: a worker documenting the protocol wraps its sample in an outer ````
 // fence, and flagging that as a live ask parks the thread in "awaiting you" over an example. The
 // fenced-interior scan is the one piece genuinely SHARED with the web (@fray-ui/shared) rather than

@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: The full fray end-of-turn signal reference for a fray-ui worker (invoke as fray:handoff) — every `awaiting` hint kind, the `question` fence tags (`approval`, `approval danger`, `multi`), `done` body formatting, and worked examples of each. Your system-prompt contract carries the rules you need for the common case; load this when you are emitting an unusual fence, need a worked example of a tagged question card, or are unsure which fence a situation calls for.
+description: The full fray end-of-turn signal reference for a fray-ui worker (invoke as fray:handoff) — every `awaiting` hint kind, the `question` fence tags (`danger`, `multi`), `done` body formatting, and worked examples of each. Your system-prompt contract carries the rules you need for the common case; load this when you are emitting an unusual fence, need a worked example of a tagged question card, or are unsure which fence a situation calls for.
 ---
 
 # fray handoff reference
@@ -88,19 +88,23 @@ Should the settings store use SQLite or a JSON file?
 - B. JSON file — zero deps, human-editable, racy under concurrent writes
 ```
 
-`approval` — a go/no-go gate:
+A GO/NO-GO gate has NO tag of its own — it is a plain `question` with two options, the go and the
+decline. (There used to be an `approval` tag rendering one Approve button that SENT on click; it was
+dropped 2026-07-26 because it couldn't express the decline and it bypassed the staging every other
+block uses. A legacy `approval` token still parses — as a plain question — so old transcripts render,
+but never write one.)
 
-```question approval
+```question
 Ready to create CONTRIBUTING.md with the draft above?
 
-- A. Approve as-is
-- B. Approve with edits — tell me what to change
+- A. Approve as-is (recommended)
+- B. Hold — tell me what to change first
 ```
 
-`approval danger` — reserve for the genuinely hard-to-undo (force-merge, deletion, history rewrite,
-prod rollback). Renders in red. A routine ship is plain `approval`:
+`danger` — reserve for the genuinely hard-to-undo (force-merge, deletion, history rewrite,
+prod rollback). Renders in red. A routine ship is a plain question:
 
-```question approval danger
+```question danger
 Force-merge PR #391 over the failing flaky check and delete the `legacy-api` branch?
 
 - A. Do it — the failure is the known-flaky timeout

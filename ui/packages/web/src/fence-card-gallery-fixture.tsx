@@ -1,7 +1,8 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { AwaitingHint, BoardSnapshot, ThreadView } from "@fray-ui/shared"
+import { composeBlockAnswer, parseQuestionBlock, type BlockAnswer } from "./lib/questionBlocks.ts"
 import {
   FenceCard,
   LimitPauseCard,
@@ -67,15 +68,18 @@ const fences: { slug: string; label: string; kind: "done" | "awaiting"; body: st
   { slug: "g-legacy", label: "```awaiting · legacy ci (no action)", kind: "awaiting", body: "The legacy build is still running.", hints: [{ kind: "ci", value: "acme/app#7" }] },
 ]
 
-const questions: { label: string; raw: string; kind: "question" | "approval" | "multi"; danger?: boolean }[] = [
+// The `approval` kind is RETIRED (2026-07-26) — a go/no-go is just a two-option question, and the last
+// two entries are exactly that: the gate shapes a worker used to tag `approval` / `approval danger`,
+// now rendering through the ordinary staged chips + Send path like every other block.
+const questions: { label: string; raw: string; kind: "question" | "multi"; danger?: boolean }[] = [
   {
     label: "```question",
     kind: "question",
     raw: "Should the settings store use SQLite or a JSON file?\n\n- A. SQLite — transactional, matches the session registry (recommended: consistency with what exists)\n- B. JSON file — zero deps, human-editable, racy under concurrent writes",
   },
   {
-    label: "```question approval",
-    kind: "approval",
+    label: "```question · go/no-go (was `approval`)",
+    kind: "question",
     raw: "Ready to create CONTRIBUTING.md with the draft above?\n\n- A. Approve as-is\n- B. Approve with edits — tell me what to change",
   },
   {
@@ -84,8 +88,8 @@ const questions: { label: string; raw: string; kind: "question" | "approval" | "
     raw: "Which of these findings should I fix in this pass?\n\n- A. Null-deref in parse() — crashes on empty input\n- B. Off-by-one in slice() — drops the last row\n- C. Flaky timeout in the retry test — passes on rerun",
   },
   {
-    label: "```question approval danger",
-    kind: "approval",
+    label: "```question danger",
+    kind: "question",
     danger: true,
     raw: "Force-merge PR #391 over the failing flaky check and delete the `legacy-api` branch?\n\n- A. Do it — the failure is the known-flaky timeout\n- B. Hold — I'll wait for a green run",
   },
@@ -112,10 +116,12 @@ function Section({ label, children }: { label: string; children: React.ReactNode
   )
 }
 
-// One question block plus a readout of what a click would put ON THE WIRE. The approval gate's actions
-// send in a single click, so the gallery has to show the composed answer — otherwise the whole point of
-// the affordance (that one click answers) is invisible to a visual check.
+// One question block wired to REAL local answer state (chips toggle, the free-text box types) plus a
+// readout of what Send would put ON THE WIRE. Live state is what makes the gallery answer the questions
+// a static render can't: does a chip select, does the free-text box take a newline, does ⌘-Enter send.
 function QuestionSection({ q }: { q: (typeof questions)[number] }) {
+  const parsed = useMemo(() => parseQuestionBlock(q.raw, q.kind, q.danger), [q])
+  const [answer, setAnswer] = useState<BlockAnswer>({ chosen: null, text: "", chosenSet: [] })
   const [sent, setSent] = useState<string | null>(null)
   return (
     <Section label={q.label}>
@@ -124,16 +130,19 @@ function QuestionSection({ q }: { q: (typeof questions)[number] }) {
         questionKind={q.kind}
         danger={q.danger}
         interactive={{
-          answer: { chosen: null, text: "", chosenSet: [] },
-          onChip: () => {},
-          onText: () => {},
-          onSubmit: () => {},
-          onInstantAnswer: (answer: string) => setSent(answer),
-          sending: false,
+          answer,
+          onChip: (optIdx: number) =>
+            setAnswer((a) =>
+              q.kind === "multi"
+                ? { ...a, chosen: null, chosenSet: (a.chosenSet ?? []).includes(optIdx) ? (a.chosenSet ?? []).filter((i) => i !== optIdx) : [...(a.chosenSet ?? []), optIdx].sort((x, y) => x - y) }
+                : { chosen: a.chosen === optIdx ? null : optIdx, text: "" },
+            ),
+          onText: (text: string) => setAnswer((a) => (q.kind === "multi" ? { ...a, text } : { chosen: null, text })),
+          onSubmit: () => setSent(composeBlockAnswer(parsed, answer)),
         }}
       />
       {sent !== null && (
-        <p data-sent className="text-[11px] text-accent">
+        <p data-sent className="whitespace-pre-wrap text-[11px] text-accent">
           sent → {sent}
         </p>
       )}

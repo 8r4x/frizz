@@ -4,16 +4,22 @@
 
 import { insideFence } from "@fray-ui/shared"
 
-// The three answer MODES a ```question block can carry (the info-string picks one):
+// The two answer MODES a ```question block can carry (the info-string picks one):
 //   question — single-select (radio feel) OR freetext; the default.
-//   approval — a go/no-go gate (same single-select semantics, gate styling).
 //   multi    — multi-select: several options may be toggled on at once, freetext appends color.
-// `danger` (a separate orthogonal flag, below) layers destructive styling on any of these.
-export type QuestionKind = "question" | "approval" | "multi"
+// `danger` (a separate orthogonal flag, below) layers destructive styling on either of these.
+//
+// There used to be a third, `approval`: a go/no-go gate that rendered as ONE "Approve" button which
+// SENT on click. It is gone (maintainer 2026-07-26) — a one-click send contradicted the staging model
+// every other block follows (choose, then Send answers), and a lone Approve button couldn't express the
+// decline the gate's own second option named. A go/no-go is just a two-option question, so the token
+// now degrades to `question` and legacy ```question approval blocks in old transcripts render as the
+// two-option multiple choice they always were underneath.
+export type QuestionKind = "question" | "multi"
 
 // Per-question-block answer state (one per ```question block in a message). Grows ADDITIVELY so the
-// existing single-select semantics stay untouched: `chosen` is the selected chip index for
-// question/approval (mutually exclusive with non-empty `text` — freetext overrides a chip). `chosenSet`
+// existing single-select semantics stay untouched: `chosen` is the selected chip index for a
+// single-select block (mutually exclusive with non-empty `text` — freetext overrides a chip). `chosenSet`
 // is the toggled-on option indices for a `multi` block, where freetext COEXISTS with the selection
 // (it appends color) rather than overriding it. Lives here (not in a component) so the shared answering
 // controller, the queue card, and the thread view all agree.
@@ -26,12 +32,6 @@ export type MessageAnswering = {
   onChip: (blockIdx: number, optIdx: number, optText: string) => void
   onText: (blockIdx: number, text: string) => void
   onSubmit: () => void // ⌘-Enter from any block input, or this message's Send button, composes + sends
-  // ONE-CLICK answer for a block (the approval gate's action buttons): set this block's answer AND send,
-  // in a single gesture. It cannot be expressed as onChip-then-onSubmit — onChip goes through setState,
-  // so a submit fired in the same handler would compose from the PRE-click answers and drop the choice.
-  // The answer is passed through as an override instead, and any sibling block the human already filled
-  // still rides along.
-  onInstantAnswer: (blockIdx: number, answer: string) => void
   anyAnswered: boolean // at least one of THIS message's blocks is filled → its Send button is enabled
   sending: boolean // a send is in flight → disable this message's Send button
 }
@@ -41,7 +41,7 @@ export type MessageSegment =
   | { kind: "question"; text: string; questionKind: QuestionKind; danger: boolean }
 
 // Opening fence begins a line: ```question, an OPTIONAL info-string of one or more space-separated
-// tokens (e.g. ```question approval, ```question multi, ```question approval danger), then a newline;
+// tokens (e.g. ```question multi, ```question danger), then a newline;
 // the block runs non-greedily to the next line that is exactly ``` (optional trailing spaces). Group 1
 // captures the WHOLE info-string run (letter-led, up to the newline) so multi-token combinations parse;
 // parseInfoString below tokenizes it. The `m` flag anchors ^/$ to line boundaries; an unterminated
@@ -49,15 +49,15 @@ export type MessageSegment =
 // as a plain code block).
 const QUESTION_BLOCK = /^```question(?:[ \t]+([A-Za-z][^\r\n]*?))?[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/gm
 
-// The tokens the info-string understands. Base kind is picked by the first recognized of multi >
-// approval > question; `danger` is an orthogonal styling flag. GRACEFUL DEGRADATION: unknown/extra
-// tokens are ignored, and an info-string with no recognized base token degrades to kind "question" —
-// a never-break rule so a future or mistyped token can never turn a block into a parse failure.
+// The tokens the info-string understands. `multi` is the only base-kind token left; `danger` is an
+// orthogonal styling flag. GRACEFUL DEGRADATION: unknown/extra tokens are ignored, and an info-string
+// with no recognized base token degrades to kind "question" — a never-break rule so a future, mistyped,
+// or RETIRED token can never turn a block into a parse failure. The retired `approval` rides exactly
+// that rule: a legacy ```question approval danger still parses as a danger-styled two-option question.
 function parseInfoString(info: string | undefined): { kind: QuestionKind; danger: boolean } {
   const tokens = (info ?? "").toLowerCase().split(/\s+/).filter(Boolean)
   const has = (t: string) => tokens.includes(t)
-  const kind: QuestionKind = has("multi") ? "multi" : has("approval") ? "approval" : "question"
-  return { kind, danger: has("danger") }
+  return { kind: has("multi") ? "multi" : "question", danger: has("danger") }
 }
 
 export function splitQuestionBlocks(text: string): MessageSegment[] {
@@ -342,58 +342,8 @@ export function optionId(opt: string): string {
   return m ? m[1].toUpperCase() : opt.trim()
 }
 
-const OPTION_ID_PREFIX = /^\s*(?:[A-Za-z]|\d+)[.)]\s*/
-
-// An option's text WITHOUT its "A."/"1)" id — the label for an approval block's action buttons, which
-// read as verbs ("Approve as-is") rather than menu entries ("A. Approve as-is"). Display only: the
-// answer actually SENT is always the full option text, so the wire format matches a chip click exactly.
-export function optionVerb(opt: string): string {
-  return opt.replace(OPTION_ID_PREFIX, "").trim() || opt.trim()
-}
-
-// ---- approval affirmative detection ----
-// An approval gate's options are a go and a decline. Which is which CANNOT be read off position: the
-// prompt's examples lead with the go ("- A. Do it" / "- B. Hold"), but nothing enforces it, and putting
-// a primary "approve" button on an option that actually says "Hold" would send the opposite of what the
-// human clicked — on a `danger` gate, catastrophically. So classify by the option's OWN words, and
-// return null whenever the reading is not clean (the caller then renders every action equal-weight).
-
-// The leading VERB CLAUSE — text before the first dash/colon separator, id prefix and markdown emphasis
-// removed. Classification reads only this: "Hold — I'll wait for a green run" must be judged on "Hold",
-// not on a rationale that may well contain the word "merge" (and vice-versa).
-function leadingClause(option: string): string {
-  return option
-    .replace(OPTION_ID_PREFIX, "")
-    .replace(/[*_`~]/g, "")
-    .split(/\s+[—–]\s+|\s+-\s+|\s*[:;]\s+/)[0]
-    .trim()
-}
-
-const AFFIRMATIVE_LEAD =
-  /^(?:approve|approved|accept|yes|yep|ok|okay|do it|go|go ahead|proceed|ship|send it|merge|land|publish|apply|confirm|continue|lgtm|sounds good)\b/i
-const NEGATIVE_LEAD =
-  /^(?:hold|no|nope|not yet|wait|stop|cancel|abort|don'?t|do not|decline|reject|skip|defer|revert|pause|leave|keep)\b/i
-
-// The option that means GO, or null when there is no clean reading. `recommendedIdx` is the agent's own
-// marked recommendation (see parseQuestionBlock) and acts as both tiebreak and veto:
-//   · several affirmatives — the canonical gate has two ("Approve as-is" / "Approve with edits") — the
-//     recommended one wins, else the FIRST (the unqualified go).
-//   · the agent recommends a NON-affirmative ("Hold — wait for green") → null. A primary "Do it" must
-//     never out-shout the agent's own advice to decline; the Recommended badge carries the signal alone.
-export function approvalAffirmativeIndex(options: readonly string[], recommendedIdx: number | null = null): number | null {
-  const affirmative: number[] = []
-  for (let i = 0; i < options.length; i++) {
-    const clause = leadingClause(options[i])
-    if (NEGATIVE_LEAD.test(clause)) continue // a decline is never the go, whatever else the line says
-    if (AFFIRMATIVE_LEAD.test(clause)) affirmative.push(i)
-  }
-  if (affirmative.length === 0) return null
-  if (recommendedIdx !== null) return affirmative.includes(recommendedIdx) ? recommendedIdx : null
-  return affirmative[0]
-}
-
 // Compose ONE block's final answer string from its selection + freetext — the single source of truth
-// shared by the send path and its tests. Single-select (question/approval): freetext OVERRIDES the
+// shared by the send path and its tests. Single-select: freetext OVERRIDES the
 // chosen chip (else the chosen option's full text). Multi-select: the toggled options' letters in
 // option order ("A, C"), with any freetext appended as color ("A, C — and skip the flaky one");
 // selecting none but typing stays valid (freetext alone). Empty string ⇒ this block is unanswered.

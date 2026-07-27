@@ -35,7 +35,9 @@ plugin (`../cc-worker/`). The full plan: `../plans/standalone-ui.md`.
   designs — a blocking MCP tool and a fray-ask CLI + .questions/ sidecars — were built and
   rejected: fragile timeouts / redundant state; the user chose fences). The block body is plain
   markdown; a TRAILING `- A. …` option list + optional `Recommendation:` line are convention-parsed
-  into choice chips (web/src/lib/questionBlocks.ts); ` ```question approval ` tags a go/no-go gate.
+  into choice chips (web/src/lib/questionBlocks.ts). A go/no-go is just a two-option question — the
+  old ` ```question approval ` gate (one Approve button that sent on click) was dropped 2026-07-26;
+  its token now degrades to a plain question so legacy transcripts still render.
   Answers compose into one follow-up numbered by ORIGINAL block position ("Answers:\n2. …"). The
   contract lives in ui/WORKER_PROMPT.md + cc-worker's SKILL/deny-ask hook — keep all three aligned.
 
