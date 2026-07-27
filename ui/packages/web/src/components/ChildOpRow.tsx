@@ -13,6 +13,7 @@ import {
   CHILD_QUIET_SHELL_TITLE,
   CHILD_STALE_DOT_CLASS,
   CHILD_STALE_TITLE,
+  childProgressLabel,
 } from "../lib/childOps.ts"
 
 export type ChildOpKind = "AGENT" | "SHELL"
@@ -23,10 +24,12 @@ export type ChildOpKind = "AGENT" | "SHELL"
 //           rail speaks, at 12px, indented to clear the parent row's indicator column. NEVER swap this
 //           for the pulsing dot: matching the parent rows is the point. The rail keeps carrying the raw
 //           subagent type in its tooltip, which is now the only place it appears at all.
-//   card  — a queue card's live child lines. The pulsing live dot, no kind tag: a handoff card names
-//           the work still running beneath it, it does not become a second ops toolbar.
+//   card  — a queue card's live child lines. The pulsing live dot and the child's CURRENT STEP, no kind
+//           tag and no counters: a handoff card names the work still running beneath it and what that
+//           work is doing, it does not become a second ops toolbar.
 //   sheet — the drawer's background-ops strip. The full row: dot + petite-caps kind tag + label + the
-//           dismiss ×, because this IS the operations surface.
+//           dismiss × + the current step + the "how far it has got" counters, because this IS the
+//           operations surface.
 // All three carry the light-gray "last active" reading when the child reports one — the recency the
 // running/stale mark alone can't give ("stale" only means quiet ≥15 min, not HOW long) — RIGHT-JUSTIFIED
 // at the end of the row (maintainer 2026-07-27), so a column of rows reads its recencies down one edge
@@ -54,6 +57,9 @@ export function ChildOpRow({
   state,
   density,
   lastActivityAt,
+  activityDetail,
+  toolUses,
+  tokens,
   parentSlug,
   onOpen,
   onDismiss,
@@ -66,6 +72,20 @@ export function ChildOpRow({
   // ISO of the child's last transcript append (its output-file mtime). Rendered as a light-gray
   // "6 min ago" reading, live-ticking; absent ⇒ no reading (never a fabricated one).
   lastActivityAt?: string
+  // WHAT THE CHILD IS DOING RIGHT NOW, in the provider's own words ("Running sleep for 20 seconds") —
+  // rewritten per tool call off the Claude Agent SDK's typed task stream. This is the answer to "there's
+  // not really any indication of what they're up to aside from starts and stops", so it is the row's
+  // headline reading after the label. Prefer it over the bare tool name (`activity`, e.g. "Bash"),
+  // which says almost nothing, and over `summary`, which measured EMPTY on every progress event and
+  // only arrives with the terminal notification — by which point the row has already been retired.
+  // Absent for a tmux thread, a codex child, or an older CLI ⇒ the row simply reads as it did before,
+  // never with a gap where the step would have gone.
+  activityDetail?: string
+  // How far the child has got. `toolUses` rides the board signature so it pushes promptly; `tokens`
+  // deliberately does not (it would churn), so it reads as a slow secondary number and never animates.
+  // Ops-strip only — a queue card names the work, it does not keep a meter on it.
+  toolUses?: number
+  tokens?: number
   // Drill-in marker: keeps an open ThreadSheet for this slug from self-dismissing on the pointer-down,
   // so the child transcript STACKS over its parent instead of replacing it (see ThreadSheet).
   parentSlug?: string
@@ -116,6 +136,11 @@ export function ChildOpRow({
   const reading: ReactNode = ago ? (
     <span className="ml-auto shrink-0 pl-1.5 text-muted/40" title={`Last active ${ago}`}>{ago}</span>
   ) : null
+  // The current step, and (ops strip only) how far the child has got. The step TRUNCATES rather than
+  // pushing the recency off the row: at a narrow width the first few words still say what kind of work
+  // is in flight, and the full sentence rides the tooltip.
+  const step = !rail && activityDetail?.trim() ? activityDetail.trim() : undefined
+  const progress = sheet ? childProgressLabel(toolUses, tokens) : undefined
 
   const identity = (
     <>
@@ -129,9 +154,16 @@ export function ChildOpRow({
     </>
   )
 
+  // SHRINK PRIORITY on the two prompt-box densities: the label is the child's IDENTITY (and the
+  // drill-in target), so it keeps its natural width up to 60% of the row and the current step absorbs
+  // whatever is left. Letting both shrink proportionally crushed the label to "Inspe…" the moment a
+  // step arrived, which inverted the reading — you could see what some child was doing but not which.
   const rowClass = rail
     ? "group flex w-full min-w-0 items-center gap-2 rounded-md py-0.5 pl-[26px] pr-1.5 text-left text-[11.5px] outline-none transition-colors hover:bg-white/[0.04]"
-    : `group flex min-w-0 items-center gap-1.5 text-left text-[11.5px] ${clickable ? "cursor-pointer rounded-sm outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60" : ""}`
+    // `overflow-hidden` is load-bearing at a narrow width: the arrow/dot/kind tag inside are shrink-0,
+    // so once the row runs out of room the button's own content used to SPILL and the × landed on top
+    // of the "AGENT" tag. Clipping keeps the collapse graceful. The ring goes inset to survive it.
+    : `group flex min-w-0 max-w-[60%] items-center gap-1.5 overflow-hidden text-left text-[11.5px] ${clickable ? "cursor-pointer rounded-sm outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-fg/60" : ""}`
 
   const row = clickable ? (
     <button
@@ -163,6 +195,7 @@ export function ChildOpRow({
   return (
     <div className="flex min-w-0 items-center gap-1.5" data-op-row={onDismiss ? "" : undefined}>
       {row}
+      {/* The × sits between the identity and the live step, which is exactly "after the title". */}
       {onDismiss && (
         <button
           type="button"
@@ -175,6 +208,22 @@ export function ChildOpRow({
           <X size={11} />
         </button>
       )}
+      {/* `flex-1` here is `flex: 1 1 0%` — a ZERO base size, so the step only ever consumes space the
+          label did not need. It never pushes the identity out; it just fills what is left and clips.
+          The 4rem floor is not cosmetic: with a pure zero basis a long label squeezed the step to
+          nothing and left its separator dot stranded against the next reading. Below that floor the
+          label yields instead, which is the right trade — a step clipped to two words still says what
+          KIND of work is in flight. */}
+      {step && (
+        <span className="flex min-w-[4rem] flex-1 items-center gap-1.5 text-muted/45" title={step} data-child-activity>
+          <span aria-hidden className="shrink-0 text-muted/25">·</span>
+          <span className="min-w-0 truncate">{step}</span>
+        </span>
+      )}
+      {/* The counters are the row's LOWEST-value reading, so they are the first thing a narrow viewport
+          gives up — below `sm` they would cost the label and the step the room they need to say which
+          child this is and what it is doing. Both of those matter more than "how many tools so far". */}
+      {progress && <span className="hidden shrink-0 tabular-nums text-muted/35 sm:block" data-child-progress>{progress}</span>}
       {reading}
     </div>
   )

@@ -34,12 +34,17 @@ const thread: ThreadView = {
   foreign: false,
   // The `subagentType` spread is retained as DRILL-IN + tooltip data (the rail's type reading rides its
   // row tooltip). It is no longer rendered as a bracketed tag on any density — see ChildOpRow.
+  // The `activityDetail` / `toolUses` / `tokens` spread is the LIVE-READING coverage: a child mid-step
+  // with counters, a long step that has to truncate beside a long label, and — the case that must not
+  // regress — a child reporting NOTHING (a tmux or codex dispatch), which has to read exactly as the
+  // row did before those fields existed rather than leaving a gap where the step would go.
   subAgents: [
-    { id: "agent-a", label: "Inspect logs", startedAt: "2026-07-14T10:00:00.000Z", state: "running", subagentType: "fray:opus-xhigh", lastActivityAt: agoIso(0) },
-    { id: "agent-b", label: "Run regression suite", startedAt: "2026-07-14T10:01:00.000Z", state: "running", subagentType: "worker gpt-5.6-terra/high", lastActivityAt: agoIso(6) },
-    { id: "agent-long", label: "Sweep every call site of the renamed board projection helper for stale imports", startedAt: "2026-07-14T10:02:00.000Z", state: "running", subagentType: "fray:sonnet-medium", lastActivityAt: agoIso(2) },
+    { id: "agent-a", label: "Inspect logs", startedAt: "2026-07-14T10:00:00.000Z", state: "running", subagentType: "fray:opus-xhigh", lastActivityAt: agoIso(0), activity: "Bash", activityDetail: "Running sleep for 20 seconds", toolUses: 12, tokens: 13_476 },
+    { id: "agent-b", label: "Run regression suite", startedAt: "2026-07-14T10:01:00.000Z", state: "running", subagentType: "worker gpt-5.6-terra/high", lastActivityAt: agoIso(6), activity: "Edit", activityDetail: "Editing packages/server/src/tailer.ts", toolUses: 1, tokens: 947 },
+    { id: "agent-long", label: "Sweep every call site of the renamed board projection helper for stale imports", startedAt: "2026-07-14T10:02:00.000Z", state: "running", subagentType: "fray:sonnet-medium", lastActivityAt: agoIso(2), activity: "Grep", activityDetail: "Searching for every remaining reference to the old projection helper name across the workspace", toolUses: 148, tokens: 132_000 },
+    // No task stream at all (a tmux thread / a codex child): identity only, and no empty slot.
     { id: "agent-plain", label: "Explore the resume path", startedAt: "2026-07-14T10:03:00.000Z", state: "running", subagentType: "general-purpose", lastActivityAt: agoIso(3) },
-    { id: "agent-stale", label: "Prior investigation", startedAt: "2026-07-14T09:00:00.000Z", state: "stale", subagentType: "fray:haiku", lastActivityAt: agoIso(42) },
+    { id: "agent-stale", label: "Prior investigation", startedAt: "2026-07-14T09:00:00.000Z", state: "stale", subagentType: "fray:haiku", lastActivityAt: agoIso(42), activityDetail: "Reading the orphan reaper", toolUses: 3, tokens: 2_400_000 },
   ],
   bgShells: [
     { label: "Watch CI", startedAt: "2026-07-14T10:00:00.000Z", state: "running", lastActivityAt: agoIso(1) },

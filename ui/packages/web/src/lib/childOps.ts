@@ -31,6 +31,34 @@ export const CHILD_STALE_TITLE = "stale — no recent output"
 export const CHILD_QUIET_SHELL_TITLE = "running — no recent output"
 
 export const CHILD_OPEN_TITLE = { AGENT: "Open sub-agent transcript", SHELL: "Open background shell output" } as const
+
+// ── HOW MUCH the child has done — the quiet counter beside its current step ──────────────────────
+//
+// A live sub-agent used to be a name and a spinner. `activityDetail` (the provider's per-tool-call
+// sentence) says what it is doing RIGHT NOW; this says how far it has got. Both come off the Claude
+// Agent SDK's typed task stream, so both are absent for a tmux thread, a codex child, or an older CLI
+// — the row must read fine without them, never leave a gap where one would have been.
+//
+// `toolUses` rides the board signature (it pushes promptly); `tokens` deliberately does NOT (it would
+// churn), so it is a slow, secondary reading and must never be styled as something that ticks.
+export function childProgressLabel(toolUses?: number, tokens?: number): string | undefined {
+  const parts: string[] = []
+  if (typeof toolUses === "number" && toolUses > 0) parts.push(`${toolUses} ${toolUses === 1 ? "tool" : "tools"}`)
+  const compact = compactCount(tokens)
+  if (compact) parts.push(`${compact} tok`)
+  return parts.length > 0 ? parts.join(" · ") : undefined
+}
+
+// 947 → "947", 13476 → "13.5k", 132000 → "132k", 2400000 → "2.4M". A raw six-digit token count next to
+// a truncated label is noise; the magnitude is the whole reading. The decimal survives up to three
+// significant figures and is dropped past them, where it would only be adding width.
+function compactCount(n: number | undefined): string | undefined {
+  if (typeof n !== "number" || !Number.isFinite(n) || n <= 0) return undefined
+  const scale = (value: number, suffix: string) => `${value < 100 ? value.toFixed(1).replace(/\.0$/, "") : Math.round(value)}${suffix}`
+  if (n < 1_000) return String(Math.round(n))
+  if (n < 1_000_000) return scale(n / 1_000, "k")
+  return scale(n / 1_000_000, "M")
+}
 export const CHILD_DISMISS_TITLE = "Dismiss — stop tracking this finished operation"
 export const CHILD_DISMISS_NOUN = { AGENT: "sub-agent", SHELL: "background shell" } as const
 

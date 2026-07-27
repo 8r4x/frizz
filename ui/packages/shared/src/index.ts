@@ -112,8 +112,11 @@ export const SubAgentView = z.object({
   label: z.string(), // the dispatch's `description` (e.g. "Investigate nubjs/nub GitHub issue 376")
   startedAt: z.string(), // ISO8601 of the dispatch record
   state: z.enum(["running", "stale"]),
-  // The worker-profile cell (model+effort) from the dispatch's `subagent_type`, shown verbatim as a
-  // "[fray:fray-opus-high]" tag. Optional — absent on dispatches without it → no tag rendered.
+  // The worker-profile cell (model+effort) from the dispatch's `subagent_type`. It is NO LONGER drawn as
+  // a tag on the child rows under the prompt box (maintainer 2026-07-27: the profile belongs to the
+  // prompt box's own control one line up, not repeated on every child line); the transcript's dispatch
+  // card still shows it, the sidebar rail carries it in the row tooltip, and the drill-in passes it to
+  // the drawer. Optional — absent on dispatches without it.
   subagentType: z.string().optional(),
   // The dispatch tool_use id (the stable correlation key: same id on the Agent tool_use block, the
   // completion <task-notification>, and the transcript AgentBlock). Optional — absent on a pre-restart

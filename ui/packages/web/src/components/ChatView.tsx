@@ -152,6 +152,15 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
   // native modal field, never offer a terminal control Fray does not own.
   const nativeInputRequired = thread?.foreign ? undefined : thread?.nativeInputRequired
   const copyTerminalCommand = useCopyTerminalCommand(slug)
+  // The safety-net readout for a session frozen at a native AskUserQuestion — "answer it in your
+  // external terminal". That is the WRONG thing to say once fray OWNS the question: the broker path
+  // journals the same tool call as an answerable interaction, which renders as the question card just
+  // above, and pointing the operator at a terminal while an answerable copy sits on screen is worse
+  // than saying nothing. So the net stands down whenever this thread has a pending interaction, and
+  // still covers the sessions it exists for — pre-contract, adopted, or tmux threads that reach the
+  // tool with no broker to intercept it.
+  const frozenAsk = thread?.pendingInteraction ? undefined : thread?.pendingAsk
+
 
   // Freshness is centrally managed (transcript-live.ts keeps every observed transcript live); `poll`
   // only gates the SSE-fallback interval for a running thread.
@@ -393,7 +402,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
               })
               return out
             })()}
-            {(thread?.providerFault || thread?.limitPause || thread?.pendingAsk || nativeInputRequired || thread?.runtime === "perm-prompt" || running) && <VSpace />}
+            {(thread?.providerFault || thread?.limitPause || frozenAsk || nativeInputRequired || thread?.runtime === "perm-prompt" || running) && <VSpace />}
             {/* A frozen native AskUserQuestion takes precedence over the generic perm banner and the
                 Working… spinner — it's the salient state (the safety net). Background sub-agents/shells
                 are NOT surfaced here anymore: they live in the anchored ops strip (below), which is
@@ -408,8 +417,8 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
               />
             ) : thread?.limitPause && !thread.foreign ? (
               <LimitPauseCard slug={slug} sessionId={thread.sessionId} pause={thread.limitPause} />
-            ) : thread?.pendingAsk ? (
-              <PendingAskCard ask={thread.pendingAsk} onTerminal={copyTerminalCommand} />
+            ) : frozenAsk ? (
+              <PendingAskCard ask={frozenAsk} onTerminal={copyTerminalCommand} />
             ) : nativeInputRequired ? (
               <NativeInputRequiredCard input={nativeInputRequired} onTerminal={copyTerminalCommand} />
             ) : thread?.runtime === "perm-prompt" ? (
@@ -569,7 +578,7 @@ function VirtualizedThreadTranscript({
   const hasRuntimeStatus = Boolean(
     (thread?.providerFault && !thread.foreign)
       || (thread?.limitPause && !thread.foreign)
-      || thread?.pendingAsk
+      || (thread?.pendingInteraction ? undefined : thread?.pendingAsk)
       || nativeInputRequired
       || thread?.runtime === "perm-prompt"
       || running,
@@ -1081,8 +1090,8 @@ function VirtualizedThreadTranscript({
                   <ProviderFaultCard slug={slug} sessionId={thread.sessionId} fault={thread.providerFault} retryText={lastUserIdx >= 0 ? messages[lastUserIdx]?.text : undefined} />
                 ) : thread?.limitPause && !thread.foreign ? (
                   <LimitPauseCard slug={slug} sessionId={thread.sessionId} pause={thread.limitPause} />
-                ) : thread?.pendingAsk ? (
-                  <PendingAskCard ask={thread.pendingAsk} onTerminal={copyTerminalCommand} />
+                ) : (thread?.pendingInteraction ? undefined : thread?.pendingAsk) ? (
+                  <PendingAskCard ask={thread!.pendingAsk!} onTerminal={copyTerminalCommand} />
                 ) : nativeInputRequired ? (
                   <NativeInputRequiredCard input={nativeInputRequired} onTerminal={copyTerminalCommand} />
                 ) : thread?.runtime === "perm-prompt" ? (
