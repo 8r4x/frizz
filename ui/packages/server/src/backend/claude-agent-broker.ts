@@ -68,6 +68,9 @@ const ENV_ALLOWLIST = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TM
 const IDLE_EXIT_MS = 6 * 60 * 60 * 1000
 const REACHABILITY_CHECK_MS = 30_000
 const REACHABILITY_STRIKES = 2
+// Consecutive event-stream mapping failures tolerated before the session is treated as genuinely
+// broken. One bad event must not end hours of work; an endlessly throwing stream must not spin.
+const EVENT_ERROR_TOLERANCE = 5
 
 export interface RunningBroker { close: () => Promise<void>; sessionId: string; generation: string }
 
@@ -152,7 +155,40 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   }
 
   // The session ending (claude exits) tears the daemon down — there is nothing left to hold.
-  const pump = (async () => { for await (const event of handle) emitEvent(event) })().then(() => shutdown(0)).catch(() => shutdown(0))
+  // The session ending (claude exits) tears the daemon down — there is nothing left to hold. But an
+  // error out of the ITERATOR is a different thing entirely and used to be conflated with it: any
+  // failure mapping one event to fray's typed shape landed in this `.catch` and killed the daemon,
+  // the claude process, and every in-flight sub-agent. Live on 2026-07-27 a single control character
+  // in a Bash command did exactly that to a multi-hour orchestrator thread.
+  //
+  // The mapper no longer throws for that case (claude-agent-sdk.ts degrades an unrepresentable tool
+  // input instead), but the conflation itself was the deeper bug: losing one telemetry event must
+  // never be a reason to destroy hours of an operator's work. So a mapping failure is now recorded
+  // and the pump continues; only the stream genuinely ENDING tears the session down.
+  // `handle` is its own async iterator (claude-agent-sdk.ts: `[Symbol.asyncIterator]() { return this }`),
+  // so pulling with next() is exactly what `for await` did — it just lets ONE bad event be survivable.
+  // Bounded: a stream that keeps throwing is genuinely broken, and retrying it forever would spin the
+  // daemon at 100% CPU, which is a worse failure than the one being fixed.
+  const pump = (async () => {
+    let consecutiveErrors = 0
+    for (;;) {
+      let next: IteratorResult<ClaudeQueryEvent>
+      try {
+        next = await handle.next()
+      } catch (error) {
+        writeDiagnostic?.({
+          kind: "stderr",
+          message: `event stream error ${++consecutiveErrors}/${EVENT_ERROR_TOLERANCE} (session continues): ${error instanceof Error ? error.message : String(error)}`,
+          truncated: false,
+        })
+        if (consecutiveErrors >= EVENT_ERROR_TOLERANCE) return // genuinely broken → end the session
+        continue
+      }
+      consecutiveErrors = 0
+      if (next.done) return
+      emitEvent(next.value)
+    }
+  })().then(() => shutdown(0)).catch(() => shutdown(0))
 
   const armIdle = () => { if (client) return; clearTimeout(idleTimer); idleTimer = setTimeout(() => shutdown(0), IDLE_EXIT_MS) }
 

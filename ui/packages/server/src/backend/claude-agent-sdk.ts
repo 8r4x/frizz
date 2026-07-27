@@ -121,6 +121,17 @@ export interface ClaudeQueryStartOptions {
   pluginDir?: string
   mcpServers?: Record<string, { type?: "stdio"; command: string; args?: string[]; env?: Record<string, string> }>
   allowedTools?: string[]
+  // Which of Claude Code's own settings layers the session loads — and, critically, whether it reads
+  // the PROJECT's `CLAUDE.md` / `AGENTS.md` and `.claude/skills` at all.
+  //
+  // Default `["project", "local"]`: the repo fray is dispatched INTO gets its own conventions in front
+  // of the worker, which is what every one of those files assumes ("This binds EVERY agent that
+  // touches this repo"). Deliberately NOT `"user"` — the operator's personal `~/.claude` config is
+  // theirs, not something a dispatched worker should silently inherit.
+  //
+  // Pass `[]` for a hermetic session that sees no project config at all (what the standalone SDK
+  // foundation used before the broker became a real worker transport).
+  settingSources?: Array<"user" | "project" | "local">
 }
 
 export interface ClaudeQueryHandle extends AsyncIterable<ClaudeQueryEvent> {
@@ -603,11 +614,16 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       ...(options.session.kind === "new" ? { sessionId } : { resume: sessionId }),
       canUseTool,
       onElicitation,
-      settingSources: [],
+      // PROJECT + LOCAL by default — see ClaudeQueryStartOptions.settingSources. `[]` was correct while
+      // this was a standalone foundation nothing dispatched through; once the broker became the DEFAULT
+      // Claude transport it silently stopped every worker from seeing the repo's own `CLAUDE.md` /
+      // `AGENTS.md` and its `.claude/skills`. Measured differential in the fray repo, one variable:
+      // this factory answered `NO-CLAUDE-MD` where a plain `claude -p` in the same cwd answered
+      // "# No pull requests — land on local `main`". `"user"` stays OUT on purpose (see the field docs).
+      settingSources: options.settingSources ?? ["project", "local"],
       // The fray worker environment (see ClaudeQueryStartOptions): load the local cc-worker plugin so a
       // broker session gets the fray sub-agent profiles + hooks, mount the MCP servers (fray +
-      // chrome-devtools), and pre-approve them. settingSources stays [] so ONLY this plugin loads, not
-      // the user's global settings.
+      // chrome-devtools), and pre-approve them.
       ...(options.pluginDir ? { plugins: [{ type: "local" as const, path: options.pluginDir }] } : {}),
       ...(options.mcpServers ? { mcpServers: options.mcpServers } : {}),
       ...(options.allowedTools ? { allowedTools: options.allowedTools } : {}),
@@ -1045,7 +1061,8 @@ function mapSessionInit(raw: Record<string, unknown>): ClaudeSessionInitEvent {
   }
 }
 
-function mapAssistant(raw: Record<string, unknown>): ClaudeQueryEvent {
+/** Exported as a test seam: the degrade-don't-throw contract below is load-bearing for session survival. */
+export function mapAssistant(raw: Record<string, unknown>): ClaudeQueryEvent {
   const apiMessage = objectValue(raw.message, "assistant.message")
   const blocks = boundedArray(apiMessage.content, "assistant.content", 64)
   const text: string[] = []
@@ -1059,10 +1076,32 @@ function mapAssistant(raw: Record<string, unknown>): ClaudeQueryEvent {
       if (textBytes > CLAUDE_AGENT_SDK_MAX_EVENT_TEXT_BYTES) throw new ClaudeAgentSdkProtocolError("assistant text exceeds its aggregate limit")
       text.push(value)
     } else if (block.type === "tool_use") {
+      // A tool input fray cannot REPRESENT must never be a fatal error. This is outbound TELEMETRY —
+      // fray's own view of what the agent is doing — and the agent's actual tool call has already been
+      // made either way. Throwing here propagates out of the event iterator, and the broker daemon's
+      // pump treats any iterator error as terminal (claude-agent-broker.ts), so it kills the daemon,
+      // the `claude` process, and every in-flight sub-agent with it.
+      //
+      // That is not hypothetical. Live, 2026-07-27 07:03:55, on a multi-hour orchestrator thread:
+      //   lifecycle:crashed "assistant.content[0].input.command contains unsafe text"
+      // A single control character inside a Bash `command` — trivially reachable the moment an agent
+      // echoes terminal output, writes an ANSI escape, or handles binary — destroyed the whole thread
+      // and all of its sub-agents. The operator saw a frozen card with no explanation.
+      //
+      // So: keep the strict validator (it is what stops unbounded/unsafe values reaching the wire),
+      // but on rejection emit the tool call with a PLACEHOLDER input rather than taking the session
+      // down. The id and name still identify the call; only the arguments degrade. This is the same
+      // "parse defensively, degrade to unknown, never throw" discipline the tailer already documents.
+      let input: ReturnType<typeof boundedJsonObject>
+      try {
+        input = boundedJsonObject(block.input, `assistant.content[${index}].input`)
+      } catch (error) {
+        input = { __frayUnrepresentable: error instanceof Error ? safeText(error.message, "unrepresentable", 512) : "tool input could not be represented" }
+      }
       toolUses.push({
         id: boundedId(block.id, `assistant.content[${index}].id`),
         name: safeText(block.name, `assistant.content[${index}].name`, 512),
-        input: boundedJsonObject(block.input, `assistant.content[${index}].input`),
+        input,
       })
     }
   }

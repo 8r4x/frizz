@@ -11,6 +11,7 @@ import {
   createClaudeDiagnosticRedactor,
   createClaudeQueryFactory,
   claudeAgentSdkFoundationEnabled,
+  mapAssistant,
   type ClaudeQueryHandle,
 } from "./claude-agent-sdk.ts"
 import {
@@ -107,7 +108,12 @@ test("real SDK + fake executable: init owns the requested session, input streams
     const argv = startup.argv as string[]
     assert.deepEqual(argv.slice(0, 5), ["--output-format", "stream-json", "--verbose", "--input-format", "stream-json"])
     assert.ok(argv.includes("--no-session-persistence"))
-    assert.ok(argv.includes("--setting-sources="))
+    // PROJECT + LOCAL, never USER: a dispatched worker reads the repo's own CLAUDE.md / AGENTS.md and
+    // .claude/skills, and never the operator's personal ~/.claude config. This pinned the empty (fully
+    // hermetic) form until 2026-07-26, when a measured differential showed the broker — by then the
+    // DEFAULT Claude transport — was answering `NO-CLAUDE-MD` where a plain `claude -p` in the same
+    // cwd read the project's first heading.
+    assert.ok(argv.includes("--setting-sources=project,local"), `argv had: ${argv.filter((a) => a.startsWith("--setting-sources")).join(",") || "no --setting-sources flag"}`)
     assert.equal(argv[argv.indexOf("--session-id") + 1], SESSION_ID)
     assert.deepEqual(startup.environment, {
       frayFakeInheritedPresent: false,
@@ -1079,3 +1085,31 @@ async function withTimeout<T>(promise: Promise<T>, label: string, timeoutMs = 5_
     if (timer) clearTimeout(timer)
   }
 }
+
+// ---- Session survival: a telemetry mapping failure must never end a session ----
+
+const ASSISTANT_RAW = (input: Record<string, unknown>) => ({
+  session_id: "11111111-2222-3333-4444-555555555555",
+  uuid: "66666666-7777-8888-9999-000000000000",
+  message: { content: [{ type: "tool_use", id: "toolu_x", name: "Bash", input }] },
+})
+
+test("a tool input with a control character DEGRADES instead of killing the session", () => {
+  // The live incident, 2026-07-27 07:03:55: a multi-hour orchestrator thread and every one of its
+  // sub-agents destroyed by exactly this shape, because the mapper threw, the error propagated out of
+  // the event iterator, and the broker daemon's pump treated any iterator error as terminal:
+  //   lifecycle:crashed "assistant.content[0].input.command contains unsafe text"
+  // A control character in a Bash command is trivially reachable — echoing terminal output, an ANSI
+  // escape, anything binary. It must cost the ARGUMENTS of one telemetry event, never the session.
+  const esc = String.fromCharCode(27)
+  const event = mapAssistant(ASSISTANT_RAW({ command: `printf '${esc}[31mred${esc}[0m'` })) as Extract<ClaudeQueryEvent, { kind: "assistant" }>
+  assert.equal(event.kind, "assistant")
+  assert.equal(event.toolUses.length, 1, "the tool call is still reported")
+  assert.equal(event.toolUses[0]!.name, "Bash", "id and name survive — only the arguments degrade")
+  assert.ok("__frayUnrepresentable" in event.toolUses[0]!.input, `input was ${JSON.stringify(event.toolUses[0]!.input)}`)
+})
+
+test("an ordinary tool input is untouched by the degrade path", () => {
+  const event = mapAssistant(ASSISTANT_RAW({ command: "ls -la" })) as Extract<ClaudeQueryEvent, { kind: "assistant" }>
+  assert.deepEqual(event.toolUses[0]!.input, { command: "ls -la" })
+})
