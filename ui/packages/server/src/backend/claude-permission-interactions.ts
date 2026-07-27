@@ -17,7 +17,7 @@ import {
 } from "@fray-ui/shared"
 import { redactCredentialSyntax } from "../credential-redaction.ts"
 import { validatePermissionDecision } from "./claude-agent-sdk-protocol.ts"
-import type { ClaudeJson, ClaudePermissionDecision, ClaudePermissionRequest } from "./claude-agent-sdk-protocol.ts"
+import type { ClaudeJson, ClaudeJsonObject, ClaudePermissionDecision, ClaudePermissionRequest } from "./claude-agent-sdk-protocol.ts"
 
 // The decision IDs the fray web CANONICALIZES for a permission-approval card (typedInteractions.ts
 // specFor): the security verb is a fixed vocabulary, not provider-chosen, so an unrecognized id renders
@@ -144,6 +144,12 @@ const UNSAFE_TEXT_SOURCE = "[\\p{Cf}\\p{Cs}\\p{Zl}\\p{Zp}\\u0000-\\u0008\\u000b\
 const SCRUB_UNSAFE_TEXT = new RegExp(UNSAFE_TEXT_SOURCE, "gu")
 const HAS_UNSAFE_TEXT = new RegExp(UNSAFE_TEXT_SOURCE, "u")
 
+// claude 2.1.220's own sentinel for "the operator left notes but picked no option" — its result mapper
+// special-cases this exact string (`if (!f || f === "(notes only)") return true`) so a notes-only answer
+// is not scored as an unadvertised pick. Matching it is what makes fray's free-text box native rather
+// than a fray-shaped approximation.
+const CLAUDE_NOTES_ONLY = "(notes only)"
+
 const CLAUDE_QUESTION_DECLINED =
   "The operator did not answer this question from the fray dashboard. Do not ask it again with this tool — " +
   "decide with the information you already have, or raise it in your final message."
@@ -247,14 +253,34 @@ function askFields(spec: ClaudeAskSpec): InteractionField[] {
       id: `q${index}`,
       label: singleLine(question.header, 160, `Question ${index + 1}`),
       description: displayText(question.question, 4_000, "Claude asked for a decision."),
-      required: true,
+      // NOT required: the card offers the same free-text escape a ```question fence does, and an
+      // operator who only types ("neither — do X instead") has answered without picking an option.
+      // "at least one of pick/notes" is enforced where the decision is built, not per field.
+      required: false,
       secret: false,
     }
-    return question.multiSelect
-      ? { ...base, input: "multi-select" as const, options, minItems: 1 }
-      : { ...base, input: "select" as const, options }
-  })
+    return [
+      question.multiSelect
+        ? { ...base, input: "multi-select" as const, options }
+        : { ...base, input: "select" as const, options },
+      // The free-text half of the same question. It is a SEPARATE field because the store validates a
+      // select's value against the advertised options — which is right, and which free text by
+      // definition is not. The pairing convention (`q<i>` + `q<i>` + NOTES_FIELD_SUFFIX) is what the
+      // web reads to fold the two back into one question card.
+      {
+        id: `q${index}${NOTES_FIELD_SUFFIX}`,
+        label: singleLine(question.header, 160, `Question ${index + 1}`),
+        input: "multiline" as const,
+        required: false,
+        secret: false,
+        maxLength: 4_000,
+      },
+    ]
+  }).flat()
 }
+
+/** Field-id suffix pairing a question's free-text field with its option field. */
+export const NOTES_FIELD_SUFFIX = "_notes"
 
 /** Build the durable interaction request for an AskUserQuestion call, or null when it cannot be
  *  represented (→ the caller denies with an explanation). */
@@ -315,18 +341,30 @@ export function claudeQuestionDecisionFor(
 ): ClaudePermissionDecision {
   if (decisionId !== CLAUDE_QUESTION_DECISIONS.answer) return { behavior: "deny", message: CLAUDE_QUESTION_DECLINED }
   const answers: Record<string, string> = {}
+  const annotations: Record<string, { notes: string }> = {}
   for (const [index, question] of spec.questions.entries()) {
     const value = values?.[`q${index}`]
-    if (value === undefined) continue
     // "multi-select answers are comma-separated" — claude 2.1.220's own schema description, and its
     // result mapper splits on exactly ", " when checking the answer against the advertised labels.
-    const answer = Array.isArray(value) ? value.join(", ") : String(value)
-    if (answer !== "") answers[question.question] = answer
+    const picked = value === undefined ? "" : Array.isArray(value) ? value.join(", ") : String(value)
+    const notesValue = values?.[`q${index}${NOTES_FIELD_SUFFIX}`]
+    const notes = typeof notesValue === "string" ? notesValue.trim() : ""
+    if (picked === "" && notes === "") continue
+    // The SDK's own shape for "the operator typed something as well as (or instead of) picking":
+    // free text rides `annotations[question].notes`, and a notes-only answer takes claude's own
+    // NOTES_ONLY sentinel in `answers`. Both are read by the result mapper — the presence of notes
+    // is precisely what makes it tell the model to read the answer carefully rather than treating a
+    // matched label as a clean pick. This is why free text is native here and not a fray convention.
+    answers[question.question] = picked === "" ? CLAUDE_NOTES_ONLY : picked
+    if (notes !== "") annotations[question.question] = { notes }
   }
   if (Object.keys(answers).length === 0) return { behavior: "deny", message: CLAUDE_QUESTION_DECLINED }
+  const hasNotes = Object.keys(annotations).length > 0
   for (const questions of [spec.raw, minimalQuestions(spec)]) {
+    const updatedInput: ClaudeJsonObject = { questions, answers: { ...answers } }
+    if (hasNotes) updatedInput.annotations = { ...annotations }
     try {
-      return validatePermissionDecision({ behavior: "allow", updatedInput: { questions, answers: { ...answers } } })
+      return validatePermissionDecision({ behavior: "allow", updatedInput })
     } catch { /* fall through to the rebuilt, minimal echo */ }
   }
   return {

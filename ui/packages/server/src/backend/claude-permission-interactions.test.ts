@@ -61,10 +61,11 @@ test("the card is an agent-question with one select field per question, valued b
   assert.deepEqual(request.allowedDecisions.map((d) => [d.id, d.semantic]), [["answer", "answer"], ["decline", "decline"]])
   assert.equal(request.payload.kind === "agent-question" && request.payload.title, "Channel")
   const fields = request.payload.kind === "agent-question" ? request.payload.fields : []
-  assert.equal(fields.length, 1)
-  assert.equal(fields[0].id, "q0")
-  assert.equal(fields[0].input, "select")
-  assert.equal(fields[0].required, true)
+  // Two fields per question: the options, and the free-text half the shared card's box writes into.
+  assert.deepEqual(fields.map((f) => [f.id, f.input]), [["q0", "select"], ["q0_notes", "multiline"]])
+  // Neither half is `required`: picking an option OR typing is a complete answer, exactly as on a
+  // ```question fence. "at least one of the two" is enforced where the decision is built.
+  assert.equal(fields[0].required, false)
   assert.equal(fields[0].description, "Which release channel should we ship on?")
   // The VALUE is the provider's exact label (that is what the answer must echo); the option's
   // description is folded into the display label because the card renders only `option.label`.
@@ -111,7 +112,6 @@ test("a multiSelect question maps to a multi-select field and a \", \"-joined an
   const request = buildClaudeQuestionInteraction(spec, requestFor(input), OWNER)!
   const fields = request.payload.kind === "agent-question" ? request.payload.fields : []
   assert.equal(fields[0].input, "multi-select")
-  assert.equal(fields[0].input === "multi-select" ? fields[0].minItems : undefined, 1)
   const decision = claudeQuestionDecisionFor(spec, "answer", { q0: ["Metrics", "Tracing"] })
   // claude 2.1.220's own schema: "multi-select answers are comma-separated", and its result mapper
   // splits on exactly ", " before checking each part against the advertised labels.
@@ -131,12 +131,38 @@ test("several questions each get their own field and their own answer key", () =
   const request = buildClaudeQuestionInteraction(spec, requestFor(input), OWNER)!
   assert.equal(request.payload.kind === "agent-question" && request.payload.title, "Claude questions")
   const fields = request.payload.kind === "agent-question" ? request.payload.fields : []
-  assert.deepEqual(fields.map((f) => f.id), ["q0", "q1"])
+  assert.deepEqual(fields.map((f) => f.id), ["q0", "q0_notes", "q1", "q1_notes"])
   const decision = claudeQuestionDecisionFor(spec, "answer", { q0: "Beta", q1: "No" })
   assert.deepEqual(decision.behavior === "allow" ? decision.updatedInput?.answers : undefined, {
     "Which channel?": "Beta",
     "Tag a release now?": "No",
   })
+})
+
+test("FREE TEXT rides the SDK's own annotations, with claude's notes-only sentinel in answers", () => {
+  // The fence card's free-text box is not a fray convention bolted onto a tool call: claude's own
+  // AskUserQuestion input schema carries `annotations[questionText].notes`, and its result mapper
+  // special-cases the literal "(notes only)" answer. Picking an option AND typing sends both.
+  const spec = parseClaudeAskUserQuestion(CHANNEL_INPUT)!
+  const withPick = claudeQuestionDecisionFor(spec, "answer", { q0: "Beta", q0_notes: "but check the changelog first" })
+  assert.deepEqual(withPick.behavior === "allow" ? withPick.updatedInput?.answers : undefined, {
+    "Which release channel should we ship on?": "Beta",
+  })
+  assert.deepEqual(withPick.behavior === "allow" ? withPick.updatedInput?.annotations : undefined, {
+    "Which release channel should we ship on?": { notes: "but check the changelog first" },
+  })
+  // Typing INSTEAD of picking is a complete answer too — the fence card's single-select semantics,
+  // where free text overrides the chip.
+  const notesOnly = claudeQuestionDecisionFor(spec, "answer", { q0_notes: "neither — ship nothing yet" })
+  assert.deepEqual(notesOnly.behavior === "allow" ? notesOnly.updatedInput?.answers : undefined, {
+    "Which release channel should we ship on?": "(notes only)",
+  })
+  assert.deepEqual(notesOnly.behavior === "allow" ? notesOnly.updatedInput?.annotations : undefined, {
+    "Which release channel should we ship on?": { notes: "neither — ship nothing yet" },
+  })
+  // No notes at all → no annotations key, so a clean pick stays a clean pick.
+  const clean = claudeQuestionDecisionFor(spec, "answer", { q0: "Stable" })
+  assert.equal(clean.behavior === "allow" ? "annotations" in (clean.updatedInput ?? {}) : true, false)
 })
 
 test("declining, cancelling, and an empty answer set all DENY with a reason the model can act on", () => {

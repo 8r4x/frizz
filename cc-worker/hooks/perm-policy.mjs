@@ -138,6 +138,22 @@ try {
 // mode), so it never becomes a real human block — leave it entirely alone, marker included.
 if (input.tool_name === 'ExitPlanMode') process.exit(0);
 
+// AskUserQuestion is not an authorization request — it is the agent ASKING, and the permission
+// decision is where the ANSWER travels. `worker-autonomy` would allow it with `updatedInput` set to
+// the untouched tool input, i.e. the questions and NO answers, and claude's own result mapper then
+// tells the model "The user did not answer the questions." So the auto-approval that keeps a worker
+// moving for every other tool is, for this one, a guaranteed wasted turn.
+//
+// Fray's broker intercepts this call at canUseTool and renders it as a real question card the
+// operator answers (claude-permission-interactions.ts), so the right move here is to say NOTHING —
+// no decision AND no marker. A `defer` verdict would write a marker the tailer reads as a human
+// permission block, stacking a second "needs you" surface on top of the card already asking.
+// (Verified 2026-07-27 on a promoted artifact: workers dispatch at --permission-mode auto, so
+// `restrictive-mode` does not catch this and `worker-autonomy` did allow it. A dev-stack harness at
+// the default permission mode deferred and looked fine, which is exactly why this needed an
+// artifact run to find.)
+if (input.tool_name === 'AskUserQuestion') process.exit(0);
+
 const verdict = evaluate(input);
 
 // Record the decision BEFORE acting on it, best-effort. The marker is fray's only structured view of

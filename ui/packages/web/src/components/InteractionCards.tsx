@@ -41,6 +41,14 @@ import {
 } from "../lib/typedInteractions.ts"
 import { safeHttpUrl } from "../lib/external-links.ts"
 import { draftKey, draftStore, useDraftValues, useProjectDir } from "../lib/drafts.ts"
+// THE question card. A native AskUserQuestion is a question, not an authorization request, so it
+// renders through the very component a ```question fence renders through — same card, same option
+// chips, same free-text box, same Send answers verb (maintainer 2026-07-27: "Ideally, they could
+// share a component"). Only the plumbing differs: a fence answers by composing a user message, a
+// native question answers by resolving this interaction.
+import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
+import { interactionQuestionValues, interactionQuestions } from "../lib/interactionQuestion.ts"
+import type { BlockAnswer } from "../lib/questionBlocks.ts"
 
 function errorText(error: unknown): string {
   const message = error instanceof Error ? error.message : "The request could not be updated."
@@ -117,7 +125,167 @@ type MutationResult = {
   waitingForProvider: boolean
 }
 
+// A question interaction, rendered as THE question card — identical to a ```question fence, because it
+// is literally the same component fed by the other producer (lib/interactionQuestion.ts). No shield
+// chrome, no typed-form fieldset: a question is not an authorization request and must not wear the
+// authorization card's clothes. Answers stage exactly as a fence's do — pick a chip and/or type, then
+// Send answers; nothing sends on a single click.
+function InteractionQuestionCard({
+  record,
+  questions,
+  autoFocus,
+}: {
+  record: InteractionRecord
+  questions: NonNullable<ReturnType<typeof interactionQuestions>>
+  autoFocus: boolean
+}) {
+  const qc = useQueryClient()
+  const cardRef = useRef<HTMLElement>(null)
+  const responseIds = useRef(new Map<string, string>())
+  const projectDir = useProjectDir()
+  const delivery = interactionDeliveryPresentation(record.delivery?.effect)
+  const answerDecision = useMemo(
+    () => canonicalInteractionDecisions(record).find((decision) => decision.semantic === "answer"),
+    [record],
+  )
+  // Free text persists through a remount the same way a fence answer does — an operator who typed half
+  // a paragraph and switched surfaces must not lose it.
+  const textKeys = questions.flatMap((entry) => entry.notesFieldId
+    ? [draftKey.interaction(projectDir, record.owner.projectId, record.owner.threadSlug, record.owner.sessionId, record.owner.sessionEpoch, record.id, entry.notesFieldId)]
+    : [])
+  const persistedText = useDraftValues(textKeys)
+  const [picks, setPicks] = useState<Array<{ chosen: number | null; chosenSet: number[] }>>(
+    () => questions.map(() => ({ chosen: null, chosenSet: [] })),
+  )
+  const answers: BlockAnswer[] = questions.map((entry, index) => ({
+    chosen: picks[index]?.chosen ?? null,
+    chosenSet: picks[index]?.chosenSet ?? [],
+    text: entry.notesFieldId
+      ? persistedText.get(draftKey.interaction(projectDir, record.owner.projectId, record.owner.threadSlug, record.owner.sessionId, record.owner.sessionEpoch, record.id, entry.notesFieldId)) ?? ""
+      : "",
+  }))
+  const values = interactionQuestionValues(questions, answers)
+  const [error, setError] = useState<string>()
+  const [sent, setSent] = useState(false)
+
+  useEffect(() => {
+    if (!autoFocus) return
+    const active = document.activeElement
+    if (active && active !== document.body) return
+    requestAnimationFrame(() => cardRef.current?.focus())
+  }, [autoFocus, record.id])
+
+  const mutation = useMutation({
+    mutationFn: async (input: { decisionId: string; values: InteractionValues; responseId: string }) => rpc.interactionResolve({
+      slug: record.owner.threadSlug,
+      sessionId: record.owner.sessionId,
+      interactionId: record.id,
+      sessionEpoch: record.owner.sessionEpoch,
+      capabilityRevision: record.owner.capabilityRevision,
+      expectedRecordRevision: record.recordRevision,
+      responseId: input.responseId,
+      decisionId: input.decisionId,
+      values: input.values,
+    }),
+    onSuccess: (result) => {
+      setSent(true)
+      reconcileCachedInteraction(qc, result.interaction)
+      void qc.invalidateQueries({ queryKey: pendingInteractionsKey(record.owner.threadSlug, record.owner.sessionId) })
+      void qc.invalidateQueries({ queryKey: interactionRecordKey(record.owner.threadSlug, record.owner.sessionId, record.id) })
+    },
+    onError: (cause) => {
+      // Fail CLOSED on an ambiguous write, exactly as the typed card does: a response fray cannot
+      // prove landed must not look re-sendable.
+      failClosedAmbiguousInteraction(qc, record)
+      setError(errorText(cause))
+    },
+  })
+
+  const submit = () => {
+    if (!answerDecision || !values || mutation.isPending || sent || !delivery.actionsEnabled) return
+    setError(undefined)
+    const signature = interactionDecisionSignature(answerDecision.id, values)
+    const responseId = responseIds.current.get(signature) ?? newResponseId()
+    responseIds.current.set(signature, responseId)
+    mutation.mutate({ decisionId: answerDecision.id, values, responseId })
+  }
+  const setText = (entry: (typeof questions)[number], text: string) => {
+    if (!entry.notesFieldId) return
+    draftStore.set(draftKey.interaction(projectDir, record.owner.projectId, record.owner.threadSlug, record.owner.sessionId, record.owner.sessionEpoch, record.id, entry.notesFieldId), text)
+  }
+
+  return (
+    <article
+      ref={cardRef}
+      tabIndex={-1}
+      data-interaction-id={record.id}
+      data-interaction-kind={record.payload.kind}
+      data-interaction-question="native"
+      data-delivery-effect={record.delivery?.effect}
+      className="flex min-w-0 flex-col gap-2 outline-none"
+    >
+      {questions.map((entry, index) => (
+        <QuestionBlockCard
+          key={entry.optionFieldId ?? entry.notesFieldId ?? index}
+          question={entry.question}
+          interactive={delivery.actionsEnabled && !sent ? {
+            answer: answers[index],
+            onChip: (optIdx) => setPicks((prev) => prev.map((pick, i) => {
+              if (i !== index) return pick
+              if (entry.question.kind === "multi") {
+                const set = pick.chosenSet.includes(optIdx) ? pick.chosenSet.filter((v) => v !== optIdx) : [...pick.chosenSet, optIdx]
+                return { ...pick, chosenSet: set }
+              }
+              // SINGLE: picking a chip clears any typed override, mirroring the fence card exactly.
+              setText(entry, "")
+              return { ...pick, chosen: optIdx }
+            })),
+            onText: (text) => setText(entry, text),
+            onSubmit: submit,
+          } : undefined}
+        />
+      ))}
+      {error && <div role="alert" className="break-words text-[11px] leading-snug text-red-300">{error}</div>}
+      {(delivery.status || mutation.isPending || sent) && (
+        <div role="status" aria-live="polite" className="text-[11px] leading-snug text-muted">
+          {delivery.status ?? (sent ? "Answer sent." : "Sending…")}
+        </div>
+      )}
+      {delivery.actionsEnabled && !sent && (
+        // The SAME Send answers verb, chrome and placement a fence question's message-level button uses.
+        <div className="flex justify-end">
+          <button
+            type="button"
+            data-send-answers
+            disabled={!values || mutation.isPending}
+            onClick={submit}
+            onMouseDown={(e) => e.preventDefault()}
+            className="rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:hover:opacity-30"
+          >
+            Send answers
+          </button>
+        </div>
+      )}
+    </article>
+  )
+}
+
 export function InteractionCard({
+  record,
+  autoFocus = false,
+}: {
+  record: InteractionRecord
+  autoFocus?: boolean
+}) {
+  // A QUESTION renders as the shared question card, not as this authorization chrome. Anything that
+  // cannot be expressed as a question (a numeric or secret prompt) falls through to the typed form
+  // below rather than silently dropping an input the operator still has to fill.
+  const asQuestions = useMemo(() => interactionQuestions(record), [record])
+  if (asQuestions) return <InteractionQuestionCard record={record} questions={asQuestions} autoFocus={autoFocus} />
+  return <InteractionApprovalCard record={record} autoFocus={autoFocus} />
+}
+
+function InteractionApprovalCard({
   record,
   autoFocus = false,
 }: {
