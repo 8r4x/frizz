@@ -66,6 +66,14 @@ export interface ClaudeRuntimeTask {
   outcome?: "completed" | "failed" | "killed"
   /** The tool the child is running right now — the single most useful "what is it up to" field. */
   lastToolName?: string
+  /**
+   * What the child's CURRENT step is, in words — `task_progress.description`, which the provider
+   * rewrites per tool call ("Running Print current date and time"). Distinct from `description`, which
+   * is the stable dispatch description and does not move. Measured against a real session, this is the
+   * richest live field on the stream: `summary` was empty on every progress event and only arrived with
+   * the terminal notification, by which point the row is already retired.
+   */
+  activityDetail?: string
   /** The provider's rolling one-line summary of the child's work. */
   summary?: string
   outputFile?: string
@@ -205,7 +213,12 @@ export function createClaudeRuntimeIngest(deps: ClaudeRuntimeIngestDeps): Claude
     if (!event.taskId) return // an edge with no correlation key can enrich nothing
     const task = rememberTask(sessionId, event.taskId, now)
     if (event.toolUseId) task.toolUseId = event.toolUseId
-    if (event.description) task.description = event.description
+    // `description` means two different things by phase and must not be collapsed: on `started` it is
+    // the stable dispatch description (the board's label), on `progress` it is the live step.
+    if (event.description) {
+      if (event.phase === "progress") task.activityDetail = event.description
+      else task.description = event.description
+    }
     if (event.subagentType) task.subagentType = event.subagentType
     if (event.taskType) task.taskType = event.taskType
     if (event.lastToolName) task.lastToolName = event.lastToolName

@@ -132,6 +132,10 @@ export const SubAgentView = z.object({
   // they are present for a BROKER thread and absent for a tmux one, an older CLI, or a pre-restart
   // server. Render each only when set; never assume they arrive together.
   activity: z.string().optional(), // the tool the child is running right now (e.g. "Bash", "Edit")
+  // What the current step IS, in words — the provider rewrites it per tool call ("Running Print
+  // current date and time"). Measured against a real session this is the richest LIVE field: `summary`
+  // stayed empty on every progress event and only arrived with the terminal notification.
+  activityDetail: z.string().optional(),
   summary: z.string().optional(), // the provider's rolling one-line summary of the child's work
   toolUses: z.number().optional(), // tool calls the child has made so far
   tokens: z.number().optional(), // total tokens the child has spent so far

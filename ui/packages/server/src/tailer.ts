@@ -142,6 +142,7 @@ export interface SubAgentView {
   // that indication. Every field is ABSENT unless the SDK reported it for this exact child, so a tmux
   // thread (prose-only) and an older claude that emits no task_* events render exactly as before.
   activity?: string // the tool the child is running RIGHT NOW (SDK last_tool_name)
+  activityDetail?: string // what that step IS, in words (e.g. "Running Print current date and time")
   summary?: string // the provider's rolling one-line summary of the child's work
   toolUses?: number // tool calls the child has made so far
   tokens?: number // total tokens the child has spent so far
@@ -350,6 +351,7 @@ interface SubAgentEntry {
 // entry (rather than re-read per view) so it survives in the prime cache alongside the rest of the map.
 interface SubAgentProgress {
   activity?: string // SDK last_tool_name — the tool the child is running right now
+  activityDetail?: string // SDK task_progress.description — the current step, in words
   summary?: string // the provider's rolling summary of the child's work
   toolUses?: number
   totalTokens?: number
@@ -1624,6 +1626,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       if (!entry.taskId) entry.taskId = task.taskId
       const progress: SubAgentProgress = {
         activity: task.lastToolName,
+        activityDetail: task.activityDetail,
         summary: task.summary,
         toolUses: task.toolUses,
         totalTokens: task.totalTokens,
@@ -1806,6 +1809,7 @@ export function createTailer(deps: TailerDeps): Tailer {
         id: e.toolUseId,
         ...(lastActivityAt ? { lastActivityAt } : {}),
         ...(p?.activity ? { activity: p.activity } : {}),
+        ...(p?.activityDetail ? { activityDetail: p.activityDetail } : {}),
         ...(p?.summary ? { summary: p.summary } : {}),
         ...(p?.toolUses !== undefined ? { toolUses: p.toolUses } : {}),
         ...(p?.totalTokens !== undefined ? { tokens: p.totalTokens } : {}),
@@ -1854,7 +1858,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   // (it changes rarely). Raw TOKEN counts are deliberately NOT here: they can advance on every progress
   // event without the rendered line changing meaningfully, and pushing a board delta for that is churn.
   function derivedSignature(state: TailState, nowMs: number): string {
-    const agents = subAgentViews(state, nowMs).map((v) => `A:${v.label}|${v.state}|${v.startedAt}|${activityMinute(v.lastActivityAt)}|${v.activity ?? ""}|${v.toolUses ?? ""}|${v.summary ?? ""}`).join("")
+    const agents = subAgentViews(state, nowMs).map((v) => `A:${v.label}|${v.state}|${v.startedAt}|${activityMinute(v.lastActivityAt)}|${v.activity ?? ""}|${v.activityDetail ?? ""}|${v.toolUses ?? ""}|${v.summary ?? ""}`).join("")
     const shells = bgShellViews(state).map((v) => `S:${v.label}|${v.state}|${v.startedAt}|${activityMinute(v.lastActivityAt)}`).join("")
     const ask = state.pendingAsk ? `Q:${state.pendingAsk.id}:${state.pendingAsk.questions.length}` : ""
     return `${agents}\n${shells}\n${ask}`

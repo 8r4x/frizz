@@ -329,13 +329,15 @@ test("integration: the structured task stream says what a live sub-agent is DOIN
     // Now the SDK reports what the child is up to — data that exists ONLY on this stream.
     s.play(
       event(taskEvent(s.sessionId, { phase: "started", taskId: "task-1", toolUseId: "toolu_child", description: "Audit the fold" })),
-      event(taskEvent(s.sessionId, { phase: "progress", taskId: "task-1", lastToolName: "Bash", summary: "running the harness", usage: { totalTokens: 40123, toolUses: 18, durationMs: 92_000 } })),
+      event(taskEvent(s.sessionId, { phase: "progress", taskId: "task-1", description: "Running the live harness", lastToolName: "Bash", summary: "running the harness", usage: { totalTokens: 40123, toolUses: 18, durationMs: 92_000 } })),
     )
     await h.settle()
 
     const live = h.telemetry("progress")?.subAgents?.[0]
     assert.equal(live?.state, "running")
     assert.equal(live?.activity, "Bash", "the tool the child is running right now")
+    assert.equal(live?.activityDetail, "Running the live harness", "the per-step description, not the dispatch label")
+    assert.equal(live?.label, "Audit the fold", "the dispatch label is NOT overwritten by the live step")
     assert.equal(live?.summary, "running the harness")
     assert.equal(live?.toolUses, 18)
     assert.equal(live?.tokens, 40123)
