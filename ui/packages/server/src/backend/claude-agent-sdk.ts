@@ -82,6 +82,12 @@ const EXPLICIT_CLAUDE_ENV_KEYS = new Set<string>([
   // dir — that make the broker's loaded plugin behave like the tmux worker's.
   "FRAY_UI_THREAD",
   "FRAY_PERM_DIR",
+  // Set by the broker bridge only when a dashboard InteractionStore is wired, i.e. only when fray can
+  // actually RENDER and answer an AskUserQuestion as a question card. It tells the plugin's deny-ask
+  // hook to stand down; without it in this allowlist the daemon dies at startup ("environment key is
+  // not allowlisted") before it publishes its record, and every dispatch times out "did not become
+  // ready" — which is exactly how this was found, on a live session rather than in a unit test.
+  "FRAY_NATIVE_ASK",
   "CLAUDE_PROJECT_DIR",
 ])
 const MAX_ENV_ENTRIES = 512

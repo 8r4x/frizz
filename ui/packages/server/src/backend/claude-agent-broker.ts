@@ -109,11 +109,25 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     pluginDir: config.pluginDir,
     mcpServers: config.mcpServers,
     allowedTools: config.allowedTools,
-    canUseTool: async (request) => {
+    canUseTool: async (request, context) => {
       const requestId = `perm-${++permSeq}`
       return await new Promise<ClaudePermissionDecision>((resolve) => {
-        pendingPermissions.set(requestId, { request, resolve })
-        if (client) write(client, { t: "permission-request", requestId, request })
+        // Abort-aware: interrupting the turn (or the session ending) aborts the SDK's permission
+        // callback, and a request left in `pendingPermissions` after that is not merely a leak — the
+        // reconnect handler REPLAYS every pending request to the next fray that attaches, which would
+        // put a card in front of the operator for a tool call that no longer exists. So an abort
+        // settles the waiter with a deny and drops it, exactly like an answer would.
+        let settled = false
+        const settle = (decision: ClaudePermissionDecision) => {
+          if (settled) return
+          settled = true
+          pendingPermissions.delete(requestId)
+          resolve(decision)
+        }
+        pendingPermissions.set(requestId, { request, resolve: settle })
+        if (context.signal.aborted) settle({ behavior: "deny", message: "The turn was interrupted before this was answered." })
+        else context.signal.addEventListener("abort", () => settle({ behavior: "deny", message: "The turn was interrupted before this was answered." }), { once: true })
+        if (!settled && client) write(client, { t: "permission-request", requestId, request })
       })
     },
     onDiagnostic: (diagnostic: ClaudeDiagnostic) => {

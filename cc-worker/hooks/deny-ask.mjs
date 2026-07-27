@@ -5,10 +5,19 @@
 // keyboard to click it). Deny with a redirect to the async pattern: ask in the FINAL MESSAGE via one
 // or more ```question fenced blocks, then come to rest; answers arrive as the next user message.
 // GATE: inert unless FRAY_UI_THREAD is set. FAIL OPEN on parse errors.
+//
+// SECOND GATE: also inert when FRAY_NATIVE_ASK=1. The premise above — "nobody is at the keyboard" —
+// is only true where the question has nowhere to go. On the Claude session-broker path fray now
+// intercepts the call at canUseTool and renders it as a real question card on the dashboard, which the
+// operator answers and which returns the chosen labels to the tool. The broker bridge sets that var
+// only when an InteractionStore is actually wired to render and resolve the card, so a denial here
+// would block a question the operator CAN see. The tmux path never sets it (and additionally drops the
+// tool with --disallowedTools), so it keeps the deny plus the ```question redirect.
 import { readFileSync } from 'node:fs';
 
 const slug = process.env.FRAY_UI_THREAD;
 if (!slug) process.exit(0);
+if (process.env.FRAY_NATIVE_ASK === '1') process.exit(0);
 
 try {
   JSON.parse(readFileSync(0, 'utf8'));
