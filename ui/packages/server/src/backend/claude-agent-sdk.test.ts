@@ -785,11 +785,22 @@ test("permission callback idempotency state is bounded under a request flood", {
     await harness.handle.ready()
     await harness.handle.send({ id: INPUT_ID, text: "flood" })
     const records = await waitForCapture(harness.capturePath, (rows) => rows.filter((row) => row.kind === "host-response" && String(row.requestId).startsWith("permission-flood-")).length === 140)
-    assert.equal(calls, 128)
+    // The bound is on STATE, not on a session's lifetime allowance. These 140 requests SETTLE as they
+    // go, so the map never holds more than the cap while every request is still served.
+    //
+    // This asserted `calls === 128` with 12 errors until 2026-07-27, which pinned the actual bug: the
+    // cache only ever added entries, so after 128 DISTINCT ids a session rejected every further
+    // permission for the rest of its life — a long orchestrator thread silently losing the ability to
+    // run any approval-gated tool, with nothing the operator could see. The test could not tell a
+    // burst from a lifetime, so the defect was protected by a test that looked like it covered it.
+    //
+    // A genuinely CONCURRENT flood — callbacks that never settle, so nothing can be evicted — must
+    // still reject; that is the shape covered by the hanging-callback test below.
+    assert.equal(calls, 140, "every settled request is served; the cap is a concurrency budget")
     assert.equal(records.filter((row) => {
       const response = row.response as { subtype?: string } | undefined
       return row.kind === "host-response" && String(row.requestId).startsWith("permission-flood-") && response?.subtype === "error"
-    }).length, 12)
+    }).length, 0, "and none are refused just because the session has been busy")
   } finally {
     await harness.close()
   }

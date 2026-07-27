@@ -233,14 +233,38 @@ class ClaudeInputQueue extends BoundedAsyncQueue<SDKUserMessage> {
   }
 }
 
+/**
+ * De-duplicates a provider request id, bounded so a flood cannot grow the map without limit.
+ *
+ * The bound used to be a LIFETIME budget: entries were only ever added, so once `limit` distinct ids
+ * had been seen the cache rejected EVERY further request for the rest of the session. For permissions
+ * (limit 128) that meant a long orchestrator thread silently lost the ability to run any
+ * approval-gated tool — no error the operator can see, the agent just stops being able to use Bash.
+ * 128 escalations is very reachable on a multi-hour thread.
+ *
+ * It is now a CONCURRENCY budget, which is what the bound was actually protecting: a settled entry is
+ * evicted (oldest first, Map preserves insertion order) to make room. Idempotency is preserved where
+ * it is needed, because the daemon only ever re-delivers requests that are still PENDING — an answered
+ * one is deleted from its map before the socket reconnects. A flood of genuinely CONCURRENT requests
+ * still rejects, which is the case the "bounded under a flood" test pins.
+ */
 class BoundedIdempotencyCache<T> {
-  private readonly entries = new Map<string, { fingerprint: string; result: Promise<T> }>()
+  private readonly entries = new Map<string, { fingerprint: string; result: Promise<T>; settled: boolean }>()
   private readonly limit: number
   private readonly label: string
 
   constructor(limit: number, label: string) {
     this.limit = limit
     this.label = label
+  }
+
+  /** Drop settled entries, oldest first, until there is room. Returns whether room now exists. */
+  private evictSettled(): boolean {
+    for (const [id, entry] of this.entries) {
+      if (this.entries.size < this.limit) break
+      if (entry.settled) this.entries.delete(id)
+    }
+    return this.entries.size < this.limit
   }
 
   resolve(id: string, fingerprint: string, create: () => Promise<T>): Promise<T> {
@@ -251,11 +275,14 @@ class BoundedIdempotencyCache<T> {
       }
       return existing.result
     }
-    if (this.entries.size >= this.limit) {
+    if (this.entries.size >= this.limit && !this.evictSettled()) {
+      // Every slot is an IN-FLIGHT request — a real flood, not an old session. Reject as before.
       return Promise.reject(new ClaudeAgentSdkProtocolError(`${this.label} exceeded its request limit`))
     }
     const result = Promise.resolve().then(create)
-    this.entries.set(id, { fingerprint, result })
+    const entry = { fingerprint, result, settled: false }
+    this.entries.set(id, entry)
+    result.then(() => { entry.settled = true }, () => { entry.settled = true })
     return result
   }
 }
