@@ -116,6 +116,65 @@ export interface ClaudePromptSuggestionEvent {
   suggestion: string
 }
 
+/** Provider-reported cost of a background task so far. Every field optional — informational only. */
+export interface ClaudeTaskUsage {
+  totalTokens?: number
+  toolUses?: number
+  durationMs?: number
+}
+
+/**
+ * SUB-AGENT / BACKGROUND-TASK LIFECYCLE, as the Agent SDK actually reports it.
+ *
+ * These ride `type:"system"` messages (`task_started`, `task_updated`, `task_progress`,
+ * `task_notification`, `background_tasks_changed`) and used to flatten into `ClaudeOtherEvent` — two
+ * strings, whole payload discarded. That discard is why the tailer reconstructs child lifecycle by
+ * REGEX-MATCHING ENGLISH PROSE out of launch acks and `<task-notification>` blocks, a path whose own
+ * comments record three separate phantom-sub-agent leaks.
+ *
+ * They are STREAM-ONLY: probed against the broker's exact `persistSession:true` config, task_started /
+ * task_progress / task_notification all appear on the SDK stream and NONE of them in the on-disk
+ * JSONL. So the payload exists only if it survives this boundary.
+ *
+ * EVERY field except `kind`/`phase` is optional and informational, because the mapper is required to
+ * DEGRADE rather than throw (see mapAssistant's incident note in claude-agent-sdk.ts): a task event
+ * fray cannot fully represent must cost that event's detail, never the session.
+ */
+export interface ClaudeTaskEvent {
+  kind: "task"
+  /**
+   * Which system message this came from.
+   *  - "started"      task_started — a child/background op began
+   *  - "progress"     task_progress — rolling activity: last tool, summary, usage
+   *  - "updated"      task_updated — a status/description patch
+   *  - "notification" task_notification — terminal (completed/failed/stopped) + output file
+   *  - "level"        background_tasks_changed — the FULL live set, REPLACE semantics (see `tasks`)
+   */
+  phase: "started" | "updated" | "progress" | "notification" | "level"
+  sessionId?: string
+  messageId?: string
+  /** The runtime task id — the handle a `TaskStop` references and every notification carries. */
+  taskId?: string
+  /** The dispatch tool_use id, when the SDK supplies it: the tailer's own correlation key. */
+  toolUseId?: string
+  description?: string
+  /** `task_notification.status`, or `task_updated.patch.status`. Open set — never switch exhaustively. */
+  status?: string
+  summary?: string
+  lastToolName?: string
+  subagentType?: string
+  taskType?: string
+  outputFile?: string
+  error?: string
+  usage?: ClaudeTaskUsage
+  /**
+   * phase "level" ONLY: every live background task after the change. REPLACE semantics — swap your set
+   * for this payload rather than pairing start/stop edges, so a missed bookend cannot wedge a stale
+   * "running" row. Per-process: nothing is emitted at startup.
+   */
+  tasks?: Array<{ taskId: string; taskType?: string; description?: string }>
+}
+
 export interface ClaudeOtherEvent {
   kind: "other"
   type: string
@@ -130,6 +189,7 @@ export type ClaudeQueryEvent =
   | ClaudeUserEvent
   | ClaudeResultEvent
   | ClaudePromptSuggestionEvent
+  | ClaudeTaskEvent
   | ClaudeOtherEvent
 
 export interface ClaudePermissionRequest {

@@ -42,6 +42,8 @@ import {
   type ClaudePermissionRequest,
   type ClaudeQueryEvent,
   type ClaudeSessionInitEvent,
+  type ClaudeTaskEvent,
+  type ClaudeTaskUsage,
 } from "./claude-agent-sdk-protocol.ts"
 import { redactCredentialSyntax } from "../credential-redaction.ts"
 
@@ -512,10 +514,16 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
           continue
         }
         if (!this.initialized) {
-          // ONLY control/telemetry frames (command_lifecycle, rate_limit_event → kind "other")
-          // legitimately precede the session init. Anything substantive (assistant/user/result) before
-          // init is anomalous and still rejected, exactly as before — and the frame must prove ownership.
-          if (event.kind !== "other") throw new ClaudeAgentSdkProtocolError("Claude emitted a non-init event before session ownership")
+          // ONLY control/telemetry frames (command_lifecycle, rate_limit_event → kind "other", and the
+          // sub-agent task lifecycle → kind "task") legitimately precede the session init. Anything
+          // substantive (assistant/user/result) before init is anomalous and still rejected, exactly as
+          // before — and the frame must prove ownership.
+          //
+          // `task` is listed here because it was CARVED OUT of `other`: those frames have always been
+          // tolerated pre-init, and giving them their own kind without widening this guard would have
+          // converted a swallowed telemetry frame into a session kill. That is the same
+          // telemetry-loss-treated-as-fatal conflation the pump's own comment above is about.
+          if (event.kind !== "other" && event.kind !== "task") throw new ClaudeAgentSdkProtocolError("Claude emitted a non-init event before session ownership")
           if (event.sessionId === undefined) throw new ClaudeAgentSdkProtocolError("Claude emitted a non-init event before session ownership")
           if (event.sessionId !== this.sessionId) throw new ClaudeAgentSdkProtocolError("Claude session ownership mismatch")
           continue // swallow so the first event a consumer sees is still the init
@@ -1092,10 +1100,33 @@ function secretLikeLabel(value: string): boolean {
     || ["apikey", "privatekey", "accesskey", "clientsecret", "securitycode", "onetimepassword", "writeonly"].some((marker) => joined.includes(marker))
 }
 
+// The `system` subtypes that carry SUB-AGENT / BACKGROUND-TASK lifecycle, and the phase each maps to.
+// Everything here used to collapse into `kind:"other"` (type + subtype, payload dropped on the floor),
+// which is precisely why the tailer has to reconstruct child lifecycle from English prose. See
+// ClaudeTaskEvent for the probe that established these are stream-only.
+const TASK_PHASES: Record<string, ClaudeTaskEvent["phase"]> = {
+  task_started: "started",
+  task_updated: "updated",
+  task_progress: "progress",
+  task_notification: "notification",
+  background_tasks_changed: "level",
+}
+
 function mapSdkMessage(message: SDKMessage): ClaudeQueryEvent {
   const raw = message as unknown as Record<string, unknown>
   const type = safeText(raw.type, "event.type", 256)
   if (type === "system" && raw.subtype === "init") return mapSessionInit(raw)
+  if (type === "system" && typeof raw.subtype === "string" && TASK_PHASES[raw.subtype]) {
+    // Belt AND braces. mapTask degrades every field internally, so this catch should be unreachable —
+    // but "should be unreachable" is exactly what was believed about mapAssistant on 2026-07-26, and a
+    // day later one control character in a Bash command took down a multi-hour thread. A telemetry
+    // frame falling back to the old `other` shape costs a progress line; it must never cost a session.
+    try {
+      return mapTask(raw, TASK_PHASES[raw.subtype]!)
+    } catch {
+      // fall through to the generic `other` mapping below
+    }
+  }
   if (type === "assistant") return mapAssistant(raw)
   if (type === "user") return mapUser(raw)
   if (type === "result") return mapResult(raw)
@@ -1118,6 +1149,69 @@ function mapSdkMessage(message: SDKMessage): ClaudeQueryEvent {
 
 /** Read a value, or fall back — never let an informational field cost the frame it rides on. */
 function softList<T>(read: () => T[], fallback: T[]): T[] { try { return read() } catch { return fallback } }
+
+/** Read a value, or report ABSENT. The degrade primitive for wholly informational fields. */
+function softValue<T>(read: () => T): T | undefined { try { return read() } catch { return undefined } }
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined
+}
+
+/**
+ * Exported as a test seam for the same reason `mapAssistant` is: the degrade-don't-throw contract is
+ * what keeps a malformed telemetry frame from killing an operator's session.
+ *
+ * NOTHING in this mapper is allowed to throw. Every value it reads is INFORMATIONAL — a description, a
+ * tool name, a token count, a summary — and the child's real work has already happened either way. The
+ * strict validators still run (they are what bounds what reaches the wire); a rejection just drops
+ * that ONE field to `undefined` instead of taking the frame, and therefore the session, down with it.
+ *
+ * Note the deliberate absence of `boundedId`. A task id / tool_use id whose shape fray's opaque-id
+ * pattern rejects costs this event its CORRELATION — the board shows an unenriched child — and not one
+ * thing more. `boundedId` throws, so it must not be on this path.
+ */
+export function mapTask(raw: Record<string, unknown>, phase: ClaudeTaskEvent["phase"]): ClaudeTaskEvent {
+  // `task_updated` carries its changes under `patch` rather than at the top level; read both so one
+  // shape of field lookup covers every subtype.
+  const patch = softValue(() => objectValue(raw.patch, "task.patch")) ?? {}
+  const usageRaw = softValue(() => objectValue(raw.usage, "task.usage"))
+  const usage: ClaudeTaskUsage | undefined = usageRaw
+    ? {
+        totalTokens: finiteNumber(usageRaw.total_tokens),
+        toolUses: finiteNumber(usageRaw.tool_uses),
+        durationMs: finiteNumber(usageRaw.duration_ms),
+      }
+    : undefined
+  // The REPLACE-semantics live set. Bounded hard: this is the one repeated-structure field here, and
+  // an unbounded provider array is how a telemetry channel becomes a memory problem.
+  const tasks = phase !== "level" ? undefined : softValue(() =>
+    boundedArray(raw.tasks, "task.tasks", 256).map((entry, index) => {
+      const item = objectValue(entry, `task.tasks[${index}]`)
+      return {
+        taskId: safeText(item.task_id, `task.tasks[${index}].task_id`, 512),
+        taskType: optionalText(item.task_type, `task.tasks[${index}].task_type`, 512),
+        description: optionalText(item.description, `task.tasks[${index}].description`, 4 * 1024),
+      }
+    }))
+  return {
+    kind: "task",
+    phase,
+    sessionId: softValue(() => boundedOptionalId(raw.session_id, "task.sessionId")),
+    messageId: softValue(() => boundedOptionalId(raw.uuid, "task.messageId")),
+    taskId: softValue(() => optionalText(raw.task_id, "task.taskId", 512)),
+    toolUseId: softValue(() => optionalText(raw.tool_use_id, "task.toolUseId", 512)),
+    description: softValue(() => optionalText(raw.description ?? patch.description, "task.description", 4 * 1024)),
+    status: softValue(() => optionalText(raw.status ?? patch.status, "task.status", 256)),
+    summary: softValue(() => optionalText(raw.summary, "task.summary", 8 * 1024)),
+    lastToolName: softValue(() => optionalText(raw.last_tool_name, "task.lastToolName", 512)),
+    subagentType: softValue(() => optionalText(raw.subagent_type, "task.subagentType", 512)),
+    taskType: softValue(() => optionalText(raw.task_type, "task.taskType", 512)),
+    outputFile: softValue(() => optionalText(raw.output_file, "task.outputFile", 8 * 1024)),
+    error: softValue(() => optionalText(patch.error, "task.error", 4 * 1024)),
+    ...(usage ? { usage } : {}),
+    ...(tasks ? { tasks } : {}),
+  }
+}
 
 function mapSessionInit(raw: Record<string, unknown>): ClaudeSessionInitEvent {
   // Informational too — degrade rather than lose the frame (see the note on the return below).

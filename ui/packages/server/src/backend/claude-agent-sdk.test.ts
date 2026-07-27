@@ -12,6 +12,7 @@ import {
   createClaudeQueryFactory,
   claudeAgentSdkFoundationEnabled,
   mapAssistant,
+  mapTask,
   type ClaudeQueryHandle,
 } from "./claude-agent-sdk.ts"
 import {
@@ -1181,4 +1182,83 @@ test("an unrepresentable PERMISSION input is denied, not thrown — content vs p
   // no correlation id to answer against, so a deny would go nowhere. Pinned by the
   // "without requestId" test above.
   assert.doesNotThrow(() => boundedJsonObject({ command: "ls -la" }, "permission.input"))
+})
+
+// ---- Sub-agent task lifecycle: rich payload, and the same degrade contract ----
+// These `system` messages are the ONLY place sub-agent progress exists — they are stream-only, absent
+// from the session JSONL — so mapping them is what lets the board say what a child is doing. And they
+// arrive carrying agent-authored strings (a description, a summary, a task's error text), which is
+// exactly the class of value that killed a session on 2026-07-27. Every one of them degrades.
+
+test("mapTask carries the whole sub-agent payload, not just two strings", () => {
+  const event = mapTask({
+    session_id: "11111111-2222-3333-4444-555555555555",
+    uuid: "66666666-7777-8888-9999-000000000000",
+    task_id: "task_abc",
+    tool_use_id: "toolu_child",
+    description: "Audit the tailer fold",
+    subagent_type: "fray:opus-high",
+    last_tool_name: "Bash",
+    summary: "running the live harness",
+    usage: { total_tokens: 40123, tool_uses: 18, duration_ms: 92_000 },
+  }, "progress")
+  assert.equal(event.kind, "task")
+  assert.equal(event.phase, "progress")
+  assert.equal(event.taskId, "task_abc")
+  assert.equal(event.toolUseId, "toolu_child")
+  assert.equal(event.description, "Audit the tailer fold")
+  assert.equal(event.subagentType, "fray:opus-high")
+  assert.equal(event.lastToolName, "Bash")
+  assert.equal(event.summary, "running the live harness")
+  assert.deepEqual(event.usage, { totalTokens: 40123, toolUses: 18, durationMs: 92_000 })
+})
+
+test("mapTask reads task_updated's status out of its patch", () => {
+  const event = mapTask({ task_id: "t", patch: { status: "failed", description: "renamed", error: "boom" } }, "updated")
+  assert.equal(event.status, "failed")
+  assert.equal(event.description, "renamed")
+  assert.equal(event.error, "boom")
+})
+
+test("mapTask DEGRADES every hostile field instead of throwing", () => {
+  // A control character in a summary is the same shape as the control character in a Bash command that
+  // destroyed a multi-hour thread — and a sub-agent's summary is agent-authored prose, so it is at
+  // least as reachable. Nothing here may throw: `kind` and `phase` survive, bad fields drop out.
+  const esc = String.fromCharCode(27)
+  const event = mapTask({
+    session_id: { not: "a string" },
+    uuid: 42,
+    description: "x".repeat(200_000), // far past the field cap
+    summary: `${esc}[31mred${esc}[0m`, // the 2026-07-27 shape, in agent-authored prose
+    last_tool_name: { nope: true }, // wrong type entirely
+    usage: "not an object",
+    patch: 7,
+  }, "progress")
+  assert.equal(event.kind, "task")
+  assert.equal(event.phase, "progress")
+  assert.equal(event.usage, undefined)
+  assert.equal(event.lastToolName, undefined)
+  assert.equal(event.sessionId, undefined)
+  assert.ok((event.description?.length ?? 0) < 200_000, "an oversized description is truncated, not fatal")
+  assert.ok(event.summary && !event.summary.includes(esc), "the control byte is sanitized out of the summary")
+})
+
+test("mapTask never throws, whatever the frame is", () => {
+  // Exhaustive over the shapes a defensive mapper is expected to shrug at. The bar is not "correct
+  // output" — it is "the session is still alive".
+  for (const raw of [{}, { task_id: null }, { tasks: "no" }, { usage: [] }, { patch: null }, { task_id: [] }]) {
+    for (const phase of ["started", "updated", "progress", "notification", "level"] as const) {
+      assert.doesNotThrow(() => mapTask(raw as Record<string, unknown>, phase))
+    }
+  }
+})
+
+test("mapTask bounds the background_tasks_changed level set", () => {
+  const tasks = Array.from({ length: 8 }, (_, i) => ({ task_id: `k${i}`, task_type: "agent", description: `child ${i}` }))
+  const event = mapTask({ tasks }, "level")
+  assert.equal(event.tasks?.length, 8)
+  assert.equal(event.tasks?.[3]?.taskId, "k3")
+  // Past the cap the whole list degrades to absent rather than growing without bound.
+  const huge = mapTask({ tasks: Array.from({ length: 400 }, (_, i) => ({ task_id: `k${i}` })) }, "level")
+  assert.equal(huge.tasks, undefined)
 })

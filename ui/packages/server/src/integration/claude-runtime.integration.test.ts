@@ -8,6 +8,8 @@
 // out longhand below.
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { writeFileSync } from "node:fs"
+import { join } from "node:path"
 import { createIntegrationHarness } from "./harness.ts"
 import {
   assistantEvent,
@@ -17,6 +19,10 @@ import {
   resultEvent,
   userEvent,
   userRecord,
+  agentDispatchRecord,
+  agentLaunchRecord,
+  taskEvent,
+  taskNotificationRecord,
 } from "./scripted-claude.ts"
 
 const T0 = "2026-07-01T00:00:00.000Z"
@@ -26,6 +32,7 @@ const T2 = "2026-07-01T00:00:02.000Z"
 test("integration: a scripted broker turn folds through the real graph to an idle board thread", async () => {
   const h = createIntegrationHarness()
   try {
+    const OUT = childTranscript(h)
     const s = h.dispatch("alpha")
     h.telemetry("alpha") // prime
 
@@ -61,6 +68,7 @@ test("integration: a `result` event NEVER queues a thread ahead of its final rec
   // TOOL-CALL as its last message and no parsed fence — a worse regression than the latency it fixes.
   const h = createIntegrationHarness()
   try {
+    const OUT = childTranscript(h)
     const s = h.dispatch("beta")
     h.telemetry("beta")
 
@@ -115,6 +123,7 @@ test("integration: without a runtime signal the backstop behaves exactly as befo
   // and every pre-broker session still does, and it must be untouched.
   const h = createIntegrationHarness()
   try {
+    const OUT = childTranscript(h)
     const s = h.dispatch("delta")
     h.telemetry("delta")
     s.play(record(userRecord("go", T0)), record(assistantRecord("done, i think", undefined, T1)))
@@ -137,6 +146,7 @@ test("integration: a delivered follow-up shows in-flight before its user record 
   // toward in-flight.
   const h = createIntegrationHarness()
   try {
+    const OUT = childTranscript(h)
     const s = h.dispatch("epsilon")
     h.telemetry("epsilon")
     s.play(record(userRecord("go", T0)), record(assistantRecord("all done", "end_turn", T1)))
@@ -154,6 +164,7 @@ test("integration: a delivered follow-up shows in-flight before its user record 
 test("integration: the runtime turn reading is scoped to broker rows and dies with the session", async () => {
   const h = createIntegrationHarness()
   try {
+    const OUT = childTranscript(h)
     const s = h.dispatch("zeta")
     h.telemetry("zeta")
     s.play(record(userRecord("go", T0)), record(assistantRecord("all done", "end_turn", T1)))
@@ -175,6 +186,7 @@ test("integration: the runtime turn reading is scoped to broker rows and dies wi
 test("integration: receipts name each milestone, and drain means the ingest is finished", async () => {
   const h = createIntegrationHarness()
   try {
+    const OUT = childTranscript(h)
     const s = h.dispatch("eta")
     h.telemetry("eta")
 
@@ -208,6 +220,7 @@ test("integration: the fold catches up when the provider's event beats its own d
   // anything else prompting it. `settle()` (which ticks by hand) would hide the bug completely.
   const h = createIntegrationHarness()
   try {
+    const OUT = childTranscript(h)
     const s = h.dispatch("iota")
     h.telemetry("iota") // prime; nothing calls tick() by hand past this line
 
@@ -236,6 +249,7 @@ test("integration: the chase is bounded — events that never produce a record s
   // session into a permanent tick loop, which is a worse stability problem than the latency.
   const h = createIntegrationHarness()
   try {
+    const OUT = childTranscript(h)
     const s = h.dispatch("kappa")
     h.telemetry("kappa")
     s.play(event({ kind: "other", type: "system", sessionId: s.sessionId }))
@@ -256,6 +270,7 @@ test("integration: a runtime event drives a tailer re-read with no poll tick at 
   // (10s) under load.
   const h = createIntegrationHarness()
   try {
+    const OUT = childTranscript(h)
     const s = h.dispatch("theta")
     h.telemetry("theta") // prime; from here nothing calls tick() by hand
     const before = h.boardRefreshes()
@@ -273,6 +288,202 @@ test("integration: a runtime event drives a tailer re-read with no poll tick at 
     assert.notEqual(h.boardRefreshes(), before, "the nudge ran a tick without waiting for the poll")
     assert.equal(h.tailer.get("theta")?.turn, "idle")
     assert.equal(h.tailer.get("theta")?.lastAssistant, "all done")
+  } finally {
+    h.close()
+  }
+})
+
+// ---- sub-agent progress: the structured stream over the prose fold --------------------------------
+// "There's not really any indication of what they're up to aside from starts and stops." These pin the
+// three rules that answer it: the structured stream ENRICHES a folded child, it may RETIRE one, and it
+// may never INVENT one. The prose path is exercised alongside in every case, because a tmux thread has
+// nothing else and must keep behaving exactly as it did.
+
+// The child's own transcript, which the fold resolves out of the launch ack's prose and then stats as
+// the staleness clock. It has to EXIST: a path that never stats reads as stale, which is correct
+// behaviour (a child whose transcript vanished is not healthy) and would mask what these tests assert.
+function childTranscript(h: { project: { dir: string } }): string {
+  const path = join(h.project.dir, "child.jsonl")
+  writeFileSync(path, "")
+  return path
+}
+
+test("integration: the structured task stream says what a live sub-agent is DOING", async () => {
+  const h = createIntegrationHarness()
+  try {
+    const OUT = childTranscript(h)
+    const s = h.dispatch("progress")
+    h.telemetry("progress")
+
+    // The prose path registers the child, exactly as it always has.
+    s.play(
+      record(userRecord("go", T0)),
+      record(agentDispatchRecord("toolu_child", "Audit the fold", T1)),
+      record(agentLaunchRecord("toolu_child", OUT, T1)),
+    )
+    await h.settle()
+    const bare = h.telemetry("progress")?.subAgents?.[0]
+    assert.equal(bare?.label, "Audit the fold")
+    assert.equal(bare?.activity, undefined, "before the SDK reports anything there is nothing to show")
+
+    // Now the SDK reports what the child is up to — data that exists ONLY on this stream.
+    s.play(
+      event(taskEvent(s.sessionId, { phase: "started", taskId: "task-1", toolUseId: "toolu_child", description: "Audit the fold" })),
+      event(taskEvent(s.sessionId, { phase: "progress", taskId: "task-1", lastToolName: "Bash", summary: "running the harness", usage: { totalTokens: 40123, toolUses: 18, durationMs: 92_000 } })),
+    )
+    await h.settle()
+
+    const live = h.telemetry("progress")?.subAgents?.[0]
+    assert.equal(live?.state, "running")
+    assert.equal(live?.activity, "Bash", "the tool the child is running right now")
+    assert.equal(live?.summary, "running the harness")
+    assert.equal(live?.toolUses, 18)
+    assert.equal(live?.tokens, 40123)
+    assert.equal(live?.durationMs, 92_000)
+    // ...and the correlation key a manual TaskStop needs is backfilled from the structured pairing.
+    assert.equal(h.tailer.subAgent("progress", "toolu_child")?.state, "running")
+  } finally {
+    h.close()
+  }
+})
+
+test("integration: a structured task_notification retires the child with NO prose notification", async () => {
+  // The phantom bug, in its exact shape. `<task-notification>` records are how the fold learns a child
+  // finished — and the tailer's own comments record three separate leaks from missing one. Here none
+  // ever lands on disk: the ONLY terminal signal is the SDK's, and the live count must still reach zero.
+  const h = createIntegrationHarness()
+  try {
+    const OUT = childTranscript(h)
+    const s = h.dispatch("retire")
+    h.telemetry("retire")
+
+    s.play(
+      record(userRecord("go", T0)),
+      record(agentDispatchRecord("toolu_child", "Do the thing", T1)),
+      record(agentLaunchRecord("toolu_child", OUT, T1)),
+      event(taskEvent(s.sessionId, { phase: "started", taskId: "task-1", toolUseId: "toolu_child" })),
+    )
+    await h.settle()
+    assert.equal(h.telemetry("retire")?.subAgents.length, 1, "the child is live")
+
+    s.play(event(taskEvent(s.sessionId, { phase: "notification", taskId: "task-1", toolUseId: "toolu_child", status: "completed", summary: "all green" })))
+    await h.settle()
+
+    assert.equal(h.telemetry("retire")?.subAgents.length, 0, "the live sub-agent count returned to zero")
+    // ...and it is RETAINED for the drill-in drawer, exactly as a prose completion would leave it.
+    assert.equal(h.tailer.subAgent("retire", "toolu_child")?.state, "done")
+  } finally {
+    h.close()
+  }
+})
+
+test("integration: the structured stream never INVENTS a sub-agent the fold does not track", async () => {
+  // `trackDispatches` deliberately skips a FOREGROUND Agent (run_in_background:false) because the
+  // thread spinner already covers it — and the provider reports those tasks too. Minting board rows
+  // from the task stream would put foreground children on the live count and into the completion hold:
+  // manufacturing exactly the phantoms this change exists to remove.
+  const h = createIntegrationHarness()
+  try {
+    const OUT = childTranscript(h)
+    const s = h.dispatch("noinvent")
+    h.telemetry("noinvent")
+
+    s.play(
+      record(userRecord("go", T0)),
+      event(taskEvent(s.sessionId, { phase: "started", taskId: "ghost", toolUseId: "toolu_ghost", description: "A foreground child" })),
+      event(taskEvent(s.sessionId, { phase: "progress", taskId: "ghost", lastToolName: "Read" })),
+      event(taskEvent(s.sessionId, { phase: "level", tasks: [{ taskId: "ghost" }] })),
+    )
+    await h.settle()
+
+    assert.equal(h.telemetry("noinvent")?.subAgents.length, 0, "no folded dispatch, no board row")
+    assert.equal(h.boardThread("noinvent")?.subAgents?.length ?? 0, 0)
+  } finally {
+    h.close()
+  }
+})
+
+test("integration: the PROSE fold still retires a child on its own, with no structured stream at all", async () => {
+  // The fallback that must not rot. A tmux thread emits no task events ever, so this is the whole of
+  // its sub-agent lifecycle — byte-identical to before this change existed.
+  const h = createIntegrationHarness()
+  try {
+    const OUT = childTranscript(h)
+    const s = h.dispatch("prose")
+    h.telemetry("prose")
+
+    s.play(
+      record(userRecord("go", T0)),
+      record(agentDispatchRecord("toolu_child", "Prose only", T1)),
+      record(agentLaunchRecord("toolu_child", OUT, T1)),
+    )
+    await h.settle()
+    assert.equal(h.telemetry("prose")?.subAgents.length, 1)
+
+    s.play(record(taskNotificationRecord("toolu_child", "completed", T2)))
+    await h.settle()
+    assert.equal(h.telemetry("prose")?.subAgents.length, 0, "the prose notification is still terminal")
+  } finally {
+    h.close()
+  }
+})
+
+test("integration: a NON-terminal structured status never retires a live child", async () => {
+  // The dangerous direction. A status fray has never seen, or a plain progress ping, must leave the
+  // child exactly where it is — the board reporting done while the work continues is far worse than
+  // the phantom this whole change is about.
+  const h = createIntegrationHarness()
+  try {
+    const OUT = childTranscript(h)
+    const s = h.dispatch("nonterminal")
+    h.telemetry("nonterminal")
+
+    s.play(
+      record(userRecord("go", T0)),
+      record(agentDispatchRecord("toolu_child", "Still going", T1)),
+      record(agentLaunchRecord("toolu_child", OUT, T1)),
+      event(taskEvent(s.sessionId, { phase: "started", taskId: "task-1", toolUseId: "toolu_child" })),
+      event(taskEvent(s.sessionId, { phase: "updated", taskId: "task-1", status: "paused" })),
+      event(taskEvent(s.sessionId, { phase: "updated", taskId: "task-1", status: "hibernating" })),
+      event(taskEvent(s.sessionId, { phase: "progress", taskId: "task-1", lastToolName: "Edit" })),
+    )
+    await h.settle()
+
+    const view = h.telemetry("nonterminal")?.subAgents?.[0]
+    assert.equal(view?.state, "running", "paused / unknown / progress are all still alive")
+    assert.equal(view?.activity, "Edit")
+  } finally {
+    h.close()
+  }
+})
+
+test("integration: a structured completion reaches the BOARD, not just the tailer", async () => {
+  // The signature has to move for progress to be visible at all: a completion clears an entry without
+  // touching lastActivityAt, and an activity change writes no record whatsoever.
+  const h = createIntegrationHarness()
+  try {
+    const OUT = childTranscript(h)
+    const s = h.dispatch("boardmove")
+    h.telemetry("boardmove")
+
+    s.play(
+      record(userRecord("go", T0)),
+      record(agentDispatchRecord("toolu_child", "Visible child", T1)),
+      record(agentLaunchRecord("toolu_child", OUT, T1)),
+      event(taskEvent(s.sessionId, { phase: "started", taskId: "task-1", toolUseId: "toolu_child" })),
+    )
+    await h.settle()
+    assert.equal(h.boardThread("boardmove")?.subAgents?.length, 1)
+
+    const before = h.boardRefreshes()
+    s.play(event(taskEvent(s.sessionId, { phase: "progress", taskId: "task-1", lastToolName: "Grep", summary: "searching" })))
+    await h.settle()
+    assert.ok(h.boardRefreshes() > before, "an activity change with no new record still moves the board")
+    assert.equal(h.boardThread("boardmove")?.subAgents?.[0]?.activity, "Grep")
+
+    s.play(event(taskEvent(s.sessionId, { phase: "notification", taskId: "task-1", toolUseId: "toolu_child", status: "completed" })))
+    await h.settle()
+    assert.equal(h.boardThread("boardmove")?.subAgents?.length ?? 0, 0, "the board's live child list is empty")
   } finally {
     h.close()
   }

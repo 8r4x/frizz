@@ -145,3 +145,126 @@ test("ingest: a throwing nudge cannot wedge the queue", async () => {
   assert.equal(ingest.liveness(sessionId)?.turn, "settled")
   ingest.close()
 })
+
+// ---- task lifecycle: the payload the protocol used to discard --------------------------------------
+// The tailer's whole sub-agent derivation was regex archaeology over English prose because these
+// events arrived as `{kind:"other", type:"system", subtype:"task_started"}` and nothing else. Each
+// test below pins one rule of the fold that replaced it.
+
+const task = (over: Partial<Extract<ClaudeQueryEvent, { kind: "task" }>>): ClaudeQueryEvent =>
+  ({ kind: "task", phase: "progress", sessionId, ...over }) as ClaudeQueryEvent
+
+test("tasks: a session with no task events reports an empty set", async () => {
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  ingest.onEvent("t", sessionId, ev.assistant)
+  await ingest.drain()
+  assert.deepEqual(ingest.tasks(sessionId), [])
+  ingest.close()
+})
+
+test("tasks: started → progress accumulates what the child is doing", async () => {
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  ingest.onEvent("t", sessionId, task({ phase: "started", taskId: "k1", toolUseId: "toolu_1", description: "Audit the fold", subagentType: "fray:opus-high" }))
+  ingest.onEvent("t", sessionId, task({ phase: "progress", taskId: "k1", lastToolName: "Bash", summary: "running the harness", usage: { totalTokens: 1234, toolUses: 7, durationMs: 9000 } }))
+  await ingest.drain()
+  const [entry] = ingest.tasks(sessionId)
+  assert.equal(entry?.toolUseId, "toolu_1")
+  assert.equal(entry?.description, "Audit the fold")
+  assert.equal(entry?.subagentType, "fray:opus-high")
+  assert.equal(entry?.lastToolName, "Bash")
+  assert.equal(entry?.summary, "running the harness")
+  assert.equal(entry?.toolUses, 7)
+  assert.equal(entry?.totalTokens, 1234)
+  assert.equal(entry?.terminal, false)
+  ingest.close()
+})
+
+test("tasks: a notification is terminal, and its outcome is normalized", async () => {
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  ingest.onEvent("t", sessionId, task({ phase: "started", taskId: "done", toolUseId: "toolu_done" }))
+  ingest.onEvent("t", sessionId, task({ phase: "notification", taskId: "done", status: "completed", summary: "all green", outputFile: "/tmp/child.jsonl" }))
+  ingest.onEvent("t", sessionId, task({ phase: "started", taskId: "bad" }))
+  ingest.onEvent("t", sessionId, task({ phase: "notification", taskId: "bad", status: "failed" }))
+  ingest.onEvent("t", sessionId, task({ phase: "started", taskId: "gone" }))
+  ingest.onEvent("t", sessionId, task({ phase: "updated", taskId: "gone", status: "stopped" }))
+  await ingest.drain()
+  const byId = new Map(ingest.tasks(sessionId).map((entry) => [entry.taskId, entry]))
+  assert.deepEqual([byId.get("done")?.terminal, byId.get("done")?.outcome], [true, "completed"])
+  assert.equal(byId.get("done")?.outputFile, "/tmp/child.jsonl")
+  assert.deepEqual([byId.get("bad")?.terminal, byId.get("bad")?.outcome], [true, "failed"])
+  assert.deepEqual([byId.get("gone")?.terminal, byId.get("gone")?.outcome], [true, "killed"])
+  ingest.close()
+})
+
+test("tasks: an UNKNOWN status is never terminal", async () => {
+  // A status fray has never seen must not retire a live child. The whole point of this signal is to
+  // remove phantoms, and "retire on anything unfamiliar" would manufacture the opposite failure —
+  // the board reporting done while the work continues.
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  ingest.onEvent("t", sessionId, task({ phase: "started", taskId: "k" }))
+  ingest.onEvent("t", sessionId, task({ phase: "updated", taskId: "k", status: "hibernating" }))
+  await ingest.drain()
+  assert.equal(ingest.tasks(sessionId)[0]?.terminal, false)
+  assert.equal(ingest.tasks(sessionId)[0]?.status, "hibernating")
+  ingest.close()
+})
+
+test("tasks: the level signal retires a task that DROPS OUT of the live set", async () => {
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  ingest.onEvent("t", sessionId, task({ phase: "level", tasks: [{ taskId: "a" }, { taskId: "b" }] }))
+  ingest.onEvent("t", sessionId, task({ phase: "level", tasks: [{ taskId: "a" }] }))
+  await ingest.drain()
+  const byId = new Map(ingest.tasks(sessionId).map((entry) => [entry.taskId, entry]))
+  assert.equal(byId.get("a")?.terminal, false)
+  assert.equal(byId.get("b")?.terminal, true, "b left the live set, so it is over")
+  ingest.close()
+})
+
+test("tasks: the level sweep NEVER retires a task it has not first seen in a level payload", async () => {
+  // The ordering of the level signal relative to the start/stop edges is documented as unspecified, so
+  // a task_started that races ahead of the next level payload would otherwise read as "disappeared" —
+  // retiring a child that is very much alive. Present-then-absent is the only edge that counts.
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  ingest.onEvent("t", sessionId, task({ phase: "started", taskId: "fresh" }))
+  ingest.onEvent("t", sessionId, task({ phase: "level", tasks: [{ taskId: "other" }] }))
+  await ingest.drain()
+  const byId = new Map(ingest.tasks(sessionId).map((entry) => [entry.taskId, entry]))
+  assert.equal(byId.get("fresh")?.terminal, false, "a never-levelled task is not swept")
+  ingest.close()
+})
+
+test("tasks: release drops the table with the session", async () => {
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  ingest.onEvent("t", sessionId, task({ phase: "started", taskId: "k" }))
+  await ingest.drain()
+  assert.equal(ingest.tasks(sessionId).length, 1)
+  ingest.release(sessionId)
+  assert.deepEqual(ingest.tasks(sessionId), [])
+  ingest.close()
+})
+
+test("tasks: a task event with no id folds nothing and wedges nothing", async () => {
+  const nudged: string[] = []
+  const ingest = createClaudeRuntimeIngest({ nudge: (slug) => nudged.push(slug) })
+  ingest.onEvent("t", sessionId, task({ phase: "progress", lastToolName: "Bash" }))
+  ingest.onEvent("t", sessionId, task({ phase: "started", taskId: "k" }))
+  await ingest.drain()
+  assert.deepEqual(ingest.tasks(sessionId).map((entry) => entry.taskId), ["k"])
+  assert.equal(nudged.length, 2, "the un-foldable event still nudged")
+  ingest.close()
+})
+
+test("tasks: the per-session table is bounded, evicting FINISHED tasks first", async () => {
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  // One live task, then far more than the cap of finished ones.
+  ingest.onEvent("t", sessionId, task({ phase: "started", taskId: "keep-me" }))
+  for (let i = 0; i < 400; i++) {
+    ingest.onEvent("t", sessionId, task({ phase: "started", taskId: `k${i}` }))
+    ingest.onEvent("t", sessionId, task({ phase: "notification", taskId: `k${i}`, status: "completed" }))
+  }
+  await ingest.drain()
+  const all = ingest.tasks(sessionId)
+  assert.ok(all.length <= 256, `table grew to ${all.length}`)
+  assert.ok(all.some((entry) => entry.taskId === "keep-me"), "the still-running task survived the eviction")
+  ingest.close()
+})

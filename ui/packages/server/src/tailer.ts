@@ -12,7 +12,7 @@ import * as tmux from "./tmux.ts"
 import { detectClaudePermissionMode } from "./permission-controller.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { normalizeObservedThreadModel, validateThreadProfile } from "./backend/thread-profiles.ts"
-import { resolveRuntimeTurn } from "./backend/claude-runtime-ingest.ts"
+import { resolveRuntimeTurn, type ClaudeRuntimeTask } from "./backend/claude-runtime-ingest.ts"
 import { classifyLimitRecord } from "./backend/usage-limit.ts"
 import { parseDeliveryLedger, correlateDeliveryRecord, ageDeliveries, serializeDeliveryLedger, type DeliveryLedgerItem } from "./delivery-ledger.ts"
 import { createCodexSubAgentTracker, type CodexSubAgentTracker } from "./codex-subagents.ts"
@@ -137,6 +137,15 @@ export interface SubAgentView {
   subagentType?: string // the dispatch's input.subagent_type verbatim (e.g. "fray:fray-opus-high"); absent when unset
   id: string // the dispatch tool_use id — the drill-in drawer's stable handle to this exact child
   lastActivityAt?: string // ISO8601 of the child transcript's last append (its output-file mtime)
+  // ---- provider-reported progress (broker Claude rows only; see applyRuntimeTasks) ----
+  // "there's not really any indication of what they're up to aside from starts and stops" — this is
+  // that indication. Every field is ABSENT unless the SDK reported it for this exact child, so a tmux
+  // thread (prose-only) and an older claude that emits no task_* events render exactly as before.
+  activity?: string // the tool the child is running RIGHT NOW (SDK last_tool_name)
+  summary?: string // the provider's rolling one-line summary of the child's work
+  toolUses?: number // tool calls the child has made so far
+  tokens?: number // total tokens the child has spent so far
+  durationMs?: number // the provider's own measure of working time (excludes paused)
 }
 
 // A signal fence parsed from the FINAL assistant message (mirrors @fray-ui/shared ThreadFence; kept
@@ -327,7 +336,24 @@ interface SubAgentEntry {
   // from the launch ack. This is the ONE identifier a `TaskStop` references (its `input.task_id`) and
   // it also rides every natural completion notification as `<task-id>` — so it is the correlation key
   // for a MANUAL stop, which carries no tool_use id at all. Absent until the launch ack is seen.
+  //
+  // On a BROKER row it is also backfilled from the SDK's own `task_started`, which pairs task id and
+  // tool_use id directly — so a structured session gets this correlation key without depending on the
+  // ack prose parsing above landing.
   taskId?: string
+  // What the provider says this child is doing, folded from the SDK `task_*` stream (broker rows only).
+  // Purely additive telemetry: absent for every tmux thread and every codex row.
+  progress?: SubAgentProgress
+}
+
+// Provider-reported progress for one live op — the payload the protocol used to discard. Stored on the
+// entry (rather than re-read per view) so it survives in the prime cache alongside the rest of the map.
+interface SubAgentProgress {
+  activity?: string // SDK last_tool_name — the tool the child is running right now
+  summary?: string // the provider's rolling summary of the child's work
+  toolUses?: number
+  totalTokens?: number
+  durationMs?: number
 }
 
 // A live background shell as surfaced to the board (mirrors @fray-ui/shared BgShellView).
@@ -1375,6 +1401,12 @@ export interface TailerDeps {
   //     provider has reported activity the transcript has not caught up with yet. See RUNTIME_CHASE_MAX.
   // Absent (tmux threads, tests, bridge-less server) ⇒ the fold decides alone, byte-identical to before.
   runtimeLiveness?: (sessionId: string) => { turn: "running" | "settled"; events: number } | undefined
+  // The provider's OWN view of a broker session's background tasks (backend/claude-runtime-ingest.ts):
+  // what each child is doing right now, and which ones the SDK says are finished. Consulted ONLY
+  // through applyRuntimeTasks, which may ENRICH a folded entry and RETIRE one the provider reports
+  // terminal — and may never invent an entry the fold does not know about. Absent (tmux threads, codex
+  // rows, tests, bridge-less server) ⇒ the prose fold decides alone, byte-identical to before.
+  runtimeTasks?: (sessionId: string) => readonly ClaudeRuntimeTask[]
 }
 
 // The durable permission-request marker written by the worker's PermissionRequest hook
@@ -1549,6 +1581,63 @@ export function createTailer(deps: TailerDeps): Tailer {
     return true
   }
 
+  // Fold the provider's OWN report of this session's background tasks over the entries the transcript
+  // fold already tracks. This is the structured replacement for the prose archaeology above — the SDK
+  // states outright which child is running which tool, what it has spent, and when it is done, where
+  // `launchOutputFile` / `launchTaskId` / `trackCompletions` have to recognize English sentences
+  // ("Command running in background with ID:", "Monitor started (task", "<task-notification>"). Those
+  // stay exactly where they are: they are the ONLY signal a tmux thread has, and a broker session that
+  // predates these events (or drops one) still folds identically.
+  //
+  // The authority split mirrors resolveRuntimeTurn's, and the SECOND rule is the load-bearing one:
+  //
+  //  * ENRICH — freely. Progress is information the fold structurally does not have; there is nothing
+  //    to conflict with.
+  //  * RETIRE — yes, on a provider-reported terminal status. This is not overriding folded evidence: it
+  //    is the SAME terminal signal the `<task-notification>` fold is waiting for, on a channel that
+  //    actually carries it. (Those notifications are stream-only — they are NOT in the JSONL — which is
+  //    why the prose path has leaked phantoms three separate times.) retireLive is idempotent, so the
+  //    prose path re-seeing it later is a no-op.
+  //  * CREATE — never. `trackDispatches` deliberately skips a foreground `Agent` (run_in_background:
+  //    false) because the spinner already covers it, and the provider reports those tasks too. Minting
+  //    entries here would put foreground children on the board's LIVE count and into the completion
+  //    hold — inventing exactly the phantoms this change exists to remove.
+  function applyRuntimeTasks(row: SessionRow, state: TailState, nowMs: number): void {
+    if (!deps.runtimeTasks || !isBrokerClaudeRow(row) || state.subAgents.size === 0) return
+    const runtime = deps.runtimeTasks(row.session_id)
+    if (runtime.length === 0) return
+    // Index both ways up front: a handful of live entries against up to a few hundred remembered tasks.
+    const byToolUse = new Map<string, ClaudeRuntimeTask>()
+    const byTaskId = new Map<string, ClaudeRuntimeTask>()
+    for (const task of runtime) {
+      if (task.toolUseId) byToolUse.set(task.toolUseId, task)
+      byTaskId.set(task.taskId, task)
+    }
+    const doomed: Array<{ entry: SubAgentEntry; task: ClaudeRuntimeTask }> = []
+    for (const entry of state.subAgents.values()) {
+      // tool_use id first — it is the key BOTH sides mint at dispatch, so it cannot be confused. The
+      // task id is the fallback for a launch ack fray parsed but an SDK build that omits tool_use_id.
+      const task = byToolUse.get(entry.toolUseId) ?? (entry.taskId ? byTaskId.get(entry.taskId) : undefined)
+      if (!task) continue
+      // Backfill the manual-stop correlation key from the structured pairing, so a `TaskStop` on this
+      // child correlates even when the launch ack's prose never yielded one.
+      if (!entry.taskId) entry.taskId = task.taskId
+      const progress: SubAgentProgress = {
+        activity: task.lastToolName,
+        summary: task.summary,
+        toolUses: task.toolUses,
+        totalTokens: task.totalTokens,
+        durationMs: task.durationMs,
+      }
+      entry.progress = progress
+      if (task.terminal) doomed.push({ entry, task })
+    }
+    // Collected first: retireLive mutates the map being iterated above.
+    for (const { entry, task } of doomed) {
+      retireLive(state, entry, new Date(task.updatedAt || nowMs).toISOString(), task.outcome ?? "completed")
+    }
+  }
+
   function adoptionBinding(row: SessionRow) {
     const cached = adoptionBindings.get(row.slug)
     if (cached) return cached
@@ -1706,7 +1795,22 @@ export function createTailer(deps: TailerDeps): Tailer {
     for (const e of state.subAgents.values()) {
       if (e.kind !== "agent") continue
       const lastActivityAt = entryLastActivity(e)
-      out.push({ label: e.label, startedAt: e.startedAt, state: entryStale(e, nowMs) ? "stale" : "running", subagentType: e.subagentType, id: e.toolUseId, ...(lastActivityAt ? { lastActivityAt } : {}) })
+      // Each progress field is spread in only when the provider reported it, so a prose-only child's
+      // view object is byte-identical to what it was before this existed.
+      const p = e.progress
+      out.push({
+        label: e.label,
+        startedAt: e.startedAt,
+        state: entryStale(e, nowMs) ? "stale" : "running",
+        subagentType: e.subagentType,
+        id: e.toolUseId,
+        ...(lastActivityAt ? { lastActivityAt } : {}),
+        ...(p?.activity ? { activity: p.activity } : {}),
+        ...(p?.summary ? { summary: p.summary } : {}),
+        ...(p?.toolUses !== undefined ? { toolUses: p.toolUses } : {}),
+        ...(p?.totalTokens !== undefined ? { tokens: p.totalTokens } : {}),
+        ...(p?.durationMs !== undefined ? { durationMs: p.durationMs } : {}),
+      })
     }
     return out
   }
@@ -1744,8 +1848,13 @@ export function createTailer(deps: TailerDeps): Tailer {
   // lastActivityAt is folded in at MINUTE granularity, never raw: the reading is displayed as
   // "N min ago", so a running child whose mtime advances every append only needs to re-push when its
   // displayed minute would change — at most once a minute per active child, not once an append.
+  //
+  // Provider progress joins on the same terms. `activity` and `toolUses` change together, once per tool
+  // the child runs — the exact granularity the operator wants to see move. `summary` is folded in too
+  // (it changes rarely). Raw TOKEN counts are deliberately NOT here: they can advance on every progress
+  // event without the rendered line changing meaningfully, and pushing a board delta for that is churn.
   function derivedSignature(state: TailState, nowMs: number): string {
-    const agents = subAgentViews(state, nowMs).map((v) => `A:${v.label}|${v.state}|${v.startedAt}|${activityMinute(v.lastActivityAt)}`).join("")
+    const agents = subAgentViews(state, nowMs).map((v) => `A:${v.label}|${v.state}|${v.startedAt}|${activityMinute(v.lastActivityAt)}|${v.activity ?? ""}|${v.toolUses ?? ""}|${v.summary ?? ""}`).join("")
     const shells = bgShellViews(state).map((v) => `S:${v.label}|${v.state}|${v.startedAt}|${activityMinute(v.lastActivityAt)}`).join("")
     const ask = state.pendingAsk ? `Q:${state.pendingAsk.id}:${state.pendingAsk.questions.length}` : ""
     return `${agents}\n${shells}\n${ask}`
@@ -2442,6 +2551,7 @@ export function createTailer(deps: TailerDeps): Tailer {
         state.permPrompt = pane.permPrompt
         state.nativeInputRequired = pane.nativeInputRequired
         state.paneDead = paneDeadForRow(row)
+        applyRuntimeTasks(row, state, nowMs)
         state.subAgentsSig = derivedSignature(state, nowMs)
         state.primed = true
         // Cache what this prime derived, unless it came from the cache and consumed nothing — in which
@@ -2579,6 +2689,11 @@ export function createTailer(deps: TailerDeps): Tailer {
           state.paneDead = dead
         }
       }
+
+      // The provider's own report of those ops, folded over the entries the transcript fold tracks:
+      // progress the JSONL does not carry at all, plus terminal statuses that reach fray SECONDS before
+      // (or, when a notification never lands on disk, INSTEAD of) the prose the fold waits for.
+      applyRuntimeTasks(row, state, nowMs)
 
       // live background ops + pending ask: a dispatch/completion/launch changes the set, a running→stale
       // flip is purely time-based (no new record), and an ask appears/clears — recompute every tick.

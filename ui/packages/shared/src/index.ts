@@ -126,6 +126,16 @@ export const SubAgentView = z.object({
   // pre-restart server. Minute-bucketed into the board signature server-side, so a running child's
   // steadily-advancing mtime does not spam deltas.
   lastActivityAt: z.string().optional(),
+  // ---- what the child is actually DOING, from the provider's own task_* event stream ----
+  // A live sub-agent used to be a name and a spinner: start, stop, nothing in between. These come off
+  // the Claude Agent SDK's typed task lifecycle (stream-only — none of it is in the session JSONL), so
+  // they are present for a BROKER thread and absent for a tmux one, an older CLI, or a pre-restart
+  // server. Render each only when set; never assume they arrive together.
+  activity: z.string().optional(), // the tool the child is running right now (e.g. "Bash", "Edit")
+  summary: z.string().optional(), // the provider's rolling one-line summary of the child's work
+  toolUses: z.number().optional(), // tool calls the child has made so far
+  tokens: z.number().optional(), // total tokens the child has spent so far
+  durationMs: z.number().optional(), // the provider's own working-time measure (excludes paused)
 })
 export type SubAgentView = z.infer<typeof SubAgentView>
 
@@ -1078,6 +1088,15 @@ export const TranscriptToolCall = z.object({
   // missed) — in which case the live tracked-sub-agent overlay supplies "running Nm" instead.
   agentStatus: z.enum(["completed", "failed", "killed"]).optional(),
   agentElapsedMs: z.number().optional(), // dispatch → completion elapsed, for the finished-state label
+  // TRUE only on the copy of the dispatch call the server re-emits, as its own standalone message, at
+  // the position the completion <task-notification> landed (see transcript.ts completionEvents). That
+  // copy is a TIMELINE MARKER, not a second tool call, so the client renders it as the centered wake
+  // divider a background shell's completion already uses — never as a second AgentBlock card
+  // (maintainer 2026-07-27: converge an agent finishing onto the background-shell rendering, which is
+  // "more visually distinct in a big sea of tool call blocks"). The LAUNCH card, which carries the same
+  // agentStatus/agentElapsedMs after back-fill, never sets this and stays an expandable prompt card.
+  // Optional + additive: an old client ignores it and shows the previous duplicate-card rendering.
+  agentCompletion: z.boolean().optional(),
   // ---- SendMessage (peer / agent-to-agent messaging) block ----
   // Set only for a `SendMessage` tool_use (an orchestrator steering a sub-agent, or a teammate note).
   // The client promotes such a call into a SendMessageCard (same quiet card family as Bash/Read/Agent):

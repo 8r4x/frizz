@@ -28,11 +28,60 @@
 // thread would queue with a stale last message and no parsed fence. So a folded `tool_use` (the model
 // is definitively mid-tool) always wins over a runtime "settled", and only the backstop case — where
 // the fold has no opinion and was going to time out into `idle` anyway — is short-circuited.
+//
+// (3) SUB-AGENT PROGRESS. The SDK reports child lifecycle as typed `task_*` system messages carrying a
+//     description, the tool the child is running right now, a rolling summary and usage — and those
+//     messages are STREAM-ONLY, absent from the JSONL the tailer folds. Until now the whole payload was
+//     discarded at the protocol boundary, so the tailer reconstructed lifecycle by regex-matching
+//     English prose out of launch acks ("output_file:", "Command running in background with ID:") — a
+//     path whose own comments record three separate phantom-sub-agent leaks. `tasks()` below is that
+//     payload, kept per session; the tailer reads it the same way it reads `liveness()`, as a signal it
+//     may consult, and the prose fold stays exactly where it is for tmux threads that have nothing else.
 import type { ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
 import { createDrainableWorker, type DrainableWorker, type ReceiptBus } from "@fray-ui/shared"
 
 /** What the SDK says about the session's turn right now, independent of what is on disk. */
 export type ClaudeRuntimeTurn = "running" | "settled"
+
+/** How many tasks to remember per session. Terminal ones are evicted first — see rememberTask. */
+const MAX_TRACKED_TASKS = 256
+
+/**
+ * The provider's own live view of one background task (a sub-agent, a background Bash, a Monitor),
+ * folded from the `task_*` stream. Everything but `taskId`/`updatedAt` is optional: the SDK fills a
+ * different subset per phase, and the mapper degrades any field it cannot represent.
+ */
+export interface ClaudeRuntimeTask {
+  taskId: string
+  /** The dispatch tool_use id, when the SDK supplied one — the tailer's primary correlation key. */
+  toolUseId?: string
+  description?: string
+  subagentType?: string
+  taskType?: string
+  /** Provider status verbatim, last one seen. Open set; `terminal` is the derived question. */
+  status?: string
+  /** The provider has reported this task finished (completed / failed / stopped / killed). */
+  terminal: boolean
+  /** Normalized terminal outcome, once `terminal`. */
+  outcome?: "completed" | "failed" | "killed"
+  /** The tool the child is running right now — the single most useful "what is it up to" field. */
+  lastToolName?: string
+  /** The provider's rolling one-line summary of the child's work. */
+  summary?: string
+  outputFile?: string
+  error?: string
+  totalTokens?: number
+  toolUses?: number
+  durationMs?: number
+  /**
+   * Whether this task has ever appeared in a `background_tasks_changed` PAYLOAD. Deliberately NOT "has
+   * ever looked alive" — a task_started sets no such thing. It is the precondition for the level sweep,
+   * which may only retire a task it has watched leave the set it was previously in.
+   */
+  seenInLevel: boolean
+  /** ms epoch of the event that last touched this record. */
+  updatedAt: number
+}
 
 export interface ClaudeRuntimeLiveness {
   turn: ClaudeRuntimeTurn
@@ -48,6 +97,7 @@ export type ClaudeRuntimeReceipt =
   | { type: "claude.runtime.turn.started"; slug: string; sessionId: string }
   | { type: "claude.runtime.turn.settled"; slug: string; sessionId: string; isError: boolean }
   | { type: "claude.runtime.session.released"; sessionId: string }
+  | { type: "claude.runtime.task"; slug: string; sessionId: string; taskId: string; phase: string; terminal: boolean }
 
 export interface ClaudeRuntimeIngestDeps {
   /** Ask the tailer to re-read now. Coalesced on its side; safe to call on every event. */
@@ -61,6 +111,12 @@ export interface ClaudeRuntimeIngest {
   onEvent(slug: string, sessionId: string, event: ClaudeQueryEvent): void
   /** The SDK's own reading of this session's turn, or undefined if nothing has been ingested. */
   liveness(sessionId: string): ClaudeRuntimeLiveness | undefined
+  /**
+   * The provider's own view of this session's background tasks — what each child is doing right now,
+   * and which ones it says are finished. Empty for a session that has emitted no `task_*` event (every
+   * tmux thread, every codex row, an older claude that does not emit them).
+   */
+  tasks(sessionId: string): readonly ClaudeRuntimeTask[]
   /** Forget a session (replaced or deleted) so a later same-slug dispatch starts clean. */
   release(sessionId: string): void
   /** Resolves once every event handed to `onEvent` so far has been folded. Tests only. */
@@ -78,8 +134,95 @@ function turnSignal(event: ClaudeQueryEvent): ClaudeRuntimeTurn | undefined {
   return undefined
 }
 
+/**
+ * Normalize the provider's terminal vocabulary. `stopped` (a manual TaskStop, or a task the previous
+ * CLI process left behind) and `killed` are the same thing to fray: the op is over and was not its own
+ * idea. Anything else — `pending`, `running`, `paused` — is NOT terminal, and an UNKNOWN status is
+ * deliberately not terminal either: a future status fray has never seen must not retire a live child.
+ */
+function terminalOutcome(status: string | undefined): "completed" | "failed" | "killed" | undefined {
+  if (status === "completed") return "completed"
+  if (status === "failed") return "failed"
+  if (status === "stopped" || status === "killed") return "killed"
+  return undefined
+}
+
 export function createClaudeRuntimeIngest(deps: ClaudeRuntimeIngestDeps): ClaudeRuntimeIngest {
   const live = new Map<string, ClaudeRuntimeLiveness>() // keyed by session id
+  // Provider-reported background tasks, keyed by session id then task id. Insertion-ordered, so the
+  // eviction below drops the oldest.
+  const tasks = new Map<string, Map<string, ClaudeRuntimeTask>>()
+
+  function rememberTask(sessionId: string, taskId: string, now: number): ClaudeRuntimeTask {
+    let table = tasks.get(sessionId)
+    if (!table) { table = new Map(); tasks.set(sessionId, table) }
+    let task = table.get(taskId)
+    if (!task) {
+      task = { taskId, terminal: false, seenInLevel: false, updatedAt: now }
+      table.set(taskId, task)
+      // Bounded, terminal-first: a long orchestrator session can dispatch hundreds of children, and the
+      // ones still running are the ones the board needs. Evicting a FINISHED task is harmless — the
+      // tailer retires on the edge, and a re-seen terminal retire is a no-op either way.
+      while (table.size > MAX_TRACKED_TASKS) {
+        const victim = [...table.values()].find((entry) => entry.terminal) ?? table.values().next().value
+        if (!victim || victim === task) break
+        table.delete(victim.taskId)
+      }
+    }
+    task.updatedAt = now
+    return task
+  }
+
+  /**
+   * Fold ONE task event into the session's table. Defensive throughout: a phase fray does not know, a
+   * missing task id, a status it has never seen — every one of them is a no-op, never a throw and never
+   * a state change it cannot justify. This runs inside the drainable worker, whose failure would stall
+   * every later nudge.
+   */
+  function foldTask(slug: string, sessionId: string, event: Extract<ClaudeQueryEvent, { kind: "task" }>, now: number): void {
+    // The REPLACE-semantics level signal, and the one place a task can go terminal without an edge.
+    // Deliberately narrow: only a task fray has ALREADY SEEN IN A LEVEL PAYLOAD and that has now
+    // dropped out of one is treated as finished. Without that guard, a `task_started` racing ahead of
+    // the next level payload would look like a task that "disappeared" and retire a child that is very
+    // much alive — the phantom bug in its most damaging direction (the board says done, work continues).
+    if (event.phase === "level") {
+      const present = new Set((event.tasks ?? []).map((entry) => entry.taskId))
+      for (const entry of event.tasks ?? []) {
+        const task = rememberTask(sessionId, entry.taskId, now)
+        task.seenInLevel = true
+        if (entry.description && !task.description) task.description = entry.description
+        if (entry.taskType && !task.taskType) task.taskType = entry.taskType
+      }
+      for (const task of tasks.get(sessionId)?.values() ?? []) {
+        if (task.terminal || !task.seenInLevel || present.has(task.taskId)) continue
+        task.terminal = true
+        task.outcome = "completed" // absent from the live set with no notification: finished, cause unknown
+        task.updatedAt = now
+        deps.receipts?.publish({ type: "claude.runtime.task", slug, sessionId, taskId: task.taskId, phase: "level", terminal: true })
+      }
+      return
+    }
+    if (!event.taskId) return // an edge with no correlation key can enrich nothing
+    const task = rememberTask(sessionId, event.taskId, now)
+    if (event.toolUseId) task.toolUseId = event.toolUseId
+    if (event.description) task.description = event.description
+    if (event.subagentType) task.subagentType = event.subagentType
+    if (event.taskType) task.taskType = event.taskType
+    if (event.lastToolName) task.lastToolName = event.lastToolName
+    if (event.summary) task.summary = event.summary
+    if (event.outputFile) task.outputFile = event.outputFile
+    if (event.error) task.error = event.error
+    if (event.usage?.totalTokens !== undefined) task.totalTokens = event.usage.totalTokens
+    if (event.usage?.toolUses !== undefined) task.toolUses = event.usage.toolUses
+    if (event.usage?.durationMs !== undefined) task.durationMs = event.usage.durationMs
+    if (event.status) task.status = event.status
+    const outcome = terminalOutcome(event.status)
+    if (outcome) {
+      task.terminal = true
+      task.outcome = outcome
+    }
+    deps.receipts?.publish({ type: "claude.runtime.task", slug, sessionId, taskId: task.taskId, phase: event.phase, terminal: task.terminal })
+  }
   // Serialized so `drain()` means something: after it resolves, every event handed in has been
   // folded and its nudge issued. Without that a harness is back to sleeping and hoping.
   const worker: DrainableWorker<{ slug: string; sessionId: string; event: ClaudeQueryEvent }> =
@@ -93,6 +236,11 @@ export function createClaudeRuntimeIngest(deps: ClaudeRuntimeIngestDeps): Claude
         events: (prior?.events ?? 0) + 1,
       })
       deps.receipts?.publish({ type: "claude.runtime.event", slug: item.slug, sessionId: item.sessionId, kind: item.event.kind })
+      // Never let a malformed task frame stall the worker: the nudge below is what makes the board
+      // responsive at all, and it is queued behind this fold.
+      if (item.event.kind === "task") {
+        try { foldTask(item.slug, item.sessionId, item.event, now) } catch { /* telemetry only */ }
+      }
       if (signal === "running" && prior?.turn !== "running") {
         deps.receipts?.publish({ type: "claude.runtime.turn.started", slug: item.slug, sessionId: item.sessionId })
       }
@@ -108,12 +256,14 @@ export function createClaudeRuntimeIngest(deps: ClaudeRuntimeIngestDeps): Claude
   return {
     onEvent(slug, sessionId, event) { worker.enqueue({ slug, sessionId, event }) },
     liveness: (sessionId) => live.get(sessionId),
+    tasks: (sessionId) => [...(tasks.get(sessionId)?.values() ?? [])],
     release(sessionId) {
       live.delete(sessionId)
+      tasks.delete(sessionId)
       deps.receipts?.publish({ type: "claude.runtime.session.released", sessionId })
     },
     drain: () => worker.drain(),
-    close() { worker.close(); live.clear() },
+    close() { worker.close(); live.clear(); tasks.clear() },
   }
 }
 

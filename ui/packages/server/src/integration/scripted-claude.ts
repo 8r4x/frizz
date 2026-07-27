@@ -63,6 +63,45 @@ export function resultEvent(sessionId: string, isError = false): ClaudeQueryEven
   return { kind: "result", sessionId, messageId: "r", subtype: isError ? "error_during_execution" : "success", isError, errors: [] }
 }
 
+// ---- record builders for a BACKGROUND SUB-AGENT, in the prose shapes the tailer folds ----
+// These are the three records the regex path depends on. They stay in the harness because the whole
+// point of the structured task stream is that it must coexist with them, not replace them: a tmux
+// thread has only these, and a broker thread has both.
+
+/** The `Agent` tool_use that registers a live child, keyed by its tool_use id. */
+export function agentDispatchRecord(toolUseId: string, description: string, at: string, subagentType = "fray:opus-high"): Record<string, unknown> {
+  return {
+    type: "assistant",
+    timestamp: at,
+    message: { stop_reason: "tool_use", content: [{ type: "tool_use", name: "Agent", id: toolUseId, input: { description, run_in_background: true, subagent_type: subagentType } }] },
+  }
+}
+
+/** The launch ack whose ENGLISH PROSE the fold parses for the child's output path. */
+export function agentLaunchRecord(toolUseId: string, outputFile: string, at: string): Record<string, unknown> {
+  return {
+    type: "user",
+    timestamp: at,
+    message: { content: [{ type: "tool_result", tool_use_id: toolUseId, content: [{ type: "text", text: `Async agent launched successfully.\nagentId: agent-1\noutput_file: ${outputFile}\nDo not read this file.` }] }] },
+  }
+}
+
+/** The prose completion notification — the fallback terminal signal, and the one that can go missing. */
+export function taskNotificationRecord(toolUseId: string, status: string, at: string): Record<string, unknown> {
+  return {
+    type: "queue-operation",
+    operation: "enqueue",
+    timestamp: at,
+    content: `<task-notification>\n<task-id>task-1</task-id>\n<tool-use-id>${toolUseId}</tool-use-id>\n<status>${status}</status>\n<summary>done</summary>\n</task-notification>`,
+  }
+}
+
+// ---- event builders for the STRUCTURED task lifecycle (stream-only; never on disk) ----
+
+export function taskEvent(sessionId: string, over: Partial<Extract<ClaudeQueryEvent, { kind: "task" }>>): ClaudeQueryEvent {
+  return { kind: "task", phase: "progress", sessionId, ...over } as ClaudeQueryEvent
+}
+
 export interface ScriptedClaudeSession {
   /** Play the steps in order: records land on disk, events go to the ingest. */
   play(...steps: ScriptStep[]): void

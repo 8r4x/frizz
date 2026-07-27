@@ -653,6 +653,10 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     // guess need not run out before a finished turn reaches the queue) and its event count (so a tick
     // can tell the provider has reported activity its own disk write has not caught up with yet).
     runtimeLiveness: claudeRuntimeIngest ? (sessionId) => claudeRuntimeIngest.liveness(sessionId) : undefined,
+    // The provider's own report of what each sub-agent/background op is doing, and which ones it says
+    // are finished — the payload the protocol used to discard, which is why the tailer had to
+    // reconstruct child lifecycle from English prose. See applyRuntimeTasks for the authority split.
+    runtimeTasks: claudeRuntimeIngest ? (sessionId) => claudeRuntimeIngest.tasks(sessionId) : undefined,
   })
   resources.tailer = tailer
   opts.startup?.afterPhase?.("tailer")
