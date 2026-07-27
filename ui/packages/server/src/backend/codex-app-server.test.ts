@@ -1620,18 +1620,36 @@ test("secret user-input capability is unavailable instead of rendering an unusab
   h.close()
 })
 
-test("unsupported Codex version fails negotiation before any thread is created", async () => {
-  const h = harness("0.145.0")
+test("an OLDER Codex fails negotiation before any thread is created", async () => {
+  // The floor. An older binary may genuinely lack params fray sends, and that is the direction where
+  // proceeding produces silent misbehaviour rather than a loud failure.
+  const h = harness("0.143.0")
   await assert.rejects(
     h.bridge.startDisposableSession({ threadSlug: "bad-version", sessionId: "bad-version-session", cwd: h.dir }),
-    /unsupported Codex app-server version/,
+    /older than the audited protocol/,
   )
   assert.equal(h.processes[0]!.clientRequests.some((message) => message.method === "thread/start"), false)
   assert.deepEqual(h.diagnostics, [{
     event: "version-rejected",
     expected: CODEX_APP_SERVER_SUPPORTED_VERSION,
-    received: "0.145.0",
+    received: "0.143.0",
   }])
+  h.close()
+})
+
+test("a NEWER Codex RUNS, and records that it is ahead of the audit", async () => {
+  // This case used to be a hard refusal, and that made one `npm i -g @openai/codex` a total,
+  // permanent Codex outage: no tmux fallback, every operation gated behind ensureConnected, recovery
+  // only by editing a source constant and rebuilding fray. codex ships a stable roughly every two
+  // days, and 0.145.0 was already published while fray pinned 0.144.6.
+  const h = harness("0.145.0")
+  const session = await h.bridge.startDisposableSession({ threadSlug: "newer", sessionId: "newer-session", cwd: h.dir })
+  assert.ok(session, "a newer app-server is usable")
+  assert.equal(h.processes[0]!.clientRequests.some((message) => message.method === "thread/start"), true)
+  assert.ok(
+    h.diagnostics.some((d) => (d as { event?: string; received?: string }).event === "version-ahead" && (d as { received?: string }).received === "0.145.0"),
+    `diagnostics were ${JSON.stringify(h.diagnostics)}`,
+  )
   h.close()
 })
 

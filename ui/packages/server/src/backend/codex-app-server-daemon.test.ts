@@ -435,7 +435,10 @@ test("codex daemon: a genuinely unsupported codex fails loudly and is never refo
         bridge.bridge.startDisposableSession({
           threadSlug: `bad-${attempt}`, sessionId: `bad-${attempt}-session`, cwd: h.stateDir,
         }),
-        /unsupported Codex app-server version/,
+        // 0.1.0 is BELOW the audited protocol, so it is still refused — only the wording changed when
+        // the gate became a floor+ceiling instead of exact equality (a NEWER codex now runs with a
+        // warning rather than taking Codex out entirely).
+        /older than the audited protocol/,
         `attempt ${attempt} fails loudly`,
       )
     }

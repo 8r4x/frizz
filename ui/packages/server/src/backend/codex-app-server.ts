@@ -67,15 +67,80 @@ export function selectCodexHostKind(
   return nativeSupported ? "native" : "daemon"
 }
 export const CODEX_APP_SERVER_SUPPORTED_VERSION = "0.144.6"
-// Upgrade policy: this is an exact protocol pin, never a semver range. Changing it requires a fresh
+// Upgrade policy: the AUDITED version is an exact coordinate — changing it requires a fresh
 // generated-protocol audit plus a source audit at the matching immutable Rust tag/commit, then a new
 // fingerprint and contract fixtures. These coordinates are intentionally runtime-visible diagnostics,
 // but contain no host paths or credentials.
+//
+// The ACCEPTANCE RULE is deliberately not that exact coordinate — see codexVersionVerdict below.
 export const CODEX_APP_SERVER_PROTOCOL_REVISION = Object.freeze({
   packageVersion: CODEX_APP_SERVER_SUPPORTED_VERSION,
   sourceTag: "rust-v0.144.6",
   sourceCommit: "5d1fbf26c43abc65a203928b2e31561cb039e06d",
 })
+/** Numeric semver compare; a version that will not parse sorts BELOW everything (fails closed). */
+export function compareCodexVersions(a: string, b: string): number {
+  const parse = (v: string) => {
+    const m = v.match(/^(\d+)\.(\d+)\.(\d+)/)
+    return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : [-1, -1, -1]
+  }
+  const [x, y] = [parse(a), parse(b)]
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1
+  return 0
+}
+
+export type CodexVersionVerdict =
+  | { kind: "audited" }
+  | { kind: "ahead"; message: string }
+  | { kind: "refused"; message: string }
+
+/**
+ * Whether to talk to this app-server, given the version its handshake reported.
+ *
+ * This was exact string equality against the audited version. That is unsafe-CLOSED, and it is the
+ * single most dangerous property in the whole Codex integration: `codex` ships a stable release about
+ * every two days, fray has no tmux fallback for it (dispatch.ts throws), and `ensureConnected` gates
+ * ALL EIGHT operation entry points — dispatch, follow-up, steer, interrupt, resume, warm-up, settings.
+ * So one `npm i -g @openai/codex` turned every Codex thread into a permanent hard failure recoverable
+ * only by editing a source constant and rebuilding fray. Measured 2026-07-27: the pin is 0.144.6 and
+ * `@openai/codex@0.145.0` was already published.
+ *
+ * The rule now: a FLOOR that refuses, and a CEILING that only warns.
+ *  - BELOW the audited version → refuse. An older binary may genuinely lack params fray sends, and
+ *    that is the direction where proceeding produces silent misbehaviour.
+ *  - AT it → the audited path, unchanged.
+ *  - ABOVE it → run, and say so loudly once. Codex's protocol is additive in practice and unknown
+ *    fields are ignored, so "newer" is overwhelmingly compatible — and fray already owns a REAL drift
+ *    detector that does not depend on guessing from a version number: codex-protocol-conformance.test.ts
+ *    asks the INSTALLED binary for its own JSON schema and asserts every param fray sends still exists.
+ *    That test, not a string compare, is what should fail when the protocol actually moves.
+ *
+ * An unparseable version sorts below everything, so it is refused.
+ */
+export function codexVersionVerdict(
+  received: string | undefined,
+  audited: string = CODEX_APP_SERVER_SUPPORTED_VERSION,
+): CodexVersionVerdict {
+  if (!received) {
+    return { kind: "refused", message: `Codex app-server did not report a parseable fray/<version> user agent; expected ${audited}` }
+  }
+  const cmp = compareCodexVersions(received, audited)
+  if (cmp === 0) return { kind: "audited" }
+  if (cmp < 0) {
+    return {
+      kind: "refused",
+      message: `Codex app-server ${received} is older than the audited protocol ${audited}. Upgrade codex (\`npm i -g @openai/codex\`) — fray sends parameters this build may not accept.`,
+    }
+  }
+  return {
+    kind: "ahead",
+    message: `Codex app-server ${received} is NEWER than fray's audited protocol ${audited} — running anyway (the protocol is additive and unknown fields are ignored). If Codex threads misbehave, re-audit and re-pin. Run \`npm test -- codex-protocol-conformance\` to check fray's params against this binary's own schema.`,
+  }
+}
+
+// Latched per process: the "running ahead of the audit" warning must not repeat on every reconnect.
+let aheadVersionWarned: string | undefined
+
 const PROTOCOL_FINGERPRINT = [
   CODEX_APP_SERVER_PROTOCOL_REVISION.sourceTag,
   CODEX_APP_SERVER_PROTOCOL_REVISION.sourceCommit,
@@ -418,6 +483,9 @@ export type CodexAppServerDiagnostic =
   | { event: "connected"; version: string; connectionEpoch: number }
   | { event: "disconnected"; connectionEpoch: number; reason: "exit" | "error" | "closed" | "protocol" }
   | { event: "version-rejected"; expected: string; received: string }
+  // The app-server is NEWER than the audited protocol. Not a failure — fray runs anyway; this is the
+  // breadcrumb that says which build was actually driving if something later looks wrong.
+  | { event: "version-ahead"; expected: string; received: string }
   | { event: "stderr"; bytes: number; truncated: boolean }
   | { event: "request-rejected"; method: string; code: number }
   | { event: "turn-auto-resumed"; threadSlug: string; interruptedTurnId: string }
@@ -2434,13 +2502,30 @@ export class CodexAppServerBridge {
       // an incompatible user agent.
       const version = initialized.userAgent.match(/^fray\/(\d+\.\d+\.\d+)(?:\s|\()/u)?.[1]
       handshakeVersion = version
-      if (version !== CODEX_APP_SERVER_SUPPORTED_VERSION) {
+      const verdict = codexVersionVerdict(version)
+      // `!version` is already the refused case inside codexVersionVerdict; naming it here too is what
+      // lets the compiler see that `version` is a string for the rest of the handshake.
+      if (verdict.kind === "refused" || !version) {
         this.options.diagnostic?.({
           event: "version-rejected",
           expected: CODEX_APP_SERVER_SUPPORTED_VERSION,
           received: version ?? "unparseable",
         })
-        throw new Error(`unsupported Codex app-server version ${version ?? "unknown"}; expected ${CODEX_APP_SERVER_SUPPORTED_VERSION}`)
+        throw new Error(verdict.kind === "refused" ? verdict.message : `Codex app-server did not report a parseable version; expected ${CODEX_APP_SERVER_SUPPORTED_VERSION}`)
+      }
+      if (verdict.kind === "ahead") {
+        // The DIAGNOSTIC is per connection — it is the durable breadcrumb saying which build was
+        // actually driving. The console warning is latched to once per distinct version per process,
+        // because a warning that repeats on every reconnect is a warning nobody reads.
+        this.options.diagnostic?.({
+          event: "version-ahead",
+          expected: CODEX_APP_SERVER_SUPPORTED_VERSION,
+          received: version,
+        })
+        if (version !== aheadVersionWarned) {
+          aheadVersionWarned = version
+          console.warn(`[fray-ui] ${verdict.message}`)
+        }
       }
       handshaking = false
       const negotiated = this.db.transaction(() => {
