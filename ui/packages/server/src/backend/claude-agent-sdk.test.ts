@@ -1113,3 +1113,41 @@ test("an ordinary tool input is untouched by the degrade path", () => {
   const event = mapAssistant(ASSISTANT_RAW({ command: "ls -la" })) as Extract<ClaudeQueryEvent, { kind: "assistant" }>
   assert.deepEqual(event.toolUses[0]!.input, { command: "ls -la" })
 })
+
+test("an UNMAPPABLE frame is dropped and the session keeps running", { timeout: 10_000 }, async () => {
+  // The degrade above rescues the input; this rescues everything else. mapSdkMessage can still throw
+  // for a frame whose id/name/shape is unrepresentable, and that throw used to reach pump()'s catch —
+  // which calls sdkQuery.close(), killing the claude process and every in-flight sub-agent, and
+  // reporting lifecycle:crashed. The broker's own error tolerance cannot help: by then the query is
+  // already closed. So the skip has to live here, at the mapper call itself.
+  //
+  // Three real sessions died this way on 2026-07-27 (two "unsafe text", one "oversized text").
+  const harness = startHarness("unmappable-event")
+  try {
+    await harness.handle.ready()
+    assert.equal((await harness.handle.next()).value?.kind, "init")
+    await harness.handle.send({ id: "11111111-1111-4111-8111-111111111111", text: "go" })
+    const kinds: string[] = []
+    for (;;) {
+      const next = await withTimeout(harness.handle.next(), "unmappable-event stream")
+      if (next.done) break
+      kinds.push(next.value.kind)
+      if (next.value.kind === "result") break
+    }
+    // The turn completed: the bad frame cost only itself.
+    assert.ok(kinds.includes("result"), `stream ended without a result; saw ${kinds.join(",")}`)
+    assert.ok(kinds.includes("assistant"), `the assistant text after the bad frame was lost; saw ${kinds.join(",")}`)
+    // ...and the drop is reported rather than silent, so an operator can still see it happened.
+    assert.ok(
+      harness.diagnostics.some((d) => d.kind === "stderr" && /unmappable event dropped/.test(d.message)),
+      `no drop diagnostic; saw ${JSON.stringify(harness.diagnostics)}`,
+    )
+    // The session must NOT have been torn down as a crash.
+    assert.ok(
+      !harness.diagnostics.some((d) => d.kind === "lifecycle" && d.phase === "crashed"),
+      "a dropped telemetry frame reported lifecycle:crashed",
+    )
+  } finally {
+    await harness.close()
+  }
+})

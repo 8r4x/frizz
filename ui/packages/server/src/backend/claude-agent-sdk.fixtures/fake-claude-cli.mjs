@@ -431,6 +431,31 @@ function handleUserMessage(message) {
     for (let index = 0; index < 300; index += 1) emitAssistant(`flood ${index}`)
     return
   }
+  if (scenario === "unmappable-event") {
+    // A frame the mapper cannot represent AT ALL. The tool-use id fails boundedId, which sits OUTSIDE
+    // mapAssistant's degrade-the-input path, so this is the residual class the degrade alone misses.
+    // The turn must continue: the assistant text and the result after it still have to arrive.
+    emitUserEcho(message)
+    send({
+      type: "assistant",
+      message: {
+        id: "msg_fake_unmappable",
+        type: "message",
+        role: "assistant",
+        model: "claude-sonnet-test",
+        content: [{ type: "tool_use", id: "not a valid opaque id!", name: "Bash", input: { command: "ls" } }],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      parent_tool_use_id: null,
+      uuid: "70000000-0000-4000-8000-000000000001",
+      session_id: eventSessionId,
+    })
+    emitAssistant("survived the unmappable frame")
+    emitResult("fake final result")
+    return
+  }
 
   emitUserEcho(message)
   emitAssistant("fake assistant response")

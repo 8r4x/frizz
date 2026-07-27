@@ -441,7 +441,34 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
   private async pump(): Promise<void> {
     try {
       for await (const raw of this.sdkQuery) {
-        const event = mapSdkMessage(raw)
+        // MAPPING is not OWNERSHIP. A frame fray cannot represent in its typed shape is a TELEMETRY
+        // loss; a frame that names someone else's session is a breach. Only the second may be fatal.
+        //
+        // These were conflated, and the conflation cost hours of live work. `mapSdkMessage` throwing
+        // lands in this method's catch, which calls `sdkQuery.close()` — killing the claude process
+        // and every in-flight sub-agent — and reports `lifecycle:crashed`. Three sessions died this
+        // way on 2026-07-27 alone: two on `input.command contains unsafe text` (one control character
+        // inside a Bash command) and one on `input.content contains oversized text` (a Write over the
+        // validator's 16 KiB per-string cap). Ordinary agent behaviour, total session loss.
+        //
+        // Note the broker's own error tolerance (claude-agent-broker.ts) CANNOT save the session from
+        // here: by the time an error surfaces to it, this catch has already closed the query. The
+        // chokepoint is here, so the repair belongs here — drop the frame and keep going.
+        //
+        // Dropping is cheap precisely because this stream is not fray's system of record: the tailer
+        // reads the session JSONL directly, so the board still sees what the agent did. Ownership
+        // checks below stay fatal, unchanged.
+        let event: ClaudeQueryEvent
+        try {
+          event = mapSdkMessage(raw)
+        } catch (error) {
+          this.diagnostic?.({
+            kind: "stderr",
+            message: `unmappable event dropped (session continues): ${error instanceof Error ? error.message : String(error)}`,
+            truncated: false,
+          })
+          continue
+        }
         // Session OWNERSHIP is the invariant to protect: every event that names a session must name
         // OURS. What the earlier rules got wrong — because they were calibrated to the fake test CLI,
         // not a real claude — is TWO benign things real claude does in streaming mode: it re-emits
