@@ -32,6 +32,13 @@ export interface InteractionQuestion {
   notesFieldId?: string
 }
 
+/** `A.`, `B.`, … then `AA.` past 26 — the fence convention's option identifiers. */
+function optionLetter(index: number): string {
+  let n = index, out = ""
+  do { out = String.fromCharCode(65 + (n % 26)) + out; n = Math.floor(n / 26) - 1 } while (n >= 0)
+  return `${out}.`
+}
+
 function questionFor(optionField: InteractionField | undefined, notesField: InteractionField | undefined): InteractionQuestion | null {
   const anchor = optionField ?? notesField
   if (!anchor) return null
@@ -45,7 +52,11 @@ function questionFor(optionField: InteractionField | undefined, notesField: Inte
       // The question itself is the field's description (the provider's full question text); the label
       // is the short header chip, used only when a producer supplied no description.
       contextMd: anchor.description ?? anchor.label,
-      options: options.map((option) => option.label),
+      // Lettered exactly as a fence's option lines are (`- A. …`). This is not decoration: the card
+      // derives the free-text row's own identifier from the last option's prefix, and an operator
+      // answering in the composer refers to options by letter. Without it a native question read as
+      // a fence question with its letters missing — the one visible difference left between them.
+      options: options.map((option, index) => `${optionLetter(index)} ${option.label}`),
       // A tool call has no notion of a recommended option — that is a fray fence convention — so the
       // badge simply does not appear rather than being faked.
       recommendedIdx: null,

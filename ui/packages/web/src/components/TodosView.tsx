@@ -1043,9 +1043,12 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
             knows exactly what's asked without opening anything; it takes precedence over the generic
             perm banner. Otherwise a permission-blocked agent has NO message to show (turn parked
             mid-tool_use) — say so explicitly. Both route the answer to the terminal tab. */}
-        {thread.pendingAsk ? (
+        {/* Stands down when fray OWNS the question: a broker-path AskUserQuestion is journaled as an
+            answerable interaction and already rendered by InteractionStack above, so pointing the
+            operator at a terminal here would duplicate it with worse advice. */}
+        {(thread.pendingInteraction ? undefined : thread.pendingAsk) ? (
           <div className="mb-4">
-            <PendingAskCard ask={thread.pendingAsk} onTerminal={copyTerminalCommand} />
+            <PendingAskCard ask={thread.pendingAsk!} onTerminal={copyTerminalCommand} />
           </div>
         ) : thread.nativeInputRequired ? (
           <div className="mb-4">
