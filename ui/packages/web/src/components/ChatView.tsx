@@ -445,11 +445,11 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
 // trackpad momentum between discrete events, short enough that it never outlives the gesture itself.
 const READER_GESTURE_MS = 700
 
-// How long a pin move owns the scroller while the row it un-pinned re-expands. The re-expansion lands
-// on a ResizeObserver pass one or more frames after the commit, so the restore has to outlive the
-// commit — but it must stay far under READER_GESTURE_MS, since a reader who scrolls during it should
-// win the moment it ends.
-const PIN_RESTORE_MS = 250
+// How long an anchor restore (a pin move, a head trim) owns the scroller while the rows it disturbed
+// settle. The settling lands on a ResizeObserver pass one or more frames after the commit, so the restore
+// has to outlive the commit — but it must stay far under READER_GESTURE_MS, since a reader who scrolls
+// during it should win the moment it ends.
+const ANCHOR_RESTORE_MS = 250
 
 // Opt-in drift diagnostic: `localStorage["fray.debugScroll"] = "1"`, then reload.
 //
@@ -603,7 +603,8 @@ function VirtualizedThreadTranscript({
   // position — which is exactly the place a pin move has to put the reader back.
   const readerAnchorRef = useRef<{ rowKey: string; viewportTop: number } | null>(null)
   const pinnedRowKeyRef = useRef<string | undefined>(undefined)
-  const pinRestoreUntilRef = useRef(0)
+  const firstMessageKeyRef = useRef<string | undefined>(undefined)
+  const anchorRestoreUntilRef = useRef(0)
 
   const requestEarlier = useCallback(() => {
     const scroller = transcriptRef.current
@@ -724,7 +725,7 @@ function VirtualizedThreadTranscript({
     if (!anchor || pendingPrependAnchorRef.current) return
     // Claim the scroller for this beat so the tail-follow pass leaves the offset alone while the row
     // above settles (it reconciles against a scroll height that is mid-change until it does).
-    pinRestoreUntilRef.current = performance.now() + PIN_RESTORE_MS
+    anchorRestoreUntilRef.current = performance.now() + ANCHOR_RESTORE_MS
     alignToAnchor(anchor)
     let secondFrame = 0
     let thirdFrame = 0
@@ -734,7 +735,7 @@ function VirtualizedThreadTranscript({
         alignToAnchor(anchor)
         thirdFrame = requestAnimationFrame(() => {
           alignToAnchor(anchor)
-          pinRestoreUntilRef.current = 0
+          anchorRestoreUntilRef.current = 0
         })
       })
     })
@@ -742,9 +743,54 @@ function VirtualizedThreadTranscript({
       cancelAnimationFrame(firstFrame)
       cancelAnimationFrame(secondFrame)
       cancelAnimationFrame(thirdFrame)
-      pinRestoreUntilRef.current = 0
+      anchorRestoreUntilRef.current = 0
     }
   }, [alignToAnchor, pinnedRowKey])
+
+  // THE HEAD TRIM — the other event that moves content ABOVE a reader parked mid-thread, and the one the
+  // virtualizer is structurally unable to see.
+  //
+  // The server projects at most MAX_MESSAGES (300), so on any thread past that cap every new message also
+  // pushes one off the HEAD of the live window. Those rows vanish from above the reader, the content above
+  // them shrinks by exactly their height, and scrollTop is left untouched — so the whole transcript slides
+  // UP past their eye, which is indistinguishable from being scrolled down. Measured on a real saturated
+  // thread at 62-185px per append, cumulative: -975px over 25 appends (verify-full-window-slide.mjs).
+  //
+  // TanStack cannot compensate it. Its `anchorTo: "end"` preservation is gated on `didEdgeKeysChange` —
+  // `count changed || getItemKey(0) changed || getItemKey(count - 1) changed` — and on THIS list row 0 is
+  // always the interactions row, the last row is always the runtime-status row, and `count` is pinned by
+  // the cap. A trim is therefore entirely interior to the key list, so the library sees nothing, rebuilds
+  // no measurements and adjusts no offset. Every other surface that changes the rows above the reader (a
+  // prepend, a pin move) already restores the reader explicitly; this one simply never was.
+  //
+  // The trim has already landed by the time this runs, so realign synchronously — then again across the
+  // next frames, because the rows below the removed ones re-measure on later ResizeObserver passes.
+  const firstMessageKey = messageRows[0]?.key
+  useLayoutEffect(() => {
+    const previousKey = firstMessageKeyRef.current
+    firstMessageKeyRef.current = firstMessageKey
+    // First commit establishes the baseline. A reader AT the tail is tail-follow's to move; a prepend owns
+    // the scroller through its own anchor; and the initial scroll-to-end must not be fought.
+    if (previousKey === undefined || previousKey === firstMessageKey) return
+    if (!tailReadyRef.current || followingTailRef.current || pendingPrependAnchorRef.current) return
+    const anchor = readerAnchorRef.current
+    if (!anchor) return
+    anchorRestoreUntilRef.current = performance.now() + ANCHOR_RESTORE_MS
+    alignToAnchor(anchor)
+    let secondFrame = 0
+    const firstFrame = requestAnimationFrame(() => {
+      alignToAnchor(anchor)
+      secondFrame = requestAnimationFrame(() => {
+        alignToAnchor(anchor)
+        anchorRestoreUntilRef.current = 0
+      })
+    })
+    return () => {
+      cancelAnimationFrame(firstFrame)
+      cancelAnimationFrame(secondFrame)
+      anchorRestoreUntilRef.current = 0
+    }
+  }, [alignToAnchor, firstMessageKey])
 
   // TAIL FOLLOW — keep a reader who is AT the bottom at the bottom as the conversation grows.
   //
@@ -765,10 +811,10 @@ function VirtualizedThreadTranscript({
     // A prepend in flight owns the scroller: "load earlier" grows the content by a whole page and
     // restores the reader's anchor across the next two frames. Following that growth would race it.
     if (!scroller || pendingPrependAnchorRef.current) return
-    // Same for a pin restore: the row above the reader is mid-re-expansion, so the scroll height this
-    // would reconcile against is a value in transit. Let the restore land, then resume — and do NOT
-    // refresh the reader anchor from a position it is still correcting.
-    if (performance.now() < pinRestoreUntilRef.current) return
+    // Same for an anchor restore (a pin move, a head trim): the rows above the reader are mid-settle, so
+    // the scroll height this would reconcile against is a value in transit. Let the restore land, then
+    // resume — and do NOT refresh the reader anchor from a position it is still correcting.
+    if (performance.now() < anchorRestoreUntilRef.current) return
     const next = nextTailFollow({
       scrollTop: scroller.scrollTop,
       scrollHeight: scroller.scrollHeight,

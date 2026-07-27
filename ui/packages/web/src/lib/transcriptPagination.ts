@@ -52,6 +52,16 @@ export function reconcileLatestPage(
   }
 }
 
+// A live push carries MESSAGES ONLY — never a page envelope — so the envelope can only come from what we
+// already hold. Overlapping source ids mean it is the same transcript, whatever else moved.
+//
+// `previousIndex > 0` is the SLID WINDOW: the server projects at most MAX_MESSAGES, so once a thread
+// passes that cap every new message also pushes one off the HEAD, and the push's first message is one we
+// already have further in. That is an ordinary live update on a long thread — not a session replacement —
+// and dropping the envelope there was destroying `hasEarlier`/`beforeCursor`/`transcriptKey` on the FIRST
+// push of any thread past the cap, which removed the "Load earlier messages" affordance outright (and
+// with it the only route back to the history the slide had just trimmed away, since loadEarlier needs
+// both the cursor and the key). Only a genuine no-overlap replacement discards what we hold.
 export function reconcileLiveMessages(
   previous: PaginatedTranscriptData | undefined,
   incoming: readonly TranscriptMessage[],
@@ -59,11 +69,7 @@ export function reconcileLiveMessages(
   if (!previous) return { messages: [...incoming] }
   const overlap = firstOverlap(previous.messages, incoming)
   if (!overlap) return { messages: [...incoming] }
-  if (!previous.historyLoaded) {
-    return overlap.previousIndex === 0 && overlap.incomingIndex === 0
-      ? { ...previous, messages: [...incoming] }
-      : { messages: [...incoming] }
-  }
+  if (!previous.historyLoaded) return { ...previous, messages: [...incoming] }
   return {
     ...previous,
     messages: [
