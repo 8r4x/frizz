@@ -379,6 +379,15 @@ export const InteractionPayload = z.discriminatedUnion("kind", [
 ])
 export type InteractionPayload = z.infer<typeof InteractionPayload>
 
+// An `agent-question` splits ONE question across TWO fields: the options (a select the store validates
+// against the advertised choices) and the free text beside them (which by definition no option list can
+// validate). `<optionFieldId>` + this suffix is the entire pairing convention — the PRODUCER (the Claude
+// broker, server/src/backend/claude-permission-interactions.ts) emits the pair and reads the answer back
+// out of it, and the CONSUMER (web/src/lib/interactionQuestion.ts) folds the pair into a single card. It
+// is a wire contract between two packages, so it lives here rather than as two hand-mirrored copies that
+// can silently drift: change it on one side alone and the card splits into a phantom second question.
+export const NOTES_FIELD_SUFFIX = "_notes"
+
 const InteractionRequestObject = z.object({
   protocolVersion: z.literal(INTERACTION_PROTOCOL_VERSION),
   contentFormat: z.literal("plain-text"),

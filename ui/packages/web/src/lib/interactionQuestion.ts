@@ -14,12 +14,14 @@
 // display label and the submitted value are deliberately separate — the label may be clipped or
 // scrubbed for the card, while the value must be the provider's exact bytes or the agent reads the
 // answer as freeform prose instead of a pick.
-import type { InteractionField, InteractionRecord, InteractionValue, InteractionValues } from "@fray-ui/shared"
+import {
+  NOTES_FIELD_SUFFIX,
+  type InteractionField,
+  type InteractionRecord,
+  type InteractionValue,
+  type InteractionValues,
+} from "@fray-ui/shared"
 import type { BlockAnswer, ParsedQuestion } from "./questionBlocks.ts"
-
-/** The field-id suffix the Claude broker uses to pair a question's free-text field with its options.
- *  Mirrors NOTES_FIELD_SUFFIX in server/src/backend/claude-permission-interactions.ts. */
-const NOTES_SUFFIX = "_notes"
 
 export interface InteractionQuestion {
   /** The neutral model the shared card renders. */
@@ -79,9 +81,9 @@ export function interactionQuestions(record: Pick<InteractionRecord, "payload">)
     // A secret field must never be rendered as an ordinary answer box; the generic card has the
     // secure-fallback affordance for that, so hand the whole record back to it.
     if (field.secret) return null
-    if (field.id.endsWith(NOTES_SUFFIX)) continue // consumed by its option field below
+    if (field.id.endsWith(NOTES_FIELD_SUFFIX)) continue // consumed by its option field below
     const next = fields[index + 1]
-    const notesField = next && next.id === `${field.id}${NOTES_SUFFIX}` ? next : undefined
+    const notesField = next && next.id === `${field.id}${NOTES_FIELD_SUFFIX}` ? next : undefined
     if (field.input === "select" || field.input === "multi-select") {
       const built = questionFor(field, notesField)
       if (!built) return null

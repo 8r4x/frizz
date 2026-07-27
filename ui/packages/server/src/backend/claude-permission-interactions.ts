@@ -11,6 +11,7 @@
 import {
   INTERACTION_PROTOCOL_VERSION,
   InteractionRequest,
+  NOTES_FIELD_SUFFIX,
   type InteractionField,
   type InteractionRequest as InteractionRequestType,
   type InteractionValues,
@@ -278,9 +279,6 @@ function askFields(spec: ClaudeAskSpec): InteractionField[] {
     ]
   }).flat()
 }
-
-/** Field-id suffix pairing a question's free-text field with its option field. */
-export const NOTES_FIELD_SUFFIX = "_notes"
 
 /** Build the durable interaction request for an AskUserQuestion call, or null when it cannot be
  *  represented (→ the caller denies with an explanation). */
