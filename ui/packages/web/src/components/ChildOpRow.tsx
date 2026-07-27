@@ -1,8 +1,7 @@
-import type { ReactElement } from "react"
-import { ArrowUpRight, X } from "lucide-react"
+import type { ReactElement, ReactNode } from "react"
+import { X } from "lucide-react"
 import { BoxSpinner } from "./BoxSpinner.tsx"
 import { isRunningOperation } from "../lib/operationIndicators.ts"
-import { agentProfileLabel } from "../lib/agentProfile.ts"
 import { formatAgo } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import {
@@ -22,24 +21,28 @@ export type ChildOpKind = "AGENT" | "SHELL"
 // differences between the three places a child row appears — not styling preference:
 //   rail  — the sidebar's indented child rows. The [ ]/[/] checkbox motif (BoxSpinner) that the whole
 //           rail speaks, at 12px, indented to clear the parent row's indicator column. NEVER swap this
-//           for the pulsing dot: matching the parent rows is the point. No room for a tag of any kind,
-//           so the sidebar keeps carrying the raw subagent type in its tooltip instead.
-//   card  — a queue card's live child lines. The pulsing live dot and the model+effort tag, but no kind
-//           tag: a handoff card names the work still running beneath it, it does not become a second
-//           ops toolbar.
-//   sheet — the drawer's background-ops strip. The full row: dot + petite-caps kind tag + label +
-//           model+effort tag + a hover drill-in arrow, because this IS the operations surface.
-// Both prompt-box densities (card, sheet) carry the MODEL+EFFORT reading (maintainer 2026-07-24): the
-// pulsing rows under a prompt box say what is running, and "which model, at what effort" is half of
-// that — read in the same `model › effort` form the prompt box's own profile control uses one line up.
+//           for the pulsing dot: matching the parent rows is the point. The rail keeps carrying the raw
+//           subagent type in its tooltip, which is now the only place it appears at all.
+//   card  — a queue card's live child lines. The pulsing live dot, no kind tag: a handoff card names
+//           the work still running beneath it, it does not become a second ops toolbar.
+//   sheet — the drawer's background-ops strip. The full row: dot + petite-caps kind tag + label + the
+//           dismiss ×, because this IS the operations surface.
 // All three carry the light-gray "last active" reading when the child reports one — the recency the
-// running/stale mark alone can't give ("stale" only means quiet ≥15 min, not HOW long).
+// running/stale mark alone can't give ("stale" only means quiet ≥15 min, not HOW long) — RIGHT-JUSTIFIED
+// at the end of the row (maintainer 2026-07-27), so a column of rows reads its recencies down one edge
+// instead of at whatever ragged offset each label happens to end.
 export type ChildOpDensity = "rail" | "card" | "sheet"
 
 // ONE row for "a thing running underneath this thread", rendered identically everywhere it appears.
 // Before this component existed the same row was written four times and the copies drifted — two arrow
 // alphas six pixels apart on one queue card, two stale-dot alphas, and three different answers for a
 // child with no id. Every token it draws comes from lib/childOps.ts.
+//
+// WHAT THE ROW DELIBERATELY NO LONGER CARRIES (maintainer 2026-07-27, on the rows under the prompt box):
+//   • the ↗ hover glyph — the drill-in affordance is the TITLE itself (it underlines on hover and is
+//     the button), so a second, quieter icon saying the same thing was noise;
+//   • the bracketed model+effort tag — the profile belongs to the prompt box's own control one line up,
+//     not repeated on every child line.
 //
 // POLICY for a child with no `id` (nothing to drill into): a NON-INTERACTIVE row — a plain <div> with
 // the same layout, no hover, no focus stop. Never a `disabled` button (which announces an affordance
@@ -51,7 +54,6 @@ export function ChildOpRow({
   state,
   density,
   lastActivityAt,
-  subagentType,
   parentSlug,
   onOpen,
   onDismiss,
@@ -64,10 +66,6 @@ export function ChildOpRow({
   // ISO of the child's last transcript append (its output-file mtime). Rendered as a light-gray
   // "6 min ago" reading, live-ticking; absent ⇒ no reading (never a fabricated one).
   lastActivityAt?: string
-  // The AGENT dispatch's `subagent_type`, verbatim. Read for its model+effort pair only (see
-  // lib/agentProfile.ts); a string carrying no recognizable pair renders no tag. A SHELL has no
-  // profile, so callers leave it unset there.
-  subagentType?: string
   // Drill-in marker: keeps an open ThreadSheet for this slug from self-dismissing on the pointer-down,
   // so the child transcript STACKS over its parent instead of replacing it (see ThreadSheet).
   parentSlug?: string
@@ -76,7 +74,7 @@ export function ChildOpRow({
   // Absent ⇒ no × . Retiring a finished-but-unsignalled op is an ops-strip affordance; a rail row and a
   // queue card line deliberately have no dismiss.
   onDismiss?: () => void
-  // Tooltip override. The rail passes "[subagent-type] label" — the type tag it has no room to render.
+  // Tooltip override. The rail passes "[subagent-type] label" — the type reading it has no room to render.
   title?: string
 }): ReactElement {
   const running = isRunningOperation(state)
@@ -89,9 +87,6 @@ export function ChildOpRow({
   const ago = formatAgo(lastActivityAt, now)
   const openTitle = CHILD_OPEN_TITLE[kind]
   const rowTitle = title ?? (clickable ? openTitle : undefined)
-  // The rail has no horizontal room for it (its type tag lives in the row tooltip); the two prompt-box
-  // densities do, and are exactly where the reading is wanted.
-  const profile = rail ? undefined : agentProfileLabel(subagentType)
 
   // The liveness mark. The rail speaks the rail's checkbox language; the card and the drawer share the
   // pulsing-dot language, in a fixed-width column so their labels line up across both surfaces.
@@ -116,28 +111,27 @@ export function ChildOpRow({
     </span>
   )
 
-  const content = (
+  // `ml-auto` is what right-justifies it: the reading is the LAST item in the row's flex line, so it
+  // takes every pixel the (truncating) label leaves behind and sits flush at the right edge.
+  const reading: ReactNode = ago ? (
+    <span className="ml-auto shrink-0 pl-1.5 text-muted/40" title={`Last active ${ago}`}>{ago}</span>
+  ) : null
+
+  const identity = (
     <>
       <span aria-hidden className={CHILD_ARROW_CLASS}>{CHILD_ARROW}</span>
       {indicator}
       {sheet && <span className="petite-caps shrink-0 text-[9.5px] text-muted/45">{kind}</span>}
       <span className={`min-w-0 truncate text-muted/70 ${rail ? "leading-[16px]" : clickable ? "group-hover:text-fg/80 group-hover:underline" : ""}`}>{label}</span>
-      {/* Bracketed and AFTER the label — the transcript AgentBlock's own "<title> [fray:opus-high]"
-          treatment for this exact datum. The brackets are load-bearing: label and tag share a type size
-          and differ only in alpha, so without them "…for edge cases opus › high" reads as one run-on
-          phrase. `shrink-0` so a long label truncates AROUND the pair instead of ellipsizing a model
-          name into garbage. Tooltip keeps the raw dispatch string. */}
-      {profile && <span className="shrink-0 text-muted/55" title={subagentType} data-agent-profile>[{profile}]</span>}
-      {ago && <span className="shrink-0 text-muted/40" title={`Last active ${ago}`}>{ago}</span>}
-      {sheet && clickable && <ArrowUpRight size={11} className="shrink-0 text-transparent transition-colors group-hover:text-muted/50" />}
+      {/* The RAIL's reading rides INSIDE the row so the full-width hover highlight (and the whole
+          click target) still spans the row; the two prompt-box densities put it outside, past the ×. */}
+      {rail && reading}
     </>
   )
 
-  // `flex-1` only when a × sits beside the row: in the card/rail column layouts a flex-1 child would
-  // grow VERTICALLY instead.
   const rowClass = rail
-    ? "group flex min-w-0 items-center gap-2 rounded-md py-0.5 pl-[26px] pr-1.5 text-left text-[11.5px] outline-none transition-colors hover:bg-white/[0.04]"
-    : `group flex min-w-0 items-center gap-1.5 text-left text-[11.5px] ${onDismiss ? "flex-1 " : ""}${clickable ? "cursor-pointer rounded-sm outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60" : ""}`
+    ? "group flex w-full min-w-0 items-center gap-2 rounded-md py-0.5 pl-[26px] pr-1.5 text-left text-[11.5px] outline-none transition-colors hover:bg-white/[0.04]"
+    : `group flex min-w-0 items-center gap-1.5 text-left text-[11.5px] ${clickable ? "cursor-pointer rounded-sm outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60" : ""}`
 
   const row = clickable ? (
     <button
@@ -152,30 +146,36 @@ export function ChildOpRow({
       aria-label={`${openTitle}: ${label}`}
       className={rowClass}
     >
-      {content}
+      {identity}
     </button>
   ) : (
     <div data-subagent-parent={parentSlug} title={rowTitle} className={rowClass}>
-      {content}
+      {identity}
     </div>
   )
 
-  if (!onDismiss) return row
-  // The label (drill-in) and the × are SIBLINGS inside one row group — a button can't nest inside a
-  // button. The × reveals on row hover/focus so it never competes with the label at rest.
+  if (rail) return row
+  // The two prompt-box densities. The label (drill-in) and the × are SIBLINGS inside one row line — a
+  // button can't nest inside a button — with the × sitting DIRECTLY AFTER the title (maintainer
+  // 2026-07-27: at the far right it read as too subtle to find) and the recency pushed to the right
+  // edge behind it. The × is always visible, quietly: a control you have to discover by hovering is
+  // exactly the complaint.
   return (
-    <div className="group/op flex min-w-0 items-center gap-1" data-op-row>
+    <div className="flex min-w-0 items-center gap-1.5" data-op-row={onDismiss ? "" : undefined}>
       {row}
-      <button
-        type="button"
-        onClick={onDismiss}
-        onMouseDown={(e) => e.stopPropagation()}
-        title={CHILD_DISMISS_TITLE}
-        aria-label={`Dismiss ${CHILD_DISMISS_NOUN[kind]}: ${label}`}
-        className="shrink-0 rounded-sm p-0.5 text-muted/30 opacity-0 outline-none transition-opacity hover:text-fg/70 focus-visible:opacity-100 group-hover/op:opacity-100"
-      >
-        <X size={11} />
-      </button>
+      {onDismiss && (
+        <button
+          type="button"
+          onClick={onDismiss}
+          onMouseDown={(e) => e.stopPropagation()}
+          title={CHILD_DISMISS_TITLE}
+          aria-label={`Dismiss ${CHILD_DISMISS_NOUN[kind]}: ${label}`}
+          className="shrink-0 rounded-sm p-0.5 text-muted/45 outline-none transition-colors hover:text-fg focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
+        >
+          <X size={11} />
+        </button>
+      )}
+      {reading}
     </div>
   )
 }

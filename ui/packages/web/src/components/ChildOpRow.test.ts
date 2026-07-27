@@ -88,12 +88,31 @@ test("the card keeps the pulsing queue indicator and stays free of ops chrome", 
   assert.doesNotMatch(html, /<svg /, "the card must not borrow the rail's checkbox spinner")
 })
 
-test("the sheet is the full operations row: kind tag and a hover drill-in", () => {
+test("the sheet is the operations row: kind tag, and NO second drill-in glyph beside the title", () => {
   const html = render({ density: "sheet", onOpen: () => {}, lastActivityAt: TWELVE_MIN_AGO })
   assert.match(html, /data-running-indicator="operation"/)
   assert.match(html, /petite-caps[^"]*">AGENT</)
-  assert.match(html, /<svg /, "the drill-in ArrowUpRight renders on a clickable ops row")
-  assert.doesNotMatch(render({ density: "sheet", lastActivityAt: TWELVE_MIN_AGO }), /<svg /, "no drill-in arrow without onOpen")
+  // The ↗ hover glyph was deleted (maintainer 2026-07-27): the drill-in affordance is the TITLE, which
+  // underlines on hover and IS the button, so the only icon a clickable ops row may draw is the ×.
+  assert.doesNotMatch(html, /<svg /, "a clickable ops row draws no icon of its own")
+  assert.match(render({ density: "sheet", onOpen: () => {}, onDismiss: () => {} }), /<svg /, "…the × is the one exception")
+})
+
+test("no density renders a model+effort tag — the profile lives on the prompt box's own control", () => {
+  // Deleted 2026-07-27 (maintainer). ChildOpRow no longer even accepts `subagentType`; this pins that
+  // no bracketed profile reading crept back in through the label or a tooltip.
+  for (const density of DENSITIES) {
+    const html = render({ density, onOpen: () => {}, onDismiss: density === "sheet" ? () => {} : undefined })
+    assert.doesNotMatch(html, /data-agent-profile/, density)
+    assert.doesNotMatch(html, /›/, `${density} must not render the model › effort separator`)
+  }
+})
+
+test("the last-active reading is right-justified on every density", () => {
+  for (const density of DENSITIES) {
+    const html = render({ density, onOpen: () => {}, lastActivityAt: TWELVE_MIN_AGO })
+    assert.match(html, /class="ml-auto[^"]*"[^>]*>12 min ago</, `${density} pushes the reading to the right edge`)
+  }
 })
 
 test("the light-gray last-active reading renders on every density, and only when reported", () => {
@@ -116,12 +135,18 @@ test("a quiet SHELL breathes instead of going flat, on the ops row", () => {
   assert.match(render({ density: "sheet", kind: "SHELL", state: "running" }), /fray-live-dot--shell/)
 })
 
-test("the dismiss × exists only when onDismiss is supplied, and wraps the row", () => {
-  const withX = render({ density: "sheet", onOpen: () => {}, onDismiss: () => {} })
+test("the dismiss × exists only when onDismiss is supplied, and sits directly after the title", () => {
+  const withX = render({ density: "sheet", onOpen: () => {}, onDismiss: () => {}, lastActivityAt: TWELVE_MIN_AGO })
   assert.match(withX, /data-op-row/)
   assert.match(withX, /aria-label="Dismiss sub-agent: Audit the drawer ops strip"/)
   assert.match(withX, /title="Dismiss — stop tracking this finished operation"/)
   assert.match(render({ density: "sheet", kind: "SHELL", onDismiss: () => {} }), /aria-label="Dismiss background shell: Audit the drawer ops strip"/)
+  // ORDER is the point of the 2026-07-27 move: title → × → recency. At the far right, past the
+  // recency, the × read as too subtle to find.
+  const order = ["Audit the drawer ops strip", "Dismiss sub-agent", "12 min ago"].map((needle) => withX.indexOf(needle))
+  assert.ok(order.every((i) => i >= 0) && order[0] < order[1] && order[1] < order[2], `title → × → recency, got ${order}`)
+  // …and it is visible at rest, not revealed by a hover the reader has to guess at.
+  assert.doesNotMatch(withX, /opacity-0/)
   for (const density of DENSITIES) {
     assert.doesNotMatch(render({ density, onOpen: () => {} }), /data-op-row/, `${density} without onDismiss must not render the × wrapper`)
   }

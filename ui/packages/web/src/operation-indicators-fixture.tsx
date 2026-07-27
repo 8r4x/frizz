@@ -32,9 +32,8 @@ const thread: ThreadView = {
   pendingQuestion: false,
   kind: "session",
   foreign: false,
-  // The `subagentType` spread is the MODEL+EFFORT tag's coverage: a fray cell, a codex cell (parsed
-  // through its slash), a named agent type that carries no profile and so must show NO tag, and a long
-  // label that has to truncate AROUND the tag rather than squeeze it out.
+  // The `subagentType` spread is retained as DRILL-IN + tooltip data (the rail's type reading rides its
+  // row tooltip). It is no longer rendered as a bracketed tag on any density — see ChildOpRow.
   subAgents: [
     { id: "agent-a", label: "Inspect logs", startedAt: "2026-07-14T10:00:00.000Z", state: "running", subagentType: "fray:opus-xhigh", lastActivityAt: agoIso(0) },
     { id: "agent-b", label: "Run regression suite", startedAt: "2026-07-14T10:01:00.000Z", state: "running", subagentType: "worker gpt-5.6-terra/high", lastActivityAt: agoIso(6) },
@@ -98,10 +97,10 @@ createRoot(document.getElementById("root")!).render(
       <h2 className="text-sm font-medium">Sidebar rail rows</h2>
       {/* The rail density of the same shared row — checkbox spinner + the light-gray last-active reading. */}
       <div className="mt-3 flex flex-col">
-        {/* subagentType is passed here too, to prove the RAIL still renders no tag: it has no room, and
-            its type reading stays in the row tooltip. */}
+        {/* The rail's type reading lives in the row TOOLTIP; no density renders a profile tag any more
+            (maintainer 2026-07-27 — ChildOpRow no longer takes `subagentType` at all). */}
         {thread.subAgents.map((s) => (
-          <ChildOpRow key={s.id} kind="AGENT" label={s.label} state={s.state} density="rail" lastActivityAt={s.lastActivityAt} subagentType={s.subagentType} onOpen={() => {}} />
+          <ChildOpRow key={s.id} kind="AGENT" label={s.label} state={s.state} density="rail" lastActivityAt={s.lastActivityAt} title={s.subagentType ? `[${s.subagentType}] ${s.label}` : s.label} onOpen={() => {}} />
         ))}
       </div>
     </section>

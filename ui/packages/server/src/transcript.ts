@@ -1065,9 +1065,9 @@ function toolDetail(input: any): string | undefined {
 // `description`, falling back to the command summary; kept short so the divider label stays tidy.
 // The subject is the TASK, not the wake — the passive "Woken by …" spent the label's opening on the
 // one fact the divider's own position already conveys. "Background task" is deliberate, and NOT
-// "Agent": only a background SHELL reaches this label (an Agent completion re-renders its AgentBlock
-// card instead — see completionEvent), so borrowing the Agent card's noun would mislabel every line
-// it prints.
+// "Agent": only a background SHELL reaches this label (an Agent completion carries its own divider
+// text, built client-side from the `agentCompletion` call — see ChatView's AgentCompletionLine), so
+// borrowing the Agent card's noun would mislabel every line it prints.
 function backgroundWakeLabel(call: TranscriptToolCall, status: string, raw: string): string {
   const rawDesc = (call.desc ?? call.detail ?? "background command").trim()
   const desc = rawDesc.length > 64 ? `${rawDesc.slice(0, 63)}…` : rawDesc
@@ -1114,8 +1114,9 @@ function notificationCarrierText(rec: Raw): string | undefined {
 // Monitor-timeout record. A non-terminal "running" ping and status-less Monitor progress events also
 // exist and must retire nothing. Per terminal block, EVERY correlated op retires — a record can carry
 // several blocks, and one recovery block names every orphan at once (tool-use-ids, task-ids, or both):
-//   • A tracked AGENT dispatch → re-render its AgentBlock card inline at the notification's position
-//     (clickable into the run-log drawer right there in the timeline) and back-fill the launch card.
+//   • A tracked AGENT dispatch → re-emit its call inline at the notification's position, flagged
+//     `agentCompletion` so the client draws the centered wake divider (clickable into the run-log
+//     drawer right there in the timeline), and back-fill the launch card.
 //   • A tracked background SHELL → back-fill the shell card's terminal state AND emit a `boundary` event
 //     line (the wake re-invoked the agent, opening a fresh turn that would otherwise merge visually).
 // Empty when nothing correlates (an unrelated process, or an already-consumed child). Deletes each
@@ -1177,12 +1178,13 @@ function completionEvents(
       d.call.agentElapsedMs = elapsedMs
       d.call.status = status === "completed" ? "completed" : status === "killed" ? "cancelled" : "failed"
       if (elapsedMs !== undefined) d.call.durationMs = elapsedMs
-      // Re-render the SAME AgentBlock card inline at the completion point — reusing the dispatch's tool
-      // call (now carrying its terminal status + duration) so the finished agent is clickable into its
-      // run-log drawer RIGHT where it landed in the timeline, not only up-thread at the launch card. A
-      // shallow copy keeps the two out-entries from sharing one mutable object. The client renders it via
-      // the ordinary tools-part → AgentBlock path (no bubble chrome for an assistant tools-only message).
-      const finishedCall: TranscriptToolCall = { ...d.call }
+      // Re-emit the dispatch's tool call inline at the completion point — now carrying its terminal
+      // status + duration — so the finished agent is clickable into its run-log drawer RIGHT where it
+      // landed in the timeline, not only up-thread at the launch card. A shallow copy keeps the two
+      // out-entries from sharing one mutable object. `agentCompletion` marks THIS copy as the timeline
+      // marker: the client renders it as the same centered wake divider a background shell's completion
+      // emits above, instead of a second AgentBlock card indistinguishable from the launch one.
+      const finishedCall: TranscriptToolCall = { ...d.call, agentCompletion: true }
       out.push({ role: "assistant", text: "", tools: [finishedCall], parts: [{ kind: "tools", tools: [finishedCall] }], at })
     }
   }

@@ -560,34 +560,39 @@ test("SendUserFile reusing a path with new content across calls is NOT served st
   }
 })
 
-test("Agent completion → inline AgentBlock re-render + back-filled terminal state", () => {
+test("Agent completion → inline marker call (agentCompletion) + back-filled terminal state", () => {
   const msgs = parseTranscript(
     [
       agentDispatch("toolu_a", { description: "Do the thing", prompt: "p", run_in_background: true }, "2026-07-01T00:00:00.000Z"),
       taskNotification("toolu_a", "completed", "2026-07-01T00:35:00.000Z"),
     ].join("\n"),
   )
-  // The completion re-renders the dispatch's Agent tool call inline at the notification's position —
-  // a plain assistant message carrying the finished call as a tools part (renders as a clickable
-  // AgentBlock), NOT a text event line.
+  // The completion re-emits the dispatch's Agent tool call inline at the notification's position — a
+  // plain assistant message carrying the finished call as a tools part, NOT a text event line. The
+  // `agentCompletion` flag is what tells the client this copy is the wake DIVIDER (the same rendering
+  // a background shell's completion gets) rather than a second AgentBlock card.
   const completion = msgs.at(-1)!
   assert.equal(completion.kind, undefined)
   const inline = completion.tools[0]
   assert.equal(inline.name, "Agent")
   assert.equal(inline.detail, "Do the thing")
-  assert.equal(inline.agentId, "toolu_a", "carries the correlation id so the card links into the drawer")
+  assert.equal(inline.agentId, "toolu_a", "carries the correlation id so the divider title links into the drawer")
   assert.equal(inline.agentStatus, "completed")
   assert.equal(inline.agentElapsedMs, 35 * 60_000)
+  assert.equal(inline.agentCompletion, true)
   assert.deepEqual(completion.parts, [{ kind: "tools", tools: [inline] }])
-  // the ORIGINAL launch card is also back-filled with the outcome
+  // the ORIGINAL launch card is also back-filled with the outcome — but is NOT a completion marker, so
+  // it keeps its expandable prompt card. Flagging both would have turned the launch into a divider too.
   const call = msgs[0].tools[0]
+  assert.equal(call.agentCompletion, undefined)
+  assert.equal(call.prompt, "p")
   assert.equal(call.agentStatus, "completed")
   assert.equal(call.agentElapsedMs, 35 * 60_000)
   assert.equal(call.status, "completed")
   assert.equal(call.durationMs, 35 * 60_000)
 })
 
-test("failed sub-agent → inline failed AgentBlock; a background-bash notification is ignored", () => {
+test("failed sub-agent → inline failed completion marker; a background-bash notification is ignored", () => {
   const msgs = parseTranscript(
     [
       agentDispatch("toolu_a", { description: "X", prompt: "p", run_in_background: true }, "2026-07-01T00:00:00.000Z"),

@@ -36,7 +36,8 @@ import { Tooltip } from "./Tooltip.tsx"
 import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
 import { hasRunningToolIndicator, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
 import { elapsedSince, formatFixedDuration, formatToolDuration } from "../lib/durationLabels.ts"
-import { visibleChildOps } from "../lib/childOps.ts"
+import { CHILD_OPEN_TITLE, visibleChildOps } from "../lib/childOps.ts"
+import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
 import { ChildOpRow } from "./ChildOpRow.tsx"
 import { TRANSCRIPT_META_LABEL_CLASS } from "../lib/transcriptMetaLabels.ts"
 import { InteractionStack } from "./InteractionCards.tsx"
@@ -61,6 +62,26 @@ export type { BlockAnswer, MessageAnswering }
 // card also provides this now (maintainer 2026-07-15): its sub-agent blocks go live (spinner +
 // drill-in) AND its done/awaiting fence cards resolve their thread to show the confirm button.
 export const ThreadSlugContext = createContext<string | null>(null)
+
+// The slug a rendered SUB-AGENT REFERENCE resolves its drill-in against, for message trees that are
+// NOT the thread's own transcript. Only the sub-agent drawer sets it (with the PARENT thread's slug),
+// so an Agent card or completion divider nested inside a child's transcript is still a live link
+// instead of dead text — the maintainer's "some scenarios where that's not the case".
+//
+// Deliberately SEPARATE from ThreadSlugContext rather than reusing it: that context also authorizes
+// whole-thread lifecycle actions (FenceCard's Mark-as-done / park buttons resolve their thread from
+// it). Handing the sub-agent drawer the parent's ThreadSlugContext would have put a button on a
+// ```done fence inside a CHILD's transcript that archives the PARENT thread. Drill-in is a read; the
+// fence buttons are writes, and only the thread's own surfaces may offer them.
+export const ChildDrillSlugContext = createContext<string | null>(null)
+
+// The slug to resolve a sub-agent id against, from either surface. ThreadSlugContext wins: on a thread
+// or queue surface it is both the drill root and the live-lookup root.
+function useChildDrillSlug(): string | null {
+  const threadSlug = useContext(ThreadSlugContext)
+  const drillSlug = useContext(ChildDrillSlugContext)
+  return threadSlug ?? drillSlug
+}
 
 // A QUEUE card provides this so any in-transcript dismissal control — the ```done fence's Mark-as-done
 // button, the ```awaiting fence's park button — routes its OWN card through the queue's user-initiated
@@ -1359,8 +1380,12 @@ export const STEP = 14
 // tool, exactly like two batched tools. Any prose at the boundary keeps STEP (14px). messageTailIsTool
 // / messageHeadIsTool inspect the LAST / FIRST rendered block; the legacy (no-parts) path renders the
 // tool band FIRST then prose, so its head is tools-if-any and its tail is tools-only-if-no-prose.
+// A sub-agent COMPLETION MARKER message (see lib/subAgentCompletion.ts) is transcript punctuation, not
+// a tool band: Message renders it as a wake divider, so every spacing predicate must treat it like the
+// boundary event it is now a peer of — never as a tool card.
 export function messageTailIsTool(m: ChatMessage): boolean {
   if (m.kind === "event" || m.kind === "reasoning" || m.role === "user") return false
+  if (agentCompletionCall(m)) return false
   if (m.parts && m.parts.length > 0) {
     for (let i = m.parts.length - 1; i >= 0; i--) {
       const p = m.parts[i]
@@ -1372,6 +1397,7 @@ export function messageTailIsTool(m: ChatMessage): boolean {
 }
 export function messageHeadIsTool(m: ChatMessage): boolean {
   if (m.kind === "event" || m.kind === "reasoning" || m.role === "user") return false
+  if (agentCompletionCall(m)) return false
   if (m.parts && m.parts.length > 0) {
     for (const p of m.parts) {
       if (p.kind === "tools" ? p.tools.length > 0 : p.text.trim()) return p.kind === "tools"
@@ -2023,7 +2049,9 @@ export function AgentBlock({
   const body = prompt ?? input
   const lineCount = useMemo(() => (body ? body.split("\n").length : 0), [body])
   const long = lineCount > AGENT_MAX_LINES
-  const slug = useContext(ThreadSlugContext)
+  // Thread surface OR sub-agent drawer (a nested dispatch inside a child's own transcript still drills
+  // in — the router maps an id it can no longer resolve to "gone", which the drawer states plainly).
+  const slug = useChildDrillSlug()
   const board = useBoard()
   const thread = slug ? threadBySlug(board, slug) : undefined
   // The live tracked sub-agent for this dispatch (matched by tool_use id) — drives the "running Nm"
@@ -2332,6 +2360,12 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
   // A model-reasoning summary (Codex) — quiet punctuation like an event line, but CLICKABLE to expand
   // the full reasoning. Rendered before the role branches (its role field is nominal, like an event).
   if (m.kind === "reasoning") return <ReasoningBlock text={m.text} durationMs={m.durationMs} sourceId={m.sourceId} />
+  // A SUB-AGENT COMPLETION — the same class of event as the background-shell wake above, so it takes
+  // the same divider (see AgentCompletionLine). Routed here, before the tool-band walk, so the marker
+  // copy never renders as a second AgentBlock card. Ahead of `textOnly` for the same reason the event
+  // line is: a queue card that hides tool bands still shows what came back underneath it.
+  const completion = agentCompletionCall(m)
+  if (completion) return <AgentCompletionLine call={completion} sourceId={m.sourceId} />
   // User messages: right-justified chat bubble; agent output stays left-aligned prose. A follow-up
   // that's been sent but not yet echoed by the transcript shows as a grayed-out bubble — the dimming
   // alone signals queued (a "queued" tag under the bubble caused layout shift when it cleared).
@@ -3343,7 +3377,6 @@ export function BackgroundOpsStrip({
           state={s.state}
           density="sheet"
           lastActivityAt={s.lastActivityAt}
-          subagentType={s.subagentType}
           onOpen={s.id ? () => pushSubAgentDrawer(slug, s.id!, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt }) : undefined}
           onDismiss={s.id ? () => dismiss.mutate(s.id!) : undefined}
         />
@@ -3416,24 +3449,86 @@ function fmtDurationMs(ms: number): string {
   return formatFixedDuration(ms)
 }
 
-// A sub-agent completion event — transcript PUNCTUATION between message bands. Quiet and muted (~12px,
-// no bubble, no icon chrome): a centered label flanked by faint hairlines so it reads as a timeline
-// marker, sitting at the same message rhythm as everything around it.
+// The hairline+label+hairline chrome of a WAKE DIVIDER — the one rendering both kinds of child
+// completion now share. A background shell coming to rest, a Monitor timing out, and a sub-agent
+// finishing are the same class of event (a child the worker launched has reached a terminal state,
+// usually re-invoking the agent), and they now read the same way: a centred section break that stands
+// out from the tool cards around it, rather than one of them being a card indistinguishable from a
+// hundred others (maintainer 2026-07-27). `label` is the whole line for a shell; the agent divider
+// passes nodes so its title can be a drill-in link.
+function WakeDivider({ children, sourceId, ariaLabel, marker }: { children: ReactNode; sourceId?: string; ariaLabel?: string; marker?: string }) {
+  return (
+    <div
+      data-fray-msg={sourceId}
+      data-wake-divider={marker}
+      className="group/msg relative my-1 flex items-center gap-3"
+      // A divider carrying an interactive title is not an ARIA `separator` (a separator may not own a
+      // focus stop), so only the inert shell-wake form takes the role — via `ariaLabel`.
+      role={ariaLabel ? "separator" : undefined}
+      aria-label={ariaLabel}
+    >
+      <MessageDebugId sourceId={sourceId} />
+      <span aria-hidden="true" className="h-px flex-1 bg-border/70" />
+      <span className="petite-caps flex min-w-0 items-center gap-1 break-words text-center text-[12px] text-muted/70">{children}</span>
+      <span aria-hidden="true" className="h-px flex-1 bg-border/70" />
+    </div>
+  )
+}
+
+// A SUB-AGENT COMPLETION — emitted by the server as a standalone `agentCompletion` copy of the dispatch
+// call at the position the completion notification landed. It renders in the SAME wake-divider idiom a
+// background shell's completion uses, because that is the convergence the maintainer asked for: the two
+// events mean the same thing to a reader, and the divider is the form that survives a long run of tool
+// cards. It deliberately does NOT reuse the launch card's chrome — a second identical AgentBlock at the
+// completion point was pure duplication, and it disappeared into the band around it.
+//
+// The TITLE is a drill-in link into the child's run log wherever a slug resolves — the launch card up
+// thread is often hundreds of lines away, so this is usually the closest handle on the finished child.
+// With no resolvable slug it degrades to plain text rather than a dead button.
+function AgentCompletionLine({ call, sourceId }: { call: TranscriptToolCall; sourceId?: string }) {
+  const slug = useChildDrillSlug()
+  const title = call.detail ?? "sub-agent"
+  const { tail } = subAgentCompletionOutcome(call)
+  const canDrill = !!(slug && call.agentId)
+  return (
+    <WakeDivider sourceId={sourceId} marker="agent" ariaLabel={canDrill ? undefined : `Sub-agent ${title} ${tail}`}>
+      <span className="shrink-0">Sub-agent</span>
+      {/* The guillemets sit OUTSIDE the truncating element (and inside a gap-less nested flex) so a
+          title clipped at a narrow width still closes its quote — `«a long title…` reads as broken
+          punctuation, not as a truncation. It also scopes the link underline to the title itself. */}
+      <span className="flex min-w-0 items-center">
+        <span className="shrink-0">«</span>
+        {canDrill ? (
+          <button
+            type="button"
+            data-subagent-completion-open
+            title={CHILD_OPEN_TITLE.AGENT}
+            aria-label={`${CHILD_OPEN_TITLE.AGENT}: ${title}`}
+            onClick={() => pushSubAgentDrawer(slug!, call.agentId!, { label: title, subagentType: call.subagentType })}
+            onMouseDown={(e) => e.preventDefault()}
+            className="min-w-0 truncate rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
+          >
+            {title}
+          </button>
+        ) : (
+          <span className="min-w-0 truncate">{title}</span>
+        )}
+        <span className="shrink-0">»</span>
+      </span>
+      <span className="shrink-0">{tail}</span>
+    </WakeDivider>
+  )
+}
+
+// A quiet transcript annotation ("Thought for Ns"), or — with `boundary` — the wake divider a
+// background task/shell completion emits. Muted ~12px, no bubble, no icon chrome, sitting at the same
+// message rhythm as everything around it.
 function EventLine({ text, boundary, sourceId }: { text: string; boundary?: boolean; sourceId?: string }) {
   // A turn BOUNDARY (an external wake — a background task/shell completion re-invoked the agent): a
   // centered divider rule carrying the cause label ON it, so two consecutive assistant turns don't read
   // as one bubble. This IS the section break the plain event line deliberately avoids.
-  if (boundary) {
-    return (
-      <div data-fray-msg={sourceId} className="group/msg relative my-1 flex items-center gap-3" role="separator" aria-label={text}>
-        <MessageDebugId sourceId={sourceId} />
-        <span aria-hidden="true" className="h-px flex-1 bg-border/70" />
-        <span className="petite-caps min-w-0 break-words text-center text-[12px] text-muted/70">{text}</span>
-        <span aria-hidden="true" className="h-px flex-1 bg-border/70" />
-      </div>
-    )
-  }
-  // Transcript PUNCTUATION ("Thought for Ns", "Agent … finished — 35m") — a quiet, left-justified
+  if (boundary) return <WakeDivider sourceId={sourceId} marker="event" ariaLabel={text}>{text}</WakeDivider>
+  // Transcript PUNCTUATION ("Thought for Ns", a context-compaction note) — a quiet, left-justified
   // light-gray label. No flanking dividers: it reads as a subtle annotation, not a section break.
   // petite-caps for consistency with the other inline dispatch readouts (the Agent label, etc.).
   return (

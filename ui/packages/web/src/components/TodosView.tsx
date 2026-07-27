@@ -10,6 +10,7 @@ import { orderQueue, queued, displayTitle, lastActiveLabelAt } from "../groups.t
 import { useLiveAnswering } from "../lib/answering.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
 import { CARD_BODY, CARD_PRIMARY_BUTTON, CardActions, Message, NativeInputRequiredCard, PermPolicyNote, PermPromptBanner, PendingAskCard, StickyUserBand, TranscriptCard, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText } from "./ChatView.tsx"
+import { agentCompletionCall } from "../lib/subAgentCompletion.ts"
 import { prefs } from "../lib/prefs.ts"
 import { ThreadComposerBox } from "./ThreadComposerBox.tsx"
 import { BackgroundOpsStrip, ThreadSlugContext, QueueDismissContext } from "./ChatView.tsx"
@@ -770,7 +771,10 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
     for (let g = firstRenderedIdx; g <= lastRenderedIdx; g++) {
       const m = messages[g]
       if (!m || m.queued || messageRendersNothing(m)) continue
-      tools += m.tools.length
+      // A sub-agent completion marker carries a tool call but renders as a wake DIVIDER, not a card
+      // (see ChatView.agentCompletionCall) — counting it would promise a tool the expansion never shows.
+      // It still counts as a step, exactly like the background-shell wake divider beside it.
+      tools += agentCompletionCall(m) ? 0 : m.tools.length
       if (g > firstRenderedIdx && g < lastRenderedIdx) steps++
     }
     return { hiddenStepCount: steps, hiddenToolCount: tools }

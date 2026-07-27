@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useSubAgentTranscript } from "../hooks.ts"
-import { Message } from "./ChatView.tsx"
+import { ChildDrillSlugContext, Message } from "./ChatView.tsx"
 import { Sheet } from "./ui/Sheet.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
 
@@ -96,11 +96,19 @@ export function SubAgentSheet({
                 <span className="block h-5 w-5 rounded-full border-2 border-muted/50 border-t-transparent animate-spin" />
               </div>
             ) : (
-              <div className="flex flex-col gap-3.5 px-6 py-5">
-                {messages.map((m, i) => (
-                  <Message key={i} m={m} />
-                ))}
-              </div>
+              // A child that dispatched children of its OWN renders Agent cards and completion
+              // dividers in here. Without a slug those titles were dead text — the maintainer's "some
+              // scenarios where that's not the case". The PARENT thread's slug is the drill root (the
+              // tailer keys every sub-agent lookup by it); a grandchild it can no longer resolve comes
+              // back "gone", which the drawer states plainly. This is deliberately NOT
+              // ThreadSlugContext — see the note on ChildDrillSlugContext for why.
+              <ChildDrillSlugContext.Provider value={slug}>
+                <div className="flex flex-col gap-3.5 px-6 py-5">
+                  {messages.map((m, i) => (
+                    <Message key={i} m={m} />
+                  ))}
+                </div>
+              </ChildDrillSlugContext.Provider>
             )}
           </div>
         </>
