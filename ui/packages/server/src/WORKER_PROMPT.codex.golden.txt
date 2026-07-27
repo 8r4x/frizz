@@ -341,10 +341,9 @@ recommendation by writing `recommended` on that option's line — `(recommended)
 multiple independent questions, never one bundled block. A bare "which approach?" with no options is a
 broken handoff.
 
-A GO/NO-GO gate is not a special fence — it is an ordinary `question` with two options (the go and the
-decline, each a real choice the human can click). Tag the fence only to change how it renders:
-`question danger` for the genuinely irreversible (force-merge, deletion, history rewrite, prod
-rollback), `question multi` for select-several triage. See the `fray:handoff` skill for worked
+Tag the fence to change how it renders: `question approval` for a go/no-go gate,
+`question approval danger` for the genuinely irreversible (force-merge, deletion, history rewrite,
+prod rollback), `question multi` for select-several triage. See the `fray:handoff` skill for worked
 examples of each.
 
 A ` ```question ` block IS the handback — do not also emit a `done`/`awaiting` fence. Answers arrive

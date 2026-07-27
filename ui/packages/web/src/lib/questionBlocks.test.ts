@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { splitQuestionBlocks, parseQuestionBlock, composeBlockAnswer, optionId, recommendedIndex } from "./questionBlocks.ts"
+import { splitQuestionBlocks, parseQuestionBlock, composeBlockAnswer, optionId, optionVerb, approvalAffirmativeIndex, recommendedIndex } from "./questionBlocks.ts"
 
 // ---- splitQuestionBlocks ----
 
@@ -24,11 +24,9 @@ test("a single question block with surrounding prose (default kind)", () => {
   ])
 })
 
-test("info-string kinds: the RETIRED `approval` degrades to question; bare/other → question", () => {
-  // `approval` is gone (2026-07-26). A legacy transcript's gate must still render — as the two-option
-  // question it always was — never as a parse failure.
+test("info-string kinds: ```question approval → approval, bare/other → question", () => {
   const approval = splitQuestionBlocks("```question approval\nShip it?\n```")
-  assert.deepEqual(approval, [{ kind: "question", text: "Ship it?", questionKind: "question", danger: false }])
+  assert.deepEqual(approval, [{ kind: "question", text: "Ship it?", questionKind: "approval", danger: false }])
   const bare = splitQuestionBlocks("```question\nShip it?\n```")
   assert.equal(bare[0].kind === "question" && bare[0].questionKind, "question")
   const explicit = splitQuestionBlocks("```question question\nShip it?\n```")
@@ -36,35 +34,36 @@ test("info-string kinds: the RETIRED `approval` degrades to question; bare/other
 })
 
 test("multiple question blocks in order", () => {
-  const text = "```question\nQ1?\nA. a\nB. b\n```\nbetween\n```question danger\nQ2?\n```"
+  const text = "```question\nQ1?\nA. a\nB. b\n```\nbetween\n```question approval\nQ2?\n```"
   assert.deepEqual(splitQuestionBlocks(text), [
     { kind: "question", text: "Q1?\nA. a\nB. b", questionKind: "question", danger: false },
     { kind: "prose", text: "\nbetween\n" },
-    { kind: "question", text: "Q2?", questionKind: "question", danger: true },
+    { kind: "question", text: "Q2?", questionKind: "approval", danger: false },
   ])
 })
 
-// ---- info-string kinds: multi, danger, multi-token degradation ----
+// ---- new info-string kinds: multi, approval danger, multi-token degradation ----
 
 test("```question multi → kind multi, no danger", () => {
   const segs = splitQuestionBlocks("```question multi\nWhich to fix?\n- A. one\n- B. two\n```")
   assert.deepEqual(segs, [{ kind: "question", text: "Which to fix?\n- A. one\n- B. two", questionKind: "multi", danger: false }])
 })
 
-test("```question multi danger → multi + danger (order-independent)", () => {
-  const a = splitQuestionBlocks("```question multi danger\nWhich to force-delete?\n```")
-  assert.deepEqual(a, [{ kind: "question", text: "Which to force-delete?", questionKind: "multi", danger: true }])
-  const b = splitQuestionBlocks("```question danger multi\nWhich to force-delete?\n```")
-  assert.equal(b[0].kind === "question" && b[0].questionKind, "multi")
+test("```question approval danger → approval + danger (order-independent)", () => {
+  const a = splitQuestionBlocks("```question approval danger\nForce-merge?\n```")
+  assert.deepEqual(a, [{ kind: "question", text: "Force-merge?", questionKind: "approval", danger: true }])
+  // The two tokens are recognized in any order.
+  const b = splitQuestionBlocks("```question danger approval\nForce-merge?\n```")
+  assert.equal(b[0].kind === "question" && b[0].questionKind, "approval")
   assert.equal(b[0].kind === "question" && b[0].danger, true)
 })
 
-test("legacy `approval danger` still carries danger onto the degraded question", () => {
-  const a = splitQuestionBlocks("```question approval danger\nForce-merge?\n```")
-  assert.deepEqual(a, [{ kind: "question", text: "Force-merge?", questionKind: "question", danger: true }])
-  // Plain legacy `approval` carries no danger; trailing/internal whitespace is stripped, not tokenized.
+test("single-token back-compat: plain `approval` carries no danger, extra spaces tolerated", () => {
+  const a = splitQuestionBlocks("```question approval\nShip it?\n```")
+  assert.equal(a[0].kind === "question" && a[0].danger, false)
+  // Trailing / internal whitespace in the info-string is stripped, not parsed as tokens.
   const b = splitQuestionBlocks("```question   approval   \nShip it?\n```")
-  assert.equal(b[0].kind === "question" && b[0].questionKind, "question")
+  assert.equal(b[0].kind === "question" && b[0].questionKind, "approval")
   assert.equal(b[0].kind === "question" && b[0].danger, false)
 })
 
@@ -202,13 +201,13 @@ test("a numbered question with NO options is a freetext question, not a one-opti
 test("a block that OPENS with a real option run keeps every option (no question to demote)", () => {
   // "A." opens the list and "B." continues it, so nothing here is a question — eating option A to invent
   // one would silently lose a choice.
-  const p = parseQuestionBlock("- A. Approve as-is\n- B. Approve with edits", "question")
+  const p = parseQuestionBlock("- A. Approve as-is\n- B. Approve with edits", "approval")
   assert.deepEqual(p.options, ["A. Approve as-is", "B. Approve with edits"])
   assert.equal(p.contextMd, "")
 })
 
 test("a lone MARKED option is still an option (only a bare leading line is demoted)", () => {
-  const p = parseQuestionBlock("- A. Approve as-is", "question")
+  const p = parseQuestionBlock("- A. Approve as-is", "approval")
   assert.deepEqual(p.options, ["A. Approve as-is"])
 })
 
@@ -263,7 +262,7 @@ test("a SECOND question's list restarts at A, so the run still ends at the first
 
 test("a numbered list after lettered options is trailing prose, not a continuation", () => {
   const body = "Approve the plan?\n\n- A. Approve all three\n- B. Adjust one\n\nThe three calls:\n1. SURFACE — config-only\n2. STREAMING — pipe bridge"
-  const p = parseQuestionBlock(body, "question")
+  const p = parseQuestionBlock(body, "approval")
   assert.deepEqual(p.options, ["A. Approve all three", "B. Adjust one"])
   assert.equal(p.trailingMd, "The three calls:\n1. SURFACE — config-only\n2. STREAMING — pipe bridge")
 })
@@ -297,9 +296,9 @@ test("a lone Recommendation line without options stays in context (not special)"
   assert.equal(p.contextMd, body)
 })
 
-test("a go/no-go gate is an ordinary two-option question", () => {
-  const p = parseQuestionBlock("Ready to ship?\nA. Ship it\nB. Hold", "question")
-  assert.equal(p.kind, "question")
+test("approval kind carries through parse", () => {
+  const p = parseQuestionBlock("Ready to ship?\nA. Ship it\nB. Hold", "approval")
+  assert.equal(p.kind, "approval")
   assert.deepEqual(p.options, ["A. Ship it", "B. Hold"])
 })
 
@@ -312,13 +311,13 @@ test("CRLF line endings are handled in both split and parse", () => {
 })
 
 test("parse defaults danger to false and threads a passed danger flag through", () => {
-  const noFlag = parseQuestionBlock("Ready?\nA. Yes", "question")
+  const noFlag = parseQuestionBlock("Ready?\nA. Yes", "approval")
   assert.equal(noFlag.danger, false)
-  const flagged = parseQuestionBlock("Ready?\nA. Yes", "question", true)
-  assert.equal(flagged.kind, "question")
+  const flagged = parseQuestionBlock("Ready?\nA. Yes", "approval", true)
+  assert.equal(flagged.kind, "approval")
   assert.equal(flagged.danger, true)
   // danger threads through the freetext-only (no trailing options) return path too.
-  const freetext = parseQuestionBlock("Type a reason.", "question", true)
+  const freetext = parseQuestionBlock("Type a reason.", "approval", true)
   assert.deepEqual(freetext.options, [])
   assert.equal(freetext.danger, true)
 })
@@ -350,11 +349,9 @@ test("compose single-select: freetext overrides the chosen chip, else the chosen
   assert.equal(composeBlockAnswer(blk, { chosen: null, text: "" }), "")
 })
 
-test("compose a danger gate: same single-select semantics as any question", () => {
-  const blk = parseQuestionBlock("Ship it?\nA. Approve\nB. Hold", "question", true)
+test("compose approval: same single-select semantics as question", () => {
+  const blk = parseQuestionBlock("Ship it?\nA. Approve\nB. Hold", "approval", true)
   assert.equal(composeBlockAnswer(blk, { chosen: 1, text: "" }), "B. Hold")
-  // A MULTI-LINE freetext answer survives compose verbatim — the box takes newlines (2026-07-26).
-  assert.equal(composeBlockAnswer(blk, { chosen: 0, text: "Hold.\n\nRerun CI first." }), "Hold.\n\nRerun CI first.")
 })
 
 test("compose multi: selected letters in option order, freetext appends color", () => {
@@ -497,4 +494,87 @@ test("inline marker with no space before the paren, preserving the label's own b
   const p = parseQuestionBlock("Flag?\n\n- A. Use `--strict`(recommended)\n- B. Use `--safe`", "question")
   assert.deepEqual(p.options, ["A. Use `--strict`", "B. Use `--safe`"])
   assert.equal(p.recommendedIdx, 0)
+})
+
+// ---- optionVerb ----
+
+test("optionVerb strips the option id so an action button reads as a verb", () => {
+  assert.equal(optionVerb("A. Approve as-is"), "Approve as-is")
+  assert.equal(optionVerb("- B. Hold"), "- B. Hold") // the list marker is stripped upstream, not here
+  assert.equal(optionVerb("3) Ship it"), "Ship it")
+  assert.equal(optionVerb("Approve"), "Approve") // no id → unchanged
+  assert.equal(optionVerb("A."), "A.") // nothing left after the id → keep the original, never empty
+})
+
+// ---- approvalAffirmativeIndex ----
+// The correctness-critical piece: a primary "go" button rendered on an option that actually says
+// "Hold" would send the OPPOSITE of what the human clicked. Position is never trusted.
+
+test("the canonical approval gate: two affirmatives → the first (unqualified) go is primary", () => {
+  const { options, recommendedIdx } = parseQuestionBlock(
+    "Ready to create CONTRIBUTING.md?\n\n- A. Approve as-is\n- B. Approve with edits — tell me what to change",
+    "approval",
+  )
+  assert.equal(approvalAffirmativeIndex(options, recommendedIdx), 0)
+})
+
+test("the canonical danger gate: 'Do it' is affirmative, 'Hold' is not", () => {
+  const { options, recommendedIdx } = parseQuestionBlock(
+    "Force-merge PR #391?\n\n- A. Do it — the failure is the known-flaky timeout\n- B. Hold — I'll wait for a green run",
+    "approval",
+    true,
+  )
+  assert.equal(approvalAffirmativeIndex(options, recommendedIdx), 0)
+})
+
+test("POSITION IS NOT TRUSTED: a gate that leads with the decline still marks the real go", () => {
+  const { options } = parseQuestionBlock("Ship?\n\n- A. Hold — wait for green\n- B. Approve and merge", "approval")
+  assert.equal(approvalAffirmativeIndex(options, null), 1)
+})
+
+test("classification reads the leading CLAUSE, not a rationale that happens to contain a verb", () => {
+  // "Hold" leads; the rationale mentions merging — must NOT read as affirmative.
+  const { options } = parseQuestionBlock("Ship?\n\n- A. Hold — do not merge until CI is green\n- B. Approve", "approval")
+  assert.equal(approvalAffirmativeIndex(options, null), 1)
+  // Symmetrically, an affirmative whose rationale mentions holding stays affirmative.
+  const b = parseQuestionBlock("Ship?\n\n- A. Merge now — no reason to hold\n- B. Wait", "approval")
+  assert.equal(approvalAffirmativeIndex(b.options, null), 0)
+})
+
+test("no recognizable affirmative → null (every action stays equal-weight, no invented primary)", () => {
+  const { options } = parseQuestionBlock("Which store?\n\n- A. SQLite\n- B. JSON file", "approval")
+  assert.equal(approvalAffirmativeIndex(options, null), null)
+})
+
+test("the recommendation is a TIEBREAK among affirmatives", () => {
+  const { options, recommendedIdx } = parseQuestionBlock(
+    "Ready?\n\n- A. Approve as-is\n- B. Approve with edits (recommended)",
+    "approval",
+  )
+  assert.equal(recommendedIdx, 1)
+  assert.equal(approvalAffirmativeIndex(options, recommendedIdx), 1)
+})
+
+test("the recommendation is a VETO: an agent advising HOLD never gets out-shouted by a primary go", () => {
+  const { options, recommendedIdx } = parseQuestionBlock(
+    "Force-merge?\n\n- A. Do it — the check is flaky\n- B. Hold — wait for a green run (recommended)",
+    "approval",
+    true,
+  )
+  assert.equal(recommendedIdx, 1)
+  assert.equal(approvalAffirmativeIndex(options, recommendedIdx), null)
+})
+
+test("markdown emphasis around the verb doesn't defeat classification", () => {
+  const { options } = parseQuestionBlock("Ship?\n\n- A. **Approve** — land it\n- B. `Hold`", "approval")
+  assert.equal(approvalAffirmativeIndex(options, null), 0)
+})
+
+test("a negative lead always loses, even when the same line also reads affirmative", () => {
+  const { options } = parseQuestionBlock("Ship?\n\n- A. Don't approve yet\n- B. Approve", "approval")
+  assert.equal(approvalAffirmativeIndex(options, null), 1)
+})
+
+test("empty options → null (never indexes into nothing)", () => {
+  assert.equal(approvalAffirmativeIndex([], null), null)
 })

@@ -555,13 +555,11 @@ function previewText(raw: string): string | undefined {
 
 // Minimal server-side MIRROR of the web's ```question fence convention (web/src/lib/questionBlocks.ts
 // QUESTION_BLOCK) — a presence check only, not a full parse: an opening ```question line (optional
-// kind info-string like `multi`), its body, then a closing ``` line. Kept in sync BY HAND (the
+// kind info-string like `approval`), its body, then a closing ``` line. Kept in sync BY HAND (the
 // architecture forbids importing web code into the server). Drives the derived pending-question safety
 // net: a worker that asked the human IN CHAT but never flipped its thread file to blocked.
 // Info-string grammar mirrors the web exactly: one or more space-separated tokens (```question
-// multi danger) — the old single-token form silently missed multi-token gates the prompt teaches.
-// It matches on SHAPE, never on the token set, so a retired token (`approval`) or a future one still
-// registers as an ask here exactly as it still renders as a card in the web.
+// approval danger) — the old single-token form silently missed multi-token gates the prompt teaches.
 // A QUOTED opener never counts: a worker documenting the protocol wraps its sample in an outer ````
 // fence, and flagging that as a live ask parks the thread in "awaiting you" over an example. The
 // fenced-interior scan is the one piece genuinely SHARED with the web (@fray-ui/shared) rather than
@@ -1459,28 +1457,6 @@ function defaultReadPermMarker(project: Project): (slug: string) => PermMarker |
 // the accumulator, and (registered sessions only) sniff the pane for a permission prompt.
 type TailBackend = Pick<AgentBackend, "transcriptPath" | "foldLine" | "matchesPermPrompt" | "detectNativeInput" | "detectBootModal">
 
-// Fields the durable prime cache must NEVER restore. Identity comes from the live registry row; the
-// pane/discovery fields are re-derived by the prime branch on every boot and a stale value would
-// suppress a genuine observation (a stall that must be captured, a discovery that must be retried).
-//
-// EXPORTED so a test can assert against the real set: the cache codec is deliberately generic (see
-// tail-cache.ts — "A hand-written field list is a standing bug"), which means a NEW TailState field is
-// restored BY DEFAULT and only an entry here stops it. That default is what made the chase bookkeeping
-// below a live bug, so the set is now a tested contract rather than a private detail.
-export const UNRESTORED_TAIL_FIELDS: ReadonlySet<string> = new Set([
-  "slug", "sessionId", "nativeSessionId", "runtimeGeneration", "path", "foreign",
-  "primed", "permPrompt", "nativeInputRequired", "paneDead", "subAgentsSig",
-  "noTranscript", "nextDiscoverMs", "stallLogged",
-  "deliveryLedgerSeen", "unconfirmedPermissionMode", "unconfirmedPermissionPolls",
-  // The chase bookkeeping is compared against an IN-MEMORY, per-process counter — the ingest's `live`
-  // map is rebuilt empty on every boot (backend/claude-runtime-ingest.ts). A hydrated high-water mark
-  // from the PREVIOUS process is therefore measured against a counter that restarted at zero, so
-  // `live.events <= runtimeEventsSeen` holds forever and the chase never fires again. Measured on a
-  // restart-crossing differential: 968/970/970 ms — the exact poll floor chaseRuntime exists to remove
-  // — against 16/22/19 ms with these two fields dropped.
-  "runtimeEventsSeen", "runtimeChase",
-])
-
 export function createTailer(deps: TailerDeps): Tailer {
   const now = deps.now ?? Date.now
   // Cached (batched list-panes): the 1s tick asks per session row — uncached that was one
@@ -2109,6 +2085,16 @@ export function createTailer(deps: TailerDeps): Tailer {
   const cacheHydrated = new Set<string>()
   let cachePruned = false
   let lastCacheFlushMs = 0
+
+  // Fields the cache must NEVER restore. Identity comes from the live registry row; the pane/discovery
+  // fields are re-derived by the prime branch on every boot and a stale value would suppress a genuine
+  // observation (a stall that must be captured, a discovery that must be retried).
+  const UNRESTORED_TAIL_FIELDS = new Set([
+    "slug", "sessionId", "nativeSessionId", "runtimeGeneration", "path", "foreign",
+    "primed", "permPrompt", "nativeInputRequired", "paneDead", "subAgentsSig",
+    "noTranscript", "nextDiscoverMs", "stallLogged",
+    "deliveryLedgerSeen", "unconfirmedPermissionMode", "unconfirmedPermissionPolls",
+  ])
 
   // Registered slugs and FOREIGN thread ids live in separate namespaces (the tailer keeps two maps for
   // exactly that reason), so they get separate key spaces in the one cache table too.

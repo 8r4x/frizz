@@ -1005,12 +1005,9 @@ test("tailer: a background shell stays running however long it is quiet; only it
 
 test("hasQuestionBlock: detects a fenced ```question block; rejects prose and a plain code fence", () => {
   assert.equal(hasQuestionBlock("intro\n\n```question\nWhich one?\n\n- A. x\n- B. y\n```"), true)
-  assert.equal(hasQuestionBlock("```question danger\nShip it?\n```"), true) // kind info-string
-  // Multi-token info-strings the prompt teaches (```question multi danger) — plus the RETIRED
-  // `approval` token, which must still register as an ask so a legacy transcript is not silently
-  // demoted (the check is on SHAPE, never on the token set) —
+  assert.equal(hasQuestionBlock("```question approval\nShip it?\n```"), true) // kind info-string
+  // Multi-token info-strings the prompt teaches (```question approval danger, ```question multi) —
   // the old single-token grammar silently missed them and broke the pendingQuestion safety net.
-  assert.equal(hasQuestionBlock("```question multi danger\nForce-merge?\n\n- A. Do it\n```"), true)
   assert.equal(hasQuestionBlock("```question approval danger\nForce-merge?\n\n- A. Do it\n```"), true)
   assert.equal(hasQuestionBlock("```question multi\nWhich?\n\n- A. x\n- B. y\n```"), true)
   assert.equal(hasQuestionBlock("just prose, no fence at all"), false)

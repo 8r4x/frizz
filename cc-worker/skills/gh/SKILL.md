@@ -18,7 +18,7 @@ This skill is the full playbook the injected `⟦gh available⟧` block summariz
 
 - **NEVER** comment, review, approve, request-changes, label, assign, milestone, edit, close, reopen, merge, or push — no state change of any kind on GitHub.
 - Your deliverable is your **final message** (a findings write-up, a review, a recommendation) — NOT a GitHub post. Producing the review in-session is the job; posting it is a separate action the human authorizes.
-- If posting would genuinely help, don't just do it — **ask** with a two-option ` ```question ` block ("A. Post this review to the PR / B. Keep it in-session only", Recommendation), then rest. When the destructive edge is real (a force-merge, a close), that's a ` ```question danger ` gate.
+- If posting would genuinely help, don't just do it — **ask** with a ` ```question approval ` block ("A. Post this review to the PR / B. Keep it in-session only", Recommendation), then rest. When the destructive edge is real (a force-merge, a close), that's a ` ```question approval danger ` gate.
 - When the human HAS asked you to write, do exactly the scoped thing and report the resulting URL — nothing extra.
 
 There is no server-side enforcement of this; the boundary is yours to hold.

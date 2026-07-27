@@ -26,8 +26,20 @@ export interface LiveAnswering {
   // gathered (the queue card, which only ever has the single live ask). Pass a message identity to
   // scope the send to JUST that message's blocks — the thread view's per-message Send button, which
   // deliberately answers one message at a time so its state never bleeds into another open ask.
-  sendAnswers: (scopeIdentity?: string) => void
+  // `override` supplies one block's answer DIRECTLY, bypassing the answers state (see BlockAnswerOverride).
+  sendAnswers: (scopeIdentity?: string, override?: BlockAnswerOverride) => void
   sendMessage: (text: string, callbacks?: EagerFollowUpCallbacks) => void // freeform eager reply (same path as an answer)
+}
+
+// One block's answer supplied DIRECTLY to a send, instead of being read out of the answers state. The
+// approval gate's one-click buttons need this: they answer and send in a single gesture, and React's
+// setState is asynchronous, so a send fired right after onChip would compose from the pre-click state
+// and silently drop the very option the human clicked. Overriding at compose time removes the race
+// entirely rather than papering over it with a ref or a deferred send.
+export interface BlockAnswerOverride {
+  identity: string
+  blockIdx: number
+  answer: string
 }
 
 // One question-bearing assistant message that is still OPEN (unanswered) — its parsed blocks, its stable
@@ -212,8 +224,8 @@ export function useLiveAnswering(
     return map
   }, [openAsks])
   // Chip click. MULTI: toggle this option in/out of the set (kept in option order); freetext COEXISTS,
-  // so it's preserved. SINGLE: picking a chip clears that block's freetext (the chip becomes the
-  // answer); re-picking toggles off.
+  // so it's preserved. SINGLE (question/approval): picking a chip clears that block's freetext (the chip
+  // becomes the answer); re-picking toggles off.
   const onChip = useCallback(
     (identity: string, bi: number, optIdx: number) => {
       const blk = openByIdentity.get(identity)?.blocks[bi]
@@ -257,7 +269,7 @@ export function useLiveAnswering(
     },
     [followUp, scrollToBottom],
   )
-  const sendAnswers = useCallback((scopeIdentity?: string) => {
+  const sendAnswers = useCallback((scopeIdentity?: string, override?: BlockAnswerOverride) => {
     // `scopeIdentity` is a message identity when the thread's per-message Send button (or a ⌘-Enter from
     // one of its blocks) fires; guard `typeof` because the queue card wires its button as onClick={sendAnswers}
     // and React would otherwise hand us a MouseEvent. Non-string → gather every open ask (queue path).
@@ -267,9 +279,12 @@ export function useLiveAnswering(
     const scopedKeys = scope ? scopedAsks.flatMap((a) => a.blocks.map((_, block) => keyFor(a.identity, block))) : textKeys
     const scopedStateKeys = scopedAsks.flatMap((a) => a.blocks.map((_, bi) => `${a.identity}::${bi}`))
 
-    // One block's answer. Used for BOTH the answered-collection and the live numbering below, so the
-    // two can never disagree.
-    const answerAt = (a: OpenAsk, bi: number): string => composeBlockAnswer(a.blocks[bi], answerFor(a.identity, bi))
+    // One block's answer, with the one-click override winning over the (possibly stale) answers state.
+    // Used for BOTH the answered-collection and the live numbering below, so the two can never disagree.
+    const answerAt = (a: OpenAsk, bi: number): string =>
+      override && override.identity === a.identity && override.blockIdx === bi
+        ? override.answer
+        : composeBlockAnswer(a.blocks[bi], answerFor(a.identity, bi))
 
     // Collect every answered block across the scoped asks, in transcript order.
     const answered = scopedAsks.flatMap((a) =>
@@ -333,6 +348,10 @@ export function useLiveAnswering(
         onText: (bi: number, text: string) => onText(ask.identity, bi, text),
         // ⌘-Enter / the per-message Send button submits ONLY this message's blocks (scoped identity).
         onSubmit: () => sendAnswers(ask.identity),
+        // One click on an approval action: this block's answer rides in as an override (dodging the
+        // setState race), scoped to this message so a sibling ask's draft is untouched.
+        onInstantAnswer: (bi: number, answer: string) =>
+          sendAnswers(ask.identity, { identity: ask.identity, blockIdx: bi, answer }),
         anyAnswered: ask.blocks.some((blk, i) => composeBlockAnswer(blk, answerFor(ask.identity, i)) !== ""),
         sending: followUp.pending,
       }

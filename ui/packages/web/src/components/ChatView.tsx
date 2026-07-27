@@ -2805,8 +2805,12 @@ export function QuestionBlockCard({
               rows={1}
               // Its own surface tag — deliberately NOT the queue card's `queueComposer`, which is the
               // separate free-form prompt box at the bottom of the card. Escape BLURS (climb out, same
-              // semantics as the shared Composer) and must NOT bubble — the window handler would pop
-              // the enclosing drawer mid-answer. Every key stops here.
+              // semantics as the shared Composer) and stops here rather than reaching App's window
+              // handler. NOTE (verified in the real app 2026-07-26): stopping it does NOT keep an
+              // enclosing thread drawer open — Radix's DismissableLayer takes Escape on the document
+              // in the CAPTURE phase, so it has already dismissed the sheet before this bubble-phase
+              // handler runs. The typed answer survives that (it lives in the draft store), but the
+              // "Escape climbs out of the box first" intent only holds on the queue card.
               data-surface="questionAnswer"
               value={freetext}
               onChange={(e) => interactive.onText(e.target.value)}

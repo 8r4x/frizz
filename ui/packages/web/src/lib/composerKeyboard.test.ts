@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter, shouldSubmitStagedEnter, type ComposerKeyboardEvent } from "./composerKeyboard.ts"
+import { shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter, type ComposerKeyboardEvent } from "./composerKeyboard.ts"
 
 function key(overrides: Partial<ComposerKeyboardEvent> = {}): ComposerKeyboardEvent {
   return {
@@ -41,29 +41,4 @@ test("Option-Enter fallback is eligible only without Ctrl or Command", () => {
   assert.equal(shouldRestoreOptionEnterNewline(key({ altKey: true, ctrlKey: true })), false)
   assert.equal(shouldRestoreOptionEnterNewline(key({ altKey: true, metaKey: true })), false)
   assert.equal(shouldRestoreOptionEnterNewline(key({ altKey: true, isComposing: true })), false)
-})
-
-// ---- shouldSubmitStagedEnter — the ```question card's free-text box ----
-// The inverse contract to the composer's: a staged form field keeps Enter as a NEWLINE and reserves
-// ⌘/Ctrl-Enter for the send, so a multi-line answer can be typed without firing a reply mid-sentence.
-
-test("a staged answer box takes a NEWLINE on every unmodified Enter", () => {
-  assert.equal(shouldSubmitStagedEnter(key()), false, "plain Enter must fall through to the textarea default")
-  assert.equal(shouldSubmitStagedEnter(key({ shiftKey: true })), false)
-  assert.equal(shouldSubmitStagedEnter(key({ altKey: true })), false, "macOS Option-Enter reports altKey")
-})
-
-test("a staged answer box submits on Command- or Ctrl-Enter", () => {
-  assert.equal(shouldSubmitStagedEnter(key({ metaKey: true })), true)
-  assert.equal(shouldSubmitStagedEnter(key({ ctrlKey: true })), true)
-  // A held Shift alongside the accelerator is still a send, not a newline.
-  assert.equal(shouldSubmitStagedEnter(key({ metaKey: true, shiftKey: true })), true)
-})
-
-test("a staged answer box never submits a non-Enter key or an IME confirmation", () => {
-  assert.equal(shouldSubmitStagedEnter(key({ key: "a", metaKey: true })), false)
-  assert.equal(shouldSubmitStagedEnter(key({ metaKey: true, isComposing: true })), false)
-  // WebKit/Safari can confirm an IME candidate with isComposing=false but keyCode=229.
-  assert.equal(shouldSubmitStagedEnter(key({ metaKey: true, keyCode: 229 })), false)
-  assert.equal(shouldSubmitStagedEnter(key({ metaKey: true, keyCode: 13 })), true)
 })
