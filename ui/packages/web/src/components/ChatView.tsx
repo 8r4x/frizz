@@ -163,10 +163,15 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
   // state (not a ref) so the portal renders as soon as the node mounts.
   const [jumpOverlay, setJumpOverlay] = useState<HTMLDivElement | null>(null)
   const count = q.data?.messages.length ?? 0
+  // The EAGER (non-virtualized) fallback's own tail follow. No production surface reaches it — both
+  // ThreadView callers virtualize, and this branch only renders when `count === 0` besides — but it shares
+  // the SAME `[overflow-anchor:none]` scroller, so its band must not disagree with the virtualized path's:
+  // at the 240px it used to carry, a third of a pane, a reader who scrolled up to re-read was hauled back
+  // to the bottom by the next append. One constant, one meaning of "at the tail".
   useEffect(() => {
     if (virtualized) return
     const scroller = transcriptRef.current
-    if (scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 240) scroller.scrollTop = scroller.scrollHeight
+    if (scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= TAIL_FOLLOW_PX) scroller.scrollTop = scroller.scrollHeight
   }, [count, running, virtualized])
 
   const loadEarlier = useCallback(async () => {

@@ -25,6 +25,7 @@ import {
   captureTranscriptViewportAnchor,
   prependEarlierPage,
   previousUserBoundary,
+  resolveVisibleStart,
   restoreTranscriptViewportAnchor,
   type TranscriptViewportAnchor,
 } from "../lib/transcriptPagination.ts"
@@ -780,10 +781,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // when there is ANYTHING to hide — middle steps OR tool calls batched into the first/last message.
   const collapseIntermediate =
     !intermediateExpanded && stickyUserIdx >= 0 && firstRenderedIdx !== lastRenderedIdx && (hiddenStepCount >= 1 || hiddenToolCount >= 1)
-  const explicitStart = visibleStartId
-    ? messages.findIndex((message) => message.sourceId === visibleStartId)
-    : -1
-  const visibleStart = explicitStart >= 0 ? explicitStart : lastUserIdx
+  const visibleStart = resolveVisibleStart(messages, visibleStartId, lastUserIdx)
   const visible = messages.slice(visibleStart)
   const hasMore = visibleStart > 0 || q.data?.hasEarlier === true
 

@@ -7,6 +7,7 @@ import {
   previousUserBoundary,
   reconcileLatestPage,
   reconcileLiveMessages,
+  resolveVisibleStart,
   restoreTranscriptViewportAnchor,
   transcriptAnchorScrollDelta,
 } from "./transcriptPagination.ts"
@@ -61,6 +62,18 @@ test("client transcript replacement discards loaded history instead of mixing se
   const loaded = { ...page([["user", "old-u"], ["assistant", "old-a"]]), historyLoaded: true }
   const replacement = page([["user", "new-u"], ["assistant", "new-a"]], { transcriptKey: "transcript-B" })
   assert.deepEqual(reconcileLatestPage(loaded, replacement).messages.map((m) => m.sourceId), ["new-u", "new-a"])
+})
+
+test("an expanded queue card whose start message was trimmed away keeps showing what is still held", () => {
+  const messages = [message("user", "u1"), message("assistant", "a1"), message("user", "u2"), message("assistant", "a2")]
+  const lastUserIdx = 2
+  // Ordinary case: the reader expanded back to u1 and u1 is still in the window.
+  assert.equal(resolveVisibleStart(messages, "u1", lastUserIdx), 0)
+  // Unexpanded: the default window is the latest turn.
+  assert.equal(resolveVisibleStart(messages, null, lastUserIdx), lastUserIdx)
+  // THE TRIM: the reader expanded back to a message the 300-cap window has since dropped. Falling back to
+  // `lastUserIdx` would silently collapse the card they had just expanded; keep the whole held window.
+  assert.equal(resolveVisibleStart(messages, "trimmed-away", lastUserIdx), 0)
 })
 
 // A push carries messages only, so the envelope can only survive by being carried over. On a thread past

@@ -13,6 +13,24 @@ export function previousUserBoundary(messages: readonly TranscriptMessage[], cur
   return start > 0 ? 0 : null
 }
 
+// Where a queue card's visible window starts, given the message the reader explicitly expanded back to.
+//
+// The subtlety is the message going MISSING. The server projects at most MAX_MESSAGES, so on a thread past
+// that cap every new message pushes one off the head of the window — and "View more" walks back INSIDE
+// that window without fetching (so nothing marks the prefix as loaded history, which is what would make a
+// push retain it). The reader's chosen start can therefore be trimmed away underneath them, and falling
+// back to `lastUserIdx` there silently collapses the card they had just expanded, all the way back to the
+// latest turn. Keep the intent instead: they asked to see further back, so show everything still held.
+export function resolveVisibleStart(
+  messages: readonly TranscriptMessage[],
+  visibleStartId: string | null,
+  lastUserIdx: number,
+): number {
+  if (!visibleStartId) return lastUserIdx
+  const explicit = messages.findIndex((message) => message.sourceId === visibleStartId)
+  return explicit >= 0 ? explicit : 0
+}
+
 function firstOverlap(
   previous: readonly TranscriptMessage[],
   incoming: readonly TranscriptMessage[],
