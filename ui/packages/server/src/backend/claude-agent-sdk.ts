@@ -597,7 +597,29 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
   const input = new ClaudeInputQueue()
   const canUseTool = options.canUseTool
     ? async (toolName: string, rawInput: Record<string, unknown>, context: Parameters<SdkCanUseTool>[2]): Promise<SdkPermissionResult> => {
-      const request = mapPermissionRequest(toolName, rawInput, context)
+      // Representing the request is STRICT on purpose (see mapPermissionRequest: this decides whether
+      // authority is granted, so ambiguous bytes are rejected rather than sanitized). But rejecting
+      // must mean DENY THIS TOOL CALL, never "reject the callback" — this used to be called outside
+      // the guard below, so an unrepresentable input rejected the SDK's canUseTool instead.
+      //
+      // That is the same shape as the incident that destroyed a thread and all its sub-agents on
+      // 2026-07-27 (a control character in a Bash `command`; see mapAssistant), and it lands on a
+      // HOTTER path: canUseTool fires precisely for risky tool calls, which is exactly where Bash
+      // commands — and therefore ANSI escapes and other control bytes — actually live.
+      //
+      // Fail closed AND alive. It also matches what the bridge already does one layer up when it
+      // cannot build an approval card: deny with a plain message rather than take anything down.
+      // CONTENT vs PROTOCOL, and the distinction is the whole point:
+      //  - an INPUT fray cannot represent is a content problem. Deny this one call; the session lives.
+      //  - a malformed control frame (no requestId, no toolUseId) is a protocol violation. There is no
+      //    correlation id to answer against, so a deny would go nowhere — that still fails hard, and
+      //    the "without requestId" test pins it.
+      try {
+        boundedJsonObject(rawInput, "permission.input")
+      } catch {
+        return { behavior: "deny", message: "This tool call could not be represented for approval, so fray denied it." } as SdkPermissionResult
+      }
+      const request: ClaudePermissionRequest = mapPermissionRequest(toolName, rawInput, context)
       const fingerprint = canonicalFingerprint(request)
       return permissionRequests.resolve(request.requestId, fingerprint, async () => {
         const signal = AbortSignal.any([context.signal, lifecycleAbort.signal])

@@ -1151,3 +1151,23 @@ test("an UNMAPPABLE frame is dropped and the session keeps running", { timeout: 
     await harness.close()
   }
 })
+
+test("an unrepresentable PERMISSION input is denied, not thrown — content vs protocol", () => {
+  // Same class as the assistant crash, on a hotter path: canUseTool fires precisely for risky tool
+  // calls, which is exactly where Bash commands (and therefore ANSI escapes) live.
+  //
+  // The validator stays strict — this decides whether authority is granted, so sanitizing the bytes
+  // the provider will act on would be a security bug. What changed is the CONSEQUENCE: an input fray
+  // cannot represent denies that one call instead of rejecting the SDK callback, which is how a
+  // formatting problem used to become a dead session.
+  const esc = String.fromCharCode(27)
+  assert.throws(
+    () => boundedJsonObject({ command: `printf '${esc}[31m'` }, "permission.input"),
+    (e: unknown) => e instanceof ClaudeAgentSdkProtocolError && /unsafe text/.test((e as Error).message),
+    "control bytes are still rejected — that strictness is deliberate and load-bearing",
+  )
+  // A protocol violation is a DIFFERENT case and must keep failing hard: with no requestId there is
+  // no correlation id to answer against, so a deny would go nowhere. Pinned by the
+  // "without requestId" test above.
+  assert.doesNotThrow(() => boundedJsonObject({ command: "ls -la" }, "permission.input"))
+})
