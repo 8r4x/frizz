@@ -26,11 +26,11 @@ const USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 const OAUTH_BETA = "oauth-2025-04-20"
 const USER_AGENT = "claude-code/2.0.0" // gates by product, not exact version
 const ENDPOINT_TIMEOUT_MS = 5000
-// A healthy reading is trusted for one minute. The endpoint is one cheap ~200ms GET, and a proactive
+// A healthy reading is trusted for two minutes. The endpoint is one cheap ~200ms GET, and a proactive
 // server-side heartbeat (refreshClaudeQuotaInBackground, wired in context.ts) already keeps this cache
-// warm on a 60s cadence, so a lazy read reflects a value at most ~1 minute old instead of the multi-
+// warm on a 2-minute cadence, so a lazy read reflects a value at most ~2 minutes old instead of the multi-
 // minute lag a 3-minute TTL served while the fleet burned quota fast. FAIL keeps its tight 10s retry.
-const OK_TTL_MS = 60_000
+const OK_TTL_MS = 2 * 60_000
 const FAIL_TTL_MS = 10_000
 const STALE_MAX_AGE_MS = 24 * 60 * 60_000
 // The CLI fallback boots a full Claude Code process; under load-80 a cold boot alone can blow well
@@ -431,11 +431,11 @@ export async function claudeQuotaRefreshSettled(): Promise<void> {
 // polling. The freshness of the sidebar chip (and the scheduler's weekly-reset check) used to be a
 // side effect of someone READING the cache: with a 3-minute stale-while-revalidate TTL and a 60s
 // browser poll, the displayed reading could lag 3–4 minutes — long enough to blow past a limit during
-// a fast fleet burn without the chip ever warning. A server-side heartbeat calling this every minute
+// a fast fleet burn without the chip ever warning. A server-side heartbeat calling this every two minutes
 // keeps the cache genuinely warm so every read is recent.
 //
 // It uses the SAME non-blocking background path a stale read kicks — endpoint-first, one in-flight
-// refresh per process, cross-process lock so N Fray windows make ~one request per minute per account,
+// refresh per process, cross-process lock so N Fray windows make ~one request every two minutes per account,
 // and the CLI fallback only for the 401/403 token-refresh case it already owned. It NEVER blocks the
 // caller and swallows every failure (the last known-good reading rides until the next success).
 export async function refreshClaudeQuotaInBackground(claudeBin = "claude", deps: ClaudeQuotaDeps = {}): Promise<void> {
