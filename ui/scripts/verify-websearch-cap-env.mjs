@@ -16,7 +16,7 @@ import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { setSocket, spawn, socketName } from "../packages/server/src/tmux.ts"
 import { createClaudeBackend } from "../packages/server/src/backend/claude.ts"
-import { WORKER_MAX_WEB_SEARCHES } from "../packages/server/src/dispatch.ts"
+import { WORKER_MAX_WEB_SEARCHES, WORKER_MAX_SUBAGENTS, WORKER_MAX_CONCURRENT_SUBAGENTS } from "../packages/server/src/dispatch.ts"
 
 const SOCKET = `frayvwsc${process.pid}`
 const work = mkdtempSync(join(tmpdir(), "fray-websearch-cap-"))
@@ -53,6 +53,16 @@ try {
   const dumped = waitFor(() => existsSync(envDump), 20000, "child env dump")
   const childEnv = dumped ? readFileSync(envDump, "utf8").split("\n") : []
   const capLine = childEnv.find((l) => l.startsWith("CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION="))
+
+  // The sub-agent caps ride the same env record and the same tmux hop, so they are asserted on the
+  // same real child rather than trusted from the returned object.
+  for (const [name, want] of [
+    ["CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION", WORKER_MAX_SUBAGENTS],
+    ["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS", WORKER_MAX_CONCURRENT_SUBAGENTS],
+  ]) {
+    const line = childEnv.find((l) => l.startsWith(`${name}=`))
+    check(`the spawned child's REAL environment carries the lifted ${name}`, line === `${name}=${want}`, `got ${line ?? "<absent>"}`)
+  }
 
   check(
     "the spawned child's REAL environment carries the lifted WebSearch budget",

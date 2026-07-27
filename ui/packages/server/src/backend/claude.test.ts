@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { createClaudeBackend, parseClaudeLine } from "./claude.ts"
 import { newTailState, computeTurn } from "../tailer.ts"
-import { buildClaudeCommand, buildClaudeResumeCommand, claudeWorkerEnvironment, loadWorkerPrompt, WORKER_MAX_WEB_SEARCHES, workerPluginDir } from "../dispatch.ts"
+import { buildClaudeCommand, buildClaudeResumeCommand, claudeWorkerEnvironment, loadWorkerPrompt, WORKER_MAX_CONCURRENT_SUBAGENTS, WORKER_MAX_SUBAGENTS, WORKER_MAX_WEB_SEARCHES, workerPluginDir } from "../dispatch.ts"
 import { spawnWithRunner } from "../tmux.ts"
 
 // ---- parseClaudeLine: the normalized VIEW of a Claude JSONL line (codex-facing seam; NOT the
@@ -80,6 +80,8 @@ test("createClaudeBackend: buildSpawn pins the session id + prompt and clears in
     CLAUDE_CODE_SUBAGENT_MODEL: "",
     CLAUDE_CODE_EFFORT_LEVEL: "",
     CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION: String(WORKER_MAX_WEB_SEARCHES),
+    CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION: String(WORKER_MAX_SUBAGENTS),
+    CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS: String(WORKER_MAX_CONCURRENT_SUBAGENTS),
   })
   assert.deepEqual(prewrite, [])
 })
@@ -93,6 +95,8 @@ test("createClaudeBackend sanitizes both spawn and resume without replacing Clau
       CLAUDE_CODE_SUBAGENT_MODEL: "",
       CLAUDE_CODE_EFFORT_LEVEL: "",
       CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION: String(WORKER_MAX_WEB_SEARCHES),
+      CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION: String(WORKER_MAX_SUBAGENTS),
+      CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS: String(WORKER_MAX_CONCURRENT_SUBAGENTS),
     })
     assert.equal("CLAUDE_CONFIG_DIR" in built.env, false, "auth/config variables are never replaced")
   }
@@ -110,15 +114,45 @@ test("Claude worker profile sanitization reaches the tmux launch environment", (
   assert.ok(launch.includes("CLAUDE_CODE_SUBAGENT_MODEL="))
   assert.ok(launch.includes("CLAUDE_CODE_EFFORT_LEVEL="))
   assert.ok(launch.includes(`CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION=${WORKER_MAX_WEB_SEARCHES}`))
+  assert.ok(launch.includes(`CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION=${WORKER_MAX_SUBAGENTS}`))
+  assert.ok(launch.includes(`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=${WORKER_MAX_CONCURRENT_SUBAGENTS}`))
   assert.equal(launch.some((entry) => entry.startsWith("CLAUDE_CONFIG_DIR=")), false)
 })
 
-// Claude Code's WebSearch tool stops searching after `CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION`
-// calls (default 200) and returns a budget-exhausted string instead of results — a ceiling a
-// research-heavy worker reaches but a chat session does not. Verified against the real 2.1.220
-// binary: with the cap at 1 the second WebSearch returned "this session has used its web search
-// budget (1 of 1 WebSearch calls)", and the value parses as `int({min:1,digitsOnly:true})`, so a
-// non-digit override is silently discarded by Claude Code back to 200 rather than honored.
+// The three QUIET caps a long-lived worker hits and a chat session does not. All three read
+// `Z.<VAR> ?? <default>` through the same `int({min:1,digitsOnly:true})` parser in the real 2.1.220
+// binary, so a non-digit override is silently discarded by Claude Code back to ITS default rather
+// than honored — which is why fray only passes an override through in exactly that shape:
+//   · WebSearch (200): verified live — with the cap at 1 the second search returned "this session has
+//     used its web search budget (1 of 1 WebSearch calls)" instead of results.
+//   · Subagent spawns per session (200): past it every Task throws "Subagent spawn limit reached".
+//   · Concurrent subagents (20): past it a spawn throws "Concurrent subagent limit reached… Do not
+//     retry", so the tail of a wide fan-out is lost rather than queued.
+const WORKER_CAPS: readonly (readonly [string, number])[] = [
+  ["CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION", WORKER_MAX_WEB_SEARCHES],
+  ["CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION", WORKER_MAX_SUBAGENTS],
+  ["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS", WORKER_MAX_CONCURRENT_SUBAGENTS],
+]
+
+test("claudeWorkerEnvironment: every cap clears Claude Code's default and honors only a well-formed override", () => {
+  for (const [name, lifted] of WORKER_CAPS) {
+    assert.equal(claudeWorkerEnvironment({})[name], String(lifted), `${name} is lifted when unset`)
+    assert.ok(lifted > 20, `${name} must clear Claude Code's own default, not sit under it`)
+    assert.equal(claudeWorkerEnvironment({ [name]: "750" })[name], "750", `${name}: operator policy wins`)
+    // Each of these is rejected by Claude Code's own parser, so passing it through would silently
+    // DROP the worker back to ITS default — the fray value is the safer answer for every one of them.
+    for (const bad of ["", "0", "-5", "1_000", "1e5", "20 ", "abc", "12.5", "+7"]) {
+      assert.equal(
+        claudeWorkerEnvironment({ [name]: bad })[name],
+        String(lifted),
+        `${name}: malformed override ${JSON.stringify(bad)} must fall back to the fray default`,
+      )
+    }
+  }
+})
+
+// The caps are read off the REAL process environment by default — the injectable arg above is a test
+// seam, not the production path, so one var round-trips through process.env to pin that.
 test("claudeWorkerEnvironment: lifts the WebSearch budget and honors only a well-formed operator override", () => {
   const original = process.env.CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION
   try {

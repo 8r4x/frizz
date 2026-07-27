@@ -541,13 +541,36 @@ export function workerPluginDir(): string | undefined {
 // only expression of "effectively uncapped".
 export const WORKER_MAX_WEB_SEARCHES = 10000
 
-// Claude Code parses this variable as a strictly-digits integer >= 1 (`int({min:1,digitsOnly:true})`)
-// and silently falls back to the 200 default on anything else, so an operator override is honored
+// The SAME quiet-cap problem, on the sub-agent path (verified in the same 2.1.220 bundle — all three
+// read `Z.<VAR> ?? <default>` through the identical `int({min:1,digitsOnly:true})` parser):
+//
+//   CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION  default 200 — TOTAL Task spawns for the whole session.
+//     Past it every spawn throws "Subagent spawn limit reached (N of 200 agents spawned)… ask the user
+//     to raise CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION". A fray worker is long-lived and dispatches a
+//     helper per prong across many turns, so it reaches 200 on work a chat session never would — and
+//     the failure reads to the model as "stop delegating", not as a quota. Lifted like the search
+//     budget: no machine cost to a high ceiling, since this counts spawns over time, not live ones.
+//
+//   CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS   default 20 — LIVE agents at once. Past it a spawn throws
+//     "Concurrent subagent limit reached… Do not retry", so a fan-out wider than 20 silently loses its
+//     tail. Raised, but NOT to the same sentinel: every live sub-agent is a real process and API
+//     stream on this machine, so this one is a genuine resource dial (the orphan-reaper work exists
+//     because runaway fan-out really does burn the box). 100 clears any real fan-out with a bound left.
+//
+// NOT lifted: CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH. Its default is not a constant at all — it resolves
+// through a server-gated feature value — but the worker contract already tells workers to keep fan-out
+// shallow because a rested sub-agent is not reliably re-woken by grandchildren. Raising the nesting cap
+// would buy depth that fray's own wake path cannot deliver on, so the cap and the contract agree.
+export const WORKER_MAX_SUBAGENTS = 10000
+export const WORKER_MAX_CONCURRENT_SUBAGENTS = 100
+
+// Claude Code parses these variables as a strictly-digits integer >= 1 (`int({min:1,digitsOnly:true})`)
+// and silently falls back to its own default on anything else, so an operator override is honored
 // only in exactly that shape.
-function workerMaxWebSearches(env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION
+function workerCap(name: string, lifted: number, env: NodeJS.ProcessEnv): string {
+  const override = env[name]
   if (override !== undefined && /^[1-9][0-9]*$/.test(override)) return override
-  return String(WORKER_MAX_WEB_SEARCHES)
+  return String(lifted)
 }
 
 // Claude Code reads these inherited process variables as sub-agent profile defaults. A Fray worker
@@ -555,16 +578,18 @@ function workerMaxWebSearches(env: NodeJS.ProcessEnv = process.env): string {
 // a shell nor a globally configured Claude session silently replace that selection. Empty tmux
 // environment entries override inherited values while preserving every auth/config variable.
 //
-// The web-search cap is the deliberate exception to that masking: a profile override hijacks the
-// worker's identity, but a cap is operator policy, so an explicitly configured one is passed through
-// rather than overridden. It is always set EXPLICITLY (never left to inheritance) because a tmux pane
+// The CAPS are the deliberate exception to that masking: a profile override hijacks the worker's
+// identity, but a cap is operator policy, so an explicitly configured one is passed through rather
+// than overridden. They are always set EXPLICITLY (never left to inheritance) because a tmux pane
 // inherits the tmux SERVER's environment — captured whenever that server first started, which may
 // predate the current fray process by days.
-export function claudeWorkerEnvironment(): Record<string, string> {
+export function claudeWorkerEnvironment(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   return {
     CLAUDE_CODE_SUBAGENT_MODEL: "",
     CLAUDE_CODE_EFFORT_LEVEL: "",
-    CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION: workerMaxWebSearches(),
+    CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION: workerCap("CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION", WORKER_MAX_WEB_SEARCHES, env),
+    CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION: workerCap("CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION", WORKER_MAX_SUBAGENTS, env),
+    CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS: workerCap("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS", WORKER_MAX_CONCURRENT_SUBAGENTS, env),
   }
 }
 
