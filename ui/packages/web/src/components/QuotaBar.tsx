@@ -92,9 +92,9 @@ export function QuotaChips() {
   )
 }
 
-// One provider's chip: the provider mark + a battery meter of the TIGHTEST window's remaining quota,
-// with a percentage. Clicking opens a Popover with the full per-window breakdown (both windows + reset
-// times + plan) — and forces a fresh quota+auth read, so the chip doubles as the recheck control.
+// One provider's chip: the provider mark + the 5-HOUR window's remaining quota, as a percentage. Clicking
+// opens a Popover with the full per-window breakdown (both windows + reset times + plan) — and forces a
+// fresh quota+auth read, so the chip doubles as the recheck control.
 // Signed out → the em dash, and the popover offers Sign in. Unavailable → a muted dash whose Popover
 // explains why; loading (first fetch) → a quiet non-interactive placeholder.
 function QuotaChip({
@@ -131,10 +131,9 @@ function QuotaChip({
   const unavailable = !quota || quota.status !== "ok" || quota.windows.length === 0
   const detail = quota?.detail ?? "quota unavailable"
 
-  // The headline PREFERS the 5-hour window — "how much can I do right now" is the number that matters
-  // most day-to-day. A tighter OTHER window (the weekly / Opus wall) only takes over the headline once it
-  // drops into the warn zone; while everything's healthy the 5h number leads instead of falling back to
-  // weekly. Falls back to the tightest window when there is no 5h window at all.
+  // The headline is ALWAYS the 5-hour window — "how much can I do right now" is the number that matters
+  // day-to-day, and it is the only reading the chip ever shows. The weekly / Opus wall is one click away
+  // in the popover. Falls back to the tightest window only when there is no 5h window at all.
   const headline = unavailable ? undefined : pickHeadline(quota!.windows)
   const remaining = headline ? clampPct(100 - headline.usedPercent) : 0
   const dash = signedOut || unavailable
@@ -235,19 +234,17 @@ function clampPct(n: number): number {
 }
 
 // The remaining % at/below which a window is no longer "a good amount of quota" — it enters the warn
-// zone. Shared by the headline picker (when to surface the tighter window) and the tone (when to drop
-// the healthy green for the amber alarm), so the two stay in lockstep.
+// zone, where the tone drops the calm neutral for the amber alarm.
 const HEALTHY_MIN = 25
 
-// Which window's number leads the chip. Default to the 5-hour window — the immediate runway, the number
-// that matters most day-to-day. Only when some window has fallen into the warn zone (≤ HEALTHY_MIN% left)
-// do we surface the TIGHTEST window instead — that's the limit about to bite, and it earns the headline.
-// With no 5h window at all we always show the tightest.
+// Which window's number leads the chip: ALWAYS the 5-hour one — the immediate runway, the number that
+// matters day-to-day. The chip is a FIXED-MEANING readout, not a "whichever limit is tightest" indicator:
+// it used to swap to the weekly / Opus wall once anything dropped into the warn zone, which made the same
+// glyph mean different things at different times — you had to open the popover just to learn which window
+// the number described. The other windows are still in that popover, one click away. The tightest-window
+// fallback survives only for a provider that reports no 5h window at all.
 function pickHeadline(windows: QuotaWindow[]): QuotaWindow {
-  const tightest = windows.reduce((a, b) => (b.usedPercent > a.usedPercent ? b : a))
-  const fiveHour = windows.find((w) => w.key === "5h")
-  if (!fiveHour) return tightest
-  return clampPct(100 - tightest.usedPercent) > HEALTHY_MIN ? fiveHour : tightest
+  return windows.find((w) => w.key === "5h") ?? windows.reduce((a, b) => (b.usedPercent > a.usedPercent ? b : a))
 }
 
 // Severity by REMAINING: healthy (neutral light gray — no alarm), low (amber), critical (red). Color is

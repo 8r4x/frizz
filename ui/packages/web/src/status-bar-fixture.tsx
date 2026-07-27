@@ -10,6 +10,9 @@ import "./styles.css"
 //
 // Query params drive the states worth eyeballing:
 //   ?state=low        — Claude in the amber warn zone, Codex critical
+//   ?state=weeklywall — a HEALTHY 5h window behind a nearly-spent weekly one. The chip must still read
+//                       the 5h number; this is the state where the old "swap to the tightest window"
+//                       headline used to hijack it and show the weekly figure instead.
 //   ?state=signedout  — Codex signed out (em dash + Sign in popover)
 //   ?connection=closed|connecting
 //   ?identity=loading|unavailable
@@ -31,10 +34,15 @@ const quota =
         claude: { status: "ok", planType: "max", windows: windows(82, 64) },
         codex: { status: "ok", planType: "pro", windows: windows(95, 71) },
       }
-    : {
-        claude: { status: "ok", planType: "max", windows: windows(17, 38) },
-        codex: { status: "ok", planType: "pro", windows: windows(41, 29) },
-      }
+    : state === "weeklywall"
+      ? {
+          claude: { status: "ok", planType: "max", windows: windows(18, 93) },
+          codex: { status: "ok", planType: "pro", windows: windows(24, 88) },
+        }
+      : {
+          claude: { status: "ok", planType: "max", windows: windows(17, 38) },
+          codex: { status: "ok", planType: "pro", windows: windows(41, 29) },
+        }
 
 const auth =
   state === "signedout"
