@@ -64,6 +64,34 @@ For a worker-environment change, dispatch a prompt that uses the real surface �
 the fray MCP (`mcp__fray__spawn_thread`), chrome-devtools — and assert the sub-agent's marker token routes
 back. A plain "write a file" proves almost nothing.
 
+### 2b. A HAPPY-PATH PROMPT IS NOT A TEST — drive the ugly shapes
+
+**This is the step that has actually failed.** 2026-07-26 a spike shipped with a promoted-artifact e2e,
+a real-Chrome screenshot, a sub-agent round-trip, a kill-the-server survival test and 2150 green unit
+tests. Every dispatched prompt was a toy: *"reply with exactly HELLO-OK"*, *"write a marker file"*,
+*"count to 5"*. Within a day a real orchestrator thread and every one of its sub-agents were destroyed
+by a real agent running `printf '\033[31m…'` — an ANSI escape hit a strict protocol validator, the
+validator threw, and the daemon's pump read that as the session ending.
+
+A toy prompt cannot find that, and no amount of MORE toy prompts would have. The risk in a provider
+integration is not in the control flow you wrote; it is in the **values the provider sends back**, and a
+clean prompt only ever produces clean values. So the workload has to be hostile ON PURPOSE:
+
+- **control bytes and ANSI escapes** in a tool argument (`printf '\033[31mX\033[0m'`) — the shape that
+  actually killed a thread;
+- **output far past the size bounds** in `claude-agent-sdk-protocol.ts` (128 KB event text, 64 KB JSON) —
+  `head -c 400000 /dev/zero | tr '\0' 'x'`;
+- **non-UTF-8 / binary** bytes (`head -c 2048 /dev/urandom | base64`);
+- **unicode the validators single out** — bidi overrides, zero-width joiners, astral plane, combining marks;
+- **a long tool chain and a live sub-agent**, so turn bracketing and liveness are exercised together.
+
+`packages/server/src/backend/_live_broker_hostile.mts` is exactly this workload against a real session;
+run it (or extend it) rather than re-deriving the list. When you add a bound to the protocol, add a case.
+
+The assertion that matters is not "the reply was correct" — it is **"the session is still alive and
+still answering afterwards"**, checked against the daemon's own diagnostics log for a `lifecycle:crashed`
+record. A thread that dies quietly is the failure mode; a wrong answer is a much smaller problem.
+
 ### 3. Screenshot in a real browser tab
 
 The `chrome-devtools` MCP is the reliable path here (`scripts/shot.mjs`'s puppeteer Chrome tends to hang in
