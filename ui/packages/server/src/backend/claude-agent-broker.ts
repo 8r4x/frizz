@@ -243,6 +243,15 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   }, REACHABILITY_CHECK_MS)
   if (reach.unref) reach.unref()
 
+  // A bind failure used to be an UNHANDLED 'error' event: node prints a stack and exits, and the host
+  // spawns this daemon with stdio:"ignore" — so the stack goes nowhere, fray sees only a 30s "did not
+  // become ready", and the operator gets "the thread went quiet". Note the `claude` child is already
+  // running by this point, so this is also the moment it leaks. Record the cause, then shut down.
+  // Reachable via a swept stateDir, EACCES, a >104-byte socket path on macOS, or an EADDRINUSE race.
+  server.on("error", (error) => {
+    writeDiagnostic?.({ kind: "lifecycle", phase: "crashed", message: `socket listen failed: ${error instanceof Error ? error.message : String(error)}` })
+    void shutdown(1)
+  })
   try { unlinkSync(config.socketPath) } catch {} // sweep a stale unix socket before binding
   server.listen(config.socketPath, () => {
     published = true

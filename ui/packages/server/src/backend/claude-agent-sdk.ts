@@ -614,12 +614,24 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       //  - a malformed control frame (no requestId, no toolUseId) is a protocol violation. There is no
       //    correlation id to answer against, so a deny would go nowhere — that still fails hard, and
       //    the "without requestId" test pins it.
+      // Guard the WHOLE representation, not just `input`. The first cut pre-checked only rawInput, but
+      // mapPermissionRequest applies equally strict validators to `title`, `description`,
+      // `decisionReason`, `blockedPath` and `suggestions[]` — all derived from the same tool text, and
+      // all capped at 8 KB where the input cap is 64 KB. So a 10 KB Bash command with no control
+      // characters at all passed the input pre-check and still threw on the title.
+      //
+      // Protocol failures (a frame with no requestId to answer against) are still hard: they are
+      // detected before this, and the "without requestId fails before entering the host callback"
+      // test pins that they stay that way.
+      let request: ClaudePermissionRequest
       try {
-        boundedJsonObject(rawInput, "permission.input")
-      } catch {
+        request = mapPermissionRequest(toolName, rawInput, context)
+      } catch (error) {
+        // No correlation id to answer against ⇒ a deny would go nowhere; that stays fatal, and the
+        // ORIGINAL error is re-thrown so the diagnostic still names the actual missing field.
+        if (!context.requestId || !context.toolUseID) throw error
         return { behavior: "deny", message: "This tool call could not be represented for approval, so fray denied it." } as SdkPermissionResult
       }
-      const request: ClaudePermissionRequest = mapPermissionRequest(toolName, rawInput, context)
       const fingerprint = canonicalFingerprint(request)
       return permissionRequests.resolve(request.requestId, fingerprint, async () => {
         const signal = AbortSignal.any([context.signal, lifecycleAbort.signal])
@@ -1077,36 +1089,58 @@ function mapSdkMessage(message: SDKMessage): ClaudeQueryEvent {
   }
 }
 
+/** Read a value, or fall back — never let an informational field cost the frame it rides on. */
+function softList<T>(read: () => T[], fallback: T[]): T[] { try { return read() } catch { return fallback } }
+
 function mapSessionInit(raw: Record<string, unknown>): ClaudeSessionInitEvent {
-  const mcpServers = boundedArray(raw.mcp_servers, "init.mcpServers", 128).map((entry, index) => {
+  // Informational too — degrade rather than lose the frame (see the note on the return below).
+  const mcpServers = softList(() => boundedArray(raw.mcp_servers, "init.mcpServers", 512).map((entry, index) => {
     const object = objectValue(entry, `init.mcpServers[${index}]`)
     return {
       name: safeText(object.name, `init.mcpServers[${index}].name`, 512),
       status: safeText(object.status, `init.mcpServers[${index}].status`, 512),
     }
-  })
-  const plugins = boundedArray(raw.plugins, "init.plugins", 128).map((entry, index) => {
+  }), [])
+  const plugins = softList(() => boundedArray(raw.plugins, "init.plugins", 512).map((entry, index) => {
     const object = objectValue(entry, `init.plugins[${index}]`)
     return {
       name: safeText(object.name, `init.plugins[${index}].name`, 512),
       path: safeText(object.path, `init.plugins[${index}].path`, 8 * 1024),
     }
-  })
+  }), [])
+  // `init` is the ONE frame that must never be dropped: the ownership state machine is built on it, so
+  // a session that loses it dies at birth — the next event trips "non-init event before session
+  // ownership", which fails the output and closes the query. Dropping it therefore costs the whole
+  // session AND misattributes the cause, because the accurate message is one log line earlier.
+  //
+  // So exactly one field stays strict: `sessionId`, which is what ownership is checked against and the
+  // only field where a wrong value would be unsafe. Everything else here is INFORMATIONAL — a version
+  // string, a tool list, a mode name — and is degraded rather than allowed to take the session down.
+  //
+  // Two triggers were proven against the real daemon before this was written, each with a one-variable
+  // control: `init.tools` of 129 entries (the default boundedStringArray cap is 128, and fray dispatches
+  // into arbitrary repos where one MCP server of the Neon/better-stack size clears it on its own), and a
+  // permissionMode string outside the six fray currently knows — `dontAsk` and `auto` are recent
+  // additions to that list, so the NEXT one claude ships would otherwise be a fleet-wide outage on
+  // upgrade. That is the same failure mode as the codex version pin, on the Claude side.
+  const soft = <T,>(read: () => T, fallback: T): T => { try { return read() } catch { return fallback } }
   return {
     kind: "init",
     protocolVersion: CLAUDE_AGENT_SDK_PROTOCOL_VERSION,
-    sessionId: boundedId(raw.session_id, "init.sessionId"),
-    messageId: boundedId(raw.uuid, "init.messageId"),
-    claudeCodeVersion: safeText(raw.claude_code_version, "init.claudeCodeVersion", 512),
-    cwd: safeText(raw.cwd, "init.cwd", 8 * 1024),
-    model: safeText(raw.model, "init.model", 512),
-    permissionMode: validatePermissionMode(raw.permissionMode),
-    tools: boundedStringArray(raw.tools, "init.tools"),
+    sessionId: boundedId(raw.session_id, "init.sessionId"), // ownership — strict on purpose
+    messageId: soft(() => boundedId(raw.uuid, "init.messageId"), ""),
+    claudeCodeVersion: soft(() => safeText(raw.claude_code_version, "init.claudeCodeVersion", 512), ""),
+    cwd: soft(() => safeText(raw.cwd, "init.cwd", 8 * 1024), ""),
+    model: soft(() => safeText(raw.model, "init.model", 512), ""),
+    // An unknown mode reports as "default" rather than killing the session. fray never ACTS on this
+    // value — it sends the mode it wants; this is the provider's echo, for display.
+    permissionMode: soft(() => validatePermissionMode(raw.permissionMode), "default"),
+    tools: soft(() => boundedStringArray(raw.tools, "init.tools", 4096), []),
     mcpServers,
-    slashCommands: boundedStringArray(raw.slash_commands, "init.slashCommands", 256),
-    skills: boundedStringArray(raw.skills, "init.skills", 256),
+    slashCommands: soft(() => boundedStringArray(raw.slash_commands, "init.slashCommands", 1024), []),
+    skills: soft(() => boundedStringArray(raw.skills, "init.skills", 1024), []),
     plugins,
-    capabilities: raw.capabilities === undefined ? [] : boundedStringArray(raw.capabilities, "init.capabilities", 256),
+    capabilities: raw.capabilities === undefined ? [] : soft(() => boundedStringArray(raw.capabilities, "init.capabilities", 1024), []),
   }
 }
 
