@@ -374,6 +374,20 @@ export function isActivelyRunning(t: ThreadView): boolean {
   return t.runtime === "turn-idle" && hasLiveOps(t)
 }
 
+// A QUEUE HANDOFF THAT HAS ALREADY COME TO REST: the server queued it (`needsYou`) and the thread's
+// OWN turn is over (turn-idle/exited). Its dispatched sub-agents may still be spinning — that is
+// exactly the awaiting-background handoff (board.ts hasLiveOwnWork), and it deliberately keeps the
+// thread undimmed and in the Active section via isActivelyRunning/hasLiveOps. What it must NOT do is
+// make the PARENT's rail mark claim motion the parent does not have (maintainer 2026-07-27: "when an
+// agent comes to rest and shows up in the queue, it should get the ellipsis indicator in the sidebar,
+// even though its sub-agents are still spinning"). The children keep their own spinners on their own
+// indented rows (Sidebar SubAgentRows → ChildOpRow); the parent's indicator speaks for the parent.
+// This closes the drift inActiveRunningBand already flagged below ("its rail indicator may still be a
+// spinner … cosmetic"): the queued row now sits in the rested band AND reads as rested.
+function restedQueueHandoff(t: ThreadView): boolean {
+  return t.needsYou === true && atRest(t)
+}
+
 // One status-priority decision shared by the sidebar renderer and its tests. The order is important:
 // an archived row at rest stays archived even if stale attention metadata lingers; a real human ask
 // stays a question after the worker exits; live work stays working; and a completed handoff stays a
@@ -394,7 +408,10 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
       t.status === "needs-human",
   )
   if (explicitlyNeedsInput) return "needs-input"
-  if (activelyRunning) return "working"
+  // "Working" is reserved for motion the PARENT actually has: its own turn in flight (running/spawning),
+  // or a live child while the parent is NOT yet a handoff. A rested, queued thread falls through to the
+  // at-rest ellipsis below no matter how many sub-agents it still has out — see restedQueueHandoff.
+  if (activelyRunning && !restedQueueHandoff(t)) return "working"
 
   if (isHeld(t)) return "held"
   if (t.lastFence?.kind === "done" && atRest(t)) return "done"
@@ -485,8 +502,8 @@ export function orderActive(threads: readonly ThreadView[], direction: QueueDire
 
 // The running band is strictly live work that ISN'T waiting on the human: a queued thread ALWAYS
 // belongs to the rested band so its queue card maps to a rested-band row and the marker stays
-// monotonic even in the rare spinning-yet-needs-you state. (Its rail indicator may still be a spinner
-// via sessionIndicatorKind — cosmetic; what matters here is that it never leaves the rested band.)
+// monotonic even in the rare spinning-yet-needs-you state. (sessionIndicatorKind now agrees: a rested
+// queued row reads as at-rest rather than spinning, so band and glyph tell the operator one story.)
 function inActiveRunningBand(t: ThreadView): boolean {
   return isActivelyRunning(t) && t.needsYou !== true
 }

@@ -140,6 +140,34 @@ test("sessionIndicatorKind: bare queued rest stays rest while concrete input sta
   assert.equal(sessionIndicatorKind(thread({ state: "archived", needsYou: true, runtime: "exited" })), "archived")
 })
 
+// A worker that comes to rest and lands in the queue reads AT REST on the rail, even while the
+// sub-agents it dispatched keep running (maintainer 2026-07-27). The children still spin — on their
+// OWN indented rows — but the parent's mark speaks for the parent, and the parent has handed off.
+test("sessionIndicatorKind: a rested QUEUED thread is at rest even with live sub-agents", () => {
+  const restedInQueue = thread({ kind: "session", state: "open", needsYou: true, runtime: "turn-idle", subAgents: liveSub })
+  assert.equal(sessionIndicatorKind(restedInQueue), "rest")
+  // …and it stays in the undimmed Active section's RESTED band: only the glyph changed.
+  assert.equal(sectionOf(restedInQueue), "active")
+  assert.equal(isHeld(restedInQueue), false)
+  assert.equal(partitionActive([restedInQueue]).rested.length, 1)
+
+  // NOTHING else collapses into the ellipsis:
+  // • the parent's OWN turn in flight still spins, queued or not
+  assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, runtime: "running" })), "working")
+  assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, runtime: "spawning" })), "working")
+  // • a rested thread with live children that is NOT a handoff (event-snoozed card, no queue entry)
+  //   keeps its spinner — that row is genuinely just cooking
+  assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, needsYou: false })), "working")
+  // • a concrete ask still wins the row
+  assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, pendingQuestion: true })), "needs-input")
+  // • a done fence still reads as the completed handoff
+  assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, lastFence: { kind: "done", body: "shipped", hints: [] } })), "done")
+  // • a parked wait keeps its hourglass (needsYou is false there — the server holds it out of the queue)
+  assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, needsYou: false, subAgents: [], lastFence: awaitingHuman })), "held")
+  // • an EXITED parent with children still reading "running" is a stall, not a rest
+  assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, runtime: "exited" })), "stalled")
+})
+
 // ── THE STALLED/RETRY CONTRACT ────────────────────────────────────────────────────────────────────
 // The queue card's Retry button and the sidebar row's yellow [!] must be ONE decision. They were not:
 // the card gated on "the process exited" while the row gated on the server's `crashed` bit (exited AND

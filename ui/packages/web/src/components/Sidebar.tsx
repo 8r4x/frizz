@@ -552,7 +552,8 @@ export function ThreadIndicator({ t, legacy }: { t: ThreadView; legacy?: boolean
 //                     inline Retry verb (offersRetry === this kind — one decision, two surfaces).
 //   clock waiting   — machine-waiting behind an ```awaiting fence
 //   [✓] done        — a ```done fence at rest, OR an archived thread (muted check — NOTHING else)
-//   […] at rest     — an ordinary bare rest with no concrete ask
+//   […] at rest     — an ordinary rest with no concrete ask, INCLUDING a queued thread whose own
+//                     dispatched sub-agents are still running (they spin on their own child rows)
 // Attention (needs-input / stalled) wears the accent; everything else is muted.
 function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string | null } {
   const kind = sessionIndicatorKind(t)
@@ -609,8 +610,9 @@ function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string |
     if (hk === "session") return { node: <StatusBox><CircleDashed size={10} className="text-muted/70" /></StatusBox>, tip: "Waiting on another session" }
     return { node: <StatusBox><Clock size={9} className="text-muted/70" /></StatusBox>, tip: "Waiting on a machine" }
   }
-  // Bare at rest (no fence, no live sub, nothing pending) with the process still ALIVE — a worker that
-  // came to rest WITHOUT declaring done or a machine-wait. (An exited one is `stalled` above; this
+  // At rest (no fence, nothing pending) with the process still ALIVE — a worker that came to rest
+  // WITHOUT declaring done or a machine-wait. A queued thread reaches here even with LIVE sub-agents:
+  // it has handed off, and its children spin on their own rows. (An exited one is `stalled` above; this
   // ellipsis is now honestly reserved for a session you can still just type at.) Read it as WAITING
   // (maintainer 2026-07-10: a rested-not-done thread "should be blocked or waiting", never a stark
   // empty box and never a false check). We don't know the reason — the worker didn't fence — so: no
