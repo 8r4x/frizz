@@ -463,7 +463,10 @@ export function projectDeliveryLedger(messages: TranscriptMessage[], items: Deli
   // happen to carry the SAME words both resolved to the same bubble — the second item tagged it with
   // its own deliveryId and then skipped projecting, so the operator saw ONE queued bubble for two
   // messages they had sent, and the first send's optimistic client copy (which consumes by deliveryId)
-  // was never accounted for. Indexes into `messages`, so it is unaffected by the tail appends below.
+  // was never accounted for. Bubbles this loop APPENDS are claimed too — the scan below re-reads
+  // `messages.length` each pass, so without that a second item simply adopted the bubble the first one
+  // had just projected, which is the same collapse by another route (seen live: two identical sends,
+  // ledger holding both, exactly one gray bubble on screen).
   const claimed = new Set<number>()
   for (const item of items) {
     const text = canon(item.text)
@@ -485,6 +488,7 @@ export function projectDeliveryLedger(messages: TranscriptMessage[], items: Deli
       break
     }
     if (handled) continue
+    claimed.add(messages.length)
     messages.push({
       sourceId: `delivery:${item.id}`,
       role: "user",

@@ -9,7 +9,7 @@
 // appendDelivery(state:"enqueued"). Then ticks the tailer (which folds the JSONL into the ledger) and
 // dumps readLatestThreadTranscriptPage after each phase, counting how many times each message renders.
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, realpathSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
@@ -101,9 +101,10 @@ try {
   console.log(`\n${at()} sending ALPHA + BRAVO back to back`)
   const dA = randomUUID(), dB = randomUUID()
   const tSend = Date.now()
-  await bridge.followUp({ threadSlug: slug, sessionId, cwd, text: ALPHA })
+  // deliveryId rides through to the SDK as this input's uuid — exactly what router.followUp does now.
+  await bridge.followUp({ threadSlug: slug, sessionId, cwd, text: ALPHA, deliveryId: dA })
   appendDelivery(storage, slug, { id: dA, text: ALPHA, state: "enqueued" })
-  await bridge.followUp({ threadSlug: slug, sessionId, cwd, text: BRAVO })
+  await bridge.followUp({ threadSlug: slug, sessionId, cwd, text: BRAVO, deliveryId: dB })
   appendDelivery(storage, slug, { id: dB, text: BRAVO, state: "enqueued" })
 
   dump("immediately after send")
@@ -135,7 +136,24 @@ try {
   ok("BRAVO renders exactly once", nB === 1, `renders ${nB}x`)
   const leftover = parseDeliveryLedger(storage.getSession(slug)?.delivery_ledger)
   ok("the delivery ledger is empty", leftover.length === 0, `${leftover.length} left: ${leftover.map((i) => i.state).join(",")}`)
-  console.log(`\ntranscript: ${claudeBackend.transcriptPath(sessionId)}`)
+
+  // THE IDENTITY CLAIM, verified end to end through the real bridge: fray's deliveryId must come back
+  // as the queued_command attachment's source_uuid. That is what makes correlation exact.
+  const path = claudeBackend.transcriptPath(sessionId)!
+  const echoed = new Map<string, string>()
+  for (const line of readFileSync(path, "utf8").split("\n").filter(Boolean)) {
+    const r = JSON.parse(line) as Record<string, unknown>
+    const att = r.attachment as { type?: string; prompt?: unknown; source_uuid?: unknown } | undefined
+    if (att?.type === "queued_command" && typeof att.source_uuid === "string" && typeof att.prompt === "string") {
+      echoed.set(att.prompt, att.source_uuid)
+    }
+    if (r.type === "user" && typeof (r.message as { content?: unknown })?.content === "string" && typeof r.uuid === "string") {
+      echoed.set((r.message as { content: string }).content, r.uuid)
+    }
+  }
+  ok("ALPHA's deliveryId came back as the delivery record's id", echoed.get(ALPHA) === dA, `source_uuid=${echoed.get(ALPHA)} deliveryId=${dA}`)
+  ok("BRAVO's deliveryId came back as the delivery record's id", echoed.get(BRAVO) === dB, `source_uuid=${echoed.get(BRAVO)} deliveryId=${dB}`)
+  console.log(`\ntranscript: ${path}`)
 } catch (err) {
   failures++
   console.log(`ERROR ${err instanceof Error ? err.stack : String(err)}`)

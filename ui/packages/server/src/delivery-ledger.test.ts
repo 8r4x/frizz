@@ -376,6 +376,14 @@ test("an already-delivered copy suppresses projection entirely (prune race)", ()
   assert.equal(out[0].deliveryId, undefined)
 })
 
+test("two untracked sends of the SAME text project TWO bubbles, not one", () => {
+  // The second item must not adopt the bubble the first one just appended.
+  const out = projectDeliveryLedger([msg({ text: "earlier", sourceId: "s:1" })], [item({ id: "d-1" }), item({ id: "d-2" })])
+  assert.equal(out.length, 3)
+  assert.deepEqual(out.slice(1).map((m) => m.sourceId), ["delivery:d-1", "delivery:d-2"])
+  assert.deepEqual(out.slice(1).map((m) => m.deliveryId), ["d-1", "d-2"])
+})
+
 test("two outstanding sends of the SAME text never collapse onto one bubble", () => {
   // Both items matched the one rendered bubble by text, so the second tagged it with ITS id and then
   // skipped projecting: the operator saw ONE queued bubble for two messages they had sent, and the
