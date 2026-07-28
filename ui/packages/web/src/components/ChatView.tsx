@@ -47,6 +47,9 @@ import { InteractionStack } from "./InteractionCards.tsx"
 // a file THIS one imports, so the card could not have stayed here without a module cycle.
 import { CARD_BODY, CARD_PRIMARY_ACTION, CARD_PRIMARY_BUTTON, CardActions, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
+// The resting card, shared with the queue (TodosView passes it the event-Snooze; these two surfaces
+// deliberately pass no action — see the module header).
+import { AwaitingBackgroundCard } from "./AwaitingBackgroundCard.tsx"
 // Re-exported from their new homes so existing importers (TodosView, the fixtures) keep one
 // import path while the definitions live where both question producers can reach them.
 export { CARD_BODY, CARD_PRIMARY_BUTTON, CardActions, TranscriptCard } from "./TranscriptCard.tsx"
@@ -394,7 +397,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
               // (rendered after the working/pending indicators, below) — not interleaved here.
               (m) => !!m.queued,
             )}
-            {(thread?.providerFault || thread?.limitPause || frozenAsk || nativeInputRequired || thread?.runtime === "perm-prompt" || running) && <VSpace />}
+            {(thread?.providerFault || thread?.limitPause || frozenAsk || nativeInputRequired || thread?.runtime === "perm-prompt" || running || thread?.awaitingBackground) && <VSpace />}
             {/* A frozen native AskUserQuestion takes precedence over the generic perm banner and the
                 Working… spinner — it's the salient state (the safety net). Background sub-agents/shells
                 are NOT surfaced here anymore: they live in the anchored ops strip (below), which is
@@ -417,6 +420,11 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
               <PermPromptBanner onTerminal={copyTerminalCommand} />
             ) : running ? (
               <WorkingIndicator since={thread?.lastUserAt} />
+            ) : thread?.awaitingBackground ? (
+              // The rest itself, stated. Last in the chain because every branch above is a HARDER
+              // reading of the same slot; this one is the benign case and never outranks them. It can
+              // never collide with `running` anyway — the server only sets it at turn-idle.
+              <AwaitingBackgroundCard thread={thread} />
             ) : null}
             {/* SIBLING of the chain above, not a branch in it. Those are mutually exclusive because they
                 all describe the ONE thing currently blocking; a policy decision blocks nothing and can
@@ -573,7 +581,8 @@ function VirtualizedThreadTranscript({
       || (thread?.pendingInteraction ? undefined : thread?.pendingAsk)
       || nativeInputRequired
       || thread?.runtime === "perm-prompt"
-      || running,
+      || running
+      || thread?.awaitingBackground,
   )
   const rows = useMemo<VirtualThreadRow[]>(() => {
     const next: VirtualThreadRow[] = [{ key: "interactions", kind: "interactions" }]
@@ -1090,6 +1099,9 @@ function VirtualizedThreadTranscript({
                   <PermPromptBanner onTerminal={copyTerminalCommand} />
                 ) : running ? (
                   <WorkingIndicator since={thread?.lastUserAt} />
+                ) : thread?.awaitingBackground ? (
+                  // See the non-virtualized chain above: last branch, benign case, no Snooze here.
+                  <AwaitingBackgroundCard thread={thread} />
                 ) : null}
                 {/* Sibling, not a branch — see the runtime-status block above. */}
                 {thread?.permPolicy ? (
@@ -3172,9 +3184,6 @@ export function BackgroundOpsStrip({
           startedAt={s.startedAt}
           // The ops strip is where the full live reading belongs: the child's current step plus how far
           // it has got. All three are absent for a tmux/codex child, which just reads as it did before.
-          activityDetail={s.activityDetail}
-          toolUses={s.toolUses}
-          tokens={s.tokens}
           onOpen={s.id ? () => pushSubAgentDrawer(slug, s.id!, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt }) : undefined}
           onDismiss={s.id ? () => dismiss.mutate(s.id!) : undefined}
         />

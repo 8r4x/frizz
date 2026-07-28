@@ -9,7 +9,8 @@ import { useBoard, asThreads, useTranscript } from "../hooks.ts"
 import { orderQueue, queued, displayTitle, lastActiveLabelAt } from "../groups.ts"
 import { useLiveAnswering } from "../lib/answering.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
-import { CARD_BODY, CARD_PRIMARY_BUTTON, CardActions, Message, NativeInputRequiredCard, PermPolicyNote, PermPromptBanner, PendingAskCard, StickyUserBand, TranscriptCard, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText } from "./ChatView.tsx"
+import { CARD_PRIMARY_BUTTON, Message, NativeInputRequiredCard, PermPolicyNote, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText } from "./ChatView.tsx"
+import { AwaitingBackgroundCard } from "./AwaitingBackgroundCard.tsx"
 import { agentCompletionCall } from "../lib/subAgentCompletion.ts"
 import { prefs } from "../lib/prefs.ts"
 import { ThreadComposerBox } from "./ThreadComposerBox.tsx"
@@ -113,11 +114,10 @@ function resumeNativeAnchoring(): void {
   }
 }
 
-// The awaiting-background banner. A queued thread whose SOLE reason is "resting while its own dispatched
-// work (sub-agents / launched shells) is still live, no human ask" — it is awaiting results it kicked
-// off, not the human. This is a heads-up, not a request: it says what is cooking and offers a one-click
-// event-snooze that hides the card until the work returns (the parent comes to a NEW rest). NO session is
-// stopped — the thread is already at rest and stays alive; the card simply drops out of the queue and
+// The QUEUE's awaiting-background banner: the shared resting card (AwaitingBackgroundCard, which the
+// drawer and the full-screen page render too) plus the one affordance only the queue gets — a one-click
+// event-snooze that hides the card until the work returns (the parent comes to a NEW rest). NO session
+// is stopped — the thread is already at rest and stays alive; the card simply drops out of the queue and
 // re-surfaces on its own when a child returns. Distinct from the footer's wall-clock Snooze (a fixed
 // deadline); this one has no deadline and expires itself on the next rest.
 function AwaitingBackgroundBanner({ thread, onSnooze, onSnoozeFailed }: {
@@ -126,13 +126,6 @@ function AwaitingBackgroundBanner({ thread, onSnooze, onSnoozeFailed }: {
   onSnoozeFailed: () => void // reinstate the card if the server declines
 }) {
   const [pending, setPending] = useState(false)
-  const agents = (thread.subAgents ?? []).filter((a) => a.state === "running").length
-  const shells = (thread.bgShells ?? []).filter((s) => s.state === "running").length
-  // Name what it is ACTUALLY waiting on: "sub-agents" is wrong for a shell-only thread (a launched dev
-  // server is not a child whose result you await), so fall back to a neutral noun when there are none.
-  const what = agents > 0
-    ? `${agents} sub-agent${agents === 1 ? "" : "s"}`
-    : `${shells} background task${shells === 1 ? "" : "s"}`
   const snooze = () => {
     setPending(true)
     onSnooze() // fade the card immediately, like every other queue dismissal
@@ -146,18 +139,9 @@ function AwaitingBackgroundBanner({ thread, onSnooze, onSnoozeFailed }: {
       })
   }
   return (
-    // The SAME shell as every transcript card (ChatView.TranscriptCard). This banner stacks directly
-    // under an awaiting fence card on a queue card, and it used to be a visibly different object there
-    // — smaller radius, a washed-out fill, its own padding, no kind header — for the same job.
-    <TranscriptCard data-awaiting-background icon={Hourglass} label="Awaiting background work">
-      {/* Both sentences are BODY text (maintainer 2026-07-24): the self-return is a fact about the
-          thread, not a caption for the button, so it reads as prose rather than as a label the Snooze
-          control drags around with it. The button then owns its row alone. */}
-      <p className={CARD_BODY}>
-        This agent has come to rest, but it’s awaiting the results from {what} it dispatched. It returns
-        to the queue on its own when the work comes back.
-      </p>
-      <CardActions>
+    <AwaitingBackgroundCard
+      thread={thread}
+      actions={
         <button
           type="button"
           onClick={snooze}
@@ -174,8 +158,8 @@ function AwaitingBackgroundBanner({ thread, onSnooze, onSnoozeFailed }: {
           <Hourglass size={12} className={ICON_LABEL_NUDGE} />
           Snooze
         </button>
-      </CardActions>
-    </TranscriptCard>
+      }
+    />
   )
 }
 

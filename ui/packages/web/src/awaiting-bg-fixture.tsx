@@ -6,10 +6,16 @@ import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
 
-// Browser QA for the AWAITING-BACKGROUND card: a queued thread that came to rest while its OWN dispatched
-// sub-agents are still live and no human ask is outstanding renders the informational banner + the event
-// "Snooze" button (see TodosView.AwaitingBackgroundBanner). ?shells=1 exercises the shell-only wording.
-// snoozeAwaitingBackground is mocked so nothing real is hit; clicking Snooze fades the card out.
+// Browser QA for the AWAITING-BACKGROUND card ON THE QUEUE: a queued thread that came to rest while its
+// OWN dispatched sub-agents are still live and no human ask is outstanding renders the informational
+// banner + the event "Snooze" button (see TodosView.AwaitingBackgroundBanner). ?shells=1 exercises the
+// shell-only wording. snoozeAwaitingBackground is mocked so nothing real is hit; clicking Snooze fades
+// the card out.
+//
+// The SAME card also renders in the drawer and on the full-screen page, WITHOUT the Snooze — that pair is
+// server-derived (board.awaitingBackground), so it is verified against a real stack rather than here:
+// `node scripts/seed-resting-thread.mjs --home=… --socket=…` against an adhoc stack seeds a thread at
+// rest with live children, then /thread/<slug> and /thread/<slug>/full show the button-less card.
 
 const SLUG = "awaiting-bg-demo"
 const shellOnly = new URLSearchParams(location.search).get("shells") === "1"
