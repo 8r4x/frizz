@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 const names = ["ci-watch.mjs", "github-watch.mjs", "review-watch.mjs"]
-const targets = ["codex/skills/fray-orchestrator/scripts", "cc-worker/skills/gh/scripts"]
+const targets = ["cc-worker/skills/gh/scripts"]
 
 test("provider packages contain byte-identical generated monitor entrypoints", () => {
   for (const target of targets) for (const name of names) {
@@ -24,17 +24,14 @@ test("portable monitor guidance requires declared-project precedence and explici
   assert.match(guide, /do not silently fall back[\s\S]*shadow it/)
 })
 
-test("Codex and Claude provider guidance prefer declared tooling and make no Luna child mandatory", () => {
-  const codex = readFileSync(join(root, "codex/skills/fray-orchestrator/SKILL.md"), "utf8")
+// The codex ORCHESTRATOR skill is retired, but Codex is still a live fray-ui worker BACKEND, so its
+// golden worker prompt keeps the same guidance bar the Claude one does.
+test("worker guidance prefers declared tooling and makes no Luna child mandatory", () => {
   const claude = readFileSync(join(root, "cc-worker/skills/gh/SKILL.md"), "utf8")
-  for (const guide of [codex, claude]) {
-    assert.match(guide, /project-local `AGENTS\.md`/)
-    assert.match(guide, /terminal\s+event\/exit contract/)
-    assert.match(guide, /never silently shadow/)
-    assert.match(guide, /workflow name.*event|workflow name plus event/)
-  }
-  assert.match(codex, /Luna\s+child is optional only/)
-  assert.doesNotMatch(codex, /exactly one `gpt-5\.6-luna` \+ `medium` monitor child/)
+  assert.match(claude, /project-local `AGENTS\.md`/)
+  assert.match(claude, /terminal\s+event\/exit contract/)
+  assert.match(claude, /never silently shadow/)
+  assert.match(claude, /workflow name.*event|workflow name plus event/)
   assert.match(claude, /use native `Monitor`/)
 
   const promptDir = join(root, "ui/packages/server/src")

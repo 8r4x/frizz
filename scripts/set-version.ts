@@ -2,21 +2,16 @@
 /**
  * set-version — single source of truth for the fray Claude Code plugin version.
  *
- * The CC plugin version lives in TWO files that MUST stay in lockstep:
- *   - cc/.claude-plugin/plugin.json  ("version")
- *   - cc/skills/fray/SKILL.md        (YAML frontmatter `version:`)
- * These drifted once (plugin.json at 1.6.3 while SKILL.md frontmatter fell to
- * 1.0.x) because each was bumped by hand independently. This script makes them
- * one command with an atomic replacement per file. A process crash between the
- * two renames can still leave temporary drift, which `--check` detects.
+ * The plugin version lives in cc-worker/.claude-plugin/plugin.json ("version").
  *
- * DELIBERATELY EXCLUDED (independent version tracks — NOT bumped here):
- *   - codex/.codex-plugin/plugin.json — the Codex plugin has an independent
- *     version track. Its skill carries no separate version field.
- *   - pi/package.json — private (`"private": true`, 0.0.0), never published.
- *   - opencode/package.json — carries no version field at all (only a dep pin).
- *   - .claude-plugin/marketplace.json — the marketplace manifest has no version.
- * If a future port should share the CC version, add its file to SYNCED_FILES.
+ * This was a two-file lockstep while the retired cc orchestrator plugin also
+ * carried the version in its SKILL.md frontmatter — the pair drifted once
+ * (plugin.json at 1.6.3, frontmatter at 1.0.x) because each was bumped by hand.
+ * Only the worker plugin ships now, so SYNCED_FILES has one entry and `--check`
+ * is trivially satisfied. The set-shaped machinery is kept because it costs
+ * nothing and re-adding a second version-bearing file is a one-entry change.
+ *
+ * The marketplace manifest carries no version and is not bumped here.
  *
  * Usage:
  *   node scripts/set-version.ts 1.8.0     # write 1.8.0 to all synced files
@@ -43,7 +38,7 @@ interface SyncedFile {
 
 const SYNCED_FILES: readonly SyncedFile[] = [
   {
-    path: "cc/.claude-plugin/plugin.json",
+    path: "cc-worker/.claude-plugin/plugin.json",
     label: 'plugin.json "version"',
     read(text) {
       const m = text.match(/"version"\s*:\s*"([^"]+)"/);
@@ -52,26 +47,6 @@ const SYNCED_FILES: readonly SyncedFile[] = [
     write(text, version) {
       // Surgical replacement preserves the file's exact formatting/key order.
       return text.replace(/("version"\s*:\s*")[^"]+(")/, `$1${version}$2`);
-    },
-  },
-  {
-    path: "cc/skills/fray/SKILL.md",
-    label: "SKILL.md frontmatter version:",
-    read(text) {
-      const m = text.match(/^---\n([\s\S]*?)\n---/);
-      if (!m) return null;
-      const fm = m[1].match(/^version:\s*(.+)$/m);
-      return fm ? fm[1].trim() : null;
-    },
-    write(text, version) {
-      const fm = text.match(/^(---\n)([\s\S]*?)(\n---)/);
-      if (!fm) throw new Error("SKILL.md: no YAML frontmatter block found");
-      if (!/^version:\s*.+$/m.test(fm[2])) {
-        throw new Error("SKILL.md: no `version:` key in frontmatter");
-      }
-      // Replace ONLY within the frontmatter block, never a body `version:` line.
-      const nextFm = fm[2].replace(/^(version:\s*).+$/m, `$1${version}`);
-      return fm[1] + nextFm + fm[3] + text.slice(fm[0].length);
     },
   },
 ];

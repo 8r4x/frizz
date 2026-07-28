@@ -1,12 +1,12 @@
 {
   "name": "fray",
   "owner": { "name": "Colin McDonnell" },
-  "description": "fray — the orchestrator-first multi-agent methodology, packaged for Claude Code and other agent harnesses.",
+  "description": "fray — the multi-agent workbench. A dashboard drives many one-effort worker sessions.",
   "plugins": [
     {
       "name": "fray",
-      "source": "./cc",
-      "description": "Orchestrator-first multi-agent methodology + tooling: a per-project .fray/ thread board, dispatch/reconciliation hooks, and a board/validator CLI."
+      "source": "./cc-worker",
+      "description": "Worker-side plugin for fray-ui sessions: the worker contract seed, sub-agent profiles, the on-demand gh/handoff/waits skills, and the hooks that keep a dashboard worker signalling correctly."
     }
   ]
 }

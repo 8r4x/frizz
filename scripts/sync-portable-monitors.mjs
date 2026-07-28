@@ -6,10 +6,7 @@ import { fileURLToPath } from "node:url"
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 const source = join(root, "monitors")
 const names = ["ci-watch.mjs", "github-watch.mjs", "review-watch.mjs"]
-const targets = [
-  join(root, "codex/skills/fray-orchestrator/scripts"),
-  join(root, "cc-worker/skills/gh/scripts"),
-]
+const targets = [join(root, "cc-worker/skills/gh/scripts")]
 const check = process.argv.slice(2).join(" ") === "--check"
 if (process.argv.length > 2 && !check) throw new Error("Usage: sync-portable-monitors.mjs [--check]")
 

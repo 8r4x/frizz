@@ -1,8 +1,7 @@
 name: version-check
 
-# Fails on plugin version drift — the cc plugin.json "version" and the
-# cc/skills/fray/SKILL.md frontmatter `version:` must always agree.
-# Bump them together with `node scripts/set-version.ts <version>`.
+# Fails on plugin version drift across every version-bearing file.
+# Bump with `node scripts/set-version.ts <version>`.
 
 on:
   push:

@@ -17,12 +17,12 @@
 // GATE: everything is gated on FRAY_UI_THREAD being set, so the plugin is completely inert when
 // loaded outside a fray-ui worker (e.g. a plain `claude --plugin-dir cc-worker` smoke run).
 //
-// DOUBLE-HOOK DEFENSE: if the user ALSO has the orchestrator `cc` (fray) plugin globally enabled,
-// its hooks fire in every repo but are gated on cc's opt-IN sentinel — dormant until a session runs
-// `fray on`. A fresh worker never runs `fray on`, so cc is already dormant here. To make that
-// GUARANTEED (and survive an accidental `fray on`/orchestrator-skill load inside a worker), we write
-// cc's OWN per-session `off` sentinel for this session id via cc's shared API — belt-and-suspenders,
-// overridable by an explicit later `fray on`. See DECISIONS.md.
+// STALE-INSTALL DEFENSE: the `cc` orchestrator plugin is retired — the marketplace ships only this
+// worker plugin, and cc's hooks/skills/agents are gone. But a machine can still carry a CACHED cc
+// install from before the retirement, whose hooks fire in every repo gated on cc's opt-IN sentinel.
+// A fresh worker never runs `fray on`, so such a cc is already dormant; we write cc's own per-session
+// `off` sentinel anyway via the shared config API (cc/scripts/fray survives as cc-worker's board
+// implementation) so a stale install is guaranteed inert. Cheap belt-and-suspenders. See DECISIONS.md.
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { setSessionOverride, currentSessionId } from '../scripts/fray/config.mjs';
@@ -63,7 +63,7 @@ const scratch = sid
 // CANNOT carry: the runtime-derived scratchpad PATH, an essential signal-at-rest anchor, and (below)
 // the compaction re-read nudge, gh guidance, and the defensive cc-orchestrator off-sentinel.
 const core =
-  '⟦fray worker contract⟧ You are a fray-ui WORKER driving EXACTLY ONE effort. Your FULL operating contract — the end-of-turn signal fences, scratchpad rules, sub-agent rules, and the runtime release gate — lives in your SYSTEM PROMPT; follow it there (this is a runtime re-grounding, not a second copy). The human + the fray-ui app are the ORCHESTRATOR; you drive ONE effort and never scan the board, touch other efforts, or run `fray on` / load the orchestrator "fray" skill.\n' +
+  '⟦fray worker contract⟧ You are a fray-ui WORKER driving EXACTLY ONE effort. Your FULL operating contract — the end-of-turn signal fences, scratchpad rules, sub-agent rules, and the runtime release gate — lives in your SYSTEM PROMPT; follow it there (this is a runtime re-grounding, not a second copy). The human + the fray-ui app are the ORCHESTRATOR; you drive ONE effort and never scan the board or touch other efforts. There is no orchestrator mode and no fleet to run: doing the work yourself is the default, and you dispatch a sub-agent only when the work genuinely decomposes into independent prongs.\n' +
   'SCRATCHPAD: `' + scratch + '` — your compaction-proof working memory and your sub-agents\' shared blackboard. Put any survive-compaction to-do list / state there, and pass its PATH into every sub-agent prompt.\n' +
   'SIGNAL AT REST through your FINAL MESSAGE, per the fence rules in your system prompt: bare rest is the ordinary handoff and queues for the human; ```done only when the effort\'s real work is COMPLETE (code LANDED on the mainline — an open PR is NOT done, park it on ```awaiting until it MERGES) and is a DISMISSAL (its card files the thread away where nobody looks again), so if the thread points at future work AT ALL — a pre-fix investigation, a live code-change discussion — bare rest instead, and uncertain is not done; the ONE exception is a planning session whose plan file is fully written and persisted, because that artifact outlives the thread; ```awaiting parks only a human:/timer:/pr-watch: gate, never CI/releases/merge progression (those stay ACTIVE); ```question is the operator ask. Load `fray:handoff` for the full fence reference.\n' +
   'DECIDE rather than ask: anything derivable from the code, the conventions, or ordinary engineering judgment is YOURS to settle — asking permission to do the work you were dispatched to do is not a question, it is the job. Reserve the operator for the irreversible and the genuinely human-owned.';
