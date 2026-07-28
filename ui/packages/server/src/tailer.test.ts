@@ -403,6 +403,131 @@ function toolResult(id: string) {
   return { type: "user", timestamp: "2026-07-01T00:00:05.000Z", message: { content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text: "answered" }] }] } }
 }
 
+// ---- a re-steered child (SendMessage restart) ----
+// Shapes copied from the real corpus (705 transcripts under ~/.claude/projects, 2026-07-28). The
+// launch ack states `agentId:` and `output_file:`; the restart ack is a JSON tool_result whose
+// `resumedAgentId` is that SAME agent id, and whose `message` restates the output path.
+function agentDispatch(id: string, description: string, at: string, subagentType = "fray:opus-high") {
+  return {
+    type: "assistant",
+    timestamp: at,
+    message: { stop_reason: "tool_use", content: [{ type: "tool_use", name: "Agent", id, input: { description, run_in_background: true, subagent_type: subagentType } }] },
+  }
+}
+function agentLaunch(id: string, agentId: string, outputFile: string, at: string) {
+  return {
+    type: "user",
+    timestamp: at,
+    message: { content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text: `Async agent launched successfully.\nagentId: ${agentId} (internal ID - do not mention to user.)\noutput_file: ${outputFile}\nDo NOT Read or tail this file.` }] }] },
+  }
+}
+function notify(toolUseId: string, agentId: string, status: string, at: string) {
+  return {
+    type: "queue-operation",
+    operation: "enqueue",
+    timestamp: at,
+    content: `<task-notification>\n<task-id>${agentId}</task-id>\n<tool-use-id>${toolUseId}</tool-use-id>\n<status>${status}</status>\n<summary>Agent finished</summary>\n</task-notification>`,
+  }
+}
+function sendMessage(id: string, to: string, summary: string, at: string) {
+  return {
+    type: "assistant",
+    timestamp: at,
+    message: { stop_reason: "tool_use", content: [{ type: "tool_use", name: "SendMessage", id, input: { to, summary, message: "Resume. You were terminated by an API error." } }] },
+  }
+}
+// The two result shapes that matter, verbatim from the corpus: a RESTART carries `resumedAgentId`, an
+// ordinary delivery to a still-live child does not.
+function resumeAck(id: string, agentId: string, outputFile: string, at: string, stopped = "failed") {
+  const text = JSON.stringify({
+    success: true,
+    message: `Agent "${agentId}" was stopped (${stopped}); resumed it in the background with your message. You'll be notified when it finishes. Output: ${outputFile}`,
+    resumedAgentId: agentId,
+    pin: { id: agentId, name: agentId, ref: "e8f1bb" },
+  })
+  return { type: "user", timestamp: at, message: { content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text }] }] } }
+}
+function queuedAck(id: string, agentId: string, at: string) {
+  const text = JSON.stringify({ success: true, message: `Message queued for delivery to ${agentId} at its next tool round.`, pin: { id: agentId, name: agentId, ref: "e8f1bb" } })
+  return { type: "user", timestamp: at, message: { content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text }] }] } }
+}
+
+const OUT = "/tmp/tasks/a0b15ec8029fe3830.output"
+
+test("applyRecord: a child that FAILED and was re-steered comes back live under its original identity", () => {
+  const s = newTailState("t", "s", "/x")
+  applyRecord(s, agentDispatch("toolu_dispatch", "Fix the node-shim abort", "2026-07-28T18:14:02.743Z"))
+  applyRecord(s, agentLaunch("toolu_dispatch", "a0b15ec8029fe3830", OUT, "2026-07-28T18:14:02.926Z"))
+  assert.equal(s.subAgents.size, 1)
+  // The child hits a session limit. Its terminal notification retires it — correct at that instant.
+  applyRecord(s, notify("toolu_dispatch", "a0b15ec8029fe3830", "failed", "2026-07-28T18:26:53.757Z"))
+  assert.equal(s.subAgents.size, 0, "a failed child is retired")
+  assert.equal(s.retiredSubAgents.get("toolu_dispatch")?.status, "failed")
+  // The maintainer re-steers it. THIS is the signal the board used to have no way of seeing.
+  applyRecord(s, sendMessage("toolu_send", "a0b15ec8029fe3830", "Resume shim fix", "2026-07-28T18:36:36.963Z"))
+  applyRecord(s, resumeAck("toolu_send", "a0b15ec8029fe3830", OUT, "2026-07-28T18:36:36.974Z"))
+  assert.equal(s.subAgents.size, 1, "the re-steered child is live again")
+  const e = s.subAgents.get("toolu_dispatch")
+  assert.ok(e, "it keeps the ORIGINAL dispatch tool_use id, so an open drawer keeps resolving")
+  assert.equal(e?.label, "Fix the node-shim abort", "and its original label, not the steer's recap")
+  assert.equal(e?.subagentType, "fray:opus-high", "and its worker-profile tag")
+  assert.equal(e?.taskId, "a0b15ec8029fe3830", "keyed to the runtime id, which is stable across restarts")
+  assert.equal(e?.startedAt, "2026-07-28T18:36:36.974Z", "elapsed measures THIS run, not the dead gap")
+  assert.equal(s.retiredSubAgents.has("toolu_dispatch"), false, "and it is no longer in the retired ring")
+  // The resumed run's own completion notification names the SENDMESSAGE tool_use id, never the
+  // original — the `<task-id>` is what correlates it back.
+  applyRecord(s, notify("toolu_send", "a0b15ec8029fe3830", "completed", "2026-07-28T18:50:00.000Z"))
+  assert.equal(s.subAgents.size, 0, "the resumed run retires on its own notification")
+  assert.equal(s.retiredSubAgents.get("toolu_dispatch")?.status, "completed")
+})
+
+test("applyRecord: an ordinary SendMessage to a LIVE child neither duplicates it nor invents one", () => {
+  const s = newTailState("t", "s", "/x")
+  applyRecord(s, agentDispatch("toolu_dispatch", "Still working", "2026-07-28T18:14:02.743Z"))
+  applyRecord(s, agentLaunch("toolu_dispatch", "a0b15ec8029fe3830", OUT, "2026-07-28T18:14:02.926Z"))
+  applyRecord(s, sendMessage("toolu_send", "a0b15ec8029fe3830", "One more thing", "2026-07-28T18:20:00.000Z"))
+  applyRecord(s, queuedAck("toolu_send", "a0b15ec8029fe3830", "2026-07-28T18:20:00.100Z"))
+  assert.equal(s.subAgents.size, 1, "the queued-delivery shape restarts nothing")
+  assert.ok(s.subAgents.has("toolu_dispatch"))
+  // Even a RESTART ack for a child fray still holds live must not double the row.
+  applyRecord(s, resumeAck("toolu_send2", "a0b15ec8029fe3830", OUT, "2026-07-28T18:21:00.000Z"))
+  assert.equal(s.subAgents.size, 1, "a restart ack for an already-live child is a no-op")
+})
+
+test("applyRecord: a REPLAYED restart ack can never resurrect a child that already finished", () => {
+  // Claude transcripts re-emit past records verbatim (65 duplicated uuids in the reproduction
+  // session). A restart ack is only a restart the first time it is folded.
+  const s = newTailState("t", "s", "/x")
+  applyRecord(s, agentDispatch("toolu_dispatch", "Long done", "2026-07-27T11:00:00.000Z"))
+  applyRecord(s, agentLaunch("toolu_dispatch", "a776b185bf27ce789", OUT, "2026-07-27T11:00:00.500Z"))
+  applyRecord(s, notify("toolu_dispatch", "a776b185bf27ce789", "failed", "2026-07-27T11:22:27.842Z"))
+  applyRecord(s, sendMessage("toolu_send", "a776b185bf27ce789", "Resume tooldir-fix", "2026-07-27T11:29:05.830Z"))
+  applyRecord(s, resumeAck("toolu_send", "a776b185bf27ce789", OUT, "2026-07-27T11:29:05.853Z"))
+  assert.equal(s.subAgents.size, 1, "the genuine restart revives it")
+  applyRecord(s, notify("toolu_send", "a776b185bf27ce789", "completed", "2026-07-27T11:58:10.271Z"))
+  assert.equal(s.subAgents.size, 0)
+  // …now the SAME ack replays, carrying its ORIGINAL timestamp, long after the child finished.
+  applyRecord(s, resumeAck("toolu_send", "a776b185bf27ce789", OUT, "2026-07-27T11:29:05.853Z"))
+  assert.equal(s.subAgents.size, 0, "replayed history is not a restart — the retired row's death is newer")
+  // And the same replay once the retired row has aged out of the bounded ring, where the guard above
+  // has nothing to compare against: the fold's monotonic high-water mark still rejects it.
+  s.retiredSubAgents.clear()
+  applyRecord(s, resumeAck("toolu_send", "a776b185bf27ce789", OUT, "2026-07-27T11:29:05.853Z"))
+  assert.equal(s.subAgents.size, 0, "a stale ack cannot revive a child whose retired row is gone")
+})
+
+test("applyRecord: a restart whose retired row aged out still surfaces, labelled from the steer", () => {
+  const s = newTailState("t", "s", "/x")
+  applyRecord(s, { type: "assistant", timestamp: "2026-07-28T18:30:00.000Z", message: { content: [{ type: "text", text: "working" }] } })
+  applyRecord(s, sendMessage("toolu_send", "a0b15ec8029fe3830", "Resume shim fix from the preload gap", "2026-07-28T18:36:36.963Z"))
+  applyRecord(s, resumeAck("toolu_send", "a0b15ec8029fe3830", OUT, "2026-07-28T18:36:36.974Z"))
+  const e = s.subAgents.get("toolu_send")
+  assert.equal(s.subAgents.size, 1, "a running child is surfaced even with no provenance in the fold")
+  assert.equal(e?.label, "Resume shim fix from the preload gap", "labelled from the steer's own recap")
+  assert.equal(e?.taskId, "a0b15ec8029fe3830")
+  assert.equal(e?.outputFile, OUT, "its transcript resolves, so the staleness clock works")
+})
+
 test("applyRecord: a BACKGROUND Bash registers a SHELL op; a FOREGROUND Bash does not", () => {
   const s = newTailState("t", "s", "/x")
   applyRecord(s, bashBg("toolu_sh", "Watch origin/main CI", "gh run watch"))

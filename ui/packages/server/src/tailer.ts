@@ -399,6 +399,12 @@ interface RetiredSubAgent {
   outputFormat?: "codex" // see SubAgentEntry.outputFormat
   finishedAt?: string // ISO8601 of the completion notification
   status: "completed" | "failed" | "killed"
+  // The RUNTIME task id (Claude's `agentId`) this child ran under — see SubAgentEntry.taskId. Retained
+  // because a terminal child is NOT necessarily a finished one: a `SendMessage` RESTARTS a stopped
+  // child, and the restart ack names only this id. It is how `trackResumes` matches a revived child
+  // back to the row it was retired from, so the board shows one row per child rather than a new one
+  // (or, before that path existed, none at all) on every re-steer.
+  taskId?: string
 }
 interface RetiredShell {
   toolUseId: string
@@ -409,6 +415,13 @@ interface RetiredShell {
 // How many terminal sub-agents to retain per thread for drawer review (newest-wins ring).
 const RETAINED_SUBAGENTS_MAX = 20
 const RETAINED_SHELLS_MAX = 20
+// How many un-answered `SendMessage` summaries to hold (see TailState.pendingResumes). Each is
+// consumed one record after it is recorded, so this only ever bounds the pathological case.
+const PENDING_RESUMES_MAX = 32
+// How far behind the fold's high-water mark a restart ack may sit and still count as live. Covers
+// ordinary out-of-order writes between sibling records; a REPLAYED ack (see trackResumes) carries its
+// original timestamp and is stale by minutes to days, so nothing near this boundary is ambiguous.
+const RESUME_REPLAY_SLACK_MS = 60_000
 
 // Mutable accumulator for one session's tail. Extends the backend-neutral FoldState (the running
 // derivation `applyRecord`/`applyEvent` fold into — turn, lastActivityAt, lastAssistant, aiTitle,
@@ -453,6 +466,16 @@ export interface TailState extends FoldState {
   codexSubAgents?: CodexSubAgentTracker
   // completed shells retained so an already-open output drawer can render the terminal tail.
   retiredShells: Map<string, RetiredShell>
+  // SendMessage tool_use id → the `summary` that call carried, held only until its tool_result lands
+  // (the very next record). A RESTART ack names the child's runtime id and its output path but nothing
+  // about the work, so this is the label of last resort when `trackResumes` has to mint a row for a
+  // child whose retired record has already aged out of the ring. Bounded; consumed on use.
+  pendingResumes?: Map<string, string>
+  // MONOTONIC high-water mark over every timestamped record folded so far. `lastActivityAt` cannot
+  // serve this purpose: it tracks the LATEST record folded and therefore moves BACKWARD whenever a
+  // transcript replays history (which Claude's do — see trackResumes). This only ever advances, and it
+  // is what lets a live restart be told apart from a replayed one.
+  maxRecordAt?: string
   // a pending native AskUserQuestion the session is frozen on (no tool_result yet), else undefined
   pendingAsk?: PendingAskData
   subAgentsSig?: string // last-emitted signature of the derived background-ops + ask view (dirty-change detection)
@@ -723,6 +746,8 @@ function shellSummary(command: unknown): string {
 //   • a `Monitor` (always background in Claude Code; finite or session-persistent) → kind "shell" too.
 //     Tracking it keeps an off-turn worker in Active while the monitor owns an automatable wait.
 // Re-seeing the same id preserves any outputFile already resolved from its launch result.
+// A `SendMessage` registers NOTHING here — it addresses a child that already exists — but its recap is
+// parked for `trackResumes`, the one path where such a call restarts a stopped child.
 function trackDispatches(state: TailState, rec: Record): void {
   const content = rec.message?.content
   if (!Array.isArray(content)) return
@@ -732,7 +757,7 @@ function trackDispatches(state: TailState, rec: Record): void {
     if (b.type !== "tool_use") continue
     const id = typeof b.id === "string" ? b.id : undefined
     if (!id) continue
-    const input = (b.input ?? {}) as { description?: unknown; run_in_background?: unknown; subagent_type?: unknown; command?: unknown }
+    const input = (b.input ?? {}) as { description?: unknown; run_in_background?: unknown; subagent_type?: unknown; command?: unknown; summary?: unknown }
     const startedAt = typeof rec.timestamp === "string" ? rec.timestamp : (state.lastActivityAt ?? "")
     const previous = state.subAgents.get(id)
     const outputFile = previous?.outputFile
@@ -745,6 +770,21 @@ function trackDispatches(state: TailState, rec: Record): void {
     } else if ((b.name === "Bash" && input.run_in_background === true) || b.name === "Monitor") {
       const command = typeof input.command === "string" ? input.command : previous?.command
       state.subAgents.set(id, { kind: "shell", toolUseId: id, label: desc ?? shellSummary(input.command), startedAt, command, outputFile, taskId: previous?.taskId })
+    } else if (b.name === "SendMessage") {
+      // NOT a dispatch — a message to an already-dispatched child, which registers nothing here. But it
+      // may RESTART a child that has already stopped (see trackResumes), and only this record carries a
+      // human-readable recap of the work. Park it for the tool_result one record later; if that result
+      // turns out to be an ordinary "queued for delivery" it is simply dropped.
+      const summary = typeof input.summary === "string" ? input.summary.trim() : ""
+      if (summary) {
+        const pending = (state.pendingResumes ??= new Map())
+        pending.set(id, summary.length > 160 ? `${summary.slice(0, 159)}…` : summary)
+        while (pending.size > PENDING_RESUMES_MAX) {
+          const oldest = pending.keys().next().value
+          if (oldest === undefined) break
+          pending.delete(oldest)
+        }
+      }
     }
   }
 }
@@ -772,6 +812,7 @@ function retireToRing(state: TailState, entry: SubAgentEntry, finishedAt: string
     subagentType: entry.subagentType,
     outputFile: entry.outputFile,
     outputFormat: entry.outputFormat,
+    taskId: entry.taskId,
     finishedAt,
     status,
   })
@@ -942,6 +983,126 @@ function trackLaunchResults(state: TailState, rec: Record): void {
     // Foreground completion (or a failed dispatch): the tool_result IS the terminal signal.
     state.subAgents.delete(id)
     retireToRing(state, entry, typeof rec.timestamp === "string" ? rec.timestamp : undefined, "completed")
+  }
+}
+
+// A `SendMessage` aimed at a child that has ALREADY STOPPED does not just deliver a message — it
+// RESTARTS that child, detached, exactly as the original dispatch did ("resumed it in the background
+// … You'll be notified when it finishes"). Nothing else in the transcript announces that restart: the
+// child's terminal notification already fired and retired the row, and no new `Agent` tool_use is ever
+// written. That is why a re-steered child vanished from the board while it was demonstrably running —
+// reproduced on a real 8668-record session (2026-07-28) where four children hit a session limit, were
+// re-steered minutes later, and the fold held all four in `retiredSubAgents` with status "failed".
+//
+// The discriminator is STRUCTURED, not prose: the tool_result is a JSON object, and `resumedAgentId`
+// is present on exactly the shapes that restart something. Corpus-verified over every SendMessage
+// result in ~/.claude/projects (705 transcripts, 802 results, 2026-07-28) — four shapes, all
+// `success:true`:
+//   • "Message queued for delivery to <id> at its next tool round."           466 · NO resumedAgentId
+//   • "Agent \"<id>\" had no active task; resumed from transcript …"          230 · resumedAgentId
+//   • "Agent \"<id>\" was stopped (completed); resumed it in the background …"  95 · resumedAgentId
+//   • "Agent \"<id>\" was stopped (failed); resumed it in the background …"     11 · resumedAgentId
+// The first is the child already being alive — reviving on it would DOUBLE a row the fold still holds,
+// which is the phantom class this whole path has leaked three times. The other three each promise the
+// <task-notification> that will retire the revived row, so nothing minted here can dangle without a
+// terminal signal coming for it.
+interface ResumeAck {
+  agentId: string // the restarted child's runtime task id (`to:` / `resumedAgentId`)
+  outputFile?: string // its transcript, re-stated by the ack — the same path the launch ack gave
+}
+function parseResumeAck(text: string): ResumeAck | undefined {
+  if (!text.includes("resumedAgentId")) return undefined // cheap reject before the parse
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return undefined // a shape that only MENTIONS the field is not a restart
+  }
+  if (!parsed || typeof parsed !== "object") return undefined
+  const ack = parsed as { success?: unknown; resumedAgentId?: unknown; message?: unknown }
+  if (ack.success !== true) return undefined
+  const agentId = typeof ack.resumedAgentId === "string" ? ack.resumedAgentId.trim() : ""
+  if (!agentId) return undefined
+  const message = typeof ack.message === "string" ? ack.message : ""
+  return { agentId, outputFile: message.match(/Output:\s*(\S+)/)?.[1]?.replace(/\.$/, "") }
+}
+
+// Correlate a restart ack to a row fray already holds. The runtime task id is the primary key (both
+// the launch ack's `agentId:` and this ack's `resumedAgentId` are that same id); the output path is a
+// second, independent key, since both acks state it verbatim. Two keys because a MISS here mints a
+// duplicate row for a child that is already on the board — the failure mode that costs the most.
+function matchesAgent(candidate: { taskId?: string; outputFile?: string }, ack: ResumeAck): boolean {
+  if (candidate.taskId && candidate.taskId === ack.agentId) return true
+  return Boolean(ack.outputFile && candidate.outputFile === ack.outputFile)
+}
+
+// Revive a child the fold has already retired (or never saw) when its parent re-steers it back to
+// life. Keyed by the ORIGINAL dispatch tool_use id whenever the retired row can be found, so the
+// child keeps one stable identity across any number of re-steers and an open drill-in drawer keeps
+// resolving; only a child whose retired row has aged out of the ring gets a fresh row keyed by the
+// SendMessage. Either way `taskId` carries the runtime id, which is what every completion
+// notification correlates on (`<task-id>`) — and for the freshly-keyed case the notification's
+// `<tool-use-id>` is the SendMessage's own id, so both correlation paths land.
+//
+// `startedAt` is the RESUME instant, not the original dispatch: this is a new run, and the elapsed
+// reading on the board should measure it rather than the dead gap before it.
+function trackResumes(state: TailState, rec: Record): void {
+  const content = rec.message?.content
+  if (!Array.isArray(content)) return
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue
+    const b = block as { type?: string; tool_use_id?: unknown; content?: unknown }
+    if (b.type !== "tool_result") continue
+    const id = typeof b.tool_use_id === "string" ? b.tool_use_id : undefined
+    if (!id) continue
+    // Consume the parked summary whatever the result turns out to be — an ordinary delivery must not
+    // leave it to be picked up by some later, unrelated resume.
+    const summary = state.pendingResumes?.get(id)
+    state.pendingResumes?.delete(id)
+    const ack = parseResumeAck(toolResultText(b.content))
+    if (!ack) continue
+    // Already live: the fold never lost this child (its terminal notification has not landed, or the
+    // parent re-steered one that was still working). Reviving would double it.
+    let live = false
+    for (const e of state.subAgents.values()) if (matchesAgent(e, ack)) { live = true; break }
+    if (live) continue
+    const at = typeof rec.timestamp === "string" ? rec.timestamp : (state.lastActivityAt ?? "")
+    // NEWEST match wins. `retireToRing` re-inserts on every retirement, so reverse insertion order is
+    // most-recently-retired first — and a child that has been re-steered before can hold more than one
+    // retired row (one per run whose original row had already aged out of the ring). Reading the oldest
+    // of those would defeat the history guard below, which compares against exactly this row's death.
+    const retiredRows = [...state.retiredSubAgents.values()]
+    let retired: RetiredSubAgent | undefined
+    for (let i = retiredRows.length - 1; i >= 0; i--) if (matchesAgent(retiredRows[i], ack)) { retired = retiredRows[i]; break }
+    // REPLAYED HISTORY. A Claude transcript re-emits past records verbatim — the reproduction session
+    // carries 65 duplicated uuids and replays five of these very restart acks, with their ORIGINAL
+    // timestamps, some 1200 records after the fold already watched those children finish. An ack is
+    // only a restart the FIRST time it is folded, so a child whose retired row records a death at or
+    // after this ack's own instant has already moved past it: reviving would resurrect a child that
+    // finished a day ago and leave it pulsing (then "stale") forever. This is the same class of
+    // phantom the notification fold has leaked three times; it does not get to happen a fourth.
+    const finished = retired?.finishedAt ? Date.parse(retired.finishedAt) : Number.NaN
+    const ackAt = at ? Date.parse(at) : Number.NaN
+    if (Number.isFinite(finished) && Number.isFinite(ackAt) && finished >= ackAt) continue
+    // …and the same guard for the case the row above cannot cover: a replay whose child was retired so
+    // long ago that its row has been evicted from the 20-deep ring (all five replayed acks in the
+    // reproduction session). A replayed record keeps its ORIGINAL timestamp, so it lands far BEHIND the
+    // fold's high-water mark, where a genuine ack is always at it. The slack is for ordinary write
+    // jitter between sibling records — replays are minutes to days stale, not seconds.
+    const highWater = state.maxRecordAt ? Date.parse(state.maxRecordAt) : Number.NaN
+    if (Number.isFinite(highWater) && Number.isFinite(ackAt) && highWater - ackAt > RESUME_REPLAY_SLACK_MS) continue
+    if (retired) state.retiredSubAgents.delete(retired.toolUseId)
+    const toolUseId = retired?.toolUseId ?? id
+    state.subAgents.set(toolUseId, {
+      kind: "agent",
+      toolUseId,
+      label: retired?.label ?? summary ?? "sub-agent",
+      startedAt: at,
+      subagentType: retired?.subagentType,
+      outputFile: ack.outputFile ?? retired?.outputFile,
+      outputFormat: retired?.outputFormat,
+      taskId: ack.agentId,
+    })
   }
 }
 
@@ -1137,6 +1298,12 @@ export function applyRecord(state: TailState, rec: Record): void {
   if (typeof rec.timestamp === "string" && (type === "assistant" || (type === "user" && !metaUserRec) || type === "system")) {
     state.lastActivityAt = rec.timestamp
   }
+  // The high-water mark takes EVERY timestamped record and only ever advances (see TailState). A plain
+  // string compare, not Date.parse: these are all `toISOString()` output, so lexicographic order IS
+  // chronological order, and this runs on every record of every transcript at boot.
+  if (typeof rec.timestamp === "string" && (state.maxRecordAt === undefined || rec.timestamp > state.maxRecordAt)) {
+    state.maxRecordAt = rec.timestamp
+  }
   if (type === "permission-mode") {
     const parsed = PermissionMode.safeParse(rec.permissionMode)
     if (parsed.success) {
@@ -1243,6 +1410,7 @@ export function applyRecord(state: TailState, rec: Record): void {
     // earlier over-fix that WAS a real bug).
     if (!systemUserRec && !compactSummaryRec && typeof rec.timestamp === "string" && isRealUserMessage(rec.message?.content)) state.lastUserAt = rec.timestamp
     trackLaunchResults(state, rec) // resolve a background dispatch's transcript path from its launch result
+    trackResumes(state, rec) // a SendMessage that RESTARTED a stopped child is a fresh launch — revive it
     trackStops(state, rec) // a manual TaskStop is a terminal signal — retire the op it killed
     clearAskOnResult(state, rec) // the AskUserQuestion answer landed → clear the pending ask
   } else if (type === "ai-title") {
@@ -1435,7 +1603,13 @@ export interface Tailer {
   // unknown (never dispatched, or aged out of the retained ring). The router maps undefined → "gone".
   // `outputFormat` tells the reader which schema the file is: absent = Claude JSONL, "codex" = the
   // child's codex rollout (a codex sub-agent is itself a codex thread).
-  subAgent(slug: string, id: string): { outputFile?: string; outputFormat?: "codex"; state: "running" | "stale" | "done" } | undefined
+  // `direct` marks the ONE case fray can address a steer at: an Agent-tool child THIS thread's own
+  // session dispatched and is still tracking live. A background shell, a retired child, and a
+  // DESCENDANT (a grandchild, resolved through the sidecar index — its dispatch happened inside
+  // another agent's process, so this session's CLI has never heard of its tool_use id) are all
+  // readable but not addressable, and each reports direct:false so the router refuses rather than
+  // firing a message that would silently land on the main thread instead.
+  subAgent(slug: string, id: string): { outputFile?: string; outputFormat?: "codex"; state: "running" | "stale" | "done"; direct: boolean } | undefined
   // Read-only background-shell drawer lookup. Output content stays server-side until the scoped query.
   backgroundShell?(slug: string, id: string): { command?: string; outputFile?: string; state: "running" | "done" } | undefined
   // Manual dismiss of a live background op (the × on an op row): retire it from tracking as if a
@@ -2040,14 +2214,16 @@ export function createTailer(deps: TailerDeps): Tailer {
   // the drill-in drawer's server-side lookup. Checks the LIVE map first (running/stale), then the
   // RETAINED ring (a completed child kept for review → "done"). Undefined only when the id is unknown
   // to both (never dispatched, or aged out of the ring) → the router maps that to "gone".
-  function subAgentLookup(slug: string, id: string): { outputFile?: string; outputFormat?: "codex"; state: "running" | "stale" | "done" } | undefined {
+  function subAgentLookup(slug: string, id: string): { outputFile?: string; outputFormat?: "codex"; state: "running" | "stale" | "done"; direct: boolean } | undefined {
     const state = states.get(slug)
     if (!state || !registeredStateIsCurrent(state)) return undefined
     // `outputFormat` is spread in only when set, so a Claude child's lookup shape is byte-identical.
     const live = state.subAgents.get(id)
-    if (live) return { outputFile: live.outputFile, ...(live.outputFormat ? { outputFormat: live.outputFormat } : {}), state: entryStale(live, now()) ? "stale" : "running" }
+    // A background SHELL shares this map (see backgroundShellLookup) and is emphatically not an agent:
+    // there is nobody in there to read a steer. Only kind "agent" is ever `direct`.
+    if (live) return { outputFile: live.outputFile, ...(live.outputFormat ? { outputFormat: live.outputFormat } : {}), state: entryStale(live, now()) ? "stale" : "running", direct: live.kind === "agent" }
     const dead = state.retiredSubAgents.get(id)
-    if (dead) return { outputFile: dead.outputFile, ...(dead.outputFormat ? { outputFormat: dead.outputFormat } : {}), state: "done" }
+    if (dead) return { outputFile: dead.outputFile, ...(dead.outputFormat ? { outputFormat: dead.outputFormat } : {}), state: "done", direct: false }
     // A DESCENDANT — a child of a child, of a child, at any depth. Its dispatch is in an ANCESTOR's
     // transcript rather than this thread's, so neither map above can hold it; the flat sidecar index
     // resolves it by the same tool_use id. Still undefined when nothing matches, so an id fray genuinely
@@ -2055,7 +2231,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     // never invents one.
     const descendant = descendantSidecar(state, id)
     if (!descendant) return undefined
-    return { outputFile: descendantTranscript(state, descendant), state: descendantState(state, descendant) }
+    return { outputFile: descendantTranscript(state, descendant), state: descendantState(state, descendant), direct: false }
   }
 
   function backgroundShellLookup(slug: string, id: string): { command?: string; outputFile?: string; state: "running" | "done" } | undefined {
