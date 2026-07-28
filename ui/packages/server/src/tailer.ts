@@ -147,6 +147,12 @@ export interface SubAgentView {
   toolUses?: number // tool calls the child has made so far
   tokens?: number // total tokens the child has spent so far
   durationMs?: number // the provider's own measure of working time (excludes paused)
+  // ---- NESTING (see the DESCENDANTS note below) ----
+  // 1 (or absent, which every reader treats as 1) = a child THIS session dispatched. 2 = a grandchild,
+  // 3 = a great-grandchild, … Emitted only from 2 down, so a direct child's view stays byte-identical
+  // to what it was before nesting existed.
+  depth?: number
+  parentId?: string // the dispatch id of the sub-agent that dispatched this one; absent at depth 1
 }
 
 // A signal fence parsed from the FINAL assistant message (mirrors @fray-ui/shared ThreadFence; kept
@@ -909,6 +915,11 @@ interface DescendantSidecar {
   agentType?: string
   parentAgentId?: string // absent at depth 1 (a direct child of the session)
   spawnDepth?: number // 1 for a direct child, 2 for a grandchild, …
+  // The sidecar file's own mtime. It is written ONCE at spawn and never rewritten (the same property
+  // the index's invalidation relies on), so this IS the dispatch instant — a real reading off disk, not
+  // a fabricated one. It gives a surfaced descendant row the same "working for 38s" duration a direct
+  // child gets from its dispatch record. Undefined when the file no longer stats.
+  spawnedAtMs?: number
 }
 
 // How many sidecars one resolution pass will read. A bound, not an opinion: a long orchestrator
@@ -920,7 +931,7 @@ const DESCENDANT_SIDECAR_MAX = 512
 // on the drawer's read path and a throw there is a dead drawer (and, historically in this subsystem, a
 // dead thread). A sidecar fray cannot parse simply does not resolve, which is the state it was in
 // before this existed.
-function readDescendantSidecars(sessionDir: string): DescendantSidecar[] {
+function readDescendantSidecars(sessionDir: string, mtimeMs: (path: string) => number | undefined): DescendantSidecar[] {
   let names: string[]
   try {
     names = readdirSync(join(sessionDir, "subagents"))
@@ -948,6 +959,7 @@ function readDescendantSidecars(sessionDir: string): DescendantSidecar[] {
       agentType: text(meta.agentType),
       parentAgentId: text(meta.parentAgentId),
       spawnDepth: typeof meta.spawnDepth === "number" && Number.isFinite(meta.spawnDepth) ? meta.spawnDepth : undefined,
+      spawnedAtMs: mtimeMs(join(sessionDir, "subagents", name)),
     })
   }
   return out
@@ -2106,9 +2118,15 @@ export function createTailer(deps: TailerDeps): Tailer {
     return m === undefined ? undefined : new Date(m).toISOString()
   }
 
-  // Derive the surfaced view of a session's live SUB-AGENTS (kind "agent"; insertion = dispatch order).
+  // Derive the surfaced view of a session's live SUB-AGENTS (kind "agent"; insertion = dispatch order),
+  // each followed by its own live DESCENDANTS in depth-first order — so a worker that fanned out through
+  // a sub-agent reads as the tree it is, on every surface, instead of as one opaque row.
+  //
+  // A direct child's view object is deliberately left BYTE-IDENTICAL to what it was before nesting
+  // existed: `depth` is emitted only from 2 down, and absent means 1 everywhere it is read.
   function subAgentViews(state: TailState, nowMs: number): SubAgentView[] {
     if (state.subAgents.size === 0) return []
+    const subtrees = descendantSubtrees(state, nowMs)
     const out: SubAgentView[] = []
     for (const e of state.subAgents.values()) {
       if (e.kind !== "agent") continue
@@ -2130,6 +2148,8 @@ export function createTailer(deps: TailerDeps): Tailer {
         ...(p?.totalTokens !== undefined ? { tokens: p.totalTokens } : {}),
         ...(p?.durationMs !== undefined ? { durationMs: p.durationMs } : {}),
       })
+      const subtree = subtrees.get(e.toolUseId)
+      if (subtree) out.push(...subtree)
     }
     return out
   }
@@ -2184,22 +2204,27 @@ export function createTailer(deps: TailerDeps): Tailer {
   // every sidecar per poll would turn an open drawer into a disk loop; and a new descendant at any
   // depth is a new FILE in that flat dir, which is exactly what moves the dir's mtime. A sidecar is
   // written once at spawn and not rewritten, so mtime is a complete invalidation signal here.
-  const descendantIndex = new Map<string, { at: number | undefined; byToolUse: Map<string, DescendantSidecar> }>()
+  const descendantIndex = new Map<string, { at: number | undefined; all: DescendantSidecar[]; byToolUse: Map<string, DescendantSidecar> }>()
+  const subtreeMemo = new Map<string, { at: number | undefined; second: number; live: number; value: Map<string, SubAgentView[]> }>()
 
   function sessionDirOf(state: TailState): string {
     return state.path.replace(/\.jsonl$/, "")
   }
 
-  function descendantSidecar(state: TailState, id: string): DescendantSidecar | undefined {
+  function descendantSidecars(state: TailState): DescendantSidecar[] {
     const at = mtimeMs(join(sessionDirOf(state), "subagents"))
     const cached = descendantIndex.get(state.slug)
-    if (cached && cached.at === at) return cached.byToolUse.get(id)
+    if (cached && cached.at === at) return cached.all
+    const all = readDescendantSidecars(sessionDirOf(state), mtimeMs)
     const byToolUse = new Map<string, DescendantSidecar>()
-    for (const meta of readDescendantSidecars(sessionDirOf(state))) {
-      if (meta.toolUseId) byToolUse.set(meta.toolUseId, meta)
-    }
-    descendantIndex.set(state.slug, { at, byToolUse })
-    return byToolUse.get(id)
+    for (const meta of all) if (meta.toolUseId) byToolUse.set(meta.toolUseId, meta)
+    descendantIndex.set(state.slug, { at, all, byToolUse })
+    return all
+  }
+
+  function descendantSidecar(state: TailState, id: string): DescendantSidecar | undefined {
+    descendantSidecars(state) // refresh the index if the dir moved
+    return descendantIndex.get(state.slug)?.byToolUse.get(id)
   }
 
   // Where the descendant's own transcript sits — the same flat dir, beside its sidecar.
@@ -2218,6 +2243,130 @@ export function createTailer(deps: TailerDeps): Tailer {
     if (task?.terminal) return "done"
     const at = mtimeMs(descendantTranscript(state, meta))
     return at === undefined || now() - at > SUBAGENT_STALE_MS ? "stale" : "running"
+  }
+
+  // How deep the surfaced tree goes. A bound, not an opinion: `parentAgentId` comes off an unvalidated
+  // flat directory, so a malformed (or cyclic) link must not be able to recurse without end. Real
+  // fan-out is 2-3 levels; anything past this is a broken sidecar, not a real orchestration.
+  const DESCENDANT_DEPTH_MAX = 16
+
+  // ---- the surfaced view of DESCENDANTS ----------------------------------------------------------
+  //
+  // `subAgents` used to be direct children only, so a worker that fanned out THROUGH a sub-agent showed
+  // one row and the whole branch under it was invisible on every surface (rail, card, ops strip,
+  // completion hold). The sidecars already describe that tree; this turns them into rows.
+  //
+  // RUNNING-ONLY, deliberately. A direct child leaves the list on its <task-notification>; a descendant
+  // has no such signal here — its sidecar is written once at spawn and never deleted — so admitting
+  // "stale" would pin a phantom row under the thread FOREVER, one per grandchild that ever ran. Running
+  // is the only reading that retires itself. The one exception is an ancestor of something running: it
+  // keeps its row even when quiet, because otherwise a live great-grandchild would have nothing to
+  // indent under and would read as a child of the wrong agent.
+  //
+  // Returns subtrees keyed by the DIRECT child they hang off, each already in depth-first order, so the
+  // caller can splice each one in directly behind its parent's row and get a tree by reading top down.
+  function descendantSubtrees(state: TailState, nowMs: number): Map<string, SubAgentView[]> {
+    const empty = new Map<string, SubAgentView[]>()
+    // Nothing tracked ⇒ nothing a descendant could hang off. This is the common case for most threads,
+    // and returning here keeps the sidecar dir off the tick's disk path entirely.
+    if (state.subAgents.size === 0) return empty
+    const all = descendantSidecars(state)
+    if (all.length === 0) return empty
+
+    // Every reading below costs a stat per descendant, and this runs from BOTH the projection and the
+    // change signature on the same tick. Memo per (sidecar-dir mtime, live-child count, second) so those
+    // calls collapse into one pass — a one-second grain is far finer than the staleness window it feeds,
+    // so no running→gone transition is held back by it.
+    const second = Math.floor(nowMs / 1000)
+    const dirAt = descendantIndex.get(state.slug)?.at
+    const memo = subtreeMemo.get(state.slug)
+    if (memo && memo.at === dirAt && memo.second === second && memo.live === state.subAgents.size) return memo.value
+
+    const byAgentId = new Map<string, DescendantSidecar>()
+    for (const meta of all) byAgentId.set(meta.agentId, meta)
+    // One stat per sidecar per pass, not per lookup — `shown` and the emit both need the reading.
+    const liveness = new Map<string, "running" | "stale" | "done">()
+    const stateOf = (meta: DescendantSidecar): "running" | "stale" | "done" => {
+      const cached = liveness.get(meta.agentId)
+      if (cached) return cached
+      const value = descendantState(state, meta)
+      liveness.set(meta.agentId, value)
+      return value
+    }
+
+    // Walk to the depth-1 ancestor and check this thread is still tracking it. A branch whose root
+    // child has been retired is over, whatever its sidecars' mtimes say.
+    const rootedInLiveChild = (meta: DescendantSidecar): boolean => {
+      let cur = meta
+      for (let hops = 0; hops <= all.length; hops++) {
+        if (!cur.parentAgentId) return Boolean(cur.toolUseId && state.subAgents.has(cur.toolUseId))
+        const next = byAgentId.get(cur.parentAgentId)
+        if (!next) return false
+        cur = next
+      }
+      return false // a cyclic parent link — resolves to nothing rather than looping
+    }
+
+    const shown = new Set<string>()
+    for (const meta of all) {
+      if ((meta.spawnDepth ?? 1) < 2 || !meta.toolUseId) continue
+      if (stateOf(meta) !== "running" || !rootedInLiveChild(meta)) continue
+      // Mark it and every descendant ancestor above it (the depth-1 root already has its own row).
+      let cur: DescendantSidecar | undefined = meta
+      for (let hops = 0; cur && (cur.spawnDepth ?? 1) >= 2 && hops <= all.length; hops++) {
+        shown.add(cur.agentId)
+        cur = cur.parentAgentId ? byAgentId.get(cur.parentAgentId) : undefined
+      }
+    }
+    const remember = (value: Map<string, SubAgentView[]>): Map<string, SubAgentView[]> => {
+      subtreeMemo.set(state.slug, { at: dirAt, second, live: state.subAgents.size, value })
+      return value
+    }
+    if (shown.size === 0) return remember(empty)
+
+    // Group the shown rows under their parent's DISPATCH id — the same id the parent's own row carries,
+    // which is what lets the client join the two without knowing anything about agent ids.
+    const kids = new Map<string, DescendantSidecar[]>()
+    for (const meta of all) {
+      if (!shown.has(meta.agentId)) continue
+      const parentId = meta.parentAgentId ? byAgentId.get(meta.parentAgentId)?.toolUseId : undefined
+      if (!parentId) continue
+      const list = kids.get(parentId)
+      if (list) list.push(meta)
+      else kids.set(parentId, [meta])
+    }
+    // Dispatch order, so siblings read the way the parent fanned them out rather than by agent id.
+    for (const list of kids.values()) list.sort((a, b) => (a.spawnedAtMs ?? 0) - (b.spawnedAtMs ?? 0))
+
+    const subtrees = new Map<string, SubAgentView[]>()
+    for (const entry of state.subAgents.values()) {
+      if (entry.kind !== "agent") continue
+      const out: SubAgentView[] = []
+      const walk = (parentId: string, depth: number): void => {
+        if (depth > DESCENDANT_DEPTH_MAX) return
+        for (const meta of kids.get(parentId) ?? []) {
+          const id = meta.toolUseId
+          if (!id) continue // unreachable — `shown` requires one — but the row's drill-in handle is not optional
+          const activeAt = mtimeMs(descendantTranscript(state, meta))
+          out.push({
+            label: meta.description ?? "sub-agent",
+            // The sidecar's own mtime IS the spawn instant (written once, never rewritten), so the row
+            // gets the same real "working for 38s" duration a direct child gets from its dispatch record.
+            startedAt: new Date(meta.spawnedAtMs ?? nowMs).toISOString(),
+            state: stateOf(meta) === "running" ? "running" : "stale",
+            ...(meta.agentType ? { subagentType: meta.agentType } : {}),
+            id,
+            ...(activeAt === undefined ? {} : { lastActivityAt: new Date(activeAt).toISOString() }),
+            depth,
+            parentId,
+          })
+          walk(id, depth + 1)
+        }
+      }
+      walk(entry.toolUseId, 2)
+      if (out.length > 0) subtrees.set(entry.toolUseId, out)
+    }
+    return remember(subtrees)
   }
 
   // Resolve a tracked sub-agent (thread slug + dispatch tool_use id) to its transcript path + state —

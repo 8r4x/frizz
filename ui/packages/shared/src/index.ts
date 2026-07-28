@@ -143,8 +143,30 @@ export const SubAgentView = z.object({
   toolUses: z.number().optional(), // tool calls the child has made so far
   tokens: z.number().optional(), // total tokens the child has spent so far
   durationMs: z.number().optional(), // the provider's own working-time measure (excludes paused)
+  // ---- NESTING: a sub-agent's sub-agent, and so on down ----
+  // 1 = a child this thread's worker dispatched itself (the only kind that used to reach any surface).
+  // 2 = a grandchild, 3 = a great-grandchild, … Its dispatch is in an ANCESTOR's transcript rather than
+  // this thread's, so it is derived from claude's flat descendant sidecars, not from the fold — see the
+  // DESCENDANTS note in tailer.ts. Absent on a pre-restart server's snapshot, which is why every reader
+  // treats absent as 1 (`isDirectSubAgent`) instead of testing for the field.
+  depth: z.number().optional(),
+  // The dispatch tool_use id of the sub-agent that dispatched THIS one — the `id` of another row in the
+  // same list. Absent at depth 1 (the thread itself is the parent). Present → the row indents under it.
+  parentId: z.string().optional(),
 })
 export type SubAgentView = z.infer<typeof SubAgentView>
+
+// A sub-agent THIS thread's worker dispatched itself, as opposed to one of its descendants.
+//
+// Every LIVENESS reading keys on this and never on the raw list. A descendant has no retirement signal
+// in this thread's transcript — a direct child clears on its <task-notification>, but a sidecar is
+// written once and never deleted — so counting descendants as live work would hold a thread out of the
+// queue (hasLiveBackgroundWork) for the full staleness window after a grandchild finished, which is
+// exactly the invisible-for-hours failure the queue exists to prevent. Descendants are a RENDERING
+// concern: they show what is happening under the thread, and they change no thread state.
+export function isDirectSubAgent(agent: { depth?: number }): boolean {
+  return (agent.depth ?? 1) === 1
+}
 
 // A LIVE background SHELL the worker launched (Bash run_in_background:true) — same tailer tracking as a
 // sub-agent (dispatch → launch output path → task-notification clear). Foreground-blocking waits keep

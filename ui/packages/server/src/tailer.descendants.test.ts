@@ -83,9 +83,12 @@ function cleanup(f: { tailer: { stop(): void }; storage: { close(): void }; dir:
 test("descendants: a GRANDCHILD resolves, though its dispatch is in the child's transcript and not the thread's", () => {
   const f = fixture()
   try {
-    // Precondition, so a passing assertion below cannot be the direct-child path in disguise.
-    assert.equal(f.tailer.get(SLUG)?.subAgents.some((view) => view.id === "toolu_grand"), false,
-      "the grandchild is deliberately NOT a tracked child of this thread")
+    // Precondition, so a passing assertion below cannot be the direct-child path in disguise. The
+    // grandchild IS surfaced now (see the nesting tests below) — but only ever as a DESCENDANT, at
+    // depth 2, which is the sidecar path. Nothing the fold does to this thread's transcript can
+    // produce it, and `depth` is exactly the witness of which path it came from.
+    const surfaced = f.tailer.get(SLUG)?.subAgents.find((view) => view.id === "toolu_grand")
+    assert.equal(surfaced?.depth, 2, "the grandchild is deliberately NOT a tracked direct child of this thread")
 
     const grand = f.tailer.subAgent(SLUG, "toolu_grand")
     assert.ok(grand, "the grandchild's dispatch id resolves")
@@ -125,6 +128,76 @@ test("descendants: a junk or half-written sidecar is skipped, never thrown on", 
     // The good ones still resolve, and the bad ones simply do not.
     assert.ok(f.tailer.subAgent(SLUG, "toolu_grand"), "a torn neighbour must not cost a healthy sidecar")
     assert.equal(f.tailer.subAgent(SLUG, "toolu_torn"), undefined)
+  } finally {
+    cleanup(f)
+  }
+})
+
+// ── SURFACING: the descendants have to REACH the board, not just resolve on a drill-in ────────────
+//
+// Resolving a grandchild answers "what is behind this id"; these answer "what does the operator SEE".
+// Before this, `subAgents` was direct children only, so a worker that fanned out THROUGH a sub-agent
+// showed one row and the entire branch under it was invisible on every surface at once.
+
+test("nesting: the whole tree is surfaced, depth-first under the child it hangs off", () => {
+  const f = fixture()
+  try {
+    const views = f.tailer.get(SLUG)?.subAgents ?? []
+    assert.deepEqual(views.map((v) => [v.id, v.depth, v.parentId]), [
+      ["toolu_child", undefined, undefined], // a direct child is unchanged — no depth, no parent
+      ["toolu_grand", 2, "toolu_child"],
+      ["toolu_great", 3, "toolu_grand"],
+    ], "each descendant follows its parent, carrying the parent's DISPATCH id as the join key")
+    // The row has to be renderable on its own: a label, a real dispatch instant, and the cell it runs as.
+    const grand = views[1]
+    assert.equal(grand?.label, "LEVEL-TWO")
+    assert.equal(grand?.subagentType, "general-purpose")
+    assert.ok(grand?.startedAt && !Number.isNaN(Date.parse(grand.startedAt)), "a real ISO instant, off the sidecar's own mtime")
+  } finally {
+    cleanup(f)
+  }
+})
+
+test("nesting: a QUIET descendant leaves the list — it has no retirement signal, so silence is the only one", () => {
+  const f = fixture()
+  try {
+    // Both descendants go quiet. A direct child would linger as `stale` until its task-notification;
+    // a descendant must not, or every grandchild that ever ran would pin a phantom row forever.
+    rmSync(join(f.subagents, "agent-aGreat.jsonl"))
+    rmSync(join(f.subagents, "agent-aGrand.jsonl"))
+    assert.deepEqual(f.tailer.get(SLUG)?.subAgents.map((v) => v.id), ["toolu_child"],
+      "the thread keeps its own child and drops the quiet branch")
+  } finally {
+    cleanup(f)
+  }
+})
+
+test("nesting: a quiet descendant with something LIVE under it keeps its row", () => {
+  const f = fixture()
+  try {
+    // Only the middle level goes quiet; the leaf is still appending. Dropping the middle row would
+    // leave the live great-grandchild indented under the wrong agent, so it stays — marked stale.
+    rmSync(join(f.subagents, "agent-aGrand.jsonl"))
+    const views = f.tailer.get(SLUG)?.subAgents ?? []
+    assert.deepEqual(views.map((v) => [v.id, v.state]), [
+      ["toolu_child", "running"],
+      ["toolu_grand", "stale"],
+      ["toolu_great", "running"],
+    ])
+  } finally {
+    cleanup(f)
+  }
+})
+
+test("nesting: a branch whose ROOT child is gone is over, whatever its own mtimes say", () => {
+  const f = fixture()
+  try {
+    // Dismiss the direct child exactly as a terminal signal would. Its descendants' transcripts are
+    // untouched and still fresh — the only thing that changed is that this thread stopped tracking the
+    // child, and that alone must take the whole branch off the board.
+    assert.equal(f.tailer.dismissOp(SLUG, "toolu_child"), true)
+    assert.deepEqual(f.tailer.get(SLUG)?.subAgents.map((v) => v.id), [],
+      "no orphan rows survive their root child")
   } finally {
     cleanup(f)
   }

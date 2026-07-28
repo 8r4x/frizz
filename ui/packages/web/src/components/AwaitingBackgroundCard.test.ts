@@ -10,6 +10,8 @@ import type { ThreadView } from "@fray-ui/shared"
 // it — so those are what these pin.
 
 const agent = (state: "running" | "stale") => ({ label: "Audit the parser", startedAt: "2026-07-28T09:00:00.000Z", state })
+// A live sub-agent OF a sub-agent (depth 2 = a grandchild, 3 = a great-grandchild).
+const nested = (depth: number) => ({ label: "Trace the cache key", startedAt: "2026-07-28T09:00:00.000Z", state: "running" as const, depth })
 const shell = (state: "running") => ({ label: "vite dev", startedAt: "2026-07-28T09:00:00.000Z", state })
 const thread = (subAgents: unknown[], bgShells: unknown[]) =>
   ({ subAgents, bgShells } as unknown as Pick<ThreadView, "subAgents" | "bgShells">)
@@ -30,6 +32,10 @@ test("awaitingBackgroundSubject names exactly the work that is RUNNING", () => {
   // A STALE sub-agent is not live work: it must not be counted, and with a live shell beside it the
   // sentence falls back to the shell alone rather than claiming a sub-agent that stopped reporting.
   assert.equal(awaitingBackgroundSubject(thread([agent("stale")], [shell("running")])), "1 background task")
+  // A DESCENDANT — a sub-agent's own sub-agent — rides `subAgents` so the rows can nest, but the
+  // sentence says "it dispatched", and this thread's worker dispatched no such thing. Counting it would
+  // make the card claim work the agent never launched.
+  assert.equal(awaitingBackgroundSubject(thread([agent("running"), nested(2), nested(3)], [])), "1 sub-agent")
 })
 
 test("the card carries the snooze ONLY when a surface passes one", () => {

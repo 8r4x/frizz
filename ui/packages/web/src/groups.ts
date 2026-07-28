@@ -1,4 +1,4 @@
-import { isValidAwaitingTimer, type AwaitingHint, type ThreadView } from "@fray-ui/shared"
+import { isDirectSubAgent, isValidAwaitingTimer, type AwaitingHint, type ThreadView } from "@fray-ui/shared"
 import { canRetry } from "./lib/status.ts"
 
 // Shared listing logic: the queue definition (needsAction), the sidebar's status-keyed sections
@@ -293,8 +293,12 @@ function isDeclaredAwaiting(t: ThreadView): boolean {
 // INTERNAL WORK: a thread with a LIVE sub-agent is awaiting its OWN dispatched child — not an external
 // event — so it is a fully ACTIVE thread and must never be dimmed (maintainer 2026-07-10: "when an
 // agent is merely awaiting its own sub-agents, we should NOT dim it — that's the differentiator").
+// Direct children only, matching the server's hasLiveBackgroundWork: `subAgents` also carries the live
+// DESCENDANTS under those children so the rows can nest, and those are a rendering concern that must
+// never move thread state (see isDirectSubAgent). A running descendant sits under a running direct child
+// anyway, so the reading is unchanged — this keeps it that way by construction rather than by luck.
 function hasLiveSubAgents(t: ThreadView): boolean {
-  return (t.subAgents ?? []).some((s) => s.state === "running")
+  return (t.subAgents ?? []).some((s) => isDirectSubAgent(s) && s.state === "running")
 }
 
 // A background Bash/Monitor does NOT make its thread live (maintainer 2026-07-22). `run_in_background`

@@ -453,6 +453,8 @@ function SubAgentRows({ t }: { t: ThreadView }) {
           label={s.label}
           state={s.state}
           density="rail"
+          // A sub-agent's own sub-agents indent one step further under it, so a branch reads as a tree.
+          depth={s.depth}
           startedAt={s.startedAt}
           parentSlug={t.id}
           onOpen={() => pushSubAgentDrawer(t.id, s.id, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt })}

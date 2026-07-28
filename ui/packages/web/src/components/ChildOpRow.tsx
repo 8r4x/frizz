@@ -51,6 +51,7 @@ export function ChildOpRow({
   label,
   state,
   density,
+  depth,
   startedAt,
   parentSlug,
   onOpen,
@@ -61,6 +62,11 @@ export function ChildOpRow({
   label: string
   state: "running" | "stale"
   density: ChildOpDensity
+  // How far down the dispatch tree this row sits: 1 (or absent) = a child the THREAD dispatched, 2 = a
+  // child of that child, and so on. Each level past the first steps the row right by one indent, so a
+  // fanned-out branch reads as the tree it is. The arrow glyph already says "hangs off the line above";
+  // the indent says WHICH line. Absent ⇒ renders exactly as it did before nesting existed.
+  depth?: number
   // ISO of the child's DISPATCH. Rendered as a light-gray compact duration ("38s", "12m", "1hr 5m"),
   // live-ticking; absent ⇒ no
   // reading (never a fabricated one). Deliberately not a "last active" recency: anything still listed
@@ -87,6 +93,11 @@ export function ChildOpRow({
   // keeps counting up even while the board sends nothing (a steadily-quiet child pushes no delta).
   const now = useNowMs()
   const elapsed = compactElapsedSince(startedAt, now)
+  // One indent step per level below the first. 13px is the arrow glyph's own advance plus its gap, so a
+  // nested row's arrow lands under its parent's LABEL — the same relationship the rail's child rows
+  // already have with their thread row. Clamped: a runaway depth must step the row, never push the label
+  // out of a narrow rail entirely.
+  const nestIndent = Math.min(Math.max((depth ?? 1) - 1, 0), 4) * 13
   const openTitle = CHILD_OPEN_TITLE[kind]
   const rowTitle = title ?? (clickable ? openTitle : undefined)
 
@@ -142,9 +153,17 @@ export function ChildOpRow({
     // of the "AGENT" tag. Clipping keeps the collapse graceful. The ring goes inset to survive it.
     : `group flex min-w-0 max-w-[60%] items-center gap-1.5 overflow-hidden text-left text-[11.5px] ${clickable ? "cursor-pointer rounded-sm outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-fg/60" : ""}`
 
+  // The rail indents INSIDE the row (padding, not margin) so the full-width hover highlight and the
+  // whole click target keep spanning the rail — a margin would carve the highlight back on every nested
+  // row. The two prompt-box densities have no full-width highlight, so they shift the whole line
+  // (below), keeping the × and the duration reading in step with the label.
+  const railStyle = rail && nestIndent > 0 ? { paddingLeft: 26 + nestIndent } : undefined
+
   const row = clickable ? (
     <button
       type="button"
+      style={railStyle}
+      data-subagent-depth={depth && depth > 1 ? depth : undefined}
       data-subagent-parent={parentSlug}
       onClick={onOpen}
       // Only the ops strip swallows the press: it can sit inside a card/drawer whose own mousedown
@@ -158,7 +177,7 @@ export function ChildOpRow({
       {identity}
     </button>
   ) : (
-    <div data-subagent-parent={parentSlug} title={rowTitle} className={rowClass}>
+    <div style={railStyle} data-subagent-depth={depth && depth > 1 ? depth : undefined} data-subagent-parent={parentSlug} title={rowTitle} className={rowClass}>
       {identity}
     </div>
   )
@@ -175,7 +194,11 @@ export function ChildOpRow({
   // edge behind it. The × is always visible, quietly: a control you have to discover by hovering is
   // exactly the complaint.
   return (
-    <div className="flex min-w-0 items-center gap-1.5 text-[11.5px]" data-op-row={onDismiss ? "" : undefined}>
+    <div
+      className="flex min-w-0 items-center gap-1.5 text-[11.5px]"
+      style={nestIndent > 0 ? { marginLeft: nestIndent } : undefined}
+      data-op-row={onDismiss ? "" : undefined}
+    >
       {row}
       {/* The × sits between the identity and the live step, which is exactly "after the title". */}
       {onDismiss && (

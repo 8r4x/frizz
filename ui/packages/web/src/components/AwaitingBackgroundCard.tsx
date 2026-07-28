@@ -18,14 +18,19 @@
 import type { ReactNode } from "react"
 import { Hourglass } from "lucide-react"
 import type { ThreadView } from "@fray-ui/shared"
+import { isDirectSubAgent } from "@fray-ui/shared"
 import { CARD_BODY, CardActions, TranscriptCard } from "./TranscriptCard.tsx"
 
 // Name what the thread is ACTUALLY waiting on. Three real cases, and the sentence has to be true in all
 // of them: "sub-agents" is wrong for a shell-only thread (a launched dev server is not a child whose
 // result you await), so shells fall back to a neutral noun; and a thread with BOTH kinds live must name
 // both rather than silently dropping the shells behind the agent count.
+//
+// The count is DIRECT children only. The sentence below says "it dispatched", and a descendant — a
+// sub-agent's own sub-agent, which `subAgents` also carries now so the rows can nest — was dispatched by
+// the child, not by this thread's worker. Counting them would make the sentence false.
 export function awaitingBackgroundSubject(thread: Pick<ThreadView, "subAgents" | "bgShells">): string {
-  const agents = (thread.subAgents ?? []).filter((a) => a.state === "running").length
+  const agents = (thread.subAgents ?? []).filter((a) => isDirectSubAgent(a) && a.state === "running").length
   const shells = (thread.bgShells ?? []).filter((s) => s.state === "running").length
   const agentPart = `${agents} sub-agent${agents === 1 ? "" : "s"}`
   const shellPart = `${shells} background task${shells === 1 ? "" : "s"}`

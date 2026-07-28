@@ -1,4 +1,5 @@
 import type { CompletionHold, ThreadView } from "@fray-ui/shared"
+import { isDirectSubAgent } from "@fray-ui/shared"
 
 export interface ThreadLifecycleAvailability {
   footer: boolean
@@ -37,7 +38,9 @@ export function completionArchivesImmediately(thread: ThreadView): boolean {
   if (thread.runtime === "running" || thread.runtime === "spawning") return false
   // A resting/exited shell prompts only if it still has live background sub-agents or shells.
   const busy = (op: { state: string }) => op.state === "running" || op.state === "stale"
-  if (thread.subAgents?.some(busy) || thread.bgShells?.some(busy)) return false
+  // Sub-agents: DIRECT children only, because that is what the server's completionConfirmationHold
+  // counts. This guess only stays useful while it agrees with the verdict it is predicting.
+  if (thread.subAgents?.some((op) => isDirectSubAgent(op) && busy(op)) || thread.bgShells?.some(busy)) return false
   return true
 }
 

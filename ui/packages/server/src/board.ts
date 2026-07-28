@@ -6,7 +6,7 @@ import {
 import { join } from "node:path"
 import watcher from "@parcel/watcher"
 import type { BoardSnapshot, ThreadView, RuntimeState, PlanView } from "@fray-ui/shared"
-import { BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isValidAwaitingTimer, type PermissionMode as PermissionModeValue } from "@fray-ui/shared"
+import { BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, isValidAwaitingTimer, type PermissionMode as PermissionModeValue } from "@fray-ui/shared"
 import type { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
 import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked } from "./storage.ts"
@@ -174,8 +174,14 @@ function futureSnooze(row: Pick<SessionRow, "snoozed_until">, nowMs: number): st
 // finished thread behind a process that is never going to end. Erring the other way is cheap: a
 // spurious queue card costs one click, while a wrongly-held thread is invisible for hours. A worker
 // that actually wants to wait dispatches a sub-agent to own the wait — see the worker contract.
+//
+// DIRECT children only (isDirectSubAgent). `subAgents` also carries the thread's live DESCENDANTS now —
+// a sub-agent's own sub-agents — but those are a rendering concern and must never move thread state: a
+// descendant has no retirement signal in this transcript, so counting one would hold a finished thread
+// out of the queue for the whole staleness window after its grandchild stopped. A running descendant
+// implies a running direct child anyway, so nothing is lost by reading only the top level.
 function hasLiveBackgroundWork(tele: SessionTelemetry | undefined): boolean {
-  return Boolean(tele?.subAgents?.some((agent) => agent.state === "running"))
+  return Boolean(tele?.subAgents?.some((agent) => isDirectSubAgent(agent) && agent.state === "running"))
 }
 
 // The awaiting-background card's trigger: the thread's OWN dispatched work is still live — a sub-agent
@@ -186,7 +192,7 @@ function hasLiveBackgroundWork(tele: SessionTelemetry | undefined): boolean {
 // background handoff, which the human sees and can one-click snooze until the work returns.
 function hasLiveOwnWork(tele: SessionTelemetry | undefined): boolean {
   return Boolean(
-    tele?.subAgents?.some((agent) => agent.state === "running") ||
+    tele?.subAgents?.some((agent) => isDirectSubAgent(agent) && agent.state === "running") ||
     tele?.bgShells?.some((shell) => shell.state === "running"),
   )
 }

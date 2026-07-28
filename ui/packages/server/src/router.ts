@@ -54,6 +54,7 @@ import {
   type InteractionRecord,
   type ThreadView,
   ThreadSlug,
+  isDirectSubAgent,
 } from "@fray-ui/shared"
 import type { AppContext } from "./context.ts"
 import { appServerTurnStalled } from "./board.ts"
@@ -121,10 +122,12 @@ export function githubDispatcherRequest(
 }
 
 export function hasUnresolvedBackgroundOps(thread: {
-  subAgents: readonly { state: string }[]
+  subAgents: readonly { state: string; depth?: number }[]
   bgShells: readonly { state: string }[]
 }): boolean {
-  return thread.subAgents.some((op) => op.state === "running" || op.state === "stale") ||
+  // Direct children only — a descendant row is surfaced for rendering and never moves thread state
+  // (see isDirectSubAgent). Its ancestor's row already represents the same unresolved work.
+  return thread.subAgents.some((op) => isDirectSubAgent(op) && (op.state === "running" || op.state === "stale")) ||
     thread.bgShells.some((op) => op.state === "running" || op.state === "stale")
 }
 
@@ -309,7 +312,11 @@ export function completionConfirmationHold(telemetry: SessionTelemetry | undefin
   // it — running only. (bgShells have no stale state; this narrows sub-agents, leaves shells unchanged.)
   // The real orphan case that used to strand stale rows here now retires at its `stopped` recovery
   // notification (see trackCompletions), so those never reach this filter at all.
-  const busy = (op: { state: "running" | "stale" }) => op.state === "running"
+  // DIRECT children only, for the same reason hasLiveBackgroundWork reads only those: the two must
+  // agree, and a descendant (a sub-agent's own sub-agent) is surfaced for RENDERING and carries no
+  // retirement signal of its own. A running descendant always sits under a running direct child, so the
+  // work it represents is already held by that child's row.
+  const busy = (op: { state: "running" | "stale"; depth?: number }) => op.state === "running" && isDirectSubAgent(op)
   const subAgents = telemetry.subAgents.filter(busy)
   const bgShells = telemetry.bgShells.filter(busy)
   const turnInFlight = telemetry.turn === "in-flight"

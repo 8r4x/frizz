@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight, FileText, Hash, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, ShieldCheck, Sparkles, X, type LucideIcon } from "lucide-react"
 import type { AwaitingHint, NativeInputRequired as NativeInputRequiredData, PendingAsk, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptToolCall } from "@fray-ui/shared"
+import { isDirectSubAgent } from "@fray-ui/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBoard, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
@@ -3231,11 +3232,15 @@ export function BackgroundOpsStrip({
           label={s.label}
           state={s.state}
           density="sheet"
+          depth={s.depth}
           startedAt={s.startedAt}
           // The ops strip is where the full live reading belongs: the child's current step plus how far
           // it has got. All three are absent for a tmux/codex child, which just reads as it did before.
           onOpen={s.id ? () => pushSubAgentDrawer(slug, s.id!, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt }) : undefined}
-          onDismiss={s.id ? () => dismiss.mutate(s.id!) : undefined}
+          // NO × on a descendant row. Dismiss retires a tracked op by its dispatch id, and a descendant's
+          // dispatch is in an ANCESTOR's transcript — this thread never tracked it, so the call would be a
+          // silent no-op. A control that does nothing is worse than no control.
+          onDismiss={s.id && isDirectSubAgent(s) ? () => dismiss.mutate(s.id!) : undefined}
         />
       ))}
       {visibleChildOps(shells, "sheet").map((s, i) => (

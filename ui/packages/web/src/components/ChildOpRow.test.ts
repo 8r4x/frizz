@@ -17,6 +17,7 @@ function render(props: {
   label?: string
   state?: "running" | "stale"
   density: ChildOpDensity
+  depth?: number
   startedAt?: string
   parentSlug?: string
   onOpen?: () => void
@@ -153,4 +154,35 @@ test("the dismiss × exists only when onDismiss is supplied, and sits directly a
   for (const density of DENSITIES) {
     assert.doesNotMatch(render({ density, onOpen: () => {} }), /data-op-row/, `${density} without onDismiss must not render the × wrapper`)
   }
+})
+
+// ── NESTING: a sub-agent's own sub-agents ────────────────────────────────────────────────────────
+//
+// `depth` is the only thing that distinguishes a grandchild's row from a child's, so what it does to
+// the row's box is the whole feature. It must step the row on every density and change nothing else.
+
+test("depth steps the row right — the rail inside its padding, the prompt-box densities as a whole", () => {
+  // Absent depth (and depth 1) render exactly as they did before nesting existed: no inline style.
+  for (const density of DENSITIES) {
+    assert.doesNotMatch(render({ density, onOpen: () => {} }), /style="/, `${density} at depth 1 must carry no indent style`)
+    assert.doesNotMatch(render({ density, depth: 1, onOpen: () => {} }), /style="/, `${density} passed depth:1 explicitly is the same row`)
+  }
+  // The rail pads INSIDE the row so the full-width hover highlight still spans the rail; 26px is its
+  // established indent, and each level adds one step.
+  assert.match(render({ density: "rail", depth: 2, onOpen: () => {} }), /style="padding-left:39px"/)
+  assert.match(render({ density: "rail", depth: 3, onOpen: () => {} }), /style="padding-left:52px"/)
+  // The prompt-box densities shift the whole line, so the × and the duration reading travel with it.
+  assert.match(render({ density: "sheet", depth: 2, onOpen: () => {} }), /style="margin-left:13px"/)
+  assert.match(render({ density: "card", depth: 3, onOpen: () => {} }), /style="margin-left:26px"/)
+  // A row that reports its nesting says so in the DOM, which is what a QA pass reads it back by.
+  assert.match(render({ density: "rail", depth: 2, onOpen: () => {} }), /data-subagent-depth="2"/)
+  assert.doesNotMatch(render({ density: "rail", onOpen: () => {} }), /data-subagent-depth/)
+})
+
+test("a runaway depth still renders a row — the indent clamps, the label never leaves the rail", () => {
+  // `spawnDepth` comes off an unvalidated sidecar, so the row must degrade rather than push its label
+  // off a narrow rail. Four steps is the cap, and depth 40 renders identically to depth 5.
+  const clamped = render({ density: "rail", depth: 5, onOpen: () => {} })
+  assert.match(clamped, /style="padding-left:78px"/)
+  assert.equal(render({ density: "rail", depth: 40, onOpen: () => {} }), clamped.replace('data-subagent-depth="5"', 'data-subagent-depth="40"'))
 })
