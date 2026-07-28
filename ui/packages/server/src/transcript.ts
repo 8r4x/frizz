@@ -161,6 +161,61 @@ function pushToolPart(m: TranscriptMessage, call: TranscriptToolCall): void {
   else m.parts.push({ kind: "tools", tools: [call] })
 }
 
+// ── Queued-follow-up delivery shapes ────────────────────────────────────────────────────────────────
+// A queued human message is matched to its DELIVERY by raw text (see the queue-operation handling in the
+// fold). Three harness paths deliver text that is no longer byte-identical to what was enqueued, so the
+// exact-key lookup misses and the gray bubble becomes IMMORTAL — the "stuck enqueued" bug. Each shape
+// below reconstructs the enqueued text STRUCTURALLY rather than fuzzy-matching: a plain
+// `deliveredText.includes(queuedText)` was measured against all 681 transcripts on this machine and
+// produced four false positives (a message that merely MENTIONS "`/reload-plugins`" or "/etc/docker/
+// config.json" resolves a genuinely-pending `/reload-plugins` or `/config`), which would silently
+// un-gray a message the agent never received.
+
+// SHAPE 1 — the SDK path coalesces the whole queue into ONE user record. Claude Code 2.1.220 with
+// `promptSource:"sdk"` emits N content-less `dequeue`s and then a single user record whose content is the
+// N queued texts joined by "\n" (verified byte-exact). Neither key matches, so BOTH bubbles stuck AND the
+// merged record rendered as a third copy of the same words. Reconstruction is exact and must consume the
+// ENTIRE delivered text, walking pending entries in FIFO (Map insertion) order — a partial drain leaves
+// the rest pending, which is correct. 2 such deliveries in the corpus, covering 5 queued messages.
+export function coalescedQueuedKeys(deliveredText: string, pendingKeys: Iterable<string>): string[] {
+  const consumed: string[] = []
+  let cursor = 0
+  for (const key of pendingKeys) {
+    if (!deliveredText.startsWith(key, cursor)) break
+    cursor += key.length
+    consumed.push(key)
+    if (cursor === deliveredText.length) return consumed
+    if (!deliveredText.startsWith("\n", cursor)) break
+    cursor += 1
+  }
+  return cursor === deliveredText.length && consumed.length > 0 ? consumed : []
+}
+
+// SHAPE 2 — a slash command is enqueued as the human TYPED it ("/effort", "/loop <prompt>") but delivered
+// as the expansion envelope `<command-message>…</command-message>\n<command-name>/loop</command-name>\n
+// <command-args>…</command-args>`. Rebuilding "name[ args]" from the envelope recovers the typed text
+// exactly. 83 such deliveries in the corpus.
+const COMMAND_NAME_RE = /<command-name>([\s\S]*?)<\/command-name>/
+const COMMAND_ARGS_RE = /<command-args>([\s\S]*?)<\/command-args>/
+export function commandEnvelopeQueuedKey(deliveredText: string): string | undefined {
+  const name = COMMAND_NAME_RE.exec(deliveredText)?.[1]?.trim()
+  if (!name) return undefined
+  const args = COMMAND_ARGS_RE.exec(deliveredText)?.[1]?.trim()
+  return args ? `${name} ${args}` : name
+}
+
+// SHAPE 3 — a message from a PEER Claude session. Claude Code delivers it as an isMeta user record that
+// wraps the enqueued text in a fixed preamble plus trailing handling guidance, so the isMeta splice below
+// (which drops harness plumbing the human never typed) missed it and left the bubble gray. Anchoring on
+// the exact preamble AT THE START keeps this precise: 51 deliveries matched in the corpus, zero false
+// positives — where bare containment matched prose that merely quoted a queued slash command.
+const PEER_SESSION_PREAMBLE = "Another Claude session sent a message:\n"
+export function peerSessionQueuedKey(deliveredText: string, pendingKeys: Iterable<string>): string | undefined {
+  if (!deliveredText.startsWith(PEER_SESSION_PREAMBLE)) return undefined
+  for (const key of pendingKeys) if (deliveredText.startsWith(key, PEER_SESSION_PREAMBLE.length)) return key
+  return undefined
+}
+
 // ── Retained incremental Claude parse ───────────────────────────────────────────────────────────────
 // The single-pass fold that turns a Claude JSONL into renderable messages, made RESUMABLE: every piece
 // of closure state (the `out` array + the pending-tool / queued-follow-up / agent-dispatch / background-
@@ -220,6 +275,41 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
   // A just-delivered queued message's text — so an immediately-following NORMAL user record carrying the
   // identical text (a belt-and-suspenders guard; unobserved in the evidence) doesn't double-render.
   let deliveredDedupe: string | null = null
+
+  // The still-gray keys, in FIFO order. `queuedPending` also retains entries the backstop below has
+  // already un-grayed (so their own delivery can still resolve the SAME object rather than render a
+  // second copy), and those must not take part in matching.
+  function unresolvedQueuedKeys(): string[] {
+    const keys: string[] = []
+    for (const [k, m] of queuedPending) if (m.queued) keys.push(k)
+    return keys
+  }
+  // FIFO backstop. Claude Code's queue drains in order, so a delivery that positively resolves entry K
+  // PROVES every entry enqueued before K already left the queue — whatever shape its own delivery record
+  // took. Without this, ONE unrecognized delivery shape strands its bubble gray forever (the failure this
+  // whole block exists to prevent), and every future harness format drift re-creates it. The older bubbles
+  // are UN-GRAYED, never spliced: they are the human's words, and a sent message must never disappear
+  // from the transcript once queued. They also stay REGISTERED — de-registering them made their real
+  // delivery record fall through and push a duplicate bubble (caught A/B-ing the corpus: 21 spurious
+  // messages across the uncapped transcripts).
+  function resolveQueuedThrough(key: string): void {
+    for (const [k, m] of queuedPending) {
+      if (k === key) break
+      m.queued = false
+    }
+  }
+  // Resolve a pending bubble IN PLACE — same object, same position, just un-gray it — plus everything
+  // queued ahead of it. Returns whether the bubble is ALREADY IN `out` (true even when the backstop
+  // un-grayed it early), which is what tells a caller not to render a second copy; false means this
+  // delivery has no bubble yet and the caller should emit one.
+  function resolveQueued(key: string): boolean {
+    const m = queuedPending.get(key)
+    if (!m) return false
+    if (m.queued) resolveQueuedThrough(key)
+    queuedPending.delete(key)
+    m.queued = false
+    return true
+  }
 
   // Incremental line framing. `offset` is the byte position of `buffer[0]` in the overall stream (or,
   // when buffer is empty, of the next unprocessed byte). `buffer` holds a trailing line whose newline
@@ -325,7 +415,13 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         // it is the ordinary handshake and matching it by anything but exact text could evict a
         // genuinely-still-pending bubble when an unrelated queue item is dequeued.
         const m = queuedPending.get(content)
-        if (m) m.queued = false
+        // Deliberately NOT resolveQueued(): the entry stays registered so the attachment that follows
+        // re-resolves this same object. The FIFO backstop still applies — this removal proves the queue
+        // drained past everything ahead of it.
+        if (m) {
+          resolveQueuedThrough(content)
+          m.queued = false
+        }
       }
       return
     }
@@ -343,13 +439,9 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
       // the removal above, an image-bearing queued message disappeared from the chat for good.
       const prompt = normalizeNewlines(attachmentPromptText(att.prompt))
       if (prompt.trim() && att.origin?.kind === "human" && att.commandMode === "prompt" && !isInjectedNoise(prompt)) {
-        const pending = queuedPending.get(prompt)
-        if (pending) {
-          // Resolve the pending bubble IN PLACE — same object, same position, just un-gray it. Never emit
-          // a second copy (the enqueue already placed it where the human hit send).
-          queuedPending.delete(prompt)
-          pending.queued = false
-        } else {
+        // Resolve the pending bubble IN PLACE — same object, same position, just un-gray it. Never emit
+        // a second copy (the enqueue already placed it where the human hit send).
+        if (!resolveQueued(prompt)) {
           // Attachment-only: an older session with no queue-operations, or an enqueue that scrolled out of
           // the render window. Emit the delivered message fresh at the attachment's position.
           const deliveredDisplay = userDisplayText(prompt, out.length === 0)
@@ -381,9 +473,15 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
       if (rec.isMeta === true) {
         const metaText = userText(rec)
         if (metaText) {
-          const pending = queuedPending.get(metaText)
-          if (pending) {
-            queuedPending.delete(metaText)
+          // A message from a PEER Claude session is enqueued raw but delivered WRAPPED in a fixed
+          // preamble + trailing guidance (SHAPE 3), so the byte-identical key misses. Recover it before
+          // the splice, or the bubble sits gray forever — this is the shape that stranded a live thread's
+          // <agent-message> follow-up.
+          const key = queuedPending.has(metaText) ? metaText : peerSessionQueuedKey(metaText, unresolvedQueuedKeys())
+          const pending = key === undefined ? undefined : queuedPending.get(key)
+          if (key !== undefined && pending) {
+            resolveQueuedThrough(key)
+            queuedPending.delete(key)
             const i = out.indexOf(pending)
             if (i !== -1) out.splice(i, 1)
           }
@@ -400,9 +498,26 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         // another here duplicated the first prompt in a real disposable session.
         const queued = queuedPending.get(text)
         if (queued) {
-          queuedPending.delete(text)
-          queued.queued = false
-          queued.at = rec.timestamp
+          const wasQueued = queued.queued
+          resolveQueued(text)
+          if (wasQueued) queued.at = rec.timestamp
+          lastAssistantId = null
+          return
+        }
+        // …and 2.1.220's SDK path coalesces SEVERAL queued messages into that one record (SHAPE 1).
+        // Resolve every message it carries in place. Falling through instead re-rendered the whole run
+        // as one extra bubble BELOW the originals, which stayed gray — the same words three times.
+        const coalesced = coalescedQueuedKeys(text, unresolvedQueuedKeys())
+        if (coalesced.length > 0) {
+          for (const key of coalesced) resolveQueued(key)
+          lastAssistantId = null
+          return
+        }
+        // A slash command typed into the queue arrives as its expansion envelope (SHAPE 2). Resolve the
+        // bubble carrying what the human actually typed, and drop the envelope — rendering it would show
+        // raw `<command-name>` markup underneath a permanently-gray "/effort".
+        const commandKey = commandEnvelopeQueuedKey(text)
+        if (commandKey !== undefined && resolveQueued(commandKey)) {
           lastAssistantId = null
           return
         }
