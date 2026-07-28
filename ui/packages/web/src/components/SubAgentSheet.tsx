@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useSubAgentTranscript } from "../hooks.ts"
-import { ChildDrillSlugContext, Message } from "./ChatView.tsx"
+import { ChildDrillSlugContext, Message, withMessageSpacers } from "./ChatView.tsx"
 import { Sheet } from "./ui/Sheet.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
 
@@ -103,10 +103,13 @@ export function SubAgentSheet({
               // back "gone", which the drawer states plainly. This is deliberately NOT
               // ThreadSlugContext — see the note on ChildDrillSlugContext for why.
               <ChildDrillSlugContext.Provider value={slug}>
-                <div className="flex flex-col gap-3.5 px-6 py-5">
-                  {messages.map((m, i) => (
-                    <Message key={i} m={m} />
-                  ))}
+                {/* GAP-LESS on purpose: the between-message rhythm is withMessageSpacers' explicit
+                    spacers, the same ones the thread transcript uses. A flat container `gap` here put
+                    14px between two successive tool-only turns while a batch inside ONE turn stayed at
+                    6px — and a child's transcript is nearly all tool calls, so the chunking the tailer
+                    happens to have chosen was the most visible thing on the surface. */}
+                <div data-transcript-column className="flex flex-col px-6 py-5">
+                  {withMessageSpacers(messages, (m, i) => <Message key={i} m={m} />)}
                 </div>
               </ChildDrillSlugContext.Provider>
             )}

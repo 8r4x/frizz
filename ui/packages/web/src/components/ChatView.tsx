@@ -2513,7 +2513,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     // re-merge into one band. Otherwise it splits one batch into two blocks, and the block rhythm
     // (STEP) would put 14px between two tool cards that the reader sees as adjacent — the same batch
     // seam withMessageSpacers erases across messages. Order is preserved; only invisible parts go.
-    m.parts.forEach((part, pi) => {
+    normalizeParts(m.parts).forEach((part, pi) => {
       if (part.kind === "tools") {
         // textOnly (the queue card's first/last agent message): the batched tool band is dropped so only
         // the agent's prose remains — its calls live inside the collapsed intermediate bar instead.
