@@ -193,6 +193,8 @@ export interface SessionTelemetry extends NormalizedTail {
   // The pinned transcript never materialized and discovery found no drifted one either (worker likely
   // failed to boot). Drives the board's degraded/stalled runtime instead of an eternal "Spinning up…".
   noTranscript?: boolean
+  contextTokens?: number // tokens the model's last request carried (see FoldState.contextTokens)
+  contextWindow?: number // the model's context size, provider-reported (see FoldState.contextWindow)
 }
 
 // ---- Interactive permission-prompt sniff (pane text; no jsonl signal) ----
@@ -500,7 +502,16 @@ interface Record {
   // limit detection structural rather than a text guess — see backend/usage-limit.ts.
   error?: unknown
   apiErrorStatus?: unknown // HTTP status alongside `error` (429 on a limit stop); absent on some errors
-  message?: { stop_reason?: string; content?: unknown; model?: string }
+  // A SIDECHAIN record belongs to a sub-agent running inside this session, not to the main thread.
+  // Modern claude writes children to their own transcripts, so this is currently always absent — it is
+  // read only by the context reading, which would otherwise report a child's context as the parent's
+  // the moment a build starts inlining them again.
+  isSidechain?: boolean
+  // `usage` is the API's own accounting for the request this record answered: input + cache-creation +
+  // cache-read is exactly what the model's context held. See applyRecord's context reading.
+  // NOTE: `Record` here is this module's own transcript-record interface, which SHADOWS the global
+  // `Record<K,V>` utility type — so the usage bag is written as an index signature, not Record<…>.
+  message?: { stop_reason?: string; content?: unknown; model?: string; usage?: { [key: string]: unknown } }
 }
 
 // Narrow text conjunction for a Claude AUTH error (vs other API errors riding the same synthetic
@@ -1073,6 +1084,27 @@ export function applyRecord(state: TailState, rec: Record): void {
       state.profileAt = typeof rec.timestamp === "string" ? rec.timestamp : undefined
       state.profileRevision = (state.profileRevision ?? 0) + 1
     }
+    // How full the model's context is, straight off the API's own accounting for this request. The
+    // three input components sum to exactly what the request carried: fresh input, the prefix newly
+    // written to cache, and the prefix read back from it. Output tokens are excluded — they are not in
+    // the context until the NEXT request quotes them back, at which point they arrive inside these
+    // three. Guards, in order: a synthetic error record carries no real usage; a sidechain record is a
+    // CHILD's context, not this thread's; and a record whose components are all absent must leave the
+    // previous reading alone rather than assert zero. A compaction shows up here for free — the next
+    // request is genuinely smaller, so the reading simply drops.
+    const usage = rec.isApiErrorMessage === true || rec.isSidechain === true ? undefined : rec.message?.usage
+    if (usage && typeof usage === "object") {
+      const part = (key: string): number | undefined => {
+        const value = usage[key]
+        return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
+      }
+      const input = part("input_tokens")
+      const created = part("cache_creation_input_tokens")
+      const read = part("cache_read_input_tokens")
+      if (input !== undefined || created !== undefined || read !== undefined) {
+        state.contextTokens = (input ?? 0) + (created ?? 0) + (read ?? 0)
+      }
+    }
     const raw = lastTextBlock(rec.message?.content)
     // Runtime auth classifier (claude-auth plan): claude records a rejected credential as a SYNTHETIC
     // assistant record (isApiErrorMessage:true, model "<synthetic>") whose text is the 401/login
@@ -1253,8 +1285,12 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
       state.sawRecords = true
       break
     case "context-usage":
-      // Pure telemetry — see the activity-clock note above. Consumed only by the transcript projection,
-      // which brackets a compaction with the readings either side of it.
+      // Pure telemetry — see the activity-clock note above. Read by the transcript projection (which
+      // brackets a compaction with the readings either side of it) and by the footer's fullness
+      // readout. The window is latched rather than overwritten-to-absent: codex names it on every
+      // token_count, but a build that stops doing so must not silently erase a real reading.
+      state.contextTokens = ev.tokens
+      if (ev.window !== undefined) state.contextWindow = ev.window
       break
   }
 }
@@ -1409,6 +1445,13 @@ export interface TailerDeps {
   // terminal — and may never invent an entry the fold does not know about. Absent (tmux threads, codex
   // rows, tests, bridge-less server) ⇒ the prose fold decides alone, byte-identical to before.
   runtimeTasks?: (sessionId: string) => readonly ClaudeRuntimeTask[]
+  // The model's context SIZE for a broker Claude session, as the SDK reported it on that session's
+  // `result` message (backend/claude-runtime-ingest.ts). It is the only place Claude names the number:
+  // the JSONL carries per-request usage (the numerator) and nothing at all about the window. Absent
+  // (codex rows — which name their own window on every token_count — tmux/foreign Claude rows, tests,
+  // a bridge-less server) ⇒ the fold keeps whatever window it already has, and a Claude row that never
+  // gets one renders no reading rather than a guessed one.
+  runtimeContextWindow?: (sessionId: string) => number | undefined
 }
 
 // The durable permission-request marker written by the worker's PermissionRequest hook
@@ -1604,6 +1647,17 @@ export function createTailer(deps: TailerDeps): Tailer {
   //    false) because the spinner already covers it, and the provider reports those tasks too. Minting
   //    entries here would put foreground children on the board's LIVE count and into the completion
   //    hold — inventing exactly the phantoms this change exists to remove.
+  // Claude's context WINDOW, latched onto the fold from the broker event stream. One-way and
+  // latching by design: the SDK only names the window when a turn ends, so it must survive the
+  // in-between ticks, and it lands in TailState (not a side map) so the durable tail cache carries it
+  // across a fray restart — otherwise every resting Claude thread would lose its readout on reload and
+  // not get it back until its next turn finished. The tokens half needs none of this: it is on disk.
+  function applyRuntimeContextWindow(row: SessionRow, state: TailState): void {
+    if (!deps.runtimeContextWindow || !isBrokerClaudeRow(row)) return
+    const window = deps.runtimeContextWindow(row.session_id)
+    if (window !== undefined && window > 0) state.contextWindow = window
+  }
+
   function applyRuntimeTasks(row: SessionRow, state: TailState, nowMs: number): void {
     if (!deps.runtimeTasks || !isBrokerClaudeRow(row) || state.subAgents.size === 0) return
     const runtime = deps.runtimeTasks(row.session_id)
@@ -2556,6 +2610,7 @@ export function createTailer(deps: TailerDeps): Tailer {
         state.nativeInputRequired = pane.nativeInputRequired
         state.paneDead = paneDeadForRow(row)
         applyRuntimeTasks(row, state, nowMs)
+        applyRuntimeContextWindow(row, state)
         state.subAgentsSig = derivedSignature(state, nowMs)
         state.primed = true
         // Cache what this prime derived, unless it came from the cache and consumed nothing — in which
@@ -2698,6 +2753,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // progress the JSONL does not carry at all, plus terminal statuses that reach fray SECONDS before
       // (or, when a notification never lands on disk, INSTEAD of) the prose the fold waits for.
       applyRuntimeTasks(row, state, nowMs)
+      applyRuntimeContextWindow(row, state)
 
       // live background ops + pending ask: a dispatch/completion/launch changes the set, a running→stale
       // flip is purely time-based (no new record), and an ask appears/clears — recompute every tick.
@@ -2956,7 +3012,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // an unanswered ```question fence (a user reply clears the flag and flips the turn in-flight).
       const pendingQuestion = s.turn === "idle" && s.lastAssistantHasQuestion
       const nowMs = now()
-      return { turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), bgShells: bgShellViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault }
+      return { turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), bgShells: bgShellViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.

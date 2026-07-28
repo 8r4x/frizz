@@ -1367,6 +1367,7 @@ function mapResult(raw: Record<string, unknown>): ClaudeQueryEvent {
   if (!["success", "error_during_execution", "error_max_turns", "error_max_budget_usd", "error_max_structured_output_retries"].includes(subtype)) {
     throw new ClaudeAgentSdkProtocolError("result subtype is unsupported")
   }
+  const windows = mapModelContextWindows(raw.modelUsage)
   return {
     kind: "result",
     sessionId: boundedId(raw.session_id, "result.sessionId"),
@@ -1376,7 +1377,33 @@ function mapResult(raw: Record<string, unknown>): ClaudeQueryEvent {
     stopReason: optionalText(raw.stop_reason, "result.stopReason", 512),
     result: optionalText(raw.result, "result.result", CLAUDE_AGENT_SDK_MAX_EVENT_TEXT_BYTES),
     errors: raw.errors === undefined ? [] : boundedStringArray(raw.errors, "result.errors", 32, 8 * 1024),
+    ...(windows === undefined ? {} : { modelContextWindows: windows }),
   }
+}
+
+// `modelUsage` → {alias: contextWindow}, defensively. Everything here degrades to "no reading": this
+// is the footer's denominator, and a malformed/absent field must cost the readout, never the result
+// event (mapAssistant's incident note is the standing rule — a telemetry field may not kill a session).
+// Bounded at 32 aliases so a pathological payload cannot grow the per-turn event.
+function mapModelContextWindows(raw: unknown): Record<string, number> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined
+  const out: Record<string, number> = {}
+  let count = 0
+  for (const [alias, entry] of Object.entries(raw as Record<string, unknown>)) {
+    if (count >= 32) break
+    if (!entry || typeof entry !== "object") continue
+    const value = (entry as Record<string, unknown>).contextWindow
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) continue
+    let key: string
+    try {
+      key = safeText(alias, "result.modelUsage.alias", 256)
+    } catch {
+      continue
+    }
+    out[key] = value
+    count += 1
+  }
+  return count === 0 ? undefined : out
 }
 
 function mapControlInitialization(raw: SDKControlInitializeResponse): ClaudeControlInitialization {

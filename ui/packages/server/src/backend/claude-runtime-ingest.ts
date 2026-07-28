@@ -125,6 +125,14 @@ export interface ClaudeRuntimeIngest {
    * tmux thread, every codex row, an older claude that does not emit them).
    */
   tasks(sessionId: string): readonly ClaudeRuntimeTask[]
+  /**
+   * The context SIZE of the model this session is running, as the SDK reported it. Undefined until the
+   * session's first turn ENDS (the window rides `result` and nothing earlier), and undefined forever
+   * for a tmux/foreign row that has no broker at all. The numerator comes off disk on every assistant
+   * record, so this is the half that decides whether a Claude row has a readout — and an undefined
+   * here must render nothing, never a fabricated denominator.
+   */
+  contextWindow(sessionId: string): number | undefined
   /** Forget a session (replaced or deleted) so a later same-slug dispatch starts clean. */
   release(sessionId: string): void
   /** Resolves once every event handed to `onEvent` so far has been folded. Tests only. */
@@ -160,6 +168,22 @@ export function createClaudeRuntimeIngest(deps: ClaudeRuntimeIngestDeps): Claude
   // Provider-reported background tasks, keyed by session id then task id. Insertion-ordered, so the
   // eviction below drops the oldest.
   const tasks = new Map<string, Map<string, ClaudeRuntimeTask>>()
+  // The session's own model alias, from `init` — the key that picks THIS thread's row out of the
+  // per-model `modelUsage` table on `result`. Kept because the alias is load-bearing: an orchestrator
+  // session bills its sub-agents' models on the same result, and `claude-opus-5[1m]` and
+  // `claude-opus-5` are different windows under the same canonical model.
+  const sessionModel = new Map<string, string>()
+  const contextWindows = new Map<string, number>() // keyed by session id; the main model's window
+
+  // Which row of `modelUsage` describes the MAIN thread. The alias `init` named, when the result
+  // carries it. Otherwise: a single-row table is unambiguous (no sub-agent billed anything), and a
+  // multi-row table with no match is NOT guessed at — a wrong denominator is worse than none.
+  function pickWindow(sessionId: string, windows: Record<string, number>): number | undefined {
+    const alias = sessionModel.get(sessionId)
+    if (alias && windows[alias] !== undefined) return windows[alias]
+    const rows = Object.values(windows)
+    return rows.length === 1 ? rows[0] : undefined
+  }
 
   function rememberTask(sessionId: string, taskId: string, now: number): ClaudeRuntimeTask {
     let table = tasks.get(sessionId)
@@ -254,6 +278,14 @@ export function createClaudeRuntimeIngest(deps: ClaudeRuntimeIngestDeps): Claude
       if (item.event.kind === "task") {
         try { foldTask(item.slug, item.sessionId, item.event, now) } catch { /* telemetry only */ }
       }
+      // Context-window latch: `init` names the model alias, `result` prices every alias it billed.
+      // Latched, never cleared by a later result that omits the row — the window of a running session
+      // does not change, and losing it would blank a readout the operator is already reading.
+      if (item.event.kind === "init") sessionModel.set(item.sessionId, item.event.model)
+      if (item.event.kind === "result" && item.event.modelContextWindows) {
+        const window = pickWindow(item.sessionId, item.event.modelContextWindows)
+        if (window !== undefined && window > 0) contextWindows.set(item.sessionId, window)
+      }
       if (signal === "running" && prior?.turn !== "running") {
         deps.receipts?.publish({ type: "claude.runtime.turn.started", slug: item.slug, sessionId: item.sessionId })
       }
@@ -270,13 +302,16 @@ export function createClaudeRuntimeIngest(deps: ClaudeRuntimeIngestDeps): Claude
     onEvent(slug, sessionId, event) { worker.enqueue({ slug, sessionId, event }) },
     liveness: (sessionId) => live.get(sessionId),
     tasks: (sessionId) => [...(tasks.get(sessionId)?.values() ?? [])],
+    contextWindow: (sessionId) => contextWindows.get(sessionId),
     release(sessionId) {
       live.delete(sessionId)
       tasks.delete(sessionId)
+      sessionModel.delete(sessionId)
+      contextWindows.delete(sessionId)
       deps.receipts?.publish({ type: "claude.runtime.session.released", sessionId })
     },
     drain: () => worker.drain(),
-    close() { worker.close(); live.clear(); tasks.clear() },
+    close() { worker.close(); live.clear(); tasks.clear(); sessionModel.clear(); contextWindows.clear() },
   }
 }
 

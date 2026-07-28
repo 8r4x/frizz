@@ -107,6 +107,19 @@ export interface ClaudeResultEvent {
   stopReason?: string
   result?: string
   errors: string[]
+  /**
+   * The context SIZE of every model this session billed against, keyed by the SDK's own model alias
+   * (`modelUsage`). This is the ONLY place Claude names a context window: the JSONL records what each
+   * request carried but never what it could have carried, and neither the `init` event nor the
+   * control-initialize `models` capability list mentions it. Keyed rather than flattened because a
+   * session that dispatched sub-agents bills several models at once and the windows differ — the main
+   * thread's row is the one that describes the main thread's context. The alias matters as much as the
+   * model does: `claude-opus-5[1m]` reports 1_000_000 where plain `claude-opus-5` reports 200_000,
+   * which is precisely why a hardcoded per-model table would be wrong rather than merely stale.
+   * Optional/bounded — informational, and a build that stops reporting it must cost the readout, never
+   * the session.
+   */
+  modelContextWindows?: Record<string, number>
 }
 
 export interface ClaudePromptSuggestionEvent {

@@ -516,6 +516,13 @@ export const ThreadView = z.object({
   // values forward-compatible; absent when neither durable source knows → the UI renders no guess.
   model: z.string().optional(),
   effort: z.string().optional(),
+  // How full the session's context window is right now — the footer's fullness readout. BOTH halves
+  // are provider-measured and the field is emitted ONLY when both are present, so a client never has
+  // to decide what to do with half a fraction: absent ⇒ no reading, never a 0% dial. Codex reports
+  // both on every `token_count`; a Claude row gets `tokens` from each assistant record's usage but
+  // `window` only once its first broker turn has ended (and never at all for a tmux/foreign row).
+  // `tokens` legitimately DROPS after a compaction — the context really did get smaller.
+  context: z.object({ tokens: z.number(), window: z.number() }).optional(),
 })
 export type ThreadView = z.infer<typeof ThreadView>
 

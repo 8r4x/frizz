@@ -685,6 +685,10 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     // are finished — the payload the protocol used to discard, which is why the tailer had to
     // reconstruct child lifecycle from English prose. See applyRuntimeTasks for the authority split.
     runtimeTasks: claudeRuntimeIngest ? (sessionId) => claudeRuntimeIngest.tasks(sessionId) : undefined,
+    // The model's context SIZE for a broker Claude session. Claude names it nowhere on disk, so this
+    // is the only path to the footer readout's denominator for a Claude row (codex names its own on
+    // every token_count and needs nothing here).
+    runtimeContextWindow: claudeRuntimeIngest ? (sessionId) => claudeRuntimeIngest.contextWindow(sessionId) : undefined,
   })
   resources.tailer = tailer
   opts.startup?.afterPhase?.("tailer")

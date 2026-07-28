@@ -581,6 +581,13 @@ function sessionThreadView(
     // fall back to current Settings; when both durable sources are silent the readout is omitted.
     model: profile.model,
     effort: profile.effort,
+    // Context fullness. Emitted only when the provider has given BOTH halves — a fraction with a
+    // guessed denominator is a fabricated reading, and the client's contract is that absence means no
+    // dial rather than an empty one. A Claude row therefore carries no `context` until its first turn
+    // has ended; codex carries one from its first token_count.
+    context: tele?.contextTokens !== undefined && tele?.contextWindow !== undefined && tele.contextWindow > 0
+      ? { tokens: tele.contextTokens, window: tele.contextWindow }
+      : undefined,
   }
 }
 

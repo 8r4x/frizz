@@ -55,8 +55,12 @@ export type NormalizedEvent =
   | { kind: "compaction"; at?: string; preTokens?: number; postTokens?: number }
   // Tokens occupying the model's context after its latest request (codex token_count). Pure telemetry:
   // it moves no turn state. It exists so a consumer can bracket a compaction it can't measure directly —
-  // the codex reading is the token_count immediately before/after the `compacted` envelope.
-  | { kind: "context-usage"; at?: string; tokens: number }
+  // the codex reading is the token_count immediately before/after the `compacted` envelope — and so the
+  // footer can render how full the context is. `window` is the model's context size AS THE PROVIDER
+  // REPORTS IT on the same event (codex: `info.model_context_window`), never a table we maintain: a
+  // hardcoded window goes stale on exactly the schedule the codex version pin did. Optional because a
+  // backend may measure the numerator without naming the denominator.
+  | { kind: "context-usage"; at?: string; tokens: number; window?: number }
 
 // The shape a backend's fold produces per session — the SAME shape board.ts already consumes as
 // SessionTelemetry, minus `permPrompt` (which is pane-sniffed live, not folded from the transcript).
@@ -92,6 +96,8 @@ export interface NormalizedTail {
   pendingAsk?: PendingAskData // codex: undefined
   authFault?: "authentication_rejected" // runtime provider-auth rejection (see FoldState.authFault)
   limitFault?: LimitFault // subscription window exhausted mid-turn (see FoldState.limitFault)
+  contextTokens?: number // tokens the last request carried (see FoldState.contextTokens)
+  contextWindow?: number // the model's context size, provider-reported (see FoldState.contextWindow)
 }
 
 // The backend-NEUTRAL fold accumulator: the running derivation a backend folds each transcript line
@@ -143,6 +149,20 @@ export interface FoldState {
   // match — and cleared by the next real assistant text OR any user record. That clearing rule is
   // what makes a delivered "continue" supersede the fault it was fired for.
   limitFault?: LimitFault
+  // ---- context occupancy (the footer's fullness readout) ----
+  // How many tokens the model's LAST request actually carried — i.e. how full its context is right
+  // now. Both providers measure this themselves and both write it to their transcript, so this is
+  // always a reading, never an estimate: codex reports `last_token_usage.total_tokens`; Claude's
+  // per-assistant `message.usage` sums input + cache-creation + cache-read (the three components of
+  // one request's input). It falls back down after a compaction, exactly as it should.
+  contextTokens?: number
+  // The model's context size, as the PROVIDER reports it. Deliberately not a per-model table: the
+  // window depends on the concrete variant in play (a `[1m]` Claude alias reports 1_000_000 where the
+  // same canonical model otherwise reports 200_000), so only the provider can answer for THIS session.
+  // Codex names it on every token_count; Claude names it on the SDK `result` message, which means a
+  // Claude row has a numerator from its first assistant record but no denominator until its first turn
+  // ends — and a tmux/foreign Claude row never gets one at all. Absent ⇒ NO reading is rendered.
+  contextWindow?: number
 }
 
 // A file a backend needs on disk BEFORE the detached spawn (e.g. codex's session-scoped AGENTS.md).

@@ -458,12 +458,17 @@ export function parseCodexLine(line: string): NormalizedEvent[] {
       }
       // Per-request usage telemetry. `last_token_usage.total_tokens` is what the LAST request actually
       // carried — i.e. the size of the context at that moment — which is the reading codex's own TUI
-      // uses for its remaining-context meter. Only the compaction bracket consumes it today.
+      // uses for its remaining-context meter. `model_context_window` rides the same event and is the
+      // DENOMINATOR for the footer's fullness readout: codex names the window itself, so fray never
+      // has to keep a per-model table that would go stale the moment a model ships a bigger context.
+      // Consumed by the compaction bracket and by the fold's contextTokens/contextWindow.
       case "token_count": {
         const info = p.info && typeof p.info === "object" ? (p.info as Record<string, unknown>) : undefined
         const last = info?.last_token_usage && typeof info.last_token_usage === "object" ? (info.last_token_usage as Record<string, unknown>) : undefined
         const tokens = typeof last?.total_tokens === "number" ? last.total_tokens : undefined
-        return tokens === undefined ? [] : [{ kind: "context-usage", at, tokens }]
+        const raw = info?.model_context_window
+        const window = typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : undefined
+        return tokens === undefined ? [] : [{ kind: "context-usage", at, tokens, ...(window === undefined ? {} : { window }) }]
       }
       case "user_message": {
         const text = typeof p.message === "string" ? p.message : undefined
