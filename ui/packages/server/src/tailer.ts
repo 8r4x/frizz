@@ -835,6 +835,83 @@ function launchTaskId(text: string): string | undefined {
   )
 }
 
+// ---- DESCENDANTS: a sub-agent's sub-agent, and so on down --------------------------------------
+//
+// A grandchild's DISPATCH is not in this thread's transcript — it is in the CHILD's, because the child
+// is the one that ran the Agent tool. So neither `subAgents` nor `retiredSubAgents` can ever hold it,
+// and the drill-in drawer's lookup used to bottom out at depth 1 (the drawer then states "unavailable",
+// which is honest but is also all it could say).
+//
+// The provider does record it, twice over. Measured on a real three-level broker session
+// (`_live_broker_depth.mts`, 2026-07-28 — read that harness's output before changing anything here):
+//
+//  1. ON THE STREAM. Everything is ONE session: the grandchild's dispatch arrives as an assistant event
+//     whose `parentToolUseId` is the CHILD's dispatch id, and the grandchild gets its own task_started /
+//     task_progress / task_notification carrying its own taskId + toolUseId. 33 of 50 assistant+user
+//     events in that run carried a parentToolUseId, so the link is populated in practice, not in theory.
+//  2. ON DISK, which is what this code uses. Beside every child transcript claude writes a SIDECAR,
+//     `<session-dir>/subagents/agent-<agentId>.meta.json`, verbatim from that run:
+//       {"agentType":"general-purpose","description":"LEVEL-ONE","toolUseId":"toolu_01Tszn…","spawnDepth":1}
+//       {"agentType":"general-purpose","description":"LEVEL-TWO","toolUseId":"toolu_01E6L4…",
+//        "parentAgentId":"a40cc1902e8ccba6d","spawnDepth":2}
+//
+// The disk route is the one to build on because the directory is FLAT: a child, a grandchild and a
+// great-grandchild all write into the SAME `subagents/` dir of the ROOT session. So "resolve a
+// descendant at any depth" is ONE capped directory read keyed by the very dispatch tool_use id the
+// drawer is already holding — there is no tree to walk, hence no recursion to bound and no malformed
+// parent link that could loop. `parentAgentId` and `spawnDepth` come along for free and are recorded
+// here rather than derived, so nothing downstream has to guess at either.
+interface DescendantSidecar {
+  agentId: string // from the FILENAME, so it exists even for a sidecar whose body is junk
+  toolUseId?: string // the dispatch id — the key the drawer resolves against
+  description?: string
+  agentType?: string
+  parentAgentId?: string // absent at depth 1 (a direct child of the session)
+  spawnDepth?: number // 1 for a direct child, 2 for a grandchild, …
+}
+
+// How many sidecars one resolution pass will read. A bound, not an opinion: a long orchestrator
+// session can accumulate hundreds of descendants and this runs behind a polling drawer.
+const DESCENDANT_SIDECAR_MAX = 512
+
+// Read a session's descendant sidecars. DEGRADES at every level and never throws — a missing dir, an
+// unreadable file, half-written JSON, a body that is not an object are each skipped, because this runs
+// on the drawer's read path and a throw there is a dead drawer (and, historically in this subsystem, a
+// dead thread). A sidecar fray cannot parse simply does not resolve, which is the state it was in
+// before this existed.
+function readDescendantSidecars(sessionDir: string): DescendantSidecar[] {
+  let names: string[]
+  try {
+    names = readdirSync(join(sessionDir, "subagents"))
+  } catch {
+    return []
+  }
+  const out: DescendantSidecar[] = []
+  for (const name of names) {
+    if (out.length >= DESCENDANT_SIDECAR_MAX) break
+    const agentId = /^agent-(.+)\.meta\.json$/.exec(name)?.[1]
+    if (!agentId) continue
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(readFileSync(join(sessionDir, "subagents", name), "utf8"))
+    } catch {
+      continue
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue
+    const meta = parsed as { toolUseId?: unknown; description?: unknown; agentType?: unknown; parentAgentId?: unknown; spawnDepth?: unknown }
+    const text = (value: unknown): string | undefined => (typeof value === "string" && value.trim() ? value.trim() : undefined)
+    out.push({
+      agentId,
+      toolUseId: text(meta.toolUseId),
+      description: text(meta.description),
+      agentType: text(meta.agentType),
+      parentAgentId: text(meta.parentAgentId),
+      spawnDepth: typeof meta.spawnDepth === "number" && Number.isFinite(meta.spawnDepth) ? meta.spawnDepth : undefined,
+    })
+  }
+  return out
+}
+
 // Process tool_results for tracked background ops: enrich a launch ack with the child's transcript
 // path (staleness clock) and keep tracking; retire a tracked AGENT whose tool_result is NOT a launch
 // ack (a synchronous call's final report / an error — no task-notification ever fires for those;
@@ -1918,6 +1995,47 @@ export function createTailer(deps: TailerDeps): Tailer {
     return `${agents}\n${shells}\n${ask}`
   }
 
+  // ---- descendant resolution (see the DescendantSidecar note above) ------------------------------
+  // One directory read per thread per CHANGE to its subagents dir. The drawer POLLS, so re-reading
+  // every sidecar per poll would turn an open drawer into a disk loop; and a new descendant at any
+  // depth is a new FILE in that flat dir, which is exactly what moves the dir's mtime. A sidecar is
+  // written once at spawn and not rewritten, so mtime is a complete invalidation signal here.
+  const descendantIndex = new Map<string, { at: number | undefined; byToolUse: Map<string, DescendantSidecar> }>()
+
+  function sessionDirOf(state: TailState): string {
+    return state.path.replace(/\.jsonl$/, "")
+  }
+
+  function descendantSidecar(state: TailState, id: string): DescendantSidecar | undefined {
+    const at = mtimeMs(join(sessionDirOf(state), "subagents"))
+    const cached = descendantIndex.get(state.slug)
+    if (cached && cached.at === at) return cached.byToolUse.get(id)
+    const byToolUse = new Map<string, DescendantSidecar>()
+    for (const meta of readDescendantSidecars(sessionDirOf(state))) {
+      if (meta.toolUseId) byToolUse.set(meta.toolUseId, meta)
+    }
+    descendantIndex.set(state.slug, { at, byToolUse })
+    return byToolUse.get(id)
+  }
+
+  // Where the descendant's own transcript sits — the same flat dir, beside its sidecar.
+  function descendantTranscript(state: TailState, meta: DescendantSidecar): string {
+    return join(sessionDirOf(state), "subagents", `agent-${meta.agentId}.jsonl`)
+  }
+
+  // A descendant's liveness. The provider's own task table is authoritative when it holds the row —
+  // its task id IS the agent id, and it says outright whether the child finished — which is precisely
+  // the reading the `task_*` stream exists to give. Otherwise fall back to the same mtime rule every
+  // tracked child uses. Deliberately never "done" on a guess: a child that has merely gone quiet reads
+  // "stale", and a transcript that does not stat at all reads "stale" too rather than claiming a
+  // completion nothing reported.
+  function descendantState(state: TailState, meta: DescendantSidecar): "running" | "stale" | "done" {
+    const task = deps.runtimeTasks?.(state.sessionId).find((entry) => entry.taskId === meta.agentId)
+    if (task?.terminal) return "done"
+    const at = mtimeMs(descendantTranscript(state, meta))
+    return at === undefined || now() - at > SUBAGENT_STALE_MS ? "stale" : "running"
+  }
+
   // Resolve a tracked sub-agent (thread slug + dispatch tool_use id) to its transcript path + state —
   // the drill-in drawer's server-side lookup. Checks the LIVE map first (running/stale), then the
   // RETAINED ring (a completed child kept for review → "done"). Undefined only when the id is unknown
@@ -1930,7 +2048,14 @@ export function createTailer(deps: TailerDeps): Tailer {
     if (live) return { outputFile: live.outputFile, ...(live.outputFormat ? { outputFormat: live.outputFormat } : {}), state: entryStale(live, now()) ? "stale" : "running" }
     const dead = state.retiredSubAgents.get(id)
     if (dead) return { outputFile: dead.outputFile, ...(dead.outputFormat ? { outputFormat: dead.outputFormat } : {}), state: "done" }
-    return undefined
+    // A DESCENDANT — a child of a child, of a child, at any depth. Its dispatch is in an ANCESTOR's
+    // transcript rather than this thread's, so neither map above can hold it; the flat sidecar index
+    // resolves it by the same tool_use id. Still undefined when nothing matches, so an id fray genuinely
+    // cannot place keeps degrading to the drawer's stated "unavailable" — this ADDS a resolution, it
+    // never invents one.
+    const descendant = descendantSidecar(state, id)
+    if (!descendant) return undefined
+    return { outputFile: descendantTranscript(state, descendant), state: descendantState(state, descendant) }
   }
 
   function backgroundShellLookup(slug: string, id: string): { command?: string; outputFile?: string; state: "running" | "done" } | undefined {
