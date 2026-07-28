@@ -258,7 +258,24 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
     | { kind: "sent" }
     | { kind: "unavailable" }
     | { kind: "slow" }
+    | { kind: "backpressure" }
     | { kind: "oversized"; actualBytes: number }
+
+  // How a channel sheds when this peer's queued output would breach the cap.
+  //  • "close" — the board channel. Its frames are an ORDERED delta stream: a dropped frame tears the
+  //    client's incremental base, so the only sound shed is to drop the connection and let the reconnect
+  //    handshake re-send a keyframe.
+  //  • "skip"  — the transcript channel. Its frames are IDEMPOTENT FULL SNAPSHOTS, so a backed-up peer
+  //    loses nothing by not queueing this generation: the slug stays dirty and the NEWER snapshot goes
+  //    out once the peer drains. Closing here is actively harmful — the client's recovery is to reconnect
+  //    and replay every subscription at once, i.e. a strictly LARGER burst than the one that shed it, so
+  //    the cap trips again on the next generation and the connection flaps forever (connecting/connected)
+  //    without ever reaching a state the user can read as broken.
+  type ShedPolicy = "close" | "skip"
+
+  // A skipped generation retries on this cadence. Retries are cheap: with no intervening change edge the
+  // snapshot cache still holds the encoded frame, so a retry costs neither a disk read nor a serialization.
+  const BACKPRESSURE_RETRY_MS = 250
 
   function encodeMsg(msg: SocketServerMsg): EncodedMessage | null {
     try {
@@ -272,12 +289,18 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
   // Logical frame size and queued transport pressure are different failure classes. A payload that is
   // intrinsically too large gets a typed, non-closing downgrade below; a bounded frame that cannot be
   // queued because this peer stopped reading is still shed as a slow consumer.
-  function sendEncoded(ws: WebSocket, frame: EncodedMessage, enforceLogicalLimit = true): SendResult {
+  function sendEncoded(
+    ws: WebSocket,
+    frame: EncodedMessage,
+    enforceLogicalLimit = true,
+    shed: ShedPolicy = "close",
+  ): SendResult {
     if (ws.readyState !== ws.OPEN) return { kind: "unavailable" }
     if (enforceLogicalLimit && frame.bytes > maxLogicalFrameBytes) {
       return { kind: "oversized", actualBytes: frame.bytes }
     }
     if (bufferedAmount(ws) + frame.bytes > maxOutputBufferBytes) {
+      if (shed === "skip") return { kind: "backpressure" }
       closeSocket(ws, 1013, "client too slow")
       return { kind: "slow" }
     }
@@ -522,10 +545,24 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
       })
       return
     }
-    const sent = sendEncoded(ws, result.snapshot.frame)
+    const sent = sendEncoded(ws, result.snapshot.frame, true, "skip")
+    if (sent.kind === "backpressure") {
+      // Keep the subscription: this peer is merely behind, not broken. Leave the slug dirty so the next
+      // flush delivers the CURRENT snapshot, and never seed lastSig — that would dedupe away the very
+      // frame this connection has not received yet.
+      requeueTranscript(slug)
+      return
+    }
     if (sent.kind === "sent" && registry.subscribers(slug).length <= 1) {
       lastSig.set(slug, result.snapshot.sig)
     }
+  }
+
+  // Mark a slug for redelivery after a backpressure skip, on a fixed short cadence.
+  function requeueTranscript(slug: string): void {
+    if (closing) return
+    pendingTranscriptRefreshes.add(slug)
+    scheduleTranscriptFlush(BACKPRESSURE_RETRY_MS)
   }
 
   // New subscriptions are deferred to one check-phase batch. All sockets that arrive in that batch
@@ -669,8 +706,18 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
       }
       if (result.snapshot.sig === lastSig.get(slug)) continue
       let sent = false
+      let skipped = false
       for (const ws of registry.subscribers(slug)) {
-        if (sendEncoded(ws, result.snapshot.frame).kind === "sent") sent = true
+        const outcome = sendEncoded(ws, result.snapshot.frame, true, "skip")
+        if (outcome.kind === "sent") sent = true
+        else if (outcome.kind === "backpressure") skipped = true
+      }
+      // A skipped peer must not be stranded: hold the slug dirty (and withhold lastSig, which would
+      // otherwise dedupe the redelivery away) until every subscriber has actually taken a generation.
+      if (skipped) {
+        pendingTranscriptRefreshes.add(slug)
+        retryMs = retryMs === undefined ? BACKPRESSURE_RETRY_MS : Math.min(retryMs, BACKPRESSURE_RETRY_MS)
+        continue
       }
       if (sent) lastSig.set(slug, result.snapshot.sig)
     }

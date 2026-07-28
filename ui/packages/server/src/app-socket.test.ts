@@ -458,6 +458,56 @@ test("security: a valid-frame flood and a slow outbound consumer are shed withou
   }
 })
 
+// The transcript channel carries IDEMPOTENT FULL SNAPSHOTS, so a momentarily backed-up peer must be shed
+// by dropping the GENERATION, never the connection. Closing it is a self-sustaining flap: the client's
+// recovery is to reconnect and replay every subscription in one tick — a strictly larger burst than the
+// one that shed it — so the cap trips again, forever, and the indicator alternates connecting/connected
+// without ever reaching a state a human can read as broken. (Diagnosed against the live nub board, whose
+// 300-message windows render 1.0–1.4MB per push, well under the 4MB payload-too-large cap.)
+test("resource control: transcript backpressure skips the generation instead of killing the connection", async () => {
+  let simulateSlow = false
+  const h = await startHarness({
+    maxOutputBufferBytes: 1_024,
+    bufferedAmount: () => (simulateSlow ? 1_024 : 0),
+  })
+  try {
+    h.transcripts.set("t", [msg("first")])
+    const c = await connectClient(h.port)
+    await c.next() // keyframe
+    c.ws.send(JSON.stringify({ t: "sub", topic: "transcript", slug: "t" }))
+    const first = await c.next()
+    assert.equal(first.t, "transcript")
+
+    // The peer stops draining, and the thread keeps advancing.
+    simulateSlow = true
+    h.transcripts.set("t", [msg("first"), msg("second")])
+    h.transcriptChange.emit(["t"])
+    await c.expectNone(300)
+    assert.equal(c.ws.readyState, WebSocket.OPEN, "a backed-up transcript peer is NOT closed")
+
+    // It advances again while still behind: the stale generation is dropped, not queued.
+    h.transcripts.set("t", [msg("first"), msg("second"), msg("third")])
+    h.transcriptChange.emit(["t"])
+    await c.expectNone(300)
+    assert.equal(c.ws.readyState, WebSocket.OPEN, "still open after a second skipped generation")
+
+    // Once it drains, it receives the CURRENT snapshot — not the stale one it missed.
+    simulateSlow = false
+    const recovered = await c.next(2_000)
+    assert.equal(recovered.t, "transcript")
+    if (recovered.t === "transcript") {
+      assert.deepEqual(
+        recovered.messages.map((m) => m.text),
+        ["first", "second", "third"],
+        "redelivery carries the newest snapshot, so no skipped generation is lost",
+      )
+    }
+    c.ws.close()
+  } finally {
+    await h.close()
+  }
+})
+
 test("protocol: bus board-delta + notify are forwarded as {t:'event'}", async () => {
   const h = await startHarness()
   try {
