@@ -26,7 +26,6 @@ export function QueueSubAgentLines({ slug, subAgents }: { slug: string; subAgent
           density="card"
           startedAt={agent.startedAt}
           // What the child is DOING right now. The counters stay off a handoff card (see ChildOpRow).
-          activityDetail={agent.activityDetail}
           parentSlug={slug}
           onOpen={agent.id ? () => pushSubAgentDrawer(slug, agent.id!, { label: agent.label, subagentType: agent.subagentType, startedAt: agent.startedAt }) : undefined}
         />

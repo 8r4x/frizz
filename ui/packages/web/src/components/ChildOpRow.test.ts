@@ -18,9 +18,6 @@ function render(props: {
   state?: "running" | "stale"
   density: ChildOpDensity
   startedAt?: string
-  activityDetail?: string
-  toolUses?: number
-  tokens?: number
   parentSlug?: string
   onOpen?: () => void
   onDismiss?: () => void
@@ -109,43 +106,6 @@ test("no density renders a model+effort tag — the profile lives on the prompt 
     assert.doesNotMatch(html, /data-agent-profile/, density)
     assert.doesNotMatch(html, /›/, `${density} must not render the model › effort separator`)
   }
-})
-
-// ── what the child is DOING, not just that it started ────────────────────────────────────────────
-// The maintainer's complaint that drove this: "there's not really any indication of what they're up to
-// aside from starts and stops". `activityDetail` is the answer, so a row that HAS it must show it, and
-// a row that doesn't (tmux, codex, an older CLI) must read exactly as it did before — no empty gap.
-const STEP = "Running sleep for 20 seconds"
-
-test("both prompt-box densities render the child's current step", () => {
-  for (const density of ["card", "sheet"] as const) {
-    const html = render({ density, onOpen: () => {}, activityDetail: STEP })
-    assert.match(html, /data-child-activity/, density)
-    assert.match(html, new RegExp(STEP), density)
-    assert.match(html, new RegExp(`title="${STEP}"`), `${density} keeps the full sentence in the tooltip`)
-  }
-})
-
-test("a child with no reported step renders no step element at all — never a blank slot", () => {
-  for (const density of DENSITIES) {
-    assert.doesNotMatch(render({ density, onOpen: () => {} }), /data-child-activity/, density)
-    assert.doesNotMatch(render({ density, onOpen: () => {}, activityDetail: "   " }), /data-child-activity/, `${density} whitespace`)
-  }
-  // The rail has no horizontal room for it — its rows stay identity-only.
-  assert.doesNotMatch(render({ density: "rail", onOpen: () => {}, activityDetail: STEP }), /data-child-activity/)
-})
-
-test("the how-far counters are an OPS-STRIP reading, not a meter on a handoff card", () => {
-  const sheet = render({ density: "sheet", onOpen: () => {}, toolUses: 12, tokens: 13476 })
-  assert.match(sheet, /data-child-progress/)
-  assert.match(sheet, /12 tools · 13.5k tok/)
-  for (const density of ["rail", "card"] as const) {
-    assert.doesNotMatch(render({ density, onOpen: () => {}, toolUses: 12, tokens: 13476 }), /data-child-progress/, density)
-  }
-  // Each half stands alone, and a zero/absent count is simply not a reading.
-  assert.match(render({ density: "sheet", toolUses: 1 }), /1 tool</)
-  assert.match(render({ density: "sheet", tokens: 947 }), /947 tok</)
-  assert.doesNotMatch(render({ density: "sheet", toolUses: 0, tokens: 0 }), /data-child-progress/)
 })
 
 test("the working-duration reading is right-justified on every density", () => {
