@@ -41,6 +41,14 @@ export type ClaudePermissionMode = "default" | "acceptEdits" | "bypassPermission
 // artifact.
 export const CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER = "subagent-steer-v1"
 
+// This one covers taking a queued follow-up BACK out of the CLI's command queue (the
+// `cancel_async_message` control request, reached through the daemon's `cancel-input` frame). A
+// pre-2026-07-28 daemon has no handler for that frame and answers nothing at all, so the request
+// would sit until its timeout and then read as "the daemon is wedged" rather than "this session is
+// too old". The bridge refuses up front instead — and refusing matters more here than it would for a
+// cosmetic capability: the operator is being told whether the agent will still read their message.
+export const CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT = "cancel-input-v1"
+
 export interface ClaudeInputMessage {
   id: string
   text: string

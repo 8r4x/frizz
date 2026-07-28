@@ -781,6 +781,25 @@ export const FollowUpInput = z.object({
 })
 export type FollowUpInput = z.infer<typeof FollowUpInput>
 
+// Take a follow-up back out of the provider's queue — the operator clicked their own queued bubble to
+// unqueue it and get the text back in the prompt box. Keyed by the same `deliveryId` the send carried,
+// which IS the uuid the provider queued the message under.
+export const UnqueueFollowUpInput = z.object({
+  slug: ThreadSlug,
+  // Same staleness guard as followUp: a stale tab must not unqueue against a re-dispatched session.
+  sessionId: z.string().min(1),
+  deliveryId: z.string().min(1).max(200),
+}).strict()
+export type UnqueueFollowUpInput = z.infer<typeof UnqueueFollowUpInput>
+// `unqueued:false` is a real, expected outcome, NOT an error: the message had already been dequeued for
+// execution. It is reported rather than thrown precisely because the operator must be able to tell
+// "I took it back" from "it's already on its way" — `reason` is what the surface shows them.
+export const UnqueueFollowUpResult = z.object({
+  unqueued: z.boolean(),
+  reason: z.string().optional(),
+}).strict()
+export type UnqueueFollowUpResult = z.infer<typeof UnqueueFollowUpResult>
+
 export const SetThreadSnoozeInput = z.object({
   slug: ThreadSlug,
   sessionId: z.string().min(1),

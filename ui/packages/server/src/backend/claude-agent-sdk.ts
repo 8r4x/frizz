@@ -150,6 +150,13 @@ export interface ClaudeQueryHandle extends AsyncIterable<ClaudeQueryEvent> {
   initializationResult(): Promise<ClaudeControlInitialization>
   reinitialize(): Promise<ClaudeControlInitialization>
   interrupt(): Promise<ClaudeInterruptReceipt | undefined>
+  /**
+   * Take one still-QUEUED input back out of the CLI's command queue, by the uuid `send` supplied.
+   * Resolves true only when the CLI positively removed it — i.e. the agent will never read it. False
+   * means it had already been dequeued for execution (or was never queued): the message is on its way
+   * and nothing was undone. Never guesses; the caller renders the difference to the operator.
+   */
+  cancelInput(id: string): Promise<boolean>
   setPermissionMode(mode: ClaudePermissionMode): Promise<void>
   // Ask the provider to name the session from `description` and PERSIST the name as the `ai-title`
   // record fray's tailer reads. See CLAUDE_TITLE_NEEDS_EXPLICIT_REQUEST below for why the broker has
@@ -416,6 +423,42 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
     const receipt = await this.awaitOpenControl(this.sdkQuery.interrupt())
     if (!receipt) return undefined
     return { stillQueued: boundedStringArray(receipt.still_queued, "interrupt.stillQueued", 256, 512).map((id, index) => boundedId(id, `interrupt.stillQueued[${index}]`)) }
+  }
+
+  // Unqueue a follow-up the operator has taken back. `cancel_async_message` is a documented control
+  // request on the CLI protocol (SDKControlCancelAsyncMessageRequest) but the SDK ships NO wrapper for
+  // it on `Query`, so it goes out over `request` — the same unmangled method `interrupt()` uses one
+  // level up. Probed rather than assumed, exactly like generateSessionTitle: an SDK bump that renames
+  // it must fail loudly here instead of throwing "not a function" out of an operator's click.
+  //
+  // Measured live against claude 2.1.220 / SDK 0.3.207 (_live_sdk_cancel_queued.mts): a still-queued
+  // uuid answers `{cancelled:true}` and the message never reaches the model — no assistant
+  // acknowledgement, no `queued_command` attachment, no user record — while a co-queued SIBLING is
+  // untouched and runs normally. An unknown/already-dequeued uuid answers `{cancelled:false}` without
+  // throwing, which is the honest "too late" the caller surfaces.
+  async cancelInput(id: string): Promise<boolean> {
+    this.assertOpen()
+    const messageUuid = boundedId(id, "cancelInput.id")
+    if (!UUID_PATTERN.test(messageUuid)) throw new ClaudeAgentSdkProtocolError("cancelInput.id must be a UUID")
+    await this.ready()
+    this.assertOpen()
+    const provider = this.sdkQuery as unknown as {
+      request?: (inner: { subtype: string; message_uuid: string }) => Promise<unknown>
+    }
+    if (typeof provider.request !== "function") {
+      throw new ClaudeAgentSdkProtocolError("Claude queued-input cancellation is unavailable")
+    }
+    const raw = await this.awaitOpenControl(provider.request({ subtype: "cancel_async_message", message_uuid: messageUuid }))
+    const cancelled = (raw as { response?: { cancelled?: unknown } } | undefined)?.response?.cancelled === true
+    // A cancelled input will never be echoed back, so observeProviderProgress can never release its
+    // slot — without this it would hold one of the 64 outstanding-input slots for the life of the
+    // session, and a thread the operator unqueues from often would eventually refuse new sends.
+    if (cancelled) {
+      this.outstandingInputs.delete(messageUuid)
+      const orderIndex = this.outstandingInputOrder.indexOf(messageUuid)
+      if (orderIndex >= 0) this.outstandingInputOrder.splice(orderIndex, 1)
+    }
+    return cancelled
   }
 
   async setPermissionMode(mode: ClaudePermissionMode): Promise<void> {

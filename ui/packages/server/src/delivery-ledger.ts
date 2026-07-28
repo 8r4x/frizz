@@ -27,7 +27,20 @@ export const PENDING_TIMEOUT_MS = 60_000
 export const UNCONFIRMED_DROP_MS = 60 * 60_000
 export const MAX_LEDGER_ITEMS = 20
 
-export type DeliveryState = "pending" | "enqueued" | "unconfirmed"
+// `cancelled` is not a delivery state at all — it is a TOMBSTONE, and the only one that outlives its
+// own message. The other three describe a send making its way to the agent; this one records a send the
+// operator took BACK out of the provider's queue (see cancelDelivery), and it exists purely to keep the
+// transcript honest afterwards.
+//
+// It has to exist because the JSONL never forgets. Claude Code writes a `queue-operation enqueue`
+// record the moment it accepts a follow-up, and transcript.ts renders that record as the gray queued
+// bubble. Cancelling removes the message from the CLI's queue but cannot unwrite that record, and the
+// CLI's own cancellation trace is a CONTENTLESS `queue-operation dequeue` (measured live —
+// _live_sdk_cancel_queued.mts) which is unattributable to any particular send. Left alone the enqueue
+// bubble therefore outlives the cancellation, and the FIFO backstop in transcript.ts eventually
+// UN-GRAYS it when a later message delivers — rendering a message the agent provably never read as a
+// message the human sent it. So fray has to remember the cancellation itself.
+export type DeliveryState = "pending" | "enqueued" | "unconfirmed" | "cancelled"
 
 export interface DeliveryLedgerItem {
   id: string
@@ -78,7 +91,7 @@ function isItem(v: unknown): v is DeliveryLedgerItem {
   if (!v || typeof v !== "object") return false
   const i = v as Partial<DeliveryLedgerItem>
   return typeof i.id === "string" && typeof i.text === "string" && typeof i.at === "string" &&
-    typeof i.updatedAt === "string" && (["pending", "enqueued", "unconfirmed"] as const).includes(i.state as DeliveryState)
+    typeof i.updatedAt === "string" && (["pending", "enqueued", "unconfirmed", "cancelled"] as const).includes(i.state as DeliveryState)
 }
 
 export function parseDeliveryLedger(json: string | null | undefined): DeliveryLedgerItem[] {
@@ -125,6 +138,26 @@ export function appendDelivery(
 // injection, a hit only ever exists for an ALREADY-delivered send, never for the pre-injection refusals
 // the client actually replays. Keeping every retryable throw upstream of the first write is the real
 // guarantee; a miss here proves nothing.
+// Turn an outstanding send into a cancellation TOMBSTONE — called only once the provider has positively
+// confirmed the message left its queue. Returns the item's text (what the operator gets back in their
+// prompt box) or null when there is no such outstanding item.
+//
+// The row keeps its id and text on purpose: the id is what makes `hasDelivery` keep refusing a replayed
+// send of the cancelled deliveryId, and the text is what `projectDeliveryLedger` matches the orphaned
+// JSONL enqueue bubble against. `updatedAt` becomes the cancellation instant, which bounds that match
+// (see the projection) so a LATER re-send of the same words is never mistaken for the retracted copy.
+export function cancelDelivery(storage: Storage, slug: string, id: string, now?: number): string | null {
+  const row = storage.getSession(slug)
+  if (!row) return null
+  const items = parseDeliveryLedger(row.delivery_ledger)
+  const index = items.findIndex((item) => item.id === id)
+  if (index < 0 || items[index].state === "cancelled") return null
+  const at = new Date(now ?? Date.now()).toISOString()
+  const next = items.map((item, i) => (i === index ? { ...item, state: "cancelled" as const, updatedAt: at } : item))
+  storage.setDeliveryLedger(slug, serializeDeliveryLedger(next))
+  return items[index].text
+}
+
 export function hasDelivery(storage: Storage, slug: string, id: string): boolean {
   const row = storage.getSession(slug)
   if (!row) return false
@@ -270,7 +303,7 @@ export function correlateDeliveryRecord(
   // id is absent (every tmux row, and the coalesced record, which mints a fresh uuid of its own).
   const echoed = echoedInputId(r)
   if (echoed !== null) {
-    const index = items.findIndex((item) => item.id === echoed)
+    const index = items.findIndex((item) => item.id === echoed && item.state !== "cancelled")
     if (index >= 0 && contemporaneous(items[index])) return items.filter((_, i) => i !== index)
   }
 
@@ -328,6 +361,7 @@ export function accountFor(
     // the text path decide, rather than resolving an arbitrary one of them.
     const owners = new Map<number, number[]>()
     items.forEach((item, index) => {
+      if (item.state === "cancelled") return // a tombstone is never evidence of its own delivery
       const tag = deliveryTag(item.id)
       if (wanted.has(tag)) owners.set(tag, [...(owners.get(tag) ?? []), index])
     })
@@ -387,6 +421,10 @@ export function matchComposedText(
   const candidate = (index: number): string | null => {
     if (matched.has(index)) return null
     const item = items[index]
+    // A tombstone is not an outstanding send: the provider confirmed it left the queue, so no later
+    // record can be evidence of its delivery, and matching one would silently retire the very row that
+    // keeps its orphaned enqueue bubble suppressed.
+    if (item.state === "cancelled") return null
     if (!contemporaneous(item)) return null
     const text = canon(item.text)
     return text || null
@@ -424,6 +462,11 @@ export function ageDeliveries(items: DeliveryLedgerItem[], nowMs: number): Deliv
   let changed = false
   const next: DeliveryLedgerItem[] = []
   for (const item of items) {
+    // A tombstone never ages. It is not describing a send in flight — it is suppressing a JSONL record
+    // that will still be there tomorrow, so a timeout would simply resurrect the cancelled bubble one
+    // hour later. It is bounded the other way instead: MAX_LEDGER_ITEMS evicts the oldest rows as new
+    // sends arrive, by which point the orphaned enqueue is far up in settled history.
+    if (item.state === "cancelled") { next.push(item); continue }
     const born = Date.parse(item.at)
     if (item.state === "pending" && Number.isFinite(born) && nowMs - born > PENDING_TIMEOUT_MS) {
       next.push({ ...item, state: "unconfirmed", updatedAt: new Date(nowMs).toISOString() })
@@ -450,15 +493,61 @@ export function ageDeliveries(items: DeliveryLedgerItem[], nowMs: number): Deliv
   return changed ? next : items
 }
 
+// How far past the cancellation instant a rendered bubble may still be the cancelled send. Covers the
+// clock skew between fray's own timestamp and the CLI's record, and nothing more: the bound is what
+// keeps a LATER re-send of the same words — the likely next thing the operator does, since unqueueing
+// hands them the text back in the prompt box — from being eaten by its own tombstone.
+const CANCEL_MATCH_SLACK_MS = 5_000
+
+// Remove the orphaned rendering of every CANCELLED send, and return the live items.
+//
+// The JSONL's `queue-operation enqueue` for a cancelled send is still on disk and still renders — as a
+// queued bubble, or as an UN-GRAYED one once transcript.ts's FIFO backstop passes over it when a later
+// message delivers. Drop it: the provider confirmed the agent never read those words, so showing them
+// in the conversation is a lie in either styling. Bounded to one bubble per tombstone, and to the
+// window between the send and its cancellation, so nothing outside that window can be claimed.
+type LiveDeliveryItem = DeliveryLedgerItem & { state: Exclude<DeliveryState, "cancelled"> }
+
+function dropCancelled(
+  messages: TranscriptMessage[],
+  items: DeliveryLedgerItem[],
+): { messages: TranscriptMessage[]; live: LiveDeliveryItem[] } {
+  const live = items.filter((item): item is LiveDeliveryItem => item.state !== "cancelled")
+  if (live.length === items.length) return { messages, live }
+  const dropped = new Set<number>()
+  for (const item of items) {
+    if (item.state !== "cancelled") continue
+    const text = canon(item.text)
+    const from = Date.parse(item.at) - 5_000
+    const to = Date.parse(item.updatedAt) + CANCEL_MATCH_SLACK_MS
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m.role !== "user" || dropped.has(i)) continue
+      if (canon(stripDeliveryMarkers(m.text)) !== text) continue
+      // An untimestamped bubble cannot be placed in the window; nothing but this send could have
+      // rendered it, so accepting it is safe and leaving it on screen is not.
+      const at = m.at ? Date.parse(m.at) : NaN
+      if (Number.isFinite(at) && Number.isFinite(from) && Number.isFinite(to) && (at < from || at > to)) continue
+      dropped.add(i)
+      break
+    }
+  }
+  return { messages: dropped.size ? messages.filter((_, i) => !dropped.has(i)) : messages, live }
+}
+
 // Project the ledger into a rendered transcript: every not-yet-delivered follow-up renders as the gray
 // queued user bubble even when the JSONL carries no trace of it yet (reload-safe server truth replacing
 // the client-only optimistic bubble). Rules, per item:
+//  • a CANCELLED item is a tombstone — it renders nothing and REMOVES the JSONL bubble it left behind;
 //  • the JSONL's own queued (enqueue) bubble already renders it → tag that bubble with the deliveryId
 //    (the client's optimistic copy consumes by id) and don't double-render;
 //  • a delivered copy already renders (correlation prune races a read by ≤1 tick) → skip entirely;
 //  • otherwise append a queued bubble at the tail, where a just-sent follow-up belongs.
 export function projectDeliveryLedger(messages: TranscriptMessage[], items: DeliveryLedgerItem[]): TranscriptMessage[] {
   if (!items.length) return messages
+  const cancelled = dropCancelled(messages, items)
+  messages = cancelled.messages
+  if (!cancelled.live.length) return messages
   // One rendered message accounts for at most ONE ledger item. Without this, two outstanding sends that
   // happen to carry the SAME words both resolved to the same bubble — the second item tagged it with
   // its own deliveryId and then skipped projecting, so the operator saw ONE queued bubble for two
@@ -468,7 +557,7 @@ export function projectDeliveryLedger(messages: TranscriptMessage[], items: Deli
   // had just projected, which is the same collapse by another route (seen live: two identical sends,
   // ledger holding both, exactly one gray bubble on screen).
   const claimed = new Set<number>()
-  for (const item of items) {
+  for (const item of cancelled.live) {
     const text = canon(item.text)
     const tag = deliveryTag(item.id)
     let handled = false

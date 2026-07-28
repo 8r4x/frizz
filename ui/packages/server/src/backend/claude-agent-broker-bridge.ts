@@ -9,7 +9,7 @@ import { adoptOrForkBroker, killBroker, liveBrokerRecord, liveBrokerRecords, cla
 import { connectClaudeBroker, type ClaudeBrokerClient } from "./claude-broker-client.ts"
 import { describeClaudeBrokerExit, readClaudeBrokerExit, type ClaudeBrokerExitRecord } from "./claude-broker-diagnostics.ts"
 import type { ClaudeDiagnostic, ClaudePermissionDecision, ClaudePermissionRequest, ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
-import { CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, validateInputMessage } from "./claude-agent-sdk-protocol.ts"
+import { CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, validateInputMessage } from "./claude-agent-sdk-protocol.ts"
 import type { BrokerRecord, ClaudeBrokerConfig } from "./claude-agent-broker.ts"
 import type { InteractionSessionScope, InteractionStore } from "../interaction-store.ts"
 import {
@@ -134,6 +134,21 @@ export interface ClaudeAgentBrokerBridge {
    * The caller turns that into "this sub-agent can no longer be reached", which is the truth.
    */
   steerSubAgent(input: { threadSlug: string; sessionId: string; subAgentId: string; text: string; deliveryId?: string }): Promise<void>
+  /**
+   * Take a follow-up BACK out of the session's command queue — the operator clicked their own queued
+   * bubble to unqueue it. `deliveryId` is the id `followUp` handed the SDK, which is the uuid the CLI
+   * queued the message under.
+   *
+   * Resolves TRUE only when the CLI positively removed it: the agent will never read that message.
+   * FALSE means it had already been dequeued for execution — nothing was undone and the operator must
+   * be told so, because a message they believe they retracted is the worst possible outcome here.
+   *
+   * NEVER attaches and never cold-resumes, for the same reason steerSubAgent doesn't: a queue lives
+   * inside a running CLI process. A daemon that died took its queue with it (the message was never
+   * read), and forking a fresh one to cancel a uuid it has never heard of would answer `false` — the
+   * one answer that means "your message is on its way". Requires a daemon this bridge holds LIVE.
+   */
+  cancelFollowUp(input: { threadSlug: string; sessionId: string; deliveryId: string }): Promise<boolean>
   /**
    * Reattach at boot to every broker daemon this project left running, without waiting for someone to
    * touch the thread.
@@ -349,6 +364,30 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
         { resume: true, appendSystemPrompt: input.appendSystemPrompt, model: input.model, effort: input.effort },
       )
       session.client.sendInput({ id: inputIdFor(input.deliveryId), text: input.text })
+    },
+
+    async cancelFollowUp(input) {
+      const held = current(input.threadSlug, input.sessionId)
+      if (!held || !holdsLiveDaemon(held)) {
+        if (held) { held.client.close(); sessions.delete(input.threadSlug) }
+        throw new Error("This thread's Claude session is no longer running, so nothing is queued to take back")
+      }
+      // Same shape as the sub-agent-steer capability gate: a detached daemon outlives fray upgrades by
+      // six hours, so the process on the other end may predate the `cancel-input` frame entirely. It
+      // would answer NOTHING, and this call would hang to its deadline and then read as a wedged
+      // session — when the truth is simply "this session is too old to unqueue from".
+      const record = liveBrokerRecord(claudeBrokerRecordPath(deps.stateDir, held.sessionId))
+      if (!record?.capabilities?.includes(CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT)) {
+        throw new Error("This thread's Claude session predates unqueueing — its next turn will restart on a session that supports it")
+      }
+      // `inputIdFor` is what followUp used to mint the SDK uuid, so passing the SAME deliveryId
+      // reproduces the SAME uuid — as long as it is uuid-shaped. When it is NOT, followUp substituted a
+      // random uuid that nothing recorded, so there is no id to cancel and a fresh one would answer a
+      // misleading `false`. Refuse instead of guessing.
+      if (inputIdFor(input.deliveryId) !== input.deliveryId) {
+        throw new Error("This message was sent without a cancellable id, so it can no longer be taken back")
+      }
+      return await held.client.cancelInput(input.deliveryId)
     },
 
     async steerSubAgent(input) {

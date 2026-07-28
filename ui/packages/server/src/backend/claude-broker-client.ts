@@ -27,6 +27,13 @@ export interface ClaudeBrokerClient {
   sendInput(message: ClaudeInputMessage): void
   answerPermission(requestId: string, decision: ClaudePermissionDecision): void
   interrupt(): void
+  /**
+   * Take a still-queued input back out of the session, by the id `sendInput` supplied. The ONE
+   * round-trip in this protocol: resolves with the CLI's own verdict (true ⇒ the agent will never
+   * read it), rejects when the daemon does not answer inside the deadline. Never resolves optimistically —
+   * a caller that cannot tell "unqueued" from "already delivered" has nothing to tell the operator.
+   */
+  cancelInput(id: string): Promise<boolean>
   setPermissionMode(mode: string): void
   connected(): boolean
   close(): void
@@ -36,6 +43,8 @@ interface Options {
   /** Give up (call onDisconnect for good) after this long without a connection. Default 30s. */
   connectDeadlineMs?: number
   retryDelayMs?: number
+  /** How long a `cancelInput` waits for the daemon's verdict before rejecting. Default 10s. */
+  cancelTimeoutMs?: number
 }
 
 export function connectClaudeBroker(
@@ -44,11 +53,15 @@ export function connectClaudeBroker(
   options: Options = {},
 ): ClaudeBrokerClient {
   const retryDelayMs = options.retryDelayMs ?? 250
+  const cancelTimeoutMs = options.cancelTimeoutMs ?? 10_000
   let sock: net.Socket | null = null
   let closed = false
   let buf = ""
   const outbound: string[] = [] // frames queued while not connected (e.g. the first prompt sent right after spawn)
   let firstConnectDeadline = Date.now() + (options.connectDeadlineMs ?? 30_000)
+  // In-flight cancelInput round-trips, keyed by the request id echoed on the reply.
+  const pendingCancels = new Map<string, { settle: (cancelled: boolean) => void; fail: (error: Error) => void; timer: NodeJS.Timeout }>()
+  let cancelSeq = 0
 
   const send = (frame: unknown): void => {
     const line = JSON.stringify(frame) + "\n"
@@ -68,6 +81,17 @@ export function connectClaudeBroker(
         case "event": handlers.onEvent?.(frame.event as ClaudeQueryEvent); break
         case "permission-request": handlers.onPermissionRequest?.(frame.requestId as string, frame.request as ClaudePermissionRequest); break
         case "diagnostic": handlers.onDiagnostic?.(frame.diagnostic as ClaudeDiagnostic); break
+        case "cancel-result": {
+          const entry = pendingCancels.get(frame.requestId as string)
+          if (!entry) break
+          pendingCancels.delete(frame.requestId as string)
+          clearTimeout(entry.timer)
+          // The daemon reports its own failure rather than dropping the request; surface it verbatim
+          // so the operator learns WHY their message could not be taken back.
+          if (typeof frame.error === "string" && frame.error) entry.fail(new Error(frame.error))
+          else entry.settle(frame.cancelled === true)
+          break
+        }
       }
     }
   }
@@ -94,8 +118,27 @@ export function connectClaudeBroker(
     sendInput: (message: ClaudeInputMessage) => send({ t: "input", message }),
     answerPermission: (requestId: string, decision: ClaudePermissionDecision) => send({ t: "permission", requestId, decision }),
     interrupt: () => send({ t: "interrupt" }),
+    cancelInput: (id: string) => new Promise<boolean>((resolve, reject) => {
+      if (closed) { reject(new Error("the broker connection is closed")); return }
+      const requestId = `cancel-${++cancelSeq}`
+      const timer = setTimeout(() => {
+        pendingCancels.delete(requestId)
+        reject(new Error("the Claude session did not answer the unqueue request"))
+      }, cancelTimeoutMs)
+      if (timer.unref) timer.unref()
+      pendingCancels.set(requestId, { settle: resolve, fail: reject, timer })
+      // Rides the same `send` as every other frame, so a request issued in the sliver between a socket
+      // blip and its reconnect is replayed rather than lost — and if the daemon never comes back, the
+      // deadline above is what answers instead.
+      send({ t: "cancel-input", requestId, id })
+    }),
     setPermissionMode: (mode: string) => send({ t: "set-mode", mode }),
     connected: () => sock !== null && !sock.destroyed,
-    close: () => { closed = true; sock?.destroy(); sock = null },
+    close: () => {
+      closed = true
+      for (const [, entry] of pendingCancels) { clearTimeout(entry.timer); entry.fail(new Error("the broker connection closed before the unqueue was answered")) }
+      pendingCancels.clear()
+      sock?.destroy(); sock = null
+    },
   }
 }

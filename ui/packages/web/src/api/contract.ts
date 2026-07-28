@@ -20,6 +20,8 @@ import type {
   AdoptThreadInput,
   AdoptThreadResult,
   FollowUpInput,
+  UnqueueFollowUpInput,
+  UnqueueFollowUpResult,
   ConfirmAwaitingInput,
   RenameThreadInput,
   AiRenameThreadResult,
@@ -91,6 +93,7 @@ export interface Api {
   dispatch(input: DispatchInput): Promise<{ slug: string; sessionId: string }>
   adoptThread(input: AdoptThreadInput): Promise<AdoptThreadResult>
   followUp(input: FollowUpInput): Promise<void>
+  unqueueFollowUp(input: UnqueueFollowUpInput): Promise<UnqueueFollowUpResult>
   setThreadPermission(input: SetThreadPermissionInput): Promise<SetThreadPermissionResult>
   threadProfileOptions(input: ThreadProfileOptionsInput): Promise<ThreadProfileOptionsResult>
   setThreadProfile(input: SetThreadProfileInput): Promise<SetThreadProfileResult>
@@ -194,6 +197,7 @@ export const PROCEDURES = {
   dispatch: "mutation",
   adoptThread: "mutation",
   followUp: "mutation",
+  unqueueFollowUp: "mutation",
   setThreadPermission: "mutation",
   threadProfileOptions: "query",
   setThreadProfile: "mutation",

@@ -8,6 +8,8 @@ import {
   AdoptThreadResult,
   DispatchInput,
   FollowUpInput,
+  UnqueueFollowUpInput,
+  UnqueueFollowUpResult,
   SetThreadSnoozeInput,
   ConfirmAwaitingInput,
   canonicalSnoozeInstant,
@@ -58,7 +60,7 @@ import { appServerTurnStalled } from "./board.ts"
 import { runThreadUpdate } from "./fray.ts"
 import { repairThreadFile } from "./repair.ts"
 import { resumeThread } from "./resume.ts"
-import { appendDelivery, hasDelivery } from "./delivery-ledger.ts"
+import { appendDelivery, cancelDelivery, hasDelivery } from "./delivery-ledger.ts"
 import { flushStuckComposer } from "./delivery-confirm.ts"
 import {
   readEarlierThreadTranscriptPage,
@@ -939,6 +941,46 @@ export function createRouter(ctx: AppContext) {
           appendDelivery(ctx.storage, input.slug, { id: input.deliveryId, text: input.message })
         }
         ctx.board.refresh()
+      },
+    }),
+
+    // Take a queued follow-up BACK — the operator clicked their own gray bubble to unqueue it and get
+    // the words back in the prompt box. The whole value of this is that it is TRUTHFUL: it reports
+    // whether the provider actually removed the message, and never claims a retraction it did not get.
+    //
+    // Only a broker-backed Claude row can do it, because only there does fray hold a control channel
+    // into a queue that still exists. A tmux row's text was typed into Claude Code's own TUI composer
+    // and a codex app-server steer went straight into the running turn — in both cases the message has
+    // left every surface fray can address, and the honest answer is "too late", not a silent no-op.
+    unqueueFollowUp: mutation({
+      input: UnqueueFollowUpInput,
+      output: UnqueueFollowUpResult,
+      handler: async ({ input }) => {
+        const row = currentOwnedSession(input.slug, input.sessionId)
+        if (!row) throw new Error("This thread is no longer the session this tab is looking at")
+        if (row.backend !== "claude" || row.claude_runtime !== "broker") {
+          return { unqueued: false, reason: "This thread's runtime can't take a message back once it's been sent" }
+        }
+        const bridge = ctx.claudeBroker
+        if (!bridge) throw new Error("Claude session broker is unavailable; cannot unqueue this follow-up")
+        // The ledger is the proof fray ever sent this id. Without it there is nothing to tombstone, so a
+        // successful provider-side cancel would leave the orphaned JSONL enqueue bubble on screen —
+        // which reads exactly like the cancel failed.
+        if (!hasDelivery(ctx.storage, input.slug, input.deliveryId)) {
+          return { unqueued: false, reason: "fray has no record of that send, so it can't be taken back" }
+        }
+        const cancelled = await bridge.cancelFollowUp({
+          threadSlug: input.slug,
+          sessionId: row.session_id,
+          deliveryId: input.deliveryId,
+        })
+        // ORDER: tombstone only AFTER the provider confirms. Recording a cancellation fray did not get
+        // would hide a message the agent is about to read — the one failure this feature must never
+        // have. `cancelDelivery` returning null means the row was already cancelled (a double click).
+        if (!cancelled) return { unqueued: false, reason: "The agent already picked that message up — it's on its way" }
+        cancelDelivery(ctx.storage, input.slug, input.deliveryId)
+        ctx.board.refresh()
+        return { unqueued: true }
       },
     }),
 

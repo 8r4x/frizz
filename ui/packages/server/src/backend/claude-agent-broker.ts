@@ -7,7 +7,13 @@
 //
 // Wire protocol — newline-delimited JSON frames:
 //   fray -> broker:  {t:"input", message} | {t:"permission", requestId, decision} | {t:"interrupt"} | {t:"set-mode", mode}
+//                  | {t:"cancel-input", requestId, id}
 //   broker -> fray:  {t:"hello", sessionId, generation} | {t:"event", event} | {t:"permission-request", requestId, request} | {t:"diagnostic", diagnostic}
+//                  | {t:"cancel-result", requestId, cancelled, error?}
+//
+// `cancel-input` is the one REQUEST/RESPONSE pair in an otherwise fire-and-forget protocol, and it has
+// to be: the operator is asking whether their queued message will still be read, and "we sent the
+// cancel" is not an answer to that. The reply carries the CLI's own verdict.
 //
 // Lifecycle mirrors codex-app-server-daemon.ts (record-after-listen, owner-checked cleanup, idle
 // exit, reachability self-collection). The recovered session-broker daemon's NAIVE unconditional
@@ -18,7 +24,7 @@ import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { createClaudeQueryFactory } from "./claude-agent-sdk.ts"
 import { createClaudeBrokerDiagnosticWriter, createClaudeBrokerExitWriter, type ClaudeBrokerExitReason } from "./claude-broker-diagnostics.ts"
-import { CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER } from "./claude-agent-sdk-protocol.ts"
+import { CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER } from "./claude-agent-sdk-protocol.ts"
 import type {
   ClaudeDiagnostic,
   ClaudeInputMessage,
@@ -72,7 +78,7 @@ export interface BrokerRecord { daemonPid: number; socketPath: string; sessionId
 // of a VALUE from here — rather than an `import type` — initializes this module inside the server
 // process, where the entry-point check is satisfied by the bundle's own path and the guard fires. That
 // took down the whole control plane on the artifact while dev source (separate files) stayed green.
-const BROKER_CAPABILITIES = [CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER]
+const BROKER_CAPABILITIES = [CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT]
 
 const ENV_ALLOWLIST = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"]
 const IDLE_EXIT_MS = 6 * 60 * 60 * 1000
@@ -248,6 +254,17 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
         if (msg.t === "input") { const message = msg.message as ClaudeInputMessage; void handle.send(message).catch(() => {}); seedSessionTitle(message) }
         else if (msg.t === "permission") { const e = pendingPermissions.get(msg.requestId as string); if (e) { pendingPermissions.delete(msg.requestId as string); e.resolve(msg.decision as ClaudePermissionDecision) } }
         else if (msg.t === "interrupt") void handle.interrupt().catch(() => {})
+        else if (msg.t === "cancel-input") {
+          // ALWAYS answer, including on failure: the caller is blocked on this reply and a silent drop
+          // would be indistinguishable from a wedged daemon. `sock` rather than `client` is deliberate —
+          // the answer belongs to the connection that asked, even if a reconnect has already replaced it.
+          const requestId = msg.requestId as string
+          const id = typeof msg.id === "string" ? msg.id : ""
+          void handle.cancelInput(id).then(
+            (cancelled) => write(sock, { t: "cancel-result", requestId, cancelled }),
+            (error: unknown) => write(sock, { t: "cancel-result", requestId, cancelled: false, error: error instanceof Error ? error.message : String(error) }),
+          )
+        }
         else if (msg.t === "set-mode") void handle.setPermissionMode(msg.mode as never).catch(() => {})
       }
     })
