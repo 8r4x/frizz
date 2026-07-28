@@ -150,8 +150,14 @@ export function Sidebar() {
     // recurring "hidden underneath the prompt box" bug. Default stacking is the fix: overlays win by
     // simply being overlays. Do not re-add a z here — raise the specific overlay instead.
     <aside className="sticky top-0 self-start h-screen w-[clamp(320px,34vw,680px)] shrink-0 flex flex-col justify-center max-[800px]:static max-[800px]:h-auto max-[800px]:w-full max-[800px]:justify-start max-[800px]:pt-16">
-      {/* The content column FILLS the aside track (no narrow inner cap). */}
-      <div className="flex max-h-[calc(100vh-32px)] min-h-0 min-w-0 w-full flex-col max-[800px]:max-h-none">
+      {/* The content column FILLS the aside track (no narrow inner cap). Its cap reserves 44px top AND
+          bottom (symmetric, so the column stays centred): the top 44px is the band the fixed status bar
+          occupies (top-2.5 + h-7 = 38px, plus a 6px gap). Below that cap the column grows and then
+          scrolls INTERNALLY, so a long thread list can no longer push the dispatch composer up under the
+          identity/gear/quota strip — it stops just short of it. Short boards are unaffected: they never
+          reach the cap, so nothing moves. A viewport-scrolled rail (the narrow layout, where this cap is
+          lifted) still passes BEHIND the bar, which is opaque for exactly that reason. */}
+      <div className="flex max-h-[calc(100vh-88px)] min-h-0 min-w-0 w-full flex-col max-[800px]:max-h-none">
         {/* THE PROMPT BOX lives at the sidebar top (it replaced the New-thread pill — maintainer
             2026-07-09): always present, type + Enter dispatches a new thread. A brand-new repo shows
             this same box CENTERED as the whole screen (App hides the sidebar); the first dispatch

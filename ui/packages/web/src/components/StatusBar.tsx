@@ -18,6 +18,14 @@ import { RestartFrayButton } from "./RestartFrayButton.tsx"
 // Everything in here is deliberately sized to ONE 24px line so it reads as a single strip: 12px
 // identity text, 11px quota chips, 24px icon buttons (STATUS_BAR_ACTION). Hairline dividers segment the
 // three groups; without them the run of unrelated glyphs reads as a pile rather than a bar.
+//
+// THE BAR IS AN OPAQUE SURFACE OF ITS OWN, not bare glyphs floating on the page. It used to have no
+// background at all, so anything that reached this corner painted THROUGH it: a full sidebar pushes the
+// dispatch composer up to the viewport top, and on a narrow viewport the whole rail scrolls past — both
+// smeared the list text and the composer's border straight across the identity, the gear and the quota
+// chips. A fill + hairline + shadow at z-20 (above the sidebar, which deliberately carries no z-index)
+// makes the bar a chip the page passes BEHIND. Sidebar.tsx reserves this band's height at the top of
+// the desktop column so the composer stops short of it instead of hiding underneath it.
 
 function Divider() {
   return <span aria-hidden="true" className="h-3 w-px shrink-0 bg-border" />
@@ -38,7 +46,12 @@ export function StatusBar({
       // The bar is capped to the viewport so a long owner/repo truncates (IdentityMark carries
       // min-w-0) instead of pushing the actions and quota chips off-screen; every item to the right of
       // the identity is shrink-0 and therefore always reachable.
-      className="fixed top-3 left-4 z-20 flex h-6 max-w-[calc(100vw-2rem)] items-center gap-2 text-[12px]"
+      //
+      // Geometry: h-7 at top-2.5 keeps the strip's optical centre exactly where the old h-6/top-3 line
+      // sat (y = 24px) while giving the fill 2px of breathing room around the 24px icon targets. Now
+      // that the bar is a BOX, its inset is the corner gutter (left-3 = the 12px the narrow layout
+      // already uses for the sidebar), so the chip's edge lines up with the composer below it.
+      className="fixed top-2.5 left-3 z-20 flex h-7 max-w-[calc(100vw-1.5rem)] items-center gap-2 rounded-lg border border-border bg-panel px-2 text-[12px] shadow-sm shadow-black/30"
     >
       <IdentityMark identity={identity} state={connection} boardFallback={boardFallback} />
       <Divider />

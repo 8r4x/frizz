@@ -39,10 +39,22 @@ test("the bar is one fixed upper-left strip, not per-item corner chrome", () => 
   const html = render()
 
   assert.match(html, /data-status-bar/)
-  // One 24px line pinned top-left. The reload button is absent in a static render (it only appears
+  // One line pinned top-left. The reload button is absent in a static render (it only appears
   // once the supervisor status resolves), which is why the order test above pins settings, not it.
-  assert.match(html, /class="fixed top-3 left-4 z-20 flex h-6/)
+  assert.match(html, /class="fixed top-2\.5 left-3 z-20 flex h-7/)
   assert.doesNotMatch(html, /top-3 right-3/)
+})
+
+test("the bar is an OPAQUE surface stacked above the sidebar, not bare glyphs on the page", () => {
+  const html = render()
+
+  // Its own fill + hairline: a full sidebar (composer pushed to the viewport top) and a scrolling
+  // narrow rail both reach this corner, and with no background they painted straight through it.
+  assert.match(html, /bg-panel/)
+  assert.match(html, /border border-border/)
+  // The sidebar deliberately carries NO z-index (see lib/overlaySurface.ts), so z-20 is what keeps the
+  // list and the composer BEHIND the bar rather than over it.
+  assert.match(html, /\bz-20\b/)
 })
 
 test("a cold identity still reserves its measure without collapsing the bar", () => {
