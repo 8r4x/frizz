@@ -216,6 +216,44 @@ export function peerSessionQueuedKey(deliveredText: string, pendingKeys: Iterabl
   return undefined
 }
 
+// ── The clock backstop ──────────────────────────────────────────────────────────────────────────────
+// The three shapes above are the ones that EXIST. The fold recognizes a delivery by its record shape, so
+// a shape a future harness version invents is unrecognized by construction — and the FIFO backstop only
+// heals a stranded bubble once a LATER delivery is recognized, which never comes for the NEWEST message.
+// That is the case a human actually sees, and it is how this bug was reported: the parser already carried
+// a fix for Claude Code 2.1.207's SDK shape, and 2.1.220 changed it again.
+//
+// So the render layer applies the shape-independent rule the fold cannot: a queued bubble this old is
+// stale no matter what its delivery looked like. Measured over the 3223 deliveries in this machine's
+// corpus, a legitimately-queued message waits p50 0.1s, p99 2.5min, p99.9 5.2min, MAX 54min (one; none
+// above an hour) — a mid-turn queue lasts as long as its turn, so the ceiling is generous rather than
+// tight. At 2h nothing measured is touched, and an unrecognized shape degrades to "renders as an ordinary
+// message" instead of "gray forever". Never a splice: a sent message must not vanish, and the text here
+// is the human's own. This is the transcript twin of ageDeliveries' UNCONFIRMED_DROP_MS, which fixed the
+// identical immortality for the ledger's own bubbles.
+export const QUEUED_STALE_MS = 2 * 60 * 60_000
+export function retireStaleQueuedBubbles(messages: TranscriptMessage[], nowMs: number = Date.now()): TranscriptMessage[] {
+  // Fast path: almost every read has nothing queued, and must not pay a copy.
+  let stale = false
+  for (const m of messages) {
+    if (!m.queued) continue
+    const at = m.at === undefined ? NaN : Date.parse(m.at)
+    if (Number.isFinite(at) && nowMs - at > QUEUED_STALE_MS) {
+      stale = true
+      break
+    }
+  }
+  if (!stale) return messages
+  // COPY-ON-WRITE. These objects are owned by the retained fold and are mutated in place when a real
+  // delivery lands; rewriting one here would make the retirement permanent and defeat that.
+  return messages.map((m) => {
+    if (!m.queued) return m
+    const at = m.at === undefined ? NaN : Date.parse(m.at)
+    // An unparseable timestamp is not evidence of staleness — leave those queued.
+    return Number.isFinite(at) && nowMs - at > QUEUED_STALE_MS ? { ...m, queued: false } : m
+  })
+}
+
 // ── Retained incremental Claude parse ───────────────────────────────────────────────────────────────
 // The single-pass fold that turns a Claude JSONL into renderable messages, made RESUMABLE: every piece
 // of closure state (the `out` array + the pending-tool / queued-follow-up / agent-dispatch / background-
@@ -1435,7 +1473,8 @@ export function readTranscript(project: Project, sessionId: string): TranscriptM
     // Defensive shallow slice: keeps per-message identity (all that matters downstream) while protecting
     // the RETAINED array from callers that append synthetic tail rows — projectDeliveryLedger pushes
     // queued bubbles into the array it's handed, which would otherwise pollute the fold across reads.
-    return [...messages]
+    // Same clock backstop as projectSnapshot: this is the other reader funnel (readThreadTranscript).
+    return retireStaleQueuedBubbles([...messages])
   } catch {
     return [] // file not created yet (agent still booting) — the UI shows the spinner
   } finally {
@@ -2505,7 +2544,10 @@ function fixedSnapshot(source: TranscriptSourceBinding): FixedTranscriptSnapshot
 function projectSnapshot(snapshot: FixedTranscriptSnapshot): TranscriptMessage[] {
   const prefix = `${snapshot.backend}:${snapshot.nativeId}`
   // The codex projector parses a rollout whole — no incremental fold to retain, and rollouts are small.
-  if (snapshot.backend === "codex") return projectCodexTranscript(snapshot.raw, prefix)
+  // It emits no queued bubbles today (codex's gray bubbles come only from the delivery ledger, which
+  // ages its own out), so the backstop is a no-op here — applied anyway so the guarantee is a property
+  // of the reader rather than of one backend's current parser.
+  if (snapshot.backend === "codex") return retireStaleQueuedBubbles(projectCodexTranscript(snapshot.raw, prefix))
 
   const { entry } = retainedFoldEntry(snapshot.path, prefix, snapshot.fileKey, snapshot.bytes.length)
   if (snapshot.bytes.length > entry.bytesRead) {
@@ -2520,7 +2562,9 @@ function projectSnapshot(snapshot: FixedTranscriptSnapshot): TranscriptMessage[]
 
   // Shallow copy: callers append synthetic tail rows (projectDeliveryLedger pushes queued bubbles into
   // the array it is handed), which would otherwise pollute the RETAINED projection across reads.
-  return [...entry.fold.allMessages()]
+  // retireStaleQueuedBubbles runs HERE rather than further down: it must see the fold's OWN bubbles and
+  // not the ledger's synthetic ones, which carry their own aging (ageDeliveries) and states.
+  return retireStaleQueuedBubbles([...entry.fold.allMessages()])
 }
 
 // sha256 over the whole snapshot, memoized per file identity+length. Cursor minting hashes the ENTIRE

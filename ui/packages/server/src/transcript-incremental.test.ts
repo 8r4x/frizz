@@ -199,11 +199,15 @@ test("readTranscript cache: append reflects, no-op read is stable, truncation fo
     // The incremental result must equal a from-scratch parse of the current file.
     assert.equal(JSON.stringify(msgs), JSON.stringify(projectClaudeTranscript(readFileWhole(h.path), `claude:${h.sessionId}`)))
 
-    // 4) an in-place mutation delivered via appended bytes (enqueue then delivery on a later read)
-    h.append([enqueue("steer it")])
+    // 4) an in-place mutation delivered via appended bytes (enqueue then delivery on a later read).
+    // A LIVE timestamp, unlike every other fixture line here: readTranscript applies the clock backstop
+    // (retireStaleQueuedBubbles), which correctly refuses to render a bubble enqueued in 2026-07-01 as
+    // still-waiting. What this step tests is the in-place un-graying, so the bubble has to be gray first.
+    const justNow = new Date().toISOString()
+    h.append([enqueue("steer it", justNow)])
     msgs = readTranscript(h.project, h.sessionId)
     assert.equal(msgs.filter((m) => m.queued === true && m.text === "steer it").length, 1, "enqueue → gray bubble")
-    h.append([deliver("steer it")])
+    h.append([deliver("steer it", justNow)])
     msgs = readTranscript(h.project, h.sessionId)
     const steer = msgs.filter((m) => m.text === "steer it")
     assert.equal(steer.length, 1)
@@ -213,6 +217,25 @@ test("readTranscript cache: append reflects, no-op read is stable, truncation fo
     h.write([userLine("only line now")])
     msgs = readTranscript(h.project, h.sessionId)
     assert.deepEqual(msgs.map((m) => m.text), ["only line now"], "truncation re-folds from scratch; no stale rows survive")
+  } finally {
+    h.cleanup()
+  }
+})
+
+test("readTranscript: a long-stale enqueue is never rendered as still-waiting, whatever its delivery looked like", () => {
+  // The reader-level guarantee, exercised through the REAL funnel rather than the pure helper: the fold
+  // recognizes a delivery by record SHAPE, so a shape a future harness version invents strands its bubble
+  // — and the FIFO backstop can't help the NEWEST message, because nothing later ever resolves. This is
+  // what stops that from being visible forever. The fixture's enqueue has no delivery record AT ALL,
+  // which is the worst case: unrecognized and last.
+  __clearTranscriptCacheForTests()
+  const h = cacheHarness()
+  try {
+    h.write([userLine("q1"), enqueue("a delivery shape from a future release", "2026-07-01T00:00:02.000Z")])
+    const msgs = readTranscript(h.project, h.sessionId)
+    const stranded = msgs.filter((m) => m.text === "a delivery shape from a future release")
+    assert.equal(stranded.length, 1, "the message must still be rendered — never spliced, it is the human's own words")
+    assert.equal(stranded[0].queued, false, "but not as a gray bubble, hours after it was sent")
   } finally {
     h.cleanup()
   }

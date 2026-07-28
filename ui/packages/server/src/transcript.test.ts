@@ -10,6 +10,8 @@ import {
   pageProjectedTranscript,
   projectClaudeTranscript,
   parseTranscript,
+  QUEUED_STALE_MS,
+  retireStaleQueuedBubbles,
   readEarlierThreadTranscriptPage,
   readLatestThreadTranscriptPage,
   readThreadTranscript,
@@ -1531,6 +1533,50 @@ test("FIFO backstop: a later delivery un-grays the messages queued ahead of it",
   const users = msgs.filter((m) => m.role === "user")
   assert.deepEqual(users.map((m) => m.text), [stranded, later])
   assert.deepEqual(users.map((m) => m.queued), [false, false], "the stranded bubble must not stay gray")
+})
+
+// ---- the clock backstop ----
+// The fold recognizes a delivery by RECORD SHAPE, so a shape a future harness invents is unrecognized by
+// construction, and the FIFO backstop only heals a stranded bubble once a LATER delivery is recognized —
+// which never arrives for the NEWEST message, the one a human actually sees. The render layer applies the
+// shape-independent rule instead: this bubble is simply too old to still be waiting.
+test("a queued bubble older than the ceiling stops rendering gray, whatever its delivery looked like", () => {
+  const sent = Date.parse("2026-07-01T00:00:00.000Z")
+  const msgs = parseTranscript(enqueueLine("a shape no parser here recognizes", "2026-07-01T00:00:00.000Z"))
+  assert.equal(msgs[0].queued, true, "still queued a moment later")
+  assert.equal(retireStaleQueuedBubbles(msgs, sent + QUEUED_STALE_MS - 1)[0].queued, true, "and right up to the ceiling")
+  assert.equal(retireStaleQueuedBubbles(msgs, sent + QUEUED_STALE_MS + 1)[0].queued, false, "past it, it renders as an ordinary message")
+})
+
+test("the ceiling clears the longest legitimately-queued message in the corpus by a wide margin", () => {
+  // Measured over 3223 real deliveries: p50 0.1s, p99 2.5min, p99.9 5.2min, max 54min, none above 1h.
+  // A mid-turn queue lasts as long as its turn, so this must never fire on a message still genuinely
+  // waiting — the ceiling is deliberately ~2x the worst case ever observed.
+  const longestObservedMs = 54 * 60_000
+  assert.ok(QUEUED_STALE_MS > longestObservedMs * 2, "the ceiling must stay far above real queue waits")
+})
+
+test("retiring a stale bubble never mutates the message the retained fold owns", () => {
+  // The fold reuses these objects across incremental reads and un-grays them in place when the real
+  // delivery lands. Rewriting one here would make the retirement permanent and defeat that.
+  const msgs = parseTranscript(enqueueLine("still waiting", "2026-07-01T00:00:00.000Z"))
+  const original = msgs[0]
+  const retired = retireStaleQueuedBubbles(msgs, Date.parse("2026-07-01T00:00:00.000Z") + QUEUED_STALE_MS + 1)
+  assert.equal(original.queued, true, "the fold's own object is untouched")
+  assert.notEqual(retired[0], original, "the caller gets a copy")
+  assert.equal(retired[0].text, original.text, "carrying the same words")
+})
+
+test("a bubble with no usable timestamp is left queued rather than guessed at", () => {
+  const noTs = JSON.stringify({ type: "queue-operation", operation: "enqueue", content: "no timestamp here" })
+  const msgs = parseTranscript(noTs)
+  assert.equal(msgs[0].queued, true)
+  assert.equal(retireStaleQueuedBubbles(msgs, Date.now())[0].queued, true, "absent evidence is not evidence of staleness")
+})
+
+test("a read with nothing stale returns the very same array — the common path pays no copy", () => {
+  const msgs = parseTranscript([enqueueLine("fresh", new Date().toISOString()), assistantLine("working")].join("\n"))
+  assert.equal(retireStaleQueuedBubbles(msgs, Date.now()), msgs)
 })
 
 test("a backstopped message still resolves its OWN delivery in place, without a second copy", () => {
