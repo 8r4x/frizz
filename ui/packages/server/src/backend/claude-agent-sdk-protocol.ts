@@ -27,6 +27,14 @@ export type ClaudePermissionMode = "default" | "acceptEdits" | "bypassPermission
 export interface ClaudeInputMessage {
   id: string
   text: string
+  // ADDRESSING. Absent/undefined ⇒ the message is a top-level turn for the session's main thread —
+  // every follow-up fray has ever sent. SET to a live Agent-tool dispatch's `tool_use_id` ⇒ the CLI
+  // routes the message INTO that running sub-agent's own conversation instead, which is how a human
+  // steers a child mid-flight. Verified live against claude 2.1.220 / SDK 0.3.207: a message carrying
+  // the child's tool_use_id reached the child (it acted on it, and only the CHILD's subagent JSONL
+  // carried the token) while the same session's null-addressed control reached only the main thread.
+  // There is no control-request equivalent — this field IS the entire steering channel.
+  parentToolUseId?: string
 }
 
 export interface ClaudeCommandCapability {
@@ -360,7 +368,11 @@ export function validateInputMessage(value: ClaudeInputMessage): ClaudeInputMess
   // silently replace controls or truncate after replacement expansion: the accepted bytes must be
   // exactly the bytes the caller supplied.
   if (text !== value.text) throw new ClaudeAgentSdkProtocolError("input.text contains unsafe text")
-  return { id, text }
+  // Addressing is an opaque provider id (`toolu_…`), validated on the same bounded-id path as every
+  // other id that crosses this membrane. Omitted stays omitted — the adapter turns that into the
+  // null the SDK expects for a main-thread turn, so an unaddressed send is byte-identical to before.
+  const parentToolUseId = boundedOptionalId(value.parentToolUseId, "input.parentToolUseId")
+  return parentToolUseId === undefined ? { id, text } : { id, text, parentToolUseId }
 }
 
 export function validatePermissionMode(value: unknown): ClaudePermissionMode {

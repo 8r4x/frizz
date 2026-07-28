@@ -463,6 +463,44 @@ export function createRouter(ctx: AppContext) {
     return row
   }
 
+  // Can this exact sub-agent be steered RIGHT NOW? Returns the session to address, or null. Every
+  // condition below is load-bearing and each was measured rather than assumed:
+  //
+  //  - the row must be a BROKER-backed claude thread. Steering rides an addressed input message on
+  //    the live SDK stream, which only the broker daemon has. A tmux claude row has no such channel;
+  //    a codex row's children are spawned inside codex's own process and the app-server protocol
+  //    exposes no per-child address at all (`turn/steer` addresses a THREAD, and a codex child's
+  //    thread is not one this app-server connection started).
+  //  - the child must be DIRECT (this session's own Agent-tool dispatch, not a grandchild resolved
+  //    through the descendant sidecar and not a background shell) — the CLI only knows tool_use ids
+  //    its own main thread issued.
+  //  - the child must be RUNNING. `stale` means fray has seen no output for a long while and the
+  //    completion record was probably missed; addressing a finished child MISDELIVERS to the parent's
+  //    main thread rather than failing, so "probably finished" has to be treated as finished.
+  //
+  // A residual race remains and cannot be closed from outside the CLI: a child may settle between
+  // this check and the daemon's read of the frame, and there is no receipt to tell us. It is narrow
+  // (a broker row retires a child on the SDK's own task_notification, not on a mtime timeout) and it
+  // is the reason the drawer's composer disappears the instant the child stops running.
+  // `note` is the sentence the drawer shows in place of the prompt box, and it is composed HERE —
+  // next to the code that knows the actual reason — rather than re-derived from a boolean by a client
+  // that would have to guess. Null note = nothing worth saying (a settled child's transcript already
+  // reads as finished; a banner there would be noise).
+  function subAgentSteerable(slug: string, id: string): { sessionId: string } | { sessionId: null; note: string | null } {
+    const blocked = (note: string | null) => ({ sessionId: null, note })
+    const info = ctx.tailer.subAgent(slug, id)
+    if (!info) return blocked(null)
+    if (info.state !== "running") return blocked(null)
+    if (!info.direct) return blocked("Only sub-agents this thread dispatched itself can be steered — this one belongs to another agent.")
+    const row = ctx.storage.getSession(slug)
+    if (!row) return blocked(null)
+    if (row.backend === "codex") return blocked("Codex runs its sub-agents inside its own process and exposes no way to address one, so this child can't be steered from here.")
+    if (row.claude_runtime !== "broker" || !ctx.claudeBroker) {
+      return blocked("Steering a sub-agent needs the Claude session broker; this thread runs in a terminal.")
+    }
+    return { sessionId: row.session_id }
+  }
+
   // Every interaction RPC re-derives the project from this server and binds the requested slug to the
   // CURRENT registered session id. Foreign transcripts have no registry row; a stale page holding a
   // replaced session id fails closed instead of reading or answering the replacement's requests.
@@ -632,15 +670,65 @@ export function createRouter(ctx: AppContext) {
     // transcript with state "gone", which the drawer renders as its quiet "unavailable" state.
     subAgentTranscript: query({
       input: z.object({ slug: ThreadSlug, id: z.string() }).strict(),
-      output: z.object({ messages: z.array(TranscriptMessage), state: z.enum(["running", "stale", "done", "gone"]) }),
+      output: z.object({
+        messages: z.array(TranscriptMessage),
+        state: z.enum(["running", "stale", "done", "gone"]),
+        // Whether THIS child can be steered right now. Computed server-side, never re-derived by the
+        // client: the drawer renders a prompt box if and only if this is true, because the codebase
+        // rule is "absent ⇒ no affordance, never a fabricated one" and an input that silently drops a
+        // steer is worse than no input. See subAgentSteer for every condition folded in here.
+        steerable: z.boolean(),
+        // Why not, when the reason is worth stating (a RUNNING child that still can't be reached).
+        steerNote: z.string().nullable(),
+      }),
       handler: async ({ input }) => {
         const info = ctx.tailer.subAgent(input.slug, input.id)
-        if (!info) return { messages: [], state: "gone" as const }
+        if (!info) return { messages: [], state: "gone" as const, steerable: false, steerNote: null }
         // A CODEX sub-agent is itself a codex thread, so its "output file" is a rollout in codex's own
         // schema — parse it with the codex reader or the drawer renders an empty pane.
         const read = info.outputFormat === "codex" ? readCodexTranscriptFile : readTranscriptFile
         const messages = info.outputFile ? read(info.outputFile) : []
-        return { messages, state: info.state }
+        const steer = subAgentSteerable(input.slug, input.id)
+        return {
+          messages,
+          state: info.state,
+          steerable: steer.sessionId !== null,
+          steerNote: steer.sessionId === null ? steer.note : null,
+        }
+      },
+    }),
+
+    // Steer ONE running sub-agent: deliver the operator's text into the CHILD's own conversation
+    // rather than the thread's main turn. The maintainer's question — "don't we have the ability to
+    // steer them with prompts?" — turned out to be yes, but only through one narrow channel: an input
+    // message addressed with the child's dispatch tool_use id (`parent_tool_use_id`). There is no
+    // control request for it; `stopTask` and `backgroundTasks` are the only other per-task controls
+    // the SDK exposes.
+    //
+    // WHY THE GATE IS STRICT. Measured live: addressing a child that has ALREADY SETTLED does not
+    // error and does not vanish — the CLI falls the message back onto the MAIN thread, where the
+    // parent obeys it as if the operator had typed it into the thread composer. So an ungated steer
+    // is not a no-op, it is a misdelivery. `subAgentSteerable` is the single predicate that decides,
+    // and the drawer's prompt box is rendered off the same answer.
+    subAgentSteer: mutation({
+      input: z.object({ slug: ThreadSlug, id: z.string(), message: z.string().min(1), deliveryId: z.string().optional() }).strict(),
+      output: z.object({ delivered: z.boolean() }),
+      handler: async ({ input }) => {
+        const target = subAgentSteerable(input.slug, input.id)
+        if (target.sessionId === null) {
+          throw new Error(target.note ?? "This sub-agent is no longer running, so it can't be steered")
+        }
+        const bridge = ctx.claudeBroker
+        if (!bridge) throw new Error("Claude session broker is unavailable; cannot steer this sub-agent")
+        await bridge.steerSubAgent({
+          threadSlug: input.slug,
+          sessionId: target.sessionId,
+          subAgentId: input.id,
+          text: input.message,
+          deliveryId: input.deliveryId,
+        })
+        ctx.board.refresh()
+        return { delivered: true }
       },
     }),
 

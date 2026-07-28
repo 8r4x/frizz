@@ -120,6 +120,20 @@ export interface ClaudeAgentBrokerBridge {
    *  (worker system prompt + profile) must be re-supplied, exactly like the tmux `claude -r` path. */
   followUp(input: { threadSlug: string; sessionId: string; cwd: string; text: string; deliveryId?: string; permissionMode?: ClaudeBrokerConfig["permissionMode"]; appendSystemPrompt?: string; model?: string; effort?: string }): Promise<void>
   /**
+   * Steer ONE running Agent-tool sub-agent: deliver `text` into the child's own conversation rather
+   * than the thread's main turn. `subAgentId` is the dispatch tool_use id — the same id the board's
+   * SubAgentView carries and the drill-in drawer is keyed by.
+   *
+   * DELIBERATELY UNLIKE `followUp`: this NEVER attaches and NEVER cold-resumes. A child exists only
+   * inside the live CLI process that dispatched it — it has no transcript of its own to resume, no
+   * socket, and no PID. Cold-starting a daemon and addressing a message at a `toolu_…` it has never
+   * heard of does not steer anything; at best the steer evaporates, at worst it lands on the main
+   * thread as an out-of-context instruction the operator never aimed there. So a steer requires a
+   * daemon this bridge is holding LIVE (same generation, per holdsLiveDaemon) and throws otherwise.
+   * The caller turns that into "this sub-agent can no longer be reached", which is the truth.
+   */
+  steerSubAgent(input: { threadSlug: string; sessionId: string; subAgentId: string; text: string; deliveryId?: string }): Promise<void>
+  /**
    * Reattach at boot to every broker daemon this project left running, without waiting for someone to
    * touch the thread.
    *
@@ -334,6 +348,18 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
         { resume: true, appendSystemPrompt: input.appendSystemPrompt, model: input.model, effort: input.effort },
       )
       session.client.sendInput({ id: inputIdFor(input.deliveryId), text: input.text })
+    },
+
+    async steerSubAgent(input) {
+      // No attach, no resume — see the interface doc. `holdsLiveDaemon` is the same generation check
+      // followUp uses to notice a daemon died under a held session; here a miss is terminal rather
+      // than a cue to cold-start, because there is no such thing as resuming a sub-agent.
+      const held = current(input.threadSlug, input.sessionId)
+      if (!held || !holdsLiveDaemon(held)) {
+        if (held) { held.client.close(); sessions.delete(input.threadSlug) }
+        throw new Error("This sub-agent's session is no longer running, so it cannot be steered")
+      }
+      held.client.sendInput({ id: inputIdFor(input.deliveryId), text: input.text, parentToolUseId: input.subAgentId })
     },
 
     async warmUp() {

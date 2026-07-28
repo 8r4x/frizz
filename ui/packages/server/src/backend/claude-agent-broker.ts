@@ -168,6 +168,10 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   let titleSeeded = config.resume === true
   const seedSessionTitle = (message: ClaudeInputMessage): void => {
     if (titleSeeded) return
+    // An ADDRESSED message is a steer aimed at one running sub-agent, not this thread's opening
+    // prompt. Titling the whole thread "fix the flaky assertion in the child you dispatched" would
+    // name the session after a side conversation, so addressing disqualifies a message from seeding.
+    if (message?.parentToolUseId) return
     const text = typeof message?.text === "string" ? message.text.trim() : ""
     if (!text) return
     titleSeeded = true

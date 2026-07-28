@@ -379,7 +379,9 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
       this.input.push({
         type: "user",
         message: { role: "user", content: parsed.text },
-        parent_tool_use_id: null,
+        // null = the session's main thread (every follow-up). A sub-agent STEER carries the child's
+        // dispatch tool_use id here, which is the CLI's only addressing channel into a running child.
+        parent_tool_use_id: parsed.parentToolUseId ?? null,
         uuid: parsed.id as `${string}-${string}-${string}-${string}-${string}`,
       })
     } catch (error) {

@@ -188,7 +188,10 @@ function handleHostResponse(message) {
 
 function handleUserMessage(message) {
   userInputCount += 1
-  record({ kind: "user-input", uuid: message.uuid, text: extractText(message.message?.content) })
+  // `parent_tool_use_id` is captured because it is not decoration: null routes the message to this
+  // session's main thread, a `toolu_…` routes it INTO that running sub-agent's own conversation. The
+  // adapter is the only thing that decides which, so the wire frame is where it has to be asserted.
+  record({ kind: "user-input", uuid: message.uuid, text: extractText(message.message?.content), parentToolUseId: message.parent_tool_use_id ?? null })
   if (scenario === "crash") {
     process.stderr.write("fake child crash\n")
     process.exit(17)

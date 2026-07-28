@@ -138,6 +138,9 @@ test("real SDK + fake executable: init owns the requested session, input streams
       kind: "user-input",
       uuid: INPUT_ID,
       text: "hello from streaming input",
+      // An ordinary send is a MAIN-THREAD turn and must stay one. `null` here is the whole guarantee
+      // that adding sub-agent addressing did not quietly re-route every follow-up fray sends.
+      parentToolUseId: null,
     })
   } finally {
     await harness.close()
@@ -463,6 +466,40 @@ test("provider-consumed input cannot bypass UUID backpressure or duplicate prote
     }
     await assert.rejects(harness.handle.send({ id: inputId(0), text: "duplicate" }), /already outstanding/)
     await assert.rejects(harness.handle.send({ id: inputId(64), text: "overflow" }), /outstanding input limit/)
+  } finally {
+    await harness.close()
+  }
+})
+
+// A SUB-AGENT STEER is one addressed input frame and nothing else — there is no per-agent control
+// request in the SDK (`stopTask` / `backgroundTasks` are the whole per-task surface). So the ONE thing
+// the adapter must get right is which value lands in `parent_tool_use_id`: null keeps the message on
+// the session's main thread (every follow-up fray has ever sent, which must stay byte-identical), and
+// the child's dispatch tool_use id routes it into that child's own conversation. Asserted on the wire
+// frame the CLI actually reads, because that is where the routing decision is consumed.
+test("addressing an input routes it to the sub-agent; omitting it stays a main-thread turn", { timeout: 10_000 }, async () => {
+  const harness = startHarness("hold-inputs")
+  try {
+    await harness.handle.ready()
+    await harness.handle.send({ id: inputId(0), text: "main thread" })
+    await harness.handle.send({ id: inputId(1), text: "steer the child", parentToolUseId: "toolu_child_01" })
+    const records = await waitForCapture(harness.capturePath, (rows) => rows.filter((row) => row.kind === "user-input").length === 2)
+    const inputs = records.filter((row) => row.kind === "user-input")
+    assert.equal(inputs[0]?.parentToolUseId, null, "an unaddressed send is the main turn, exactly as before")
+    assert.equal(inputs[1]?.parentToolUseId, "toolu_child_01", "the steer carries the child's dispatch id")
+  } finally {
+    await harness.close()
+  }
+})
+
+test("an addressing id is validated as an opaque provider id, never passed through raw", { timeout: 10_000 }, async () => {
+  const harness = startHarness("hold-inputs")
+  try {
+    await harness.handle.ready()
+    await assert.rejects(
+      harness.handle.send({ id: inputId(2), text: "hostile", parentToolUseId: "toolu bad id" }),
+      /not a valid opaque id/,
+    )
   } finally {
     await harness.close()
   }

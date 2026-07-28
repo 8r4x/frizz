@@ -71,7 +71,13 @@ export interface Api {
   threadBody(input: { slug: string }): Promise<{ markdown: string }>
   threadTranscript(input: { slug: string }): Promise<TranscriptPage>
   threadTranscriptEarlier(input: TranscriptEarlierInput): Promise<TranscriptPage>
-  subAgentTranscript(input: { slug: string; id: string }): Promise<{ messages: TranscriptMessage[]; state: "running" | "stale" | "done" | "gone" }>
+  // `steerable` is the server's answer to "can this child be prompted right now" — a broker-backed
+  // claude thread's own live Agent-tool child, and nothing else. The drawer renders its prompt box
+  // if and only if this is true; the client never re-derives the policy.
+  subAgentTranscript(input: { slug: string; id: string }): Promise<{ messages: TranscriptMessage[]; state: "running" | "stale" | "done" | "gone"; steerable: boolean; steerNote: string | null }>
+  // Deliver a steer INTO one running sub-agent's own conversation (not the thread's main turn).
+  // Throws when the child settled first — see the router's subAgentSteer for why that must fail loudly.
+  subAgentSteer(input: { slug: string; id: string; message: string; deliveryId?: string }): Promise<{ delivered: boolean }>
   backgroundShellOutput(input: { slug: string; id: string }): Promise<{ command: string | null; output: string; truncated: boolean; state: "running" | "done" | "gone" }>
   // The × on a live sub-agent / background-shell row: retire the op from tracking. `dismissed:false`
   // when the id is no longer live (already gone).
@@ -178,6 +184,7 @@ export const PROCEDURES = {
   threadTranscript: "query",
   threadTranscriptEarlier: "query",
   subAgentTranscript: "query",
+  subAgentSteer: "mutation",
   backgroundShellOutput: "query",
   dismissBackgroundOp: "mutation",
   pendingInteractions: "query",
