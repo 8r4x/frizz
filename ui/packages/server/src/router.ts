@@ -970,9 +970,19 @@ export function createRouter(ctx: AppContext) {
         }
         const bridge = ctx.claudeBroker
         if (!bridge) throw new Error("Claude session broker is unavailable; cannot unqueue this follow-up")
-        // ONE refusal sentence for every way this can be too late, because from where the operator is
-        // standing there is only one outcome to distinguish: did the agent get it or not.
-        const tooLate = { unqueued: false, reason: "The agent already picked that message up — it's on its way" }
+        // ONE refusal sentence for every way this can be too late — and it deliberately does NOT claim
+        // the message was DELIVERED, which is what it used to say.
+        //
+        // `cancelled: false` proves exactly one thing: the message is not in the queue any more. The
+        // obvious reading is "the agent picked it up", and that is what happens in every state fray has
+        // been able to reach. But the SDK documents another: once a batch is dequeued and coalesced,
+        // cancelling a member answers false whether its content still runs or the whole batch was
+        // dropped. Probed hard for that (_live_sdk_cancel_coalesced.mts) and could not reach it — which
+        // is not the same as proving it absent, so the wording must not depend on the answer. What fray
+        // knows is that the message left the queue and is beyond its reach; the bubbles it could not
+        // retract stay gray rather than flipping to delivered, so an undelivered message keeps LOOKING
+        // undelivered whichever reading is true.
+        const tooLate = { unqueued: false, reason: "Too late — that message has already left the queue, so fray can't take it back" }
         const item = deliveryItem(ctx.storage, input.slug, input.deliveryId)
         // Already retracted — a double click, or a second tab clicking the same bubble. Idempotent
         // rather than "too late": the message really is gone, and saying otherwise would be a lie in
