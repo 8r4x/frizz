@@ -151,20 +151,22 @@ test("the how-far counters are an OPS-STRIP reading, not a meter on a handoff ca
 test("the working-duration reading is right-justified on every density", () => {
   for (const density of DENSITIES) {
     const html = render({ density, onOpen: () => {}, startedAt: TWELVE_MIN_AGO })
-    assert.match(html, /class="ml-auto[^"]*"[^>]*>12 min</, `${density} pushes the reading to the right edge`)
+    assert.match(html, /class="ml-auto[^"]*"[^>]*>12m</, `${density} pushes the reading to the right edge`)
   }
 })
 
 test("the light-gray working-duration reading renders on every density, and only when reported", () => {
   for (const density of DENSITIES) {
     const withReading = render({ density, startedAt: TWELVE_MIN_AGO })
-    // "12 min" — how long the child has been WORKING, not how recently it was active: anything still
+    // "12m" — how long the child has been WORKING, not how recently it was active: anything still
     // listed here is running or tracked-stale, so recency was near-zero information (maintainer 2026-07-28).
-    assert.match(withReading, /12 min/, `${density} must render the working-duration reading`)
-    assert.match(withReading, /text-muted\/40[^>]*>12 min</, `${density} reading must be the light-gray tone`)
-    assert.match(withReading, /title="Working for 12 min"/, `${density} reading carries the explicit tooltip`)
-    // A child that reports no activity instant gets NO reading — never a fabricated "just now".
-    assert.doesNotMatch(render({ density }), /\d+ min|just now/, `${density} must omit the reading when absent`)
+    assert.match(withReading, /\b12m\b/, `${density} must render the working-duration reading`)
+    assert.match(withReading, /text-muted\/40[^>]*>12m</, `${density} reading must be the light-gray tone`)
+    assert.match(withReading, /title="Working for 12m"/, `${density} reading carries the explicit tooltip`)
+    // A child with no dispatch instant gets NO reading — never a fabricated "0s".
+    // Assert the READING, not a bare duration shape: the spinner SVG carries dur="1.1s", so a loose
+    // /\d+s/ matches the animation and the test passes for the wrong reason.
+    assert.doesNotMatch(render({ density }), /title="Working for/, `${density} must omit the reading when absent`)
   }
 })
 
@@ -184,7 +186,7 @@ test("the dismiss × exists only when onDismiss is supplied, and sits directly a
   assert.match(render({ density: "sheet", kind: "SHELL", onDismiss: () => {} }), /aria-label="Dismiss background shell: Audit the drawer ops strip"/)
   // ORDER is the point of the 2026-07-27 move: title → × → reading. At the far right, past the
   // reading, the × read as too subtle to find.
-  const order = ["Audit the drawer ops strip", "Dismiss sub-agent", "Working for 12 min"].map((needle) => withX.indexOf(needle))
+  const order = ["Audit the drawer ops strip", "Dismiss sub-agent", "Working for 12m"].map((needle) => withX.indexOf(needle))
   assert.ok(order.every((i) => i >= 0) && order[0] < order[1] && order[1] < order[2], `title → × → reading, got ${order}`)
   // …and it is visible at rest, not revealed by a hover the reader has to guess at.
   assert.doesNotMatch(withX, /opacity-0/)

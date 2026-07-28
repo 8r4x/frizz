@@ -295,6 +295,10 @@ export interface SweepDeps {
   selfPid?: number
   minAgeMs?: number
   log?: (msg: string) => void
+  /** Thresholds for the report-only runaway detector. */
+  runaway?: RunawayOptions
+  /** Set false to skip the runaway `ps` pass entirely (tests that assert exact exec call counts). */
+  runawayReport?: boolean
 }
 
 export interface SweepResult {
@@ -303,6 +307,100 @@ export interface SweepResult {
   /** distinct dead thread slugs whose aux were reaped */
   deadSlugs: string[]
   liveSlugs: string[]
+}
+
+// ── Runaway detection (REPORT ONLY — nothing here kills anything) ─────────────────────────────────
+//
+// The reaper's whole predicate is "the owning thread is DEAD." That leaves the opposite case entirely
+// unwatched: a LIVE thread whose dispatched work is pinning the machine. Measured on the maintainer's
+// box 2026-07-26 — load average 95-103 on 10 cores, 5.6 GB into swap, and the top EIGHT CPU consumers
+// were all FRAY_UI_THREAD-tagged node processes from just TWO threads, four of them at ~80% CPU for
+// 2 days 18 hours. Every "extreme lag" / "insane contention" / "the sidebar won't update" report in
+// the thread history is downstream of that, and every engineering response so far has made FRAY's own
+// per-tick work cheaper while the workers' far larger slice stayed unmeasured.
+//
+// This does not reap. Killing a worker's build because it is slow is a decision fray has no business
+// making unattended, and a long compile is indistinguishable from a runaway by CPU alone. What is
+// missing is not enforcement, it is VISIBILITY: today the operator's only signal is that the laptop
+// is hot. So this names the thread.
+//
+// The metric is average cores held over the process's whole life (`cputime / etime`), not instantaneous
+// %CPU — a spot reading catches a healthy compile mid-burst, whereas 0.8 cores sustained across two
+// days is unambiguous.
+
+/** ~cores held on average across this process's entire lifetime. */
+export interface RunawayAux {
+  pid: number
+  slug: string
+  ageMs: number
+  cpuMs: number
+  cores: number
+}
+
+export interface RunawayOptions {
+  /** Average cores held before a process is worth naming. Default 0.5. */
+  minCores?: number
+  /** How long it must have been doing it. Default 30 min — well past any ordinary build. */
+  minAgeMs?: number
+}
+
+/** `[dd-]hh:mm:ss[.ff]` accumulated CPU time → ms. NaN-safe: unparseable → 0 (never reported). */
+export function parseCpuTimeMs(value: string): number {
+  const m = value.trim().match(/^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)$/)
+  if (!m) return 0
+  const [, d, h, min, s] = m
+  const ms = ((Number(d ?? 0) * 24 + Number(h ?? 0)) * 3600 + Number(min) * 60 + Number(s)) * 1000
+  return Number.isFinite(ms) ? ms : 0
+}
+
+/**
+ * Join per-pid CPU time onto already-enumerated rows and return the tagged AUX processes over budget.
+ * Pure apart from the injected `exec`, and deliberately a SEPARATE `ps` pass: `enumerateProcs`'s
+ * two-pass format is load-bearing for slug attribution and is not worth destabilising for telemetry.
+ */
+export function detectRunawayAux(
+  rows: ProcRow[],
+  liveSlugs: ReadonlySet<string>,
+  exec: Exec = defaultExec,
+  options: RunawayOptions = {},
+): RunawayAux[] {
+  const minCores = options.minCores ?? 0.5
+  const minAgeMs = options.minAgeMs ?? 30 * 60_000
+  let text: string
+  try {
+    text = exec("ps", ["-Ao", "pid=,cputime="])
+  } catch {
+    return [] // telemetry only — never let it perturb the sweep
+  }
+  const cpuByPid = new Map<number, number>()
+  for (const line of text.split("\n")) {
+    const m = line.match(/^\s*(\d+)\s+(\S+)\s*$/)
+    if (m) cpuByPid.set(Number(m[1]), parseCpuTimeMs(m[2]!))
+  }
+  const out: RunawayAux[] = []
+  for (const row of rows) {
+    // Only AUX of a LIVE thread. A dead thread's aux is the reaper's business, and a session ROOT
+    // (the agent itself) is never a runaway — it is the thing the operator asked for.
+    if (!row.slug || !liveSlugs.has(row.slug) || isSessionRoot(row.command)) continue
+    if (row.ageMs < minAgeMs) continue
+    const cpuMs = cpuByPid.get(row.pid) ?? 0
+    const cores = cpuMs / Math.max(row.ageMs, 1)
+    if (cores >= minCores) out.push({ pid: row.pid, slug: row.slug, ageMs: row.ageMs, cpuMs, cores })
+  }
+  return out.sort((a, b) => b.cores - a.cores)
+}
+
+/** One line per offending THREAD (not per process) — the operator cares which thread, not which pid. */
+export function summarizeRunaways(runaways: readonly RunawayAux[]): string[] {
+  const bySlug = new Map<string, RunawayAux[]>()
+  for (const r of runaways) bySlug.set(r.slug, [...(bySlug.get(r.slug) ?? []), r])
+  return [...bySlug.entries()]
+    .map(([slug, list]) => ({ slug, list, cores: list.reduce((n, r) => n + r.cores, 0) }))
+    .sort((a, b) => b.cores - a.cores)
+    .map(({ slug, list, cores }) => {
+      const hours = (Math.max(...list.map((r) => r.ageMs)) / 3_600_000).toFixed(1)
+      return `orphan-reaper: thread "${slug}" is holding ~${cores.toFixed(1)} core(s) across ${list.length} background process(es), oldest ${hours}h — fray dispatched these but does not reap a LIVE thread's work`
+    })
 }
 
 /** One periodic sweep: enumerate → decide → reap. Never throws (fails closed). */
@@ -318,6 +416,11 @@ export function sweepOrphansOnce(deps: SweepDeps = {}): SweepResult {
   }
   const protectedPids = selfAndAncestors(rows, selfPid)
   const { reap, liveSlugs } = decideOrphans(rows, { minAgeMs, protectedPids })
+  // Report-only, and BEFORE the early return: a board with nothing to reap is exactly the board most
+  // likely to be quietly on fire.
+  if (deps.log && deps.runawayReport !== false) {
+    for (const line of summarizeRunaways(detectRunawayAux(rows, new Set(liveSlugs), exec, deps.runaway))) deps.log(line)
+  }
   if (!reap.length) return { reaped: 0, deadSlugs: [], liveSlugs }
   const bySlug = new Map(rows.map((r) => [r.pid, r.slug]))
   const deadSlugs = [...new Set(reap.map((pid) => bySlug.get(pid)).filter((s): s is string => !!s))]

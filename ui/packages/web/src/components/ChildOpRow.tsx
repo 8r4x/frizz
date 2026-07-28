@@ -2,7 +2,7 @@ import type { ReactElement, ReactNode } from "react"
 import { X } from "lucide-react"
 import { BoxSpinner } from "./BoxSpinner.tsx"
 import { isRunningOperation } from "../lib/operationIndicators.ts"
-import { elapsedSince } from "../lib/durationLabels.ts"
+import { compactElapsedSince } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import {
   CHILD_ARROW,
@@ -69,7 +69,8 @@ export function ChildOpRow({
   label: string
   state: "running" | "stale"
   density: ChildOpDensity
-  // ISO of the child's DISPATCH. Rendered as a light-gray "12 min" duration, live-ticking; absent ⇒ no
+  // ISO of the child's DISPATCH. Rendered as a light-gray compact duration ("38s", "12m", "1hr 5m"),
+  // live-ticking; absent ⇒ no
   // reading (never a fabricated one). Deliberately not a "last active" recency: anything still listed
   // here is running or stale-but-tracked, so "recently active" is already implied and the recency read
   // as near-zero information (maintainer 2026-07-28). How long it has been WORKING is the number that
@@ -107,7 +108,7 @@ export function ChildOpRow({
   // Live-ticking recency, on every density. useNowMs re-renders this row ~every 30s so the reading
   // keeps counting up even while the board sends nothing (a steadily-quiet child pushes no delta).
   const now = useNowMs()
-  const elapsed = elapsedSince(startedAt, now)
+  const elapsed = compactElapsedSince(startedAt, now)
   const openTitle = CHILD_OPEN_TITLE[kind]
   const rowTitle = title ?? (clickable ? openTitle : undefined)
 
