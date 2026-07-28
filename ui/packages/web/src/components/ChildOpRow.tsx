@@ -2,7 +2,7 @@ import type { ReactElement, ReactNode } from "react"
 import { X } from "lucide-react"
 import { BoxSpinner } from "./BoxSpinner.tsx"
 import { isRunningOperation } from "../lib/operationIndicators.ts"
-import { formatAgo } from "../lib/durationLabels.ts"
+import { elapsedSince } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import {
   CHILD_ARROW,
@@ -30,10 +30,10 @@ export type ChildOpKind = "AGENT" | "SHELL"
 //   sheet — the drawer's background-ops strip. The full row: dot + petite-caps kind tag + label + the
 //           dismiss × + the current step + the "how far it has got" counters, because this IS the
 //           operations surface.
-// All three carry the light-gray "last active" reading when the child reports one — the recency the
-// running/stale mark alone can't give ("stale" only means quiet ≥15 min, not HOW long) — RIGHT-JUSTIFIED
-// at the end of the row (maintainer 2026-07-27), so a column of rows reads its recencies down one edge
-// instead of at whatever ragged offset each label happens to end.
+// All three carry the light-gray DURATION the child has been working — right-justified at the end of the
+// row (maintainer 2026-07-27), so a column of rows reads its numbers down one edge instead of at
+// whatever ragged offset each label happens to end. It reads at the SAME size as the title and every
+// other reading on the row; the size lives on the container for exactly that reason.
 export type ChildOpDensity = "rail" | "card" | "sheet"
 
 // ONE row for "a thing running underneath this thread", rendered identically everywhere it appears.
@@ -56,7 +56,7 @@ export function ChildOpRow({
   label,
   state,
   density,
-  lastActivityAt,
+  startedAt,
   activityDetail,
   toolUses,
   tokens,
@@ -69,9 +69,12 @@ export function ChildOpRow({
   label: string
   state: "running" | "stale"
   density: ChildOpDensity
-  // ISO of the child's last transcript append (its output-file mtime). Rendered as a light-gray
-  // "6 min ago" reading, live-ticking; absent ⇒ no reading (never a fabricated one).
-  lastActivityAt?: string
+  // ISO of the child's DISPATCH. Rendered as a light-gray "12 min" duration, live-ticking; absent ⇒ no
+  // reading (never a fabricated one). Deliberately not a "last active" recency: anything still listed
+  // here is running or stale-but-tracked, so "recently active" is already implied and the recency read
+  // as near-zero information (maintainer 2026-07-28). How long it has been WORKING is the number that
+  // tells you whether to go look at it.
+  startedAt?: string
   // WHAT THE CHILD IS DOING RIGHT NOW, in the provider's own words ("Running sleep for 20 seconds") —
   // rewritten per tool call off the Claude Agent SDK's typed task stream. This is the answer to "there's
   // not really any indication of what they're up to aside from starts and stops", so it is the row's
@@ -104,7 +107,7 @@ export function ChildOpRow({
   // Live-ticking recency, on every density. useNowMs re-renders this row ~every 30s so the reading
   // keeps counting up even while the board sends nothing (a steadily-quiet child pushes no delta).
   const now = useNowMs()
-  const ago = formatAgo(lastActivityAt, now)
+  const elapsed = elapsedSince(startedAt, now)
   const openTitle = CHILD_OPEN_TITLE[kind]
   const rowTitle = title ?? (clickable ? openTitle : undefined)
 
@@ -133,8 +136,8 @@ export function ChildOpRow({
 
   // `ml-auto` is what right-justifies it: the reading is the LAST item in the row's flex line, so it
   // takes every pixel the (truncating) label leaves behind and sits flush at the right edge.
-  const reading: ReactNode = ago ? (
-    <span className="ml-auto shrink-0 pl-1.5 text-muted/40" title={`Last active ${ago}`}>{ago}</span>
+  const reading: ReactNode = elapsed ? (
+    <span className="ml-auto shrink-0 pl-1.5 text-muted/40" title={`Working for ${elapsed}`}>{elapsed}</span>
   ) : null
   // The current step, and (ops strip only) how far the child has got. The step TRUNCATES rather than
   // pushing the recency off the row: at a narrow width the first few words still say what kind of work
@@ -187,13 +190,18 @@ export function ChildOpRow({
   )
 
   if (rail) return row
+  // text-[11.5px] sits on the CONTAINER, not only on the label button: the ×, the step, the counters
+  // and the reading are all SIBLINGS of that button, so a size set only on it leaves them inheriting
+  // the parent's larger one. That is exactly what happened when the reading moved to the right edge
+  // (maintainer 2026-07-28: "why did you make the 5 min ago labels bigger… it should be the same font
+  // size as the title"). One size here keeps every reading on the row in step.
   // The two prompt-box densities. The label (drill-in) and the × are SIBLINGS inside one row line — a
   // button can't nest inside a button — with the × sitting DIRECTLY AFTER the title (maintainer
   // 2026-07-27: at the far right it read as too subtle to find) and the recency pushed to the right
   // edge behind it. The × is always visible, quietly: a control you have to discover by hovering is
   // exactly the complaint.
   return (
-    <div className="flex min-w-0 items-center gap-1.5" data-op-row={onDismiss ? "" : undefined}>
+    <div className="flex min-w-0 items-center gap-1.5 text-[11.5px]" data-op-row={onDismiss ? "" : undefined}>
       {row}
       {/* The × sits between the identity and the live step, which is exactly "after the title". */}
       {onDismiss && (

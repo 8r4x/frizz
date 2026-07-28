@@ -27,11 +27,11 @@ export function formatFixedDuration(ms: number): string {
 // already-COMPLETED span (a dispatch→completion elapsed, in ms). This was written twice verbatim — in
 // ChatView's ops strip and in BackgroundShellSheet — while every other duration formatter already
 // lived here.
-export function elapsedSince(startedAt: string | undefined): string {
+export function elapsedSince(startedAt: string | undefined, nowMs = Date.now()): string {
   if (!startedAt) return ""
   const started = Date.parse(startedAt)
   if (!Number.isFinite(started)) return ""
-  return formatElapsedMinutes(Math.floor((Date.now() - started) / 60_000))
+  return formatElapsedMinutes(Math.floor((nowMs - started) / 60_000))
 }
 
 // Compact "time since" for a dense status row: "just now", "6 min ago", "1 hr 3 min ago". Distinct

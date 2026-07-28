@@ -3117,7 +3117,7 @@ export function BackgroundOpsStrip({
           label={s.label}
           state={s.state}
           density="sheet"
-          lastActivityAt={s.lastActivityAt}
+          startedAt={s.startedAt}
           // The ops strip is where the full live reading belongs: the child's current step plus how far
           // it has got. All three are absent for a tmux/codex child, which just reads as it did before.
           activityDetail={s.activityDetail}
@@ -3134,7 +3134,7 @@ export function BackgroundOpsStrip({
           label={s.label}
           state={s.state}
           density="sheet"
-          lastActivityAt={s.lastActivityAt}
+          startedAt={s.startedAt}
           onOpen={s.id ? () => pushBackgroundShellDrawer(slug, s.id!, { label: s.label, startedAt: s.startedAt }) : undefined}
           onDismiss={s.id ? () => dismiss.mutate(s.id!) : undefined}
         />

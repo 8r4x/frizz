@@ -17,7 +17,7 @@ function render(props: {
   label?: string
   state?: "running" | "stale"
   density: ChildOpDensity
-  lastActivityAt?: string
+  startedAt?: string
   activityDetail?: string
   toolUses?: number
   tokens?: number
@@ -30,7 +30,7 @@ function render(props: {
     kind: props.kind ?? "AGENT",
     label: props.label ?? "Audit the drawer ops strip",
     state: props.state ?? "running",
-    lastActivityAt: props.lastActivityAt,
+    startedAt: props.startedAt,
     ...props,
   }))
 }
@@ -83,7 +83,7 @@ test("the rail keeps its checkbox spinner, its indent and its tooltip override",
 })
 
 test("the card keeps the pulsing queue indicator and stays free of ops chrome", () => {
-  const html = render({ density: "card", onOpen: () => {}, parentSlug: "parent-thread", lastActivityAt: TWELVE_MIN_AGO })
+  const html = render({ density: "card", onOpen: () => {}, parentSlug: "parent-thread", startedAt: TWELVE_MIN_AGO })
   assert.match(html, /data-running-indicator="queue-subagent"/)
   assert.match(html, /fray-live-dot--agent/)
   assert.match(html, /data-subagent-parent="parent-thread"/)
@@ -92,7 +92,7 @@ test("the card keeps the pulsing queue indicator and stays free of ops chrome", 
 })
 
 test("the sheet is the operations row: kind tag, and NO second drill-in glyph beside the title", () => {
-  const html = render({ density: "sheet", onOpen: () => {}, lastActivityAt: TWELVE_MIN_AGO })
+  const html = render({ density: "sheet", onOpen: () => {}, startedAt: TWELVE_MIN_AGO })
   assert.match(html, /data-running-indicator="operation"/)
   assert.match(html, /petite-caps[^"]*">AGENT</)
   // The ↗ hover glyph was deleted (maintainer 2026-07-27): the drill-in affordance is the TITLE, which
@@ -148,22 +148,23 @@ test("the how-far counters are an OPS-STRIP reading, not a meter on a handoff ca
   assert.doesNotMatch(render({ density: "sheet", toolUses: 0, tokens: 0 }), /data-child-progress/)
 })
 
-test("the last-active reading is right-justified on every density", () => {
+test("the working-duration reading is right-justified on every density", () => {
   for (const density of DENSITIES) {
-    const html = render({ density, onOpen: () => {}, lastActivityAt: TWELVE_MIN_AGO })
-    assert.match(html, /class="ml-auto[^"]*"[^>]*>12 min ago</, `${density} pushes the reading to the right edge`)
+    const html = render({ density, onOpen: () => {}, startedAt: TWELVE_MIN_AGO })
+    assert.match(html, /class="ml-auto[^"]*"[^>]*>12 min</, `${density} pushes the reading to the right edge`)
   }
 })
 
-test("the light-gray last-active reading renders on every density, and only when reported", () => {
+test("the light-gray working-duration reading renders on every density, and only when reported", () => {
   for (const density of DENSITIES) {
-    const withReading = render({ density, lastActivityAt: TWELVE_MIN_AGO })
-    // "12 min ago" — the recency the running/stale mark alone can't give — in the muted reading tone.
-    assert.match(withReading, /12 min ago/, `${density} must render the last-active reading`)
-    assert.match(withReading, /text-muted\/40[^>]*>12 min ago</, `${density} reading must be the light-gray tone`)
-    assert.match(withReading, /title="Last active 12 min ago"/, `${density} reading carries the explicit tooltip`)
+    const withReading = render({ density, startedAt: TWELVE_MIN_AGO })
+    // "12 min" — how long the child has been WORKING, not how recently it was active: anything still
+    // listed here is running or tracked-stale, so recency was near-zero information (maintainer 2026-07-28).
+    assert.match(withReading, /12 min/, `${density} must render the working-duration reading`)
+    assert.match(withReading, /text-muted\/40[^>]*>12 min</, `${density} reading must be the light-gray tone`)
+    assert.match(withReading, /title="Working for 12 min"/, `${density} reading carries the explicit tooltip`)
     // A child that reports no activity instant gets NO reading — never a fabricated "just now".
-    assert.doesNotMatch(render({ density }), /min ago|just now/, `${density} must omit the reading when absent`)
+    assert.doesNotMatch(render({ density }), /\d+ min|just now/, `${density} must omit the reading when absent`)
   }
 })
 
@@ -176,15 +177,15 @@ test("a quiet SHELL breathes instead of going flat, on the ops row", () => {
 })
 
 test("the dismiss × exists only when onDismiss is supplied, and sits directly after the title", () => {
-  const withX = render({ density: "sheet", onOpen: () => {}, onDismiss: () => {}, lastActivityAt: TWELVE_MIN_AGO })
+  const withX = render({ density: "sheet", onOpen: () => {}, onDismiss: () => {}, startedAt: TWELVE_MIN_AGO })
   assert.match(withX, /data-op-row/)
   assert.match(withX, /aria-label="Dismiss sub-agent: Audit the drawer ops strip"/)
   assert.match(withX, /title="Dismiss — stop tracking this finished operation"/)
   assert.match(render({ density: "sheet", kind: "SHELL", onDismiss: () => {} }), /aria-label="Dismiss background shell: Audit the drawer ops strip"/)
-  // ORDER is the point of the 2026-07-27 move: title → × → recency. At the far right, past the
-  // recency, the × read as too subtle to find.
-  const order = ["Audit the drawer ops strip", "Dismiss sub-agent", "12 min ago"].map((needle) => withX.indexOf(needle))
-  assert.ok(order.every((i) => i >= 0) && order[0] < order[1] && order[1] < order[2], `title → × → recency, got ${order}`)
+  // ORDER is the point of the 2026-07-27 move: title → × → reading. At the far right, past the
+  // reading, the × read as too subtle to find.
+  const order = ["Audit the drawer ops strip", "Dismiss sub-agent", "Working for 12 min"].map((needle) => withX.indexOf(needle))
+  assert.ok(order.every((i) => i >= 0) && order[0] < order[1] && order[1] < order[2], `title → × → reading, got ${order}`)
   // …and it is visible at rest, not revealed by a hover the reader has to guess at.
   assert.doesNotMatch(withX, /opacity-0/)
   for (const density of DENSITIES) {

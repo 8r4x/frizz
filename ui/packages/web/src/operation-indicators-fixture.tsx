@@ -105,7 +105,7 @@ createRoot(document.getElementById("root")!).render(
         {/* The rail's type reading lives in the row TOOLTIP; no density renders a profile tag any more
             (maintainer 2026-07-27 — ChildOpRow no longer takes `subagentType` at all). */}
         {thread.subAgents.map((s) => (
-          <ChildOpRow key={s.id} kind="AGENT" label={s.label} state={s.state} density="rail" lastActivityAt={s.lastActivityAt} title={s.subagentType ? `[${s.subagentType}] ${s.label}` : s.label} onOpen={() => {}} />
+          <ChildOpRow key={s.id} kind="AGENT" label={s.label} state={s.state} density="rail" startedAt={s.startedAt} title={s.subagentType ? `[${s.subagentType}] ${s.label}` : s.label} onOpen={() => {}} />
         ))}
       </div>
     </section>

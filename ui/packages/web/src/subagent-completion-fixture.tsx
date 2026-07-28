@@ -236,13 +236,13 @@ createRoot(document.getElementById("root")!).render(
         <div className="mt-3 flex flex-col gap-3">
           <div className="flex flex-col">
             {thread.subAgents!.map((s) => (
-              <ChildOpRow key={`rail-${s.id}`} kind="AGENT" label={s.label} state={s.state} density="rail" lastActivityAt={s.lastActivityAt} parentSlug={SLUG} onOpen={() => openChild(s)} />
+              <ChildOpRow key={`rail-${s.id}`} kind="AGENT" label={s.label} state={s.state} density="rail" startedAt={s.startedAt} parentSlug={SLUG} onOpen={() => openChild(s)} />
             ))}
           </div>
           <QueueSubAgentLines slug={SLUG} subAgents={thread.subAgents ?? []} />
           <div className="flex flex-col gap-0.5">
             {thread.subAgents!.map((s) => (
-              <ChildOpRow key={`sheet-${s.id}`} kind="AGENT" label={s.label} state={s.state} density="sheet" lastActivityAt={s.lastActivityAt} onDismiss={() => {}} onOpen={() => openChild(s)} />
+              <ChildOpRow key={`sheet-${s.id}`} kind="AGENT" label={s.label} state={s.state} density="sheet" startedAt={s.startedAt} onDismiss={() => {}} onOpen={() => openChild(s)} />
             ))}
           </div>
         </div>

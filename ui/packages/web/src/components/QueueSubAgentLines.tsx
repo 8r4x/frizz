@@ -24,7 +24,7 @@ export function QueueSubAgentLines({ slug, subAgents }: { slug: string; subAgent
           label={agent.label}
           state={agent.state}
           density="card"
-          lastActivityAt={agent.lastActivityAt}
+          startedAt={agent.startedAt}
           // What the child is DOING right now. The counters stay off a handoff card (see ChildOpRow).
           activityDetail={agent.activityDetail}
           parentSlug={slug}
