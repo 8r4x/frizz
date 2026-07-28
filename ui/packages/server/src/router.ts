@@ -777,6 +777,13 @@ export function createRouter(ctx: AppContext) {
         if (row?.backend === "claude" && row.claude_runtime === "broker") {
           const bridge = ctx.claudeBroker
           if (!bridge) throw new Error("Claude session broker is unavailable; cannot deliver this follow-up")
+          // Replay guard, same as the tmux path below: the ledger entry is written only once
+          // `bridge.followUp` RETURNS, so a hit proves the text already crossed into the daemon. The
+          // broker branch returns before that check, so it had none — a replayed deliveryId sent the
+          // message a SECOND time. It also matters now that the deliveryId IS the SDK input uuid: the
+          // SDK rejects an id that is still outstanding, so a replay would surface as an error on the
+          // operator's send instead of the no-op it should be.
+          if (input.deliveryId && hasDelivery(ctx.storage, input.slug, input.deliveryId)) return
           const settings = ctx.getSettings()
           const appendSystemPrompt = [
             loadWorkerPrompt("claude", settings.runtimeGate !== false),
@@ -788,6 +795,9 @@ export function createRouter(ctx: AppContext) {
             sessionId: row.session_id,
             cwd: ctx.project.dir,
             text: input.message,
+            // Rides through to the SDK as this input's uuid, which the SDK echoes back on the record
+            // that delivers it — the ledger then correlates by identity rather than by text.
+            deliveryId: input.deliveryId,
             permissionMode: (row.permission_mode as ClaudePermissionMode | null) ?? undefined,
             appendSystemPrompt,
             model: row.model ?? undefined,

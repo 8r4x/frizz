@@ -188,6 +188,21 @@ function codexUserMessageText(r: Record<string, unknown>): string {
     .join("\n")
 }
 
+// The id fray itself supplied for this input, if the record is one the SDK minted FROM a fray input.
+// Deliberately narrow — only the two record shapes measured to echo it — so nothing else in a
+// transcript can be mistaken for a delivery receipt. Returns null for every tmux record.
+export function echoedInputId(rec: Record<string, unknown>): string | null {
+  if (rec.type === "attachment") {
+    const att = rec.attachment as { type?: unknown; commandMode?: unknown; source_uuid?: unknown } | undefined
+    if (att?.type !== "queued_command" || att.commandMode !== "prompt") return null
+    return typeof att.source_uuid === "string" && att.source_uuid ? att.source_uuid : null
+  }
+  // A tool_result echo is also `type:"user"` but carries no prompt of its own; requiring a non-meta
+  // record keeps this to records that represent a human turn.
+  if (rec.type === "user" && rec.isMeta !== true && typeof rec.uuid === "string" && rec.uuid) return rec.uuid
+  return null
+}
+
 // Fold ONE freshly appended JSONL record into the ledger. Pure: returns the same array when nothing
 // matched, a new array otherwise. `nowIso` stamps updatedAt (injectable for tests).
 export function correlateDeliveryRecord(
@@ -241,6 +256,22 @@ export function correlateDeliveryRecord(
     const dequeued = accountFor(items, r.content, contemporaneous)
     if (dequeued.size === 0) return items
     return items.filter((_, index) => !dequeued.has(index))
+  }
+
+  // ── IDENTITY, the exact path (broker/SDK rows) ──────────────────────────────────────────────────
+  // fray hands the SDK a `uuid` with every input (claude-agent-broker-bridge → sendInput), and the SDK
+  // ECHOES IT BACK on the record that materializes that input:
+  //   • delivered straight away → the `user` record's own `uuid`
+  //   • delivered out of the queue → the `queued_command` attachment's `source_uuid`
+  // Both verified byte-exact against a live claude 2.1.220 broker session, and `source_uuid` is present
+  // on 78/78 sdk prompt attachments in this machine's corpus. No prose is compared, so the case text
+  // matching gets WRONG — two sends the agent dequeues in the same instant, either of which the fuzzy
+  // matcher can attribute to the other — resolves exactly. Degrades to the text paths below whenever the
+  // id is absent (every tmux row, and the coalesced record, which mints a fresh uuid of its own).
+  const echoed = echoedInputId(r)
+  if (echoed !== null) {
+    const index = items.findIndex((item) => item.id === echoed)
+    if (index >= 0 && contemporaneous(items[index])) return items.filter((_, i) => i !== index)
   }
 
   // Delivery into the agent's context: the queued_command attachment (mid-turn/turn-start pickup) or a
@@ -428,13 +459,19 @@ export function ageDeliveries(items: DeliveryLedgerItem[], nowMs: number): Deliv
 //  • otherwise append a queued bubble at the tail, where a just-sent follow-up belongs.
 export function projectDeliveryLedger(messages: TranscriptMessage[], items: DeliveryLedgerItem[]): TranscriptMessage[] {
   if (!items.length) return messages
+  // One rendered message accounts for at most ONE ledger item. Without this, two outstanding sends that
+  // happen to carry the SAME words both resolved to the same bubble — the second item tagged it with
+  // its own deliveryId and then skipped projecting, so the operator saw ONE queued bubble for two
+  // messages they had sent, and the first send's optimistic client copy (which consumes by deliveryId)
+  // was never accounted for. Indexes into `messages`, so it is unaffected by the tail appends below.
+  const claimed = new Set<number>()
   for (const item of items) {
     const text = canon(item.text)
     const tag = deliveryTag(item.id)
     let handled = false
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i]
-      if (m.role !== "user") continue
+      if (m.role !== "user" || claimed.has(i)) continue
       // Same order as correlation: identity if the rendered copy still carries our marker, text
       // otherwise. Transcript text is stripped for display before it reaches here, so in practice this
       // is the text compare — the tag check costs nothing and covers any surface that keeps the raw.
@@ -443,6 +480,7 @@ export function projectDeliveryLedger(messages: TranscriptMessage[], items: Deli
         m.deliveryId = item.id
         m.deliveryState = item.state
       }
+      claimed.add(i)
       handled = true // queued (tagged in place) or already delivered — either way, no projection
       break
     }

@@ -376,6 +376,59 @@ test("an already-delivered copy suppresses projection entirely (prune race)", ()
   assert.equal(out[0].deliveryId, undefined)
 })
 
+test("two outstanding sends of the SAME text never collapse onto one bubble", () => {
+  // Both items matched the one rendered bubble by text, so the second tagged it with ITS id and then
+  // skipped projecting: the operator saw ONE queued bubble for two messages they had sent, and the
+  // first send's optimistic client copy (which consumes by deliveryId) was never accounted for.
+  const existing = msg({ queued: true, sourceId: "s:9" })
+  const out = projectDeliveryLedger([existing], [item({ id: "d-1", state: "enqueued" }), item({ id: "d-2", state: "enqueued" })])
+  assert.equal(out.length, 2, "the second send still gets its own bubble")
+  assert.equal(existing.deliveryId, "d-1", "the rendered bubble belongs to the FIRST send")
+  assert.equal(out[1].sourceId, "delivery:d-2")
+  assert.equal(out[1].queued, true)
+})
+
+// ---- identity: the broker echoes fray's own input id back ----
+// fray passes a uuid with every SDK input; the SDK returns it as the delivered `user` record's `uuid`
+// or the `queued_command` attachment's `source_uuid`. Verified byte-exact against a live claude 2.1.220
+// broker session. This is what makes two simultaneous dequeues resolve exactly instead of by prose.
+test("a queued_command attachment resolves the item whose id is its source_uuid", () => {
+  const items = [item({ id: "11111111-1111-4111-8111-111111111111", text: "first" }), item({ id: "22222222-2222-4222-8222-222222222222", text: "second" })]
+  const rec = {
+    type: "attachment", timestamp: iso(T0 + 500),
+    attachment: { type: "queued_command", commandMode: "prompt", source_uuid: "22222222-2222-4222-8222-222222222222", prompt: "second" },
+  }
+  const out = correlateDeliveryRecord(items, rec, iso(T0 + 500))
+  assert.deepEqual(out.map((i) => i.id), ["11111111-1111-4111-8111-111111111111"], "only the id's own item leaves")
+})
+
+test("identity resolves even when the delivered text no longer matches at all", () => {
+  const items = [item({ id: "33333333-3333-4333-8333-333333333333", text: "the words fray sent" })]
+  const rec = {
+    type: "attachment", timestamp: iso(T0 + 500),
+    attachment: { type: "queued_command", commandMode: "prompt", source_uuid: "33333333-3333-4333-8333-333333333333", prompt: "something else entirely" },
+  }
+  assert.deepEqual(correlateDeliveryRecord(items, rec, iso(T0 + 500)), [])
+})
+
+test("a user record whose uuid is the item's id resolves it (immediate delivery)", () => {
+  const items = [item({ id: "44444444-4444-4444-8444-444444444444", text: "hello" })]
+  const rec = { type: "user", uuid: "44444444-4444-4444-8444-444444444444", timestamp: iso(T0 + 500), message: { role: "user", content: "hello" } }
+  assert.deepEqual(correlateDeliveryRecord(items, rec, iso(T0 + 500)), [])
+})
+
+test("an echoed id from BEFORE the send never resolves it (replayed transcript)", () => {
+  const items = [item({ id: "55555555-5555-4555-8555-555555555555", text: "continue" })]
+  const rec = { type: "user", uuid: "55555555-5555-4555-8555-555555555555", timestamp: iso(T0 - 60_000), message: { role: "user", content: "continue" } }
+  assert.equal(correlateDeliveryRecord(items, rec, iso(T0)), items, "a stale record is not evidence")
+})
+
+test("an unrelated uuid degrades to the text path rather than resolving anything", () => {
+  const items = [item({ id: "66666666-6666-4666-8666-666666666666", text: "fix the bug" })]
+  const rec = { type: "user", uuid: "99999999-9999-4999-8999-999999999999", timestamp: iso(T0 + 500), message: { role: "user", content: "unrelated prose" } }
+  assert.equal(correlateDeliveryRecord(items, rec, iso(T0 + 500)), items)
+})
+
 // ---- codex: the ledger as a RENDERING guarantee ----
 // Codex has no provider-side queue and no tmux composer, so its ledger entry exists only to keep the
 // queued bubble on screen until the rollout materialises the message. Measured against fray's own

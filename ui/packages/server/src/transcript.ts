@@ -268,10 +268,20 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
   // while the agent is working NEVER lands as a normal user record — the session JSONL records the
   // lifecycle only as sidecar: an `enqueue` queue-operation, a `remove`/`dequeue`, and finally a
   // `queued_command` attachment that materializes the text into the agent's context. Without the two
-  // handlers below the message is SWALLOWED entirely. `queuedPending` maps a still-undelivered message's
-  // TEXT → its emitted (grayed) bubble, so the delivering attachment (which carries the prompt verbatim)
-  // resolves its enqueue regardless of the timestamp drift between the two records.
-  const queuedPending = new Map<string, TranscriptMessage>()
+  // handlers below the message is SWALLOWED entirely. `queuedPending` holds a still-undelivered
+  // message's TEXT alongside its emitted (grayed) bubble, so the delivering attachment (which carries
+  // the prompt verbatim) resolves its enqueue regardless of the timestamp drift between the two records.
+  //
+  // An ORDERED LIST, not a Map keyed by text: two queued messages may carry the SAME words, and under a
+  // Map the second `set` silently overwrote the first, orphaning the first bubble in `out` where nothing
+  // could ever resolve it. Measured in this machine's corpus (pullfrog-app 11610c49): four identical
+  // "asdf" sends queued at once, delivered as the single coalesced record "asdf\nasdf\nasdf\nasdf" —
+  // one map key, so coalescedQueuedKeys could not reconstruct the delivery, all four bubbles stayed gray
+  // AND the joined record rendered as a fifth copy. That is the maintainer's "they show up as dequeued
+  // but the enqueued versions stick around as well", exactly. A list keeps one entry per SEND, so the
+  // FIFO reconstruction below walks repeats one at a time.
+  interface QueuedEntry { key: string; message: TranscriptMessage }
+  const queuedPending: QueuedEntry[] = []
   // A just-delivered queued message's text — so an immediately-following NORMAL user record carrying the
   // identical text (a belt-and-suspenders guard; unobserved in the evidence) doesn't double-render.
   let deliveredDedupe: string | null = null
@@ -279,10 +289,23 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
   // The still-gray keys, in FIFO order. `queuedPending` also retains entries the backstop below has
   // already un-grayed (so their own delivery can still resolve the SAME object rather than render a
   // second copy), and those must not take part in matching.
+  // Duplicates INCLUDED: a run of N identical queued messages contributes N keys, which is what lets
+  // coalescedQueuedKeys rebuild a delivery record that repeats the same words.
   function unresolvedQueuedKeys(): string[] {
     const keys: string[] = []
-    for (const [k, m] of queuedPending) if (m.queued) keys.push(k)
+    for (const entry of queuedPending) if (entry.message.queued) keys.push(entry.key)
     return keys
+  }
+  // The entry a delivery for `key` refers to: the OLDEST still-gray one (FIFO — Claude Code's queue
+  // drains in order), falling back to the oldest registered one because the remove/attachment pair
+  // deliberately leaves an entry registered after un-graying it, so the attachment can re-resolve the
+  // SAME object instead of pushing a second copy. For a unique key this is exactly the old Map.get.
+  function findQueued(key: string): QueuedEntry | undefined {
+    return queuedPending.find((e) => e.key === key && e.message.queued) ?? queuedPending.find((e) => e.key === key)
+  }
+  function dropQueued(entry: QueuedEntry): void {
+    const i = queuedPending.indexOf(entry)
+    if (i !== -1) queuedPending.splice(i, 1)
   }
   // FIFO backstop. Claude Code's queue drains in order, so a delivery that positively resolves entry K
   // PROVES every entry enqueued before K already left the queue — whatever shape its own delivery record
@@ -292,10 +315,10 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
   // from the transcript once queued. They also stay REGISTERED — de-registering them made their real
   // delivery record fall through and push a duplicate bubble (caught A/B-ing the corpus: 21 spurious
   // messages across the uncapped transcripts).
-  function resolveQueuedThrough(key: string): void {
-    for (const [k, m] of queuedPending) {
-      if (k === key) break
-      m.queued = false
+  function resolveQueuedThrough(entry: QueuedEntry): void {
+    for (const e of queuedPending) {
+      if (e === entry) break
+      e.message.queued = false
     }
   }
   // Resolve a pending bubble IN PLACE — same object, same position, just un-gray it — plus everything
@@ -303,11 +326,11 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
   // un-grayed it early), which is what tells a caller not to render a second copy; false means this
   // delivery has no bubble yet and the caller should emit one.
   function resolveQueued(key: string): boolean {
-    const m = queuedPending.get(key)
-    if (!m) return false
-    if (m.queued) resolveQueuedThrough(key)
-    queuedPending.delete(key)
-    m.queued = false
+    const entry = findQueued(key)
+    if (!entry) return false
+    if (entry.message.queued) resolveQueuedThrough(entry)
+    dropQueued(entry)
+    entry.message.queued = false
     return true
   }
 
@@ -393,7 +416,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         const queuedDisplay = userDisplayText(content, out.length === 0)
         const m: TranscriptMessage = { sourceId, role: "user", text: content, ...(queuedDisplay ? { displayText: queuedDisplay } : {}), tools: [], parts: [], at: thisTs, queued: true }
         out.push(m)
-        queuedPending.set(content, m)
+        queuedPending.push({ key: content, message: m })
       } else if ((op === "remove" || op === "dequeue" || op === "popAll") && content.trim()) {
         // A content-bearing removal is Claude Code DEQUEUEING the message into the turn. Resolve the
         // bubble IN PLACE — un-gray it where the human sent it — and leave it registered so the
@@ -414,13 +437,13 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         // appear in practice, while the vanish it caused does. An EMPTY-content removal remains ignored:
         // it is the ordinary handshake and matching it by anything but exact text could evict a
         // genuinely-still-pending bubble when an unrelated queue item is dequeued.
-        const m = queuedPending.get(content)
+        const entry = findQueued(content)
         // Deliberately NOT resolveQueued(): the entry stays registered so the attachment that follows
         // re-resolves this same object. The FIFO backstop still applies — this removal proves the queue
         // drained past everything ahead of it.
-        if (m) {
-          resolveQueuedThrough(content)
-          m.queued = false
+        if (entry) {
+          resolveQueuedThrough(entry)
+          entry.message.queued = false
         }
       }
       return
@@ -431,14 +454,26 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
     // renderable place, so it renders as the human's user message at its position in the flow. Only
     // origin.kind "human" + commandMode "prompt" is a plain typed message; other commandModes (notably
     // "task-notification" — a sub-agent completion materialized the same way) are harness plumbing → skip.
+    //
+    // …and `origin` is a TMUX-TUI-ONLY field. The SDK/broker path writes none, so requiring it made this
+    // whole branch STRUCTURALLY DEAD on every broker thread: the delivery record was ignored and the gray
+    // bubble waited for the much later `queue-operation remove` to clear it. Measured over this machine's
+    // corpus, that wait is p50 20.9s, p90 130s, max 9.6min AFTER the agent already had the message — long
+    // enough that the agent's REPLY routinely renders above a message still styled as "pending", which is
+    // the "unnecessarily long delay before it renders as a real message" report. The counts: 1664 tui
+    // prompt attachments carry origin.kind "human" and ALL 78 sdk ones carry none, while every sdk one
+    // carries `source_uuid` (the id fray itself passed to sendInput) and no task-notification attachment
+    // ever does. So an origin-less prompt attachment bearing a source_uuid is the human delivery it says
+    // it is. Deliberately additive: origin.kind "peer" (17 in the corpus) stays excluded exactly as before.
     if (rec.type === "attachment" && rec.attachment?.type === "queued_command") {
       const att = rec.attachment
+      const humanDelivery = att.origin?.kind === "human" || (att.origin === undefined && typeof att.source_uuid === "string")
       // `prompt` is a plain string for a typed message but an ARRAY of content blocks when the human
       // attached an image to a queued follow-up (10 such in this machine's corpus, every one
       // text+image). Reading only the string shape dropped those on the floor entirely — combined with
       // the removal above, an image-bearing queued message disappeared from the chat for good.
       const prompt = normalizeNewlines(attachmentPromptText(att.prompt))
-      if (prompt.trim() && att.origin?.kind === "human" && att.commandMode === "prompt" && !isInjectedNoise(prompt)) {
+      if (prompt.trim() && humanDelivery && att.commandMode === "prompt" && !isInjectedNoise(prompt)) {
         // Resolve the pending bubble IN PLACE — same object, same position, just un-gray it. Never emit
         // a second copy (the enqueue already placed it where the human hit send).
         if (!resolveQueued(prompt)) {
@@ -477,12 +512,12 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
           // preamble + trailing guidance (SHAPE 3), so the byte-identical key misses. Recover it before
           // the splice, or the bubble sits gray forever — this is the shape that stranded a live thread's
           // <agent-message> follow-up.
-          const key = queuedPending.has(metaText) ? metaText : peerSessionQueuedKey(metaText, unresolvedQueuedKeys())
-          const pending = key === undefined ? undefined : queuedPending.get(key)
-          if (key !== undefined && pending) {
-            resolveQueuedThrough(key)
-            queuedPending.delete(key)
-            const i = out.indexOf(pending)
+          const key = findQueued(metaText) ? metaText : peerSessionQueuedKey(metaText, unresolvedQueuedKeys())
+          const pending = key === undefined ? undefined : findQueued(key)
+          if (pending) {
+            resolveQueuedThrough(pending)
+            dropQueued(pending)
+            const i = out.indexOf(pending.message)
             if (i !== -1) out.splice(i, 1)
           }
         }
@@ -496,7 +531,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         // Claude Code 2.1.207's print/SDK path emits enqueue → empty dequeue → the ordinary user
         // record (no queued_command attachment). Resolve an identical pending bubble in place; adding
         // another here duplicated the first prompt in a real disposable session.
-        const queued = queuedPending.get(text)
+        const queued = findQueued(text)?.message
         if (queued) {
           const wasQueued = queued.queued
           resolveQueued(text)

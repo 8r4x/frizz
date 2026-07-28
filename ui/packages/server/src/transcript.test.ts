@@ -1394,6 +1394,75 @@ test("the SDK path coalesces two queued messages into one record — both resolv
   assert.equal(users[0].at, "2026-07-01T00:00:05.000Z", "each keeps the moment the human sent it")
 })
 
+// The broker/SDK path writes NO `origin` on its queued_command attachments — measured over this
+// machine's corpus, all 78 sdk prompt attachments carry none while 1664 tmux ones carry
+// origin.kind "human", and every sdk one carries `source_uuid` instead. Requiring origin made the
+// delivery branch structurally dead on every broker thread, so the bubble stayed gray until the far
+// later `queue-operation remove` (p50 20.9s, p90 130s, max 9.6min after the agent already had the
+// message) — the "it only becomes a real message after the reply" report.
+const sdkDeliverLine = (prompt: unknown, sourceUuid: string, ts = "2026-07-01T00:00:10.000Z") =>
+  JSON.stringify({
+    type: "attachment", timestamp: ts, uuid: "att-1",
+    attachment: { type: "queued_command", commandMode: "prompt", source_uuid: sourceUuid, prompt },
+  })
+
+test("the BROKER delivery attachment (no origin, source_uuid instead) un-grays the bubble at once", () => {
+  const text = "check the ACL cleanup"
+  const msgs = parseTranscript([enqueueLine(text), sdkDeliverLine(text, "d-1"), assistantLine("on it")].join("\n"))
+  const mine = msgs.filter((m) => m.role === "user" && m.text === text)
+  assert.equal(mine.length, 1, "exactly one copy — resolved in place, never a second bubble")
+  assert.equal(mine[0].queued, false, "the delivery record must clear the gray immediately")
+})
+
+test("a task-notification attachment still never renders as the human's message", () => {
+  // The same shape minus commandMode "prompt" is harness plumbing; widening the origin gate must not
+  // let it through.
+  const msgs = parseTranscript(JSON.stringify({
+    type: "attachment", timestamp: "2026-07-01T00:00:10.000Z",
+    attachment: { type: "queued_command", commandMode: "task-notification", source_uuid: "d-9", prompt: "<task-notification>done</task-notification>" },
+  }))
+  assert.equal(msgs.filter((m) => m.role === "user").length, 0)
+})
+
+test("a PEER-origin attachment is still excluded by the widened gate", () => {
+  const msgs = parseTranscript(JSON.stringify({
+    type: "attachment", timestamp: "2026-07-01T00:00:10.000Z",
+    attachment: { type: "queued_command", commandMode: "prompt", origin: { kind: "peer" }, prompt: "hi from a peer" },
+  }))
+  assert.equal(msgs.filter((m) => m.role === "user").length, 0, "origin.kind peer must not render as the human")
+})
+
+test("IDENTICAL messages queued at once and dequeued together each resolve exactly once", () => {
+  // The maintainer's report, and the exact corpus case (pullfrog-app 11610c49): four identical "asdf"
+  // sends enqueued in the same instant, four content-less dequeues, then ONE record joining them with
+  // "\n". `queuedPending` used to be a Map keyed by TEXT, so all four collapsed onto one entry: the
+  // three orphaned bubbles could never be resolved, coalescedQueuedKeys could not rebuild the delivery
+  // from a single key, and the joined record rendered as a FIFTH copy. 4 gray + 1 real for 4 messages.
+  const text = "asdf"
+  const drain = JSON.stringify({ type: "queue-operation", timestamp: "2026-07-01T00:00:09.000Z", operation: "dequeue", content: "" })
+  const msgs = parseTranscript([
+    enqueueLine(text, "2026-07-01T00:00:05.000Z"), enqueueLine(text, "2026-07-01T00:00:05.001Z"),
+    enqueueLine(text, "2026-07-01T00:00:05.002Z"), enqueueLine(text, "2026-07-01T00:00:05.003Z"),
+    drain, drain, drain, drain,
+    userLine([text, text, text, text].join("\n")),
+  ].join("\n"))
+  const users = msgs.filter((m) => m.role === "user")
+  assert.equal(users.length, 4, "four sends render as four messages — no joined fifth copy")
+  assert.deepEqual(users.map((m) => m.text), [text, text, text, text])
+  assert.deepEqual(users.map((m) => m.queued), [false, false, false, false], "none may stay gray")
+})
+
+test("two IDENTICAL queued messages delivered one at a time resolve one bubble each", () => {
+  const text = "asdf"
+  const msgs = parseTranscript([
+    enqueueLine(text, "2026-07-01T00:00:05.000Z"), enqueueLine(text, "2026-07-01T00:00:05.001Z"),
+    sdkDeliverLine(text, "d-1", "2026-07-01T00:00:06.000Z"),
+  ].join("\n"))
+  const users = msgs.filter((m) => m.role === "user")
+  assert.equal(users.length, 2, "both sends keep their own bubble")
+  assert.deepEqual(users.map((m) => m.queued), [false, true], "FIFO: the first is delivered, the second still queued")
+})
+
 test("a coalesced record that drains only PART of the queue leaves the rest queued", () => {
   const a = "first"
   const b = "second"

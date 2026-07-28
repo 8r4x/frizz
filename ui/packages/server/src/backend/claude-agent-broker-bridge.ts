@@ -94,6 +94,18 @@ export interface ClaudeSpawnDispatchInput {
   effort?: string
 }
 
+// The uuid to hand the SDK for one input. fray's own deliveryId when it is UUID-shaped (the browser
+// mints one with crypto.randomUUID), because the SDK ECHOES this id back on the record that
+// materializes the input — as the delivered `user` record's `uuid`, or as the `queued_command`
+// attachment's `source_uuid` — which is what lets the delivery ledger correlate by IDENTITY instead of
+// by comparing prose (see the identity path in delivery-ledger.ts). The SDK rejects a non-UUID id
+// outright, and eagerComposerSubmission has a non-UUID fallback for browsers without crypto.randomUUID,
+// so anything else degrades to a fresh uuid and the text path — never a throw on the operator's send.
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+function inputIdFor(deliveryId: string | undefined): string {
+  return deliveryId && UUID_SHAPE.test(deliveryId) ? deliveryId : randomUUID()
+}
+
 // Options that shape a FORK (only consulted when attach cold-starts a daemon; ignored when it reattaches
 // to a live one — the running session already carries them). `resume` picks up the on-disk transcript.
 type ForkOpts = Pick<ClaudeSpawnDispatchInput, "appendSystemPrompt" | "model" | "effort"> & { resume?: boolean }
@@ -106,7 +118,7 @@ export interface ClaudeAgentBrokerBridge {
   /** Deliver a follow-up turn. If the daemon is live we reattach its socket (context intact); if it
    *  died, we cold-start a fresh daemon that RESUMES the on-disk transcript — so the resume context
    *  (worker system prompt + profile) must be re-supplied, exactly like the tmux `claude -r` path. */
-  followUp(input: { threadSlug: string; sessionId: string; cwd: string; text: string; permissionMode?: ClaudeBrokerConfig["permissionMode"]; appendSystemPrompt?: string; model?: string; effort?: string }): Promise<void>
+  followUp(input: { threadSlug: string; sessionId: string; cwd: string; text: string; deliveryId?: string; permissionMode?: ClaudeBrokerConfig["permissionMode"]; appendSystemPrompt?: string; model?: string; effort?: string }): Promise<void>
   /**
    * Reattach at boot to every broker daemon this project left running, without waiting for someone to
    * touch the thread.
@@ -321,7 +333,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
         input.threadSlug, input.sessionId, input.cwd, input.permissionMode ?? "default",
         { resume: true, appendSystemPrompt: input.appendSystemPrompt, model: input.model, effort: input.effort },
       )
-      session.client.sendInput({ id: randomUUID(), text: input.text })
+      session.client.sendInput({ id: inputIdFor(input.deliveryId), text: input.text })
     },
 
     async warmUp() {
