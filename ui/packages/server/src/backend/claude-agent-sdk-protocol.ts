@@ -24,6 +24,23 @@ export type ClaudeJsonObject = { [key: string]: ClaudeJson }
 
 export type ClaudePermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" | "auto"
 
+// A capability a broker DAEMON advertises in its on-disk record, so the bridge can tell a daemon this
+// build forked from one a PREVIOUS build left running (they are detached and idle for six hours, so a
+// fray upgrade routinely reattaches to an old one and no handshake would reveal the difference).
+//
+// This one covers input ADDRESSING. A pre-2026-07-28 daemon validates an input message with a
+// validator that drops `parentToolUseId`, so a sub-agent steer sent to it arrives unaddressed — and an
+// unaddressed steer is not a no-op, it is a message the PARENT obeys as if the operator had typed it
+// into the thread composer. The bridge refuses rather than misdeliver.
+//
+// It lives HERE, in the pure protocol module, and deliberately not in claude-agent-broker.ts: that
+// file is the detached daemon's process entry point and throws at module scope when loaded as one
+// without FRAY_CLAUDE_BROKER. In the promoted artifact everything is a single bundle, so importing a
+// VALUE from it initializes it inside the SERVER process, the entry-point check passes on the bundle's
+// own path, and the guard takes down the control plane at boot — green on dev source, dead on the
+// artifact.
+export const CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER = "subagent-steer-v1"
+
 export interface ClaudeInputMessage {
   id: string
   text: string

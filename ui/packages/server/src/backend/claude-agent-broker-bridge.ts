@@ -9,7 +9,7 @@ import { adoptOrForkBroker, killBroker, liveBrokerRecord, liveBrokerRecords, cla
 import { connectClaudeBroker, type ClaudeBrokerClient } from "./claude-broker-client.ts"
 import { describeClaudeBrokerExit, readClaudeBrokerExit, type ClaudeBrokerExitRecord } from "./claude-broker-diagnostics.ts"
 import type { ClaudeDiagnostic, ClaudePermissionDecision, ClaudePermissionRequest, ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
-import { CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER } from "./claude-agent-broker.ts"
+import { CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, validateInputMessage } from "./claude-agent-sdk-protocol.ts"
 import type { BrokerRecord, ClaudeBrokerConfig } from "./claude-agent-broker.ts"
 import type { InteractionSessionScope, InteractionStore } from "../interaction-store.ts"
 import {
@@ -369,7 +369,17 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       if (!record?.capabilities?.includes(CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER)) {
         throw new Error("This thread's Claude session predates sub-agent steering — its next turn will restart on a session that supports it")
       }
-      held.client.sendInput({ id: inputIdFor(input.deliveryId), text: input.text, parentToolUseId: input.subAgentId })
+      // VALIDATE HERE, not only in the daemon. `sendInput` writes a socket frame and returns; the
+      // daemon calls `handle.send(...).catch(() => {})`, so a message the protocol validator rejects
+      // (a control byte, an over-long body) is discarded THERE with nobody to tell. For a follow-up
+      // that has always been true and is out of scope to change — it is a shared hot path whose
+      // error handling deliberately never kills a session. For a STEER it is unacceptable: the RPC
+      // would answer `delivered: true` for a message that never reached the child, which is exactly
+      // the "an input that silently drops a steer is worse than no input" failure the prompt box is
+      // gated on. Measured on the promoted artifact: an ESC/BEL steer was accepted and vanished.
+      // Running the same pure validator first turns that into an error the operator actually sees.
+      const message = validateInputMessage({ id: inputIdFor(input.deliveryId), text: input.text, parentToolUseId: input.subAgentId })
+      held.client.sendInput(message)
     },
 
     async warmUp() {
