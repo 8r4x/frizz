@@ -9,6 +9,7 @@ import { adoptOrForkBroker, killBroker, liveBrokerRecord, liveBrokerRecords, cla
 import { connectClaudeBroker, type ClaudeBrokerClient } from "./claude-broker-client.ts"
 import { describeClaudeBrokerExit, readClaudeBrokerExit, type ClaudeBrokerExitRecord } from "./claude-broker-diagnostics.ts"
 import type { ClaudeDiagnostic, ClaudePermissionDecision, ClaudePermissionRequest, ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
+import { CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER } from "./claude-agent-broker.ts"
 import type { BrokerRecord, ClaudeBrokerConfig } from "./claude-agent-broker.ts"
 import type { InteractionSessionScope, InteractionStore } from "../interaction-store.ts"
 import {
@@ -358,6 +359,15 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       if (!held || !holdsLiveDaemon(held)) {
         if (held) { held.client.close(); sessions.delete(input.threadSlug) }
         throw new Error("This sub-agent's session is no longer running, so it cannot be steered")
+      }
+      // A DETACHED daemon outlives fray upgrades by design (six-hour idle timeout), so the process on
+      // the other end of this socket may well have been forked by the previous build — whose input
+      // validator drops the addressing field entirely. That would not fail; it would deliver the
+      // operator's steer to the thread's MAIN turn, where the parent obeys it. Refuse instead, and say
+      // what fixes it. A daemon forked by this build advertises the capability in its record.
+      const record = liveBrokerRecord(claudeBrokerRecordPath(deps.stateDir, held.sessionId))
+      if (!record?.capabilities?.includes(CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER)) {
+        throw new Error("This thread's Claude session predates sub-agent steering — its next turn will restart on a session that supports it")
       }
       held.client.sendInput({ id: inputIdFor(input.deliveryId), text: input.text, parentToolUseId: input.subAgentId })
     },

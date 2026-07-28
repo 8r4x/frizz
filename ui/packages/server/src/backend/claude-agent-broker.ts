@@ -62,7 +62,20 @@ export interface ClaudeBrokerConfig {
   generation?: string
 }
 
-export interface BrokerRecord { daemonPid: number; socketPath: string; sessionId: string; generation: string; createdAt: string }
+export interface BrokerRecord { daemonPid: number; socketPath: string; sessionId: string; generation: string; createdAt: string; capabilities?: string[] }
+
+// What THIS daemon build understands, stamped into its record so the bridge can tell an old surviving
+// daemon from a current one. A broker daemon is DETACHED and long-lived (six-hour idle timeout): after
+// a fray upgrade the new server routinely reattaches to a daemon the PREVIOUS build forked, and there
+// is no handshake that would otherwise reveal the difference.
+//
+// It matters for exactly one frame so far. A pre-2026-07-28 daemon validates an input message with a
+// validator that DROPS `parentToolUseId`, so a sub-agent steer sent to it would arrive unaddressed —
+// and an unaddressed steer is not a no-op, it is a message the parent obeys as if the operator had
+// typed it into the thread composer. Silent misdelivery is the one outcome this feature must never
+// produce, so the bridge refuses to steer a daemon that does not advertise this.
+export const CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER = "subagent-steer-v1"
+const BROKER_CAPABILITIES = [CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER]
 
 const ENV_ALLOWLIST = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"]
 const IDLE_EXIT_MS = 6 * 60 * 60 * 1000
@@ -296,7 +309,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   server.listen(config.socketPath, () => {
     published = true
     if (config.recordPath) {
-      const record: BrokerRecord = { daemonPid: process.pid, socketPath: config.socketPath, sessionId: config.sessionId, generation, createdAt: new Date().toISOString() }
+      const record: BrokerRecord = { daemonPid: process.pid, socketPath: config.socketPath, sessionId: config.sessionId, generation, createdAt: new Date().toISOString(), capabilities: BROKER_CAPABILITIES }
       try { writeFileSync(config.recordPath, JSON.stringify(record), { mode: 0o600 }) } catch {}
     }
     armIdle()
