@@ -21,6 +21,7 @@ import {
   userRecord,
   agentDispatchRecord,
   agentLaunchRecord,
+  agentResumeRecords,
   taskEvent,
   taskNotificationRecord,
 } from "./scripted-claude.ts"
@@ -374,6 +375,85 @@ test("integration: a structured task_notification retires the child with NO pros
     assert.equal(h.telemetry("retire")?.subAgents.length, 0, "the live sub-agent count returned to zero")
     // ...and it is RETAINED for the drill-in drawer, exactly as a prose completion would leave it.
     assert.equal(h.tailer.subAgent("retire", "toolu_child")?.state, "done")
+  } finally {
+    h.close()
+  }
+})
+
+test("integration: a re-steered child comes back live even though its task id is already terminal", async () => {
+  // The end-to-end shape of the bug, on the seam the fold alone cannot show. A task id OUTLIVES the run
+  // that created it: `SendMessage` restarts a stopped child under the SAME id. So after the first run's
+  // terminal event, the ingest holds `terminal:true` for that id forever — and the revived row was
+  // retired again on its very next tick. Measured on the promoted artifact: the fold revived the child
+  // correctly and the board showed nothing for the whole 37 s it ran.
+  const h = createIntegrationHarness()
+  try {
+    const OUT = childTranscript(h)
+    const s = h.dispatch("resteer")
+    h.telemetry("resteer")
+
+    s.play(
+      record(userRecord("go", T0)),
+      record(agentDispatchRecord("toolu_child", "Probe child", T1)),
+      record(agentLaunchRecord("toolu_child", OUT, T1, "task-1")),
+      event(taskEvent(s.sessionId, { phase: "started", taskId: "task-1", toolUseId: "toolu_child" })),
+    )
+    await h.settle()
+    assert.equal(h.telemetry("resteer")?.subAgents.length, 1, "the child is live")
+
+    s.play(event(taskEvent(s.sessionId, { phase: "notification", taskId: "task-1", toolUseId: "toolu_child", status: "completed" })))
+    await h.settle()
+    assert.equal(h.telemetry("resteer")?.subAgents.length, 0, "it retires when the run finishes")
+
+    // The re-steer. Same runtime id, brand-new tool_use id, and the provider says it started again.
+    s.play(
+      ...agentResumeRecords("toolu_send", "task-1", OUT, T2).map(record),
+      event(taskEvent(s.sessionId, { phase: "started", taskId: "task-1", toolUseId: "toolu_send" })),
+    )
+    await h.settle()
+
+    const live = h.telemetry("resteer")?.subAgents ?? []
+    assert.equal(live.length, 1, "the re-steered child is on the board again")
+    assert.equal(live[0]?.label, "Probe child", "under its original label")
+    assert.equal(h.boardThread("resteer")?.subAgents?.length, 1, "and the board row agrees")
+  } finally {
+    h.close()
+  }
+})
+
+test("integration: a re-steer survives the stream and the transcript racing each other", async () => {
+  // The ingest clears its terminal latch on `task_started`, but the event stream and the disk write race
+  // by design (see chaseRuntime), so that ordering must never be load-bearing. Here the restart ack is
+  // folded with NO task_started at all — the stale terminal reading predates this run, and a reading
+  // from before the run began cannot end it.
+  //
+  // Record timestamps here are REAL instants, not the T0/T1/T2 fixtures the other cases use. The guard
+  // compares the row's `startedAt` (a record timestamp, written by the CLI) against the task's
+  // `updatedAt` (a `Date.now()` in the fray process) — one wall clock on one host in production, but
+  // hours apart if the records claim 2026-07-01. A fixture that mixes them does not test the guard, it
+  // just happens to sit on one side of it.
+  const h = createIntegrationHarness()
+  try {
+    const OUT = childTranscript(h)
+    const s = h.dispatch("race")
+    h.telemetry("race")
+    const at = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString()
+
+    s.play(
+      record(userRecord("go", at(-3000))),
+      record(agentDispatchRecord("toolu_child", "Probe child", at(-2000))),
+      record(agentLaunchRecord("toolu_child", OUT, at(-2000), "task-1")),
+      event(taskEvent(s.sessionId, { phase: "started", taskId: "task-1", toolUseId: "toolu_child" })),
+      event(taskEvent(s.sessionId, { phase: "notification", taskId: "task-1", toolUseId: "toolu_child", status: "completed" })),
+    )
+    await h.settle()
+    assert.equal(h.telemetry("race")?.subAgents.length, 0)
+
+    // The restart ack lands AFTER the terminal event that is still latched, and nothing on the stream
+    // announces it yet. `startedAt` is therefore newer than the dead run's reading.
+    s.play(...agentResumeRecords("toolu_send", "task-1", OUT, at(1000)).map(record))
+    await h.settle()
+    assert.equal(h.telemetry("race")?.subAgents.length, 1, "the revived row survives the dead run's terminal flag")
   } finally {
     h.close()
   }

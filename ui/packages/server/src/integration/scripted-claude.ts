@@ -78,12 +78,30 @@ export function agentDispatchRecord(toolUseId: string, description: string, at: 
 }
 
 /** The launch ack whose ENGLISH PROSE the fold parses for the child's output path. */
-export function agentLaunchRecord(toolUseId: string, outputFile: string, at: string): Record<string, unknown> {
+export function agentLaunchRecord(toolUseId: string, outputFile: string, at: string, agentId = "agent-1"): Record<string, unknown> {
   return {
     type: "user",
     timestamp: at,
-    message: { content: [{ type: "tool_result", tool_use_id: toolUseId, content: [{ type: "text", text: `Async agent launched successfully.\nagentId: agent-1\noutput_file: ${outputFile}\nDo not read this file.` }] }] },
+    message: { content: [{ type: "tool_result", tool_use_id: toolUseId, content: [{ type: "text", text: `Async agent launched successfully.\nagentId: ${agentId}\noutput_file: ${outputFile}\nDo not read this file.` }] }] },
   }
+}
+
+/**
+ * The `SendMessage` that RESTARTS a stopped child, and its ack. Unlike every other builder here the ack
+ * is structured JSON, not prose: `resumedAgentId` is the field that distinguishes a restart from an
+ * ordinary delivery to a still-live child. The restarted run keeps the child's runtime id and gets a
+ * NEW tool_use id — which is why the two must be scripted together.
+ */
+export function agentResumeRecords(sendToolUseId: string, agentId: string, outputFile: string, at: string): Record<string, unknown>[] {
+  const ack = JSON.stringify({
+    success: true,
+    message: `Agent "${agentId}" was stopped (completed); resumed it in the background with your message. You'll be notified when it finishes. Output: ${outputFile}`,
+    resumedAgentId: agentId,
+  })
+  return [
+    { type: "assistant", timestamp: at, message: { stop_reason: "tool_use", content: [{ type: "tool_use", name: "SendMessage", id: sendToolUseId, input: { to: agentId, summary: "carry on" } }] } },
+    { type: "user", timestamp: at, message: { content: [{ type: "tool_result", tool_use_id: sendToolUseId, content: [{ type: "text", text: ack }] }] } },
+  ]
 }
 
 /** The prose completion notification — the fallback terminal signal, and the one that can go missing. */

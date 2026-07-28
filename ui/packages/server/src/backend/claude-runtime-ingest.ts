@@ -236,6 +236,18 @@ export function createClaudeRuntimeIngest(deps: ClaudeRuntimeIngestDeps): Claude
     }
     if (!event.taskId) return // an edge with no correlation key can enrich nothing
     const task = rememberTask(sessionId, event.taskId, now)
+    // A task id OUTLIVES the run that created it. `SendMessage` restarts a stopped child, and the
+    // provider reuses the SAME taskId for the new run — measured on a real session: three `task_started`
+    // events for one agent, one per restart, with the taskId stable and the tool_use id different every
+    // time. So `terminal` is a fact about a RUN, not about the id, and `task_started` is the provider
+    // saying this id is running again. Without clearing it the latch is permanent: the tailer's
+    // `applyRuntimeTasks` re-reads the dead run's terminal flag and retires the revived child on the
+    // very next tick, which is exactly what happened on the promoted artifact — the fold revived the
+    // child correctly and the board still showed nothing for the 37 s it ran.
+    if (event.phase === "started") {
+      task.terminal = false
+      task.outcome = undefined
+    }
     if (event.toolUseId) task.toolUseId = event.toolUseId
     // `description` means two different things by phase and must not be collapsed: on `started` it is
     // the stable dispatch description (the board's label), on `progress` it is the live step.

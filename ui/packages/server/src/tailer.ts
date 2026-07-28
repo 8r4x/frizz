@@ -1077,18 +1077,19 @@ function trackResumes(state: TailState, rec: Record): void {
     // REPLAYED HISTORY. A Claude transcript re-emits past records verbatim — the reproduction session
     // carries 65 duplicated uuids and replays five of these very restart acks, with their ORIGINAL
     // timestamps, some 1200 records after the fold already watched those children finish. An ack is
-    // only a restart the FIRST time it is folded, so a child whose retired row records a death at or
-    // after this ack's own instant has already moved past it: reviving would resurrect a child that
+    // only a restart the FIRST time it is folded; folding it again would resurrect a child that
     // finished a day ago and leave it pulsing (then "stale") forever. This is the same class of
     // phantom the notification fold has leaked three times; it does not get to happen a fourth.
-    const finished = retired?.finishedAt ? Date.parse(retired.finishedAt) : Number.NaN
+    //
+    // The test is against the fold's own high-water mark, and deliberately NOT against the retired
+    // row's `finishedAt`: that field can be stamped from the RUNTIME event clock (applyRuntimeTasks)
+    // rather than from record timestamps, and comparing two clocks silently misfires — it rejected
+    // every revival in the integration harness, where the two domains are hours apart. Record
+    // timestamps compared to a mark built only from record timestamps is one clock, always. A
+    // replayed record keeps its ORIGINAL timestamp so it lands far behind the mark; a genuine ack is
+    // AT it. The slack covers ordinary out-of-order writes between sibling records — replays are
+    // stale by minutes to days, so nothing near the boundary is ambiguous.
     const ackAt = at ? Date.parse(at) : Number.NaN
-    if (Number.isFinite(finished) && Number.isFinite(ackAt) && finished >= ackAt) continue
-    // …and the same guard for the case the row above cannot cover: a replay whose child was retired so
-    // long ago that its row has been evicted from the 20-deep ring (all five replayed acks in the
-    // reproduction session). A replayed record keeps its ORIGINAL timestamp, so it lands far BEHIND the
-    // fold's high-water mark, where a genuine ack is always at it. The slack is for ordinary write
-    // jitter between sibling records — replays are minutes to days stale, not seconds.
     const highWater = state.maxRecordAt ? Date.parse(state.maxRecordAt) : Number.NaN
     if (Number.isFinite(highWater) && Number.isFinite(ackAt) && highWater - ackAt > RESUME_REPLAY_SLACK_MS) continue
     if (retired) state.retiredSubAgents.delete(retired.toolUseId)
@@ -1938,7 +1939,16 @@ export function createTailer(deps: TailerDeps): Tailer {
         durationMs: task.durationMs,
       }
       entry.progress = progress
-      if (task.terminal) doomed.push({ entry, task })
+      // A terminal reading from BEFORE this run began cannot end it. A task id outlives the run that
+      // created it — `SendMessage` restarts a stopped child under the SAME id — so a row revived by
+      // `trackResumes` would otherwise be retired on its first tick by the DEAD run's terminal flag,
+      // whichever of the two signals happens to arrive first. The ingest clears that latch on
+      // `task_started`, but the stream and the transcript race by design (see chaseRuntime), so the
+      // ordering must not be load-bearing: compare instants instead. An unparseable `startedAt` falls
+      // through to the old unconditional behaviour rather than pinning a row alive.
+      const startedMs = entry.startedAt ? Date.parse(entry.startedAt) : Number.NaN
+      const staleTerminal = Number.isFinite(startedMs) && task.updatedAt < startedMs
+      if (task.terminal && !staleTerminal) doomed.push({ entry, task })
     }
     // Collected first: retireLive mutates the map being iterated above.
     for (const { entry, task } of doomed) {
