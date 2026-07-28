@@ -8,6 +8,7 @@ import { futureSnoozedUntil } from "../groups.ts"
 import { formatSnoozeWake } from "../lib/snooze.ts"
 import { CHILD_ARROW, CHILD_ARROW_CLASS } from "../lib/childOps.ts"
 import { SnoozeButton } from "./SnoozeButton.tsx"
+import { ContextMeter } from "./ContextMeter.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { Dialog } from "./ui/Dialog.tsx"
 
@@ -40,9 +41,21 @@ export function ThreadLifecycleFooter({
     <footer
       aria-label="Thread lifecycle actions"
       data-thread-lifecycle-footer
-      className={`${sticky ? "z-20" : "rounded-b-[7px]"} flex min-h-10 shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/70 bg-panel/95 px-3 pt-2 ${safeArea ? "pb-[max(0.5rem,env(safe-area-inset-bottom))]" : "pb-2"} backdrop-blur-sm`}
+      // `text-[12px]` is the footer's OWN scale, stated here rather than left to whatever the
+      // surrounding card or drawer happens to set. The buttons pin their size themselves (see
+      // StateButton), so this is inert for them; it exists so the em-sized readouts on the left
+      // inherit a scale from the strip they sit in instead of choosing one — the sizing discipline
+      // ChildOpRow's duration reading landed on.
+      className={`${sticky ? "z-20" : "rounded-b-[7px]"} flex min-h-10 shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/70 bg-panel/95 px-3 pt-2 text-[12px] ${safeArea ? "pb-[max(0.5rem,env(safe-area-inset-bottom))]" : "pb-2"} backdrop-blur-sm`}
     >
-      <PendingSnooze thread={thread} />
+      {/* Bottom-LEFT cluster: background readings and presence markers, held away from the lifecycle
+          buttons by the one `mr-auto` on this group. Each child renders nothing when it has nothing to
+          say, so the group is commonly empty — and an empty flex box is zero-width, which leaves the
+          strip laid out exactly as it was before any of this existed. */}
+      <span className="mr-auto flex items-center gap-1.5">
+        <ContextMeter thread={thread} />
+        <PendingSnooze thread={thread} />
+      </span>
       {available.snooze && <SnoozeButton thread={thread} onSnoozed={onSnoozed} />}
       <StateButton thread={thread} onArchived={onArchived} onDismissCancel={onDismissCancel} />
     </footer>
@@ -55,7 +68,7 @@ export function ThreadLifecycleFooter({
 // a sentence. The footer is a control strip, and spending a line of it restating a deadline the
 // SnoozeButton beside it already edits is not worth the real estate. Details (wake time, and the
 // follow-up text when one is armed) live entirely in the hover popover, exactly as the sidebar's
-// hourglass does. `mr-auto` keeps the lifecycle buttons right-aligned.
+// hourglass does. The left-alignment is the enclosing cluster's `mr-auto`, not this element's.
 function PendingSnooze({ thread }: { thread: ThreadView }) {
   const until = futureSnoozedUntil(thread)
   if (!until) return null
@@ -67,7 +80,7 @@ function PendingSnooze({ thread }: { thread: ThreadView }) {
     : `Snoozed until ${formatSnoozeWake(until)}`
   return (
     <Tooltip label={detail} side="top" multiline={!!prompt}>
-      <span data-pending-snooze aria-label={detail} className="mr-auto flex items-center px-0.5 text-muted/60">
+      <span data-pending-snooze aria-label={detail} className="flex items-center px-0.5 text-muted/60">
         <Hourglass size={12} />
       </span>
     </Tooltip>

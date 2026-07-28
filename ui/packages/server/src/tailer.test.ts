@@ -209,6 +209,50 @@ test("applyEvent: a compaction is harness motion — it advances the clock but m
   assert.equal(s.turn, "in-flight")
 })
 
+// ---- context fullness: both halves are READINGS, and an absent one must render nothing ----
+
+test("applyEvent: context-usage carries the reading AND latches the provider's window", () => {
+  const s = newTailState("t", "s", "/x")
+  assert.equal(s.contextTokens, undefined, "no reading before any telemetry — the footer renders nothing")
+  assert.equal(s.contextWindow, undefined)
+  applyEvent(s, { kind: "context-usage", at: "2026-07-01T00:00:00.000Z", tokens: 25026, window: 258400 })
+  assert.equal(s.contextTokens, 25026)
+  assert.equal(s.contextWindow, 258400)
+  // A compaction genuinely SHRINKS the context, so the reading must be allowed to fall.
+  applyEvent(s, { kind: "context-usage", at: "2026-07-01T00:01:00.000Z", tokens: 9000, window: 258400 })
+  assert.equal(s.contextTokens, 9000)
+  // A later event that omits the window must not erase a real one — losing the denominator would blank
+  // a readout the operator is already reading, and the window of a running session does not change.
+  applyEvent(s, { kind: "context-usage", at: "2026-07-01T00:02:00.000Z", tokens: 9500 })
+  assert.equal(s.contextTokens, 9500)
+  assert.equal(s.contextWindow, 258400)
+})
+
+test("applyRecord: Claude's context reading is the request's own input accounting, and only the main thread's", () => {
+  const s = newTailState("t", "s", "/x")
+  const assistant = (usage: unknown, extra: Record<string, unknown> = {}) => JSON.stringify({
+    type: "assistant", timestamp: "2026-07-01T00:00:00.000Z",
+    message: { stop_reason: "end_turn", model: "claude-opus-5", content: [{ type: "text", text: "hi" }], usage },
+    ...extra,
+  })
+  const fold = (line: string) => { const r = parseLine(line); assert.ok(r); applyRecord(s, r) }
+  // input + cache-creation + cache-read is exactly what the request carried. output_tokens is NOT in
+  // the context yet — it arrives inside those three on the next request.
+  fold(assistant({ input_tokens: 2, cache_creation_input_tokens: 2858, cache_read_input_tokens: 16344, output_tokens: 123 }))
+  assert.equal(s.contextTokens, 2 + 2858 + 16344)
+  // Claude names no window on disk, so the numerator alone must never imply a fraction.
+  assert.equal(s.contextWindow, undefined, "the disk fold cannot invent a denominator")
+  // A SIDECHAIN record is a child's context, not this thread's.
+  fold(assistant({ input_tokens: 1, cache_read_input_tokens: 999 }, { isSidechain: true }))
+  assert.equal(s.contextTokens, 19204, "a sub-agent's reading may not overwrite the parent's")
+  // A synthetic API-error record carries no real usage.
+  fold(assistant({ input_tokens: 0, cache_read_input_tokens: 0 }, { isApiErrorMessage: true }))
+  assert.equal(s.contextTokens, 19204, "an error record must not zero a real reading")
+  // A record with no usage at all leaves the previous reading alone rather than asserting zero.
+  fold(assistant(undefined))
+  assert.equal(s.contextTokens, 19204)
+})
+
 test("applyEvent: lastUserText and lastUserAt stay paired when a genuine user event has no text", () => {
   const s = newTailState("t", "s", "/x")
   applyEvent(s, { kind: "user-message", at: "2026-07-01T00:00:00.000Z", text: "older exact text", synthetic: false })
