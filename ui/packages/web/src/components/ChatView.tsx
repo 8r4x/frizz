@@ -5,7 +5,7 @@ import * as RadixTabs from "@radix-ui/react-tabs"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight, FileText, Hash, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, ShieldCheck, Sparkles, X, type LucideIcon } from "lucide-react"
-import type { AwaitingHint, NativeInputRequired as NativeInputRequiredData, PendingAsk, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptToolCall } from "@fray-ui/shared"
+import type { AwaitingHint, NativeInputRequired as NativeInputRequiredData, PendingAsk, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptToolCall } from "@fray-ui/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBoard, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
@@ -337,7 +337,9 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
       {/* No flex GAP: between-message spacing is adjacency-based explicit spacers (two tool-only
           messages → the tight 6px run; anything involving prose/a bubble/an event → STEP 14px), so a
           tool-card column reads uniformly no matter how the turns were chunked. */}
-      <div className="flex min-h-full flex-col px-6 py-5">
+      {/* data-transcript-column marks a stack of messages whose rhythm comes from withMessageSpacers.
+          Every such column is gap-less by construction; the marker is what the spacing e2e measures. */}
+      <div data-transcript-column className="flex min-h-full flex-col px-6 py-5">
         {count === 0 ? (
           <div className="flex-1 flex items-center justify-center text-sm text-muted">
             {q.isPending ? (
@@ -370,20 +372,9 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
           </div>
         ) : (
           <>
-            {(() => {
-              // Interleave messages with adjacency-based spacers (see isToolOnlyMessage): SKIP messages
-              // that render nothing (so no orphan/double gap), 6px between two tool-only messages, STEP
-              // otherwise. `prevToolOnly === null` marks "no rendered message yet" → no leading spacer.
-              const out: ReactNode[] = []
-              let prevTailIsMeta: boolean | null = null
-              messages.forEach((m, i) => {
-                // QUEUED (optimistic, not-yet-in-the-log) messages are pinned to the very BOTTOM
-                // (rendered after the working/pending indicators, below) — not interleaved here.
-                if (m.queued) return
-                if (messageRendersNothing(m)) return
-                // 6px when two META rows abut across the boundary — a tool band OR a "Thought for Ns" /
-                // reasoning label (see messageTailIsMeta), so the meta-label column reads as one rhythm.
-                if (prevTailIsMeta !== null) out.push(<VSpace key={`s${i}`} h={prevTailIsMeta && messageHeadIsMeta(m) ? 6 : STEP} />)
+            {withMessageSpacers(
+              messages,
+              (m, i) => {
                 // The current ask sticks to the pane top (unless the pref is off) as a collapsed,
                 // hover-to-expand bubble; every other message flows normally.
                 const isSticky = i === lastUserIdx && stickyUserMessage
@@ -397,11 +388,12 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
                     sticky={isSticky}
                   />
                 )
-                out.push(isSticky ? <StickyUserBand key={i}>{msg}</StickyUserBand> : msg)
-                prevTailIsMeta = messageTailIsMeta(m)
-              })
-              return out
-            })()}
+                return isSticky ? <StickyUserBand key={i}>{msg}</StickyUserBand> : msg
+              },
+              // QUEUED (optimistic, not-yet-in-the-log) messages are pinned to the very BOTTOM
+              // (rendered after the working/pending indicators, below) — not interleaved here.
+              (m) => !!m.queued,
+            )}
             {(thread?.providerFault || thread?.limitPause || frozenAsk || nativeInputRequired || thread?.runtime === "perm-prompt" || running) && <VSpace />}
             {/* A frozen native AskUserQuestion takes precedence over the generic perm banner and the
                 Working… spinner — it's the salient state (the safety net). Background sub-agents/shells
@@ -1460,6 +1452,57 @@ export function VSpace({ h = STEP }: { h?: number }) {
   return <div aria-hidden className="shrink-0" style={{ height: h }} />
 }
 
+// THE between-message rhythm, in ONE place. Every surface that stacks messages goes through this —
+// the thread transcript and the sub-agent drawer — so no surface can invent its own gap. That is the
+// whole point: the sub-agent drawer used to lay its messages out with a flat `gap-3.5`, which gave a
+// child's transcript 14px between successive tool-only turns and 6px inside a batch, i.e. exactly the
+// batch seam the tight run exists to erase (maintainer 2026-07-27: "there's a bigger gap between
+// independent batches as opposed to within a batch"). A container `gap` CANNOT express this rule —
+// the gap depends on the two rows it sits between — so the spacing is explicit VSpace elements and
+// the container must stay gap-less.
+//
+// Messages that render nothing are SKIPPED (no orphan or doubled spacer); `skip` drops messages the
+// caller renders elsewhere (the queued tail). A null `prevTailIsMeta` marks "nothing rendered yet" →
+// no leading spacer.
+export function withMessageSpacers(
+  messages: readonly ChatMessage[],
+  render: (m: ChatMessage, i: number) => ReactNode,
+  skip?: (m: ChatMessage, i: number) => boolean,
+): ReactNode[] {
+  const out: ReactNode[] = []
+  let prevTailIsMeta: boolean | null = null
+  messages.forEach((m, i) => {
+    if (skip?.(m, i)) return
+    if (messageRendersNothing(m)) return
+    // 6px when two META rows abut across the boundary — a tool band OR a "Thought for Ns" / reasoning
+    // label (see messageTailIsMeta), so the meta-label column reads as one rhythm.
+    if (prevTailIsMeta !== null) out.push(<VSpace key={`s${i}`} h={prevTailIsMeta && messageHeadIsMeta(m) ? 6 : STEP} />)
+    out.push(render(m, i))
+    prevTailIsMeta = messageTailIsMeta(m)
+  })
+  return out
+}
+
+// Drop parts that render nothing and re-coalesce the contiguous tool runs they were splitting, so a
+// message's block list matches what the reader actually sees. Mirrors the server's own part-coalescing
+// rule (transcript.ts pushToolPart) for the one case it can't catch: a blank text block BETWEEN two
+// tool_use blocks starts a fresh tools part server-side, and the client would then draw two bands.
+export function normalizeParts(parts: readonly TranscriptPart[]): TranscriptPart[] {
+  const out: TranscriptPart[] = []
+  for (const p of parts) {
+    if (p.kind === "text") {
+      if (!p.text.trim()) continue
+      out.push(p)
+      continue
+    }
+    if (p.tools.length === 0) continue
+    const last = out[out.length - 1]
+    if (last && last.kind === "tools") out[out.length - 1] = { kind: "tools", tools: [...last.tools, ...p.tools] }
+    else out.push(p)
+  }
+  return out
+}
+
 // Interleave a list of block-level nodes with explicit spacers. Nullish entries (e.g. an empty prose
 // run) are dropped BEFORE interleaving so a spacer never leads, trails, or doubles.
 function withSpacers(blocks: ReactNode[], h = STEP): ReactNode[] {
@@ -2160,10 +2203,10 @@ export function AgentBlock({
 }
 
 // A SendMessage (peer / agent-to-agent messaging) rendered as a sibling of AgentBlock/BashBlock: the
-// SAME quiet bordered card family, but purpose-built to read as "this agent sent a message to that
-// agent" rather than a generic SendMessage(...) tool line. The header leads with the petite-caps kind
-// label ("Sent", or "Shutdown" for a shutdown_request) then the RECIPIENT prominently as "→ <name>"
-// (near-fg, so it's the salient token), then the model's one-line `summary` (muted, truncated). The
+// SAME quiet bordered card family, but purpose-built to read as "this agent steered that one" rather
+// than a generic SendMessage(...) tool line. The header leads with the petite-caps kind label
+// ("Steered", or "Shutdown" for a shutdown_request), then the model's one-line `summary` (muted,
+// truncated). The
 // chevron expands the MESSAGE BODY, rendered as markdown in a quiet indented block (long bodies clamp
 // with a "Show all N lines" affordance, exactly like the Bash/Read/Agent bodies). Default state mirrors
 // AgentBlock: COLLAPSED when a summary already conveys the gist, OPEN when there's no summary so a
@@ -2178,7 +2221,12 @@ function SendMessageCard({ to, summary, body, type, status, durationMs }: { to?:
   const lineCount = useMemo(() => body.split("\n").length, [body])
   const long = lineCount > SEND_MAX_LINES
   const hasBody = !!body.trim()
-  const label = isShutdown ? "Shutdown" : "Sent"
+  // "Steered", not "Sent → <recipient>" (maintainer 2026-07-28). The recipient was rendered as the
+  // salient token, but a SendMessage to a background agent addresses it by raw agentId — so the most
+  // prominent thing on the card was a meaningless hash. What the reader needs is the VERB: this turn
+  // steered another agent. The recipient stays in the aria-label, where an id is still an identifier
+  // rather than noise.
+  const label = isShutdown ? "Shutdown" : "Steered"
   return (
     <div className="fray-bash">
       <button
@@ -2193,7 +2241,6 @@ function SendMessageCard({ to, summary, body, type, status, durationMs }: { to?:
       >
         <span className="flex min-w-0 items-center gap-2">
           <span className="petite-caps fray-bash-label shrink-0">{label}</span>
-          {to && <span className="shrink-0 whitespace-nowrap text-[11.5px] text-fg/75">→ {to}</span>}
           {summary && <span className="min-w-0 truncate text-[11.5px] text-muted">{summary}</span>}
         </span>
         <span className="flex shrink-0 items-center gap-2">
@@ -2461,6 +2508,11 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     // Ordered walk (the fix): each part renders where it belongs. A tools part → a card band over its
     // CONTIGUOUS run (collapseTools folds ×N + merges same-file edits within the run); a text part →
     // its prose + question cards.
+    // NORMALIZED FIRST: a text part that renders NOTHING (empty/whitespace — a provider emitting a
+    // blank text block between two tool_use blocks) is dropped, and the tools parts it separated
+    // re-merge into one band. Otherwise it splits one batch into two blocks, and the block rhythm
+    // (STEP) would put 14px between two tool cards that the reader sees as adjacent — the same batch
+    // seam withMessageSpacers erases across messages. Order is preserved; only invisible parts go.
     m.parts.forEach((part, pi) => {
       if (part.kind === "tools") {
         // textOnly (the queue card's first/last agent message): the batched tool band is dropped so only
