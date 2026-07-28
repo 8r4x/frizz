@@ -23,6 +23,7 @@ import { PlanDrawer } from "./components/PlanDrawer.tsx"
 import { SettingsDrawer } from "./components/SettingsDrawer.tsx"
 import { CommandPalette } from "./components/CommandPalette.tsx"
 import { StatusListView } from "./components/StatusListView.tsx"
+import { ErrorBoundary, DrawerErrorSheet } from "./components/ErrorBoundary.tsx"
 import { RestartOverlay } from "./components/RestartOverlay.tsx"
 import { Toaster } from "./components/Toaster.tsx"
 import { FRAY_SUPERVISOR_STATUS_WAKE_EVENT, getFraySupervisorStatus } from "./api/restart.ts"
@@ -273,7 +274,13 @@ export function App() {
         {/* A genuinely fresh project keeps its centered first-task view. Once this project has had a
             Fray-owned thread or plan, the sidebar remains mounted through transient empty keyframes;
             navigation must not vanish while the live board stream reconnects or catches up. */}
-        {showSidebar && <Sidebar />}
+        {/* Each of the three standing surfaces catches its OWN render errors (see ErrorBoundary.tsx):
+            a bad row in the sidebar must not take the workpane with it, and vice versa. */}
+        {showSidebar && (
+          <ErrorBoundary label="the sidebar">
+            <Sidebar />
+          </ErrorBoundary>
+        )}
         <main
           id="workpane"
           // min-h-screen where content is vertically CENTERED: the boot loader and the empty queue's
@@ -295,10 +302,10 @@ export function App() {
               <span className="block h-5 w-5 rounded-full border-2 border-muted/50 border-t-transparent animate-spin" />
             </div>
           ) : (
-            <>
+            <ErrorBoundary label="the queue" resetKeys={[snap.view]}>
               {snap.view.startsWith("status:") && <StatusListView status={snap.view.slice(7)} />}
               {snap.view === "todos" && <TodosView />}
-            </>
+            </ErrorBoundary>
           )}
         </main>
       </div>
@@ -319,7 +326,7 @@ export function App() {
         return snap.drawers.map((d, i) => {
           const widthDepth = below
           if (!d.closing) below++
-          return d.kind === "thread" ? (
+          const layer = d.kind === "thread" ? (
             <ThreadSheet key={d.id} id={d.id} slug={d.slug} depth={i} widthDepth={widthDepth} initiallyOpen={d.routed} />
           ) : d.kind === "subagent" ? (
             <SubAgentSheet
@@ -355,6 +362,22 @@ export function App() {
               widthDepth={widthDepth}
               title={(() => { const t = threadBySlug(board, d.slug); return t ? displayTitle(t) : d.slug })()}
             />
+          )
+          // A drawer that throws while rendering used to blank the whole window — the board it was
+          // opened FROM included. Now the failure stays inside its own layer: the fallback re-mounts
+          // the same Sheet geometry, so it still slides in, still closes, and still leaves everything
+          // underneath it alive. Reset on the layer's identity so re-opening it is a real retry.
+          return (
+            <ErrorBoundary
+              key={d.id}
+              label="this drawer"
+              resetKeys={[d.kind, d.slug, d.subId, d.path]}
+              fallback={(error, retry) => (
+                <DrawerErrorSheet id={d.id} depth={i} widthDepth={widthDepth} error={error} onRetry={retry} />
+              )}
+            >
+              {layer}
+            </ErrorBoundary>
           )
         })
       })()}

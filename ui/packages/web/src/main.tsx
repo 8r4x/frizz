@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import "@xterm/xterm/css/xterm.css"
 import "./styles.css"
 import { App } from "./App.tsx"
+import { RootErrorBoundary } from "./components/ErrorBoundary.tsx"
 import { StandaloneThreadPage } from "./components/StandaloneThreadPage.tsx"
 import { connectSync } from "./api/socket.ts"
 import { initTranscriptLive } from "./api/transcript-live.ts"
@@ -50,7 +51,13 @@ if (!settingsFixture) {
 if (!settingsFixture) {
   createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={queryClient}>
-      {standaloneThreadSlug ? <StandaloneThreadPage slug={standaloneThreadSlug} /> : <App />}
+      {/* The last-resort catch. App wraps its own surfaces far more finely (sidebar / queue / each
+          drawer), so anything reaching this one broke above all of them — a throw in App's own body,
+          or in the standalone thread page. It still renders a page with the error ON it, which is
+          the whole difference between a bad render and the blank window this replaced. */}
+      <RootErrorBoundary>
+        {standaloneThreadSlug ? <StandaloneThreadPage slug={standaloneThreadSlug} /> : <App />}
+      </RootErrorBoundary>
     </QueryClientProvider>,
   )
 }
