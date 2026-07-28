@@ -49,21 +49,38 @@ Always kill it before you come to rest; never rest on a running stack.
 
 ## 2. Driving the app — headless, with screenshots
 
-### Preferred when it's available and free: Chrome DevTools MCP
-When the `chrome-devtools` MCP is connected, use it for rich inspection: `new_page` → `navigate_page` →
-`take_snapshot` (a11y tree, best for locating elements) / `take_screenshot` / `list_console_messages` /
-`list_network_requests` / `click` / `fill` / `evaluate_script`.
+> ## NEVER put a browser window on the maintainer's screen
+>
+> You share this desktop with a human who is working. A verification run must be **invisible**: headless,
+> on a throwaway profile, leaving no window and no tab behind. Popping a visible Chrome is the single
+> most disruptive thing this skill can do, and it is never necessary — `shot.mjs` does everything the
+> gate requires without ever drawing a pixel. If you catch yourself about to launch a headful browser,
+> that is the bug.
+>
+> This is not a style note. It was a real, repeated complaint (maintainer 2026-07-28: *"it keeps opening
+> tabs in my actual real Chrome"*), and the cause was this file recommending the MCP first — see below.
 
-> **Gotcha (hit this for real):** chrome-devtools-mcp launches ONE Chrome on a single shared
-> `chrome-profile`. If a Chrome is already running on that profile (a prior session, the user's own), every
-> `new_page` fails with *"The browser is already running … Use --isolated"*. It is often NOT free to use in
-> a background/headless run. When it collides or isn't connected, fall straight to the puppeteer path below —
-> don't fight it.
+### Default, and the one you should almost always use: `ui/scripts/shot.mjs` (puppeteer)
+`shot.mjs` launches its **own isolated headless Chrome** every run — a fresh `puppeteer_dev_chrome_profile-*`
+temp dir, no shared profile, no collision, no window. It works in the background unconditionally and cannot
+disturb the maintainer. It screenshots and runs an in-page `evaluate` in one shot, and prints any
+page/console errors. This is the workhorse for "prove it renders", responsive checks, and optical review.
 
-### Reliable headless/background path: `ui/scripts/shot.mjs` (puppeteer)
-`shot.mjs` launches its **own isolated headless Chrome** every run (no shared profile, no collision), so it
-works in the background unconditionally. It screenshots and runs an in-page `evaluate` in one shot, and
-prints any page/console errors. This is the workhorse for "prove it renders" and responsive checks.
+### Chrome DevTools MCP — richer, but only because this repo forces it headless
+The MCP gives you a real a11y tree and interaction primitives (`new_page` → `navigate_page` →
+`take_snapshot` / `take_screenshot` / `list_console_messages` / `list_network_requests` / `click` / `fill` /
+`evaluate_script`). Reach for it when you genuinely need to *drive* the page rather than photograph it.
+
+> **Why it is second, and why it used to be a menace.** `chrome-devtools-mcp` ships two hostile defaults:
+> `headless` defaults to **false** (`cli-options.js`) so it opens a **visible window on the maintainer's
+> desktop**, and `isolated` defaults to **false** (`index.js`) so every agent shares one persistent profile
+> at `~/.cache/chrome-devtools-mcp/chrome-profile`. Shared-profile collisions then fail every `new_page`
+> with *"The browser is already running … Use --isolated"*.
+>
+> This repo pins both off in `.mcp.json` (`--headless --isolated`) and disables the argument-less plugin
+> build in `.claude/settings.json`, because `enabledPlugins` accepts no flags and so can only ever run
+> headful. **Do not re-enable that plugin, and do not launch `chrome-devtools-mcp` by hand without both
+> flags.** If the MCP is unavailable or collides anyway, fall straight to `shot.mjs` — don't fight it.
 
 ```bash
 # screenshot + assert board state (the eval's completion value prints as json)
