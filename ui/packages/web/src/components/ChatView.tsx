@@ -1,4 +1,4 @@
-import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef, type CSSProperties, type ReactNode } from "react"
+import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
 import { createPortal } from "react-dom"
 import { useSnapshot } from "valtio"
 import * as RadixTabs from "@radix-ui/react-tabs"
@@ -18,6 +18,7 @@ import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
 import { parseAnswersCard, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
 import { sendEagerFollowUp } from "../lib/eagerComposerSubmission.ts"
+import { useUnqueueFollowUp, useUnqueueSupported } from "../lib/unqueueFollowUp.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { messagePresentationText } from "../lib/messagePresentation.ts"
@@ -2334,8 +2335,24 @@ export function StickyUserBand({ children, stickyTopPx, sourceId }: { children: 
 // ellipsis) with a soft "there's more" cue; hovering expands it to the full message (up to 85vh, then
 // it scrolls) and leaving re-collapses. Non-sticky (every historical bubble) is the plain, uncapped
 // bubble, unchanged. Its own component so the sticky hover/measure hooks stay out of memoized Message.
-function UserBubble({ text, queued, sticky, deliveryUnconfirmed, sourceId }: { text: string; queued?: boolean; sticky?: boolean; deliveryUnconfirmed?: boolean; sourceId?: string }) {
+function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, deliveryId, sourceId }: { text: string; rawText?: string; queued?: boolean; sticky?: boolean; deliveryUnconfirmed?: boolean; deliveryId?: string; sourceId?: string }) {
   const ref = useRef<HTMLDivElement>(null)
+  // TAKE IT BACK. A still-queued send is the one bubble in the transcript that isn't history yet, so
+  // it alone is clickable: the click unqueues it at the provider and hands the words back to the
+  // prompt box (see lib/unqueueFollowUp.ts). Three gates, all of them load-bearing:
+  //  · ThreadSlugContext — the same authorization boundary the fence-card buttons use. A queued bubble
+  //    rendered inside a SUB-AGENT's transcript is not this surface's to retract.
+  //  · deliveryId — the provider queued the message under that uuid; without it there is nothing to
+  //    address, which is exactly the case for a bubble fray did not send (one typed in the terminal).
+  //  · the backend — a codex steer has no queue to take anything out of.
+  const unqueueSlug = useContext(ThreadSlugContext)
+  const unqueueSupported = useUnqueueSupported(unqueueSlug)
+  const { unqueue, pending: unqueuePending } = useUnqueueFollowUp(unqueueSlug)
+  const unqueueable = Boolean(queued && deliveryId && unqueueSlug && unqueueSupported)
+  // Local hover state rather than a named-group hover utility: the `group/msg` group is the DEBUG CHIP's
+  // channel (MessageDebugId owns every use of it, and a test pins that), and only the handful of
+  // still-queued bubbles ever subscribe to this.
+  const [unqueueHover, setUnqueueHover] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [overflows, setOverflows] = useState(false)
   // Whether the FULL message is taller than the expanded cap (85vh) — the ONLY case that genuinely
@@ -2382,8 +2399,25 @@ function UserBubble({ text, queued, sticky, deliveryUnconfirmed, sourceId }: { t
           is verbatim, so its line breaks must survive. */}
       <div
         ref={ref}
-        onMouseEnter={sticky ? () => setExpanded(true) : undefined}
-        onMouseLeave={sticky ? () => { setExpanded(false); setScrollReady(false) } : undefined}
+        {...(unqueueable ? {
+          role: "button",
+          tabIndex: 0,
+          "data-unqueue": deliveryId,
+          "aria-label": "Unqueue this message and put it back in the prompt box",
+          title: unqueuePending ? "Taking it back…" : "Click to unqueue — the text comes back to the prompt box",
+          onClick: (e: ReactMouseEvent<HTMLDivElement>) => unqueue({ deliveryId: deliveryId!, text, rawText: rawText ?? text, from: e.currentTarget }),
+          onKeyDown: (e: ReactKeyboardEvent<HTMLDivElement>) => {
+            if (e.key !== "Enter" && e.key !== " ") return
+            e.preventDefault()
+            unqueue({ deliveryId: deliveryId!, text, rawText: rawText ?? text, from: e.currentTarget })
+          },
+          onFocus: () => setUnqueueHover(true),
+          onBlur: () => setUnqueueHover(false),
+        } : {})}
+        // A queued bubble is never the sticky one (the pinned ask is the last LANDED user message), so
+        // these two never both apply — but they share the handler, so compose rather than overwrite.
+        onMouseEnter={sticky ? () => setExpanded(true) : unqueueable ? () => setUnqueueHover(true) : undefined}
+        onMouseLeave={sticky ? () => { setExpanded(false); setScrollReady(false) } : unqueueable ? () => setUnqueueHover(false) : undefined}
         onTransitionEnd={sticky ? (e) => { if (e.propertyName === "max-height" && expanded && exceedsCap) setScrollReady(true) } : undefined}
         // While NOT scrollable (collapsed, or expanding before it settles) the bubble is `overflow-hidden`
         // and so lacks the scrollbar-gutter the scrollable state reserves — a 7px text shift when scroll
@@ -2393,7 +2427,11 @@ function UserBubble({ text, queued, sticky, deliveryUnconfirmed, sourceId }: { t
           ...(maxH ? { maxHeight: maxH } : {}),
           ...(sticky && exceedsCap && !scrollable ? { paddingRight: "calc(0.875rem + var(--sbw))" } : {}),
         }}
-        className={`relative rounded-2xl rounded-br-sm bg-user-bubble px-3.5 py-2 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere] text-bg ${queued ? "opacity-50" : ""} ${sticky ? `transition-[max-height] duration-200 ease-out ${scrollable ? "overflow-y-auto" : "overflow-hidden"}` : ""}`}
+        // A retractable bubble LIFTS under the pointer — back toward full opacity, with a ring — so the
+        // one message in the transcript that is still yours to change says so on hover instead of
+        // needing a permanent control that would clutter every send. Opacity is the same channel that
+        // already encodes "queued", which is exactly the state being offered.
+        className={`relative rounded-2xl rounded-br-sm bg-user-bubble px-3.5 py-2 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere] text-bg ${queued ? "opacity-50" : ""} ${unqueueable ? "cursor-pointer transition-opacity hover:opacity-80 focus-visible:opacity-80 focus-visible:outline-none ring-accent/60 hover:ring-1 focus-visible:ring-1" : ""} ${unqueuePending ? "!opacity-30" : ""} ${sticky ? `transition-[max-height] duration-200 ease-out ${scrollable ? "overflow-y-auto" : "overflow-hidden"}` : ""}`}
       >
         {text}
         {/* Fade the last ~2.5rem of text into the bubble colour — keeps the box fully rounded + opaque
@@ -2407,6 +2445,15 @@ function UserBubble({ text, queued, sticky, deliveryUnconfirmed, sourceId }: { t
           is the recovery surface, and the bubble stays gray so the send is still legible above it. */}
       {deliveryUnconfirmed && (
         <div className="text-[11px] text-amber-400/80">Delivery unconfirmed — check the terminal</div>
+      )}
+      {/* The hint appears only on hover/focus of this message, so a thread full of queued sends stays
+          quiet. It reserves no layout of its own (`h-0` + overflow) — a line that appeared under the
+          bubble on hover would nudge every row below it, which is the same layout shift that got the
+          old permanent "queued" tag deleted. */}
+      {unqueueable && (
+        <div aria-hidden className={`h-0 overflow-visible text-[11px] text-muted transition-opacity ${unqueueHover || unqueuePending ? "opacity-100" : "opacity-0"}`}>
+          {unqueuePending ? "Taking it back…" : "Click to unqueue"}
+        </div>
       )}
     </div>
   )
@@ -2458,7 +2505,10 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     // Non-matching text (and a parse hiccup → null) falls back to the plain bubble; text is never lost.
     const answers = paired !== undefined ? paired : parseAnswersCard(text)
     if (answers) return <AnswersCard answers={answers} queued={m.queued} sourceId={m.sourceId} />
-    return <UserBubble text={text} queued={m.queued} sticky={sticky} deliveryUnconfirmed={m.deliveryState === "unconfirmed"} sourceId={m.sourceId} />
+    // `rawText` rides alongside the presentation text because the two differ: the bubble shows the
+    // stripped/normalized copy, while the optimistic cache entry an unqueue has to evict is keyed on
+    // the message's own raw text.
+    return <UserBubble text={text} rawText={m.text} queued={m.queued} sticky={sticky} deliveryUnconfirmed={m.deliveryState === "unconfirmed"} deliveryId={m.deliveryId} sourceId={m.sourceId} />
   }
 
   // Build ONE ordered list of block-level children, then interleave with explicit spacers. The

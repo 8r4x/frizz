@@ -475,3 +475,76 @@ test("a codex record predating the send is still not evidence", () => {
   const items = [item({ state: "enqueued" })]
   assert.equal(correlateDeliveryRecord(items, codexUser("fix the bug", T0 - 60_000), iso(T0)), items)
 })
+
+// ---- cancellation tombstones ----
+// A cancelled send is the only ledger row that outlives its own message: the CLI's `queue-operation
+// enqueue` record stays on disk forever and keeps rendering, so the row exists to suppress it.
+
+test("a cancelled item projects NOTHING and removes the JSONL bubble it left behind", () => {
+  const tombstone = item({ state: "cancelled", text: "wait, not that", updatedAt: iso(T0 + 4000) })
+  const out = projectDeliveryLedger(
+    [msg({ text: "earlier", sourceId: "s:1" }), msg({ text: "wait, not that", sourceId: "s:2", at: iso(T0 + 1000), queued: true })],
+    [tombstone],
+  )
+  assert.deepEqual(out.map((m) => m.text), ["earlier"])
+})
+
+test("the orphan is removed even after the FIFO backstop UN-GRAYED it", () => {
+  // transcript.ts un-grays every bubble queued ahead of a delivered one, so by the time a later send
+  // lands the cancelled bubble no longer carries `queued` — matching on that flag would miss exactly
+  // the case that renders a never-read message as a sent one.
+  const out = projectDeliveryLedger(
+    [msg({ text: "wait, not that", sourceId: "s:2", at: iso(T0 + 1000) })],
+    [item({ state: "cancelled", text: "wait, not that", updatedAt: iso(T0 + 4000) })],
+  )
+  assert.deepEqual(out, [])
+})
+
+test("a tombstone never eats a LATER re-send of the same words", () => {
+  // The likely next thing the operator does: unqueue hands the text back to the prompt box, they
+  // change their mind and send it again. That copy is outside the send→cancel window.
+  const out = projectDeliveryLedger(
+    [msg({ text: "wait, not that", sourceId: "s:9", at: iso(T0 + 90_000) })],
+    [item({ state: "cancelled", text: "wait, not that", updatedAt: iso(T0 + 4000) })],
+  )
+  assert.deepEqual(out.map((m) => m.sourceId), ["s:9"])
+})
+
+test("one tombstone removes at most ONE bubble", () => {
+  const out = projectDeliveryLedger(
+    [msg({ text: "again", sourceId: "s:1", at: iso(T0 + 500) }), msg({ text: "again", sourceId: "s:2", at: iso(T0 + 1000) })],
+    [item({ state: "cancelled", text: "again", updatedAt: iso(T0 + 4000) })],
+  )
+  assert.equal(out.length, 1)
+})
+
+test("live items still project alongside a tombstone", () => {
+  const out = projectDeliveryLedger(
+    [msg({ text: "retracted", sourceId: "s:1", at: iso(T0 + 500) })],
+    [item({ id: "d-c", state: "cancelled", text: "retracted", updatedAt: iso(T0 + 4000) }), item({ id: "d-2", text: "still going" })],
+  )
+  assert.deepEqual(out.map((m) => [m.text, m.deliveryId]), [["still going", "d-2"]])
+})
+
+test("a tombstone never ages out — a timeout would resurrect the bubble an hour later", () => {
+  const items = [item({ state: "cancelled", updatedAt: iso(T0 + 1000) })]
+  assert.equal(ageDeliveries(items, T0 + UNCONFIRMED_DROP_MS * 5), items)
+})
+
+test("no later record can resolve a tombstone away", () => {
+  // The suppression must survive everything the tailer folds in afterwards: an enqueue echo, the
+  // delivery of a DIFFERENT send carrying the same words, and the identity path.
+  const items = [item({ id: "d-c", state: "cancelled", text: "fix the bug", updatedAt: iso(T0 + 1000) })]
+  const enqueue = { type: "queue-operation", operation: "enqueue", content: "fix the bug", timestamp: iso(T0 + 2000) }
+  assert.equal(correlateDeliveryRecord(items, enqueue, iso(T0 + 2000)), items)
+  const removal = { type: "queue-operation", operation: "remove", content: "fix the bug", timestamp: iso(T0 + 2000) }
+  assert.equal(correlateDeliveryRecord(items, removal, iso(T0 + 2000)), items)
+  const echo = { type: "user", uuid: "d-c", message: { role: "user", content: "fix the bug" }, timestamp: iso(T0 + 2000) }
+  assert.equal(correlateDeliveryRecord(items, echo, iso(T0 + 2000)), items)
+})
+
+test("a tombstone's own delivery marker is not evidence either", () => {
+  const items = [item({ id: "d-c", state: "cancelled", text: "fix the bug", updatedAt: iso(T0 + 1000) })]
+  const marked = { type: "user", message: { role: "user", content: `${encodeDeliveryMarker("d-c")}fix the bug` }, timestamp: iso(T0 + 2000) }
+  assert.equal(correlateDeliveryRecord(items, marked, iso(T0 + 2000)), items)
+})
