@@ -26,6 +26,13 @@ import { decodeDeliveryMarkers, deliveryTag, stripDeliveryMarkers } from "./deli
 export const PENDING_TIMEOUT_MS = 60_000
 export const UNCONFIRMED_DROP_MS = 60 * 60_000
 export const MAX_LEDGER_ITEMS = 20
+// Tombstones are capped SEPARATELY from live sends, and the reason is that they are not competing for
+// the same thing. A live item is a send in flight and ages out on its own; a tombstone is suppressing
+// a JSONL record that will still be there tomorrow, so evicting one resurrects a message the agent
+// never read. Sharing one cap meant twenty ordinary follow-ups silently un-retracted an earlier
+// cancellation — reachable in an afternoon on a busy thread, not a remote edge. They still need a
+// bound (the row holds each message's text), so they get their own, and the oldest goes first.
+export const MAX_CANCELLED_ITEMS = 12
 
 // `cancelled` is not a delivery state at all — it is a TOMBSTONE, and the only one that outlives its
 // own message. The other three describe a send making its way to the agent; this one records a send the
@@ -34,10 +41,15 @@ export const MAX_LEDGER_ITEMS = 20
 //
 // It has to exist because the JSONL never forgets. Claude Code writes a `queue-operation enqueue`
 // record the moment it accepts a follow-up, and transcript.ts renders that record as the gray queued
-// bubble. Cancelling removes the message from the CLI's queue but cannot unwrite that record, and the
-// CLI's own cancellation trace is a CONTENTLESS `queue-operation dequeue` (measured live —
-// _live_sdk_cancel_queued.mts) which is unattributable to any particular send. Left alone the enqueue
-// bubble therefore outlives the cancellation, and the FIFO backstop in transcript.ts eventually
+// bubble. Cancelling removes the message from the CLI's queue but cannot unwrite that record.
+//
+// Nor does the CLI leave anything fray could attribute the cancellation TO. Measured live
+// (_live_sdk_cancel_queued.mts): the cancelled send got its `enqueue` and then nothing that names it —
+// no content-bearing `remove`, no `queued_command` attachment, no user record. (A contentless
+// `dequeue` was written around the same instant; contentless ops carry no send identity and both the
+// parser and the correlator ignore them, so nothing here rests on what produced it.)
+//
+// Left alone the enqueue bubble therefore outlives the cancellation, and the FIFO backstop in transcript.ts eventually
 // UN-GRAYS it when a later message delivers — rendering a message the agent provably never read as a
 // message the human sent it. So fray has to remember the cancellation itself.
 export type DeliveryState = "pending" | "enqueued" | "unconfirmed" | "cancelled"
@@ -116,6 +128,26 @@ export function serializeDeliveryLedger(items: DeliveryLedgerItem[]): string | n
 // id IS the receipt: the provider has positively accepted the text. That distinction matters beyond
 // bookkeeping — `pending` is what ages into the amber "check the terminal" warning, and a codex
 // app-server thread has no terminal composer to check, so it must never enter that state.
+// Bound the row, oldest-first, counting live sends and tombstones against their OWN caps so a run of
+// ordinary follow-ups can never evict a cancellation. Order is otherwise preserved: matchComposedText
+// consumes items in send order, so a reshuffle here would silently change how a coalesced record is
+// attributed.
+export function trimLedger(items: DeliveryLedgerItem[]): DeliveryLedgerItem[] {
+  const overLive = items.filter((i) => i.state !== "cancelled").length - MAX_LEDGER_ITEMS
+  const overCancelled = items.filter((i) => i.state === "cancelled").length - MAX_CANCELLED_ITEMS
+  if (overLive <= 0 && overCancelled <= 0) return items
+  let dropLive = Math.max(0, overLive)
+  let dropCancelledCount = Math.max(0, overCancelled)
+  return items.filter((item) => {
+    if (item.state === "cancelled") {
+      if (dropCancelledCount > 0) { dropCancelledCount--; return false }
+      return true
+    }
+    if (dropLive > 0) { dropLive--; return false }
+    return true
+  })
+}
+
 export function appendDelivery(
   storage: Storage,
   slug: string,
@@ -127,8 +159,7 @@ export function appendDelivery(
   if (items.some((existing) => existing.id === item.id)) return
   const at = new Date(item.now ?? Date.now()).toISOString()
   items.push({ id: item.id, text: item.text, state: item.state ?? "pending", at, updatedAt: at })
-  while (items.length > MAX_LEDGER_ITEMS) items.shift()
-  storage.setDeliveryLedger(slug, serializeDeliveryLedger(items))
+  storage.setDeliveryLedger(slug, serializeDeliveryLedger(trimLedger(items)))
 }
 
 // Has this exact send already been recorded as delivered? The entry is written only once
@@ -514,6 +545,16 @@ const CANCEL_MATCH_SLACK_MS = 5_000
 // in the conversation is a lie in either styling. Bounded to one bubble per tombstone, and to the
 // window between the send and its cancellation, so nothing outside that window can be claimed.
 type LiveDeliveryItem = DeliveryLedgerItem & { state: Exclude<DeliveryState, "cancelled"> }
+
+// The suppression half alone, for readers that must NOT project queued bubbles.
+//
+// An EARLIER page is settled history: a pending send can never belong there, so it never gets the
+// projection. But a cancelled one's orphan absolutely can — a retracted message scrolls out of the
+// latest window like any other, and without this it reappears intact the moment the operator scrolls
+// back, un-grayed by the FIFO backstop and indistinguishable from a message they really sent.
+export function suppressCancelledDeliveries(messages: TranscriptMessage[], items: DeliveryLedgerItem[]): TranscriptMessage[] {
+  return items.length ? dropCancelled(messages, items).messages : messages
+}
 
 function dropCancelled(
   messages: TranscriptMessage[],

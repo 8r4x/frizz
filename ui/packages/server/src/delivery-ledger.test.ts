@@ -9,6 +9,10 @@ import {
   projectDeliveryLedger,
   PENDING_TIMEOUT_MS,
   UNCONFIRMED_DROP_MS,
+  MAX_LEDGER_ITEMS,
+  MAX_CANCELLED_ITEMS,
+  trimLedger,
+  suppressCancelledDeliveries,
   type DeliveryLedgerItem,
 } from "./delivery-ledger.ts"
 import { encodeDeliveryMarker } from "./delivery-marker.ts"
@@ -547,4 +551,46 @@ test("a tombstone's own delivery marker is not evidence either", () => {
   const items = [item({ id: "d-c", state: "cancelled", text: "fix the bug", updatedAt: iso(T0 + 1000) })]
   const marked = { type: "user", message: { role: "user", content: `${encodeDeliveryMarker("d-c")}fix the bug` }, timestamp: iso(T0 + 2000) }
   assert.equal(correlateDeliveryRecord(items, marked, iso(T0 + 2000)), items)
+})
+
+// ---- tombstones are bounded, but never by the LIVE cap ----
+// Sharing one cap was a real resurrection path: twenty ordinary follow-ups after a retraction evicted
+// its tombstone, and the orphaned enqueue bubble came back as a message the agent never read.
+
+test("a run of ordinary sends never evicts a tombstone", () => {
+  const tomb = item({ id: "tomb", state: "cancelled", text: "retracted" })
+  const live = Array.from({ length: MAX_LEDGER_ITEMS + 5 }, (_, i) => item({ id: `d-${i}`, text: `send ${i}` }))
+  const out = trimLedger([tomb, ...live])
+  assert.ok(out.some((i) => i.id === "tomb"), "the tombstone survives")
+  assert.equal(out.filter((i) => i.state !== "cancelled").length, MAX_LEDGER_ITEMS, "live items are capped")
+  // Oldest live items go first, and order is otherwise preserved (matchComposedText consumes in order).
+  assert.deepEqual(out.filter((i) => i.state !== "cancelled").map((i) => i.id), live.slice(5).map((i) => i.id))
+})
+
+test("tombstones are still bounded by their own cap, oldest first", () => {
+  const tombs = Array.from({ length: MAX_CANCELLED_ITEMS + 3 }, (_, i) => item({ id: `t-${i}`, state: "cancelled", text: `retracted ${i}` }))
+  const out = trimLedger(tombs)
+  assert.equal(out.length, MAX_CANCELLED_ITEMS)
+  assert.deepEqual(out.map((i) => i.id), tombs.slice(3).map((i) => i.id))
+})
+
+test("a ledger under both caps is returned untouched", () => {
+  const items = [item({ id: "t", state: "cancelled" }), item({ id: "d" })]
+  assert.equal(trimLedger(items), items)
+})
+
+// ---- the suppression reaches SCROLLBACK, where no bubble may ever be projected ----
+
+test("an earlier page suppresses a cancelled orphan without projecting anything", () => {
+  const messages = [msg({ text: "kept", sourceId: "s:1" }), msg({ text: "retracted", sourceId: "s:2", at: iso(T0 + 1000) })]
+  const items = [item({ id: "t", state: "cancelled", text: "retracted", updatedAt: iso(T0 + 4000) }), item({ id: "d", text: "still queued" })]
+  const out = suppressCancelledDeliveries(messages, items)
+  assert.deepEqual(out.map((m) => m.text), ["kept"], "the orphan is gone")
+  assert.ok(!out.some((m) => m.text === "still queued"), "and a live send is NOT projected into settled history")
+})
+
+test("an earlier page with no tombstones is returned untouched", () => {
+  const messages = [msg({ text: "kept", sourceId: "s:1" })]
+  assert.equal(suppressCancelledDeliveries(messages, [item()]), messages)
+  assert.equal(suppressCancelledDeliveries(messages, []), messages)
 })

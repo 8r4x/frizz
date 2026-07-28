@@ -16,7 +16,7 @@ import {
 import type { Project } from "./project.ts"
 import type { Storage } from "./storage.ts"
 import type { AgentBackend, NormalizedEvent } from "./backend/types.ts"
-import { parseDeliveryLedger, projectDeliveryLedger, attachmentPromptText } from "./delivery-ledger.ts"
+import { parseDeliveryLedger, projectDeliveryLedger, suppressCancelledDeliveries, attachmentPromptText } from "./delivery-ledger.ts"
 import { stripDeliveryMarkers } from "./delivery-marker.ts"
 import { CODEX_FIRST_FINAL_TITLE_TRANSPORT, CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT, parseCodexLine, createCodexBackend, extractCodexFrayTitle } from "./backend/codex.ts"
 import { discoverTranscriptId, DISCOVERY_GRACE_MS } from "./discover.ts"
@@ -2771,8 +2771,16 @@ export function readEarlierThreadTranscriptPage(
   const anchor = projected.findIndex((message) => message.sourceId === payload.anchorSourceId)
   if (anchor < 0) throw new Error("transcript cursor boundary is no longer present")
   const page = pageProjectedTranscript(projected, anchor)
+  // SUPPRESSION ONLY — deliberately not the full projection. An earlier page is settled history and a
+  // pending send can never belong there, so no queued bubble is ever added here. A CANCELLED send's
+  // orphan is the opposite case: the JSONL's `queue-operation enqueue` scrolls into history like any
+  // other record, and left alone the retracted message reappears the moment the operator scrolls back.
+  const earlierRow = storage.getSession(slug)
+  const messages = earlierRow
+    ? suppressCancelledDeliveries(page.messages, parseDeliveryLedger(earlierRow.delivery_ledger))
+    : page.messages
   return {
-    messages: page.messages,
+    messages,
     beforeCursor: page.start > 0 ? encodeTranscriptCursor(snapshot, projected[page.start].sourceId!) : null,
     hasEarlier: page.start > 0,
     reachedTurnBoundary: page.reachedTurnBoundary,

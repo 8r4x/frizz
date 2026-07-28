@@ -195,7 +195,9 @@ test("nesting: a branch whose ROOT child is gone is over, whatever its own mtime
     // Dismiss the direct child exactly as a terminal signal would. Its descendants' transcripts are
     // untouched and still fresh — the only thing that changed is that this thread stopped tracking the
     // child, and that alone must take the whole branch off the board.
-    assert.equal(f.tailer.dismissOp(SLUG, "toolu_child"), true)
+    // `dismissOp` is optional on the interface only so a narrow test stub need not supply it (see
+    // tailer.ts); this fixture holds the real tailer, which always does.
+    assert.equal(f.tailer.dismissOp!(SLUG, "toolu_child"), true)
     assert.deepEqual(f.tailer.get(SLUG)?.subAgents.map((v) => v.id), [],
       "no orphan rows survive their root child")
   } finally {

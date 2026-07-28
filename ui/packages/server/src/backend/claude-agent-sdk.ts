@@ -51,6 +51,11 @@ export const CLAUDE_AGENT_SDK_FOUNDATION_FLAG = "FRAY_CLAUDE_AGENT_SDK_FOUNDATIO
 export const CLAUDE_AGENT_SDK_CLIENT_APP = "fray/claude-agent-sdk-foundation"
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+// The SDK `Query` method that drops a still-queued input, named ONCE so the code that calls it and the
+// canary that guards it cannot drift apart. It is real at runtime but missing from the SDK's `.d.ts`,
+// so nothing in the type system would notice it disappearing — see claude-agent-sdk.cancel.test.ts.
+export const CLAUDE_SDK_CANCEL_METHOD = "cancelAsyncMessage"
 const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
 const SENSITIVE_ENV_KEY = /(?:API_KEY|AUTH|BASE_URL|BEARER|COOKIE|CREDENTIAL|OAUTH|PASSWORD|PRIVATE|SECRET|TOKEN)/i
 const INHERITED_RUNTIME_ENV_KEYS = [
@@ -425,17 +430,27 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
     return { stillQueued: boundedStringArray(receipt.still_queued, "interrupt.stillQueued", 256, 512).map((id, index) => boundedId(id, `interrupt.stillQueued[${index}]`)) }
   }
 
-  // Unqueue a follow-up the operator has taken back. `cancel_async_message` is a documented control
-  // request on the CLI protocol (SDKControlCancelAsyncMessageRequest) but the SDK ships NO wrapper for
-  // it on `Query`, so it goes out over `request` — the same unmangled method `interrupt()` uses one
-  // level up. Probed rather than assumed, exactly like generateSessionTitle: an SDK bump that renames
-  // it must fail loudly here instead of throwing "not a function" out of an operator's click.
+  // Unqueue a follow-up the operator has taken back.
+  //
+  // `cancelAsyncMessage` is present at runtime in @anthropic-ai/claude-agent-sdk 0.3.207 but absent
+  // from its `.d.ts` `Query` interface, so — exactly like generateSessionTitle above — the capability
+  // is PROBED rather than assumed, and an SDK bump that drops it fails loudly here instead of throwing
+  // an opaque "not a function" out of the operator's click. See CLAUDE_SDK_CANCEL_METHOD, which is the
+  // CI canary for precisely that: it needs no auth and no process, because query() hands back a Query
+  // before the CLI is ever spawned.
+  //
+  // Deliberately the SDK's own method rather than its private `request` + a hand-parsed
+  // `{response:{cancelled}}` envelope, which is what this first shipped as. The envelope is
+  // undocumented, and mis-reading it would silently degrade to `false` — reporting "too late" for a
+  // message the CLI had in fact dropped, which leaves the retracted send rendering as one the human
+  // sent (the exact lie the delivery-ledger tombstone exists to prevent). Letting the SDK own the
+  // envelope means a protocol change moves with the SDK instead of rotting here.
   //
   // Measured live against claude 2.1.220 / SDK 0.3.207 (_live_sdk_cancel_queued.mts): a still-queued
-  // uuid answers `{cancelled:true}` and the message never reaches the model — no assistant
-  // acknowledgement, no `queued_command` attachment, no user record — while a co-queued SIBLING is
-  // untouched and runs normally. An unknown/already-dequeued uuid answers `{cancelled:false}` without
-  // throwing, which is the honest "too late" the caller surfaces.
+  // uuid answers true and the message never reaches the model — no assistant acknowledgement, no
+  // `queued_command` attachment, no user record — while a co-queued SIBLING is untouched and runs
+  // normally. An unknown/already-dequeued uuid answers false without throwing, which is the honest
+  // "too late" the caller surfaces.
   async cancelInput(id: string): Promise<boolean> {
     this.assertOpen()
     const messageUuid = boundedId(id, "cancelInput.id")
@@ -443,22 +458,27 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
     await this.ready()
     this.assertOpen()
     const provider = this.sdkQuery as unknown as {
-      request?: (inner: { subtype: string; message_uuid: string }) => Promise<unknown>
+      [CLAUDE_SDK_CANCEL_METHOD]?: (messageUuid: string) => Promise<unknown>
     }
-    if (typeof provider.request !== "function") {
+    if (typeof provider[CLAUDE_SDK_CANCEL_METHOD] !== "function") {
       throw new ClaudeAgentSdkProtocolError("Claude queued-input cancellation is unavailable")
     }
-    const raw = await this.awaitOpenControl(provider.request({ subtype: "cancel_async_message", message_uuid: messageUuid }))
-    const cancelled = (raw as { response?: { cancelled?: unknown } } | undefined)?.response?.cancelled === true
+    const answer = await this.awaitOpenControl(provider[CLAUDE_SDK_CANCEL_METHOD](messageUuid))
+    // STRICT, and never coerced. Anything but a boolean means fray cannot tell whether the provider
+    // dropped the message, and the two readings have opposite consequences — so refuse to guess and
+    // let the caller surface a failure instead of inventing a verdict.
+    if (typeof answer !== "boolean") {
+      throw new ClaudeAgentSdkProtocolError("Claude queued-input cancellation returned an unreadable answer")
+    }
     // A cancelled input will never be echoed back, so observeProviderProgress can never release its
     // slot — without this it would hold one of the 64 outstanding-input slots for the life of the
     // session, and a thread the operator unqueues from often would eventually refuse new sends.
-    if (cancelled) {
+    if (answer) {
       this.outstandingInputs.delete(messageUuid)
       const orderIndex = this.outstandingInputOrder.indexOf(messageUuid)
       if (orderIndex >= 0) this.outstandingInputOrder.splice(orderIndex, 1)
     }
-    return cancelled
+    return answer
   }
 
   async setPermissionMode(mode: ClaudePermissionMode): Promise<void> {

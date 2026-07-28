@@ -40,6 +40,8 @@ let elicitationStep = 0
 let permissionResponses = 0
 let resultNumber = 0
 let userInputCount = 0
+// Input uuids sitting in the command queue, unanswered — the only ones a cancel can take back.
+const queuedInputs = new Set()
 
 record({
   kind: "startup",
@@ -133,6 +135,20 @@ function handleHostControl(message) {
     respond(message.request_id, {})
     return
   }
+  // Taking a still-queued input back out of the command queue. Models the real CLI's semantics as
+  // measured against 2.1.220 (_live_sdk_cancel_queued.mts): a uuid still in the queue answers
+  // `cancelled: true` and never runs; anything else — already dequeued for execution, or never sent —
+  // answers `cancelled: false` WITHOUT throwing. The distinction is the whole contract, since one
+  // means "the agent will never read it" and the other means "it is already on its way".
+  if (request.subtype === "cancel_async_message") {
+    const uuid = request.message_uuid
+    const cancelled = queuedInputs.delete(uuid)
+    record({ kind: "cancel-async-message", uuid, cancelled })
+    if (scenario === "cancel-unreadable") return respond(message.request_id, { cancelled: "yes" })
+    if (scenario === "cancel-failure") return respondError(message.request_id, "cancellation unavailable")
+    respond(message.request_id, { cancelled })
+    return
+  }
   // Real claude names the session from `description` and, when `persist` is set, appends the
   // `ai-title` transcript record fray reads. The fake only needs to prove the REQUEST is made once,
   // with the dispatch prompt and persistence on, so it records and echoes a derived title.
@@ -192,6 +208,10 @@ function handleUserMessage(message) {
   // session's main thread, a `toolu_…` routes it INTO that running sub-agent's own conversation. The
   // adapter is the only thing that decides which, so the wire frame is where it has to be asserted.
   record({ kind: "user-input", uuid: message.uuid, text: extractText(message.message?.content), parentToolUseId: message.parent_tool_use_id ?? null })
+  // Under `hold-inputs` the fake never answers, which is precisely the real "queued behind a running
+  // turn" state a cancel targets — so that is when an input is cancellable. Every other scenario runs
+  // the input immediately, matching a CLI that has already dequeued it.
+  if (scenario === "hold-inputs" && typeof message.uuid === "string") queuedInputs.add(message.uuid)
   if (scenario === "crash") {
     process.stderr.write("fake child crash\n")
     process.exit(17)
