@@ -60,7 +60,7 @@ import { appServerTurnStalled } from "./board.ts"
 import { runThreadUpdate } from "./fray.ts"
 import { repairThreadFile } from "./repair.ts"
 import { resumeThread } from "./resume.ts"
-import { appendDelivery, cancelDelivery, hasDelivery } from "./delivery-ledger.ts"
+import { appendDelivery, cancelDelivery, deliveryItem, hasDelivery } from "./delivery-ledger.ts"
 import { flushStuckComposer } from "./delivery-confirm.ts"
 import {
   readEarlierThreadTranscriptPage,
@@ -963,21 +963,30 @@ export function createRouter(ctx: AppContext) {
         }
         const bridge = ctx.claudeBroker
         if (!bridge) throw new Error("Claude session broker is unavailable; cannot unqueue this follow-up")
-        // The ledger is the proof fray ever sent this id. Without it there is nothing to tombstone, so a
-        // successful provider-side cancel would leave the orphaned JSONL enqueue bubble on screen —
-        // which reads exactly like the cancel failed.
-        if (!hasDelivery(ctx.storage, input.slug, input.deliveryId)) {
-          return { unqueued: false, reason: "fray has no record of that send, so it can't be taken back" }
-        }
+        // ONE refusal sentence for every way this can be too late, because from where the operator is
+        // standing there is only one outcome to distinguish: did the agent get it or not.
+        const tooLate = { unqueued: false, reason: "The agent already picked that message up — it's on its way" }
+        const item = deliveryItem(ctx.storage, input.slug, input.deliveryId)
+        // Already retracted — a double click, or a second tab clicking the same bubble. Idempotent
+        // rather than "too late": the message really is gone, and saying otherwise would be a lie in
+        // the dangerous direction.
+        if (item?.state === "cancelled") return { unqueued: true }
+        // A retired ledger row means the tailer already correlated this send's delivery evidence — the
+        // agent has it. It is also where a deliveryId fray never sent lands, which the UI cannot
+        // produce (every clickable bubble is one fray itself projected from a ledger row).
+        //
+        // The row is also what makes a successful cancel SAFE to perform: without it there is nothing
+        // to tombstone, and the orphaned JSONL enqueue bubble would stay on screen — which reads
+        // exactly like the cancel failed.
+        if (!item) return tooLate
         const cancelled = await bridge.cancelFollowUp({
           threadSlug: input.slug,
           sessionId: row.session_id,
           deliveryId: input.deliveryId,
         })
         // ORDER: tombstone only AFTER the provider confirms. Recording a cancellation fray did not get
-        // would hide a message the agent is about to read — the one failure this feature must never
-        // have. `cancelDelivery` returning null means the row was already cancelled (a double click).
-        if (!cancelled) return { unqueued: false, reason: "The agent already picked that message up — it's on its way" }
+        // would hide a message the agent is about to read — the one failure this feature must not have.
+        if (!cancelled) return tooLate
         cancelDelivery(ctx.storage, input.slug, input.deliveryId)
         ctx.board.refresh()
         return { unqueued: true }

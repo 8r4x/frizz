@@ -158,6 +158,13 @@ export function cancelDelivery(storage: Storage, slug: string, id: string, now?:
   return items[index].text
 }
 
+/** The ledger row for one send, or null when nothing outstanding carries that id. */
+export function deliveryItem(storage: Storage, slug: string, id: string): DeliveryLedgerItem | null {
+  const row = storage.getSession(slug)
+  if (!row) return null
+  return parseDeliveryLedger(row.delivery_ledger).find((item) => item.id === id) ?? null
+}
+
 export function hasDelivery(storage: Storage, slug: string, id: string): boolean {
   const row = storage.getSession(slug)
   if (!row) return false
