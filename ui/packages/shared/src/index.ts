@@ -111,7 +111,15 @@ export const ThreadAgent = z.object({
 export const SubAgentView = z.object({
   label: z.string(), // the dispatch's `description` (e.g. "Investigate nubjs/nub GitHub issue 376")
   startedAt: z.string(), // ISO8601 of the dispatch record
-  state: z.enum(["running", "stale"]),
+  // running — appending to its transcript now. stale — tracked, but quiet past the staleness ceiling.
+  // rested — its RUN ended (the harness notified `completed`/`failed`) while its own fan-out kept
+  // running. Not a phantom and not a lie: `completed` does not mean finished — the same notification
+  // says outright that a stopped agent can be resumed and may notify again — and a child that rests
+  // holding live grandchildren used to take the entire branch off the board with it. See anchorRoots in
+  // tailer.ts. Only ever emitted for a DIRECT child that still has something running under it, so it
+  // clears itself when that work does. Every liveness reading keys on "running", so a rested row holds
+  // nothing back: it does not block a rest, hold the queue, or gate Mark-as-done.
+  state: z.enum(["running", "stale", "rested"]),
   // The worker-profile cell (model+effort) from the dispatch's `subagent_type`. It is NO LONGER drawn as
   // a tag on the child rows under the prompt box (maintainer 2026-07-27: the profile belongs to the
   // prompt box's own control one line up, not repeated on every child line); the transcript's dispatch

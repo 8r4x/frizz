@@ -133,7 +133,9 @@ export type TurnState = "in-flight" | "idle"
 export interface SubAgentView {
   label: string
   startedAt: string // ISO8601 of the dispatch record
-  state: "running" | "stale"
+  // "rested" = a DIRECT child whose run ended (the harness reported completed/failed) while the fan-out
+  // it dispatched is still running. See anchorRoots below for why `completed` is not "finished".
+  state: "running" | "stale" | "rested"
   subagentType?: string // the dispatch's input.subagent_type verbatim (e.g. "fray:fray-opus-high"); absent when unset
   id: string // the dispatch tool_use id — the drill-in drawer's stable handle to this exact child
   lastActivityAt?: string // ISO8601 of the child transcript's last append (its output-file mtime)
@@ -403,6 +405,10 @@ interface RetiredSubAgent {
   subagentType?: string
   outputFile?: string
   outputFormat?: "codex" // see SubAgentEntry.outputFormat
+  // ISO8601 of the DISPATCH, carried over from the live entry. A retired row is normally never rendered,
+  // but one holding a live fan-out is (see the RESTED anchor in descendantSubtrees), and that row needs
+  // the same honest "working for 12m" instant every other child row shows rather than a derived one.
+  startedAt?: string
   finishedAt?: string // ISO8601 of the completion notification
   status: "completed" | "failed" | "killed"
   // The RUNTIME task id (Claude's `agentId`) this child ran under — see SubAgentEntry.taskId. Retained
@@ -819,6 +825,7 @@ function retireToRing(state: TailState, entry: SubAgentEntry, finishedAt: string
     outputFile: entry.outputFile,
     outputFormat: entry.outputFormat,
     taskId: entry.taskId,
+    startedAt: entry.startedAt,
     finishedAt,
     status,
   })
@@ -2136,7 +2143,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   // A direct child's view object is deliberately left BYTE-IDENTICAL to what it was before nesting
   // existed: `depth` is emitted only from 2 down, and absent means 1 everywhere it is read.
   function subAgentViews(state: TailState, nowMs: number): SubAgentView[] {
-    if (state.subAgents.size === 0) return []
+    if (state.subAgents.size === 0 && state.retiredSubAgents.size === 0) return []
     const subtrees = descendantSubtrees(state, nowMs)
     const out: SubAgentView[] = []
     for (const e of state.subAgents.values()) {
@@ -2161,6 +2168,31 @@ export function createTailer(deps: TailerDeps): Tailer {
       })
       const subtree = subtrees.get(e.toolUseId)
       if (subtree) out.push(...subtree)
+    }
+    // The RESTED roots (see anchorRoots): a child whose run ended while its own fan-out kept running.
+    // Only the ones that actually produced a subtree — a retired child with nothing live under it is
+    // finished work and belongs in the ring, off every live surface, exactly as before.
+    //
+    // Appended AFTER the live rows rather than interleaved by instant: the live map's insertion order IS
+    // dispatch order and a good deal of the board's copy leans on it, while the ring is ordered by
+    // retirement. Two honest orders beat one invented one, and the rested rows are the smaller set.
+    for (const dead of state.retiredSubAgents.values()) {
+      const subtree = subtrees.get(dead.toolUseId)
+      if (!subtree || subtree.length === 0) continue
+      const lastActivityAt = dead.outputFile ? mtimeMs(dead.outputFile) : undefined
+      out.push({
+        label: dead.label,
+        // Its real dispatch instant, so the row's duration keeps reading "how long this branch has been
+        // going". `finishedAt` is the fallback for a row retired before this field existed (the durable
+        // tail cache can hold those across an upgrade); the oldest live grandchild's spawn is the last
+        // resort. Every one of the three is a measured instant — never a fabricated one.
+        startedAt: dead.startedAt ?? dead.finishedAt ?? subtree[0].startedAt,
+        state: "rested",
+        subagentType: dead.subagentType,
+        id: dead.toolUseId,
+        ...(lastActivityAt === undefined ? {} : { lastActivityAt: new Date(lastActivityAt).toISOString() }),
+      })
+      out.push(...subtree)
     }
     return out
   }
@@ -2220,7 +2252,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   // depth is a new FILE in that flat dir, which is exactly what moves the dir's mtime. A sidecar is
   // written once at spawn and not rewritten, so mtime is a complete invalidation signal here.
   const descendantIndex = new Map<string, { at: number | undefined; all: DescendantSidecar[]; byToolUse: Map<string, DescendantSidecar> }>()
-  const subtreeMemo = new Map<string, { at: number | undefined; second: number; live: number; value: Map<string, SubAgentView[]> }>()
+  const subtreeMemo = new Map<string, { at: number | undefined; second: number; live: number; retired: number; value: Map<string, SubAgentView[]> }>()
 
   function sessionDirOf(state: TailState): string {
     return state.path.replace(/\.jsonl$/, "")
@@ -2265,6 +2297,47 @@ export function createTailer(deps: TailerDeps): Tailer {
   // fan-out is 2-3 levels; anything past this is a broken sidecar, not a real orchestration.
   const DESCENDANT_DEPTH_MAX = 16
 
+  // ---- RESTED roots: a child whose run ENDED while its own fan-out kept running -------------------
+  //
+  // `status: completed` does NOT mean a sub-agent is finished. The harness says so itself, in the very
+  // notification that carries it (real bytes, nub session 5258ebe4, 2026-07-29):
+  //
+  //   <status>completed</status>
+  //   <summary>Agent "Sweep corpus for system-library grants" finished</summary>
+  //   <note>A task-notification fires each time this agent stops with no live background children of its
+  //   own. The user can send it another message and resume it, so the same task-id may notify more than
+  //   once.</note>
+  //   <result>I've launched five parallel sweep agents … plus a Monitor … I'll continue once that
+  //   notification lands.</result>
+  //
+  // That child had RESTED holding five live grandchildren, and its own transcript kept appending two
+  // minutes later. fray retired it on the notification (correctly — that is the only terminal signal it
+  // gets) and the whole branch went dark: the root's row left every surface, and `rootedInAnchor` then
+  // dropped its five RUNNING grandchildren too, because a descendant may only hang off a root the thread
+  // still tracks. Six rows of live fan-out, invisible under the prompt box — for 107 s in that session,
+  // and only because the coordinator happened to re-steer the child (trackResumes revives on the restart
+  // ack); with no re-steer the branch stays invisible for as long as it runs. That is the bug this exists
+  // to close, reported by the maintainer as "it totally disappeared from the UI".
+  //
+  // So a retired child STILL ANCHORS its subtree, and is surfaced as `rested` for exactly as long as
+  // something under it is running. It self-retires on the same terms every descendant row does — when
+  // the last live grandchild goes quiet, `shown` empties, the anchor produces no subtree, and the row
+  // goes away. Nothing can dangle.
+  //
+  // `killed` is deliberately excluded. That status means the OPERATOR dismissed the row (the × says
+  // "stop tracking this finished operation"), a `TaskStop` ended it, or the owning process died and a
+  // new session swept it — each an explicit "this branch is over", which fray must honour over any
+  // mtime under it. Only the ambiguous terminals (`completed`/`failed`, the ones a resumable rest also
+  // emits) keep anchoring.
+  //
+  // Ordered: live children in dispatch order first, then rested ones in retirement order.
+  function anchorRoots(state: TailState): Set<string> {
+    const out = new Set<string>()
+    for (const entry of state.subAgents.values()) if (entry.kind === "agent") out.add(entry.toolUseId)
+    for (const dead of state.retiredSubAgents.values()) if (dead.status !== "killed") out.add(dead.toolUseId)
+    return out
+  }
+
   // ---- the surfaced view of DESCENDANTS ----------------------------------------------------------
   //
   // `subAgents` used to be direct children only, so a worker that fanned out THROUGH a sub-agent showed
@@ -2280,22 +2353,24 @@ export function createTailer(deps: TailerDeps): Tailer {
   //
   // Returns subtrees keyed by the DIRECT child they hang off, each already in depth-first order, so the
   // caller can splice each one in directly behind its parent's row and get a tree by reading top down.
+  // A key may name a RETIRED direct child — see anchorRoots.
   function descendantSubtrees(state: TailState, nowMs: number): Map<string, SubAgentView[]> {
     const empty = new Map<string, SubAgentView[]>()
     // Nothing tracked ⇒ nothing a descendant could hang off. This is the common case for most threads,
-    // and returning here keeps the sidecar dir off the tick's disk path entirely.
-    if (state.subAgents.size === 0) return empty
+    // and returning here keeps the sidecar dir off the tick's disk path entirely. A RETIRED child counts
+    // as tracked here (it can still anchor a live branch), which is why the ring is consulted too.
+    if (state.subAgents.size === 0 && state.retiredSubAgents.size === 0) return empty
     const all = descendantSidecars(state)
     if (all.length === 0) return empty
 
     // Every reading below costs a stat per descendant, and this runs from BOTH the projection and the
-    // change signature on the same tick. Memo per (sidecar-dir mtime, live-child count, second) so those
-    // calls collapse into one pass — a one-second grain is far finer than the staleness window it feeds,
-    // so no running→gone transition is held back by it.
+    // change signature on the same tick. Memo per (sidecar-dir mtime, tracked-child counts, second) so
+    // those calls collapse into one pass — a one-second grain is far finer than the staleness window it
+    // feeds, so no running→gone transition is held back by it.
     const second = Math.floor(nowMs / 1000)
     const dirAt = descendantIndex.get(state.slug)?.at
     const memo = subtreeMemo.get(state.slug)
-    if (memo && memo.at === dirAt && memo.second === second && memo.live === state.subAgents.size) return memo.value
+    if (memo && memo.at === dirAt && memo.second === second && memo.live === state.subAgents.size && memo.retired === state.retiredSubAgents.size) return memo.value
 
     const byAgentId = new Map<string, DescendantSidecar>()
     for (const meta of all) byAgentId.set(meta.agentId, meta)
@@ -2309,12 +2384,13 @@ export function createTailer(deps: TailerDeps): Tailer {
       return value
     }
 
-    // Walk to the depth-1 ancestor and check this thread is still tracking it. A branch whose root
-    // child has been retired is over, whatever its sidecars' mtimes say.
-    const rootedInLiveChild = (meta: DescendantSidecar): boolean => {
+    const anchors = anchorRoots(state)
+
+    // Walk to the depth-1 ancestor and check this thread is still tracking it, live or RESTED.
+    const rootedInAnchor = (meta: DescendantSidecar): boolean => {
       let cur = meta
       for (let hops = 0; hops <= all.length; hops++) {
-        if (!cur.parentAgentId) return Boolean(cur.toolUseId && state.subAgents.has(cur.toolUseId))
+        if (!cur.parentAgentId) return Boolean(cur.toolUseId && anchors.has(cur.toolUseId))
         const next = byAgentId.get(cur.parentAgentId)
         if (!next) return false
         cur = next
@@ -2325,7 +2401,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     const shown = new Set<string>()
     for (const meta of all) {
       if ((meta.spawnDepth ?? 1) < 2 || !meta.toolUseId) continue
-      if (stateOf(meta) !== "running" || !rootedInLiveChild(meta)) continue
+      if (stateOf(meta) !== "running" || !rootedInAnchor(meta)) continue
       // Mark it and every descendant ancestor above it (the depth-1 root already has its own row).
       let cur: DescendantSidecar | undefined = meta
       for (let hops = 0; cur && (cur.spawnDepth ?? 1) >= 2 && hops <= all.length; hops++) {
@@ -2334,7 +2410,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       }
     }
     const remember = (value: Map<string, SubAgentView[]>): Map<string, SubAgentView[]> => {
-      subtreeMemo.set(state.slug, { at: dirAt, second, live: state.subAgents.size, value })
+      subtreeMemo.set(state.slug, { at: dirAt, second, live: state.subAgents.size, retired: state.retiredSubAgents.size, value })
       return value
     }
     if (shown.size === 0) return remember(empty)
@@ -2354,8 +2430,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     for (const list of kids.values()) list.sort((a, b) => (a.spawnedAtMs ?? 0) - (b.spawnedAtMs ?? 0))
 
     const subtrees = new Map<string, SubAgentView[]>()
-    for (const entry of state.subAgents.values()) {
-      if (entry.kind !== "agent") continue
+    for (const rootId of anchors) {
       const out: SubAgentView[] = []
       const walk = (parentId: string, depth: number): void => {
         if (depth > DESCENDANT_DEPTH_MAX) return
@@ -2378,8 +2453,8 @@ export function createTailer(deps: TailerDeps): Tailer {
           walk(id, depth + 1)
         }
       }
-      walk(entry.toolUseId, 2)
-      if (out.length > 0) subtrees.set(entry.toolUseId, out)
+      walk(rootId, 2)
+      if (out.length > 0) subtrees.set(rootId, out)
     }
     return remember(subtrees)
   }
@@ -2433,8 +2508,21 @@ export function createTailer(deps: TailerDeps): Tailer {
     const state = states.get(slug)
     if (!state || !registeredStateIsCurrent(state)) return false
     const entry = state.subAgents.get(id)
-    if (!entry) return false
-    retireLive(state, entry, new Date(now()).toISOString(), "killed")
+    if (entry) {
+      retireLive(state, entry, new Date(now()).toISOString(), "killed")
+      deps.onChange()
+      return true
+    }
+    // A RESTED root (see anchorRoots): already retired, but still surfaced because live descendants hang
+    // off it. The × on that row means the same thing it means anywhere else — stop showing me this — so
+    // re-stamp it `killed`, the one status that stops anchoring. The row keeps its place in the ring, so
+    // its drawer still resolves; the branch leaves every live surface on the next frame.
+    const dead = state.retiredSubAgents.get(id)
+    if (!dead || dead.status === "killed") return false
+    dead.status = "killed"
+    // The subtree memo keys on the sidecar dir's mtime and the two map SIZES, none of which this touches,
+    // so drop it explicitly — otherwise the click's own board frame would still carry the branch.
+    subtreeMemo.delete(slug)
     deps.onChange()
     return true
   }

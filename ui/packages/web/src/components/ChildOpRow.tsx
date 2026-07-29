@@ -11,6 +11,8 @@ import {
   CHILD_DISMISS_TITLE,
   CHILD_OPEN_TITLE,
   CHILD_QUIET_SHELL_TITLE,
+  CHILD_RESTED_DOT_CLASS,
+  CHILD_RESTED_TITLE,
   CHILD_STALE_DOT_CLASS,
   CHILD_STALE_TITLE,
 } from "../lib/childOps.ts"
@@ -60,7 +62,10 @@ export function ChildOpRow({
 }: {
   kind: ChildOpKind
   label: string
-  state: "running" | "stale"
+  // "rested" is a sub-AGENT only reading: its own run ended while the fan-out it dispatched kept going
+  // (see CHILD_RESTED_TITLE). It draws a hollow dot in place of the live/stale one and nothing else on
+  // the row changes — the live children still pulse, indented one step beneath it.
+  state: "running" | "stale" | "rested"
   density: ChildOpDensity
   // How far down the dispatch tree this row sits: 1 (or absent) = a child the THREAD dispatched, 2 = a
   // child of that child, and so on. Each level past the first steps the row right by one indent, so a
@@ -103,9 +108,12 @@ export function ChildOpRow({
 
   // The liveness mark. The rail speaks the rail's checkbox language; the card and the drawer share the
   // pulsing-dot language, in a fixed-width column so their labels line up across both surfaces.
+  const quiet = state === "rested"
+    ? <span className={CHILD_RESTED_DOT_CLASS} title={CHILD_RESTED_TITLE} />
+    : <span className={CHILD_STALE_DOT_CLASS} title={CHILD_STALE_TITLE} />
   const indicator = rail ? (
     <span className="flex w-3.5 shrink-0 items-center justify-center">
-      {running ? <BoxSpinner size={12} /> : <span className={CHILD_STALE_DOT_CLASS} title={CHILD_STALE_TITLE} />}
+      {running ? <BoxSpinner size={12} /> : quiet}
     </span>
   ) : (
     <span className="flex w-[9px] shrink-0 justify-center">
@@ -119,7 +127,7 @@ export function ChildOpRow({
       ) : kind === "SHELL" ? (
         <span aria-hidden className="fray-live-dot-quiet fray-live-dot-quiet--shell" data-running-indicator="operation-quiet" title={CHILD_QUIET_SHELL_TITLE} />
       ) : (
-        <span className={CHILD_STALE_DOT_CLASS} title={CHILD_STALE_TITLE} />
+        quiet
       )}
     </span>
   )
