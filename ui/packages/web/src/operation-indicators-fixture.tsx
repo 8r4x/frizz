@@ -9,8 +9,10 @@ import { ToolDisclosureHeader } from "./components/ToolDisclosureHeader.ts"
 import { store } from "./store.ts"
 import "./styles.css"
 
-// The last-active reading is relative to NOW, so seed it that way rather than with a frozen date — a
-// child that last wrote 6 min ago should read "6 min ago" whenever the fixture is opened.
+// Both the last-active reading AND the RUNTIME (`startedAt`, on every child row and on the dispatch
+// card) are relative to NOW, so seed them that way rather than with a frozen date — a child dispatched
+// 12 min ago should read "12m" whenever the fixture is opened. A hard-coded 2026-07-14 read "372hr 53m"
+// the moment the dispatch card started rendering a runtime, which is nobody's real reading.
 const agoIso = (minutes: number): string => new Date(Date.now() - minutes * 60_000).toISOString()
 
 const thread: ThreadView = {
@@ -39,12 +41,15 @@ const thread: ThreadView = {
   // regress — a child reporting NOTHING (a tmux or codex dispatch), which has to read exactly as the
   // row did before those fields existed rather than leaving a gap where the step would go.
   subAgents: [
-    { id: "agent-a", label: "Inspect logs", startedAt: "2026-07-14T10:00:00.000Z", state: "running", subagentType: "fray:opus-xhigh", lastActivityAt: agoIso(0), activity: "Bash", activityDetail: "Running sleep for 20 seconds", toolUses: 12, tokens: 13_476 },
-    { id: "agent-b", label: "Run regression suite", startedAt: "2026-07-14T10:01:00.000Z", state: "running", subagentType: "worker gpt-5.6-terra/high", lastActivityAt: agoIso(6), activity: "Edit", activityDetail: "Editing packages/server/src/tailer.ts", toolUses: 1, tokens: 947 },
-    { id: "agent-long", label: "Sweep every call site of the renamed board projection helper for stale imports", startedAt: "2026-07-14T10:02:00.000Z", state: "running", subagentType: "fray:sonnet-medium", lastActivityAt: agoIso(2), activity: "Grep", activityDetail: "Searching for every remaining reference to the old projection helper name across the workspace", toolUses: 148, tokens: 132_000 },
+    { id: "agent-a", label: "Inspect logs", startedAt: agoIso(4), state: "running", subagentType: "fray:opus-xhigh", lastActivityAt: agoIso(0), activity: "Bash", activityDetail: "Running sleep for 20 seconds", toolUses: 12, tokens: 13_476 },
+    { id: "agent-b", label: "Run regression suite", startedAt: agoIso(12), state: "running", subagentType: "worker gpt-5.6-terra/high", lastActivityAt: agoIso(6), activity: "Edit", activityDetail: "Editing packages/server/src/tailer.ts", toolUses: 1, tokens: 947 },
+    { id: "agent-long", label: "Sweep every call site of the renamed board projection helper for stale imports", startedAt: agoIso(78), state: "running", subagentType: "fray:sonnet-medium", lastActivityAt: agoIso(2), activity: "Grep", activityDetail: "Searching for every remaining reference to the old projection helper name across the workspace", toolUses: 148, tokens: 132_000 },
     // No task stream at all (a tmux thread / a codex child): identity only, and no empty slot.
-    { id: "agent-plain", label: "Explore the resume path", startedAt: "2026-07-14T10:03:00.000Z", state: "running", subagentType: "general-purpose", lastActivityAt: agoIso(3) },
-    { id: "agent-stale", label: "Prior investigation", startedAt: "2026-07-14T09:00:00.000Z", state: "stale", subagentType: "fray:haiku", lastActivityAt: agoIso(42), activityDetail: "Reading the orphan reaper", toolUses: 3, tokens: 2_400_000 },
+    { id: "agent-plain", label: "Explore the resume path", startedAt: agoIso(0.6), state: "running", subagentType: "general-purpose", lastActivityAt: agoIso(3) },
+    { id: "agent-stale", label: "Prior investigation", startedAt: agoIso(51), state: "stale", subagentType: "fray:haiku", lastActivityAt: agoIso(42), activityDetail: "Reading the orphan reaper", toolUses: 3, tokens: 2_400_000 },
+    // RESTED: its own run ended while the fan-out it launched kept going — the hollow dot, on every
+    // density and on the dispatch card that opens it.
+    { id: "agent-rested", label: "Fan out the migration sweep", startedAt: agoIso(23), state: "rested", subagentType: "fray:opus-high", lastActivityAt: agoIso(18) },
   ],
   bgShells: [
     { label: "Watch CI", startedAt: "2026-07-14T10:00:00.000Z", state: "running", lastActivityAt: agoIso(1) },
@@ -118,20 +123,28 @@ createRoot(document.getElementById("root")!).render(
         <div className="flex items-center justify-between gap-3"><span>Cancelled command</span><ToolStatusMeta status="cancelled" /></div>
       </div>
     </section>
-    {/* Agent rows carry TWO independent status sources — their own stateLabel (with its dot) and the
-        shared meta slot — so they are the one card family that can render a DOUBLE indicator. Each row
-        below must show exactly one `data-running-indicator`, and the no-child rows must still surface
-        their terminal status/duration through the meta slot. */}
+    {/* Agent rows carry TWO independent status sources — their own state reading (with its mark) and
+        the shared meta slot — so they are the one card family that can render a DOUBLE indicator. Each
+        row below must show exactly one `data-running-indicator`, and the no-child rows must still
+        surface their terminal status/duration through the meta slot.
+        These rows are also the coverage for the 2026-07-29 header shape: mark → "Agent" → title →
+        right-justified RUNTIME → chevron, mirroring the prompt-box child lines two sections up. Read
+        the two sections together — the marks and the runtime readings must agree. */}
     <section data-agent-rows className="rounded-lg border border-border bg-panel p-4">
       <h2 className="text-sm font-medium">Agent rows</h2>
       <div className="mt-3 flex flex-col gap-2">
         <ThreadSlugContext.Provider value={thread.id}>
-          {/* Live child, running: the reported bug — "running Nm ●" plus a second "● RUNNING" badge. */}
+          {/* Live child, running: pulsing mark, bare live-ticking runtime, no state verb. */}
           <AgentBlock detail="Measure private repo placeholder prevalence" prompt="Measure how many repos use the placeholder." subagentType="fray:opus-high" agentId="agent-a" status="pending" />
-          {/* Live child gone quiet: reads "stale", and must NOT be contradicted by a "running" badge. */}
+          {/* Live child gone quiet: the flat stale mark, and no "running" badge to contradict it. */}
           <AgentBlock detail="Prior investigation" prompt="Investigate the earlier failure." subagentType="fray:sonnet-high" agentId="agent-stale" status="pending" />
-          {/* Completed child: agentStatus supplies "finished 3m"; the meta slot stays empty. */}
+          {/* Rested child: the hollow mark — it stopped, its own fan-out has not. */}
+          <AgentBlock detail="Fan out the migration sweep" prompt="Fan out the sweep across every package." subagentType="fray:opus-high" agentId="agent-rested" status="pending" />
+          {/* Completed child: an empty mark slot and the bare runtime — "finished" is what the empty
+              slot already says. */}
           <AgentBlock detail="Diagnose remotion model routing anomaly" prompt="Diagnose the routing anomaly." subagentType="fray:opus-high" agentId="agent-done" agentStatus="completed" agentElapsedMs={183_000} status="completed" durationMs={183_000} />
+          {/* A NON-nominal outcome keeps its verb, in the failure tone: no mark can say "killed". */}
+          <AgentBlock detail="Interrupted long-running audit" prompt="Audit every call site." subagentType="fray:sonnet-medium" agentId="agent-killed" agentStatus="killed" agentElapsedMs={2_460_000} status="completed" durationMs={2_460_000} />
           {/* No child record at all — the meta slot is the ONLY status surface, so a terminal status
               and its duration must still render here (this is what the suppression must never eat). */}
           <AgentBlock detail="Cancelled dispatch (no child record)" prompt="This dispatch was interrupted." status="cancelled" />
