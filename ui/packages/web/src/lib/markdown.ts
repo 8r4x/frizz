@@ -1,5 +1,5 @@
 import { Marked } from "marked"
-import type { Tokens } from "marked"
+import type { Token, Tokens, TokenizerAndRendererExtension } from "marked"
 import { renderHighlightedCode } from "./syntaxHighlight.ts"
 import { localImageUrlForTarget, localMarkdownTarget } from "./markdownTargets.ts"
 
@@ -21,10 +21,102 @@ const strikethroughTokenizer = {
   },
 }
 
+// GFM only sees a table if a DELIMITER row (`|---|---|`) follows the first line. Agents constantly
+// write the shape without one — a label/value breakdown where every line opens and closes with `|`
+// and there is no header to spell — and marked handed the whole run to the paragraph tokenizer, so
+// the reader got literal pipe soup instead of a table. Nothing about that block is ambiguous, so
+// tokenize it: consecutive lines that all open AND close with `|` are a table the author simply
+// didn't spell in full. Every row becomes a BODY row — promoting the first line to a header would
+// relabel data as a heading, and a headerless block has no header by construction.
+type HeaderlessCell = { tokens: Token[] }
+type HeaderlessTableToken = { type: "headerlessTable"; raw: string; rows: HeaderlessCell[][] }
+
+const DELIMITER_CELL = /^:?-+:?$/
+const ROW_INDENT = /^ {0,3}$/
+const ROW_TRAILING = /^[ \t]*$/
+
+// The cells of one `| a | b |` line, or null if the line isn't that shape. Splitting drives the
+// check rather than a regex so an ESCAPED pipe can't be mistaken for a delimiter: `\|` is consumed
+// as one unit here and stays escaped in the cell text, where the inline lexer turns it into the
+// literal the author meant. A row therefore needs both outer pipes intact (nothing but indent
+// before the first, nothing but blanks after the last) and at least two cells — a one-column run of
+// `| x |` lines is far likelier to be prose or ASCII art than a table.
+function pipeRowCells(line: string): string[] | null {
+  const segments: string[] = []
+  let cell = ""
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (ch === "\\" && i + 1 < line.length) {
+      cell += ch + line[i + 1]
+      i++
+    } else if (ch === "|") {
+      segments.push(cell)
+      cell = ""
+    } else {
+      cell += ch
+    }
+  }
+  segments.push(cell)
+  // [before the first pipe, ...cells, after the last pipe] — so two cells means four segments.
+  if (segments.length < 4) return null
+  if (!ROW_INDENT.test(segments[0]) || !ROW_TRAILING.test(segments.at(-1)!)) return null
+  return segments.slice(1, -1).map((text) => text.trim())
+}
+
+// The leading run of pipe rows in `src`, or null if there isn't one worth tokenizing.
+function matchHeaderlessTable(src: string): { raw: string; rows: string[][] } | null {
+  const rows: string[][] = []
+  let consumed = 0
+  for (const line of src.split("\n")) {
+    const cells = pipeRowCells(line)
+    if (!cells) break
+    // A delimiter row means this IS a GFM table (or an attempt at one): hands off, marked's own
+    // table tokenizer owns it and carries the column alignment we'd throw away.
+    if (cells.every((text) => DELIMITER_CELL.test(text))) return null
+    rows.push(cells)
+    consumed += line.length + 1
+  }
+  if (rows.length < 2) return null
+  return { raw: src.slice(0, Math.min(consumed, src.length)), rows }
+}
+
+const headerlessTableExtension: TokenizerAndRendererExtension = {
+  name: "headerlessTable",
+  level: "block",
+  // Lets the run end a paragraph it directly follows (no blank line between), the way a real GFM
+  // table can. Validating the whole run before reporting an index matters: returning the offset of
+  // any old pipe would chop ordinary prose into two paragraphs.
+  start(src: string) {
+    let offset = 0
+    for (const line of src.split("\n")) {
+      if (line.includes("|") && matchHeaderlessTable(src.slice(offset))) return offset
+      offset += line.length + 1
+    }
+    return undefined
+  },
+  tokenizer(this: { lexer: { inline: (src: string) => Token[] } }, src: string) {
+    const match = matchHeaderlessTable(src)
+    if (!match) return undefined
+    // Ragged rows are padded rather than rejected: a table missing one cell still reads as a table,
+    // and falling back would put the whole block back on the pipe-soup path.
+    const width = Math.max(...match.rows.map((row) => row.length))
+    const rows = match.rows.map((row) =>
+      Array.from({ length: width }, (_, i) => ({ tokens: this.lexer.inline(row[i] ?? "") })))
+    return { type: "headerlessTable", raw: match.raw, rows } satisfies HeaderlessTableToken
+  },
+  renderer(this: { parser: { parseInline: (tokens: Token[]) => string } }, token) {
+    const body = (token as HeaderlessTableToken).rows
+      .map((row) => `<tr>${row.map((cell) => `<td>${this.parser.parseInline(cell.tokens)}</td>`).join("")}</tr>`)
+      .join("\n")
+    return `<table>\n<tbody>${body}</tbody></table>\n`
+  },
+}
+
 // Exported so markdown.test.ts can drive the EXACT configuration the app renders with: mdToHtml
 // itself can't run under `node --test` (the sanitizer needs a DOM), but everything here is pure.
 export const MARKDOWN_OPTIONS = {
   breaks: true,
+  extensions: [headerlessTableExtension],
   tokenizer: strikethroughTokenizer,
   renderer: {
     code: ({ text, lang }: Tokens.Code) => renderHighlightedCode(text, lang),

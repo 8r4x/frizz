@@ -55,6 +55,60 @@ test("strikethrough: non-strikethrough tilde shapes are unchanged", () => {
   assert.equal(render("~~ leading space ~~"), "~~ leading space ~~")
 })
 
+// The bug: GFM only recognises a table when a delimiter row (`|---|---|`) follows the first line, so
+// the headerless label/value breakdowns agents write constantly fell through to the paragraph
+// tokenizer and rendered as literal pipe soup.
+const HEADERLESS = [
+  "| packages doing observable work (the real denominator) | **186** |",
+  "| identical delta under the jail | **161** |",
+  "| genuine BREAK | **10 (5.4%)** |",
+].join("\n")
+
+test("a headerless pipe block renders as a table, with every row a body row", () => {
+  const html = renderBlock(HEADERLESS)
+  assert.match(html, /^<table>/)
+  assert.doesNotMatch(html, /<thead>|<th[ >]/, "there is no header to promote — the first line is data")
+  assert.match(html, /<tr><td>packages doing observable work \(the real denominator\)<\/td><td><strong>186<\/strong><\/td><\/tr>/)
+  assert.match(html, /<tr><td>genuine BREAK<\/td><td><strong>10 \(5\.4%\)<\/strong><\/td><\/tr>/)
+  assert.doesNotMatch(html, /\|/, "no pipe should survive as literal text")
+})
+
+test("the headerless run ends the paragraph it follows, with or without a blank line", () => {
+  for (const md of [`Breakdown:\n${HEADERLESS}`, `Breakdown:\n\n${HEADERLESS}`]) {
+    const html = renderBlock(md)
+    assert.match(html, /^<p>Breakdown:<\/p>\n<table>/)
+    assert.doesNotMatch(html, /<p>[^<]*\|/)
+  }
+})
+
+test("a real GFM table keeps its header and column alignment", () => {
+  const html = renderBlock("| a | b |\n| :-- | --: |\n| 1 | 2 |")
+  assert.match(html, /<thead>[\s\S]*<th align="left">a<\/th>\n<th align="right">b<\/th>/)
+  assert.match(html, /<td align="left">1<\/td>\n<td align="right">2<\/td>/)
+})
+
+test("shapes that are not obviously a table stay prose", () => {
+  // One row is as likely a sentence as a table; a single column is likelier ASCII art than data.
+  assert.match(renderBlock("| just one line | 3 |"), /^<p>/)
+  assert.match(renderBlock("| alpha |\n| beta |"), /^<p>/)
+  // The closing pipe is escaped, so the row never closes.
+  assert.match(renderBlock("| a | b \\|\n| c | d \\|"), /^<p>/)
+  // Four-space indent is an indented code block, not a table.
+  assert.match(renderBlock("    | a | b |\n    | c | d |"), /^<pre>/)
+})
+
+test("pipe rows inside a fence stay code", () => {
+  const html = renderBlock("```\n| a | b |\n| c | d |\n```")
+  assert.match(html, /^<pre>/)
+  assert.doesNotMatch(html, /<table>/)
+})
+
+test("a headerless table escapes pipes and pads ragged rows", () => {
+  const html = renderBlock("| a \\| b | c |\n| d | e | f |")
+  assert.match(html, /<tr><td>a \| b<\/td><td>c<\/td><td><\/td><\/tr>/)
+  assert.match(html, /<tr><td>d<\/td><td>e<\/td><td>f<\/td><\/tr>/)
+})
+
 // stripFrontmatter underpins the thread header's "Fray document" gate (ChatView.ThreadHeader): the
 // button shows iff `stripFrontmatter(threadBody).trim()` is non-empty. These lock the two invariants
 // that gate relies on — a missing/frontmatter-only doc must reduce to empty (button HIDDEN, no
