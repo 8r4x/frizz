@@ -29,6 +29,7 @@ import {
   previousUserBoundary,
   resolveVisibleStart,
   restoreTranscriptViewportAnchor,
+  transcriptAnchorCorrection,
   type TranscriptViewportAnchor,
 } from "../lib/transcriptPagination.ts"
 import type { TranscriptData } from "../hooks.ts"
@@ -663,7 +664,10 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // 800px where a fixed nav bar sits — is added by the band's own responsive class.)
   const headerRef = useRef<HTMLDivElement>(null)
   const [headerH, setHeaderH] = useState(0)
-  const pendingViewportAnchor = useRef<{ anchor: TranscriptViewportAnchor; targetStartId: string } | null>(null)
+  // `reserved` marks that this anchor already spent its ONE bottom-reserve growth (see the layout effect):
+  // the reserve adds exactly the pixels the correction was short, so a second ask means it is not
+  // converging — retrying instead of abandoning is what let a scroll-locked document loop forever.
+  const pendingViewportAnchor = useRef<{ anchor: TranscriptViewportAnchor; targetStartId: string; reserved?: boolean } | null>(null)
   // True while THIS card holds one suspension of the shared native-anchoring owner (see
   // suspendNativeAnchoring at module top) for its load-earlier viewport-anchor dance.
   const anchoringHeld = useRef(false)
@@ -792,12 +796,21 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
       return remaining
     }
     const remaining = correct()
-    const maxScrollY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight)
-    if (remaining > 0.5 && window.scrollY >= maxScrollY - 1) {
+    // "reserve" RE-ARMS THIS EFFECT (bottomScrollReserve is a dependency), so the decision is factored
+    // out and unit-tested in transcriptPagination.ts — a geometry it can never stop reserving on is an
+    // infinite render loop, which is exactly what a scroll-locked document used to produce here.
+    const decision = transcriptAnchorCorrection({
+      remaining,
+      scrollY: window.scrollY,
+      maxScrollY: Math.max(0, document.documentElement.scrollHeight - window.innerHeight),
+      alreadyReserved: pending.reserved === true,
+    })
+    if (decision === "reserve") {
       // A short queue is vertically centered by `my-auto`; once prepended history makes it taller than
       // the viewport those auto margins collapse. At the document's new maximum scroll position there
       // may therefore be no physical space left to keep the old message at its original screen Y. Keep
       // an equivalent external reserve below this card, then the next layout pass can restore exactly.
+      pending.reserved = true
       setBottomScrollReserve((current) => current + Math.ceil(remaining))
       return
     }
