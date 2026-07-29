@@ -1058,6 +1058,79 @@ test("tailer: a dead pane clears its background shells — a shell cannot outliv
   assert.ok(h.changes.n > before, "the shell vanishing marks the board dirty")
 })
 
+// A HEADLESS row (broker claude / app-server codex) has NO tmux pane, so the pane probe can only ever
+// answer "dead" for it — and the prime path asked anyway, latching paneDead=true at first sighting while
+// the steady tick (guarded by !isHeadlessRow) never revisited it. Every broker thread therefore reported
+// bgShells:[] for the life of the process, however many shells the fold was tracking. Measured on the
+// real board 2026-07-29: 174 threads, 13 holding live shell entries, ZERO rendering one — the sole
+// paneDead=false row was a legacy tmux thread. The pane probe must not be consulted at all here.
+test("tailer: a BROKER (headless) thread reports its live background shells — the pane probe is never asked", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  h.storage.setBackend("t", "claude")
+  h.storage.setClaudeRuntime("t", "broker")
+  const shellLine = JSON.stringify(bashBg("toolu_sh", "Watch CI on PR 604", "node scripts/ci-watch.ts --pr 604"))
+  const ackLine = JSON.stringify(resultText("toolu_sh", "Command running in background with ID: b63. Output is being written to: /tmp/tasks/b63.output. You will be notified when it completes."))
+  fixture(h.logDir, "sid", [IN_FLIGHT, shellLine, ackLine])
+  const shellMtime = Date.parse("2026-07-01T00:00:02.000Z")
+  const deadCalls: string[] = []
+  const t = createTailer({
+    project: { cwdSlug: "x" } as Project,
+    storage: h.storage,
+    bus: h.bus,
+    onChange: () => h.changes.n++,
+    now: () => h.clock.ms,
+    // The real tmux probe's answer for a slug with no pane, which is EVERY headless row: dead.
+    paneDead: (slug) => { deadCalls.push(slug); return true },
+    capturePane: () => h.pane.text,
+    sessionLogDir: h.logDir,
+    mtimeMs: () => shellMtime,
+  })
+
+  h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
+  t.tick() // prime — the tick that used to latch paneDead=true
+  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Watch CI on PR 604", startedAt: "2026-07-01T00:00:01.000Z", state: "running", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
+  t.tick() // and the steady tick keeps it, rather than latching on a stale prime reading
+  assert.equal(t.get("t")?.bgShells.length, 1, "the shell survives the steady tick")
+  assert.deepEqual(deadCalls, [], "a paneless row is never sniffed for pane death")
+  // The drill-in drawer reads the same fact and must agree — it reported "done" for a live shell.
+  assert.equal(t.backgroundShell?.("t", "toolu_sh")?.state, "running")
+})
+
+// The other half of the same contract: a headless thread has no pane to die, so its shells clear on the
+// registry's exit stamp instead — and on the TICK, not only at prime, or the reading latches forever.
+test("tailer: stopping a BROKER thread clears its live background shells (the headless pane-death)", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  h.storage.setBackend("t", "claude")
+  h.storage.setClaudeRuntime("t", "broker")
+  const shellLine = JSON.stringify(bashBg("toolu_sh", "Watch CI on PR 604", "node scripts/ci-watch.ts --pr 604"))
+  const ackLine = JSON.stringify(resultText("toolu_sh", "Command running in background with ID: b63. Output is being written to: /tmp/tasks/b63.output. You will be notified when it completes."))
+  fixture(h.logDir, "sid", [IN_FLIGHT, shellLine, ackLine])
+  const shellMtime = Date.parse("2026-07-01T00:00:02.000Z")
+  const t = createTailer({
+    project: { cwdSlug: "x" } as Project,
+    storage: h.storage,
+    bus: h.bus,
+    onChange: () => h.changes.n++,
+    now: () => h.clock.ms,
+    paneDead: () => false,
+    capturePane: () => h.pane.text,
+    sessionLogDir: h.logDir,
+    mtimeMs: () => shellMtime,
+  })
+
+  h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
+  t.tick()
+  assert.equal(t.get("t")?.bgShells.length, 1, "live before the session is stopped")
+
+  h.storage.setExited("t", true) // fray stopped the broker session — its children went with it
+  const before = h.changes.n
+  t.tick()
+  assert.deepEqual(t.get("t")?.bgShells, [], "a stopped headless session owns no live background shells")
+  assert.ok(h.changes.n > before, "the shell vanishing marks the board dirty")
+})
+
 test("tailer: a manual TaskStop clears a live background shell from the board view (real read→fold→view)", () => {
   // End-to-end through createTailer (file → parseLine → applyRecord → bgShellViews), the pipeline that
   // produced the phantom pulsing row: a shell TaskStop'd instead of allowed to exit had NO terminal

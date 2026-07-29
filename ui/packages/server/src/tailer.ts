@@ -1976,7 +1976,18 @@ export function createTailer(deps: TailerDeps): Tailer {
     return binding
   }
 
+  // "Is the process that owns this session's children gone?" — pane death for a tmux row, and the
+  // registry's own exit stamp for a HEADLESS one (broker claude / app-server codex), which has no tmux
+  // pane by construction. Sniffing tmux for a headless row can only ever answer "dead", the exact trap
+  // deriveRuntime (board.ts) and reconcileSessions (context.ts) each refuse by name — and the tailer
+  // fell into it at PRIME, where this was called unguarded while the steady tick below guards it with
+  // !isHeadlessRow. That latched paneDead=true on every broker thread at first sighting and never
+  // revisited it, so bgShellViews returned [] for all of them: a live CI watcher, correctly tracked by
+  // the fold, rendered nowhere (measured 2026-07-29 — 13 threads holding live shell entries, the only
+  // one with paneDead=false a legacy tmux row). `exited` is the honest headless equivalent: for those
+  // rows nothing sniffs tmux to set it, so it is stamped only when fray genuinely stops the session.
   function paneDeadForRow(row: SessionRow): boolean {
+    if (isHeadlessRow(row)) return row.exited === 1
     const binding = adoptionBinding(row)
     if (binding.kind === "unbound") return paneDead(row.slug)
     if (binding.kind === "conflict") return true
@@ -2156,11 +2167,15 @@ export function createTailer(deps: TailerDeps): Tailer {
 
   // Derive the surfaced view of a session's live background SHELLS (kind "shell"; DISPLAY-ONLY — the
   // "background running" chip on the launch record, nothing more). A background Bash/Monitor is a CHILD
-  // of the agent process inside this session's tmux pane — it cannot outlive it. So a dead pane (the
-  // agent exited/crashed WITHOUT emitting each shell's terminal <task-notification>) means every tracked
-  // shell died with it: report none rather than leaving them to read as live (the UI would otherwise
-  // show them "alive", quietly breathing, forever). The normal path — a shell exiting while the agent
-  // lives — still clears via its terminal notification.
+  // of the agent process running this session — it cannot outlive it. So the death of that process (it
+  // exited/crashed WITHOUT emitting each shell's terminal <task-notification>) means every tracked shell
+  // died with it: report none rather than leaving them to read as live (the UI would otherwise show them
+  // "alive", quietly breathing, forever). The normal path — a shell exiting while the agent lives —
+  // still clears via its terminal notification.
+  //
+  // `paneDead` is that death, and it is NOT a tmux fact: a headless row (broker claude / app-server
+  // codex) has no pane at all and answers from its exit stamp instead — see paneDeadForRow, where
+  // asking tmux about a paneless row silently emptied this list for every broker thread.
   //
   // A tracked, pane-alive shell is simply "running" — there is no age-based staleness. `run_in_background`
   // cannot tell a CI watcher (ends soon) from a vite dev server (runs forever), so NO clock is a correct
@@ -3207,6 +3222,13 @@ export function createTailer(deps: TailerDeps): Tailer {
           }
           state.paneDead = dead
         }
+      } else {
+        // No pane to sniff, but the "owning process is gone" flag still has to stay CURRENT: it is what
+        // clears a headless thread's background shells when fray stops the session, exactly as a dead
+        // pane clears a tmux thread's. Assigned without the death EDGE — onPaneDeath stamps `exited`
+        // and fires the one-shot notify, and for a headless row `exited` is the input here, not the
+        // output. Left out, the prime-time reading would latch for the life of the process.
+        state.paneDead = paneDeadForRow(row)
       }
 
       // The provider's own report of those ops, folded over the entries the transcript fold tracks:
