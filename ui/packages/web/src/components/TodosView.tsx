@@ -474,10 +474,6 @@ export function TodosView() {
   // on this same predicate, so the fresh-user experience is just the prompt + corner chrome.
   // Foreign (terminal) sessions don't count — only fray-originated threads/plans make a board "real".
   const nothingAtAll = !board?.threads.some((t) => t.foreign !== true) && (board?.plans?.length ?? 0) === 0
-  // Active = the sidebar's Active section (non-foreign, non-archived session threads). The empty-inbox
-  // only shows when there IS active work but nothing's queued; with zero active threads it's hidden, so
-  // a fresh repo is just the centered prompt (the prompt box lives in the sidebar now, not this column).
-  const activeCount = asThreads(board?.threads ?? []).filter((t) => t.kind === "session" && t.foreign !== true && t.state !== "archived").length
 
   return (
     // The queue column, top to bottom: queue cards (or the empty-inbox state) → rule → dispatch box.
@@ -511,10 +507,14 @@ export function TodosView() {
               the send button), so no separate trigger here. */}
           <DispatchForm autoFocus />
         </div>
-      ) : renderItems.length === 0 && activeCount > 0 ? (
-        // Active work exists but nothing's queued: the calm empty-inbox (NO dispatch box — the prompt
-        // box lives in the sidebar). Hidden entirely when there are zero active threads. Gated on
-        // renderItems (not items) so the empty state can't flash UNDER the last card while it dissolves.
+      ) : renderItems.length === 0 ? (
+        // Nothing's queued: the calm empty-inbox (NO dispatch box — the prompt box lives in the
+        // sidebar). It STANDS whether or not anything is currently active — a board whose threads are
+        // all busy and a board whose threads are all finished both read as inbox-zero, not as a blank
+        // column (it used to vanish with the last active thread, leaving the workpane empty). Only the
+        // brand-new board above opts out, since its centered prompt says the same thing better. Gated
+        // on renderItems (not items) so the empty state can't flash UNDER the last card while it
+        // dissolves.
         <div className="flex flex-col items-center gap-2 pt-2">
           <Inbox size={40} strokeWidth={1.25} className="text-muted/30" />
           <div className="text-[13px] text-muted/80">No threads awaiting human input</div>
