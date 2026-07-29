@@ -316,7 +316,11 @@ export function completionConfirmationHold(telemetry: SessionTelemetry | undefin
   // agree, and a descendant (a sub-agent's own sub-agent) is surfaced for RENDERING and carries no
   // retirement signal of its own. A running descendant always sits under a running direct child, so the
   // work it represents is already held by that child's row.
-  const busy = (op: { state: "running" | "stale"; depth?: number }) => op.state === "running" && isDirectSubAgent(op)
+  // A type guard, so the filtered lists carry "running" into holdOps below rather than the wider view
+  // union (a sub-agent can also read `rested` — its run over, its own fan-out still going — which is not
+  // work this hold may claim is running).
+  const busy = <T extends { state: string; depth?: number }>(op: T): op is T & { state: "running" } =>
+    op.state === "running" && isDirectSubAgent(op)
   const subAgents = telemetry.subAgents.filter(busy)
   const bgShells = telemetry.bgShells.filter(busy)
   const turnInFlight = telemetry.turn === "in-flight"

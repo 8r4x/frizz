@@ -11,7 +11,7 @@
 // states it plainly). This path may add resolutions; it may never invent one.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createStorage } from "./storage.ts"
@@ -41,7 +41,7 @@ function fixture(runtimeTasks?: readonly ClaudeRuntimeTask[]) {
   // The THREAD's own transcript knows only about its direct child — this is the whole point: the
   // grandchild's dispatch is not in here, so no fold over this file could ever produce it.
   writeFileSync(join(dir, `${SESSION}.jsonl`), `${assistant([
-    { type: "tool_use", id: "toolu_child", name: "Agent", input: { description: "LEVEL-ONE", run_in_background: true } },
+    { type: "tool_use", id: "toolu_child", name: "Agent", input: { description: "LEVEL-ONE", subagent_type: "general-purpose", run_in_background: true } },
   ])}\n`)
 
   const sidecar = (agentId: string, body: unknown) => writeFileSync(join(subagents, `agent-${agentId}.meta.json`), JSON.stringify(body))
@@ -72,6 +72,31 @@ function fixture(runtimeTasks?: readonly ClaudeRuntimeTask[]) {
   })
   tailer.tick()
   return { tailer, storage, dir, subagents }
+}
+
+/**
+ * Retire the direct child exactly as the harness does — a `queue-operation` record carrying the
+ * <task-notification> XML. Shaped from the real bytes of the notification that produced this bug (nub
+ * session 5258ebe4, 2026-07-29): `status: completed` and a summary saying "finished", written the moment
+ * the child STOPPED, while the five grandchildren it had just dispatched were all still running.
+ */
+function notifyChild(dir: string, status: string): void {
+  appendFileSync(join(dir, `${SESSION}.jsonl`), `${JSON.stringify({
+    type: "queue-operation",
+    operation: "enqueue",
+    timestamp: "2026-07-28T18:30:00.000Z",
+    content: [
+      "<task-notification>",
+      "<task-id>aChild</task-id>",
+      "<tool-use-id>toolu_child</tool-use-id>",
+      `<status>${status}</status>`,
+      '<summary>Agent "LEVEL-ONE" finished</summary>',
+      "<note>A task-notification fires each time this agent stops with no live background children of its own.",
+      "The user can send it another message and resume it, so the same task-id may notify more than once.</note>",
+      "<result>I've launched the fan-out; I'll continue once it reports.</result>",
+      "</task-notification>",
+    ].join("\n"),
+  })}\n`)
 }
 
 function cleanup(f: { tailer: { stop(): void }; storage: { close(): void }; dir: string }) {
@@ -202,6 +227,91 @@ test("nesting: a branch whose ROOT child is gone is over, whatever its own mtime
       "no orphan rows survive their root child")
   } finally {
     cleanup(f)
+  }
+})
+
+// ── RESTED roots: the child stopped, its own fan-out did not ──────────────────────────────────────
+//
+// The bug these pin, in the maintainer's words: "Subagent spun up a bunch of sub-subagents, then seemed
+// to rest, but when it rested, it totally disappeared from the UI." `status: completed` is what the
+// harness sends when a sub-agent merely STOPS — its own notification says so, and says the same task-id
+// may notify again — so retiring the row on it took the whole live branch off the board with it.
+
+test("rested: a child that stops while its own fan-out runs KEEPS the branch on the board", () => {
+  const f = fixture()
+  try {
+    // Precondition: the branch is live and rooted in a live child.
+    assert.deepEqual(f.tailer.get(SLUG)?.subAgents.map((v) => [v.id, v.state]), [
+      ["toolu_child", "running"],
+      ["toolu_grand", "running"],
+      ["toolu_great", "running"],
+    ])
+
+    notifyChild(f.dir, "completed")
+    f.tailer.tick()
+
+    const views = f.tailer.get(SLUG)?.subAgents ?? []
+    assert.deepEqual(views.map((v) => [v.id, v.state, v.depth]), [
+      ["toolu_child", "rested", undefined], // stopped — but still the anchor its descendants hang off
+      ["toolu_grand", "running", 2],
+      ["toolu_great", "running", 3],
+    ], "the notification retires the RUN, not the branch")
+    // The row has to render on its own terms: its label, its cell, and its real DISPATCH instant (the
+    // duration under the prompt box reads "how long this branch has been going", not "since it stopped").
+    assert.equal(views[0]?.label, "LEVEL-ONE")
+    assert.equal(views[0]?.subagentType, "general-purpose")
+    assert.equal(views[0]?.startedAt, "2026-07-28T18:24:00.000Z")
+    // And it is emphatically NOT live work: nothing keyed on "running" may be held back by it.
+    assert.equal(views.filter((v) => v.state === "running" && (v.depth ?? 1) === 1).length, 0)
+    // Its drawer still resolves — the row is retired, so the lookup answers from the retained ring.
+    assert.equal(f.tailer.subAgent(SLUG, "toolu_child")?.state, "done")
+  } finally {
+    cleanup(f)
+  }
+})
+
+test("rested: the anchor retires itself — when the fan-out goes quiet the whole branch leaves", () => {
+  const f = fixture()
+  try {
+    notifyChild(f.dir, "completed")
+    f.tailer.tick()
+    assert.equal(f.tailer.get(SLUG)?.subAgents.length, 3, "still anchored while the descendants append")
+
+    // Both descendants fall silent. A rested root has no live work left to hold up, so it must not
+    // linger: this is the property that makes admitting a retired row safe at all.
+    rmSync(join(f.subagents, "agent-aGreat.jsonl"))
+    rmSync(join(f.subagents, "agent-aGrand.jsonl"))
+    assert.deepEqual(f.tailer.get(SLUG)?.subAgents ?? [], [], "no phantom survives its own fan-out")
+  } finally {
+    cleanup(f)
+  }
+})
+
+test("rested: KILLED never anchors — the operator's dismiss ends the branch, whatever the mtimes say", () => {
+  // `stopped` is the recovery notification a new session emits for ops the dead process left behind; the
+  // fold maps it to `killed`. The owning process is gone, so nothing under it may keep the row alive.
+  const swept = fixture()
+  try {
+    notifyChild(swept.dir, "stopped")
+    swept.tailer.tick()
+    assert.deepEqual(swept.tailer.get(SLUG)?.subAgents ?? [], [], "a swept orphan takes its branch with it")
+  } finally {
+    cleanup(swept)
+  }
+
+  // And the × on a rested row means the same thing. It is no longer live, so dismissOp re-stamps the
+  // retained row `killed` — the one status that stops anchoring — instead of silently doing nothing.
+  const dismissed = fixture()
+  try {
+    notifyChild(dismissed.dir, "completed")
+    dismissed.tailer.tick()
+    assert.equal(dismissed.tailer.get(SLUG)?.subAgents[0]?.state, "rested")
+    assert.equal(dismissed.tailer.dismissOp!(SLUG, "toolu_child"), true, "the × acts on a rested row")
+    assert.deepEqual(dismissed.tailer.get(SLUG)?.subAgents ?? [], [])
+    assert.equal(dismissed.tailer.dismissOp!(SLUG, "toolu_child"), false, "and is a no-op the second time")
+    assert.ok(dismissed.tailer.subAgent(SLUG, "toolu_child"), "dismissing never costs the drawer its transcript")
+  } finally {
+    cleanup(dismissed)
   }
 })
 
