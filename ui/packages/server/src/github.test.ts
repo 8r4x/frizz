@@ -5,7 +5,7 @@ import {
   sumReactions,
   commentCount,
   parseListJson,
-  pickLinkedPr,
+  summarizeLinkedPrs,
   linkedPrQuery,
   parseLinkedPrJson,
   truncateBody,
@@ -277,28 +277,40 @@ function linkNode(number: number, state: string, isDraft = false) {
   return { number, url: `https://github.com/cli/cli/pull/${number}`, state, isDraft }
 }
 
-test("pickLinkedPr: an open link wins over a merged one (the work in flight is the signal)", () => {
-  const pr = pickLinkedPr([linkNode(700, "MERGED"), linkNode(812, "OPEN")])
-  assert.deepEqual(pr, { number: 812, url: "https://github.com/cli/cli/pull/812", state: "OPEN", isDraft: false })
+test("summarizeLinkedPrs: an open link is the primary over a merged one (work in flight is the signal)", () => {
+  const prs = summarizeLinkedPrs([linkNode(700, "MERGED"), linkNode(812, "OPEN")])
+  assert.deepEqual(prs, { count: 2, number: 812, url: "https://github.com/cli/cli/pull/812", state: "OPEN", isDraft: false })
 })
 
-test("pickLinkedPr: a merged link is kept when nothing is open", () => {
-  assert.equal(pickLinkedPr([linkNode(616, "MERGED")])?.number, 616)
+test("summarizeLinkedPrs: a merged link is kept when nothing is open", () => {
+  assert.deepEqual(summarizeLinkedPrs([linkNode(616, "MERGED")]), {
+    count: 1,
+    number: 616,
+    url: "https://github.com/cli/cli/pull/616",
+    state: "MERGED",
+    isDraft: false,
+  })
 })
 
-test("pickLinkedPr: a PR closed WITHOUT merging closes nothing — never badge it", () => {
-  assert.equal(pickLinkedPr([linkNode(590, "CLOSED")]), undefined)
-  // …and a closed one alongside an open one must not shadow the open one.
-  assert.equal(pickLinkedPr([linkNode(590, "CLOSED"), linkNode(599, "OPEN")])?.number, 599)
+test("summarizeLinkedPrs: the badge count is what the row shows — every qualifying link, not just the primary", () => {
+  assert.equal(summarizeLinkedPrs([linkNode(1, "OPEN"), linkNode(2, "OPEN"), linkNode(3, "MERGED")])?.count, 3)
 })
 
-test("pickLinkedPr: draft state rides along; empty/malformed → undefined, never throws", () => {
-  assert.equal(pickLinkedPr([linkNode(601, "OPEN", true)])?.isDraft, true)
-  assert.equal(pickLinkedPr([]), undefined)
-  assert.equal(pickLinkedPr(undefined), undefined)
-  assert.equal(pickLinkedPr("nope"), undefined)
-  assert.equal(pickLinkedPr([{ number: 0, state: "OPEN" }]), undefined) // non-positive number
-  assert.equal(pickLinkedPr([{ state: "OPEN" }]), undefined) // no number
+test("summarizeLinkedPrs: a PR closed WITHOUT merging closes nothing — out of the count AND the pick", () => {
+  assert.equal(summarizeLinkedPrs([linkNode(590, "CLOSED")]), undefined)
+  // …and a closed one alongside an open one neither shadows it nor inflates the count.
+  const prs = summarizeLinkedPrs([linkNode(590, "CLOSED"), linkNode(599, "OPEN")])
+  assert.equal(prs?.number, 599)
+  assert.equal(prs?.count, 1)
+})
+
+test("summarizeLinkedPrs: draft state rides along; empty/malformed → undefined, never throws", () => {
+  assert.equal(summarizeLinkedPrs([linkNode(601, "OPEN", true)])?.isDraft, true)
+  assert.equal(summarizeLinkedPrs([]), undefined)
+  assert.equal(summarizeLinkedPrs(undefined), undefined)
+  assert.equal(summarizeLinkedPrs("nope"), undefined)
+  assert.equal(summarizeLinkedPrs([{ number: 0, state: "OPEN" }]), undefined) // non-positive number
+  assert.equal(summarizeLinkedPrs([{ state: "OPEN" }]), undefined) // no number
 })
 
 test("linkedPrQuery: one alias per issue, aliases derived from the number alone", () => {

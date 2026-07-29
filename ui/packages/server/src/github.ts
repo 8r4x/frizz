@@ -165,27 +165,32 @@ export function parseListJson(raw: string, kind: GhKind): GithubItem[] {
 // per listing: `Issue.closedByPullRequestsReferences` is GitHub's own "linked pull requests" edge —
 // the same thing the issue page shows — populated by a closing keyword (Closes/Fixes/Resolves #N) in
 // a PR body. One aliased query covers the whole page of issues, so this is a single round trip.
-type LinkedPr = NonNullable<GithubItem["linkedPr"]>
+type LinkedPrs = NonNullable<GithubItem["linkedPrs"]>
 
-// Pick the ONE PR worth painting on a row from an issue's linked set. A PR that was closed WITHOUT
-// merging no longer closes anything, so it is dropped — showing it would read as "handled" when the
-// issue is in fact unowned. OPEN wins over MERGED: on an open issue a merged link is usually a
-// partial/earlier fix, while the open one is the work actually in flight.
-export function pickLinkedPr(nodes: unknown): LinkedPr | undefined {
+// Reduce an issue's linked set to the badge: how many PRs qualify, plus the ONE the badge links to.
+// A PR closed WITHOUT merging no longer closes anything, so it is excluded from both the count and
+// the pick — showing it would read as "handled" when the issue is in fact unowned. The primary is
+// OPEN over MERGED: on an open issue a merged link is usually a partial/earlier fix, while the open
+// one is the work actually in flight.
+export function summarizeLinkedPrs(nodes: unknown): LinkedPrs | undefined {
   if (!Array.isArray(nodes)) return undefined
-  let merged: LinkedPr | undefined
+  let count = 0
+  let open: LinkedPrs | undefined
+  let merged: LinkedPrs | undefined
   for (const node of nodes) {
     const n = node as { number?: unknown; url?: unknown; state?: unknown; isDraft?: unknown }
     const number = typeof n?.number === "number" ? n.number : Number(n?.number)
     if (!Number.isInteger(number) || number <= 0) continue
     const state = typeof n?.state === "string" ? n.state.toUpperCase() : ""
     if (state !== "OPEN" && state !== "MERGED") continue
-    const pr: LinkedPr = { number, url: typeof n?.url === "string" ? n.url : "", state }
+    count += 1
+    const pr: LinkedPrs = { count: 0, number, url: typeof n?.url === "string" ? n.url : "", state }
     if (typeof n?.isDraft === "boolean") pr.isDraft = n.isDraft
-    if (state === "OPEN") return pr
-    merged ??= pr
+    if (state === "OPEN") open ??= pr
+    else merged ??= pr
   }
-  return merged
+  const primary = open ?? merged
+  return primary ? { ...primary, count } : undefined
 }
 
 // Build the aliased query. Aliases are `i<number>` — derived from the validated integer, never from
@@ -197,10 +202,11 @@ export function linkedPrQuery(numbers: number[]): string {
   return `query($owner: String!, $name: String!) {\n  repository(owner: $owner, name: $name) {\n${fields}\n  }\n}`
 }
 
-// Parse the aliased GraphQL response into number → linked PR. PURE + defensive (the unit-tested
-// seam): a foreign shape, a null alias (issue vanished), or an empty node list all yield no entry.
-export function parseLinkedPrJson(raw: string): Map<number, LinkedPr> {
-  const out = new Map<number, LinkedPr>()
+// Parse the aliased GraphQL response into number → linked-PR summary. PURE + defensive (the
+// unit-tested seam): a foreign shape, a null alias (issue vanished), or an empty node list all yield
+// no entry.
+export function parseLinkedPrJson(raw: string): Map<number, LinkedPrs> {
+  const out = new Map<number, LinkedPrs>()
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
@@ -213,7 +219,7 @@ export function parseLinkedPrJson(raw: string): Map<number, LinkedPr> {
     const issue = value as { number?: unknown; closedByPullRequestsReferences?: { nodes?: unknown } } | null
     const number = typeof issue?.number === "number" ? issue.number : undefined
     if (number === undefined) continue
-    const pr = pickLinkedPr(issue?.closedByPullRequestsReferences?.nodes)
+    const pr = summarizeLinkedPrs(issue?.closedByPullRequestsReferences?.nodes)
     if (pr) out.set(number, pr)
   }
   return out
@@ -241,14 +247,14 @@ export async function attachLinkedPrs(repo: string, items: GithubItem[]): Promis
         return parseLinkedPrJson(await gh(["api", "graphql", "-f", `query=${linkedPrQuery(chunk)}`, "-F", `owner=${owner}`, "-F", `name=${name}`]))
       } catch {
         // Rate limit, network, an older gh — leave this chunk's rows unbadged and keep going.
-        return new Map<number, LinkedPr>()
+        return new Map<number, LinkedPrs>()
       }
     }),
   )
-  const found = new Map<number, LinkedPr>(results.flatMap((m) => [...m]))
+  const found = new Map<number, LinkedPrs>(results.flatMap((m) => [...m]))
   for (const it of items) {
     const pr = found.get(it.number)
-    if (it.kind === "issue" && pr) it.linkedPr = pr
+    if (it.kind === "issue" && pr) it.linkedPrs = pr
   }
 }
 

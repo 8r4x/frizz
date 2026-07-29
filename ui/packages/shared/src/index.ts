@@ -1082,11 +1082,14 @@ export const GithubItem = z.object({
   labels: z.array(z.object({ name: z.string(), color: z.string() })).default([]),
   state: z.string().optional(), // OPEN | CLOSED | MERGED
   isDraft: z.boolean().optional(), // PRs only
-  // ISSUES only: the pull request whose body carries a closing keyword for this issue (GitHub's own
-  // "linked pull requests"). Present means someone is already on it — the row paints a PR glyph so a
-  // dispatch doesn't duplicate work in flight. Absent for PRs and for issues nobody has opened one for.
-  linkedPr: z
+  // ISSUES only: the pull requests whose bodies carry a closing keyword for this issue (GitHub's own
+  // "linked pull requests"). Present means someone is already on it — the row paints the PR glyph so
+  // a dispatch doesn't duplicate work in flight. `count` is what the badge shows, mirroring the
+  // github.com issue list; `number`/`url`/`state` describe the PRIMARY one (open outranks merged),
+  // which the badge links to and names in its tooltip. Absent for PRs and for unclaimed issues.
+  linkedPrs: z
     .object({
+      count: z.number().int().positive(),
       number: z.number().int().positive(),
       url: z.string(),
       state: z.string(), // OPEN | MERGED

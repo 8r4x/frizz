@@ -368,7 +368,7 @@ function Row({ item, checked, onActivate }: { item: GithubItem; checked: boolean
         </span>
       </span>
       <span className="mt-px flex shrink-0 items-center gap-2.5 text-[11.5px] text-muted/70">
-        {item.linkedPr ? <LinkedPrBadge pr={item.linkedPr} /> : null}
+        {item.linkedPrs ? <LinkedPrBadge prs={item.linkedPrs} /> : null}
         {item.comments ? <Badge icon={MessageSquare} n={item.comments} label="comments" /> : null}
         {item.reactions ? <Badge emoji="👍" n={item.reactions} label="reactions" /> : null}
       </span>
@@ -392,26 +392,39 @@ function Checkbox({ checked }: { checked: boolean }) {
   )
 }
 
-// The "someone already opened a PR for this" badge — GitHub's own linked-pull-request signal, painted
-// with the same glyph + color family as StateIcon (emerald open, purple merged, muted draft). It sits
-// FIRST in the right-hand cluster because it is the one thing on the row that changes the decision to
-// dispatch: an issue with a PR in flight rarely needs a second investigation. The number keeps its `#`
-// — every other badge in this cluster is a COUNT, and a bare "413" beside them reads as one.
-// Links straight to the PR (stopPropagation, so opening it doesn't also toggle the row).
-function LinkedPrBadge({ pr }: { pr: NonNullable<GithubItem["linkedPr"]> }) {
-  const merged = pr.state.toUpperCase() === "MERGED"
-  const Icon = merged ? GitMerge : pr.isDraft ? GitPullRequestDraft : GitPullRequest
+// GitHub's own `git-pull-request` octicon, path verbatim from github.com. Lucide's git-pull-request
+// is a STROKE glyph and renders as a thin squiggle at badge size; the octicon is a filled 16-viewBox
+// path built for exactly this, which is why the row badge uses it instead of the lucide family the
+// rest of this file draws from. `currentColor` so it inherits the cluster's muted tone.
+function GitPullRequestOcticon({ size = 12, className }: { size?: number; className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" width={size} height={size} fill="currentColor" aria-hidden className={className}>
+      <path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z" />
+    </svg>
+  )
+}
+
+// The "someone already opened a PR for this" badge, mirroring github.com's issue list exactly: the
+// pull-request octicon + the COUNT of linked PRs, in the same muted tone and size as the comment
+// badge beside it (measured on github.com — the row glyph is monochrome rgb(145,152,161), NOT the
+// green/purple state coloring that StateIcon uses; GitHub reserves color for the item's OWN state).
+// Sits first in the cluster, where GitHub puts it. Links to the primary PR, naming it in the tooltip
+// — stopPropagation so opening it doesn't also toggle the row.
+function LinkedPrBadge({ prs }: { prs: NonNullable<GithubItem["linkedPrs"]> }) {
+  const merged = prs.state.toUpperCase() === "MERGED"
+  const what = prs.count > 1 ? `${prs.count} linked pull requests — ` : ""
+  const primary = merged ? `#${prs.number} merged` : prs.isDraft ? `#${prs.number} open (draft)` : `#${prs.number} open`
   return (
     <a
-      href={pr.url}
+      href={prs.url}
       target="_blank"
       rel="noreferrer noopener"
       onClick={(e) => e.stopPropagation()}
-      title={merged ? `Closed by PR #${pr.number}` : pr.isDraft ? `Draft PR #${pr.number} open` : `PR #${pr.number} open`}
-      className={`inline-flex items-center gap-1 tabular-nums hover:underline ${merged ? "text-purple-400" : pr.isDraft ? "text-muted/70" : "text-emerald-500"}`}
+      title={`${what}${primary}`}
+      className="inline-flex items-center gap-1 tabular-nums hover:text-fg/90"
     >
-      <Icon size={12} strokeWidth={2} />
-      #{pr.number}
+      <GitPullRequestOcticon size={12} />
+      {prs.count}
     </a>
   )
 }

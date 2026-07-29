@@ -26,11 +26,13 @@ const items: GithubItem[] = NUMBERS.map((number, i) => ({
   labels: i % 4 === 0 ? [{ name: "bug", color: "d73a4a" }] : [],
   comments: (i * 3) % 7,
   reactions: (i * 5) % 11,
-  // Every 4th row carries a linked closing PR, cycling open → merged → draft, so the badge is
-  // observable in all three states next to rows that have none — the common case must stay uncluttered.
+  // Every 4th row carries linked PRs, cycling open → merged → draft and single → multiple, so the
+  // badge is observable in every shape next to rows that have none (the common case must stay
+  // uncluttered) and beside the comment/reaction badges it has to tone-match.
   ...(i % 4 === 0
     ? {
-        linkedPr: {
+        linkedPrs: {
+          count: i % 8 === 0 ? 1 : 2,
           number: number + 1,
           url: `https://github.com/fixture/repo/pull/${number + 1}`,
           state: i % 12 === 4 ? "MERGED" : "OPEN",
