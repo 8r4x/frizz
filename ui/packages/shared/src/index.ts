@@ -255,7 +255,7 @@ export type NativeInputRequired = z.infer<typeof NativeInputRequired>
 // worker on ANY new activity — a review, an approval, or a comment, from a human or a bot alike (most
 // review today is filed by an app, so there is no actor filter). It does NOT park the thread
 // in Held: a pr-watch thread stays a visible QUEUE handoff (the worker opened a PR and is watching it),
-// and new activity re-surfaces it. The human can park it via the "Arm watcher" card's Snooze button
+// and new activity re-surfaces it. The human can park it via the "PR watcher armed" card's Snooze button
 // (a hold the next activity clears). Pair `pr-watch:` with `human:` only when the worker is genuinely
 // blocked on a NAMED reviewer — then `human:` supplies the Held/park while pr-watch supplies the cursor.
 export const AwaitingHint = z.object({
@@ -947,6 +947,114 @@ export function stripWakeDeliveryToken(text: string): string {
   return text.replace(WAKE_DELIVERY_TOKEN_TAIL, "")
 }
 
+// Was this user turn WRITTEN BY FRAY rather than by the human? The token rides only on a scheduler
+// delivery, so its presence is the one unambiguous tell — and it matters for presentation: a wake
+// rendered in the human's own off-white right-justified bubble claims the operator typed it, when in
+// fact fray is reporting something it noticed. The chat renders these as a first-party card instead.
+export function isWakeDelivery(text: string): boolean {
+  return WAKE_DELIVERY_TOKEN_TAIL.test(text)
+}
+
+// ---- THE pr-watch WAKE STEER (scheduler ↔ chat card) ---------------------------------------------
+// FORMATTER AND PARSER LIVE TOGETHER, for the same reason the token and its stripper do. The scheduler
+// composes this string and pastes it into a worker's composer; the chat then has nothing BUT that
+// string to rebuild a first-party card from, because the structured activity lives in the scheduler's
+// own cursor (keyed by fence generation) and never reaches the transcript. Two definitions of one
+// format in two packages is a silent drift waiting to happen — a wording tweak on the producer would
+// quietly downgrade every card in the chat to a plain text blob. Keeping the pair adjacent, with a
+// round-trip test over both, is the guard.
+
+export interface GithubWakeItem {
+  label: string // the activity's noun ("comment", "approval", "change request", …)
+  actor: string // GitHub login, no leading @
+  bot: boolean // drives the 🤖/👤 icon; an app files most of what wakes this watcher
+  at?: string // ISO8601
+  url?: string // the item's own permalink
+}
+
+export interface GithubWakeSteer {
+  ref: string // owner/repo#N
+  items: GithubWakeItem[]
+  omitted: number // fresh items counted but not named (the enumeration cap)
+}
+
+const WAKE_SCOPE = "ignore older activity you have already handled"
+
+function wakeItemTail(item: GithubWakeItem): string {
+  // The URL goes LAST and carries no trailing punctuation, so terminal autolinkers cannot swallow a
+  // following period into the href.
+  return `${item.at ? ` at ${item.at}` : ""}${item.url ? `: ${item.url}` : ""}`
+}
+
+export function formatGithubWakeSteer({ ref, items, omitted }: GithubWakeSteer): string {
+  const icon = items.some((i) => !i.bot) ? "👤" : "🤖"
+  if (items.length === 1 && omitted === 0) {
+    const item = items[0]
+    const url = item.url ? `: ${item.url}` : "."
+    return `${icon} New GitHub ${item.label} on ${ref} from @${item.actor}${item.at ? ` at ${item.at}` : ""}. Read that exact ${item.label} — ${WAKE_SCOPE} — and continue${url}`
+  }
+  const more = omitted > 0 ? `\n- …and ${omitted} more not listed — check ${ref} for the rest` : ""
+  // The blank line separates the instruction from the items. Fray's transcript renders a delivered
+  // wake as PLAIN TEXT with line breaks preserved, so this buys a paragraph break rather than an <li>,
+  // and it keeps the two readable as distinct parts in a terminal composer too.
+  // Each line carries its OWN 🤖/👤. A burst routinely mixes a maintainer's comment with a review
+  // app's output, and "who is a person here" is the first thing both the worker and a human scanning
+  // the card want — the header icon alone cannot say it, and a login is not a reliable tell (@pullfrog
+  // is a GitHub App with no `[bot]` suffix). It is also what makes the format round-trip losslessly.
+  const lines = items.map((i) => `- ${i.bot ? "🤖" : "👤"} ${i.label} from @${i.actor}${wakeItemTail(i)}`).join("\n")
+  return `${icon} ${items.length + omitted} new GitHub items on ${ref}. Read exactly these — ${WAKE_SCOPE} — and continue:\n\n${lines}${more}`
+}
+
+const WAKE_REF = String.raw`[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*#\d+`
+const WAKE_SINGLE = new RegExp(
+  String.raw`^(👤|🤖) New GitHub (.+?) on (${WAKE_REF}) from @(\S+?)(?: at (\S+?))?\. Read that exact .+? — ` +
+    WAKE_SCOPE +
+    String.raw` — and continue(?::\s*(\S+)|\.)$`,
+)
+const WAKE_MULTI_HEAD = new RegExp(
+  String.raw`^(👤|🤖) (\d+) new GitHub items on (${WAKE_REF})\. Read exactly these — ` + WAKE_SCOPE + String.raw` — and continue:$`,
+)
+const WAKE_ITEM = /^- (👤|🤖) (.+?) from @(\S+?)(?: at (\S+?))?(?:: (\S+))?$/
+const WAKE_MORE = /^- …and (\d+) more not listed — check .+ for the rest$/
+
+// Rebuild the structured wake from its delivered text. `null` for anything that is not exactly one of
+// the two shapes above — the chat then falls back to rendering the text as-is, so a format the parser
+// does not know costs a card, never the message.
+export function parseGithubWakeSteer(text: string): GithubWakeSteer | null {
+  // Absent fields are OMITTED rather than set to undefined, so a parsed steer is deep-equal to the one
+  // the formatter was handed — which is what makes the round-trip test a real contract.
+  const item = (label: string, actor: string, bot: boolean, at?: string, url?: string): GithubWakeItem => ({
+    label,
+    actor,
+    bot,
+    ...(at ? { at } : {}),
+    ...(url ? { url } : {}),
+  })
+  const lines = text.trim().split("\n")
+  const single = lines.length === 1 ? WAKE_SINGLE.exec(lines[0]) : null
+  if (single) {
+    return { ref: single[3], omitted: 0, items: [item(single[2], single[4], single[1] === "🤖", single[5], single[6])] }
+  }
+  const head = WAKE_MULTI_HEAD.exec(lines[0] ?? "")
+  if (!head) return null
+  const items: GithubWakeItem[] = []
+  let omitted = 0
+  for (const line of lines.slice(1)) {
+    if (!line.trim()) continue
+    const more = WAKE_MORE.exec(line)
+    if (more) {
+      omitted = Number(more[1])
+      continue
+    }
+    const m = WAKE_ITEM.exec(line)
+    if (!m) return null // an unrecognized line means we do not understand this message; do not guess
+    items.push(item(m[2], m[3], m[1] === "🤖", m[4], m[5]))
+  }
+  // The header's own count is the authority on how many landed; disagreeing with it means we misread.
+  if (!items.length || items.length + omitted !== Number(head[2])) return null
+  return { ref: head[3], omitted, items }
+}
+
 // The server's gh-CLI availability signal. `installed`/`inRepo`/`nameWithOwner` are STABLE for the
 // process lifetime (resolved once at boot); `authed` can flip mid-session (the user runs
 // `gh auth login`) so it is re-checked live on each githubStatus query.
@@ -1242,6 +1350,12 @@ export const TranscriptMessage = z.object({
   // and the terminal is the recovery surface. Delivered sends never carry this (the ledger drops them;
   // the real transcript record renders). Additive + optional.
   deliveryState: z.enum(["pending", "enqueued", "unconfirmed"]).optional(),
+  // FRAY wrote this user turn, not the human: it is a scheduler wake delivery (isWakeDelivery). The
+  // client renders it as a first-party card rather than the human's off-white right-justified bubble,
+  // which was claiming the operator had typed a message the watcher composed. Additive + optional: an
+  // old client ignores it and shows the plain bubble (the previous behavior), and an old server simply
+  // never sets it.
+  wake: z.boolean().optional(),
 })
 export type TranscriptMessage = z.infer<typeof TranscriptMessage>
 

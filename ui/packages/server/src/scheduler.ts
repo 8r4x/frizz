@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { isValidAwaitingTimer, wakeDeliveryToken, type QuotaSnapshot } from "@fray-ui/shared"
+import { formatGithubWakeSteer, isValidAwaitingTimer, wakeDeliveryToken, type QuotaSnapshot } from "@fray-ui/shared"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { FenceView } from "./tailer.ts"
@@ -697,43 +697,37 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
 
   // Who + when + WHICH ONE. The steer used to name only the PR and the actor, which is not enough to
-  // find the thing that woke the worker: the worker's only move was a broad re-read of the thread
+  // find the thing that woke the worker: its only move was a broad re-read of the thread
   // (`gh pr view N --json comments`), and that hands back every comment the actor ever left. A worker
   // woken for one fresh comment on nubjs/nub#587 pulled back TWO and re-litigated a stale one it had
   // already handled hours earlier. The permalink is the fix — it addresses exactly one item — and the
   // ISO timestamp lets the worker order it against its own last turn even if the URL is unavailable.
-  function activityDetail(a: GithubReviewActivity): string {
-    const at = a.at ? ` at ${a.at}` : ""
-    // The URL goes LAST and carries no trailing punctuation, so terminal autolinkers cannot swallow a
-    // following period into the href.
-    const url = a.url ? `: ${a.url}` : ""
-    return `${activityLabel(a)} from @${a.actor}${at}${url}`
-  }
-
-  // The steer must never imply a person: an app filed most of what wakes this watcher.
   //
-  // It must also never read as an instruction to MUTATE the PR. "Re-open the PR and continue" meant
-  // "open the PR again and read it", but a worker parses `gh pr reopen` — so the steer either burned a
-  // turn on the ambiguity or, worse, reopened a PR the maintainer closed on purpose. The wake is a
-  // NOTIFICATION; what to do about it is the worker's call. Keep the verb about reading, like the
-  // merged/closed/CI steers that just say "Continue."
+  // The steer must never imply a person: an app filed most of what wakes this watcher. It must also
+  // never read as an instruction to MUTATE the PR. "Re-open the PR and continue" meant "open the PR
+  // again and read it", but a worker parses `gh pr reopen` — so the steer either burned a turn on the
+  // ambiguity or, worse, reopened a PR the maintainer closed on purpose. The wake is a NOTIFICATION;
+  // what to do about it is the worker's call. Keep the verb about reading, like the merged/closed/CI
+  // steers that just say "Continue."
+  //
+  // The FORMAT itself lives in @fray-ui/shared beside its parser, because the chat rebuilds a
+  // first-party card from this exact string — the structured activity never reaches the transcript.
   //
   // `activities` is chronological and may hold several: one poll interval routinely collects a burst,
   // and every one of them is marked seen, so anything this steer does not name is never mentioned to
   // anyone again. `omitted` is how many more than the cap were dropped from the enumeration.
   function activitySteer(activities: GithubReviewActivity[], ref: PrRef, omitted = 0): string {
-    const icon = activities.some((a) => !isBotGithubActor(a)) ? "👤" : "🤖"
-    const scope = "ignore older activity you have already handled"
-    if (activities.length === 1) {
-      const a = activities[0]
-      return `${icon} New GitHub ${activityLabel(a)} on ${refKey(ref)} from @${a.actor}${a.at ? ` at ${a.at}` : ""}. Read that exact ${activityLabel(a)} — ${scope} — and continue${a.url ? `: ${a.url}` : "."}`
-    }
-    const more = omitted > 0 ? `\n- …and ${omitted} more not listed — check ${refKey(ref)} for the rest` : ""
-    // The blank line separates the instruction from the items. Fray's transcript renders a delivered
-    // wake as PLAIN TEXT with line breaks preserved (no list markup — verified in the running app), so
-    // this buys a paragraph break rather than an <li>, and it keeps the two readable as distinct parts
-    // in a terminal composer too.
-    return `${icon} ${activities.length + omitted} new GitHub items on ${refKey(ref)}. Read exactly these — ${scope} — and continue:\n\n${activities.map((a) => `- ${activityDetail(a)}`).join("\n")}${more}`
+    return formatGithubWakeSteer({
+      ref: refKey(ref),
+      omitted,
+      items: activities.map((a) => ({
+        label: activityLabel(a),
+        actor: a.actor,
+        bot: isBotGithubActor(a),
+        ...(a.at ? { at: a.at } : {}),
+        ...(a.url ? { url: a.url } : {}),
+      })),
+    })
   }
 
   // The operator-facing log line for this wake. Names the distinct actors rather than a count, since
@@ -935,7 +929,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         reason: verdict.reason,
       }, nowMs).delivery
       st.fired = true
-      // "Arm watcher": if the human parked this pr-watch card with a user snooze, new PR
+      // "PR watcher armed": if the human parked this pr-watch card with a user snooze, new PR
       // activity is exactly the thing it was hiding UNTIL — so clear the snooze here, the moment we
       // enqueue the wake, and the card re-surfaces in the queue (the preset instant was only a safety
       // timeout). A no-op when nothing was snoozed. Scoped to pr-watch: a human/timer park is a

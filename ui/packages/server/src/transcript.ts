@@ -8,6 +8,7 @@ import {
   GITHUB_DISPATCH_UI_BOUNDARY,
   ATTACHMENT_IMAGE_EXTENSIONS,
   attachmentExtension,
+  isWakeDelivery,
   stripWakeDeliveryToken,
   type TranscriptMessage,
   type TranscriptPage,
@@ -143,6 +144,15 @@ function userDisplayText(text: string, first: boolean): string | undefined {
   }
   projected = stripWakeDeliveryToken(projected)
   return projected === text ? undefined : projected
+}
+
+// The full presentation projection for one user turn: its display text, plus whether FRAY wrote it.
+// Both derive from the same raw record, and every site that pushes a user message needs both — keeping
+// them in one helper is what stops a new push site from shipping the display projection while silently
+// dropping the wake flag (which would put a scheduler steer back in the human's own bubble).
+function userProjection(text: string, first: boolean): { displayText?: string; wake?: true } {
+  const displayText = userDisplayText(text, first)
+  return { ...(displayText ? { displayText } : {}), ...(isWakeDelivery(text) ? { wake: true as const } : {}) }
 }
 
 // Append a text block to a message's ordered parts, coalescing into a trailing text part (so several
@@ -451,8 +461,8 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         // delivery), and the assistant-merge tail-role check already blocks merging across a live bubble.
         // `text` stays the RAW queued content — it is the key `queuedPending` matches the delivery
         // attachment against — so a wake token riding a queued follow-up is dropped only for display.
-        const queuedDisplay = userDisplayText(content, out.length === 0)
-        const m: TranscriptMessage = { sourceId, role: "user", text: content, ...(queuedDisplay ? { displayText: queuedDisplay } : {}), tools: [], parts: [], at: thisTs, queued: true }
+        const queuedProjection = userProjection(content, out.length === 0)
+        const m: TranscriptMessage = { sourceId, role: "user", text: content, ...queuedProjection, tools: [], parts: [], at: thisTs, queued: true }
         out.push(m)
         queuedPending.push({ key: content, message: m })
       } else if ((op === "remove" || op === "dequeue" || op === "popAll") && content.trim()) {
@@ -517,8 +527,8 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         if (!resolveQueued(prompt)) {
           // Attachment-only: an older session with no queue-operations, or an enqueue that scrolled out of
           // the render window. Emit the delivered message fresh at the attachment's position.
-          const deliveredDisplay = userDisplayText(prompt, out.length === 0)
-          out.push({ sourceId, role: "user", text: prompt, ...(deliveredDisplay ? { displayText: deliveredDisplay } : {}), tools: [], parts: [], at: thisTs })
+          const deliveredProjection = userProjection(prompt, out.length === 0)
+          out.push({ sourceId, role: "user", text: prompt, ...deliveredProjection, tools: [], parts: [], at: thisTs })
         }
         deliveredDedupe = prompt
         if (thisTs) prevTs = thisTs // a delivered human turn is substantive — it bounds the next thinking window
@@ -605,8 +615,8 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         // The first user message is the composed dispatch prompt (scratchpad orientation + project
         // instructions + banner + TASK). Only what sits below the banner is the human's words — that
         // narrowing is a DISPLAY projection (userDisplayText), never a rewrite of the stored text.
-        const displayText = userDisplayText(text, out.length === 0)
-        out.push({ sourceId, role: "user", text, ...(displayText ? { displayText } : {}), tools: [], parts: [], at: rec.timestamp })
+        const projection = userProjection(text, out.length === 0)
+        out.push({ sourceId, role: "user", text, ...projection, tools: [], parts: [], at: rec.timestamp })
         lastAssistantId = null
       }
       return
@@ -1707,8 +1717,8 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
           // sentinel). Only what sits below the banner is the human's words, and — as in parseTranscript
           // — that narrowing is a DISPLAY projection, so the stored text keeps the machine-facing prompt.
           if (text) {
-            const displayText = userDisplayText(text, out.length === 0)
-            out.push({ sourceId, role: "user", text, ...(displayText ? { displayText } : {}), tools: [], parts: [], at: ev.at })
+            const projection = userProjection(text, out.length === 0)
+            out.push({ sourceId, role: "user", text, ...projection, tools: [], parts: [], at: ev.at })
           }
           break
         }
