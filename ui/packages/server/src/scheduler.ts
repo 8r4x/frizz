@@ -729,7 +729,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       return `${icon} New GitHub ${activityLabel(a)} on ${refKey(ref)} from @${a.actor}${a.at ? ` at ${a.at}` : ""}. Read that exact ${activityLabel(a)} — ${scope} — and continue${a.url ? `: ${a.url}` : "."}`
     }
     const more = omitted > 0 ? `\n- …and ${omitted} more not listed — check ${refKey(ref)} for the rest` : ""
-    return `${icon} ${activities.length + omitted} new GitHub items on ${refKey(ref)}. Read exactly these — ${scope} — and continue:\n${activities.map((a) => `- ${activityDetail(a)}`).join("\n")}${more}`
+    // The blank line separates the instruction from the items. Fray's transcript renders a delivered
+    // wake as PLAIN TEXT with line breaks preserved (no list markup — verified in the running app), so
+    // this buys a paragraph break rather than an <li>, and it keeps the two readable as distinct parts
+    // in a terminal composer too.
+    return `${icon} ${activities.length + omitted} new GitHub items on ${refKey(ref)}. Read exactly these — ${scope} — and continue:\n\n${activities.map((a) => `- ${activityDetail(a)}`).join("\n")}${more}`
   }
 
   // The operator-facing log line for this wake. Names the distinct actors rather than a count, since

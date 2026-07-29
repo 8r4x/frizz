@@ -505,6 +505,7 @@ test("pr-watch: a BURST between polls is enumerated in full, oldest first — no
     h.resumes[0].message,
     [
       "👤 3 new GitHub items on acme/app#391. Read exactly these — ignore older activity you have already handled — and continue:",
+      "",
       `- comment from @carol at ${t1}: https://github.com/acme/app/pull/391#issuecomment-1`,
       `- comment from @coderabbitai[bot] at ${t2}: https://github.com/acme/app/pull/391#issuecomment-2`,
       `- approval from @dana at ${t3}: https://github.com/acme/app/pull/391#pullrequestreview-3`,
