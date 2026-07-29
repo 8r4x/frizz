@@ -1,5 +1,5 @@
 import Database from "better-sqlite3"
-import { ThreadSlug, tmuxSessionName } from "@fray-ui/shared"
+import { ThreadSlug, slugify, tmuxSessionName } from "@fray-ui/shared"
 import { createInteractionStore, type InteractionStore } from "./interaction-store.ts"
 
 // The UI-state store (never .fray/): session registry + settings. SQLite at
@@ -153,6 +153,18 @@ export function isBrokerClaudeRow(row: Pick<SessionRow, "backend" | "claude_runt
 // auto-title CAS all decide through this one predicate.
 export function sessionTitleLocked(row: Pick<SessionRow, "title_auto" | "title_locked">): boolean {
   return (row.title_locked ?? (row.title_auto === 1 ? 0 : 1)) === 1
+}
+
+// Does this slug read as one DISPATCH minted from this exact title? Only dispatch derives the two
+// from each other — `slugify(title)`, plus the `-2`/`-3` suffix resolveSlug appends on a collision —
+// so an affirmative means the stored title is still the one the thread was spawned with. Every human
+// title writer (rename, native /rename) rewrites the title and leaves the slug alone, so a renamed
+// thread answers NO. That asymmetry is the whole basis of the boot repair that unlocks titles a
+// dispatch-path bug froze; it is a heuristic, never an invariant, so nothing but that one-time repair
+// may decide anything on it.
+export function slugMintedFromTitle(slug: string, title: string): boolean {
+  const derived = slugify(title)
+  return derived === slug || derived === slug.replace(/-\d+$/, "")
 }
 
 export interface RuntimeExpectation {
@@ -605,6 +617,36 @@ export function createStorage(dbPath: string): Storage {
     // (A boot repair that re-LOCKED instead would be the dangerous direction: it would silently re-lock
     // each newly dispatched caller-titled row on the next restart.)
     db.exec("UPDATE session SET title_locked = 0 WHERE title_auto = 1")
+    // ONE-TIME repair for titles locked by a BUG rather than by a human. From the broker's arrival
+    // (2026-07-24) until the fix that ships with this line, the Claude session-broker dispatch path
+    // omitted `title_locked` from its registry row, and an absent value on a caller-titled row
+    // normalises to LOCKED (see sessionTitleLocked — it fails safe, which here means failing into the
+    // bug). So every GitHub-batch and spawn_thread thread froze on its dispatch title
+    // (`Investigate acme/app#391`) while the worker's own, far better name was withheld forever.
+    // Rows that predate the title_auto/title_locked split carry the same shape, left locked by the
+    // deliberately conservative ADD COLUMN backfill above.
+    //
+    // A human's rename and a stuck dispatch title are indistinguishable by the flags alone, so this
+    // asks a sharper question: does the SLUG still read as one this exact title minted? Dispatch is
+    // the only writer that derives one from the other, and a rename rewrites the title while leaving
+    // the slug untouched — so a renamed thread fails the test, which is what keeps the repair off
+    // human names. It runs ONCE (settings marker) because, unlike the invariant-based repairs around
+    // it, that test is a heuristic: a human rename after the repair must be the last word.
+    const unlockedRepairKey = "repair:unlock-dispatch-minted-titles"
+    const repairDone = db.prepare<[string], { value: string }>("SELECT value FROM settings WHERE key = ?")
+      .get(unlockedRepairKey)
+    if (!repairDone) {
+      const unlockOne = db.prepare("UPDATE session SET title_locked = 0 WHERE slug = ? AND title_locked = 1")
+      const candidates = db.prepare<[], Pick<SessionRow, "slug" | "title">>(`
+        SELECT slug, title FROM session
+        WHERE title_locked = 1 AND title_auto = 0 AND title IS NOT NULL AND title <> ''
+      `).all()
+      for (const row of candidates) {
+        if (row.title && slugMintedFromTitle(row.slug, row.title)) unlockOne.run(row.slug)
+      }
+      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
+        .run(unlockedRepairKey, new Date().toISOString())
+    }
     // The tmux codex composer is gone, and with it every writer AND releaser of its durable
     // 'codex-input' runtime lock. A row that still holds one was locked by the retired subsystem and
     // nothing can ever clear it again: the board reports runtimeControlPending forever, which fences

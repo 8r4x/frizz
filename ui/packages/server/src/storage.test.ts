@@ -782,9 +782,9 @@ test("the title_locked migration backfills conservatively and its boot repair is
 
   // Reopening runs the ADD COLUMN + repair exactly as a server upgrade does. Both titles a human owns
   // (explicit and legacy) come back LOCKED from the conservative DEFAULT; only the machine guess is
-  // unlocked by the repair. The caller-titled row is indistinguishable from a rename at this point and
-  // is correctly locked — the feature applies to threads dispatched from here on, and nothing that
-  // predates it silently loosens.
+  // unlocked by the flag-keyed repair. The caller-titled row stays locked here because this fixture's
+  // slug ("caller") is not one its title could have minted — the dispatch-minted repair below is the
+  // one that reaches rows whose slug still proves where the title came from.
   const upgraded = createStorage(dbPath)
   assert.equal(upgraded.getSession("named")?.title_locked, 1)
   assert.equal(upgraded.getSession("guessed")?.title_locked, 0)
@@ -798,6 +798,42 @@ test("the title_locked migration backfills conservatively and its boot repair is
   const restarted = createStorage(dbPath)
   assert.equal(restarted.getSession("fresh")?.title_locked, 0, "a restart never re-locks a caller's dispatch title")
   assert.equal(restarted.getSession("named")?.title_locked, 1)
+  restarted.close()
+})
+
+test("the one-time repair unlocks titles a dispatch minted, and never a human's rename", () => {
+  const dbPath = join(mkdtempSync(join(tmpdir(), "fray-title-repair-")), "ui.db")
+  const first = createStorage(dbPath)
+  // Slugs as the dispatcher mints them: slugify(title), plus the -2 suffix resolveSlug adds on a
+  // collision. `renamed` is the counter-case — a thread the human renamed, so its slug still reads as
+  // the ORIGINAL dispatch title and no longer as the stored one.
+  first.upsertSession(row({ slug: "investigate-acme-app-391", session_id: "sid-a", title: "Investigate acme/app#391", title_auto: 0 }))
+  first.upsertSession(row({ slug: "investigate-acme-app-391-2", session_id: "sid-b", title: "Investigate acme/app#391", title_auto: 0 }))
+  first.upsertSession(row({ slug: "i-m-seeing-a-stale-cache", session_id: "sid-c", title: "Resolver cache bug", title_auto: 0 }))
+  first.upsertSession(row({ slug: "raw-prompt-chop", session_id: "sid-d", title: "raw prompt chop", title_auto: 1 }))
+  first.close()
+
+  // Rewind to the state the broker bug left behind: caller-titled rows locked, and no record that the
+  // repair has run. (A server old enough to write those rows is old enough not to know the marker.)
+  const raw = new Database(dbPath)
+  raw.exec("UPDATE session SET title_locked = 1 WHERE title_auto = 0")
+  raw.exec("DELETE FROM settings WHERE key = 'repair:unlock-dispatch-minted-titles'")
+  raw.close()
+
+  const upgraded = createStorage(dbPath)
+  assert.equal(upgraded.getSession("investigate-acme-app-391")?.title_locked, 0, "the slug proves the title came from a dispatch")
+  assert.equal(upgraded.getSession("investigate-acme-app-391-2")?.title_locked, 0, "…including through a collision suffix")
+  assert.equal(upgraded.getSession("i-m-seeing-a-stale-cache")?.title_locked, 1, "a renamed thread's slug no longer matches its title — untouched")
+  assert.equal(upgraded.getSession("raw-prompt-chop")?.title_auto, 1, "a machine guess is unlocked by the flag repair, not this one")
+
+  // ONE time only: the predicate is a heuristic, so a human who re-locks a repaired row by renaming it
+  // keeps that name even if their new title happens to mint the slug again.
+  upgraded.setTitle("investigate-acme-app-391", "Investigate acme/app#391")
+  assert.equal(upgraded.getSession("investigate-acme-app-391")?.title_locked, 1)
+  upgraded.close()
+
+  const restarted = createStorage(dbPath)
+  assert.equal(restarted.getSession("investigate-acme-app-391")?.title_locked, 1, "the repair never runs a second time")
   restarted.close()
 })
 

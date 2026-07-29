@@ -1,0 +1,100 @@
+import { test } from "node:test"
+import assert from "node:assert/strict"
+import { mkdtempSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { createDispatcher } from "./dispatch.ts"
+import { createStorage } from "./storage.ts"
+import { defaultSettings } from "./settings.ts"
+import { cwdSlug, type Project } from "./project.ts"
+import type { BoardManager } from "./board.ts"
+import type { ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
+import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
+import type { PaneIdentity } from "./tmux.ts"
+
+// TITLE PROVENANCE ACROSS EVERY TRANSPORT.
+//
+// A title a dispatch CALLER hard-coded — `Investigate acme/app#391` from the GitHub batch, a parent
+// agent's guess through spawn_thread — is a real name (title_auto 0, so the UI shows it verbatim
+// instead of "Spinning up…") that no human authored (title_locked 0, so the worker's own aiTitle
+// supersedes it). Both halves matter and they live on DIFFERENT columns, which is exactly how the
+// Claude broker path lost one: it was added a day before the flags were split, so the split patched
+// the tmux and codex writers and left the broker's registry row without `title_locked` at all.
+// An absent value is not a type error and normalises to LOCKED (sessionTitleLocked fails safe), so
+// every GitHub-dispatched thread froze on `Investigate owner/repo#N` while the far better title the
+// worker had already reported sat unread in its transcript.
+//
+// So this asserts the invariant TRANSPORT BY TRANSPORT rather than through whichever one happens to
+// be the default — a fourth transport has to answer the same question before it can ship.
+
+function harness() {
+  const dir = mkdtempSync(join(tmpdir(), "fray-title-lock-"))
+  const storage = createStorage(join(dir, "ui.db"))
+  const project: Project = { dir, id: "title-lock", name: "t", label: "o/t", stateDir: dir, cwdSlug: cwdSlug(dir) }
+  const board = {
+    snapshot: async () => ({}),
+    currentSeq: () => 0,
+    rebuild: async () => {},
+    refresh: () => ({}),
+    start: async () => {},
+    stop: async () => {},
+  } as unknown as BoardManager
+  const claudeBroker = {
+    spawnDispatch: async (input: { threadSlug: string; sessionId: string; cwd: string }) => ({
+      binding: { threadSlug: input.threadSlug, sessionId: input.sessionId, cwd: input.cwd },
+    }),
+    releaseSession: () => {},
+  } as unknown as ClaudeAgentBrokerBridge
+  const codexAppServer = {
+    spawnDispatch: async () => ({ binding: { codexSessionId: "codex-rollout-id" }, turnId: "turn-1" }),
+    releaseSession: () => {},
+  } as unknown as CodexAppServerBridge
+  const dispatcher = createDispatcher({
+    project,
+    storage,
+    board,
+    getSettings: () => ({ ...defaultSettings(), model: "sonnet", effort: "high" }),
+    ensureServer: () => {},
+    hasSession: () => false,
+    spawn: (): PaneIdentity => ({ paneId: "%1", panePid: 4242, sessionCreated: 1 }),
+    killPane: () => {},
+    killSession: () => {},
+    claudeBroker,
+    codexAppServer,
+  })
+  return { dir, storage, dispatcher }
+}
+
+const CALLER_TITLE = "Investigate acme/app#391"
+
+for (const transport of ["claude-broker", "claude-tmux", "codex"] as const) {
+  test(`${transport}: a caller's dispatch title is shown as a name but never locked against the worker's own`, async (t) => {
+    // The broker is the DEFAULT claude transport (opt out with FRAY_CLAUDE_BROKER_BRIDGE=0), so the
+    // tmux case has to switch it off for the length of its own dispatch.
+    if (transport === "claude-tmux") {
+      const prior = process.env.FRAY_CLAUDE_BROKER_BRIDGE
+      process.env.FRAY_CLAUDE_BROKER_BRIDGE = "0"
+      t.after(() => {
+        if (prior === undefined) delete process.env.FRAY_CLAUDE_BROKER_BRIDGE
+        else process.env.FRAY_CLAUDE_BROKER_BRIDGE = prior
+      })
+    }
+    const { storage, dispatcher } = harness()
+    const { slug } = await dispatcher.dispatch(
+      { prompt: "Investigate this issue and make recommendations", title: CALLER_TITLE },
+      { backend: transport === "codex" ? "codex" : "claude" },
+    )
+    const row = storage.getSession(slug)
+    assert.equal(row?.title, CALLER_TITLE)
+    assert.equal(row?.title_auto, 0, "a caller's title is a real name, not the prompt chop — no 'Spinning up…' placeholder")
+    assert.equal(row?.title_locked, 0, "…and no human authored it, so the worker's own aiTitle must still win")
+  })
+}
+
+test("a dispatch with NO caller title stores a guess that is likewise replaceable", async () => {
+  const { storage, dispatcher } = harness()
+  const { slug } = await dispatcher.dispatch({ prompt: "fix the flaky resolver test" })
+  const row = storage.getSession(slug)
+  assert.equal(row?.title_auto, 1, "the prompt chop is a machine guess the UI must not present as a name")
+  assert.equal(row?.title_locked, 0)
+})

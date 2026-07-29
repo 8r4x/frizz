@@ -8,6 +8,7 @@ import {
   DispatchInput,
   THREAD_SLUG_MAX_CHARS,
   ThreadSlug,
+  slugify,
   tmuxSessionName,
   type Settings,
   type PermissionMode,
@@ -39,17 +40,10 @@ import {
 // scratchpad (.fray/threads/<sessionId>/scratch.md). The prompt is the ONLY intelligence: settings'
 // dispatchPreamble (all orchestration wisdom) + scratchpad orientation + the task.
 
-// title -> slug matching the board's id regex (^[a-z0-9][a-z0-9-]*$). Non-alnum collapses to a
-// single '-'; leading/trailing '-' trimmed; empty falls back to "thread".
-export function slugify(title: string): string {
-  const s = title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-  // Leave no partial trailing separator after the cap. The collision suffixer below preserves this
-  // same bound when it appends -2, -3, … to a maximum-length base.
-  return s.slice(0, THREAD_SLUG_MAX_CHARS).replace(/-+$/g, "") || "thread"
-}
+// title -> slug. The rule itself lives in @fray-ui/shared beside the ThreadSlug contract (the
+// registry's boot repair recognises dispatch-minted slugs with it); re-exported here because every
+// caller reaches for it through the dispatcher.
+export { slugify }
 
 // Derive a concrete thread title from the prompt when the human didn't supply one: the first ~6
 // words of the prompt's first line, capped at 48 chars, ellipsized if anything was dropped. The
@@ -927,6 +921,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             archived: 0,
             rested_at: null,
             title_auto: input.title?.trim() ? 0 : 1,
+            title_locked: 0, // a caller's hard-coded title is not a human's — the worker may rename it
             title: registryTitle,
             state: "open",
             meta: null,
