@@ -10,7 +10,7 @@
 // The project defaults to the fray repo itself (a gh-authed repo, an empty board under the temp HOME).
 //
 // Usage:
-//   npx tsx ui/scripts/adhoc-stack.mjs [--port=4930] [--project=/abs/dir] [--claude-bin=/abs/bin] [--wakers] [--reaper] [--keep] [--seed]
+//   npx tsx ui/scripts/adhoc-stack.mjs [--port=4930] [--project=/abs/dir] [--claude-bin=/abs/bin] [--wakers] [--reaper] [--keep] [--home=/abs] [--seed]
 //
 // It prints ONE json line to stdout: {"url","port","home","socket","project"} once /health is green,
 // then stays up until SIGINT/SIGTERM, deleting the temp HOME on exit (unless --keep). Run it with Bash
@@ -29,11 +29,15 @@ const opt = (k, d) => {
 const port = Number(opt("port", "4930"))
 const projectDir = opt("project", process.cwd().replace(/\/ui$/, "")) // default: the fray repo root
 const claudeBin = opt("claude-bin", undefined)
-const keep = flag("keep")
+// --home=/abs reuses a sandbox a previous `--keep` run left behind, which is the only way to verify
+// anything that happens at BOOT against state that already exists — a schema migration, a registry
+// repair, resume/recovery. Implies --keep: a HOME you were handed is never one this run may delete.
+const reuseHome = opt("home", undefined)
+const keep = flag("keep") || reuseHome !== undefined
 
 // Sandbox HOME first — resolveProject() reads homedir() lazily, so setting it now redirects the whole
 // state tree (~/.fray/projects/<id>/) into the throwaway dir before the server derives any path.
-const home = mkdtempSync(join(tmpdir(), "fray-adhoc-home-"))
+const home = reuseHome ?? mkdtempSync(join(tmpdir(), "fray-adhoc-home-"))
 mkdirSync(join(home, ".fray"), { recursive: true })
 process.env.HOME = home
 process.env.FRAY_TMUX_SOCKET = `fray-adhoc-${port}-${process.pid}`
