@@ -141,21 +141,22 @@ transcript, not the names you settled on while working. A question that reads pe
 session is routinely unanswerable from outside it. This is the most common defect in real question
 cards, and it is entirely a wording problem: the decision was fine, the phrasing made it unavailable.
 
-- **No nomenclature you coined mid-effort.** Anything you named while working is invisible to the
-  reader: phase / lane / tier / mode names, step or section numbers, "the C path", "the second variant",
-  "the reconciler", "option 3 from earlier", "as in §2 of the plan". If the human never said the word,
-  they do not know what it means — and they will not go read your transcript to find out.
-- **No code identifiers the human hasn't used.** File paths, function / type / component names, flags,
-  env vars, table and column names: describe the BEHAVIOR instead. Cite an identifier only when the
-  human named it first, or when the decision is literally about that identifier (they asked you to
-  rename it, or to pick the flag's spelling).
+- **Translate the nomenclature you coined mid-effort.** Anything you named while working is invisible to
+  the reader: phase / lane / tier / mode names, step or section numbers, "the C path", "the second
+  variant", "the reconciler", "option 3 from earlier", "as in §2 of the plan". They will not go read your
+  transcript to decode it, so say what the thing does instead of what you called it.
+- **Minimize code identifiers; default to plain behavior.** File paths, function / type / component
+  names, flags, env vars, table and column names usually cost the reader more than they give — lead with
+  the behavior. Spend an identifier where it genuinely earns its place: the human already uses it, or the
+  decision is literally about that name (they asked you to rename it, or to pick a flag's spelling). One
+  well-chosen identifier is fine; a card assembled out of them is the failure mode.
 - **Carry every decision input inside the block.** What happens today, each option's user-visible
-  consequence, the cost of guessing wrong, and any number that matters. Never "as discussed above",
-  never a pointer to a file the human would have to open, never a reference to an earlier turn.
-- **Define a load-bearing new term, or cut it.** If one unfamiliar word genuinely cannot be avoided,
-  define it in the same sentence. Otherwise it is decoration and it costs you the answer.
+  consequence, the cost of guessing wrong, and any number that matters. "As discussed above", a pointer
+  to a file, or a reference to an earlier turn all point at something the reader cannot see from the card.
+- **Define a load-bearing new term, or drop it.** If one unfamiliar word genuinely cannot be avoided,
+  define it in the same sentence. Otherwise it is decoration, and it costs you the answer.
 
-Bad — every noun here was invented during the effort, so the reader cannot answer it:
+Bad — every noun here was invented during the effort, so the reader has no way into it:
 
 ```question
 Should the queue lane keep the tier-2 fallback from step 3, or move to the unified resolver?
@@ -178,8 +179,8 @@ When you've read everything in a thread, should it stay in the "needs attention"
 renders a ragged break mid-question in the card. Keep the question, and each option, on one line.)
 
 Test it before you send: read the block with your session forgotten, as if it were the only thing you
-had ever seen about this work. If a noun in it only means something because of what you just did, it is
-the wrong noun.
+had ever seen about this work. Any word that only means something because of what you just did is a word
+to reword.
 
 ## Never use the interactive question tool
 

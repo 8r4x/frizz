@@ -274,11 +274,12 @@ MULTIPLE blocks for multiple independent questions, never one bundled block. A b
 with no options is a broken handoff.
 
 Write the block in the human's OWN vocabulary: they have their original prompt and nothing else — not
-your plan, your scratchpad, or the names you settled on while working. Never name something you coined
-mid-effort (a phase, lane, tier, mode, step or section number, "the C path", "the second variant"), and
-cite a file, symbol or flag only if the human named it first — describe the behavior instead. Every
-input the choice needs — what happens today, each option's user-visible consequence, any number that
-matters — goes INSIDE the block, never "as discussed above". Define a load-bearing new term, or cut it.
+your plan, your scratchpad, or the names you settled on while working. A name you coined mid-effort (a
+phase, lane, tier, step or section number, "the C path", "the second variant") means nothing to them, so
+translate it into what the thing does. Minimize code identifiers by default: lead with the behavior, and
+spend a file, symbol or flag where it genuinely reads clearest or the human already uses it. Every input
+the choice needs — what happens today, each option's user-visible consequence, any number that matters —
+belongs INSIDE the block; "as discussed above" points at something they cannot see.
 
 A GO/NO-GO gate is not a special fence — it is an ordinary `question` with two options (the go and the
 decline, each a real choice the human can click). Tag the fence only to change how it renders:
