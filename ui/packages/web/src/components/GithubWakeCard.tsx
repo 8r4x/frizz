@@ -6,19 +6,24 @@
 // aligned like every other first-party card, in the shared TranscriptCard chrome, with the GitHub
 // activity broken back out into rows the human can actually click through to.
 import type { ReactNode } from "react"
-import { Bell, Bot, Github, User } from "lucide-react"
+import { ArrowUpRight, Bell, Bot, Github, User } from "lucide-react"
 import { parseGithubWakeSteer, type GithubWakeItem } from "@fray-ui/shared"
 import { CARD_BODY, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { MessageDebugId } from "./MessageDebugId.tsx"
+import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { wakeCardTitle, wakeItemAge, wakeRefUrl } from "../lib/githubWakeCard.ts"
 
-function WakeShell({
-  sourceId,
-  children,
-}: {
-  sourceId?: string
-  children: ReactNode
-}) {
+// ONE icon+label rhythm for the whole card. The kind header (CardKind) pairs a 12px lucide glyph with
+// its label at `gap-1` and the measured optical nudge; every row below repeats exactly that, so the
+// card reads as one grid instead of a header and a list that disagree about their spacing by 4px.
+const ROW_ICON = `shrink-0 ${ICON_LABEL_NUDGE}`
+
+// The app's link language, straight off `.md-body a` in styles.css: accent, underlined, 2px offset.
+// A link has to LOOK like one at rest — `text-fg` with a hover-only underline reads as a plain label,
+// and nobody hovers a label to find out.
+const CARD_LINK = "text-accent underline underline-offset-2 decoration-accent/40 hover:decoration-accent"
+
+function WakeShell({ sourceId, children }: { sourceId?: string; children: ReactNode }) {
   // NOT `self-end`: right-justification is the human's side of the conversation, and that placement is
   // most of what made a watcher notification read as something the operator sent.
   return (
@@ -29,36 +34,37 @@ function WakeShell({
   )
 }
 
-function ItemRow({ item, showLabel, wrap }: { item: GithubWakeItem; showLabel: boolean; wrap?: boolean }) {
+function ItemRow({ item, showLabel }: { item: GithubWakeItem; showLabel: boolean }) {
   const Icon = item.bot ? Bot : User
   const age = wakeItemAge(item.at)
   const body = (
     <>
-      <Icon size={12} className="mt-0.5 shrink-0 text-muted/70" />
-      <span className="min-w-0 flex-1">
+      <Icon size={12} className={`${ROW_ICON} text-muted/70`} />
+      <span className="min-w-0 flex-1 truncate">
         <span className="font-medium text-fg/90">@{item.actor}</span>
         {/* The heading already names the kind when there is only one item ("New comment"), so repeating
             it on the row read as a stutter: "New comment / @colinhacks · comment". */}
         {showLabel && <span className="text-muted"> · {item.label}</span>}
       </span>
       {age && (
-        // The exact instant stays available on hover; the row shows the age, which is the thing a
-        // human scanning a burst actually reads.
+        // The exact instant stays available on hover; the row shows the age, which is what a human
+        // scanning a burst actually reads.
         <span title={item.at} className="shrink-0 tabular-nums text-[11px] text-muted/60">
           {age}
         </span>
       )}
     </>
   )
-  const className = `flex items-start gap-2 rounded-md px-2 py-1.5 text-[12px] leading-snug ${wrap ? QUEUE_WRAP : ""}`
-  // An item with no permalink (a GitHub shape surprise) stays a row rather than becoming a dead link.
-  if (!item.url) return <div className={className}>{body}</div>
+  // `-mx-2 px-2` lets the hover fill bleed into the card's own padding so the row reads as a full-width
+  // target, while the icon still starts on the card's content edge — the same x as the kind header's.
+  const shape = "-mx-2 flex items-center gap-1 rounded-md px-2 py-1 text-[12px] leading-5"
+  if (!item.url) return <div className={shape}>{body}</div>
   return (
     <a
       href={item.url}
       target="_blank"
       rel="noreferrer noopener"
-      className={`${className} -mx-2 transition-colors hover:bg-bg/50 focus-visible:bg-bg/50 focus-visible:outline-none`}
+      className={`${shape} outline-none transition-colors hover:bg-bg/60 focus-visible:bg-bg/60 focus-visible:ring-1 focus-visible:ring-fg/40`}
     >
       {body}
     </a>
@@ -79,16 +85,20 @@ export function GithubWakeCard({ text, sourceId, wrap }: { text: string; sourceI
     )
   }
   const refUrl = wakeRefUrl(steer.ref)
+  const total = steer.items.length + steer.omitted
   return (
     <WakeShell sourceId={sourceId}>
-      <TranscriptCard icon={Github} label={wakeCardTitle(steer.items.length + steer.omitted, steer.items[0].label)}>
-        <div className={CARD_BODY}>
+      <TranscriptCard icon={Github} label={wakeCardTitle(total, steer.items[0].label)}>
+        {/* The card's SUBJECT line: which PR this is about, as an obvious link. It sits on the same
+            left edge as the kind header and the rows, so the card has one vertical spine. */}
+        <div className={`${CARD_BODY} truncate`}>
           {refUrl ? (
-            <a href={refUrl} target="_blank" rel="noreferrer noopener" className="font-medium text-fg/90 hover:underline">
+            <a href={refUrl} target="_blank" rel="noreferrer noopener" className={`inline-flex items-center gap-1 ${CARD_LINK}`}>
               {steer.ref}
+              <ArrowUpRight size={12} className={ROW_ICON} />
             </a>
           ) : (
-            <span className="font-medium text-fg/90">{steer.ref}</span>
+            <span className="text-fg/90">{steer.ref}</span>
           )}
         </div>
         <div className="mt-1.5 flex flex-col">
@@ -97,15 +107,12 @@ export function GithubWakeCard({ text, sourceId, wrap }: { text: string; sourceI
               key={item.url ?? `${item.actor}-${item.at ?? ""}-${item.label}`}
               item={item}
               showLabel={steer.items.length > 1}
-              wrap={wrap}
             />
           ))}
         </div>
         {steer.omitted > 0 && (
           // Never let the card imply it listed everything: the steer counted these but did not name them.
-          <div className="mt-1.5 px-2 text-[11px] text-muted/60">
-            …and {steer.omitted} more not listed
-          </div>
+          <div className="mt-1 text-[11px] leading-5 text-muted/60">…and {steer.omitted} more not listed</div>
         )}
       </TranscriptCard>
     </WakeShell>

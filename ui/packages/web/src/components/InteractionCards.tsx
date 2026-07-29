@@ -253,7 +253,7 @@ function InteractionQuestionCard({
       )}
       {delivery.actionsEnabled && !sent && (
         // The SAME Send answers verb, chrome and placement a fence question's message-level button uses.
-        <div className="flex justify-end">
+        <div className="flex justify-start">
           <button
             type="button"
             data-send-answers
@@ -561,7 +561,7 @@ function InteractionApprovalCard({
               />
               <span>I understand this may authorize later matching actions in this session.</span>
             </label>
-            <div className="mt-3 flex flex-wrap justify-end gap-2">
+            <div className="mt-3 flex flex-wrap justify-start gap-2">
               <button
                 type="button"
                 onClick={() => {
@@ -588,7 +588,7 @@ function InteractionApprovalCard({
         {(delivery.status ?? status) && <div role="status" aria-live="polite" className="mt-3 text-[11px] leading-snug text-muted">{delivery.status ?? status}</div>}
 
         {delivery.actionsEnabled && !confirming && !responseAccepted && visibleDecisions.length > 0 && (
-          <div className="mt-4 flex flex-wrap justify-end gap-2">
+          <div className="mt-4 flex flex-wrap justify-start gap-2">
             {visibleDecisions.map((decision) => (
               <button
                 key={decision.id}

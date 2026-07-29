@@ -92,14 +92,24 @@ export function TranscriptCard({
 // card is not visibly larger than the same sentence in the card above it.
 export const CARD_BODY = "block min-w-0 text-[12px] leading-5 text-fg/85"
 
-// Part two: the action row, ALWAYS right-justified (maintainer 2026-07-24). A card's buttons are its
-// trailing verb; hung on the left they read as another paragraph of the body and every card disagreed
-// with every other about where to look for the action. Any explainer text passed as the first child
-// takes the leftover width (`flex-1 min-w-0`) and wraps its own lines there, so the button still
-// anchors the right edge on a narrow queue card instead of being pushed onto its own line.
+// Part two: the action row, ALWAYS LEFT-justified (maintainer 2026-07-29). Every card's action starts
+// at the same x as its kind header and its body copy, so the eye finds the verb on the one vertical
+// line the whole card is already built on — rather than tracking to a right edge whose position moves
+// with the card's width. The rule matters more than either direction did: what made nine sibling cards
+// read as nine unrelated shapes was disagreeing about it at all.
+//
+// Explanatory copy for the action (the awaiting card's "This will dismiss the card…") goes IMMEDIATELY
+// TO THE RIGHT of its button and is centered against it, so the pair reads as one control with its
+// caption rather than as a sentence the button happens to sit near. `items-center` is what holds that
+// alignment; the explainer takes the leftover width and wraps its own lines there (`flex-1 min-w-0`)
+// instead of pushing the button onto a line of its own on a narrow queue card.
 export function CardActions({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`mt-3 flex flex-wrap items-center justify-end gap-x-2.5 gap-y-2 ${className}`}>{children}</div>
+  return <div className={`mt-3 flex flex-wrap items-center justify-start gap-x-2.5 gap-y-2 ${className}`}>{children}</div>
 }
+
+// The explainer that sits beside a card's action. Exported so every card spells its caption the same
+// way instead of re-deriving the muted scale and the flex behavior at each call site.
+export const CARD_ACTION_EXPLAINER = "min-w-0 flex-1 text-[11px] leading-snug text-muted/70"
 
 // The primary (light-on-dark) verb EVERY card's main action wears — the done card's white
 // "Mark as done" chrome. Exported because this is a rule, not a per-card choice (maintainer 2026-07-24:
