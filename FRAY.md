@@ -55,6 +55,32 @@ runtime, the way it will really run, and observe the real outcome. This is non-n
   what you actually exercised and what you could NOT, and why. "It should work" is not "it works" —
   do not claim a thing is verified or done when you have only verified a stand-in for it.
 
+## Dial in the visuals yourself — "it renders" is not "it looks right"
+
+For UI work, running the thing is only half the gate. The other half is JUDGING what you rendered, and
+it is the half that keeps getting skipped — this section exists because the maintainer has had to say
+"the alignment is off" one time too many on work that was otherwise finished and verified.
+
+**Load the `visual-review` skill** the moment you place an icon, glyph, emoji, badge, chip, or counter
+beside text, and before you call any new UI correct. It carries the ink-measurement routine, the
+per-glyph numbers it produced, and the instrument bug that makes a naive baseline probe report ~3x the
+real error. The two rules to internalize:
+
+- **You are the first reviewer of your own screenshot.** Taking the shot is not reviewing the shot. Read
+  it back and hunt for what is wrong with it — a glyph riding high or low, one mark visually heavier than
+  its neighbours, something colliding or clipping at a narrow width. Capture at a scale where the detail
+  is actually judgeable (a 40px component inside a 1400px frame cannot be reviewed). If you would not
+  ship it to a design-conscious colleague without a caveat, fix the caveat instead of writing it.
+- **Icon-beside-text alignment is an INK problem, and every glyph differs.** `items-center` centers a
+  glyph's BOX on the flex line, but the eye aligns ink: a digit has no descender so its ink rides high,
+  an SVG's ink sits wherever its path falls inside its viewBox, an emoji ignores your font size. One
+  shared nudge therefore cannot fix a cluster — measure each glyph, correct each in `em` so it tracks
+  the font size, then re-measure and confirm the residual is ~0. Leave sub-pixel offsets alone.
+
+And when the pattern already exists in a real product — GitHub, Linear, this app's own components — go
+measure the real one and mirror it rather than designing from taste. Reading the real DOM settles in one
+call what two rounds of guessing will not.
+
 ## Git: land on local `main` — NEVER open a pull request
 
 **This repo does NOT use pull requests. At all. Ever.** This section OVERRIDES fray's default

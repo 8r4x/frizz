@@ -37,6 +37,27 @@ explicit browser-cleanup confirmation. This does not apply to purely non-UI chan
 and widths to capture, browser process hygiene (one owned instance per task; never a global close or a
 broad `pkill`), and how to embed evidence so fray renders it inline.
 
+# Visual alignment is the implementer's job, not a review someone else does
+
+**Load the `visual-review` skill whenever you place an icon, glyph, emoji, badge, chip, or counter next
+to text — and before you declare any new UI correct.** It carries the ink-measurement routine, the
+per-glyph offsets it produced, and the instrument bug that makes a naive baseline probe report ~3x the
+real error. Two non-negotiables from it:
+
+- **You are the first reviewer of your own screenshot.** Capturing evidence is not reviewing evidence.
+  Read the shot back and actively hunt for what is wrong with it — a glyph riding high, mismatched visual
+  weight, a collision at a narrow width. Never hand over a screenshot you have not personally critiqued.
+  Capture at a scale where the detail is judgeable; a 40px component inside a 1400px shot cannot be
+  reviewed, and glancing at it counts for nothing.
+- **Icon-beside-text alignment is an INK problem, and every glyph differs.** `items-center` centers a
+  glyph's BOX on the flex line; the eye aligns ink. A digit has no descender, an SVG's ink sits wherever
+  its path falls inside its viewBox, an emoji ignores your font size — so one shared nudge cannot fix a
+  cluster. Measure each glyph, correct each in `em`, then re-measure and confirm the residual is ~0.
+
+Do not ship "it renders" and wait to be told it looks wrong. If the pattern exists in a real product
+(GitHub, Linear, this app's own components), measure the real one and mirror it instead of designing
+from taste.
+
 # Copy capitalization: sentence case, never title case
 
 All user-visible copy uses SENTENCE case — capitalize only the first word and any proper nouns. This

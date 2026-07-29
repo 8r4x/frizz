@@ -182,6 +182,11 @@ Optical review is part of the pass, not a follow-up: icons beside text must be o
 centered, and placement, truncation, and wrapping must be checked by looking at the screenshot — box
 model numbers alone are not a pass.
 
+**This skill gets you the shot; the `visual-review` skill tells you how to JUDGE it — load that one too
+for any UI change.** It carries the ink-measurement routine for icon-beside-text alignment (every glyph
+is off by a different amount, so one shared nudge cannot fix a cluster), the sign convention, and the
+flex-item baseline-probe bug that inflates a real 1.2px error into a plausible-looking 3.5px one.
+
 ---
 
 ## 4. Before you rest
