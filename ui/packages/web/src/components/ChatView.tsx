@@ -18,7 +18,6 @@ import { splitQuestionBlocks, parseQuestionBlock, type QuestionKind, type BlockA
 import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
 import { parseAnswersCard, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
 import { GithubWakeCard } from "./GithubWakeCard.tsx"
-import { SubAgentReportCard } from "./SubAgentReportCard.tsx"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
 import { sendEagerFollowUp } from "../lib/eagerComposerSubmission.ts"
 import { useUnqueueFollowUp, useUnqueueSupported } from "../lib/unqueueFollowUp.ts"
@@ -2587,8 +2586,9 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     // …and the same correction for the OTHER writer of a user turn the human didn't type: a background
     // sub-agent pushing a report up to its parent through `SendMessage({to:"main"})`. `m.peerFrom` is the
     // server's own tell (it parsed the <agent-message> wrapper and put the body in displayText, which
-    // `text` above already carries), never a text guess made here.
-    if (m.peerFrom) return <SubAgentReportCard text={text} from={m.peerFrom} agentId={m.peerAgentId} sourceId={m.sourceId} wrap={dense} queued={m.queued} />
+    // `text` above already carries), never a text guess made here. It renders as a wake divider rather
+    // than any kind of bubble — see SubAgentReportLine.
+    if (m.peerFrom) return <SubAgentReportLine from={m.peerFrom} agentId={m.peerAgentId} preview={firstLine(text)} sourceId={m.sourceId} dense={dense} />
     // `rawText` rides alongside the presentation text because the two differ: the bubble shows the
     // stripped/normalized copy, while the optimistic cache entry an unqueue has to evict is keyed on
     // the message's own raw text.
@@ -3469,6 +3469,101 @@ function AgentCompletionLine({ call, sourceId }: { call: TranscriptToolCall; sou
         <span className="shrink-0">»</span>
       </span>
       <span className="shrink-0">{tail}</span>
+    </WakeDivider>
+  )
+}
+
+// A SUB-AGENT'S UPWARD REPORT — a background child calling `SendMessage({to:"main"})` mid-flight to tell
+// its dispatcher something before it finishes. It rides the SAME wake-divider idiom as the completion
+// above, and for the same reason: this is a child the worker launched reaching a notable state and
+// re-invoking the agent, which is exactly the class the divider was converged on to carry.
+//
+// It is deliberately NOT a message and NOT a card (maintainer 2026-07-29: it "should look more like tool
+// calls, or even more like the kind of full-width messages that show up whenever a subagent or a sub-shell
+// complete… we don't need to render its full message in the chat like any other message"). The earlier
+// TranscriptCard version rendered the child's whole markdown body inline, which read as a full peer turn
+// and competed with the parent's own prose for the eye.
+//
+// The line keeps ONE short first-line preview, because "reported" on its own is content-free — a
+// completion at least says finished/failed, and the entire point of an upward message is that the reader
+// learns why the child interrupted. The full body stays one click away: the sender is a drill-in link into
+// the child's run log, where its own SendMessage call is recorded, exactly as for a finished child.
+// The report's opening line, for the divider's preview. The divider is PLAIN TEXT chrome, so the child's
+// markdown has to be flattened or its syntax shows up as literal characters (`npm test` rendered with its
+// backticks visible, which just looks like a bug). Deliberately minimal: backticks and asterisks, plus a
+// leading list/quote/heading marker. Underscores are left ALONE — stripping them would mangle the
+// snake_case identifiers these reports are full of, which is worse than an occasional stray `_`.
+function stripInlineMarkdown(line: string): string {
+  return line
+    .replace(/^\s*(?:[-*+]|#{1,6}|>)\s+/, "")
+    .replace(/[`*]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+// CSS does the visual truncation, but the string is capped anyway so a child that opens with a
+// 4000-character paragraph doesn't put all of it in the DOM — and, on the no-drill path, doesn't hand a
+// screen reader an aria-label it reads out in full.
+const REPORT_PREVIEW_MAX = 120
+function firstLine(text: string): string {
+  const line = stripInlineMarkdown(text.split("\n").find((l) => l.trim().length > 0) ?? "")
+  return line.length > REPORT_PREVIEW_MAX ? `${line.slice(0, REPORT_PREVIEW_MAX - 1).trimEnd()}…` : line
+}
+
+function SubAgentReportLine({ from, agentId, preview, sourceId, dense }: { from: string; agentId?: string; preview: string; sourceId?: string; dense?: boolean }) {
+  const slug = useChildDrillSlug()
+  const canDrill = !!(slug && agentId)
+  return (
+    <WakeDivider sourceId={sourceId} marker="agent-report" ariaLabel={canDrill ? undefined : `Sub-agent ${from} reported${preview ? `: ${preview}` : ""}`}>
+      <span className="shrink-0">Sub-agent</span>
+      {/* Guillemets OUTSIDE the truncating element, per the completion line: a title clipped at a narrow
+          width still closes its quote. `from` is the child's subagent_type — the dispatch hook strips
+          `name`, so it is the only label there is, and `agentId` is what disambiguates two siblings. */}
+      <span className="flex shrink-0 items-center">
+        <span>«</span>
+        {canDrill ? (
+          <button
+            type="button"
+            data-subagent-report-open
+            title={CHILD_OPEN_TITLE.AGENT}
+            aria-label={`${CHILD_OPEN_TITLE.AGENT}: ${from}`}
+            onClick={() => pushSubAgentDrawer(slug!, agentId!, { label: from, subagentType: from })}
+            onMouseDown={(e) => e.preventDefault()}
+            className="rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
+          >
+            {from}
+          </button>
+        ) : (
+          <span>{from}</span>
+        )}
+        <span>»</span>
+      </span>
+      <span className="shrink-0">reported</span>
+      {/* The preview is the ONE element allowed to truncate, so the label and sender always survive a
+          narrow rail — the reverse of the completion line, whose tail is a fixed-width outcome.
+          It opts OUT of the divider's petite-caps: that treatment is for short fixed readouts, and a
+          sentence of the child's own prose in small capitals is unreadable. `normal-case` cannot do it —
+          .petite-caps sets font-variant-caps (in both its primary and @supports fallback form), which
+          text-transform does not touch — so the reset has to name font-variant-caps and the tracking. */}
+      {/* CAPPED WIDTH, not just capped characters. The flanking hairlines are `flex-1`, so they only get
+          what the label leaves — a full-length first line squeezed them to 2px and the row stopped reading
+          as a divider at all. Measured in the drawer (row 664px, the fixed "Sub-agent «…» reported" part
+          ~251px), 18rem leaves ~60px of rule each side, matching the balance shorter reports already had.
+          A PERCENTAGE cannot do this job: the preview's containing block is WakeDivider's own label span,
+          which is shrink-to-fit, so a `%` max-width resolves against a width the content itself determines
+          and constrains nothing (measured: it went to 0px hairlines). A fixed cap also behaves correctly on
+          a wider surface — the label stays put and the rules simply grow. */}
+      {/* The preview DROPS OUT rather than shrinking to nothing when the row is narrow. `truncate` clips
+          from the right, so the leading em dash is the last thing to go: at a 430px viewport this rendered
+          as `REPORTED —.` — a dangling dash and an ellipsis, which reads as broken punctuation rather than
+          as a truncation (the same trap the completion line keeps its guillemets outside the clip for).
+          Two narrow cases, and they are NOT the same axis, so both are named: `dense` is the queue rail,
+          which is narrow even on a wide screen, and `max-sm:hidden` covers a genuinely small viewport. */}
+      {preview && !dense && (
+        <span className="hidden min-w-0 max-w-[18rem] truncate font-normal tracking-normal text-muted/60 [font-variant-caps:normal] sm:inline">
+          — {preview}
+        </span>
+      )}
     </WakeDivider>
   )
 }
