@@ -48,7 +48,7 @@ import { InteractionStack } from "./InteractionCards.tsx"
 // surface can render them without importing the thread view. QuestionBlockCard in particular is
 // shared with the native-AskUserQuestion path, which reaches it through InteractionCards.tsx —
 // a file THIS one imports, so the card could not have stayed here without a module cycle.
-import { CARD_BODY, CARD_PRIMARY_ACTION, CARD_PRIMARY_BUTTON, CardActions, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
+import { CARD_BODY, CARD_PRIMARY_ACTION, CARD_PRIMARY_BUTTON, CardActions, CardContent, CardHead, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 // The resting card, shared with the queue (TodosView passes it the event-Snooze; these two surfaces
 // deliberately pass no action — see the module header).
@@ -2647,9 +2647,17 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
 })
 
 // A user's composed multi-block answer, rendered as a structured card that MIRRORS the question
-// component's answered state: the quiet uppercase label + the neutral elevated card of QuestionBlockCard,
-// with each chosen answer in the same accent chip the option chips use when selected (border-accent
-// bg-accent/10). Right-aligned + the user-bubble corner (rounded-br-sm) mark it as a human artifact.
+// component's answered state — so it wears the SAME anatomy as every other transcript card
+// (TranscriptCard's CardHead + CardContent): "Answers" as a real sentence-case title flush with the
+// card's left padding, the glyph parked top-right, and the rows starting on that same left edge.
+//
+// It composes those pieces instead of using TranscriptCard because it is the HUMAN's artifact and must
+// keep the user bubble's identity: right-aligned, capped at 85%, the elevated fill and the
+// rounded-br-sm corner. Only the shell differs; the anatomy inside is identical, which is the point.
+// The header used to be a right-justified lowercase eyebrow, chasing that bubble alignment — but the
+// card's own rows read left-to-right, so it was the one thing in the card fighting its own content.
+// Each chosen answer sits in the same accent chip the option chips use when selected (border-accent
+// bg-accent/10).
 // Each row leads with ITS QUESTION (compact, muted, clamped to two lines — the full text rides the
 // title tooltip) so the answers read in context, not as bare numbered rows; a row whose pairing failed
 // (count mismatch / no question message found — `question` undefined) degrades to the numbered layout,
@@ -2663,33 +2671,33 @@ function AnswersCard({ answers, queued, sourceId }: { answers: PairedAnswer[]; q
   return (
     <div data-fray-msg={sourceId} className={`group/msg relative self-end flex w-full max-w-[85%] flex-col items-end ${queued ? "opacity-50" : ""}`}>
       <MessageDebugId sourceId={sourceId} side="left" />
-      <div className="w-full rounded-2xl rounded-br-sm border border-border-strong bg-elevated px-3.5 py-3">
-        <div className="mb-2 flex items-center justify-end gap-1.5 text-[10px] uppercase tracking-wide text-muted/70">
-          <ListChecks size={11} className="shrink-0" />
-          answers
-        </div>
-        <div className="flex flex-col gap-2.5">
-          {answers.map((a, i) => (
-            <div key={i} className="flex flex-col gap-1">
-              {a.question && (
-                <div title={a.question} className="line-clamp-2 min-w-0 text-[11px] leading-snug text-muted">
-                  {a.question}
-                </div>
-              )}
-              <div className="flex items-start gap-2">
-                {!a.question && (
-                  <span className="mt-1.5 shrink-0 text-[10px] uppercase tabular-nums tracking-wide text-muted/70">{a.n}</span>
+      <div className="w-full min-w-0 rounded-2xl rounded-br-sm border border-border-strong bg-elevated px-3.5 py-3">
+        <CardHead icon={ListChecks} label="Answers" />
+        <CardContent>
+          <div className="flex flex-col gap-2.5">
+            {answers.map((a, i) => (
+              <div key={i} className="flex flex-col gap-1">
+                {a.question && (
+                  <div title={a.question} className="line-clamp-2 min-w-0 text-[11px] leading-snug text-muted">
+                    {a.question}
+                  </div>
                 )}
-                {/* Neutral recessed chip — a SETTLED answer, not "awaiting you". The bright yellow accent
-                    is reserved solely for the awaiting-you motif (see styles.css); a past choice reads
-                    quiet: a darker inset panel with a soft left rule to still mark it as the reply. */}
-                <span className="min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere] rounded-md border border-border-strong border-l-2 border-l-accent/40 bg-bg/50 px-2.5 py-1.5 text-[12px] leading-snug text-fg">
-                  {a.answer}
-                </span>
+                <div className="flex items-start gap-2">
+                  {!a.question && (
+                    <span className="mt-1.5 shrink-0 text-[10px] uppercase tabular-nums tracking-wide text-muted/70">{a.n}</span>
+                  )}
+                  {/* Neutral recessed chip — a SETTLED answer, not "awaiting you". The bright yellow accent
+                      is reserved solely for the awaiting-you motif (see styles.css); a past choice reads
+                      quiet: a darker inset panel with a soft left rule to still mark it as the reply. The
+                      12px is the family's CHIP scale (the question card's options), not its 13px body. */}
+                  <span className="min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere] rounded-md border border-border-strong border-l-2 border-l-accent/40 bg-bg/50 px-2.5 py-1.5 text-[12px] leading-snug text-fg">
+                    {a.answer}
+                  </span>
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        </CardContent>
       </div>
     </div>
   )

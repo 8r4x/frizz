@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { TranscriptMessage } from "@fray-ui/shared"
 import { Message } from "./components/ChatView.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
@@ -72,8 +73,15 @@ function Fixture() {
   )
 }
 
+// `Message` reaches react-query today (a descendant runs a mutation), so the fixture needs a client or
+// it throws "No QueryClient set" and renders NOTHING — which is what it had started doing. Nothing here
+// hits the network; the provider only has to exist.
+const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+
 createRoot(document.getElementById("root")!).render(
-  <TooltipProvider>
-    <Fixture />
-  </TooltipProvider>,
+  <QueryClientProvider client={client}>
+    <TooltipProvider>
+      <Fixture />
+    </TooltipProvider>
+  </QueryClientProvider>,
 )

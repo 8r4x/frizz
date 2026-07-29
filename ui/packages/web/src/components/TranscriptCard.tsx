@@ -21,19 +21,17 @@ export const QUEUE_WRAP = "[overflow-wrap:anywhere] [&_pre]:whitespace-pre-wrap 
 // (maintainer 2026-07-24: "I like the little checkmark with the Done label — we should have something
 // similar for all the other kinds of cards").
 //
-// The ANATOMY is shadcn/ui's Alert, adopted wholesale (maintainer 2026-07-29: "the default shadcn
-// call-out or alert box looks way better than ours"). Three rules carry the whole look:
+// The ANATOMY came from shadcn/ui's Alert (maintainer 2026-07-29: "the default shadcn call-out or
+// alert box looks way better than ours"), minus its gutter. Two rules carry the look:
 //
-//   1. The glyph sits in a fixed LEFT GUTTER — its own grid column — instead of inline at the head of
-//      a text line. The gutter is the card's spine.
-//   2. The kind is a real TITLE: sentence case, body size, medium weight, full-strength in the tone's
-//      own color. It used to be a 10px UPPERCASE eyebrow, which reads as a metadata tag stuck above
-//      the card rather than as the card's headline.
-//   3. Everything below the title — body copy, option chips, the action row — starts on the TITLE's
-//      left edge, not the card's. One vertical line runs the length of the card.
-//
-// shadcn does this with `grid-cols-[16px_1fr] gap-x-3` + `col-start-2` on the title and description;
-// this is the same grid at fray's denser scale.
+//   1. The kind is a real TITLE: sentence case, body size, medium weight, full-strength in the tone's
+//      own color, flush with the card's own left padding. It used to be a 10px UPPERCASE eyebrow,
+//      which reads as a metadata tag stuck above the card rather than as the card's headline.
+//   2. The glyph rides the title row at the FAR RIGHT. shadcn puts it in a left gutter and indents
+//      the description to clear it; fray does not, because that indent spends ~24px of every card's
+//      width on a decoration and leaves the body hanging off the one edge that should be flush
+//      (maintainer, same day: "I don't like how much space there is left padding for the actual
+//      content"). Title, body and actions all start on the card's own x; the glyph is a corner mark.
 
 // The card's MEANING, and the ONLY thing allowed to vary between kinds (maintainer 2026-07-24: the
 // styling across kinds was "vastly different… almost no consistency"). Every card is otherwise the
@@ -49,9 +47,9 @@ export const QUEUE_WRAP = "[overflow-wrap:anywhere] [&_pre]:whitespace-pre-wrap 
 // indistinguishable — and a self-resolving pause must never compete for the eye with "your agent is
 // stuck waiting on you". Border = how loud; the title = what it is.
 //
-// The tone color lands on the icon AND the title together, exactly as shadcn's `[&>svg]:text-current`
-// makes the glyph inherit its variant's foreground: they are one object, and a red glyph beside a
-// grey word read as two.
+// The tone color lands on the icon AND the title together, as shadcn's `[&>svg]:text-current` does:
+// they are one object — more so now that the glyph sits at the opposite end of the row, where a
+// mismatched color would read as an unrelated badge rather than as the title's own mark.
 export type CardTone = "neutral" | "attention" | "caution" | "danger"
 const CARD_TONES: Record<CardTone, { border: string; head: string }> = {
   neutral: { border: "border-border-strong", head: "text-fg" },
@@ -60,19 +58,69 @@ const CARD_TONES: Record<CardTone, { border: string; head: string }> = {
   danger: { border: "border-red-500/45", head: "text-red-400" },
 }
 
-// The 14px gutter glyph is optically centred on the TITLE'S CAP BLOCK, not on its line box — same
+// The 14px corner glyph is optically centred on the TITLE'S CAP BLOCK, not on its line box — same
 // reasoning as ICON_LABEL_NUDGE (a short word inks from cap-top to baseline, so its mass rides high
-// inside the font box while the glyph's ink is centred in its own). The amount is FONT-DEPENDENT, so
-// like that nudge it is a CSS variable that flips with the type stack (styles.css): 2px under mono —
-// which is also exactly shadcn's `translate-y-0.5` — and 3px under system-ui.
+// inside the font box while the glyph's ink is centred in its own), and it matters MORE across the
+// row than it did beside the word: a glyph a pixel low at the far edge reads as a dropped corner.
+// The amount is FONT-DEPENDENT, so like that nudge it is a CSS variable that flips with the type
+// stack (styles.css): 2px under mono, 3px under system-ui.
 const CARD_ICON_OFFSET = "card-icon-offset"
+
+// The ANATOMY itself, separate from the shell that usually carries it. Both pieces are exported
+// because ONE card cannot use `TranscriptCard`: the answers card is the human's own artifact, so it
+// keeps the user bubble's fill, radius and right-hand corner (ChatView's AnswersCard) while wearing
+// exactly this anatomy inside. Composing it out of the same pieces is what keeps that promise honest —
+// the alternative, hanging fill/radius props off TranscriptCard for a single caller, invites the next
+// card to override the shell rather than join it.
+
+// The title row: the kind at the card's own left edge, the glyph parked top-RIGHT.
+//
+// The glyph used to sit in a left GUTTER with the body indented to clear it (shadcn's Alert grid).
+// That cost every card ~24px of content width for a decoration, which is most of a word on a queue
+// card, and it read as a hanging indent on the one thing that should have been flush (maintainer
+// 2026-07-29: "I don't like how much space there is left padding for the actual content"). Moving the
+// glyph to the opposite corner keeps the icon+title pairing legible while giving the whole left edge
+// back: title, body copy and the action row now start on the SAME x as the card's padding.
+export function CardHead({
+  icon: Icon,
+  label,
+  head = CARD_TONES.neutral.head,
+  aside,
+}: {
+  icon: LucideIcon
+  label: ReactNode
+  head?: string
+  aside?: ReactNode
+}) {
+  return (
+    <div className="flex min-w-0 items-start gap-2">
+      {/* The title WRAPS rather than truncating: fray's kinds are short sentences ("Waiting on your
+          answer — in your external terminal"), and the half of one that survives a narrow queue card
+          is not the half that carries the meaning. It takes the row's slack, which is what pushes the
+          aside and the glyph to the right edge. */}
+      <span className={`min-w-0 flex-1 text-[13px] font-medium leading-5 tracking-tight ${head}`}>{label}</span>
+      {/* `leading-5` matches the title's line box so a smaller aside still reads as sitting ON the
+          title's line rather than floating above it. */}
+      {aside && <span className="shrink-0 leading-5">{aside}</span>}
+      <Icon aria-hidden="true" size={14} className={`shrink-0 ${CARD_ICON_OFFSET} ${head}`} />
+    </div>
+  )
+}
+
+// The card's content. One wrapper so every card spells its top gap the same way, and `card-md` pulls
+// any markdown rendered inside down to the card's own body scale (styles.css) — without it a ```done
+// bullet list renders at the transcript's 14px prose scale and is visibly larger than the identical
+// sentence in the card above it.
+export function CardContent({ children }: { children: ReactNode }) {
+  return <div className="card-md mt-1 min-w-0 text-fg/75">{children}</div>
+}
 
 // Part one: the SHELL. One rounded panel-2 card at one padding for every kind. Cards used to disagree
 // about all three of fill (panel-2 / elevated / an accent or red wash), border color, and whether they
 // carried a shadow — which is what made nine sibling cards read as nine unrelated shapes.
 export function TranscriptCard({
   tone = "neutral",
-  icon: Icon,
+  icon,
   label,
   aside,
   children,
@@ -82,34 +130,19 @@ export function TranscriptCard({
   tone?: CardTone
   icon: LucideIcon
   label: ReactNode
-  // Optional trailing slot, parked at the title row's RIGHT edge: the one thing the card is ABOUT,
-  // when that is a short reference rather than prose (the wake card's `owner/repo#N` link). It rides
-  // the title instead of taking a body line of its own, which keeps the body for the card's actual
-  // content.
+  // Optional trailing slot on the title row, immediately LEFT of the glyph: the one thing the card is
+  // ABOUT, when that is a short reference rather than prose (the wake card's `owner/repo#N` link). It
+  // rides the title instead of taking a body line of its own, which keeps the body for the card's
+  // actual content.
   aside?: ReactNode
   children: ReactNode
   className?: string
 } & Omit<ComponentPropsWithoutRef<"div">, "children" | "className">) {
   const { border, head } = CARD_TONES[tone]
   return (
-    <div
-      {...rest}
-      className={`grid min-w-0 grid-cols-[14px_minmax(0,1fr)] items-start gap-x-2.5 gap-y-1 rounded-lg border ${border} bg-panel-2 px-4 py-3 ${className}`}
-    >
-      <Icon aria-hidden="true" size={14} className={`col-start-1 row-start-1 shrink-0 ${CARD_ICON_OFFSET} ${head}`} />
-      <div className="col-start-2 row-start-1 flex min-w-0 items-baseline gap-2">
-        {/* The title WRAPS rather than truncating: fray's kinds are short sentences ("Waiting on your
-            answer — in your external terminal"), and the half of one that survives a narrow queue
-            card is not the half that carries the meaning. */}
-        <span className={`min-w-0 flex-1 text-[13px] font-medium leading-5 tracking-tight ${head}`}>{label}</span>
-        {aside && <span className="shrink-0">{aside}</span>}
-      </div>
-      {/* One wrapper, so a card passing several children still lands them all in the title's column
-          instead of letting grid auto-placement drop the second one into the icon gutter. `card-md`
-          pulls any markdown rendered inside down to the card's own body scale (styles.css) — without
-          it a ```done bullet list renders at the transcript's 14px prose scale and is visibly larger
-          than the identical sentence in the card above it. */}
-      <div className="card-md col-start-2 min-w-0 text-fg/75">{children}</div>
+    <div {...rest} className={`min-w-0 rounded-lg border ${border} bg-panel-2 px-4 py-3 ${className}`}>
+      <CardHead icon={icon} label={label} head={head} aside={aside} />
+      <CardContent>{children}</CardContent>
     </div>
   )
 }

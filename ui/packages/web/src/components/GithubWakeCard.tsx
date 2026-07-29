@@ -6,7 +6,7 @@
 // aligned like every other first-party card, in the shared TranscriptCard chrome, with the GitHub
 // activity broken back out into rows the human can actually click through to.
 import type { ReactNode } from "react"
-import { ArrowUpRight, Bell, Bot, Github, User } from "lucide-react"
+import { Bell, Bot, Github, User } from "lucide-react"
 import { parseGithubWakeSteer, type GithubWakeItem } from "@fray-ui/shared"
 import { CARD_BODY, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { MessageDebugId } from "./MessageDebugId.tsx"
@@ -87,20 +87,22 @@ export function GithubWakeCard({ text, sourceId, wrap }: { text: string; sourceI
   }
   const refUrl = wakeRefUrl(steer.ref)
   const total = steer.items.length + steer.omitted
-  // Which PR this is about, parked at the header's right edge (maintainer 2026-07-29). It is the card's
-  // subject, not a line of its content — on its own body line it pushed the activity down and read as
-  // the first of the rows.
+  // Which PR this is about, read INSIDE the heading rather than beside it: "New review comment on
+  // owner/repo#587" (maintainer 2026-07-29). It is the card's subject, so it belongs in the sentence
+  // that names the card — on its own body line it pushed the activity down and read as the first of
+  // the rows, and parked at the header's right edge it read as an unrelated badge. The ref keeps the
+  // app's accent link language so it still LOOKS clickable at rest; an unparseable ref degrades to
+  // muted text in the same position rather than to a dead link.
   const ref = refUrl ? (
-    <a href={refUrl} target="_blank" rel="noreferrer noopener" className={`flex items-center gap-1 text-[11px] ${CARD_LINK}`}>
+    <a href={refUrl} target="_blank" rel="noreferrer noopener" className={CARD_LINK}>
       {steer.ref}
-      <ArrowUpRight size={12} className={ROW_ICON} />
     </a>
   ) : (
-    <span className="text-[11px] text-muted">{steer.ref}</span>
+    <span className="text-muted">{steer.ref}</span>
   )
   return (
     <WakeShell sourceId={sourceId}>
-      <TranscriptCard icon={Github} label={wakeCardTitle(total, steer.items[0].label)} aside={ref}>
+      <TranscriptCard icon={Github} label={<>{wakeCardTitle(total, steer.items[0].label)} on {ref}</>}>
         <div className="flex flex-col">
           {steer.items.map((item) => (
             <ItemRow
