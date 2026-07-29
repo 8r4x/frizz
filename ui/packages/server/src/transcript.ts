@@ -9,6 +9,7 @@ import {
   ATTACHMENT_IMAGE_EXTENSIONS,
   attachmentExtension,
   isWakeDelivery,
+  parseAgentMessage,
   stripWakeDeliveryToken,
   type TranscriptMessage,
   type TranscriptPage,
@@ -150,7 +151,14 @@ function userDisplayText(text: string, first: boolean): string | undefined {
 // Both derive from the same raw record, and every site that pushes a user message needs both — keeping
 // them in one helper is what stops a new push site from shipping the display projection while silently
 // dropping the wake flag (which would put a scheduler steer back in the human's own bubble).
-function userProjection(text: string, first: boolean): { displayText?: string; wake?: true } {
+function userProjection(text: string, first: boolean): { displayText?: string; wake?: true; peerFrom?: string } {
+  // An UPWARD agent-to-agent message — a background child calling `SendMessage({to:"main"})` — is not
+  // the human's text at all, so it is settled FIRST and returns on its own. Its body, not the
+  // `<agent-message>` wrapper, is what a reader wants, and none of the projections below apply: the
+  // dispatch/wake strippers target envelopes this text never carries. `peerAgentId` is deliberately not
+  // set here — only the delivery record carries the sender's agentId, so the attachment arm adds it.
+  const peer = parseAgentMessage(text)
+  if (peer) return { displayText: peer.body, peerFrom: peer.from }
   const displayText = userDisplayText(text, first)
   return { ...(displayText ? { displayText } : {}), ...(isWakeDelivery(text) ? { wake: true as const } : {}) }
 }
@@ -512,7 +520,8 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
     // prompt attachments carry origin.kind "human" and ALL 78 sdk ones carry none, while every sdk one
     // carries `source_uuid` (the id fray itself passed to sendInput) and no task-notification attachment
     // ever does. So an origin-less prompt attachment bearing a source_uuid is the human delivery it says
-    // it is. Deliberately additive: origin.kind "peer" (17 in the corpus) stays excluded exactly as before.
+    // it is. origin.kind "peer" (17 in the corpus) stays excluded from THIS human branch — it is a child's
+    // upward SendMessage, not the operator's words — and is handled by its own branch just below.
     if (rec.type === "attachment" && rec.attachment?.type === "queued_command") {
       const att = rec.attachment
       const humanDelivery = att.origin?.kind === "human" || (att.origin === undefined && typeof att.source_uuid === "string")
@@ -533,6 +542,42 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         deliveredDedupe = prompt
         if (thisTs) prevTs = thisTs // a delivered human turn is substantive — it bounds the next thinking window
         lastAssistantId = null // …and breaks the assistant-record merge chain, like any user message
+      }
+      // A PEER delivery — an UPWARD `SendMessage({to:"main"})` from a background sub-agent. It is not a
+      // human delivery (so it must never take the branch above, and the `humanDelivery` gate keeps it
+      // out), but it is the ONLY record that names the SENDER: `origin.senderTaskId` is the child's own
+      // agentId, and it is the sole unambiguous identity when several children share one profile label
+      // (the worker dispatch hook strips `name`, so `origin.from` is just the subagent_type). The
+      // enqueue arm has already placed and un-grayed the bubble, so the work here is to STAMP that id
+      // onto it — plus the same attachment-only fallback the human path keeps, because a child's report
+      // must not vanish when its enqueue scrolled out of the window.
+      const peerOrigin = att.origin?.kind === "peer" ? att.origin : undefined
+      if (peerOrigin && prompt.trim() && att.commandMode === "prompt") {
+        const senderTaskId = typeof peerOrigin.senderTaskId === "string" ? peerOrigin.senderTaskId.trim() : ""
+        // Take the entry BEFORE resolving: resolveQueued de-registers it, and we still need the message
+        // object it points at in order to stamp the id onto the bubble already rendered in `out`.
+        const entry = findQueued(prompt)
+        if (entry) {
+          resolveQueued(prompt)
+          if (senderTaskId) entry.message.peerAgentId = senderTaskId
+        } else {
+          const peerProjection = userProjection(prompt, out.length === 0)
+          // Only project it as a child's message when the wrapper actually parsed. An origin-flagged
+          // record whose text is NOT an <agent-message> is a shape this build doesn't know; dropping it
+          // silently is worse than rendering the plain text, so it falls through to an ordinary bubble.
+          out.push({
+            sourceId,
+            role: "user",
+            text: prompt,
+            ...peerProjection,
+            ...(senderTaskId && peerProjection.peerFrom ? { peerAgentId: senderTaskId } : {}),
+            tools: [],
+            parts: [],
+            at: thisTs,
+          })
+        }
+        if (thisTs) prevTs = thisTs // a child's report is a real turn, exactly like a human follow-up
+        lastAssistantId = null // …so it breaks the assistant-record merge chain too
       }
       return
     }

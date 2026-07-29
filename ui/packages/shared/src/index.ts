@@ -955,6 +955,35 @@ export function isWakeDelivery(text: string): boolean {
   return WAKE_DELIVERY_TOKEN_TAIL.test(text)
 }
 
+// ---- THE agent-to-agent UPWARD message (a sub-agent reporting to its parent) ----------------------
+// Claude Code's own wrapper for a message that arrived through the agent-to-agent channel — what a
+// BACKGROUND CHILD produces by calling `SendMessage({to:"main"})`. It is delivered into the parent's
+// input queue exactly like a human follow-up, so the parent's transcript records it as a user turn
+// carrying this wrapper as its literal text. Recognizing it is what stops a child's report from
+// rendering as the operator's own bubble with raw XML showing (the `wake` defect, one channel over).
+//
+// Anchored to the START of the text and required to close, so prose that merely QUOTES a wrapper — this
+// repo's own tests and docs do — is left alone. `from` is the sender label; today that is the child's
+// `subagent_type` (the worker dispatch hook strips `name`), so it is NOT unique across siblings — the
+// delivery record's `origin.senderTaskId` is the unambiguous id, and the parser deliberately does not
+// invent one here.
+const AGENT_MESSAGE_WRAPPER = /^<agent-message from="([^"]*)">\n?([\s\S]*?)\n?<\/agent-message>\s*$/
+
+// Parse an upward agent-to-agent message into its sender label and body, or undefined when `text` is
+// not one. The body is returned verbatim (minus the wrapper's own framing newlines) — it is the part a
+// human actually reads, and the part the transcript projects as `displayText`.
+export function parseAgentMessage(text: string): { from: string; body: string } | undefined {
+  const m = AGENT_MESSAGE_WRAPPER.exec(text.trim())
+  if (!m) return undefined
+  const from = m[1].trim()
+  const body = m[2]
+  // A wrapper with no readable body, or none naming its sender, is plumbing rather than a report. Both
+  // degrade to the ordinary user path (a plain bubble) instead of an empty or unattributed child card —
+  // the label is the whole point of the card, so inventing one would be worse than not drawing it.
+  if (!body.trim() || !from) return undefined
+  return { from, body }
+}
+
 // ---- THE pr-watch WAKE STEER (scheduler ↔ chat card) ---------------------------------------------
 // FORMATTER AND PARSER LIVE TOGETHER, for the same reason the token and its stripper do. The scheduler
 // composes this string and pastes it into a worker's composer; the chat then has nothing BUT that
@@ -1370,6 +1399,21 @@ export const TranscriptMessage = z.object({
   // old client ignores it and shows the plain bubble (the previous behavior), and an old server simply
   // never sets it.
   wake: z.boolean().optional(),
+  // A SUB-AGENT (or peer session) wrote this user turn, not the human — the same defect class `wake`
+  // above corrects. Claude Code's agent-to-agent channel (a background child calling
+  // `SendMessage({to:"main"})`) delivers UPWARD into the parent's queue like any follow-up, so the
+  // parent's transcript records it as an ordinary user turn whose text is the raw
+  // `<agent-message from="…">…</agent-message>` wrapper. Left alone that renders as the operator's own
+  // off-white bubble with the XML showing — claiming the human typed what a child reported.
+  //
+  // `peerFrom` is the sender label the wrapper carries (today the child's `subagent_type`, e.g.
+  // `fray:opus-high`, because the worker dispatch hook strips `name`), and `displayText` carries the
+  // unwrapped body. `peerAgentId` is the child's own agentId, which ONLY the delivery record supplies
+  // (`origin.senderTaskId`) — it is the unambiguous identity when several children share one profile
+  // label, and it is the same id the sub-agent drawer and `.agent-bindings.jsonl` key on. Additive +
+  // optional: an old client ignores both and shows the previous plain bubble.
+  peerFrom: z.string().optional(),
+  peerAgentId: z.string().optional(),
 })
 export type TranscriptMessage = z.infer<typeof TranscriptMessage>
 
