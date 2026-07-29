@@ -58,8 +58,8 @@ runtime, the way it will really run, and observe the real outcome. This is non-n
 ## Dial in the visuals yourself — "it renders" is not "it looks right"
 
 For UI work, running the thing is only half the gate. The other half is JUDGING what you rendered, and
-it is the half that keeps getting skipped — this section exists because the maintainer has had to say
-"the alignment is off" one time too many on work that was otherwise finished and verified.
+it is the half that keeps getting skipped — this section exists because alignment defects have had to be
+pointed out repeatedly on work that was otherwise finished and verified.
 
 **Load the `visual-review` skill** the moment you place an icon, glyph, emoji, badge, chip, or counter
 beside text, and before you call any new UI correct. It carries the ink-measurement routine, the

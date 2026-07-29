@@ -23,9 +23,10 @@ Two failures ship bad UI, and this skill exists because both happened repeatedly
    a shot the maintainer then has to tell you is ugly means you did the expensive half and skipped the
    cheap half.
 
-> Maintainer, 2026-07-29, after a third round on one badge: *"I am so tired of telling you that you
-> need to dial in visual alignment on stuff. Clearly, you're capable of it."* The capability was never
-> the problem. Doing it unprompted is.
+Codified 2026-07-29, after one badge took three maintainer-prompted rounds to get right: the treatment
+was invented where the real product should have been measured, and then the glyphs were left riding
+~1.2px low because `items-center` was trusted to align them. The capability was never the problem —
+doing it unprompted is.
 
 ---
 
