@@ -1148,7 +1148,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         continue
       }
 
-      log(`waker: delivering ${item.slug} — ${item.reason} (attempt ${item.attempts})`)
       try {
         await deps.resume(item.slug, item.message, item.id)
       } catch (error) {
@@ -1175,10 +1174,17 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           failedAt + Math.max(deliveryLeaseMs, retryDelay(item.attempts)),
           message,
         )
-        log(`waker: delivery FAILED for ${item.slug}: ${message}`)
+        log(`waker: delivery FAILED for ${item.slug} (attempt ${item.attempts} of ${maxDeliveryAttempts}): ${message}`)
         continue
       }
 
+      // The happy path logs exactly one line, and it CONFIRMS something that already happened. A
+      // pre-flight "delivering … (attempt 1)" reads like a retry counter — as if a previous try had
+      // failed — on the first-and-only attempt every ordinary wake takes. Attempt counts belong on the
+      // failure lines above, where they carry information; here one is worth printing only when the
+      // delivery genuinely did take more than one.
+      const retried = item.attempts > 1 ? ` (on attempt ${item.attempts})` : ""
+      log(`waker: delivered ${item.slug} — ${item.reason}${retried}`)
       checkpoint("after-delivery", item)
       if (!outbox.acknowledge(item.id, deliveryOwner, now())) {
         log(`waker: delivery acknowledgement lost ownership for ${item.slug}; preserving the authoritative terminal state`)

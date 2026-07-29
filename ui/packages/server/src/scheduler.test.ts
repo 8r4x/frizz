@@ -1052,6 +1052,54 @@ test("delivery failures use bounded exponential retry windows and terminate exha
   assert.equal(attempts, 3)
 })
 
+// An ordinary wake takes exactly one attempt, so a pre-flight "delivering … (attempt 1)" spent its
+// whole life telling the human about a retry counter that had never retried anything — it read as if
+// something had already gone wrong. The default line is now a CONFIRMATION of a delivery that landed.
+test("the happy path logs one delivery CONFIRMATION, with no attempt counter", async () => {
+  const h = harness()
+  const { target } = dueTimer(h, "quiet")
+  const logs: string[] = []
+  const scheduler = h.make({ log: (message) => logs.push(message) })
+  await scheduler.tick() // armed (unmet)
+  h.clock.ms = target + 1
+  await scheduler.tick() // crosses → queue + deliver
+  assert.equal(h.resumes.length, 1)
+  assert.deepEqual(logs, [
+    `waker: queued quiet — timer ${iso(target)}`,
+    `waker: delivered quiet — timer ${iso(target)}`,
+  ])
+})
+
+test("attempt counts surface only where they inform: the failure, then the delivery that recovered", async () => {
+  const h = harness()
+  const { target } = dueTimer(h, "flaky")
+  const logs: string[] = []
+  let failing = true
+  const scheduler = h.make({
+    log: (message) => logs.push(message),
+    deliveryLeaseMs: 10,
+    retryBaseMs: 10,
+    retryMaxMs: 40,
+    maxDeliveryAttempts: 3,
+    resume: (slug, message, deliveryId) => {
+      if (failing) throw new Error("tmux pane busy")
+      h.resumes.push({ slug, message, deliveryId })
+    },
+  })
+  await scheduler.tick()
+  h.clock.ms = target + 1
+  await scheduler.tick() // attempt 1 throws
+  failing = false
+  h.clock.ms += 10 // the retry window elapses
+  await scheduler.tick() // attempt 2 lands
+  assert.equal(h.resumes.length, 1)
+  assert.deepEqual(logs, [
+    `waker: queued flaky — timer ${iso(target)}`,
+    "waker: delivery FAILED for flaky (attempt 1 of 3): tmux pane busy",
+    `waker: delivered flaky — timer ${iso(target)} (on attempt 2)`,
+  ])
+})
+
 test("two scheduler instances on separate SQLite connections atomically claim one wake", async () => {
   const dir = mkdtempSync(join(tmpdir(), "fray-sched-concurrent-"))
   const path = join(dir, "ui.db")
