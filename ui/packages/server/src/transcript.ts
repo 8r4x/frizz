@@ -1049,9 +1049,9 @@ const SENT_IMAGE_MAX_BYTES = 24_000_000
 // Max files rendered from one SendUserFile call — a delivery of more than this is pathological; the extra
 // are dropped so the card can't mount hundreds of images/chips.
 const SENT_FILES_MAX = 24
-// SendUserFile ships ABSOLUTE SOURCE paths (often the worker's scratchpad — a dir /local-image does NOT
-// serve). For each IMAGE file, copy it ONCE into the servable screenshot cache and return the cached
-// absolute path so the chat renders it inline via /local-image; a non-image, oversized, unreadable, or
+// SendUserFile ships ABSOLUTE SOURCE paths (often a scratch file the worker will overwrite on its next
+// iteration). For each IMAGE file, copy it ONCE into the screenshot cache and return the cached absolute
+// path so the chat renders it inline via /local-image; a non-image, oversized, unreadable, or
 // mismatched-bytes file → undefined (the caller records its basename as an openable chip instead).
 // `idKey` (tool_use id + file index) makes the cache name UNIQUE PER CALL — so a re-projection on every
 // poll short-circuits on existsSync, while a later call that reuses the same PATH with new content (a
@@ -1077,6 +1077,31 @@ function persistSentFile(srcPath: string, idKey: string): string | undefined {
     return dest
   } catch {
     return undefined
+  }
+}
+
+// Codex's `view_image` tool — the model pulling a picture off disk INTO its own context. The rollout's
+// result is `[{type:"input_image", image_url:"data:…;base64,…"}]`, which backend/codex deliberately
+// collapses to the "[image output]" placeholder rather than pumping megabytes of base64 through the
+// tailer's event stream. So the picture is recovered from the CALL's `path` instead: copy the real file
+// into the screenshot cache (exactly as a SendUserFile delivery does) and hand the card an `outputImage`,
+// so the reader SEES what the model looked at instead of a bare path.
+//
+// The copy is about FIDELITY, not servability — /local-image would happily serve the source path (it is
+// deliberately unconfined; see local-image.ts). Workers overwrite one screenshot path over and over while
+// iterating (`shot.mjs out.png`, fix, re-shoot, re-view), so rendering the LIVE file would show every card
+// in that loop the same final image — a transcript that lies about what the model saw at step 1. Keying
+// the cache copy on the CALL id snapshots each view independently. Best-effort: the copy happens on first
+// projection, so only a transcript projected after the fact (never a live one, which polls within a tick
+// of the call) can miss a rewrite — still strictly better than serving the live path. A missing,
+// unreadable, oversized, or magic-byte-mismatched file yields undefined → the card degrades to its plain
+// header, never a broken <img>.
+function viewImageCall(path: string | undefined, idKey: string | undefined): TranscriptToolCall {
+  const image = path && idKey ? persistSentFile(path, idKey) : undefined // reads the REAL path
+  return {
+    name: "View image",
+    detail: path ? redactToolPayload(path) : undefined, // the DISPLAYED path is redacted, as everywhere else
+    ...(image ? { outputImage: image } : {}),
   }
 }
 
@@ -1848,7 +1873,7 @@ export function parseCodexTranscript(raw: string, identityPrefix = "codex"): Tra
 // protocols onto the same Bash/Edit/generic card family. Unknown calls retain capped input, so the
 // renderer always has something more useful than a bare tool name.
 function codexToolCall(name: string, input: unknown, callId?: string): TranscriptToolCall {
-  if (name === "exec" && typeof input === "string") return codexExecWrapperCall(input)
+  if (name === "exec" && typeof input === "string") return codexExecWrapperCall(input, callId)
 
   const obj = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : {}
   const direct = codexDirectToolCall(name, obj, callId)
@@ -1901,6 +1926,13 @@ function codexDirectToolCall(name: string, obj: Record<string, unknown>, callId?
     }
     case "wait":
       return { name: "Wait", detail: strField(obj.cell_id) ? `cell ${strField(obj.cell_id)}` : "running tool" }
+    case "view_image": {
+      // Without this case a direct view_image function_call fell to the generic branch: the raw
+      // snake_case name, no picture, and — because codexResultSummary suppresses the placeholder only
+      // for the "View image" label — a card whose whole body was the literal text "[image output]".
+      const path = strField(obj.path) ?? strField(obj.file_path)
+      return viewImageCall(path, callId ?? path)
+    }
     default:
       return undefined
   }
@@ -1934,7 +1966,7 @@ interface WrappedInvocation {
   args: string
 }
 
-function codexExecWrapperCall(source: string): TranscriptToolCall {
+function codexExecWrapperCall(source: string, callId?: string): TranscriptToolCall {
   const calls = wrappedInvocations(source)
   if (calls.length !== 1) {
     return {
@@ -1979,7 +2011,7 @@ function codexExecWrapperCall(source: string): TranscriptToolCall {
 
   if (call.name === "view_image") {
     const path = jsStringProperty(call.args, "path")
-    return { name: "View image", detail: path }
+    return viewImageCall(path, callId ?? path)
   }
 
   if (call.name === "web__run") return wrappedWebCall(call.args)

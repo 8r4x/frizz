@@ -1878,7 +1878,10 @@ function ToolImageCard({ name, detail, outputImage, output, status, durationMs }
             {/* `outputImage` is ALWAYS a hash-named copy in the screenshot cache, so BlockImage's
                 basename caption would read "9f2c…c1.png" — noise directly under a header that already
                 names the real file. Drop it and give the picture the real target as its alt. */}
-            <BlockImage path={outputImage} />
+            {/* `outputImage` is ALWAYS a hash-named copy in the screenshot cache, so BlockImage's
+                basename caption would read "9f2c…c1.png" — noise directly under a header that already
+                names the real file. Drop it and give the picture the real target as its alt. */}
+            <BlockImage path={outputImage} hideCaption altText={short ? `${prettyToolName(name)}: ${short}` : prettyToolName(name)} />
             {output && <pre className="fray-bash-body fray-bash-output-body mt-1.5">{output}</pre>}
           </div>
         )}
@@ -2792,6 +2795,10 @@ function ProseHtml({ md, wrap }: { md: string; wrap?: boolean }) {
 // the <img> box out to the full card width, and `object-contain` then letterboxed the picture inside it.
 // A tall 390×1002 phone screenshot measured 642px of box painting 163px of image — 479px of dead
 // gutter. Hugging the intrinsic aspect makes the bordered frame the picture's own edge.
+// `self-start` is load-bearing: the figure is a flex COLUMN, whose default `align-items: stretch` blew
+// the <img> box out to the full card width, and `object-contain` then letterboxed the picture inside it.
+// A tall 390×1002 phone screenshot measured 642px of box painting 163px of image — 479px of dead
+// gutter. Hugging the intrinsic aspect makes the bordered frame the picture's own edge.
 export function BlockImage({ path, hideCaption, altText }: { path: string; hideCaption?: boolean; altText?: string }) {
   const [broken, setBroken] = useState(false)
   if (broken) return <div className="font-mono-keep text-[12px] text-muted/70 break-all">{path}</div>
@@ -2804,7 +2811,7 @@ export function BlockImage({ path, hideCaption, altText }: { path: string; hideC
         data-local-path={path}
         data-local-image="true"
         onError={() => setBroken(true)}
-        className="max-w-full max-h-[420px] w-auto cursor-pointer rounded-lg border border-border object-contain"
+        className="max-w-full max-h-[420px] w-auto self-start cursor-pointer rounded-lg border border-border object-contain"
       />
       {!hideCaption && <figcaption className="font-mono-keep text-[11px] text-muted/60 break-all">{base}</figcaption>}
     </figure>

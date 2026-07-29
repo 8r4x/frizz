@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { readFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { GITHUB_DISPATCH_UI_BOUNDARY, wakeDeliveryToken } from "@fray-ui/shared"
 import { pageProjectedTranscript, parseCodexTranscript, projectCodexTranscript } from "./transcript.ts"
@@ -483,12 +484,113 @@ test("real wrapped web and image calls expose the query/path without image blobs
   assert.equal(image.detail, "/tmp/evidence.png")
   assert.equal(image.output, undefined)
   assert.equal(image.status, "completed")
+  // No such file on disk → no picture to show, and NOT a broken <img>: the card degrades to its header.
+  assert.equal(image.outputImage, undefined)
 })
 
 // A minimal well-formed rollout builder for synthetic shapes (session_meta is sidecar → skipped).
 function rollout(lines: Array<{ type: string; payload?: Record<string, unknown>; timestamp?: string }>): string {
   return lines.map((l) => JSON.stringify({ timestamp: "2026-07-11T00:00:00.000Z", ...l })).join("\n")
 }
+
+// ---- view_image renders the PICTURE, not a "[image output]" placeholder ----
+// Codex ships the viewed image back as an `input_image` data URL, which backend/codex collapses to the
+// "[image output]" placeholder (never pump base64 through the tailer). The card recovers the picture from
+// the call's own `path` instead, copying it into the servable screenshot cache.
+// Two DISTINCT minimal 1×1 PNGs — both decode to real png bytes, so the magic-byte gate accepts either
+// and a byte comparison can tell one card's snapshot from another's.
+const PNG_1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+const PNG_1x1_ALT = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+
+function writeTempPng(name: string, b64 = PNG_1x1): string {
+  const path = join(mkdtempSync(join(tmpdir(), "fray-view-image-")), name)
+  writeFileSync(path, Buffer.from(b64, "base64"))
+  return path
+}
+
+// One direct view_image function_call + its input_image result, projected to the single tool card.
+// `callId` must be unique per case: the cache filename derives from it, so a reused id (correctly)
+// short-circuits on existsSync and hands back an earlier case's copy.
+function viewImageTool(callId: string, path: string) {
+  return parseCodexTranscript(rollout([
+    { type: "response_item", payload: { type: "function_call", call_id: callId, name: "view_image", arguments: JSON.stringify({ path }) } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: callId, output: [{ type: "input_image", image_url: "data:image/png;base64,x" }] } },
+  ]))[0].tools[0]
+}
+
+// The legacy `function_call` form — what codex 0.144.1 actually emits for view_image. Before this case
+// existed the card fell to the generic branch: raw snake_case name, no picture, and a body whose entire
+// content was the literal string "[image output]".
+test("a direct view_image function_call renders the picture inline, never an '[image output]' placeholder", () => {
+  const path = writeTempPng("evidence.png")
+  const raw = rollout([
+    { type: "response_item", payload: { type: "function_call", call_id: "vi1", name: "view_image", arguments: JSON.stringify({ path, detail: "high" }) } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: "vi1", output: [{ type: "input_image", image_url: `data:image/png;base64,${PNG_1x1}` }] } },
+  ])
+  const [call] = parseCodexTranscript(raw)[0].tools
+  assert.equal(call.name, "View image")
+  assert.equal(call.detail, path)
+  assert.equal(call.status, "completed")
+  assert.equal(call.output, undefined, "the placeholder is suppressed — the picture is the content")
+  assert.ok(call.outputImage, "outputImage is set")
+  assert.match(call.outputImage!, /fray-tool-images[/\\][0-9a-f]{32}\.png$/)
+  // The cache copy holds the source bytes verbatim, so /local-image serves the real picture.
+  assert.deepEqual(readFileSync(call.outputImage!), Buffer.from(PNG_1x1, "base64"))
+})
+
+// WHY the card serves a COPY rather than the source path (/local-image would serve either — it is
+// unconfined): a worker iterating on a screenshot overwrites ONE path repeatedly, so rendering the live
+// file would show every view in that loop the final image. Each call snapshots its own bytes instead.
+test("re-viewing an OVERWRITTEN path shows each view's own bytes, not the final file", () => {
+  const path = writeTempPng("iterated.png")
+  const first = viewImageTool("vi2a", path)
+  // The worker re-shoots to the same path and views it again — a different picture under the same name.
+  writeFileSync(path, Buffer.from(PNG_1x1_ALT, "base64"))
+  const second = viewImageTool("vi2b", path)
+  assert.ok(first.outputImage && second.outputImage)
+  assert.notEqual(first.outputImage, second.outputImage, "each call gets its own cache entry")
+  assert.deepEqual(readFileSync(first.outputImage!), Buffer.from(PNG_1x1, "base64"), "the first card still shows the ORIGINAL")
+  assert.deepEqual(readFileSync(second.outputImage!), Buffer.from(PNG_1x1_ALT, "base64"))
+})
+
+test("a view_image of a path that no longer exists degrades to a header-only card", () => {
+  const call = viewImageTool("vi3", "/tmp/fray-does-not-exist-9137.png")
+  assert.equal(call.name, "View image")
+  assert.equal(call.outputImage, undefined)
+  assert.equal(call.output, undefined, "still no '[image output]' placeholder body")
+})
+
+// Codex's OTHER tool protocol — the unified exec wrapper's `tools.view_image({path})` — reaches the same
+// card. This form already carried the "View image" label; what it lacked was the picture.
+test("the exec-wrapper view_image form also renders the picture", () => {
+  const path = writeTempPng("wrapped.png")
+  const source = `const r = await tools.view_image({path:${JSON.stringify(path)},detail:"original"}); image(r.image_url);`
+  const raw = rollout([
+    { type: "response_item", payload: { type: "custom_tool_call", call_id: "vi4", name: "exec", input: source } },
+    { type: "response_item", payload: { type: "custom_tool_call_output", call_id: "vi4", output: "Script completed\nWall time 0.1 seconds\nOutput:\n[image output]" } },
+  ])
+  const [call] = parseCodexTranscript(raw)[0].tools
+  assert.equal(call.name, "View image")
+  assert.equal(call.detail, path)
+  assert.ok(call.outputImage)
+  assert.deepEqual(readFileSync(call.outputImage!), Buffer.from(PNG_1x1, "base64"))
+})
+
+test("a view_image of a NON-image path is not served as a picture", () => {
+  const path = join(mkdtempSync(join(tmpdir(), "fray-view-image-")), "notes.txt")
+  writeFileSync(path, "not a picture")
+  const call = viewImageTool("vi5", path)
+  assert.equal(call.name, "View image")
+  assert.equal(call.outputImage, undefined)
+})
+
+// A .png name over non-png bytes must never reach the page as a broken <img>.
+test("a view_image whose bytes are not the image its extension claims is skipped", () => {
+  const path = writeTempPng("liar.png")
+  writeFileSync(path, "GIF89a-but-named-png")
+  const call = viewImageTool("vi6", path)
+  assert.equal(call.outputImage, undefined, "magic-byte mismatch → header-only, not a broken picture")
+})
 
 test("codex reasoning: a turn's SEVERAL reasoning steps COALESCE into one expandable block above the work", () => {
   const raw = rollout([
