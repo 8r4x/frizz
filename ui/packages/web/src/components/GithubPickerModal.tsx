@@ -392,13 +392,32 @@ function Checkbox({ checked }: { checked: boolean }) {
   )
 }
 
+// Optical alignment for the count badges. `items-center` centers each glyph's BOX on the flex line,
+// but the eye aligns INK — and a digit has no descender, so its ink rides HIGH in the line box while
+// an icon's ink sits wherever its path falls inside its viewBox. Centering the boxes therefore leaves
+// every glyph sitting low by a different amount. Measured in the browser at this exact size (each
+// glyph's ink bbox against the digit's, via canvas metrics plus an inline-block baseline probe):
+//   octicon        ink 10.8px — 1.16px low
+//   lucide stroke  ink  9.0px — 1.29px low
+//   emoji          ink 16.0px — 0.26px, already aligned, and a nudge would only disturb it
+// Expressed in em so the correction tracks the font size instead of pinning to today's 11.5px.
+const GLYPH_INK_LIFT = { octicon: "-0.1em", stroke: "-0.112em" } as const
+
 // GitHub's own `git-pull-request` octicon, path verbatim from github.com. Lucide's git-pull-request
 // is a STROKE glyph and renders as a thin squiggle at badge size; the octicon is a filled 16-viewBox
 // path built for exactly this, which is why the row badge uses it instead of the lucide family the
 // rest of this file draws from. `currentColor` so it inherits the cluster's muted tone.
 function GitPullRequestOcticon({ size = 12, className }: { size?: number; className?: string }) {
   return (
-    <svg viewBox="0 0 16 16" width={size} height={size} fill="currentColor" aria-hidden className={className}>
+    <svg
+      viewBox="0 0 16 16"
+      width={size}
+      height={size}
+      fill="currentColor"
+      aria-hidden
+      className={className}
+      style={{ transform: `translateY(${GLYPH_INK_LIFT.octicon})` }}
+    >
       <path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z" />
     </svg>
   )
@@ -444,7 +463,13 @@ function Badge({
 }) {
   return (
     <span className="inline-flex items-center gap-1 tabular-nums" title={`${n} ${label}`}>
-      {emoji ? <span aria-hidden className="text-[11px] leading-none">{emoji}</span> : Icon ? <Icon size={12} strokeWidth={2} /> : null}
+      {emoji ? (
+        <span aria-hidden className="text-[11px] leading-none">{emoji}</span>
+      ) : Icon ? (
+        <span className="inline-flex" style={{ transform: `translateY(${GLYPH_INK_LIFT.stroke})` }}>
+          <Icon size={12} strokeWidth={2} />
+        </span>
+      ) : null}
       {n}
     </span>
   )
