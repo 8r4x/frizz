@@ -13,9 +13,10 @@ import { MessageDebugId } from "./MessageDebugId.tsx"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { wakeCardTitle, wakeItemAge, wakeRefUrl } from "../lib/githubWakeCard.ts"
 
-// ONE icon+label rhythm for the whole card. The kind header (CardKind) pairs a 12px lucide glyph with
-// its label at `gap-1` and the measured optical nudge; every row below repeats exactly that, so the
-// card reads as one grid instead of a header and a list that disagree about their spacing by 4px.
+// A 12px lucide glyph beside a 12px label at `gap-1`, with the measured optical nudge — the same
+// icon+label rhythm every dense row in the app uses. The card's own kind glyph is NOT one of these:
+// it lives in TranscriptCard's left gutter at 14px, and the rows below start where the TITLE does, so
+// the card reads down one spine rather than two.
 const ROW_ICON = `shrink-0 ${ICON_LABEL_NUDGE}`
 
 // The app's link language, straight off `.md-body a` in styles.css: accent, underlined, 2px offset.

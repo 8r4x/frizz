@@ -101,6 +101,20 @@ html[data-font="sans"] {
 .icon-label-nudge {
   translate: 0 var(--icon-label-nudge);
 }
+/* The transcript card's GUTTER glyph (TranscriptCard) — a 14px icon in its own grid column, optically
+   centred on the 13px/20px title beside it. Same font-dependence as --icon-label-nudge above and
+   measured the same way (svg.getBBox ink centre vs the title's cap block, all 15 cards on the card
+   gallery): under mono the ink lands dead on at 2px, while system-ui's cap block sits ~1.1px lower in
+   its font box and needs 3px. `translate`, not a margin, so the offset can never grow the title row. */
+:root {
+  --card-icon-offset: 2px;
+}
+html[data-font="sans"] {
+  --card-icon-offset: 3px;
+}
+.card-icon-offset {
+  translate: 0 var(--card-icon-offset);
+}
 /* Markdown prose rendered INSIDE a .fray-bash card (the SendMessage peer-message body) is PROSE, not
    code — so it must read in the app's prose font (mono by default, sans under the font experiment),
    matching the surrounding assistant messages. Re-assert the body-font rule here so the mono that
@@ -389,6 +403,18 @@ a[href] {
   line-height: 1.7;
   color: var(--color-fg);
   word-wrap: break-word;
+}
+/* Markdown rendered INSIDE a transcript card (TranscriptCard's body wrapper) wears the CARD's body
+   scale, not the transcript's prose scale. Without this a ```done bullet list or a ```question's
+   context renders at 14px full-strength fg while the plain sentence in the card above it renders at
+   CARD_BODY's 13px — the exact "a two-line explanation in one card is visibly larger than the same
+   sentence in the card above it" inconsistency the shared chrome exists to kill. Colour is inherited
+   so the card's own description strength wins; --md-step follows the size so the paragraph rhythm
+   stays proportional. */
+.card-md .md-body {
+  --md-step: 13px;
+  font-size: 13px;
+  color: inherit;
 }
 .md-body > :first-child {
   margin-top: 0;

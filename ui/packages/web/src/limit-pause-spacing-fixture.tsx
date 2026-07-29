@@ -7,7 +7,7 @@ import "./styles.css"
 // Browser QA for the usage-limit pause card's layout: the REAL card at a wide and a narrow width,
 // across all three copy variants (a clock, no clock, auto-resume off). The reported "garbage spacing"
 // was a button hanging below the sentence inside the card's padding; the card now wears the shared
-// transcript-card chrome (CardKind header, then the sentence, then a left-justified CardActions row),
+// transcript-card chrome (a gutter glyph + title row, then the sentence, then a left-justified CardActions row),
 // so the check here is that the Continue button stays anchored to the right edge and the sentence
 // wraps above it at every width rather than colliding with it.
 

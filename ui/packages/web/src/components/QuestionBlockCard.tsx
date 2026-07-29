@@ -88,10 +88,20 @@ export function QuestionBlockCard({
     ta.style.height = `${ta.scrollHeight + ta.offsetHeight - ta.clientHeight}px`
   }, [freetext])
   const KindIcon = isDanger ? AlertTriangle : isMulti ? ListChecks : HelpCircle
-  const kindLabel = isMulti ? "select multiple" : "question"
+  // Sentence case, because the shared chrome renders this as a real TITLE now rather than as an
+  // uppercased eyebrow — a lowercase "question" beside the card's glyph reads as a typo.
+  const kindLabel = isMulti ? "Select multiple" : "Question"
   return (
     <TranscriptCard tone={isDanger ? "danger" : "neutral"} icon={KindIcon} label={kindLabel}>
-      {html && <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={{ __html: html }} />}
+      {/* FULL-strength, against the card's stepped-down description colour: this card's body is not a
+          description of the title, it IS the ask, and the question must never read dimmer than the
+          word "Question" above it. The colour rides a WRAPPER because `.card-md .md-body` inherits
+          colour by design (and outranks a utility class on the element itself). */}
+      {html && (
+        <div className="text-fg">
+          <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={{ __html: html }} />
+        </div>
+      )}
       {(parsed.options.length > 0 || interactive) && (
         // Options stack in a SINGLE full-width column (maintainer 2026-07-10: a 2-col grid read as
         // ragged, uneven columns with dead whitespace once option text got long). One chip per row;
@@ -105,10 +115,12 @@ export function QuestionBlockCard({
                   the tail of that context, so a muted caption here would make two identical things
                   render differently in one card. */}
               {parsed.optionHeadings?.[i] && (
-                <div
-                  className={`md-body mt-1${wrap ? ` ${QUEUE_WRAP}` : ""}`}
-                  dangerouslySetInnerHTML={{ __html: mdInlineToHtml(parsed.optionHeadings[i]!.split("\n").join(" ")) }}
-                />
+                <div className="mt-1 text-fg">
+                  <div
+                    className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`}
+                    dangerouslySetInnerHTML={{ __html: mdInlineToHtml(parsed.optionHeadings[i]!.split("\n").join(" ")) }}
+                  />
+                </div>
               )}
             <Chip
               label={opt}
