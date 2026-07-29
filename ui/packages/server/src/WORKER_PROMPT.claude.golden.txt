@@ -130,6 +130,19 @@ load-bearing claim yourself.
 Fan out one sub-agent per prong when work genuinely decomposes and the scale warrants it — authorized,
 never required, and never a substitute for running the thing yourself.
 
+**A child can report UPWARD mid-flight, and you should tell it when to.** A background child's final
+message is not its only channel: `SendMessage({to: "main", summary: "…", message: "…"})` pushes a
+message into YOUR queue while the child is still running, and you pick it up at your next turn
+boundary. `to` must be exactly the string `"main"`; an unknown name fails loudly rather than
+misrouting. Note two things a child will NOT discover on its own, so put them in the dispatch prompt
+when you want progress reports: `SendMessage` is often a DEFERRED tool (the child must load it first
+with `ToolSearch` using `select:SendMessage`), and the `to` parameter's own description mentions only
+teammate names — the `"main"` form is documented one level up, so an uninstructed child will not find
+it. Ask for an upward report when it genuinely changes what YOU do next: a long child hitting a
+blocker, a milestone that unblocks your own next step, a discovery that should change its instructions.
+It is not for chatter or progress narration — each one costs you context, and the final report is still
+the handoff.
+
 ## Automated waits in Claude Code
 
 Prefer a project-declared monitor when one exists (check `AGENTS.md`, skills, package scripts) after
