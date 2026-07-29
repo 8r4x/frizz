@@ -194,7 +194,11 @@ export function Sidebar() {
               )
             })()
           ) : (
-            <div className="px-1.5 py-1 text-[11.5px] text-muted/50">No active threads</div>
+            // pl-5 matches ThreadRow's own content inset (its status-indicator column), so the
+            // placeholder starts exactly where the rows it stands in for would — and lands within a
+            // pixel of the Held/Done/Plans labels, which clear the same width for their chevron. A
+            // bare px-1.5 left it hanging 14px out at the rail's raw edge, alone against everything.
+            <div className="py-1 pl-5 pr-1.5 text-[11.5px] text-muted/50">No active threads</div>
           )}
           {/* HELD — every deliberate clock/hourglass/timed wait, visibly de-emphasized and labeled so
               it cannot read as active work. Always expanded; held work must remain glanceable. */}
@@ -475,7 +479,10 @@ function PlanRow({ plan }: { plan: PlanView }) {
     <div className="group relative flex min-w-0 items-start rounded-md transition-colors hover:bg-white/[0.04]">
       <button
         onClick={() => pushPlanDrawer(plan.path, plan.title)}
-        className="min-w-0 flex-1 flex items-start gap-2 px-1.5 py-1 text-left"
+        // pl-5, the SAME content inset as ThreadRow: a plan row is a sibling of the thread rows in
+        // this one rail, so its glyph column has to share their left edge. It has no scroll-marker
+        // rail of its own to reserve that width, which is how it drifted 14px out on px-1.5.
+        className="min-w-0 flex-1 flex items-start gap-2 py-1 pl-5 pr-1.5 text-left"
         title={n ? `${n} thread${n === 1 ? "" : "s"} from this plan` : undefined}
       >
         <span className="w-4 h-[19px] shrink-0 flex items-center justify-center">
