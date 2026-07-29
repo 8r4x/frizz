@@ -39,8 +39,9 @@ import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { Tooltip } from "./Tooltip.tsx"
 import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
 import { hasPendingToolSpinner, hasRunningToolIndicator, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
-import { elapsedSince, formatFixedDuration, formatToolDuration } from "../lib/durationLabels.ts"
-import { CHILD_OPEN_TITLE, visibleChildOps } from "../lib/childOps.ts"
+import { compactElapsedSince, formatCompactElapsed, formatToolDuration } from "../lib/durationLabels.ts"
+import { useNowMs } from "../lib/liveClock.ts"
+import { CHILD_OPEN_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, visibleChildOps } from "../lib/childOps.ts"
 import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
 import { ChildOpRow } from "./ChildOpRow.tsx"
 import { TRANSCRIPT_META_LABEL_CLASS } from "../lib/transcriptMetaLabels.ts"
@@ -1874,6 +1875,9 @@ function ToolImageCard({ name, detail, outputImage, output, status, durationMs }
       <div id={bodyId} hidden={!open}>
         {open && (
           <div className="px-2.5 pb-2.5 pt-1.5">
+            {/* `outputImage` is ALWAYS a hash-named copy in the screenshot cache, so BlockImage's
+                basename caption would read "9f2c…c1.png" — noise directly under a header that already
+                names the real file. Drop it and give the picture the real target as its alt. */}
             <BlockImage path={outputImage} />
             {output && <pre className="fray-bash-body fray-bash-output-body mt-1.5">{output}</pre>}
           </div>
@@ -2093,15 +2097,26 @@ function ReadBlock({ detail, read, status, durationMs }: { detail?: string; read
   )
 }
 
-// An Agent dispatch rendered as a sibling of BashBlock/ReadBlock: a bordered card COLLAPSED by default,
-// header = petite-caps "Agent" + the dispatch description + a dim "[subagent_type]" tag; the chevron
-// expands the dispatch PROMPT. TWO affordances, kept distinct: the chevron toggles the prompt body,
-// while the DESCRIPTION itself is an underlined link (PathLink treatment) that drills INTO that
-// sub-agent's own transcript in a new drawer — for LIVE and COMPLETED children alike (the drawer
-// resolves both; an aged-out one degrades to "unavailable"). The header also carries the child's state
-// — "running Nm" (+ a spinner) while live, or "finished 35m" / "failed 12m" once completed.
+// An Agent dispatch rendered as a sibling of BashBlock/ReadBlock: a bordered card COLLAPSED by default;
+// the chevron expands the dispatch PROMPT. TWO affordances, kept distinct: the chevron toggles the
+// prompt body, while the DESCRIPTION itself is an underlined link (PathLink treatment) that drills INTO
+// that sub-agent's own transcript in a new drawer — for LIVE and COMPLETED children alike (the drawer
+// resolves both; an aged-out one degrades to "unavailable").
+//
+// THE HEADER MIRRORS THE PROMPT-BOX CHILD LINES (maintainer 2026-07-29). A dispatch card and the
+// `ChildOpRow` lines under the prompt box name the SAME running child, so they now read the same way,
+// in the same order: the liveness MARK first, then the kind ("Agent"), then the title, then the RUNTIME
+// right-justified at the far edge. What that cost, deliberately:
+//   • the "[subagent_type]" tag is GONE from the card — same ruling as the child lines two days earlier
+//     (the profile belongs to the prompt box's own control, not repeated on every dispatch). It still
+//     rides the drill-in payload, and stays readable in the title's tooltip;
+//   • the state VERB is gone for the two nominal outcomes. A pulsing dot already says "running" and an
+//     empty mark slot already says "not running any more", so "running 3 min" / "finished 35m" became a
+//     bare "3m" / "35m" — the reading the child lines show. A NON-nominal outcome keeps its verb
+//     ("failed 12m", "killed 4m"): the mark slot cannot say that, and losing it would delete the one
+//     fact the reader most needs.
 // Exported for operation-indicators-fixture.tsx: the agent row is the one card family with TWO
-// independent status sources (its own stateLabel + the shared meta slot), so it needs live fixture
+// independent status sources (its own state reading + the shared meta slot), so it needs live fixture
 // coverage — the double-indicator bug shipped precisely because the fixture skipped it.
 const AGENT_MAX_LINES = 16
 export function AgentBlock({
@@ -2152,23 +2167,55 @@ export function AgentBlock({
   const running = live?.state === "running"
   const canDrill = !!(slug && agentId)
   const title = detail ?? "sub-agent"
+  // Drives the live runtime, on the same shared 30s tick the child rows use — so the dispatch card's
+  // reading and the prompt-box line naming the same child never disagree about how long it has been up.
+  const now = useNowMs()
 
-  let stateLabel: string | null = null
-  if (agentStatus) {
-    const verb = agentStatus === "completed" ? "finished" : agentStatus
-    const dur = agentElapsedMs !== undefined ? fmtDurationMs(agentElapsedMs) : ""
-    stateLabel = `${verb}${dur ? ` ${dur}` : ""}`
-  } else if (live) {
-    const e = elapsedSince(live.startedAt)
-    stateLabel = live.state === "running" ? `running${e ? ` ${e}` : ""}` : live.state
-  }
+  // THE RUNTIME. Compact ("38s" / "12m" / "1hr 5m"), from the same formatter the child rows use, so a
+  // card and a line about one child read the same number in the same shape. Live while the child is
+  // tracked; the harness-reported elapsed once it has finished; nothing at all when neither exists
+  // (never a fabricated reading).
+  const runtime = agentStatus
+    ? agentElapsedMs !== undefined
+      ? formatCompactElapsed(agentElapsedMs)
+      : ""
+    : live
+      ? compactElapsedSince(live.startedAt, now)
+      : ""
+  // The one word the mark slot cannot say. "finished" is dropped (an empty mark slot on a card that
+  // reports a runtime already means "it ran and stopped"), but a FAILED or KILLED child is a different
+  // fact that has no glyph, so it keeps its verb — and the failure tone the tool cards already use.
+  const outcome = agentStatus && agentStatus !== "completed" ? agentStatus : null
+  // The tooltip says what the bare number means, and it must not contradict the mark beside it: a rested
+  // or stale child is not "working", so only a RUNNING one gets that verb.
+  const runtimeTitle = outcome
+    ? `${outcome} after ${runtime}`
+    : agentStatus
+      ? `Ran for ${runtime}`
+      : running
+        ? `Working for ${runtime}`
+        : `Dispatched ${runtime} ago`
 
   // ONE running indicator per row (maintainer 2026-07-18). Whenever a live/completed child resolves,
-  // stateLabel above already IS this row's status and carries its own dot — and "running 3 min" is
+  // the mark slot + runtime below already ARE this row's status — and "3m" beside a pulsing dot is
   // strictly richer than ToolStatusMeta's generic "running", so the meta badge would be a second,
   // duller copy of the same fact. The meta slot stays the ONLY status surface for the remaining case:
   // a dispatch with no child record at all, where a terminal status/duration must still render.
   const showStatusMeta = !live && !agentStatus
+
+  // The liveness MARK, in a fixed-width slot that is reserved whether or not it draws anything — a run
+  // of dispatch cards then aligns its "Agent" labels and titles down one edge instead of stepping in and
+  // out as children finish. Every glyph is the shared child-op vocabulary (lib/childOps.ts), so this card
+  // and the line under the prompt box mark the same child the same way: pulsing accent = running, flat
+  // gray = stale, hollow = rested (its run over, its own fan-out still going), empty = resolved.
+  const mark =
+    running ? (
+      <span aria-hidden className="fray-live-dot fray-live-dot--agent" data-running-indicator="subagent-disclosure" />
+    ) : live?.state === "stale" ? (
+      <span className={CHILD_STALE_DOT_CLASS} title={CHILD_STALE_TITLE} />
+    ) : live?.state === "rested" ? (
+      <span className={CHILD_RESTED_DOT_CLASS} title={CHILD_RESTED_TITLE} />
+    ) : null
 
   function openDrawer() {
     if (!slug || !agentId) return
@@ -2183,25 +2230,38 @@ export function AgentBlock({
         expanded={open}
         label={`${open ? "Collapse" : "Expand"} Agent dispatch: ${title}`}
         onToggle={() => setOpen((v) => !v)}
-        meta={showStatusMeta && <ToolStatusMeta status={status} durationMs={durationMs} indicator="agent" />}
+        meta={
+          showStatusMeta ? (
+            <ToolStatusMeta status={status} durationMs={durationMs} indicator="agent" />
+          ) : (
+            (outcome || runtime) && (
+              <span className={`shrink-0 whitespace-nowrap text-[11.5px] ${outcome ? "fray-tool-failed" : "text-muted/40"}`} title={runtimeTitle}>
+                {[outcome, runtime].filter(Boolean).join(" ")}
+              </span>
+            )
+          )
+        }
       >
+        {/* The mark leads the row, as it does on the prompt-box lines. `-mr-1` pulls the label back to
+            roughly the dot↔label gap those lines use: the header's own gap-2 is tuned for a petite-caps
+            label beside a path, and at full width a 6px dot floated away from the word it qualifies. */}
+        <span className="fray-agent-mark -mr-1 flex w-[9px] shrink-0 justify-center">{mark}</span>
         <span className="petite-caps fray-bash-label shrink-0">Agent</span>
         {canDrill ? (
           <button
             type="button"
             aria-label={`Open sub-agent transcript: ${title}`}
-            title="Open sub-agent transcript"
+            // The model+effort profile no longer renders, so the tooltip is where it stays readable —
+            // the same place the sidebar rail keeps it for the same reason.
+            title={subagentType ? `Open sub-agent transcript — ${subagentType}` : "Open sub-agent transcript"}
             onClick={openDrawer}
             className="min-w-[4rem] flex-1 truncate text-left text-[11.5px] text-muted outline-none hover:underline hover:text-fg/80 focus-visible:underline focus-visible:text-fg/80"
           >
             {title}
           </button>
         ) : (
-          <span className="min-w-[4rem] flex-1 truncate text-[11.5px] text-muted">{title}</span>
+          <span className="min-w-[4rem] flex-1 truncate text-[11.5px] text-muted" title={subagentType}>{title}</span>
         )}
-        {subagentType && <span className="min-w-0 max-w-[9rem] truncate font-mono-keep text-[11px] text-muted/45">[{subagentType}]</span>}
-        {stateLabel && <span className="shrink-0 text-[11px] text-muted/55 whitespace-nowrap">{stateLabel}</span>}
-        {running && <span aria-hidden className="fray-live-dot fray-live-dot--agent" data-running-indicator="subagent-disclosure" />}
       </ToolDisclosureHeader>
       <div id={bodyId} hidden={!open}>
         {open && (
@@ -2728,6 +2788,10 @@ function ProseHtml({ md, wrap }: { md: string; wrap?: boolean }) {
 // to showing the plain path text so nothing is silently swallowed. `hideCaption` drops the basename
 // line (SendUserFile images are hash-named cache copies whose basename is meaningless, and the
 // SentFilesCard carries its own caption); `altText` overrides the a11y alt (else the basename).
+// `self-start` is load-bearing: the figure is a flex COLUMN, whose default `align-items: stretch` blew
+// the <img> box out to the full card width, and `object-contain` then letterboxed the picture inside it.
+// A tall 390×1002 phone screenshot measured 642px of box painting 163px of image — 479px of dead
+// gutter. Hugging the intrinsic aspect makes the bordered frame the picture's own edge.
 export function BlockImage({ path, hideCaption, altText }: { path: string; hideCaption?: boolean; altText?: string }) {
   const [broken, setBroken] = useState(false)
   if (broken) return <div className="font-mono-keep text-[12px] text-muted/70 break-all">{path}</div>
@@ -3336,12 +3400,6 @@ export function PendingAskCard({ ask, onTerminal }: { ask: PendingAsk; onTermina
       </CardActions>
     </TranscriptCard>
   )
-}
-
-// Coarse duration for a FIXED span (a dispatch→completion elapsed, in ms): "<1m", "42m", "1h 3m".
-// Distinct from elapsedSince(), which measures an ISO start against now for a still-running child.
-function fmtDurationMs(ms: number): string {
-  return formatFixedDuration(ms)
 }
 
 // The hairline+label+hairline chrome of a WAKE DIVIDER — the one rendering both kinds of child
