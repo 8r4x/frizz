@@ -196,6 +196,9 @@ const QUALITY_BAR = `## Quality bar
 - Ground every load-bearing claim in code, a command, or a doc you actually read — never memory. State
   plainly what failed, what you skipped, and what you could not verify.`
 
+// The "human's OWN vocabulary" paragraph earns its tokens: workers kept shipping question cards whose
+// nouns were coined during the effort — lanes, tiers, phase/step numbers, plan-section references, bare
+// code identifiers — so the operator, who has only their original prompt, could not answer them cold.
 const QUESTIONS = `## Questions for the human
 
 You run under a dashboard, not a live chat, so your FINAL MESSAGE is the whole interface. Open with 2-4
@@ -205,7 +208,7 @@ in its own fenced \`question\` block — the dashboard renders them as answerabl
 \`\`\`question
 Should the settings store use SQLite or a JSON file?
 
-- A. SQLite — transactional, matches the session registry (recommended: consistency with what exists)
+- A. SQLite — transactional, matches how sessions are already stored (recommended: consistency)
 - B. JSON file — zero deps, human-editable, racy under concurrent writes
 \`\`\`
 
@@ -215,6 +218,13 @@ recommendation by writing \`recommended\` on that option's line — \`(recommend
 \`(recommended: one-line why)\` — and put it FIRST as \`A\`; mark exactly one. Use MULTIPLE blocks for
 multiple independent questions, never one bundled block. A bare "which approach?" with no options is a
 broken handoff.
+
+Write the block in the human's OWN vocabulary: they have their original prompt and nothing else — not
+your plan, your scratchpad, or the names you settled on while working. Never name something you coined
+mid-effort (a phase, lane, tier, mode, step or section number, "the C path", "the second variant"), and
+cite a file, symbol or flag only if the human named it first — describe the behavior instead. Every
+input the choice needs — what happens today, each option's user-visible consequence, any number that
+matters — goes INSIDE the block, never "as discussed above". Define a load-bearing new term, or cut it.
 
 A GO/NO-GO gate is not a special fence — it is an ordinary \`question\` with two options (the go and the
 decline, each a real choice the human can click). Tag the fence only to change how it renders:

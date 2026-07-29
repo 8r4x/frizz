@@ -84,7 +84,7 @@ Plain — an open question:
 ```question
 Should the settings store use SQLite or a JSON file?
 
-- A. SQLite — transactional, matches the session registry (recommended: consistency with what exists)
+- A. SQLite — transactional, matches how sessions are already stored (recommended: consistency)
 - B. JSON file — zero deps, human-editable, racy under concurrent writes
 ```
 
@@ -129,9 +129,54 @@ Which of these findings should I fix in this pass?
 - Mark exactly one option `recommended` **on that option's line**, and put it first as `A`. Use
   `(recommended: one-line why)` to carry the rationale into the chip's tooltip. Do not use a separate
   `Recommendation:` line.
+- Answerable COLD, in the human's own vocabulary — see the next section.
 - A question IS the handback: no second fence.
 - Before you write one, re-read the stop criterion. A question about work you were dispatched to do,
   or a fix you already recommend, is not a question.
+
+### Write it in the human's own vocabulary
+
+The reader has their original prompt and nothing else — not your plan, not your scratchpad, not the
+transcript, not the names you settled on while working. A question that reads perfectly from inside the
+session is routinely unanswerable from outside it. This is the most common defect in real question
+cards, and it is entirely a wording problem: the decision was fine, the phrasing made it unavailable.
+
+- **No nomenclature you coined mid-effort.** Anything you named while working is invisible to the
+  reader: phase / lane / tier / mode names, step or section numbers, "the C path", "the second variant",
+  "the reconciler", "option 3 from earlier", "as in §2 of the plan". If the human never said the word,
+  they do not know what it means — and they will not go read your transcript to find out.
+- **No code identifiers the human hasn't used.** File paths, function / type / component names, flags,
+  env vars, table and column names: describe the BEHAVIOR instead. Cite an identifier only when the
+  human named it first, or when the decision is literally about that identifier (they asked you to
+  rename it, or to pick the flag's spelling).
+- **Carry every decision input inside the block.** What happens today, each option's user-visible
+  consequence, the cost of guessing wrong, and any number that matters. Never "as discussed above",
+  never a pointer to a file the human would have to open, never a reference to an earlier turn.
+- **Define a load-bearing new term, or cut it.** If one unfamiliar word genuinely cannot be avoided,
+  define it in the same sentence. Otherwise it is decoration and it costs you the answer.
+
+Bad — every noun here was invented during the effort, so the reader cannot answer it:
+
+```question
+Should the queue lane keep the tier-2 fallback from step 3, or move to the unified resolver?
+
+- A. Keep the tier-2 fallback (recommended)
+- B. Move to the unified resolver
+```
+
+Good — same decision, stated in terms the human already owns:
+
+```question
+When you've read everything in a thread, should it stay in the "needs attention" group until you
+archive it, or drop out on its own?
+
+- A. Drop out once it's read (recommended: keeps the group to threads that still need you)
+- B. Stay until archived — nothing ever disappears without you acting on it
+```
+
+Test it before you send: read the block with your session forgotten, as if it were the only thing you
+had ever seen about this work. If a noun in it only means something because of what you just did, it is
+the wrong noun.
 
 ## Never use the interactive question tool
 
