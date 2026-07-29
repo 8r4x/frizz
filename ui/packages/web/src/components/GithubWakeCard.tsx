@@ -86,22 +86,21 @@ export function GithubWakeCard({ text, sourceId, wrap }: { text: string; sourceI
   }
   const refUrl = wakeRefUrl(steer.ref)
   const total = steer.items.length + steer.omitted
+  // Which PR this is about, parked at the header's right edge (maintainer 2026-07-29). It is the card's
+  // subject, not a line of its content — on its own body line it pushed the activity down and read as
+  // the first of the rows.
+  const ref = refUrl ? (
+    <a href={refUrl} target="_blank" rel="noreferrer noopener" className={`flex items-center gap-1 text-[11px] ${CARD_LINK}`}>
+      {steer.ref}
+      <ArrowUpRight size={12} className={ROW_ICON} />
+    </a>
+  ) : (
+    <span className="text-[11px] text-muted">{steer.ref}</span>
+  )
   return (
     <WakeShell sourceId={sourceId}>
-      <TranscriptCard icon={Github} label={wakeCardTitle(total, steer.items[0].label)}>
-        {/* The card's SUBJECT line: which PR this is about, as an obvious link. It sits on the same
-            left edge as the kind header and the rows, so the card has one vertical spine. */}
-        <div className={`${CARD_BODY} truncate`}>
-          {refUrl ? (
-            <a href={refUrl} target="_blank" rel="noreferrer noopener" className={`inline-flex items-center gap-1 ${CARD_LINK}`}>
-              {steer.ref}
-              <ArrowUpRight size={12} className={ROW_ICON} />
-            </a>
-          ) : (
-            <span className="text-fg/90">{steer.ref}</span>
-          )}
-        </div>
-        <div className="mt-1.5 flex flex-col">
+      <TranscriptCard icon={Github} label={wakeCardTitle(total, steer.items[0].label)} aside={ref}>
+        <div className="flex flex-col">
           {steer.items.map((item) => (
             <ItemRow
               key={item.url ?? `${item.actor}-${item.at ?? ""}-${item.label}`}

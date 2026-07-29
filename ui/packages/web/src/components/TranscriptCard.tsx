@@ -27,17 +27,26 @@ export function CardKind({
   icon: Icon,
   label,
   tone = "text-muted/70",
+  aside,
 }: {
   icon: LucideIcon
   label: ReactNode
   // The kind's own color language: muted by default, red for danger/fault, amber for a pause, accent
   // for "this one is waiting on you".
   tone?: string
+  // Optional trailing slot, parked at the header's RIGHT edge: the one thing the card is ABOUT, when
+  // that is a short reference rather than prose (the wake card's `owner/repo#N` link). It rides the
+  // header instead of taking a body line of its own, which keeps the body for the card's actual
+  // content. Exempted from the header's uppercase/tracking — a ref or an id is not a kind label.
+  aside?: ReactNode
 }) {
   return (
     <div className={`mb-1.5 flex items-center gap-1 text-[10px] uppercase tracking-wide ${tone}`}>
       <Icon size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} />
-      {label}
+      {/* The kind truncates before the aside does: on a narrow card the specific reference is worth
+          more than the last few characters of a label the icon is already carrying. */}
+      <span className="min-w-0 truncate">{label}</span>
+      {aside && <span className="ml-auto shrink-0 pl-2 normal-case tracking-normal">{aside}</span>}
     </div>
   )
 }
@@ -70,6 +79,7 @@ export function TranscriptCard({
   tone = "neutral",
   icon,
   label,
+  aside,
   children,
   className = "",
   ...rest
@@ -77,12 +87,13 @@ export function TranscriptCard({
   tone?: CardTone
   icon: LucideIcon
   label: ReactNode
+  aside?: ReactNode
   children: ReactNode
   className?: string
 } & Omit<ComponentPropsWithoutRef<"div">, "children" | "className">) {
   return (
     <div {...rest} className={`min-w-0 rounded-lg border ${CARD_TONES[tone].border} bg-panel-2 px-4 py-3 ${className}`}>
-      <CardKind icon={icon} label={label} tone={CARD_TONES[tone].kind} />
+      <CardKind icon={icon} label={label} tone={CARD_TONES[tone].kind} aside={aside} />
       {children}
     </div>
   )
