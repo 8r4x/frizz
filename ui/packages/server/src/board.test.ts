@@ -512,7 +512,7 @@ test("deriveNeedsYou: the awaiting-background event-snooze hides the card until 
   assert.equal(deriveNeedsYou(row({ rested_at: null, bg_snooze_rested_at: T0 }), child, "turn-idle"), true)
 })
 
-test("deriveAwaitingBackground: true only when own-work rest is the SOLE, unsnoozed queue reason", () => {
+test("deriveAwaitingBackground: true only when own-work rest is the SOLE reason for the card", () => {
   const child = tele({ subAgents: [{ label: "c", startedAt: T0, state: "running", id: "a1" }], lastActivityAt: LATER })
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), child, "turn-idle"), true)
   // A shell-only rest also qualifies.
@@ -531,8 +531,22 @@ test("deriveAwaitingBackground: true only when own-work rest is the SOLE, unsnoo
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), child, "exited"), false)
   // No live own work → not this card.
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), tele({ lastActivityAt: LATER }), "turn-idle"), false)
-  // Event-snoozed → hidden, so not a handoff at all.
-  assert.equal(deriveAwaitingBackground(row({ rested_at: T0, bg_snooze_rested_at: T0 }), child, "turn-idle"), false)
+  // A user WALL-CLOCK snooze is a park on the whole thread, not a queue-card verb → no card.
+  assert.equal(deriveAwaitingBackground(row({ rested_at: T0, snoozed_until: LATER }), child, "turn-idle", false, Date.parse(T0)), false)
+})
+
+// The queue's event-Snooze must NOT blank the drawer / full-screen page. `awaitingBackground` states a
+// FACT about the thread and drives all three surfaces; only the QUEUE honours the snooze, and it does so
+// through needsYou (groups.ts `queued`). Inheriting it here meant one queue click left the drawer showing
+// nothing at rest — the "reads as if the agent died" state this card exists to prevent.
+test("deriveAwaitingBackground: the event-snooze hides the QUEUE card, never the fact", () => {
+  const child = tele({ subAgents: [{ label: "c", startedAt: T0, state: "running", id: "a1" }], lastActivityAt: LATER })
+  const shell = tele({ bgShells: [{ label: "Poll CI to terminal", startedAt: T0, state: "running" }], lastActivityAt: LATER })
+  for (const [what, t] of [["sub-agent", child], ["shell-only", shell]] as const) {
+    const snoozed = row({ rested_at: T0, bg_snooze_rested_at: T0 })
+    assert.equal(deriveNeedsYou(snoozed, t, "turn-idle"), false, `${what}: snoozed → out of the queue`)
+    assert.equal(deriveAwaitingBackground(snoozed, t, "turn-idle"), true, `${what}: …but the card still states the rest`)
+  }
 })
 
 test("deriveNeedsYou: mid-turn never queues; once runtime reports rest the session is presented", () => {

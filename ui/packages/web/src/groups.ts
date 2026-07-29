@@ -307,8 +307,19 @@ function hasLiveSubAgents(t: ThreadView): boolean {
 // as live work spun a finished thread forever and kept it out of the queue. `bgShells` stays as
 // transcript-level telemetry (the "background running" chip) — it just no longer speaks for the
 // THREAD. A worker that genuinely wants to wait dispatches a sub-agent to own the wait.
+//
+// `awaitingBackground` is the ONE exception, and it is not `bgShells` by another name: it is SERVER
+// truth (board.deriveAwaitingBackground) meaning "at rest, its own dispatched work is still live, and
+// nothing harder outranks that". Reading it here keeps the bands honest for a thread whose card the
+// human EVENT-SNOOZED. Such a thread leaves the queue (needsYou false) while still cooking, and with a
+// live SUB-AGENT hasLiveSubAgents already kept it in the running band with a spinner. A shell-only
+// thread had no such signal, so it fell into the RESTED band — the queue-ordered band — with no queue
+// card behind it (found 2026-07-29: "showing up as a rested thread in my sidebar, yet there's no card
+// for it"). It does NOT re-spin finished threads: an UNSNOOZED awaiting-background thread has
+// needsYou true, so inActiveRunningBand keeps it in the rested band exactly as before, and only a
+// thread the human deliberately parked reads as running.
 function hasLiveOps(t: ThreadView): boolean {
-  return hasLiveSubAgents(t)
+  return hasLiveSubAgents(t) || t.awaitingBackground === true
 }
 
 // The wait kinds that truthfully earn the parked/hourglass presentation. A timer is only a park while

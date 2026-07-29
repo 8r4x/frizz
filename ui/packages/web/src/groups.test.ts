@@ -394,6 +394,21 @@ test("partitionActive: splits an ordered Active list into running/rested; queued
   assert.deepEqual(rested.map((t) => t.id), ["rest-old", "spin-ask", "rest-new"])
 })
 
+// THE RESTED BAND IS THE QUEUE, so every row in it must have a queue card behind it. An EVENT-SNOOZED
+// awaiting-background thread is still cooking but has left the queue (needsYou false), so it belongs in
+// the RUNNING band — which a live sub-agent already achieved via hasLiveSubAgents, and a SHELL-ONLY
+// thread did not, leaving a cardless row stranded in the rested band (maintainer 2026-07-29).
+test("partitionActive: an event-snoozed awaiting-background thread cooks in the running band, shells included", () => {
+  const shellOnly = thread({ id: "snoozed-shell", kind: "session", state: "open", runtime: "turn-idle", needsYou: false, awaitingBackground: true, subAgents: [], lastUserAt: "2026-07-09T00:00:00.000Z" })
+  const withChild = thread({ id: "snoozed-child", kind: "session", state: "open", runtime: "turn-idle", needsYou: false, awaitingBackground: true, subAgents: [{ id: "a1", label: "c", startedAt: "2026-07-09T00:00:00.000Z", state: "running" }], lastUserAt: "2026-07-09T00:00:00.000Z" })
+  // UNSNOOZED is the control: awaitingBackground is true there too, but it is QUEUED, so it must stay in
+  // the rested band with its card — this is what keeps a never-ending dev server from spinning forever.
+  const queuedShell = thread({ id: "queued-shell", kind: "session", state: "open", runtime: "turn-idle", needsYou: true, awaitingBackground: true, subAgents: [], lastUserAt: "2026-07-09T00:00:00.000Z" })
+  const { running, rested } = partitionActive([shellOnly, withChild, queuedShell])
+  assert.deepEqual(running.map((t) => t.id), ["snoozed-shell", "snoozed-child"])
+  assert.deepEqual(rested.map((t) => t.id), ["queued-shell"])
+})
+
 // ---- isHeld: every rendered wait glyph belongs to the labeled dimmed Held band ----
 
 const awaitingHuman = { kind: "awaiting" as const, body: "", hints: [{ kind: "human" as const, value: "Cloudflare maintainer must approve fork CI" }] }

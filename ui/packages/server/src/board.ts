@@ -314,12 +314,26 @@ export function deriveNeedsYou(
   return true
 }
 
-// Whether a QUEUED thread's SOLE reason is "resting while its own background work is still live" — the
-// signal the client keys the awaiting-background card + event-Snooze on. True only when it is a live
-// handoff (deriveNeedsYou), it is at rest (turn-idle) with live own work, and NO stronger reason
-// outranks it (a native/typed ask, permission prompt, chat question, or ANY signal fence all render
-// their own card instead). An event-snoozed card returns false here too — deriveNeedsYou hides it, so
-// it is not a handoff at all. Kept adjacent to deriveNeedsYou and delegating to it so the two never drift.
+// Whether a thread is resting while its own background work is still live — the signal the client keys
+// the awaiting-background card on, on ALL THREE surfaces (queue card, drawer, full-screen page). True
+// only when it is at rest (turn-idle) with live own work and NO stronger reason outranks it (a
+// native/typed ask, permission prompt, chat question, or ANY signal fence all render their own card
+// instead). Kept adjacent to deriveNeedsYou and delegating to it so the two never drift.
+//
+// The queue's event-Snooze is deliberately NOT inherited (bg_snooze_rested_at is nulled out below).
+// Snoozing is a QUEUE VERB — "stop showing me this card in the queue" — while this flag states a FACT
+// about the thread, and AwaitingBackgroundCard renders that fact on the drawer and the standalone page
+// too, where there is no Snooze affordance and nothing to dismiss. Inheriting the snooze let one queue
+// click blank all three surfaces at once: the drawer then showed NOTHING at rest — the shimmer stops and
+// the transcript just ends — which is exactly the "reads as if the agent died" failure the card exists to
+// prevent (found 2026-07-29 on a shell-only thread; the report was "there's no card for it in the UI —
+// when I click it, it opens it in a drawer"). The queue card itself stays hidden regardless, because the
+// queue list gates on needsYou (groups.ts `queued`), which still honours the snooze.
+//
+// SHELL-ONLY is why this went unnoticed: with a live SUB-AGENT the client's own hasLiveOps still reads
+// the thread as running, so a snoozed thread keeps a spinner in the sidebar's running band and stays
+// legibly alive. A background shell deliberately does not count as live work there, so a snoozed
+// shell-only thread fell all the way through to a rested-band row with nothing behind it anywhere.
 export function deriveAwaitingBackground(
   row: SessionRow,
   tele: SessionTelemetry | undefined,
@@ -339,7 +353,9 @@ export function deriveAwaitingBackground(
   // watcher" fence, not as this banner. A parked human/timer fence never reached here anyway (it's
   // Held, not queued); this only changes the non-parked awaiting fences (pr-watch, legacy, hintless).
   if (tele?.lastFence?.kind === "done" || tele?.lastFence?.kind === "awaiting") return false
-  return deriveNeedsYou(row, tele, runtime, hasActionableInteraction, nowMs, limitPause)
+  // Every OTHER excusal deriveNeedsYou applies still outranks the card (a user wall-clock snooze, a
+  // limit pause, a delivered-but-unobserved follow-up); only the queue-owned event-snooze is dropped.
+  return deriveNeedsYou({ ...row, bg_snooze_rested_at: null }, tele, runtime, hasActionableInteraction, nowMs, limitPause)
 }
 
 // The scratchpad path for a session, iff the file exists under the project dir (else undefined so the
