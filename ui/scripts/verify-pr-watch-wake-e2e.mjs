@@ -113,10 +113,13 @@ check("the embedded newlines survived the paste", bullets.length === 3, `${bulle
 check("never names the stale 07:36 comment", payload.length > 0 && !payload.includes("2026-07-29T07:36:03Z"))
 
 // ---- 4. render it: append what the worker received, so the chat shows the real steer ---------------
-// From the steer's leading icon up to the invisible wake-delivery marker the resume path appends.
+// From the steer's leading icon THROUGH the wake-delivery token, because a real worker's transcript
+// records the delivered text WITH that token — it is how the outbox acks the delivery, and it is
+// also the server's only tell that fray (not the human) wrote the turn, which is what promotes it
+// out of the human's bubble into the first-party card. Dropping it here would silently test the
+// wrong render path.
 const start = payload.search(/[\u{1F464}\u{1F916}]/u)
-const end = payload.indexOf("<!-- fray-wake:")
-const steer = payload.slice(start, end > start ? end : undefined).trim()
+const steer = payload.slice(start < 0 ? 0 : start).trim()
 const delivered = {
   parentUuid: "00000002-0000-4000-8000-000000000000", isSidechain: false, type: "user",
   message: { role: "user", content: steer },

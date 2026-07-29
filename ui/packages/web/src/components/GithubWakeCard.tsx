@@ -29,7 +29,7 @@ function WakeShell({
   )
 }
 
-function ItemRow({ item, wrap }: { item: GithubWakeItem; wrap?: boolean }) {
+function ItemRow({ item, showLabel, wrap }: { item: GithubWakeItem; showLabel: boolean; wrap?: boolean }) {
   const Icon = item.bot ? Bot : User
   const age = wakeItemAge(item.at)
   const body = (
@@ -37,7 +37,9 @@ function ItemRow({ item, wrap }: { item: GithubWakeItem; wrap?: boolean }) {
       <Icon size={12} className="mt-0.5 shrink-0 text-muted/70" />
       <span className="min-w-0 flex-1">
         <span className="font-medium text-fg/90">@{item.actor}</span>
-        <span className="text-muted"> · {item.label}</span>
+        {/* The heading already names the kind when there is only one item ("New comment"), so repeating
+            it on the row read as a stutter: "New comment / @colinhacks · comment". */}
+        {showLabel && <span className="text-muted"> · {item.label}</span>}
       </span>
       {age && (
         // The exact instant stays available on hover; the row shows the age, which is the thing a
@@ -91,7 +93,12 @@ export function GithubWakeCard({ text, sourceId, wrap }: { text: string; sourceI
         </div>
         <div className="mt-1.5 flex flex-col">
           {steer.items.map((item) => (
-            <ItemRow key={item.url ?? `${item.actor}-${item.at ?? ""}-${item.label}`} item={item} wrap={wrap} />
+            <ItemRow
+              key={item.url ?? `${item.actor}-${item.at ?? ""}-${item.label}`}
+              item={item}
+              showLabel={steer.items.length > 1}
+              wrap={wrap}
+            />
           ))}
         </div>
         {steer.omitted > 0 && (

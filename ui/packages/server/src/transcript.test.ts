@@ -78,6 +78,9 @@ test("Claude wake delivery hides the wake token in the bubble while the stored t
   assert.equal(wake.role, "user")
   assert.equal(wake.text, delivered) // the ack (scheduler: lastUserText.includes(token)) depends on this
   assert.equal(wake.displayText, wakeSteer)
+  // FRAY composed this turn, not the human — the chat renders it as a first-party card rather than
+  // the human's own right-justified bubble, which claimed the operator had typed it.
+  assert.equal(wake.wake, true)
 })
 
 test("a wake token riding a QUEUED follow-up is hidden too, and the pending bubble still resolves", () => {
@@ -96,6 +99,7 @@ test("a wake token riding a QUEUED follow-up is hidden too, and the pending bubb
   assert.equal(queued[1].queued, false)
   assert.equal(queued[1].text, delivered)
   assert.equal(queued[1].displayText, wakeSteer)
+  assert.equal(queued[1].wake, true, "a wake pasted into a mid-turn worker is still fray speaking")
 })
 
 test("a wake token is projected out only from the delivery tail, never from quoted prose", () => {
@@ -108,6 +112,7 @@ test("a wake token is projected out only from the delivery tail, never from quot
   const asked = msgs[msgs.length - 1]
   assert.equal(asked.text, quoting)
   assert.equal(asked.displayText, undefined, "a mid-sentence token is the human's own words — leave the bubble alone")
+  assert.equal(asked.wake, undefined, "and it must not be laundered into a first-party fray card either")
 })
 
 // fray's own dispatch envelope. The bubble shows the operator's prompt and nothing else — on the plain
