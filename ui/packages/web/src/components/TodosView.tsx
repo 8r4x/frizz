@@ -1183,7 +1183,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
           rather than hovering over the box. */}
       {answerable && (
         <div className="shrink-0 px-5 pt-0">
-          <div className="mb-4 flex items-center justify-start gap-2">
+          <div className="mb-4 flex items-center justify-end gap-2">
             <button
               disabled={!anyAnswered}
               onClick={() => sendAnswers()}

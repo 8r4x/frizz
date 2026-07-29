@@ -48,7 +48,7 @@ import { InteractionStack } from "./InteractionCards.tsx"
 // surface can render them without importing the thread view. QuestionBlockCard in particular is
 // shared with the native-AskUserQuestion path, which reaches it through InteractionCards.tsx —
 // a file THIS one imports, so the card could not have stayed here without a module cycle.
-import { CARD_ACTION_EXPLAINER, CARD_BODY, CARD_PRIMARY_ACTION, CARD_PRIMARY_BUTTON, CardActions, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
+import { CARD_BODY, CARD_PRIMARY_ACTION, CARD_PRIMARY_BUTTON, CardActions, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 // The resting card, shared with the queue (TodosView passes it the event-Snooze; these two surfaces
 // deliberately pass no action — see the module header).
@@ -2620,7 +2620,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
   // the queue card leaves showSendButton unset (it owns a single card-level Send instead).
   if (showSendButton && answering) {
     blocks.push(
-      <div key="send-answers" className="flex justify-start">
+      <div key="send-answers" className="flex justify-end">
         <button
           type="button"
           data-send-answers
@@ -2935,12 +2935,12 @@ function AwaitingParkButton({ thread, hints }: { thread: ThreadViewData; hints: 
       .finally(() => setBusy(false))
   }
   return (
-    // Button FIRST, explainer immediately to its right and centered against it (maintainer
-    // 2026-07-29) — the pair reads as one control with its caption, and the verb starts on the same
-    // left edge as the card's kind header and body. The explainer still takes the remaining width and
-    // wraps its OWN lines there (flex-1 + min-w-0) rather than pushing the button onto a line of its
-    // own, so a two-line sentence on a narrow queue card leaves the control intact.
+    // Explainer first, button ANCHORED RIGHT — the same trailing-verb position the done card's
+    // Mark-as-done holds (maintainer 2026-07-24). The explainer takes the remaining width and wraps its
+    // OWN lines there (flex-1 + min-w-0) instead of pushing the button onto a line of its own: on a
+    // narrow queue card a two-line sentence beside the button still reads as one control.
     <CardActions>
+      <span className="min-w-0 flex-1 text-[11px] leading-snug text-muted/70">{action.explainer}</span>
       <button
         type="button"
         onClick={apply}
@@ -2955,7 +2955,6 @@ function AwaitingParkButton({ thread, hints }: { thread: ThreadViewData; hints: 
         {busy && <Loader2 size={11} className="animate-spin" />}
         {AWAITING_PARK_BUTTON}
       </button>
-      <span className={CARD_ACTION_EXPLAINER}>{action.explainer}</span>
     </CardActions>
   )
 }

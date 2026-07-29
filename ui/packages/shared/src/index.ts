@@ -1082,6 +1082,17 @@ export const GithubItem = z.object({
   labels: z.array(z.object({ name: z.string(), color: z.string() })).default([]),
   state: z.string().optional(), // OPEN | CLOSED | MERGED
   isDraft: z.boolean().optional(), // PRs only
+  // ISSUES only: the pull request whose body carries a closing keyword for this issue (GitHub's own
+  // "linked pull requests"). Present means someone is already on it — the row paints a PR glyph so a
+  // dispatch doesn't duplicate work in flight. Absent for PRs and for issues nobody has opened one for.
+  linkedPr: z
+    .object({
+      number: z.number().int().positive(),
+      url: z.string(),
+      state: z.string(), // OPEN | MERGED
+      isDraft: z.boolean().optional(),
+    })
+    .optional(),
 })
 export type GithubItem = z.infer<typeof GithubItem>
 

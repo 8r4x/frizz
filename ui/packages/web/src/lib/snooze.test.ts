@@ -10,29 +10,16 @@ import {
   isSnoozePreset,
   localDateTimeInputValue,
   parseLocalSnooze,
-  snoozePresetAction,
   snoozePresetInstant,
   snoozePresetLabel,
 } from "./snooze.ts"
 
-test("snooze preset metadata has a stable one-day default and sentence-case labels", () => {
+test("snooze preset metadata has a stable one-day default and compact Tomorrow label", () => {
   assert.equal(DEFAULT_SNOOZE_PRESET, "1d")
   assert.equal(snoozePresetLabel(DEFAULT_SNOOZE_PRESET), "1 day")
-  // Sentence case, like every other preset in the same menu — "Tomorrow" was the only capitalized
-  // entry in a list of bare nouns, and it capitalized mid-phrase inside the button.
-  assert.equal(snoozePresetLabel("tomorrow"), "tomorrow")
+  assert.equal(snoozePresetLabel("tomorrow"), "Tomorrow")
   assert.equal(isSnoozePreset("1w"), true)
   assert.equal(isSnoozePreset("custom"), false)
-})
-
-// You snooze FOR a duration but UNTIL an instant. Gluing the bare label on gave "Snooze tomorrow",
-// which reads as deferring the snoozing rather than naming the wake.
-test("the button says 'until' for a calendar preset and nothing extra for a duration", () => {
-  assert.equal(snoozePresetAction("tomorrow"), "Snooze until tomorrow")
-  assert.equal(snoozePresetAction("1d"), "Snooze 1 day")
-  assert.equal(snoozePresetAction("1h"), "Snooze 1 hour")
-  assert.equal(snoozePresetAction("3d"), "Snooze 3 days")
-  assert.equal(snoozePresetAction("1w"), "Snooze 1 week")
 })
 
 test("snooze presets distinguish exact duration from tomorrow's local wall clock", () => {

@@ -5,6 +5,9 @@ import {
   sumReactions,
   commentCount,
   parseListJson,
+  pickLinkedPr,
+  linkedPrQuery,
+  parseLinkedPrJson,
   truncateBody,
   renderGithubPrompt,
   effectiveTemplate,
@@ -266,6 +269,67 @@ test("DEFAULT_PR_PROMPT renders into a real PR prompt (diff/checks by number)", 
   assert.ok(p.includes("gh pr diff 13844 -R cli/cli"))
   assert.ok(p.includes("gh pr checks 13844 -R cli/cli"))
   assert.ok(p.includes("read-only"))
+})
+
+// ---- linked closing PRs ----
+
+function linkNode(number: number, state: string, isDraft = false) {
+  return { number, url: `https://github.com/cli/cli/pull/${number}`, state, isDraft }
+}
+
+test("pickLinkedPr: an open link wins over a merged one (the work in flight is the signal)", () => {
+  const pr = pickLinkedPr([linkNode(700, "MERGED"), linkNode(812, "OPEN")])
+  assert.deepEqual(pr, { number: 812, url: "https://github.com/cli/cli/pull/812", state: "OPEN", isDraft: false })
+})
+
+test("pickLinkedPr: a merged link is kept when nothing is open", () => {
+  assert.equal(pickLinkedPr([linkNode(616, "MERGED")])?.number, 616)
+})
+
+test("pickLinkedPr: a PR closed WITHOUT merging closes nothing — never badge it", () => {
+  assert.equal(pickLinkedPr([linkNode(590, "CLOSED")]), undefined)
+  // …and a closed one alongside an open one must not shadow the open one.
+  assert.equal(pickLinkedPr([linkNode(590, "CLOSED"), linkNode(599, "OPEN")])?.number, 599)
+})
+
+test("pickLinkedPr: draft state rides along; empty/malformed → undefined, never throws", () => {
+  assert.equal(pickLinkedPr([linkNode(601, "OPEN", true)])?.isDraft, true)
+  assert.equal(pickLinkedPr([]), undefined)
+  assert.equal(pickLinkedPr(undefined), undefined)
+  assert.equal(pickLinkedPr("nope"), undefined)
+  assert.equal(pickLinkedPr([{ number: 0, state: "OPEN" }]), undefined) // non-positive number
+  assert.equal(pickLinkedPr([{ state: "OPEN" }]), undefined) // no number
+})
+
+test("linkedPrQuery: one alias per issue, aliases derived from the number alone", () => {
+  const q = linkedPrQuery([562, 610])
+  assert.ok(q.includes("i562: issue(number: 562)"))
+  assert.ok(q.includes("i610: issue(number: 610)"))
+  assert.ok(q.includes("closedByPullRequestsReferences"))
+})
+
+test("parseLinkedPrJson: maps each alias to its issue number, skipping issues with no link", () => {
+  const raw = JSON.stringify({
+    data: {
+      repository: {
+        i562: { number: 562, closedByPullRequestsReferences: { nodes: [linkNode(599, "OPEN")] } },
+        i610: { number: 610, closedByPullRequestsReferences: { nodes: [linkNode(616, "MERGED")] } },
+        i605: { number: 605, closedByPullRequestsReferences: { nodes: [] } },
+      },
+    },
+  })
+  const map = parseLinkedPrJson(raw)
+  assert.equal(map.size, 2)
+  assert.equal(map.get(562)?.number, 599)
+  assert.equal(map.get(610)?.state, "MERGED")
+  assert.equal(map.get(605), undefined)
+})
+
+test("parseLinkedPrJson: malformed body / null alias / error payload → empty map, never throws", () => {
+  assert.equal(parseLinkedPrJson("not json").size, 0)
+  assert.equal(parseLinkedPrJson(JSON.stringify({ errors: [{ message: "rate limited" }] })).size, 0)
+  assert.equal(parseLinkedPrJson(JSON.stringify({ data: { repository: null } })).size, 0)
+  assert.equal(parseLinkedPrJson(JSON.stringify({ data: { repository: { i1: null } } })).size, 0)
 })
 
 // ---- effectiveTemplate (settings override vs default fallback) ----

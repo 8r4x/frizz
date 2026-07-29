@@ -308,8 +308,8 @@ function LabelChip({ name, color }: { name: string; color: string }) {
 }
 
 // One issue/PR row, mirroring github.com: the select checkbox, the state glyph, the title (a LINK OUT)
-// with its label chips, a metadata line "#N · author opened <ago>", and the comment/reaction badges on
-// the right. Clicking the row toggles selection, SHIFT-clicking extends from the last clicked row
+// with its label chips, a metadata line "#N · author opened <ago>", and the linked-PR / comment /
+// reaction badges on the right. Clicking the row toggles selection, SHIFT-clicking extends from the last clicked row
 // through every row in between; clicking the title or the #number opens GitHub.
 function Row({ item, checked, onActivate }: { item: GithubItem; checked: boolean; onActivate: (shiftKey: boolean) => void }) {
   const opened = relTime(item.createdAt)
@@ -368,6 +368,7 @@ function Row({ item, checked, onActivate }: { item: GithubItem; checked: boolean
         </span>
       </span>
       <span className="mt-px flex shrink-0 items-center gap-2.5 text-[11.5px] text-muted/70">
+        {item.linkedPr ? <LinkedPrBadge pr={item.linkedPr} /> : null}
         {item.comments ? <Badge icon={MessageSquare} n={item.comments} label="comments" /> : null}
         {item.reactions ? <Badge emoji="👍" n={item.reactions} label="reactions" /> : null}
       </span>
@@ -388,6 +389,30 @@ function Checkbox({ checked }: { checked: boolean }) {
     >
       {checked && <Check size={11} strokeWidth={3} className="text-bg" />}
     </span>
+  )
+}
+
+// The "someone already opened a PR for this" badge — GitHub's own linked-pull-request signal, painted
+// with the same glyph + color family as StateIcon (emerald open, purple merged, muted draft). It sits
+// FIRST in the right-hand cluster because it is the one thing on the row that changes the decision to
+// dispatch: an issue with a PR in flight rarely needs a second investigation. The number keeps its `#`
+// — every other badge in this cluster is a COUNT, and a bare "413" beside them reads as one.
+// Links straight to the PR (stopPropagation, so opening it doesn't also toggle the row).
+function LinkedPrBadge({ pr }: { pr: NonNullable<GithubItem["linkedPr"]> }) {
+  const merged = pr.state.toUpperCase() === "MERGED"
+  const Icon = merged ? GitMerge : pr.isDraft ? GitPullRequestDraft : GitPullRequest
+  return (
+    <a
+      href={pr.url}
+      target="_blank"
+      rel="noreferrer noopener"
+      onClick={(e) => e.stopPropagation()}
+      title={merged ? `Closed by PR #${pr.number}` : pr.isDraft ? `Draft PR #${pr.number} open` : `PR #${pr.number} open`}
+      className={`inline-flex items-center gap-1 tabular-nums hover:underline ${merged ? "text-purple-400" : pr.isDraft ? "text-muted/70" : "text-emerald-500"}`}
+    >
+      <Icon size={12} strokeWidth={2} />
+      #{pr.number}
+    </a>
   )
 }
 
