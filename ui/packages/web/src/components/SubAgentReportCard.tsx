@@ -51,10 +51,14 @@ export function SubAgentReportCard({
       {/* The sender rides the title row's `aside` slot — the same place the wake card puts the
           `owner/repo#N` it is about. It is the one short reference that identifies this card, so it
           belongs in the headline rather than spending a body line. */}
+      {/* 12px against the title's 13px: CardHead's `leading-5` exists so a SMALLER aside still reads as
+          sitting ON the title's line, and the aside sets no size of its own — left to inherit it came out
+          at 14px, so the sender label was rendering LARGER than the card's own headline. It is
+          subordinate metadata and must read that way. */}
       <TranscriptCard
         icon={Bot}
         label="Sub-agent reported"
-        aside={<span className="text-muted">{from}</span>}
+        aside={<span className="text-[12px] text-muted">{from}</span>}
       >
         <div className={`${CARD_BODY} md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={{ __html: html }} />
       </TranscriptCard>
