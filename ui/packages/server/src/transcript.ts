@@ -552,32 +552,45 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
       // onto it — plus the same attachment-only fallback the human path keeps, because a child's report
       // must not vanish when its enqueue scrolled out of the window.
       const peerOrigin = att.origin?.kind === "peer" ? att.origin : undefined
-      if (peerOrigin && prompt.trim() && att.commandMode === "prompt") {
-        const senderTaskId = typeof peerOrigin.senderTaskId === "string" ? peerOrigin.senderTaskId.trim() : ""
+      if (peerOrigin && att.commandMode === "prompt") {
+        const str = (v: unknown) => (typeof v === "string" ? v.trim() : "")
+        const senderTaskId = str(peerOrigin.senderTaskId)
         // Take the entry BEFORE resolving: resolveQueued de-registers it, and we still need the message
         // object it points at in order to stamp the id onto the bubble already rendered in `out`.
-        const entry = findQueued(prompt)
+        const entry = prompt.trim() ? findQueued(prompt) : undefined
         if (entry) {
           resolveQueued(prompt)
-          if (senderTaskId) entry.message.peerAgentId = senderTaskId
+          // Guard on peerFrom: only a bubble the enqueue actually recognized as a child's report gets the
+          // child's id. Stamping it on an unattributed bubble would assert an origin nothing established.
+          if (senderTaskId && entry.message.peerFrom) entry.message.peerAgentId = senderTaskId
+          if (thisTs) prevTs = thisTs // a child's report is a real turn, exactly like a human follow-up
+          lastAssistantId = null // …so it breaks the assistant-record merge chain too
         } else {
-          const peerProjection = userProjection(prompt, out.length === 0)
-          // Only project it as a child's message when the wrapper actually parsed. An origin-flagged
-          // record whose text is NOT an <agent-message> is a shape this build doesn't know; dropping it
-          // silently is worse than rendering the plain text, so it falls through to an ordinary bubble.
-          out.push({
-            sourceId,
-            role: "user",
-            text: prompt,
-            ...peerProjection,
-            ...(senderTaskId && peerProjection.peerFrom ? { peerAgentId: senderTaskId } : {}),
-            tools: [],
-            parts: [],
-            at: thisTs,
-          })
+          // ATTACHMENT-ONLY: the enqueue scrolled out of the render window, or an older session never
+          // wrote one. Prefer this record's STRUCTURED fields — it carries `from` and `body` already
+          // separated — and fall back to parsing the wrapper out of `prompt` when they are absent.
+          const parsed = prompt.trim() ? parseAgentMessage(prompt) : undefined
+          const from = str(peerOrigin.from) || str(peerOrigin.name) || parsed?.from || ""
+          const body = parsed?.body ?? (typeof peerOrigin.body === "string" ? peerOrigin.body : "")
+          // Unattributable or bodiless → render NOTHING. That is the long-standing behavior for a peer
+          // record this build cannot resolve, and it is the SAFER failure: a child's words wearing the
+          // operator's own bubble is a worse bug than a missing line, because it invents a human turn.
+          if (from && body.trim()) {
+            out.push({
+              sourceId,
+              role: "user",
+              text: prompt || body, // raw when we have it — it is the key a later removal matches on
+              displayText: body,
+              peerFrom: from,
+              ...(senderTaskId ? { peerAgentId: senderTaskId } : {}),
+              tools: [],
+              parts: [],
+              at: thisTs,
+            })
+            if (thisTs) prevTs = thisTs
+            lastAssistantId = null
+          }
         }
-        if (thisTs) prevTs = thisTs // a child's report is a real turn, exactly like a human follow-up
-        lastAssistantId = null // …so it breaks the assistant-record merge chain too
       }
       return
     }

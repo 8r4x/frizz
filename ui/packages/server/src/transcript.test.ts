@@ -1431,7 +1431,10 @@ test("a task-notification attachment still never renders as the human's message"
   assert.equal(msgs.filter((m) => m.role === "user").length, 0)
 })
 
-test("a PEER-origin attachment is still excluded by the widened gate", () => {
+test("an UNATTRIBUTABLE peer attachment renders nothing at all — never the human's bubble", () => {
+  // A peer record IS rendered now, but only as the child it came from (see the sub-agent tests below).
+  // This one names no sender and carries no <agent-message> wrapper, so there is nothing to attribute it
+  // to — and the safe failure is silence. Rendering it would manufacture a turn the operator never typed.
   const msgs = parseTranscript(JSON.stringify({
     type: "attachment", timestamp: "2026-07-01T00:00:10.000Z",
     attachment: { type: "queued_command", commandMode: "prompt", origin: { kind: "peer" }, prompt: "hi from a peer" },
@@ -1594,4 +1597,79 @@ test("a backstopped message still resolves its OWN delivery in place, without a 
   )
   const users = msgs.filter((m) => m.role === "user")
   assert.deepEqual(users.map((m) => m.text), [first, second], "exactly one bubble each, in send order")
+})
+
+// ---- a SUB-AGENT'S UPWARD MESSAGE (SendMessage({to:"main"}) from a background child) --------------
+// Verified live before these were written: a real background child in a real fray worker session sent
+// two of these ~45s apart and both landed in the parent's context mid-flight. What the parser owes them
+// is ATTRIBUTION — left alone they render in the human's own bubble with the wrapper showing as text.
+const peerWrap = (from: string, body: string) => `<agent-message from="${from}">\n${body}\n</agent-message>`
+// Faithful to the real record (observed live in a fray worker's own transcript): the delivery carries the
+// wrapper as `prompt` AND the same sender/body already broken out under `origin`, plus `senderTaskId` —
+// the child's agentId, which appears nowhere else.
+const peerDeliverLine = (from: string, body: string, senderTaskId?: string, ts = "2026-07-01T00:00:10.000Z") =>
+  JSON.stringify({
+    type: "attachment", timestamp: ts,
+    attachment: {
+      type: "queued_command", commandMode: "prompt", prompt: peerWrap(from, body),
+      origin: { kind: "peer", from, name: from, ...(senderTaskId ? { senderTaskId } : {}), body },
+    },
+  })
+
+test("a child's upward message is attributed to the child, with the wrapper unwrapped for display", () => {
+  const body = "Phase 1 is green. Moving to the migration."
+  const raw = peerWrap("fray:opus-high", body)
+  const msgs = parseTranscript([enqueueLine(raw), removeLine(raw), peerDeliverLine("fray:opus-high", body, "a52fb9b476bb380c4")].join("\n"))
+  const users = msgs.filter((m) => m.role === "user")
+  assert.equal(users.length, 1, "exactly one bubble — the delivery must not push a second copy")
+  const m = users[0]
+  assert.equal(m.peerFrom, "fray:opus-high", "the sender label comes off the wrapper")
+  assert.equal(m.displayText, "Phase 1 is green. Moving to the migration.", "the BODY is what a human reads")
+  assert.equal(m.text, raw, "…while `text` stays RAW — it is the key the removal/delivery match against")
+  assert.equal(m.queued, false, "the content-bearing removal un-grays it")
+  assert.equal(m.wake, undefined, "a child's report is not a scheduler wake")
+})
+
+test("only the peer DELIVERY record carries the child's agentId, and it is stamped on the bubble", () => {
+  // origin.from is just the subagent_type (the worker dispatch hook strips `name`), so senderTaskId is
+  // the one field that tells two same-profile siblings apart. It exists ONLY on the attachment.
+  const body = "Found the leak in the resolver."
+  const raw = peerWrap("fray:sonnet-high", body)
+  const withDelivery = parseTranscript([enqueueLine(raw), removeLine(raw), peerDeliverLine("fray:sonnet-high", body, "a52fb9b476bb380c4")].join("\n"))
+  assert.equal(withDelivery.filter((m) => m.role === "user")[0].peerAgentId, "a52fb9b476bb380c4")
+  // …and without that record the bubble still renders, just without the id.
+  const noDelivery = parseTranscript([enqueueLine(raw), removeLine(raw)].join("\n"))
+  const m = noDelivery.filter((u) => u.role === "user")[0]
+  assert.equal(m.peerFrom, "fray:sonnet-high")
+  assert.equal(m.peerAgentId, undefined, "absent evidence is not an invented id")
+})
+
+test("an attachment-only peer delivery still renders — a child's report never vanishes", () => {
+  // The enqueue scrolled out of the render window (or an older session never wrote one). The human path
+  // keeps this fallback for the same reason: a message that was queued must not disappear.
+  const body = "Blocked: the fixture needs a token I don't have."
+  const users = parseTranscript(peerDeliverLine("fray:opus-max", body, "aabbccdd")).filter((m) => m.role === "user")
+  assert.equal(users.length, 1)
+  assert.equal(users[0].peerFrom, "fray:opus-max")
+  assert.equal(users[0].peerAgentId, "aabbccdd")
+  assert.equal(users[0].displayText, "Blocked: the fixture needs a token I don't have.")
+})
+
+test("a malformed wrapper degrades to a plain bubble rather than an unattributed card", () => {
+  // No sender and no body are both plumbing, not a report. The card's whole point is the label, so
+  // drawing one without it would be worse than not drawing it.
+  for (const raw of ['<agent-message from="">\nbody here\n</agent-message>', '<agent-message from="x">\n\n</agent-message>']) {
+    const users = parseTranscript(enqueueLine(raw)).filter((m) => m.role === "user")
+    assert.equal(users.length, 1, raw)
+    assert.equal(users[0].peerFrom, undefined, `must not be attributed to a child: ${raw}`)
+  }
+})
+
+test("prose that merely QUOTES an agent-message wrapper is not treated as a child's report", () => {
+  // Same anchoring discipline the wake token uses: this repo's own docs and tests contain the wrapper
+  // verbatim, and a human pasting one into the composer is still the human talking.
+  const quoting = `the delivery looks like ${peerWrap("fray:opus-high", "hi")} — see transcript.ts`
+  const users = parseTranscript(enqueueLine(quoting)).filter((m) => m.role === "user")
+  assert.equal(users.length, 1)
+  assert.equal(users[0].peerFrom, undefined, "a mention is not a delivery")
 })
