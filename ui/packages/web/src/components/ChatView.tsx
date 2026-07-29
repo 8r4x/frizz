@@ -1878,9 +1878,6 @@ function ToolImageCard({ name, detail, outputImage, output, status, durationMs }
             {/* `outputImage` is ALWAYS a hash-named copy in the screenshot cache, so BlockImage's
                 basename caption would read "9f2c…c1.png" — noise directly under a header that already
                 names the real file. Drop it and give the picture the real target as its alt. */}
-            {/* `outputImage` is ALWAYS a hash-named copy in the screenshot cache, so BlockImage's
-                basename caption would read "9f2c…c1.png" — noise directly under a header that already
-                names the real file. Drop it and give the picture the real target as its alt. */}
             <BlockImage path={outputImage} hideCaption altText={short ? `${prettyToolName(name)}: ${short}` : prettyToolName(name)} />
             {output && <pre className="fray-bash-body fray-bash-output-body mt-1.5">{output}</pre>}
           </div>
@@ -2791,10 +2788,6 @@ function ProseHtml({ md, wrap }: { md: string; wrap?: boolean }) {
 // to showing the plain path text so nothing is silently swallowed. `hideCaption` drops the basename
 // line (SendUserFile images are hash-named cache copies whose basename is meaningless, and the
 // SentFilesCard carries its own caption); `altText` overrides the a11y alt (else the basename).
-// `self-start` is load-bearing: the figure is a flex COLUMN, whose default `align-items: stretch` blew
-// the <img> box out to the full card width, and `object-contain` then letterboxed the picture inside it.
-// A tall 390×1002 phone screenshot measured 642px of box painting 163px of image — 479px of dead
-// gutter. Hugging the intrinsic aspect makes the bordered frame the picture's own edge.
 // `self-start` is load-bearing: the figure is a flex COLUMN, whose default `align-items: stretch` blew
 // the <img> box out to the full card width, and `object-contain` then letterboxed the picture inside it.
 // A tall 390×1002 phone screenshot measured 642px of box painting 163px of image — 479px of dead
