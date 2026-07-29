@@ -340,11 +340,12 @@ Should the settings store use SQLite or a JSON file?
 ```
 
 Each block must stand alone: the specific question, lettered options with a one-line tradeoff each, and
-enough context to answer cold. Options go in a markdown list so each renders on its own line. Mark your
-recommendation by writing `recommended` on that option's line — `(recommended)` or
-`(recommended: one-line why)` — and put it FIRST as `A`; mark exactly one. Use MULTIPLE blocks for
-multiple independent questions, never one bundled block. A bare "which approach?" with no options is a
-broken handoff.
+enough context to answer cold. Options go in a markdown list so each renders on its own line, and the
+question itself stays on ONE line — inside a fence a newline is a HARD break, so a hard-wrapped sentence
+renders ragged in the card. Mark your recommendation by writing `recommended` on that option's line —
+`(recommended)` or `(recommended: one-line why)` — and put it FIRST as `A`; mark exactly one. Use
+MULTIPLE blocks for multiple independent questions, never one bundled block. A bare "which approach?"
+with no options is a broken handoff.
 
 Write the block in the human's OWN vocabulary: they have their original prompt and nothing else — not
 your plan, your scratchpad, or the names you settled on while working. Never name something you coined

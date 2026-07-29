@@ -167,12 +167,15 @@ Should the queue lane keep the tier-2 fallback from step 3, or move to the unifi
 Good — same decision, stated in terms the human already owns:
 
 ```question
-When you've read everything in a thread, should it stay in the "needs attention" group until you
-archive it, or drop out on its own?
+When you've read everything in a thread, should it stay in the "needs attention" group until you archive it, or drop out on its own?
 
 - A. Drop out once it's read (recommended: keeps the group to threads that still need you)
 - B. Stay until archived — nothing ever disappears without you acting on it
 ```
+
+(That question line is deliberately unwrapped. Inside a fence a single newline is a HARD break —
+`breaks: true` in the web markdown renderer — so hard-wrapping the sentence at your editor's column
+renders a ragged break mid-question in the card. Keep the question, and each option, on one line.)
 
 Test it before you send: read the block with your session forgotten, as if it were the only thing you
 had ever seen about this work. If a noun in it only means something because of what you just did, it is
