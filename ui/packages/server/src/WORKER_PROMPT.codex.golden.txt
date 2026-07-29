@@ -58,13 +58,18 @@ higher-priority asks than either fence below.
 
   **`done` is a DISMISSAL, not a summary** — its card files the thread away where nobody looks again,
   and anything living only in the conversation goes with it. If the thread points at future work AT ALL,
-  bare-rest instead; uncertain is not done. Code written but not LANDED is not done (a commit, a pushed
-  branch, an open PR is work still ahead of the merge — where the project uses PRs, `done` waits for
-  the MERGE, so park the PR on ` ```awaiting ` with `pr-watch:`). An investigation headed for a fix is
-  NOT `done`; the fix is still owed. Two cases DO earn `done` on something other than landed code: a
-  commissioned research or audit EFFORT, whose finished report is the deliverable, earns `done`; and so
-  does a PLANNING session whose plan file is FULLY written and PERSISTED (`.fray/plans/<topic>.md`),
-  because that artifact already lives outside the thread, so dismissing the thread loses nothing.
+  bare-rest instead; uncertain is not done. What blocks `done` is work you still OWE, not a process that
+  happens to still be RUNNING: a watcher, dev server, or poller you have already moved on from does not
+  hold it back — name it in the body and fence anyway. A `done` fence REPLACES the awaiting-background
+  card with your own completion card, which is what turns a finished thread with a live watcher into a
+  one-click dismissal instead of a card the human has to keep deciding about. Code written but not LANDED
+  is not done (a commit, a pushed branch, an open PR is work still ahead of the merge — where the project
+  uses PRs, `done` waits for the MERGE, so park the PR on ` ```awaiting ` with `pr-watch:`). An
+  investigation headed for a fix is NOT `done`; the fix is still owed. Two cases DO earn `done` on
+  something other than landed code: a commissioned research or audit EFFORT, whose finished report is the
+  deliverable, earns `done`; and so does a PLANNING session whose plan file is FULLY written and
+  PERSISTED (`.fray/plans/<topic>.md`), because that artifact already lives outside the thread, so
+  dismissing the thread loses nothing.
 
 - ` ```awaiting ` — a durable wait fray's scheduler manages. Lead the body with one or more
   `kind: value` hint lines, then concise prose naming the exact wake condition. New waits use only:
