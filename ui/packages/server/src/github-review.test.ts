@@ -67,6 +67,49 @@ test("review fetcher gets the gh token once and batches + deduplicates same-turn
   assert.deepEqual(duplicate, first)
 })
 
+// The wake steer quotes this permalink so a woken worker can address ONE item instead of re-reading
+// the whole thread. Verified against the live GitHub GraphQL schema 2026-07-29: both IssueComment.url
+// and PullRequestReview.url return the `#issuecomment-…` / `#pullrequestreview-…` anchors.
+test("review fetcher asks for each item's permalink and carries it through to the activity", async () => {
+  let body: any
+  const fetcher = createGithubReviewFetcher({
+    getToken: async () => "t",
+    request: async (_input, init) => {
+      body = JSON.parse(String(init?.body))
+      return response({
+        data: {
+          ref0: {
+            pullRequest: {
+              reviews: { nodes: [{ id: "R1", url: "https://github.com/nubjs/nub/pull/587#pullrequestreview-1", state: "COMMENTED", submittedAt: "2026-07-29T15:46:04Z", author: { login: "pullfrog", __typename: "Bot" } }] },
+              comments: {
+                nodes: [
+                  { id: "C1", url: "https://github.com/nubjs/nub/pull/587#issuecomment-1", createdAt: "2026-07-29T15:39:28Z", author: { login: "colinhacks", __typename: "User" } },
+                  // A shape surprise costs the steer its permalink, never the wake itself.
+                  { id: "C2", createdAt: "2026-07-29T15:40:00Z", author: { login: "colinhacks", __typename: "User" } },
+                ],
+              },
+            },
+          },
+          rateLimit: { cost: 1, remaining: 4_900, resetAt: "2026-07-29T18:00:00Z", limit: 5_000 },
+        },
+      })
+    },
+    now: () => Date.parse("2026-07-29T15:50:00Z"),
+  })
+
+  const got = await fetcher(ref(587))
+  assert.match(body.query, /reviews\(last: 50\) \{ nodes \{ id url state submittedAt/)
+  assert.match(body.query, /comments\(last: 50\) \{ nodes \{ id url createdAt/)
+  assert.deepEqual(got, {
+    status: "ok",
+    activity: [
+      { id: "review:R1", actor: "pullfrog", actorType: "Bot", at: "2026-07-29T15:46:04Z", kind: "review", reviewState: "COMMENTED", url: "https://github.com/nubjs/nub/pull/587#pullrequestreview-1" },
+      { id: "comment:C1", actor: "colinhacks", actorType: "User", at: "2026-07-29T15:39:28Z", kind: "comment", url: "https://github.com/nubjs/nub/pull/587#issuecomment-1" },
+      { id: "comment:C2", actor: "colinhacks", actorType: "User", at: "2026-07-29T15:40:00Z", kind: "comment" },
+    ],
+  })
+})
+
 test("review fetcher reports gh-token auth failures precisely and retries token lookup next batch", async () => {
   let tokenCalls = 0
   let requestCalls = 0

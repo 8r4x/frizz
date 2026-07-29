@@ -21,6 +21,11 @@ export interface GithubReviewActivity {
   at?: string
   kind: "review" | "comment"
   reviewState?: string
+  // The item's own permalink (`…/pull/N#issuecomment-123`, `…#pullrequestreview-456`). The steer that
+  // wakes a worker quotes this so the worker can fetch THAT item instead of re-reading the whole
+  // thread and re-litigating comments it already handled. Optional: a shape surprise degrades the
+  // steer's precision, never the wake itself.
+  url?: string
 }
 
 export type GithubReviewFailureKind =
@@ -116,7 +121,16 @@ export function parseGithubReviewActivities(raw: unknown): GithubReviewActivity[
       const actorType = typeof author?.__typename === "string" ? author.__typename : undefined
       const at = typeof n[atKey] === "string" ? (n[atKey] as string) : undefined
       const reviewState = kind === "review" && typeof n.state === "string" ? n.state : undefined
-      out.push({ id: `${kind}:${rawId}`, actor, actorType, at, kind, ...(reviewState ? { reviewState } : {}) })
+      const url = typeof n.url === "string" && n.url ? n.url : undefined
+      out.push({
+        id: `${kind}:${rawId}`,
+        actor,
+        actorType,
+        at,
+        kind,
+        ...(reviewState ? { reviewState } : {}),
+        ...(url ? { url } : {}),
+      })
     }
   }
   add((pr as any)?.reviews?.nodes, "review", "submittedAt")
@@ -145,8 +159,8 @@ function buildQuery(refs: GithubReviewRef[]): { query: string; variables: Record
     fields.push(`
       ref${index}: repository(owner: $owner${index}, name: $repo${index}) {
         pullRequest(number: $number${index}) {
-          reviews(last: 50) { nodes { id state submittedAt author { login __typename } } }
-          comments(last: 50) { nodes { id createdAt author { login __typename } } }
+          reviews(last: 50) { nodes { id url state submittedAt author { login __typename } } }
+          comments(last: 50) { nodes { id url createdAt author { login __typename } } }
         }
       }`)
   })

@@ -446,6 +446,131 @@ test("pr-watch: baselines, then bumps on a new human comment", async () => {
   assert.match(h.resumes[0].message, /👤/, "a User actor still reads as a person")
 })
 
+// The steer used to name only the PR and the actor. A worker woken that way has no way to address the
+// exact item, so its only move is a broad re-read of the thread — and on the real nubjs/nub#587 wake
+// that handed back TWO comments from @colinhacks, one of them hours stale and already handled. The
+// permalink addresses exactly one item; the ISO timestamp orders it against the worker's own last turn.
+test("pr-watch: the bump steer carries the item's permalink and timestamp, not just the actor", async () => {
+  const h = harness()
+  const fenceAt = iso(h.clock.ms)
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "nubjs/nub#587" }])), lastActivityAt: fenceAt })
+  h.review.result = [{ id: "comment:stale", actor: "colinhacks", actorType: "User", at: iso(h.clock.ms - 1000), kind: "comment", url: "https://github.com/nubjs/nub/pull/587#issuecomment-1" }]
+  await h.make().tick()
+  assert.equal(h.resumes.length, 0)
+
+  h.clock.ms += 10_000
+  const at = iso(h.clock.ms)
+  h.review.result = [
+    { id: "comment:fresh", actor: "colinhacks", actorType: "User", at, kind: "comment", url: "https://github.com/nubjs/nub/pull/587#issuecomment-2" },
+    { id: "comment:stale", actor: "colinhacks", actorType: "User", at: iso(h.clock.ms - 11_000), kind: "comment", url: "https://github.com/nubjs/nub/pull/587#issuecomment-1" },
+  ]
+  const s = h.make()
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.equal(
+    h.resumes[0].message,
+    `👤 New GitHub comment on nubjs/nub#587 from @colinhacks at ${at}. Read that exact comment — ignore older activity you have already handled — and continue: https://github.com/nubjs/nub/pull/587#issuecomment-2`,
+  )
+  assert.doesNotMatch(h.resumes[0].message, /issuecomment-1\b/, "the stale comment the worker already handled is never named")
+  assert.ok(h.resumes[0].message.endsWith("issuecomment-2"), "the URL ends the steer so no trailing period joins the href")
+})
+
+// Every id in the fresh set is marked seen the moment the cursor is persisted, so an activity this
+// steer does not name is never mentioned to anyone again. Naming only `fresh[0]` dropped the rest.
+test("pr-watch: a BURST between polls is enumerated in full, oldest first — none is silently dropped", async () => {
+  const h = harness()
+  const fenceAt = iso(h.clock.ms)
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: fenceAt })
+  h.review.result = []
+  await h.make().tick()
+  assert.equal(h.resumes.length, 0)
+
+  h.clock.ms += 10_000
+  const t1 = iso(h.clock.ms - 2000)
+  const t2 = iso(h.clock.ms - 1000)
+  const t3 = iso(h.clock.ms)
+  h.review.result = [
+    { id: "review:c", actor: "dana", actorType: "User", at: t3, kind: "review", reviewState: "APPROVED", url: "https://github.com/acme/app/pull/391#pullrequestreview-3" },
+    { id: "comment:b", actor: "coderabbitai[bot]", actorType: "Bot", at: t2, kind: "comment", url: "https://github.com/acme/app/pull/391#issuecomment-2" },
+    { id: "comment:a", actor: "carol", actorType: "User", at: t1, kind: "comment", url: "https://github.com/acme/app/pull/391#issuecomment-1" },
+  ]
+  const s = h.make()
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.equal(
+    h.resumes[0].message,
+    [
+      "👤 3 new GitHub items on acme/app#391. Read exactly these — ignore older activity you have already handled — and continue:",
+      `- comment from @carol at ${t1}: https://github.com/acme/app/pull/391#issuecomment-1`,
+      `- comment from @coderabbitai[bot] at ${t2}: https://github.com/acme/app/pull/391#issuecomment-2`,
+      `- approval from @dana at ${t3}: https://github.com/acme/app/pull/391#pullrequestreview-3`,
+    ].join("\n"),
+  )
+})
+
+// The cap keeps the NEWEST items (they matter most) and the header still counts the whole burst, so a
+// worker is never told "3 new items" when 30 landed.
+test("pr-watch: a burst past the enumeration cap counts everything and says how many it did not name", async () => {
+  const h = harness()
+  const fenceAt = iso(h.clock.ms)
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: fenceAt })
+  h.review.result = []
+  await h.make().tick()
+
+  h.clock.ms += 10_000
+  h.review.result = Array.from({ length: 13 }, (_, i) => ({
+    id: `comment:${i}`,
+    actor: "carol",
+    actorType: "User",
+    at: iso(h.clock.ms - (12 - i) * 100),
+    kind: "comment" as const,
+    url: `https://github.com/acme/app/pull/391#issuecomment-${i}`,
+  }))
+  const s = h.make()
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  const msg = h.resumes[0].message
+  assert.match(msg, /^👤 13 new GitHub items on acme\/app#391\./, "the header counts the whole burst, not just the named ones")
+  assert.equal(msg.split("\n").filter((l) => l.startsWith("- ")).length, 11, "10 named items plus the overflow line")
+  assert.match(msg, /- …and 3 more not listed — check acme\/app#391 for the rest$/)
+  assert.match(msg, /issuecomment-12/, "the newest item survives the cap")
+  assert.doesNotMatch(msg, /issuecomment-2:/, "the oldest three are the ones dropped")
+})
+
+// A pending cursor written before the enumeration existed still owes its worker a wake. Reading the
+// bare object as a one-element list is what keeps that promise across the upgrade.
+test("pr-watch: a legacy single-object pending cursor still delivers after the upgrade", async () => {
+  const h = harness()
+  const fenceAt = iso(h.clock.ms)
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: fenceAt })
+  const fenceId = `${fenceAt}pr-watch:acme/app#391`
+  h.storage.setSetting("waker.registrations.v1", [{
+    key: `r ${fenceId}`,
+    timers: {},
+    reviews: {
+      "pr-watch:acme/app#391": {
+        baseline: true,
+        seen: ["comment:pending"],
+        pending: { id: "comment:pending", actor: "erin", actorType: "User", at: fenceAt, kind: "comment" },
+      },
+    },
+  }])
+  h.review.result = []
+  const s = h.make()
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 1, "the wake the old scheduler owed is still delivered")
+  assert.match(h.resumes[0].message, /@erin/)
+  assert.match(h.resumes[0].message, /New GitHub comment on acme\/app#391/)
+})
+
 test("pr-watch: an APPROVAL is named specifically in the bump steer", async () => {
   const h = harness()
   const fenceAt = iso(h.clock.ms)
@@ -476,12 +601,16 @@ test("pr-watch: CHANGES_REQUESTED is named as a noun, so the steer stays a gramm
   await h.make().tick()
 
   h.clock.ms += 10_000
-  h.review.result = [{ id: "review:cr", actor: "erin", actorType: "User", at: iso(h.clock.ms), kind: "review", reviewState: "CHANGES_REQUESTED" }]
+  const at = iso(h.clock.ms)
+  h.review.result = [{ id: "review:cr", actor: "erin", actorType: "User", at, kind: "review", reviewState: "CHANGES_REQUESTED" }]
   const s = h.make()
   await s.tick()
   await s.tick()
   assert.equal(h.resumes.length, 1)
-  assert.equal(h.resumes[0].message, "👤 New GitHub change request on acme/app#391 from @erin. Read it and continue.")
+  assert.equal(
+    h.resumes[0].message,
+    `👤 New GitHub change request on acme/app#391 from @erin at ${at}. Read that exact change request — ignore older activity you have already handled — and continue.`,
+  )
 })
 
 // The steer is a NOTIFICATION that activity landed, never an instruction to change the PR's state.
@@ -630,14 +759,40 @@ test("ci: pending→(gh failure)→green; a transient gh failure is skipped, nev
   assert.equal(h.resumes[0].message, "✅ CI is green on acme/app#391. Continue.")
 })
 
-test("ci: a failing check still wakes the worker (with the failed steer)", async () => {
+// "CI failed" alone sent every woken worker straight back to `gh pr checks` to learn WHICH job went
+// red. The rollup already carries the job names, so the steer names them.
+test("ci: a failing check still wakes the worker, and the steer NAMES the failed jobs", async () => {
   const h = harness()
   h.storage.upsertSession(row("c"))
   h.tele.set("c", tele(awaiting([{ kind: "ci", value: "acme/app#391" }])))
   const s = h.make()
   h.pr.result = { state: "OPEN", mergedAt: null, rollup: [{ status: "IN_PROGRESS" }], workflowRuns: [{ workflowName: "CI", event: "pull_request", status: "IN_PROGRESS" }] }
   await s.tick()
-  h.pr.result = { state: "OPEN", mergedAt: null, rollup: [{ status: "COMPLETED", conclusion: "FAILURE" }], workflowRuns: [{ workflowName: "CI", event: "pull_request", status: "COMPLETED", conclusion: "FAILURE" }] }
+  h.pr.result = {
+    state: "OPEN",
+    mergedAt: null,
+    rollup: [
+      { name: "typecheck", status: "COMPLETED", conclusion: "SUCCESS" },
+      { name: "test (node 24)", status: "COMPLETED", conclusion: "FAILURE" },
+      { context: "vercel/preview", state: "ERROR" },
+    ],
+    workflowRuns: [{ workflowName: "CI", event: "pull_request", status: "COMPLETED", conclusion: "FAILURE" }],
+  }
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.equal(h.resumes[0].message, "❌ CI failed on acme/app#391 — test (node 24), vercel/preview, CI. Continue.")
+})
+
+// A green check must never leak into the failed list, and a red one with no reportable name must not
+// produce a dangling "— " tail.
+test("ci: an unnamed failure degrades to the bare failed steer rather than an empty list", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("c"))
+  h.tele.set("c", tele(awaiting([{ kind: "ci", value: "acme/app#391" }])))
+  const s = h.make()
+  h.pr.result = { state: "OPEN", mergedAt: null, rollup: [{ status: "IN_PROGRESS" }], workflowRuns: [{ event: "pull_request", status: "IN_PROGRESS" }] }
+  await s.tick()
+  h.pr.result = { state: "OPEN", mergedAt: null, rollup: [{ status: "COMPLETED", conclusion: "FAILURE" }], workflowRuns: [{ event: "pull_request", status: "COMPLETED", conclusion: "FAILURE" }] }
   await s.tick()
   assert.equal(h.resumes.length, 1)
   assert.equal(h.resumes[0].message, "❌ CI failed on acme/app#391. Continue.")

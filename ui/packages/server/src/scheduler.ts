@@ -78,6 +78,9 @@ interface RollupEntry {
   status?: string // CheckRun: QUEUED | IN_PROGRESS | COMPLETED | PENDING | WAITING
   conclusion?: string // CheckRun: SUCCESS | FAILURE | NEUTRAL | CANCELLED | TIMED_OUT | ACTION_REQUIRED | SKIPPED | STALE
   state?: string // StatusContext: PENDING | SUCCESS | FAILURE | ERROR | EXPECTED
+  name?: string // CheckRun's job name
+  context?: string // StatusContext's context label
+  workflowName?: string // CheckRun's parent workflow, when GitHub reports one
 }
 
 // Parse a PR reference out of a hint value: `owner/repo#123` or a GitHub PR URL. Undefined when neither
@@ -136,17 +139,51 @@ export function evalRollup(rollup: RollupEntry[]): { done: boolean; ok: boolean 
     // done+green — so a shape surprise can never launder a `ci:` wait into a false "green" fire.
     const terminal = status ? status === "COMPLETED" : state ? state !== "PENDING" && state !== "EXPECTED" : false
     if (!terminal) pending = true
-    const bad =
-      conclusion === "FAILURE" ||
-      conclusion === "TIMED_OUT" ||
-      conclusion === "CANCELLED" ||
-      conclusion === "ACTION_REQUIRED" ||
-      conclusion === "STARTUP_FAILURE" ||
-      state === "FAILURE" ||
-      state === "ERROR"
-    if (bad) failed = true
+    if (rollupEntryFailed(conclusion, state)) failed = true
   }
   return { done: !pending, ok: !failed }
+}
+
+// The single definition of "this check concluded badly", shared by the pass/fail verdict and by the
+// steer that NAMES the failures — so the wake can never say "CI failed" and then list nothing.
+function rollupEntryFailed(conclusion: string | undefined, state: string | undefined): boolean {
+  return (
+    conclusion === "FAILURE" ||
+    conclusion === "TIMED_OUT" ||
+    conclusion === "CANCELLED" ||
+    conclusion === "ACTION_REQUIRED" ||
+    conclusion === "STARTUP_FAILURE" ||
+    state === "FAILURE" ||
+    state === "ERROR"
+  )
+}
+
+// Which checks actually failed. "❌ CI failed on owner/repo#N" told a worker only that SOMETHING went
+// red, so its first move was always another `gh pr checks` round-trip; naming the jobs it must look at
+// costs nothing here and saves that turn. Deduplicated and bounded — a red matrix can be 40 entries.
+export function failedCheckNames(rollup: RollupEntry[], runs: WorkflowRun[] = [], cap = 8): { names: string[]; omitted: number } {
+  const names: string[] = []
+  const seen = new Set<string>()
+  const push = (raw: string | undefined) => {
+    const name = raw?.trim()
+    if (!name || seen.has(name)) return
+    seen.add(name)
+    names.push(name)
+  }
+  for (const c of Array.isArray(rollup) ? rollup : []) {
+    if (!c || typeof c !== "object") continue
+    if (!rollupEntryFailed(typeof c.conclusion === "string" ? c.conclusion : undefined, typeof c.state === "string" ? c.state : undefined)) continue
+    push(c.name ?? c.context ?? c.workflowName)
+  }
+  for (const run of Array.isArray(runs) ? runs : []) {
+    if (!run || typeof run !== "object") continue
+    // An unapproved fork run reads ACTION_REQUIRED but is a pending approval, not a failure — the same
+    // reading `evalHint` gives it, so it must not be listed as a failed job either.
+    if (run.conclusion === "ACTION_REQUIRED") continue
+    if (!rollupEntryFailed(run.conclusion ?? undefined, undefined)) continue
+    push(run.workflowName ?? run.name)
+  }
+  return { names: names.slice(0, cap), omitted: Math.max(0, names.length - cap) }
 }
 
 // The PR-activity watcher hint. A one-line predicate (rather than inlining `=== "pr-watch"`) keeps
@@ -328,7 +365,11 @@ function evalHint(hint: FenceView["hints"][number], nowMs: number, prCache: Map<
   }))
   const done = rollupVerdict.done && workflowVerdict.done
   const ok = rollupVerdict.ok && workflowVerdict.ok
-  const steer = ok ? `✅ CI is green on ${refKey(ref)}. Continue.` : `❌ CI failed on ${refKey(ref)}. Continue.`
+  const failures = failedCheckNames(rollup, runs)
+  const named = failures.names.length
+    ? ` — ${failures.names.join(", ")}${failures.omitted > 0 ? `, and ${failures.omitted} more` : ""}`
+    : ""
+  const steer = ok ? `✅ CI is green on ${refKey(ref)}. Continue.` : `❌ CI failed on ${refKey(ref)}${named}. Continue.`
   return { met: done, steer, reason: `ci ${refKey(ref)} ${done ? (ok ? "green" : "failed") : "pending"}` }
 }
 
@@ -379,15 +420,42 @@ interface ThreadWake {
 const FIRED_CAP = 500 // legacy pre-outbox marker cap (read during rolling upgrade, never newly added)
 const REGISTRATION_CAP = 500
 const REVIEW_SEEN_CAP = 300
+// How many fresh activities a single wake steer enumerates. One poll interval can collect a whole
+// review app's burst; naming ten of them is already a long steer, and the count line tells the worker
+// how many it did not get named individually.
+const REVIEW_STEER_CAP = 10
 
 interface ReviewCursor {
   baseline: true
   seen: string[]
-  // A newly-observed event is recorded before the wake outbox is enqueued. If GitHub is
-  // temporarily unavailable on restart, this cursor still reproduces the exact pending event; the
-  // deterministic outbox id prevents a second delivery row for the same fence generation.
-  pending?: GithubReviewActivity
+  // Every newly-observed event is recorded before the wake outbox is enqueued. If GitHub is
+  // temporarily unavailable on restart, this cursor still reproduces the exact pending events; the
+  // deterministic outbox id prevents a second delivery row for the same fence generation. It is a
+  // LIST because one poll interval routinely collects several: naming only the newest while marking
+  // the rest seen dropped the others on the floor, unmentioned to anyone, forever.
+  pending?: GithubReviewActivity[]
+  // How many fresh activities exceeded REVIEW_STEER_CAP and so were counted but not named. Persisted
+  // so a retried delivery reproduces the SAME steer rather than quietly dropping the "and N more" line.
+  pendingOmitted?: number
 }
+// Re-hydrate one persisted activity. Anything without the three load-bearing fields is dropped rather
+// than half-restored, so a corrupt row can never synthesize a wake naming a `@undefined` actor.
+function parsePersistedActivity(raw: unknown): GithubReviewActivity | undefined {
+  if (!raw || typeof raw !== "object") return undefined
+  const p = raw as Record<string, unknown>
+  if (typeof p.id !== "string" || typeof p.actor !== "string") return undefined
+  if (p.kind !== "review" && p.kind !== "comment") return undefined
+  return {
+    id: p.id,
+    actor: p.actor,
+    actorType: typeof p.actorType === "string" ? p.actorType : undefined,
+    at: typeof p.at === "string" ? p.at : undefined,
+    kind: p.kind,
+    ...(typeof p.reviewState === "string" ? { reviewState: p.reviewState } : {}),
+    ...(typeof p.url === "string" && p.url ? { url: p.url } : {}),
+  }
+}
+
 interface PersistedRegistration {
   key: string
   timers: Record<string, string> // hint key → exact ISO target; presence means durably armed
@@ -492,32 +560,26 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           if (!v || typeof v !== "object") continue
           const seen = (v as { seen?: unknown }).seen
           if (!Array.isArray(seen)) continue
+          // `pending` was a single activity before the steer learned to enumerate a burst. A
+          // registration written by that scheduler is still on disk across the upgrade, so read the
+          // bare object as a one-element list rather than discarding a wake already owed to a worker.
           const rawPending = (v as { pending?: unknown }).pending
-          let pending: GithubReviewActivity | undefined
-          if (rawPending && typeof rawPending === "object") {
-            const p = rawPending as Record<string, unknown>
-            if (
-              typeof p.id === "string" &&
-              typeof p.actor === "string" &&
-              (p.kind === "review" || p.kind === "comment")
-            ) {
-              pending = {
-                id: p.id,
-                actor: p.actor,
-                actorType: typeof p.actorType === "string" ? p.actorType : undefined,
-                at: typeof p.at === "string" ? p.at : undefined,
-                kind: p.kind,
-                ...(typeof p.reviewState === "string" ? { reviewState: p.reviewState } : {}),
-              }
-            }
-          }
+          const pending = (Array.isArray(rawPending) ? rawPending : rawPending === undefined ? [] : [rawPending])
+            .map(parsePersistedActivity)
+            .filter((p): p is GithubReviewActivity => p !== undefined)
+            .slice(0, REVIEW_STEER_CAP)
+          const rawOmitted = (v as { pendingOmitted?: unknown }).pendingOmitted
+          const pendingOmitted = typeof rawOmitted === "number" && Number.isFinite(rawOmitted) && rawOmitted > 0
+            ? Math.floor(rawOmitted)
+            : 0
           reviews[k] = {
             baseline: true,
             // Cursors are stored newest-first (saveReviewCursor prepends the current page), so retain
             // the head on load too. Keeping the oldest tail would forget recent activity after a
             // restart and could misclassify it as a fresh human review.
             seen: seen.filter((x): x is string => typeof x === "string").slice(0, REVIEW_SEEN_CAP),
-            ...(pending ? { pending } : {}),
+            ...(pending.length ? { pending } : {}),
+            ...(pending.length && pendingOmitted ? { pendingOmitted } : {}),
           }
         }
       }
@@ -546,10 +608,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     r.timers[hintKey] = target
     saveRegistrations()
   }
-  function saveReviewCursor(key: string, hintKey: string, seen: string[], pending?: GithubReviewActivity): void {
+  function saveReviewCursor(key: string, hintKey: string, seen: string[], pending?: GithubReviewActivity[], pendingOmitted = 0): void {
     const r = registration(key)
     const unique = [...new Set(seen)].slice(0, REVIEW_SEEN_CAP)
-    const next: ReviewCursor = { baseline: true, seen: unique, ...(pending ? { pending } : {}) }
+    const next: ReviewCursor = {
+      baseline: true,
+      seen: unique,
+      ...(pending?.length ? { pending } : {}),
+      ...(pending?.length && pendingOmitted > 0 ? { pendingOmitted } : {}),
+    }
     if (JSON.stringify(r.reviews[hintKey] ?? null) === JSON.stringify(next)) return
     r.reviews[hintKey] = next
     saveRegistrations()
@@ -629,6 +696,20 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   }
 
+  // Who + when + WHICH ONE. The steer used to name only the PR and the actor, which is not enough to
+  // find the thing that woke the worker: the worker's only move was a broad re-read of the thread
+  // (`gh pr view N --json comments`), and that hands back every comment the actor ever left. A worker
+  // woken for one fresh comment on nubjs/nub#587 pulled back TWO and re-litigated a stale one it had
+  // already handled hours earlier. The permalink is the fix — it addresses exactly one item — and the
+  // ISO timestamp lets the worker order it against its own last turn even if the URL is unavailable.
+  function activityDetail(a: GithubReviewActivity): string {
+    const at = a.at ? ` at ${a.at}` : ""
+    // The URL goes LAST and carries no trailing punctuation, so terminal autolinkers cannot swallow a
+    // following period into the href.
+    const url = a.url ? `: ${a.url}` : ""
+    return `${activityLabel(a)} from @${a.actor}${at}${url}`
+  }
+
   // The steer must never imply a person: an app filed most of what wakes this watcher.
   //
   // It must also never read as an instruction to MUTATE the PR. "Re-open the PR and continue" meant
@@ -636,9 +717,27 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // turn on the ambiguity or, worse, reopened a PR the maintainer closed on purpose. The wake is a
   // NOTIFICATION; what to do about it is the worker's call. Keep the verb about reading, like the
   // merged/closed/CI steers that just say "Continue."
-  function activitySteer(a: GithubReviewActivity, ref: PrRef): string {
-    const icon = isBotGithubActor(a) ? "🤖" : "👤"
-    return `${icon} New GitHub ${activityLabel(a)} on ${refKey(ref)} from @${a.actor}. Read it and continue.`
+  //
+  // `activities` is chronological and may hold several: one poll interval routinely collects a burst,
+  // and every one of them is marked seen, so anything this steer does not name is never mentioned to
+  // anyone again. `omitted` is how many more than the cap were dropped from the enumeration.
+  function activitySteer(activities: GithubReviewActivity[], ref: PrRef, omitted = 0): string {
+    const icon = activities.some((a) => !isBotGithubActor(a)) ? "👤" : "🤖"
+    const scope = "ignore older activity you have already handled"
+    if (activities.length === 1) {
+      const a = activities[0]
+      return `${icon} New GitHub ${activityLabel(a)} on ${refKey(ref)} from @${a.actor}${a.at ? ` at ${a.at}` : ""}. Read that exact ${activityLabel(a)} — ${scope} — and continue${a.url ? `: ${a.url}` : "."}`
+    }
+    const more = omitted > 0 ? `\n- …and ${omitted} more not listed — check ${refKey(ref)} for the rest` : ""
+    return `${icon} ${activities.length + omitted} new GitHub items on ${refKey(ref)}. Read exactly these — ${scope} — and continue:\n${activities.map((a) => `- ${activityDetail(a)}`).join("\n")}${more}`
+  }
+
+  // The operator-facing log line for this wake. Names the distinct actors rather than a count, since
+  // "by pullfrog" is what makes a `waker: queued` line legible when scanning the server log.
+  function reviewReason(ref: PrRef, activities: GithubReviewActivity[], omitted = 0): string {
+    const actors = [...new Set(activities.map((a) => a.actor))]
+    const total = activities.length + omitted
+    return `pr-watch ${refKey(ref)} by ${actors.join(", ")}${total > 1 ? ` (${total} items)` : ""}`
   }
 
   function reviewVerdict(
@@ -653,11 +752,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     const prior = registrations.get(persistKey)?.reviews[hintKey]
     // A previous delivery attempt failed. Retry the durable outbox item before consulting the latest
     // page; it must not disappear merely because GitHub is down or the item fell off a bounded page.
-    if (prior?.pending) {
+    if (prior?.pending?.length) {
+      const omitted = prior.pendingOmitted ?? 0
       return {
         met: true,
-        steer: activitySteer(prior.pending, ref),
-        reason: `pr-watch ${refKey(ref)} by ${prior.pending.actor}`,
+        steer: activitySteer(prior.pending, ref, omitted),
+        reason: reviewReason(ref, prior.pending, omitted),
       }
     }
     // No actor filter: every review and comment on the PR is a wake candidate.
@@ -688,13 +788,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       saveReviewCursor(persistKey, hintKey, [...newestFirst.map((a) => a.id), ...(prior?.seen ?? [])])
       return undefined
     }
-    const newest = fresh[0]
-    saveReviewCursor(persistKey, hintKey, [...newestFirst.map((a) => a.id), ...(prior?.seen ?? [])], newest)
-    return {
-      met: true,
-      steer: activitySteer(newest, ref),
-      reason: `pr-watch ${refKey(ref)} by ${newest.actor}`,
-    }
+    // Enumerate the WHOLE burst, newest first so the cap keeps what matters most, then chronologically
+    // for the steer — a conversation reads in the order it was written. Every id in `fresh` is about to
+    // be marked seen, so a steer that named only `fresh[0]` silently discarded the rest.
+    const named = fresh.slice(0, REVIEW_STEER_CAP)
+    const omitted = fresh.length - named.length
+    const chronological = [...named].reverse()
+    saveReviewCursor(persistKey, hintKey, [...newestFirst.map((a) => a.id), ...(prior?.seen ?? [])], chronological, omitted)
+    return { met: true, steer: activitySteer(chronological, ref, omitted), reason: reviewReason(ref, chronological, omitted) }
   }
 
   function normalizeReviewResult(
