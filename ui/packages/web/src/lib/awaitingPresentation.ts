@@ -6,26 +6,27 @@ import { formatSnoozeWake } from "./snooze.ts"
 export const AWAITING_FALLBACK_TITLE = "Awaiting"
 
 /** The verb every park button wears. It is deliberately ONE word for every kind: the card's TITLE
- *  already names the specific wait ("Arm watcher"), and the explainer already spells out the effect,
- *  so the button only has to say what it does (maintainer 2026-07-24). */
+ *  already names the specific wait ("PR watcher armed"), and the explainer already spells out the
+ *  effect, so the button only has to say what it does (maintainer 2026-07-24). */
 export const AWAITING_PARK_BUTTON = "Snooze"
 
 /** What the awaiting card's park control offers for these hints, or null when no hint is parkable
  *  (legacy pr/ci/session, or an elapsed/malformed timer) — there is then nothing to confirm.
  *
  *  `title` is the card's HEADING, not a button label: a future `timer` → "Scheduled snooze" to that
- *  exact instant; `pr-watch` → "Arm watcher" — the opt-in "hand this to the watcher and hide it",
- *  since a pr-watch card is a VISIBLE queue handoff by default; a plain `human` gate → "Awaiting
- *  human". For pr-watch/human there's no declared time, so the caller parks for the user's default
+ *  exact instant; `pr-watch` → "PR watcher armed" — the STATE the thread is already in, since the
+ *  scheduler auto-arms off the fence and a pr-watch card is a VISIBLE queue handoff by default; a
+ *  plain `human` gate → "Awaiting human". For pr-watch/human there's no declared time, so the caller parks for the user's default
  *  snooze preset — for pr-watch that preset is only a SAFETY timeout: the scheduler clears the snooze
  *  the moment new PR activity arrives (scheduler.ts, the clear-snooze-on-pr-watch-wake), so ACTIVITY
  *  is the real wake and the timeout just guards against a dead PR hiding forever. Signalled by a null
  *  `timerUntil`, and why pr-watch's explainer names PR activity rather than a clock.
  *
- *  NB the title is user-facing framing, not literal mechanics: the scheduler polls a pr-watch thread
- *  whether or not the button was pressed (it auto-arms off the fence). What the button actually does
- *  is PARK the visible card and let the watcher bring it back — "Arm watcher" is how the maintainer
- *  wants that handoff to read.
+ *  NB the title STATES the wait, it does not offer it: the scheduler polls a pr-watch thread whether
+ *  or not the button is ever pressed (it auto-arms off the fence), so "PR watcher armed" is the literal
+ *  standing fact. The imperative it replaced ("Arm watcher") described the button instead, which read
+ *  as an offer to start something that was already running. What the button actually does is PARK the
+ *  visible card and let the watcher bring it back (maintainer 2026-07-29).
  *
  *  `timerUntil` is CANONICALIZED, never the raw hint: the fence grammar admits instants the durable
  *  snooze grammar rejects (no millis, a numeric offset), and setThreadSnooze rejects those as invalid
@@ -47,7 +48,7 @@ export function awaitingParkAction(
     }
   }
   if (hints.some((hint) => hint.kind === "pr-watch")) {
-    return { title: "Arm watcher", explainer: `${dismiss} PR activity is detected.`, toastVerb: "Watcher armed", timerUntil: null }
+    return { title: "PR watcher armed", explainer: `${dismiss} PR activity is detected.`, toastVerb: "Watcher armed", timerUntil: null }
   }
   if (hints.some((hint) => hint.kind === "human")) {
     return { title: "Awaiting human", explainer: `${dismiss} your default snooze elapses.`, toastVerb: "Snoozed", timerUntil: null }

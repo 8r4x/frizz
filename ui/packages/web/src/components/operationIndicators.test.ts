@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import test from "node:test"
-import { hasRunningToolIndicator, isRunningOperation, liveBackgroundOperationState, runningOperations } from "../lib/operationIndicators.ts"
+import { hasPendingToolSpinner, hasRunningToolIndicator, isRunningOperation, liveBackgroundOperationState, runningOperations } from "../lib/operationIndicators.ts"
 
 test("multiple simultaneous background operations get individual live indicators while terminal states do not", () => {
   const operations = [
@@ -24,6 +24,35 @@ test("tool disclosures pulse only while their own call is pending", () => {
     assert.equal(hasRunningToolIndicator(status), false)
   }
   assert.equal(hasRunningToolIndicator("pending", "unknown"), false)
+})
+
+// The dot is the BACKGROUND signal, so the two pending kinds must be told apart, not merged: a detached
+// op pulses, an ordinary long-running command spins. Exactly one indicator ever applies.
+test("only a DETACHED pending call gets the live dot; a foreground one gets the spinner", () => {
+  assert.equal(hasRunningToolIndicator("pending"), false, "a foreground Bash is not a background job")
+  assert.equal(hasPendingToolSpinner("pending"), true, "…it spins instead")
+
+  assert.equal(hasPendingToolSpinner("pending", "background"), false, "a detached op never doubles up")
+  assert.equal(hasRunningToolIndicator("pending", "background"), true)
+
+  // An orphaned Codex poll is a process fray cannot place — it claims neither liveness nor progress.
+  assert.equal(hasRunningToolIndicator("pending", "unknown"), false)
+  assert.equal(hasPendingToolSpinner("pending", "unknown"), false)
+
+  for (const status of ["completed", "failed", "cancelled", undefined] as const) {
+    assert.equal(hasPendingToolSpinner(status), false, `${status} is not in progress`)
+  }
+})
+
+test("the foreground spinner keeps its mark under reduced motion, in the chip's own tone", () => {
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8")
+  // currentColor, NOT a --live-dot hue: the spinner must never read as the shell blue or agent accent.
+  assert.match(css, /\.fray-tool-spinner \{[^}]*border-top-color: currentColor/)
+  assert.doesNotMatch(css, /\.fray-tool-spinner \{[^}]*--live-dot/)
+  assert.match(css, /\.fray-tool-spinner \{[^}]*animation: fray-tool-spin/)
+  assert.match(css, /@keyframes fray-tool-spin/)
+  // Motion off, mark still drawn — an in-progress call that renders nothing reads as finished.
+  assert.match(css, /\.fray-tool-spinner \{ animation: none; border-color:/)
 })
 
 test("live background telemetry overrides a completed launch wrapper without borrowing another operation's state", () => {

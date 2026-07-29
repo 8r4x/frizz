@@ -17,6 +17,7 @@ import { DiffBlock, PathLink } from "./DiffBlock.tsx"
 import { splitQuestionBlocks, parseQuestionBlock, type QuestionKind, type BlockAnswer, type MessageAnswering } from "../lib/questionBlocks.ts"
 import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
 import { parseAnswersCard, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
+import { GithubWakeCard } from "./GithubWakeCard.tsx"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
 import { sendEagerFollowUp } from "../lib/eagerComposerSubmission.ts"
 import { useUnqueueFollowUp, useUnqueueSupported } from "../lib/unqueueFollowUp.ts"
@@ -36,7 +37,7 @@ import { ThreadLifecycleFooter, StateButton } from "./ThreadLifecycleFooter.tsx"
 import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { Tooltip } from "./Tooltip.tsx"
 import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
-import { hasRunningToolIndicator, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
+import { hasPendingToolSpinner, hasRunningToolIndicator, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
 import { elapsedSince, formatFixedDuration, formatToolDuration } from "../lib/durationLabels.ts"
 import { CHILD_OPEN_TITLE, visibleChildOps } from "../lib/childOps.ts"
 import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
@@ -1753,30 +1754,39 @@ type ToolStatus = NonNullable<TranscriptToolCall["status"]>
 
 export function ToolStatusMeta({ status, backgroundState, liveBackgroundState, exitCode, durationMs, indicator = "shell" }: { status?: ToolStatus; backgroundState?: TranscriptToolCall["backgroundState"]; liveBackgroundState?: "running" | "stale"; exitCode?: number; durationMs?: number; indicator?: "shell" | "agent" }) {
   if (!status && durationMs === undefined) return null
-  const label =
+  // The GLYPH carries "background", so the words no longer have to. "BACKGROUND RUNNING" in petite-caps
+  // beside a dot that already says background was the longest string in the header and pushed the command
+  // it annotates into truncation for a fact it was stating twice (maintainer 2026-07-29: "it is way too
+  // long of a label to put into that card"). The drawn label is the short form; `longLabel` keeps the
+  // explicit phrasing for the tooltip and the accessible name, where length costs nothing.
+  const [label, longLabel] =
     liveBackgroundState === "running"
-      ? "background running"
+      ? ["running", "background running"]
       : liveBackgroundState === "stale"
-        ? "background stale"
+        ? ["stale", "background stale"]
         : status === "pending"
       ? backgroundState === "unknown"
-        ? "background / unknown"
-        : "running"
+        ? ["unknown", "background / unknown"]
+        : ["running", backgroundState === "background" ? "background running" : "running"]
       : status === "failed"
         ? exitCode !== undefined
-          ? `exit ${exitCode}`
-          : "failed"
+          ? [`exit ${exitCode}`, `exit ${exitCode}`]
+          : ["failed", "failed"]
         : status === "cancelled"
-          ? "cancelled"
+          ? ["cancelled", "cancelled"]
           : status === "completed"
-            ? "done"
-            : undefined
+            ? ["done", "done"]
+            : [undefined, undefined]
   const duration = durationMs !== undefined ? formatToolDuration(durationMs) : undefined
-  const title = [label, duration].filter(Boolean).join(" · ")
+  const title = [longLabel, duration].filter(Boolean).join(" · ")
   const tone = status === "failed" ? "fray-tool-failed" : status === "cancelled" ? "text-amber-400" : "text-muted/55"
   return (
     <span className={`petite-caps fray-tool-header-caps flex shrink-0 items-center gap-1 text-[11.5px] leading-none ${tone}`} title={title} aria-label={title}>
-      {(liveBackgroundState === "running" || hasRunningToolIndicator(status, backgroundState)) && <span aria-hidden className={`fray-live-dot fray-live-dot--${indicator}`} data-running-indicator="tool-disclosure" />}
+      {liveBackgroundState === "running" || hasRunningToolIndicator(status, backgroundState)
+        ? <span aria-hidden className={`fray-live-dot fray-live-dot--${indicator}`} data-running-indicator="tool-disclosure" />
+        : hasPendingToolSpinner(status, backgroundState)
+          ? <span aria-hidden className="fray-tool-spinner" data-running-indicator="tool-pending" />
+          : null}
       <span>{[label, duration].filter(Boolean).join(" · ")}</span>
     </span>
   )
@@ -2506,6 +2516,10 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     // Non-matching text (and a parse hiccup → null) falls back to the plain bubble; text is never lost.
     const answers = paired !== undefined ? paired : parseAnswersCard(text)
     if (answers) return <AnswersCard answers={answers} queued={m.queued} sourceId={m.sourceId} />
+    // A scheduler wake is recorded as a user turn because it is pasted into the worker's composer —
+    // but FRAY wrote it, not the human, so it must not wear the human's off-white right-justified
+    // bubble. `m.wake` is the server's own tell (the delivery token it stripped), never a text guess.
+    if (m.wake) return <GithubWakeCard text={text} sourceId={m.sourceId} wrap={dense} />
     // `rawText` rides alongside the presentation text because the two differ: the bubble shows the
     // stripped/normalized copy, while the optimistic cache entry an unqueue has to evict is keyed on
     // the message's own raw text.
@@ -2821,8 +2835,8 @@ export function InlineVisualization({ file }: { file: string }) {
 // A SIGNAL fence rendered as a card in place of the raw ```done / ```awaiting block (the fence
 // language IS the state; the body is the message). `done` → a compact presentation-only success card;
 // its thread's Archive lives in the stable lifecycle footer. `awaiting` → the SAME card shape: a
-// heading naming the wait ("Arm watcher"), the body prose plus one plain-English action summary (with
-// legacy pr/ci/session support), then the park button + its explainer.
+// heading naming the wait ("PR watcher armed"), the body prose plus one plain-English action summary
+// (with legacy pr/ci/session support), then the park button + its explainer.
 export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKind; body: string; hints: AwaitingHint[]; wrap?: boolean }) {
   const html = useMemo(() => (body ? mdToHtml(body) : ""), [body])
   const awaitingHint = awaitingHintSentence(hints)
@@ -2875,9 +2889,10 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
     )
   }
   // Same shell as the done card above — heading, then the prose, then the action. The heading names
-  // the WAIT ("Arm watcher"), which is what the old right-rail button label was doing badly: it read
-  // as the button's verb when it was really the card's identity (maintainer 2026-07-24). With no
-  // parkable hint there's no action to name, so it falls back to a plain "Awaiting".
+  // the WAIT ("PR watcher armed"), which is what the old right-rail button label was doing badly: it
+  // read as the button's verb when it was really the card's identity (maintainer 2026-07-24) — and why
+  // the heading is now a STATE rather than the imperative "Arm watcher" that replaced it (2026-07-29).
+  // With no parkable hint there's no action to name, so it falls back to a plain "Awaiting".
   const parkTitle = awaitingParkAction(hints)?.title ?? AWAITING_FALLBACK_TITLE
   return (
     <TranscriptCard icon={Hourglass} label={parkTitle}>

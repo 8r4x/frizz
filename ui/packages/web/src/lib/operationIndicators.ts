@@ -9,8 +9,26 @@ export function runningOperations<T extends { state: string }>(operations: reado
   return operations.filter((operation) => isRunningOperation(operation.state))
 }
 
+// The pulsing DOT means exactly one thing: a DETACHED background op is alive — blue for a shell/Monitor,
+// accent-yellow for a sub-agent. That is the whole reason the hue vocabulary exists, so a call that was
+// never backgrounded must not wear it: an ordinary Bash that is simply taking a while, or a blocking
+// Agent, is not a background job and reading as one is the bug (maintainer 2026-07-29: "the fact that
+// there's a blue dot at all indicates that it's a background job … something that is not backgrounded
+// should not even have a blue dot"). It gets the spinner below instead.
+//
+// `run_in_background` is what decides this and fray reads it straight off the tool input at parse time
+// (transcript.ts — Bash `run_in_background: true`, and Monitor, which is always detached), so the two
+// cases are told apart definitively rather than guessed at from how long the call has been pending.
 export function hasRunningToolIndicator(status: "pending" | "completed" | "failed" | "cancelled" | undefined, backgroundState?: "background" | "unknown"): boolean {
-  return status === "pending" && backgroundState !== "unknown"
+  return status === "pending" && backgroundState === "background"
+}
+
+// A pending FOREGROUND call: in progress inside the turn that is running it, with no detached process
+// behind it. Motion still belongs here — the work IS underway — but as a neutral spinner, which claims
+// nothing about a background job. "unknown" is deliberately excluded: an orphaned poll is a process fray
+// cannot place, and animating it as in-progress would assert liveness nobody has observed.
+export function hasPendingToolSpinner(status: "pending" | "completed" | "failed" | "cancelled" | undefined, backgroundState?: "background" | "unknown"): boolean {
+  return status === "pending" && backgroundState === undefined
 }
 
 type BackgroundTool = {

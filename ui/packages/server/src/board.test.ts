@@ -521,7 +521,7 @@ test("deriveAwaitingBackground: true only when own-work rest is the SOLE, unsnoo
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), tele({ ...child, pendingQuestion: true }), "turn-idle"), false, "a question outranks it")
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), tele({ ...child, pendingAsk: { id: "x", questions: [] } }), "turn-idle"), false, "a native ask outranks it")
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), tele({ ...child, lastFence: { kind: "done", body: "", hints: [] } }), "turn-idle"), false, "a done fence outranks it")
-  // A pr-watch ```awaiting fence renders its own "Arm watcher" card, so it outranks this banner even
+  // A pr-watch ```awaiting fence renders its own "PR watcher armed" card, so it outranks this banner even
   // though the thread stays QUEUED (pr-watch is a visible handoff, not a Held park) — the fence card
   // wins, no double-card. deriveNeedsYou still queues it; only the banner is suppressed.
   const prWatch = tele({ ...child, lastFence: { kind: "awaiting", body: "PR up.", hints: [{ kind: "pr-watch", value: "acme/app#1" }] } })
@@ -680,7 +680,7 @@ test("deriveNeedsYou: only truthful human/future-timer waits excuse rest; machin
     tele({ lastFence: { kind: "awaiting", body: "", hints: [{ kind, value }] } })
   assert.equal(deriveNeedsYou(row(), waiting("human", "Alice review"), "turn-idle", false, now), false)
   // pr-watch does NOT park: it's a visible queue handoff (a PR whose reviews may never arrive must not
-  // vanish). The scheduler still polls + bumps it; the human hides it via the "Arm watcher" card. (2026-07-22)
+  // vanish). The scheduler still polls + bumps it; the human hides it via the "PR watcher armed" card. (2026-07-22)
   assert.equal(deriveNeedsYou(row(), waiting("pr-watch", "owner/repo#1"), "turn-idle", false, now), true, "pr-watch queues, never Held")
   assert.equal(deriveNeedsYou(row(), waiting("timer", "2026-07-14T12:00:00Z"), "turn-idle", false, now), false)
   assert.equal(deriveNeedsYou(row(), waiting("timer", "2026-07-12T12:00:00Z"), "turn-idle", false, now), true)

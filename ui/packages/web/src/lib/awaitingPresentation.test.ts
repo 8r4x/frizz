@@ -41,13 +41,13 @@ test("actionable hints win and elapsed timers remain stable instead of becoming 
   assert.equal(awaitingHintSentence([{ kind: "timer", value: "not-a-time" }], now), "Snooze schedule unavailable")
 })
 
-test("pr-watch: watcher sentence + an 'Arm watcher' park action (parks the card until the next PR activity)", () => {
+test("pr-watch: watcher sentence + a 'PR watcher armed' park action (parks the card until the next PR activity)", () => {
   assert.equal(
     awaitingHintSentence([{ kind: "pr-watch", value: "acme/app#391" }], now),
     "Watch acme/app#391 for new reviews, approvals, or comments",
   )
   assert.deepEqual(awaitingParkAction([{ kind: "pr-watch", value: "acme/app#391" }], now), {
-    title: "Arm watcher",
+    title: "PR watcher armed",
     explainer: "This will dismiss the card from the queue until PR activity is detected.",
     toastVerb: "Watcher armed",
     timerUntil: null,
@@ -55,7 +55,8 @@ test("pr-watch: watcher sentence + an 'Arm watcher' park action (parks the card 
 })
 
 // The card's HEADING names the wait and the muted explainer names the effect, so the button itself is
-// one word for every kind (maintainer 2026-07-24: "Arm watcher" read as a verb when it was a title).
+// one word for every kind (maintainer 2026-07-24: "Arm watcher" read as a verb when it was a title; the heading is a STATE,
+// "PR watcher armed", since 2026-07-29).
 // Each explainer must state the real wake, which for pr-watch is ACTIVITY — not the safety timeout.
 test("every parkable kind carries a card title and an explainer naming what actually re-surfaces it", () => {
   assert.equal(AWAITING_PARK_BUTTON, "Snooze")
@@ -99,7 +100,7 @@ test("a park target is always an instant setThreadSnooze accepts, whatever shape
 
 test("park kinds without a declared instant defer to the caller's preset, and unparkable hints offer nothing", () => {
   assert.deepEqual(awaitingParkAction([{ kind: "pr-watch", value: "owner/repo#42" }], now), {
-    title: "Arm watcher",
+    title: "PR watcher armed",
     explainer: "This will dismiss the card from the queue until PR activity is detected.",
     toastVerb: "Watcher armed",
     timerUntil: null,

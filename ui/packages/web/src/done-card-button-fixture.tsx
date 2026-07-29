@@ -11,7 +11,7 @@ import "./styles.css"
 //     → the End-session dialog path)
 //   • the awaiting card's "Snooze" park button, one per parkable kind — the kind picks the card TITLE
 //     and the muted explainer beside the button (timer → "Scheduled snooze" to the exact instant;
-//     pr-watch → "Arm watcher"; human → "Awaiting human"). Each applies a user snooze via
+//     pr-watch → "PR watcher armed"; human → "Awaiting human"). Each applies a user snooze via
 //     setThreadSnooze.
 // RPC is mocked like completion-lifecycle-fixture so nothing real is hit.
 const mode = new URLSearchParams(window.location.search).get("mode") === "executing" ? "executing" : "resting"
