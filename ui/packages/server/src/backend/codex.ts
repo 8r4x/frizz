@@ -490,7 +490,7 @@ export function parseCodexLine(line: string): NormalizedEvent[] {
     if (pt === "function_call_output") {
       const id = typeof p.call_id === "string" ? p.call_id : ""
       const text = typeof p.output === "string" ? p.output : stringifyOutput(p.output)
-      return [{ kind: "tool-result", at, id, text }]
+      return [{ kind: "tool-result", at, id, text, ...imageField(p.output) }]
     }
     // Freeform ("custom") tools — codex delivers apply_patch (its file-edit tool) this way, NOT as a
     // function_call. The payload carries `input` as a RAW STRING (the V4A patch for apply_patch), so we
@@ -504,7 +504,7 @@ export function parseCodexLine(line: string): NormalizedEvent[] {
     if (pt === "custom_tool_call_output") {
       const id = typeof p.call_id === "string" ? p.call_id : ""
       const text = typeof p.output === "string" ? p.output : stringifyOutput(p.output)
-      return [{ kind: "tool-result", at, id, text }]
+      return [{ kind: "tool-result", at, id, text, ...imageField(p.output) }]
     }
     if (pt === "reasoning") {
       // The raw CoT (`encrypted_content`) is opaque, but codex also emits a plaintext `summary`: an
@@ -669,6 +669,27 @@ function parseToolArguments(args: unknown): unknown {
     return args
   }
 }
+// The `image` half of a structured tool result, as its own event field. An MCP `take_screenshot` (and
+// codex's own `view_image`) answers with an `input_image` part whose `image_url` is a base64 data URL —
+// the ONLY copy of that picture for a screenshot taken without a `filePath`, so unlike the text channel
+// it cannot be recovered from anywhere else and must survive parsing. `stringifyOutput` still reduces the
+// part to the "[image output]" placeholder for `text`; this returns the data URL BY REFERENCE alongside
+// it (no copy, no decode) and only the transcript projection ever reads it. Returns {} when there is no
+// image, so spreading it adds no key at all to the overwhelmingly common case.
+function imageField(output: unknown): { image?: string } {
+  if (!Array.isArray(output)) return {}
+  for (const part of output) {
+    if (!part || typeof part !== "object") continue
+    const p = part as Record<string, unknown>
+    if (p.type !== "input_image" && p.type !== "output_image" && p.type !== "image") continue
+    const url = typeof p.image_url === "string" ? p.image_url : typeof p.url === "string" ? p.url : undefined
+    // Only an inline data URL is ours to render. A remote http(s) image is someone else's fetch — the
+    // transcript never reaches out to the network to draw a tool card.
+    if (url?.startsWith("data:image/")) return { image: url }
+  }
+  return {}
+}
+
 // Legacy function-call results are strings. Unified custom-tool results are an ordered response-content
 // array (`[{type:"input_text",text}, …]`) — flatten those text blocks in order so transcript parsing
 // can recover the wrapper status/result instead of receiving an opaque one-line JSON serialization.

@@ -409,6 +409,51 @@ test("parseCodexLine: unified custom-tool content blocks flatten to ordered text
   assert.doesNotMatch(ev.text, /"type":"input_text"/)
 })
 
+// ---- a tool result that CARRIED a picture keeps it on its own channel ----
+// An MCP `take_screenshot` answers with an `input_image` data URL. The text channel must keep showing the
+// "[image output]" stand-in (the board fold, summaries and the output pane all read `text`, and none of
+// them want megabytes of base64), while the picture rides `image` for the transcript projection alone.
+const screenshotOutput = (imageUrl: string) => JSON.stringify({
+  timestamp: "2026-07-29T20:29:00.000Z",
+  type: "response_item",
+  payload: {
+    type: "function_call_output",
+    call_id: "shot",
+    output: [
+      { type: "input_text", text: "Wall time: 0.0580 seconds\nOutput:" },
+      { type: "input_text", text: "Took a screenshot of the current page's viewport." },
+      { type: "input_image", image_url: imageUrl },
+    ],
+  },
+})
+
+test("parseCodexLine: an input_image result exposes the data URL on `image`, never inside `text`", () => {
+  const dataUrl = "data:image/png;base64,iVBORw0KGgo="
+  const ev = parseCodexLine(screenshotOutput(dataUrl))[0] as Extract<NormalizedEvent, { kind: "tool-result" }>
+  assert.equal(ev.kind, "tool-result")
+  assert.equal(ev.image, dataUrl)
+  assert.match(ev.text, /Took a screenshot/)
+  assert.match(ev.text, /\[image output\]/, "the text channel keeps the stand-in")
+  assert.doesNotMatch(ev.text, /base64/, "and never the blob itself")
+})
+
+test("parseCodexLine: a REMOTE image url is not adopted (the transcript never fetches to draw a card)", () => {
+  const ev = parseCodexLine(screenshotOutput("https://example.com/shot.png"))[0] as Extract<NormalizedEvent, { kind: "tool-result" }>
+  assert.equal(ev.image, undefined)
+  assert.match(ev.text, /\[image output\]/, "still reported as an image result, just not a drawable one")
+})
+
+test("parseCodexLine: an ordinary text-only result carries no `image` key at all", () => {
+  const line = JSON.stringify({
+    timestamp: "2026-07-29T20:29:00.000Z",
+    type: "response_item",
+    payload: { type: "function_call_output", call_id: "c1", output: [{ type: "input_text", text: "done" }] },
+  })
+  const ev = parseCodexLine(line)[0] as Extract<NormalizedEvent, { kind: "tool-result" }>
+  assert.equal("image" in ev, false)
+  assert.equal(ev.text, "done")
+})
+
 // Shapes captured from the real corpus (2026-07-24: 2282 `compacted` records across 355 rollouts under
 // ~/.codex/sessions/2026; `payload.message` empty in every one, a token_count immediately before in 2281
 // and immediately after in 2282). Written inline rather than fixtured because a real record's

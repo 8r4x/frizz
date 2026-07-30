@@ -165,7 +165,11 @@ function substanceLength(text) {
       if (!t) return false;
       if (t.startsWith('#')) return false; // headings
       if (/^[-*]\s*\[\s*\]\s*$/.test(t)) return false; // an empty task box
-      if (/^(Your|SCRATCHPAD:)/.test(t) && /compaction-proof working memory/.test(t)) return false; // the provisioned orientation
+      // The provisioned orientation line. Matched on the CONCEPT rather than a leading word, because
+      // the wording has changed once already and pads written under the old shape are still on disk —
+      // anchoring on a prefix silently reclassified a template as "written", which made an empty pad
+      // skip its re-grounding and made the summarizer swallow a skeleton.
+      if (/compaction-survival mechanism|compaction-proof working memory/.test(t)) return false;
       return true;
     })
     .join('')

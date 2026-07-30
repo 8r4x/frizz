@@ -77,3 +77,22 @@ test("every child-operation surface renders through the one shared row component
   // liveness mark, no drill-in, no dismiss), so it consumes the tokens directly rather than the row.
   assert.match(readFileSync(join(SRC, "components/ThreadLifecycleFooter.tsx"), "utf8"), /CHILD_ARROW\b/)
 })
+
+test("every child-operation surface offers the dismiss ×, through the one shared dismisser", () => {
+  // Maintainer 2026-07-30: "the X button to stop a sub-agent should show up everywhere sub-agents are
+  // listed — in the sidebar, in the cue cards, in the full view." The × was an ops-strip-only control,
+  // so the rail and the queue card named a phantom child and offered no way to retire it. This is the
+  // guard against a surface silently dropping the control again, and against one of them growing its
+  // own dismiss call: `childOpDismisser` is where the direct-child / has-an-id rule lives, and a local
+  // `rpc.dismissBackgroundOp` would route around it.
+  for (const file of ["components/QueueSubAgentLines.tsx", "components/Sidebar.tsx", "components/ChatView.tsx"]) {
+    const source = readFileSync(join(SRC, file), "utf8")
+    assert.match(source, /onDismiss=\{childOpDismisser\(/, `${file} must pass the shared dismisser to its ChildOpRow`)
+  }
+  const callers = sourceFiles(SRC).filter((path) => /\brpc\.dismissBackgroundOp\(/.test(readFileSync(path, "utf8")))
+  assert.deepEqual(
+    callers.map((path) => path.slice(SRC.length)),
+    ["lib/dismissChildOp.ts"],
+    "dismissBackgroundOp has exactly one caller — the shared dismisser",
+  )
+})

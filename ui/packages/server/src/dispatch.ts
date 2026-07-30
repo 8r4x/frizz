@@ -204,7 +204,7 @@ export function scratchpadContent(title: string, kind: BackendKind = "claude"): 
   if (kind === "codex") {
     return `# Scratchpad — ${title}
 
-Your compaction-proof working memory — keep your task list and any state that must survive a compaction here.
+The canonical record of this thread and your compaction-survival mechanism — keep your task list, the approach and what you rejected, the human's decisions, and anything that must outlive your context here.
 
 ## Task list
 
@@ -215,7 +215,7 @@ Your compaction-proof working memory — keep your task list and any state that 
   }
   return `# Scratchpad — ${title}
 
-Your compaction-proof working memory and the fleet blackboard — keep your task list and any state that must survive a compaction or be shared with your sub-agents here.
+The canonical record of this thread, your compaction-survival mechanism, and the blackboard your sub-agents read — keep your task list, the approach and what you rejected, the human's decisions, and anything that must outlive your context here.
 
 ## Task list
 
@@ -323,8 +323,8 @@ export function scratchpadHookScript(): string | undefined {
 export function composePrompt(sessionId: string, prompt: string, customInstructions: string, kind: BackendKind = "claude"): string {
   const scratch =
     kind === "codex"
-      ? `Your scratchpad is \`.fray/threads/${sessionId}/scratch.md\` — your compaction-proof working memory. Keep your task list and any state that must survive a compaction IN it, and re-read it after a compaction to recover where you are.`
-      : `Your scratchpad is \`.fray/threads/${sessionId}/scratch.md\` — your compaction-proof working memory and the shared blackboard for your sub-agents. Keep your task list and any state that must survive a compaction or be shared with sub-agents IN it, and pass its path to every sub-agent you dispatch.`
+      ? `Your scratchpad is \`.fray/threads/${sessionId}/scratch.md\` — the CANONICAL record of this thread and your compaction-survival mechanism. Keep your task list, the approach and what you rejected, the human's decisions, and anything that must outlive your context IN it, written as you go; re-read it after any compaction or resume before asserting anything.`
+      : `Your scratchpad is \`.fray/threads/${sessionId}/scratch.md\` — the CANONICAL record of this thread, your compaction-survival mechanism, and the shared blackboard for your sub-agents. Keep your task list, the approach and what you rejected, the human's decisions, and anything that must outlive your context IN it, written as you go; re-read it after any compaction or resume, and pass its path to every sub-agent you dispatch.`
   const custom = customInstructions.trim()
     ? `\n\nPROJECT INSTRUCTIONS (from the human operator):\n${customInstructions.trim()}`
     : ""
@@ -343,8 +343,8 @@ export function composePrompt(sessionId: string, prompt: string, customInstructi
 export function scratchpadOrientation(sessionId: string, planPath?: string | null, kind: BackendKind = "claude"): string {
   const scratch =
     kind === "codex"
-      ? `SCRATCHPAD: .fray/threads/${sessionId}/scratch.md — your compaction-proof working memory (write your task list + any state that must survive a compaction there; re-read it after a compaction to recover where you are).`
-      : `SCRATCHPAD: .fray/threads/${sessionId}/scratch.md — your compaction-proof working memory and the shared blackboard for your sub-agents (write shared state + your task list there; pass this path in every sub-agent prompt).`
+      ? `SCRATCHPAD: .fray/threads/${sessionId}/scratch.md — the CANONICAL record of this thread and your compaction-survival mechanism (write your task list, the approach and what you rejected, and anything that must outlive your context there, as you go; re-read it after any compaction or resume).`
+      : `SCRATCHPAD: .fray/threads/${sessionId}/scratch.md — the CANONICAL record of this thread, your compaction-survival mechanism, and the shared blackboard for your sub-agents (write your task list, the approach and what you rejected, and anything that must outlive your context there, as you go; re-read it after any compaction or resume; pass this path in every sub-agent prompt).`
   const lines = [scratch]
   if (planPath) lines.push(`PLAN: ${planPath} — the durable plan artifact this thread works from; read it FIRST.`)
   return lines.join("\n")

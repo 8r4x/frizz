@@ -9,6 +9,7 @@ import {
   formatSnoozeWake,
   localDateTimeInputValue,
   parseLocalSnooze,
+  snoozePresetAction,
   snoozePresetInstant,
   snoozePresetLabel,
   type SnoozePreset,
@@ -30,6 +31,7 @@ export function SnoozeButton({ thread, onSnoozed }: { thread: ThreadView; onSnoo
   const snoozedUntil = futureSnoozedUntil(thread)
   const selectedPreset = useSnapshot(prefs).snoozePreset
   const selectedLabel = snoozePresetLabel(selectedPreset)
+  const selectedAction = snoozePresetAction(selectedPreset)
   const minCustom = useMemo(() => localDateTimeInputValue(new Date(Date.now() + 60_000)), [customOpen])
 
   // `prompt` is what upgrades a park into a scheduled BUMP: the server arms a durable wake that resumes
@@ -90,13 +92,13 @@ export function SnoozeButton({ thread, onSnoozed }: { thread: ThreadView; onSnoo
         <button
           type="button"
           disabled={busy}
-          aria-label={snoozedUntil ? "Wake thread now" : `Snooze thread for ${selectedLabel.toLowerCase()}`}
-          title={snoozedUntil ? `Wake now · ${formatSnoozeWake(snoozedUntil)}` : `Snooze for ${selectedLabel.toLowerCase()}`}
+          aria-label={snoozedUntil ? "Wake thread now" : selectedAction}
+          title={snoozedUntil ? `Wake now · ${formatSnoozeWake(snoozedUntil)}` : selectedAction}
           onClick={() => void apply(snoozedUntil ? null : snoozePresetInstant(selectedPreset))}
           className="flex items-center gap-1.5 rounded-l-md px-2.5 py-1 text-[12px] font-medium text-fg/75 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 disabled:cursor-not-allowed disabled:opacity-45"
         >
           {busy && <Loader2 size={12} className="animate-spin" />}
-          {snoozedUntil ? "Wake now" : `Snooze ${selectedLabel}`}
+          {snoozedUntil ? "Wake now" : selectedAction}
         </button>
         <span aria-hidden className="my-1 w-px bg-border" />
         <Menu>

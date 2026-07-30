@@ -26,6 +26,15 @@ export const CHILD_ARROW_CLASS = "shrink-0 text-[11px] leading-none text-muted/4
 export const CHILD_STALE_DOT_CLASS = "block h-1.5 w-1.5 rounded-full bg-muted/30"
 export const CHILD_STALE_TITLE = "stale — no recent output"
 
+// A RESTED child: its run ended (the harness reported completed/failed) while the fan-out IT dispatched
+// is still running. A HOLLOW dot of the same 1.5-unit geometry as the stale one — same box, same
+// baseline, so nothing on the row shifts — because the reading is "this one stopped" while the rows
+// indented beneath it are still pulsing. It is deliberately not the stale dot: stale means "probably
+// still working, just quiet", and the action here is the opposite one (steer it, or its children's work
+// is stranded).
+export const CHILD_RESTED_DOT_CLASS = "block h-1.5 w-1.5 rounded-full border border-muted/45"
+export const CHILD_RESTED_TITLE = "rested — it stopped, but the work it launched is still running"
+
 // A tracked background shell/Monitor is a LIVE process even when quiet (its entry only clears on a
 // terminal notification), so it breathes rather than showing the flat stale dot — and says so.
 export const CHILD_QUIET_SHELL_TITLE = "running — no recent output"
@@ -59,6 +68,11 @@ function compactCount(n: number | undefined): string | undefined {
   if (n < 1_000_000) return scale(n / 1_000, "k")
   return scale(n / 1_000_000, "M")
 }
+// The × on a child row — on EVERY surface that lists children, since 2026-07-30 (maintainer: "the X
+// button to stop a sub-agent should show up everywhere sub-agents are listed"). It was an ops-strip-only
+// affordance, which meant the rail and the queue card showed the same phantom child and offered no way
+// to retire it. WHICH rows may carry it is a property of the ROW (a direct child with an id — see
+// lib/dismissChildOp.ts), never of the surface it happens to be rendered on.
 export const CHILD_DISMISS_TITLE = "Dismiss — stop tracking this finished operation"
 export const CHILD_DISMISS_NOUN = { AGENT: "sub-agent", SHELL: "background shell" } as const
 
@@ -70,19 +84,24 @@ export const CHILD_DISMISS_NOUN = { AGENT: "sub-agent", SHELL: "background shell
 // the drawer still listed it — the same cross-surface inconsistency the shared row was built to end
 // (maintainer ruling 2026-07-24: unify the card onto the rail's policy). Now:
 //
-//   card  — running OR stale. Same set as the rail, minus the rail's id requirement: an id-less child
-//           still renders (non-interactive), never silently dropped.
-//   rail  — running OR stale, and only children carrying an `id` (its rows are always drill-in targets;
+//   card  — running OR stale OR rested. Same set as the rail, minus the rail's id requirement: an
+//           id-less child still renders (non-interactive), never silently dropped.
+//   rail  — the same set, and only children carrying an `id` (its rows are always drill-in targets;
 //           an id-less child from an old snapshot shape has nothing to open, so the rail omits it).
 //   sheet — no filter at all. Everything the board reports gets a row.
+//
+// `rested` joins the visible set for the same reason `stale` did, only more so: the server emits it ONLY
+// for a child that still has running work under it (see anchorRoots in tailer.ts), so hiding it would
+// hide the live grandchildren indented beneath it — which is exactly the disappearance this vocabulary
+// keeps having to fix.
 export type ChildOpRecord = { readonly state: string; readonly id?: string }
 
-const liveOrStale = (op: ChildOpRecord): boolean => op.state === "running" || op.state === "stale"
+const unresolved = (op: ChildOpRecord): boolean => op.state === "running" || op.state === "stale" || op.state === "rested"
 
 export function visibleChildOps<T extends ChildOpRecord>(ops: readonly T[], surface: "rail"): readonly (T & { id: string })[]
 export function visibleChildOps<T extends ChildOpRecord>(ops: readonly T[], surface: "card" | "sheet"): readonly T[]
 export function visibleChildOps<T extends ChildOpRecord>(ops: readonly T[], surface: "rail" | "card" | "sheet"): readonly T[] {
-  if (surface === "card") return ops.filter(liveOrStale)
-  if (surface === "rail") return ops.filter((op): op is T & { id: string } => Boolean(op.id) && liveOrStale(op))
+  if (surface === "card") return ops.filter(unresolved)
+  if (surface === "rail") return ops.filter((op): op is T & { id: string } => Boolean(op.id) && unresolved(op))
   return ops
 }

@@ -12,6 +12,7 @@ import {
   type ScopedThreadTabCapabilities,
 } from "../lib/threadTabState.ts"
 import { ThreadView, type ThreadTab } from "./ChatView.tsx"
+import { DrawerStack } from "./DrawerStack.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
 import { Toaster } from "./Toaster.tsx"
 
@@ -90,6 +91,12 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
             <ThreadView slug={slug} tab={effectiveTab} onTab={setTab} virtualized showReturnToQueue />
           )}
         </main>
+        {/* The SAME drawer stack the queue mounts. Without it every drill-in this page renders — a
+            sub-agent row, a background-shell row, the fray-doc button, a `[…](/thread/<slug>)` link —
+            pushed a layer onto the store that nothing displayed, so the click was simply dead. Mounted
+            OUTSIDE <main> (which is overflow-hidden); the sheets are `fixed inset-0` and no ancestor
+            here creates a containing block, so they cover the viewport exactly as they do in App. */}
+        <DrawerStack />
         <Toaster />
       </div>
     </TooltipProvider>

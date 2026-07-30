@@ -152,8 +152,53 @@ test("the dismiss × exists only when onDismiss is supplied, and sits directly a
   // …and it is visible at rest, not revealed by a hover the reader has to guess at.
   assert.doesNotMatch(withX, /opacity-0/)
   for (const density of DENSITIES) {
-    assert.doesNotMatch(render({ density, onOpen: () => {} }), /data-op-row/, `${density} without onDismiss must not render the × wrapper`)
+    assert.doesNotMatch(render({ density, onOpen: () => {} }), /data-op-row/, `${density} without onDismiss must not carry the × marker`)
   }
+})
+
+// ── THE × IS THE SAME CONTROL ON EVERY SURFACE (maintainer 2026-07-30) ──────────────────────────
+//
+// It used to render only at "sheet" density, so the rail and the queue card listed a phantom child
+// with no way to retire it — you had to go find the one surface that had the control. Whether a row
+// carries the × is now a property of the ROW (its caller decides, per lib/dismissChildOp.ts), never of
+// the density. These pin that, and pin the structural constraint the rail's old shape violated.
+
+test("every density renders the identical dismiss ×, in the same place on the line", () => {
+  for (const density of DENSITIES) {
+    const html = render({ density, onOpen: () => {}, onDismiss: () => {}, startedAt: TWELVE_MIN_AGO })
+    assert.match(html, /data-op-row/, `${density} must mark itself as a row carrying the ×`)
+    assert.match(html, /aria-label="Dismiss sub-agent: Audit the drawer ops strip"/, `${density} must render the × with the shared label`)
+    assert.match(html, /title="Dismiss — stop tracking this finished operation"/, `${density} × carries the shared tooltip`)
+    assert.doesNotMatch(html, /opacity-0/, `${density} × is visible at rest, never hover-revealed`)
+    // title → × → reading on every surface, the rail included: its duration used to ride INSIDE the
+    // label button, which would have put the × on the far side of the reading.
+    const order = ["Audit the drawer ops strip", "Dismiss sub-agent", "Working for 12m"].map((needle) => html.indexOf(needle))
+    assert.ok(order.every((i) => i >= 0) && order[0] < order[1] && order[1] < order[2], `${density}: title → × → reading, got ${order}`)
+  }
+})
+
+test("the × is a SIBLING of the drill-in button on every density — never a button inside a button", () => {
+  // The rail used to BE the button (full-width, reading inside it). Nesting the × there would emit
+  // invalid HTML that React hydrates into a broken tree, so the row grew a wrapper instead. Assert the
+  // structure, not the styling: exactly two buttons, and the first one closed before the second opened.
+  for (const density of DENSITIES) {
+    const html = render({ density, onOpen: () => {}, onDismiss: () => {}, startedAt: TWELVE_MIN_AGO })
+    assert.equal(html.split("<button").length - 1, 2, `${density} renders exactly the identity button and the ×`)
+    const secondOpen = html.indexOf("<button", html.indexOf("<button") + 1)
+    assert.ok(html.indexOf("</button>") < secondOpen, `${density} must close the identity button before opening the ×`)
+  }
+})
+
+test("the rail keeps its full-width hover highlight and its indent now that they live on the wrapper", () => {
+  // The highlight and the 26px indent moved off the button (which no longer spans the row) onto the
+  // row wrapper, so the rail still lights up edge-to-edge and a nested row still steps by padding
+  // rather than margin — a margin would carve the highlight back on every child row.
+  const html = render({ density: "rail", onOpen: () => {}, onDismiss: () => {}, depth: 2, startedAt: TWELVE_MIN_AGO })
+  const wrapper = html.slice(0, html.indexOf("<button"))
+  assert.match(wrapper, /hover:bg-white\/\[0\.04\]/, "the highlight is on the wrapper, so it spans the whole rail row")
+  assert.match(wrapper, /pl-\[26px\]/)
+  assert.match(wrapper, /style="padding-left:39px"/)
+  assert.doesNotMatch(wrapper, /margin-left/)
 })
 
 // ── NESTING: a sub-agent's own sub-agents ────────────────────────────────────────────────────────

@@ -463,7 +463,7 @@ test("composePrompt(claude) keeps the sub-agent blackboard framing; codex drops 
   const codex = composePrompt("sid", "do the thing", "", "codex")
   assert.doesNotMatch(codex, /sub-agent/)
   assert.doesNotMatch(codex, /blackboard/)
-  assert.match(codex, /compaction-proof working memory/)
+  assert.match(codex, /compaction-survival mechanism/)
   assert.ok(codex.endsWith("do the thing")) // the task still rides through, and rides through LAST
 })
 
@@ -523,7 +523,7 @@ test("scratchpadOrientation(codex) drops the blackboard framing; claude keeps it
   const codex = scratchpadOrientation("sid", null, "codex")
   assert.doesNotMatch(codex, /sub-agent/)
   assert.doesNotMatch(codex, /blackboard/)
-  assert.match(codex, /compaction-proof working memory/)
+  assert.match(codex, /compaction-survival mechanism/)
 
   // The plan line is agnostic and appended for both.
   assert.match(scratchpadOrientation("sid", ".fray/plans/x.md", "codex"), /PLAN: \.fray\/plans\/x\.md/)
@@ -533,7 +533,7 @@ test("scratchpadOrientation(codex) drops the blackboard framing; claude keeps it
 
 test("scratchpadContent(codex) is compaction-only (no fleet-blackboard / Shared context section)", () => {
   const claude = scratchpadContent("t", "claude")
-  assert.match(claude, /fleet blackboard/)
+  assert.match(claude, /blackboard your sub-agents read/)
   assert.match(claude, /## Shared context/)
   assert.equal(scratchpadContent("t"), claude) // default = claude (unchanged)
 

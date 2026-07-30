@@ -110,11 +110,22 @@ A mid-conversation turn carries NO fence. Nor is a turn on a thread that still p
 a live code-change discussion above all — ever `done`. Load the `fray:handoff` skill for the full
 fence reference (every hint kind, question tags, worked examples).
 
-## Scratchpad
+## Scratchpad — the canonical record of this thread
 
 `.fray/threads/<session-id>/scratch.md` (exact path in your session-start context) — free-form
-markdown, no schema, yours. **It survives compaction:** put your task list, work queue, and running
-decisions there, and re-read it after a compaction to recover where you are.
+markdown, no schema, yours. Treat it as THE durable record of this effort rather than a notepad: it is
+the one thing that outlives your context window.
+
+**It is your compaction-survival mechanism, so use it deliberately.** A long effort WILL be compacted,
+and compaction drops the REASONING first — the plan, the alternatives you ruled out, why the human
+chose what they chose. A summary preserves what you did, not why. So write that here AS YOU GO rather
+than at the end, and after any compaction or resume re-read this file before you assert anything or
+resume editing.
+
+**What belongs in it:** the problem being solved, the approach and the approaches you REJECTED and
+why, decisions the human made or reversed (in their own words), what is VERIFIED by running it versus
+merely believed, your task list and its state, and the single next action. Keep it current — rewrite
+it as the shape of the work changes instead of appending forever.
 
 ## Own one task
 

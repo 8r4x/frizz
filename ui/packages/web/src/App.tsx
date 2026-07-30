@@ -1,29 +1,23 @@
 import { useEffect, useRef } from "react"
 import { useSnapshot } from "valtio"
 import { useQuery } from "@tanstack/react-query"
-import { closeGithubPicker, store, seedBoard, threadBySlug, pushDrawer, topDrawer, topThreadSlug, showToast } from "./store.ts"
+import { closeGithubPicker, store, seedBoard, pushDrawer, topDrawer, topThreadSlug, showToast } from "./store.ts"
 import { useBoard } from "./hooks.ts"
-import { displayTitle } from "./groups.ts"
-import { closeSettingsAnimated, closeDrawerAnimated } from "./lib/overlays.ts"
+import { closeDrawerAnimated } from "./lib/overlays.ts"
 import { startRouter } from "./lib/router.ts"
-import { dismissOpenSelect } from "./lib/selectOverlay.ts"
 import { nextSidebarPresence, type SidebarPresence } from "./lib/sidebarPresence.ts"
 import { rpc } from "./api/rpc.ts"
 import { Sidebar, projectIdentity } from "./components/Sidebar.tsx"
 import { StatusBar } from "./components/StatusBar.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
-import { ThreadSheet } from "./components/ThreadSheet.tsx"
-import { SubAgentSheet } from "./components/SubAgentSheet.tsx"
-import { BackgroundShellSheet } from "./components/BackgroundShellSheet.tsx"
+import { DrawerStack } from "./components/DrawerStack.tsx"
 import { TodosView } from "./components/TodosView.tsx"
 import { NewThreadDialog } from "./components/NewThreadModal.tsx"
 import { GithubPickerModal } from "./components/GithubPickerModal.tsx"
-import { ThreadDrawer } from "./components/ThreadDrawer.tsx"
-import { PlanDrawer } from "./components/PlanDrawer.tsx"
 import { SettingsDrawer } from "./components/SettingsDrawer.tsx"
 import { CommandPalette } from "./components/CommandPalette.tsx"
 import { StatusListView } from "./components/StatusListView.tsx"
-import { ErrorBoundary, DrawerErrorSheet } from "./components/ErrorBoundary.tsx"
+import { ErrorBoundary } from "./components/ErrorBoundary.tsx"
 import { RestartOverlay } from "./components/RestartOverlay.tsx"
 import { Toaster } from "./components/Toaster.tsx"
 import { FRAY_SUPERVISOR_STATUS_WAKE_EVENT, getFraySupervisorStatus } from "./api/restart.ts"
@@ -164,7 +158,9 @@ export function App() {
   //   alone. Hijacking it either loses to the browser outright (a plain tab never delivers the event)
   //   or, in a standalone/PWA window, steals a system shortcut the user expects. New-thread keeps
   //   three doors that cost us nothing: ⌘K → "New thread", the sidebar pill, and the visible composer.
-  //   Esc — overlays first (palette/modal/settings), then the drawer stack topmost-first
+  //   Esc — overlays first (palette/modal/settings), then the drawer stack topmost-first. That chain
+  //   belongs to <DrawerStack> (the standalone /full page needs the identical unwinding), so only the
+  //   chords are handled here.
   //   Enter submits in a composer; Shift/Option-Enter newline (Composer's own handler)
   // (The xstate focus machine — nav selection, arrow-walk, chevron, step-in/out, focus registry — was
   // DELETED when the sidebar went mouse-only: the queue is always visible, clicking a row opens its
@@ -174,48 +170,21 @@ export function App() {
       // The terminal is a native TUI surface. Its Escape/arrows/control keys and slash-menu input
       // belong to xterm, never to Fray's drawer/global shortcut layer.
       if (e.target instanceof Element && e.target.closest(".xterm")) return
-      const meta = e.metaKey || e.ctrlKey
-      if (meta) {
-        const key = e.key.toLowerCase()
-        if (key === "k") {
+      if (!(e.metaKey || e.ctrlKey)) return
+      const key = e.key.toLowerCase()
+      if (key === "k") {
+        e.preventDefault()
+        store.showPalette = !store.showPalette
+      } else if (key === "i") {
+        // ⌘I: fray document for the topmost open thread (stacks another layer / pops its own).
+        const top = topDrawer()
+        const target = topThreadSlug()
+        if (top?.kind === "doc") {
           e.preventDefault()
-          store.showPalette = !store.showPalette
-        } else if (key === "i") {
-          // ⌘I: fray document for the topmost open thread (stacks another layer / pops its own).
-          const top = topDrawer()
-          const target = topThreadSlug()
-          if (top?.kind === "doc") {
-            e.preventDefault()
-            if (!closeDrawerAnimated(top.id)) store.drawers.pop()
-          } else if (target) {
-            e.preventDefault()
-            pushDrawer("doc", target)
-          }
-        }
-        return
-      }
-
-      if (e.key === "Escape") {
-        // Portaled selectors are not descendants of their owning dialog/drawer. Give the topmost
-        // model/effort matrix or Select this physical Escape before unwinding the app overlay stack.
-        if (dismissOpenSelect()) {
-          e.preventDefault()
-          e.stopPropagation()
-          e.stopImmediatePropagation()
-          return
-        }
-        // Overlays soak up Esc first (outermost wins). A focused composer handles its own Esc (blur)
-        // and stops propagation, so reaching here means the page is at rest. Settings + the
-        // open-thread sheet route through their OWN animated close (fall back to the store write if
-        // nothing registered) so Esc slides them out instead of unmounting instantly.
-        if (store.showPalette) store.showPalette = false
-        else if (store.showNewThread) store.showNewThread = false
-        else if (store.showGithubPicker) closeGithubPicker()
-        else if (store.showSettings) { if (!closeSettingsAnimated()) store.showSettings = false }
-        // The drawer STACK unwinds topmost-first, one layer per Esc.
-        else if (store.drawers.length > 0) {
-          const top = store.drawers[store.drawers.length - 1]
           if (!closeDrawerAnimated(top.id)) store.drawers.pop()
+        } else if (target) {
+          e.preventDefault()
+          pushDrawer("doc", target)
         }
       }
     }
@@ -310,77 +279,9 @@ export function App() {
         </main>
       </div>
 
-      {/* The side-drawer STACK: each layer above the last, arbitrary depth. Two DIFFERENT depths:
-          `depth` = the layer's true stack position (array index) drives z-index — it must stay strictly
-          monotonic so a layer always paints above everything below it, including the ~210ms window while
-          a lower layer slides OUT. `widthDepth` = the count of layers below that are STAYING (non-closing)
-          drives the width/inset (each step 28px narrower). A closing layer keeps its array slot for its
-          slide-out, so counting it toward WIDTH made the layer above open one step too narrow, then JUMP
-          wider (content reflow) the instant the closer was removed; excluding it lets the new layer render
-          at its FINAL width and slide in from off-screen with no end-of-animation reflow. z and width are
-          decoupled because ThreadSheet alone is portaled + split-z (overlay/content) while the others are
-          single-z inline — tying z to the non-closing count let a closing ThreadSheet outrank a drawer
-          opened above it. */}
-      {(() => {
-        let below = 0
-        return snap.drawers.map((d, i) => {
-          const widthDepth = below
-          if (!d.closing) below++
-          const layer = d.kind === "thread" ? (
-            <ThreadSheet key={d.id} id={d.id} slug={d.slug} depth={i} widthDepth={widthDepth} initiallyOpen={d.routed} />
-          ) : d.kind === "subagent" ? (
-            <SubAgentSheet
-              key={d.id}
-              id={d.id}
-              slug={d.slug}
-              subId={d.subId ?? ""}
-              label={d.label ?? d.slug}
-              subagentType={d.subagentType}
-              startedAt={d.startedAt}
-              depth={i}
-              widthDepth={widthDepth}
-            />
-          ) : d.kind === "shell" ? (
-            <BackgroundShellSheet
-              key={d.id}
-              id={d.id}
-              slug={d.slug}
-              shellId={d.subId ?? ""}
-              label={d.label ?? "Background shell"}
-              startedAt={d.startedAt}
-              depth={i}
-              widthDepth={widthDepth}
-            />
-          ) : d.kind === "plan" ? (
-            <PlanDrawer key={d.id} id={d.id} path={d.path ?? d.slug} title={d.label ?? d.slug} depth={i} widthDepth={widthDepth} />
-          ) : (
-            <ThreadDrawer
-              key={d.id}
-              id={d.id}
-              slug={d.slug}
-              depth={i}
-              widthDepth={widthDepth}
-              title={(() => { const t = threadBySlug(board, d.slug); return t ? displayTitle(t) : d.slug })()}
-            />
-          )
-          // A drawer that throws while rendering used to blank the whole window — the board it was
-          // opened FROM included. Now the failure stays inside its own layer: the fallback re-mounts
-          // the same Sheet geometry, so it still slides in, still closes, and still leaves everything
-          // underneath it alive. Reset on the layer's identity so re-opening it is a real retry.
-          return (
-            <ErrorBoundary
-              key={d.id}
-              label="this drawer"
-              resetKeys={[d.kind, d.slug, d.subId, d.path]}
-              fallback={(error, retry) => (
-                <DrawerErrorSheet id={d.id} depth={i} widthDepth={widthDepth} error={error} onRetry={retry} />
-              )}
-            >
-              {layer}
-            </ErrorBoundary>
-          )
-        })
-      })()}
+      {/* The side-drawer STACK — and the Escape chain that unwinds it — lives in <DrawerStack> so the
+          standalone `/thread/<slug>/full` page can mount the identical thing. See DrawerStack.tsx. */}
+      <DrawerStack />
       {snap.showSettings && <SettingsDrawer />}
       {snap.showNewThread && <NewThreadDialog onClose={() => { store.showNewThread = false; store.newThreadPlanPath = null }} />}
       {snap.showGithubPicker && <GithubPickerModal onClose={closeGithubPicker} />}

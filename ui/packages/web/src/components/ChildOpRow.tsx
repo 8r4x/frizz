@@ -11,6 +11,8 @@ import {
   CHILD_DISMISS_TITLE,
   CHILD_OPEN_TITLE,
   CHILD_QUIET_SHELL_TITLE,
+  CHILD_RESTED_DOT_CLASS,
+  CHILD_RESTED_TITLE,
   CHILD_STALE_DOT_CLASS,
   CHILD_STALE_TITLE,
 } from "../lib/childOps.ts"
@@ -24,7 +26,8 @@ export type ChildOpKind = "AGENT" | "SHELL"
 //           for the pulsing dot: matching the parent rows is the point. The rail keeps carrying the raw
 //           subagent type in its tooltip, which is now the only place it appears at all.
 //   card  — a queue card's live child lines: the pulsing live dot and the label, no kind tag.
-//   sheet — the drawer's background-ops strip: dot + petite-caps kind tag + label + the dismiss ×.
+//   sheet — the drawer's background-ops strip: dot + petite-caps kind tag + label.
+// The dismiss × is NOT one of those differences any more — see `onDismiss`.
 // All three carry the light-gray DURATION the child has been working — right-justified at the end of the
 // row (maintainer 2026-07-27), so a column of rows reads its numbers down one edge instead of at
 // whatever ragged offset each label happens to end. It reads at the SAME size as the title and every
@@ -60,7 +63,10 @@ export function ChildOpRow({
 }: {
   kind: ChildOpKind
   label: string
-  state: "running" | "stale"
+  // "rested" is a sub-AGENT only reading: its own run ended while the fan-out it dispatched kept going
+  // (see CHILD_RESTED_TITLE). It draws a hollow dot in place of the live/stale one and nothing else on
+  // the row changes — the live children still pulse, indented one step beneath it.
+  state: "running" | "stale" | "rested"
   density: ChildOpDensity
   // How far down the dispatch tree this row sits: 1 (or absent) = a child the THREAD dispatched, 2 = a
   // child of that child, and so on. Each level past the first steps the row right by one indent, so a
@@ -79,8 +85,12 @@ export function ChildOpRow({
   parentSlug?: string
   // Absent ⇒ a non-interactive row (never a dropped one).
   onOpen?: () => void
-  // Absent ⇒ no × . Retiring a finished-but-unsignalled op is an ops-strip affordance; a rail row and a
-  // queue card line deliberately have no dismiss.
+  // The dismiss ×, on EVERY density (maintainer 2026-07-30: "the X button to stop a sub-agent should
+  // show up everywhere sub-agents are listed"). It used to be an ops-strip-only affordance, which meant
+  // the rail and the queue card listed the same live child and offered no way to retire it — you had to
+  // find the one surface that had the control. Absence is now a property of the ROW, not the surface:
+  // a descendant or an id-less child has nothing to dismiss (see lib/dismissChildOp.ts), everything
+  // else carries it. Absent ⇒ no ×.
   onDismiss?: () => void
   // Tooltip override. The rail passes "[subagent-type] label" — the type reading it has no room to render.
   title?: string
@@ -103,9 +113,12 @@ export function ChildOpRow({
 
   // The liveness mark. The rail speaks the rail's checkbox language; the card and the drawer share the
   // pulsing-dot language, in a fixed-width column so their labels line up across both surfaces.
+  const quiet = state === "rested"
+    ? <span className={CHILD_RESTED_DOT_CLASS} title={CHILD_RESTED_TITLE} />
+    : <span className={CHILD_STALE_DOT_CLASS} title={CHILD_STALE_TITLE} />
   const indicator = rail ? (
     <span className="flex w-3.5 shrink-0 items-center justify-center">
-      {running ? <BoxSpinner size={12} /> : <span className={CHILD_STALE_DOT_CLASS} title={CHILD_STALE_TITLE} />}
+      {running ? <BoxSpinner size={12} /> : quiet}
     </span>
   ) : (
     <span className="flex w-[9px] shrink-0 justify-center">
@@ -119,7 +132,7 @@ export function ChildOpRow({
       ) : kind === "SHELL" ? (
         <span aria-hidden className="fray-live-dot-quiet fray-live-dot-quiet--shell" data-running-indicator="operation-quiet" title={CHILD_QUIET_SHELL_TITLE} />
       ) : (
-        <span className={CHILD_STALE_DOT_CLASS} title={CHILD_STALE_TITLE} />
+        quiet
       )}
     </span>
   )
@@ -136,9 +149,6 @@ export function ChildOpRow({
       {indicator}
       {sheet && <span className="petite-caps shrink-0 text-[9.5px] text-muted/45">{kind}</span>}
       <span className={`min-w-0 truncate text-muted/70 ${rail ? "leading-[16px]" : clickable ? "group-hover:text-fg/80 group-hover:underline" : ""}`}>{label}</span>
-      {/* The RAIL's reading rides INSIDE the row so the full-width hover highlight (and the whole
-          click target) still spans the row; the two prompt-box densities put it outside, past the ×. */}
-      {rail && reading}
     </>
   )
 
@@ -147,22 +157,15 @@ export function ChildOpRow({
   // whatever is left. Letting both shrink proportionally crushed the label to "Inspe…" the moment a
   // step arrived, which inverted the reading — you could see what some child was doing but not which.
   const rowClass = rail
-    ? "group flex w-full min-w-0 items-center gap-2 rounded-md py-0.5 pl-[26px] pr-1.5 text-left text-[11.5px] outline-none transition-colors hover:bg-white/[0.04]"
+    ? "group flex min-w-0 items-center gap-2 text-left outline-none"
     // `overflow-hidden` is load-bearing at a narrow width: the arrow/dot/kind tag inside are shrink-0,
     // so once the row runs out of room the button's own content used to SPILL and the × landed on top
     // of the "AGENT" tag. Clipping keeps the collapse graceful. The ring goes inset to survive it.
     : `group flex min-w-0 max-w-[60%] items-center gap-1.5 overflow-hidden text-left text-[11.5px] ${clickable ? "cursor-pointer rounded-sm outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-fg/60" : ""}`
 
-  // The rail indents INSIDE the row (padding, not margin) so the full-width hover highlight and the
-  // whole click target keep spanning the rail — a margin would carve the highlight back on every nested
-  // row. The two prompt-box densities have no full-width highlight, so they shift the whole line
-  // (below), keeping the × and the duration reading in step with the label.
-  const railStyle = rail && nestIndent > 0 ? { paddingLeft: 26 + nestIndent } : undefined
-
   const row = clickable ? (
     <button
       type="button"
-      style={railStyle}
       data-subagent-depth={depth && depth > 1 ? depth : undefined}
       data-subagent-parent={parentSlug}
       onClick={onOpen}
@@ -177,30 +180,37 @@ export function ChildOpRow({
       {identity}
     </button>
   ) : (
-    <div style={railStyle} data-subagent-depth={depth && depth > 1 ? depth : undefined} data-subagent-parent={parentSlug} title={rowTitle} className={rowClass}>
+    <div data-subagent-depth={depth && depth > 1 ? depth : undefined} data-subagent-parent={parentSlug} title={rowTitle} className={rowClass}>
       {identity}
     </div>
   )
 
-  if (rail) return row
+  // ONE line shape for all three densities: [ identity button ] [ × ] [ duration ]. The identity is a
+  // button and the × is a button, so they can only ever be SIBLINGS — a button cannot nest inside a
+  // button, which is what forced this wrapper in the first place. The × sits DIRECTLY AFTER the title
+  // (maintainer 2026-07-27: at the far right it read as too subtle to find) with the duration pushed to
+  // the right edge behind it, and it is always visible, quietly — a control you have to discover by
+  // hovering is exactly the complaint.
+  //
   // text-[11.5px] sits on the CONTAINER, not only on the label button: the ×, the step, the counters
   // and the reading are all SIBLINGS of that button, so a size set only on it leaves them inheriting
   // the parent's larger one. That is exactly what happened when the reading moved to the right edge
   // (maintainer 2026-07-28: "why did you make the 5 min ago labels bigger… it should be the same font
   // size as the title"). One size here keeps every reading on the row in step.
-  // The two prompt-box densities. The label (drill-in) and the × are SIBLINGS inside one row line — a
-  // button can't nest inside a button — with the × sitting DIRECTLY AFTER the title (maintainer
-  // 2026-07-27: at the far right it read as too subtle to find) and the recency pushed to the right
-  // edge behind it. The × is always visible, quietly: a control you have to discover by hovering is
-  // exactly the complaint.
+  //
+  // The RAIL's own chrome — its indent, its hover highlight, its row padding — lives on this wrapper
+  // rather than on the button, so the highlight and the row box still span the FULL rail now that the
+  // button no longer does. It indents with PADDING, not margin: a margin would carve the highlight back
+  // on every nested row. The two prompt-box densities have no full-width highlight, so they shift the
+  // whole line, keeping the × and the duration reading in step with the label.
+  const wrapperClass = rail
+    ? "flex w-full min-w-0 items-center gap-1.5 rounded-md py-0.5 pl-[26px] pr-1.5 text-[11.5px] transition-colors hover:bg-white/[0.04]"
+    : "flex min-w-0 items-center gap-1.5 text-[11.5px]"
+  const wrapperStyle = nestIndent > 0 ? (rail ? { paddingLeft: 26 + nestIndent } : { marginLeft: nestIndent }) : undefined
+
   return (
-    <div
-      className="flex min-w-0 items-center gap-1.5 text-[11.5px]"
-      style={nestIndent > 0 ? { marginLeft: nestIndent } : undefined}
-      data-op-row={onDismiss ? "" : undefined}
-    >
+    <div className={wrapperClass} style={wrapperStyle} data-op-row={onDismiss ? "" : undefined}>
       {row}
-      {/* The × sits between the identity and the live step, which is exactly "after the title". */}
       {onDismiss && (
         <button
           type="button"
