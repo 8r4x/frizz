@@ -1,5 +1,5 @@
 // LIVE PROBE: what does the Agent SDK tell fray about an input it DELIVERED, and when?
-//   node --experimental-strip-types packages/server/src/backend/_live_broker_dequeue.mts
+//   nub packages/server/src/backend/_live_broker_dequeue.mts
 //
 // The question this exists to answer, empirically, before any design:
 //  1. Does the SDK emit a `user` event for a delivered input, and does that event carry the `uuid`

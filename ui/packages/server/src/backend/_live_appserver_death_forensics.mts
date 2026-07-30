@@ -6,7 +6,7 @@
 //   2. the next bridge emits a `daemon-replaced` diagnostic carrying that cause;
 //   3. the persistent diagnostic LOG file captures the death.
 // Run:
-//   ./node_modules/.bin/tsx --tsconfig packages/web/tsconfig.json packages/server/src/backend/_live_appserver_death_forensics.mts
+//   nub packages/server/src/backend/_live_appserver_death_forensics.mts
 import { mkdtempSync, existsSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"

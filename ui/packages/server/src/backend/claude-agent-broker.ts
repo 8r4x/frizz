@@ -349,7 +349,7 @@ function startedAsProcessEntry(): boolean {
   }
 }
 
-// Standalone daemon entry: `node claude-agent-broker.ts` with config in FRAY_CLAUDE_BROKER.
+// Standalone daemon entry: `nub claude-agent-broker.ts` with config in FRAY_CLAUDE_BROKER.
 if (process.env.FRAY_CLAUDE_BROKER) {
   const config = JSON.parse(process.env.FRAY_CLAUDE_BROKER) as ClaudeBrokerConfig
   // A signal exits IMMEDIATELY and deliberately — it must not wait on a teardown that can hang — so it

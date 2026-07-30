@@ -82,7 +82,7 @@ const heavy: TranscriptMessage[] = [
     tool("Edit", { detail: "components/TodosView.tsx" }),
     tool("Edit", { detail: "components/TodosView.tsx" }),
     tool("Bash", { detail: "npx tsc --noEmit", desc: "Re-typecheck after edits" }),
-    tool("Bash", { detail: "npx tsx --test packages/web/src/**/*.test.ts", desc: "Run web tests" }),
+    tool("Bash", { detail: "nub --test packages/web/src/**/*.test.ts", desc: "Run web tests" }),
   ])),
   withId(asst("Verified the counts line up with what the loop skips (queued + render-nothing messages).", [
     tool("Read", { detail: "packages/shared/src/index.ts" }),

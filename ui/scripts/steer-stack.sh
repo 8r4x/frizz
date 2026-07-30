@@ -7,7 +7,7 @@ LOG=${2:-/tmp/steer-stack.log}
 PROJ=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$PROJ/ui"
 : > "$LOG"
-npx tsx scripts/adhoc-stack.mjs --port="$PORT" --project="$PROJ" >> "$LOG" 2>&1 &
+nub scripts/adhoc-stack.mjs --port="$PORT" --project="$PROJ" >> "$LOG" 2>&1 &
 STACK_PID=$!
 echo "$STACK_PID" > "/tmp/steer-stack-$PORT.pid"
 for i in $(seq 1 90); do

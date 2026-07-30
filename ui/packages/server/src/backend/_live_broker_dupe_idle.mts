@@ -1,6 +1,6 @@
 // LIVE REPRO, variant B: the maintainer's EXACT scenario — two messages queued at once against an
 // IDLE session, which Claude Code dequeues SIMULTANEOUSLY.
-//   node --experimental-strip-types packages/server/src/backend/_live_broker_dupe_idle.mts
+//   nub packages/server/src/backend/_live_broker_dupe_idle.mts
 //
 // Variant A (_live_broker_dupe.mts, mid-turn) passes: the two sends become two `queued_command`
 // attachments and render once each. This one exercises the OTHER delivery shape the parser knows

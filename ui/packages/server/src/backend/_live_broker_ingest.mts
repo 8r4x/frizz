@@ -1,6 +1,6 @@
 // LIVE end-to-end test of the seam the artifact e2e caught: broker daemon → socket → bridge.onEvent
 //   → claude-runtime-ingest → tailer.nudge → a tick that folds the record.
-//   node --experimental-strip-types packages/server/src/backend/_live_broker_ingest.mts
+//   nub packages/server/src/backend/_live_broker_ingest.mts
 //
 // The unit + integration tests cover ingest→tailer with a scripted provider, and
 // _live_broker_bridge.mts covers daemon→bridge.onEvent with real claude. NOTHING covered the two

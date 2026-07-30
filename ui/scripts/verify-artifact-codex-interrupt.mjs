@@ -16,7 +16,7 @@
 // CODEX_HOME points at the real ~/.codex so the app-server can authenticate; nothing is written there
 // beyond the throwaway rollouts codex records for itself.
 //
-//   ./node_modules/.bin/tsx --tsconfig packages/web/tsconfig.json scripts/verify-artifact-codex-interrupt.mjs
+//   nub scripts/verify-artifact-codex-interrupt.mjs
 import { execFileSync, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"

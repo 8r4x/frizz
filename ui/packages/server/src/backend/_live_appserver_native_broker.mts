@@ -8,7 +8,7 @@
 // This proves it end-to-end against real codex: start a turn, HARD-KILL the fray process that spawned
 // the listener (SIGKILL, no cleanup — the daemon's most dangerous case), and show the app-server is
 // still alive and the turn is still recoverable by a fresh fray. Run:
-//   ./node_modules/.bin/tsx --tsconfig packages/web/tsconfig.json packages/server/src/backend/_live_appserver_native_broker.mts
+//   nub packages/server/src/backend/_live_appserver_native_broker.mts
 import { spawnSync } from "node:child_process"
 import { mkdtempSync, readdirSync, readFileSync } from "node:fs"
 import { tmpdir, homedir } from "node:os"

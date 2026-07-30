@@ -1,5 +1,5 @@
 // LIVE proof of the property a concurrent session's plan note (fe4bdf3) claimed fray does NOT have:
-//   node --experimental-strip-types packages/server/src/backend/_live_broker_detached_backlog.mts
+//   nub packages/server/src/backend/_live_broker_detached_backlog.mts
 //
 // That note says "the daemon does not buffer: claude-agent-broker.ts:81 drops every event when no
 // client is attached, and there is no backlog or replay cursor," and concludes item 1 must not be

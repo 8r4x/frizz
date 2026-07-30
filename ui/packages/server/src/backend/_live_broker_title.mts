@@ -9,7 +9,7 @@
 // truncation of the raw dispatch prompt, forever. The broker therefore ASKS for the title explicitly
 // (claude-agent-broker.ts → seedSessionTitle → generate_session_title with persist).
 //
-// Run:  node --experimental-strip-types packages/server/src/backend/_live_broker_title.mts
+// Run:  nub packages/server/src/backend/_live_broker_title.mts
 import { execFileSync } from "node:child_process"
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir, homedir } from "node:os"

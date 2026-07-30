@@ -12,7 +12,7 @@
 // shapes, and a mode line quoted mid-transcript) prove the new structural gates did not weaken
 // detection of a real prompt.
 //
-// Usage: npx tsx ui/scripts/verify-perm-prompt-sniff.mjs   (exit 0 = all green)
+// Usage: nub ui/scripts/verify-perm-prompt-sniff.mjs   (exit 0 = all green)
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"

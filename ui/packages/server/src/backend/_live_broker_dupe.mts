@@ -1,6 +1,6 @@
 // LIVE REPRO of the maintainer's report, at the fray SERVER level (real broker + real tailer + real
 // delivery ledger + real transcript projection):
-//   node --experimental-strip-types packages/server/src/backend/_live_broker_dupe.mts
+//   nub packages/server/src/backend/_live_broker_dupe.mts
 //
 // "When two messages are queued at once and they get dequeued simultaneously … they both show up as
 //  dequeued in the chat, but also the enqueued versions stick around as well."

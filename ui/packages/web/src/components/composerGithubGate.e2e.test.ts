@@ -32,7 +32,7 @@ after(async () => {
   await browser?.close()
 })
 
-// The evaluate body must stay a single flat arrow — tsx's esbuild transform wraps nested function
+// The evaluate body must stay a single flat arrow — Nub's transform wraps nested function
 // declarations in a `__name` helper that doesn't exist in the page context.
 const rail = async (p: Page) =>
   p.evaluate(`(() => {

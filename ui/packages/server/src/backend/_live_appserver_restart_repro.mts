@@ -2,7 +2,7 @@
 // spontaneously" failure against the REAL `codex app-server`: a fray runtime restart kills the shared
 // app-server child mid-turn, and NOTHING ever resumes the interrupted turn.
 //
-//   ./node_modules/.bin/tsx --tsconfig packages/web/tsconfig.json packages/server/src/backend/_live_appserver_restart_repro.mts
+//   nub packages/server/src/backend/_live_appserver_restart_repro.mts
 //
 // Two death modes are exercised, matching the two real ones:
 //   A. graceful  — bridge.close() (what a clean fray shutdown / update-restart drain does)

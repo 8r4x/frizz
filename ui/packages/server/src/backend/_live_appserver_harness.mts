@@ -1,7 +1,7 @@
 // LIVE harness (not a unit test; excluded from the *.test.ts glob). Drives the REAL CodexAppServerBridge
 // against the REAL `codex app-server` 0.144.6 to observe steer/interrupt behavior end-to-end and learn
 // the ACTUAL error semantics of a stale turn/steer. Run:
-//   ./node_modules/.bin/tsx --tsconfig packages/web/tsconfig.json packages/server/src/backend/_live_appserver_harness.mts
+//   nub packages/server/src/backend/_live_appserver_harness.mts
 import { spawn as spawnChild } from "node:child_process"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"

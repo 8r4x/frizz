@@ -19,7 +19,7 @@
 //      survives;
 //   4. the NEGATIVE control — the same wake without the verdict must reconnect and change nothing.
 //
-// Usage: npx tsx ui/scripts/verify-limit-fresh-process.mjs   (exit 0 = all green)
+// Usage: nub ui/scripts/verify-limit-fresh-process.mjs   (exit 0 = all green)
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"

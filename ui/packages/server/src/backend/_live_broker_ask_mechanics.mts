@@ -1,5 +1,5 @@
 // What actually happens to a BLOCKED native AskUserQuestion when things go wrong, against real claude:
-//   node --experimental-strip-types packages/server/src/backend/_live_broker_ask_mechanics.mts
+//   nub packages/server/src/backend/_live_broker_ask_mechanics.mts
 //
 // This exists to settle the fence-vs-native question on evidence rather than intuition. Now that a
 // fence question and a native one render through the same component and read identically, the only

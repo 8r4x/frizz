@@ -1,7 +1,7 @@
 // LIVE proof for A+B (not a unit test; excluded from the *.test.ts glob). The counterpart to
 // _live_appserver_restart_repro.mts, which showed a fray runtime restart silently killing an
 // in-flight codex turn. Run:
-//   ./node_modules/.bin/tsx --tsconfig packages/web/tsconfig.json packages/server/src/backend/_live_appserver_daemon_survival.mts
+//   nub packages/server/src/backend/_live_appserver_daemon_survival.mts
 //
 // A — the app-server now lives in a DETACHED daemon, so a runtime restart must leave the turn running
 //     and the next generation must rejoin the SAME process and see the turn finish.

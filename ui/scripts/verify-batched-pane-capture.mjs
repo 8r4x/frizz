@@ -12,7 +12,7 @@
 //     slugs (the tailer falls back per-slug) rather than returning wrong text for them;
 //   • the retry rounds must still recover the panes that follow the dead one.
 //
-// Usage: npx tsx ui/scripts/verify-batched-pane-capture.mjs   (exit 0 = all green)
+// Usage: nub ui/scripts/verify-batched-pane-capture.mjs   (exit 0 = all green)
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"

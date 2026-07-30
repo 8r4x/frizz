@@ -16,7 +16,7 @@ type ToolDisclosureHeaderProps = {
 // Keep that action and the disclosure control as SIBLINGS: nesting either one inside the other makes
 // the browser repair the markup inconsistently and gives keyboard/screen-reader users two actions
 // with one ambiguous focus target. Kept JSX-free so the real rendered markup can be exercised by the
-// workspace's native node:test runner (which intentionally does not transpile TSX).
+// workspace's Nub-backed node:test runner.
 export function ToolDisclosureHeader({
   children,
   className,

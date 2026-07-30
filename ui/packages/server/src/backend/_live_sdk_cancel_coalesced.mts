@@ -1,6 +1,6 @@
 // LIVE PROBE: the COALESCING hazard — can cancelling one queued message destroy a DIFFERENT one the
 // operator never retracted, and lie about it?
-//   node --experimental-strip-types packages/server/src/backend/_live_sdk_cancel_coalesced.mts
+//   nub packages/server/src/backend/_live_sdk_cancel_coalesced.mts
 //
 // The SDK's own .d.ts (SDKControlInterruptResponse.still_queued) says:
 //

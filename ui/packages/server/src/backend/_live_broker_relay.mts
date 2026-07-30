@@ -1,5 +1,5 @@
 // LIVE validation of the broker RELAY design against real claude:
-//   node --experimental-strip-types packages/server/src/backend/_live_broker_relay.mts
+//   nub packages/server/src/backend/_live_broker_relay.mts
 // Proves the parts the raw PoC skipped, with the SDK's typed payloads:
 //   1. a permission request relays over the socket as a typed ClaudePermissionRequest; deny reaches the model
 //   2. a PENDING permission survives fray dying + a fresh reconnect (re-delivered), then the session continues

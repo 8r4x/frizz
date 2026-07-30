@@ -1,6 +1,6 @@
 // LIVE DEPTH PROBE: does anything fray can see describe a GRANDCHILD — a sub-agent dispatched by a
 // sub-agent — and if so, where?
-//   node --experimental-strip-types packages/server/src/backend/_live_broker_depth.mts
+//   nub packages/server/src/backend/_live_broker_depth.mts
 //
 // This answers, empirically and before any design:
 //   1. Does the PARENT session's event stream carry the grandchild's task_* / assistant events, or does

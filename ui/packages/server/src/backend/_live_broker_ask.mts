@@ -1,5 +1,5 @@
 // LIVE end-to-end proof of NATIVE AskUserQuestion on the Claude broker path, against real claude:
-//   node --experimental-strip-types packages/server/src/backend/_live_broker_ask.mts
+//   nub packages/server/src/backend/_live_broker_ask.mts
 //
 // A unit test cannot prove this. The whole risk lives in ONE contract that only the real claude binary
 // enforces: the answers object must be keyed by the FULL QUESTION TEXT, and the value must be exactly

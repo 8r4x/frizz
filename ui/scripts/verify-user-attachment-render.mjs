@@ -10,7 +10,7 @@
 // must not change. A fixture can't cover this: the fray server mounts Vite with appType "custom", so
 // every *.html falls back to index.html and only the real thread route renders a real transcript.
 //
-// Usage: npx tsx scripts/verify-user-attachment-render.mjs --port=4931 --home=/abs/temp-home
+// Usage: nub scripts/verify-user-attachment-render.mjs --port=4931 --home=/abs/temp-home
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync, readdirSync, copyFileSync, existsSync } from "node:fs"
 import { join } from "node:path"

@@ -1,5 +1,5 @@
 // LIVE end-to-end test of the whole Claude broker path against real claude:
-//   node --experimental-strip-types packages/server/src/backend/_live_broker_bridge.mts
+//   nub packages/server/src/backend/_live_broker_bridge.mts
 // Proves: bridge.spawnDispatch forks a DETACHED broker daemon that drives real claude; permissions
 // auto-allow so a tool runs; the transcript lands at the tailer-readable JSONL path; followUp adds a
 // second turn on the SAME live session; the daemon is a separate process that survives the bridge;

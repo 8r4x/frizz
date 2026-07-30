@@ -1,5 +1,5 @@
 // LIVE spike: prove the Claude Agent SDK backend's PERMISSION ROUND-TRIP against real `claude`.
-//   node --experimental-strip-types packages/server/src/backend/_live_sdk_permission.mts
+//   nub packages/server/src/backend/_live_sdk_permission.mts
 //
 // Drives the ACTUAL production factory (createClaudeQueryFactory -> the code that would replace the
 // tmux path), not a reimplementation. Proves the thing that is fragile today: a tool-permission

@@ -8,7 +8,7 @@
 // `command failed; retry without sandbox?` approval per patch, forever.
 //
 // Run:
-//   ./node_modules/.bin/tsx --tsconfig packages/web/tsconfig.json packages/server/src/backend/_live_appserver_approvals.mts
+//   nub packages/server/src/backend/_live_appserver_approvals.mts
 import { spawn as spawnChild } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync } from "node:fs"
 import { tmpdir } from "node:os"

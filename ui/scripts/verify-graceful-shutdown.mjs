@@ -9,7 +9,7 @@
 //   • its output contains NO timeout / error / stack-trace noise,
 //   • every process in the launcher's process group is gone afterwards (exact PID accounting).
 //
-//   npx tsx ui/scripts/verify-graceful-shutdown.mjs [--port=4952] [--mode=sigint|sigterm|double-sigint]
+//   nub ui/scripts/verify-graceful-shutdown.mjs [--port=4952] [--mode=sigint|sigterm|double-sigint]
 //
 // --mode=double-sigint sends a second SIGINT 150ms after the first (the impatient operator).
 // --mode=wedged-double-sigint SIGSTOPs the control-plane child first, so it CANNOT drain, then sends a
@@ -107,7 +107,7 @@ if (process.env.FRAY_SHUTDOWN_HARNESS === "launcher") {
     }
   }
 
-  // Plain node, NOT the tsx CLI. A tsx wrapper re-spawns the real launcher and FORWARDS signals to
+  // Plain Node, not a wrapper that re-spawns the real launcher and forwards signals to
   // it, so one Ctrl-C reached the launcher twice and the harness measured the wrapper's exit code
   // rather than the launcher's. Node strips types natively, exactly as the dev supervisor's own
   // fork(dev.ts) relies on, so the launcher runs directly and the signal accounting is honest.

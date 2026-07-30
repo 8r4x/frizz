@@ -1,7 +1,7 @@
 // LIVE harness (not a unit test; excluded from the *.test.ts glob). Drives the REAL
 // CodexAppServerBridge against the REAL `codex app-server` to prove that an EAGER per-thread sandbox
 // change actually lands on a running thread. Run:
-//   ./node_modules/.bin/tsx --tsconfig packages/web/tsconfig.json packages/server/src/backend/_live_appserver_sandbox_update.mts
+//   nub packages/server/src/backend/_live_appserver_sandbox_update.mts
 //
 // What it asserts, in order:
 //   1. a thread started `read-only` reports `read-only`

@@ -10,7 +10,7 @@
 // The project defaults to the fray repo itself (a gh-authed repo, an empty board under the temp HOME).
 //
 // Usage:
-//   npx tsx ui/scripts/adhoc-stack.mjs [--port=4930] [--project=/abs/dir] [--claude-bin=/abs/bin] [--wakers] [--reaper] [--keep] [--home=/abs] [--seed]
+//   nub ui/scripts/adhoc-stack.mjs [--port=4930] [--project=/abs/dir] [--claude-bin=/abs/bin] [--wakers] [--reaper] [--keep] [--home=/abs] [--seed]
 //
 // It prints ONE json line to stdout: {"url","port","home","socket","project"} once /health is green,
 // then stays up until SIGINT/SIGTERM, deleting the temp HOME on exit (unless --keep). Run it with Bash

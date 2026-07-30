@@ -5,7 +5,7 @@
 // the orphaned daemon must not wedge or corrupt anything.
 //
 // Run:
-//   ./node_modules/.bin/tsx --tsconfig packages/web/tsconfig.json packages/server/src/backend/_live_appserver_daemon_to_native_migration.mts
+//   nub packages/server/src/backend/_live_appserver_daemon_to_native_migration.mts
 import { mkdtempSync, readdirSync, readFileSync } from "node:fs"
 import { tmpdir, homedir } from "node:os"
 import { join } from "node:path"

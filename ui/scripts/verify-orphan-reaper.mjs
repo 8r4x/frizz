@@ -3,7 +3,7 @@
 // REAL processes, with a NEGATIVE CONTROL (a live-slug root + its aux that MUST survive). Mocks
 // prove nothing about whether macOS ps actually surfaces FRAY_UI_THREAD from the environment.
 //
-//   run: npx tsx scripts/verify-orphan-reaper.mjs   (from ui/)   → PASS/FAIL lines; exit 1 on any fail.
+//   run: nub scripts/verify-orphan-reaper.mjs   (from ui/)   → PASS/FAIL lines; exit 1 on any fail.
 //
 // Uses REAL `node` processes — the production shape of leaked aux (MCP/dev servers, and Chrome,
 // whose env `ps -E` surfaces identically; verified separately). System binaries like /bin/sleep are

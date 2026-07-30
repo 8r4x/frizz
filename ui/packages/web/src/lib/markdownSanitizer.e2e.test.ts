@@ -19,7 +19,7 @@ test("the markdown sanitizer keeps authored meaning and blocks every scripted es
     page.on("pageerror", (error) => pageErrors.push(String(error)))
     await page.goto(`${baseUrl}/markdown-sanitizer-fixture.html`, { waitUntil: "domcontentloaded" })
     await page.waitForSelector("[data-case=tasklist]")
-    // NOTE: no named function expressions in here. tsx/esbuild rewrites `const f = () => …` with a
+    // NOTE: no named function expressions in here. Nub's transpiler rewrites `const f = () => …` with a
     // `__name` keep-names shim that does not exist inside the page, and evaluate dies on it.
     const seen = await page.evaluate(() => {
       const handlers: string[] = []

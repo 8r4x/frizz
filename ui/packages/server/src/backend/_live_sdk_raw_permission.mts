@@ -1,7 +1,7 @@
 // LIVE spike (positive proof): the Claude Agent SDK permission round-trip works against REAL claude
 // with subscription auth. Drives @anthropic-ai/claude-agent-sdk's query() directly (streaming input +
 // canUseTool), the same surface fray's backend wraps — isolating the SDK from fray's wrapper.
-//   node --experimental-strip-types packages/server/src/backend/_live_sdk_raw_permission.mts
+//   nub packages/server/src/backend/_live_sdk_raw_permission.mts
 //
 // Proves: (1) subscription/OAuth auth (apiKeySource "none", no API key); (2) real tools run;
 // (3) a gated tool (Write) routes through canUseTool as a TYPED request we answer allow/deny, and the

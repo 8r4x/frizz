@@ -1,5 +1,5 @@
 // LIVE proof that a REALLY-FORKED broker daemon writes its own death forensics to disk:
-//   node --experimental-strip-types packages/server/src/backend/_live_broker_diagnostics.mts
+//   nub packages/server/src/backend/_live_broker_diagnostics.mts
 //
 // claude-broker-diagnostics.test.ts proves the writer. This proves the DAEMON is actually handed the
 // path and uses it — the seam that was silently missing before (onDiagnostic was plumbed all the way

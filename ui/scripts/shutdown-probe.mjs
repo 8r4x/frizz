@@ -2,7 +2,7 @@
 // live load on it (SSE board stream, /ws app socket, in-flight RPC), then closes it and reports how
 // long the shutdown barrier took plus every diagnostic it emitted.
 //
-//   npx tsx ui/scripts/shutdown-probe.mjs --port=4941 --load=sse,ws,rpc
+//   nub ui/scripts/shutdown-probe.mjs --port=4941 --load=sse,ws,rpc
 //
 // --load= is a comma list of: none | sse | ws | rpc  (default: none)
 import { mkdtempSync, rmSync, mkdirSync } from "node:fs"

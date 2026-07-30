@@ -10,7 +10,7 @@
 // points at the real ~/.codex so the app-server can authenticate; nothing is written there beyond the
 // throwaway rollout codex records for itself.
 //
-//   ./node_modules/.bin/tsx --tsconfig packages/web/tsconfig.json scripts/verify-artifact-daemon-closure.mjs
+//   nub scripts/verify-artifact-daemon-closure.mjs
 import { execFileSync, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, mkdirSync, rmSync, existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"

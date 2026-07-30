@@ -6,18 +6,17 @@
     "node": ">=26"
   },
   "scripts": {
-    "dev": "node packages/server/src/dev.ts",
+    "dev": "nub packages/server/src/dev.ts",
     "fray-dev:install": "node scripts/install-global-cli.mjs",
     "fray-dev:check": "node scripts/install-global-cli.mjs --check",
     "fray-dev:uninstall": "node scripts/install-global-cli.mjs --uninstall",
     "install:global": "node scripts/install-global-cli.mjs",
     "typecheck": "tsc -b packages/shared packages/rpc packages/server packages/cli && nub run --filter @fray-ui/web typecheck",
-    "test": "tsx --tsconfig packages/web/tsconfig.json --test --test-force-exit 'scripts/**/*.test.mjs' 'packages/shared/src/**/*.test.ts' 'packages/server/src/**/*.test.ts' 'packages/cli/src/**/*.test.ts' 'packages/web/src/**/*.test.ts'"
+    "test": "nub --test --test-force-exit 'scripts/**/*.test.mjs' 'packages/shared/src/**/*.test.ts' 'packages/server/src/**/*.test.ts' 'packages/cli/src/**/*.test.ts' 'packages/web/src/**/*.test.ts'"
   },
   "devDependencies": {
     "@types/node": "^24",
     "puppeteer": "^25.3.0",
-    "tsx": "^4.20.3",
     "typescript": "^5.7"
   },
   "pnpm": {

@@ -2,7 +2,7 @@
 // earlier harnesses did NOT: the ones most likely to be a regression now that native is the default and
 // EVERY reattach is forced through the "cold" reconcile (the native host reports droppedWhileDetached>=1,
 // so sameProcess is always false). Run:
-//   ./node_modules/.bin/tsx --tsconfig packages/web/tsconfig.json packages/server/src/backend/_live_appserver_native_adversarial.mts
+//   nub packages/server/src/backend/_live_appserver_native_adversarial.mts
 //
 // A. A LIVE turn must SURVIVE a fray restart UNTOUCHED — same turn id, NO recovery nudge, no second
 //    turn. If native's forced-cold reconcile retired or re-nudged a running turn, every fray restart

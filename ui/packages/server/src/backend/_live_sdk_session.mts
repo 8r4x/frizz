@@ -1,7 +1,7 @@
 // LIVE integration test: exercise a COMPLEX real-claude session through fray's SDK backend to prove
 // the rewritten pump holds across the boundaries unit tests can't reach with a fake CLI —
 // multiple turns (per-turn re-init), setPermissionMode mid-session, and interrupt.
-//   node --experimental-strip-types packages/server/src/backend/_live_sdk_session.mts
+//   nub packages/server/src/backend/_live_sdk_session.mts
 import { execFileSync } from "node:child_process"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"

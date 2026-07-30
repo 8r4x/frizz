@@ -9,7 +9,7 @@
 // This harness spawns a fake worker pane on the FULL project socket with a realistic start command,
 // then asserts BOTH scans now agree it's a compatible, injectable worker — for Claude and for Codex.
 //
-// Usage: npx tsx ui/scripts/verify-legacy-wake.mjs   (exit 0 = all green)
+// Usage: nub ui/scripts/verify-legacy-wake.mjs   (exit 0 = all green)
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { deriveSocket } from "../packages/server/src/tmux-socket.ts"

@@ -1,5 +1,5 @@
 // LIVE end-to-end RUNTIME GATE for the broker CUTOVER through the REAL server wiring (not just the
-// bridge). Run:  FRAY_CLAUDE_BROKER_BRIDGE=1 node --experimental-strip-types \
+// bridge). Run:  FRAY_CLAUDE_BROKER_BRIDGE=1 nub \
 //   packages/server/src/backend/_live_broker_server.mts
 //
 // Unlike _live_broker_bridge.mts (which drives the bridge directly), this exercises the code I wired

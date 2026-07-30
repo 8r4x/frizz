@@ -3,7 +3,7 @@
 // fake. This is the second half of the 2026-07-22 stall: the board showing the thread as forever
 // "running" was one bug; the thread refusing every follow-up afterwards was the other.
 //
-//   npx tsx scripts/verify-codex-stall-recovery.mjs
+//   nub scripts/verify-codex-stall-recovery.mjs
 //
 // Needs a signed-in `codex` (0.144.x) on PATH. Spends a small amount of real model usage.
 import { spawn } from "node:child_process"

@@ -16,7 +16,7 @@
 // ran and its output was dropped.
 //
 // Run:
-//   ./node_modules/.bin/tsx --tsconfig packages/web/tsconfig.json packages/server/src/backend/_live_codex_hooks.mts
+//   nub packages/server/src/backend/_live_codex_hooks.mts
 import { spawn as spawnChild } from "node:child_process"
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"

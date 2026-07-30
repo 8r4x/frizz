@@ -1,7 +1,7 @@
 // LIVE REPRO, variant C: the SIMULTANEOUS-DEQUEUE shape — two follow-ups queued while the model is
 // producing its final TEXT (no tool boundary to inject at), so Claude Code drains the whole queue at
 // TURN END into ONE user record joining them with "\n" (N content-less `dequeue`s first).
-//   node --experimental-strip-types packages/server/src/backend/_live_broker_coalesce.mts [same]
+//   nub packages/server/src/backend/_live_broker_coalesce.mts [same]
 //
 // This is the shape the maintainer described ("two messages queued at once … dequeued simultaneously")
 // and the one the corpus proves fray mis-renders. Pass `same` to queue two IDENTICAL texts.

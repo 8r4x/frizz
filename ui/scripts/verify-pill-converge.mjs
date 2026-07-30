@@ -3,7 +3,7 @@
 // new turn — proves the pill does. Drives a REAL codex thread on an isolated stack booted from THIS
 // worktree's source (which carries the fix).
 //
-//   ./node_modules/.bin/tsx --tsconfig packages/web/tsconfig.json scripts/verify-pill-converge.mjs
+//   nub scripts/verify-pill-converge.mjs
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, mkdirSync, rmSync, realpathSync } from "node:fs"
@@ -24,7 +24,7 @@ let child
 
 try {
   log("booting an isolated stack from this worktree source…")
-  child = spawn(process.execPath, ["--import", "tsx", "scripts/adhoc-stack.mjs", `--port=${PORT}`], {
+  child = spawn("nub", ["scripts/adhoc-stack.mjs", `--port=${PORT}`], {
     cwd: resolve(import.meta.dirname, ".."),
     env: { ...process.env, HOME: home, CODEX_HOME: join(homedir(), ".codex") },
     stdio: ["ignore", "pipe", "pipe"],

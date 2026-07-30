@@ -2,7 +2,7 @@
 // REAL server (createContext → dispatch broker branch → daemon with the wired workerEnv) actually has
 // the fray plugin environment — specifically that it can DISPATCH a fray:<model>-<effort> sub-agent
 // profile (which requires the cc-worker plugin to have loaded through the SDK) and that the fray MCP is
-// mounted. Run:  FRAY_CLAUDE_BROKER_BRIDGE=1 node --experimental-strip-types \
+// mounted. Run:  FRAY_CLAUDE_BROKER_BRIDGE=1 nub \
 //   packages/server/src/backend/_live_broker_workerenv.mts
 import { execFileSync } from "node:child_process"
 import { existsSync, mkdtempSync, rmSync, readFileSync } from "node:fs"

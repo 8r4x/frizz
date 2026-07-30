@@ -578,7 +578,7 @@ test("applyRecord: a shell leaves the live view on completion and retains bounde
 
 test("applyRecord: a manual TaskStop clears a background Bash shell (the phantom-row leak fix)", () => {
   const s = newTailState("t", "s", "/x")
-  applyRecord(s, bashBg("toolu_sh", "Boot isolated stack", "npx tsx scripts/adhoc-stack.mjs"))
+  applyRecord(s, bashBg("toolu_sh", "Boot isolated stack", "nub scripts/adhoc-stack.mjs"))
   applyRecord(s, resultText("toolu_sh", "Command running in background with ID: ba3y11c3t. Output is being written to: /tmp/tasks/ba3y11c3t.output. You will be notified when it completes."))
   assert.equal(s.subAgents.get("toolu_sh")?.taskId, "ba3y11c3t", "the runtime task id is captured from the launch ack")
   // TaskStop references the RUNTIME task id, which carries no tool_use id — the signal the board used to miss.
@@ -830,7 +830,7 @@ test("applyRecord: a FOREGROUND Bash auto-backgrounded on timeout becomes a trac
 
 test("applyRecord: an auto-backgrounded shell retires on its own <task-notification>", () => {
   const s = newTailState("t", "s", "/x")
-  applyRecord(s, bashFg("toolu_fg", "Run the full production backfill", "node reap.ts"))
+  applyRecord(s, bashFg("toolu_fg", "Run the full production backfill", "nub reap.ts"))
   applyRecord(s, resultText("toolu_fg", autoBackgroundAck("b2hk8870c", 600)))
   assert.equal(s.subAgents.size, 1)
   applyRecord(s, taskNotificationAttachment("toolu_fg", "completed", "b2hk8870c"))
@@ -1125,7 +1125,7 @@ test("tailer: a BROKER (headless) thread reports its live background shells — 
   h.storage.upsertSession(row())
   h.storage.setBackend("t", "claude")
   h.storage.setClaudeRuntime("t", "broker")
-  const shellLine = JSON.stringify(bashBg("toolu_sh", "Watch CI on PR 604", "node scripts/ci-watch.ts --pr 604"))
+  const shellLine = JSON.stringify(bashBg("toolu_sh", "Watch CI on PR 604", "nub scripts/ci-watch.ts --pr 604"))
   const ackLine = JSON.stringify(resultText("toolu_sh", "Command running in background with ID: b63. Output is being written to: /tmp/tasks/b63.output. You will be notified when it completes."))
   fixture(h.logDir, "sid", [IN_FLIGHT, shellLine, ackLine])
   const shellMtime = Date.parse("2026-07-01T00:00:02.000Z")
@@ -1160,7 +1160,7 @@ test("tailer: stopping a BROKER thread clears its live background shells (the he
   h.storage.upsertSession(row())
   h.storage.setBackend("t", "claude")
   h.storage.setClaudeRuntime("t", "broker")
-  const shellLine = JSON.stringify(bashBg("toolu_sh", "Watch CI on PR 604", "node scripts/ci-watch.ts --pr 604"))
+  const shellLine = JSON.stringify(bashBg("toolu_sh", "Watch CI on PR 604", "nub scripts/ci-watch.ts --pr 604"))
   const ackLine = JSON.stringify(resultText("toolu_sh", "Command running in background with ID: b63. Output is being written to: /tmp/tasks/b63.output. You will be notified when it completes."))
   fixture(h.logDir, "sid", [IN_FLIGHT, shellLine, ackLine])
   const shellMtime = Date.parse("2026-07-01T00:00:02.000Z")
@@ -1193,7 +1193,7 @@ test("tailer: a manual TaskStop clears a live background shell from the board vi
   // signal the tailer recognized, so bgShells reported it live until the pane died.
   const h = harness()
   h.storage.upsertSession(row())
-  const shellLine = JSON.stringify(bashBg("toolu_sh", "Boot isolated stack", "npx tsx scripts/adhoc-stack.mjs"))
+  const shellLine = JSON.stringify(bashBg("toolu_sh", "Boot isolated stack", "nub scripts/adhoc-stack.mjs"))
   const ackLine = JSON.stringify(resultText("toolu_sh", "Command running in background with ID: ba3y11c3t. Output is being written to: /tmp/tasks/ba3y11c3t.output. You will be notified when it completes."))
   fixture(h.logDir, "sid", [IN_FLIGHT, shellLine, ackLine])
   const shellMtime = Date.parse("2026-07-01T00:00:02.000Z")
@@ -1214,7 +1214,7 @@ test("tailer: a manual TaskStop clears a live background shell from the board vi
   assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Boot isolated stack", startedAt: "2026-07-01T00:00:01.000Z", state: "running", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
 
   // The worker TaskStops the shell (pane still alive). Its structured result is the terminal signal.
-  appendFileSync(join(h.logDir, "sid.jsonl"), JSON.stringify(taskStopResult("ba3y11c3t", "npx tsx scripts/adhoc-stack.mjs")) + "\n")
+  appendFileSync(join(h.logDir, "sid.jsonl"), JSON.stringify(taskStopResult("ba3y11c3t", "nub scripts/adhoc-stack.mjs")) + "\n")
   const before = h.changes.n
   t.tick()
   assert.deepEqual(t.get("t")?.bgShells, [], "a manual TaskStop clears the live shell — no phantom pulsing row")

@@ -1,6 +1,6 @@
 // LIVE PROBE: can fray take BACK a follow-up it already pushed into the Agent SDK, while the queue
 // still holds it?  This is the empirical foundation for "click a queued bubble to unqueue it".
-//   node --experimental-strip-types packages/server/src/backend/_live_sdk_cancel_queued.mts
+//   nub packages/server/src/backend/_live_sdk_cancel_queued.mts
 //
 // The SDK's own .d.ts advertises the control request but exposes NO wrapper on `Query`:
 //   SDKControlCancelAsyncMessageRequest { subtype: 'cancel_async_message', message_uuid }

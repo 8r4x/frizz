@@ -16,7 +16,7 @@ LOG="/tmp/adhoc-stack-$PORT.log"
 cd "$PROJ/ui"
 : > "$LOG"
 
-npx tsx scripts/adhoc-stack.mjs --port="$PORT" --project="$PROJ" >> "$LOG" 2>&1 &
+nub scripts/adhoc-stack.mjs --port="$PORT" --project="$PROJ" >> "$LOG" 2>&1 &
 STACK_PID=$!
 cleanup() { kill "$STACK_PID" 2>/dev/null; wait "$STACK_PID" 2>/dev/null; }
 trap cleanup EXIT INT TERM

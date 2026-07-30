@@ -4,7 +4,7 @@
 // LIVE end-to-end test of SUB-AGENT PROGRESS: a real claude session dispatching real background
 // children → the SDK's task_* system messages → protocol mapper → claude-runtime-ingest → tailer →
 // the SubAgentView the board renders.
-//   node --experimental-strip-types packages/server/src/backend/_live_broker_subagents.mts
+//   nub packages/server/src/backend/_live_broker_subagents.mts
 //
 // WHY A LIVE HARNESS. Every claim this change rests on is a claim about VALUES A REAL PROVIDER SENDS:
 // that `task_started` carries `tool_use_id` (the correlation key the whole design hangs on), that
