@@ -37,8 +37,10 @@ import {
 // Dispatch = provision the thread's scratchpad + compose the full prompt + spawn a detached `claude`
 // in a tmux session + register the session row. Session-first (2026-07-09): a new dispatch writes NO
 // .fray/<slug>.md thread file — the session IS the thread, and its durable working memory is a
-// scratchpad (.fray/threads/<sessionId>/scratch.md). The prompt is the ONLY intelligence: settings'
-// dispatchPreamble (all orchestration wisdom) + scratchpad orientation + the task.
+// scratchpad (.fray/threads/<sessionId>/scratch.md). The prompt is the ONLY intelligence: the worker
+// contract + this repo's FRAY.md + scratchpad orientation + the task. Project-specific conventions
+// live in FRAY.md alone — the old settings `dispatchPreamble` was retired in favour of it, so there is
+// exactly ONE operator-authored surface.
 
 // title -> slug. The rule itself lives in @fray-ui/shared beside the ThreadSlug contract (the
 // registry's boot repair recognises dispatch-minted slugs with it); re-exported here because every
@@ -261,8 +263,8 @@ export function writeScratchpad(projectDir: string, sessionId: string, title: st
 
 // The FIXED worker system prompt for `kind`, compiled in via workerPrompt.ts (single source of truth).
 // The runtimeGate flag toggles the settings-gated Runtime-release-gate section. Not user-modifiable —
-// the settings dispatchPreamble (custom instructions) is appended separately. Thin adapter kept so
-// existing callers (spawn/adopt/resume builders + tests) are untouched.
+// project-specific conventions ride FRAY.md (frayConfigBlock), appended separately. Thin adapter kept
+// so existing callers (spawn/adopt/resume builders + tests) are untouched.
 export function loadWorkerPrompt(kind: BackendKind = "claude", runtimeGate = true): string {
   return buildWorkerPrompt(kind, { runtimeGate })
 }
@@ -377,17 +379,6 @@ export function frayConfigBlock(projectDir: string): string {
   if (!body) return ""
   const clipped = body.length > FRAY_MD_MAX_CHARS ? `${body.slice(0, FRAY_MD_MAX_CHARS)}\n\n[FRAY.md truncated]` : body
   return `PROJECT FRAY CONFIG (from this repo's FRAY.md) — the project's own conventions for fray workers. They OVERRIDE the fray worker PROCESS defaults above (review depth, gates, git/PR conventions, the quality bar) wherever they conflict; follow them. They do NOT relax the fray-mechanical contract — the signal fences, scratchpad, and browser runtime gate still bind:\n\n${clipped}`
-}
-
-// The OPERATOR's own standing instructions (Settings → "Subagent instructions", stored as
-// `dispatchPreamble`). SYSTEM-level, exactly like FRAY.md above and for the same two reasons: it has to
-// SURVIVE COMPACTION — it used to live only in the first user message, which a summary paraphrases or
-// drops outright — and it has to be REBUILT on every resume, so editing the setting reaches a thread
-// that is already running instead of only the next new one.
-export function operatorInstructionsBlock(preamble: string | undefined): string {
-  const body = (preamble ?? "").trim()
-  if (!body) return ""
-  return `PROJECT INSTRUCTIONS (from the human operator) — standing instructions for workers on this project, set in fray's Settings. They sit ALONGSIDE this repo's FRAY.md: follow both, and where the two genuinely conflict prefer the more specific one.\n\n${body}`
 }
 
 // A DispatchInput.planPath is honored only when it is a well-formed .fray/plans/*.md path AND the file
@@ -886,7 +877,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
           throw new Error("Codex app-server is unavailable; cannot start this thread. Check that `codex` is installed and its app-server protocol matches the pinned revision (re-pin if you upgraded codex).")
         }
-        const extraSystemPrompt = [scratchpadOrientation(sessionId, planPath, kind), frayConfigBlock(deps.project.dir), operatorInstructionsBlock(settings.dispatchPreamble)]
+        const extraSystemPrompt = [scratchpadOrientation(sessionId, planPath, kind), frayConfigBlock(deps.project.dir)]
           .filter(Boolean).join("\n\n")
         try {
           const spawned = await bridge.spawnDispatch({
@@ -954,7 +945,6 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           loadWorkerPrompt("claude", runtimeGate),
           scratchpadOrientation(sessionId, planPath, kind),
           frayConfigBlock(deps.project.dir),
-          operatorInstructionsBlock(settings.dispatchPreamble),
         ].filter(Boolean).join("\n\n")
         try {
           await bridge.spawnDispatch({
@@ -1008,7 +998,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         model,
         effort,
         prompt,
-        extraSystemPrompt: [scratchpadOrientation(sessionId, planPath, kind), frayConfigBlock(deps.project.dir), operatorInstructionsBlock(settings.dispatchPreamble)].filter(Boolean).join("\n\n"),
+        extraSystemPrompt: [scratchpadOrientation(sessionId, planPath, kind), frayConfigBlock(deps.project.dir)].filter(Boolean).join("\n\n"),
         kind,
         runtimeGate,
       })
@@ -1199,7 +1189,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           model: settings.model,
           effort: settings.effort,
           prompt,
-          extraSystemPrompt: [scratchpadOrientation(sessionId), frayConfigBlock(deps.project.dir), operatorInstructionsBlock(settings.dispatchPreamble), adoption].filter(Boolean).join("\n\n"),
+          extraSystemPrompt: [scratchpadOrientation(sessionId), frayConfigBlock(deps.project.dir), adoption].filter(Boolean).join("\n\n"),
           runtimeGate,
         })
       } catch {

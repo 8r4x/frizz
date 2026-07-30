@@ -2,7 +2,6 @@ import { createRoot } from "react-dom/client"
 import { QueryClientProvider } from "@tanstack/react-query"
 
 const settings = {
-  dispatchPreamble: "Keep implementation notes concise.\nCheck the affected workflow before reporting completion.",
   permissionMode: "auto",
   notifications: true,
   font: "sans",

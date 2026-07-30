@@ -35,7 +35,6 @@ export const SETTINGS_HELP = {
   notifications: "Shows a desktop notification when work needs attention while this window is hidden.",
   runtimeGate: "When on, dispatched workers must verify UI/runtime changes in a real browser, screenshot the result into their handoff, and get an independent review before finishing. Turn off to drop that requirement from the worker prompt.",
   autoResumeOnLimit: "When a usage limit interrupts running threads, fray remembers every one it cut off and sends each a “continue” once the window resets. Those threads stay out of your queue while they wait. Turn off to leave them parked for you to restart by hand.",
-  subagentInstructions: "Your custom per-project instructions, appended to every dispatched agent's prompt after the built-in worker contract.",
 } as const
 function currentPerm(): NotifPerm {
   if (typeof Notification === "undefined") return "unsupported"
@@ -49,7 +48,6 @@ export function SettingsDrawer() {
   const codexModels = useQuery({ queryKey: ["codexModels"], queryFn: () => rpc.codexModels() })
   const codexList = codexModels.data ?? []
   const projectDir = useProjectDir()
-  const [preambleDraft, setPreambleDraft, clearPreambleDraft] = useDraft(draftKey.settings(projectDir, "dispatchPreamble"))
   const [issueDraft, setIssueDraft, clearIssueDraft] = useDraft(draftKey.settings(projectDir, "githubIssuePrompt"))
   const [prDraft, setPrDraft, clearPrDraft] = useDraft(draftKey.settings(projectDir, "githubPrPrompt"))
   const [draft, setDraft] = useState<Settings | null>(null)
@@ -76,18 +74,16 @@ export function SettingsDrawer() {
   useEffect(() => {
     if (settings.data && !draft) setDraft({
       ...settings.data,
-      ...(preambleDraft ? { dispatchPreamble: preambleDraft } : {}),
       ...(issueDraft ? { githubIssuePrompt: issueDraft } : {}),
       ...(prDraft ? { githubPrPrompt: prDraft } : {}),
     })
-  }, [settings.data, draft, preambleDraft, issueDraft, prDraft])
+  }, [settings.data, draft, issueDraft, prDraft])
 
   const setTrackedDraft = useCallback((next: Settings) => {
-    if (next.dispatchPreamble !== draft?.dispatchPreamble) setPreambleDraft(next.dispatchPreamble)
     if (next.githubIssuePrompt !== draft?.githubIssuePrompt) setIssueDraft(next.githubIssuePrompt ?? "")
     if (next.githubPrPrompt !== draft?.githubPrPrompt) setPrDraft(next.githubPrPrompt ?? "")
     setDraft(next)
-  }, [draft, setIssueDraft, setPreambleDraft, setPrDraft])
+  }, [draft, setIssueDraft, setPrDraft])
 
   function close() {
     if (closing) return
@@ -99,7 +95,6 @@ export function SettingsDrawer() {
   const save = useMutation({
     mutationFn: (s: Settings) => rpc.settingsSet(s),
     onSuccess: () => {
-      clearPreambleDraft()
       clearIssueDraft()
       clearPrDraft()
       queryClient.invalidateQueries({ queryKey: ["settingsGet"] })
@@ -293,23 +288,6 @@ function PromptsSection({ draft, setDraft }: { draft: Settings; setDraft: (s: Se
   return (
     <div className="flex flex-col gap-6">
       <DividerLabel label="Prompts" />
-
-      {/* Subagent instructions — the old "Dispatch preamble", now grouped with the picker prompts since
-          it is a prompt too. Does NOT use tokens, so no "?" affordance here. */}
-      <div className="flex flex-col gap-2">
-        <LabelWithHelp
-          label="Subagent instructions"
-          help={SETTINGS_HELP.subagentInstructions}
-        />
-        <textarea
-          value={draft.dispatchPreamble}
-          onChange={(e) => setDraft({ ...draft, dispatchPreamble: e.target.value })}
-          rows={10}
-          className="input resize-none text-[12px] leading-relaxed"
-          placeholder="e.g. Prefer pnpm. Never touch the generated/ dir. Ask before adding dependencies."
-          spellCheck={false}
-        />
-      </div>
 
       {/* The two GitHub-picker investigation templates. Each field carries its own label, so no group
           label is needed; tokens apply to BOTH, so the "?" popover lives once, right-aligned above them,

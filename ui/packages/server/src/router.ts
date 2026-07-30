@@ -73,7 +73,7 @@ import { openExternalUrl } from "./open-external.ts"
 import { openLocalFile, resolveOpenableFile } from "./local-file.ts"
 import { openableFileRoots } from "./project.ts"
 import { ghInstalled, ghAuthed, ghRepo, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_ISSUE_PROMPT, DEFAULT_PR_PROMPT } from "./github.ts"
-import { slugify, resolveSlug, resolveLegacyThreadFile, scratchpadRelPath, loadWorkerPrompt, scratchpadOrientation, frayConfigBlock, operatorInstructionsBlock } from "./dispatch.ts"
+import { slugify, resolveSlug, resolveLegacyThreadFile, scratchpadRelPath, loadWorkerPrompt, scratchpadOrientation, frayConfigBlock } from "./dispatch.ts"
 import { readCodexModels } from "./backend/codex-models.ts"
 import { codexSandbox } from "./backend/codex.ts"
 import type { CodexSandboxMode } from "./backend/codex-app-server.ts"
@@ -937,7 +937,6 @@ export function createRouter(ctx: AppContext) {
             loadWorkerPrompt("claude", settings.runtimeGate !== false),
             scratchpadOrientation(row.session_id, row.plan_path, "claude"),
             frayConfigBlock(ctx.project.dir),
-            operatorInstructionsBlock(settings.dispatchPreamble),
           ].filter(Boolean).join("\n\n")
           await bridge.followUp({
             threadSlug: input.slug,

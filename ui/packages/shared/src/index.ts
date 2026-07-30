@@ -676,8 +676,6 @@ export const LocalFileOpener = z.enum(["system", "cursor", "vscode", "finder", "
 export type LocalFileOpener = z.infer<typeof LocalFileOpener>
 
 export const Settings = z.object({
-  // Injected verbatim into every dispatch prompt. All orchestration wisdom lives here.
-  dispatchPreamble: z.string(),
   permissionMode: PermissionMode,
   model: z.string().optional(), // the agent's --model value; undefined = CLI default
   // The agent backend the selected model runs on (Codex-support epic, Phase 3). Persisted ALONGSIDE

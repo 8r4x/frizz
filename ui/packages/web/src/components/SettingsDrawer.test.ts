@@ -6,7 +6,9 @@ const source = readFileSync(new URL("./SettingsDrawer.tsx", import.meta.url), "u
 const tooltipSource = readFileSync(new URL("./Tooltip.tsx", import.meta.url), "utf8")
 
 test("settings maps each contextual explanation to a help control", () => {
-  for (const key of ["model", "effort", "font", "compact", "notifications", "subagentInstructions"]) {
+  // `subagentInstructions` is gone: the settings preamble was retired in favour of FRAY.md, so there
+  // is exactly one operator-authored surface for project conventions.
+  for (const key of ["model", "effort", "font", "compact", "notifications", "runtimeGate"]) {
     assert.match(source, new RegExp(`\\b${key}:`), `missing settings help mapping: ${key}`)
   }
   assert.match(source, /<SettingsField label="Model" help=\{SETTINGS_HELP\.model\}/)

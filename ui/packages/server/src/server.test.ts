@@ -10,7 +10,7 @@ import type { BoardManager } from "./board.ts"
 import {
   slugify,
   resolveSlug,
-  composePrompt, operatorInstructionsBlock,
+  composePrompt,
   buildClaudeCommand,
   buildClaudeResumeCommand,
   fallbackTitle,
@@ -176,9 +176,8 @@ test("settings: defaults, roundtrip, merge-over-defaults", () => {
   const s = createStorage(join(dir, "ui.db"))
   const def = getSettings(s)
   assert.deepEqual(def, defaultSettings())
-  // dispatchPreamble is the USER's custom instructions — empty by default. The invariant worker
+  // Project-specific conventions live in FRAY.md, not in settings — there is no preamble field.
   // system prompt ships separately (ui/WORKER_PROMPT.md via dispatch.ts) and is not a setting.
-  assert.equal(def.dispatchPreamble, "")
   assert.equal(def.permissionMode, "auto")
   assert.equal(def.notifications, true)
 
@@ -259,21 +258,9 @@ test("composePrompt: scratchpad orientation + task, and NOT the operator's instr
   assert.ok(!out.includes("You are a dispatched worker agent"))
   assert.ok(!out.includes("You own")) // the old ownership contract is gone
   assert.ok(!out.includes("status: blocked"))
-  // The operator's Settings preamble MOVED to the system prompt (operatorInstructionsBlock). Leaving it
-  // here meant a compaction destroyed it — the first user message is exactly what a summary replaces.
+  // There is no operator preamble anywhere any more — project conventions live in FRAY.md alone.
   assert.ok(!out.includes("PROJECT INSTRUCTIONS"))
   assert.ok(out.endsWith("\n\nDo the thing.")) // the task is the tail, directly below the banner
-})
-
-test("operatorInstructionsBlock is system-level, blank when unset, and names its relationship to FRAY.md", () => {
-  assert.equal(operatorInstructionsBlock(""), "")
-  assert.equal(operatorInstructionsBlock(undefined), "")
-  assert.equal(operatorInstructionsBlock("   \n  "), "")
-  const block = operatorInstructionsBlock("PREAMBLE_TEXT")
-  assert.match(block, /PROJECT INSTRUCTIONS \(from the human operator\)/)
-  assert.ok(block.endsWith("PREAMBLE_TEXT"))
-  // The two operator-authored surfaces coexist; the worker is told how to reconcile them.
-  assert.match(block, /alongside this repo's FRAY\.md/i)
 })
 
 test("scratchpadOrientation: scratchpad line always; PLAN line only when a plan is associated", () => {

@@ -838,3 +838,31 @@ opposite plus a dedicated `operatorInstructionsBlock` test. A second (`dispatch.
 used `PROJECT INSTRUCTIONS` as its above-the-banner anchor; on an ABSENT string `indexOf(...) < banner`
 passes VACUOUSLY (-1 < banner), so it was re-anchored on the scratchpad line and given an explicit
 `doesNotMatch` instead. Suite 2460 pass / 0 fail, typecheck clean.
+
+## 2026-07-30 (seventh pass): converge on FRAY.md — the Settings preamble is GONE
+
+Maintainer's call, one pass after making the preamble durable: rather than maintain two
+operator-authored surfaces, keep the one that is already versioned with the repo. `dispatchPreamble`
+(drawer label "Subagent instructions") is deleted outright — schema, server default, the drawer field
+and its draft plumbing, `operatorInstructionsBlock` and all six of its call sites.
+
+**FRAY.md is now the ONLY place project conventions live.** It was already the better surface and
+needed no work: `frayConfigBlock()` puts it in `extraSystemPrompt` at every site (claude dispatch,
+codex dispatch, adopt, resume, broker follow-up, router follow-up), so it survives compaction and is
+rebuilt on every resume. It is also reviewable in a diff, travels with a clone, and can differ per
+branch — none of which a value in a local SQLite settings blob can do.
+
+Checked before deleting rather than after: `DEFAULT_PREAMBLE` shipped as `""`, and a read of every
+`~/.fray/projects/*/ui.db` found no project with a non-empty `dispatchPreamble`. So there is nothing to
+migrate and no operator text is silently dropped. `Settings` is a plain `z.object`, so an older blob
+that still carries the key parses fine — zod strips the unknown field.
+
+Fallout fixed in the same change, since it was this change that made them false: two dispatch.ts
+header comments still described the preamble as the prompt's "orchestration wisdom", and
+`SettingsDrawer.test.ts` iterated a help-key list containing `subagentInstructions`. The
+`operatorInstructionsBlock` test added one pass earlier was removed with the function.
+
+Suite 2419 pass / 0 fail (two timing-sensitive tests — `app-socket` coalescing and the tmux SIGKILL
+buffer — flaked under parallel load and pass in isolation; neither touches this change), typecheck
+clean, and the drawer was re-driven in a real browser: the field is gone, and the Prompts section
+measures as exactly two children at the standard 24px `gap-6` with no orphaned container left behind.

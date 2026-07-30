@@ -3,12 +3,8 @@ import type { Storage } from "./storage.ts"
 
 const SETTINGS_KEY = "settings"
 
-// dispatchPreamble is the USER's custom per-project instructions, appended after the fixed
-// worker system prompt (workerPrompt.ts, injected by dispatch.ts — not configurable here).
-const DEFAULT_PREAMBLE = ""
 
 export const defaultSettings = (): Settings => ({
-  dispatchPreamble: DEFAULT_PREAMBLE,
   // `auto` = the CLI's classifier mode: safe actions auto-approve, risky ones still prompt in
   // the embedded terminal. Fewer invisible permission stalls than acceptEdits/default.
   permissionMode: "auto",
