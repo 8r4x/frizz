@@ -20,12 +20,17 @@
         "hooks": [
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-bind.mjs\"" }
         ]
+      },
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scratchpad.mjs\" --mode=nudge --event=PostToolUse" }
+        ]
       }
     ],
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/carryover.mjs\" --mode=nudge" }
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scratchpad.mjs\" --mode=nudge" }
         ]
       }
     ],
@@ -48,14 +53,14 @@
         "matcher": "auto",
         "hooks": [
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/precompact-instructions.mjs\"" },
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/carryover.mjs\" --mode=precompact" }
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scratchpad.mjs\" --mode=precompact" }
         ]
       },
       {
         "matcher": "manual",
         "hooks": [
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/precompact-instructions.mjs\"" },
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/carryover.mjs\" --mode=precompact" }
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scratchpad.mjs\" --mode=precompact" }
         ]
       }
     ],
@@ -64,28 +69,28 @@
         "matcher": "startup",
         "hooks": [
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-seed.mjs\"" },
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/carryover.mjs\" --mode=session-start" }
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scratchpad.mjs\" --mode=session-start" }
         ]
       },
       {
         "matcher": "resume",
         "hooks": [
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-seed.mjs\"" },
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/carryover.mjs\" --mode=session-start" }
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scratchpad.mjs\" --mode=session-start" }
         ]
       },
       {
         "matcher": "clear",
         "hooks": [
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-seed.mjs\"" },
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/carryover.mjs\" --mode=session-start" }
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scratchpad.mjs\" --mode=session-start" }
         ]
       },
       {
         "matcher": "compact",
         "hooks": [
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-seed.mjs\"" },
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/carryover.mjs\" --mode=session-start" }
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scratchpad.mjs\" --mode=session-start" }
         ]
       }
     ]

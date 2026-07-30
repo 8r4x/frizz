@@ -31,7 +31,7 @@ what was ported from the orchestrator `cc/` plugin, what was dropped, and why.
 | --- | --- | --- | --- |
 | `session-seed.mjs` | SessionStart (startup/resume/clear/compact) | cc `session-seed.mjs` | Injects the single-thread worker contract + the bound slug + its file path; re-grounds on compact. Also writes cc's `off` sentinel defensively (see interplay). |
 | `precompact-instructions.mjs` | PreCompact (auto/manual) | new — no cc equivalent | Steers WHAT SURVIVES compaction: emits an editorial brief asking the summarizer to preserve the high-level approach (plan, alternatives rejected, rationale) at high fidelity, plus a closing "Re-grounding before continuing:" section naming the scratchpad path and the files to re-read. **PLAIN STDOUT is the channel** — cc's usual `hookSpecificOutput` JSON would be handed to the summarizer as its literal instructions. Skips sub-agent contexts (the derived scratchpad path is only guaranteed for the top-level worker). |
-| `carryover.mjs` | SessionStart (startup/resume/clear/compact) + PreCompact (auto/manual) + UserPromptSubmit | new — no cc equivalent | The agent-authored per-session brief at `.fray/threads/<sid>/carryover.md`, re-injected VERBATIM at every session start and after every compaction. Three modes on one script: `--mode=session-start` (JSON `additionalContext`, the load-bearing channel), `--mode=precompact` (**plain stdout**, hands the brief to the summarizer as a second channel), `--mode=nudge` (asks for a refresh once context has grown past `STALE_TOKENS` since the brief was last written). NOT gated on `FRAY_UI_THREAD` — the mechanism is useful to any session; `--via=project` marks the repo-local registration and defers to this one inside a fray worker. |
+| `scratchpad.mjs` | SessionStart (startup/resume/clear/compact) + PreCompact (auto/manual) + UserPromptSubmit + PostToolUse | new — no cc equivalent | Keeps the ONE per-thread scratchpad (`.fray/threads/<sid>/scratch.md`) written and re-grounded across compaction. `--mode=session-start` injects the pad's HEAD back verbatim on the context-losing sources (compact/resume/clear) plus a re-read pointer, and teaches the contract when the pad is still an unwritten skeleton; `--mode=precompact` (**plain stdout**) hands the head to the summarizer; `--mode=nudge` fires on BOTH UserPromptSubmit and PostToolUse (mid-turn — the one that matters for long autonomous turns) once context has grown past `STALE_TOKENS` since the last write. Both nudge channels share one state file, so mid-turn firing does not multiply reminders. NOT gated on `FRAY_UI_THREAD`; `--via=project` marks the repo-local registration and defers to this one inside a fray worker. |
 | `agent-dispatch.mjs` | PreToolUse(Agent) | cc `agent-dispatch.mjs` | Enforces `run_in_background:true`, strips `name`/`team_name`, appends a worker-flavored orchestration epilogue. |
 | `agent-bind.mjs` | PostToolUse(Agent) | cc `agent-bind.mjs` (verbatim behavior) | Records `agentId → thread` into `.fray/.agent-bindings.jsonl` in cc's exact format, so a worker's THREAD-tagged helper renders on the fray-ui board's per-thread liveness. |
 | `stop-flush.mjs` | Stop | cc `fray-stop-reminder.mjs` (dirty-check idea only) | If the worker's ONE thread file wasn't edited since the last rest, nudges it to flush its state (mtime dirty-check, cooldown-limited, least-alarming `additionalContext` channel). |
@@ -583,3 +583,82 @@ VERIFIED LIVE against cli 2.1.220, in an isolated `/tmp` project, not by proxy:
 
 Regression net: `ui/packages/server/src/carryover-hook.test.ts` executes the real script over its
 wire contract (argv + stdin JSON + stdout) rather than asserting on its source.
+
+## 2026-07-30 (same day, revised): carryover COLLAPSED into the scratchpad; the nudge moved mid-turn
+
+The `carryover.md` brief shipped earlier today was redundant with the scratchpad and made the worker
+maintain two overlapping documents (maintainer's call, and correct). ONE doc per thread is the rule.
+`carryover.mjs` is DELETED and replaced by `scratchpad.mjs`, which does the same three things to
+`scratch.md` — the pad the dispatcher already provisions, already names in the system prompt, and
+already forbids sub-agents from writing.
+
+Two behavior changes fell out of the retarget:
+
+**Injection is scoped to the context-losing sources.** A brand-new `startup` has lost nothing, so it
+gets the contract text only; `compact`/`resume`/`clear` get the pad's head injected verbatim PLUS an
+explicit "re-read the full file" pointer. Injecting the head rather than only pointing at the file is
+deliberate: a bare reminder routes recovery through a decision the model can skip, which is the exact
+failure being fixed. The head is the floor; the pointer is the ceiling. The cap (12k chars, was 24k)
+keeps that floor affordable now that the target is unbounded working memory rather than a bounded brief.
+
+**"Present" no longer means "written".** fray provisions scratch.md with a skeleton, so file-absence
+is gone as the unwritten signal. `substanceLength()` strips headings, the provisioned orientation line
+and empty task boxes, and measures what remains. It is a heuristic on purpose — it only decides
+whether to NUDGE, so a wrong call costs one redundant reminder, never correctness.
+
+**The nudge now also fires on PostToolUse, and that is the real fix.** UserPromptSubmit alone only
+fires at turn boundaries, and a fray worker runs enormous autonomous turns — dozens of tool calls
+between human prompts — so a whole session's work could compact unpersisted without a single nudge.
+PostToolUse `additionalContext` was verified live against cli 2.1.220 (a real session quoted a
+sentinel injected after a Bash call, and through the plugin the model received the nudge mid-turn and
+said it would update the pad). Both channels share one state file, so the interval is global: firing
+per tool call makes the existing budget land SOONER and mid-turn, it does not multiply reminders.
+
+### Researched: there is NO context-pressure hook, on either backend
+
+Measured, so do not go looking again. Claude Code 2.1.220 exposes **31 hook events** and not one
+signals an approaching context limit; **no hook input carries a token count at all**, and the docs say
+plainly to poll the transcript yourself. Codex is the same. So the fill is computed here from the
+transcript's newest usage record (`input + cache_creation + cache_read`), reading only the file's tail
+because transcripts reach tens of megabytes. Growth-since-last-write remains the metric because the
+window is not knowable from a hook.
+
+Useful events noticed while enumerating, none wired yet: `PostToolBatch` (fires after a batch of
+parallel tool calls resolves, before the next model call), `SubagentStart` (could carry the
+read-only-pad rule structurally instead of via the dispatch epilogue's prose), `PostCompact`
+(receives the summary), and `SessionStart`'s `initialUserMessage` output (injects a VISIBLE user
+message rather than a system reminder) and `fork` matcher.
+
+### Rejected: a blocking Stop gate
+
+A Stop hook could refuse to let the worker rest until it writes. That was tried and removed on
+2026-07-02 (maintainer's call): the block-until-file-edited nag forced even trivial workers into
+Read/Edit dances that render as noise in the chat UI. This nudges; it never blocks.
+
+### Verified feasible, NOT yet built: the background checkpoint fork
+
+`claude -p --resume <sid> --fork-session` was tested end to end. The fork carries the FULL original
+conversation (it reproduced a human quote that existed only in that transcript), it wrote to the
+ORIGINAL thread's scratchpad when handed the absolute path, the original transcript was
+**byte-identical before and after** (15,078 → 15,078 — the live session is never interrupted), the
+original continued normally afterwards, and it is cheap because it HITS THE PROMPT CACHE (28,904
+cache-read vs 413 cache-create). `SessionStart` has a `fork` matcher so hooks can tell they are in one.
+
+Open problems before this could ship: the fork gets a NEW session id, so it must be handed the
+ORIGINAL pad path explicitly (its own hooks would derive a different one); concurrent writes against
+the live worker need an ownership rule; the spawn needs a single-flight lock so one threshold crossing
+cannot fan out into many forks; and fray's discover/tailer must not adopt the fork's transcript as a
+board thread.
+
+### Codex parity gap
+
+Codex 0.144.6 (installed) HAS a hooks system with nearly the same schema — SessionStart, SessionEnd,
+PreToolUse, PostToolUse, PermissionRequest, UserPromptSubmit, Stop, PreCompact, PostCompact,
+SubagentStart, SubagentStop — plus `additionalContext`, all confirmed present in the installed binary.
+Config lives at `~/.codex/hooks.json` or `[hooks]` in config.toml, repo-level `.codex/hooks.json`, or
+plugin-bundled. SessionStart distinguishes a `compact` source. Codex is BETTER in one respect: it lets
+you SET the compaction threshold (`model_auto_compact_token_limit`, with
+`model_auto_compact_token_limit_scope` = `total` | `body_after_prefix`), so compaction can be made
+predictable with headroom rather than merely detected. Wrinkle: codex enforces hook TRUST
+(`--dangerously-bypass-hook-trust` exists for automation). **fray currently wires ZERO hooks for
+codex**, so a codex worker has only prompt-level scratchpad discipline — the largest remaining gap.

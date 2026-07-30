@@ -1,0 +1,343 @@
+#!/usr/bin/env node
+// @ts-check
+// SCRATCHPAD REINFORCEMENT hook (fray-worker) — keeps the ONE per-thread scratchpad
+// (`.fray/threads/<sid>/scratch.md`) written and re-grounded across compaction. Run directly with
+// node (zero deps, max Node compat), mirroring the other hooks in this plugin.
+//
+// WHY THIS EXISTS: compaction is the largest source of context loss in a long session, and the
+// scratchpad is fray's answer to it — but the scratchpad only works if two things happen, and
+// nothing was enforcing either. It has to be WRITTEN while the work is happening, and it has to be
+// RE-READ after the context is gone. A worker that forgets the first has nothing to recover; one
+// that forgets the second has a recovery it never opens.
+//
+// This hook closes both, and deliberately targets scratch.md rather than a second file of its own.
+// An earlier revision shipped a separate `carryover.md` brief; it was redundant with the scratchpad
+// and made the worker maintain two overlapping documents. ONE doc per thread is the rule — the
+// scratchpad the dispatcher already provisions, already names in the system prompt, and already
+// forbids sub-agents from writing (see agent-dispatch.mjs).
+//
+// THE RE-READ SIDE — injection, not a reminder. On compaction/resume the head of scratch.md is
+// spliced into the context window by the harness, before the model's first token, alongside a
+// pointer to read the rest. A bare "remember to read your scratchpad" routes recovery through a
+// decision the model can skip, which is exactly the failure being fixed; injecting the head
+// guarantees a floor of orientation even if the pointer is ignored. The cap keeps the guarantee
+// affordable — a scratchpad is unbounded working memory and the whole file is not owed to every
+// session start.
+//
+// THE WRITE SIDE — a staleness nudge on two channels:
+//   UserPromptSubmit — the turn boundary.
+//   PostToolUse      — MID-TURN, and this is the one that matters. A fray worker runs enormous
+//                      autonomous turns (dozens of tool calls between human prompts), so a
+//                      turn-boundary-only nudge can miss an entire session's worth of work and let
+//                      it compact unpersisted. PostToolUse additionalContext was verified live
+//                      against cli 2.1.220: a real session quoted a sentinel injected after a Bash
+//                      call. Both channels share one state file, so the interval is global — moving
+//                      to per-tool-call firing does NOT multiply the number of nudges.
+//
+// NO HOOK FIRES ON CONTEXT PRESSURE — measured, not assumed. Claude Code 2.1.220 exposes 31 hook
+// events and not one of them signals an approaching context limit; no hook input carries a token
+// count at all (the docs say plainly: poll the transcript yourself). So this computes the fill
+// itself from the transcript's newest usage record — `input + cache_creation + cache_read` is the
+// live context size — reading only the file's TAIL, since transcripts reach tens of megabytes.
+//
+// STALENESS IS GROWTH SINCE THE LAST WRITE, never an absolute threshold: the window size is not
+// knowable from a hook (a real compaction in this project fired at preTokens 935,291 on a 1M-window
+// session, while a 200k session compacts near 160k). Growth is window-independent and self-resetting.
+//
+// NOT A BLOCKING GATE. A Stop hook could refuse to let the worker rest until it writes, and that was
+// tried and REMOVED on 2026-07-02 (maintainer's call): the block-until-file-edited nag forced even
+// trivial workers into Read/Edit dances that render as noise in the chat UI. This nudges; it never
+// blocks.
+import { readFileSync, writeFileSync, mkdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
+import { join } from 'node:path';
+import { currentSessionId } from '../scripts/fray/config.mjs';
+
+const SCRATCH_FILE = 'scratch.md';
+
+/** Hard cap on injected characters. The scratchpad is unbounded working memory, so this bounds what
+ *  a session start is charged; past the cap we inject the HEAD (a scratchpad's orientation lives at
+ *  the top) and say plainly that it was clipped, pointing at the file for the rest. */
+const MAX_INJECT_CHARS = intFromEnv('FRAY_SCRATCHPAD_MAX_CHARS', 12000);
+
+/** Context-token growth since the last scratchpad write that marks it stale. 60k is ~a third of a
+ *  200k window and ~6% of a 1M one: frequent enough that the pad is never many turns behind, rare
+ *  enough not to be chatter. Also the first-write trigger — an untouched template counts as
+ *  unwritten, so the baseline is zero and the first nudge lands once a session has accumulated 60k
+ *  tokens actually worth persisting. */
+const STALE_TOKENS = intFromEnv('FRAY_SCRATCHPAD_STALE_TOKENS', 60000);
+
+/** @param {string} name @param {number} fallback */
+function intFromEnv(name, fallback) {
+  const n = parseInt(String(process.env[name] ?? ''), 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+const argv = process.argv.slice(2);
+/** @param {string} flag */
+const flagValue = (flag) => {
+  const hit = argv.find((a) => a.startsWith(flag + '='));
+  return hit ? hit.slice(flag.length + 1) : null;
+};
+const mode = flagValue('--mode') ?? 'session-start';
+const via = flagValue('--via') ?? 'plugin';
+
+// Global kill switch — one env var disables every mode.
+if ((process.env.FRAY_SCRATCHPAD_HOOK ?? '').trim().toLowerCase() === 'off') process.exit(0);
+
+// The repo-local registration defers to the plugin one for fray workers (see --via, and the
+// registration note in DECISIONS.md) so a fray worker never injects twice.
+if (via === 'project' && (process.env.FRAY_UI_THREAD ?? '').trim()) process.exit(0);
+
+/** @type {{ agent_id?: unknown, agentId?: unknown, source?: string, trigger?: string, session_id?: string, transcript_path?: string }} */
+let input = {};
+try {
+  input = JSON.parse(readFileSync(0, 'utf8'));
+} catch {
+  /* no stdin / not JSON → fall back to env for the session id */
+}
+// Sub-agent contexts (they carry agent_id) are skipped. This is load-bearing for the ONE-scratchpad
+// rule: a sub-agent must never nudge, inject, or key state against its dispatcher's pad — it is told
+// to read that pad and never write it (agent-dispatch.mjs), and it gets no pad of its own.
+if (input.agent_id ?? input.agentId) process.exit(0);
+
+const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+
+let sid = null;
+try {
+  sid = currentSessionId(input.session_id);
+} catch {
+  /* best-effort */
+}
+// Without a session id there is no key, and an unkeyed pad would bleed between sessions.
+if (!sid) process.exit(0);
+
+const threadDir = join(projectDir, '.fray', 'threads', sid);
+const relPath = '.fray/threads/' + sid + '/' + SCRATCH_FILE;
+const absPath = join(threadDir, SCRATCH_FILE);
+
+// Ensure the directory exists so a first Write lands. fray's dispatcher already provisions this for
+// a real thread; this only covers a session that started outside a dispatch.
+try {
+  mkdirSync(threadDir, { recursive: true });
+} catch {
+  /* a read-only or racing FS just means the agent's Write creates it instead */
+}
+
+/** Raw scratchpad text, or null when absent/empty/unreadable. */
+function readPad() {
+  try {
+    const raw = readFileSync(absPath, 'utf8');
+    return raw.trim() ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Characters of SUBSTANTIVE content — the pad minus its provisioned skeleton.
+ *  fray writes scratch.md up front with an H1, a one-line orientation, section headings and an empty
+ *  task box, so unlike a file that simply does not exist, "present" no longer means "written". This
+ *  strips exactly those skeleton shapes and measures what is left. A heuristic on purpose: it only
+ *  decides whether to NUDGE, so a wrong call costs one redundant reminder, never correctness.
+ *  @param {string|null} text */
+function substanceLength(text) {
+  if (!text) return 0;
+  return text
+    .split('\n')
+    .filter((line) => {
+      const t = line.trim();
+      if (!t) return false;
+      if (t.startsWith('#')) return false; // headings
+      if (/^[-*]\s*\[\s*\]\s*$/.test(t)) return false; // an empty task box
+      if (/^(Your|SCRATCHPAD:)/.test(t) && /compaction-proof working memory/.test(t)) return false; // the provisioned orientation
+      return true;
+    })
+    .join('')
+    .trim().length;
+}
+
+/** @param {string} text */
+function capped(text) {
+  if (text.length <= MAX_INJECT_CHARS) return text;
+  return (
+    text.slice(0, MAX_INJECT_CHARS) +
+    '\n\n[…clipped at ' + MAX_INJECT_CHARS.toLocaleString('en-US') + ' characters — read `' + relPath +
+    '` for the rest.]'
+  );
+}
+
+/** @param {string} additionalContext @param {'SessionStart'|'UserPromptSubmit'|'PostToolUse'} hookEventName */
+function emitJson(additionalContext, hookEventName) {
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext } }));
+  process.exit(0);
+}
+
+// ── mode: session-start ──────────────────────────────────────────────────────────────────────────
+if (mode === 'session-start') {
+  const pad = readPad();
+  const written = substanceLength(pad) > 0;
+  const parts = [];
+
+  if (written && (input.source === 'compact' || input.source === 'resume' || input.source === 'clear')) {
+    // The moments the deep model of the work is actually gone. Inject the head AND point at the file:
+    // the injection is the floor, the pointer is the ceiling.
+    const lead =
+      input.source === 'compact'
+        ? '⟦scratchpad — restored after compaction⟧ Context was just compacted. This is the CURRENT head of your scratchpad `' +
+          relPath + '`, the working state you wrote for exactly this moment. Treat it as authoritative over anything the summary implies, RE-READ THE FULL FILE before acting, and re-read any code before describing or changing it.'
+        : '⟦scratchpad — restored⟧ This is the current head of your scratchpad `' + relPath +
+          '`. Re-read the full file before acting.';
+    parts.push(lead + '\n\n' + capped(/** @type {string} */ (pad)) + '\n\n⟦end scratchpad⟧');
+  } else {
+    // Nothing substantive to restore — teach the contract instead, so the pad gets written at all.
+    parts.push(
+      '⟦scratchpad⟧ `' + relPath + '` is your ONE durable working doc for this effort, and the only ' +
+        'thing guaranteed to survive a compaction: its head is injected back into your context ' +
+        'automatically whenever the context is lost. Keep it current as you work — the problem, the ' +
+        'approach and the approaches you REJECTED and why, decisions the human made or reversed, ' +
+        'what is VERIFIED by running it versus merely believed, and the next action.',
+    );
+  }
+  emitJson(parts.join('\n\n'), 'SessionStart');
+}
+
+// ── mode: precompact ─────────────────────────────────────────────────────────────────────────────
+// PLAIN STDOUT — joined with the other PreCompact hooks' stdout into the summarizer's
+// `Additional Instructions:`. Worded as an ordinary editorial note: precompact-instructions.mjs
+// records that a summarizer REFUSES instructions that read like prompt-hijacking.
+if (mode === 'precompact') {
+  const pad = readPad();
+  if (substanceLength(pad) === 0) process.exit(0);
+  process.stdout.write(
+    'The worker keeps a running scratchpad of this effort at `' + relPath + '`, written by hand as ' +
+      'the work progressed. Its current head is reproduced below. Treat it as the authoritative ' +
+      'account of the problem, the chosen approach, and the decisions behind them, and make sure the ' +
+      'summary preserves its substance — where it disagrees with your reading of the transcript, ' +
+      'prefer it.\n\n' +
+      capped(/** @type {string} */ (pad)) + '\n',
+  );
+  process.exit(0);
+}
+
+// ── nudge modes (UserPromptSubmit + PostToolUse) ─────────────────────────────────────────────────
+// Everything below answers one question: has the context moved on since the pad was last written?
+
+/** Live context fill in tokens from the transcript's newest usage record, or null.
+ *  Reads only the TAIL — transcripts reach tens of megabytes, and on PostToolUse this runs after
+ *  every single tool call. Scanning backwards means the one line the tail read may have cut in half
+ *  is reached last, and its parse failure is simply skipped.
+ *  @param {string} path */
+function contextTokens(path) {
+  let fd = null;
+  try {
+    const size = statSync(path).size;
+    const want = Math.min(size, 128 * 1024);
+    const buf = Buffer.alloc(want);
+    fd = openSync(path, 'r');
+    readSync(fd, buf, 0, want, size - want);
+    const lines = buf.toString('utf8').split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      let rec;
+      try {
+        rec = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const u = rec?.message?.usage;
+      if (!u) continue;
+      const n =
+        (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+const statePath = join(threadDir, '.scratchpad-state.json');
+/** @returns {{ mtimeMs?: number, tokensAtWrite?: number, tokensAtNudge?: number }} */
+function readState() {
+  try {
+    const s = JSON.parse(readFileSync(statePath, 'utf8'));
+    return s && typeof s === 'object' ? s : {};
+  } catch {
+    return {};
+  }
+}
+/** @param {{ mtimeMs?: number, tokensAtWrite?: number, tokensAtNudge?: number }} s */
+function writeState(s) {
+  try {
+    writeFileSync(statePath, JSON.stringify(s) + '\n');
+  } catch {
+    /* best-effort — a lost state file costs at most one extra nudge */
+  }
+}
+
+if (mode === 'nudge') {
+  const transcript = input.transcript_path;
+  const tokens = transcript ? contextTokens(transcript) : null;
+  // No readable usage yet, or an unparseable transcript → say nothing. The nudge is an optimization;
+  // silence is always safe.
+  if (!tokens) process.exit(0);
+
+  const pad = readPad();
+  const written = substanceLength(pad) > 0;
+
+  let mtimeMs = 0;
+  try {
+    mtimeMs = written ? statSync(absPath).mtimeMs : 0;
+  } catch {
+    mtimeMs = 0;
+  }
+
+  let state = readState();
+  // A changed mtime means the pad was just written — rebase the baseline to NOW and go quiet. This is
+  // also the first-ever observation, and it is why a fresh write buys a full interval of silence. It
+  // fires for a human's hand-edit exactly as for the agent's Write: both are just an mtime change.
+  if (state.mtimeMs !== mtimeMs) {
+    state = { mtimeMs, tokensAtWrite: tokens, tokensAtNudge: 0 };
+    writeState(state);
+  }
+
+  // An unwritten pad (absent, or still the provisioned skeleton) measures growth from ZERO: the whole
+  // session is unpersisted, so the clock starts at the beginning, not at whenever this first looked.
+  const baseline = mtimeMs ? (state.tokensAtWrite ?? tokens) : 0;
+  const grown = tokens - baseline;
+  if (grown < STALE_TOKENS) process.exit(0);
+  // Space repeat nudges by the same interval. Both channels share this state, so firing on every tool
+  // call does not multiply reminders — it only makes the existing budget land sooner and mid-turn.
+  if (state.tokensAtNudge && tokens - state.tokensAtNudge < STALE_TOKENS) process.exit(0);
+
+  writeState({ ...state, tokensAtNudge: tokens });
+
+  const k = Math.round(grown / 1000);
+  const event = /** @type {'UserPromptSubmit'|'PostToolUse'} */ (
+    input.transcript_path && flagValue('--event') === 'PostToolUse' ? 'PostToolUse' : 'UserPromptSubmit'
+  );
+  emitJson(
+    mtimeMs
+      ? '⟦scratchpad stale⟧ Your context has grown ~' + k + 'k tokens since you last wrote `' +
+          relPath + '`. Bring it up to date now, before a compaction forces the issue — the problem, ' +
+          'the approach and what you rejected, the human\'s decisions, what is verified versus ' +
+          'believed, and the next action. Its head is injected back automatically after a compaction, ' +
+          'so it is the one thing you are guaranteed to still have.'
+      : '⟦scratchpad empty⟧ This session is ~' + k + 'k tokens deep and `' + relPath + '` still has ' +
+          'nothing substantive in it. Write it now: the problem, the approach and the approaches you ' +
+          'rejected, the human\'s decisions, what is verified versus merely believed, and the next ' +
+          'action. Its head is injected back automatically after a compaction, so it is what survives ' +
+          'when the rest of this context does not.',
+    event,
+  );
+}
+
+process.exit(0);
