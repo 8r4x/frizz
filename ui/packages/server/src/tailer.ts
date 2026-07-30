@@ -430,6 +430,10 @@ const RETAINED_SHELLS_MAX = 20
 // How many un-answered `SendMessage` summaries to hold (see TailState.pendingResumes). Each is
 // consumed one record after it is recorded, so this only ever bounds the pathological case.
 const PENDING_RESUMES_MAX = 32
+// How many FOREGROUND `Bash` launches to hold pending their result (see TailState.pendingShells).
+// Each is consumed by its own tool_result — usually the very next record — so this bounds nothing but
+// the pathological case of a turn whose results never land.
+const PENDING_SHELLS_MAX = 32
 // How far behind the fold's high-water mark a restart ack may sit and still count as live. Covers
 // ordinary out-of-order writes between sibling records; a REPLAYED ack (see trackResumes) carries its
 // original timestamp and is stale by minutes to days, so nothing near this boundary is ambiguous.
@@ -483,6 +487,12 @@ export interface TailState extends FoldState {
   // about the work, so this is the label of last resort when `trackResumes` has to mint a row for a
   // child whose retired record has already aged out of the ring. Bounded; consumed on use.
   pendingResumes?: Map<string, string>
+  // FOREGROUND `Bash` tool_use id → the label/command that call carried, held only until its
+  // tool_result lands. A foreground shell is normally none of the board's business (the spinner covers
+  // it), but Claude Code AUTO-BACKGROUNDS one that outlives its `timeout` — and it announces that in the
+  // RESULT, which carries no command text. Without this the promoted row would have nothing to be
+  // labelled with. Bounded; consumed on use. See AUTO_BACKGROUND_ACK_RE.
+  pendingShells?: Map<string, { label: string; command?: string; startedAt: string }>
   // MONOTONIC high-water mark over every timestamped record folded so far. `lastActivityAt` cannot
   // serve this purpose: it tracks the LATEST record folded and therefore moves BACKWARD whenever a
   // transcript replays history (which Claude's do — see trackResumes). This only ever advances, and it
@@ -782,6 +792,18 @@ function trackDispatches(state: TailState, rec: Record): void {
     } else if ((b.name === "Bash" && input.run_in_background === true) || b.name === "Monitor") {
       const command = typeof input.command === "string" ? input.command : previous?.command
       state.subAgents.set(id, { kind: "shell", toolUseId: id, label: desc ?? shellSummary(input.command), startedAt, command, outputFile, taskId: previous?.taskId })
+    } else if (b.name === "Bash") {
+      // A FOREGROUND Bash — not a background op, and normally none of this map's business. But Claude
+      // Code auto-backgrounds one that outlives its `timeout`, and only the RESULT says so, so park the
+      // label/command here for trackLaunchResults to promote from. Dropped by the same result when the
+      // command simply finished, which is the overwhelmingly common case.
+      const pending = (state.pendingShells ??= new Map())
+      pending.set(id, { label: desc ?? shellSummary(input.command), command: typeof input.command === "string" ? input.command : undefined, startedAt })
+      while (pending.size > PENDING_SHELLS_MAX) {
+        const oldest = pending.keys().next().value
+        if (oldest === undefined) break
+        pending.delete(oldest)
+      }
     } else if (b.name === "SendMessage") {
       // NOT a dispatch — a message to an already-dispatched child, which registers nothing here. But it
       // may RESTART a child that has already stopped (see trackResumes), and only this record carries a
@@ -812,7 +834,20 @@ function trackDispatches(state: TailState, rec: Record): void {
 // its completion (an error/denial result also means the dispatch is over). The earlier discriminator
 // ("no output_file: token ⇒ foreground") retired live background children of the two path-less ack
 // shapes — including every mailbox-style Agent and every background shell — on their own launch ack.
-const LAUNCH_ACK_RE = /^\s*(Async agent launched successfully|Spawned successfully|Command running in background|Monitor started)/
+const LAUNCH_ACK_RE = /^\s*(Async agent launched successfully|Spawned successfully|Command running in background|Monitor started|Command did not complete within its)/
+
+// The FIFTH launch shape, and the only one that arrives for a call nothing registered: Claude Code
+// AUTO-BACKGROUNDS a foreground `Bash` that outlives its `timeout` and says so in the result —
+//   "Command did not complete within its 590s timeout and was moved to the background (ID: bhlfxzwg1).
+//    Output is being written to: …/tasks/bhlfxzwg1.output. You will be notified when it completes."
+// From that instant it is an ordinary detached shell: it outlives the turn, it keeps the worker's own
+// work live across a rest, and it terminates with the same <task-notification> (carrying the ORIGINAL
+// tool_use id, so retirement correlates normally). fray used to see none of it — `trackDispatches`
+// only registers `run_in_background: true` — so such a shell was invisible on every surface, could not
+// hold its thread Active, and its completion correlated to nothing. 881 of these acks sit in the local
+// transcript corpus; one thread hit it three times in an hour (2026-07-30, reported as "a background
+// bash script completed, but it did not resume the agent"). Promoted in trackLaunchResults.
+const AUTO_BACKGROUND_ACK_RE = /^\s*Command did not complete within its .{0,40}?and was moved to the background/
 
 // Move a tracked AGENT entry into the bounded retained ring (drawer review), evicting the oldest.
 // Shared by the foreground-completion path and the <task-notification> path.
@@ -884,6 +919,7 @@ function launchOutputFile(state: TailState, text: string): string | undefined {
 function launchTaskId(text: string): string | undefined {
   return (
     text.match(/Command running in background with ID:\s*(\S+)/)?.[1]?.replace(/\.$/, "") ??
+    text.match(/was moved to the background \(ID:\s*([^)\s]+)\)/)?.[1] ??
     text.match(/Monitor started \(task\s+(\w+)/)?.[1] ??
     text.match(/agentId:\s*(\S+)/)?.[1]
   )
@@ -979,19 +1015,34 @@ function readDescendantSidecars(sessionDir: string, mtimeMs: (path: string) => n
 // SHELL follows the same launch discriminator: a recognized background/Monitor ack stays live; any
 // synchronous error/non-ack result means no detached operation exists and is removed immediately.
 // Once launched, its terminal signal remains the <task-notification>.
+//
+// This is ALSO where a foreground `Bash` becomes a background one: its result — not its call — is what
+// announces the auto-background handoff, so an id nothing registered can still promote here out of
+// `pendingShells`. See AUTO_BACKGROUND_ACK_RE.
 function trackLaunchResults(state: TailState, rec: Record): void {
-  if (state.subAgents.size === 0) return
+  if (state.subAgents.size === 0 && !state.pendingShells?.size) return
   const content = rec.message?.content
   if (!Array.isArray(content)) return
   for (const block of content) {
     if (!block || typeof block !== "object") continue
-    const b = block as { type?: string; tool_use_id?: unknown; content?: unknown }
+    const b = block as { type?: string; tool_use_id?: unknown; content?: unknown; is_error?: unknown }
     if (b.type !== "tool_result") continue
     const id = typeof b.tool_use_id === "string" ? b.tool_use_id : undefined
     if (!id) continue
-    const entry = state.subAgents.get(id)
-    if (!entry) continue
     const text = toolResultText(b.content)
+    let entry = state.subAgents.get(id)
+    if (!entry) {
+      // A parked FOREGROUND shell's result. Either it was auto-backgrounded — promote it to a live
+      // tracked shell, from this instant indistinguishable from one launched with run_in_background —
+      // or it simply finished, and the park is over either way. `is_error` guards the (unobserved but
+      // cheap to exclude) case of the harness reporting the handoff as a failure.
+      const parked = state.pendingShells?.get(id)
+      if (!parked) continue
+      state.pendingShells?.delete(id)
+      if (b.is_error === true || !AUTO_BACKGROUND_ACK_RE.test(text)) continue
+      entry = { kind: "shell", toolUseId: id, label: parked.label, startedAt: parked.startedAt, command: parked.command }
+      state.subAgents.set(id, entry)
+    }
     if (!entry.outputFile) entry.outputFile = launchOutputFile(state, text)
     if (!entry.taskId) entry.taskId = launchTaskId(text)
     if (LAUNCH_ACK_RE.test(text)) continue // background launch ack — the child/shell is alive, keep tracking

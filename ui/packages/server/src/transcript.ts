@@ -1167,6 +1167,13 @@ function cancelledToolResult(text: string): boolean {
   )
 }
 
+// The harness's AUTO-BACKGROUND handoff: a foreground `Bash` that outlives its `timeout` is not
+// cancelled and has not failed — it is now a detached shell that will notify on exit, exactly like one
+// launched with `run_in_background`. Kept in lockstep with the tailer's AUTO_BACKGROUND_ACK_RE.
+function autoBackgroundedToolResult(text: string): boolean {
+  return /^\s*Command did not complete within its .{0,40}?and was moved to the background/.test(text)
+}
+
 // Back-fill real Claude tool results. Read keeps its dedicated excerpt field; ordinary tools expose a
 // bounded result pane. Successful edits suppress their redundant prose acknowledgement (the diff is
 // already the useful payload), while failures retain it. Agent's immediate result is only launch
@@ -1218,6 +1225,19 @@ function attachToolResults(
         if (stoppedMs !== undefined) shell.call.durationMs = stoppedMs
       }
     }
+    // A foreground `Bash` that outlives its `timeout` is AUTO-BACKGROUNDED by the harness, which says so
+    // only here, in the result ("Command did not complete within its 590s timeout and was moved to the
+    // background (ID: …)"). From this record on it is an ordinary detached shell, so the card must become
+    // one: registered in `backgroundShells` and marked background, which both keeps it pending (its
+    // terminal signal is now the <task-notification>, not this ack) and routes it through the branch
+    // below that captures its runtime task id. Without this the launch card read COMPLETED the moment the
+    // shell went into the background, and its real completion landed on nothing — the transcript half of
+    // "a background bash script completed, but it did not resume the agent" (2026-07-30).
+    const promoted = entry.calls[0]
+    if (promoted && text && autoBackgroundedToolResult(text) && b.is_error !== true) {
+      for (const call of entry.calls) call.backgroundState = "background"
+      if (!backgroundShells.has(b.tool_use_id)) backgroundShells.set(b.tool_use_id, { at: entry.at, call: promoted })
+    }
     // A successful Agent result is launch metadata, not child completion. Keep waiting for the
     // task-notification in that case. A launch error, however, may never produce a notification and
     // must not leave the card spinning forever.
@@ -1226,10 +1246,12 @@ function attachToolResults(
       b.is_error !== true &&
       !(text && (cancelledToolResult(text) || failedToolResult(text)))
     ) {
-      // Capture the launch ack's RUNTIME task id (Bash "…with ID: <id>", Monitor "(task <id>") so the
-      // tool-use-id-less terminal signals above/in completionEvent can still find this card.
+      // Capture the launch ack's RUNTIME task id (Bash "…with ID: <id>", Monitor "(task <id>", and the
+      // auto-background handoff's "moved to the background (ID: <id>)") so the tool-use-id-less terminal
+      // signals above/in completionEvent can still find this card.
       const taskId =
         text?.match(/Command running in background with ID:\s*(\S+)/)?.[1]?.replace(/\.$/, "") ??
+        text?.match(/was moved to the background \(ID:\s*([^)\s]+)\)/)?.[1] ??
         text?.match(/Monitor started \(task\s+(\w+)/)?.[1]
       if (taskId) backgroundTaskIds.set(taskId, b.tool_use_id)
       continue

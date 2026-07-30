@@ -396,6 +396,37 @@ test("a shell completion RACING ahead of its launch is recovered by the inline a
   assert.equal(msgs.at(-1)?.kind, "event", "the wake boundary rides the attachment's position")
 })
 
+test("a FOREGROUND Bash auto-backgrounded on timeout keeps its card pending, then ends on its notification", () => {
+  // Regression: the harness moves a foreground Bash that outlives its `timeout` into the background,
+  // saying so ONLY in the result. The projector keyed `backgroundState` off `run_in_background` alone,
+  // so the card read COMPLETED the instant the shell detached and its real completion landed on
+  // nothing — no wake boundary, no terminal status. Real shape, 2026-07-30 pullfrog session.
+  const launch = JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-07-01T00:00:00.000Z",
+    message: { id: "m-fg", content: [{ type: "tool_use", id: "bash-fg", name: "Bash", input: { command: "until grep -q '^TOTALS' log; do sleep 25; done", description: "Wait for the backfill to finish", timeout: 590000 } }] },
+  })
+  const handoff = JSON.stringify({
+    type: "user",
+    timestamp: "2026-07-01T00:10:00.000Z",
+    message: { content: [{ type: "tool_result", tool_use_id: "bash-fg", content: "Command did not complete within its 590s timeout and was moved to the background (ID: bhlfxzwg1). Output is being written to: /tmp/tasks/bhlfxzwg1.output. You will be notified when it completes. To check interim output, use Read on that file path." }] },
+  })
+  const detached = parseTranscript([launch, handoff].join("\n"))[0].tools[0]
+  assert.equal(detached.status, "pending", "the handoff ack is not the command's result — the shell is still running")
+  assert.equal(detached.backgroundState, "background", "from the handoff on it is an ordinary detached shell")
+
+  // Correlating by TASK id alone (the notification shape that carries no tool-use-id) proves the
+  // handoff's "(ID: …)" was captured, not just the tool_use pairing.
+  const notification = JSON.stringify({
+    type: "attachment",
+    timestamp: "2026-07-01T00:20:00.000Z",
+    attachment: { type: "queued_command", commandMode: "task-notification", prompt: `<task-notification>\n<task-id>bhlfxzwg1</task-id>\n<status>completed</status>\n<summary>Background command "Wait for the backfill to finish" completed (exit code 0)</summary>\n</task-notification>` },
+  })
+  const msgs = parseTranscript([launch, handoff, notification].join("\n"))
+  assert.equal(msgs[0].tools[0].status, "completed", "its completion notification ends the card")
+  assert.equal(msgs.at(-1)?.kind, "event", "the wake it caused is shown as a turn boundary")
+})
+
 test("a `stopped` RECOVERY notification back-fills EVERY orphaned card it names (task-ids only)", () => {
   // A new session's recovery record carries one block naming every orphan by runtime task-id, NO
   // tool-use-ids, status "stopped". Both cards must end (cancelled), not just the first.

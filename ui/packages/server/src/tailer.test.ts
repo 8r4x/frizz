@@ -382,6 +382,18 @@ function bashBg(id: string, description: string | null, command: string) {
     message: { stop_reason: "tool_use", content: [{ type: "tool_use", name: "Bash", id, input: { command, run_in_background: true, ...(description != null ? { description } : {}) } }] },
   }
 }
+// A FOREGROUND Bash launch (no run_in_background) — the shape the harness may auto-background later.
+function bashFg(id: string, description: string | null, command: string) {
+  return {
+    type: "assistant",
+    timestamp: "2026-07-01T00:00:01.000Z",
+    message: { stop_reason: "tool_use", content: [{ type: "tool_use", name: "Bash", id, input: { command, ...(description != null ? { description } : {}) } }] },
+  }
+}
+// The harness's auto-background handoff, verbatim (reproduced live 2026-07-30 with timeout: 5000).
+function autoBackgroundAck(taskId: string, seconds = 590) {
+  return `Command did not complete within its ${seconds}s timeout and was moved to the background (ID: ${taskId}). Output is being written to: /tmp/tasks/${taskId}.output. You will be notified when it completes. To check interim output, use Read on that file path.`
+}
 // A Claude Code Monitor is inherently a background watcher; persistent=true removes its timeout.
 function monitorUse(id: string, description: string, command: string, persistent = true) {
   return {
@@ -796,6 +808,50 @@ test("applyRecord: a shell's REAL launch ack ('Command running in background…'
   applyRecord(s, resultText("toolu_sh", "Command running in background with ID: b8p363n40. Output is being written to: /tmp/tasks/b8p363n40.output. You will be notified when it completes."))
   assert.equal(s.subAgents.size, 1, "the launch ack must never retire a background shell")
   assert.equal(s.subAgents.get("toolu_sh")?.outputFile, "/tmp/tasks/b8p363n40.output", "sentence period stripped from the captured path")
+})
+
+test("applyRecord: a FOREGROUND Bash auto-backgrounded on timeout becomes a tracked live shell", () => {
+  // The regression this closes: the harness moves a foreground Bash that outlives its `timeout` into
+  // the background and says so ONLY in the result. `trackDispatches` registers nothing for a foreground
+  // Bash, so the detached shell was invisible on every surface, could not hold its thread Active, and
+  // its completion notification correlated to nothing. Real shape, 2026-07-30 pullfrog session.
+  const s = newTailState("t", "s", "/x")
+  applyRecord(s, bashFg("toolu_fg", "Wait for the backfill to finish", "until grep -q '^TOTALS' log; do sleep 25; done"))
+  assert.equal(s.subAgents.size, 0, "a foreground Bash is not a background op while it is still foreground")
+  applyRecord(s, resultText("toolu_fg", autoBackgroundAck("bhlfxzwg1")))
+  assert.equal(s.subAgents.size, 1, "the auto-background handoff must promote it to a live shell")
+  const entry = s.subAgents.get("toolu_fg")
+  assert.equal(entry?.kind, "shell")
+  assert.equal(entry?.label, "Wait for the backfill to finish", "the label comes from the parked launch, not the ack")
+  assert.equal(entry?.taskId, "bhlfxzwg1", "the runtime task id must be captured for TaskStop correlation")
+  assert.equal(entry?.outputFile, "/tmp/tasks/bhlfxzwg1.output", "sentence period stripped from the captured path")
+  assert.equal(s.pendingShells?.size ?? 0, 0, "the park is consumed by the result that promoted it")
+})
+
+test("applyRecord: an auto-backgrounded shell retires on its own <task-notification>", () => {
+  const s = newTailState("t", "s", "/x")
+  applyRecord(s, bashFg("toolu_fg", "Run the full production backfill", "node reap.ts"))
+  applyRecord(s, resultText("toolu_fg", autoBackgroundAck("b2hk8870c", 600)))
+  assert.equal(s.subAgents.size, 1)
+  applyRecord(s, taskNotificationAttachment("toolu_fg", "completed", "b2hk8870c"))
+  assert.equal(s.subAgents.size, 0, "the completion notification must clear the promoted shell")
+  assert.equal(s.retiredShells.get("toolu_fg")?.status, "completed")
+})
+
+test("applyRecord: an ORDINARY foreground Bash result leaves nothing tracked and nothing parked", () => {
+  const s = newTailState("t", "s", "/x")
+  applyRecord(s, bashFg("toolu_fg", "List files", "ls"))
+  assert.equal(s.pendingShells?.size, 1, "parked only until its result lands")
+  applyRecord(s, resultText("toolu_fg", "a.txt\nb.txt"))
+  assert.equal(s.subAgents.size, 0, "a command that simply finished is not a background op")
+  assert.equal(s.pendingShells?.size ?? 0, 0, "the park is released either way")
+})
+
+test("applyRecord: pendingShells is bounded — a turn of foreground Bash calls cannot grow it without limit", () => {
+  const s = newTailState("t", "s", "/x")
+  for (let i = 0; i < 100; i++) applyRecord(s, bashFg(`toolu_fg_${i}`, `probe ${i}`, "true"))
+  assert.equal(s.pendingShells?.size, 32, "capped at PENDING_SHELLS_MAX, newest-wins")
+  assert.ok(s.pendingShells?.has("toolu_fg_99"), "the newest launch survives the cap")
 })
 
 test("applyRecord: a non-ack shell tool_result retires a failed synchronous launch (no phantom live op)", () => {
