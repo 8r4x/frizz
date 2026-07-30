@@ -2484,10 +2484,6 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
   // splitProseAttachments, the agent-prose splitter) it never swallows a ::directive or mermaid line.
   // `text` itself stays whole for the unqueue payload below — restoreDraft must hand the paths back.
   const { prose, attachments } = useMemo(() => splitComposerValue(text), [text])
-  // Local hover state rather than a named-group hover utility: the `group/msg` group is the DEBUG CHIP's
-  // channel (MessageDebugId owns every use of it, and a test pins that), and only the handful of
-  // still-queued bubbles ever subscribe to this.
-  const [unqueueHover, setUnqueueHover] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [overflows, setOverflows] = useState(false)
   // Whether the FULL message is taller than the expanded cap (85vh) — the ONLY case that genuinely
@@ -2541,20 +2537,16 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
             tabIndex: 0,
             "data-unqueue": deliveryId,
             "aria-label": "Unqueue this message and put it back in the prompt box",
-            title: unqueuePending ? "Taking it back…" : "Click to unqueue — the text comes back to the prompt box",
+            title: unqueuePending ? "Taking it back…" : undefined,
             onClick: (e: ReactMouseEvent<HTMLDivElement>) => unqueue({ deliveryId: deliveryId!, text, rawText: rawText ?? text, from: e.currentTarget }),
             onKeyDown: (e: ReactKeyboardEvent<HTMLDivElement>) => {
               if (e.key !== "Enter" && e.key !== " ") return
               e.preventDefault()
               unqueue({ deliveryId: deliveryId!, text, rawText: rawText ?? text, from: e.currentTarget })
             },
-            onFocus: () => setUnqueueHover(true),
-            onBlur: () => setUnqueueHover(false),
           } : {})}
-          // A queued bubble is never the sticky one (the pinned ask is the last LANDED user message), so
-          // these two never both apply — but they share the handler, so compose rather than overwrite.
-          onMouseEnter={sticky ? () => setExpanded(true) : unqueueable ? () => setUnqueueHover(true) : undefined}
-          onMouseLeave={sticky ? () => { setExpanded(false); setScrollReady(false) } : unqueueable ? () => setUnqueueHover(false) : undefined}
+          onMouseEnter={sticky ? () => setExpanded(true) : undefined}
+          onMouseLeave={sticky ? () => { setExpanded(false); setScrollReady(false) } : undefined}
           onTransitionEnd={sticky ? (e) => { if (e.propertyName === "max-height" && expanded && exceedsCap) setScrollReady(true) } : undefined}
           // While NOT scrollable (collapsed, or expanding before it settles) the bubble is `overflow-hidden`
           // and so lacks the scrollbar-gutter the scrollable state reserves — a 7px text shift when scroll
@@ -2564,11 +2556,16 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
             ...(maxH ? { maxHeight: maxH } : {}),
             ...(sticky && exceedsCap && !scrollable ? { paddingRight: "calc(0.875rem + var(--sbw))" } : {}),
           }}
-          // A retractable bubble LIFTS under the pointer — back toward full opacity, with a ring — so the
-          // one message in the transcript that is still yours to change says so on hover instead of
-          // needing a permanent control that would clutter every send. Opacity is the same channel that
-          // already encodes "queued", which is exactly the state being offered.
-          className={`relative rounded-2xl rounded-br-sm bg-user-bubble px-3.5 py-2 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere] text-bg ${queued ? "opacity-50" : ""} ${unqueueable ? "cursor-pointer transition-opacity hover:opacity-80 focus-visible:opacity-80 focus-visible:outline-none ring-accent/60 hover:ring-1 focus-visible:ring-1" : ""} ${unqueuePending ? "!opacity-30" : ""} ${sticky ? `transition-[max-height] duration-200 ease-out ${scrollable ? "overflow-y-auto" : "overflow-hidden"}` : ""}`}
+          // A retractable bubble LIFTS to FULL opacity under the pointer — so the one message in the
+          // transcript that is still yours to change says so on hover instead of needing a permanent
+          // control that would clutter every send. Opacity alone carries it, because opacity is already
+          // the channel encoding "queued" and coming back to solid is exactly the state being offered.
+          // NO hover ring: an accent outline laid directly on this warm off-white card read as a muddy
+          // olive (accent yellow at 60% blending into #d5d7da), and a hover ring is a shape nothing else
+          // in the app uses. A KEYBOARD focus ring still has to exist, so it keeps the accent — but
+          // OFFSET onto the near-black page, which is the only place this yellow reads clean and is how
+          // every other focus ring in the app is drawn.
+          className={`relative rounded-2xl rounded-br-sm bg-user-bubble px-3.5 py-2 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere] text-bg ${queued ? "opacity-50" : ""} ${unqueueable ? "cursor-pointer transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg" : ""} ${unqueuePending ? "!opacity-30" : ""} ${sticky ? `transition-[max-height] duration-200 ease-out ${scrollable ? "overflow-y-auto" : "overflow-hidden"}` : ""}`}
         >
           {prose}
           {/* Fade the last ~2.5rem of text into the bubble colour — keeps the box fully rounded + opaque
@@ -2601,14 +2598,13 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
       {deliveryUnconfirmed && (
         <div className="text-[11px] text-amber-400/80">Delivery unconfirmed — check the terminal</div>
       )}
-      {/* The hint appears only on hover/focus of this message, so a thread full of queued sends stays
-          quiet. It reserves no layout of its own (`h-0` + overflow) — a line that appeared under the
-          bubble on hover would nudge every row below it, which is the same layout shift that got the
-          old permanent "queued" tag deleted. */}
-      {unqueueable && (
-        <div aria-hidden className={`h-0 overflow-visible text-[11px] text-muted transition-opacity ${unqueueHover || unqueuePending ? "opacity-100" : "opacity-0"}`}>
-          {unqueuePending ? "Taking it back…" : "Click to unqueue"}
-        </div>
+      {/* No "click to unqueue" hint: the hover lift above already says the bubble is live, and a
+          label spelling that out is noise on every queued send. Only the IN-FLIGHT retraction gets a
+          line, because "did my click land?" isn't something the hover state can answer. It reserves no
+          layout of its own (`h-0` + overflow) — a line that appeared under the bubble would nudge every
+          row below it, the same layout shift that got the old permanent "queued" tag deleted. */}
+      {unqueueable && unqueuePending && (
+        <div aria-hidden className="h-0 overflow-visible text-[11px] text-muted">Taking it back…</div>
       )}
     </div>
   )
