@@ -4,7 +4,7 @@ import { useSnapshot } from "valtio"
 import * as RadixTabs from "@radix-ui/react-tabs"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight, FileText, Hash, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, ShieldCheck, Sparkles, X, type LucideIcon } from "lucide-react"
+import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight, FileText, Hash, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, ShieldCheck, Sparkles, X, type LucideIcon } from "lucide-react"
 import type { AwaitingHint, NativeInputRequired as NativeInputRequiredData, PendingAsk, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@fray-ui/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBoard, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
@@ -3059,8 +3059,8 @@ export function InlineVisualization({ file }: { file: string }) {
 // A SIGNAL fence rendered as a card in place of the raw ```done / ```awaiting block (the fence
 // language IS the state; the body is the message). `done` → a compact presentation-only success card;
 // its thread's Archive lives in the stable lifecycle footer. `awaiting` → the SAME card shape: a
-// heading naming the wait ("PR watcher armed"), the body prose plus one plain-English action summary
-// (with legacy pr/ci/session support), then the park button + its explainer.
+// heading naming the wait ("PR watcher armed"), the body prose plus a plain-English action summary
+// for non-watcher waits (with legacy pr/ci/session support), then the park button + its explainer.
 export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKind; body: string; hints: AwaitingHint[]; wrap?: boolean }) {
   const html = useMemo(() => (body ? mdToHtml(body) : ""), [body])
   const awaitingHint = awaitingHintSentence(hints)
@@ -3121,9 +3121,13 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   // read as the button's verb when it was really the card's identity (maintainer 2026-07-24) — and why
   // the heading is now a STATE rather than the imperative "Arm watcher" that replaced it (2026-07-29).
   // With no parkable hint there's no action to name, so it falls back to a plain "Awaiting".
-  const parkTitle = awaitingParkAction(hints)?.title ?? AWAITING_FALLBACK_TITLE
+  const parkAction = awaitingParkAction(hints)
+  const parkTitle = parkAction?.title ?? AWAITING_FALLBACK_TITLE
+  // A watch is active observation, not elapsed time. Keep the hourglass for actual timer/human holds
+  // and give pr-watch its own scanning mark; the scheduler-facing hint itself stays out of the prose.
+  const AwaitingIcon = hints.some((hint) => hint.kind === "pr-watch") ? Radar : Hourglass
   return (
-    <TranscriptCard icon={Hourglass} label={parkTitle}>
+    <TranscriptCard icon={AwaitingIcon} label={parkTitle}>
       <div
         className={`md-inline ${CARD_BODY}${wrap ? ` ${QUEUE_WRAP}` : ""}`}
         dangerouslySetInnerHTML={{ __html: awaitingHtml }}

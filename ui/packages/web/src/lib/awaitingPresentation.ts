@@ -69,38 +69,16 @@ function lowerCalendarLead(value: string): string {
   return value.replace(/^(Today|Tomorrow)/, (day) => day.toLowerCase())
 }
 
-/** How many watched PRs the sentence NAMES before it counts the rest. The card's line is one line of
- *  prose, so three refs is about what fits before it stops reading as a sentence. */
-const WATCH_NAME_CAP = 3
-
-/** "a", "a and b", "a, b and c", "a, b, c and 4 more" — the watched-PR list for the sentence below. */
-function watchList(refs: readonly string[]): string {
-  const named = refs.slice(0, WATCH_NAME_CAP)
-  const tail = refs.length - named.length
-  const parts = tail > 0 ? [...named, `${tail} more`] : named
-  if (parts.length === 1) return parts[0]
-  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`
-}
-
 export function awaitingHintSentence(hints: readonly AwaitingHint[], nowMs = Date.now()): string | null {
+  // A pr-watch hint is an instruction to fray, not additional copy for the human. The card title
+  // already says the watcher is armed and the worker-authored body names the useful status/wake
+  // condition; echoing the parsed hint as "Watch owner/repo#N for…" mixed implementation mechanics
+  // into that explanation and usually repeated it. Keep the hints intact for the scheduler and park
+  // action, but do not render them — including a co-declared timer backstop — into the card body.
+  if (hints.some((hint) => hint.kind === "pr-watch")) return null
+
   const timer = hints.find((hint) => hint.kind === "timer" && isValidAwaitingTimer(hint.value))
   const futureTimer = timer && Date.parse(timer.value) > nowMs ? timer : undefined
-
-  // EVERY pr-watch ref, not just the first: a fence legitimately carries one line per PR and the
-  // scheduler polls all of them (scheduler.ts evalThread loops the whole hint list). Naming only
-  // hints[0] read as "this thread watches a single PR" — the same misreading that sends a worker
-  // tracking a SET of PRs to a periodic timer sweep instead of arming a watcher on each.
-  // The watch also outranks a co-declared timer here, because activity is the earlier, live wake and
-  // the timer is the backstop; leading with the clock hid the watcher entirely.
-  const watched = hints.flatMap((hint) => (hint.kind === "pr-watch" ? [hint.value] : []))
-  if (watched.length) {
-    // A SEMICOLON and a fresh verb, not ", or <instant>": the sentence already ends in an or-list
-    // ("reviews, approvals, or comments"), so a comma-or tail attaches to it and the backstop reads as
-    // a fourth kind of PR activity. An em-dash is out too — awaitingPresentationLine uses one to join
-    // this sentence onto the body prose, and two in a row read as one run-on.
-    const backstop = futureTimer ? `; otherwise resume ${lowerCalendarLead(formatSnoozeWake(futureTimer.value, nowMs))}` : ""
-    return `Watch ${watchList(watched)} for new reviews, approvals, or comments${backstop}`
-  }
 
   if (futureTimer) {
     return `Snooze until ${lowerCalendarLead(formatSnoozeWake(futureTimer.value, nowMs))}`

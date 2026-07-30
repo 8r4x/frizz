@@ -1,12 +1,12 @@
 // Seed a disposable adhoc stack with SIMULATED workers whose last turn is an `awaiting` fence carrying
-// SEVERAL `pr-watch:` lines — the shape a worker tracking a set of open PRs writes, and the one the card
-// used to mis-render by naming only the first ref (so a thread watching eleven PRs read as watching one).
+// SEVERAL `pr-watch:` lines and a timer backstop. These scheduler instructions must remain parsed and
+// actionable without being echoed as a second imperative after the worker-authored card copy.
 //
 // Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer reads,
 // so the fence is parsed by the production server parser and rendered by the production card — not by a
 // hand-built props fixture.
 //
-// Usage: node scripts/seed-multi-prwatch.mjs --home=/abs/temp-home --socket=fray-adhoc-NNNN-PID
+// Usage: nub scripts/seed-multi-prwatch.mjs --home=/abs/temp-home --socket=fray-adhoc-NNNN-PID
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync, globSync } from "node:fs"
 import { join } from "node:path"
@@ -31,8 +31,12 @@ const ahead = (mins) => new Date(Date.now() + mins * 60_000).toISOString().repla
 const CASES = [
   {
     slug: "watch-one",
-    title: "watch · a single PR (the baseline shape)",
-    fence: "pr-watch: nubjs/nub#587\nPR is open and CI is green. Watching for review.",
+    title: "watch · instructions stay hidden",
+    fence: [
+      "pr-watch: dependabot/dependabot-core#15524",
+      `timer: ${ahead(600)}`,
+      "PR watcher armed — wakes on any review, approval, or comment on #15524 (plus merge/close). Ping posted at issuecomment-5110553111; on wake, address whatever landed. Fallback timer: if a week passes with zero activity, re-check CI health and report the continued silence.",
+    ].join("\n"),
   },
   {
     slug: "watch-three",
