@@ -58,18 +58,35 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
           quietMark: marks.length > 0 ? marks[0].getAttribute("title") : null,
           // The right-hand group holds the reading AND the chevron, in that order, flush to one edge.
           rightText: right.innerText.replace(/\s+/g, " ").trim(),
+          // The reading's own COLOUR, composited over black and sampled as sRGB bytes. This is how the
+          // tone split between a stopped child and a failed one is pinned — the two read the same shape,
+          // so only the colour tells them apart, and a regression there is invisible to a text
+          // assertion. Sampled through a canvas rather than parsed out of `getComputedStyle`, because
+          // Tailwind's `/55` alpha modifier serialises as `oklab(… / 0.55)` — digits a naive rgb() parse
+          // reads as a wildly non-neutral colour.
+          readingRgb: ((color: string) => {
+            const canvas = document.createElement("canvas")
+            canvas.width = canvas.height = 1
+            const ctx = canvas.getContext("2d")!
+            ctx.fillStyle = "#000"
+            ctx.fillRect(0, 0, 1, 1)
+            ctx.fillStyle = color
+            ctx.fillRect(0, 0, 1, 1)
+            const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data
+            return [r, g, b]
+          })(getComputedStyle(right.firstElementChild!).color),
           rightEdge: Math.round(right.getBoundingClientRect().right * 10) / 10,
           chevronIsLast: right.lastElementChild!.matches("[data-tool-disclosure]"),
         }
       }),
     )
-    assert.equal(rows.length, 7, "the fixture must cover live/stale/rested/finished/killed/cancelled/failed agent rows")
+    assert.equal(rows.length, 8, "the fixture must cover live/stale/rested/finished/stopped/failed agent rows, plus the two with no child record")
 
     // THE SHAPE. A child with a liveness reading leads with its mark, then "Agent"; a RESOLVED child has
     // no mark and NO SLOT for one, so "Agent" leads and sits flush at the header's left edge. The empty
     // reservation was a real, reported defect ("a weird gap … to the left of the word Agent"), so the
     // absence is pinned as hard as the presence. The chevron is last on the right on every row.
-    const MARKED = 3 // rows 0-2 are the live / stale / rested children; 3-6 have all resolved.
+    const MARKED = 3 // rows 0-2 are the live / stale / rested children; 3-7 have all resolved.
     for (const [index, row] of rows.entries()) {
       const marked = index < MARKED
       assert.equal(row.markSlotIndex, marked ? 0 : -1, `row ${index}: ${marked ? "the liveness mark must lead the header" : "a resolved child must render no mark slot at all"}`)
@@ -109,17 +126,28 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
     assert.equal(rows[3].rightText, "3m")
     assert.doesNotMatch(rows[3].text, /finished/)
 
-    // A NON-nominal outcome keeps its verb: no mark can say "killed", so dropping it would delete the
-    // one fact the reader needs.
+    // A NON-nominal outcome keeps its verb — no mark can say it — but the WORD is the shared vocabulary,
+    // never the harness's raw `agentStatus` enum, and the two outcomes are TONED APART:
+    //   • a STOPPED child (interrupted / timed out) is not an error, so it reads at the quiet weight of
+    //     every other reading on the row. It shipped in blood-red as "killed 10m" beside its neighbours'
+    //     "done · 9 ms" (maintainer: "this is way too scary looking") — hence both halves are pinned;
+    //   • a FAILED child keeps the red the tool cards use for a real failure.
     assert.equal(rows[4].indicators, 0)
-    assert.equal(rows[4].rightText, "killed 41m")
+    assert.equal(rows[4].rightText, "stopped 41m")
+    assert.doesNotMatch(rows[4].text, /killed/)
+    assert.equal(rows[5].indicators, 0)
+    assert.equal(rows[5].rightText, "failed 12m")
+    // The tones, sampled: the stop must be a NEUTRAL gray (r≈g≈b), the failure the red the tool cards own.
+    const spread = (rgb: number[]) => Math.max(...rgb) - Math.min(...rgb)
+    assert.ok(spread(rows[4].readingRgb) <= 24, `a stopped child must read neutral, not rgb(${rows[4].readingRgb})`)
+    assert.deepEqual(rows[5].readingRgb, [229, 83, 75], "a failed child keeps the tool cards' failure red")
 
     // No child record at all → the meta slot is the only status surface, so terminal state + duration
     // must still render. This is the regression the one-indicator rule must never cause.
-    assert.equal(rows[5].indicators, 0)
-    assert.match(rows[5].text, /cancelled/)
     assert.equal(rows[6].indicators, 0)
-    assert.match(rows[6].text, /failed · 12 sec/)
+    assert.match(rows[6].text, /cancelled/)
+    assert.equal(rows[7].indicators, 0)
+    assert.match(rows[7].text, /failed · 12 sec/)
 
     assert.deepEqual(errors, [])
     assert.deepEqual(notFound.filter((path) => path !== "/favicon.ico"), [])

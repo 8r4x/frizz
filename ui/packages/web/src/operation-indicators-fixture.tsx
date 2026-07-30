@@ -144,8 +144,13 @@ createRoot(document.getElementById("root")!).render(
               bare runtime is what says it ran and stopped. Read this row against the three above it: the
               marked rows step in by the slot, these four do not, and that is the point. */}
           <AgentBlock detail="Diagnose remotion model routing anomaly" prompt="Diagnose the routing anomaly." subagentType="fray:opus-high" agentId="agent-done" agentStatus="completed" agentElapsedMs={183_000} status="completed" durationMs={183_000} />
-          {/* A NON-nominal outcome keeps its verb, in the failure tone: no mark can say "killed". */}
+          {/* A NON-nominal outcome keeps its verb — no mark can say it — but the two are TONED APART, and
+              this pair is the coverage for that. A STOPPED child is not an error (interrupted, or timed
+              out), so it reads at the same quiet weight as the "done · 32 sec" meta above; only a real
+              FAILURE takes the red. Read the two rows together — if the stop is as loud as the failure,
+              the regression is back. */}
           <AgentBlock detail="Interrupted long-running audit" prompt="Audit every call site." subagentType="fray:sonnet-medium" agentId="agent-killed" agentStatus="killed" agentElapsedMs={2_460_000} status="completed" durationMs={2_460_000} />
+          <AgentBlock detail="Crashed dependency sweep" prompt="Sweep every dependency." subagentType="fray:sonnet-medium" agentId="agent-failed" agentStatus="failed" agentElapsedMs={738_000} status="failed" durationMs={738_000} />
           {/* No child record at all — the meta slot is the ONLY status surface, so a terminal status
               and its duration must still render here (this is what the suppression must never eat). */}
           <AgentBlock detail="Cancelled dispatch (no child record)" prompt="This dispatch was interrupted." status="cancelled" />

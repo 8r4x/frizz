@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import type { TranscriptToolCall } from "@fray-ui/shared"
-import { agentCompletionCall, subAgentCompletionOutcome, type CompletionMessageLike } from "./subAgentCompletion.ts"
+import { AGENT_OUTCOME_VERB, agentCompletionCall, subAgentCompletionOutcome, type CompletionMessageLike } from "./subAgentCompletion.ts"
 
 // The routing decision behind "an agent finishing looks like a background shell terminating". Getting
 // it wrong in EITHER direction is a visible regression: too loose and the launch card (or a silent
@@ -67,6 +67,17 @@ test("outcome words mirror the background-shell wake label", () => {
   assert.equal(subAgentCompletionOutcome({ agentStatus: "completed" }).outcome, "finished")
   assert.equal(subAgentCompletionOutcome({ agentStatus: "failed" }).outcome, "failed")
   assert.equal(subAgentCompletionOutcome({ agentStatus: "killed" }).outcome, "stopped")
+})
+
+// The map is what the AgentBlock header reads too, so this is the guard against a SECOND surface
+// re-deriving the words and leaking the raw enum (the header shipped a red "killed 10m" doing exactly
+// that). No `agentStatus` value may ever render as itself.
+test("no raw agentStatus value is ever a user-visible word", () => {
+  assert.deepEqual(AGENT_OUTCOME_VERB, { completed: "finished", killed: "stopped", failed: "failed" })
+  for (const [status, verb] of Object.entries(AGENT_OUTCOME_VERB)) {
+    if (status === "failed") continue // the one status whose enum value IS the right English word
+    assert.notEqual(verb, status, `"${status}" is a process enum, not copy`)
+  }
 })
 
 test("a marker with no status degrades to the neutral outcome rather than inventing one", () => {

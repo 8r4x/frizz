@@ -39,13 +39,27 @@ export function agentCompletionCall(m: CompletionMessageLike): TranscriptToolCal
   return only?.agentCompletion ? only : undefined
 }
 
-// The divider's label parts. The outcome vocabulary MIRRORS the background-shell wake label
-// (finished / stopped / failed — see server transcript.ts backgroundWakeLabel) so the two dividers read
-// as one family; a marker with no status degrades to the neutral "finished" rather than inventing an
-// outcome. The duration is the dispatch→completion elapsed, in the same coarse form the AgentBlock
-// header uses ("<1m", "42m", "1h 3m").
+// THE OUTCOME VOCABULARY — the ONE place a raw `agentStatus` becomes a word a reader sees. It mirrors
+// the background-shell wake label (finished / stopped / failed — see server transcript.ts
+// backgroundWakeLabel) so every surface that reports a finished child reads as one family.
+//
+// "killed" is deliberately NOT that word. It is the harness's process-level enum, and the event it
+// names is almost always a deliberate stop (the operator interrupted the child, or it timed out) —
+// which is why the server files a killed dispatch under the tool status "cancelled", not "failed"
+// (transcript.ts). This map exists because the AgentBlock header duplicated the ternary and drifted:
+// it shipped a blood-red "killed 10m" beside its neighbours' quiet "done · 9 ms" (maintainer
+// 2026-07-29: "this is way too scary looking"). One source, so it cannot drift again.
+export const AGENT_OUTCOME_VERB: Record<NonNullable<TranscriptToolCall["agentStatus"]>, string> = {
+  completed: "finished",
+  killed: "stopped",
+  failed: "failed",
+}
+
+// The divider's label parts. A marker with no status degrades to the neutral "finished" rather than
+// inventing an outcome. The duration is the dispatch→completion elapsed, in the same coarse form the
+// AgentBlock header uses ("<1m", "42m", "1h 3m").
 export function subAgentCompletionOutcome(call: Pick<TranscriptToolCall, "agentStatus" | "agentElapsedMs">): { outcome: string; tail: string } {
-  const outcome = call.agentStatus === "killed" ? "stopped" : call.agentStatus === "failed" ? "failed" : "finished"
+  const outcome = AGENT_OUTCOME_VERB[call.agentStatus ?? "completed"]
   const duration = call.agentElapsedMs !== undefined ? formatFixedDuration(call.agentElapsedMs) : undefined
   return { outcome, tail: `${outcome}${duration ? ` · ${duration}` : ""}` }
 }
