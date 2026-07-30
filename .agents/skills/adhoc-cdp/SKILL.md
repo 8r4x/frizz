@@ -35,7 +35,7 @@ Boot it in the **background** (never foreground — it stays up until killed) an
 
 ```bash
 # from ui/ — run in the background, REDIRECT to a file, then read the json line for the url + home
-nub scripts/adhoc-stack.mjs --port=4930 > /tmp/stack.log 2>&1
+npx tsx scripts/adhoc-stack.mjs --port=4930 > /tmp/stack.log 2>&1
 # → {"url":"http://127.0.0.1:4930/","port":4930,"home":"…","socket":"…","project":"…","wakers":false}
 ```
 
@@ -142,24 +142,11 @@ const board = await api.query("board")            // unwrapped result; throws Rp
 
 The client also sets the loopback `Origin` header, without which any write 403s.
 
-**Dispatching a REAL Claude worker won't work under the temp HOME** — `rpc/dispatch` fails
-`AUTH_REQUIRED:claude`. The reason is worth knowing, because it decides the workaround: the macOS login
-keychain lives at `$HOME/Library/Keychains`, so redirecting HOME hides the `Claude Code-credentials`
-item from `security find-generic-password` even though it is a USER-scoped credential. Seeding it into
-the temp HOME (copying the blob, symlinking `~/Library/Keychains`) is blocked by the permission classifier.
-
-**When you need a real broker worker, keep the real HOME and isolate the PROJECT instead:**
-`--home=$HOME --project=/tmp/<throwaway-git-repo>`. HOME stays real (keychain works, so `dispatch`
-succeeds and a genuine broker session streams SDK events), while the throwaway project dir gets its own
-project id, its own `~/.fray/projects/<id>/` state, its own tmux socket and its own port — so it never
-touches a board you care about. `--home` implies `--keep`, so clean up after yourself: kill the stack by
-exact PID, kill the leftover `claude` broker processes (find them by their `FRAY_STATE_DIR=<that project
-id>` in `ps`), then `rm -rf ~/.fray/projects/<id> <throwaway-repo> ~/.claude/projects/<cwd-slug>`.
-Verified 2026-07-30 driving a real background-dispatch-then-rest worker end to end this way. Do NOT
-write settings through this stack — `~/.fray/ui.db` settings are global and shared with the real boards.
-
-For transcript/board/telemetry flows that don't need a live provider, **simulate a worker** instead —
-the tailer only needs three things, all inside the sandbox:
+**Dispatching a REAL Claude worker usually won't work here** — the sandbox HOME has no Claude
+credentials, `rpc/dispatch` fails `AUTH_REQUIRED:claude`, and seeding credentials into the temp HOME
+(copying the Keychain blob, symlinking `~/Library/Keychains`) is blocked by the permission classifier.
+Don't fight it. For transcript/board/telemetry flows, **simulate a worker** — the tailer only needs three
+things, all inside the sandbox:
 1. a JSONL at `<tempHome>/.claude/projects/<cwd-slug>/<sessionId>.jsonl` you append records to
    (copy real record shapes: `user` / `assistant` (+`stop_reason`) / `queue-operation` / `queued_command`
    attachment — `transcript.ts` + `tailer.ts` document what each field drives);
@@ -175,7 +162,7 @@ the tailer only needs three things, all inside the sandbox:
 ## 3. Focused real-subsystem harnesses (backend behavior)
 
 Browser QA can't reach tmux sockets, the resume/wake path, SQLite migrations, or the scheduler. For those,
-write a small `Nub` harness that spins the **real** resource and asserts the **real** function — mocks prove
+write a small `tsx` harness that spins the **real** resource and asserts the **real** function — mocks prove
 nothing about tmux. Pattern (`ui/scripts/verify-legacy-wake.mjs` is a worked example for the legacy-socket
 wake fix):
 

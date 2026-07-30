@@ -537,6 +537,9 @@ a[href] {
   background: transparent;
 }
 .md-body img[data-local-path] {
+  display: block;
+  max-width: 100%;
+  margin-inline: auto;
   cursor: pointer;
 }
 /* Inline code is MONO inside a sans (or mono) prose run. Mono has a smaller x-height, so at the old
