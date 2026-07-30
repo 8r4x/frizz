@@ -52,6 +52,19 @@ under the temp HOME), `--wakers` (arm the scheduler), `--keep` (don't delete the
 **Cleanup:** send SIGTERM/SIGINT (kill the background Bash task) — it deletes the temp HOME automatically.
 Always kill it before you come to rest; never rest on a running stack.
 
+**A SERVER change needs a RESTART; only the web hot-reloads.** Vite HMR covers `packages/web`, so a
+component edit is live on the next reload — but the server modules (`transcript.ts`, the tailer, the RPC
+router) were loaded once at boot, so an edit there is invisible until you restart the stack. The failure
+is silent and reads as "my fix didn't work": the page renders the OLD projection and your assertion fails
+against code you already corrected. If a server-side assertion fails and the code plainly says otherwise,
+restart before debugging.
+
+**Removing an injected style: hold the handle.** `page.addStyleTag()` returns an ElementHandle — remove
+THAT (`await tag.evaluate((el) => el.remove())`). Never sweep `querySelectorAll("style")` matching on text
+content: in dev Vite injects the entire app CSS as a `<style>`, so a predicate like "contains
+`.fray-todo-row` and `nowrap`" matches the whole stylesheet and deletes it. The page then renders
+unstyled and every geometry assertion after it fails for a reason that has nothing to do with your change.
+
 ---
 
 ## 2. Driving the app — headless, with screenshots
