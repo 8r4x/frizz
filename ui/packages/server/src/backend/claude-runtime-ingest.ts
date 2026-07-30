@@ -92,7 +92,13 @@ export interface ClaudeRuntimeTask {
 }
 
 export interface ClaudeRuntimeLiveness {
-  turn: ClaudeRuntimeTurn
+  /**
+   * The SDK's reading, or UNDEFINED while it has none — a session can have delivered events without
+   * any of them saying a thing about its turn (`init`, `task`, `other`). This used to default to
+   * "running", which invented a reading out of an event that carries no turn meaning; see the
+   * fabrication note on the fold below.
+   */
+  turn?: ClaudeRuntimeTurn
   /** ms epoch of the event that produced this reading. */
   at: number
   /** Events ingested for this session since it was bound — a cheap "is anything arriving at all". */
@@ -291,8 +297,17 @@ export function createClaudeRuntimeIngest(deps: ClaudeRuntimeIngestDeps): Claude
       const now = Date.now()
       const prior = live.get(item.sessionId)
       const signal = turnSignal(item.event)
+      // NEVER FABRICATE A READING. An event that carries no turn meaning (`init`, `task`, `other`)
+      // leaves the turn exactly as it was — INCLUDING "as it was: unknown". This used to fall back to
+      // "running", which is a guess, and `resolveRuntimeTurn` lets a "running" override a folded
+      // `idle` — so the guess overrode folded evidence, the one thing this module's contract forbids.
+      // It mattered on every restart: `live` starts empty, so the first signal-less event for an
+      // ALREADY-RESTED session minted "running" from nothing, and nothing could ever clear it (the
+      // turn is over; no `result` is coming). Measured on a real broker session, an `init` alone did
+      // exactly this. Four threads that had been at rest for hours rendered "Working…" for the life of
+      // the server process (reported 2026-07-30, the second report of this shimmer).
       live.set(item.sessionId, {
-        turn: signal ?? prior?.turn ?? "running",
+        turn: signal ?? prior?.turn,
         at: now,
         events: (prior?.events ?? 0) + 1,
       })
@@ -340,6 +355,16 @@ export function createClaudeRuntimeIngest(deps: ClaudeRuntimeIngestDeps): Claude
 }
 
 /**
+ * How long a `running` reading may go on outranking a folded `idle`. That override exists for ONE
+ * reason — the SDK's socket runs ahead of its own disk write — and the lag it covers is milliseconds:
+ * measured at ~100-140 ms on a live broker session, with the tailer's own chase budgeted for ~500 ms.
+ * Past this bound "the transcript has not caught up yet" is no longer a possible explanation; the
+ * transcript has had half a minute. Generous on purpose — it is a backstop against a reading that
+ * STOPPED ADVANCING, not a second turn heuristic.
+ */
+const RUNNING_OVERRIDE_MAX_AGE_MS = 30_000
+
+/**
  * How a runtime turn reading is allowed to affect the folded one. Pure, so the rule is testable on
  * its own — this is the single place the "never override folded evidence" invariant lives.
  *
@@ -347,17 +372,27 @@ export function createClaudeRuntimeIngest(deps: ClaudeRuntimeIngestDeps): Claude
  * @param backstopped  true when `folded === "in-flight"` ONLY because the unknown-stop_reason 5 s
  *                     backstop has not elapsed — i.e. the fold has no real evidence either way
  * @param runtime   the SDK's reading, or undefined when there is none
+ * @param ageMs     how long ago the event that produced `runtime` arrived. 0 (the default) means
+ *                  "fresh"; a negative skew from an injected clock is treated as fresh too.
  */
 export function resolveRuntimeTurn(
   folded: "in-flight" | "idle",
   backstopped: boolean,
   runtime: ClaudeRuntimeTurn | undefined,
+  ageMs = 0,
 ): "in-flight" | "idle" {
   if (!runtime) return folded
   // The SDK says a turn is underway and the transcript has not caught up (the user record for a
   // just-delivered follow-up is not on disk yet). Safe in the only direction that matters: it can
   // never fire a premature turn-done, it just stops the board showing `idle` for a beat.
-  if (runtime === "running" && folded === "idle") return "in-flight"
+  //
+  // Bounded by age, because a "running" that stops advancing is indistinguishable from one that is
+  // merely early — and unbounded it pinned a rested thread's board reading at "Working…" forever.
+  // Only THIS rule is bounded: a stale `settled` can only ever agree with a fold that already reads
+  // idle, and a folded `tool_use` still wins over both regardless of age.
+  if (runtime === "running" && folded === "idle") {
+    return ageMs > RUNNING_OVERRIDE_MAX_AGE_MS ? "idle" : "in-flight"
+  }
   // The SDK says the turn is over and the fold is only holding `in-flight` on the 5 s silence guess.
   // Short-circuit the guess. A fold reading `tool_use` — real evidence the model is mid-tool — is
   // deliberately NOT overridden: there the runtime is simply ahead of the disk, and trusting it

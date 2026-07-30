@@ -1815,11 +1815,15 @@ export interface TailerDeps {
   // (backend/claude-runtime-ingest.ts). Two things come off it:
   //   * `turn` — the provider stating outright whether a turn is running, where the fold has to infer
   //     it from `stop_reason` and falls back to a 5s silence guess. Consulted ONLY through
-  //     resolveRuntimeTurn, which is forbidden from overriding folded evidence.
+  //     resolveRuntimeTurn, which is forbidden from overriding folded evidence. OPTIONAL: a session
+  //     whose events have all been turn-neutral (`init`, `task`, `other`) has no reading at all, and
+  //     saying so is the point — inventing one there is what pinned rested threads at "Working…".
+  //   * `at` — when the reading was taken, so a `running` that has STOPPED ADVANCING stops outranking
+  //     a folded rest (see RUNNING_OVERRIDE_MAX_AGE_MS).
   //   * `events` — how many events this session has produced, which is what lets a tick tell that the
   //     provider has reported activity the transcript has not caught up with yet. See RUNTIME_CHASE_MAX.
   // Absent (tmux threads, tests, bridge-less server) ⇒ the fold decides alone, byte-identical to before.
-  runtimeLiveness?: (sessionId: string) => { turn: "running" | "settled"; events: number } | undefined
+  runtimeLiveness?: (sessionId: string) => { turn?: "running" | "settled"; at: number; events: number } | undefined
   // The provider's OWN view of a broker session's background tasks (backend/claude-runtime-ingest.ts):
   // what each child is doing right now, and which ones the SDK says are finished. Consulted ONLY
   // through applyRuntimeTasks, which may ENRICH a folded entry and RETIRE one the provider reports
@@ -1978,7 +1982,11 @@ export function createTailer(deps: TailerDeps): Tailer {
   function turnFor(row: SessionRow, state: TailState, nowMs: number): TurnState {
     const detailed = computeTurnDetailed(state, nowMs)
     if (!deps.runtimeLiveness || !isBrokerClaudeRow(row)) return detailed.turn
-    return resolveRuntimeTurn(detailed.turn, detailed.backstopped, deps.runtimeLiveness(row.session_id)?.turn)
+    const live = deps.runtimeLiveness(row.session_id)
+    // The reading's AGE, clamped at 0. An injected test clock can sit behind the wall clock the ingest
+    // stamps with, and a negative age must read as FRESH — never as an ancient reading to discard.
+    const ageMs = live ? Math.max(0, nowMs - live.at) : 0
+    return resolveRuntimeTurn(detailed.turn, detailed.backstopped, live?.turn, ageMs)
   }
 
   // The provider's event stream RUNS AHEAD OF ITS OWN DISK WRITE. Measured against a real broker

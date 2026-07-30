@@ -31,6 +31,28 @@ test("resolveRuntimeTurn: `settled` NEVER overrides folded evidence", () => {
   assert.equal(resolveRuntimeTurn("in-flight", false, "settled"), "in-flight")
 })
 
+// The second report of the resting-thread shimmer (2026-07-30). `running` outranks a folded `idle` for
+// exactly one reason — the SDK's socket beats its own disk write by ~100-140 ms — so a reading that has
+// stopped advancing has no claim on the board at all. Unbounded, one stale "running" pinned four rested
+// threads at "Working…" for the whole life of the server process, because the turn was already over and
+// no `result` was ever coming to clear it.
+test("resolveRuntimeTurn: a STALE `running` stops outranking a folded idle", () => {
+  assert.equal(resolveRuntimeTurn("idle", false, "running", 0), "in-flight", "fresh: the disk is behind")
+  assert.equal(resolveRuntimeTurn("idle", false, "running", 29_000), "in-flight", "still inside the window")
+  assert.equal(resolveRuntimeTurn("idle", false, "running", 31_000), "idle", "half a minute is not write lag")
+  // The bound is on THIS rule alone. A folded tool_use is real evidence and still wins at any age…
+  assert.equal(resolveRuntimeTurn("in-flight", false, "running", 10 * 60_000), "in-flight")
+  assert.equal(resolveRuntimeTurn("in-flight", false, "settled", 10 * 60_000), "in-flight")
+  // …and a stale `settled` only ever agrees with a fold that already reads idle, so it needs no bound.
+  assert.equal(resolveRuntimeTurn("in-flight", true, "settled", 10 * 60_000), "idle")
+})
+
+test("resolveRuntimeTurn: a negative age (an injected clock behind the wall clock) reads as FRESH", () => {
+  // The tailer clamps at 0 before calling; assert the contract from this side too, because a reading
+  // treated as ancient by clock skew would silently disable the override the fold depends on.
+  assert.equal(resolveRuntimeTurn("idle", false, "running", 0), "in-flight")
+})
+
 test("resolveRuntimeTurn: `running` never un-settles a folded idle... except to in-flight", () => {
   // Exhaustive over the remaining pairs, so a future edit that widens the rule fails here first.
   assert.equal(resolveRuntimeTurn("idle", false, "settled"), "idle")
@@ -115,6 +137,26 @@ test("ingest: a child event fires no turn-started receipt", async () => {
   assert.equal(kinds.filter((k) => k === "claude.runtime.turn.started").length, 0)
   ingest.close()
   receipts.close()
+})
+
+// The restart shape, at the ingest. `live` is empty on every boot, so the FIRST event to arrive for an
+// already-rested session is routinely one with no turn meaning — an `init` alone did this on a real
+// broker session. Defaulting to "running" there invented a reading out of nothing, and because the turn
+// was already over nothing could ever clear it.
+test("ingest: a turn-neutral event with NO prior invents no reading at all", async () => {
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  for (const neutral of [ev.init, ev.other]) {
+    ingest.onEvent("t", sessionId, neutral)
+    await ingest.drain()
+    assert.equal(ingest.liveness(sessionId)?.turn, undefined, `${neutral.kind} says nothing about the turn`)
+  }
+  assert.equal(ingest.liveness(sessionId)?.events, 2, "…but it is still counted, and still nudges")
+
+  // A real signal still lands normally on top of the reading-less entry.
+  ingest.onEvent("t", sessionId, ev.assistant)
+  await ingest.drain()
+  assert.equal(ingest.liveness(sessionId)?.turn, "running")
+  ingest.close()
 })
 
 test("ingest: a turn-neutral event leaves the reading alone rather than resetting it", async () => {

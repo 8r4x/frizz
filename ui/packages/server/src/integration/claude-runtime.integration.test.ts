@@ -62,6 +62,40 @@ test("integration: a scripted broker turn folds through the real graph to an idl
   }
 })
 
+test("integration: a thread that rested BEFORE a restart is not re-spun by a turn-neutral event", async () => {
+  // Reported 2026-07-30 (the second sighting of this shimmer): four broker threads that had come to
+  // rest hours earlier all rendered `runtime: "running"` on a control plane that had restarted after
+  // they rested. Replaying the live DB with no runtime signal folded every one of them to `idle`, so
+  // the reading could only have come from the ingest.
+  //
+  // This is that shape exactly. A restart empties the ingest's `live` map while the transcript on disk
+  // still records a finished turn — so the fold knows the thread rested and the ingest knows nothing.
+  // The next event to arrive is routinely one that carries no turn meaning (`task` is stream-only and
+  // says nothing about the parent's turn), and it must not be allowed to invent one.
+  const h = createIntegrationHarness()
+  try {
+    const s = h.dispatch("restarted")
+    h.telemetry("restarted") // prime
+
+    // Records ONLY: the turn happened, and no event of it ever reached THIS ingest.
+    s.play(
+      record(userRecord("go", T0)),
+      record(assistantRecord("```done\n- finished before the restart\n```", "end_turn", T1)),
+    )
+    await h.settle()
+    assert.equal(h.boardThread("restarted")?.runtime, "turn-idle", "the fold alone reads the rest correctly")
+
+    // …and now the first event this ingest has ever seen for the session arrives, carrying no turn.
+    s.play(event(taskEvent(s.sessionId, { phase: "level", tasks: [] })))
+    await h.settle()
+
+    assert.equal(h.telemetry("restarted")?.turn, "idle", "a turn-neutral event decides nothing")
+    assert.equal(h.boardThread("restarted")?.runtime, "turn-idle", "no shimmer on a thread at rest")
+  } finally {
+    h.close()
+  }
+})
+
 test("integration: a `result` event NEVER queues a thread ahead of its final record reaching disk", async () => {
   // The single most dangerous ordering, and the reason resolveRuntimeTurn refuses to override folded
   // evidence. The SDK reports the turn finished while the last record the tailer can see is an
