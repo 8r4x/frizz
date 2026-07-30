@@ -5,8 +5,7 @@ import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, utimesSync } from 
 import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
-import { scratchpadContent, scratchpadHookEnv, codexScratchpadHookConfig, SCRATCHPAD_HOOK_ENV } from "./dispatch.ts"
-import { defaultSettings } from "./settings.ts"
+import { scratchpadContent, codexScratchpadHookConfig } from "./dispatch.ts"
 
 // ---- scratchpad reinforcement hook (cc-worker/hooks/scratchpad.mjs) ----
 // Keeps the ONE per-thread scratchpad written and re-grounded across compaction: it injects the pad's
@@ -63,9 +62,7 @@ function runHook(
       ...process.env,
       CLAUDE_PROJECT_DIR: dir,
       FRAY_UI_THREAD: "",
-      // The mechanism is OPT-IN, so every test must turn it on explicitly; the gate itself is
-      // covered by its own test below.
-      FRAY_SCRATCHPAD_HOOK: "on",
+      FRAY_SCRATCHPAD_HOOK: "",
       ...env,
     },
   })
@@ -75,16 +72,16 @@ function additionalContext(stdout: string): string {
   return JSON.parse(stdout).hookSpecificOutput.additionalContext as string
 }
 
-test("a provisioned-but-unwritten scratchpad teaches the contract instead of echoing its own skeleton", () => {
+test("a fresh startup teaches the contract instead of echoing the pad's own skeleton", () => {
   const dir = newProject()
   // The real skeleton fray writes at dispatch — headings, orientation line, an empty task box.
   writePad(dir, scratchpadContent("some effort"))
-  const ctx = additionalContext(runHook(dir, ["--mode=session-start"], { session_id: SID, source: "compact" }))
+  const ctx = additionalContext(runHook(dir, ["--mode=session-start"], { session_id: SID, source: "startup" }))
   assert.match(ctx, /⟦scratchpad⟧/)
-  assert.match(ctx, /is your ONE durable working doc/)
-  // Injecting an empty template back would be pure noise.
+  assert.match(ctx, /is the CANONICAL document for this thread/)
+  // Injecting an empty template back would be pure noise, and a fresh start has lost nothing.
   assert.doesNotMatch(ctx, /⟦end scratchpad⟧/)
-  assert.doesNotMatch(ctx, /restored after compaction/)
+  assert.doesNotMatch(ctx, /reground here/)
 })
 
 test("a written scratchpad's head is injected BYTE-FOR-BYTE after a compaction, with a re-read pointer", () => {
@@ -93,8 +90,9 @@ test("a written scratchpad's head is injected BYTE-FOR-BYTE after a compaction, 
   writePad(dir, pad)
   const ctx = additionalContext(runHook(dir, ["--mode=session-start"], { session_id: SID, source: "compact" }))
   assert.ok(ctx.includes(pad), "the pad must appear verbatim, not reformatted")
-  assert.match(ctx, /⟦scratchpad — restored after compaction⟧/)
-  assert.match(ctx, /RE-READ THE FULL FILE/, "injection is the floor; the pointer is the ceiling")
+  assert.match(ctx, /⟦scratchpad — reground here⟧/)
+  assert.match(ctx, /RE-GROUND ON IT BEFORE DOING ANYTHING ELSE/, "the pad is the canonical record")
+  assert.match(ctx, /re-read the full file/i, "injection is the floor; the pointer is the ceiling")
   assert.match(ctx, new RegExp(`\\.fray/threads/${SID}/scratch\\.md`))
   assert.match(ctx, /⟦end scratchpad⟧/)
 })
@@ -143,9 +141,8 @@ test("every silence gate holds: project registration under fray, sub-agents, and
   // Load-bearing for the ONE-scratchpad rule: a sub-agent never acts against its dispatcher's pad.
   assert.equal(runHook(dir, ["--mode=session-start"], { ...evt, agent_id: "sub-1" }), "")
   assert.equal(runHook(dir, ["--mode=session-start"], evt, { FRAY_SCRATCHPAD_HOOK: "off" }), "")
-  // Absence is OFF: an unset variable must not activate an opinionated mechanism by accident.
-  assert.equal(runHook(dir, ["--mode=session-start"], evt, { FRAY_SCRATCHPAD_HOOK: "" }), "")
-  assert.equal(runHook(dir, ["--mode=session-start"], evt, { FRAY_SCRATCHPAD_HOOK: "maybe" }), "")
+  // …but a non-off value never disables it: absence means ON now.
+  assert.notEqual(runHook(dir, ["--mode=session-start"], evt, { FRAY_SCRATCHPAD_HOOK: "maybe" }), "")
   // With no session id there is no key, and an unkeyed pad would bleed across sessions.
   assert.equal(runHook(dir, ["--mode=session-start"], { source: "compact" }, { CLAUDE_CODE_SESSION_ID: "" }), "")
 })
@@ -260,15 +257,28 @@ test("hooks.json wires every channel, and no stale carryover registration surviv
 // Verified live: SessionStart / UserPromptSubmit / Stop all fired through CodexAppServerBridge with
 // the real scratchpad.mjs wired exactly as codexScratchpadHookConfig wires it.
 
-test("the codex opt-in flag works without the env var, because a shared daemon cannot carry one", () => {
+test("re-grounding is UNCONDITIONAL — no setting, no flag, no env var required", () => {
   const dir = newProject()
-  writePad(dir, "# Scratchpad\n\ncodex content\n")
-  const evt = { session_id: SID, source: "compact" }
-  // No FRAY_SCRATCHPAD_HOOK at all — the flag alone must open the gate.
-  const out = runHook(dir, ["--enabled", "--mode=session-start"], evt, { FRAY_SCRATCHPAD_HOOK: "" })
-  assert.match(additionalContext(out), /⟦scratchpad — restored after compaction⟧/)
-  // …and neither signal still means off.
-  assert.equal(runHook(dir, ["--mode=session-start"], evt, { FRAY_SCRATCHPAD_HOOK: "" }), "")
+  writePad(dir, "# Scratchpad\n\ncanonical content\n")
+  // No opt-in of any kind: the pad is the canonical document, so a compacted worker always gets it
+  // back. An earlier revision gated this behind a default-OFF setting, which meant the DEFAULT worker
+  // recovered nothing after a compaction — the exact failure the pad exists to prevent.
+  const ctx = additionalContext(runHook(dir, ["--mode=session-start"], { session_id: SID, source: "compact" }))
+  assert.match(ctx, /⟦scratchpad — reground here⟧/)
+  assert.match(ctx, /canonical content/)
+  // The only escape hatch is an explicit env off — a one-off, not a project posture.
+  assert.equal(runHook(dir, ["--mode=session-start"], { session_id: SID, source: "compact" }, { FRAY_SCRATCHPAD_HOOK: "off" }), "")
+})
+
+test("an EMPTY pad still re-grounds after compaction, and says the pad is empty", () => {
+  const dir = newProject()
+  writePad(dir, scratchpadContent("some effort"))
+  const ctx = additionalContext(runHook(dir, ["--mode=session-start"], { session_id: SID, source: "compact" }))
+  // "You lost your context and your pad is empty" is the most urgent thing the next turn can hear —
+  // staying silent here was the old behavior and it left the worker with nothing.
+  assert.match(ctx, /⟦scratchpad — reground here⟧/)
+  assert.match(ctx, /RE-READ IT NOW/)
+  assert.match(ctx, /nothing substantive in it/)
 })
 
 test("--session overrides the reported id, so a codex worker finds FRAY's pad and not its own", () => {
@@ -283,11 +293,11 @@ test("--session overrides the reported id, so a codex worker finds FRAY's pad an
   }
   // Without --session the hook addresses codex's id — a path that does not exist — so it can only
   // fall back to the contract text.
-  const derived = additionalContext(runHook(dir, ["--enabled", "--mode=session-start"], codexEvent))
+  const derived = additionalContext(runHook(dir, ["--mode=session-start"], codexEvent))
   assert.doesNotMatch(derived, /fray thread content/)
   // With it, the real pad is found and restored.
   const explicit = additionalContext(
-    runHook(dir, ["--enabled", `--session=${SID}`, "--mode=session-start"], codexEvent)
+    runHook(dir, [`--session=${SID}`, "--mode=session-start"], codexEvent)
   )
   assert.match(explicit, /fray thread content/)
   assert.match(explicit, new RegExp(`\\.fray/threads/${SID}/scratch\\.md`))
@@ -304,28 +314,17 @@ test("a codex rollout carries no readable claude usage, so the nudge degrades to
   )
   // Silence, never a crash and never a bogus token count: the codex nudge channel simply does not
   // fire until a rollout-aware token parser exists. The codex INJECTION channel is unaffected.
-  assert.equal(runHook(dir, ["--enabled", `--session=${SID}`, "--mode=nudge"], { session_id: SID, transcript_path: rollout }), "")
+  assert.equal(runHook(dir, [`--session=${SID}`, "--mode=nudge"], { session_id: SID, transcript_path: rollout }), "")
 })
 
-// ---- settings plumbing: the toggle is OPT-IN and reaches each backend by its own route ----
+// ---- codex delivery is unconditional too ----
 
-test("scratchpad reinforcement is OFF in the shipped defaults — it is chosen, never inherited", () => {
-  assert.equal(defaultSettings().scratchpadReinforcement, false)
-  // Absence must read as off too, so an old settings blob cannot silently enable it.
-  assert.deepEqual(scratchpadHookEnv({ scratchpadReinforcement: undefined }), {})
-  assert.deepEqual(scratchpadHookEnv({ scratchpadReinforcement: false }), {})
-})
+test("the codex hook config is built unconditionally, and carries what codex requires", () => {
+  // No plugin path or no session id must still produce nothing rather than a broken command.
+  assert.deepEqual(codexScratchpadHookConfig(undefined, "sid-1"), {})
+  assert.deepEqual(codexScratchpadHookConfig("/p/scratchpad.mjs", ""), {})
 
-test("the Claude route is a worker env var; the Codex route is per-conversation config", () => {
-  assert.deepEqual(scratchpadHookEnv({ scratchpadReinforcement: true }), { [SCRATCHPAD_HOOK_ENV]: "on" })
-
-  // Off ⇒ codex gets NO hooks config at all, so nothing is delivered and nothing needs trusting.
-  assert.deepEqual(codexScratchpadHookConfig({ scratchpadReinforcement: false }, "/p/scratchpad.mjs", "sid-1"), {})
-  // A missing plugin path or session id must also produce nothing rather than a broken command.
-  assert.deepEqual(codexScratchpadHookConfig({ scratchpadReinforcement: true }, undefined, "sid-1"), {})
-  assert.deepEqual(codexScratchpadHookConfig({ scratchpadReinforcement: true }, "/p/scratchpad.mjs", ""), {})
-
-  const cfg = codexScratchpadHookConfig({ scratchpadReinforcement: true }, "/p/scratchpad.mjs", "sid-1") as {
+  const cfg = codexScratchpadHookConfig("/p/scratchpad.mjs", "sid-1") as {
     bypass_hook_trust?: boolean
     hooks?: Record<string, { hooks: { command: string }[] }[]>
   }
@@ -336,8 +335,8 @@ test("the Claude route is a worker env var; the Codex route is per-conversation 
   assert.deepEqual(Object.keys(cfg.hooks ?? {}).sort(), ["PostToolUse", "SessionStart", "UserPromptSubmit"])
   for (const entries of Object.values(cfg.hooks ?? {})) {
     const cmd = entries[0].hooks[0].command
-    assert.match(cmd, /--enabled/, "the flag is codex's opt-in signal (a shared daemon has no per-conversation env)")
     assert.match(cmd, /--session="sid-1"/, "fray's thread id must override codex's own reported session id")
+    assert.doesNotMatch(cmd, /--enabled/, "there is no opt-in flag any more")
     assert.match(cmd, /scratchpad\.mjs/)
   }
 })

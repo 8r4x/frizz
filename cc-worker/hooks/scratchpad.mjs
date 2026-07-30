@@ -81,24 +81,17 @@ const flagValue = (flag) => {
 const mode = flagValue('--mode') ?? 'session-start';
 const via = flagValue('--via') ?? 'plugin';
 
-// OPT-IN GATE — two ways in, because the two backends can only be gated in different places.
+// ALWAYS ON — deliberately not settings-gated. The scratchpad is the CANONICAL document for a thread,
+// so re-grounding on it after a compaction is not an opinion a project opts into; it is what makes the
+// pad worth writing at all. An earlier revision put this behind an opt-in setting that defaulted OFF,
+// which meant the default worker got nothing back after a compaction — the exact failure the pad
+// exists to prevent (maintainer's correction: the thing that should be opt-in is the FORK-based
+// auto-updating, not the re-grounding).
 //
-// CLAUDE: an ENVIRONMENT VARIABLE. fray stamps FRAY_SCRATCHPAD_HOOK=on into the worker env at
-// spawn/fork from the `scratchpadReinforcement` setting (same shape as FRAY_UI_THREAD). The plugin's
-// hooks.json is static, so the env is what decides whether they do anything.
-//
-// CODEX: the `--enabled` FLAG. A codex worker's hooks arrive as per-conversation CONFIG (the only
-// delivery path that works — see codexScratchpadHookConfig in dispatch.ts), and fray only builds that
-// config when the setting is on, so the config's mere PRESENCE is already the opt-in. The env var is
-// unusable there: the `codex app-server` daemon is shared per project, so its environment cannot
-// carry a per-conversation decision.
-//
-// Either signal is sufficient; absence of both means off, so an opinionated mechanism is never
-// inherited by accident.
-const optedIn =
-  /^(on|1|true|yes|enabled)$/i.test((process.env.FRAY_SCRATCHPAD_HOOK ?? '').trim()) ||
-  process.argv.includes('--enabled');
-if (!optedIn) process.exit(0);
+// The escape hatch is an env var, not a setting, because it is for a one-off ("this session is doing
+// something where the injection is in the way"), not a project posture. Anything affirmative-looking
+// is ignored: only an explicit off value disables.
+if (/^(off|0|false|no|disabled)$/i.test((process.env.FRAY_SCRATCHPAD_HOOK ?? '').trim())) process.exit(0);
 
 // The repo-local registration defers to the plugin one for fray workers (see --via, and the
 // registration note in DECISIONS.md) so a fray worker never injects twice.
@@ -201,24 +194,43 @@ if (mode === 'session-start') {
   const written = substanceLength(pad) > 0;
   const parts = [];
 
-  if (written && (input.source === 'compact' || input.source === 'resume' || input.source === 'clear')) {
-    // The moments the deep model of the work is actually gone. Inject the head AND point at the file:
-    // the injection is the floor, the pointer is the ceiling.
+  // The sources where the deep model of the work is actually GONE. On these the worker is ALWAYS
+  // re-grounded on its scratchpad — whether or not there is anything in it yet, because "your pad is
+  // empty and you just lost your context" is itself the most urgent thing the next turn can be told.
+  const lostContext = input.source === 'compact' || input.source === 'resume' || input.source === 'clear'
+
+  if (lostContext && written) {
+    // Inject the head AND point at the file: the injection is the floor (it cannot be skipped), the
+    // pointer is the ceiling (the pad may be longer than the cap, and it is the canonical doc).
     const lead =
       input.source === 'compact'
-        ? '⟦scratchpad — restored after compaction⟧ Context was just compacted. This is the CURRENT head of your scratchpad `' +
-          relPath + '`, the working state you wrote for exactly this moment. Treat it as authoritative over anything the summary implies, RE-READ THE FULL FILE before acting, and re-read any code before describing or changing it.'
-        : '⟦scratchpad — restored⟧ This is the current head of your scratchpad `' + relPath +
-          '`. Re-read the full file before acting.';
+        ? '⟦scratchpad — reground here⟧ Context was just compacted. Your scratchpad `' + relPath +
+          '` is the CANONICAL record of this thread and the head of it follows. RE-GROUND ON IT BEFORE ' +
+          'DOING ANYTHING ELSE: re-read the full file, treat it as authoritative over anything the ' +
+          'summary implies, and re-read any code before describing or changing it.'
+        : '⟦scratchpad — reground here⟧ This session resumed and lost its working context. Your ' +
+          'scratchpad `' + relPath + '` is the CANONICAL record of this thread and the head of it ' +
+          'follows. Re-read the full file before acting.';
     parts.push(lead + '\n\n' + capped(/** @type {string} */ (pad)) + '\n\n⟦end scratchpad⟧');
-  } else {
-    // Nothing substantive to restore — teach the contract instead, so the pad gets written at all.
+  } else if (lostContext) {
+    // Context is gone and there is nothing to restore. Still re-ground on the pad — it is the only
+    // durable surface there is — and say plainly that it is empty, which is the actionable fact.
     parts.push(
-      '⟦scratchpad⟧ `' + relPath + '` is your ONE durable working doc for this effort, and the only ' +
-        'thing guaranteed to survive a compaction: its head is injected back into your context ' +
-        'automatically whenever the context is lost. Keep it current as you work — the problem, the ' +
-        'approach and the approaches you REJECTED and why, decisions the human made or reversed, ' +
-        'what is VERIFIED by running it versus merely believed, and the next action.',
+      '⟦scratchpad — reground here⟧ Context was just compacted or resumed. Your scratchpad `' +
+        relPath + '` is the CANONICAL record of this thread — RE-READ IT NOW to recover your working ' +
+        'state, before asserting anything or resuming edits. It currently has nothing substantive in ' +
+        'it, so once you have re-established where you are, WRITE it: the problem, the approach and ' +
+        'the approaches you rejected, the decisions the human made, what is verified versus merely ' +
+        'believed, and the next action.',
+    );
+  } else {
+    // A fresh start has lost nothing — teach the contract so the pad gets written in the first place.
+    parts.push(
+      '⟦scratchpad⟧ `' + relPath + '` is the CANONICAL document for this thread and your ONE durable ' +
+        'working doc: its head is injected back into your context automatically whenever the context ' +
+        'is lost, so it is the only thing guaranteed to survive a compaction. Keep it current as you ' +
+        'work — the problem, the approach and the approaches you REJECTED and why, decisions the human ' +
+        'made or reversed, what is VERIFIED by running it versus merely believed, and the next action.',
     );
   }
   emitJson(parts.join('\n\n'), 'SessionStart');

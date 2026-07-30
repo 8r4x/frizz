@@ -56,10 +56,6 @@ export interface ClaudeBrokerBridgeDeps {
     allowedTools?: string[]
     permDir?: string
   }
-  /** Extra worker env evaluated PER FORK rather than fixed at construction, so a settings-gated
-   *  variable (scratchpad reinforcement) takes effect on the next dispatch/cold-resume instead of
-   *  requiring a server restart. Merged under the per-thread vars below. */
-  extraWorkerEnv?: () => Record<string, string>
   /** The dashboard InteractionStore + this project's id. When present, a Claude tool-permission
    *  escalation (canUseTool, which under "auto" fires only for classifier-flagged risky calls) is
    *  journaled as an approval interaction and gated on the human's dashboard decision. Absent ⇒ the
@@ -308,7 +304,6 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     // carries them. FRAY_UI_THREAD is per-thread (the slug), so it's stamped here, not in deps.workerEnv.
     const we = deps.workerEnv
     const workerEnv: Record<string, string> = {
-      ...(deps.extraWorkerEnv?.() ?? {}),
       FRAY_UI_THREAD: slug,
       ...(we?.permDir ? { FRAY_PERM_DIR: we.permDir } : {}),
       // The cc-worker plugin's PreToolUse hook DENIES AskUserQuestion, because on the tmux path a

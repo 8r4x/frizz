@@ -704,14 +704,6 @@ export const Settings = z.object({
   // is the differentiator); a project that doesn't want that opinionation flips it off in one click.
   // Optional so an old settings blob parses; absent ⇒ on (defaultSettings pins true).
   runtimeGate: z.boolean().optional(),
-  // Whether dispatched workers get SCRATCHPAD REINFORCEMENT: the hooks that inject the thread
-  // scratchpad's head back into context after a compaction/resume, hand it to the compaction
-  // summarizer (Claude only — Codex exposes no PreCompact injection channel), and nudge the worker to
-  // bring the pad up to date once context has grown past a threshold since the last write. OPT-IN and
-  // OFF by default: it is opinionated (it spends context on every restore and interrupts to ask for a
-  // journal entry), so a project chooses it rather than inheriting it. Optional so an old settings
-  // blob parses; absent ⇒ off (defaultSettings pins false).
-  scratchpadReinforcement: z.boolean().optional(),
   // When a subscription window runs dry mid-turn, remember every thread it cut off and deliver a
   // "continue" to each one once the window rolls. ON by default — an interrupted agent that never
   // gets picked back up is the whole cost of a limit. Flip it off to leave the paused threads in the

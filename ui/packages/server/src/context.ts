@@ -9,7 +9,7 @@ import { readQuota } from "./quota.ts"
 import { refreshClaudeQuotaInBackground } from "./backend/claude-quota.ts"
 import { createBoard, type BoardManager } from "./board.ts"
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
-import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frayConfigBlock, claudeMcpConfig, resolveFrayMcp, workerPluginDir, scratchpadHookEnv, type Dispatcher } from "./dispatch.ts"
+import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frayConfigBlock, claudeMcpConfig, resolveFrayMcp, workerPluginDir, type Dispatcher } from "./dispatch.ts"
 import { createScheduler, type Scheduler } from "./scheduler.ts"
 import {
   reattachThreadWithPermission,
@@ -643,8 +643,6 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         // The fray worker environment — the SDK equivalent of the tmux path's --plugin-dir / --mcp-config.
         // Computed ONCE here (constant per project) and applied on every broker fork so a broker worker
         // gets the fray sub-agent profiles, the fray + chrome-devtools MCP, and the cc-worker hooks.
-        // Evaluated per fork (not fixed here) so flipping the setting reaches the next dispatch.
-        extraWorkerEnv: () => scratchpadHookEnv(getSettings(storage)),
         workerEnv: {
           pluginDir: workerPluginDir(),
           ...claudeMcpConfig(resolveFrayMcp(project.stateDir)),

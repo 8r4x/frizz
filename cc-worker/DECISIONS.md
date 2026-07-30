@@ -665,6 +665,9 @@ codex**, so a codex worker has only prompt-level scratchpad discipline — the l
 
 ## 2026-07-30 (third pass): reinforcement is OPT-IN, and the two backends are gated differently
 
+> **SUPERSEDED the same day by the fourth pass below** — the opt-in gate was REMOVED. Re-grounding is
+> unconditional now. The measured codex findings in this entry all still hold; only the gating does not.
+
 Maintainer's call: the mechanism is opinionated, so it should be chosen rather than inherited. New
 `scratchpadReinforcement` setting, **OFF by default** — the inverse of `runtimeGate` /
 `autoResumeOnLimit`, which are opt-OUT. Toggle sits in the Settings drawer under "Auto-resume after
@@ -707,3 +710,36 @@ The codex NUDGE cannot fire yet: staleness is computed from Claude's transcript 
 (`message.usage`), and a codex rollout is a different format, so `contextTokens()` returns null and
 the nudge degrades to SILENCE rather than to a wrong number — pinned by a test. Closing it needs a
 rollout-aware token parser. The load-bearing channel (restoring the pad on SessionStart) works on both.
+
+## 2026-07-30 (fourth pass): the gate comes OFF — the scratchpad is canonical, so re-grounding is not optional
+
+Maintainer's correction, and it reverses the third pass's central decision: the thing that deserves an
+opt-in is the FORK-based auto-updating (still unbuilt, and called "a little overkill"), NOT the
+re-grounding. The scratchpad is the CANONICAL document for a thread, so reading it back after a
+compaction is what makes the pad worth writing at all — a posture no project should have to opt into.
+
+The bug this fixes is worse than a mis-scoped setting: `scratchpadReinforcement` defaulted to FALSE, so
+the DEFAULT worker — every worker, in practice — got nothing back after a compaction. The mechanism was
+shipped and inert. A feature that is off by default is a feature that does not exist.
+
+Removed entirely: the `scratchpadReinforcement` setting (shared schema, server defaults, Settings
+drawer toggle), the `FRAY_SCRATCHPAD_HOOK=on` env plumbing (`scratchpadHookEnv`, the tmux spawn stamp,
+the broker bridge's `extraWorkerEnv` dep), and codex's `--enabled` flag. A dead toggle that gates
+nothing is worse than no toggle; when the fork checkpointer is built it brings its own setting.
+
+What survives: `--session=<fray sessionId>` on the codex path stays MANDATORY (codex reports its own
+rollout session id, so the derived path would address a scratchpad that does not exist), and
+`bypass_hook_trust` stays required (codex silently skips untrusted hook definitions). The escape hatch
+is now `FRAY_SCRATCHPAD_HOOK=off` — env only, and only an explicit off value disables, because it is
+for a one-off session, not a project posture.
+
+Behavior change beyond ungating: **an EMPTY pad now re-grounds too.** Previously a compaction with an
+unwritten pad fell through to the generic contract text; now it says plainly that context was just
+lost, that the pad is the canonical record, to re-read it NOW, and that it currently has nothing in it
+so it must be written. "You lost your context and your pad is empty" is the most actionable thing the
+next turn can hear, and staying quiet about it left the worker with nothing at the exact moment it had
+nothing.
+
+VERIFIED against a real `/compact` with NO env var and NO flag set anywhere: `SessionStart:compact`
+exit 0, delivering the re-grounding lead plus the pad head carrying a sentinel from the file. 17 hook
+tests; full suite 2419 pass / 0 fail; typecheck clean.

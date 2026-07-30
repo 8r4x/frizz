@@ -24,10 +24,6 @@ export const defaultSettings = (): Settings => ({
   // exhausted subscription window should pick itself back up when the window rolls, not sit idle
   // until the operator happens to notice hours later.
   autoResumeOnLimit: true,
-  // Scratchpad reinforcement OFF by default (opt-IN): it is deliberately opinionated — it spends
-  // context re-injecting the pad on every restore and interrupts the worker to ask for a journal
-  // entry — so a project turns it on rather than inheriting it.
-  scratchpadReinforcement: false,
 })
 
 // Settings persist as one JSON blob under settings['settings']. Read merges over defaults
