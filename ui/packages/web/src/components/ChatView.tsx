@@ -12,7 +12,7 @@ import { useBoard, useTranscript, type ChatMessage, type TranscriptData } from "
 import { rpc } from "../api/rpc.ts"
 import { displayTitle, lastActiveLabelAt } from "../groups.ts"
 import { mdToHtml, mdInlineToHtml, stripFrontmatter } from "../lib/markdown.ts"
-import { splitProseAttachments } from "../lib/imagePaths.ts"
+import { splitComposerValue, splitProseAttachments } from "../lib/imagePaths.ts"
 import { DiffBlock, PathLink } from "./DiffBlock.tsx"
 import { splitQuestionBlocks, parseQuestionBlock, type QuestionKind, type BlockAnswer, type MessageAnswering } from "../lib/questionBlocks.ts"
 import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
@@ -2423,6 +2423,14 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
   const unqueueSupported = useUnqueueSupported(unqueueSlug)
   const { unqueue, pending: unqueuePending } = useUnqueueFollowUp(unqueueSlug)
   const unqueueable = Boolean(queued && deliveryId && unqueueSlug && unqueueSupported)
+  // The composer parks attached files in the draft as TRAILING standalone absolute-path lines
+  // (joinComposerValue) and presents them as chips — so a sent message carries those paths as text, and
+  // this bubble reprinted the screenshot the human had just attached as a wall of mono path. Peel them
+  // back off and render the picture. splitComposerValue is that append's exact inverse: it takes only
+  // the trailing run, so a path typed mid-sentence stays the human's own words, and (unlike
+  // splitProseAttachments, the agent-prose splitter) it never swallows a ::directive or mermaid line.
+  // `text` itself stays whole for the unqueue payload below — restoreDraft must hand the paths back.
+  const { prose, attachments } = useMemo(() => splitComposerValue(text), [text])
   // Local hover state rather than a named-group hover utility: the `group/msg` group is the DEBUG CHIP's
   // channel (MessageDebugId owns every use of it, and a test pins that), and only the handful of
   // still-queued bubbles ever subscribe to this.
@@ -2470,50 +2478,70 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
       <MessageDebugId sourceId={sourceId} side="left" />
       {/* OFF-WHITE bubble, BLACK text — the human's words POP against the dark page + agent prose. bg-user-bubble
           is a tick less white than bg-fg so it reads as a card. whitespace-pre-wrap is load-bearing: user text
-          is verbatim, so its line breaks must survive. */}
-      <div
-        ref={ref}
-        {...(unqueueable ? {
-          role: "button",
-          tabIndex: 0,
-          "data-unqueue": deliveryId,
-          "aria-label": "Unqueue this message and put it back in the prompt box",
-          title: unqueuePending ? "Taking it back…" : "Click to unqueue — the text comes back to the prompt box",
-          onClick: (e: ReactMouseEvent<HTMLDivElement>) => unqueue({ deliveryId: deliveryId!, text, rawText: rawText ?? text, from: e.currentTarget }),
-          onKeyDown: (e: ReactKeyboardEvent<HTMLDivElement>) => {
-            if (e.key !== "Enter" && e.key !== " ") return
-            e.preventDefault()
-            unqueue({ deliveryId: deliveryId!, text, rawText: rawText ?? text, from: e.currentTarget })
-          },
-          onFocus: () => setUnqueueHover(true),
-          onBlur: () => setUnqueueHover(false),
-        } : {})}
-        // A queued bubble is never the sticky one (the pinned ask is the last LANDED user message), so
-        // these two never both apply — but they share the handler, so compose rather than overwrite.
-        onMouseEnter={sticky ? () => setExpanded(true) : unqueueable ? () => setUnqueueHover(true) : undefined}
-        onMouseLeave={sticky ? () => { setExpanded(false); setScrollReady(false) } : unqueueable ? () => setUnqueueHover(false) : undefined}
-        onTransitionEnd={sticky ? (e) => { if (e.propertyName === "max-height" && expanded && exceedsCap) setScrollReady(true) } : undefined}
-        // While NOT scrollable (collapsed, or expanding before it settles) the bubble is `overflow-hidden`
-        // and so lacks the scrollbar-gutter the scrollable state reserves — a 7px text shift when scroll
-        // turns on. Reserve the SAME width (`--sbw`, the app's scrollbar width) here so the text width is
-        // identical across every state: zero reflow even for over-cap messages.
-        style={{
-          ...(maxH ? { maxHeight: maxH } : {}),
-          ...(sticky && exceedsCap && !scrollable ? { paddingRight: "calc(0.875rem + var(--sbw))" } : {}),
-        }}
-        // A retractable bubble LIFTS under the pointer — back toward full opacity, with a ring — so the
-        // one message in the transcript that is still yours to change says so on hover instead of
-        // needing a permanent control that would clutter every send. Opacity is the same channel that
-        // already encodes "queued", which is exactly the state being offered.
-        className={`relative rounded-2xl rounded-br-sm bg-user-bubble px-3.5 py-2 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere] text-bg ${queued ? "opacity-50" : ""} ${unqueueable ? "cursor-pointer transition-opacity hover:opacity-80 focus-visible:opacity-80 focus-visible:outline-none ring-accent/60 hover:ring-1 focus-visible:ring-1" : ""} ${unqueuePending ? "!opacity-30" : ""} ${sticky ? `transition-[max-height] duration-200 ease-out ${scrollable ? "overflow-y-auto" : "overflow-hidden"}` : ""}`}
-      >
-        {text}
-        {/* Fade the last ~2.5rem of text into the bubble colour — keeps the box fully rounded + opaque
-            (no hard cut, no ellipsis). Only while collapsed AND actually overflowing. */}
-        {collapsed && overflows && (
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-user-bubble to-transparent" />
-        )}
-      </div>
+          is verbatim, so its line breaks must survive. Skipped entirely for an attachment-only send, so the
+          picture stands on its own instead of hanging under an empty gray pill. */}
+      {prose.trim() !== "" && (
+        <div
+          ref={ref}
+          {...(unqueueable ? {
+            role: "button",
+            tabIndex: 0,
+            "data-unqueue": deliveryId,
+            "aria-label": "Unqueue this message and put it back in the prompt box",
+            title: unqueuePending ? "Taking it back…" : "Click to unqueue — the text comes back to the prompt box",
+            onClick: (e: ReactMouseEvent<HTMLDivElement>) => unqueue({ deliveryId: deliveryId!, text, rawText: rawText ?? text, from: e.currentTarget }),
+            onKeyDown: (e: ReactKeyboardEvent<HTMLDivElement>) => {
+              if (e.key !== "Enter" && e.key !== " ") return
+              e.preventDefault()
+              unqueue({ deliveryId: deliveryId!, text, rawText: rawText ?? text, from: e.currentTarget })
+            },
+            onFocus: () => setUnqueueHover(true),
+            onBlur: () => setUnqueueHover(false),
+          } : {})}
+          // A queued bubble is never the sticky one (the pinned ask is the last LANDED user message), so
+          // these two never both apply — but they share the handler, so compose rather than overwrite.
+          onMouseEnter={sticky ? () => setExpanded(true) : unqueueable ? () => setUnqueueHover(true) : undefined}
+          onMouseLeave={sticky ? () => { setExpanded(false); setScrollReady(false) } : unqueueable ? () => setUnqueueHover(false) : undefined}
+          onTransitionEnd={sticky ? (e) => { if (e.propertyName === "max-height" && expanded && exceedsCap) setScrollReady(true) } : undefined}
+          // While NOT scrollable (collapsed, or expanding before it settles) the bubble is `overflow-hidden`
+          // and so lacks the scrollbar-gutter the scrollable state reserves — a 7px text shift when scroll
+          // turns on. Reserve the SAME width (`--sbw`, the app's scrollbar width) here so the text width is
+          // identical across every state: zero reflow even for over-cap messages.
+          style={{
+            ...(maxH ? { maxHeight: maxH } : {}),
+            ...(sticky && exceedsCap && !scrollable ? { paddingRight: "calc(0.875rem + var(--sbw))" } : {}),
+          }}
+          // A retractable bubble LIFTS under the pointer — back toward full opacity, with a ring — so the
+          // one message in the transcript that is still yours to change says so on hover instead of
+          // needing a permanent control that would clutter every send. Opacity is the same channel that
+          // already encodes "queued", which is exactly the state being offered.
+          className={`relative rounded-2xl rounded-br-sm bg-user-bubble px-3.5 py-2 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere] text-bg ${queued ? "opacity-50" : ""} ${unqueueable ? "cursor-pointer transition-opacity hover:opacity-80 focus-visible:opacity-80 focus-visible:outline-none ring-accent/60 hover:ring-1 focus-visible:ring-1" : ""} ${unqueuePending ? "!opacity-30" : ""} ${sticky ? `transition-[max-height] duration-200 ease-out ${scrollable ? "overflow-y-auto" : "overflow-hidden"}` : ""}`}
+        >
+          {prose}
+          {/* Fade the last ~2.5rem of text into the bubble colour — keeps the box fully rounded + opaque
+              (no hard cut, no ellipsis). Only while collapsed AND actually overflowing. */}
+          {collapsed && overflows && (
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-user-bubble to-transparent" />
+          )}
+        </div>
+      )}
+      {/* Below the words, mirroring the composer (prose in the textarea, chips along its bottom edge) —
+          and OUTSIDE the bubble, on the dark page, so BlockImage/BlockFile carry their normal styling
+          instead of a light-bubble fork, and so the delegated open-local-file click can't collide with a
+          queued bubble's click-to-unqueue. No basename caption: an upload's hash-prefixed filename is
+          noise the human already knows, and a failed load falls back to the path text anyway. */}
+      {attachments.length > 0 && (
+        <div className="mt-1 flex flex-col items-end gap-1.5">
+          {attachments.filter((a) => a.kind === "image").map((a, i) => <BlockImage key={`i${i}-${a.path}`} path={a.path} hideCaption />)}
+          {/* Docs share one WRAPPING row (mirroring SentFilesCard) — a column would spend a whole line
+              on each pill. `justify-end` keeps the run flush with the bubble's right edge. */}
+          {attachments.some((a) => a.kind === "file") && (
+            <div className="flex flex-wrap justify-end gap-1.5">
+              {attachments.filter((a) => a.kind === "file").map((a, i) => <BlockFile key={`f${i}-${a.path}`} path={a.path} />)}
+            </div>
+          )}
+        </div>
+      )}
       {/* Delivery-ledger verdict: no JSONL evidence within the confirmation window — the injection
           likely mutated or never reached the agent. Quiet one-liner (not a modal): the terminal pane
           is the recovery surface, and the bubble stays gray so the send is still legible above it. */}
