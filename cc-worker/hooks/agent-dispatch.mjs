@@ -6,8 +6,9 @@
 //      foreground agent blocks the worker's turn; a human interjection orphans it).
 //   2) STRIP `name`/`team_name` — setting either strands a nested dispatch (its result routes
 //      wrong and never returns cleanly), so scrub both silently.
-//   3) AUTO-APPEND a minimal ORCHESTRATION EPILOGUE so helpers return a useful handoff
-//      without imposing build, test, git, or process-lifecycle policy on arbitrary repos.
+//   3) AUTO-APPEND a repo-neutral ORCHESTRATION EPILOGUE so helpers return a useful handoff
+//      and know how to reach their dispatcher mid-flight without imposing build, test, git,
+//      compilation, or process-lifecycle policy on arbitrary repos.
 //
 // GATE: inert unless FRAY_UI_THREAD is set (not a fray-ui worker → allow every dispatch unmodified).
 //
@@ -22,7 +23,9 @@ import { readFileSync } from 'node:fs';
 const EPILOGUE = `
 
 ---
-[ORCHESTRATION EPILOGUE — auto-appended by the fray worker dispatch hook] You are helping a fray-ui worker. End with a concise handoff that gives the worker your outcome, relevant changes or evidence, and anything still unresolved. Do not edit the worker's scratchpad or other \`.fray/\` state unless your prompt explicitly asks you to.`;
+[ORCHESTRATION EPILOGUE — auto-appended by the fray worker dispatch hook] You are a helper sub-agent for a fray-ui worker. Your final message is the handoff: report your outcome/status; what you did; changed files, artifacts, and commit SHA when applicable; verification or evidence and its result; caveats or unresolved work; and the next action when one remains. A bare "done" or progress-only message is not a complete handoff.
+Do not edit the worker's scratchpad or other \`.fray/\` state unless your prompt explicitly asks you to.
+You have an upward channel while you work: \`SendMessage({to: "main", summary: "<5-10 words>", message: "…"})\` delivers to your dispatcher. Use it when the dispatcher acting before you finish could change the outcome—for example, when you hit an unresolved blocker, complete a milestone another task needs, or discover that your instructions should change. Do not use it for routine progress updates.`;
 
 /** @param {unknown} obj @returns {never} */
 function emit(obj) {

@@ -787,12 +787,18 @@ Suite 2413 pass / 0 fail, typecheck clean.
 ## 2026-07-30 (sixth pass): keep the helper epilogue universal
 
 `hooks/agent-dispatch.mjs` appends its epilogue to every Claude `Agent` helper launched by a fray-ui
-worker, regardless of the repository or kind of task. That makes it the wrong layer for assumptions
-about compilation, shared build locks, test ownership, commits, monitors, or how long-running
-operations should be managed.
+worker, regardless of the repository or kind of task. That makes it the wrong layer for requirements
+about compilation, shared build locks, build/test ownership, or how long-running operations should
+be managed.
 
-The epilogue is now only the universal coordination contract: return a concise, useful handoff, and
-do not mutate the owning worker's `.fray/` state unless explicitly assigned. Task-specific
+The epilogue keeps only universal coordination: return a useful handoff, do not mutate the owning
+worker's `.fray/` state unless explicitly assigned, and use the always-available `SendMessage`
+upward channel when the dispatcher acting mid-flight could change the outcome. Task-specific
 verification and process-lifecycle instructions belong in the dispatch prompt; repository-specific
 ones belong in the repository's own guidance. Background dispatch enforcement and `name` /
 `team_name` stripping are unchanged.
+
+Correction during implementation: the first reduction also removed `SendMessage`. That was too
+aggressive. Every helper receives the tool, and reaching the dispatcher before returning is
+universally useful orchestration rather than repository policy. The restored wording treats it as
+available directly and therefore drops the old deferred-tool / `ToolSearch` caveat.
