@@ -34,10 +34,17 @@ touch the maintainer's live instance, real `~/.fray` SQLite, or real worker tmux
 Boot it in the **background** (never foreground — it stays up until killed) and read back its URL:
 
 ```bash
-# from ui/ — run in the background, then read the printed json line for the url
-npx tsx scripts/adhoc-stack.mjs --port=4930
+# from ui/ — run in the background, REDIRECT to a file, then read the json line for the url + home
+npx tsx scripts/adhoc-stack.mjs --port=4930 > /tmp/stack.log 2>&1
 # → {"url":"http://127.0.0.1:4930/","port":4930,"home":"…","socket":"…","project":"…","wakers":false}
 ```
+
+**Never pipe it through `head`/`sed`/`grep` to read that line.** The stack keeps logging (every Vite HMR
+update, and the shared tree is edited constantly), so the reader exits, the pipe closes, and the next
+write kills the server with SIGPIPE — minutes later, mid-verification, looking like an unrelated crash.
+Redirect to a file and poll the file. Take `home` AND `socket` from that json: the socket carries a PID
+suffix (`fray-adhoc-4930-84193`), so guessing `fray-adhoc-4930` seeds your fixture panes onto a socket
+the server isn't watching.
 
 Flags: `--port=N`, `--project=/abs/dir` (defaults to the fray repo — a gh-authed repo with an empty board
 under the temp HOME), `--wakers` (arm the scheduler), `--keep` (don't delete the temp HOME on exit).

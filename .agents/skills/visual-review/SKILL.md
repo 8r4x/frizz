@@ -162,6 +162,43 @@ Save as a file and pass it to `shot.mjs` with `@`:
 lifted (`translateY` negative). Re-run after correcting and confirm the residual is ~0 — never assume
 your nudge landed.
 
+### Beside PROSE, align to the cap band — not to the string's own ink
+
+`inkOfText` measures the actual bounding box of *the specific string*. That is exact for a **digit**
+(uniform, no descender), which is what this routine was written for — and unstable for a **sentence**,
+because the reference then moves with whatever letters happen to be in that row. Measured on a to-do
+checklist (2026-07-29): the SAME glyph at the SAME size read **3.06px** beside "…network **g**rant…"
+and **1.88px** beside "…unconfined is fatal" — a 1.2px spread that is purely the descender. A per-row
+nudge is meaningless, so swap the reference for the string-independent band the eye reads as "the line
+of text", baseline → cap height:
+
+```js
+const capBand = (font, baseline) => {
+  const c = document.createElement("canvas").getContext("2d")
+  c.font = font
+  return { top: baseline - c.measureText("H").actualBoundingBoxAscent, bottom: baseline }
+}
+```
+
+Keep `inkOfText` alongside it and print both — the gap between them is the descender tell.
+
+Three more ways this instrument lies, all found in one sitting and each producing a plausible number:
+
+- **A px-sized icon makes an `em` correction a lie.** `<Icon size={12}/>` pins the glyph while the text
+  around it scales, so the geometry the correction came from stops holding. Size the glyph `1em` and the
+  scale check passes for the right reason.
+- **`1em` resolves against the glyph's OWN inherited font-size.** If the icon's parent is the card
+  (12.5px) while its text sibling is pinned `text-[11.5px]`, you are aligning a 12.5px glyph to 11.5px
+  text and the correction encodes that accident. Put the font-size on the wrapper so the pair shares one.
+- **A wrapped row breaks the baseline probe.** It reports the LAST line's baseline while the glyph
+  aligns to the first — which read as a **42px** error. Force `white-space:nowrap` for the measurement.
+
+And when a residual only appears at a scaled size, re-measure RAW (correction neutralized, one pass per
+page load) before theorizing: chasing an "instrument damages what it measures" story cost a cycle, and
+the raw numbers showed the real thing — an ~11.5px box centred on a flex line is genuinely not
+scale-invariant (11.5px wanted -0.137em, 23px and 46px both wanted -0.094em). No single `em` zeroes
+both, so correct for the size that SHIPS and say so in the comment.
+
 ---
 
 ## Rule 3 — distrust a measurement that is suspiciously large
