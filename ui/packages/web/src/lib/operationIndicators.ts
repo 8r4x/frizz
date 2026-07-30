@@ -9,26 +9,60 @@ export function runningOperations<T extends { state: string }>(operations: reado
   return operations.filter((operation) => isRunningOperation(operation.state))
 }
 
-// The pulsing DOT means exactly one thing: a DETACHED background op is alive — blue for a shell/Monitor,
-// accent-yellow for a sub-agent. That is the whole reason the hue vocabulary exists, so a call that was
-// never backgrounded must not wear it: an ordinary Bash that is simply taking a while, or a blocking
-// Agent, is not a background job and reading as one is the bug (maintainer 2026-07-29: "the fact that
-// there's a blue dot at all indicates that it's a background job … something that is not backgrounded
-// should not even have a blue dot"). It gets the spinner below instead.
+// THE DOT MEANS "A SHELL IS ALIVE RIGHT NOW" — not "a shell was detached".
 //
-// `run_in_background` is what decides this and fray reads it straight off the tool input at parse time
-// (transcript.ts — Bash `run_in_background: true`, and Monitor, which is always detached), so the two
-// cases are told apart definitively rather than guessed at from how long the call has been pending.
+// It briefly meant the narrower thing. The dot was worn by any pending call, so an ordinary Bash that
+// was simply taking a while read as a detached job; that was corrected (2026-07-29) by reserving the dot
+// for `run_in_background` and giving a pending foreground call a neutral spinner instead. The spinner is
+// what did not survive contact: once the mark moved to the head of the row, a long-running foreground
+// command was the ONE live thing on screen with no mark in the liveness column, announcing itself
+// through a small grey ring at the far edge instead (maintainer 2026-07-30: "we should use the blue dot
+// even for non-backgrounded bash scripts that are running for more than like a second or two … instead
+// of the spinner").
+//
+// So detachment is no longer what the hue encodes — RUNTIME KIND is: blue for a shell, accent-yellow for
+// a sub-agent, whichever way the shell was launched. What detachment still decides is the reading beside
+// the dot ("running" vs "background running" in the tooltip) and, for a tracked op, whether fray can
+// observe it going quiet at all.
+//
+// `run_in_background` is read straight off the tool input at parse time (transcript.ts — Bash
+// `run_in_background: true`, and Monitor, which is always detached), so a detached op is known
+// definitively and marks itself the instant it starts: fray has a real process to point at.
 export function hasRunningToolIndicator(status: "pending" | "completed" | "failed" | "cancelled" | undefined, backgroundState?: "background" | "unknown"): boolean {
   return status === "pending" && backgroundState === "background"
 }
 
-// A pending FOREGROUND call: in progress inside the turn that is running it, with no detached process
-// behind it. Motion still belongs here — the work IS underway — but as a neutral spinner, which claims
-// nothing about a background job. "unknown" is deliberately excluded: an orphaned poll is a process fray
-// cannot place, and animating it as in-progress would assert liveness nobody has observed.
-export function hasPendingToolSpinner(status: "pending" | "completed" | "failed" | "cancelled" | undefined, backgroundState?: "background" | "unknown"): boolean {
+// A FOREGROUND call has no such process record, so it earns the mark on ELAPSED TIME instead — the
+// threshold exists purely to keep the column quiet. Nearly every tool call resolves in well under a
+// second, and marking those would strobe a dot on and off for every Read and Grep in a batch, which
+// reads as noise rather than as liveness. Two seconds is the point past which a command is one you are
+// actually waiting on.
+export const FOREGROUND_MARK_AFTER_MS = 2_000
+
+// In progress inside the turn that is running it, with no detached process behind it. "unknown" is
+// deliberately excluded: an orphaned poll is a process fray cannot place, and marking it live would
+// assert something nobody has observed.
+export function isPendingForegroundTool(status: "pending" | "completed" | "failed" | "cancelled" | undefined, backgroundState?: "background" | "unknown"): boolean {
   return status === "pending" && backgroundState === undefined
+}
+
+// …and has it been running long enough to earn the mark? `startedAt` is the emitting assistant message's
+// timestamp — the moment the model issued the call.
+//
+// NO timestamp (a pre-restart server / an older transcript projects messages without `at`) marks the call
+// immediately. The threshold is a noise filter, not a liveness claim, so when it cannot be evaluated the
+// safe default is the one that still shows a running command — silently hiding live work would be the
+// worse failure, and it is exactly what the spinner did NOT do.
+export function foregroundToolIsRunning(
+  status: "pending" | "completed" | "failed" | "cancelled" | undefined,
+  backgroundState: "background" | "unknown" | undefined,
+  startedAt: string | undefined,
+  nowMs: number,
+): boolean {
+  if (!isPendingForegroundTool(status, backgroundState)) return false
+  const started = startedAt ? Date.parse(startedAt) : Number.NaN
+  if (!Number.isFinite(started)) return true
+  return nowMs - started >= FOREGROUND_MARK_AFTER_MS
 }
 
 type BackgroundTool = {

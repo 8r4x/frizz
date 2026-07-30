@@ -5,7 +5,7 @@
 //
 //   • a DETACHED background Bash, still pending      → blue mark leading the row
 //   • a Monitor (always detached), still pending     → blue mark leading the row
-//   • a FOREGROUND Bash, still pending               → NO mark; spinner in the right-hand reading
+//   • a FOREGROUND Bash pending for a while          → the SAME blue mark (no spinner anywhere)
 //   • a finished Bash, and a failed one              → no mark, no slot; the reading alone
 //   • an Agent dispatch, still pending               → the accent mark, in the SAME slot
 //
@@ -74,7 +74,8 @@ const records = [
         // Monitor is always detached, so it needs no flag — and it renders as a header-only card,
         // which is the OTHER card shape that has to carry the mark.
         call("toolu_monitor", "Monitor", { command: "gh pr checks 391 --watch", description: "Monitor: PR checks" }),
-        // FOREGROUND, still pending: the spinner case. No mark, and no slot for one.
+        // FOREGROUND, still pending: marks itself on elapsed time once past the threshold. This record's
+        // own timestamp is the clock, and it is minutes old, so it renders marked on first paint.
         call("toolu_fg", "Bash", { command: "npm run build", description: "Build the workspace" }),
         call("toolu_agent", "Agent", { prompt: "Sweep every call site of the renamed helper.", subagent_type: "fray:opus-high", description: "Sweep the renamed helper" }),
       ],

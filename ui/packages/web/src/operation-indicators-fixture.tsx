@@ -15,6 +15,13 @@ import "./styles.css"
 // the moment the dispatch card started rendering a runtime, which is nobody's real reading.
 const agoIso = (minutes: number): string => new Date(Date.now() - minutes * 60_000).toISOString()
 
+// How long the "fresh" foreground shell row has been running, from the URL, so a test can pin BOTH sides
+// of the elapsed threshold with no race against page-load time. A NEGATIVE age puts the call's start in
+// the future — which is both the deterministic "definitely not marked yet" state and a real case (the
+// worker's clock and the browser's are not the same clock). Default 0 = started exactly at load.
+const freshAgeMs = Number(new URLSearchParams(location.search).get("freshAgeMs") ?? 0)
+const freshStartedAt = new Date(Date.now() - freshAgeMs).toISOString()
+
 const thread: ThreadView = {
   id: "operation-indicators",
   title: "Per-operation running indicators",
@@ -180,9 +187,14 @@ createRoot(document.getElementById("root")!).render(
           <ToolCardRouter t={{ name: "Monitor", detail: "Monitor: PR checks", desc: "Monitor: PR checks", backgroundState: "background", status: "pending", count: 1 }} />
           {/* Detached, but fray tracks no live op behind it: the mark is the pending-background dot. */}
           <ToolCardRouter t={{ name: "Bash", detail: "Untracked background job", desc: "Untracked background job", command: "node worker.mjs", backgroundState: "background", status: "pending", count: 1 }} />
-          {/* FOREGROUND pending: no mark, no slot — the spinner stays in the reading, exactly as an
-              untracked dispatch's does. A command taking a while is not a background job. */}
-          <ToolCardRouter t={{ name: "Bash", detail: "Build the workspace", desc: "Build the workspace", command: "npm run build", status: "pending", count: 1 }} />
+          {/* FOREGROUND pending, running a while: the SAME blue mark in the SAME slot. Detachment is not
+              what the dot encodes any more — a shell that is running right now is one fact, and this row
+              is the one the reader most needs to find (maintainer 2026-07-30). */}
+          <ToolCardRouter t={{ name: "Bash", detail: "Build the workspace", desc: "Build the workspace", command: "npm run build", status: "pending", count: 1 }} startedAt={agoIso(0.7)} />
+          {/* FOREGROUND pending, just issued: NO mark yet. The threshold keeps a batch of sub-second
+              Reads and Greps from strobing a dot; this row arms a timer and marks ITSELF when it lands,
+              with no data push behind it. */}
+          <ToolCardRouter t={{ name: "Bash", detail: "List the changed files", desc: "List the changed files", command: "git status --short", status: "pending", count: 1 }} startedAt={freshStartedAt} />
           {/* Resolved: no mark and no slot, so "Bash" sits flush at the header's left edge. */}
           <ToolCardRouter t={{ name: "Bash", detail: "Run the unit suite", desc: "Run the unit suite", command: "npm test", status: "completed", durationMs: 32_000, count: 1 }} />
           <ToolCardRouter t={{ name: "Bash", detail: "Typecheck", desc: "Typecheck", command: "npm run typecheck", status: "failed", exitCode: 1, durationMs: 12_000, count: 1 }} />

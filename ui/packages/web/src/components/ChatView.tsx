@@ -38,7 +38,7 @@ import { ThreadLifecycleFooter, StateButton } from "./ThreadLifecycleFooter.tsx"
 import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { Tooltip } from "./Tooltip.tsx"
 import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
-import { hasPendingToolSpinner, hasRunningToolIndicator, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
+import { FOREGROUND_MARK_AFTER_MS, foregroundToolIsRunning, hasRunningToolIndicator, isPendingForegroundTool, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
 import { formatToolDuration } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, visibleChildOps } from "../lib/childOps.ts"
@@ -1678,7 +1678,10 @@ function shortenTarget(detail: string): string {
 // activity doesn't dwarf the prose it belongs to.
 const COLLAPSE_AT = 4
 
-function ToolCalls({ tools, dense }: { tools: CollapsedTool[]; dense?: boolean }) {
+// `at` is the emitting assistant message's ISO timestamp — the moment the model issued this batch of
+// calls, and therefore the clock a pending FOREGROUND card times itself against. Optional: a pre-restart
+// server projects messages without it, and a card with no clock marks itself immediately.
+function ToolCalls({ tools, dense, at }: { tools: CollapsedTool[]; dense?: boolean; at?: string }) {
   const [expanded, setExpanded] = useState(false)
   const cardsId = useId()
   const total = tools.reduce((n, t) => n + t.count, 0)
@@ -1717,7 +1720,7 @@ function ToolCalls({ tools, dense }: { tools: CollapsedTool[]; dense?: boolean }
     // accumulator, ZERO kind-dependent flushing: ADJACENT CARDS ARE ALWAYS 6px APART — Edit next to
     // Bash next to a header-only card all sit at the same tight rhythm — while the whole band sits a
     // full STEP (14px) from surrounding prose. No other spacing values exist inside a tool band.
-    const cards = tools.map((t, i) => <ToolCardRouter key={i} t={t} />)
+    const cards = tools.map((t, i) => <ToolCardRouter key={i} t={t} startedAt={at} />)
     blocks.push(
       <div key="cards" id={collapsible ? cardsId : undefined} className="flex flex-col">
         {withSpacers(cards, 6)}
@@ -1737,7 +1740,7 @@ function ToolCalls({ tools, dense }: { tools: CollapsedTool[]; dense?: boolean }
 // Route a collapsed tool entry to its card. Edit/Bash/Read/Agent get expandable bodies (chevron);
 // everything else (Grep, Glob, Read-without-excerpt, MCP, Monitor, a pre-restart Bash with no command)
 // is a header-only card. All share the same bordered card family so no call ever reads as bare text.
-export function ToolCardRouter({ t }: { t: CollapsedTool }) {
+export function ToolCardRouter({ t, startedAt }: { t: CollapsedTool; startedAt?: string }) {
   const slug = useContext(ThreadSlugContext)
   const board = useBoard()
   const thread = slug ? threadBySlug(board, slug) : undefined
@@ -1746,7 +1749,7 @@ export function ToolCardRouter({ t }: { t: CollapsedTool }) {
     return <DiffBlock edits={t.edits} meta={<ToolStatusMeta status={t.status} backgroundState={t.backgroundState} liveBackgroundState={liveBackgroundState} exitCode={t.exitCode} durationMs={t.durationMs} />} />
   }
   if (t.command) {
-    return <BashBlock command={t.command} desc={t.desc ?? t.detail} output={t.output} status={t.status} backgroundState={t.backgroundState} liveBackgroundState={liveBackgroundState} exitCode={t.exitCode} cwd={t.cwd} sessionId={t.sessionId} durationMs={t.durationMs} />
+    return <BashBlock command={t.command} desc={t.desc ?? t.detail} output={t.output} status={t.status} backgroundState={t.backgroundState} liveBackgroundState={liveBackgroundState} exitCode={t.exitCode} cwd={t.cwd} sessionId={t.sessionId} durationMs={t.durationMs} startedAt={startedAt} />
   }
   if (t.read) return <ReadBlock detail={t.detail} read={t.read} status={t.status} durationMs={t.durationMs} />
   // A dispatch renders as an AgentBlock on EITHER signal: a prompt (Claude) or just the correlation id
@@ -1760,9 +1763,9 @@ export function ToolCardRouter({ t }: { t: CollapsedTool }) {
   // `input`, which that branch would claim first).
   if (t.todos) return <TodoBlock todos={t.todos} note={t.input} meta={<ToolStatusMeta status={t.status} durationMs={t.durationMs} />} />
   if (t.input || t.output) {
-    return <BashBlock name={t.name} command={t.input ?? ""} desc={t.detail} output={t.output} status={t.status} backgroundState={t.backgroundState} liveBackgroundState={liveBackgroundState} exitCode={t.exitCode} cwd={t.cwd} sessionId={t.sessionId} durationMs={t.durationMs} inputLabel="input" />
+    return <BashBlock name={t.name} command={t.input ?? ""} desc={t.detail} output={t.output} status={t.status} backgroundState={t.backgroundState} liveBackgroundState={liveBackgroundState} exitCode={t.exitCode} cwd={t.cwd} sessionId={t.sessionId} durationMs={t.durationMs} inputLabel="input" startedAt={startedAt} />
   }
-  return <ToolCard name={t.name} detail={t.detail} count={t.count} status={t.status} backgroundState={t.backgroundState} liveBackgroundState={liveBackgroundState} exitCode={t.exitCode} cwd={t.cwd} sessionId={t.sessionId} durationMs={t.durationMs} />
+  return <ToolCard name={t.name} detail={t.detail} count={t.count} status={t.status} backgroundState={t.backgroundState} liveBackgroundState={liveBackgroundState} exitCode={t.exitCode} cwd={t.cwd} sessionId={t.sessionId} durationMs={t.durationMs} startedAt={startedAt} />
 }
 
 type ToolStatus = NonNullable<TranscriptToolCall["status"]>
@@ -1795,6 +1798,27 @@ function ToolMetaReading({ tone, indicator, label, duration, title }: {
   )
 }
 
+// A foreground call crosses the "long enough to mark" threshold while it is ON SCREEN, so the card has
+// to reach that moment ITSELF: it is not a data change, nothing pushes, and the shared 30s liveClock is
+// far too coarse to land a 2s edge. One timer per pending card, armed for exactly the remaining time and
+// cleared on resolve/unmount — so a batch of fast Reads arms and drops its timers without ever painting,
+// and a `sleep 30` lights up 2s in and stays lit.
+function useForegroundRunning(status: ToolStatus | undefined, backgroundState: TranscriptToolCall["backgroundState"], startedAt: string | undefined): boolean {
+  const [now, setNow] = useState(() => Date.now())
+  const pending = isPendingForegroundTool(status, backgroundState)
+  const running = foregroundToolIsRunning(status, backgroundState, startedAt, now)
+  useEffect(() => {
+    // Already marked, or nothing to mark: no timer at all. `running` is what makes this terminate —
+    // once it flips true the effect re-runs and returns without arming again.
+    if (!pending || running) return
+    const started = startedAt ? Date.parse(startedAt) : Number.NaN
+    if (!Number.isFinite(started)) return
+    const timer = setTimeout(() => setNow(Date.now()), Math.max(FOREGROUND_MARK_AFTER_MS - (Date.now() - started), 0))
+    return () => clearTimeout(timer)
+  }, [pending, running, startedAt])
+  return running
+}
+
 // THE LIVENESS MARK, LEADING THE ROW — the same slot, the same width, the same ink correction the
 // dispatch card uses (AgentBlock, below), because it is the same statement: something is alive behind
 // this card. It sat in the RIGHT-hand reading instead, which put a shell card's blue dot at the
@@ -1808,10 +1832,12 @@ function ToolMetaReading({ tone, indicator, label, duration, title }: {
 // renders NO SLOT at all — an empty reservation reads as a layout bug, which is exactly what the
 // dispatch card had to unlearn (see AgentBlock's `mark`).
 //
-// What deliberately does NOT move here: the pending-FOREGROUND spinner. It stays in the reading, again
-// mirroring the dispatch card — the left mark means a detached process, and a command that is merely
-// taking a while inside the turn must not borrow that position any more than it may borrow the hue.
-function ToolLiveMark({ status, backgroundState, liveBackgroundState }: { status?: ToolStatus; backgroundState?: TranscriptToolCall["backgroundState"]; liveBackgroundState?: "running" | "stale" }) {
+// A pending FOREGROUND command marks itself here too, on elapsed time (lib/operationIndicators.ts) —
+// the spinner it used to get at the far right is gone. Detached or not, a shell that is running right
+// now is the same fact to a reader, and splitting it across two glyphs at two edges meant the LONGEST
+// commands — the ones you actually wait on — were the least visible thing on screen.
+function ToolLiveMark({ status, backgroundState, liveBackgroundState, startedAt }: { status?: ToolStatus; backgroundState?: TranscriptToolCall["backgroundState"]; liveBackgroundState?: "running" | "stale"; startedAt?: string }) {
+  const foregroundRunning = useForegroundRunning(status, backgroundState, startedAt)
   // Precedence follows the READING beside it, exactly: a tracked op's own observed state outranks the
   // call's pending-ness, so a shell fray watches and finds quiet draws the breathing mark next to the
   // word "stale". The old right-hand indicator tested `running || pending-background` first and so
@@ -1822,7 +1848,7 @@ function ToolLiveMark({ status, backgroundState, liveBackgroundState }: { status
       <span aria-hidden className="fray-live-dot fray-live-dot--shell" data-running-indicator="tool-disclosure" />
     ) : liveBackgroundState === "stale" ? (
       <span aria-hidden className="fray-live-dot-quiet fray-live-dot-quiet--shell" data-running-indicator="tool-quiet" title={CHILD_QUIET_SHELL_TITLE} />
-    ) : hasRunningToolIndicator(status, backgroundState) ? (
+    ) : hasRunningToolIndicator(status, backgroundState) || foregroundRunning ? (
       <span aria-hidden className="fray-live-dot fray-live-dot--shell" data-running-indicator="tool-disclosure" />
     ) : null
   if (!mark) return null
@@ -1866,8 +1892,9 @@ export function ToolStatusMeta({ status, backgroundState, liveBackgroundState, e
       title={title}
       label={label}
       duration={duration}
-      // The live dot moved to the row's head (ToolLiveMark); only the foreground spinner reads here.
-      indicator={hasPendingToolSpinner(status, backgroundState) ? <span aria-hidden className="fray-tool-spinner" data-running-indicator="tool-pending" /> : null}
+      // NO indicator: every liveness glyph this family draws now leads the row (ToolLiveMark), the
+      // detached and the foreground alike. The reading is words only. (The dispatch card still spins
+      // here, for the one thing elapsed time cannot say — see AgentBlock: no child record at all.)
     />
   )
 }
@@ -1891,7 +1918,7 @@ function isFilePath(detail: string): boolean {
 // COMMON case pre-restart, so it must be indistinguishable from a real card header. petite-caps label
 // left, repo-relative detail middle (an editor deep-link for a plain absolute path), ×N fold right. No
 // call ever reads as bare `Name(detail)` text again.
-function ToolCard({ name, detail, count, status, backgroundState, liveBackgroundState, exitCode, cwd, sessionId, durationMs }: { name: string; detail?: string; count: number; status?: ToolStatus; backgroundState?: TranscriptToolCall["backgroundState"]; liveBackgroundState?: "running" | "stale"; exitCode?: number; cwd?: string; sessionId?: string | number; durationMs?: number }) {
+function ToolCard({ name, detail, count, status, backgroundState, liveBackgroundState, exitCode, cwd, sessionId, durationMs, startedAt }: { name: string; detail?: string; count: number; status?: ToolStatus; backgroundState?: TranscriptToolCall["backgroundState"]; liveBackgroundState?: "running" | "stale"; exitCode?: number; cwd?: string; sessionId?: string | number; durationMs?: number; startedAt?: string }) {
   const shownDetail = contextualDetail(detail, cwd, sessionId)
   const short = shownDetail ? shortenTarget(shownDetail) : undefined
   const linkPath = detail && isFilePath(detail) ? detail : undefined
@@ -1899,7 +1926,7 @@ function ToolCard({ name, detail, count, status, backgroundState, liveBackground
     <div className="fray-bash" title={shownDetail}>
       <div className="fray-bash-header">
         <span className="flex min-w-0 items-center gap-2">
-          <ToolLiveMark status={status} backgroundState={backgroundState} liveBackgroundState={liveBackgroundState} />
+          <ToolLiveMark status={status} backgroundState={backgroundState} liveBackgroundState={liveBackgroundState} startedAt={startedAt} />
           <span className="petite-caps fray-bash-label shrink-0">{prettyToolName(name)}</span>
           {short &&
             (linkPath ? (
@@ -2033,6 +2060,7 @@ function BashBlock({
   sessionId,
   durationMs,
   inputLabel,
+  startedAt,
 }: {
   command: string
   desc?: string
@@ -2046,6 +2074,7 @@ function BashBlock({
   sessionId?: string | number
   durationMs?: number
   inputLabel?: string
+  startedAt?: string
 }) {
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -2071,7 +2100,7 @@ function BashBlock({
         className="fray-bash-header w-full text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-fg/60"
       >
         <span className="flex min-w-0 items-center gap-2">
-          <ToolLiveMark status={status} backgroundState={backgroundState} liveBackgroundState={liveBackgroundState} />
+          <ToolLiveMark status={status} backgroundState={backgroundState} liveBackgroundState={liveBackgroundState} startedAt={startedAt} />
           <span className="petite-caps fray-bash-label shrink-0">{prettyToolName(name)}</span>
           <span className="min-w-0 truncate text-[11.5px] text-muted" title={shownDesc}>{shownDesc ?? ""}</span>
         </span>
@@ -2778,7 +2807,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
         // the agent's prose remains — its calls live inside the collapsed intermediate bar instead.
         if (textOnly) return
         const collapsed = collapseTools(part.tools)
-        if (collapsed.length) blocks.push(<ToolCalls key={`t${pi}`} tools={collapsed} dense={dense} />)
+        if (collapsed.length) blocks.push(<ToolCalls key={`t${pi}`} tools={collapsed} dense={dense} at={m.at} />)
       } else {
         renderText(part.text, `x${pi}`)
       }
@@ -2788,7 +2817,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     // then all prose. Degrades to today's (order-lossy) rendering until the server bounce.
     if (!textOnly) {
       const collapsed = collapseTools(m.tools)
-      if (collapsed.length > 0) blocks.push(<ToolCalls key="tools" tools={collapsed} dense={dense} />)
+      if (collapsed.length > 0) blocks.push(<ToolCalls key="tools" tools={collapsed} dense={dense} at={m.at} />)
     }
     renderText(m.text, "leg")
   }

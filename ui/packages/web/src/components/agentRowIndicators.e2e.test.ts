@@ -204,7 +204,9 @@ test("a background shell card marks its liveness in the same slot as a dispatch 
 
   try {
     await page.setViewport({ width: 1000, height: 1800, deviceScaleFactor: 1 })
-    await page.goto(`${baseUrl}/operation-indicators-fixture.html`, { waitUntil: "networkidle0" })
+    // freshAgeMs NEGATIVE = the last shell row's call starts 15s in the FUTURE, so it is unmarked at load
+    // with a 15s margin no matter how slow the render — the threshold is pinned without racing the clock.
+    await page.goto(`${baseUrl}/operation-indicators-fixture.html?freshAgeMs=-15000`, { waitUntil: "networkidle0" })
     const read = (selector: string) =>
       page.$$eval(selector, (cards) =>
         cards.map((card) => {
@@ -245,20 +247,33 @@ test("a background shell card marks its liveness in the same slot as a dispatch 
       )
     const shells = await read("[data-shell-rows] .fray-bash")
     const agents = await read("[data-agent-rows] .fray-bash")
-    assert.equal(shells.length, 6, "the fixture must cover live / quiet / untracked-detached / foreground / done / failed shell rows")
+    assert.equal(shells.length, 7, "the fixture must cover live / quiet / untracked-detached / long-foreground / fresh-foreground / done / failed shell rows")
 
-    // THE SHAPE, row by row. Rows 0-2 are detached and marked; 3-5 have nothing live behind them and so
-    // render NO slot — an empty reservation is the defect the dispatch card already had to unlearn.
-    const MARKED = 3
+    // THE SHAPE, row by row. Rows 0-3 are running — three detached, plus the FOREGROUND command that has
+    // been going long enough to earn the mark. Rows 4-6 have nothing live to show (a call issued a moment
+    // ago, and two resolved ones) and render NO slot — an empty reservation is the defect the dispatch
+    // card already had to unlearn.
+    const MARKED = 4
     for (const [index, row] of shells.entries()) {
       const marked = index < MARKED
       assert.equal(row.markSlotIndex, marked ? 0 : -1, `shell row ${index}: ${marked ? "the liveness mark must lead the header" : "a row with nothing live behind it renders no mark slot"}`)
       assert.equal(row.labelIndex, marked ? 1 : 0, `shell row ${index}: the tool label must ${marked ? "follow the mark" : "lead the header"}`)
       assert.equal(marked ? row.labelOffset > 0 : row.labelOffset === 0, true, `shell row ${index}: the label sits ${row.labelOffset}px from the left edge`)
-      // Exactly one, and never in the reading: the right-hand column carries WORDS now, plus the
-      // foreground spinner (row 3) which deliberately did not move.
-      assert.equal(row.indicators, index < MARKED || index === 3 ? 1 : 0, `shell row ${index}: one indicator at most`)
+      // Exactly one glyph per row, and it is ALWAYS the leading mark: this family draws nothing in the
+      // right-hand reading any more. A `tool-pending` spinner reappearing here is the regression.
+      assert.equal(row.indicators, marked ? 1 : 0, `shell row ${index}: one indicator at most, and only in the mark slot`)
     }
+    // The spinner is gone from this card family entirely — it now belongs only to a dispatch with no
+    // child record, which elapsed time cannot speak for.
+    assert.equal(await page.$$eval("[data-shell-rows] [data-running-indicator]", (n) => n.map((e) => e.getAttribute("data-running-indicator"))).then((k) => k.filter((v) => v === "tool-pending").length), 0, "no shell row may spin")
+
+    // A LONG-RUNNING FOREGROUND command marks itself exactly like a detached one — same slot, same hue.
+    // This is the row the whole 2026-07-30 change is about, so it is asserted against the detached row
+    // beside it rather than on its own.
+    assert.equal(shells[3].markLeft, shells[0].markLeft, "a foreground shell marks itself in the detached shell's slot")
+    assert.match(String(shells[3].markClass), /fray-live-dot--shell/)
+    assert.deepEqual(shells[3].markRgb, shells[0].markRgb, "…in the same blue")
+    assert.equal(shells[3].rightText, "running")
 
     // ALIGNED, measured against the dispatch card: same slot position, same optical line, same class —
     // agents[0] is the live child, shells[0] the live shell.
@@ -281,6 +296,19 @@ test("a background shell card marks its liveness in the same slot as a dispatch 
     // The two detached-and-live readings: correlated to a live op, and merely flagged background.
     assert.equal(shells[0].rightText, "running")
     assert.equal(shells[2].rightText, "running")
+
+    // …AND IT MARKS ITSELF. Row 4 (`git status --short`) was issued moments ago: unmarked above, and it
+    // must cross the threshold on its OWN timer, with no reload, no interaction and no data push. That
+    // timer is the only part of the rule a pure unit test cannot reach.
+    assert.equal(shells[4].markSlotIndex, -1, "the fresh call starts unmarked")
+    await page.waitForFunction(
+      () => document.querySelectorAll("[data-shell-rows] .fray-bash")[4]?.querySelector(".fray-tool-mark") !== null,
+      { timeout: 30_000, polling: 250 },
+    )
+    const late = await read("[data-shell-rows] .fray-bash")
+    assert.equal(late[4].markSlotIndex, 0, "a call that keeps running marks itself once it passes the threshold")
+    assert.equal(late[4].markLeft, shells[0].markLeft, "…into the same slot as every other mark")
+    assert.equal(late[5].markSlotIndex, -1, "and a RESOLVED row never grows a mark, however long the page is open")
 
     assert.deepEqual(errors, [])
   } finally {

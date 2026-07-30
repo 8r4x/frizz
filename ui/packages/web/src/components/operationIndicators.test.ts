@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import test from "node:test"
-import { hasPendingToolSpinner, hasRunningToolIndicator, isRunningOperation, liveBackgroundOperationState, runningOperations } from "../lib/operationIndicators.ts"
+import { FOREGROUND_MARK_AFTER_MS, foregroundToolIsRunning, hasRunningToolIndicator, isPendingForegroundTool, isRunningOperation, liveBackgroundOperationState, runningOperations } from "../lib/operationIndicators.ts"
 
 test("multiple simultaneous background operations get individual live indicators while terminal states do not", () => {
   const operations = [
@@ -26,25 +26,29 @@ test("tool disclosures pulse only while their own call is pending", () => {
   assert.equal(hasRunningToolIndicator("pending", "unknown"), false)
 })
 
-// The dot is the BACKGROUND signal, so the two pending kinds must be told apart, not merged: a detached
-// op pulses, an ordinary long-running command spins. Exactly one indicator ever applies.
-test("only a DETACHED pending call gets the live dot; a foreground one gets the spinner", () => {
-  assert.equal(hasRunningToolIndicator("pending"), false, "a foreground Bash is not a background job")
-  assert.equal(hasPendingToolSpinner("pending"), true, "…it spins instead")
-
-  assert.equal(hasPendingToolSpinner("pending", "background"), false, "a detached op never doubles up")
-  assert.equal(hasRunningToolIndicator("pending", "background"), true)
+// The two pending kinds are still told APART — a detached op has a real process record and marks itself
+// instantly, a foreground one has only elapsed time — but they now converge on the SAME glyph, because a
+// shell that is running right now is one fact to a reader (maintainer 2026-07-30).
+test("a detached call marks instantly; a foreground one marks on elapsed time", () => {
+  assert.equal(hasRunningToolIndicator("pending", "background"), true, "a detached op has a process to point at")
+  assert.equal(hasRunningToolIndicator("pending"), false, "a foreground call is not a background job…")
+  assert.equal(isPendingForegroundTool("pending"), true, "…it is the other pending kind")
+  assert.equal(isPendingForegroundTool("pending", "background"), false, "a detached op is never both")
 
   // An orphaned Codex poll is a process fray cannot place — it claims neither liveness nor progress.
   assert.equal(hasRunningToolIndicator("pending", "unknown"), false)
-  assert.equal(hasPendingToolSpinner("pending", "unknown"), false)
+  assert.equal(isPendingForegroundTool("pending", "unknown"), false)
 
   for (const status of ["completed", "failed", "cancelled", undefined] as const) {
-    assert.equal(hasPendingToolSpinner(status), false, `${status} is not in progress`)
+    assert.equal(isPendingForegroundTool(status), false, `${status} is not in progress`)
   }
 })
 
-test("the foreground spinner keeps its mark under reduced motion, in the chip's own tone", () => {
+// The spinner is no longer a SHELL glyph, but it is not dead: a dispatch with no child record still
+// spins (AgentBlock), because "we have no record of this child" is the one thing elapsed time cannot
+// speak for. So its CSS keeps its coverage — and above all keeps NOT being a --live-dot hue, which is
+// what would let it read as a runtime it has never been.
+test("the dispatch spinner keeps its mark under reduced motion, in the chip's own tone", () => {
   const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8")
   // currentColor, NOT a --live-dot hue: the spinner must never read as the shell blue or agent accent.
   assert.match(css, /\.fray-tool-spinner \{[^}]*border-top-color: currentColor/)
@@ -53,6 +57,29 @@ test("the foreground spinner keeps its mark under reduced motion, in the chip's 
   assert.match(css, /@keyframes fray-tool-spin/)
   // Motion off, mark still drawn — an in-progress call that renders nothing reads as finished.
   assert.match(css, /\.fray-tool-spinner \{ animation: none; border-color:/)
+})
+
+// THE THRESHOLD is a noise filter: nearly every call resolves in well under a second, and marking those
+// would strobe a dot for every Read and Grep in a batch.
+test("a foreground call earns the mark only once it has been running long enough", () => {
+  const t0 = Date.parse("2026-07-30T04:00:00.000Z")
+  const at = new Date(t0).toISOString()
+  const run = (elapsed: number, status: "pending" | "completed" = "pending", bg?: "background" | "unknown") =>
+    foregroundToolIsRunning(status, bg, at, t0 + elapsed)
+
+  assert.equal(run(0), false, "a call that just started draws nothing")
+  assert.equal(run(FOREGROUND_MARK_AFTER_MS - 1), false, "…and still nothing a millisecond short")
+  assert.equal(run(FOREGROUND_MARK_AFTER_MS), true, "at the threshold it marks")
+  assert.equal(run(60_000), true, "and stays marked for as long as it runs")
+
+  assert.equal(run(60_000, "completed"), false, "a resolved call is never live, however long it took")
+  assert.equal(run(60_000, "pending", "background"), false, "a detached op goes through the other predicate")
+  assert.equal(run(60_000, "pending", "unknown"), false, "an orphaned poll claims nothing")
+
+  // No clock at all (a pre-restart server projects no message `at`): mark it. The threshold cannot be
+  // evaluated, and hiding a live command is the worse failure of the two.
+  assert.equal(foregroundToolIsRunning("pending", undefined, undefined, t0), true)
+  assert.equal(foregroundToolIsRunning("pending", undefined, "not-a-date", t0), true)
 })
 
 test("live background telemetry overrides a completed launch wrapper without borrowing another operation's state", () => {
