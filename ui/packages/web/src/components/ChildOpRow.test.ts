@@ -189,16 +189,19 @@ test("the × is a SIBLING of the drill-in button on every density — never a bu
   }
 })
 
-test("the rail keeps its full-width hover highlight and its indent now that they live on the wrapper", () => {
-  // The highlight and the 26px indent moved off the button (which no longer spans the row) onto the
-  // row wrapper, so the rail still lights up edge-to-edge and a nested row still steps by padding
-  // rather than margin — a margin would carve the highlight back on every child row.
+test("the rail's hover highlight moved to the wrapper; its 26px indent stayed on the drill-in", () => {
+  // The highlight has to span the WHOLE row — including the × and the duration, which now sit outside
+  // the button — so it moved to the wrapper. The indent did NOT: it is the gutter that clears the
+  // parent row's indicator column and it has always been part of the click target, so it stays on the
+  // identity element, still as padding (a margin would carve the highlight back on every nested row).
   const html = render({ density: "rail", onOpen: () => {}, onDismiss: () => {}, depth: 2, startedAt: TWELVE_MIN_AGO })
   const wrapper = html.slice(0, html.indexOf("<button"))
   assert.match(wrapper, /hover:bg-white\/\[0\.04\]/, "the highlight is on the wrapper, so it spans the whole rail row")
-  assert.match(wrapper, /pl-\[26px\]/)
-  assert.match(wrapper, /style="padding-left:39px"/)
+  assert.doesNotMatch(wrapper, /pl-\[26px\]/, "the indent is not the wrapper's")
   assert.doesNotMatch(wrapper, /margin-left/)
+  const identity = html.slice(html.indexOf("<button"))
+  assert.match(identity, /pl-\[26px\]/, "the drill-in button carries the rail's indent")
+  assert.match(identity, /style="padding-left:39px"/, "…and a nested row steps that padding, not a margin")
 })
 
 // ── NESTING: a sub-agent's own sub-agents ────────────────────────────────────────────────────────

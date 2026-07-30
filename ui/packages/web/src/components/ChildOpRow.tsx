@@ -157,17 +157,25 @@ export function ChildOpRow({
   // whatever is left. Letting both shrink proportionally crushed the label to "Inspe…" the moment a
   // step arrived, which inverted the reading — you could see what some child was doing but not which.
   const rowClass = rail
-    ? "group flex min-w-0 items-center gap-2 text-left outline-none"
+    // The rail's 26px INDENT stays on the identity element, not on the row wrapper: it is the gutter
+    // that clears the parent thread row's indicator column, and it has always been part of the click
+    // target. Putting it on the wrapper renders identically (the duration is `ml-auto`, so the right
+    // edge does not move) while quietly carving that gutter out of the drill-in — for no gain.
+    ? "group flex min-w-0 items-center gap-2 pl-[26px] text-left outline-none"
     // `overflow-hidden` is load-bearing at a narrow width: the arrow/dot/kind tag inside are shrink-0,
     // so once the row runs out of room the button's own content used to SPILL and the × landed on top
     // of the "AGENT" tag. Clipping keeps the collapse graceful. The ring goes inset to survive it.
     : `group flex min-w-0 max-w-[60%] items-center gap-1.5 overflow-hidden text-left text-[11.5px] ${clickable ? "cursor-pointer rounded-sm outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-fg/60" : ""}`
 
+  // The rail indents with PADDING, not margin: a margin would carve the row wrapper's full-width hover
+  // highlight back on every nested row. The two prompt-box densities have no such highlight, so they
+  // shift the whole LINE (on the wrapper, below), keeping the × and the duration in step with the label.
+  const identityStyle = rail && nestIndent > 0 ? { paddingLeft: 26 + nestIndent } : undefined
+
   const row = clickable ? (
     <button
       type="button"
-      data-subagent-depth={depth && depth > 1 ? depth : undefined}
-      data-subagent-parent={parentSlug}
+      style={identityStyle}
       onClick={onOpen}
       // Only the ops strip swallows the press: it can sit inside a card/drawer whose own mousedown
       // handler would otherwise act on it. The rail and card rows must let the pointer-down through —
@@ -180,7 +188,7 @@ export function ChildOpRow({
       {identity}
     </button>
   ) : (
-    <div data-subagent-depth={depth && depth > 1 ? depth : undefined} data-subagent-parent={parentSlug} title={rowTitle} className={rowClass}>
+    <div style={identityStyle} title={rowTitle} className={rowClass}>
       {identity}
     </div>
   )
@@ -198,18 +206,28 @@ export function ChildOpRow({
   // (maintainer 2026-07-28: "why did you make the 5 min ago labels bigger… it should be the same font
   // size as the title"). One size here keeps every reading on the row in step.
   //
-  // The RAIL's own chrome — its indent, its hover highlight, its row padding — lives on this wrapper
-  // rather than on the button, so the highlight and the row box still span the FULL rail now that the
-  // button no longer does. It indents with PADDING, not margin: a margin would carve the highlight back
-  // on every nested row. The two prompt-box densities have no full-width highlight, so they shift the
-  // whole line, keeping the × and the duration reading in step with the label.
+  // The RAIL's row box — its padding and its full-width hover highlight — moved to this wrapper when
+  // the × arrived, because the button no longer spans the row and a highlight on the button would stop
+  // short of the × and the duration. The indent stayed on the button (see rowClass).
   const wrapperClass = rail
-    ? "flex w-full min-w-0 items-center gap-1.5 rounded-md py-0.5 pl-[26px] pr-1.5 text-[11.5px] transition-colors hover:bg-white/[0.04]"
+    ? "flex w-full min-w-0 items-center gap-1.5 rounded-md py-0.5 pr-1.5 text-[11.5px] transition-colors hover:bg-white/[0.04]"
     : "flex min-w-0 items-center gap-1.5 text-[11.5px]"
-  const wrapperStyle = nestIndent > 0 ? (rail ? { paddingLeft: 26 + nestIndent } : { marginLeft: nestIndent }) : undefined
+  const wrapperStyle = !rail && nestIndent > 0 ? { marginLeft: nestIndent } : undefined
 
+  // The two row markers ride the WRAPPER, not the identity button, because they describe the ROW.
+  // `data-subagent-parent` is load-bearing for that: ThreadSheet resolves an outside pointer-down with
+  // `closest("[data-subagent-parent]")` and keeps itself open when the press landed on one of its own
+  // child rows. On the rail the button used to span the row, so every pixel of it answered that query;
+  // now that the × and the duration sit outside the button, the marker has to cover them too — or
+  // pressing the × of a row whose thread sheet is open would dismiss that sheet.
   return (
-    <div className={wrapperClass} style={wrapperStyle} data-op-row={onDismiss ? "" : undefined}>
+    <div
+      className={wrapperClass}
+      style={wrapperStyle}
+      data-op-row={onDismiss ? "" : undefined}
+      data-subagent-depth={depth && depth > 1 ? depth : undefined}
+      data-subagent-parent={parentSlug}
+    >
       {row}
       {onDismiss && (
         <button
