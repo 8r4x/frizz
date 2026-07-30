@@ -162,6 +162,8 @@ export interface ClaudeQueryHandle extends AsyncIterable<ClaudeQueryEvent> {
    * and nothing was undone. Never guesses; the caller renders the difference to the operator.
    */
   cancelInput(id: string): Promise<boolean>
+  /** Stop the background task identified by the provider's task-notification id. */
+  stopTask(taskId: string): Promise<void>
   setPermissionMode(mode: ClaudePermissionMode): Promise<void>
   // Ask the provider to name the session from `description` and PERSIST the name as the `ai-title`
   // record fray's tailer reads. See CLAUDE_TITLE_NEEDS_EXPLICIT_REQUEST below for why the broker has
@@ -428,6 +430,14 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
     const receipt = await this.awaitOpenControl(this.sdkQuery.interrupt())
     if (!receipt) return undefined
     return { stillQueued: boundedStringArray(receipt.still_queued, "interrupt.stillQueued", 256, 512).map((id, index) => boundedId(id, `interrupt.stillQueued[${index}]`)) }
+  }
+
+  async stopTask(taskId: string): Promise<void> {
+    this.assertOpen()
+    const parsed = boundedId(taskId, "stopTask.taskId")
+    await this.ready()
+    this.assertOpen()
+    await this.awaitOpenControl(this.sdkQuery.stopTask(parsed))
   }
 
   // Unqueue a follow-up the operator has taken back.

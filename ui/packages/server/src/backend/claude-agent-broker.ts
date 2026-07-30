@@ -24,7 +24,7 @@ import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { createClaudeQueryFactory } from "./claude-agent-sdk.ts"
 import { createClaudeBrokerDiagnosticWriter, createClaudeBrokerExitWriter, type ClaudeBrokerExitReason } from "./claude-broker-diagnostics.ts"
-import { CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER } from "./claude-agent-sdk-protocol.ts"
+import { CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER } from "./claude-agent-sdk-protocol.ts"
 import type {
   ClaudeDiagnostic,
   ClaudeInputMessage,
@@ -78,7 +78,7 @@ export interface BrokerRecord { daemonPid: number; socketPath: string; sessionId
 // of a VALUE from here — rather than an `import type` — initializes this module inside the server
 // process, where the entry-point check is satisfied by the bundle's own path and the guard fires. That
 // took down the whole control plane on the artifact while dev source (separate files) stayed green.
-const BROKER_CAPABILITIES = [CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT]
+const BROKER_CAPABILITIES = [CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_STOP_TASK]
 
 const ENV_ALLOWLIST = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"]
 const IDLE_EXIT_MS = 6 * 60 * 60 * 1000
@@ -263,6 +263,14 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
           void handle.cancelInput(id).then(
             (cancelled) => write(sock, { t: "cancel-result", requestId, cancelled }),
             (error: unknown) => write(sock, { t: "cancel-result", requestId, cancelled: false, error: error instanceof Error ? error.message : String(error) }),
+          )
+        }
+        else if (msg.t === "stop-task") {
+          const requestId = msg.requestId as string
+          const taskId = typeof msg.taskId === "string" ? msg.taskId : ""
+          void handle.stopTask(taskId).then(
+            () => write(sock, { t: "stop-result", requestId }),
+            (error: unknown) => write(sock, { t: "stop-result", requestId, error: error instanceof Error ? error.message : String(error) }),
           )
         }
         else if (msg.t === "set-mode") void handle.setPermissionMode(msg.mode as never).catch(() => {})

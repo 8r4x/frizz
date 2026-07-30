@@ -135,6 +135,12 @@ function handleHostControl(message) {
     respond(message.request_id, {})
     return
   }
+  if (request.subtype === "stop_task") {
+    record({ kind: "stop-task", taskId: request.task_id })
+    if (scenario === "stop-failure") return respondError(message.request_id, "task could not be stopped")
+    respond(message.request_id, {})
+    return
+  }
   // Taking a still-queued input back out of the command queue. Models the real CLI's semantics as
   // measured against 2.1.220 (_live_sdk_cancel_queued.mts): a uuid still in the queue answers
   // `cancelled: true` and never runs; anything else — already dequeued for execution, or never sent —

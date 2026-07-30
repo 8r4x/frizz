@@ -1737,7 +1737,9 @@ export interface Tailer {
   // another agent's process, so this session's CLI has never heard of its tool_use id) are all
   // readable but not addressable, and each reports direct:false so the router refuses rather than
   // firing a message that would silently land on the main thread instead.
-  subAgent(slug: string, id: string): { outputFile?: string; outputFormat?: "codex"; state: "running" | "stale" | "done"; direct: boolean } | undefined
+  // `taskId` is the provider's session-wide background-task handle. Unlike `direct`, which controls
+  // steer safety, it is available for descendants too and is what the SDK's stopTask accepts.
+  subAgent(slug: string, id: string): { outputFile?: string; outputFormat?: "codex"; state: "running" | "stale" | "done"; direct: boolean; taskId?: string } | undefined
   // Read-only background-shell drawer lookup. Output content stays server-side until the scoped query.
   backgroundShell?(slug: string, id: string): { command?: string; outputFile?: string; state: "running" | "done" } | undefined
   // Manual dismiss of a live background op (the × on an op row): retire it from tracking as if a
@@ -2589,14 +2591,20 @@ export function createTailer(deps: TailerDeps): Tailer {
   // the drill-in drawer's server-side lookup. Checks the LIVE map first (running/stale), then the
   // RETAINED ring (a completed child kept for review → "done"). Undefined only when the id is unknown
   // to both (never dispatched, or aged out of the ring) → the router maps that to "gone".
-  function subAgentLookup(slug: string, id: string): { outputFile?: string; outputFormat?: "codex"; state: "running" | "stale" | "done"; direct: boolean } | undefined {
+  function subAgentLookup(slug: string, id: string): { outputFile?: string; outputFormat?: "codex"; state: "running" | "stale" | "done"; direct: boolean; taskId?: string } | undefined {
     const state = states.get(slug)
     if (!state || !registeredStateIsCurrent(state)) return undefined
     // `outputFormat` is spread in only when set, so a Claude child's lookup shape is byte-identical.
     const live = state.subAgents.get(id)
     // A background SHELL shares this map (see backgroundShellLookup) and is emphatically not an agent:
     // there is nobody in there to read a steer. Only kind "agent" is ever `direct`.
-    if (live) return { outputFile: live.outputFile, ...(live.outputFormat ? { outputFormat: live.outputFormat } : {}), state: entryStale(live, now()) ? "stale" : "running", direct: live.kind === "agent" }
+    if (live) return {
+      outputFile: live.outputFile,
+      ...(live.outputFormat ? { outputFormat: live.outputFormat } : {}),
+      state: entryStale(live, now()) ? "stale" : "running",
+      direct: live.kind === "agent",
+      ...(live.taskId ? { taskId: live.taskId } : {}),
+    }
     const dead = state.retiredSubAgents.get(id)
     if (dead) return { outputFile: dead.outputFile, ...(dead.outputFormat ? { outputFormat: dead.outputFormat } : {}), state: "done", direct: false }
     // A DESCENDANT — a child of a child, of a child, at any depth. Its dispatch is in an ANCESTOR's
@@ -2606,7 +2614,16 @@ export function createTailer(deps: TailerDeps): Tailer {
     // never invents one.
     const descendant = descendantSidecar(state, id)
     if (!descendant) return undefined
-    return { outputFile: descendantTranscript(state, descendant), state: descendantState(state, descendant), direct: false }
+    return {
+      outputFile: descendantTranscript(state, descendant),
+      state: descendantState(state, descendant),
+      direct: false,
+      // Claude's sidecar filename is `agent-<agentId>.meta.json`; that agent id is also the
+      // provider task id accepted by Query.stopTask. Unlike steering, stopTask's registry is
+      // session-wide, so descendants are addressable without pretending their dispatch belonged
+      // to the root thread.
+      taskId: descendant.agentId,
+    }
   }
 
   function backgroundShellLookup(slug: string, id: string): { command?: string; outputFile?: string; state: "running" | "done" } | undefined {
