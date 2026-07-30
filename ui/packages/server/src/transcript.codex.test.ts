@@ -154,11 +154,18 @@ test("codex fixture (exec wrapper): common nested tools expose command, input, r
   assert.deepEqual(msgs.map((m) => m.role), ["user", "assistant"])
   const a = msgs[1]
   assert.equal(a.tools.length, 9)
-  assert.deepEqual(a.tools.map((t) => t.name), ["Plan", "Bash", "Bash", "Bash", "Bash", "Bash", "Edit", "Edit", "Plan"])
+  assert.deepEqual(a.tools.map((t) => t.name), ["Todos", "Bash", "Bash", "Bash", "Bash", "Bash", "Edit", "Edit", "Todos"])
 
+  // `update_plan` is codex's built-in TO-DO LIST, so it projects the plan itself (see transcript.ts's
+  // TO-DO LIST section) rather than a "2 steps · 0/2 complete" summary with the raw args as its body:
+  // the headline is the step IN PROGRESS and the rows carry each step's own status.
   const planStart = a.tools[0]
-  assert.equal(planStart.detail, "2 steps · 0/2 complete")
-  assert.match(planStart.input ?? "", /Inspect the sample/)
+  assert.equal(planStart.detail, "Inspect the sample")
+  assert.deepEqual(planStart.todos, [
+    { text: "Inspect the sample", status: "in_progress", changed: true },
+    { text: "Patch and verify", status: "pending" },
+  ])
+  assert.equal(planStart.input, undefined, "this call carried no explanation, so there is no note pane")
   assert.equal(planStart.status, "completed")
   assert.equal(planStart.output, undefined)
 
@@ -184,7 +191,14 @@ test("codex fixture (exec wrapper): common nested tools expose command, input, r
   assert.equal(successfulPatch.edit?.file, "/tmp/fray-tool-sample/src/greet.ts")
   assert.match(successfulPatch.edit?.new ?? "", /hello/)
 
-  assert.equal(a.tools[8].detail, "2 steps · complete")
+  // The closing plan: everything done, so no step is in progress and there is no headline — the card's
+  // counter says 2/2. Its `explanation` becomes the note pane the raw args used to occupy.
+  assert.equal(a.tools[8].detail, undefined)
+  assert.deepEqual(a.tools[8].todos, [
+    { text: "Inspect the sample", status: "completed" },
+    { text: "Patch and verify", status: "completed" },
+  ])
+  assert.equal(a.tools[8].input, "Fixture complete.")
   assert.match(a.text, /FRAY_TOOL_RENDER_FIXTURE_DONE/)
 })
 
@@ -241,7 +255,8 @@ text(r);
   assert.ok(Math.abs((bash.durationMs ?? 0) - 253.269375) < 0.001)
   assert.equal(bash.status, "completed")
   assert.equal(bash.output, "tick-2", "poll output is grouped onto the originating shell")
-  assert.equal(planned.detail, "2 steps · 1/2 complete")
+  assert.equal(planned.detail, "two", "the plan card headlines the step in progress")
+  assert.deepEqual(planned.todos, [{ text: "one", status: "completed" }, { text: "two", status: "in_progress", changed: true }])
 })
 
 test("Codex yielded shell remains running until its matching session poll has an exit code", () => {

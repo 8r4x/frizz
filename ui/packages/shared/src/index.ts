@@ -1243,6 +1243,19 @@ export const TranscriptEdit = z.object({
 })
 export type TranscriptEdit = z.infer<typeof TranscriptEdit>
 
+// One row of an agent's built-in TO-DO LIST, as it stood after the call that carried it. Every
+// provider has one of these lists and every one of them ships a different tool: Claude Code's
+// TaskCreate/TaskUpdate/TaskList (a DELTA per call — `{taskId:"3", status:"completed"}` and nothing
+// else), codex's `update_plan` and Claude's legacy `TodoWrite` (the WHOLE list, every call). The
+// server normalizes all of them onto this one row so the client renders one checklist card.
+// `changed` marks the single row THIS call created or mutated — the card's headline.
+export const TranscriptTodo = z.object({
+  text: z.string(),
+  status: z.enum(["pending", "in_progress", "completed"]),
+  changed: z.boolean().optional(),
+})
+export type TranscriptTodo = z.infer<typeof TranscriptTodo>
+
 export const TranscriptToolCall = z.object({
   name: z.string(),
   detail: z.string().optional(), // file path / command / description — whatever the input reveals
@@ -1334,6 +1347,15 @@ export const TranscriptToolCall = z.object({
   sentImages: z.array(z.string()).optional(),
   sentFiles: z.array(z.string()).optional(),
   caption: z.string().optional(),
+  // ---- To-do list block ----
+  // Set for any call against the agent's built-in to-do list: `todos` is the list state AFTER the call
+  // (see TranscriptTodo) and the client promotes such a call into a TodoBlock — a checklist card whose
+  // header is the changed row and whose body is the whole list. `todoChange` is the verb, absent for a
+  // call that only rewrites/reads the whole list (codex `update_plan`, `TodoWrite`, `TaskList`), where
+  // no single row is the subject. Both optional so a pre-restart server / older transcript falls back
+  // to the generic card.
+  todos: z.array(TranscriptTodo).optional(),
+  todoChange: z.enum(["created", "updated", "deleted"]).optional(),
 })
 export type TranscriptToolCall = z.infer<typeof TranscriptToolCall>
 

@@ -13,6 +13,7 @@ import {
   stripWakeDeliveryToken,
   type TranscriptMessage,
   type TranscriptPage,
+  type TranscriptTodo,
   type TranscriptToolCall,
 } from "@fray-ui/shared"
 import type { Project } from "./project.ts"
@@ -321,6 +322,9 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
   // lookup is keyed by the dispatch id, so this is the translation the peer arm needs. Forward-only, and
   // that is sound: a child must exist before it can report, so its ack always precedes its message.
   const childDispatchIds = new Map<string, string>()
+  // The agent's built-in TO-DO LIST as the fold has watched it evolve (see claudeTodoCall). Claude's
+  // Task* calls are deltas, so this registry — not the individual call — is what a to-do card renders.
+  const todoList: TodoRegistry = new Map()
   // For "Thought for Ns" events: the previous SUBSTANTIVE (assistant/user) record's timestamp, and the
   // message id we last emitted a thinking event for (so a turn's several thinking records emit ≤1 line).
   let prevTs: string | undefined
@@ -419,7 +423,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
     const evs = completionEvents(rec, agentDispatches, backgroundShells, backgroundTaskIds)
     if (evs.length > 0) {
       // A user-record carrier can in principle also carry tool_result blocks — never skip their back-fill.
-      attachToolResults(rec, pendingTools, backgroundShells, backgroundTaskIds, childDispatchIds)
+      attachToolResults(rec, pendingTools, backgroundShells, backgroundTaskIds, childDispatchIds, todoList)
       evs.forEach((ev, i) => {
         ev.sourceId = i === 0 ? sourceId : `${sourceId}#${i}` // keep sourceIds unique per rendered message
         out.push(ev)
@@ -607,7 +611,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
     if (rec.type === "user") {
       // Back-fill any Read excerpts this record carries FIRST — a tool_result record is dropped as a
       // human bubble (isMeta / tool_result-only), but it still holds the file content we want to show.
-      attachToolResults(rec, pendingTools, backgroundShells, backgroundTaskIds, childDispatchIds)
+      attachToolResults(rec, pendingTools, backgroundShells, backgroundTaskIds, childDispatchIds, todoList)
       // isMeta marks harness-injected user records (hook feedback, reminders, autonomous /loop
       // wakeups) — plumbing the human never typed, so it must not render as their bubble. But an
       // autonomous /loop wakeup is ENQUEUED like any follow-up (emitting a gray queued bubble),
@@ -722,7 +726,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
           pushTextPart(m, block.text)
           m.text = m.text ? `${m.text}\n\n${block.text}` : block.text
         } else if (block?.type === "tool_use") {
-          const calls = toolCalls(block)
+          const calls = toolCalls(block, todoList)
           for (const call of calls) {
             call.status = "pending"
             pushToolPart(m, call)
@@ -1176,6 +1180,7 @@ function attachToolResults(
   backgroundShells: Map<string, { at?: string; call: TranscriptToolCall }>,
   backgroundTaskIds: Map<string, string>,
   childDispatchIds: Map<string, string>,
+  todoList: TodoRegistry,
 ): void {
   const content = rec.message?.content
   if (!Array.isArray(content)) return
@@ -1197,6 +1202,10 @@ function attachToolResults(
     const dispatchId = entry.calls.find((c) => typeof c.agentId === "string" && c.agentId)?.agentId
     if (ackAgentId && dispatchId) childDispatchIds.set(ackAgentId, dispatchId)
     const text = toolResultText(b.content)
+    // The two to-do results that carry facts the CALL could not: the id the harness assigned a new task,
+    // and the authoritative full list. Both repair the registry that draws every later card.
+    if (text && entry.name === "TaskCreate") claimCreatedTodoId(todoList, b.tool_use_id, text)
+    if (text && entry.name === "TaskList") adoptTodoList(todoList, entry.calls, text)
     // A manual TaskStop is a terminal signal for the op it killed — the SAME correlation the tailer
     // reads (its structured result carries `task_id`; no notification ever follows). Without this a
     // background card whose op was stopped by hand spins forever in the timeline.
@@ -1250,12 +1259,16 @@ function attachToolResults(
 // Expand one tool_use block into transcript tool calls. Usually one, but MultiEdit fans out to one
 // call per sub-edit so each renders as its own diff. Edit/Write/MultiEdit additionally carry a
 // structured `edit` payload (Write's old side is "" — the whole file is new).
-function toolCalls(block: any): TranscriptToolCall[] {
+function toolCalls(block: any, todos: TodoRegistry): TranscriptToolCall[] {
   const name = redactToolPayload(String(block?.name ?? "tool"))
   const input = block?.input
   const detail = toolDetail(input)
 
   if (input && typeof input === "object") {
+    // The built-in to-do list, ahead of every other case: these calls carry a `description` field, which
+    // the generic detail fallback would otherwise promote to the card's title.
+    const todoCall = claudeTodoCall(name, input as Record<string, unknown>, typeof block?.id === "string" ? block.id : undefined, todos)
+    if (todoCall) return [todoCall]
     const file = typeof input.file_path === "string" ? redactToolPayload(input.file_path) : undefined
     if (name === "Edit" && file && typeof input.old_string === "string" && typeof input.new_string === "string") {
       return [{ name, detail, edit: { file, old: capEdit(input.old_string), new: capEdit(input.new_string) } }]
@@ -1350,6 +1363,155 @@ function toolCalls(block: any): TranscriptToolCall[] {
 // to/summary/type) where empty/absent should collapse to undefined, not "".
 function strField(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? redactToolPayload(v.trim()) : undefined
+}
+
+// ── THE BUILT-IN TO-DO LIST ──────────────────────────────────────────────────────────────────────
+//
+// Every provider ships one, and every one ships a DIFFERENT protocol:
+//
+//   Claude Code   TaskCreate / TaskUpdate / TaskList / TaskGet — a DELTA per call. A completed item is
+//                 literally `{taskId:"3", status:"completed"}`: no subject, no previous status, nothing
+//                 a card could render on its own. That is why the fold keeps a REGISTRY (below) and the
+//                 card is drawn from the registry rather than from the call.
+//   codex         `update_plan` — the whole plan, every call.
+//   Claude legacy `TodoWrite` — the whole list, every call. (Absent from current Claude Code, kept for
+//                 older transcripts.)
+//
+// All three normalize onto TranscriptTodo, so ONE client card renders all of them. Before this, the
+// generic card picked the first string field in the input as its one-line detail — which for a
+// TaskUpdate is the `description`, so a 600-character maintainer ruling became the card's title
+// (maintainer 2026-07-29, showing three such cards in a row).
+type TodoStatus = TranscriptTodo["status"]
+interface TodoEntry { text: string; status: TodoStatus }
+// Task id → entry, in INSERTION ORDER (which is creation order, the order the agent's own list reads
+// in). Lives on the fold, so it accumulates across incremental ingests exactly like pendingTools.
+type TodoRegistry = Map<string, TodoEntry>
+
+// `deleted` is a valid Claude TaskUpdate status but is a REMOVAL, never a row — it is handled by the
+// caller and deliberately not part of TodoStatus.
+function todoStatus(v: unknown): TodoStatus | undefined {
+  return v === "pending" || v === "in_progress" || v === "completed" ? v : undefined
+}
+
+// The list state to attach to a call. Copies (never shares) the entries: every card must keep showing
+// the list as it stood at ITS point in the timeline, and the registry keeps mutating after it.
+function todoSnapshot(reg: TodoRegistry, changedId?: string): TranscriptTodo[] {
+  const out: TranscriptTodo[] = []
+  for (const [id, entry] of reg) out.push({ text: entry.text, status: entry.status, ...(id === changedId ? { changed: true } : {}) })
+  return out
+}
+
+// A whole-list write (codex `update_plan`, legacy `TodoWrite`, a TaskList result): the incoming list is
+// the truth, so the registry is replaced outright. Ordinal keys — these protocols carry no ids.
+function replaceTodoRegistry(reg: TodoRegistry, items: readonly TodoEntry[]): void {
+  reg.clear()
+  items.forEach((item, i) => reg.set(String(i + 1), item))
+}
+
+// A whole-list write's card. No `todoChange` verb — no single row is the subject of the call — so the
+// row that carries the reading is the one IN PROGRESS: it becomes the header headline and is marked
+// `changed` so the body highlights it. All-completed lists headline nothing; the counter says it.
+function wholeListTodoCall(name: string, items: readonly TodoEntry[], reg: TodoRegistry, input?: string): TranscriptToolCall {
+  replaceTodoRegistry(reg, items)
+  let currentId: string | undefined
+  for (const [id, entry] of reg) if (entry.status === "in_progress" && !currentId) currentId = id
+  return { name, detail: currentId ? reg.get(currentId)!.text : undefined, todos: todoSnapshot(reg, currentId), input }
+}
+
+// The rows of a whole-list payload: `{todos:[{content|subject, status}]}` (TodoWrite) or
+// `{plan:[{step, status}]}` (codex update_plan). Bounded so a pathological call can't mount 10k rows.
+const TODO_ROWS_MAX = 200
+function todoRows(raw: unknown): TodoEntry[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const out: TodoEntry[] = []
+  for (const item of raw.slice(0, TODO_ROWS_MAX)) {
+    if (!item || typeof item !== "object") continue
+    const row = item as Record<string, unknown>
+    const text = strField(row.content) ?? strField(row.subject) ?? strField(row.step) ?? strField(row.text)
+    if (!text) continue
+    out.push({ text: capTodoText(text), status: todoStatus(row.status) ?? "pending" })
+  }
+  return out.length ? out : undefined
+}
+
+// A row is a one-line title. Cap it so a model that wrote a paragraph into a `subject` can't stretch
+// the card — the client truncates for display, but the payload should stay light too.
+const TODO_TEXT_CAP = 300
+function capTodoText(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim()
+  return flat.length > TODO_TEXT_CAP ? `${flat.slice(0, TODO_TEXT_CAP - 1)}…` : flat
+}
+
+// Claude Code's Task* family → a to-do card, or undefined to leave the call to the generic path.
+// `blockId` is the tool_use id: a TaskCreate's REAL task id only arrives on its result, so the new row
+// is registered under the tool_use id and rekeyed by claimCreatedTodoId when that result lands.
+function claudeTodoCall(name: string, input: Record<string, unknown>, blockId: string | undefined, reg: TodoRegistry): TranscriptToolCall | undefined {
+  const description = strField(input.description)
+  const body = description ? capToolInput(description) : undefined
+  if (name === "TaskCreate") {
+    const subject = strField(input.subject)
+    if (!subject) return undefined
+    const key = blockId ?? `new:${reg.size + 1}`
+    reg.set(key, { text: capTodoText(subject), status: "pending" })
+    return { name, detail: capTodoText(subject), todos: todoSnapshot(reg, key), todoChange: "created", input: body }
+  }
+  if (name === "TaskUpdate" || name === "TaskGet") {
+    const id = strField(input.taskId) ?? strField(input.task_id)
+    if (!id) return undefined
+    // A session that RESUMED an existing list (or one whose creates predate this transcript) updates ids
+    // the registry never saw. Register a stub rather than rendering an empty list: the card then shows
+    // the part of the list this session has actually touched, which is honest and still readable.
+    const entry = reg.get(id) ?? { text: `Task #${id}`, status: "pending" as TodoStatus }
+    if (!reg.has(id)) reg.set(id, entry)
+    if (name === "TaskGet") return { name, detail: entry.text, todos: todoSnapshot(reg, id) }
+    if (input.status === "deleted") {
+      reg.delete(id)
+      return { name, detail: entry.text, todos: todoSnapshot(reg), todoChange: "deleted", input: body }
+    }
+    const subject = strField(input.subject)
+    if (subject) entry.text = capTodoText(subject)
+    const status = todoStatus(input.status)
+    if (status) entry.status = status
+    return { name, detail: entry.text, todos: todoSnapshot(reg, id), todoChange: "updated", input: body }
+  }
+  if (name === "TaskList") return { name, detail: undefined, todos: todoSnapshot(reg) }
+  if (name === "TodoWrite") {
+    const rows = todoRows(input.todos)
+    return rows ? wholeListTodoCall(name, rows, reg) : undefined
+  }
+  return undefined
+}
+
+// A TaskCreate's result is where the harness reveals the id it assigned ("Task #7 created successfully:
+// …"), so this is where the provisional tool_use-id key becomes the real one — otherwise every later
+// TaskUpdate for that id would miss the registry and render a `Task #7` stub. Re-inserting puts the
+// entry at the END of the iteration order, which is exactly where a just-created task belongs.
+// Harness prose, and fragile in the same way as the background-launch ack strings above: if the wording
+// drifts the entry keeps its provisional key and updates degrade to stubs, never to a wrong row.
+function claimCreatedTodoId(reg: TodoRegistry, provisionalKey: string, resultText: string): void {
+  const id = resultText.match(/^Task #(\S+) created/)?.[1]
+  const entry = reg.get(provisionalKey)
+  if (!id || !entry || reg.has(id)) return
+  reg.delete(provisionalKey)
+  reg.set(id, entry)
+}
+
+// A TaskList result is the AUTHORITATIVE list — the one place the harness volunteers every row it holds,
+// including rows created before this transcript began (a resumed session). Adopting it repairs the
+// registry, and the call's own snapshot is redrawn from the repaired copy.
+// Result text form: one `#<id> [<status>] <subject>` line per task.
+function adoptTodoList(reg: TodoRegistry, calls: TranscriptToolCall[], resultText: string): void {
+  const rows: Array<{ id: string; entry: TodoEntry }> = []
+  for (const line of resultText.split("\n")) {
+    const m = line.match(/^#(\S+)\s+\[(\w+)\]\s+(.+)$/)
+    if (!m) continue
+    const text = strField(m[3])
+    if (text) rows.push({ id: m[1], entry: { text: capTodoText(text), status: todoStatus(m[2]) ?? "pending" } })
+  }
+  if (!rows.length) return
+  reg.clear()
+  for (const row of rows) reg.set(row.id, row.entry)
+  for (const call of calls) if (call.todos) call.todos = todoSnapshot(reg)
 }
 
 // One human-scannable hint per tool call, in preference order of what the input reveals.
@@ -1688,6 +1850,9 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
   // Codex yielded PTYs identify the real shell lifecycle by `session_id`, not by the wrapper call id.
   // Keep this map while projecting so later write_stdin polls back-fill the originating Bash card.
   const shellSessions = new Map<string, { call: TranscriptToolCall; at?: string }>()
+  // Codex's built-in to-do list (`update_plan`). It ships the WHOLE plan on every call, so unlike the
+  // Claude fold this registry is only a normalization buffer — but it keeps both protocols on one path.
+  const todoList: TodoRegistry = new Map()
   // The last FINAL assistant text rendered, so a task_complete.last_agent_message that merely echoes it
   // isn't surfaced twice (the common case); a genuinely-different finalText is a defensive fallback.
   let lastFinalText: string | null = null
@@ -1752,7 +1917,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
         }
         case "tool-call": {
           const m = openAssistant(ev.at, sourceId)
-          const call = codexToolCall(ev.name, ev.input, ev.id)
+          const call = codexToolCall(ev.name, ev.input, ev.id, todoList)
           call.status = "pending"
           const isPoll = call.name === "Poll process" && call.sessionId !== undefined
           const owner = isPoll ? shellSessions.get(String(call.sessionId)) : undefined
@@ -1925,11 +2090,11 @@ export function parseCodexTranscript(raw: string, identityPrefix = "codex"): Tra
 // Decode only static strings/structure from that wrapper (never evaluate it), then normalize both
 // protocols onto the same Bash/Edit/generic card family. Unknown calls retain capped input, so the
 // renderer always has something more useful than a bare tool name.
-function codexToolCall(name: string, input: unknown, callId?: string): TranscriptToolCall {
-  if (name === "exec" && typeof input === "string") return codexExecWrapperCall(input, callId)
+function codexToolCall(name: string, input: unknown, callId: string | undefined, todos: TodoRegistry): TranscriptToolCall {
+  if (name === "exec" && typeof input === "string") return codexExecWrapperCall(input, callId, todos)
 
   const obj = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : {}
-  const direct = codexDirectToolCall(name, obj, callId)
+  const direct = codexDirectToolCall(name, obj, callId, todos)
   if (direct) return direct
   const cmd = extractShellCommand(obj)
   if (cmd) {
@@ -1949,7 +2114,7 @@ function codexToolCall(name: string, input: unknown, callId?: string): Transcrip
   }
 }
 
-function codexDirectToolCall(name: string, obj: Record<string, unknown>, callId?: string): TranscriptToolCall | undefined {
+function codexDirectToolCall(name: string, obj: Record<string, unknown>, callId: string | undefined, todos: TodoRegistry): TranscriptToolCall | undefined {
   const target = strField(obj.target)
   switch (name) {
     case "spawn_agent":
@@ -1969,6 +2134,13 @@ function codexDirectToolCall(name: string, obj: Record<string, unknown>, callId?
       return { name: "Send message", detail: target }
     case "followup_task":
       return { name: "Follow up", detail: target }
+    case "update_plan": {
+      // Codex's to-do list. The direct function_call form ships real JSON, so the plan is already an
+      // array of objects here; the JS-wrapper form goes through codexExecWrapperCall's scanner instead.
+      const rows = todoRows(obj.plan)
+      if (rows) return wholeListTodoCall("Todos", rows, todos, strField(obj.explanation) ? capToolInput(strField(obj.explanation)!) : undefined)
+      return undefined
+    }
     case "list_agents":
       return { name: "Agents", detail: "list live agents" }
     case "interrupt_agent":
@@ -2033,7 +2205,7 @@ interface WrappedInvocation {
   args: string
 }
 
-function codexExecWrapperCall(source: string, callId?: string): TranscriptToolCall {
+function codexExecWrapperCall(source: string, callId: string | undefined, todos: TodoRegistry): TranscriptToolCall {
   const calls = wrappedInvocations(source)
   if (calls.length !== 1) {
     return {
@@ -2060,7 +2232,12 @@ function codexExecWrapperCall(source: string, callId?: string): TranscriptToolCa
   }
 
   if (call.name === "update_plan") {
-    return { name: "Plan", detail: planSummary(call.args), input: capToolInput(call.args) }
+    const rows = wrappedPlanRows(call.args)
+    if (rows.length) {
+      const explanation = jsStringProperty(call.args, "explanation")
+      return wholeListTodoCall("Todos", rows, todos, explanation ? capToolInput(redactToolPayload(explanation)) : undefined)
+    }
+    return { name: "Todos", detail: planSummary(call.args), input: capToolInput(call.args) }
   }
 
   if (call.name === "write_stdin") {
@@ -2232,6 +2409,31 @@ function wrappedPatch(source: string, args: string): string | undefined {
   const id = args.match(/^([A-Za-z_$][\w$]*)\b/)?.[1]
   const bound = id ? wrappedStringBindings(source).get(id) : undefined
   return bound?.includes("Begin Patch") ? bound : undefined
+}
+
+// The plan rows out of a JS-WRAPPER `tools.update_plan({plan:[{step:"…",status:"…"}]})` argument list.
+// That source is a JavaScript object literal, not JSON — codex mixes quoted and bare keys in the SAME
+// call (`{step:"…","status":"pending"}`), so JSON.parse cannot read it and this stays a scanner, like
+// every other reader of the wrapper in this file. It walks `step`/`status` string properties IN ORDER:
+// a `step` opens a row, a `status` fills the row it follows. Order is the only structure needed — a
+// status ahead of its own step (never observed) would attach to the previous row, which is why a row
+// with no step is dropped rather than guessed at.
+function wrappedPlanRows(args: string): TodoEntry[] {
+  const out: TodoEntry[] = []
+  const re = /["']?(step|status)["']?\s*:\s*/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(args))) {
+    const parsed = readJsString(args, re.lastIndex)
+    if (!parsed) continue
+    re.lastIndex = parsed.end
+    if (m[1] === "step") {
+      const text = strField(parsed.value)
+      if (text && out.length < TODO_ROWS_MAX) out.push({ text: capTodoText(text), status: "pending" })
+    } else if (out.length) {
+      out[out.length - 1].status = todoStatus(parsed.value) ?? out[out.length - 1].status
+    }
+  }
+  return out
 }
 
 function planSummary(args: string): string {

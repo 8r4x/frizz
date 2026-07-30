@@ -5,7 +5,7 @@ import * as RadixTabs from "@radix-ui/react-tabs"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight, FileText, Hash, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, ShieldCheck, Sparkles, X, type LucideIcon } from "lucide-react"
-import type { AwaitingHint, NativeInputRequired as NativeInputRequiredData, PendingAsk, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptToolCall } from "@fray-ui/shared"
+import type { AwaitingHint, NativeInputRequired as NativeInputRequiredData, PendingAsk, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@fray-ui/shared"
 import { isDirectSubAgent } from "@fray-ui/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBoard, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
@@ -14,6 +14,7 @@ import { displayTitle, lastActiveLabelAt } from "../groups.ts"
 import { mdToHtml, mdInlineToHtml, stripFrontmatter } from "../lib/markdown.ts"
 import { splitComposerValue, splitProseAttachments } from "../lib/imagePaths.ts"
 import { DiffBlock, PathLink } from "./DiffBlock.tsx"
+import { TodoBlock } from "./TodoBlock.tsx"
 import { splitQuestionBlocks, parseQuestionBlock, type QuestionKind, type BlockAnswer, type MessageAnswering } from "../lib/questionBlocks.ts"
 import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
 import { parseAnswersCard, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
@@ -1583,6 +1584,11 @@ interface CollapsedTool {
   sentImages?: string[]
   sentFiles?: string[]
   caption?: string
+  // Set for a call against the agent's built-in to-do list: the list state AFTER the call, plus the verb
+  // (see TranscriptTodo). Renders as a TodoBlock and, like the prompt/read/command entries, stands alone —
+  // two consecutive updates are two different list states and must never fold into a ×2 count.
+  todos?: TranscriptTodo[]
+  todoChange?: TranscriptToolCall["todoChange"]
   count: number
 }
 
@@ -1618,6 +1624,11 @@ function collapseTools(tools: TranscriptMessage["tools"]): CollapsedTool[] {
       // A screenshot / image tool result (chrome-devtools `take_screenshot`, an image Read) renders as its
       // own ToolImageCard showing the picture inline — never folds into a ×N run.
       out.push({ name: t.name, detail: t.detail, outputImage: t.outputImage, output: t.output, status: t.status, durationMs: t.durationMs, count: 1 })
+    } else if (t.todos) {
+      // A to-do call renders as its own TodoBlock — never folds into a ×N run. Checked BEFORE the
+      // input/output branch below, which would otherwise claim it: these calls carry the model's
+      // `description` as `input`, which is exactly the payload this card demotes out of the title.
+      out.push({ name: t.name, detail: t.detail, todos: t.todos, todoChange: t.todoChange, input: t.input, status: t.status, durationMs: t.durationMs, count: 1 })
     } else if (t.sentImages || t.sentFiles) {
       // A SendUserFile delivery renders as its own SentFilesCard (images inline + caption) — never folds.
       out.push({ name: t.name, detail: t.detail, sentImages: t.sentImages, sentFiles: t.sentFiles, caption: t.caption, status: t.status, durationMs: t.durationMs, count: 1 })
@@ -1745,6 +1756,11 @@ function ToolCardRouter({ t }: { t: CollapsedTool }) {
   if (t.sendTo !== undefined || t.sendBody !== undefined) return <SendMessageCard to={t.sendTo} summary={t.sendSummary} body={t.sendBody ?? ""} type={t.sendType} status={t.status} durationMs={t.durationMs} />
   if (t.outputImage) return <ToolImageCard name={t.name} detail={t.detail} outputImage={t.outputImage} output={t.output} status={t.status} durationMs={t.durationMs} />
   if (t.sentImages || t.sentFiles) return <SentFilesCard images={t.sentImages ?? []} files={t.sentFiles ?? []} caption={t.caption} status={t.status} durationMs={t.durationMs} />
+  // The built-in to-do list. Ahead of the generic input/output card: `input` here holds the model's task
+  // description, which is the payload the TodoBlock deliberately moves out of the header.
+  if (t.todos) {
+    return <TodoBlock todos={t.todos} change={t.todoChange} detail={t.detail} note={t.input} meta={<ToolStatusMeta status={t.status} durationMs={t.durationMs} />} />
+  }
   if (t.input || t.output) {
     return <BashBlock name={t.name} command={t.input ?? ""} desc={t.detail} output={t.output} status={t.status} backgroundState={t.backgroundState} liveBackgroundState={liveBackgroundState} exitCode={t.exitCode} cwd={t.cwd} sessionId={t.sessionId} durationMs={t.durationMs} inputLabel="input" />
   }

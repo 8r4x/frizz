@@ -143,6 +143,52 @@
   overflow-y: hidden;
 }
 
+/* The to-do checklist body (TodoBlock). A LIST, not a code body: it drops .fray-bash-body's pre-wrap
+   and gets per-row padding instead, so a long item wraps under its own text rather than under its
+   checkbox. Same top border as every other card body so the header keeps its divider. */
+.fray-todo-list {
+  margin: 0;
+  padding: 5px 10px 6px;
+  list-style: none;
+  border-top: 1px solid var(--color-border);
+}
+.fray-todo-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 1.5px 4px;
+  margin: 0 -4px;
+  border-radius: 3px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+/* The row THIS call created or changed — the one the header headlines. A tint (not a colour on the text)
+   so it reads as "this line" without competing with the status glyphs, which are the row's own signal. */
+.fray-todo-row[data-changed="true"] { background: var(--color-panel-2); }
+/* Icon-beside-text is an INK problem, so the checkbox is EXCLUDED from the header's blanket 1px text
+   nudge above (that correction is for small-caps meeting a path; an SVG shares none of those metrics)
+   and carries its own correction, measured in a real browser (scripts/verify-todo-render.mjs runs the
+   measurement as a gate). The reference is the text's CAP BAND (baseline → cap height), not the
+   string's own ink box: a row whose text has a descender measured 3.06px against its own ink while a
+   row without one measured 1.88px — for the same glyph at the same size — and a per-row nudge is
+   meaningless. Both are in `em`, and the glyph is sized in `1em` too (TodoBlock.tsx) so it scales with
+   the text the correction is measured against.
+
+   The two contexts need OPPOSITE nudges, which is why one shared value could never have worked:
+     row    — align-items:flex-start parks the glyph box at the row's top, ABOVE the cap band's centre
+              by 2.17px at 12px text, so it moves DOWN. Exactly proportional: residual 0px at 12px,
+              0px at 24px, 0px at 48px.
+     header — align-items:center centres the box on the LINE BOX, whose centre sits BELOW the cap
+              band's (the line box carries descender space), by 1.58px at 11.5px text, so it moves UP.
+              NOT proportional below ~23px, and that is the geometry, not the correction: measured raw,
+              11.5px needs -1.576px (-0.137em) but 23px needs -2.152px (-0.0935em) and 46px -4.319px
+              (-0.0939em) — proportional from 23px up, half a pixel adrift at 11.5px, because an 11.5px
+              box centred on a flex line lands on a sub-pixel Chrome resolves differently than at 23px.
+              No single em value zeroes both, so this is the value measured AT THE SIZE THAT SHIPS
+              (residual 0px at 11.5px, the only size the header renders at). */
+.fray-bash-header .fray-todo-mark { position: relative; transform: translateY(-0.137em); }
+.fray-todo-row .fray-todo-mark { position: relative; transform: translateY(0.181em); }
+
 /* Codex exec output: a second pane below the command in a BashBlock (the shell result codex records
    in the rollout — Claude Bash calls have none). The label bar is the divider (border-top); the output
    body drops its own top border so the two don't stack a double line. */
