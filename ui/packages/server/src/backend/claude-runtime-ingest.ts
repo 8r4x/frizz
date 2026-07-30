@@ -141,11 +141,23 @@ export interface ClaudeRuntimeIngest {
 }
 
 // Which events mean "a turn is underway". `init` is session setup, not a turn; `prompt-suggestion`
-// and `other` are sidecar chatter. A sub-agent's assistant/user event (parentToolUseId set) still
-// means the PARENT turn is running — the parent is blocked inside its Task tool call.
+// and `other` are sidecar chatter.
+//
+// Only the MAIN thread's assistant/user events count. A CHILD's (parentToolUseId set) says nothing
+// about the parent's turn, and reading one as "running" put every resting fleet-parent under a
+// permanent shimmer. The old rule assumed a live child implies the parent is blocked inside its Task
+// call — true only for a FOREGROUND dispatch, and there the fold already reads `tool_use` (real
+// evidence, which resolveRuntimeTurn never overrides) so the runtime signal was redundant anyway. The
+// fray worker shape is the opposite: `run_in_background: true`, then rest. Measured on a live broker
+// session (_live_bg_rest_turn.mts): the parent's `result` landed at t+9s → settled, and the child's
+// very next assistant event — 40ms later, then 17 more over the next two minutes — flipped it back to
+// "running", which dragged the folded `idle` to `in-flight` for the child's entire lifetime. So the
+// turn never settled, `deriveAwaitingBackground` (which requires turn-idle) could never fire, and the
+// board showed "Working…" for a thread that had been at rest for an hour (reported 2026-07-30).
 function turnSignal(event: ClaudeQueryEvent): ClaudeRuntimeTurn | undefined {
-  if (event.kind === "assistant") return "running"
-  if (event.kind === "user") return "running"
+  if (event.kind === "assistant" || event.kind === "user") {
+    return event.parentToolUseId === undefined ? "running" : undefined
+  }
   if (event.kind === "result") return "settled"
   return undefined
 }
