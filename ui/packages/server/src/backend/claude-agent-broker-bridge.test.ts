@@ -2,7 +2,7 @@
 // a real forked daemon — no real claude, no network). Proves: a tool-permission escalation the daemon
 // relays is journaled as a provider-neutral approval interaction (provider.kind "claude",
 // payload.kind "permission-approval"), and the human's dashboard decision is applied back to the daemon.
-import { chmodSync, copyFileSync, mkdtempSync, rmSync } from "node:fs"
+import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -83,4 +83,71 @@ test("broker routes a permission escalation to the InteractionStore and APPROVES
 
 test("broker routes a permission escalation and DENIES on the human decision", { timeout: 25_000 }, async () => {
   await runCase("deny", "deny")
+})
+
+// ---- freshProcess: the usage-limit latch escape hatch ----------------------------------------------
+// A `claude` that has taken a usage-limit 429 refuses every later input until its reset instant, so the
+// resume for that thread has to arrive in a process that never saw the 429. This proves the bridge
+// actually swaps the process — same session id, new daemon, cold-resumed from the transcript — and that
+// it does NOT do so on an ordinary follow-up, where the point is to keep the live context.
+test("followUp: freshProcess retires the live daemon and cold-resumes; a plain follow-up keeps it", { timeout: 25_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cbrk-fresh-"))
+  const exe = join(dir, "fake-claude--basic.mjs")
+  copyFileSync(fakeCli, exe); chmodSync(exe, 0o700)
+  const bridge = createClaudeAgentBrokerBridge({
+    stateDir: dir, executablePath: exe,
+    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+  })
+  const sessionId = randomUUID()
+  const slug = "latched-thread"
+  const recordOf = () => readBrokerRecord(claudeBrokerRecordPath(dir, sessionId))
+  // The fake CLI appends its argv here as it starts, so these ARE the processes that ran.
+  const startups = () => {
+    try {
+      return readFileSync(join(dir, "capture.jsonl"), "utf8")
+        .split("\n").filter(Boolean).map((l) => JSON.parse(l) as { kind: string; argv?: string[] })
+        .filter((r) => r.kind === "startup")
+    } catch { return [] }
+  }
+  const waitForStartups = async (n: number) => {
+    const deadline = Date.now() + 10_000
+    while (startups().length < n && Date.now() < deadline) await sleep(50)
+    assert.equal(startups().length, n, `expected ${n} claude process(es) by now`)
+  }
+  try {
+    await bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd: dir, prompt: "start the work", permissionMode: "default" })
+    const first = recordOf()
+    assert.ok(first, "the dispatch forked a daemon")
+    // Let the original process actually come up before swapping it. A latched thread has been running
+    // for hours; racing the swap against its own startup would test a case that never happens, and the
+    // kill lands before it records its argv, so the evidence below would be missing rather than wrong.
+    await waitForStartups(1)
+
+    // An ordinary follow-up reconnects: the operator's context is the whole point of the live session.
+    await bridge.followUp({ threadSlug: slug, sessionId, cwd: dir, text: "carry on" })
+    assert.equal(recordOf()?.daemonPid, first.daemonPid, "a plain follow-up must never restart the process")
+    assert.equal(recordOf()?.generation, first.generation)
+    assert.equal(startups().length, 1, "…and it spawns no second claude")
+
+    // The limit resume asks for a fresh one.
+    await bridge.followUp({ threadSlug: slug, sessionId, cwd: dir, text: "the limit reset, continue", freshProcess: true })
+    const second = recordOf()
+    assert.ok(second, "a replacement daemon is published")
+    assert.notEqual(second.daemonPid, first.daemonPid, "freshProcess must hand the message to a NEW process, not the latched one")
+    assert.notEqual(second.generation, first.generation, "a new generation is what tells fray the runtime was swapped")
+    assert.equal(second.sessionId, sessionId, "the thread keeps its identity — this is a restart, not a new thread")
+
+    // …and it RESUMED rather than starting blank, so every turn banked before the limit comes back
+    // with it. This is the difference between recovering the thread and losing it.
+    await waitForStartups(2)
+    const replacement = startups()[1]
+    assert.ok(replacement.argv?.includes("--resume"), "the replacement cold-resumes the on-disk transcript")
+    assert.ok(replacement.argv?.includes(sessionId), "…for this exact session")
+    assert.ok(!startups()[0].argv?.includes("--resume"), "…where the original was a fresh start, so the two are genuinely different processes")
+  } finally {
+    bridge.releaseSession(slug, sessionId, "session-deleted")
+    bridge.close()
+    try { const r = recordOf(); if (r) process.kill(r.daemonPid, "SIGKILL") } catch {}
+    await rmEventually(dir)
+  }
 })

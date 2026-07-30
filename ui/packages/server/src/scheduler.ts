@@ -6,7 +6,7 @@ import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { FenceView } from "./tailer.ts"
 import type { LimitFault } from "./backend/types.ts"
-import { limitPauseIsStale, quotaWindowKeyFor, quotaWindowRecovered, textResetInstant } from "./backend/usage-limit.ts"
+import { limitFaultResetKey, limitPauseIsStale, quotaWindowKeyFor, quotaWindowRecovered, textResetInstant } from "./backend/usage-limit.ts"
 import { createWakeDeliveryStore, type WakeDelivery } from "./wake-store.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
 import {
@@ -971,6 +971,21 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     return out
   }
 
+  // The wall each thread has already spent its ONE early (account-headroom) resume on — see the guard
+  // in limitRecovered. Keyed by slug, valued by limitFaultResetKey.
+  //
+  // The headroom trigger reads the ACCOUNT while the wall belongs to the THREAD's own process, so when
+  // an early resume bounces off that wall the trigger's premise is untouched: the account still shows
+  // headroom, so it fires again, and again. Each bounce writes a new fault, whose new `at` mints a new
+  // fence id, so the once-per-interruption dedupe in evalLimits never bites either. Live on 2026-07-30
+  // that ran every 2 minutes (exactly LIMIT_HEADROOM_MIN_FAULT_AGE_MS) for half an hour and buried a
+  // worker's transcript under 184 limit records — a self-inflicted context burn on a thread that was
+  // already stuck.
+  //
+  // In memory on purpose: a fray restart costs one extra attempt per thread, and a durable table for a
+  // guard this cheap would be a migration in exchange for nothing.
+  const spentEarlyResume = new Map<string, string>()
+
   // Has this fault's window come back? Two independent triggers, whichever fires first:
   //   (1) the ORIGINAL window RESET — its own reset clock (5-hour session: exact, local, free) or, for a
   //       weekly whose text carries no date, the endpoint's window-identity roll.
@@ -994,7 +1009,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (provider?.status === "ok" && Number.isFinite(faultAtMs) && nowMs - faultAtMs >= LIMIT_HEADROOM_MIN_FAULT_AGE_MS) {
       const key = quotaWindowKeyFor(c.fault.window)
       const w = key ? provider.windows.find((x) => x.key === key) : undefined
-      if (w && typeof w.usedPercent === "number" && w.usedPercent <= LIMIT_RESUME_HEADROOM_PERCENT) return true
+      const wall = limitFaultResetKey(c.fault)
+      // One early resume per wall. A second fault naming the same reset instant is this thread bouncing
+      // off the same wall, not a new interruption, so it gets no second attempt — it waits for trigger
+      // (1), its own clock, below.
+      if (w && typeof w.usedPercent === "number" && w.usedPercent <= LIMIT_RESUME_HEADROOM_PERCENT && spentEarlyResume.get(c.slug) !== wall) {
+        spentEarlyResume.set(c.slug, wall)
+        return true
+      }
     }
 
     // (1) Original-window reset. Text first — exact, local, free, covers the common 5-hour session case.

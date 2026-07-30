@@ -220,6 +220,41 @@ test("resumeThread un-archives a bumped LIVE archived thread (Inactive → Activ
   assert.equal(sectionOf(after), "active")
 })
 
+test("resumeThread: a limit resume RELAUNCHES a live tmux worker instead of pasting into a latched one", () => {
+  // The tmux half of the usage-limit latch. A pane whose claude took a 429 refuses every later input
+  // until its reset instant, so the ordinary live path — paste into the composer — delivers nothing at
+  // all. `freshProcess` must retire the pane and take the respawn path, which relaunches `claude -r` on
+  // the pinned conversation: a process that never saw the 429, with the transcript intact.
+  const { storage, board } = harness()
+  const slug = "latched-tmux"
+  storage.upsertSession(sessionRow(slug))
+  const keyed: string[] = []
+  const spawned: string[] = []
+  const killed: string[] = []
+  let live = true
+  const tx: ResumeTmux = {
+    isLive: () => live,
+    sendKeys: (_slug, text) => void keyed.push(text),
+    pasteText: (_slug, text) => void keyed.push(text),
+    // Model the real verb: once the session is killed the pane is genuinely gone, which is what makes
+    // the code below take the dead branch. A no-op stub here would let the test pass on a bug.
+    killSession: (s) => { killed.push(s); live = false },
+    ensureServer: () => {},
+    spawn: (s) => void spawned.push(s),
+  }
+  const deps = { project: fakeProject("/tmp"), storage, board, getSettings: () => settings, tmux: tx }
+
+  // CONTROL: without the flag, a live pane is injected into and never restarted.
+  resumeThread(deps, slug, "ordinary steer")
+  assert.deepEqual(keyed, ["ordinary steer"], "an ordinary follow-up still goes to the running worker")
+  assert.deepEqual(spawned, [], "…and must never cost it its process")
+
+  resumeThread(deps, slug, "⏳ The session usage limit that interrupted you has reset.", undefined, { freshProcess: true })
+  assert.deepEqual(keyed, ["ordinary steer"], "nothing more is pasted — a latched TUI would ignore it")
+  assert.deepEqual(spawned, [slug], "the worker is relaunched on its pinned conversation instead")
+  assert.ok(killed.includes(slug), "…which requires retiring the latched pane first")
+})
+
 test("resumeThread durably excludes a concurrent profile change until live injection finishes", () => {
   const { storage, board } = harness()
   const slug = "resume-profile-interlock"

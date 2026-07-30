@@ -1103,7 +1103,20 @@ export async function recoverThreadProfileHandoff(
   }
 }
 
-function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string, deliveryId?: string): void {
+/** Per-call shaping for a resume. See `freshProcess` — the usage-limit latch escape hatch. */
+export interface ResumeOptions {
+  /**
+   * Relaunch the worker instead of injecting into the one that is already running.
+   *
+   * Set for a usage-limit resume fired before the provider's stated reset: the `claude` behind that
+   * pane latched on its 429 and refuses every input until then, so a paste into its composer is a
+   * guaranteed no-op (see usage-limit.ts `limitResumeNeedsFreshProcess`). The broker path expresses the
+   * same thing as `followUp({freshProcess})`.
+   */
+  freshProcess?: boolean
+}
+
+function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string, deliveryId?: string, opts: ResumeOptions = {}): void {
   const tx = deps.tmux ?? tmux
   const row = deps.storage.getSession(slug)
   if (!row) throw new Error(`no session registered for ${slug}`)
@@ -1159,6 +1172,11 @@ function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string, deli
   if (adoptionLookup?.kind === "unknown") {
     throw new RetryableDeliveryError("This adopted thread's exact runtime identity could not be verified; retry")
   }
+  // The usage-limit latch, tmux side. A pane whose claude took a 429 will refuse this paste exactly as
+  // it refused the last one, so retire fray's OWN pane and let the dead-resume path below relaunch
+  // `claude -r` — a process that never saw the 429, reading the same transcript back. An ADOPTED pane is
+  // exempt: fray did not start it, so it does not get to kill it.
+  if (opts.freshProcess && !adoption && tx.isLive(slug)) tx.killSession(slug)
   const live = adoption
     ? adoptionLookup?.kind === "found" && !adoptionLookup.pane.dead
     : tx.isLive(slug)
@@ -1363,7 +1381,7 @@ function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string, deli
   deps.board.refresh() // storage-only change — overlay is enough
 }
 
-export function resumeThread(deps: ResumeDeps, slug: string, message: string, deliveryId?: string): void {
+export function resumeThread(deps: ResumeDeps, slug: string, message: string, deliveryId?: string, opts: ResumeOptions = {}): void {
   const initial = deps.storage.getSession(slug)
   if (!initial) throw new Error(`no session registered for ${slug}`)
   // Preserve the specific, actionable errors from the inner path before trying the durable claim.
@@ -1393,7 +1411,7 @@ export function resumeThread(deps: ResumeDeps, slug: string, message: string, de
     throw new RetryableDeliveryError("This thread changed or another runtime control started; no follow-up was sent")
   }
   try {
-    resumeThreadOwned(deps, slug, message, deliveryId)
+    resumeThreadOwned(deps, slug, message, deliveryId, opts)
   } finally {
     const current = deps.storage.getSession(slug)
     if (current?.session_id === initial.session_id && deps.storage.releaseRuntimeControl(slug, {

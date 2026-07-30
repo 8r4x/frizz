@@ -56,7 +56,7 @@ import {
   ThreadSlug,
   isDirectSubAgent,
 } from "@fray-ui/shared"
-import type { AppContext } from "./context.ts"
+import { needsFreshProcessForLimit, type AppContext } from "./context.ts"
 import { appServerTurnStalled } from "./board.ts"
 import { runThreadUpdate } from "./fray.ts"
 import { repairThreadFile } from "./repair.ts"
@@ -903,6 +903,15 @@ export function createRouter(ctx: AppContext) {
             appendSystemPrompt,
             model: row.model ?? undefined,
             effort: row.effort ?? undefined,
+            // The pause card's "Continue now" is the same act as the scheduler's auto-resume, so it
+            // needs the same treatment: while the process is still latched on its own 429, delivering
+            // into it does nothing at all. Restart it instead — otherwise the button is a no-op and
+            // reads as fray having ignored the click.
+            freshProcess: needsFreshProcessForLimit(
+              ctx.tailer.get(input.slug)?.limitFault,
+              Date.now(),
+              (ctx.tailer.get(input.slug)?.subAgents ?? []).some((agent) => agent.state === "running"),
+            ),
           })
           // The ledger's RELIABILITY half is indeed tmux-only — flush-stuck-composer and the
           // pane-inspected receipt are skipped for a headless row (isHeadlessRow gates both), and no
@@ -943,7 +952,16 @@ export function createRouter(ctx: AppContext) {
         // (delivery-marker.ts) — that is what lets the tailer confirm delivery by IDENTITY instead of by
         // comparing prose the tmux+TUI paste channel is free to rewrite. Codex never takes this path.
         resumeThread({ project: ctx.project, storage: ctx.storage, board: ctx.board, getSettings: ctx.getSettings, backendFor: ctx.backendFor }, input.slug, input.message,
-          input.deliveryId && row?.backend !== "codex" ? input.deliveryId : undefined)
+          input.deliveryId && row?.backend !== "codex" ? input.deliveryId : undefined,
+          // "Continue now" on a limit-paused tmux thread relaunches it, for the same reason the broker
+          // branch above swaps its process: the running one is not listening.
+          {
+            freshProcess: needsFreshProcessForLimit(
+              ctx.tailer.get(input.slug)?.limitFault,
+              Date.now(),
+              (ctx.tailer.get(input.slug)?.subAgents ?? []).some((agent) => agent.state === "running"),
+            ),
+          })
         // Injection accepted → open a delivery-ledger entry (Claude rows only; Codex has its own durable
         // queue above). From here the send is a tracked state machine: the tailer correlates the JSONL
         // evidence and the transcript projection renders the queued bubble as SERVER truth — reload-safe,

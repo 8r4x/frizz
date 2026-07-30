@@ -1,4 +1,6 @@
 import type { LimitWindow } from "@fray-ui/shared"
+// Type-only, so this never becomes a runtime cycle (types.ts reaches back here through tailer.ts).
+import type { LimitFault } from "./types.ts"
 
 // ---- SUBSCRIPTION USAGE-LIMIT DETECTION (the auto-resume feature's read side) -------------------
 // When a Claude subscription window is exhausted mid-turn, the CLI does NOT crash: it appends one
@@ -166,6 +168,55 @@ export function textResetInstant(c: LimitClassification, faultAtMs: number): num
   // mis-read meridiem, a zone surprise) is rejected rather than trusted — better no auto-resume than
   // one scheduled 20 hours late.
   return at - faultAtMs > 5 * 60 * 60_000 ? undefined : at
+}
+
+// ---- The LATCH: why a resume sometimes needs a whole new process ----------------------------------
+//
+// A `claude` process that takes a usage-limit 429 LATCHES on it. Every later input is refused by the
+// PROCESS, locally: it answers in ~1s with a byte-identical synthetic record naming the same reset
+// clock, without reaching the API at all. Nothing delivered over the existing session clears it —
+// not a "continue", not a fresh credential.
+//
+// Measured live 2026-07-30 on a five-thread fleet. The operator's credential rotator swapped in an
+// account with 99% headroom at 17:05:54Z; the same processes went on emitting `resets 11:20am` at
+// 17:06, 17:08, 17:10, 17:12, 17:15 and 17:17, while a brand-new `claude -p` on that same repaired
+// credential answered normally in the same minute. Killing the process and cold-resuming its
+// transcript brought every one of them straight back.
+//
+// This is why the auto-resume feature worked for as long as its only trigger was the reset clock: by
+// the time that clock passes, the process's own latch has expired too, so poking the live session is
+// enough. The account-HEADROOM trigger broke that alignment — it exists precisely to resume EARLY,
+// off a fresh sign-in or a rotated account, at a moment the latch is still holding. An early resume
+// is therefore deliverable only into a process that has never seen the 429.
+//
+// Returns true when this fault's resume must restart the runtime rather than steer the live one.
+export function limitResumeNeedsFreshProcess(
+  fault: Pick<LimitFault, "window" | "at" | "resetClock">,
+  nowMs: number,
+): boolean {
+  const resumesAt = faultResetInstant(fault)
+  // No resolvable instant — a weekly clock never resolves from text, so that resume rides the usage
+  // endpoint's window roll and we cannot prove the latch has expired. Restart rather than deliver
+  // into a process that may still be refusing everything.
+  if (resumesAt === undefined) return true
+  return nowMs < resumesAt
+}
+
+// One stable key per "wall the provider put this thread behind". Two faults that name the SAME reset
+// instant are the same wall — the second is just the thread bouncing off it again — so anything that
+// must happen once per wall (see the scheduler's early-resume guard) keys on this rather than on
+// `fault.at`, which changes on every bounce.
+export function limitFaultResetKey(fault: Pick<LimitFault, "window" | "at" | "resetClock">): string {
+  const resumesAt = faultResetInstant(fault)
+  return `${fault.window}:${resumesAt ?? "unresolved"}`
+}
+
+// The provider-stated reset instant for a fault, anchored on the fault itself (never on `now` — see
+// textResetInstant). `undefined` when the text cannot resolve one.
+function faultResetInstant(fault: Pick<LimitFault, "window" | "at" | "resetClock">): number | undefined {
+  const at = Date.parse(fault.at)
+  if (!fault.resetClock || !Number.isFinite(at)) return undefined
+  return textResetInstant({ window: fault.window, resetClock: fault.resetClock }, at)
 }
 
 // How long a paused thread stays auto-resumable AFTER its window was due back. This is the boot

@@ -2,6 +2,8 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import {
   classifyLimitRecord,
+  limitFaultResetKey,
+  limitResumeNeedsFreshProcess,
   parseLimitResetClock,
   quotaWindowRecovered,
   resolveResetInstant,
@@ -199,4 +201,62 @@ test("quotaWindowRecovered: a re-limit inside the CURRENT window reads as not-re
   const resetsAt = windowStart + 5 * hour
   const reLimitAt = windowStart + 10 * 60_000 // ten minutes into the fresh window
   assert.equal(quotaWindowRecovered([{ key: "5h", resetsAt: resetsAt / 1000 }], "session", reLimitAt, reLimitAt + hour), false)
+})
+
+// ---- the process latch: which resumes need a whole new `claude` ------------------------------------
+// The literals below are the real 2026-07-30 incident: a fleet cut off at 10:06 PDT reading
+// "resets 11:20am", auto-resumed early off a rotated account that had 99% headroom.
+
+test("limitResumeNeedsFreshProcess: EARLY (before the stated reset) needs a fresh process", () => {
+  const fault = {
+    window: "session" as const,
+    at: "2026-07-30T17:06:32.756Z", // 10:06 PDT
+    resetClock: { hour: 11, minute: 20, timeZone: "America/Los_Angeles" },
+  }
+  // 10:17 PDT — the account rotated and has headroom, but this process is latched until 11:20.
+  assert.equal(limitResumeNeedsFreshProcess(fault, Date.parse("2026-07-30T17:17:00.000Z")), true)
+})
+
+test("limitResumeNeedsFreshProcess: once the stated reset passes, the LIVE process is fine", () => {
+  const fault = {
+    window: "session" as const,
+    at: "2026-07-30T17:06:32.756Z",
+    resetClock: { hour: 11, minute: 20, timeZone: "America/Los_Angeles" },
+  }
+  // 11:21 PDT — the process's own latch has expired with the window, so a plain steer lands. This is
+  // the case that worked for as long as the clock was the only trigger; it must keep its context.
+  assert.equal(limitResumeNeedsFreshProcess(fault, Date.parse("2026-07-30T18:21:00.000Z")), false)
+})
+
+test("limitResumeNeedsFreshProcess: an unresolvable clock restarts rather than guesses", () => {
+  // A weekly clock never resolves from text (no date), so that resume rides the usage endpoint and we
+  // cannot prove the latch expired. Restarting is the answer that can't silently no-op.
+  const weekly = { window: "weekly" as const, at: "2026-07-30T17:06:32.756Z", resetClock: { hour: 4, minute: 0, timeZone: "America/Los_Angeles" } }
+  assert.equal(limitResumeNeedsFreshProcess(weekly, Date.parse("2026-07-30T17:17:00.000Z")), true)
+  // Same for a fault whose message carried no clock at all.
+  const clockless = { window: "session" as const, at: "2026-07-30T17:06:32.756Z" }
+  assert.equal(limitResumeNeedsFreshProcess(clockless, Date.parse("2026-07-30T17:17:00.000Z")), true)
+})
+
+test("limitFaultResetKey: every bounce off the SAME wall shares one key", () => {
+  const clock = { hour: 11, minute: 20, timeZone: "America/Los_Angeles" }
+  // The six real re-limits, minutes apart, each a distinct `at` but all the same 11:20 wall.
+  const keys = [
+    "2026-07-30T17:06:23.316Z",
+    "2026-07-30T17:08:33.847Z",
+    "2026-07-30T17:10:45.876Z",
+    "2026-07-30T17:12:53.863Z",
+    "2026-07-30T17:15:09.669Z",
+    "2026-07-30T17:17:00.483Z",
+  ].map((at) => limitFaultResetKey({ window: "session", at, resetClock: clock }))
+  assert.equal(new Set(keys).size, 1, "the same wall must collapse to one key, or the early resume re-fires forever")
+})
+
+test("limitFaultResetKey: a genuinely NEW wall gets its own key", () => {
+  const clock = { hour: 11, minute: 20, timeZone: "America/Los_Angeles" }
+  // Same wall-clock text, next day: a different instant, so it earns its own early resume. Keying on
+  // the raw text rather than the resolved instant would suppress it forever.
+  const today = limitFaultResetKey({ window: "session", at: "2026-07-30T17:06:23.316Z", resetClock: clock })
+  const tomorrow = limitFaultResetKey({ window: "session", at: "2026-07-31T17:06:23.316Z", resetClock: clock })
+  assert.notEqual(today, tomorrow)
 })
