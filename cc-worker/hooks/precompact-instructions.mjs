@@ -22,7 +22,13 @@
 //
 //   no hook (control)                    postTokens  4,060
 //   qualitative "prefer a long summary"  postTokens  4,429   (+9% — noise)
-//   explicit ">= 15,000 words"           postTokens 20,339   (5.0x the control)
+//   explicit ">= 15,000 words"           postTokens 20,339   (5.0x the control)  <-- WORD_TARGET
+//   explicit ">= 35,000 words"           postTokens  5,182   (WORSE, and slower + dearer)
+//
+// DO NOT RAISE WORD_TARGET without re-measuring: the response is NON-MONOTONIC. 35,000 words is past
+// what the model will produce in one response and asking for it degraded compliance badly — a quarter
+// the output of the 15,000 ask (2,174 words vs 9,829), at 11.2 min / $3.73 vs 8.6 min / $2.04. Three
+// single samples, so treat the exact figures as indicative, but 15,000 was clearly the best of them.
 //
 // Adjectives do nothing; a hard number does the work. The COST is latency: the 15,000-word run
 // produced no compaction result at all inside a 10-minute cap and only completed on a longer budget.
