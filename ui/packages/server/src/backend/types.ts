@@ -45,12 +45,7 @@ export type NormalizedEvent =
   | { kind: "assistant-text"; at?: string; text: string; final: boolean } // streamed assistant text (final=the answer, not commentary)
   | { kind: "user-message"; at?: string; text?: string; synthetic: boolean } // human turn (synthetic=peer/notification/tool-result echo — never bumps lastUserAt)
   | { kind: "tool-call"; at?: string; id: string; name: string; input: unknown }
-  // `image` is a `data:image/…;base64,…` URL when the result CARRIED a picture (an MCP
-  // `take_screenshot`, codex `view_image`). It is deliberately a SEPARATE channel from `text`: the text
-  // is what the board fold, summaries and the output pane consume, and splicing megabytes of base64 into
-  // it would push the blob through every one of them. Carrying the already-parsed string by reference
-  // costs nothing; only the transcript projection reads it, and only to decode it to disk once.
-  | { kind: "tool-result"; at?: string; id: string; text: string; image?: string }
+  | { kind: "tool-result"; at?: string; id: string; text: string }
   | { kind: "reasoning"; at?: string; text: string } // model-reasoning SUMMARY (Codex plaintext summary[]; Claude thinking is redacted → never emitted)
   | { kind: "title"; title: string } // backend's own session auto-title (ai-title / codex thread title)
   // Context COMPACTION: the harness replaced the conversation with a summary, so everything above this

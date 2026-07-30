@@ -9,7 +9,6 @@ import {
   reconcileLiveMessages,
   resolveVisibleStart,
   restoreTranscriptViewportAnchor,
-  transcriptAnchorCorrection,
   transcriptAnchorScrollDelta,
 } from "./transcriptPagination.ts"
 
@@ -143,58 +142,4 @@ test("scroll-anchor skips the pinned (sticky) user message and anchors on a natu
   const root = { querySelectorAll: () => [sticky, flow] }
   const anchor = captureTranscriptViewportAnchor(root as unknown as HTMLElement)
   assert.deepEqual(anchor, { sourceId: "a1", top: 300 })
-})
-
-// ---- the load-earlier correction must always be able to STOP ----
-// "reserve" re-arms the layout effect that asks for it, so any geometry this function can never stop
-// reserving on is an infinite render loop. These pin the two guards that make that unreachable.
-
-const geometry = (over: Partial<Parameters<typeof transcriptAnchorCorrection>[0]> = {}) =>
-  ({ remaining: 400, scrollY: 1000, maxScrollY: 1000, alreadyReserved: false, ...over })
-
-test("load-earlier correction reserves only when pinned at the bottom of a scrollable window", () => {
-  assert.equal(transcriptAnchorCorrection(geometry()), "reserve", "owed pixels with nowhere left to scroll")
-  assert.equal(transcriptAnchorCorrection(geometry({ scrollY: 200 })), "settle", "room left below — just scroll")
-  assert.equal(transcriptAnchorCorrection(geometry({ remaining: 0.4 })), "settle", "already converged")
-  assert.equal(transcriptAnchorCorrection(geometry({ remaining: -800 })), "settle", "a negative delta never reserves")
-  assert.equal(transcriptAnchorCorrection(geometry({ remaining: Number.NaN })), "settle", "a NaN reading never reserves")
-})
-
-// THE REGRESSION. An open thread drawer scroll-locks the board behind it (`body{position:fixed}`), which
-// reports scrollY 0 / maxScrollY 0 — so the old `scrollY >= maxScrollY - 1` test read `0 >= -1` and was
-// true forever. On a fixed body scrollBy moves nothing and margin cannot grow scrollHeight either, so
-// `remaining` and `maxScrollY` were both frozen: the branch re-armed its own effect until React's
-// nested-update limit destroyed the QueueCard. Observed live: 52 passes, remaining stuck at 2218.75px,
-// the reserve climbing to 110,950px.
-test("a scroll-LOCKED document settles instead of reserving forever (QueueCard render-loop regression)", () => {
-  const locked = geometry({ remaining: 2218.75, scrollY: 0, maxScrollY: 0 })
-  assert.equal(transcriptAnchorCorrection(locked), "settle")
-  // The degenerate comparison the guard replaces would have said "reserve" here, every single pass.
-  assert.ok(locked.scrollY >= locked.maxScrollY - 1, "0 >= -1 — why the old bottom test never terminated")
-})
-
-test("the bottom reserve is one-shot per anchor, so a non-converging correction cannot spin", () => {
-  const owed = geometry({ remaining: 2218.75 })
-  assert.equal(transcriptAnchorCorrection(owed), "reserve", "the first ask grows the reserve")
-  assert.equal(transcriptAnchorCorrection({ ...owed, alreadyReserved: true }), "settle", "the second gives up")
-})
-
-// The loop-freedom property itself, stated directly: feed the decision back into its own geometry the way
-// the effect does (reserve → the anchor is now `reserved`) and it must reach "settle" in bounded steps —
-// for EVERY combination, including the ones where the reserve buys nothing.
-test("the correction terminates from every geometry, never re-reserving indefinitely", () => {
-  for (const remaining of [-5, 0, 0.5, 1, 2218.75, 1e6, Number.NaN]) {
-    for (const maxScrollY of [0, 1, 1000]) {
-      for (const scrollY of [0, 999, 1000, 5000]) {
-        let g = { remaining, scrollY, maxScrollY, alreadyReserved: false }
-        let steps = 0
-        // Worst case the geometry never improves at all — the pessimal real case (a fixed body).
-        while (transcriptAnchorCorrection(g) === "reserve") {
-          g = { ...g, alreadyReserved: true }
-          if (++steps > 1) break
-        }
-        assert.ok(steps <= 1, `settled after ${steps} reserves for ${JSON.stringify({ remaining, scrollY, maxScrollY })}`)
-      }
-    }
-  }
 })

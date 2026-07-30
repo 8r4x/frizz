@@ -6,7 +6,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight, FileText, Hash, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, ShieldCheck, Sparkles, X, type LucideIcon } from "lucide-react"
 import type { AwaitingHint, NativeInputRequired as NativeInputRequiredData, PendingAsk, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@fray-ui/shared"
-import { isDirectSubAgent } from "@fray-ui/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBoard, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
@@ -42,6 +41,7 @@ import { FOREGROUND_MARK_AFTER_MS, foregroundToolIsRunning, hasRunningToolIndica
 import { formatToolDuration } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, visibleChildOps } from "../lib/childOps.ts"
+import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
 import { agentReading } from "../lib/agentReading.ts"
 import { ChildOpRow } from "./ChildOpRow.tsx"
@@ -3458,13 +3458,6 @@ export function BackgroundOpsStrip({
     const id = setInterval(() => force((n) => n + 1), 30_000)
     return () => clearInterval(id)
   }, [total])
-  // Dismiss a finished-but-unsignalled op: the × retires it from tracking server-side (the board push
-  // then drops its row). Optimism is unnecessary — dismissOp calls onChange, so the removal arrives on
-  // the next board frame; on failure the row simply stays and the next frame reconciles.
-  const dismiss = useMutation({
-    mutationFn: (id: string) => rpc.dismissBackgroundOp({ slug, id }),
-    onError: (e) => showToast(`Dismiss failed: ${(e as Error).message.slice(0, 80)}`),
-  })
   if (total === 0) return null
   return (
     <div className={`flex flex-col gap-0.5 ${className}`} data-background-ops>
@@ -3480,10 +3473,7 @@ export function BackgroundOpsStrip({
           // The ops strip is where the full live reading belongs: the child's current step plus how far
           // it has got. All three are absent for a tmux/codex child, which just reads as it did before.
           onOpen={s.id ? () => pushSubAgentDrawer(slug, s.id!, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt }) : undefined}
-          // NO × on a descendant row. Dismiss retires a tracked op by its dispatch id, and a descendant's
-          // dispatch is in an ANCESTOR's transcript — this thread never tracked it, so the call would be a
-          // silent no-op. A control that does nothing is worse than no control.
-          onDismiss={s.id && isDirectSubAgent(s) ? () => dismiss.mutate(s.id!) : undefined}
+          onDismiss={childOpDismisser(slug, s)}
         />
       ))}
       {visibleChildOps(shells, "sheet").map((s, i) => (
@@ -3495,7 +3485,7 @@ export function BackgroundOpsStrip({
           density="sheet"
           startedAt={s.startedAt}
           onOpen={s.id ? () => pushBackgroundShellDrawer(slug, s.id!, { label: s.label, startedAt: s.startedAt }) : undefined}
-          onDismiss={s.id ? () => dismiss.mutate(s.id!) : undefined}
+          onDismiss={childOpDismisser(slug, s)}
         />
       ))}
     </div>

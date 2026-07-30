@@ -35,38 +35,24 @@ function thread(over: Partial<ThreadView> = {}): ThreadView {
 test("thread lifecycle controls have one footer home independent of queue/done presentation", () => {
   assert.deepEqual(threadLifecycleAvailability(thread()), {
     footer: true,
-    done: false,
     snooze: true,
     archive: true,
   })
   assert.deepEqual(threadLifecycleAvailability(thread({ lastFence: { kind: "done", body: "Shipped", hints: [] } })), {
     footer: true,
-    done: false,
     snooze: true,
     archive: true,
   }, "a done fence cannot move Archive inline or into a header")
-  // An archived thread has no lifecycle VERBS — reopening is done by sending it another message, not a
-  // Reopen button — but it KEEPS the strip, which reads "Done" where the buttons were. Dropping the strip
-  // left the completed state with nowhere to appear on a thread's own full view.
+  // An archived thread has no lifecycle controls at all — reopening is done by sending it another
+  // message, not a Reopen button — so the footer does not render.
   assert.deepEqual(threadLifecycleAvailability(thread({ state: "archived", archived: true })), {
-    footer: true,
-    done: true,
+    footer: false,
     snooze: false,
     archive: false,
   })
-  const rolling = threadLifecycleAvailability(thread({ state: undefined, archived: true }))
-  assert.deepEqual({ footer: rolling.footer, done: rolling.done, archive: rolling.archive }, { footer: true, done: true, archive: false }, "rolling snapshots still read the legacy flag as done")
-  // A thread fray does not own has no lifecycle standing at all: no verbs AND no readout, because
-  // "Done" would assert a completion state fray never wrote.
-  for (const unowned of [thread({ foreign: true }), thread({ kind: "legacy" })]) {
-    assert.deepEqual(threadLifecycleAvailability(unowned), { footer: false, done: false, snooze: false, archive: false })
-  }
-  assert.deepEqual(threadLifecycleAvailability(thread({ foreign: true, state: "archived", archived: true })), {
-    footer: false,
-    done: false,
-    snooze: false,
-    archive: false,
-  }, "an archived FOREIGN thread still gets no strip")
+  assert.equal(threadLifecycleAvailability(thread({ state: undefined, archived: true })).footer, false, "rolling snapshots still suppress the footer once archived")
+  assert.equal(threadLifecycleAvailability(thread({ foreign: true })).footer, false)
+  assert.equal(threadLifecycleAvailability(thread({ kind: "legacy" })).footer, false)
 })
 
 // completionArchivesImmediately gates the OPTIMISTIC Mark-as-done dismissal, so it must match the
@@ -158,7 +144,6 @@ test("every owned open queue reason retains enabled lifecycle actions in the foo
   ]) {
     assert.deepEqual(threadLifecycleAvailability(state), {
       footer: true,
-      done: false,
       snooze: true,
       archive: true,
     })

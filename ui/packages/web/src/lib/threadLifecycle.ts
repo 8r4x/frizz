@@ -2,10 +2,7 @@ import type { CompletionHold, ThreadView } from "@fray-ui/shared"
 import { isDirectSubAgent } from "@fray-ui/shared"
 
 export interface ThreadLifecycleAvailability {
-  // The strip itself renders. TRUE for any owned session thread, done or not — see `done`.
   footer: boolean
-  // The thread is already complete, so the strip STATES that instead of offering a verb.
-  done: boolean
   snooze: boolean
   archive: boolean
 }
@@ -17,21 +14,13 @@ export function threadLifecycleAvailability(thread: ThreadView): ThreadLifecycle
   const owned = thread.kind === "session" && thread.foreign !== true
   // `archived` mirrors the pre-state-column protocol; honor it during a rolling server/client reload.
   const archived = owned && (thread.state === "archived" || thread.archived === true)
-  // An archived thread has no lifecycle VERBS — there is no Reopen button (reopening is just sending
-  // the thread another message), and Snooze rejects an archived thread server-side. It keeps the STRIP
-  // regardless, reading "Done" where the buttons were, because dropping it left the completed state
-  // with nowhere to appear: a thread's full view showed a title, an activity stamp and a composer, and
-  // nothing anywhere said the thread was finished (maintainer 2026-07-29, on a /full page: "why does
-  // this not have a footer with the mark as done button?" — the honest answer is a readout, not an
-  // absence). Holding the strip also keeps the two things it alone carries: the ContextMeter, and the
-  // device safe-area inset for the whole thread column.
-  const footer = owned
-  const actionable = owned && !archived
+  // An archived thread has NO lifecycle controls: there is no Reopen button (reopening is just sending
+  // the thread another message), so with Snooze/Archive gone too the footer has nothing to show.
+  const footer = owned && !archived
   return {
     footer,
-    done: archived,
-    snooze: actionable,
-    archive: actionable,
+    snooze: footer,
+    archive: footer,
   }
 }
 

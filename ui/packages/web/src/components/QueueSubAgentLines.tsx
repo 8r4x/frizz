@@ -1,6 +1,7 @@
 import type { SubAgentView } from "@fray-ui/shared"
 import { pushSubAgentDrawer } from "../store.ts"
 import { visibleChildOps } from "../lib/childOps.ts"
+import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { ChildOpRow } from "./ChildOpRow.tsx"
 
 // A queue handoff should name the work still running beneath the parent without turning it into a
@@ -12,6 +13,12 @@ import { ChildOpRow } from "./ChildOpRow.tsx"
 // model+effort tag was REMOVED from these lines on 2026-07-27 (maintainer): the profile belongs to the
 // prompt box's own control one line up, not repeated on every child line. It still rides the drill-in
 // so the drawer knows which cell it opened.
+//
+// It DOES carry the dismiss × (maintainer 2026-07-30 — "the X button to stop a sub-agent should show up
+// everywhere sub-agents are listed"). That is not the "second operations toolbar" this comment has
+// always warned against: the card names the live work, and retiring a child that finished without
+// signalling is the one action that reading provokes. Everything else — the kind tag, the counters, the
+// profile — still stays off the card.
 export function QueueSubAgentLines({ slug, subAgents }: { slug: string; subAgents: readonly SubAgentView[] }) {
   const visible = visibleChildOps(subAgents, "card")
   if (visible.length === 0) return null
@@ -29,6 +36,7 @@ export function QueueSubAgentLines({ slug, subAgents }: { slug: string; subAgent
           // What the child is DOING right now. The counters stay off a handoff card (see ChildOpRow).
           parentSlug={slug}
           onOpen={agent.id ? () => pushSubAgentDrawer(slug, agent.id!, { label: agent.label, subagentType: agent.subagentType, startedAt: agent.startedAt }) : undefined}
+          onDismiss={childOpDismisser(slug, agent)}
         />
       ))}
     </div>

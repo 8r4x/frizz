@@ -10,6 +10,7 @@ import { sectionThreads, partitionActive, needsAction, displayTitle, titleIsProv
 import { BoxSpinner, STATUS_BOX } from "./BoxSpinner.tsx"
 import { ChildOpRow } from "./ChildOpRow.tsx"
 import { visibleChildOps } from "../lib/childOps.ts"
+import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { MarkAsButton } from "./MarkAsButton.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
 import { Tooltip } from "./Tooltip.tsx"
@@ -462,6 +463,9 @@ function SubAgentRows({ t }: { t: ThreadView }) {
           startedAt={s.startedAt}
           parentSlug={t.id}
           onOpen={() => pushSubAgentDrawer(t.id, s.id, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt })}
+          // The same dismiss × the queue card and the ops strip carry (maintainer 2026-07-30): the rail
+          // is where a phantom child is most often SEEN, so it is where retiring one has to be possible.
+          onDismiss={childOpDismisser(t.id, s)}
           // The rail has no room for the worker-profile tag the ops strip can show, so it rides the tooltip.
           title={s.subagentType ? `[${s.subagentType}] ${s.label}` : s.label}
         />

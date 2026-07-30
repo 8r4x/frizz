@@ -56,54 +56,9 @@ export function ThreadLifecycleFooter({
         <ContextMeter thread={thread} />
         <PendingSnooze thread={thread} />
       </span>
-      {/* Done ⇒ the strip states the state; otherwise it offers the verbs. Never both, and never
-          neither: the slot on the right always says something about where the thread stands. */}
-      {available.done ? (
-        <DoneReadout />
-      ) : (
-        <>
-          {available.snooze && <SnoozeButton thread={thread} onSnoozed={onSnoozed} />}
-          <StateButton thread={thread} onArchived={onArchived} onDismissCancel={onDismissCancel} />
-        </>
-      )}
+      {available.snooze && <SnoozeButton thread={thread} onSnoozed={onSnoozed} />}
+      <StateButton thread={thread} onArchived={onArchived} onDismissCancel={onDismissCancel} />
     </footer>
-  )
-}
-
-// What a completed thread says where its Mark-as-done button used to be. A STATEMENT, not a control:
-// there is deliberately no Reopen verb anywhere in fray — a bump un-archives the thread on its way
-// through (server/src/resume.ts un-archives up front on any follow-up), so the composer directly above
-// this readout already IS the reopen affordance and the tooltip points at it rather than adding a
-// second one.
-//
-// Same Check + "Done" pairing the sidebar's rail indicator and the ```done fence card use, so one
-// vocabulary covers all three surfaces.
-//
-// It wears StateButton's BOX — same `px-2.5 py-1`, plus a 1px TRANSPARENT border standing in for that
-// button's real one — so completing a thread in place swaps the label without moving anything. With the
-// bare box it was 2px shorter (exactly the border it was missing), and every pixel below it, composer
-// included, settled by that much on the click. Now the ✓ lands where the ✓ it replaces was: measured
-// 2026-07-29, footer top and composer bottom both move 0.00px through the swap.
-//
-// Deliberately NO optical nudge on the glyph. It sits at the footer's own 12px scale beside the same
-// word at the same size as StateButton's label, and its ink measures IDENTICALLY to that button's under
-// both type stacks (+0.46px under the shipping sans default, −1.14px under mono, against the label's cap
-// band). Whatever the strip's residual is, the readout and the verb it replaces share it exactly, which
-// is the property that matters in a slot where one becomes the other — a nudge on only this glyph would
-// make the mark jump on the click.
-function DoneReadout() {
-  const label = "Marked done — send a message to reopen it"
-  return (
-    <Tooltip label={label} side="top">
-      <span
-        data-thread-done
-        aria-label={label}
-        className="flex items-center gap-1 rounded-md border border-transparent px-2.5 py-1 font-medium text-muted"
-      >
-        <Check size={12} />
-        Done
-      </span>
-    </Tooltip>
   )
 }
 
