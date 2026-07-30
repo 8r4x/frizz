@@ -2930,10 +2930,11 @@ function ProseHtml({ md, wrap }: { md: string; wrap?: boolean }) {
 // to showing the plain path text so nothing is silently swallowed. `hideCaption` drops the basename
 // line (SendUserFile images are hash-named cache copies whose basename is meaningless, and the
 // SentFilesCard carries its own caption); `altText` overrides the a11y alt (else the basename).
-// `self-start` is load-bearing: the figure is a flex COLUMN, whose default `align-items: stretch` blew
+// `self-center` is load-bearing: the figure is a flex COLUMN, whose default `align-items: stretch` blew
 // the <img> box out to the full card width, and `object-contain` then letterboxed the picture inside it.
 // A tall 390×1002 phone screenshot measured 642px of box painting 163px of image — 479px of dead
-// gutter. Hugging the intrinsic aspect makes the bordered frame the picture's own edge.
+// gutter. Hugging the intrinsic aspect makes the bordered frame the picture's own edge, while centering
+// the flex item keeps every screenshot horizontally centered in the available message width.
 export function BlockImage({ path, hideCaption, altText }: { path: string; hideCaption?: boolean; altText?: string }) {
   const [broken, setBroken] = useState(false)
   if (broken) return <div className="font-mono-keep text-[12px] text-muted/70 break-all">{path}</div>
@@ -2946,7 +2947,7 @@ export function BlockImage({ path, hideCaption, altText }: { path: string; hideC
         data-local-path={path}
         data-local-image="true"
         onError={() => setBroken(true)}
-        className="max-w-full max-h-[420px] w-auto self-start cursor-pointer rounded-lg border border-border object-contain"
+        className="max-w-full max-h-[420px] w-auto self-center cursor-pointer rounded-lg border border-border object-contain"
       />
       {!hideCaption && <figcaption className="font-mono-keep text-[11px] text-muted/60 break-all">{base}</figcaption>}
     </figure>

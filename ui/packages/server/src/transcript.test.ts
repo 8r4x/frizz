@@ -660,58 +660,6 @@ test("an immediate Agent launch error terminates the card instead of leaving it 
   assert.match(call.output ?? "", /thread limit reached/)
 })
 
-// The SECOND completion shape: the harness names the finished child ONLY by its agent id. The tailer
-// always correlated this (launchTaskId reads the ack's agentId), so the row left every live surface —
-// while this parser resolved the task-id against a shells-only map, drew no divider and left the launch
-// card pending. 8.1% of the local corpus's 1905 Agent dispatches terminate this way; the maintainer saw
-// it as sub-agents disappearing from the rendered list with no notification (2026-07-30).
-test("a task-id-ONLY completion notification still retires the sub-agent and emits its divider", () => {
-  const ack = (toolUseId: string, agentId: string) =>
-    JSON.stringify({
-      type: "user",
-      timestamp: "2026-07-01T00:00:01.000Z",
-      toolUseResult: { isAsync: true, status: "async_launched", agentId },
-      message: {
-        role: "user",
-        content: [{ type: "tool_result", tool_use_id: toolUseId, content: `Async agent launched successfully.\nagentId: ${agentId} (internal ID - do not mention to user.)` }],
-      },
-    })
-  const taskIdNotification = (agentId: string, ts: string) =>
-    JSON.stringify({
-      type: "queue-operation",
-      timestamp: ts,
-      content: `<task-notification>\n<task-id>${agentId}</task-id>\n<status>completed</status>\n<summary>Agent "Survey" finished</summary>\n</task-notification>`,
-    })
-  const msgs = parseTranscript(
-    [
-      agentDispatch("toolu_a", { description: "Survey", prompt: "p", run_in_background: true }, "2026-07-01T00:00:00.000Z"),
-      ack("toolu_a", "aab99c3e7b670a3ae"),
-      taskIdNotification("aab99c3e7b670a3ae", "2026-07-01T00:14:00.000Z"),
-    ].join("\n"),
-  )
-  const inline = msgs.at(-1)!.tools[0]
-  assert.equal(inline.agentCompletion, true, "the divider marker — with no tool-use-id to correlate on")
-  assert.equal(inline.agentStatus, "completed")
-  assert.equal(inline.agentElapsedMs, 14 * 60_000)
-  // …and the launch card up-thread stops spinning, the other half of the same disappearance.
-  const launch = msgs[0].tools[0]
-  assert.equal(launch.status, "completed")
-  assert.equal(launch.agentStatus, "completed")
-})
-
-test("a Bash ack whose output merely mentions an agentId never claims the task id", () => {
-  // The agent arm is gated on the card actually BEING an Agent dispatch — a shell that echoes the word
-  // must not hijack a later task-id notification and retire the wrong card.
-  const msgs = parseTranscript(
-    [
-      JSON.stringify({ type: "assistant", timestamp: "2026-07-01T00:00:00.000Z", message: { id: "m1", content: [{ type: "tool_use", name: "Bash", id: "toolu_sh", input: { command: "echo agentId: aab99c3e7b670a3ae", run_in_background: true } }] } }),
-      JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:01.000Z", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_sh", content: "Command running in background with ID: bsh1.\nagentId: aab99c3e7b670a3ae" }] } }),
-      JSON.stringify({ type: "queue-operation", timestamp: "2026-07-01T00:05:00.000Z", content: `<task-notification>\n<task-id>aab99c3e7b670a3ae</task-id>\n<status>completed</status>\n</task-notification>` }),
-    ].join("\n"),
-  )
-  assert.equal(msgs.filter((m) => m.boundary).length, 0, "the shell's real id is bsh1 — this notification correlates to nothing")
-})
-
 test("a duplicate terminal notification re-renders the completion card only once", () => {
   const msgs = parseTranscript(
     [

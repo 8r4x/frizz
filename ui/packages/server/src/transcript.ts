@@ -1246,37 +1246,13 @@ function attachToolResults(
       b.is_error !== true &&
       !(text && (cancelledToolResult(text) || failedToolResult(text)))
     ) {
-      // Capture the launch ack's RUNTIME task id (Bash "…with ID: <id>", Monitor "(task <id>", the
-      // auto-background handoff's "moved to the background (ID: <id>)", and an ASYNC AGENT's own
-      // `agentId`) so the tool-use-id-less terminal signals above/in completionEvent can still find
-      // this card.
-      //
-      // The AGENT arm is the one this map was missing, and it is the ONE divergence from the tailer's
-      // `launchTaskId` — which has carried the fourth pattern all along. A sub-agent's completion
-      // notification arrives in two shapes, and the second names the child ONLY by its agent id:
-      //
-      //   <task-notification>
-      //   <task-id>aab99c3e7b670a3ae</task-id>
-      //   <status>completed</status>
-      //   <summary>Agent "Survey bun-compiled OSS projects" finished</summary>
-      //
-      // The tailer correlated that (findLiveByTaskId) and retired the row, so the child's line left the
-      // rail, the queue card and the ops strip — while THIS parser resolved the task-id against a map
-      // that only ever held shells, emitted no `agentCompletion` divider, and left the launch card
-      // pending forever. The child simply vanished with nothing said, which is exactly how the
-      // maintainer found it ("some sub-agents have disappeared from the rendered list … but I don't see
-      // any notification of it", 2026-07-30, nub thread we-need-to-get-the-ball). Measured over this
-      // machine's whole transcript corpus (682 files, 1905 Agent dispatches): 1671 terminals carried a
-      // tool-use-id, 155 — 8.1% — carried ONLY the task-id and so said nothing at all.
-      //
-      // The STRUCTURED `agentId` is preferred over the ack's prose (all 1858 async acks in that corpus
-      // carry both, and a field cannot drift the way an English sentence can); the regex mirrors the
-      // tailer so a shape that only ever spells it out still correlates.
+      // Capture the launch ack's RUNTIME task id (Bash "…with ID: <id>", Monitor "(task <id>", and the
+      // auto-background handoff's "moved to the background (ID: <id>)") so the tool-use-id-less terminal
+      // signals above/in completionEvent can still find this card.
       const taskId =
         text?.match(/Command running in background with ID:\s*(\S+)/)?.[1]?.replace(/\.$/, "") ??
         text?.match(/was moved to the background \(ID:\s*([^)\s]+)\)/)?.[1] ??
-        text?.match(/Monitor started \(task\s+(\w+)/)?.[1] ??
-        (dispatchId ? (ackAgentId || text?.match(/agentId:\s*(\S+)/)?.[1]) : undefined)
+        text?.match(/Monitor started \(task\s+(\w+)/)?.[1]
       if (taskId) backgroundTaskIds.set(taskId, b.tool_use_id)
       continue
     }

@@ -121,6 +121,8 @@ export interface EnsureStableArtifactOptions {
 export interface BuildFrayArtifactOptions {
   /** Human-facing lifecycle updates; successful build-tool output stays deliberately quiet. */
   onProgress?: (message: string) => void;
+  /** Injectable command boundary for artifact-order regression tests. */
+  runCommand?: (args: string[], source: string) => void;
 }
 
 export interface FraySourceSnapshot {
@@ -846,9 +848,15 @@ export function buildFrayArtifact(
   const workerPlugin = workerPluginSourceDir(source);
   const workerPluginCcClosure = workerPluginCcClosureSourceDir(source);
   const staging = join(root, `.staging-${process.pid}-${randomUUID()}`);
+  const runCommand = options.runCommand ?? runArtifactCommand;
   try {
+    // Vite/Rolldown transpiles TypeScript but does not typecheck it. Validate the coherent captured
+    // snapshot — not the mutable checkout before capture — so an intermediate edit with a missing
+    // import can never become a valid immutable artifact and fail later as a browser global.
+    options.onProgress?.("Type-checking captured Fray source");
+    runCommand(["run", "typecheck"], source);
     options.onProgress?.("Building immutable artifact: web UI");
-    runArtifactCommand(["run", "--filter", "@fray-ui/web", "build"], source);
+    runCommand(["run", "--filter", "@fray-ui/web", "build"], source);
     const webSource = join(source, "packages", "web", "dist");
     if (!existsSync(webSource))
       throw new Error("Fray web build did not produce packages/web/dist");
@@ -860,7 +868,7 @@ export function buildFrayArtifact(
     // real file beside index.js and asserted below.
     options.onProgress?.("Building immutable artifact: bundled runtime");
     mkdirSync(join(staging, "runtime", "src"), { recursive: true, mode: 0o700 });
-    runArtifactCommand(
+    runCommand(
       [
         "packages/cli/scripts/build-runtime.mjs",
         join(staging, "runtime", "src", "index.js"),

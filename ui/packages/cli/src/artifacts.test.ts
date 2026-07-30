@@ -489,6 +489,34 @@ test("a captured source snapshot remains usable after the checkout changes", () 
   }
 });
 
+test("artifact creation typechecks the coherent source snapshot before either build", () => {
+  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-typecheck-order-"));
+  const source = resolve(import.meta.dirname, "..", "..", "..");
+  const calls: Array<{ args: string[]; source: string }> = [];
+
+  assert.throws(
+    () =>
+      buildFrayArtifact(source, root, {
+        runCommand: (args, snapshotSource) => {
+          calls.push({ args, source: snapshotSource });
+          throw new Error("typecheck sentinel");
+        },
+      }),
+    /typecheck sentinel/
+  );
+  assert.deepEqual(calls.map((call) => call.args), [["run", "typecheck"]]);
+  assert.match(calls[0]!.source, /\.source-snapshot-/);
+  assert.notEqual(calls[0]!.source, source);
+  assert.deepEqual(
+    readdirSync(root).filter(
+      (entry) =>
+        entry.startsWith(".staging-") ||
+        entry.startsWith(".source-snapshot-")
+    ),
+    []
+  );
+});
+
 async function availableLoopbackPort(): Promise<number> {
   return await new Promise((resolvePort, reject) => {
     const listener = createServer();
