@@ -81,8 +81,24 @@ const flagValue = (flag) => {
 const mode = flagValue('--mode') ?? 'session-start';
 const via = flagValue('--via') ?? 'plugin';
 
-// Global kill switch — one env var disables every mode.
-if ((process.env.FRAY_SCRATCHPAD_HOOK ?? '').trim().toLowerCase() === 'off') process.exit(0);
+// OPT-IN GATE — two ways in, because the two backends can only be gated in different places.
+//
+// CLAUDE: an ENVIRONMENT VARIABLE. fray stamps FRAY_SCRATCHPAD_HOOK=on into the worker env at
+// spawn/fork from the `scratchpadReinforcement` setting (same shape as FRAY_UI_THREAD). The plugin's
+// hooks.json is static, so the env is what decides whether they do anything.
+//
+// CODEX: the `--enabled` FLAG. A codex worker's hooks arrive as per-conversation CONFIG (the only
+// delivery path that works — see codexScratchpadHookConfig in dispatch.ts), and fray only builds that
+// config when the setting is on, so the config's mere PRESENCE is already the opt-in. The env var is
+// unusable there: the `codex app-server` daemon is shared per project, so its environment cannot
+// carry a per-conversation decision.
+//
+// Either signal is sufficient; absence of both means off, so an opinionated mechanism is never
+// inherited by accident.
+const optedIn =
+  /^(on|1|true|yes|enabled)$/i.test((process.env.FRAY_SCRATCHPAD_HOOK ?? '').trim()) ||
+  process.argv.includes('--enabled');
+if (!optedIn) process.exit(0);
 
 // The repo-local registration defers to the plugin one for fray workers (see --via, and the
 // registration note in DECISIONS.md) so a fray worker never injects twice.
@@ -102,9 +118,17 @@ if (input.agent_id ?? input.agentId) process.exit(0);
 
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
+// WHICH session keys the pad. On Claude the hook's `session_id` IS fray's thread session id, so the
+// derived path is correct. On CODEX it is NOT: codex reports its own rollout session id (measured —
+// e.g. `019fb427-93aa-…`, with transcript_path pointing into ~/.codex/sessions), which has nothing to
+// do with `.fray/threads/<fray sessionId>/scratch.md`. Deriving the path there would silently address
+// a pad that does not exist and the worker would look unreinforced for a reason nobody could see. So
+// fray bakes `--session=<fray sessionId>` into the codex hook command, and an explicit value always
+// wins over the reported one.
+const explicitSession = flagValue('--session');
 let sid = null;
 try {
-  sid = currentSessionId(input.session_id);
+  sid = explicitSession || currentSessionId(input.session_id);
 } catch {
   /* best-effort */
 }

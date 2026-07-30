@@ -5,7 +5,8 @@ import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, utimesSync } from 
 import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
-import { scratchpadContent } from "./dispatch.ts"
+import { scratchpadContent, scratchpadHookEnv, codexScratchpadHookConfig, SCRATCHPAD_HOOK_ENV } from "./dispatch.ts"
+import { defaultSettings } from "./settings.ts"
 
 // ---- scratchpad reinforcement hook (cc-worker/hooks/scratchpad.mjs) ----
 // Keeps the ONE per-thread scratchpad written and re-grounded across compaction: it injects the pad's
@@ -62,7 +63,9 @@ function runHook(
       ...process.env,
       CLAUDE_PROJECT_DIR: dir,
       FRAY_UI_THREAD: "",
-      FRAY_SCRATCHPAD_HOOK: "",
+      // The mechanism is OPT-IN, so every test must turn it on explicitly; the gate itself is
+      // covered by its own test below.
+      FRAY_SCRATCHPAD_HOOK: "on",
       ...env,
     },
   })
@@ -140,6 +143,9 @@ test("every silence gate holds: project registration under fray, sub-agents, and
   // Load-bearing for the ONE-scratchpad rule: a sub-agent never acts against its dispatcher's pad.
   assert.equal(runHook(dir, ["--mode=session-start"], { ...evt, agent_id: "sub-1" }), "")
   assert.equal(runHook(dir, ["--mode=session-start"], evt, { FRAY_SCRATCHPAD_HOOK: "off" }), "")
+  // Absence is OFF: an unset variable must not activate an opinionated mechanism by accident.
+  assert.equal(runHook(dir, ["--mode=session-start"], evt, { FRAY_SCRATCHPAD_HOOK: "" }), "")
+  assert.equal(runHook(dir, ["--mode=session-start"], evt, { FRAY_SCRATCHPAD_HOOK: "maybe" }), "")
   // With no session id there is no key, and an unkeyed pad would bleed across sessions.
   assert.equal(runHook(dir, ["--mode=session-start"], { source: "compact" }, { CLAUDE_CODE_SESSION_ID: "" }), "")
 })
@@ -242,4 +248,96 @@ test("hooks.json wires every channel, and no stale carryover registration surviv
   assert.ok(midTurn, "PostToolUse must carry the mid-turn nudge")
   assert.equal(midTurn.matcher, undefined, "the mid-turn nudge must fire after every tool call")
   assert.ok(midTurn.hooks.some((h) => h.command.includes("--event=PostToolUse")))
+})
+
+// ---- backend parity: the CODEX delivery path ----
+// Codex cannot be gated the way Claude is. Measured against codex-cli 0.144.6:
+//   • `codex exec` runs NO hooks from any discovery path — only the app-server does, and only when
+//     the hooks arrive as per-conversation config overrides (with bypass_hook_trust).
+//   • The app-server daemon is SHARED per project, so its environment cannot carry a per-conversation
+//     decision — hence `--enabled` rather than the env var.
+//   • Codex reports its OWN rollout session id to the hook, not fray's thread id — hence `--session`.
+// Verified live: SessionStart / UserPromptSubmit / Stop all fired through CodexAppServerBridge with
+// the real scratchpad.mjs wired exactly as codexScratchpadHookConfig wires it.
+
+test("the codex opt-in flag works without the env var, because a shared daemon cannot carry one", () => {
+  const dir = newProject()
+  writePad(dir, "# Scratchpad\n\ncodex content\n")
+  const evt = { session_id: SID, source: "compact" }
+  // No FRAY_SCRATCHPAD_HOOK at all — the flag alone must open the gate.
+  const out = runHook(dir, ["--enabled", "--mode=session-start"], evt, { FRAY_SCRATCHPAD_HOOK: "" })
+  assert.match(additionalContext(out), /⟦scratchpad — restored after compaction⟧/)
+  // …and neither signal still means off.
+  assert.equal(runHook(dir, ["--mode=session-start"], evt, { FRAY_SCRATCHPAD_HOOK: "" }), "")
+})
+
+test("--session overrides the reported id, so a codex worker finds FRAY's pad and not its own", () => {
+  const dir = newProject()
+  writePad(dir, "# Scratchpad\n\nfray thread content\n")
+  // Exactly what codex sends: its own rollout session id, and a transcript under ~/.codex/sessions.
+  const codexEvent = {
+    session_id: "019fb427-93aa-7ab0-91af-436173f99bc4",
+    source: "compact",
+    hook_event_name: "SessionStart",
+    transcript_path: "/Users/x/.codex/sessions/2026/07/30/rollout-019fb427.jsonl",
+  }
+  // Without --session the hook addresses codex's id — a path that does not exist — so it can only
+  // fall back to the contract text.
+  const derived = additionalContext(runHook(dir, ["--enabled", "--mode=session-start"], codexEvent))
+  assert.doesNotMatch(derived, /fray thread content/)
+  // With it, the real pad is found and restored.
+  const explicit = additionalContext(
+    runHook(dir, ["--enabled", `--session=${SID}`, "--mode=session-start"], codexEvent)
+  )
+  assert.match(explicit, /fray thread content/)
+  assert.match(explicit, new RegExp(`\\.fray/threads/${SID}/scratch\\.md`))
+})
+
+test("a codex rollout carries no readable claude usage, so the nudge degrades to silence", () => {
+  const dir = newProject()
+  writePad(dir, "content\n")
+  const rollout = join(dir, "rollout.jsonl")
+  // The real codex rollout shape — event_msg/payload, not claude's message.usage.
+  writeFileSync(
+    rollout,
+    JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "hi" } }) + "\n"
+  )
+  // Silence, never a crash and never a bogus token count: the codex nudge channel simply does not
+  // fire until a rollout-aware token parser exists. The codex INJECTION channel is unaffected.
+  assert.equal(runHook(dir, ["--enabled", `--session=${SID}`, "--mode=nudge"], { session_id: SID, transcript_path: rollout }), "")
+})
+
+// ---- settings plumbing: the toggle is OPT-IN and reaches each backend by its own route ----
+
+test("scratchpad reinforcement is OFF in the shipped defaults — it is chosen, never inherited", () => {
+  assert.equal(defaultSettings().scratchpadReinforcement, false)
+  // Absence must read as off too, so an old settings blob cannot silently enable it.
+  assert.deepEqual(scratchpadHookEnv({ scratchpadReinforcement: undefined }), {})
+  assert.deepEqual(scratchpadHookEnv({ scratchpadReinforcement: false }), {})
+})
+
+test("the Claude route is a worker env var; the Codex route is per-conversation config", () => {
+  assert.deepEqual(scratchpadHookEnv({ scratchpadReinforcement: true }), { [SCRATCHPAD_HOOK_ENV]: "on" })
+
+  // Off ⇒ codex gets NO hooks config at all, so nothing is delivered and nothing needs trusting.
+  assert.deepEqual(codexScratchpadHookConfig({ scratchpadReinforcement: false }, "/p/scratchpad.mjs", "sid-1"), {})
+  // A missing plugin path or session id must also produce nothing rather than a broken command.
+  assert.deepEqual(codexScratchpadHookConfig({ scratchpadReinforcement: true }, undefined, "sid-1"), {})
+  assert.deepEqual(codexScratchpadHookConfig({ scratchpadReinforcement: true }, "/p/scratchpad.mjs", ""), {})
+
+  const cfg = codexScratchpadHookConfig({ scratchpadReinforcement: true }, "/p/scratchpad.mjs", "sid-1") as {
+    bypass_hook_trust?: boolean
+    hooks?: Record<string, { hooks: { command: string }[] }[]>
+  }
+  // Codex silently SKIPS untrusted hook definitions, so without this the config is delivered and ignored.
+  assert.equal(cfg.bypass_hook_trust, true)
+  // Only the events codex can actually inject from: it exposes no PreCompact/PostCompact wire type,
+  // so the summarizer-steering channel is deliberately Claude-only.
+  assert.deepEqual(Object.keys(cfg.hooks ?? {}).sort(), ["PostToolUse", "SessionStart", "UserPromptSubmit"])
+  for (const entries of Object.values(cfg.hooks ?? {})) {
+    const cmd = entries[0].hooks[0].command
+    assert.match(cmd, /--enabled/, "the flag is codex's opt-in signal (a shared daemon has no per-conversation env)")
+    assert.match(cmd, /--session="sid-1"/, "fray's thread id must override codex's own reported session id")
+    assert.match(cmd, /scratchpad\.mjs/)
+  }
 })

@@ -9,7 +9,7 @@ import { readQuota } from "./quota.ts"
 import { refreshClaudeQuotaInBackground } from "./backend/claude-quota.ts"
 import { createBoard, type BoardManager } from "./board.ts"
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
-import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frayConfigBlock, claudeMcpConfig, resolveFrayMcp, workerPluginDir, type Dispatcher } from "./dispatch.ts"
+import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frayConfigBlock, claudeMcpConfig, resolveFrayMcp, workerPluginDir, scratchpadHookEnv, type Dispatcher } from "./dispatch.ts"
 import { createScheduler, type Scheduler } from "./scheduler.ts"
 import {
   reattachThreadWithPermission,
@@ -21,7 +21,8 @@ import { createClaudeBackend } from "./backend/claude.ts"
 import { createCodexBackend, codexSandbox } from "./backend/codex.ts"
 import { readClaudePreflightAuth, readCodexAuthState, readCodexBinaryState } from "./backend/auth-status.ts"
 import { createLoginUtility, type LoginUtility } from "./login-utility.ts"
-import type { AgentBackend } from "./backend/types.ts"
+import type { AgentBackend, LimitFault } from "./backend/types.ts"
+import { limitResumeNeedsFreshProcess } from "./backend/usage-limit.ts"
 import { detectGithub, type GithubDetection } from "./github.ts"
 import * as tmux from "./tmux.ts"
 import { createPermissionController, type PermissionController } from "./permission-controller.ts"
@@ -350,8 +351,10 @@ export function deliverClaudeBrokerWake(deps: {
   runtimeGate: boolean
   row: { session_id: string; plan_path?: string | null; model?: string | null; effort?: string | null; permission_mode?: string | null }
   deliveryMessage: string
+  /** Retire the live daemon first — see the bridge's followUp contract and needsFreshProcessForLimit. */
+  freshProcess?: boolean
 }): Promise<void> {
-  const { bridge, slug, cwd, runtimeGate, row, deliveryMessage } = deps
+  const { bridge, slug, cwd, runtimeGate, row, deliveryMessage, freshProcess } = deps
   const appendSystemPrompt = [
     loadWorkerPrompt("claude", runtimeGate),
     scratchpadOrientation(row.session_id, row.plan_path, "claude"),
@@ -366,7 +369,30 @@ export function deliverClaudeBrokerWake(deps: {
     appendSystemPrompt,
     model: row.model ?? undefined,
     effort: row.effort ?? undefined,
+    freshProcess,
   })
+}
+
+/**
+ * Does a follow-up aimed at this thread have to land in a NEW `claude` process?
+ *
+ * Yes exactly when the thread's tail still carries a usage-limit fault whose reset instant has not
+ * arrived: the running process latched on that 429 and will refuse this message — and every later one
+ * — until then, so delivering into it is a guaranteed no-op (see usage-limit.ts for the measurement).
+ * Shared by the scheduler's auto-resume and the followUp RPC behind the card's "Continue now", because
+ * both are the same act: asking a walled-off thread to carry on.
+ *
+ * A thread with LIVE background work is deliberately exempt. A restart kills the in-memory sub-agents,
+ * and fray's completion invariant says an agent runs to its terminal return; a parent whose child is
+ * still producing is not the wedged case this exists for.
+ */
+export function needsFreshProcessForLimit(
+  fault: LimitFault | undefined,
+  nowMs: number,
+  liveBackgroundWork = false,
+): boolean {
+  if (!fault || liveBackgroundWork) return false
+  return limitResumeNeedsFreshProcess(fault, nowMs)
 }
 
 /**
@@ -617,6 +643,8 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         // The fray worker environment — the SDK equivalent of the tmux path's --plugin-dir / --mcp-config.
         // Computed ONCE here (constant per project) and applied on every broker fork so a broker worker
         // gets the fray sub-agent profiles, the fray + chrome-devtools MCP, and the cc-worker hooks.
+        // Evaluated per fork (not fixed here) so flipping the setting reaches the next dispatch.
+        extraWorkerEnv: () => scratchpadHookEnv(getSettings(storage)),
         workerEnv: {
           pluginDir: workerPluginDir(),
           ...claudeMcpConfig(resolveFrayMcp(project.stateDir)),
@@ -802,9 +830,30 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
           runtimeGate: getSettings(storage).runtimeGate !== false,
           row,
           deliveryMessage,
+          // Recomputed here rather than carried on the delivery: the outbox stores a message, not a
+          // runtime decision, and the tail is the live answer to "is this thread still behind a wall
+          // its own process is enforcing".
+          freshProcess: needsFreshProcessForLimit(
+            tailer.get(slug)?.limitFault,
+            Date.now(),
+            (tailer.get(slug)?.subAgents ?? []).some((agent) => agent.state === "running"),
+          ),
         })
       }
-      resumeThread({ project, storage, board, getSettings: () => getSettings(storage), backendFor }, slug, deliveryMessage)
+      resumeThread(
+        { project, storage, board, getSettings: () => getSettings(storage), backendFor },
+        slug,
+        deliveryMessage,
+        undefined,
+        // Same latch, other transport: a tmux worker that hit the wall needs relaunching, not a paste.
+        {
+          freshProcess: needsFreshProcessForLimit(
+            tailer.get(slug)?.limitFault,
+            Date.now(),
+            (tailer.get(slug)?.subAgents ?? []).some((agent) => agent.state === "running"),
+          ),
+        },
+      )
     },
   })
   resources.scheduler = scheduler

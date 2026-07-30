@@ -267,6 +267,65 @@ export function loadWorkerPrompt(kind: BackendKind = "claude", runtimeGate = tru
   return buildWorkerPrompt(kind, { runtimeGate })
 }
 
+// ---- scratchpad reinforcement (settings-gated worker hook environment) ----
+// The `scratchpadReinforcement` setting reaches the worker's HOOKS, not its prompt, so unlike
+// runtimeGate it travels as an ENVIRONMENT VARIABLE rather than prompt text: cc-worker's
+// scratchpad.mjs is opt-IN and stays completely silent unless it sees this. Same shape as
+// FRAY_UI_THREAD — stamped at spawn/fork, so flipping the setting takes effect on the next
+// dispatch or resume rather than mutating a running worker.
+export const SCRATCHPAD_HOOK_ENV = "FRAY_SCRATCHPAD_HOOK"
+
+/** The worker env fragment for the setting: `{}` when off, so absence stays the off state. */
+export function scratchpadHookEnv(settings: Pick<Settings, "scratchpadReinforcement">): Record<string, string> {
+  return settings.scratchpadReinforcement === true ? { [SCRATCHPAD_HOOK_ENV]: "on" } : {}
+}
+
+// Codex reaches its hooks through per-conversation CONFIG rather than an env var, because that is the
+// only delivery path that works: measured against codex-cli 0.144.6, `codex exec` runs NO hooks from
+// any discovery path (repo `.codex/hooks.json`, `$CODEX_HOME/hooks.json`, `-c hooks.…`, with or
+// without trust bypass), while the app-server DOES run them when they arrive as config overrides on
+// the conversation. `bypass_hook_trust` is required: codex skips untrusted hook definitions silently,
+// and a fray-owned hook shipped inside fray's own plugin has no user-facing trust prompt to satisfy.
+//
+// NOTE the deliberate asymmetry with Claude: codex exposes NO PreCompact/PostCompact context-injection
+// wire type (only SessionStart / UserPromptSubmit / PostToolUse / PreToolUse / PermissionRequest /
+// SubagentStart have one), so the summarizer-steering channel is Claude-only. The load-bearing
+// channel — restoring the pad on SessionStart(compact) — is available on both.
+export function codexScratchpadHookConfig(
+  settings: Pick<Settings, "scratchpadReinforcement">,
+  hookScript: string | undefined,
+  sessionId: string
+): Record<string, unknown> {
+  if (settings.scratchpadReinforcement !== true || !hookScript || !sessionId) return {}
+  // `--enabled` is the codex-side opt-in signal: the daemon's environment is shared per project, so
+  // the Claude env-var gate cannot express a per-conversation decision. Building this config at all
+  // already means the setting is on, so the flag simply carries that fact to the hook.
+  // `--session` is mandatory here: codex reports its OWN rollout session id to the hook, so without
+  // fray's thread id the hook would resolve a scratchpad path that does not exist.
+  const cmd = (mode: string) => ({
+    hooks: [
+      {
+        type: "command",
+        command: `node ${JSON.stringify(hookScript)} --enabled --session=${JSON.stringify(sessionId)} ${mode}`,
+      },
+    ],
+  })
+  return {
+    bypass_hook_trust: true,
+    hooks: {
+      SessionStart: [cmd("--mode=session-start")],
+      UserPromptSubmit: [cmd("--mode=nudge")],
+      PostToolUse: [cmd("--mode=nudge --event=PostToolUse")],
+    },
+  }
+}
+
+/** Absolute path to the scratchpad hook inside the discovered worker plugin, when there is one. */
+export function scratchpadHookScript(): string | undefined {
+  const plugin = workerPluginDir()
+  return plugin ? join(plugin, "hooks", "scratchpad.mjs") : undefined
+}
+
 // The first USER message a dispatched agent receives: scratchpad orientation + custom instructions +
 // task. Session-first (2026-07-09) — the old thread-ownership contract is REPLACED by scratchpad
 // orientation (a new dispatch owns no .fray file). The fixed worker prompt (workerPrompt.ts) and the
@@ -843,7 +902,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             sandbox: codexSandbox(permissionMode) as "read-only" | "workspace-write" | "danger-full-access",
             baseInstructions: [loadWorkerPrompt("codex", runtimeGate), extraSystemPrompt].filter(Boolean).join("\n\n"),
             developerInstructions: CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS,
-            config: { model_reasoning_summary: "detailed" },
+            config: { model_reasoning_summary: "detailed", ...codexScratchpadHookConfig(settings, scratchpadHookScript(), sessionId) },
           })
           deps.storage.upsertSession({
             slug,
@@ -962,7 +1021,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       ensureServer()
       try {
         writePrewrites(built)
-        spawn(slug, built.argv, deps.project.dir, { ...built.env, FRAY_UI_THREAD: slug, [PERM_DIR_ENV]: permRequestDir(deps.project) })
+        spawn(slug, built.argv, deps.project.dir, { ...built.env, FRAY_UI_THREAD: slug, ...scratchpadHookEnv(settings), [PERM_DIR_ENV]: permRequestDir(deps.project) })
       } catch (err) {
         if (err instanceof tmux.TmuxSpawnError && err.identity) {
           try {

@@ -56,6 +56,10 @@ export interface ClaudeBrokerBridgeDeps {
     allowedTools?: string[]
     permDir?: string
   }
+  /** Extra worker env evaluated PER FORK rather than fixed at construction, so a settings-gated
+   *  variable (scratchpad reinforcement) takes effect on the next dispatch/cold-resume instead of
+   *  requiring a server restart. Merged under the per-thread vars below. */
+  extraWorkerEnv?: () => Record<string, string>
   /** The dashboard InteractionStore + this project's id. When present, a Claude tool-permission
    *  escalation (canUseTool, which under "auto" fires only for classifier-flagged risky calls) is
    *  journaled as an approval interaction and gated on the human's dashboard decision. Absent ⇒ the
@@ -119,7 +123,15 @@ export interface ClaudeAgentBrokerBridge {
   /** Deliver a follow-up turn. If the daemon is live we reattach its socket (context intact); if it
    *  died, we cold-start a fresh daemon that RESUMES the on-disk transcript — so the resume context
    *  (worker system prompt + profile) must be re-supplied, exactly like the tmux `claude -r` path. */
-  followUp(input: { threadSlug: string; sessionId: string; cwd: string; text: string; deliveryId?: string; permissionMode?: ClaudeBrokerConfig["permissionMode"]; appendSystemPrompt?: string; model?: string; effort?: string }): Promise<void>
+  /**
+   * `freshProcess` retires a LIVE daemon before delivering, so the text lands in a `claude` that has
+   * just started. Set it when the running process cannot act on the message no matter what it says —
+   * today that is exactly one case, a usage-limit resume fired before the provider's stated reset
+   * instant, because the process latched on its 429 and refuses every input until then (see
+   * usage-limit.ts `limitResumeNeedsFreshProcess`). Costs the in-memory sub-agents, which is why it is
+   * opt-in per call rather than the default.
+   */
+  followUp(input: { threadSlug: string; sessionId: string; cwd: string; text: string; deliveryId?: string; permissionMode?: ClaudeBrokerConfig["permissionMode"]; appendSystemPrompt?: string; model?: string; effort?: string; freshProcess?: boolean }): Promise<void>
   /**
    * Steer ONE running Agent-tool sub-agent: deliver `text` into the child's own conversation rather
    * than the thread's main turn. `subAgentId` is the dispatch tool_use id — the same id the board's
@@ -296,6 +308,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     // carries them. FRAY_UI_THREAD is per-thread (the slug), so it's stamped here, not in deps.workerEnv.
     const we = deps.workerEnv
     const workerEnv: Record<string, string> = {
+      ...(deps.extraWorkerEnv?.() ?? {}),
       FRAY_UI_THREAD: slug,
       ...(we?.permDir ? { FRAY_PERM_DIR: we.permDir } : {}),
       // The cc-worker plugin's PreToolUse hook DENIES AskUserQuestion, because on the tmux path a
@@ -359,6 +372,17 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       // socket that never returns.
       let held = current(input.threadSlug, input.sessionId)
       if (held && !holdsLiveDaemon(held)) { held.client.close(); sessions.delete(input.threadSlug); held = undefined }
+      // A caller that asked for a FRESH process is telling us the live one cannot act on this message.
+      // Retire the daemon so the attach below cold-resumes instead of reconnecting: the new `claude`
+      // re-reads the credential and carries no usage-limit latch. Nothing durable is lost — the
+      // transcript is on disk and `resume: true` reads it back — beyond the in-memory sub-agents, and a
+      // latched parent's children are already dead by the same 429 that latched it.
+      if (input.freshProcess && held) {
+        held.client.close()
+        killBroker(deps.stateDir, held.sessionId)
+        sessions.delete(input.threadSlug)
+        held = undefined
+      }
       const session = held ?? await attach(
         input.threadSlug, input.sessionId, input.cwd, input.permissionMode ?? "default",
         { resume: true, appendSystemPrompt: input.appendSystemPrompt, model: input.model, effort: input.effort },
