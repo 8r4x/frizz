@@ -50,6 +50,20 @@ pr-watch: acme/app#391
 PR is open and CI is green. Watching for review — I'll address comments or merge on approval.
 ```
 
+**One line watches one PR, and a fence may carry several.** The scheduler evaluates every hint in the
+body, so repeat the line per PR — across any mix of repos — and activity on ANY of them wakes you. A
+set of open PRs is NOT a reason to fall back to a periodic `timer:` sweep, which trades instant wakes
+for a poll that can sit a day behind a review. The body keeps its first **8** hint lines and silently
+drops the rest, so past 8 watch the 8 that matter and cover the tail with a `timer:`.
+
+```awaiting
+pr-watch: withastro/astro#17487
+pr-watch: vitejs/vite#23019
+pr-watch: strapi/strapi#26864
+All three adoption PRs are open and green, in their maintainers' hands. Whichever gets a review first
+wakes me and I'll address it.
+```
+
 `human: <actor + exact review/approval>` — a third party whose action cannot be supplied in this fray
 conversation. **Parks you in the dimmed Held band.** A bot, automated reviewer, CI gate, or merge queue
 is NOT a human wait. Pair with `pr-watch:` when a machine-readable PR exists (the `human:` supplies the

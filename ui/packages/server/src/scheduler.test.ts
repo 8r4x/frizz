@@ -376,6 +376,48 @@ test("pr-watch: a bot COMMENT wakes the watcher, and the steer names it as a bot
   assert.doesNotMatch(h.resumes[0].message, /👤/)
 })
 
+// A worker tracking a SET of PRs writes one `pr-watch:` line per PR, and the waker must poll EVERY
+// ref — activity on any of them is the wake. Nothing pinned this, and in its absence a worker watching
+// 11 adoption PRs concluded (in writing, to the operator) that a watch "can't fan out across repos"
+// and fell back to a 7-day timer sweep; a real CHANGES_REQUESTED review then sat unreported for a day
+// and a half (burned 2026-07-30). The shared harness returns ONE activity list for every ref, so this
+// test supplies a per-ref fetcher — otherwise "the third ref woke it" proves nothing.
+test("pr-watch fans out: every ref in a multi-PR fence is polled, and the LAST one's activity wakes", async () => {
+  const h = harness()
+  const fenceAt = iso(h.clock.ms)
+  h.storage.upsertSession(row("multi"))
+  h.tele.set("multi", {
+    ...tele(awaiting([
+      { kind: "pr-watch", value: "acme/a#1" },
+      { kind: "pr-watch", value: "acme/b#2" },
+      { kind: "pr-watch", value: "acme/c#3" },
+    ])),
+    lastActivityAt: fenceAt,
+  })
+  const byRef = new Map<string, GithubReviewActivity[]>([["acme/a#1", []], ["acme/b#2", []], ["acme/c#3", []]])
+  const polled: string[] = []
+  const make = () => h.make({
+    fetchGithubReview: async (ref: PrRef) => {
+      const key = `${ref.owner}/${ref.repo}#${ref.number}`
+      polled.push(key)
+      return byRef.get(key) ?? []
+    },
+  })
+  await make().tick() // baseline every ref
+  assert.deepEqual([...new Set(polled)].sort(), ["acme/a#1", "acme/b#2", "acme/c#3"])
+  assert.equal(h.resumes.length, 0)
+
+  // Activity on the THIRD hint only — the one a first-hint-wins watcher would never see.
+  h.clock.ms += 10_000
+  byRef.set("acme/c#3", [{ id: "review:z", actor: "carol", actorType: "User", at: iso(h.clock.ms), kind: "review" }])
+  const s = make()
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.match(h.resumes[0].message, /@carol/)
+  assert.match(h.resumes[0].message, /acme\/c#3/, "the steer names the PR that actually moved")
+})
+
 test("pr-watch retries a failed resume from its durable pending cursor across restart and network loss", async () => {
   const h = harness()
   const fenceAt = iso(h.clock.ms)
@@ -1421,6 +1463,41 @@ test("limit: a still-near-full window does NOT trigger the account-availability 
   h.clock.ms = Date.parse(SESSION_FAULT_AT) + 5 * 60_000 // well past the min-age, still before the 17:50 clock
   await s.tick()
   assert.deepEqual(h.resumes, [], "90% used is not headroom — no early resume; it waits for the real reset")
+  h.storage.close()
+})
+
+test("limit: the early resume is spent ONCE per wall — bouncing off it does not re-fire forever", async () => {
+  // The 2026-07-30 incident, reproduced. An early (headroom) resume lands in a process that is still
+  // latched on its own 429, so it bounces: a NEW fault, a later `at`, the SAME 17:50 wall. The account
+  // still reads healthy, so nothing in the headroom trigger's own premise has changed — which is how
+  // this ran every 2 minutes for half an hour and wrote 184 limit records into one transcript.
+  const h = limitHarness()
+  h.storage.upsertSession(row("a"))
+  h.tele.set("a", limitTele(sessionFault()))
+  const healthyAccount = async () => ({
+    claude: { status: "ok" as const, windows: [{ key: "5h", label: "5h", usedPercent: 1, resetsAt: (Date.parse(SESSION_FAULT_AT) + 3_600_000) / 1000 }] },
+    codex: { status: "unavailable" as const, windows: [] },
+  })
+  const s = h.make({ readQuota: healthyAccount })
+  h.clock.ms = Date.parse(SESSION_FAULT_AT) + 3 * 60_000
+  await s.tick()
+  assert.deepEqual(h.resumes.map((r) => r.slug), ["a"], "the one early attempt still happens")
+
+  // It bounced. Same wall, new fault record — exactly what the tailer folds when the latched process
+  // answers the wake with another synthetic 429.
+  for (let bounce = 1; bounce <= 5; bounce++) {
+    const at = new Date(Date.parse(SESSION_FAULT_AT) + bounce * 2 * 60_000 + 3 * 60_000).toISOString()
+    h.tele.set("a", limitTele({ window: "session", at, resetClock: { hour: 17, minute: 50, timeZone: LA } }))
+    h.clock.ms = Date.parse(at) + 3 * 60_000
+    await s.tick()
+  }
+  assert.equal(h.resumes.length, 1, "every later bounce off the SAME wall must be ignored, not re-woken")
+
+  // The wall itself is what clears it: once the provider's own reset passes, trigger (1) fires and the
+  // thread resumes normally. The guard must never turn into a permanent block.
+  h.clock.ms = SESSION_RESET_MS + 2 * 60_000
+  await s.tick()
+  assert.equal(h.resumes.length, 2, "past its stated reset the thread resumes on its own clock")
   h.storage.close()
 })
 

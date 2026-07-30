@@ -16,11 +16,14 @@ export const AWAITING_PARK_BUTTON = "Snooze"
  *  `title` is the card's HEADING, not a button label: a future `timer` → "Scheduled snooze" to that
  *  exact instant; `pr-watch` → "PR watcher armed" — the STATE the thread is already in, since the
  *  scheduler auto-arms off the fence and a pr-watch card is a VISIBLE queue handoff by default; a
- *  plain `human` gate → "Awaiting human". For pr-watch/human there's no declared time, so the caller parks for the user's default
- *  snooze preset — for pr-watch that preset is only a SAFETY timeout: the scheduler clears the snooze
- *  the moment new PR activity arrives (scheduler.ts, the clear-snooze-on-pr-watch-wake), so ACTIVITY
- *  is the real wake and the timeout just guards against a dead PR hiding forever. Signalled by a null
- *  `timerUntil`, and why pr-watch's explainer names PR activity rather than a clock.
+ *  plain `human` gate → "Awaiting human". A `pr-watch` OUTRANKS a co-declared timer here, because the
+ *  watcher is the live wake and the instant is only its backstop — reading the clock first titled a
+ *  watching thread "Scheduled snooze" and hid the watcher outright. Without a declared time (the usual
+ *  pr-watch/human fence) the caller parks for the user's default snooze preset — for pr-watch that
+ *  preset is only a SAFETY timeout: the scheduler clears the snooze the moment new PR activity arrives
+ *  (scheduler.ts, the clear-snooze-on-pr-watch-wake), so ACTIVITY is the real wake and the timeout just
+ *  guards against a dead PR hiding forever. That is why pr-watch's explainer leads with PR activity
+ *  rather than a clock, and only names the instant when the fence actually declared one.
  *
  *  NB the title STATES the wait, it does not offer it: the scheduler polls a pr-watch thread whether
  *  or not the button is ever pressed (it auto-arms off the fence), so "PR watcher armed" is the literal
@@ -39,6 +42,15 @@ export function awaitingParkAction(
   const timerUntil = hints
     .flatMap((hint) => (hint.kind === "timer" ? [canonicalSnoozeInstant(hint.value)] : []))
     .find((instant): instant is string => instant !== null && Date.parse(instant) > nowMs)
+  if (hints.some((hint) => hint.kind === "pr-watch")) {
+    const backstop = timerUntil ? `, or until ${lowerCalendarLead(formatSnoozeWake(timerUntil, nowMs))}` : ""
+    return {
+      title: "PR watcher armed",
+      explainer: `${dismiss} PR activity is detected${backstop}.`,
+      toastVerb: "Watcher armed",
+      timerUntil: timerUntil ?? null,
+    }
+  }
   if (timerUntil) {
     return {
       title: "Scheduled snooze",
@@ -46,9 +58,6 @@ export function awaitingParkAction(
       toastVerb: "Snoozed",
       timerUntil,
     }
-  }
-  if (hints.some((hint) => hint.kind === "pr-watch")) {
-    return { title: "PR watcher armed", explainer: `${dismiss} PR activity is detected.`, toastVerb: "Watcher armed", timerUntil: null }
   }
   if (hints.some((hint) => hint.kind === "human")) {
     return { title: "Awaiting human", explainer: `${dismiss} your default snooze elapses.`, toastVerb: "Snoozed", timerUntil: null }
@@ -60,14 +69,42 @@ function lowerCalendarLead(value: string): string {
   return value.replace(/^(Today|Tomorrow)/, (day) => day.toLowerCase())
 }
 
+/** How many watched PRs the sentence NAMES before it counts the rest. The card's line is one line of
+ *  prose, so three refs is about what fits before it stops reading as a sentence. */
+const WATCH_NAME_CAP = 3
+
+/** "a", "a and b", "a, b and c", "a, b, c and 4 more" — the watched-PR list for the sentence below. */
+function watchList(refs: readonly string[]): string {
+  const named = refs.slice(0, WATCH_NAME_CAP)
+  const tail = refs.length - named.length
+  const parts = tail > 0 ? [...named, `${tail} more`] : named
+  if (parts.length === 1) return parts[0]
+  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`
+}
+
 export function awaitingHintSentence(hints: readonly AwaitingHint[], nowMs = Date.now()): string | null {
   const timer = hints.find((hint) => hint.kind === "timer" && isValidAwaitingTimer(hint.value))
-  if (timer && Date.parse(timer.value) > nowMs) {
-    return `Snooze until ${lowerCalendarLead(formatSnoozeWake(timer.value, nowMs))}`
+  const futureTimer = timer && Date.parse(timer.value) > nowMs ? timer : undefined
+
+  // EVERY pr-watch ref, not just the first: a fence legitimately carries one line per PR and the
+  // scheduler polls all of them (scheduler.ts evalThread loops the whole hint list). Naming only
+  // hints[0] read as "this thread watches a single PR" — the same misreading that sends a worker
+  // tracking a SET of PRs to a periodic timer sweep instead of arming a watcher on each.
+  // The watch also outranks a co-declared timer here, because activity is the earlier, live wake and
+  // the timer is the backstop; leading with the clock hid the watcher entirely.
+  const watched = hints.flatMap((hint) => (hint.kind === "pr-watch" ? [hint.value] : []))
+  if (watched.length) {
+    // A SEMICOLON and a fresh verb, not ", or <instant>": the sentence already ends in an or-list
+    // ("reviews, approvals, or comments"), so a comma-or tail attaches to it and the backstop reads as
+    // a fourth kind of PR activity. An em-dash is out too — awaitingPresentationLine uses one to join
+    // this sentence onto the body prose, and two in a row read as one run-on.
+    const backstop = futureTimer ? `; otherwise resume ${lowerCalendarLead(formatSnoozeWake(futureTimer.value, nowMs))}` : ""
+    return `Watch ${watchList(watched)} for new reviews, approvals, or comments${backstop}`
   }
 
-  const review = hints.find((hint) => hint.kind === "pr-watch")
-  if (review) return `Watch ${review.value} for new reviews, approvals, or comments`
+  if (futureTimer) {
+    return `Snooze until ${lowerCalendarLead(formatSnoozeWake(futureTimer.value, nowMs))}`
+  }
 
   const human = hints.find((hint) => hint.kind === "human")
   if (human) return `Wait for ${human.value}`

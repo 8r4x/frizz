@@ -54,6 +54,61 @@ test("pr-watch: watcher sentence + a 'PR watcher armed' park action (parks the c
   })
 })
 
+// A fence watching a SET of PRs carries one `pr-watch:` line per PR and the scheduler polls every one
+// of them. Naming only the first read as "this thread watches a single PR" — the exact misreading that
+// sent a worker tracking 11 adoption PRs to a 7-day timer sweep instead of a watcher on each, and left
+// a real CHANGES_REQUESTED review unreported for a day and a half (burned 2026-07-30).
+test("pr-watch: the sentence names EVERY watched PR, not just the first", () => {
+  assert.equal(
+    awaitingHintSentence([
+      { kind: "pr-watch", value: "withastro/astro#17487" },
+      { kind: "pr-watch", value: "vitejs/vite#23019" },
+    ], now),
+    "Watch withastro/astro#17487 and vitejs/vite#23019 for new reviews, approvals, or comments",
+  )
+  assert.equal(
+    awaitingHintSentence([
+      { kind: "pr-watch", value: "a/a#1" },
+      { kind: "pr-watch", value: "b/b#2" },
+      { kind: "pr-watch", value: "c/c#3" },
+    ], now),
+    "Watch a/a#1, b/b#2 and c/c#3 for new reviews, approvals, or comments",
+  )
+  // Past three the card's one line stops reading as a sentence, so the tail is counted instead.
+  assert.equal(
+    awaitingHintSentence([
+      { kind: "pr-watch", value: "a/a#1" },
+      { kind: "pr-watch", value: "b/b#2" },
+      { kind: "pr-watch", value: "c/c#3" },
+      { kind: "pr-watch", value: "d/d#4" },
+      { kind: "pr-watch", value: "e/e#5" },
+    ], now),
+    "Watch a/a#1, b/b#2, c/c#3 and 2 more for new reviews, approvals, or comments",
+  )
+})
+
+// The prompt tells a worker past the 8-hint cap to cover the tail with a `timer:`, so watcher+timer is
+// a fence shape that really occurs. Leading with the clock titled it "Scheduled snooze" and dropped the
+// watcher from the card entirely — the live wake hidden behind its own backstop.
+test("pr-watch outranks a co-declared timer, which becomes the named backstop", () => {
+  const hints = [
+    { kind: "pr-watch", value: "acme/app#391" },
+    { kind: "timer", value: "2026-07-21T21:00:00.000Z" },
+  ] as const
+  // A semicolon + a fresh verb, never ", or <instant>" — a comma-or tail attaches to the sentence's
+  // own or-list and reads as a fourth kind of PR activity (caught reading the rendered card back).
+  assert.match(
+    awaitingHintSentence([...hints], now) ?? "",
+    /^Watch acme\/app#391 for new reviews, approvals, or comments; otherwise resume today at .+$/,
+  )
+  const park = awaitingParkAction([...hints], now)
+  assert.equal(park?.title, "PR watcher armed")
+  assert.match(park?.explainer ?? "", /^This will dismiss the card from the queue until PR activity is detected, or until today at .+\.$/)
+  // The declared instant still drives the park, so confirming snoozes to the fence's own backstop
+  // rather than the user's default preset.
+  assert.equal(park?.timerUntil, "2026-07-21T21:00:00.000Z")
+})
+
 // The card's HEADING names the wait and the muted explainer names the effect, so the button itself is
 // one word for every kind (maintainer 2026-07-24: "Arm watcher" read as a verb when it was a title; the heading is a STATE,
 // "PR watcher armed", since 2026-07-29).

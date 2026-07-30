@@ -1,0 +1,96 @@
+// Seed a disposable adhoc stack with SIMULATED workers whose last turn is an `awaiting` fence carrying
+// SEVERAL `pr-watch:` lines — the shape a worker tracking a set of open PRs writes, and the one the card
+// used to mis-render by naming only the first ref (so a thread watching eleven PRs read as watching one).
+//
+// Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer reads,
+// so the fence is parsed by the production server parser and rendered by the production card — not by a
+// hand-built props fixture.
+//
+// Usage: node scripts/seed-multi-prwatch.mjs --home=/abs/temp-home --socket=fray-adhoc-NNNN-PID
+import { execFileSync } from "node:child_process"
+import { mkdirSync, writeFileSync, globSync } from "node:fs"
+import { join } from "node:path"
+
+const flags = Object.fromEntries(
+  process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
+)
+const { home, socket, cwd = "/Users/colinmcd94/Documents/projects/fray" } = flags
+if (!home || !socket) {
+  console.error("usage: node seed-multi-prwatch.mjs --home=/abs/temp-home --socket=<tmux-socket>")
+  process.exit(1)
+}
+
+const db = globSync(join(home, ".fray/projects/*/ui.db"))[0]
+if (!db) throw new Error(`no ui.db under ${home}/.fray/projects — is the stack booted?`)
+const jsonlDir = join(home, ".claude", "projects", cwd.replace(/[/.]/g, "-"))
+mkdirSync(jsonlDir, { recursive: true })
+
+const ago = (mins) => new Date(Date.now() - mins * 60_000).toISOString().replace(/\.\d+Z$/, "Z")
+const ahead = (mins) => new Date(Date.now() + mins * 60_000).toISOString().replace(/\.\d+Z$/, "Z")
+
+const CASES = [
+  {
+    slug: "watch-one",
+    title: "watch · a single PR (the baseline shape)",
+    fence: "pr-watch: nubjs/nub#587\nPR is open and CI is green. Watching for review.",
+  },
+  {
+    slug: "watch-three",
+    title: "watch · three PRs across three repos",
+    fence: [
+      "pr-watch: withastro/astro#17487",
+      "pr-watch: vitejs/vite#23019",
+      "pr-watch: strapi/strapi#26864",
+      "All three adoption PRs are open and green, in their maintainers' hands.",
+    ].join("\n"),
+  },
+  {
+    slug: "watch-many",
+    title: "watch · past the naming cap, with a timer backstop",
+    fence: [
+      "pr-watch: withastro/astro#17487",
+      "pr-watch: vitejs/vite#23019",
+      "pr-watch: strapi/strapi#26864",
+      "pr-watch: expo/expo#48060",
+      "pr-watch: QwikDev/qwik#8786",
+      "pr-watch: payloadcms/payload#17163",
+      `timer: ${ahead(600)}`,
+      "Six adoption PRs watched; the timer re-sweeps the long tail the 8-hint cap can't hold.",
+    ].join("\n"),
+  },
+]
+
+CASES.forEach((c, n) => {
+  const sessionId = `${c.slug}-0000-4000-8000-000000000000`.slice(0, 36)
+  const tmuxName = `fray-${c.slug}`
+  const at = ago(3)
+  const records = [
+    {
+      parentUuid: null, isSidechain: false, type: "user",
+      message: { role: "user", content: `TASK:\n${c.title}` },
+      uuid: `0000000${n}-0000-4000-8000-000000000001`.slice(-36), timestamp: ago(10), session_id: sessionId, cwd,
+    },
+    {
+      parentUuid: null, isSidechain: false, type: "assistant",
+      message: {
+        model: "claude-opus-5", id: `msg_${c.slug}`, type: "message", role: "assistant",
+        content: [{ type: "text", text: `Every PR is pushed and green.\n\n\`\`\`awaiting\n${c.fence}\n\`\`\`` }],
+        stop_reason: "end_turn", usage: { input_tokens: 2, output_tokens: 40 },
+      },
+      uuid: `0000000${n}-0000-4000-8000-000000000002`.slice(-36), timestamp: at, session_id: sessionId, cwd,
+    },
+  ]
+  writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
+
+  try {
+    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"], { stdio: "ignore" })
+  } catch {
+    /* already exists */
+  }
+  execFileSync("sqlite3", [
+    db,
+    `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
+     VALUES ('${c.slug}', '${sessionId}', '${tmuxName}', '${at}', '${c.title}', 'claude', 'opus', 'high', 'default', '${at}')`,
+  ])
+  console.log(`seeded ${c.slug}`)
+})

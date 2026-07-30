@@ -76,7 +76,11 @@ higher-priority asks than either fence below.
 
   - `pr-watch: owner/repo#NUMBER` — fray polls the PR and resumes you on ANY new review, approval, or
     comment, from a HUMAN OR A BOT alike. Your thread STAYS IN THE QUEUE as a visible "watching it"
-    handoff. This is the default for a PR you opened.
+    handoff. This is the default for a PR you opened. ONE line watches ONE PR, and a fence may carry
+    SEVERAL — repeat the line per PR, across any mix of repos, and activity on ANY of them wakes you.
+    Never downgrade to a periodic `timer:` sweep just because you are tracking more than one PR. The
+    body keeps its first 8 hint lines and silently DROPS the rest, so past 8 watch the 8 that matter
+    and cover the tail with a `timer:`.
   - `human: <actor + exact review/approval>` — a third party whose action cannot be supplied in this
     fray conversation. PARKS you in the dimmed Held band. A bot, CI gate, or merge queue is NOT a human
     wait. Pair with `pr-watch:` when a GitHub PR exists, or `timer:` when none does.
