@@ -743,3 +743,43 @@ nothing.
 VERIFIED against a real `/compact` with NO env var and NO flag set anywhere: `SessionStart:compact`
 exit 0, delivering the re-grounding lead plus the pad head carrying a sentinel from the file. 17 hook
 tests; full suite 2419 pass / 0 fail; typecheck clean.
+
+## 2026-07-30 (fifth pass): the worker CONTRACT now explains what the scratchpad is FOR
+
+The hooks made the scratchpad load-bearing, but the shipped worker contract still described it as a
+place that "survives compaction" and handed over a path. That undersells it in the way that matters:
+a worker told "here is a file that survives compaction" writes a task list; a worker told "this is the
+canonical record of the thread and your compaction-survival mechanism" writes the REASONING, which is
+precisely what compaction destroys and what a summary cannot reconstruct.
+
+Rewritten in all four places a worker meets the pad, so the framing is consistent wherever it lands:
+
+- `workerPrompt.ts` `SCRATCHPAD` (both backends) — now headed "the canonical record of this thread",
+  and says plainly WHY: compaction drops the reasoning first (the plan, the alternatives ruled out,
+  why the human chose what they chose), a summary preserves what you did and not why, so write that
+  here AS YOU GO and re-read the file after any compaction or resume. Enumerates what belongs in it.
+  The claude variant keeps the sub-agent blackboard job and now states that helpers READ but never
+  EDIT it — the one-scratchpad rule, said where the worker actually reads it.
+- `dispatch.ts` `scratchpadOrientation()` (system-level, rebuilt on every resume) and the first
+  user-message line — same framing, one sentence each.
+- `dispatch.ts` `scratchpadContent()` — the provisioned skeleton's own orientation line.
+- `cc-worker/hooks/session-seed.mjs` — the runtime `SCRATCHPAD:` line.
+
+**Deliberately NOT promised: automatic re-injection.** The prompt says fray "helps by feeding the head
+of this file back into your context", and the IMPERATIVE it gives is unconditional — re-read the file
+yourself after any compaction or resume. A contract that leans on a runtime guarantee degrades badly
+wherever that channel is absent, and one such gap is known: codex's `thread/resume` does NOT re-send
+the per-conversation `config`, so a COLD-resumed codex thread (fray restart, app-server daemon death)
+may lose its hooks. Unverified either way — flagged, not assumed.
+
+Fallout fixed in the same change (the hook's own template detector): `substanceLength()` recognised the
+provisioned skeleton by a `^(Your|SCRATCHPAD:)` prefix plus the old wording. The new orientation line
+starts differently, so a freshly provisioned pad read as WRITTEN — which made an empty pad skip its
+re-grounding branch and made the summarizer swallow a skeleton. It now matches on the concept
+(`compaction-survival mechanism|compaction-proof working memory`), which is also backward compatible
+with pads already on disk under the old wording.
+
+Goldens regenerated (a deliberate contract change); the diff is the scratchpad section and nothing
+else. Two `dispatch.test.ts` assertions re-anchored — they pin the claude-keeps/codex-drops blackboard
+asymmetry and were using the retired phrase as their anchor; the behavior they check is unchanged.
+Suite 2413 pass / 0 fail, typecheck clean.
