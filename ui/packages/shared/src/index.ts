@@ -1416,12 +1416,21 @@ export const TranscriptMessage = z.object({
   //
   // `peerFrom` is the sender label the wrapper carries (today the child's `subagent_type`, e.g.
   // `fray:opus-high`, because the worker dispatch hook strips `name`), and `displayText` carries the
-  // unwrapped body. `peerAgentId` is the child's own agentId, which ONLY the delivery record supplies
-  // (`origin.senderTaskId`) — it is the unambiguous identity when several children share one profile
-  // label, and it is the same id the sub-agent drawer and `.agent-bindings.jsonl` key on. Additive +
-  // optional: an old client ignores both and shows the previous plain bubble.
+  // unwrapped body.
+  //
+  // `peerDispatchId` is what makes the chat's report line CLICKABLE: it is the child's Agent DISPATCH
+  // tool_use id, which is the key `tailer.subAgent()` resolves a drawer against (live map, retired ring
+  // and descendant sidecars are all keyed by it — see TranscriptToolCall.agentId, the same id).
+  //
+  // It is deliberately NOT the child's own agentId. The delivery record supplies `origin.senderTaskId`,
+  // which IS that agentId and is the unambiguous sender identity when several children share one profile
+  // label — but the drawer cannot resolve it, so handing it over would open an "unavailable" drawer. The
+  // two identities meet in exactly one place: the dispatch's launch-ack record, whose `toolUseResult`
+  // carries the new child's `agentId` beside the `tool_use_id` that spawned it. The parser correlates
+  // there and stores the DISPATCH id here. Additive + optional: absent when the ack was never seen (a
+  // resumed session whose dispatch scrolled out), and the line then renders as plain text, not a dead link.
   peerFrom: z.string().optional(),
-  peerAgentId: z.string().optional(),
+  peerDispatchId: z.string().optional(),
 })
 export type TranscriptMessage = z.infer<typeof TranscriptMessage>
 

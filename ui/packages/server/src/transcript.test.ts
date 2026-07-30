@@ -1604,6 +1604,19 @@ test("a backstopped message still resolves its OWN delivery in place, without a 
 // two of these ~45s apart and both landed in the parent's context mid-flight. What the parser owes them
 // is ATTRIBUTION — left alone they render in the human's own bubble with the wrapper showing as text.
 const peerWrap = (from: string, body: string) => `<agent-message from="${from}">\n${body}\n</agent-message>`
+// A child's Agent DISPATCH plus its launch ACK — the pair that teaches the parser `agentId → dispatch
+// tool_use id`. Without it a report cannot become a drawer link, so every test that asserts one seeds this.
+const dispatchLines = (toolUseId: string, agentId: string, description = "probe") => [
+  JSON.stringify({
+    type: "assistant", timestamp: "2026-07-01T00:00:01.000Z",
+    message: { id: "md", role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: "Agent", input: { description, prompt: "go", subagent_type: "fray:opus-high", run_in_background: true } }] },
+  }),
+  JSON.stringify({
+    type: "user", timestamp: "2026-07-01T00:00:02.000Z",
+    toolUseResult: { isAsync: true, status: "pending", agentId, description },
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: [{ type: "text", text: `Async agent launched successfully.\nagentId: ${agentId}` }] }] },
+  }),
+]
 // Faithful to the real record (observed live in a fray worker's own transcript): the delivery carries the
 // wrapper as `prompt` AND the same sender/body already broken out under `origin`, plus `senderTaskId` —
 // the child's agentId, which appears nowhere else.
@@ -1630,28 +1643,40 @@ test("a child's upward message is attributed to the child, with the wrapper unwr
   assert.equal(m.wake, undefined, "a child's report is not a scheduler wake")
 })
 
-test("only the peer DELIVERY record carries the child's agentId, and it is stamped on the bubble", () => {
-  // origin.from is just the subagent_type (the worker dispatch hook strips `name`), so senderTaskId is
-  // the one field that tells two same-profile siblings apart. It exists ONLY on the attachment.
+test("a report becomes a DRAWER LINK by translating the sender's agentId to its dispatch id", () => {
+  // The delivery names its sender by agentId (origin.senderTaskId), but every drawer lookup is keyed by
+  // the Agent DISPATCH tool_use id. The launch ack is the only record pairing them.
   const body = "Found the leak in the resolver."
   const raw = peerWrap("fray:sonnet-high", body)
-  const withDelivery = parseTranscript([enqueueLine(raw), removeLine(raw), peerDeliverLine("fray:sonnet-high", body, "a52fb9b476bb380c4")].join("\n"))
-  assert.equal(withDelivery.filter((m) => m.role === "user")[0].peerAgentId, "a52fb9b476bb380c4")
-  // …and without that record the bubble still renders, just without the id.
-  const noDelivery = parseTranscript([enqueueLine(raw), removeLine(raw)].join("\n"))
-  const m = noDelivery.filter((u) => u.role === "user")[0]
-  assert.equal(m.peerFrom, "fray:sonnet-high")
-  assert.equal(m.peerAgentId, undefined, "absent evidence is not an invented id")
+  const withAck = parseTranscript([
+    ...dispatchLines("toolu_DISPATCH1", "a52fb9b476bb380c4"),
+    enqueueLine(raw), removeLine(raw), peerDeliverLine("fray:sonnet-high", body, "a52fb9b476bb380c4"),
+  ].join("\n"))
+  const linked = withAck.filter((m) => m.role === "user" && m.peerFrom)[0]
+  assert.equal(linked.peerDispatchId, "toolu_DISPATCH1", "the DISPATCH id is what a drawer resolves")
+  // No ack in the window (a resumed session whose dispatch scrolled out) → still rendered, but NOT a
+  // link. A dead drill-in that opens "unavailable" is worse than plain text.
+  const noAck = parseTranscript([enqueueLine(raw), removeLine(raw), peerDeliverLine("fray:sonnet-high", body, "a52fb9b476bb380c4")].join("\n"))
+  const unlinked = noAck.filter((u) => u.role === "user" && u.peerFrom)[0]
+  assert.equal(unlinked.peerFrom, "fray:sonnet-high")
+  assert.equal(unlinked.peerDispatchId, undefined, "absent evidence is not an invented id")
+  // …and an ack for a DIFFERENT child must not lend its dispatch id to this report.
+  const wrongChild = parseTranscript([
+    ...dispatchLines("toolu_OTHER", "bbbbbbbbbbbbbbbbb"),
+    enqueueLine(raw), removeLine(raw), peerDeliverLine("fray:sonnet-high", body, "a52fb9b476bb380c4"),
+  ].join("\n"))
+  assert.equal(wrongChild.filter((u) => u.role === "user" && u.peerFrom)[0].peerDispatchId, undefined)
 })
 
 test("an attachment-only peer delivery still renders — a child's report never vanishes", () => {
   // The enqueue scrolled out of the render window (or an older session never wrote one). The human path
   // keeps this fallback for the same reason: a message that was queued must not disappear.
   const body = "Blocked: the fixture needs a token I don't have."
-  const users = parseTranscript(peerDeliverLine("fray:opus-max", body, "aabbccdd")).filter((m) => m.role === "user")
+  const users = parseTranscript([...dispatchLines("toolu_ONLY", "aabbccdd"), peerDeliverLine("fray:opus-max", body, "aabbccdd")].join("\n"))
+    .filter((m) => m.role === "user" && m.peerFrom)
   assert.equal(users.length, 1)
   assert.equal(users[0].peerFrom, "fray:opus-max")
-  assert.equal(users[0].peerAgentId, "aabbccdd")
+  assert.equal(users[0].peerDispatchId, "toolu_ONLY")
   assert.equal(users[0].displayText, "Blocked: the fixture needs a token I don't have.")
 })
 
