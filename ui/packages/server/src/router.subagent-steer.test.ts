@@ -45,6 +45,7 @@ function harness(subAgent: (slug: string, id: string) => SubAgentInfo) {
     tick: () => {},
   }
   const steers: { threadSlug: string; sessionId: string; subAgentId: string; text: string }[] = []
+  const stops: { threadSlug: string; sessionId: string; taskId: string }[] = []
   const ctx = {
     project,
     storage,
@@ -55,9 +56,12 @@ function harness(subAgent: (slug: string, id: string) => SubAgentInfo) {
       steerSubAgent: async (input: { threadSlug: string; sessionId: string; subAgentId: string; text: string }) => {
         steers.push(input)
       },
+      stopSubAgent: async (input: { threadSlug: string; sessionId: string; taskId: string }) => {
+        stops.push(input)
+      },
     },
   } as unknown as AppContext
-  return { dir, ctx, storage, router: createRouter(ctx), steers }
+  return { dir, ctx, storage, router: createRouter(ctx), steers, stops }
 }
 
 function row(slug: string, over: Partial<SessionRow> = {}): SessionRow {
@@ -91,7 +95,7 @@ function seed(storage: ReturnType<typeof createStorage>, slug: string, runtime: 
   if (runtime.claudeRuntime !== null) storage.setClaudeRuntime(slug, runtime.claudeRuntime ?? "broker")
 }
 
-const RUNNING_DIRECT: SubAgentInfo = { outputFile: "/tmp/child.jsonl", state: "running", direct: true }
+const RUNNING_DIRECT: SubAgentInfo = { outputFile: "/tmp/child.jsonl", state: "running", direct: true, taskId: "agent-runtime-child" }
 
 test("subAgentSteer delivers into the CHILD, addressed by its dispatch tool_use id", async () => {
   const h = harness(() => RUNNING_DIRECT)
@@ -150,6 +154,48 @@ test("subAgentSteer refuses a NESTED child — this session's CLI never issued t
   }
 })
 
+test("subAgentStop uses the provider task id and works for a nested child", async () => {
+  const h = harness(() => ({ outputFile: "/tmp/grandchild.jsonl", state: "running", direct: false, taskId: "agent-runtime-grandchild" }))
+  try {
+    seed(h.storage, "t")
+    const result = await h.router.subAgentStop.handler({ input: { slug: "t", id: "toolu_grandchild" } })
+    assert.deepEqual(result, { stopped: true })
+    assert.deepEqual(h.stops, [{
+      threadSlug: "t",
+      sessionId: "sid-t",
+      taskId: "agent-runtime-grandchild",
+    }])
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true })
+  }
+})
+
+test("subAgentStop refuses runtimes without a real provider stop path", async () => {
+  const codex = harness(() => RUNNING_DIRECT)
+  try {
+    seed(codex.storage, "t", { backend: "codex", claudeRuntime: null })
+    await assert.rejects(
+      () => codex.router.subAgentStop.handler({ input: { slug: "t", id: "toolu_child" } }),
+      /Codex does not expose per-sub-agent interruption/,
+    )
+    assert.deepEqual(codex.stops, [])
+  } finally {
+    rmSync(codex.dir, { recursive: true, force: true })
+  }
+
+  const noId = harness(() => ({ outputFile: "/tmp/child.jsonl", state: "running", direct: true }))
+  try {
+    seed(noId.storage, "t")
+    await assert.rejects(
+      () => noId.router.subAgentStop.handler({ input: { slug: "t", id: "toolu_child" } }),
+      /did not publish the task identifier/,
+    )
+    assert.deepEqual(noId.stops, [])
+  } finally {
+    rmSync(noId.dir, { recursive: true, force: true })
+  }
+})
+
 test("subAgentSteer refuses a codex thread's child and says why", async () => {
   const h = harness(() => RUNNING_DIRECT)
   try {
@@ -185,6 +231,8 @@ test("subAgentTranscript reports steerability + the reason the drawer shows in p
     const live = await steerable.router.subAgentTranscript.handler({ input: { slug: "t", id: "toolu_child" } })
     assert.equal(live.steerable, true)
     assert.equal(live.steerNote, null, "a box is offered, so there is nothing to explain")
+    assert.equal(live.stoppable, true)
+    assert.equal(live.stopNote, null)
   } finally {
     rmSync(steerable.dir, { recursive: true, force: true })
   }
@@ -195,6 +243,8 @@ test("subAgentTranscript reports steerability + the reason the drawer shows in p
     const live = await codex.router.subAgentTranscript.handler({ input: { slug: "t", id: "toolu_child" } })
     assert.equal(live.steerable, false)
     assert.match(String(live.steerNote), /Codex runs its sub-agents inside its own process/)
+    assert.equal(live.stoppable, false)
+    assert.match(String(live.stopNote), /Codex does not expose per-sub-agent interruption/)
   } finally {
     rmSync(codex.dir, { recursive: true, force: true })
   }
@@ -207,6 +257,8 @@ test("subAgentTranscript reports steerability + the reason the drawer shows in p
     const done = await settled.router.subAgentTranscript.handler({ input: { slug: "t", id: "toolu_child" } })
     assert.equal(done.steerable, false)
     assert.equal(done.steerNote, null)
+    assert.equal(done.stoppable, false)
+    assert.equal(done.stopNote, null)
   } finally {
     rmSync(settled.dir, { recursive: true, force: true })
   }
@@ -216,7 +268,7 @@ test("subAgentTranscript reports steerability + the reason the drawer shows in p
   try {
     seed(gone.storage, "t")
     const missing = await gone.router.subAgentTranscript.handler({ input: { slug: "t", id: "toolu_child" } })
-    assert.deepEqual(missing, { messages: [], state: "gone", steerable: false, steerNote: null })
+    assert.deepEqual(missing, { messages: [], state: "gone", steerable: false, steerNote: null, stoppable: false, stopNote: null })
   } finally {
     rmSync(gone.dir, { recursive: true, force: true })
   }

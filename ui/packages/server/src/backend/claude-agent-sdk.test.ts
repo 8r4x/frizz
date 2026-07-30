@@ -147,6 +147,22 @@ test("real SDK + fake executable: init owns the requested session, input streams
   }
 })
 
+test("stopTask reaches the provider control channel with the exact runtime task id", { timeout: 10_000 }, async () => {
+  const harness = startHarness("basic")
+  try {
+    await harness.handle.ready()
+    await harness.handle.stopTask("agent-task-123")
+    const records = await waitForCapture(harness.capturePath, (rows) => rows.some((row) => row.kind === "stop-task"))
+    assert.deepEqual(
+      records.filter((row) => row.kind === "stop-task").map((row) => row.taskId),
+      ["agent-task-123"],
+    )
+    await assert.rejects(() => harness.handle.stopTask("../unsafe task"), /not a valid opaque id/)
+  } finally {
+    await harness.close()
+  }
+})
+
 test("session init mismatch fails ownership before exposing provider events", { timeout: 10_000 }, async () => {
   const harness = startHarness("mismatch")
   try {

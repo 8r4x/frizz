@@ -34,6 +34,8 @@ export interface ClaudeBrokerClient {
    * a caller that cannot tell "unqueued" from "already delivered" has nothing to tell the operator.
    */
   cancelInput(id: string): Promise<boolean>
+  /** Stop one provider background task and resolve only after the daemon confirms the SDK call. */
+  stopTask(taskId: string): Promise<void>
   setPermissionMode(mode: string): void
   connected(): boolean
   close(): void
@@ -61,6 +63,7 @@ export function connectClaudeBroker(
   let firstConnectDeadline = Date.now() + (options.connectDeadlineMs ?? 30_000)
   // In-flight cancelInput round-trips, keyed by the request id echoed on the reply.
   const pendingCancels = new Map<string, { settle: (cancelled: boolean) => void; fail: (error: Error) => void; timer: NodeJS.Timeout }>()
+  const pendingStops = new Map<string, { settle: () => void; fail: (error: Error) => void; timer: NodeJS.Timeout }>()
   let cancelSeq = 0
 
   const send = (frame: unknown): void => {
@@ -90,6 +93,15 @@ export function connectClaudeBroker(
           // so the operator learns WHY their message could not be taken back.
           if (typeof frame.error === "string" && frame.error) entry.fail(new Error(frame.error))
           else entry.settle(frame.cancelled === true)
+          break
+        }
+        case "stop-result": {
+          const entry = pendingStops.get(frame.requestId as string)
+          if (!entry) break
+          pendingStops.delete(frame.requestId as string)
+          clearTimeout(entry.timer)
+          if (typeof frame.error === "string" && frame.error) entry.fail(new Error(frame.error))
+          else entry.settle()
           break
         }
       }
@@ -132,12 +144,25 @@ export function connectClaudeBroker(
       // deadline above is what answers instead.
       send({ t: "cancel-input", requestId, id })
     }),
+    stopTask: (taskId: string) => new Promise<void>((resolve, reject) => {
+      if (closed) { reject(new Error("the broker connection is closed")); return }
+      const requestId = `stop-${++cancelSeq}`
+      const timer = setTimeout(() => {
+        pendingStops.delete(requestId)
+        reject(new Error("the Claude session did not answer the stop request"))
+      }, cancelTimeoutMs)
+      if (timer.unref) timer.unref()
+      pendingStops.set(requestId, { settle: resolve, fail: reject, timer })
+      send({ t: "stop-task", requestId, taskId })
+    }),
     setPermissionMode: (mode: string) => send({ t: "set-mode", mode }),
     connected: () => sock !== null && !sock.destroyed,
     close: () => {
       closed = true
       for (const [, entry] of pendingCancels) { clearTimeout(entry.timer); entry.fail(new Error("the broker connection closed before the unqueue was answered")) }
       pendingCancels.clear()
+      for (const [, entry] of pendingStops) { clearTimeout(entry.timer); entry.fail(new Error("the broker connection closed before the stop was answered")) }
+      pendingStops.clear()
       sock?.destroy(); sock = null
     },
   }

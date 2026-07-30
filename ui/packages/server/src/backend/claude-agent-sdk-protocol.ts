@@ -49,6 +49,11 @@ export const CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER = "subagent-steer-v1"
 // cosmetic capability: the operator is being told whether the agent will still read their message.
 export const CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT = "cancel-input-v1"
 
+// This one covers a REAL sub-agent stop through the Agent SDK's `Query.stopTask(taskId)`. Without
+// the capability gate a server upgraded in place would send `stop-task` to a surviving older daemon,
+// which would ignore the unknown frame and leave the UI claiming work was stopped when it was not.
+export const CLAUDE_BROKER_CAPABILITY_STOP_TASK = "stop-task-v1"
+
 export interface ClaudeInputMessage {
   id: string
   text: string

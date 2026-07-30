@@ -521,6 +521,22 @@ export function createRouter(ctx: AppContext) {
     return { sessionId: row.session_id }
   }
 
+  function subAgentStoppable(slug: string, id: string): { sessionId: string; taskId: string } | { sessionId: null; note: string | null } {
+    const blocked = (note: string | null) => ({ sessionId: null, note })
+    const info = ctx.tailer.subAgent(slug, id)
+    if (!info || info.state !== "running") return blocked(null)
+    const row = ctx.storage.getSession(slug)
+    if (!row) return blocked(null)
+    if (row.backend === "codex") {
+      return blocked("Codex does not expose per-sub-agent interruption to Fray, so this child can't be stopped from here.")
+    }
+    if (row.claude_runtime !== "broker" || !ctx.claudeBroker) {
+      return blocked("Stopping a sub-agent needs the Claude session broker; this thread runs in a terminal.")
+    }
+    if (!info.taskId) return blocked("This sub-agent did not publish the task identifier needed to stop it.")
+    return { sessionId: row.session_id, taskId: info.taskId }
+  }
+
   // Every interaction RPC re-derives the project from this server and binds the requested slug to the
   // CURRENT registered session id. Foreign transcripts have no registry row; a stale page holding a
   // replaced session id fails closed instead of reading or answering the replacement's requests.
@@ -700,20 +716,25 @@ export function createRouter(ctx: AppContext) {
         steerable: z.boolean(),
         // Why not, when the reason is worth stating (a RUNNING child that still can't be reached).
         steerNote: z.string().nullable(),
+        stoppable: z.boolean(),
+        stopNote: z.string().nullable(),
       }),
       handler: async ({ input }) => {
         const info = ctx.tailer.subAgent(input.slug, input.id)
-        if (!info) return { messages: [], state: "gone" as const, steerable: false, steerNote: null }
+        if (!info) return { messages: [], state: "gone" as const, steerable: false, steerNote: null, stoppable: false, stopNote: null }
         // A CODEX sub-agent is itself a codex thread, so its "output file" is a rollout in codex's own
         // schema — parse it with the codex reader or the drawer renders an empty pane.
         const read = info.outputFormat === "codex" ? readCodexTranscriptFile : readTranscriptFile
         const messages = info.outputFile ? read(info.outputFile) : []
         const steer = subAgentSteerable(input.slug, input.id)
+        const stop = subAgentStoppable(input.slug, input.id)
         return {
           messages,
           state: info.state,
           steerable: steer.sessionId !== null,
           steerNote: steer.sessionId === null ? steer.note : null,
+          stoppable: stop.sessionId !== null,
+          stopNote: stop.sessionId === null ? stop.note : null,
         }
       },
     }),
@@ -722,8 +743,7 @@ export function createRouter(ctx: AppContext) {
     // rather than the thread's main turn. The maintainer's question — "don't we have the ability to
     // steer them with prompts?" — turned out to be yes, but only through one narrow channel: an input
     // message addressed with the child's dispatch tool_use id (`parent_tool_use_id`). There is no
-    // control request for it; `stopTask` and `backgroundTasks` are the only other per-task controls
-    // the SDK exposes.
+    // control request for STEERING. Stopping is separate and does use the SDK's `stopTask` control.
     //
     // WHY THE GATE IS STRICT. Measured live: addressing a child that has ALREADY SETTLED does not
     // error and does not vanish — the CLI falls the message back onto the MAIN thread, where the
@@ -749,6 +769,26 @@ export function createRouter(ctx: AppContext) {
         })
         ctx.board.refresh()
         return { delivered: true }
+      },
+    }),
+
+    subAgentStop: mutation({
+      input: z.object({ slug: ThreadSlug, id: z.string() }).strict(),
+      output: z.object({ stopped: z.boolean() }),
+      handler: async ({ input }) => {
+        const target = subAgentStoppable(input.slug, input.id)
+        if (target.sessionId === null) {
+          throw new Error(target.note ?? "This sub-agent is no longer running, so it can't be stopped")
+        }
+        const bridge = ctx.claudeBroker
+        if (!bridge) throw new Error("Claude session broker is unavailable; cannot stop this sub-agent")
+        await bridge.stopSubAgent({
+          threadSlug: input.slug,
+          sessionId: target.sessionId,
+          taskId: target.taskId,
+        })
+        ctx.board.refresh()
+        return { stopped: true }
       },
     }),
 

@@ -3738,7 +3738,7 @@ function Dots() {
 // dimmed elapsed timer. The baseline is the last real user interaction (server-derived, so it reads
 // as true turn duration and survives reloads); a thread with no usable timestamp falls back to
 // mount time. Ticks once a second — cheap, and unmounts with the banner.
-function WorkingIndicator({ since }: { since?: string }) {
+export function WorkingIndicator({ since }: { since?: string }) {
   const [baseline] = useState(() => {
     const t = Date.parse(since ?? "")
     return Number.isFinite(t) && t <= Date.now() ? t : Date.now()

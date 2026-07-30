@@ -33,7 +33,7 @@ async function rmEventually(dir: string, ms = 3_000): Promise<void> {
   }
 }
 
-type CaptureRow = { kind: string; text?: string; parentToolUseId?: string | null }
+type CaptureRow = { kind: string; text?: string; parentToolUseId?: string | null; taskId?: string }
 
 function capture(path: string): CaptureRow[] {
   try {
@@ -43,7 +43,7 @@ function capture(path: string): CaptureRow[] {
   }
 }
 
-test("a steer reaches the CLI addressed to the child, while a follow-up stays a main-thread turn", { timeout: 25_000 }, async () => {
+test("a steer and a real task stop reach the CLI, while a follow-up stays a main-thread turn", { timeout: 25_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "cbrk-steer-"))
   const exe = join(dir, "fake-claude--hold-inputs.mjs")
   copyFileSync(fakeCli, exe); chmodSync(exe, 0o700)
@@ -74,6 +74,14 @@ test("a steer reaches the CLI addressed to the child, while a follow-up stays a 
     assert.ok(steer, "the steer reached the CLI")
     assert.equal(followUp?.parentToolUseId, null, "a follow-up is still an unaddressed main-thread turn")
     assert.equal(steer?.parentToolUseId, "toolu_child_01", "the steer arrived carrying the child's dispatch id")
+
+    await bridge.stopSubAgent({ threadSlug: slug, sessionId, taskId: "agent-runtime-01" })
+    await waitFor(() => capture(capturePath).some((row) => row.kind === "stop-task"))
+    assert.deepEqual(
+      capture(capturePath).filter((row) => row.kind === "stop-task").map((row) => row.taskId),
+      ["agent-runtime-01"],
+      "the provider stopTask received the runtime id rather than the drawer's dispatch id",
+    )
   } finally {
     bridge.releaseSession(slug, sessionId, "session-deleted")
     bridge.close()
@@ -115,12 +123,17 @@ test("a steer refuses a daemon from a build that predates addressing, instead of
       () => bridge.steerSubAgent({ threadSlug: slug, sessionId, subAgentId: "toolu_child_01", text: "steer the child" }),
       /predates sub-agent steering/,
     )
+    await assert.rejects(
+      () => bridge.stopSubAgent({ threadSlug: slug, sessionId, taskId: "agent-runtime-01" }),
+      /predates sub-agent stopping/,
+    )
     await sleep(400)
     assert.equal(
       capture(capturePath).filter((row) => row.kind === "user-input").length,
       before,
       "nothing was sent — an unaddressed steer would have landed on the parent's main turn",
     )
+    assert.deepEqual(capture(capturePath).filter((row) => row.kind === "stop-task"), [], "an old daemon was never given an unknown stop frame")
   } finally {
     bridge.releaseSession(slug, sessionId, "session-deleted")
     bridge.close()

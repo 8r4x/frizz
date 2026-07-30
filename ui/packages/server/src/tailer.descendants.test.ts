@@ -148,6 +148,7 @@ test("descendants: a GRANDCHILD resolves, though its dispatch is in the child's 
     const grand = f.tailer.subAgent(SLUG, "toolu_grand")
     assert.ok(grand, "the grandchild's dispatch id resolves")
     assert.equal(grand.outputFile, join(f.subagents, "agent-aGrand.jsonl"))
+    assert.equal(grand.taskId, "aGrand", "the sidecar filename supplies the provider's stopTask handle")
   } finally {
     cleanup(f)
   }

@@ -9,7 +9,7 @@ import { adoptOrForkBroker, killBroker, liveBrokerRecord, liveBrokerRecords, cla
 import { connectClaudeBroker, type ClaudeBrokerClient } from "./claude-broker-client.ts"
 import { describeClaudeBrokerExit, readClaudeBrokerExit, type ClaudeBrokerExitRecord } from "./claude-broker-diagnostics.ts"
 import type { ClaudeDiagnostic, ClaudePermissionDecision, ClaudePermissionRequest, ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
-import { CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, validateInputMessage } from "./claude-agent-sdk-protocol.ts"
+import { CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, validateInputMessage } from "./claude-agent-sdk-protocol.ts"
 import type { BrokerRecord, ClaudeBrokerConfig } from "./claude-agent-broker.ts"
 import type { InteractionSessionScope, InteractionStore } from "../interaction-store.ts"
 import {
@@ -142,6 +142,8 @@ export interface ClaudeAgentBrokerBridge {
    * The caller turns that into "this sub-agent can no longer be reached", which is the truth.
    */
   steerSubAgent(input: { threadSlug: string; sessionId: string; subAgentId: string; text: string; deliveryId?: string }): Promise<void>
+  /** Stop one running Claude background task through the provider's task control API. */
+  stopSubAgent(input: { threadSlug: string; sessionId: string; taskId: string }): Promise<void>
   /**
    * Take a follow-up BACK out of the session's command queue — the operator clicked their own queued
    * bubble to unqueue it. `deliveryId` is the id `followUp` handed the SDK, which is the uuid the CLI
@@ -438,6 +440,19 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       // Running the same pure validator first turns that into an error the operator actually sees.
       const message = validateInputMessage({ id: inputIdFor(input.deliveryId), text: input.text, parentToolUseId: input.subAgentId })
       held.client.sendInput(message)
+    },
+
+    async stopSubAgent(input) {
+      const held = current(input.threadSlug, input.sessionId)
+      if (!held || !holdsLiveDaemon(held)) {
+        if (held) { held.client.close(); sessions.delete(input.threadSlug) }
+        throw new Error("This sub-agent's session is no longer running, so it cannot be stopped")
+      }
+      const record = liveBrokerRecord(claudeBrokerRecordPath(deps.stateDir, held.sessionId))
+      if (!record?.capabilities?.includes(CLAUDE_BROKER_CAPABILITY_STOP_TASK)) {
+        throw new Error("This thread's Claude session predates sub-agent stopping — its next turn will restart on a session that supports it")
+      }
+      await held.client.stopTask(input.taskId)
     },
 
     async warmUp() {

@@ -6,7 +6,7 @@ import { SubAgentSheet } from "./components/SubAgentSheet.tsx"
 import { pushSubAgentDrawer, store } from "./store.ts"
 import "./styles.css"
 
-// Browser QA for the SUB-AGENT DRAWER's two new edges — the liveness strip and the steer footer —
+// Browser QA for the SUB-AGENT DRAWER's controls and regular transcript-tail liveness —
 // across every state the server can put them in. The live adhoc stack can produce exactly one of
 // these (a steerable broker child), because the provider's task_* progress stream only exists behind
 // a real broker daemon and a codex/tmux row needs a whole second runtime. So the states that differ
@@ -32,16 +32,36 @@ const childMessages = [
 
 // EXACTLY the router's own answers, per state — copied from router.ts's subAgentSteerable so a drift
 // in the server's wording shows up here as a stale fixture rather than as a silently wrong review.
-const RESPONSES: Record<string, { state: string; steerable: boolean; steerNote: string | null }> = {
-  steerable: { state: "running", steerable: true, steerNote: null },
-  rich: { state: "running", steerable: true, steerNote: null },
-  "note-codex": { state: "running", steerable: false, steerNote: "Codex runs its sub-agents inside its own process and exposes no way to address one, so this child can't be steered from here." },
-  "note-tmux": { state: "running", steerable: false, steerNote: "Steering a sub-agent needs the Claude session broker; this thread runs in a terminal." },
-  "note-nested": { state: "running", steerable: false, steerNote: "Only sub-agents this thread dispatched itself can be steered — this one belongs to another agent." },
+const RESPONSES: Record<string, { state: string; steerable: boolean; steerNote: string | null; stoppable: boolean; stopNote: string | null }> = {
+  steerable: { state: "running", steerable: true, steerNote: null, stoppable: true, stopNote: null },
+  rich: { state: "running", steerable: true, steerNote: null, stoppable: true, stopNote: null },
+  "note-codex": {
+    state: "running",
+    steerable: false,
+    steerNote: "Codex runs its sub-agents inside its own process and exposes no way to address one, so this child can't be steered from here.",
+    stoppable: false,
+    stopNote: "Codex does not expose per-sub-agent interruption to Fray, so this child can't be stopped from here.",
+  },
+  "note-tmux": {
+    state: "running",
+    steerable: false,
+    steerNote: "Steering a sub-agent needs the Claude session broker; this thread runs in a terminal.",
+    stoppable: false,
+    stopNote: "Stopping a sub-agent needs the Claude session broker; this thread runs in a terminal.",
+  },
+  // Descendant steering is unsafe (the CLI misdelivers it to the root), but stopTask's registry is
+  // session-wide: this state must show the honest explanation AND a working stop control.
+  "note-nested": {
+    state: "running",
+    steerable: false,
+    steerNote: "Only sub-agents this thread dispatched itself can be steered — this one belongs to another agent.",
+    stoppable: true,
+    stopNote: null,
+  },
   // Settled and stale both get NO footer at all: the transcript already reads as finished, and a
   // banner on every drawer opened to review completed work would be pure noise.
-  settled: { state: "done", steerable: false, steerNote: null },
-  stale: { state: "stale", steerable: false, steerNote: null },
+  settled: { state: "done", steerable: false, steerNote: null, stoppable: false, stopNote: null },
+  stale: { state: "stale", steerable: false, steerNote: null, stoppable: false, stopNote: null },
 }
 
 window.fetch = async (input, init) => {
@@ -50,12 +70,12 @@ window.fetch = async (input, init) => {
     return rpcResult({ messages: childMessages, ...(RESPONSES[STATE] ?? RESPONSES.rich) })
   }
   if (url.pathname === "/rpc/subAgentSteer") return rpcResult({ delivered: true })
+  if (url.pathname === "/rpc/subAgentStop") return rpcResult({ stopped: true })
   return nativeFetch(input, init)
 }
 
-// `rich` carries the provider's live task-stream reading (current step in words + counters); every
-// other state deliberately omits it, which is what a tmux/codex child and an older CLI really look
-// like — the strip must read fine with nothing after "Working…".
+// `rich` still carries the provider's live task-stream reading on the board row, but the drawer now
+// deliberately uses the regular transcript treatment instead of inventing a second progress strip.
 const CHILD_ID = "toolu_child_01"
 const thread: ThreadView = {
   id: SLUG,
@@ -118,7 +138,7 @@ const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={qc}>
     <main className="min-h-screen bg-bg p-8 text-fg">
-      <h1 className="text-[13px] font-medium">Sub-agent drawer — liveness strip + steer footer</h1>
+      <h1 className="text-[13px] font-medium">Sub-agent drawer — regular transcript tail + controls</h1>
       <p className="mt-1 text-[11.5px] text-muted/70">
         state=<code>{STATE}</code> · append <code>?state=</code>steerable | rich | note-codex | note-tmux | note-nested | settled | stale
       </p>
