@@ -3,6 +3,8 @@ import { useQueryClient } from "@tanstack/react-query"
 import { useSubAgentTranscript } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
+import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
+import { subAgentProfileLabel } from "../lib/subAgentProfile.ts"
 import { ChildDrillSlugContext, Message, VSpace, WorkingIndicator, withMessageSpacers } from "./ChatView.tsx"
 import { Composer } from "./Composer.tsx"
 import { Sheet } from "./ui/Sheet.tsx"
@@ -41,7 +43,7 @@ export function SubAgentSheet({
   slug,
   subId,
   label,
-  subagentType: _subagentType,
+  subagentType,
   startedAt,
   depth,
   widthDepth,
@@ -150,6 +152,7 @@ export function SubAgentSheet({
           <SubAgentSteerFooter
             slug={slug}
             subId={subId}
+            subagentType={subagentType}
             steerable={q.data?.steerable === true}
             note={q.data?.steerNote ?? null}
             stoppable={q.data?.stoppable === true}
@@ -161,17 +164,16 @@ export function SubAgentSheet({
   )
 }
 
-// The drawer's bottom edge: the prompt box when this child can actually be reached, the server's
-// one-line reason when it is running but cannot be, and NOTHING once it has settled — a finished
-// transcript needs no footer telling you it finished.
-//
-// Deliberately NOT ThreadComposerBox. That block carries a thread draft key, the model/effort
-// controls, and the `/login` intercept; a sub-agent owns none of those, so reusing it would have put
-// three controls on screen that do not apply to a child. What is shared is the <Composer> leaf, so
-// the box itself is the same box as everywhere else.
+// The drawer's bottom edge follows the full-thread composition exactly:
+//   transcript | prompt panel | lifecycle footer.
+// Each boundary is a DIRECT full-width strip, so the rules do not stop at the prompt panel's inset.
+// The child profile belongs in the prompt box's normal footer slot, but it is a readout rather than a
+// selector: changing the parent thread profile cannot mutate an already-running child's model.
+// The stop action owns the separate lifecycle footer below it, never the prompt panel itself.
 function SubAgentSteerFooter({
   slug,
   subId,
+  subagentType,
   steerable,
   note,
   stoppable,
@@ -179,6 +181,7 @@ function SubAgentSteerFooter({
 }: {
   slug: string
   subId: string
+  subagentType?: string
   steerable: boolean
   note: string | null
   stoppable: boolean
@@ -230,42 +233,71 @@ function SubAgentSteerFooter({
     const unavailableNote = note ?? stopNote
     if (!unavailableNote) return null
     return (
-      <div data-subagent-steer-note className="shrink-0 border-t border-border bg-panel px-4 py-3 text-[11.5px] text-muted/70">
-        {unavailableNote}
+      <div data-subagent-steer-note className="w-full shrink-0 border-t border-border bg-panel px-3 py-3">
+        <div className="px-1 pb-2 text-[11.5px] text-muted/70">{unavailableNote}</div>
+        <div className="pl-1.5">
+          <SubAgentProfileReadout subagentType={subagentType} />
+        </div>
       </div>
     )
   }
 
   return (
-    <div data-subagent-steer className="shrink-0 border-t border-border bg-panel px-3 py-3">
-      {steerable ? (
-        <Composer
-          value={message}
-          onChange={setMessage}
-          onSubmit={send}
-          surface="subAgentComposer"
-          placeholder="Steer this sub-agent…"
-          busy={busy || stopping}
-        />
-      ) : note ? (
-        <div className="px-1 pb-2 text-[11.5px] text-muted/70">{note}</div>
-      ) : null}
-      {steerable && !stoppable && stopNote && (
-        <div className="mt-2 px-1 text-[11.5px] text-muted/70">{stopNote}</div>
-      )}
+    <>
+      <div data-subagent-steer className="w-full shrink-0 border-t border-border bg-panel px-3 py-3">
+        {steerable ? (
+          <Composer
+            value={message}
+            onChange={setMessage}
+            onSubmit={send}
+            surface="subAgentComposer"
+            placeholder="Steer this sub-agent…"
+            busy={busy || stopping}
+            footer={<SubAgentProfileReadout subagentType={subagentType} />}
+          />
+        ) : note ? (
+          <>
+            <div className="px-1 pb-2 text-[11.5px] text-muted/70">{note}</div>
+            <div className="pl-1.5">
+              <SubAgentProfileReadout subagentType={subagentType} />
+            </div>
+          </>
+        ) : null}
+        {steerable && !stoppable && stopNote && (
+          <div className="mt-2 px-1 text-[11.5px] text-muted/70">{stopNote}</div>
+        )}
+      </div>
       {stoppable && (
-        <div className="mt-2 flex justify-end">
+        <footer
+          aria-label="Sub-agent lifecycle actions"
+          data-subagent-lifecycle-footer
+          className="flex min-h-10 w-full shrink-0 items-center justify-end gap-1.5 border-t border-border/70 bg-panel/95 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] text-[12px] backdrop-blur-sm"
+        >
           <button
             type="button"
             data-stop-subagent
             disabled={stopping}
             onClick={stop}
-            className="rounded-md border border-border px-2.5 py-1 text-[11.5px] text-muted transition-colors hover:border-red-400/40 hover:bg-red-400/10 hover:text-red-300 disabled:opacity-50"
+            className="rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] text-fg/80 transition-colors hover:border-red-400/40 hover:bg-red-400/10 hover:text-red-300 disabled:opacity-50"
           >
             {stopping ? "Stopping…" : "Stop sub-agent"}
           </button>
-        </div>
+        </footer>
       )}
-    </div>
+    </>
+  )
+}
+
+function SubAgentProfileReadout({ subagentType }: { subagentType?: string }) {
+  const label = subAgentProfileLabel(subagentType)
+  return (
+    <span
+      data-subagent-profile
+      aria-label={`Sub-agent profile: ${label}`}
+      title={subagentType?.trim() || "The provider did not report this sub-agent's model and effort"}
+      className={`inline-flex min-w-0 max-w-[min(72%,20rem)] items-center rounded-md border border-border/50 bg-transparent px-1.5 py-0.5 text-muted ${PROMPT_CONTROL_TYPOGRAPHY_CLASS}`}
+    >
+      <span className="profile-grid-value relative -top-px min-w-0 truncate">{label}</span>
+    </span>
   )
 }
