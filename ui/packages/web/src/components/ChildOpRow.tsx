@@ -176,6 +176,7 @@ export function ChildOpRow({
     <button
       type="button"
       style={identityStyle}
+      data-subagent-parent={parentSlug}
       onClick={onOpen}
       // Only the ops strip swallows the press: it can sit inside a card/drawer whose own mousedown
       // handler would otherwise act on it. The rail and card rows must let the pointer-down through —
@@ -225,8 +226,6 @@ export function ChildOpRow({
       className={wrapperClass}
       style={wrapperStyle}
       data-op-row={onDismiss ? "" : undefined}
-      data-subagent-depth={depth && depth > 1 ? depth : undefined}
-      data-subagent-parent={parentSlug}
     >
       {row}
       {onDismiss && (
