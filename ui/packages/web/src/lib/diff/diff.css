@@ -105,15 +105,16 @@
    flex center. Covers both the Bash/Read/Agent header and the Edit diff header (sibling metrics). */
 .fray-bash-header .fray-bash-label,
 .fray-diff-header .fray-bash-label { position: relative; top: 0.8px; }
-.fray-bash-header > span:first-child > :not(.fray-bash-label, .fray-agent-mark),
-.fray-diff-header > span:first-child > :not(.fray-bash-label, .fray-agent-mark) { position: relative; top: 1px; }
-/* The Agent dispatch card leads its header with a liveness DOT instead of text (it mirrors the child
-   lines under the prompt box). The 1px drop above is a TEXT correction — small-caps and a path meeting on
-   one optical baseline — and a filled 6px circle shares none of those metrics: with that drop applied its
-   ink measured 0.65px BELOW the "Agent" ink centre. So the mark is excluded from the text rule and
+.fray-bash-header > span:first-child > :not(.fray-bash-label, .fray-tool-mark),
+.fray-diff-header > span:first-child > :not(.fray-bash-label, .fray-tool-mark) { position: relative; top: 1px; }
+/* A card that has something live behind it — a dispatched sub-agent, a detached background shell —
+   leads its header with a liveness DOT instead of text (both mirror the child lines under the prompt
+   box). The 1px drop above is a TEXT correction — small-caps and a path meeting on one optical
+   baseline — and a filled 6px circle shares none of those metrics: with that drop applied its ink
+   measured 0.65px BELOW the "Agent" ink centre. So the mark is excluded from the text rule and
    carries its own ink correction, in em so it tracks the header's font size rather than pinning to
    today's 12.5px (re-measured residual: 0.02px, and 0.03px at double the size). */
-.fray-agent-mark { position: relative; transform: translateY(0.028em); }
+.fray-tool-mark { position: relative; transform: translateY(0.028em); }
 /* The status meta (done · 2m) shares the header's 11.5px so it doesn't read as an afterthought; its
    small-caps sit low in that box, so drop it a pixel onto the row's optical baseline. */
 .fray-tool-header-caps { position: relative; top: 1px; }

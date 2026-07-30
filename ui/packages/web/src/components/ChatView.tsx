@@ -41,7 +41,7 @@ import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
 import { hasPendingToolSpinner, hasRunningToolIndicator, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
 import { formatToolDuration } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
-import { CHILD_OPEN_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, visibleChildOps } from "../lib/childOps.ts"
+import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, visibleChildOps } from "../lib/childOps.ts"
 import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
 import { agentReading } from "../lib/agentReading.ts"
 import { ChildOpRow } from "./ChildOpRow.tsx"
@@ -1533,7 +1533,7 @@ function withSpacers(blocks: ReactNode[], h = STEP): ReactNode[] {
   return out
 }
 
-interface CollapsedTool {
+export interface CollapsedTool {
   name: string
   detail?: string
   // Set for Edit/Write/MultiEdit entries: the (same-file) edits merged into one diff block. Distinct
@@ -1737,7 +1737,7 @@ function ToolCalls({ tools, dense }: { tools: CollapsedTool[]; dense?: boolean }
 // Route a collapsed tool entry to its card. Edit/Bash/Read/Agent get expandable bodies (chevron);
 // everything else (Grep, Glob, Read-without-excerpt, MCP, Monitor, a pre-restart Bash with no command)
 // is a header-only card. All share the same bordered card family so no call ever reads as bare text.
-function ToolCardRouter({ t }: { t: CollapsedTool }) {
+export function ToolCardRouter({ t }: { t: CollapsedTool }) {
   const slug = useContext(ThreadSlugContext)
   const board = useBoard()
   const thread = slug ? threadBySlug(board, slug) : undefined
@@ -1795,7 +1795,44 @@ function ToolMetaReading({ tone, indicator, label, duration, title }: {
   )
 }
 
-export function ToolStatusMeta({ status, backgroundState, liveBackgroundState, exitCode, durationMs, indicator = "shell" }: { status?: ToolStatus; backgroundState?: TranscriptToolCall["backgroundState"]; liveBackgroundState?: "running" | "stale"; exitCode?: number; durationMs?: number; indicator?: "shell" | "agent" }) {
+// THE LIVENESS MARK, LEADING THE ROW — the same slot, the same width, the same ink correction the
+// dispatch card uses (AgentBlock, below), because it is the same statement: something is alive behind
+// this card. It sat in the RIGHT-hand reading instead, which put a shell card's blue dot at the
+// opposite edge from a sub-agent card's accent one for no reason a reader could name (maintainer
+// 2026-07-30: "the blue indicator for a background bash tool is still on the right instead of on the
+// left … its rendering should align with the agent tool call component").
+//
+// The glyphs are the shared child-op vocabulary (lib/childOps.ts + BackgroundOpsStrip), so a detached
+// shell is marked the SAME way on its transcript card, in the drawer's ops strip and on the queue card:
+// pulsing blue = running, breathing muted blue = alive but quiet. A card with nothing live behind it
+// renders NO SLOT at all — an empty reservation reads as a layout bug, which is exactly what the
+// dispatch card had to unlearn (see AgentBlock's `mark`).
+//
+// What deliberately does NOT move here: the pending-FOREGROUND spinner. It stays in the reading, again
+// mirroring the dispatch card — the left mark means a detached process, and a command that is merely
+// taking a while inside the turn must not borrow that position any more than it may borrow the hue.
+function ToolLiveMark({ status, backgroundState, liveBackgroundState }: { status?: ToolStatus; backgroundState?: TranscriptToolCall["backgroundState"]; liveBackgroundState?: "running" | "stale" }) {
+  // Precedence follows the READING beside it, exactly: a tracked op's own observed state outranks the
+  // call's pending-ness, so a shell fray watches and finds quiet draws the breathing mark next to the
+  // word "stale". The old right-hand indicator tested `running || pending-background` first and so
+  // pulsed at full brightness beside its own "stale" — the same self-contradiction the agent rows had
+  // to unlearn. `pending && background` is the fallback: detached, but no live op correlated to it.
+  const mark =
+    liveBackgroundState === "running" ? (
+      <span aria-hidden className="fray-live-dot fray-live-dot--shell" data-running-indicator="tool-disclosure" />
+    ) : liveBackgroundState === "stale" ? (
+      <span aria-hidden className="fray-live-dot-quiet fray-live-dot-quiet--shell" data-running-indicator="tool-quiet" title={CHILD_QUIET_SHELL_TITLE} />
+    ) : hasRunningToolIndicator(status, backgroundState) ? (
+      <span aria-hidden className="fray-live-dot fray-live-dot--shell" data-running-indicator="tool-disclosure" />
+    ) : null
+  if (!mark) return null
+  // `-mr-1` pulls the label back to roughly the dot↔label gap the child lines use: the header's own
+  // gap-2 is tuned for a petite-caps label beside a path, and at full width a 6px dot floated away from
+  // the word it qualifies.
+  return <span className="fray-tool-mark -mr-1 flex w-[9px] shrink-0 justify-center">{mark}</span>
+}
+
+export function ToolStatusMeta({ status, backgroundState, liveBackgroundState, exitCode, durationMs }: { status?: ToolStatus; backgroundState?: TranscriptToolCall["backgroundState"]; liveBackgroundState?: "running" | "stale"; exitCode?: number; durationMs?: number }) {
   if (!status && durationMs === undefined) return null
   // The GLYPH carries "background", so the words no longer have to. "BACKGROUND RUNNING" in petite-caps
   // beside a dot that already says background was the longest string in the header and pushed the command
@@ -1829,13 +1866,8 @@ export function ToolStatusMeta({ status, backgroundState, liveBackgroundState, e
       title={title}
       label={label}
       duration={duration}
-      indicator={
-        liveBackgroundState === "running" || hasRunningToolIndicator(status, backgroundState)
-          ? <span aria-hidden className={`fray-live-dot fray-live-dot--${indicator}`} data-running-indicator="tool-disclosure" />
-          : hasPendingToolSpinner(status, backgroundState)
-            ? <span aria-hidden className="fray-tool-spinner" data-running-indicator="tool-pending" />
-            : null
-      }
+      // The live dot moved to the row's head (ToolLiveMark); only the foreground spinner reads here.
+      indicator={hasPendingToolSpinner(status, backgroundState) ? <span aria-hidden className="fray-tool-spinner" data-running-indicator="tool-pending" /> : null}
     />
   )
 }
@@ -1867,6 +1899,7 @@ function ToolCard({ name, detail, count, status, backgroundState, liveBackground
     <div className="fray-bash" title={shownDetail}>
       <div className="fray-bash-header">
         <span className="flex min-w-0 items-center gap-2">
+          <ToolLiveMark status={status} backgroundState={backgroundState} liveBackgroundState={liveBackgroundState} />
           <span className="petite-caps fray-bash-label shrink-0">{prettyToolName(name)}</span>
           {short &&
             (linkPath ? (
@@ -2038,6 +2071,7 @@ function BashBlock({
         className="fray-bash-header w-full text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-fg/60"
       >
         <span className="flex min-w-0 items-center gap-2">
+          <ToolLiveMark status={status} backgroundState={backgroundState} liveBackgroundState={liveBackgroundState} />
           <span className="petite-caps fray-bash-label shrink-0">{prettyToolName(name)}</span>
           <span className="min-w-0 truncate text-[11.5px] text-muted" title={shownDesc}>{shownDesc ?? ""}</span>
         </span>
@@ -2241,7 +2275,9 @@ export function AgentBlock({
 
   // The liveness MARK. Every glyph is the shared child-op vocabulary (lib/childOps.ts), so this card and
   // the line under the prompt box mark the same child the same way: pulsing accent = running, flat gray =
-  // stale, hollow = rested (its run over, its own fan-out still going).
+  // stale, hollow = rested (its run over, its own fan-out still going). A background SHELL card leads
+  // with the same slot in the same position (ToolLiveMark), in shell blue — one liveness column for the
+  // whole transcript, whichever kind of thing is alive behind the card.
   //
   // A RESOLVED child gets no mark AND NO SLOT (maintainer 2026-07-29: "there's a weird gap now to the
   // left of the word 'Agent'"). The slot used to be reserved whether or not it drew anything, so a run of
@@ -2290,8 +2326,8 @@ export function AgentBlock({
             resolved card starts flush at its label instead of behind an empty reservation. `-mr-1` pulls
             the label back to roughly the dot↔label gap those lines use: the header's own gap-2 is tuned
             for a petite-caps label beside a path, and at full width a 6px dot floated away from the word
-            it qualifies. */}
-        {mark && <span className="fray-agent-mark -mr-1 flex w-[9px] shrink-0 justify-center">{mark}</span>}
+            it qualifies. Same slot, same class, same numbers as a background shell card's mark. */}
+        {mark && <span className="fray-tool-mark -mr-1 flex w-[9px] shrink-0 justify-center">{mark}</span>}
         <span className="petite-caps fray-bash-label shrink-0">Agent</span>
         {canDrill ? (
           <button

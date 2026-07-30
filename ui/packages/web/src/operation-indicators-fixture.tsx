@@ -2,7 +2,7 @@ import { useState } from "react"
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { BoardSnapshot, ThreadView } from "@fray-ui/shared"
-import { AgentBlock, BackgroundOpsStrip, ThreadSlugContext, ToolStatusMeta } from "./components/ChatView.tsx"
+import { AgentBlock, BackgroundOpsStrip, ThreadSlugContext, ToolCardRouter, ToolStatusMeta } from "./components/ChatView.tsx"
 import { QueueSubAgentLines } from "./components/QueueSubAgentLines.tsx"
 import { ChildOpRow } from "./components/ChildOpRow.tsx"
 import { ToolDisclosureHeader } from "./components/ToolDisclosureHeader.ts"
@@ -160,6 +160,32 @@ createRoot(document.getElementById("root")!).render(
               and its duration must still render here (this is what the suppression must never eat). */}
           <AgentBlock detail="Cancelled dispatch (no child record)" prompt="This dispatch was interrupted." status="cancelled" />
           <AgentBlock detail="Failed dispatch (no child record)" prompt="This dispatch failed." status="failed" durationMs={12_000} />
+        </ThreadSlugContext.Provider>
+      </div>
+    </section>
+    {/* SHELL cards, read against the agent rows above: the SAME header shape, the same mark slot, in the
+        shell's blue instead of the accent. The dot used to render in the RIGHT-hand reading, so a live
+        background shell and a live sub-agent marked themselves at opposite edges of an otherwise
+        identical card (maintainer 2026-07-30). `desc` is what correlates a card to a tracked op, so the
+        first two rows name real entries in `bgShells` above — the fixture exercises the real derivation
+        (liveBackgroundOperationState) rather than hand-passing the live state in. */}
+    <section data-shell-rows className="rounded-lg border border-border bg-panel p-4">
+      <h2 className="text-sm font-medium">Background shell rows</h2>
+      <div className="mt-3 flex flex-col gap-2">
+        <ThreadSlugContext.Provider value={thread.id}>
+          {/* Live detached shell: pulsing BLUE mark leading the row, "running" in the reading. */}
+          <ToolCardRouter t={{ name: "Bash", detail: "Watch CI", desc: "Watch CI", command: "gh run watch 12345", backgroundState: "background", status: "pending", count: 1 }} />
+          {/* Alive but quiet (a dev server waiting, a Monitor with no output file): the breathing muted
+              mark — never a dead gray dot, and never nothing at all. */}
+          <ToolCardRouter t={{ name: "Monitor", detail: "Monitor: PR checks", desc: "Monitor: PR checks", backgroundState: "background", status: "pending", count: 1 }} />
+          {/* Detached, but fray tracks no live op behind it: the mark is the pending-background dot. */}
+          <ToolCardRouter t={{ name: "Bash", detail: "Untracked background job", desc: "Untracked background job", command: "node worker.mjs", backgroundState: "background", status: "pending", count: 1 }} />
+          {/* FOREGROUND pending: no mark, no slot — the spinner stays in the reading, exactly as an
+              untracked dispatch's does. A command taking a while is not a background job. */}
+          <ToolCardRouter t={{ name: "Bash", detail: "Build the workspace", desc: "Build the workspace", command: "npm run build", status: "pending", count: 1 }} />
+          {/* Resolved: no mark and no slot, so "Bash" sits flush at the header's left edge. */}
+          <ToolCardRouter t={{ name: "Bash", detail: "Run the unit suite", desc: "Run the unit suite", command: "npm test", status: "completed", durationMs: 32_000, count: 1 }} />
+          <ToolCardRouter t={{ name: "Bash", detail: "Typecheck", desc: "Typecheck", command: "npm run typecheck", status: "failed", exitCode: 1, durationMs: 12_000, count: 1 }} />
         </ThreadSlugContext.Provider>
       </div>
     </section>

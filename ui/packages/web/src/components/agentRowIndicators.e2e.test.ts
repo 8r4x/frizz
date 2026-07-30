@@ -48,7 +48,7 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
           // The left group's element order IS the mirrored shape: the mark slot (when the child has a
           // liveness reading at all), the kind label, then the title. `-1` for the slot means no slot
           // exists in the DOM — which is REQUIRED of a resolved child and a failure for a live one.
-          markSlotIndex: Array.from(left.children).findIndex((child) => child.classList.contains("fray-agent-mark")),
+          markSlotIndex: Array.from(left.children).findIndex((child) => child.classList.contains("fray-tool-mark")),
           labelIndex: Array.from(left.children).findIndex((child) => child.classList.contains("fray-bash-label")),
           // How far "Agent" sits from the header's own left edge. This is the number the reader SEES as
           // the gap: an empty reserved slot pushed it out ~13px on a card whose child had finished, which
@@ -176,6 +176,113 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
 
     assert.deepEqual(errors, [])
     assert.deepEqual(notFound.filter((path) => path !== "/favicon.ico"), [])
+  } finally {
+    await browser.close()
+  }
+})
+
+// ONE LIVENESS COLUMN. A background SHELL card says the same thing a dispatch card says — something is
+// alive behind this row — so it must say it in the same PLACE: the mark leading the header, not stranded
+// in the right-hand reading at the opposite edge of an otherwise identical card (maintainer 2026-07-30:
+// "the blue indicator for a background bash tool is still on the right instead of on the left … its
+// rendering should align with the agent tool call component"). The geometry is asserted AGAINST the agent
+// rows rather than against literals, because "aligned" is a relationship: if either card's slot moves,
+// the two must move together or this fails.
+test("a background shell card marks its liveness in the same slot as a dispatch card", {
+  skip: !baseUrl,
+  timeout: 60_000,
+}, async () => {
+  const { default: puppeteer } = await import("puppeteer")
+  const browser = await puppeteer.launch({
+    headless: "new",
+    args: ["--no-sandbox", "--force-color-profile=srgb"],
+  })
+  const page = await browser.newPage()
+  const errors: string[] = []
+  page.on("console", (message) => { if (message.type() === "error" && !message.text().includes("404")) errors.push(message.text()) })
+  page.on("pageerror", (error) => errors.push(String(error)))
+
+  try {
+    await page.setViewport({ width: 1000, height: 1800, deviceScaleFactor: 1 })
+    await page.goto(`${baseUrl}/operation-indicators-fixture.html`, { waitUntil: "networkidle0" })
+    const read = (selector: string) =>
+      page.$$eval(selector, (cards) =>
+        cards.map((card) => {
+          const header = card.querySelector<HTMLElement>(".fray-bash-header")!
+          const [left, right] = Array.from(header.children) as HTMLElement[]
+          const slot = left.querySelector<HTMLElement>(".fray-tool-mark")
+          const dot = slot?.firstElementChild
+          const headerBox = header.getBoundingClientRect()
+          const slotBox = slot?.getBoundingClientRect()
+          return {
+            label: left.querySelector<HTMLElement>(".fray-bash-label")!.innerText.trim(),
+            markSlotIndex: Array.from(left.children).findIndex((child) => child.classList.contains("fray-tool-mark")),
+            labelIndex: Array.from(left.children).findIndex((child) => child.classList.contains("fray-bash-label")),
+            labelOffset: Math.round(left.querySelector(".fray-bash-label")!.getBoundingClientRect().left - left.getBoundingClientRect().left),
+            // The slot's own geometry inside the header, to a tenth of a pixel: this is what "the same
+            // slot" means, and it is the number that a stray margin or a lost ink correction would move.
+            markLeft: slotBox ? Math.round((slotBox.left - headerBox.left) * 10) / 10 : null,
+            markMidY: slotBox ? Math.round((slotBox.top + slotBox.height / 2 - headerBox.top) * 10) / 10 : null,
+            markClass: dot ? dot.className : null,
+            // The dot's hue, composited over black — the ONE axis on which the two families differ.
+            markRgb: dot
+              ? ((color: string) => {
+                  const canvas = document.createElement("canvas")
+                  canvas.width = canvas.height = 1
+                  const ctx = canvas.getContext("2d")!
+                  ctx.fillStyle = "#000"
+                  ctx.fillRect(0, 0, 1, 1)
+                  ctx.fillStyle = color
+                  ctx.fillRect(0, 0, 1, 1)
+                  const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data
+                  return [r, g, b]
+                })(getComputedStyle(dot).backgroundColor)
+              : null,
+            indicators: card.querySelectorAll("[data-running-indicator]").length,
+            rightText: right.innerText.replace(/\s+/g, " ").trim(),
+          }
+        }),
+      )
+    const shells = await read("[data-shell-rows] .fray-bash")
+    const agents = await read("[data-agent-rows] .fray-bash")
+    assert.equal(shells.length, 6, "the fixture must cover live / quiet / untracked-detached / foreground / done / failed shell rows")
+
+    // THE SHAPE, row by row. Rows 0-2 are detached and marked; 3-5 have nothing live behind them and so
+    // render NO slot — an empty reservation is the defect the dispatch card already had to unlearn.
+    const MARKED = 3
+    for (const [index, row] of shells.entries()) {
+      const marked = index < MARKED
+      assert.equal(row.markSlotIndex, marked ? 0 : -1, `shell row ${index}: ${marked ? "the liveness mark must lead the header" : "a row with nothing live behind it renders no mark slot"}`)
+      assert.equal(row.labelIndex, marked ? 1 : 0, `shell row ${index}: the tool label must ${marked ? "follow the mark" : "lead the header"}`)
+      assert.equal(marked ? row.labelOffset > 0 : row.labelOffset === 0, true, `shell row ${index}: the label sits ${row.labelOffset}px from the left edge`)
+      // Exactly one, and never in the reading: the right-hand column carries WORDS now, plus the
+      // foreground spinner (row 3) which deliberately did not move.
+      assert.equal(row.indicators, index < MARKED || index === 3 ? 1 : 0, `shell row ${index}: one indicator at most`)
+    }
+
+    // ALIGNED, measured against the dispatch card: same slot position, same optical line, same class —
+    // agents[0] is the live child, shells[0] the live shell.
+    assert.equal(shells[0].markLeft, agents[0].markLeft, "the shell mark must start where the dispatch mark starts")
+    assert.equal(shells[0].markMidY, agents[0].markMidY, "the two marks must sit on one optical line")
+    assert.equal(shells[0].labelOffset, agents[0].labelOffset, "both labels must clear the slot by the same gap")
+
+    // …and differ on exactly ONE axis: the hue. Blue is the shell's, and it is not the dispatch accent.
+    assert.match(String(shells[0].markClass), /fray-live-dot--shell/)
+    assert.match(String(agents[0].markClass), /fray-live-dot--agent/)
+    const [r, g, b] = shells[0].markRgb!
+    assert.ok(b > r && b > g, `a live shell marks itself blue, got rgb(${shells[0].markRgb})`)
+    assert.notDeepEqual(shells[0].markRgb, agents[0].markRgb, "the two runtimes keep their two hues")
+
+    // A tracked-but-QUIET shell (a dev server waiting, a Monitor with no output file) breathes rather
+    // than pulses — and its mark must agree with its own reading. It shipped drawing the full-brightness
+    // live dot beside the word "stale", which is the row contradicting itself.
+    assert.match(String(shells[1].markClass), /fray-live-dot-quiet--shell/)
+    assert.equal(shells[1].rightText, "stale")
+    // The two detached-and-live readings: correlated to a live op, and merely flagged background.
+    assert.equal(shells[0].rightText, "running")
+    assert.equal(shells[2].rightText, "running")
+
+    assert.deepEqual(errors, [])
   } finally {
     await browser.close()
   }
