@@ -8,7 +8,7 @@ import { showToast } from "../store.ts"
 // It was previously invisible: reporting "the tool card under my third message renders wrong" meant
 // describing the message in prose and hoping the reader found the same bubble.
 //
-// This chip surfaces it. Copy it, paste it, and `node ui/scripts/debug-message.mjs <id>` prints BOTH
+// This chip surfaces it. Copy it, paste it, and `nub ui/scripts/debug-message.mjs <id>` prints BOTH
 // sides of the projection seam — the raw record(s) AND the projected TranscriptMessage — which is what
 // separates a projector bug (transcript.ts) from a renderer bug (ChatView.tsx) in one read.
 

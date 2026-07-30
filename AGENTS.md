@@ -84,6 +84,13 @@ it through the symlink, `codex exec` resolves it at `.agents/skills/adhoc-cdp/SK
 tooling scripts follow the same rule: one copy in an agent-neutral location (e.g. `ui/scripts/`),
 referenced from skills — never duplicated into agent-specific config trees.
 
+# Use Nub for the Node toolchain
+
+Prefer Nub over direct `node`, `npm`, `npx`, `pnpm`, `yarn`, `tsx`, or `ts-node` commands. Run
+JavaScript and TypeScript files with `nub <file>`, package scripts with `nub run <script>`, installed
+CLIs with `nubx <tool>`, tests with `nub --test`, and installs with `nub install`. Nub transpiles
+TypeScript but does not typecheck it, so keep `tsc --noEmit` and project typecheck gates separate.
+
 # Agent completion invariant
 
 Once spawned, an agent runs to its terminal return. Do not interrupt or cut off an active agent to

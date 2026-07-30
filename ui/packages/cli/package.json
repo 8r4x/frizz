@@ -21,7 +21,7 @@
     "runtime"
   ],
   "scripts": {
-    "prepack": "node ./scripts/prepare-package.mjs && node ./scripts/build-package.mjs"
+    "prepack": "nub ./scripts/prepare-package.mjs && nub ./scripts/build-package.mjs"
   },
   "dependencies": {
     "@parcel/watcher": "^2.5",

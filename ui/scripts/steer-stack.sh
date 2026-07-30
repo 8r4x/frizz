@@ -17,5 +17,5 @@ done
 LINE=$(grep -o '{"url".*}' "$LOG" | tail -1)
 HOME_DIR=$(echo "$LINE" | sed 's/.*"home":"\([^"]*\)".*/\1/')
 SOCKET=$(echo "$LINE" | sed 's/.*"socket":"\([^"]*\)".*/\1/')
-node scripts/seed-steer.mjs "$HOME_DIR" "$SOCKET" "$PROJ" "${3:-25}" >/dev/null
+nub scripts/seed-steer.mjs "$HOME_DIR" "$SOCKET" "$PROJ" "${3:-25}" >/dev/null
 echo "$LINE"

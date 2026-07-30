@@ -111,9 +111,9 @@ Why it works this way (all verified empirically on Chrome 150 / macOS):
 
 Failure at any opt-in app step (profile busy, install error, no shim found) falls back silently to
 the plain `--app` window. [`packages/web/public/favicon.svg`](./packages/web/public/favicon.svg) is
-the canonical icon artwork; `node scripts/generate-icons.mjs` regenerates its six tracked PNG
-derivatives, while `node scripts/generate-icons.mjs --check` detects drift. On macOS,
-`node scripts/generate-icons.mjs --refresh-app-icons` also refreshes the ICNS resource in idle,
+the canonical icon artwork; `nub scripts/generate-icons.mjs` regenerates its six tracked PNG
+derivatives, while `nub scripts/generate-icons.mjs --check` detects drift. On macOS,
+`nub scripts/generate-icons.mjs --refresh-app-icons` also refreshes the ICNS resource in idle,
 metadata-verified Fray PWA shims without launching Chrome; it stages and verifies each ad-hoc-signed
 bundle before swapping it into place. The manifest lives in
 [`packages/web/public/`](./packages/web/public); the window title is set at runtime to
