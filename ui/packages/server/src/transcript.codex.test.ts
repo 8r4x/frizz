@@ -910,3 +910,76 @@ test("Codex pagination uses the uncapped provider-neutral projection and walks o
   assert.deepEqual(first.messages.map((message) => message.text), ["user-154", "assistant-154"])
   assert.deepEqual(second.messages.map((message) => message.text), ["user-153", "assistant-153"])
 })
+
+// ---- an MCP take_screenshot renders the SHOT ----
+// Unlike view_image, a screenshot taken without `filePath` exists ONLY as the base64 data URL on its
+// result — there is no file to fall back to, so losing it in parsing loses the picture outright.
+
+function screenshotRollout(callId: string, args: Record<string, unknown>, imageUrl: string | null, resultText = "Took a screenshot of the current page's viewport.") {
+  const output: Array<Record<string, unknown>> = [
+    { type: "input_text", text: "Wall time: 0.0580 seconds\nOutput:" },
+    { type: "input_text", text: resultText },
+  ]
+  if (imageUrl) output.push({ type: "input_image", image_url: imageUrl })
+  return rollout([
+    { type: "response_item", payload: { type: "function_call", call_id: callId, name: "take_screenshot", namespace: "mcp__chrome_devtools", arguments: JSON.stringify(args) } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: callId, output } },
+  ])
+}
+
+test("an MCP take_screenshot decodes its inline shot and drops the '[image output]' stand-in", () => {
+  const [call] = parseCodexTranscript(screenshotRollout("shot1", { pageId: 1, format: "png" }, `data:image/png;base64,${PNG_1x1}`))[0].tools
+  assert.equal(call.name, "Screenshot")
+  // Before: the generic branch rendered `take_screenshot` captioned "png" — toolDetail's first-string-field
+  // fallback had picked the `format` arg, labelling every shot with its file extension.
+  assert.equal(call.detail, "viewport")
+  assert.ok(call.outputImage, "the shot is decoded to a servable path")
+  assert.match(call.outputImage!, /fray-tool-images[/\\][0-9a-f]{32}\.png$/)
+  assert.deepEqual(readFileSync(call.outputImage!), Buffer.from(PNG_1x1, "base64"))
+  // The wall-time envelope duplicates the card's own duration meta, and the stand-in captions a picture
+  // the reader can now see. Only the real sentence survives — and the duration still parses out of it.
+  assert.equal(call.output, "Took a screenshot of the current page's viewport.")
+  assert.equal(call.durationMs, 58)
+})
+
+test("a full-page screenshot says so instead of naming its file format", () => {
+  const [call] = parseCodexTranscript(screenshotRollout("shot2", { pageId: 1, format: "png", fullPage: true }, `data:image/png;base64,${PNG_1x1}`, "Took a screenshot of the full current page."))[0].tools
+  assert.equal(call.detail, "full page")
+  assert.ok(call.outputImage)
+})
+
+test("a screenshot that FAILED shows its error, not a picture", () => {
+  const denied = '[{"type":"text","text":"Error: Access denied: path /nope.png is not within any of the configured workspace roots."}]'
+  const [call] = parseCodexTranscript(screenshotRollout("shot3", { pageId: 1, filePath: "/nope.png" }, null, denied))[0].tools
+  assert.equal(call.name, "Screenshot")
+  assert.equal(call.detail, "/nope.png")
+  assert.equal(call.outputImage, undefined, "no inline image and no such file on disk")
+  assert.match(call.output ?? "", /Access denied/)
+})
+
+test("a screenshot data URL of an unservable type (svg) is skipped, never mislabelled png", () => {
+  const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>').toString("base64")
+  const [call] = parseCodexTranscript(screenshotRollout("shot4", { pageId: 1 }, `data:image/svg+xml;base64,${svg}`))[0].tools
+  assert.equal(call.outputImage, undefined)
+})
+
+test("a screenshot data URL whose bytes are not the type it claims is skipped (no broken img)", () => {
+  const garbage = Buffer.from("definitely not a png").toString("base64")
+  const [call] = parseCodexTranscript(screenshotRollout("shot5", { pageId: 1 }, `data:image/png;base64,${garbage}`))[0].tools
+  assert.equal(call.outputImage, undefined)
+})
+
+// REGRESSION GUARD for the display-side envelope strip: the exec wrapper's own
+// "Script completed / Wall time / Output:" envelope is parsed by unifiedToolResult and must be
+// untouched by it — status, exit code and body all exactly as before.
+test("the exec-wrapper envelope still parses unchanged (status, exit code, body)", () => {
+  const raw = rollout([
+    { type: "response_item", payload: { type: "custom_tool_call", call_id: "e1", name: "exec", input: `const r = await tools.exec_command({cmd:"ls"}); text(r);` } },
+    { type: "response_item", payload: { type: "custom_tool_call_output", call_id: "e1", output: `Script completed\nWall time: 1.5 seconds\nOutput:\n${JSON.stringify({ exit_code: 0, output: "a.txt\nb.txt" })}` } },
+  ])
+  const [call] = parseCodexTranscript(raw)[0].tools
+  assert.equal(call.name, "Bash")
+  assert.equal(call.status, "completed")
+  assert.equal(call.exitCode, 0)
+  assert.equal(call.output, "a.txt\nb.txt")
+})

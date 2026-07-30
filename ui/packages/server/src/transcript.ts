@@ -155,8 +155,8 @@ function userProjection(text: string, first: boolean): { displayText?: string; w
   // An UPWARD agent-to-agent message — a background child calling `SendMessage({to:"main"})` — is not
   // the human's text at all, so it is settled FIRST and returns on its own. Its body, not the
   // `<agent-message>` wrapper, is what a reader wants, and none of the projections below apply: the
-  // dispatch/wake strippers target envelopes this text never carries. `peerAgentId` is deliberately not
-  // set here — only the delivery record carries the sender's agentId, so the attachment arm adds it.
+  // dispatch/wake strippers target envelopes this text never carries. `peerDispatchId` is deliberately not
+  // set here — only the delivery record names the sender, so the attachment arm resolves and adds it.
   const peer = parseAgentMessage(text)
   if (peer) return { displayText: peer.body, peerFrom: peer.from }
   const displayText = userDisplayText(text, first)
@@ -316,6 +316,11 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
   // launchTaskId). Needed because two terminal signals carry NO <tool-use-id>: the Monitor-timeout
   // notification (task-id only) and a manual TaskStop result (task_id only).
   const backgroundTaskIds = new Map<string, string>()
+  // A CHILD's own agentId → the tool_use id of the Agent dispatch that spawned it, captured from the
+  // launch ack (see attachToolResults). An upward report names its sender by agentId but every drawer
+  // lookup is keyed by the dispatch id, so this is the translation the peer arm needs. Forward-only, and
+  // that is sound: a child must exist before it can report, so its ack always precedes its message.
+  const childDispatchIds = new Map<string, string>()
   // For "Thought for Ns" events: the previous SUBSTANTIVE (assistant/user) record's timestamp, and the
   // message id we last emitted a thinking event for (so a turn's several thinking records emit ≤1 line).
   let prevTs: string | undefined
@@ -414,7 +419,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
     const evs = completionEvents(rec, agentDispatches, backgroundShells, backgroundTaskIds)
     if (evs.length > 0) {
       // A user-record carrier can in principle also carry tool_result blocks — never skip their back-fill.
-      attachToolResults(rec, pendingTools, backgroundShells, backgroundTaskIds)
+      attachToolResults(rec, pendingTools, backgroundShells, backgroundTaskIds, childDispatchIds)
       evs.forEach((ev, i) => {
         ev.sourceId = i === 0 ? sourceId : `${sourceId}#${i}` // keep sourceIds unique per rendered message
         out.push(ev)
@@ -555,6 +560,10 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
       if (peerOrigin && att.commandMode === "prompt") {
         const str = (v: unknown) => (typeof v === "string" ? v.trim() : "")
         const senderTaskId = str(peerOrigin.senderTaskId)
+        // TRANSLATE the sender's agentId into its DISPATCH tool_use id — the only id a drawer can resolve
+        // (see peerDispatchId in shared). Absent when the ack was never seen, in which case the report line
+        // stays plain text rather than becoming a link to an "unavailable" drawer.
+        const dispatchId = senderTaskId ? childDispatchIds.get(senderTaskId) : undefined
         // Take the entry BEFORE resolving: resolveQueued de-registers it, and we still need the message
         // object it points at in order to stamp the id onto the bubble already rendered in `out`.
         const entry = prompt.trim() ? findQueued(prompt) : undefined
@@ -562,7 +571,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
           resolveQueued(prompt)
           // Guard on peerFrom: only a bubble the enqueue actually recognized as a child's report gets the
           // child's id. Stamping it on an unattributed bubble would assert an origin nothing established.
-          if (senderTaskId && entry.message.peerFrom) entry.message.peerAgentId = senderTaskId
+          if (dispatchId && entry.message.peerFrom) entry.message.peerDispatchId = dispatchId
           if (thisTs) prevTs = thisTs // a child's report is a real turn, exactly like a human follow-up
           lastAssistantId = null // …so it breaks the assistant-record merge chain too
         } else {
@@ -582,7 +591,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
               text: prompt || body, // raw when we have it — it is the key a later removal matches on
               displayText: body,
               peerFrom: from,
-              ...(senderTaskId ? { peerAgentId: senderTaskId } : {}),
+              ...(dispatchId ? { peerDispatchId: dispatchId } : {}),
               tools: [],
               parts: [],
               at: thisTs,
@@ -598,7 +607,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
     if (rec.type === "user") {
       // Back-fill any Read excerpts this record carries FIRST — a tool_result record is dropped as a
       // human bubble (isMeta / tool_result-only), but it still holds the file content we want to show.
-      attachToolResults(rec, pendingTools, backgroundShells, backgroundTaskIds)
+      attachToolResults(rec, pendingTools, backgroundShells, backgroundTaskIds, childDispatchIds)
       // isMeta marks harness-injected user records (hook feedback, reminders, autonomous /loop
       // wakeups) — plumbing the human never typed, so it must not render as their bubble. But an
       // autonomous /loop wakeup is ENQUEUED like any follow-up (emitting a gray queued bubble),
@@ -1021,26 +1030,48 @@ function persistResultImage(content: unknown, idKey: string): string | undefined
     if (!source || typeof source !== "object") continue
     const s = source as { type?: string; media_type?: string; data?: string }
     if (s.type !== "base64" || typeof s.data !== "string" || !s.data) continue
-    const ext = IMAGE_MEDIA_EXT[typeof s.media_type === "string" ? s.media_type : ""]
-    if (!ext) continue // unrecognized/absent media type (incl. svg) — never guess; let the text result win
-    const name = createHash("sha256").update(idKey).digest("hex").slice(0, 32) // hashes the id, not the image (cheap)
-    const path = join(SCREENSHOT_CACHE_DIR, `${name}.${ext}`)
-    try {
-      if (existsSync(path)) return path // already persisted this tool call — no decode, no write
-      if (s.data.length > SCREENSHOT_MAX_BASE64) return undefined
-      const buf = Buffer.from(s.data, "base64")
-      if (buf.length === 0 || !looksLikeImage(buf, ext)) continue // not the image it claims — skip → text fallback
-      mkdirSync(SCREENSHOT_CACHE_DIR, { recursive: true })
-      const tmp = join(SCREENSHOT_CACHE_DIR, `.${name}.${process.pid}.${screenshotTmpSeq++}.tmp`)
-      writeFileSync(tmp, buf)
-      renameSync(tmp, path) // atomic publish
-      pruneScreenshotCache()
-      return path
-    } catch {
-      return undefined
-    }
+    const persisted = persistBase64Image(s.media_type, s.data, idKey)
+    if (persisted) return persisted
   }
   return undefined
+}
+
+// The codex form of the same picture: a `data:image/png;base64,…` URL off an `input_image` result part
+// (an MCP `take_screenshot`, which for a screenshot taken without `filePath` is the ONLY copy that
+// exists). Same cache, same id-derived name, same guarantees as the Claude block above.
+function persistDataUrlImage(dataUrl: string | undefined, idKey: string): string | undefined {
+  if (!dataUrl || !idKey) return undefined
+  const match = /^data:([\w.+-]+\/[\w.+-]+);base64,(.*)$/s.exec(dataUrl)
+  if (!match) return undefined // a non-base64 data URL (or a plain URL) is not ours to decode
+  return persistBase64Image(match[1], match[2], idKey)
+}
+
+// Decode base64 image bytes to the servable cache ONCE and return the absolute path. The filename derives
+// from `idKey` (the tool_use / call id), NOT the bytes, so the existsSync guard short-circuits BEFORE the
+// expensive decode + write: the transcript parser runs on every poll and must not re-decode already
+// persisted screenshots each time. Persists only a KNOWN servable image type whose bytes match its magic
+// signature — a mislabeled or svg payload is skipped so the card falls back to text rather than mounting a
+// broken <img>. Publishes atomically (temp + rename) so a concurrent /local-image read never sees a
+// half-written file. Any fs error yields undefined.
+function persistBase64Image(mediaType: string | undefined, data: string, idKey: string): string | undefined {
+  const ext = IMAGE_MEDIA_EXT[typeof mediaType === "string" ? mediaType.toLowerCase() : ""]
+  if (!ext || !data) return undefined // unrecognized/absent media type (incl. svg) — never guess
+  const name = createHash("sha256").update(idKey).digest("hex").slice(0, 32) // hashes the id, not the image (cheap)
+  const path = join(SCREENSHOT_CACHE_DIR, `${name}.${ext}`)
+  try {
+    if (existsSync(path)) return path // already persisted this tool call — no decode, no write
+    if (data.length > SCREENSHOT_MAX_BASE64) return undefined
+    const buf = Buffer.from(data, "base64")
+    if (buf.length === 0 || !looksLikeImage(buf, ext)) return undefined // not the image it claims
+    mkdirSync(SCREENSHOT_CACHE_DIR, { recursive: true })
+    const tmp = join(SCREENSHOT_CACHE_DIR, `.${name}.${process.pid}.${screenshotTmpSeq++}.tmp`)
+    writeFileSync(tmp, buf)
+    renameSync(tmp, path) // atomic publish
+    pruneScreenshotCache()
+    return path
+  } catch {
+    return undefined
+  }
 }
 
 // Max source image we will copy (bytes). A statSync check BEFORE readFileSync bounds memory — never load
@@ -1144,6 +1175,7 @@ function attachToolResults(
   pending: Map<string, PendingClaudeTool>,
   backgroundShells: Map<string, { at?: string; call: TranscriptToolCall }>,
   backgroundTaskIds: Map<string, string>,
+  childDispatchIds: Map<string, string>,
 ): void {
   const content = rec.message?.content
   if (!Array.isArray(content)) return
@@ -1152,6 +1184,18 @@ function attachToolResults(
     const entry = pending.get(b.tool_use_id)
     if (!entry) continue
     pending.delete(b.tool_use_id)
+    // THE ONE RECORD WHERE A CHILD'S TWO IDENTITIES MEET. An Agent launch ack carries the new child's own
+    // `agentId` in its structured `toolUseResult`, beside the `tool_use_id` of the dispatch that spawned
+    // it. Nothing else in the transcript pairs them: a later upward report names its sender by agentId
+    // (`origin.senderTaskId`), while every drawer lookup is keyed by the DISPATCH id. Recorded here so the
+    // peer arm can turn one into the other. Gated on `entry.call.agentId`, which the projector sets only
+    // for an Agent dispatch — so a Bash or Monitor ack can never land in this map.
+    const ackAgentId = typeof rec.toolUseResult?.agentId === "string" ? rec.toolUseResult.agentId.trim() : ""
+    // One tool_use can project several cards, so find the one carrying `agentId` — the projector sets it
+    // only for an Agent dispatch (to the tool_use id itself), which both identifies the dispatch and
+    // filters out a Bash or Monitor ack that happens to carry an agentId of its own.
+    const dispatchId = entry.calls.find((c) => typeof c.agentId === "string" && c.agentId)?.agentId
+    if (ackAgentId && dispatchId) childDispatchIds.set(ackAgentId, dispatchId)
     const text = toolResultText(b.content)
     // A manual TaskStop is a terminal signal for the op it killed — the SAME correlation the tailer
     // reads (its structured result carries `task_id`; no notification ever follows). Without this a
@@ -1728,6 +1772,15 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
           pendingCalls.delete(ev.id)
           const result = codexToolResult(ev.text)
           if (result.durationMs === undefined) result.durationMs = elapsedBetween(pending.at, ev.at)
+          // A result that CARRIED a picture (an MCP `take_screenshot`) → decode the data URL to the
+          // servable cache so the card shows the shot instead of the "[image output]" stand-in. Keyed on
+          // the call id, so a re-projection on every poll short-circuits on existsSync. A failed/cancelled
+          // call is skipped for the same reason the Claude path skips it: whatever it returned is not the
+          // screenshot that was asked for.
+          if (ev.image && result.status !== "failed" && result.status !== "cancelled") {
+            const shot = persistDataUrlImage(ev.image, ev.id)
+            if (shot) (pending.owner ?? pending).call.outputImage = shot
+          }
           if (pending.owner) {
             // A known write_stdin poll belongs to its originating exec_command disclosure. The wrapper
             // may complete after yielding without a process exit, so only an explicit exit_code ends it.
@@ -1932,6 +1985,20 @@ function codexDirectToolCall(name: string, obj: Record<string, unknown>, callId?
       // for the "View image" label — a card whose whole body was the literal text "[image output]".
       const path = strField(obj.path) ?? strField(obj.file_path)
       return viewImageCall(path, callId ?? path)
+    }
+    case "take_screenshot": {
+      // The chrome-devtools MCP shot. Its picture normally arrives INLINE on the result (an
+      // `input_image` data URL, decoded in the tool-result branch of projectCodexTranscript) — this case
+      // exists for the header, which the generic branch rendered as `take_screenshot  png`: `toolDetail`
+      // has no case for these args, so its first-string-field fallback picked `format`, captioning every
+      // shot with its file extension. Say what was actually captured instead.
+      const filePath = strField(obj.filePath) ?? strField(obj.file_path) ?? strField(obj.path)
+      const detail = filePath ? redactToolPayload(filePath) : obj.fullPage === true ? "full page" : "viewport"
+      // The `--filePath` variant writes to DISK and returns no inline image. Copy it in the same way a
+      // view_image call is copied, so that shape renders too; a missing/denied path just yields undefined
+      // and the inline decode (when there is one) overwrites this at result time either way.
+      const fromDisk = filePath ? persistSentFile(filePath, callId ?? filePath) : undefined
+      return { name: "Screenshot", detail, ...(fromDisk ? { outputImage: fromDisk } : {}) }
     }
     default:
       return undefined
@@ -2431,7 +2498,26 @@ function applyCodexToolResult(call: TranscriptToolCall, result: CodexToolResult)
 }
 
 function codexResultSummary(name: string, output: string): string | undefined {
-  if (name === "View image" && output === "[image output]") return undefined
+  // "[image output]" is OUR OWN stand-in for a picture (backend/codex stringifyOutput), minted so the
+  // base64 never enters the text channel. The card now renders the real image, so every occurrence of the
+  // marker is a caption for something the reader can already see — strip it wherever it appears rather
+  // than only when it is the entire body, because an MCP screenshot glues it onto its result sentence
+  // ("Took a screenshot of the current page's viewport.[image output]").
+  // An MCP tool result opens with its own envelope — "Wall time: 0.0580 seconds\nOutput:" — and because
+  // the parts join with no separator, its `Output:` label runs straight into the first real sentence.
+  // The wall time is ALREADY the card's duration meta, so displaying it again under a screenshot is the
+  // same number twice and a dangling label. Stripped for DISPLAY ONLY, here rather than in
+  // unifiedToolResult: that function also derives status/exitCode/sessionId, and widening its header
+  // match would reroute every MCP result through a parser written for the exec wrapper.
+  let text = output.replace(/^Wall time:?\s*[0-9.]+ seconds\r?\nOutput:[ \t]*\r?\n?/, "")
+  // "[image output]" is OUR OWN stand-in for a picture (backend/codex stringifyOutput), minted so the
+  // base64 never enters the text channel. The card now renders the real image, so every occurrence of the
+  // marker is a caption for something the reader can already see — strip it wherever it appears rather
+  // than only when it is the entire body, because an MCP screenshot glues it onto its result sentence
+  // ("Took a screenshot of the current page's viewport.[image output]").
+  text = text.split("[image output]").join("").trim()
+  if (!text) return undefined
+  if (text !== output) output = text
   if (name === "Agents") {
     try {
       const parsed = JSON.parse(output) as { agents?: Array<{ agent_status?: unknown }> }
