@@ -19,7 +19,7 @@ import { HeaderActions } from "./HeaderActions.tsx"
 import { ThreadLifecycleFooter } from "./ThreadLifecycleFooter.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
-import { QueueSubAgentLines } from "./QueueSubAgentLines.tsx"
+import { QueueSubAgentLines, hasQueueSubAgentLines } from "./QueueSubAgentLines.tsx"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { LastActive } from "./LastActive.tsx"
 import { CopyTerminalCommandButton, useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
@@ -1222,13 +1222,38 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
         submitOverride={sendMessage}
         ops={
           <>
-            <QueueSubAgentLines slug={thread.id} subAgents={thread.subAgents ?? []} />
+            {/* ONE column, three positional paddings, whichever of the two lists happen to be present:
+                6px hanging off the prompt box, 2px between rows, 8px of air before the lifecycle
+                footer. The bottom 8px rides the LAST list — the shell strip when there is one (it
+                carries its own pb-2 below), these lines when there is not. Without that, a card whose
+                only children were sub-agents sat 8px tighter to the footer than one that also had a
+                shell: the same "spacing differs for sub-agents versus background shells" reading, one
+                card over. `bgShells` is the strip's own render condition (it filters nothing at sheet
+                density and this call site excludes agents), so the two agree by construction. */}
+            <QueueSubAgentLines
+              slug={thread.id}
+              subAgents={thread.subAgents ?? []}
+              className={(thread.bgShells ?? []).length > 0 ? "px-1 pt-1.5" : "px-1 pb-2 pt-1.5"}
+            />
             {/* Background shells / Monitors remain a runtime strip below the reply area. Live sub-agents are
                 intentionally excluded here because their compact ⤷ child lines sit directly above it.
                 It HANGS off the composer at the same pt-1.5 as those child lines — the prompt box's own
                 bottom padding already supplies the optical air, so a larger gap here reads as a break —
-                and carries its own pb so the last row still breathes before the lifecycle footer. */}
-            <BackgroundOpsStrip slug={thread.id} includeAgents={false} className="px-1 pb-2 pt-1.5" />
+                and carries its own pb so the last row still breathes before the lifecycle footer.
+
+                UNLESS the sub-agent lines are already there. Then this strip is not hanging off the
+                composer at all, it is CONTINUING the column those lines opened, so it takes the rows'
+                own 2px pitch instead of the 6px hang. With pt-1.5 in that case the ⤷ agent row sat 6px
+                off the ⤷ shell row beneath it while the shell rows sat 2px apart from each other —
+                three times the pitch, inside one column of identical rows, which read as a group break
+                that means nothing (maintainer 2026-07-30). MEASURED in queue-ops-spacing-fixture:
+                6/2/2 before, 2/2/2 after. The drawer never had the split — it renders agents and
+                shells inside ONE BackgroundOpsStrip, so its column has always been a flat 2px. */}
+            <BackgroundOpsStrip
+              slug={thread.id}
+              includeAgents={false}
+              className={`px-1 pb-2 ${hasQueueSubAgentLines(thread.subAgents ?? []) ? "pt-0.5" : "pt-1.5"}`}
+            />
           </>
         }
       />

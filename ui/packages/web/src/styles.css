@@ -247,12 +247,19 @@ html[data-font="sans"] .fray-bash .md-body {
   animation: fray-live-breathe 2.6s ease-in-out infinite;
 }
 .fray-live-dot-quiet--shell { --live-dot: var(--color-shell); }
+/* Breathes on OPACITY ALONE. It used to scale 0.82→1 as well, which made the quiet dot read as a
+   physically SMALLER mark than the bright one beside it rather than a calmer one — 4.92px against
+   6px, and at the same keyframe as the 0.4 opacity trough, so the smallest instant was also the
+   faintest (maintainer 2026-07-30: "I don't understand why the blue dot is so small for an idle
+   shell… it should be the same size as the other ones"). Size is what says "this is the same kind of
+   mark"; tone and motion are what say "quiet". Only the latter two may vary. */
 @keyframes fray-live-breathe {
-  0%, 100% { opacity: 0.4; transform: scale(0.82); }
-  50% { opacity: 0.9; transform: scale(1); }
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.9; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .fray-live-dot-quiet { animation: none; opacity: 1; transform: none; background: transparent; border: 1.5px solid color-mix(in srgb, var(--live-dot) 55%, var(--color-muted)); }
+  /* No `transform: none` any more — the keyframes stopped scaling, so there is nothing to undo. */
+  .fray-live-dot-quiet { animation: none; opacity: 1; background: transparent; border: 1.5px solid color-mix(in srgb, var(--live-dot) 55%, var(--color-muted)); }
 }
 @supports not (font-variant-caps: all-petite-caps) {
   .petite-caps {

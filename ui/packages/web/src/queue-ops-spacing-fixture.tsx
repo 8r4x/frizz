@@ -51,10 +51,13 @@ const thread = {
     : [],
   // ?shells=0 is the CONTROL case: with no live ops the strip unmounts, so the composer must still
   // sit correctly above the lifecycle footer on the wrapper's own padding.
+  // Every row carries an `id` so it renders the dismiss × — the shipped row has had one on all three
+  // densities since 2026-07-30, and the × is the tallest thing on the line, so a fixture without it
+  // measures a row height the app never draws.
   bgShells: new URLSearchParams(location.search).get("shells") === "0" ? [] : [
-    { label: "Poll panes for perm-prompt false positives", startedAt: "2026-07-18T09:06:00.000Z", state: "stale" },
-    { label: "Poll panes for near-miss perm markers", startedAt: "2026-07-18T09:07:00.000Z", state: "running" },
-    { label: "Record 5min of fray board SSE", startedAt: "2026-07-18T09:09:00.000Z", state: "running" },
+    { id: "shell-a", label: "Poll panes for perm-prompt false positives", startedAt: "2026-07-18T09:06:00.000Z", state: "stale" },
+    { id: "shell-b", label: "Poll panes for near-miss perm markers", startedAt: "2026-07-18T09:07:00.000Z", state: "running" },
+    { id: "shell-c", label: "Record 5min of fray board SSE", startedAt: "2026-07-18T09:09:00.000Z", state: "running" },
   ],
   lastActivityAt: "2026-07-18T09:11:00.000Z",
 } as unknown as ThreadViewModel

@@ -19,11 +19,32 @@ import { ChildOpRow } from "./ChildOpRow.tsx"
 // always warned against: the card names the live work, and retiring a child that finished without
 // signalling is the one action that reading provokes. Everything else — the kind tag, the counters, the
 // profile — still stays off the card.
-export function QueueSubAgentLines({ slug, subAgents }: { slug: string; subAgents: readonly SubAgentView[] }) {
+// Whether this card will actually draw any ⤷ child lines. The card renders these lines and the
+// background-ops strip as two SIBLING lists in one visual column, so the strip has to know whether it
+// is opening that column or continuing it (see TodosView) — and it must get the same answer this
+// component does. Exported from here, and used by the component itself, so the two cannot drift.
+export function hasQueueSubAgentLines(subAgents: readonly SubAgentView[]): boolean {
+  return visibleChildOps(subAgents, "card").length > 0
+}
+
+export function QueueSubAgentLines({
+  slug,
+  subAgents,
+  // The ops COLUMN's padding, which is positional and therefore the caller's to set — the same prop
+  // BackgroundOpsStrip takes, for the same reason. These lines and that strip stack into one column,
+  // so only the list that ends the column may carry its bottom air (8px before the lifecycle footer);
+  // a list with the strip beneath it must not, or the two paddings sum into a gap between them.
+  // Default = the column's opening padding with no bottom air, i.e. what a lone fixture wants.
+  className = "px-1 pt-1.5",
+}: {
+  slug: string
+  subAgents: readonly SubAgentView[]
+  className?: string
+}) {
   const visible = visibleChildOps(subAgents, "card")
   if (visible.length === 0) return null
   return (
-    <div data-queue-subagents className="flex min-w-0 flex-col gap-0.5 px-1 pt-1.5">
+    <div data-queue-subagents className={`flex min-w-0 flex-col gap-0.5 ${className}`}>
       {visible.map((agent, index) => (
         <ChildOpRow
           key={agent.id ?? `${agent.startedAt}-${index}`}
