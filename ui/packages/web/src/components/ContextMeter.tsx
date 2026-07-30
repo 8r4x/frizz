@@ -1,8 +1,9 @@
 import type { ThreadView } from "@fray-ui/shared"
 import { Tooltip } from "./Tooltip.tsx"
 
-// HOW FULL THE SESSION'S CONTEXT IS — a glanceable donut in the bottom-left of every thread footer
-// (queue card, drawer, full-screen), rendered once here because all three share ThreadLifecycleFooter.
+// HOW FULL THE SESSION'S CONTEXT IS — a dial and its percentage in the bottom-left of every thread
+// footer (queue card, drawer, full-screen), rendered once here because all three share
+// ThreadLifecycleFooter.
 //
 // It is a READING, never an estimate. Both halves of the fraction are measured by the provider and
 // travel together on ThreadView.context; the server omits the field entirely unless it has both, so
@@ -16,14 +17,32 @@ import { Tooltip } from "./Tooltip.tsx"
 // the footer's own text scale decides how big this is and what tone it takes — exactly the discipline
 // ChildOpRow's duration reading landed on. Do not put a px size on it.
 //
-// The numbers live in the tooltip, not on the surface. A footer is a control strip; spending a line of
-// it on "348,950 / 1,000,000" would make a background reading compete with the lifecycle buttons.
+// THE PERCENT IS ON THE SURFACE; the FRACTION stays in the tooltip. A bare 12.6px dial at 60% muted was
+// unfindable in practice — on the `/thread/<slug>/full` page it sits alone at the left end of a ~900px
+// strip, 746px from the nearest ink, and reads as no indicator at all rather than as a quiet one. (That
+// is what "why is there no context indicator in the full UI?" turned out to mean: it was rendering, and
+// invisible.) So the readout now says its number, mirroring this app's OWN usage readout — QuotaChip is
+// a provider mark plus a `tabular-nums` percentage, and this is the same reading in the same shape. The
+// original note stands for the part that was actually right: "348,950 / 1,000,000" IS a line of
+// telemetry and would compete with the lifecycle buttons, so it stays in the tooltip. Three characters
+// do not. `tabular-nums` so a live reading ticking 8% → 87% cannot jitter the dial beside it.
 
-// Geometry for a 16-unit viewBox donut. r is chosen so the stroke sits fully inside the box.
-const R = 6
+// Geometry for a 16-unit viewBox donut. r + half the stroke is the OUTER edge, held at 7.5 so the ring
+// sits fully inside the box — thinning the stroke therefore RAISES r rather than shrinking the glyph.
+const R = 6.5
+const STROKE = 2
 const CIRCUMFERENCE = 2 * Math.PI * R
+// NO ink nudge, and that is a MEASURED result rather than an omission. A dial beside digits is the exact
+// icon-beside-text trap the visual-review skill exists for — `items-center` centers the svg's BOX while
+// the eye reads its INK — so it was measured: the ring's ink is a circle centered in its own viewBox, and
+// against the digits at the footer's 12px/17.14px scale it lands 0.21px high (0.40px at 24px, i.e.
+// ~0.0175em, so the error is proportional, not a fixed pixel debt). That is under the
+// device grid and well below the ~0.3px floor where a transform starts costing more sharpness than it
+// buys. The two things that make it come out this small are the 1.43 line-height's generous half-leading
+// and the `%`'s own slight descender, which together put the digits' ink centre within a fifth of a pixel
+// of the line box centre — so if either the label or the footer's leading changes, RE-MEASURE.
 
-/** Percent for display: floored, so a dial only reads 100% when the context genuinely is full. */
+/** Percent for display: floored, so the readout only says 100% when the context genuinely is full. */
 function displayPercent(tokens: number, window: number): number {
   return Math.max(0, Math.min(100, Math.floor((tokens / window) * 100)))
 }
@@ -45,28 +64,29 @@ export function ContextMeter({ thread }: { thread: ThreadView }) {
         data-context-meter
         data-context-percent={percent}
         aria-label={label}
-        className="flex shrink-0 items-center text-muted/60"
+        className="flex shrink-0 items-center gap-1 text-muted/60"
       >
         <svg
           viewBox="0 0 16 16"
-          className="h-[1.05em] w-[1.05em]"
+          className="h-[1.05em] w-[1.05em] shrink-0"
           aria-hidden
           // Start the arc at 12 o'clock and fill clockwise — the direction every dial is read in.
           style={{ transform: "rotate(-90deg)" }}
         >
           {/* The track: the same ink at low opacity, so the empty part of the dial reads as unfilled
               rather than as a border of some other element. */}
-          <circle cx="8" cy="8" r={R} fill="none" stroke="currentColor" strokeOpacity={0.3} strokeWidth={3} />
+          <circle cx="8" cy="8" r={R} fill="none" stroke="currentColor" strokeOpacity={0.3} strokeWidth={STROKE} />
           <circle
             cx="8"
             cy="8"
             r={R}
             fill="none"
             stroke="currentColor"
-            strokeWidth={3}
+            strokeWidth={STROKE}
             strokeDasharray={`${CIRCUMFERENCE * fraction} ${CIRCUMFERENCE}`}
           />
         </svg>
+        <span className="tabular-nums">{percent}%</span>
       </span>
     </Tooltip>
   )
