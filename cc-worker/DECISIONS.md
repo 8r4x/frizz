@@ -31,6 +31,7 @@ what was ported from the orchestrator `cc/` plugin, what was dropped, and why.
 | --- | --- | --- | --- |
 | `session-seed.mjs` | SessionStart (startup/resume/clear/compact) | cc `session-seed.mjs` | Injects the single-thread worker contract + the bound slug + its file path; re-grounds on compact. Also writes cc's `off` sentinel defensively (see interplay). |
 | `precompact-instructions.mjs` | PreCompact (auto/manual) | new — no cc equivalent | Steers WHAT SURVIVES compaction: emits an editorial brief asking the summarizer to preserve the high-level approach (plan, alternatives rejected, rationale) at high fidelity, plus a closing "Re-grounding before continuing:" section naming the scratchpad path and the files to re-read. **PLAIN STDOUT is the channel** — cc's usual `hookSpecificOutput` JSON would be handed to the summarizer as its literal instructions. Skips sub-agent contexts (the derived scratchpad path is only guaranteed for the top-level worker). |
+| `carryover.mjs` | SessionStart (startup/resume/clear/compact) + PreCompact (auto/manual) + UserPromptSubmit | new — no cc equivalent | The agent-authored per-session brief at `.fray/threads/<sid>/carryover.md`, re-injected VERBATIM at every session start and after every compaction. Three modes on one script: `--mode=session-start` (JSON `additionalContext`, the load-bearing channel), `--mode=precompact` (**plain stdout**, hands the brief to the summarizer as a second channel), `--mode=nudge` (asks for a refresh once context has grown past `STALE_TOKENS` since the brief was last written). NOT gated on `FRAY_UI_THREAD` — the mechanism is useful to any session; `--via=project` marks the repo-local registration and defers to this one inside a fray worker. |
 | `agent-dispatch.mjs` | PreToolUse(Agent) | cc `agent-dispatch.mjs` | Enforces `run_in_background:true`, strips `name`/`team_name`, appends a worker-flavored orchestration epilogue. |
 | `agent-bind.mjs` | PostToolUse(Agent) | cc `agent-bind.mjs` (verbatim behavior) | Records `agentId → thread` into `.fray/.agent-bindings.jsonl` in cc's exact format, so a worker's THREAD-tagged helper renders on the fray-ui board's per-thread liveness. |
 | `stop-flush.mjs` | Stop | cc `fray-stop-reminder.mjs` (dirty-check idea only) | If the worker's ONE thread file wasn't edited since the last rest, nudges it to flush its state (mtime dirty-check, cooldown-limited, least-alarming `additionalContext` channel). |
@@ -525,3 +526,60 @@ re-reads FRESH every session and sub-agents load. That reaches NEW sessions of b
 frozen snapshot. It does NOT retroactively reach an already-running frozen session; restart such a
 session to pick up a rule change. A tool-layer enforcement hook (`deny-pr` PreToolUse) was built and
 then deliberately reverted as overkill for a single-user repo — the doc reach is the intended fix.
+
+## 2026-07-30: Carryover — a per-session brief the harness re-injects, so context survives compaction
+
+The two existing mitigations for compaction loss both routed the context through a DECISION, and that
+is where they leaked. The scratchpad survives on disk but only helps if the post-compaction turn
+chooses to read it — a model decision, and it gets skipped. `precompact-instructions.mjs` steers the
+summarizer, but the summary is a lossy retelling by a model that never saw the reasoning, and it is
+regenerated from scratch every time. `carryover.mjs` removes the decision: whatever is in
+`.fray/threads/<sid>/carryover.md` is spliced into the context window by the harness, before the
+model's first token. The model cannot forget to read it and the summarizer cannot paraphrase it away.
+
+**The file is authored by the AGENT, not by the hook** — it is a plain markdown file written with the
+Write tool. Rejected: a CLI (`fray carryover set …`) and a dedicated MCP tool. Both add something to
+learn and to keep installed, and neither buys anything over a file the agent already knows how to
+write and a human can hand-edit mid-session (an edit is just an mtime change, which the nudge treats
+exactly like an agent's write — pinned by a test).
+
+**Keyed by session id**, taken from the hook's stdin `session_id` and falling back to
+`CLAUDE_CODE_SESSION_ID` via the shared `currentSessionId`. Those two are equal (already relied on by
+the activation sentinel), which is what lets the AGENT compute its own path from a Bash/Write call.
+Stored beside the scratchpad rather than under `.fray/.session-state/` because the agent is already
+told the thread dir. `.fray/` is gitignored in full, so a brief never reaches a commit, and nothing
+enumerates `.fray/threads/*` to build the board (threads come from the DB), so writing a directory
+there for a non-fray session cannot conjure a phantom thread card.
+
+**Staleness is measured in context TOKENS, and as GROWTH, never an absolute.** The transcript's
+newest usage record gives live context fill (`input + cache_creation + cache_read`); the hook reads
+only the last 256 KB of the file, since transcripts reach tens of megabytes here. An absolute
+threshold is unusable because the window is not knowable from a hook — a real compaction in this
+project fired at preTokens 935,291 on a 1M-window session while a 200k session compacts near 160k.
+Growth since the last write is window-independent and self-resetting. Wall clock and transcript BYTES
+were both rejected: neither tracks context pressure (one large tool result adds megabytes to the file
+without moving the window much).
+
+**Why a nudge at all.** Without it the file is never written and the whole mechanism is decorative —
+an agent that is never reminded does not stop to journal. It is the one part that is a heuristic, so
+it is the one part with a cheap escape hatch: `FRAY_CARRYOVER_STALE_TOKENS` retunes it and
+`FRAY_CARRYOVER=off` disables every mode.
+
+**Registered twice, deduped deterministically.** The plugin registration ships to every fray worker
+everywhere. The repo's own `.claude/settings.json` carries the same three registrations with
+`--via=project` so plain (non-fray) `claude` sessions in this repo get the behavior too; that flag
+exits when `FRAY_UI_THREAD` is set, because such a session already loads the plugin and would
+otherwise inject the brief twice. A flag plus an env check — no lock file, no race.
+
+VERIFIED LIVE against cli 2.1.220, in an isolated `/tmp` project, not by proxy:
+- `SessionStart:startup` fired (exit 0, 63 ms) and a real session quoted a sentinel that existed ONLY
+  in the brief — with **zero tool calls** in the transcript, so it came from context, not a file read.
+- A real `/compact` produced a `compact_boundary`, and `SessionStart:compact` then delivered a brief
+  whose sentinel had been swapped to a value that had NEVER appeared in that session's context — so
+  the post-compaction injection demonstrably re-reads the file rather than echoing the summary.
+- `PreCompact:manual [carryover.mjs --mode=precompact] completed with status 0` in the hook debug log.
+- The `UserPromptSubmit` nudge fired live and reported ~31k tokens computed from the real transcript,
+  confirming the usage parser works against Claude Code's actual format and not just a fixture.
+
+Regression net: `ui/packages/server/src/carryover-hook.test.ts` executes the real script over its
+wire contract (argv + stdin JSON + stdout) rather than asserting on its source.
