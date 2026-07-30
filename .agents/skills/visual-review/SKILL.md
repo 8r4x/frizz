@@ -199,6 +199,36 @@ the raw numbers showed the real thing — an ~11.5px box centred on a flex line 
 scale-invariant (11.5px wanted -0.137em, 23px and 46px both wanted -0.094em). No single `em` zeroes
 both, so correct for the size that SHIPS and say so in the comment.
 
+### Rule 2b — geometry ink is BLIND to what a mark paints outside its box
+
+Everything above measures ink from GEOMETRY — canvas text metrics for a glyph, the union of an SVG's
+geometry children for an icon. Exact for those, and it cannot see a single pixel of `box-shadow`,
+`outline`, glow or blur. So two marks with identical boxes, identical `getBoundingClientRect`, and
+identical computed `width` can still read as **different-sized marks**, and no DOM measurement will
+tell you which.
+
+Measured 2026-07-30 on the queue card's liveness dots: the bright dot is a 6px circle plus a
+`box-shadow: 0 0 0 1px` halo = **8.0px of painted ink**; the quiet "alive but idle" dot was a bare 6px
+circle = **6.0px**. Every box reading said "both 6px, identical"; the maintainer said *"I don't
+understand why the blue dot is so small."* The halo was a third of the mark's width.
+
+When marks that should match still look mismatched and geometry says they agree, measure the PIXELS:
+
+```bash
+node ui/scripts/ink-pixels.mjs "$URL" ".fray-live-dot, .fray-live-dot-quiet" --dsf=4
+# → per element: box [6,6] | INK [8,8] css | contrast 422
+```
+
+It screenshots each element with a padded clip, decodes it onto a canvas in-page, and scans for pixels
+that differ from the surface behind them. Two habits it enforces, both load-bearing:
+
+- **Freeze animated marks at a chosen phase** (`--phase`), or two runs sample different instants and
+  are not comparable. A dot that breathes 0.4→0.9 opacity looks like a different mark each shot.
+- **Read ink and contrast as different questions.** Ink answers *how big does this read*; peak contrast
+  answers *how loud*. The fix for "the quiet dot looks small" is to match the INK and let tone/opacity
+  carry the quietness — never to shrink or dim the geometry. Size says "same kind of mark"; tone says
+  "quieter". Only tone may vary.
+
 ---
 
 ## Rule 3 — distrust a measurement that is suspiciously large

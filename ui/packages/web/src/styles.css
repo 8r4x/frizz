@@ -243,7 +243,16 @@ html[data-font="sans"] .fray-bash .md-body {
   /* Quiet-live is a SHELL state (a dev server/Monitor waiting), so it inherits the same shell-blue
      hue as the bright shell dot — just muted toward gray. Keeps the accent-yellow default for safety. */
   --live-dot: var(--color-accent);
-  background: color-mix(in srgb, var(--live-dot) 55%, var(--color-muted));
+  --quiet-dot: color-mix(in srgb, var(--live-dot) 55%, var(--color-muted));
+  background: var(--quiet-dot);
+  /* The SAME 1px halo the bright dot carries, in this dot's own muted tone and at the same 28%. The
+     halo is not decoration — it is a third of the mark's painted width, so a dot without one reads as
+     a SMALLER dot, not a quieter one. MEASURED (4x device pixels, fixture, each dot frozen at its own
+     brightest phase): bright 8.0px of ink against this dot's 6.0px before the halo, 8.0px after.
+     Geometry is what says "same kind of mark"; the muted fill and the breathing opacity are what say
+     "quiet", and the element's own opacity multiplies this ring too, so it stays the quieter of the
+     two for free. */
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--quiet-dot) 28%, transparent);
   animation: fray-live-breathe 2.6s ease-in-out infinite;
 }
 .fray-live-dot-quiet--shell { --live-dot: var(--color-shell); }
@@ -258,8 +267,10 @@ html[data-font="sans"] .fray-bash .md-body {
   50% { opacity: 0.9; }
 }
 @media (prefers-reduced-motion: reduce) {
-  /* No `transform: none` any more — the keyframes stopped scaling, so there is nothing to undo. */
-  .fray-live-dot-quiet { animation: none; opacity: 1; background: transparent; border: 1.5px solid color-mix(in srgb, var(--live-dot) 55%, var(--color-muted)); }
+  /* No `transform: none` any more — the keyframes stopped scaling, so there is nothing to undo. The
+     halo drops with the same `box-shadow: none` the bright dot uses here: this variant already paints
+     a 1.5px ring, and stacking the halo outside it would make the STATIC mark the largest of the three. */
+  .fray-live-dot-quiet { animation: none; opacity: 1; background: transparent; box-shadow: none; border: 1.5px solid var(--quiet-dot); }
 }
 @supports not (font-variant-caps: all-petite-caps) {
   .petite-caps {
