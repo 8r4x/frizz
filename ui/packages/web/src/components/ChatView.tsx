@@ -39,10 +39,11 @@ import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { Tooltip } from "./Tooltip.tsx"
 import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
 import { hasPendingToolSpinner, hasRunningToolIndicator, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
-import { compactElapsedSince, formatCompactElapsed, formatToolDuration } from "../lib/durationLabels.ts"
+import { formatToolDuration } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { CHILD_OPEN_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, visibleChildOps } from "../lib/childOps.ts"
-import { AGENT_OUTCOME_VERB, agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
+import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
+import { agentReading } from "../lib/agentReading.ts"
 import { ChildOpRow } from "./ChildOpRow.tsx"
 import { TRANSCRIPT_META_LABEL_CLASS } from "../lib/transcriptMetaLabels.ts"
 import { InteractionStack } from "./InteractionCards.tsx"
@@ -1766,6 +1767,34 @@ function ToolCardRouter({ t }: { t: CollapsedTool }) {
 
 type ToolStatus = NonNullable<TranscriptToolCall["status"]>
 
+// THE TRANSCRIPT'S RIGHT-HAND READING — one renderer for every card's meta slot.
+//
+// It exists because the slot had TWO of them and they diverged on every axis at once. A column of
+// dispatch cards read "3m", "stopped 41m", "failed 12m" in lowercase sans at three alphas, directly
+// above "CANCELLED" in amber petite-caps and "FAILED · 12 SEC" in red petite-caps — two typographic
+// systems, four saturations, two duration formatters and two separators, for eight readings of the same
+// kind (maintainer 2026-07-29: "a bizarre mix of font sizes, color saturations, and capitalization").
+// Worse, the lowercase half also sat 1.0px BELOW the title's cap band, because only the petite-caps half
+// carried `fray-tool-header-caps`'s optical lift.
+//
+// So the typography, the `·` separator and the optical correction now live HERE, once, and a caller may
+// only choose its WORDS and its TONE. Consistency by construction: a new reading cannot invent a second
+// treatment without editing this function.
+function ToolMetaReading({ tone, indicator, label, duration, title }: {
+  tone: string
+  indicator?: ReactNode
+  label?: string
+  duration?: string
+  title: string
+}) {
+  return (
+    <span className={`petite-caps fray-tool-header-caps flex shrink-0 items-center gap-1 whitespace-nowrap text-[11.5px] leading-none ${tone}`} title={title} aria-label={title}>
+      {indicator}
+      <span>{[label, duration].filter(Boolean).join(" · ")}</span>
+    </span>
+  )
+}
+
 export function ToolStatusMeta({ status, backgroundState, liveBackgroundState, exitCode, durationMs, indicator = "shell" }: { status?: ToolStatus; backgroundState?: TranscriptToolCall["backgroundState"]; liveBackgroundState?: "running" | "stale"; exitCode?: number; durationMs?: number; indicator?: "shell" | "agent" }) {
   if (!status && durationMs === undefined) return null
   // The GLYPH carries "background", so the words no longer have to. "BACKGROUND RUNNING" in petite-caps
@@ -1795,14 +1824,19 @@ export function ToolStatusMeta({ status, backgroundState, liveBackgroundState, e
   const title = [longLabel, duration].filter(Boolean).join(" · ")
   const tone = status === "failed" ? "fray-tool-failed" : status === "cancelled" ? "text-amber-400" : "text-muted/55"
   return (
-    <span className={`petite-caps fray-tool-header-caps flex shrink-0 items-center gap-1 text-[11.5px] leading-none ${tone}`} title={title} aria-label={title}>
-      {liveBackgroundState === "running" || hasRunningToolIndicator(status, backgroundState)
-        ? <span aria-hidden className={`fray-live-dot fray-live-dot--${indicator}`} data-running-indicator="tool-disclosure" />
-        : hasPendingToolSpinner(status, backgroundState)
-          ? <span aria-hidden className="fray-tool-spinner" data-running-indicator="tool-pending" />
-          : null}
-      <span>{[label, duration].filter(Boolean).join(" · ")}</span>
-    </span>
+    <ToolMetaReading
+      tone={tone}
+      title={title}
+      label={label}
+      duration={duration}
+      indicator={
+        liveBackgroundState === "running" || hasRunningToolIndicator(status, backgroundState)
+          ? <span aria-hidden className={`fray-live-dot fray-live-dot--${indicator}`} data-running-indicator="tool-disclosure" />
+          : hasPendingToolSpinner(status, backgroundState)
+            ? <span aria-hidden className="fray-tool-spinner" data-running-indicator="tool-pending" />
+            : null
+      }
+    />
   )
 }
 
@@ -2124,9 +2158,14 @@ function ReadBlock({ detail, read, status, durationMs }: { detail?: string; read
 //     rides the drill-in payload, and stays readable in the title's tooltip;
 //   • the state VERB is gone for the two nominal outcomes. A pulsing dot already says "running" and NO
 //     mark at all already says "not running any more", so "running 3 min" / "finished 35m" became a
-//     bare "3m" / "35m" — the reading the child lines show. A NON-nominal outcome keeps its verb
-//     ("stopped 4m", "failed 12m"): a mark cannot say that, and losing it would delete the one
-//     fact the reader most needs.
+//     bare runtime. A NON-nominal outcome keeps its verb ("STOPPED · 4 MIN", "FAILED · 12 MIN"): a mark
+//     cannot say that, and losing it would delete the one fact the reader most needs.
+//
+// The reading itself is `ToolMetaReading` — the transcript's shared right-hand slot — so this card's
+// petite-caps reading, and the one on the Bash card under it, are the same treatment by construction.
+// The MIRROR with the child lines is about order and content, not typography: those lines live in the
+// rail, the queue card and the ops strip, where the compact "41m" form earns its horizontal budget;
+// this card sits in a column of tool cards and speaks their language. See lib/agentReading.ts.
 // Exported for operation-indicators-fixture.tsx: the agent row is the one card family with TWO
 // independent status sources (its own state reading + the shared meta slot), so it needs live fixture
 // coverage — the double-indicator bug shipped precisely because the fixture skipped it.
@@ -2183,47 +2222,22 @@ export function AgentBlock({
   // reading and the prompt-box line naming the same child never disagree about how long it has been up.
   const now = useNowMs()
 
-  // THE RUNTIME. Compact ("38s" / "12m" / "1hr 5m"), from the same formatter the child rows use, so a
-  // card and a line about one child read the same number in the same shape. Live while the child is
-  // tracked; the harness-reported elapsed once it has finished; nothing at all when neither exists
-  // (never a fabricated reading).
-  const runtime = agentStatus
-    ? agentElapsedMs !== undefined
-      ? formatCompactElapsed(agentElapsedMs)
-      : ""
-    : live
-      ? compactElapsedSince(live.startedAt, now)
-      : ""
-  // The one word no mark can say. "finished" is dropped (a card with no mark that still reports a runtime
-  // already means "it ran and stopped"), but a STOPPED or FAILED child is a different fact that has no
-  // glyph, so it keeps its verb — from the shared vocabulary, never the raw `agentStatus` enum.
+  // THE READING — one derivation for every case (lib/agentReading.ts), so a dispatch card says the same
+  // thing in the same words, tone and typography whether or not the client still holds a live record for
+  // the child. Two renderers used to split that by data availability and diverged on every visible axis;
+  // that module's header documents what each of them got wrong.
   //
-  // TONE: only a genuine FAILURE is red. A stopped child is not an error — the operator interrupted it,
-  // or it timed out — and the server already files it under the tool status "cancelled" rather than
-  // "failed". Rendering it in the loudest colour the transcript owns made a routine interruption read as
-  // a crash ("killed 10m" in blood red beside its neighbours' quiet "done · 9 ms" — maintainer
-  // 2026-07-29: "this is way too scary looking"). So it now reads "stopped 10m" at the SAME weight as
-  // the `ToolStatusMeta` on the cards above and below it: the verb carries the fact, the colour no
-  // longer editorialises about it. A `failed` child keeps the red, because its neighbour tool cards
-  // colour a real failure red and the column should agree.
-  const outcome = agentStatus && agentStatus !== "completed" ? AGENT_OUTCOME_VERB[agentStatus] : null
-  const failed = agentStatus === "failed"
-  // The tooltip says what the bare number means, and it must not contradict the mark beside it: a rested
-  // or stale child is not "working", so only a RUNNING one gets that verb.
-  const runtimeTitle = outcome
-    ? `${outcome} after ${runtime}`
-    : agentStatus
-      ? `Ran for ${runtime}`
-      : running
-        ? `Working for ${runtime}`
-        : `Dispatched ${runtime} ago`
-
-  // ONE running indicator per row (maintainer 2026-07-18). Whenever a live/completed child resolves,
-  // the mark slot + runtime below already ARE this row's status — and "3m" beside a pulsing dot is
-  // strictly richer than ToolStatusMeta's generic "running", so the meta badge would be a second,
-  // duller copy of the same fact. The meta slot stays the ONLY status surface for the remaining case:
-  // a dispatch with no child record at all, where a terminal status/duration must still render.
-  const showStatusMeta = !live && !agentStatus
+  // ONE running indicator per row (maintainer 2026-07-18) still holds, now structurally: a tracked child
+  // is marked on the LEFT and its reading is a bare runtime, while an untracked pending dispatch has no
+  // mark and gets the reading's spinner. Exactly one, in every branch.
+  const reading = agentReading({
+    agentStatus,
+    agentElapsedMs,
+    liveState: live?.state,
+    liveElapsedMs: live?.startedAt ? Math.max(now - Date.parse(live.startedAt), 0) : undefined,
+    status,
+    durationMs,
+  })
 
   // The liveness MARK. Every glyph is the shared child-op vocabulary (lib/childOps.ts), so this card and
   // the line under the prompt box mark the same child the same way: pulsing accent = running, flat gray =
@@ -2261,14 +2275,14 @@ export function AgentBlock({
         label={`${open ? "Collapse" : "Expand"} Agent dispatch: ${title}`}
         onToggle={() => setOpen((v) => !v)}
         meta={
-          showStatusMeta ? (
-            <ToolStatusMeta status={status} durationMs={durationMs} indicator="agent" />
-          ) : (
-            (outcome || runtime) && (
-              <span className={`shrink-0 whitespace-nowrap text-[11.5px] ${failed ? "fray-tool-failed" : outcome ? "text-muted/55" : "text-muted/40"}`} title={runtimeTitle}>
-                {[outcome, runtime].filter(Boolean).join(" ")}
-              </span>
-            )
+          reading && (
+            <ToolMetaReading
+              tone={reading.tone === "failed" ? "fray-tool-failed" : "text-muted/55"}
+              title={reading.title}
+              label={reading.label}
+              duration={reading.duration}
+              indicator={reading.showSpinner ? <span aria-hidden className="fray-tool-spinner" data-running-indicator="tool-pending" /> : null}
+            />
           )
         }
       >
@@ -3004,7 +3018,11 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   // sub-agent transcript, where there's no ThreadSlugContext → the fence renders card-only).
   const fenceThread = slug ? threadBySlug(board, slug) : undefined
   const lifecycle = fenceThread ? threadLifecycleAvailability(fenceThread) : undefined
-  const canAct = !!(fenceThread && lifecycle?.footer)
+  // `archive` and `snooze` move together (owned session, not yet done), so one flag gates BOTH fence
+  // actions. Deliberately NOT `footer`: that stays true on a done thread — whose strip now renders as a
+  // "Done" readout — and keying on it here would grow a live Mark-as-done button on the done fence of a
+  // thread that is already archived.
+  const canAct = !!(fenceThread && lifecycle?.archive)
   // Once the Mark-as-done button has appeared, KEEP it mounted through completion. Clicking it flips
   // the thread to archived (canAct → false); unmounting the button there shrank the card — a layout
   // shift, and in the queue that resize also fed the passive scroll-anchor churn. StateButton latches

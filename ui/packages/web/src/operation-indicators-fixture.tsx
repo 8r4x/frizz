@@ -148,7 +148,12 @@ createRoot(document.getElementById("root")!).render(
               this pair is the coverage for that. A STOPPED child is not an error (interrupted, or timed
               out), so it reads at the same quiet weight as the "done · 32 sec" meta above; only a real
               FAILURE takes the red. Read the two rows together — if the stop is as loud as the failure,
-              the regression is back. */}
+              the regression is back.
+              READ ALL EIGHT ROWS AS A COLUMN. Every reading is ONE treatment (ChatView's ToolMetaReading,
+              worded by lib/agentReading.ts): one size, one petite-caps casing, one `·` separator, one
+              duration formatter, and a palette of exactly two tones. The column shipped with two of each
+              — the four rows below reading lowercase sans at three alphas while these last two read
+              petite-caps in amber and red — so a second treatment appearing here is the regression. */}
           <AgentBlock detail="Interrupted long-running audit" prompt="Audit every call site." subagentType="fray:sonnet-medium" agentId="agent-killed" agentStatus="killed" agentElapsedMs={2_460_000} status="completed" durationMs={2_460_000} />
           <AgentBlock detail="Crashed dependency sweep" prompt="Sweep every dependency." subagentType="fray:sonnet-medium" agentId="agent-failed" agentStatus="failed" agentElapsedMs={738_000} status="failed" durationMs={738_000} />
           {/* No child record at all — the meta slot is the ONLY status surface, so a terminal status

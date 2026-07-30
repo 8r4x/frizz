@@ -58,6 +58,12 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
           quietMark: marks.length > 0 ? marks[0].getAttribute("title") : null,
           // The right-hand group holds the reading AND the chevron, in that order, flush to one edge.
           rightText: right.innerText.replace(/\s+/g, " ").trim(),
+          // The reading's TYPOGRAPHY, resolved. Every row must report the same three values: the slot
+          // shipped with two competing treatments (lowercase sans vs petite-caps, one of them 1px off
+          // the row's optical line) and a text assertion cannot see that.
+          readingType: ((cs: CSSStyleDeclaration) => [cs.fontSize, cs.fontVariantCaps, cs.letterSpacing].join("/"))(
+            getComputedStyle(right.firstElementChild!),
+          ),
           // The reading's own COLOUR, composited over black and sampled as sRGB bytes. This is how the
           // tone split between a stopped child and a failed one is pinned — the two read the same shape,
           // so only the colour tells them apart, and a regression there is invisible to a text
@@ -102,11 +108,24 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
     // and in this row's tooltip) — no row may render it as a bracketed tag again.
     for (const row of rows) assert.doesNotMatch(row.text, /fray:|\[.*\]/)
 
-    // A LIVE child: exactly one dot, and the runtime is a BARE compact duration — no "running" verb,
-    // never doubled by the meta badge.
+    // ONE READING, EIGHT ROWS. The slot is a single renderer (ChatView's ToolMetaReading, fed by
+    // lib/agentReading.ts), so every row reports identical type metrics and the whole column draws from a
+    // palette of exactly TWO tones — quiet for every nominal or interrupted outcome, the failure red for a
+    // real failure. It shipped as two renderers picked by whether a live child record survived, which put
+    // two typographic systems, four saturations, two duration formatters and two separators in one column
+    // of eight (maintainer 2026-07-29: "a bizarre mix of font sizes, color saturations, and
+    // capitalization"). These two assertions are that complaint, made mechanical.
+    assert.equal(new Set(rows.map((row) => row.readingType)).size, 1, `one typography for the slot, found: ${[...new Set(rows.map((r) => r.readingType))].join(" | ")}`)
+    assert.equal(new Set(rows.map((row) => row.readingRgb.join(","))).size, 2, `two tones for the slot, found: ${[...new Set(rows.map((r) => r.readingRgb.join(",")))].join(" | ")}`)
+    // Petite-caps, not lowercase sans: durationLabels.ts states the house rule that a small-caps status
+    // row spells its units out, and the row's own kind label on the left is petite-caps too.
+    assert.match(rows[0].readingType, /^11\.5px\/all-petite-caps\//)
+
+    // A LIVE child: exactly one dot, and the runtime is a BARE duration — no "running" verb, never
+    // doubled by the meta badge.
     assert.equal(rows[0].indicators, 1)
     assert.doesNotMatch(rows[0].text, /running/)
-    assert.match(rows[0].rightText, /^\d+(s|m|hr( \d+m)?)$/)
+    assert.match(rows[0].rightText, /^(\d+ min|<1 min|\d+ hr( \d+ min)?)$/)
 
     // A quiet child: the flat stale mark carries the state (its tooltip says so), with no dot and no
     // "running" badge to contradict it.
@@ -118,12 +137,12 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
     // stale one, and still reads its runtime.
     assert.equal(rows[2].indicators, 0)
     assert.match(String(rows[2].quietMark), /^rested — /)
-    assert.match(rows[2].rightText, /^\d+(s|m|hr( \d+m)?)$/)
+    assert.match(rows[2].rightText, /^(\d+ min|<1 min|\d+ hr( \d+ min)?)$/)
 
     // A completed child: no mark, no slot, just the bare runtime. A card that reports a runtime and shows
     // no liveness mark already says "it ran and stopped", so the verb is deliberately absent.
     assert.equal(rows[3].indicators, 0)
-    assert.equal(rows[3].rightText, "3m")
+    assert.equal(rows[3].rightText, "3 min")
     assert.doesNotMatch(rows[3].text, /finished/)
 
     // A NON-nominal outcome keeps its verb — no mark can say it — but the WORD is the shared vocabulary,
@@ -133,21 +152,27 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
     //     "done · 9 ms" (maintainer: "this is way too scary looking") — hence both halves are pinned;
     //   • a FAILED child keeps the red the tool cards use for a real failure.
     assert.equal(rows[4].indicators, 0)
-    assert.equal(rows[4].rightText, "stopped 41m")
+    assert.equal(rows[4].rightText, "stopped · 41 min")
     assert.doesNotMatch(rows[4].text, /killed/)
     assert.equal(rows[5].indicators, 0)
-    assert.equal(rows[5].rightText, "failed 12m")
+    assert.equal(rows[5].rightText, "failed · 12 min")
     // The tones, sampled: the stop must be a NEUTRAL gray (r≈g≈b), the failure the red the tool cards own.
     const spread = (rgb: number[]) => Math.max(...rgb) - Math.min(...rgb)
     assert.ok(spread(rows[4].readingRgb) <= 24, `a stopped child must read neutral, not rgb(${rows[4].readingRgb})`)
     assert.deepEqual(rows[5].readingRgb, [229, 83, 75], "a failed child keeps the tool cards' failure red")
 
-    // No child record at all → the meta slot is the only status surface, so terminal state + duration
-    // must still render. This is the regression the one-indicator rule must never cause.
+    // NO CHILD RECORD — the reading is the only status surface, so terminal state + duration must still
+    // render (the regression the one-indicator rule must never cause). And it must be INDISTINGUISHABLE
+    // from the tracked equivalent above: losing the correlation to a child is fray's problem, not the
+    // reader's, so an interrupted dispatch says "stopped" here too — never the raw "cancelled", and never
+    // in amber, which was saying "caution" about something somebody deliberately stopped.
     assert.equal(rows[6].indicators, 0)
-    assert.match(rows[6].text, /cancelled/)
+    assert.equal(rows[6].rightText, "stopped")
+    assert.doesNotMatch(rows[6].text, /cancelled/)
+    assert.deepEqual(rows[6].readingRgb, rows[4].readingRgb, "one interruption, one tone, child record or not")
     assert.equal(rows[7].indicators, 0)
-    assert.match(rows[7].text, /failed · 12 sec/)
+    assert.match(rows[7].rightText, /^failed · /)
+    assert.deepEqual(rows[7].readingRgb, rows[5].readingRgb, "one failure, one tone, child record or not")
 
     assert.deepEqual(errors, [])
     assert.deepEqual(notFound.filter((path) => path !== "/favicon.ico"), [])
