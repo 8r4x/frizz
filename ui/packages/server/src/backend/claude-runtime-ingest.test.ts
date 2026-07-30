@@ -44,6 +44,9 @@ const ev = {
   init: { kind: "init", protocolVersion: 1, sessionId, messageId: "i", claudeCodeVersion: "x", cwd: "/", model: "m", permissionMode: "default", tools: [], mcpServers: [], slashCommands: [], skills: [], plugins: [], capabilities: [] },
   assistant: { kind: "assistant", sessionId, messageId: "a", text: ["hi"], toolUses: [], supersedes: [] },
   user: { kind: "user", sessionId, messageId: "u", text: ["go"], toolResultIds: [], synthetic: false },
+  // The same two events as a background CHILD emits them: addressed to the dispatch that started it.
+  childAssistant: { kind: "assistant", sessionId, messageId: "ca", parentToolUseId: "toolu_child", text: ["working"], toolUses: [], supersedes: [] },
+  childUser: { kind: "user", sessionId, messageId: "cu", parentToolUseId: "toolu_child", text: ["result"], toolResultIds: ["toolu_x"], synthetic: false },
   result: { kind: "result", sessionId, messageId: "r", subtype: "success", isError: false, errors: [] },
   resultError: { kind: "result", sessionId, messageId: "r", subtype: "error_during_execution", isError: true, errors: ["boom"] },
   other: { kind: "other", type: "system", sessionId },
@@ -73,6 +76,45 @@ test("ingest: assistant/user mean running, result means settled", async () => {
   await ingest.drain()
   assert.equal(ingest.liveness(sessionId)?.turn, "running", "a new turn re-opens it")
   ingest.close()
+})
+
+// The resting-fleet-parent regression (reported 2026-07-30, reproduced live by _live_bg_rest_turn.mts).
+// A worker that dispatches with `run_in_background: true` and rests keeps receiving its CHILD's events
+// for as long as the child lives — 18 of them over two minutes in the live run. Folding those as the
+// PARENT's turn held the board at in-flight for the child's whole lifetime, so the turn never settled,
+// deriveAwaitingBackground (turn-idle only) could never fire, and a thread at rest for an hour rendered
+// the "Working…" shimmer.
+test("ingest: a CHILD's events say nothing about the PARENT's turn", async () => {
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  ingest.onEvent("t", sessionId, ev.assistant)
+  ingest.onEvent("t", sessionId, ev.result)
+  await ingest.drain()
+  assert.equal(ingest.liveness(sessionId)?.turn, "settled", "the parent rested")
+
+  ingest.onEvent("t", sessionId, ev.childAssistant)
+  ingest.onEvent("t", sessionId, ev.childUser)
+  await ingest.drain()
+  assert.equal(ingest.liveness(sessionId)?.turn, "settled", "the child's chatter must not un-rest it")
+  assert.equal(ingest.liveness(sessionId)?.events, 4, "…but it is still counted, and still nudges")
+
+  // The parent's OWN next record — the child's task-notification re-invoking it — does re-open the turn.
+  ingest.onEvent("t", sessionId, ev.user)
+  await ingest.drain()
+  assert.equal(ingest.liveness(sessionId)?.turn, "running")
+  ingest.close()
+})
+
+test("ingest: a child event fires no turn-started receipt", async () => {
+  const receipts = createReceiptBus<ClaudeRuntimeReceipt>()
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {}, receipts })
+  const cursor = receipts.cursor()
+  ingest.onEvent("t", sessionId, ev.result)
+  ingest.onEvent("t", sessionId, ev.childAssistant)
+  await ingest.drain()
+  const kinds = receipts.recent().filter((e) => e.seq > cursor).map((e) => e.receipt.type)
+  assert.equal(kinds.filter((k) => k === "claude.runtime.turn.started").length, 0)
+  ingest.close()
+  receipts.close()
 })
 
 test("ingest: a turn-neutral event leaves the reading alone rather than resetting it", async () => {

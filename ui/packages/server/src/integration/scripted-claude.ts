@@ -51,12 +51,15 @@ export function assistantRecord(
 
 // ---- event builders (the ClaudeQueryEvent shapes the broker relays) ----
 
-export function assistantEvent(text: string, sessionId: string): ClaudeQueryEvent {
-  return { kind: "assistant", sessionId, messageId: `m-${text.length}`, text: [text], toolUses: [], supersedes: [] }
+// `parentToolUseId` is what distinguishes the MAIN thread's events from a live CHILD's. A background
+// child streams these for its whole life, long after the parent's own turn has ended, so the two must
+// be scriptable apart — see the resting-parent case in claude-runtime.integration.test.ts.
+export function assistantEvent(text: string, sessionId: string, parentToolUseId?: string): ClaudeQueryEvent {
+  return { kind: "assistant", sessionId, messageId: `m-${text.length}`, parentToolUseId, text: [text], toolUses: [], supersedes: [] }
 }
 
-export function userEvent(text: string, sessionId: string): ClaudeQueryEvent {
-  return { kind: "user", sessionId, messageId: "u", text: [text], toolResultIds: [], synthetic: false }
+export function userEvent(text: string, sessionId: string, parentToolUseId?: string): ClaudeQueryEvent {
+  return { kind: "user", sessionId, messageId: "u", parentToolUseId, text: [text], toolResultIds: [], synthetic: false }
 }
 
 export function resultEvent(sessionId: string, isError = false): ClaudeQueryEvent {

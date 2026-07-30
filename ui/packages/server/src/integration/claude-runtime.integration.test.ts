@@ -380,6 +380,56 @@ test("integration: a structured task_notification retires the child with NO pros
   }
 })
 
+test("integration: a parent that dispatched in the BACKGROUND and rested reads as at rest, not working", async () => {
+  // The reported bug, on the seam that produced it (2026-07-30: a thread whose own turn had ended 63
+  // minutes earlier rendered the "Working…" shimmer). A fray worker's normal shape is `run_in_background:
+  // true` then rest, and a background child keeps streaming assistant/user events on the PARENT's socket
+  // for its whole life. Folding those as the parent's own turn held `runtime: "running"` for the child's
+  // entire lifetime, which also starved `awaitingBackground` — it requires turn-idle, so the one card
+  // that describes this state could never render. Measured live by backend/_live_bg_rest_turn.mts: 118
+  // consecutive samples of `in-flight` across the two minutes the child ran.
+  const h = createIntegrationHarness()
+  try {
+    const OUT = childTranscript(h)
+    const s = h.dispatch("resting")
+    h.telemetry("resting")
+
+    s.play(
+      record(userRecord("go", T0)),
+      record(agentDispatchRecord("toolu_child", "Sweep the fold", T1)),
+      record(agentLaunchRecord("toolu_child", OUT, T1)),
+      event(taskEvent(s.sessionId, { phase: "started", taskId: "task-1", toolUseId: "toolu_child" })),
+      // The parent says its piece and ENDS ITS TURN while the child runs on.
+      record(assistantRecord("dispatched it, resting", "end_turn", T2)),
+      event(assistantEvent("dispatched it, resting", s.sessionId)),
+      event(resultEvent(s.sessionId)),
+    )
+    await h.settle()
+    assert.equal(h.telemetry("resting")?.turn, "idle", "the parent's own turn is over")
+
+    // Now the child streams — in the live run this was 18 events over two minutes, ~40ms after `result`.
+    s.play(
+      event(assistantEvent("child thinking", s.sessionId, "toolu_child")),
+      event(userEvent("tool result", s.sessionId, "toolu_child")),
+      event(assistantEvent("child still going", s.sessionId, "toolu_child")),
+    )
+    await h.settle()
+
+    assert.equal(h.telemetry("resting")?.turn, "idle", "a child's chatter is not the parent's turn")
+    assert.equal(h.telemetry("resting")?.subAgents.length, 1, "…and the child is still shown as live")
+    const thread = h.boardThread("resting")
+    assert.equal(thread?.runtime, "turn-idle", "no shimmer")
+    assert.equal(thread?.awaitingBackground, true, "the resting card can finally render")
+
+    // The parent genuinely resuming — the child's task-notification lands as a user record — still moves.
+    s.play(record(userRecord("<task-notification>done</task-notification>", T2)), event(userEvent("go on", s.sessionId)))
+    await h.settle()
+    assert.equal(h.telemetry("resting")?.turn, "in-flight", "a MAIN-thread event still re-opens the turn")
+  } finally {
+    h.close()
+  }
+})
+
 test("integration: a re-steered child comes back live even though its task id is already terminal", async () => {
   // The end-to-end shape of the bug, on the seam the fold alone cannot show. A task id OUTLIVES the run
   // that created it: `SendMessage` restarts a stopped child under the SAME id. So after the first run's
