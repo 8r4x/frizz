@@ -12,8 +12,9 @@ const baseUrl = process.env.FRAY_AGENT_ROW_INDICATORS_E2E_URL
 //
 // Since 2026-07-29 this also pins the row's SHAPE, which now mirrors the sub-agent lines under the
 // prompt box: the liveness MARK first, then the petite-caps "Agent", then the title, then the RUNTIME
-// right-justified at the far edge, then the chevron. The three facts that shape asserts — order, no
-// model/effort tag, one flush right-hand column — are each a thing the header used to get wrong.
+// right-justified at the far edge, then the chevron. The four facts that shape asserts — order, no
+// model/effort tag, one flush right-hand column, and no EMPTY mark slot once the child has resolved —
+// are each a thing the header used to get wrong.
 test("an agent row mirrors the child-line shape and shows exactly one running indicator", {
   skip: !baseUrl,
   timeout: 60_000,
@@ -44,10 +45,16 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
         return {
           text: header.innerText.replace(/\s+/g, " ").trim(),
           indicators: card.querySelectorAll("[data-running-indicator]").length,
-          // The left group's element order IS the mirrored shape: a fixed-width mark slot, the kind
-          // label, then the title. `-1` for the slot means the mark is not first any more.
-          markSlotIndex: Array.from(left.children).findIndex((child) => child.clientWidth > 0 && child.clientWidth <= 12 && !child.textContent),
+          // The left group's element order IS the mirrored shape: the mark slot (when the child has a
+          // liveness reading at all), the kind label, then the title. `-1` for the slot means no slot
+          // exists in the DOM — which is REQUIRED of a resolved child and a failure for a live one.
+          markSlotIndex: Array.from(left.children).findIndex((child) => child.classList.contains("fray-agent-mark")),
           labelIndex: Array.from(left.children).findIndex((child) => child.classList.contains("fray-bash-label")),
+          // How far "Agent" sits from the header's own left edge. This is the number the reader SEES as
+          // the gap: an empty reserved slot pushed it out ~13px on a card whose child had finished, which
+          // is the whole defect. A marked row is allowed that offset (a dot is standing in it); a
+          // resolved row must be flush at 0.
+          labelOffset: Math.round(left.querySelector(".fray-bash-label")!.getBoundingClientRect().left - left.getBoundingClientRect().left),
           quietMark: marks.length > 0 ? marks[0].getAttribute("title") : null,
           // The right-hand group holds the reading AND the chevron, in that order, flush to one edge.
           rightText: right.innerText.replace(/\s+/g, " ").trim(),
@@ -58,10 +65,16 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
     )
     assert.equal(rows.length, 7, "the fixture must cover live/stale/rested/finished/killed/cancelled/failed agent rows")
 
-    // THE SHAPE, on every row: mark slot first, "Agent" immediately after it, chevron last on the right.
+    // THE SHAPE. A child with a liveness reading leads with its mark, then "Agent"; a RESOLVED child has
+    // no mark and NO SLOT for one, so "Agent" leads and sits flush at the header's left edge. The empty
+    // reservation was a real, reported defect ("a weird gap … to the left of the word Agent"), so the
+    // absence is pinned as hard as the presence. The chevron is last on the right on every row.
+    const MARKED = 3 // rows 0-2 are the live / stale / rested children; 3-6 have all resolved.
     for (const [index, row] of rows.entries()) {
-      assert.equal(row.markSlotIndex, 0, `row ${index}: the liveness mark must lead the header`)
-      assert.equal(row.labelIndex, 1, `row ${index}: "Agent" must follow the mark`)
+      const marked = index < MARKED
+      assert.equal(row.markSlotIndex, marked ? 0 : -1, `row ${index}: ${marked ? "the liveness mark must lead the header" : "a resolved child must render no mark slot at all"}`)
+      assert.equal(row.labelIndex, marked ? 1 : 0, `row ${index}: "Agent" must ${marked ? "follow the mark" : "lead the header"}`)
+      assert.equal(marked ? row.labelOffset > 0 : row.labelOffset === 0, true, `row ${index}: "Agent" sits ${row.labelOffset}px from the left edge`)
       assert.ok(row.chevronIsLast, `row ${index}: the chevron must be the last thing on the row`)
     }
     // Right-justified means ONE column: every row's right-hand group ends at the same x, so a stack of
@@ -90,8 +103,8 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
     assert.match(String(rows[2].quietMark), /^rested — /)
     assert.match(rows[2].rightText, /^\d+(s|m|hr( \d+m)?)$/)
 
-    // A completed child: an empty mark slot plus the bare runtime. "finished" is what the empty slot
-    // already says, so the verb is deliberately absent.
+    // A completed child: no mark, no slot, just the bare runtime. A card that reports a runtime and shows
+    // no liveness mark already says "it ran and stopped", so the verb is deliberately absent.
     assert.equal(rows[3].indicators, 0)
     assert.equal(rows[3].rightText, "3m")
     assert.doesNotMatch(rows[3].text, /finished/)

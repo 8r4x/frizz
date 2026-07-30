@@ -140,8 +140,9 @@ createRoot(document.getElementById("root")!).render(
           <AgentBlock detail="Prior investigation" prompt="Investigate the earlier failure." subagentType="fray:sonnet-high" agentId="agent-stale" status="pending" />
           {/* Rested child: the hollow mark — it stopped, its own fan-out has not. */}
           <AgentBlock detail="Fan out the migration sweep" prompt="Fan out the sweep across every package." subagentType="fray:opus-high" agentId="agent-rested" status="pending" />
-          {/* Completed child: an empty mark slot and the bare runtime — "finished" is what the empty
-              slot already says. */}
+          {/* Completed child: NO mark and no slot for one — the header starts flush at "Agent", and the
+              bare runtime is what says it ran and stopped. Read this row against the three above it: the
+              marked rows step in by the slot, these four do not, and that is the point. */}
           <AgentBlock detail="Diagnose remotion model routing anomaly" prompt="Diagnose the routing anomaly." subagentType="fray:opus-high" agentId="agent-done" agentStatus="completed" agentElapsedMs={183_000} status="completed" durationMs={183_000} />
           {/* A NON-nominal outcome keeps its verb, in the failure tone: no mark can say "killed". */}
           <AgentBlock detail="Interrupted long-running audit" prompt="Audit every call site." subagentType="fray:sonnet-medium" agentId="agent-killed" agentStatus="killed" agentElapsedMs={2_460_000} status="completed" durationMs={2_460_000} />

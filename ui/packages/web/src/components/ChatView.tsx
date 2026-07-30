@@ -2109,10 +2109,10 @@ function ReadBlock({ detail, read, status, durationMs }: { detail?: string; read
 //   • the "[subagent_type]" tag is GONE from the card — same ruling as the child lines two days earlier
 //     (the profile belongs to the prompt box's own control, not repeated on every dispatch). It still
 //     rides the drill-in payload, and stays readable in the title's tooltip;
-//   • the state VERB is gone for the two nominal outcomes. A pulsing dot already says "running" and an
-//     empty mark slot already says "not running any more", so "running 3 min" / "finished 35m" became a
+//   • the state VERB is gone for the two nominal outcomes. A pulsing dot already says "running" and NO
+//     mark at all already says "not running any more", so "running 3 min" / "finished 35m" became a
 //     bare "3m" / "35m" — the reading the child lines show. A NON-nominal outcome keeps its verb
-//     ("failed 12m", "killed 4m"): the mark slot cannot say that, and losing it would delete the one
+//     ("failed 12m", "killed 4m"): a mark cannot say that, and losing it would delete the one
 //     fact the reader most needs.
 // Exported for operation-indicators-fixture.tsx: the agent row is the one card family with TWO
 // independent status sources (its own state reading + the shared meta slot), so it needs live fixture
@@ -2181,8 +2181,8 @@ export function AgentBlock({
     : live
       ? compactElapsedSince(live.startedAt, now)
       : ""
-  // The one word the mark slot cannot say. "finished" is dropped (an empty mark slot on a card that
-  // reports a runtime already means "it ran and stopped"), but a FAILED or KILLED child is a different
+  // The one word no mark can say. "finished" is dropped (a card with no mark that still reports a runtime
+  // already means "it ran and stopped"), but a FAILED or KILLED child is a different
   // fact that has no glyph, so it keeps its verb — and the failure tone the tool cards already use.
   const outcome = agentStatus && agentStatus !== "completed" ? agentStatus : null
   // The tooltip says what the bare number means, and it must not contradict the mark beside it: a rested
@@ -2202,11 +2202,19 @@ export function AgentBlock({
   // a dispatch with no child record at all, where a terminal status/duration must still render.
   const showStatusMeta = !live && !agentStatus
 
-  // The liveness MARK, in a fixed-width slot that is reserved whether or not it draws anything — a run
-  // of dispatch cards then aligns its "Agent" labels and titles down one edge instead of stepping in and
-  // out as children finish. Every glyph is the shared child-op vocabulary (lib/childOps.ts), so this card
-  // and the line under the prompt box mark the same child the same way: pulsing accent = running, flat
-  // gray = stale, hollow = rested (its run over, its own fan-out still going), empty = resolved.
+  // The liveness MARK. Every glyph is the shared child-op vocabulary (lib/childOps.ts), so this card and
+  // the line under the prompt box mark the same child the same way: pulsing accent = running, flat gray =
+  // stale, hollow = rested (its run over, its own fan-out still going).
+  //
+  // A RESOLVED child gets no mark AND NO SLOT (maintainer 2026-07-29: "there's a weird gap now to the
+  // left of the word 'Agent'"). The slot used to be reserved whether or not it drew anything, so a run of
+  // cards would align its labels down one edge — but a finished card is the COMMON case in a scrolled
+  // transcript, and an empty 13px reservation there reads as a layout bug, not as "not running any more".
+  // The alternative was inventing an always-on "finished" glyph; there isn't one, and neither existing
+  // quiet glyph can be borrowed (stale means "probably still working, just quiet" and rested means "its
+  // fan-out is stranded" — both would be false of a child that simply finished). With the slot gone a
+  // resolved dispatch card leads with its petite-caps label exactly like every other tool card in the
+  // transcript, and the runtime in the right-hand column is what says it ran and stopped.
   const mark =
     running ? (
       <span aria-hidden className="fray-live-dot fray-live-dot--agent" data-running-indicator="subagent-disclosure" />
@@ -2241,10 +2249,12 @@ export function AgentBlock({
           )
         }
       >
-        {/* The mark leads the row, as it does on the prompt-box lines. `-mr-1` pulls the label back to
-            roughly the dot↔label gap those lines use: the header's own gap-2 is tuned for a petite-caps
-            label beside a path, and at full width a 6px dot floated away from the word it qualifies. */}
-        <span className="fray-agent-mark -mr-1 flex w-[9px] shrink-0 justify-center">{mark}</span>
+        {/* The mark leads the row, as it does on the prompt-box lines — and only when there IS one, so a
+            resolved card starts flush at its label instead of behind an empty reservation. `-mr-1` pulls
+            the label back to roughly the dot↔label gap those lines use: the header's own gap-2 is tuned
+            for a petite-caps label beside a path, and at full width a 6px dot floated away from the word
+            it qualifies. */}
+        {mark && <span className="fray-agent-mark -mr-1 flex w-[9px] shrink-0 justify-center">{mark}</span>}
         <span className="petite-caps fray-bash-label shrink-0">Agent</span>
         {canDrill ? (
           <button
