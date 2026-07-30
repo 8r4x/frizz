@@ -802,3 +802,39 @@ Correction during implementation: the first reduction also removed `SendMessage`
 aggressive. Every helper receives the tool, and reaching the dispatcher before returning is
 universally useful orchestration rather than repository policy. The restored wording treats it as
 available directly and therefore drops the old deferred-tool / `ToolSearch` caveat.
+
+## 2026-07-30 (sixth pass): the operator's Settings instructions move to the SYSTEM prompt
+
+Question from the maintainer: is FRAY.md eagerly loaded, and did the Settings prompt get replaced by
+it? Answer, from the code: **both exist, neither replaced the other** — and they were being treated
+very differently.
+
+- **FRAY.md** → `frayConfigBlock(projectDir)` → `extraSystemPrompt` at EVERY site (claude dispatch,
+  codex dispatch, adopt, resume, broker follow-up, router follow-up). System-level, so it already
+  survives compaction and is rebuilt on every resume. Nothing to fix.
+- **The Settings preamble** (drawer label "Subagent instructions", schema field `dispatchPreamble`) →
+  `composePrompt()` → the **FIRST USER MESSAGE** only. Never re-applied on resume, and the first user
+  message is exactly what compaction replaces with a summary. So the repo's conventions survived while
+  the operator's own standing instructions quietly did not.
+
+Fixed by giving it the same treatment as FRAY.md: new `operatorInstructionsBlock(preamble)`, added to
+the system-prompt composition at all six sites, and REMOVED from `composePrompt` (which loses its
+`customInstructions` parameter). Moved rather than duplicated — leaving it in both would carry a second
+copy of a potentially long preamble in context for the whole pre-compaction window, and the block sits
+ABOVE the task banner either way, so the visible chat bubble is unchanged.
+
+Two things fall out for free: an edited setting now reaches a thread that is ALREADY RUNNING (the
+system prompt is rebuilt on every resume), and the block states its relationship to FRAY.md — follow
+both, prefer the more specific where they genuinely conflict — so a worker meeting two operator-authored
+surfaces knows how to reconcile them.
+
+VERIFIED with a real `/compact`: a sentinel placed in `--append-system-prompt` was still readable by the
+model after the compaction boundary (`compact_boundary` present in the transcript, model returned
+`SORREL-EGRET-4402`). That is the property the move depends on, tested rather than assumed.
+
+One test needed real rework rather than a signature patch: `server.test.ts` asserted the preamble
+appeared in the composed first message — the exact behavior being moved — so it now asserts the
+opposite plus a dedicated `operatorInstructionsBlock` test. A second (`dispatch.test.ts`'s banner test)
+used `PROJECT INSTRUCTIONS` as its above-the-banner anchor; on an ABSENT string `indexOf(...) < banner`
+passes VACUOUSLY (-1 < banner), so it was re-anchored on the scratchpad line and given an explicit
+`doesNotMatch` instead. Suite 2460 pass / 0 fail, typecheck clean.

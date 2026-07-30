@@ -83,7 +83,7 @@ test("Claude dispatch still mounts + pre-approves chrome-devtools when no fray-M
 test("Claude worker surfaces share the canonical per-session scratchpad path", () => {
   const sessionId = "scratch-canonical"
   const canonical = `.fray/threads/${sessionId}/scratch.md`
-  assert.match(composePrompt(sessionId, "task", "", "claude"), new RegExp(canonical.replaceAll("/", "\\/")))
+  assert.match(composePrompt(sessionId, "task", "claude"), new RegExp(canonical.replaceAll("/", "\\/")))
   assert.match(scratchpadOrientation(sessionId, null, "claude"), new RegExp(canonical.replaceAll("/", "\\/")))
   assert.match(SESSION_SEED, /\.fray\/threads\/.*scratch\.md/)
   assert.doesNotMatch(SESSION_SEED, /\.fray\/scratch\//)
@@ -455,12 +455,12 @@ test("visual-evidence handoffs: provider contracts keep embeds safe, useful, and
 // ---- composePrompt: the first VISIBLE user message's scratchpad line is backend-aware ----
 
 test("composePrompt(claude) keeps the sub-agent blackboard framing; codex drops it", () => {
-  const claude = composePrompt("sid", "do the thing", "", "claude")
+  const claude = composePrompt("sid", "do the thing", "claude")
   assert.match(claude, /shared blackboard for your sub-agents/)
   assert.match(claude, /pass its path to every sub-agent you dispatch/)
-  assert.equal(composePrompt("sid", "do the thing", ""), claude) // default = claude (unchanged)
+  assert.equal(composePrompt("sid", "do the thing"), claude) // default = claude (unchanged)
 
-  const codex = composePrompt("sid", "do the thing", "", "codex")
+  const codex = composePrompt("sid", "do the thing", "codex")
   assert.doesNotMatch(codex, /sub-agent/)
   assert.doesNotMatch(codex, /blackboard/)
   assert.match(codex, /compaction-survival mechanism/)
@@ -471,12 +471,15 @@ test("composePrompt(claude) keeps the sub-agent blackboard framing; codex drops 
 
 test("composePrompt puts NOTHING of fray's below the banner — the operator's prompt is the whole tail", () => {
   const task = "Fix the thing.\n\nWith a second paragraph."
-  const composed = composePrompt("sid", task, "Always run lint.", "claude")
+  const composed = composePrompt("sid", task, "claude")
 
   // The banner sits between the orientation/instructions and the task, padded by blank lines.
   const banner = composed.indexOf("YOUR TASK")
   assert.notEqual(banner, -1)
-  assert.ok(composed.indexOf("PROJECT INSTRUCTIONS") < banner)
+  // Anchor on the scratchpad orientation: the operator preamble moved to the system prompt, and
+  // asserting `indexOf(...) < banner` on an ABSENT string passes vacuously (-1 < banner).
+  assert.ok(composed.indexOf("scratch.md") < banner)
+  assert.doesNotMatch(composed, /PROJECT INSTRUCTIONS/)
   assert.match(composed, /\n\n\n\n=+\n=+ {4}YOUR TASK {4}=+\n=+\n/)
   // THE property the banner exists for: below it is the operator's prompt, byte for byte. The framing
   // note that used to sit underneath now sits above, and the bare `TASK:` marker is gone entirely.
@@ -502,7 +505,7 @@ test("composePrompt puts NOTHING of fray's below the banner — the operator's p
 // all) ended up rendered in the first chat bubble of every broker thread.
 test("composePrompt round-trips through the BROKER's enqueue record with the same bubble", () => {
   const task = "run `claude rc` in this repo"
-  const composed = composePrompt("sid", task, "", "claude")
+  const composed = composePrompt("sid", task, "claude")
   const raw = [
     JSON.stringify({ type: "queue-operation", timestamp: "2026-07-01T00:00:00.000Z", operation: "enqueue", content: composed }),
     JSON.stringify({ type: "queue-operation", timestamp: "2026-07-01T00:00:00.100Z", operation: "dequeue", content: composed }),

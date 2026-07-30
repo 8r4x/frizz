@@ -9,7 +9,7 @@ import { readQuota } from "./quota.ts"
 import { refreshClaudeQuotaInBackground } from "./backend/claude-quota.ts"
 import { createBoard, type BoardManager } from "./board.ts"
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
-import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frayConfigBlock, claudeMcpConfig, resolveFrayMcp, workerPluginDir, type Dispatcher } from "./dispatch.ts"
+import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frayConfigBlock, claudeMcpConfig, resolveFrayMcp, workerPluginDir, operatorInstructionsBlock, type Dispatcher } from "./dispatch.ts"
 import { createScheduler, type Scheduler } from "./scheduler.ts"
 import {
   reattachThreadWithPermission,
@@ -349,16 +349,19 @@ export function deliverClaudeBrokerWake(deps: {
   slug: string
   cwd: string
   runtimeGate: boolean
+  /** The operator's Settings preamble, threaded so a follow-up rebuilds the SAME system prompt. */
+  operatorPreamble: string
   row: { session_id: string; plan_path?: string | null; model?: string | null; effort?: string | null; permission_mode?: string | null }
   deliveryMessage: string
   /** Retire the live daemon first — see the bridge's followUp contract and needsFreshProcessForLimit. */
   freshProcess?: boolean
 }): Promise<void> {
-  const { bridge, slug, cwd, runtimeGate, row, deliveryMessage, freshProcess } = deps
+  const { bridge, slug, cwd, runtimeGate, operatorPreamble, row, deliveryMessage, freshProcess } = deps
   const appendSystemPrompt = [
     loadWorkerPrompt("claude", runtimeGate),
     scratchpadOrientation(row.session_id, row.plan_path, "claude"),
     frayConfigBlock(cwd),
+    operatorInstructionsBlock(operatorPreamble),
   ].filter(Boolean).join("\n\n")
   return bridge.followUp({
     threadSlug: slug,
@@ -826,6 +829,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
           slug,
           cwd: project.dir,
           runtimeGate: getSettings(storage).runtimeGate !== false,
+          operatorPreamble: getSettings(storage).dispatchPreamble,
           row,
           deliveryMessage,
           // Recomputed here rather than carried on the delivery: the outbox stores a message, not a

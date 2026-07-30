@@ -320,21 +320,18 @@ export function scratchpadHookScript(): string | undefined {
 // orientation (a new dispatch owns no .fray file). The fixed worker prompt (workerPrompt.ts) and the
 // same scratchpad line at SYSTEM level travel via --append-system-prompt (see buildClaudeCommand) so
 // they survive compaction and re-apply on resume; this composes the visible-message half.
-export function composePrompt(sessionId: string, prompt: string, customInstructions: string, kind: BackendKind = "claude"): string {
+export function composePrompt(sessionId: string, prompt: string, kind: BackendKind = "claude"): string {
   const scratch =
     kind === "codex"
       ? `Your scratchpad is \`.fray/threads/${sessionId}/scratch.md\` — the CANONICAL record of this thread and your compaction-survival mechanism. Keep your task list, the approach and what you rejected, the human's decisions, and anything that must outlive your context IN it, written as you go; re-read it after any compaction or resume before asserting anything.`
       : `Your scratchpad is \`.fray/threads/${sessionId}/scratch.md\` — the CANONICAL record of this thread, your compaction-survival mechanism, and the shared blackboard for your sub-agents. Keep your task list, the approach and what you rejected, the human's decisions, and anything that must outlive your context IN it, written as you go; re-read it after any compaction or resume, and pass its path to every sub-agent you dispatch.`
-  const custom = customInstructions.trim()
-    ? `\n\nPROJECT INSTRUCTIONS (from the human operator):\n${customInstructions.trim()}`
-    : ""
   // The banner makes the system→human handoff unmistakable to the worker, and NOTHING of fray's is
   // allowed below it: the framing note goes here, ABOVE, so everything past the banner is the
   // operator's prompt byte for byte. That is also what the transcript projectors cut on
   // (DISPATCH_TASK_BANNER_MARKER), so the first chat bubble shows the operator's words alone.
   const handoff =
     "\n\nEverything above the banner below is fray system orientation. Everything below it is the human operator's own prompt, verbatim — that, and nothing else, is your task."
-  return `${scratch}${custom}${handoff}\n\n\n${DISPATCH_TASK_BANNER_MARKER}${prompt}`
+  return `${scratch}${handoff}\n\n\n${DISPATCH_TASK_BANNER_MARKER}${prompt}`
 }
 
 // The SYSTEM-level scratchpad orientation (survives compaction, rebuilds on every resume): a scratchpad
@@ -380,6 +377,17 @@ export function frayConfigBlock(projectDir: string): string {
   if (!body) return ""
   const clipped = body.length > FRAY_MD_MAX_CHARS ? `${body.slice(0, FRAY_MD_MAX_CHARS)}\n\n[FRAY.md truncated]` : body
   return `PROJECT FRAY CONFIG (from this repo's FRAY.md) — the project's own conventions for fray workers. They OVERRIDE the fray worker PROCESS defaults above (review depth, gates, git/PR conventions, the quality bar) wherever they conflict; follow them. They do NOT relax the fray-mechanical contract — the signal fences, scratchpad, and browser runtime gate still bind:\n\n${clipped}`
+}
+
+// The OPERATOR's own standing instructions (Settings → "Subagent instructions", stored as
+// `dispatchPreamble`). SYSTEM-level, exactly like FRAY.md above and for the same two reasons: it has to
+// SURVIVE COMPACTION — it used to live only in the first user message, which a summary paraphrases or
+// drops outright — and it has to be REBUILT on every resume, so editing the setting reaches a thread
+// that is already running instead of only the next new one.
+export function operatorInstructionsBlock(preamble: string | undefined): string {
+  const body = (preamble ?? "").trim()
+  if (!body) return ""
+  return `PROJECT INSTRUCTIONS (from the human operator) — standing instructions for workers on this project, set in fray's Settings. They sit ALONGSIDE this repo's FRAY.md: follow both, and where the two genuinely conflict prefer the more specific one.\n\n${body}`
 }
 
 // A DispatchInput.planPath is honored only when it is a well-formed .fray/plans/*.md path AND the file
@@ -863,7 +871,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // backends (codex's discovered rollout id is pinned separately on agent_session_id).
       const scratchRel = writeScratchpad(deps.project.dir, sessionId, title, kind)
 
-      const prompt = composePrompt(sessionId, input.prompt, settings.dispatchPreamble, kind)
+      const prompt = composePrompt(sessionId, input.prompt, kind)
       const runtimeGate = settings.runtimeGate !== false
 
       // Codex app-server transport: a PERSISTED JSON-RPC session + the prompt as its first turn. No
@@ -878,7 +886,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
           throw new Error("Codex app-server is unavailable; cannot start this thread. Check that `codex` is installed and its app-server protocol matches the pinned revision (re-pin if you upgraded codex).")
         }
-        const extraSystemPrompt = [scratchpadOrientation(sessionId, planPath, kind), frayConfigBlock(deps.project.dir)]
+        const extraSystemPrompt = [scratchpadOrientation(sessionId, planPath, kind), frayConfigBlock(deps.project.dir), operatorInstructionsBlock(settings.dispatchPreamble)]
           .filter(Boolean).join("\n\n")
         try {
           const spawned = await bridge.spawnDispatch({
@@ -946,6 +954,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           loadWorkerPrompt("claude", runtimeGate),
           scratchpadOrientation(sessionId, planPath, kind),
           frayConfigBlock(deps.project.dir),
+          operatorInstructionsBlock(settings.dispatchPreamble),
         ].filter(Boolean).join("\n\n")
         try {
           await bridge.spawnDispatch({
@@ -999,7 +1008,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         model,
         effort,
         prompt,
-        extraSystemPrompt: [scratchpadOrientation(sessionId, planPath, kind), frayConfigBlock(deps.project.dir)].filter(Boolean).join("\n\n"),
+        extraSystemPrompt: [scratchpadOrientation(sessionId, planPath, kind), frayConfigBlock(deps.project.dir), operatorInstructionsBlock(settings.dispatchPreamble)].filter(Boolean).join("\n\n"),
         kind,
         runtimeGate,
       })
@@ -1180,7 +1189,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         rollback()
         throw unavailable()
       }
-      const prompt = composePrompt(sessionId, task, settings.dispatchPreamble)
+      const prompt = composePrompt(sessionId, task)
       const permissionMode = WORKER_DISPATCH_PERMISSION.claude
       const runtimeGate = settings.runtimeGate !== false
       try {
@@ -1190,7 +1199,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           model: settings.model,
           effort: settings.effort,
           prompt,
-          extraSystemPrompt: [scratchpadOrientation(sessionId), frayConfigBlock(deps.project.dir), adoption].filter(Boolean).join("\n\n"),
+          extraSystemPrompt: [scratchpadOrientation(sessionId), frayConfigBlock(deps.project.dir), operatorInstructionsBlock(settings.dispatchPreamble), adoption].filter(Boolean).join("\n\n"),
           runtimeGate,
         })
       } catch {

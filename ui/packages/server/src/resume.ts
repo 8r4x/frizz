@@ -27,6 +27,7 @@ import {
   resolveFrayMcp,
   scratchpadOrientation,
   frayConfigBlock,
+  operatorInstructionsBlock,
   loadWorkerPrompt,
 } from "./dispatch.ts"
 import * as tmux from "./tmux.ts"
@@ -163,7 +164,7 @@ function spawnPinnedSession(
 ): PaneIdentity | void {
   const backend = deps.backendFor?.(row.backend)
   const nativeSessionId = row.agent_session_id ?? row.session_id
-  const extraSystemPrompt = [scratchpadOrientation(row.session_id, row.plan_path, backend?.kind), frayConfigBlock(deps.project.dir)].filter(Boolean).join("\n\n")
+  const extraSystemPrompt = [scratchpadOrientation(row.session_id, row.plan_path, backend?.kind), frayConfigBlock(deps.project.dir), operatorInstructionsBlock(deps.getSettings().dispatchPreamble)].filter(Boolean).join("\n\n")
   // The runtimeGate toggle must survive resume/wake/reattach: rebuild the SAME gated worker contract
   // dispatch produced and re-set the env the session-seed hook reads — otherwise an opted-out project
   // would silently get the RUNTIME RELEASE GATE forced back on the moment its worker respawns.

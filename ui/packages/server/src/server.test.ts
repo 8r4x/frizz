@@ -10,7 +10,7 @@ import type { BoardManager } from "./board.ts"
 import {
   slugify,
   resolveSlug,
-  composePrompt,
+  composePrompt, operatorInstructionsBlock,
   buildClaudeCommand,
   buildClaudeResumeCommand,
   fallbackTitle,
@@ -251,17 +251,29 @@ test("resolveSlug: appends -N on collision", () => {
   assert.equal(resolveSlug(frayDir, "baz", (s) => taken.has(s)), "baz")
 })
 
-test("composePrompt: scratchpad orientation + custom instructions + task (no thread-ownership contract)", () => {
-  const out = composePrompt("sid-123", "Do the thing.", "PREAMBLE_TEXT")
+test("composePrompt: scratchpad orientation + task, and NOT the operator's instructions", () => {
+  const out = composePrompt("sid-123", "Do the thing.")
   // Session-first: the visible first message points at the scratchpad, NOT a .fray file to own. The
   // fixed worker prompt still rides --append-system-prompt (buildClaudeCommand), not this message.
   assert.ok(out.includes(".fray/threads/sid-123/scratch.md"))
   assert.ok(!out.includes("You are a dispatched worker agent"))
   assert.ok(!out.includes("You own")) // the old ownership contract is gone
   assert.ok(!out.includes("status: blocked"))
-  assert.ok(out.includes("PROJECT INSTRUCTIONS (from the human operator):\nPREAMBLE_TEXT"))
-  assert.ok(!composePrompt("s", "x", "").includes("PROJECT INSTRUCTIONS"))
+  // The operator's Settings preamble MOVED to the system prompt (operatorInstructionsBlock). Leaving it
+  // here meant a compaction destroyed it — the first user message is exactly what a summary replaces.
+  assert.ok(!out.includes("PROJECT INSTRUCTIONS"))
   assert.ok(out.endsWith("\n\nDo the thing.")) // the task is the tail, directly below the banner
+})
+
+test("operatorInstructionsBlock is system-level, blank when unset, and names its relationship to FRAY.md", () => {
+  assert.equal(operatorInstructionsBlock(""), "")
+  assert.equal(operatorInstructionsBlock(undefined), "")
+  assert.equal(operatorInstructionsBlock("   \n  "), "")
+  const block = operatorInstructionsBlock("PREAMBLE_TEXT")
+  assert.match(block, /PROJECT INSTRUCTIONS \(from the human operator\)/)
+  assert.ok(block.endsWith("PREAMBLE_TEXT"))
+  // The two operator-authored surfaces coexist; the worker is told how to reconcile them.
+  assert.match(block, /alongside this repo's FRAY\.md/i)
 })
 
 test("scratchpadOrientation: scratchpad line always; PLAN line only when a plan is associated", () => {
