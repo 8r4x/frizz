@@ -2313,7 +2313,13 @@ function SendMessageCard({ to, summary, body, type, status, durationMs }: { to?:
   // prominent thing on the card was a meaningless hash. What the reader needs is the VERB: this turn
   // steered another agent. The recipient stays in the aria-label, where an id is still an identifier
   // rather than noise.
-  const label = isShutdown ? "Shutdown" : "Steered"
+  //
+  // …except when the recipient is `main`, which INVERTS the direction: that is a background child
+  // reporting UP to the conversation that dispatched it, and the verb is what this card is for, so it
+  // must not claim the child steered its own parent. Seen in a sub-agent's drawer, which is exactly where
+  // an upward report is read from (the chat's report line drills in here), the card read "Steered" for a
+  // message the child had sent to its dispatcher.
+  const label = isShutdown ? "Shutdown" : to === "main" ? "Reported" : "Steered"
   return (
     <div className="fray-bash">
       <button
