@@ -662,3 +662,48 @@ you SET the compaction threshold (`model_auto_compact_token_limit`, with
 predictable with headroom rather than merely detected. Wrinkle: codex enforces hook TRUST
 (`--dangerously-bypass-hook-trust` exists for automation). **fray currently wires ZERO hooks for
 codex**, so a codex worker has only prompt-level scratchpad discipline — the largest remaining gap.
+
+## 2026-07-30 (third pass): reinforcement is OPT-IN, and the two backends are gated differently
+
+Maintainer's call: the mechanism is opinionated, so it should be chosen rather than inherited. New
+`scratchpadReinforcement` setting, **OFF by default** — the inverse of `runtimeGate` /
+`autoResumeOnLimit`, which are opt-OUT. Toggle sits in the Settings drawer under "Auto-resume after
+usage limits". `scratchpad.mjs` inverted its kill switch into an opt-in gate: absence means off.
+
+**The two backends cannot be gated in the same place**, which is the whole design constraint here:
+
+- **Claude → a worker ENV VAR.** `hooks.json` is static, so `FRAY_SCRATCHPAD_HOOK=on` is what decides
+  whether the registered hooks do anything. Stamped on the tmux spawn, and on the broker/SDK path via
+  a new per-fork `extraWorkerEnv` on `ClaudeAgentBrokerBridge` — evaluated per fork, so flipping the
+  setting reaches the next dispatch or cold-resume without a server restart.
+- **Codex → per-conversation CONFIG**, on the `config` override `CodexAppServerBridge` already
+  supported, plus a `--enabled` flag. The env var is unusable there because the `codex app-server`
+  daemon is SHARED per project and its environment cannot express a per-conversation decision;
+  building the config at all already means the setting is on.
+
+### Measured, so nobody re-derives it (codex-cli 0.144.6)
+
+- **`codex exec` runs NO lifecycle hooks, from any discovery path** — not `<repo>/.codex/hooks.json`,
+  not `$CODEX_HOME/hooks.json`, not `-c hooks.…`, with or without `bypass_hook_trust=true`, inside a
+  git repo or outside one — even though the `hooks` feature flag reports as enabled. Probed with a
+  marker file so "did the hook RUN" stayed separate from "did its output reach the model".
+- **`codex app-server` DOES run them** when they arrive as config overrides. Verified through the real
+  `CodexAppServerBridge` with the real `scratchpad.mjs`: SessionStart, UserPromptSubmit and Stop all
+  fired. Probe kept at `backend/_live_codex_hooks.mts`.
+- **`bypass_hook_trust` is required** — codex SILENTLY SKIPS untrusted hook definitions, so without it
+  the config is delivered and ignored, which looks exactly like a broken feature.
+- **Codex reports its OWN rollout session id to the hook** (e.g. `019fb427-…`, `transcript_path` under
+  `~/.codex/sessions`), NOT fray's thread id. Hence the mandatory `--session=<fray sessionId>`:
+  deriving the path would address a scratchpad that does not exist, and the worker would look
+  unreinforced for a reason nobody could see. Codex does send `source` (`"startup"`), same field name
+  as Claude, so the compact/resume branch works unchanged.
+- **Codex has no PreCompact/PostCompact context-injection wire type** (only SessionStart /
+  UserPromptSubmit / PostToolUse / PreToolUse / PermissionRequest / SubagentStart), so the
+  summarizer-steering channel stays Claude-only.
+
+### Known gap, deliberately not papered over
+
+The codex NUDGE cannot fire yet: staleness is computed from Claude's transcript shape
+(`message.usage`), and a codex rollout is a different format, so `contextTokens()` returns null and
+the nudge degrades to SILENCE rather than to a wrong number — pinned by a test. Closing it needs a
+rollout-aware token parser. The load-bearing channel (restoring the pad on SessionStart) works on both.
