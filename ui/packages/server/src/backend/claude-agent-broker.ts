@@ -7,13 +7,13 @@
 //
 // Wire protocol — newline-delimited JSON frames:
 //   fray -> broker:  {t:"input", message} | {t:"permission", requestId, decision} | {t:"interrupt"} | {t:"set-mode", mode}
-//                  | {t:"cancel-input", requestId, id}
+//                  | {t:"cancel-input", requestId, id} | {t:"stop-task", requestId, taskId}
 //   broker -> fray:  {t:"hello", sessionId, generation} | {t:"event", event} | {t:"permission-request", requestId, request} | {t:"diagnostic", diagnostic}
-//                  | {t:"cancel-result", requestId, cancelled, error?}
+//                  | {t:"cancel-result", requestId, cancelled, error?} | {t:"stop-result", requestId, error?}
 //
-// `cancel-input` is the one REQUEST/RESPONSE pair in an otherwise fire-and-forget protocol, and it has
-// to be: the operator is asking whether their queued message will still be read, and "we sent the
-// cancel" is not an answer to that. The reply carries the CLI's own verdict.
+// Control actions that make a user-visible promise are REQUEST/RESPONSE pairs: `cancel-input` carries
+// the CLI's verdict about whether a message will still run, and `stop-task` returns only after the SDK
+// accepted or rejected the task stop. "We wrote a socket frame" is not either answer.
 //
 // Lifecycle mirrors codex-app-server-daemon.ts (record-after-listen, owner-checked cleanup, idle
 // exit, reachability self-collection). The recovered session-broker daemon's NAIVE unconditional

@@ -13,24 +13,25 @@ import { SheetHeader } from "./ui/SheetHeader.tsx"
 // whatever thread it was drilled into; closing reveals the thread beneath. `depth`/`widthDepth` inset
 // each successive layer so the stack reads as one.
 //
-// IT IS NO LONGER READ-ONLY, and it no longer reads as a log. The maintainer's question — "why don't
-// sub-agents opened in a drawer have the Working shimmer or a prompt box?" — split into two answers
-// that are independent on purpose:
+// IT IS NO LONGER READ-ONLY, and it no longer reads as a log:
 //
-//  · LIVENESS (always). A running child gets the same shimmering "Working…" a top-level thread gets,
-//    plus the provider's own reading of the step it is on. This never depended on being able to talk
-//    to the child — fray already knew it was live — so it lands for every provider.
+//  · LIVENESS (always). A running child gets the exact same shimmering "Working…" tail a top-level
+//    transcript gets. It belongs after the latest message INSIDE the scroller — not in a special
+//    fixed strip above the conversation, which was a needless divergence from regular rendering.
 //  · STEERING (only where it is real). A user message addressed with the child's dispatch tool_use id
 //    is routed by the CLI INTO that child's own conversation. Measured live against claude 2.1.220 /
 //    SDK 0.3.207: the child acted on it and only the CHILD's transcript carried the token, while the
 //    same session's unaddressed control reached only the main thread. It is also the ONLY channel —
-//    the SDK exposes no per-agent control request (`stopTask` and `backgroundTasks` are the whole
-//    per-task surface). It works for a broker-backed Claude thread's OWN Agent-tool children, and not
+//    It works for a broker-backed Claude thread's OWN Agent-tool children, and not
 //    for a codex child, a tmux thread, or a grandchild. Critically, addressing a child that has
 //    already FINISHED does not fail — the CLI falls the message back onto the parent's main thread,
 //    where it lands as an instruction nobody aimed there. So the SERVER decides steerability, the box
 //    is rendered only off that answer, and where it is absent the drawer states the reason instead of
 //    offering an input that cannot deliver.
+//  · STOPPING (where the provider has a control API). Claude's SDK exposes `stopTask(taskId)`, and its
+//    task registry is session-wide, so the drawer can stop direct children and descendants for a
+//    broker thread. This is deliberately separate from the × on a child row: × retires stale tracking;
+//    Stop sub-agent terminates real work and waits for the daemon/provider to confirm the request.
 //
 // INSTANT OPEN: the frame + header + spinner mount and paint IMMEDIATELY; the heavy transcript body is
 // deferred one frame (bodyReady) so the click→sheet-visible latency isn't gated on parsing/rendering a
@@ -249,6 +250,9 @@ function SubAgentSteerFooter({
       ) : note ? (
         <div className="px-1 pb-2 text-[11.5px] text-muted/70">{note}</div>
       ) : null}
+      {steerable && !stoppable && stopNote && (
+        <div className="mt-2 px-1 text-[11.5px] text-muted/70">{stopNote}</div>
+      )}
       {stoppable && (
         <div className="mt-2 flex justify-end">
           <button

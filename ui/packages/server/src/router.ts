@@ -743,8 +743,7 @@ export function createRouter(ctx: AppContext) {
     // rather than the thread's main turn. The maintainer's question — "don't we have the ability to
     // steer them with prompts?" — turned out to be yes, but only through one narrow channel: an input
     // message addressed with the child's dispatch tool_use id (`parent_tool_use_id`). There is no
-    // control request for it; `stopTask` and `backgroundTasks` are the only other per-task controls
-    // the SDK exposes.
+    // control request for STEERING. Stopping is separate and does use the SDK's `stopTask` control.
     //
     // WHY THE GATE IS STRICT. Measured live: addressing a child that has ALREADY SETTLED does not
     // error and does not vanish — the CLI falls the message back onto the MAIN thread, where the

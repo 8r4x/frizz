@@ -1241,7 +1241,7 @@ test("tailer: subAgent() resolves a LIVE child, then its RETAINED completion, th
   t.tick()
   // `direct` = this session's OWN live Agent-tool child, i.e. the one case a steer can be addressed
   // at. Everything else the lookup can resolve is readable but not addressable.
-  assert.deepEqual(t.subAgent("t", "toolu_bg"), { outputFile: "/tmp/tasks/abc123.output", state: "running", direct: true })
+  assert.deepEqual(t.subAgent("t", "toolu_bg"), { outputFile: "/tmp/tasks/abc123.output", state: "running", direct: true, taskId: "abc123" })
   assert.equal(t.subAgent("t", "toolu_unknown"), undefined, "an id we never dispatched → undefined (router maps to gone)")
 
   // completion retains the child as "done" — still resolvable for review after it leaves the live set
