@@ -13,9 +13,9 @@ import { TooltipProvider } from "./Tooltip.tsx"
 // ring, no "—". A regression here is invisible in review and immediately visible in the product, because
 // every Claude thread is in exactly that state until its first turn ends.
 //
-// PRESENCE must be findable. The percentage lives ON the surface (the dial alone was unreadable at 12.6px
-// and 60% muted), while the raw fraction stays in the tooltip. And "thinner" must not become "smaller":
-// the stroke was thinned from 3 to 2 with r raised to compensate, so the OUTER edge is still 7.5 units.
+// PRESENCE must stay WORDLESS. The dial is the whole surface — no percentage, no label — and every number
+// lives in the hover/screen-reader label instead. And "thinner" must not become "smaller": the stroke was
+// thinned from 3 to 2 with r raised to compensate, so the OUTER edge is still 7.5 units.
 
 function thread(context?: { tokens: number; window: number }): ThreadView {
   // Only the field this component reads; the cast keeps the fixture honest about that rather than
@@ -42,35 +42,34 @@ test("a meaningless denominator renders nothing rather than a fabricated fractio
   }
 })
 
-test("the percent is ON the surface and the raw fraction is NOT", () => {
+test("NO numbers on the surface — every reading lives in the label", () => {
   const html = render({ tokens: 237_000, window: 272_000 })
-  assert.match(html, />87%</, "the floored percent must be rendered as visible text")
-  assert.ok(!html.includes(">237,000"), "the token count must stay in the tooltip, not on the surface")
-  // The tooltip/screen-reader label carries both halves — that is where the numbers went, not away.
+  // The dial carries no text of its own. Anything between tags would be a label this component is
+  // deliberately not drawing (a bare "87%" was tried here and dropped).
+  assert.ok(!/>[^<]*\d/.test(html), `the surface must render no digits: ${html}`)
+  // Both halves of the fraction go to the hover/screen-reader label instead — not away.
   assert.match(html, /aria-label="Context 87% full\s+237,000 of 272,000 tokens"/)
+  // The percent is still exposed as data, which is what the e2e/DOM probes assert against.
+  assert.match(html, /data-context-percent="87"/)
 })
 
-test("the number is tabular so a live reading cannot jitter the dial beside it", () => {
-  assert.match(render({ tokens: 22_400, window: 272_000 }), /class="tabular-nums">8%</)
-})
-
-test("the percent is FLOORED — it says 100% only when the context genuinely is full", () => {
+test("the percent is FLOORED — it reads 100% only when the context genuinely is full", () => {
   // 99.9% must not round up to a full dial.
-  assert.match(render({ tokens: 271_999, window: 272_000 }), />99%</)
-  assert.match(render({ tokens: 272_000, window: 272_000 }), />100%</)
+  assert.match(render({ tokens: 271_999, window: 272_000 }), /data-context-percent="99"/)
+  assert.match(render({ tokens: 272_000, window: 272_000 }), /data-context-percent="100"/)
 })
 
 test("a nearly-empty context still draws a hairline of arc, not a bare ring", () => {
   // The arc uses the UNFLOORED fraction, so a reading that floors to 0% is still visibly non-zero.
   const html = render({ tokens: 1_088, window: 272_000 })
-  assert.match(html, />0%</, "the label floors")
+  assert.match(html, /data-context-percent="0"/, "the reading floors to 0")
   const dash = html.match(/stroke-dasharray="([\d.]+)/)
   assert.ok(dash && Number(dash[1]) > 0, "the arc length must be > 0 even at a floored 0%")
 })
 
 test("a reading that overshoots its window clamps instead of wrapping past 12 o'clock", () => {
   const html = render({ tokens: 400_000, window: 272_000 })
-  assert.match(html, />100%</)
+  assert.match(html, /data-context-percent="100"/)
   const [, filled, circumference] = html.match(/stroke-dasharray="([\d.]+) ([\d.]+)"/)!
   assert.equal(filled, circumference, "an overshoot fills exactly one revolution, never more")
 })
