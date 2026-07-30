@@ -783,3 +783,16 @@ Goldens regenerated (a deliberate contract change); the diff is the scratchpad s
 else. Two `dispatch.test.ts` assertions re-anchored — they pin the claude-keeps/codex-drops blackboard
 asymmetry and were using the retired phrase as their anchor; the behavior they check is unchanged.
 Suite 2413 pass / 0 fail, typecheck clean.
+
+## 2026-07-30 (sixth pass): keep the helper epilogue universal
+
+`hooks/agent-dispatch.mjs` appends its epilogue to every Claude `Agent` helper launched by a fray-ui
+worker, regardless of the repository or kind of task. That makes it the wrong layer for assumptions
+about compilation, shared build locks, test ownership, commits, monitors, or how long-running
+operations should be managed.
+
+The epilogue is now only the universal coordination contract: return a concise, useful handoff, and
+do not mutate the owning worker's `.fray/` state unless explicitly assigned. Task-specific
+verification and process-lifecycle instructions belong in the dispatch prompt; repository-specific
+ones belong in the repository's own guidance. Background dispatch enforcement and `name` /
+`team_name` stripping are unchanged.
