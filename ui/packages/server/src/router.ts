@@ -313,9 +313,9 @@ export function completionConfirmationHold(telemetry: SessionTelemetry | undefin
   // The real orphan case that used to strand stale rows here now retires at its `stopped` recovery
   // notification (see trackCompletions), so those never reach this filter at all.
   // DIRECT children only, for the same reason hasLiveBackgroundWork reads only those: the two must
-  // agree, and a descendant (a sub-agent's own sub-agent) is surfaced for RENDERING and carries no
-  // retirement signal of its own. A running descendant always sits under a running direct child, so the
-  // work it represents is already held by that child's row.
+  // agree, and a descendant (a sub-agent's own sub-agent) is surfaced for RENDERING. A running
+  // descendant always sits under a running-or-rested direct child, so the work it represents is
+  // already held by that child's row.
   // A type guard, so the filtered lists carry "running" into holdOps below rather than the wider view
   // union (a sub-agent can also read `rested` — its run over, its own fan-out still going — which is not
   // work this hold may claim is running).

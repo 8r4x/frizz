@@ -427,6 +427,10 @@ interface RetiredShell {
 // How many terminal sub-agents to retain per thread for drawer review (newest-wins ring).
 const RETAINED_SUBAGENTS_MAX = 20
 const RETAINED_SHELLS_MAX = 20
+// How many DESCENDANT terminal instants to hold (see TailState.descendantTerminals). Unlike the ring
+// above these are 16 bytes apiece and are read, never rendered, so this is sized to the sidecar cap —
+// one long orchestrator session in the local corpus accumulated 104 descendants across a day.
+const DESCENDANT_TERMINALS_MAX = 512
 // How many un-answered `SendMessage` summaries to hold (see TailState.pendingResumes). Each is
 // consumed one record after it is recorded, so this only ever bounds the pathological case.
 const PENDING_RESUMES_MAX = 32
@@ -482,6 +486,12 @@ export interface TailState extends FoldState {
   codexSubAgents?: CodexSubAgentTracker
   // completed shells retained so an already-open output drawer can render the terminal tail.
   retiredShells: Map<string, RetiredShell>
+  // DESCENDANT agent id → the instant its last TERMINAL <task-notification> was folded, in epoch ms.
+  // A descendant (a sub-agent's own sub-agent) is never in `subAgents`, so the notification that
+  // retires it correlates to no live entry — but it IS in this thread's transcript, and it is the only
+  // prompt rest signal the branch has. See recordDescendantTerminal. Bounded; keyed by task-id, which
+  // IS the agent id, so it joins straight onto a sidecar. Absent until the first one lands.
+  descendantTerminals?: Map<string, number>
   // SendMessage tool_use id → the `summary` that call carried, held only until its tool_result lands
   // (the very next record). A RESTART ack names the child's runtime id and its output path but nothing
   // about the work, so this is the label of last resort when `trackResumes` has to mint a row for a
@@ -871,6 +881,34 @@ function retireToRing(state: TailState, entry: SubAgentEntry, finishedAt: string
   }
 }
 
+// Remember that a DESCENDANT reported a terminal status. This is the rest signal the descendant rows
+// used to have no access to, and it was hiding in plain sight: when a sub-agent's own sub-agent stops,
+// the <task-notification> is enqueued on the ROOT session — the transcript this fold already reads —
+// carrying `<task-id>` (the agent id, which is the sidecar's own filename key) and `<tool-use-id>`.
+// The notification correlates to no LIVE entry, because a descendant is derived from sidecars and was
+// never tracked in `subAgents`, so trackCompletions used to drop it on the floor and descendant
+// liveness fell back entirely to SUBAGENT_STALE_MS — 15 minutes of a rested grandchild reading
+// "running", its duration counting up from spawn the whole time. Measured on the live board
+// (nub session 0bb9560b, 2026-07-30): 36 of 38 depth-2 descendants had a terminal notification sitting
+// in the root transcript, each landing 0-13s AFTER the descendant's own last write; the 2 without one
+// were the 2 genuinely still running. Reported by the maintainer as "when I click into the
+// sub-sub-agents, a lot of them have rested or stopped, even though they're still showing up as
+// running actively".
+function recordDescendantTerminal(state: TailState, agentId: string, at: number): void {
+  const seen = state.descendantTerminals ?? new Map<string, number>()
+  state.descendantTerminals = seen
+  // Newest-wins, and re-inserted so eviction order stays insertion order. A task-id CAN notify more
+  // than once (the notification says so itself — a resumed agent re-notifies), and the LAST one is the
+  // reading that matters: see descendantState, which measures the transcript against this instant.
+  seen.delete(agentId)
+  seen.set(agentId, at)
+  while (seen.size > DESCENDANT_TERMINALS_MAX) {
+    const oldest = seen.keys().next().value
+    if (oldest === undefined) break
+    seen.delete(oldest)
+  }
+}
+
 // Retire a live entry however it was CORRELATED (by tool_use id from a notification, or by runtime
 // task id from a manual stop) — the map key is always its tool_use id. Both kinds retain the bounded
 // metadata their read-only drawers need. The single exit for every terminal signal.
@@ -968,6 +1006,16 @@ interface DescendantSidecar {
 // How many sidecars one resolution pass will read. A bound, not an opinion: a long orchestrator
 // session can accumulate hundreds of descendants and this runs behind a polling drawer.
 const DESCENDANT_SIDECAR_MAX = 512
+
+// How far a descendant's transcript may advance PAST its own terminal notification while still reading
+// as finished. Two different clocks are being compared — a record's ISO timestamp against a file's
+// mtime — and the notification is written a beat AFTER the work it reports, so a bare `mtime > notified`
+// would call a settled descendant "resumed" on sub-second skew. Sized off the real distribution (nub
+// session 0bb9560b): of 36 notified depth-2 descendants, 34 last wrote 2-609s BEFORE their
+// notification, 2 landed inside the same second, and the ONE genuinely resumed descendant wrote again
+// 172s after — so anything from ~1s to ~170s separates the two populations. 5s sits in that gap with
+// room on both sides, and a resume that IS missed self-heals on the descendant's next write.
+const DESCENDANT_NOTIFY_GRACE_MS = 5_000
 
 // Read a session's descendant sidecars. DEGRADES at every level and never throws — a missing dir, an
 // unreadable file, half-written JSON, a body that is not an object are each skipped, because this runs
@@ -1210,7 +1258,9 @@ function notificationText(rec: Record): string | undefined {
 }
 
 function trackCompletions(state: TailState, rec: Record): void {
-  if (state.subAgents.size === 0) return
+  // A RETIRED child still anchors a live branch (see anchorRoots), and the descendants hanging off it
+  // notify through here too — so an empty live map alone no longer means there is nothing to correlate.
+  if (state.subAgents.size === 0 && state.retiredSubAgents.size === 0) return
   const raw = notificationText(rec)
   if (!raw || !raw.includes("<task-notification>")) return
   for (const block of raw.match(/<task-notification>[\s\S]*?<\/task-notification>/g) ?? []) {
@@ -1243,10 +1293,17 @@ function trackCompletions(state: TailState, rec: Record): void {
       const entry = state.subAgents.get(m[1])
       if (entry) doomed.add(entry)
     }
+    const stampedAt = typeof rec.timestamp === "string" ? Date.parse(rec.timestamp) : Number.NaN
     for (const m of block.matchAll(/<task-id>([^<]*)<\/task-id>/g)) {
       if (m[1].startsWith("__orphan_summary__")) continue // internal scan sentinel — correlates to nothing
       const entry = findLiveByTaskId(state, m[1])
       if (entry) doomed.add(entry)
+      // Nothing live under this task id. For a DIRECT child that just means the notify is a repeat of
+      // one already folded; for a DESCENDANT it is the branch's only rest signal, and there is no way
+      // to tell the two apart from here (a descendant is not tracked, so its absence looks identical).
+      // Recording both is safe: only a depth>=2 sidecar is ever measured against this map, and a
+      // direct child's id simply never gets looked up in it.
+      else if (Number.isFinite(stampedAt)) recordDescendantTerminal(state, m[1], stampedAt)
     }
     for (const entry of doomed) retireLive(state, entry, typeof rec.timestamp === "string" ? rec.timestamp : undefined, terminal)
   }
@@ -2303,7 +2360,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   // depth is a new FILE in that flat dir, which is exactly what moves the dir's mtime. A sidecar is
   // written once at spawn and not rewritten, so mtime is a complete invalidation signal here.
   const descendantIndex = new Map<string, { at: number | undefined; all: DescendantSidecar[]; byToolUse: Map<string, DescendantSidecar> }>()
-  const subtreeMemo = new Map<string, { at: number | undefined; second: number; live: number; retired: number; value: Map<string, SubAgentView[]> }>()
+  const subtreeMemo = new Map<string, { at: number | undefined; second: number; live: number; retired: number; terminals: number; value: Map<string, SubAgentView[]> }>()
 
   function sessionDirOf(state: TailState): string {
     return state.path.replace(/\.jsonl$/, "")
@@ -2330,16 +2387,28 @@ export function createTailer(deps: TailerDeps): Tailer {
     return join(sessionDirOf(state), "subagents", `agent-${meta.agentId}.jsonl`)
   }
 
-  // A descendant's liveness. The provider's own task table is authoritative when it holds the row —
-  // its task id IS the agent id, and it says outright whether the child finished — which is precisely
-  // the reading the `task_*` stream exists to give. Otherwise fall back to the same mtime rule every
-  // tracked child uses. Deliberately never "done" on a guess: a child that has merely gone quiet reads
-  // "stale", and a transcript that does not stat at all reads "stale" too rather than claiming a
-  // completion nothing reported.
+  // A descendant's liveness, in order of authority.
+  //
+  //  1. The provider's own task table, when it holds the row — its task id IS the agent id, and it says
+  //     outright whether the child finished. Broker rows only; a tmux row has no such table.
+  //  2. This thread's own transcript: the descendant's terminal <task-notification>, folded by
+  //     trackCompletions into `descendantTerminals`. Available on EVERY backend, because it rides the
+  //     file the tailer already reads. See recordDescendantTerminal for why it exists.
+  //  3. Silence, the coarse fallback — the same mtime rule every tracked child uses.
+  //
+  // (2) is measured against the transcript rather than trusted outright, because the same task-id
+  // notifies again each time a resumable descendant stops: a transcript still advancing WELL past its
+  // last notification is a descendant that was resumed, and it must read running again. "Well past" is
+  // the grace below, not zero — the notification is written a beat after the descendant's own final
+  // record, and the two instants come from different clocks (a record timestamp vs a file mtime).
+  // Deliberately never "done" on a guess: a child that has merely gone quiet, with nothing having
+  // reported it finished, still reads "stale".
   function descendantState(state: TailState, meta: DescendantSidecar): "running" | "stale" | "done" {
     const task = deps.runtimeTasks?.(state.sessionId).find((entry) => entry.taskId === meta.agentId)
     if (task?.terminal) return "done"
     const at = mtimeMs(descendantTranscript(state, meta))
+    const notified = state.descendantTerminals?.get(meta.agentId)
+    if (notified !== undefined && (at === undefined || at <= notified + DESCENDANT_NOTIFY_GRACE_MS)) return "done"
     return at === undefined || now() - at > SUBAGENT_STALE_MS ? "stale" : "running"
   }
 
@@ -2395,12 +2464,13 @@ export function createTailer(deps: TailerDeps): Tailer {
   // one row and the whole branch under it was invisible on every surface (rail, card, ops strip,
   // completion hold). The sidecars already describe that tree; this turns them into rows.
   //
-  // RUNNING-ONLY, deliberately. A direct child leaves the list on its <task-notification>; a descendant
-  // has no such signal here — its sidecar is written once at spawn and never deleted — so admitting
-  // "stale" would pin a phantom row under the thread FOREVER, one per grandchild that ever ran. Running
-  // is the only reading that retires itself. The one exception is an ancestor of something running: it
-  // keeps its row even when quiet, because otherwise a live great-grandchild would have nothing to
-  // indent under and would read as a child of the wrong agent.
+  // RUNNING-ONLY, deliberately. A descendant's sidecar is written once at spawn and never deleted, so
+  // admitting "stale" would pin a phantom row under the thread FOREVER, one per grandchild that ever
+  // ran. Running is the only reading that retires itself — and since descendantState folds the
+  // descendant's own terminal <task-notification>, a rested one stops reading `running` the tick that
+  // notification lands rather than 15 minutes later. The one exception is an ancestor of something
+  // running: it keeps its row even when quiet, because otherwise a live great-grandchild would have
+  // nothing to indent under and would read as a child of the wrong agent.
   //
   // Returns subtrees keyed by the DIRECT child they hang off, each already in depth-first order, so the
   // caller can splice each one in directly behind its parent's row and get a tree by reading top down.
@@ -2418,10 +2488,15 @@ export function createTailer(deps: TailerDeps): Tailer {
     // change signature on the same tick. Memo per (sidecar-dir mtime, tracked-child counts, second) so
     // those calls collapse into one pass — a one-second grain is far finer than the staleness window it
     // feeds, so no running→gone transition is held back by it.
+    // A newly-folded descendant terminal moves NONE of the other keys — a notification is a record in
+    // this thread's transcript, not a file in the sidecar dir — so without counting them here the row
+    // it retires would sit on the board until the second ticked over, and a test that ticks twice in
+    // one millisecond would never see the retirement at all.
     const second = Math.floor(nowMs / 1000)
     const dirAt = descendantIndex.get(state.slug)?.at
+    const terminals = state.descendantTerminals?.size ?? 0
     const memo = subtreeMemo.get(state.slug)
-    if (memo && memo.at === dirAt && memo.second === second && memo.live === state.subAgents.size && memo.retired === state.retiredSubAgents.size) return memo.value
+    if (memo && memo.at === dirAt && memo.second === second && memo.live === state.subAgents.size && memo.retired === state.retiredSubAgents.size && memo.terminals === terminals) return memo.value
 
     const byAgentId = new Map<string, DescendantSidecar>()
     for (const meta of all) byAgentId.set(meta.agentId, meta)
@@ -2461,7 +2536,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       }
     }
     const remember = (value: Map<string, SubAgentView[]>): Map<string, SubAgentView[]> => {
-      subtreeMemo.set(state.slug, { at: dirAt, second, live: state.subAgents.size, retired: state.retiredSubAgents.size, value })
+      subtreeMemo.set(state.slug, { at: dirAt, second, live: state.subAgents.size, retired: state.retiredSubAgents.size, terminals, value })
       return value
     }
     if (shown.size === 0) return remember(empty)

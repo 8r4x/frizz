@@ -177,9 +177,10 @@ function futureSnooze(row: Pick<SessionRow, "snoozed_until">, nowMs: number): st
 //
 // DIRECT children only (isDirectSubAgent). `subAgents` also carries the thread's live DESCENDANTS now —
 // a sub-agent's own sub-agents — but those are a rendering concern and must never move thread state: a
-// descendant has no retirement signal in this transcript, so counting one would hold a finished thread
-// out of the queue for the whole staleness window after its grandchild stopped. A running descendant
-// implies a running direct child anyway, so nothing is lost by reading only the top level.
+// descendant's row is derived from a sidecar plus a liveness reading, so counting one would put thread
+// state at the mercy of that reading rather than of a signal about this thread's OWN work. A running
+// descendant implies a running-or-rested direct child anyway, so nothing is lost by reading only the
+// top level.
 function hasLiveBackgroundWork(tele: SessionTelemetry | undefined): boolean {
   return Boolean(tele?.subAgents?.some((agent) => isDirectSubAgent(agent) && agent.state === "running"))
 }
