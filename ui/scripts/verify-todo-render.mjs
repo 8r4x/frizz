@@ -6,10 +6,11 @@
 // (maintainer 2026-07-29). The server now folds the whole list across the transcript and this drives
 // the REAL pipeline for it — JSONL → tailer → transcript projection → ChatView → TodoBlock.
 //
-// Asserted here and nowhere else: the headline is the changed task's SUBJECT (resolvable only from the
-// fold's registry, since the call itself never carries it), the description is NOT the title, the
-// progress counter is right, the body checklist opens with one row per task and the changed row marked,
-// and the checkbox glyph's INK sits on the optical centre of the text beside it (the alignment gate).
+// Asserted here and nowhere else: only the calls that ENUMERATE become checklists (TaskList's result,
+// codex's update_plan, TodoWrite) while the per-task deltas stay ordinary cards titled by their change;
+// no card is titled by its description; the counter and the in-progress headline are right; a long task
+// wraps instead of clipping; and the checkbox glyph's INK sits on the optical centre of the text beside
+// it (the alignment gate).
 //
 // Usage: npx tsx scripts/verify-todo-render.mjs --port=4931 --home=/abs/temp-home [--shots=/abs/dir]
 import { execFileSync } from "node:child_process"
@@ -71,7 +72,8 @@ toolCall("tu3", "TaskUpdate", { taskId: "3", status: "completed", description: R
 toolResult("tu3", "Updated task #3 status, description")
 assistant("Two down. Here is where the list stands.")
 toolCall("tl1", "TaskList", {})
-toolResult("tl1", TASKS.map((s, i) => `#${i + 1} [${i === 0 || i === 2 ? "completed" : "pending"}] ${s}`).join("\n"))
+const STANDING = ["completed", "in_progress", "completed", "pending"]
+toolResult("tl1", TASKS.map((s, i) => `#${i + 1} [${STANDING[i]}] ${s}`).join("\n"))
 assistant("Continuing with the remaining two.")
 
 writeFileSync(join(logDir, `${SESSION_ID}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
@@ -146,74 +148,64 @@ try {
   for (const toggle of await page.$$('button[aria-label*="tool calls"]')) {
     if ((await toggle.evaluate((el) => el.getAttribute("aria-expanded"))) === "false") await toggle.click()
   }
-  await page.waitForFunction(() => document.querySelectorAll("[data-todo-card]").length >= 8, { timeout: 10_000 })
+  await page.waitForFunction(() => document.querySelectorAll("[data-todo-card]").length >= 1, { timeout: 10_000 })
 
-  const headers = await page.evaluate(() =>
+  const cardsSeen = await page.evaluate(() =>
     [...document.querySelectorAll("[data-todo-card]")].map((card) => {
       const header = card.querySelector(".fray-bash-header")
-      return {
-        label: header.querySelector(".fray-bash-label").textContent,
-        aria: header.getAttribute("aria-label"),
-        text: header.textContent.replace(/\s+/g, " ").trim(),
-        marks: header.querySelectorAll("svg.fray-todo-mark").length,
-      }
+      return { text: header.textContent.replace(/\s+/g, " ").trim(), marks: header.querySelectorAll("svg.fray-todo-mark").length }
     }))
+  // ONE checklist card in this thread: the TaskList. The four creates and three updates carry no list, so
+  // they must NOT be promoted into to-do cards — inventing a list for them is exactly what this doesn't do.
+  check(cardsSeen.length === 1, "only the enumerating call becomes a checklist card", `saw ${cardsSeen.length}: ${JSON.stringify(cardsSeen.map((c) => c.text))}`)
+  // "Todos", not "TODOS": the caps are CSS (petite-caps), so textContent carries the authored case.
+  check(cardsSeen[0].text.startsWith("Todos"), "and it carries the Todos label", cardsSeen[0].text)
+  check(cardsSeen[0].text.includes("2/4"), "its header counts the list it returned", cardsSeen[0].text)
+  check(cardsSeen[0].text.includes("Fix the coarse network grant"), "and headlines the step IN PROGRESS", cardsSeen[0].text)
 
-  check(headers.length === 8, "every to-do call renders a to-do card (4 creates, 3 updates, 1 list)", `saw ${headers.length}`)
-  check(headers.every((h) => h.label === "Todos"), "every card carries the Todos label", JSON.stringify(headers.map((h) => h.label)))
-  // THE REPORTED DEFECT: the description must not be the title, on any card.
-  check(!headers.some((h) => h.text.includes("MAINTAINER RULING")), "no card titles itself with the task description",
-    headers.find((h) => h.text.includes("MAINTAINER RULING"))?.text)
-  // The delta cards resolve their SUBJECT out of the fold's registry — the call never carries it.
-  const completed = headers[6]
-  check(completed.text.includes("Drop per-host on macOS"), "a status-only delta headlines the task's subject", completed.text)
-  check(completed.text.includes("2/4"), "the header counts progress over the whole list", completed.text)
-  check(headers[4].text.includes("Confine reads on Windows") && headers[4].text.includes("0/4"), "an in-progress update headlines its own task", headers[4].text)
-  check(headers[0].text.includes("1/1") === false && headers[0].text.includes("0/1"), "the first create's counter is the list as it stood THEN", headers[0].text)
-  check(headers.every((h) => h.marks <= 1), "the header carries at most one status glyph", JSON.stringify(headers.map((h) => h.marks)))
-  check(headers[7].text.includes("2/4") && !headers[7].text.match(/\d\/\d.*\d\/\d/), "the TaskList card reads as the list's standing", headers[7].text)
+  // The deltas: ordinary cards, titled by the CHANGE — and never by the 600-char description.
+  const deltas = await page.evaluate(() =>
+    [...document.querySelectorAll(".fray-bash")].map((c) => {
+      const h = c.querySelector(".fray-bash-header")
+      return { label: h?.querySelector(".fray-bash-label")?.textContent, text: h?.textContent.replace(/\s+/g, " ").trim() }
+    }).filter((c) => c.label && /^Task(Create|Update|Get)$/.test(c.label)))
+  check(deltas.length === 7, "every delta renders as an ordinary tool card", `saw ${deltas.length}`)
+  check(!deltas.some((d) => d.text.includes("MAINTAINER RULING")), "NO card is titled by its task description",
+    deltas.find((d) => d.text.includes("MAINTAINER RULING"))?.text)
+  check(deltas.some((d) => d.text.includes("Confine reads on Windows")), "a create is titled by its subject",
+    JSON.stringify(deltas.map((d) => d.text).slice(0, 4)))
+  check(deltas.some((d) => d.text.includes("#1 \u2192 completed")) && deltas.some((d) => d.text.includes("#1 \u2192 in progress")),
+    "a status-only update is titled by the change it makes, in sentence case",
+    JSON.stringify(deltas.map((d) => d.text)))
+  check(!cardsSeen.some((c) => c.marks > 1), "the checklist header carries at most one status glyph", JSON.stringify(cardsSeen.map((c) => c.marks)))
 
   // ---- the checklist body ----
-  // Card 4 is the in_progress update: its list carries all three row states at once, which is both the
-  // most informative screenshot and the only one that can ink-measure every glyph in one pass.
-  const cards = await page.$$("[data-todo-card]")
-  await cards[4].$eval(".fray-bash-header", (el) => el.click())
-  await cards[7].$eval(".fray-bash-header", (el) => el.click())
+  const listCard = (await page.$$("[data-todo-card]"))[0]
+  await listCard.$eval(".fray-bash-header", (el) => el.click())
   await page.waitForSelector("[data-todo-card] .fray-todo-list", { timeout: 10_000 })
   const body = await page.evaluate(() =>
-    [...document.querySelectorAll("[data-todo-card]")].map((card) =>
-      [...card.querySelectorAll(".fray-todo-list .fray-todo-row")].map((row) => ({
-        text: row.textContent.replace(/\s+—\s+(to do|in progress|done)$/, "").trim(),
-        changed: row.dataset.changed === "true",
-        status: row.textContent.match(/—\s+(to do|in progress|done)$/)?.[1],
-      })),
-    ).filter((rows) => rows.length))
-  const [current, standing] = body
-  check(body.length === 2, "only the two opened cards mount a checklist", `saw ${body.length}`)
-  check(standing.length === 4, "the list card's body lists every task, one row each", `saw ${standing.length}`)
-  check(standing[0].text.startsWith("Confine reads on Windows"), "the rows keep creation order", standing.map((r) => r.text).join(" | "))
-  check(standing.filter((r) => r.status === "done").length === 2 && standing.filter((r) => r.status === "to do").length === 2,
-    "the list card's rows carry each task's own status", JSON.stringify(standing.map((r) => r.status)))
-  // The in_progress card: exactly one current row, and it is the one the header headlines.
-  check(current.filter((r) => r.status === "in progress").length === 1, "the in-progress card marks exactly one row current", JSON.stringify(current.map((r) => r.status)))
-  check(current.filter((r) => r.changed).length === 1 && current.find((r) => r.changed)?.status === "in progress",
-    "the changed row is the one the header headlines", JSON.stringify(current))
-  // The description the generic card used as its title is still REACHABLE — in the body, as a note pane.
-  const notes = await page.evaluate(() => [...document.querySelectorAll("[data-todo-card] .fray-bash-output-body")].map((p) => p.textContent))
-  check(notes.length === 0, "an update with no description mounts no note pane", JSON.stringify(notes))
-  const descCard = await page.$$("[data-todo-card]")
-  await descCard[6].$eval(".fray-bash-header", (el) => el.click())
-  await page.waitForFunction(() => document.querySelectorAll("[data-todo-card] .fray-bash-output-body").length === 1, { timeout: 10_000 })
-  const withNote = await page.evaluate(() => {
-    const pane = document.querySelector("[data-todo-card] .fray-bash-output-body")
-    return { label: pane.previousElementSibling?.textContent, text: pane.textContent }
-  })
-  check(withNote.text.includes("MAINTAINER RULING"), "the description IS reachable, as the body's note pane", withNote.text?.slice(0, 60))
-  check(withNote.label === "note", "the note pane is labelled", withNote.label)
+    [...document.querySelectorAll("[data-todo-card] .fray-todo-list .fray-todo-row")].map((row) => ({
+      text: row.textContent.replace(/\s+\u2014\s+(to do|in progress|done)$/, "").trim(),
+      current: row.dataset.current === "true",
+      status: row.textContent.match(/\u2014\s+(to do|in progress|done)$/)?.[1],
+    })))
+  check(body.length === 4, "the body lists every task the result enumerated, one row each", `saw ${body.length}`)
+  check(body[0].text.startsWith("Confine reads on Windows"), "the rows keep the order the result gave", body.map((r) => r.text).join(" | "))
+  check(body.filter((r) => r.status === "done").length === 2 && body.filter((r) => r.status === "in progress").length === 1
+    && body.filter((r) => r.status === "to do").length === 1, "each row carries its own status", JSON.stringify(body.map((r) => r.status)))
+  check(body.filter((r) => r.current).length === 1 && body.find((r) => r.current)?.status === "in progress",
+    "the in-progress row is the tinted one, and it is what the header headlines", JSON.stringify(body))
 
-  // A row longer than the card WRAPS, and wraps under its own text — the checkbox keeps its column and
-  // the continuation lines stay indented past it. `.fray-bash` is overflow:hidden, so the failure mode is
-  // a silently amputated task, with no ellipsis to admit it.
+  // The description is still REACHABLE — as the delta card's expandable body, just not as its title.
+  const noteCard = await page.evaluateHandle(() =>
+    [...document.querySelectorAll(".fray-bash")].find((c) => c.querySelector(".fray-bash-label")?.textContent === "TaskCreate"))
+  await noteCard.asElement().$eval(".fray-bash-header", (el) => el.click())
+  await page.waitForFunction(() => [...document.querySelectorAll(".fray-bash-output-body")].some((p) => p.textContent.includes("MAINTAINER RULING")), { timeout: 10_000 })
+  check(true, "the description IS reachable, in the delta card's expandable body")
+
+  // A row longer than the card WRAPS, and wraps under its own text — the checkbox keeps its column and the
+  // continuation lines stay indented past it. `.fray-bash` is overflow:hidden, so the failure mode is a
+  // silently amputated task, with no ellipsis to admit it.
   const wrap = await page.evaluate(() => {
     const rows = [...document.querySelectorAll("[data-todo-card] .fray-todo-list .fray-todo-row")]
     const long = rows.find((r) => r.textContent.includes("sandbox/integration"))
@@ -224,7 +216,6 @@ try {
     return {
       lines: lines.length,
       escapesRight: Math.round(Math.max(...lines.map((l) => l.right)) - list.right),
-      // every wrapped line starts to the RIGHT of the checkbox, i.e. nothing tucks under the glyph
       indented: lines.every((l) => l.left >= glyph.right - 0.5),
       rowTallerThanOneLine: long.getBoundingClientRect().height > lines[0].height * 1.5,
     }
@@ -293,21 +284,33 @@ try {
         vsStringInk: +(mid(stringInk) - mid(glyphInk)).toFixed(2),
       }
     }
-    const rowsOf = (card) => [...card.querySelectorAll(".fray-todo-list .fray-todo-row")]
-    const opened = [...document.querySelectorAll("[data-todo-card]")].filter((c) => rowsOf(c).length)
-    const rows = rowsOf(opened[0])
+    const card = document.querySelector("[data-todo-card]")
+    const rows = [...card.querySelectorAll(".fray-todo-list .fray-todo-row")]
     const byStatus = (word) => rows.find((r) => r.textContent.trim().endsWith(word))
     // The header glyph aligns to the HEADLINE beside it, not to the petite-caps label (which carries its
     // own separate optical correction) — so measure inside the headline group specifically.
-    const headline = document.querySelectorAll("[data-todo-card]")[6].querySelector("[data-todo-headline]")
     return [
       analyze(byStatus("to do"), "row · pending"),
       analyze(byStatus("in progress"), "row · in progress"),
-      analyze(rowsOf(opened[1]).find((r) => r.textContent.trim().endsWith("done")), "row · completed"),
-      analyze(headline, "header · completed"),
+      analyze(byStatus("done"), "row · completed"),
+      analyze(card.querySelector("[data-todo-headline]"), "header · current"),
     ]
   }
+  // nowrap for the MEASUREMENT ONLY (the screenshots above are already taken, unaffected): a wrapped row
+  // makes `baselineOfTextNode` report the LAST line's baseline while the glyph aligns to the first, which
+  // read as an 18px error on the long task here and a 42px one at 2x. It is the instrument's blind spot,
+  // not a defect in the row — the wrap itself is asserted above, at the real width.
+  // ...and removed immediately after, by its own HANDLE. The screenshots are captured below, and a leaked
+  // nowrap turns the long task into a clipped one in the evidence (it did — the shot showed "…per-OS ja"
+  // against the card edge). Removing it by scanning `querySelectorAll("style")` for the text is NOT the
+  // way: in dev, Vite injects the whole app CSS as a <style>, and diff.css contains both "fray-todo-row"
+  // and "nowrap" — that predicate deleted the entire stylesheet, which then showed up as a bogus
+  // header-collision failure at 420px on an unstyled page.
+  const nowrapTag = await page.addStyleTag({ content: ".fray-todo-row,.fray-bash-header [data-todo-headline]{white-space:nowrap}" })
+  await new Promise((r) => setTimeout(r, 150))
   const align = await page.evaluate(measureInk)
+  await nowrapTag.evaluate((el) => el.remove())
+  await new Promise((r) => setTimeout(r, 150))
   for (const a of align) console.log(`      ink  ${a.glyph.padEnd(20)} text ${a.fontSize}px  glyph ink ${a.glyphInkHeight}px  nudge ${a.nudgeDownPx > 0 ? "+" : ""}${a.nudgeDownPx}px  (vs this string's own ink ${a.vsStringInk}px)`)
   // Sub-pixel is under the device grid; past ~0.3px the eye reads the glyph as riding high or low.
   const worst = align.reduce((w, a) => (Math.abs(a.nudgeDownPx) > Math.abs(w.nudgeDownPx) ? a : w))
@@ -315,16 +318,16 @@ try {
     `worst: ${worst.glyph} off by ${worst.nudgeDownPx}px`)
   if (shots) {
     mkdirSync(shots, { recursive: true })
-    const shot = await page.$$("[data-todo-card]")
-    await shot[6].screenshot({ path: join(shots, "todo-header.png") })
-    await shot[4].screenshot({ path: join(shots, "todo-open.png") })
-    await shot[7].screenshot({ path: join(shots, "todo-list.png") })
+    await (await page.$("[data-todo-card]")).screenshot({ path: join(shots, "todo-list.png") })
+    const deltaShot = await page.evaluateHandle(() =>
+      [...document.querySelectorAll(".fray-bash")].find((c) => c.querySelector(".fray-bash-label")?.textContent === "TaskCreate"))
+    await deltaShot.asElement().screenshot({ path: join(shots, "todo-delta.png") })
     await page.screenshot({ path: join(shots, "todo-thread.png") })
     // The band at a narrow width: nothing may escape the card or collide with the counter.
     await page.setViewport({ width: 420, height: 900, deviceScaleFactor: 2 })
     await new Promise((r) => setTimeout(r, 400))
     const narrow = await page.evaluate(() => {
-      const card = [...document.querySelectorAll("[data-todo-card]")][6]
+      const card = document.querySelector("[data-todo-card]")
       const b = card.getBoundingClientRect()
       const head = card.querySelector(".fray-bash-header").getBoundingClientRect()
       const right = card.querySelector(".fray-bash-header > span:last-child").getBoundingClientRect()
@@ -332,8 +335,7 @@ try {
       return { escapes: Math.round(head.right - b.right), collides: left.right > right.left + 1 }
     })
     check(narrow.escapes <= 1 && !narrow.collides, "the header holds at 420px — no escape, no collision", JSON.stringify(narrow))
-    const narrowCards = await page.$$("[data-todo-card]")
-    await narrowCards[6].screenshot({ path: join(shots, "todo-narrow.png") })
+    await (await page.$("[data-todo-card]")).screenshot({ path: join(shots, "todo-narrow.png") })
     await page.setViewport({ width: 1400, height: 1100, deviceScaleFactor: 2 })
     console.log(`      shots → ${shots}`)
   }
@@ -353,10 +355,8 @@ try {
   for (const toggle of await page.$$('button[aria-label*="tool calls"]')) {
     if ((await toggle.evaluate((el) => el.getAttribute("aria-expanded"))) === "false") await toggle.click()
   }
-  await page.waitForFunction(() => document.querySelectorAll("[data-todo-card]").length >= 8, { timeout: 10_000 })
-  const reopened = await page.$$("[data-todo-card]")
-  await reopened[4].$eval(".fray-bash-header", (el) => el.click())
-  await reopened[7].$eval(".fray-bash-header", (el) => el.click())
+  await page.waitForFunction(() => document.querySelectorAll("[data-todo-card]").length >= 1, { timeout: 10_000 })
+  await (await page.$("[data-todo-card]")).$eval(".fray-bash-header", (el) => el.click())
   await page.waitForSelector("[data-todo-card] .fray-todo-list", { timeout: 10_000 })
   const scaled = await page.evaluate(measureInk)
   for (const a of scaled) console.log(`      ink@2x  ${a.glyph.padEnd(20)} text ${a.fontSize}px  nudge ${a.nudgeDownPx > 0 ? "+" : ""}${a.nudgeDownPx}px`)

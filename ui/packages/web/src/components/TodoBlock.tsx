@@ -1,23 +1,21 @@
 import { useId, useState, type ReactNode } from "react"
 import { ChevronRight, Square, SquareCheckBig, SquareDot } from "lucide-react"
-import type { TranscriptTodo, TranscriptToolCall } from "@fray-ui/shared"
+import type { TranscriptTodo } from "@fray-ui/shared"
 
-// THE TO-DO LIST CARD — every provider's built-in checklist, one rendering.
+// THE TO-DO LIST CARD — for the calls that actually list the whole thing out.
 //
-// The call itself is a poor thing to draw: Claude Code's TaskUpdate is `{taskId:"3", status:"completed"}`
-// and its TaskCreate's real content is a paragraph-long `description`. The generic tool card picked that
-// description as its title, so three consecutive updates read as three walls of maintainer prose with no
-// hint of what had actually changed (maintainer 2026-07-29). The server now folds the whole list instead
-// (transcript.ts, the TO-DO LIST section) and hands this card the state AFTER the call.
+// Claude Code's `TaskList` (its result enumerates every task), codex's `update_plan` and the legacy
+// `TodoWrite` (both pass the entire list on every call). Their siblings TaskCreate/TaskUpdate are
+// per-task deltas that carry no list, and the projector deliberately does not accumulate one for them
+// (see transcript.ts) — they stay ordinary tool cards, just with an honest title instead of the
+// paragraph-long `description` the generic detail fallback used to promote.
 //
-// COLLAPSED by default, deliberately: a 20-row checklist per update — and an agent updates its list
-// constantly — is a bigger wall than the one this replaces. The header carries the whole reading:
+// COLLAPSED by default, like every other card in this family: the header carries the reading —
 //
-//   TODOS  ☑ Fix the overrides false positive in verify_deps        4/12   done · 11ms  ▸
+//   TODOS  ⊙ Inspect the PR context and the full diff        1/3   done · 11ms  ▸
 //
-// the changed row's own status glyph + its text, so "what happened" needs no words, plus the progress
-// counter. Expanding reveals the full list, and the model's own description/explanation below it — so
-// nothing it wrote is lost, it just stops being the title.
+// the step IN PROGRESS plus the progress counter, since that is what a reader wants from a list at a
+// glance. Expanding reveals the whole checklist, and the model's own explanation below it.
 const TODO_LABEL = "Todos"
 
 // Pending / current / done, as a checkbox family. Exactly ONE of them takes colour — the current row, in
@@ -56,30 +54,24 @@ const STATUS_WORD = { pending: "to do", in_progress: "in progress", completed: "
 
 export function TodoBlock({
   todos,
-  change,
-  detail,
   note,
   meta,
 }: {
   todos: readonly TranscriptTodo[]
-  change?: TranscriptToolCall["todoChange"]
-  detail?: string
-  // The model's own commentary on the call — a Claude task `description`, a codex plan `explanation`.
+  // The model's own commentary on the call — a codex plan `explanation`.
   note?: string
   meta?: ReactNode
 }) {
   const [open, setOpen] = useState(false)
   const bodyId = useId()
   const done = todos.filter((t) => t.status === "completed").length
-  // The row this call touched. A DELETED row is gone from the snapshot, so its status can't be shown —
-  // the headline strikes the text through instead, which is the one place a strikethrough earns its keep.
-  const changed = todos.find((t) => t.changed)
-  const headline = detail?.trim() || undefined
+  // The step in progress is the headline. Derived here rather than flagged by the server: it is a
+  // property of the list itself, and the list is all the card is given. An all-complete list headlines
+  // nothing — its counter says everything.
+  const current = todos.find((t) => t.status === "in_progress")
   const expandable = todos.length > 0 || Boolean(note)
   const counter = todos.length > 0 ? `${done}/${todos.length}` : undefined
-  const label = [TODO_LABEL, headline ?? (todos.length ? `${todos.length} item${todos.length === 1 ? "" : "s"}` : "empty")]
-    .filter(Boolean)
-    .join(": ")
+  const summary = current ? current.text : todos.length === 0 ? "empty" : undefined
   return (
     <div className="fray-bash" data-todo-card>
       <button
@@ -88,7 +80,7 @@ export function TodoBlock({
         onMouseDown={(e) => e.preventDefault()}
         aria-controls={expandable ? bodyId : undefined}
         aria-expanded={expandable ? open : undefined}
-        aria-label={`${expandable ? `${open ? "Collapse" : "Expand"} ` : ""}${label}${counter ? ` — ${done} of ${todos.length} done` : ""}`}
+        aria-label={`${expandable ? `${open ? "Collapse" : "Expand"} ` : ""}${TODO_LABEL}${summary ? `: ${summary}` : ""}${counter ? ` — ${done} of ${todos.length} done` : ""}`}
         className="fray-bash-header w-full text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-fg/60"
       >
         <span className="flex min-w-0 items-center gap-2">
@@ -97,10 +89,10 @@ export function TodoBlock({
               beside derive from ONE font size. With it on the span the glyph silently inherited the card's
               12.5px instead — a 1px size mismatch, and an alignment correction tied to that accident
               rather than to the pair. */}
-          {headline && (
-            <span className="flex min-w-0 items-center gap-1.5 text-[11.5px]" title={headline} data-todo-headline>
-              {change !== "deleted" && <TodoMark status={changed?.status ?? "pending"} />}
-              <span className={`min-w-0 truncate ${change === "deleted" ? "text-muted/60 line-through" : "text-muted"}`}>{headline}</span>
+          {summary && (
+            <span className="flex min-w-0 items-center gap-1.5 text-[11.5px]" title={summary} data-todo-headline>
+              {current && <TodoMark status="in_progress" />}
+              <span className="min-w-0 truncate text-muted">{summary}</span>
             </span>
           )}
         </span>
@@ -119,7 +111,7 @@ export function TodoBlock({
           {open && todos.length > 0 && (
             <ul className="fray-todo-list">
               {todos.map((todo, i) => (
-                <li key={i} className="fray-todo-row" data-changed={todo.changed ? "true" : undefined}>
+                <li key={i} className="fray-todo-row" data-current={todo.status === "in_progress" ? "true" : undefined}>
                   <TodoMark status={todo.status} />
                   <span className={`min-w-0 ${TODO_ROW_TEXT[todo.status]}`}>{todo.text}</span>
                   <span className="sr-only">{` — ${STATUS_WORD[todo.status]}`}</span>

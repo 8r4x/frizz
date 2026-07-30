@@ -157,12 +157,13 @@ test("codex fixture (exec wrapper): common nested tools expose command, input, r
   assert.deepEqual(a.tools.map((t) => t.name), ["Todos", "Bash", "Bash", "Bash", "Bash", "Bash", "Edit", "Edit", "Todos"])
 
   // `update_plan` is codex's built-in TO-DO LIST, so it projects the plan itself (see transcript.ts's
-  // TO-DO LIST section) rather than a "2 steps · 0/2 complete" summary with the raw args as its body:
-  // the headline is the step IN PROGRESS and the rows carry each step's own status.
+  // TO-DO LIST section) rather than a "2 steps · 0/2 complete" summary with the raw args as its body.
+  // No server-side `detail`: the card's headline is the step in progress, which the client reads off the
+  // list it was given rather than the server pre-rendering a sentence for it.
   const planStart = a.tools[0]
-  assert.equal(planStart.detail, "Inspect the sample")
+  assert.equal(planStart.detail, undefined)
   assert.deepEqual(planStart.todos, [
-    { text: "Inspect the sample", status: "in_progress", changed: true },
+    { text: "Inspect the sample", status: "in_progress" },
     { text: "Patch and verify", status: "pending" },
   ])
   assert.equal(planStart.input, undefined, "this call carried no explanation, so there is no note pane")
@@ -191,8 +192,8 @@ test("codex fixture (exec wrapper): common nested tools expose command, input, r
   assert.equal(successfulPatch.edit?.file, "/tmp/fray-tool-sample/src/greet.ts")
   assert.match(successfulPatch.edit?.new ?? "", /hello/)
 
-  // The closing plan: everything done, so no step is in progress and there is no headline — the card's
-  // counter says 2/2. Its `explanation` becomes the note pane the raw args used to occupy.
+  // The closing plan: everything done, so the card headlines nothing and its counter says 2/2. The
+  // `explanation` becomes the note pane the raw args used to occupy.
   assert.equal(a.tools[8].detail, undefined)
   assert.deepEqual(a.tools[8].todos, [
     { text: "Inspect the sample", status: "completed" },
@@ -255,8 +256,8 @@ text(r);
   assert.ok(Math.abs((bash.durationMs ?? 0) - 253.269375) < 0.001)
   assert.equal(bash.status, "completed")
   assert.equal(bash.output, "tick-2", "poll output is grouped onto the originating shell")
-  assert.equal(planned.detail, "two", "the plan card headlines the step in progress")
-  assert.deepEqual(planned.todos, [{ text: "one", status: "completed" }, { text: "two", status: "in_progress", changed: true }])
+  assert.equal(planned.detail, undefined, "the headline is the client's read of the list, not a server string")
+  assert.deepEqual(planned.todos, [{ text: "one", status: "completed" }, { text: "two", status: "in_progress" }])
 })
 
 test("Codex yielded shell remains running until its matching session poll has an exit code", () => {

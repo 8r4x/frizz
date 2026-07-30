@@ -42,7 +42,7 @@ import { hasPendingToolSpinner, hasRunningToolIndicator, liveBackgroundOperation
 import { compactElapsedSince, formatCompactElapsed, formatToolDuration } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { CHILD_OPEN_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, visibleChildOps } from "../lib/childOps.ts"
-import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
+import { AGENT_OUTCOME_VERB, agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
 import { ChildOpRow } from "./ChildOpRow.tsx"
 import { TRANSCRIPT_META_LABEL_CLASS } from "../lib/transcriptMetaLabels.ts"
 import { InteractionStack } from "./InteractionCards.tsx"
@@ -1584,11 +1584,10 @@ interface CollapsedTool {
   sentImages?: string[]
   sentFiles?: string[]
   caption?: string
-  // Set for a call against the agent's built-in to-do list: the list state AFTER the call, plus the verb
-  // (see TranscriptTodo). Renders as a TodoBlock and, like the prompt/read/command entries, stands alone —
-  // two consecutive updates are two different list states and must never fold into a ×2 count.
+  // Set for a call that carries the whole to-do list (see TranscriptTodo). Renders as a TodoBlock and,
+  // like the prompt/read/command entries, stands alone — two consecutive lists are two different list
+  // states and must never fold into a ×2 count.
   todos?: TranscriptTodo[]
-  todoChange?: TranscriptToolCall["todoChange"]
   count: number
 }
 
@@ -1625,10 +1624,10 @@ function collapseTools(tools: TranscriptMessage["tools"]): CollapsedTool[] {
       // own ToolImageCard showing the picture inline — never folds into a ×N run.
       out.push({ name: t.name, detail: t.detail, outputImage: t.outputImage, output: t.output, status: t.status, durationMs: t.durationMs, count: 1 })
     } else if (t.todos) {
-      // A to-do call renders as its own TodoBlock — never folds into a ×N run. Checked BEFORE the
-      // input/output branch below, which would otherwise claim it: these calls carry the model's
-      // `description` as `input`, which is exactly the payload this card demotes out of the title.
-      out.push({ name: t.name, detail: t.detail, todos: t.todos, todoChange: t.todoChange, input: t.input, status: t.status, durationMs: t.durationMs, count: 1 })
+      // A to-do list renders as its own TodoBlock — never folds into a ×N run. Checked BEFORE the
+      // input/output branch below, which would otherwise claim a codex plan (its `explanation` rides
+      // `input`) and render it as a generic card.
+      out.push({ name: t.name, detail: t.detail, todos: t.todos, input: t.input, status: t.status, durationMs: t.durationMs, count: 1 })
     } else if (t.sentImages || t.sentFiles) {
       // A SendUserFile delivery renders as its own SentFilesCard (images inline + caption) — never folds.
       out.push({ name: t.name, detail: t.detail, sentImages: t.sentImages, sentFiles: t.sentFiles, caption: t.caption, status: t.status, durationMs: t.durationMs, count: 1 })
@@ -1756,11 +1755,9 @@ function ToolCardRouter({ t }: { t: CollapsedTool }) {
   if (t.sendTo !== undefined || t.sendBody !== undefined) return <SendMessageCard to={t.sendTo} summary={t.sendSummary} body={t.sendBody ?? ""} type={t.sendType} status={t.status} durationMs={t.durationMs} />
   if (t.outputImage) return <ToolImageCard name={t.name} detail={t.detail} outputImage={t.outputImage} output={t.output} status={t.status} durationMs={t.durationMs} />
   if (t.sentImages || t.sentFiles) return <SentFilesCard images={t.sentImages ?? []} files={t.sentFiles ?? []} caption={t.caption} status={t.status} durationMs={t.durationMs} />
-  // The built-in to-do list. Ahead of the generic input/output card: `input` here holds the model's task
-  // description, which is the payload the TodoBlock deliberately moves out of the header.
-  if (t.todos) {
-    return <TodoBlock todos={t.todos} change={t.todoChange} detail={t.detail} note={t.input} meta={<ToolStatusMeta status={t.status} durationMs={t.durationMs} />} />
-  }
+  // The built-in to-do list, ahead of the generic input/output card (a codex plan's `explanation` rides
+  // `input`, which that branch would claim first).
+  if (t.todos) return <TodoBlock todos={t.todos} note={t.input} meta={<ToolStatusMeta status={t.status} durationMs={t.durationMs} />} />
   if (t.input || t.output) {
     return <BashBlock name={t.name} command={t.input ?? ""} desc={t.detail} output={t.output} status={t.status} backgroundState={t.backgroundState} liveBackgroundState={liveBackgroundState} exitCode={t.exitCode} cwd={t.cwd} sessionId={t.sessionId} durationMs={t.durationMs} inputLabel="input" />
   }
@@ -2128,7 +2125,7 @@ function ReadBlock({ detail, read, status, durationMs }: { detail?: string; read
 //   • the state VERB is gone for the two nominal outcomes. A pulsing dot already says "running" and NO
 //     mark at all already says "not running any more", so "running 3 min" / "finished 35m" became a
 //     bare "3m" / "35m" — the reading the child lines show. A NON-nominal outcome keeps its verb
-//     ("failed 12m", "killed 4m"): a mark cannot say that, and losing it would delete the one
+//     ("stopped 4m", "failed 12m"): a mark cannot say that, and losing it would delete the one
 //     fact the reader most needs.
 // Exported for operation-indicators-fixture.tsx: the agent row is the one card family with TWO
 // independent status sources (its own state reading + the shared meta slot), so it needs live fixture
@@ -2198,9 +2195,19 @@ export function AgentBlock({
       ? compactElapsedSince(live.startedAt, now)
       : ""
   // The one word no mark can say. "finished" is dropped (a card with no mark that still reports a runtime
-  // already means "it ran and stopped"), but a FAILED or KILLED child is a different
-  // fact that has no glyph, so it keeps its verb — and the failure tone the tool cards already use.
-  const outcome = agentStatus && agentStatus !== "completed" ? agentStatus : null
+  // already means "it ran and stopped"), but a STOPPED or FAILED child is a different fact that has no
+  // glyph, so it keeps its verb — from the shared vocabulary, never the raw `agentStatus` enum.
+  //
+  // TONE: only a genuine FAILURE is red. A stopped child is not an error — the operator interrupted it,
+  // or it timed out — and the server already files it under the tool status "cancelled" rather than
+  // "failed". Rendering it in the loudest colour the transcript owns made a routine interruption read as
+  // a crash ("killed 10m" in blood red beside its neighbours' quiet "done · 9 ms" — maintainer
+  // 2026-07-29: "this is way too scary looking"). So it now reads "stopped 10m" at the SAME weight as
+  // the `ToolStatusMeta` on the cards above and below it: the verb carries the fact, the colour no
+  // longer editorialises about it. A `failed` child keeps the red, because its neighbour tool cards
+  // colour a real failure red and the column should agree.
+  const outcome = agentStatus && agentStatus !== "completed" ? AGENT_OUTCOME_VERB[agentStatus] : null
+  const failed = agentStatus === "failed"
   // The tooltip says what the bare number means, and it must not contradict the mark beside it: a rested
   // or stale child is not "working", so only a RUNNING one gets that verb.
   const runtimeTitle = outcome
@@ -2258,7 +2265,7 @@ export function AgentBlock({
             <ToolStatusMeta status={status} durationMs={durationMs} indicator="agent" />
           ) : (
             (outcome || runtime) && (
-              <span className={`shrink-0 whitespace-nowrap text-[11.5px] ${outcome ? "fray-tool-failed" : "text-muted/40"}`} title={runtimeTitle}>
+              <span className={`shrink-0 whitespace-nowrap text-[11.5px] ${failed ? "fray-tool-failed" : outcome ? "text-muted/55" : "text-muted/40"}`} title={runtimeTitle}>
                 {[outcome, runtime].filter(Boolean).join(" ")}
               </span>
             )

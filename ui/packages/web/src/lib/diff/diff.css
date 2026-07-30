@@ -162,9 +162,9 @@
   font-size: 12px;
   line-height: 1.5;
 }
-/* The row THIS call created or changed — the one the header headlines. A tint (not a colour on the text)
-   so it reads as "this line" without competing with the status glyphs, which are the row's own signal. */
-.fray-todo-row[data-changed="true"] { background: var(--color-panel-2); }
+/* The row IN PROGRESS — the one the header headlines. A tint (not a colour on the text) so it reads as
+   "this line" without competing with the status glyphs, which are the row's own signal. */
+.fray-todo-row[data-current="true"] { background: var(--color-panel-2); }
 /* Icon-beside-text is an INK problem, so the checkbox is EXCLUDED from the header's blanket 1px text
    nudge above (that correction is for small-caps meeting a path; an SVG shares none of those metrics)
    and carries its own correction, measured in a real browser (scripts/verify-todo-render.mjs runs the

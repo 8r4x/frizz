@@ -3,10 +3,11 @@ import assert from "node:assert/strict"
 import { projectClaudeTranscript, projectCodexTranscript } from "./transcript.ts"
 import type { TranscriptToolCall } from "@fray-ui/shared"
 
-// The built-in TO-DO LIST projection. What makes it worth its own file: Claude Code's Task* calls are
-// DELTAS — `{taskId:"3", status:"completed"}` carries neither the subject nor the previous status — so
-// every assertion here is really about the REGISTRY the fold accumulates across records, not about one
-// call's input. The shapes are copied from real session logs (~/.claude/projects, 2026-07-29).
+// The built-in TO-DO LIST projection. The line this file defends: a checklist is built ONLY from a call
+// that carries the whole list — `TaskList`'s result, a codex `update_plan`, a legacy `TodoWrite`. Claude's
+// per-task deltas (`TaskCreate`/`TaskUpdate`) get an honest title and nothing more, because reconstructing
+// a list from them would mean the projector accumulating state across the transcript, which it does not do
+// (maintainer 2026-07-29). The record shapes are copied from real session logs.
 
 let seq = 0
 function claudeLog(records: unknown[]): string {
@@ -26,136 +27,90 @@ function result(id: string, content: string): unknown {
     message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content }] },
   }
 }
-// Every to-do call in a projected transcript, in order.
-function todoCalls(messages: { tools: TranscriptToolCall[] }[]): TranscriptToolCall[] {
-  return messages.flatMap((m) => m.tools).filter((t) => t.todos !== undefined)
+function allTools(messages: { tools: TranscriptToolCall[] }[]): TranscriptToolCall[] {
+  return messages.flatMap((m) => m.tools)
 }
 function rows(t: TranscriptToolCall): string[] {
-  return (t.todos ?? []).map((r) => `${r.status === "completed" ? "x" : r.status === "in_progress" ? ">" : " "}${r.changed ? "*" : " "}${r.text}`)
+  return (t.todos ?? []).map((r) => `${r.status === "completed" ? "x" : r.status === "in_progress" ? ">" : " "} ${r.text}`)
 }
 
-test("a Claude create/update sequence accumulates the list, and each card shows the state AFTER its own call", () => {
-  const messages = projectClaudeTranscript(claudeLog([
-    call("TaskCreate", { subject: "Rename env → envFile", description: "Across parser, schema, docs." }, "tu1"),
-    result("tu1", "Task #1 created successfully: Rename env → envFile"),
-    call("TaskCreate", { subject: "Cut the define field", description: "Maintainer approved cutting it." }, "tu2"),
-    result("tu2", "Task #2 created successfully: Cut the define field"),
-    // THE CASE THIS FEATURE EXISTS FOR: a status-only delta. The subject and the previous status can
-    // only come from the registry — the call itself says `{taskId, status}` and nothing else.
-    call("TaskUpdate", { taskId: "1", status: "in_progress" }, "tu3"),
-    result("tu3", "Updated task #1 status"),
-    call("TaskUpdate", { taskId: "1", status: "completed" }, "tu4"),
-    result("tu4", "Updated task #1 status"),
-  ]))
-  const calls = todoCalls(messages)
-  assert.equal(calls.length, 4)
-  // Each snapshot is a point-in-time copy: the first create's card must NOT have grown a second row.
-  assert.deepEqual(rows(calls[0]), [" *Rename env → envFile"])
-  assert.deepEqual(rows(calls[1]), ["  Rename env → envFile", " *Cut the define field"])
-  assert.deepEqual(rows(calls[2]), [">*Rename env → envFile", "  Cut the define field"])
-  assert.deepEqual(rows(calls[3]), ["x*Rename env → envFile", "  Cut the define field"])
-  // The delta card's headline is the SUBJECT, resolved from the registry — never the raw taskId, and
-  // never (as the generic card did) the `description`.
-  assert.equal(calls[3].detail, "Rename env → envFile")
-  assert.deepEqual(calls.map((c) => c.todoChange), ["created", "created", "updated", "updated"])
-  // The description moves to the expandable body instead of being the title.
-  assert.equal(calls[0].input, "Across parser, schema, docs.")
-  assert.equal(calls[3].input, undefined)
+const RULING = "MAINTAINER RULING: \"Unconfined reads are not acceptable for this.\" So the low-IL fallback is disqualified."
+
+test("a TaskList's RESULT is the checklist — the one to-do call that enumerates", () => {
+  const [list] = allTools(projectClaudeTranscript(claudeLog([
+    call("TaskList", {}, "tu1"),
+    result("tu1", "#1 [pending] Confine reads on Windows\n#2 [completed] Fix the coarse network grant\n#3 [in_progress] Drop per-host on macOS"),
+  ])))
+  assert.deepEqual(rows(list), ["  Confine reads on Windows", "x Fix the coarse network grant", "> Drop per-host on macOS"])
+  assert.equal(list.detail, undefined, "the card's headline is the client's read of the list, not a server string")
+  assert.equal(list.input, undefined, "and there is no input pane — the call had no payload")
 })
 
-test("a Claude TaskUpdate resolves its subject only because the create's RESULT revealed the id", () => {
-  // Without claimCreatedTodoId the row stays keyed by its tool_use id and the update below misses it.
-  const withResult = todoCalls(projectClaudeTranscript(claudeLog([
-    call("TaskCreate", { subject: "Fix the flaky test", description: "d" }, "tu1"),
-    result("tu1", "Task #7 created successfully: Fix the flaky test"),
-    call("TaskUpdate", { taskId: "7", status: "completed" }, "tu2"),
+test("an EMPTY task list projects an empty checklist, not a missing one", () => {
+  const [list] = allTools(projectClaudeTranscript(claudeLog([
+    call("TaskList", {}, "tu1"),
+    result("tu1", "No tasks found"),
   ])))
-  assert.equal(withResult[1].detail, "Fix the flaky test")
-  assert.deepEqual(rows(withResult[1]), ["x*Fix the flaky test"])
-  // A RESUMED session updates ids whose creates predate the transcript. It must still render a card —
-  // a stub row, honestly labelled — rather than an empty list or a crash.
-  const resumed = todoCalls(projectClaudeTranscript(claudeLog([
-    call("TaskUpdate", { taskId: "4", status: "completed" }, "tu9"),
-  ])))
-  assert.deepEqual(rows(resumed[0]), ["x*Task #4"])
+  assert.deepEqual(list.todos, [], "an empty array is the card saying 'empty'; undefined would demote it to a generic card")
 })
 
-test("a Claude TaskList result REPLACES the registry, repairing a partial one", () => {
-  const calls = todoCalls(projectClaudeTranscript(claudeLog([
-    call("TaskUpdate", { taskId: "2", status: "completed" }, "tu1"), // a stub — this session never created it
-    call("TaskList", {}, "tu2"),
-    result("tu2", "#1 [pending] Confine reads on Windows\n#2 [completed] Fix the coarse network grant\n#3 [in_progress] Drop per-host on macOS"),
-    call("TaskUpdate", { taskId: "3", status: "completed" }, "tu3"),
-  ])))
-  assert.deepEqual(rows(calls[0]), ["x*Task #2"])
-  // The list result is authoritative, and the TaskList card is redrawn from it (not from the stub).
-  assert.deepEqual(rows(calls[1]), ["  Confine reads on Windows", "x Fix the coarse network grant", "> Drop per-host on macOS"])
-  assert.equal(calls[1].todoChange, undefined, "a whole-list read has no verb")
-  // And the adopted subjects now resolve for later deltas.
-  assert.equal(calls[2].detail, "Drop per-host on macOS")
-  assert.deepEqual(rows(calls[2]), ["  Confine reads on Windows", "x Fix the coarse network grant", "x*Drop per-host on macOS"])
+test("a TaskList whose result has not landed yet carries no list, and never a fabricated one", () => {
+  const [pending] = allTools(projectClaudeTranscript(claudeLog([call("TaskList", {}, "tu1")])))
+  assert.equal(pending.todos, undefined)
+  assert.equal(pending.status, "pending")
 })
 
-test("a Claude delete drops the row but still names it in the headline", () => {
-  const calls = todoCalls(projectClaudeTranscript(claudeLog([
-    call("TaskCreate", { subject: "Keep this one", description: "d" }, "tu1"),
-    result("tu1", "Task #1 created successfully: Keep this one"),
-    call("TaskCreate", { subject: "Created in error", description: "d" }, "tu2"),
-    result("tu2", "Task #2 created successfully: Created in error"),
-    call("TaskUpdate", { taskId: "2", status: "deleted" }, "tu3"),
+test("a TaskCreate is titled by its SUBJECT, and its description is the body — never the title", () => {
+  // THE REPORTED DEFECT: `toolDetail`'s first-string-field fallback picked `description`, so a
+  // paragraph-long ruling became the card's one-line title.
+  const [created] = allTools(projectClaudeTranscript(claudeLog([
+    call("TaskCreate", { subject: "Confine reads on Windows", description: RULING, activeForm: "Confining reads" }, "tu1"),
   ])))
-  const deleted = calls[2]
-  assert.equal(deleted.todoChange, "deleted")
-  assert.equal(deleted.detail, "Created in error")
-  assert.deepEqual(rows(deleted), ["  Keep this one"], "the deleted row is gone from the list")
+  assert.equal(created.detail, "Confine reads on Windows")
+  assert.equal(created.input, RULING, "the description moves to the expandable body")
+  assert.equal(created.todos, undefined, "a create carries no list, and none is invented for it")
 })
 
-test("a Claude TaskUpdate that rewrites the subject renames the row for every later card", () => {
-  const calls = todoCalls(projectClaudeTranscript(claudeLog([
-    call("TaskCreate", { subject: "Propose the object syntax", description: "d" }, "tu1"),
-    result("tu1", "Task #1 created successfully: Propose the object syntax"),
-    call("TaskUpdate", { taskId: "1", status: "in_progress", subject: "Implement the object syntax", description: "Approved." }, "tu2"),
-    call("TaskUpdate", { taskId: "1", status: "completed" }, "tu3"),
+test("a TaskUpdate is titled by the CHANGE it makes, with no list reconstructed", () => {
+  const tools = allTools(projectClaudeTranscript(claudeLog([
+    call("TaskUpdate", { taskId: "1", status: "completed" }, "tu1"),
+    call("TaskUpdate", { taskId: "8", subject: "Implement the linker union", status: "in_progress", description: RULING }, "tu2"),
+    call("TaskUpdate", { taskId: "7", description: "Revisit after the merge." }, "tu3"),
+    call("TaskGet", { taskId: "3" }, "tu4"),
   ])))
-  assert.equal(calls[1].detail, "Implement the object syntax")
-  assert.equal(calls[1].input, "Approved.")
-  assert.deepEqual(rows(calls[2]), ["x*Implement the object syntax"])
+  // The id is the only identity these calls carry. The SUBJECT would need the list — which is exactly
+  // what is no longer accumulated — so the title says what changed instead of guessing at what.
+  assert.equal(tools[0].detail, "#1 → completed")
+  assert.equal(tools[1].detail, "#8 Implement the linker union → in progress", "the wire value in_progress is not copy")
+  assert.equal(tools[2].detail, "#7 · description", "a fields-only update names the fields it rewrote")
+  assert.equal(tools[3].detail, "#3")
+  assert.equal(tools[1].input, RULING)
+  assert.equal(tools[2].input, "Revisit after the merge.")
+  for (const t of tools) assert.equal(t.todos, undefined, `${t.name} must not carry a list`)
 })
 
-test("the legacy Claude TodoWrite ships the whole list and headlines the current step", () => {
-  const calls = todoCalls(projectClaudeTranscript(claudeLog([
+test("the legacy Claude TodoWrite ships the whole list in its INPUT, so it is a checklist", () => {
+  const [write] = allTools(projectClaudeTranscript(claudeLog([
     call("TodoWrite", { todos: [
       { content: "Read the config parser", status: "completed", activeForm: "Reading" },
       { content: "Add the envFile field", status: "in_progress", activeForm: "Adding" },
       { content: "Update the docs", status: "pending", activeForm: "Updating" },
     ] }, "tu1"),
   ])))
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].todoChange, undefined, "a whole-list write has no single subject row")
-  assert.equal(calls[0].detail, "Add the envFile field")
-  assert.deepEqual(rows(calls[0]), ["x Read the config parser", ">*Add the envFile field", "  Update the docs"])
+  assert.deepEqual(rows(write), ["x Read the config parser", "> Add the envFile field", "  Update the docs"])
 })
 
-test("a to-do card never folds into a repeat count, however identical two calls look", () => {
-  // Two updates with the SAME input are two DIFFERENT list states; collapsing them would erase one.
-  const messages = projectClaudeTranscript(claudeLog([
-    call("TaskCreate", { subject: "A", description: "d" }, "tu1"),
-    result("tu1", "Task #1 created successfully: A"),
-    call("TaskCreate", { subject: "B", description: "d" }, "tu2"),
-    result("tu2", "Task #2 created successfully: B"),
-    {
-      type: "assistant",
-      timestamp: "2026-07-01T00:00:00.000Z",
-      message: { id: "mx", content: [
-        { type: "tool_use", id: "tu3", name: "TaskUpdate", input: { taskId: "1", status: "completed" } },
-        { type: "tool_use", id: "tu4", name: "TaskUpdate", input: { taskId: "2", status: "completed" } },
-      ] },
-    },
-  ]))
-  const calls = todoCalls(messages)
-  assert.equal(calls.length, 4)
-  assert.deepEqual(rows(calls[2]), ["x*A", "  B"])
-  assert.deepEqual(rows(calls[3]), ["x A", "x*B"])
+test("two consecutive lists never fold into a ×2 repeat count", () => {
+  // They are two different list states; collapsing them would erase one.
+  const tools = allTools(projectClaudeTranscript(claudeLog([
+    call("TaskList", {}, "tu1"),
+    result("tu1", "#1 [pending] Alpha"),
+    call("TaskList", {}, "tu2"),
+    result("tu2", "#1 [completed] Alpha"),
+  ]))).filter((t) => t.todos)
+  assert.equal(tools.length, 2)
+  assert.deepEqual(rows(tools[0]), ["  Alpha"])
+  assert.deepEqual(rows(tools[1]), ["x Alpha"])
 })
 
 // ---- codex `update_plan`: the whole plan, both protocols ----
@@ -164,8 +119,8 @@ function codexLog(payloads: unknown[]): string {
   return payloads.map((p) => JSON.stringify({ timestamp: "2026-07-01T00:00:00.000Z", type: "response_item", payload: p })).join("\n") + "\n"
 }
 
-test("a codex update_plan function_call renders as a to-do card with its explanation as the note", () => {
-  const calls = todoCalls(projectCodexTranscript(codexLog([
+test("a codex update_plan function_call is a checklist, with its explanation as the note", () => {
+  const [plan] = allTools(projectCodexTranscript(codexLog([
     {
       type: "function_call",
       name: "update_plan",
@@ -180,27 +135,23 @@ test("a codex update_plan function_call renders as a to-do card with its explana
       }),
     },
   ])))
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].name, "Todos")
-  assert.equal(calls[0].detail, "Inspect the full diff")
-  assert.equal(calls[0].input, "Instructions and PR context are loaded.")
-  assert.deepEqual(rows(calls[0]), ["x Read the review instructions", ">*Inspect the full diff", "  Deliver ranked findings"])
+  assert.equal(plan.name, "Todos")
+  assert.deepEqual(rows(plan), ["x Read the review instructions", "> Inspect the full diff", "  Deliver ranked findings"])
+  assert.equal(plan.input, "Instructions and PR context are loaded.")
 })
 
 test("a codex JS-WRAPPER update_plan is scanned out of the object literal, mixed quoting and all", () => {
-  // Verbatim shape from a real rollout: a bare `step` key beside a quoted `"status"` key, so the args
-  // are JavaScript and not JSON — JSON.parse cannot read them.
+  // Verbatim shape from a real rollout: a bare `step` key beside a quoted `"status"` key, so the args are
+  // JavaScript and not JSON — JSON.parse cannot read them.
   const source = 'const r = await tools.update_plan({plan:[{step:"Inspect the patch","status":"completed"},{step:"Trace the lifecycle",status:"in_progress"},{step:"Report findings","status":"pending"}]});text(String(r));'
-  const calls = todoCalls(projectCodexTranscript(codexLog([
+  const [plan] = allTools(projectCodexTranscript(codexLog([
     { type: "custom_tool_call", name: "exec", call_id: "call_2", input: source },
   ])))
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].detail, "Trace the lifecycle")
-  assert.deepEqual(rows(calls[0]), ["x Inspect the patch", ">*Trace the lifecycle", "  Report findings"])
+  assert.deepEqual(rows(plan), ["x Inspect the patch", "> Trace the lifecycle", "  Report findings"])
 })
 
-test("an all-complete plan headlines nothing — the counter is the whole reading", () => {
-  const calls = todoCalls(projectCodexTranscript(codexLog([
+test("an all-complete plan is still a checklist — the client's counter is the reading", () => {
+  const [plan] = allTools(projectCodexTranscript(codexLog([
     {
       type: "function_call",
       name: "update_plan",
@@ -208,6 +159,6 @@ test("an all-complete plan headlines nothing — the counter is the whole readin
       arguments: JSON.stringify({ plan: [{ step: "One", status: "completed" }, { step: "Two", status: "completed" }] }),
     },
   ])))
-  assert.equal(calls[0].detail, undefined)
-  assert.deepEqual(rows(calls[0]), ["x One", "x Two"])
+  assert.deepEqual(rows(plan), ["x One", "x Two"])
+  assert.equal(plan.detail, undefined)
 })
