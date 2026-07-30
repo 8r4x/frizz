@@ -486,7 +486,14 @@ export function createRouter(ctx: AppContext) {
   //    thread is not one this app-server connection started).
   //  - the child must be DIRECT (this session's own Agent-tool dispatch, not a grandchild resolved
   //    through the descendant sidecar and not a background shell) — the CLI only knows tool_use ids
-  //    its own main thread issued.
+  //    its own main thread issued. MEASURED, not assumed (`_live_broker_steer_depth.mts`, 2026-07-30):
+  //    an input frame addressed to a GRANDCHILD's dispatch id is not routed to it and does not fail —
+  //    the unknown `parent_tool_use_id` is silently ignored and the frame lands on the top-level
+  //    session's MAIN thread as an ordinary `promptSource:"sdk"` user turn. Lifting this gate would
+  //    therefore not steer the grandchild; it would HIJACK THE WORKER'S TURN with text meant for
+  //    someone else. (In that run the token did reach the grandchild — because the root model read the
+  //    misdelivered steer and chose to relay it down with SendMessage, root → child → grandchild. A
+  //    model being helpful is not a transport, and nothing may be built on it.)
   //  - the child must be RUNNING. `stale` means fray has seen no output for a long while and the
   //    completion record was probably missed; addressing a finished child MISDELIVERS to the parent's
   //    main thread rather than failing, so "probably finished" has to be treated as finished.
