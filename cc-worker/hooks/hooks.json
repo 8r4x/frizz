@@ -36,6 +36,20 @@
         ]
       }
     ],
+    "PreCompact": [
+      {
+        "matcher": "auto",
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/precompact-instructions.mjs\"" }
+        ]
+      },
+      {
+        "matcher": "manual",
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/precompact-instructions.mjs\"" }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "matcher": "startup",
