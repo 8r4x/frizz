@@ -176,7 +176,6 @@ export function ChildOpRow({
     <button
       type="button"
       style={identityStyle}
-      data-subagent-parent={parentSlug}
       onClick={onOpen}
       // Only the ops strip swallows the press: it can sit inside a card/drawer whose own mousedown
       // handler would otherwise act on it. The rail and card rows must let the pointer-down through —
@@ -216,16 +215,24 @@ export function ChildOpRow({
   const wrapperStyle = !rail && nestIndent > 0 ? { marginLeft: nestIndent } : undefined
 
   // The two row markers ride the WRAPPER, not the identity button, because they describe the ROW.
-  // `data-subagent-parent` is load-bearing for that: ThreadSheet resolves an outside pointer-down with
+  // `data-subagent-parent` is the one that does work: ThreadSheet resolves an outside pointer-down with
   // `closest("[data-subagent-parent]")` and keeps itself open when the press landed on one of its own
   // child rows. On the rail the button used to span the row, so every pixel of it answered that query;
-  // now that the × and the duration sit outside the button, the marker has to cover them too — or
-  // pressing the × of a row whose thread sheet is open would dismiss that sheet.
+  // the × and the duration now sit outside it, so the marker moved out with them to keep the coverage
+  // the rail already had.
+  //
+  // MEASURED, so the comment does not overclaim (adhoc stack, thread sheet open over the board): with
+  // the marker on the button ALONE, pressing the × still did not dismiss the sheet — that press never
+  // reaches Radix's outside-dismiss — while clicking a plainly-outside sidebar control did dismiss it.
+  // So this restores coverage on principle (the duration strip is the part that actually loses it),
+  // not a reproduced bug.
   return (
     <div
       className={wrapperClass}
       style={wrapperStyle}
       data-op-row={onDismiss ? "" : undefined}
+      data-subagent-depth={depth && depth > 1 ? depth : undefined}
+      data-subagent-parent={parentSlug}
     >
       {row}
       {onDismiss && (
