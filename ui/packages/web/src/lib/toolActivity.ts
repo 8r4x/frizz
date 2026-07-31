@@ -29,10 +29,9 @@ function normalizedToolName(name: string): string {
 /** Calls that keep their dedicated card instead of entering the minimal activity disclosure. */
 export function isToolActivityException(tool: Pick<
   TranscriptToolCall,
-  "name" | "backgroundState" | "prompt" | "agentId" | "sendTo" | "sendBody"
+  "name" | "prompt" | "agentId" | "sendTo" | "sendBody"
 >): boolean {
-  return tool.backgroundState !== undefined
-    || tool.prompt !== undefined
+  return tool.prompt !== undefined
     || tool.agentId !== undefined
     || tool.sendTo !== undefined
     || tool.sendBody !== undefined
@@ -248,7 +247,10 @@ function gerundDescription(description: string | undefined, fallback: string): s
   const first = (firstSpace === -1 ? clean : clean.slice(0, firstSpace)).replace(/[.:]$/, "")
   if (/ing$/i.test(first)) return first.charAt(0).toUpperCase() + first.slice(1) + (firstSpace === -1 ? "" : clean.slice(firstSpace))
   const gerund = IMPERATIVE_GERUNDS[first.toLowerCase()]
-  if (!gerund) return `${fallback} ${clean}`
+  // An authored description is always a better activity label than the raw command in `fallback`.
+  // Some providers send a noun phrase rather than an imperative (for example, "Final workflow
+  // validation"). Keep it intact behind a gerund instead of leaking `Running <long command>`.
+  if (!gerund) return `Running ${clean}`
   return gerund + (firstSpace === -1 ? "" : clean.slice(firstSpace))
 }
 

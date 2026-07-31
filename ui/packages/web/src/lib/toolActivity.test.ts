@@ -41,7 +41,7 @@ test("ordinary tool turns coalesce across provider batches while retaining a sta
   assert.equal(compact[0].messageIndex, 0)
 })
 
-test("prose, background shells, and sub-agent cards split ordinary activity runs", () => {
+test("prose and sub-agent cards split runs while background Bash stays ordinary activity", () => {
   const background = toolMessage("background", [
     tool("Bash", { command: "nub run dev", backgroundState: "background", status: "pending" }),
   ])
@@ -75,24 +75,20 @@ test("prose, background shells, and sub-agent cards split ordinary activity runs
   const compact = coalesceToolActivityMessages(messages)
   assert.deepEqual(compact.map((entry) => entry.message.sourceId), [
     "one",
-    "background",
-    "two",
     "agent",
     "three",
     "prose",
     "four",
   ])
-  assert.deepEqual(compact[0].message.tools.map((call) => call.name), ["Read"])
-  assert.deepEqual(compact[1].message.tools.map((call) => call.name), ["Bash"])
-  assert.deepEqual(compact[2].message.tools.map((call) => call.name), ["Grep"])
-  assert.equal(isToolActivityException(background.tools[0]), true)
-  assert.equal(isToolActivityException(tool("Bash", { backgroundState: "unknown" })), true)
+  assert.deepEqual(compact[0].message.tools.map((call) => call.name), ["Read", "Bash", "Grep"])
+  assert.equal(isToolActivityException(background.tools[0]), false)
+  assert.equal(isToolActivityException(tool("Bash", { backgroundState: "unknown" })), false)
   assert.equal(isToolActivityException(agent.tools[0]), true)
   assert.equal(isToolActivityException(tool("Send message", { sendTo: "main" })), true)
   assert.equal(isToolActivityException(tool("Read")), false)
 })
 
-test("a prose message's ordinary tool tail owns following provider batches until the next block", () => {
+test("a prose tool tail absorbs background Bash until the real rendered boundary", () => {
   const first = tool("Bash", { desc: "Starting the focused build", status: "completed" })
   const lead: ChatMessage = {
     sourceId: "lead",
@@ -107,6 +103,7 @@ test("a prose message's ordinary tool tail owns following provider batches until
   const messages = [
     lead,
     toolMessage("batch-a", [tool("Read", { status: "completed" })]),
+    toolMessage("batch-edit", [tool("Edit", { status: "completed" })]),
     toolMessage("batch-b", [tool("Bash", { backgroundState: "background", status: "pending" })]),
     {
       sourceId: "empty",
@@ -115,20 +112,28 @@ test("a prose message's ordinary tool tail owns following provider batches until
       tools: [],
       parts: [{ kind: "text", text: "  " }],
     } satisfies ChatMessage,
-    toolMessage("batch-c", [tool("Write", { status: "completed" })]),
+    toolMessage("batch-c", [tool("Bash", { status: "completed" })]),
+    {
+      sourceId: "finished-event",
+      role: "assistant",
+      kind: "event",
+      boundary: true,
+      text: "Background task finished",
+      tools: [],
+      parts: [],
+    } satisfies ChatMessage,
   ]
 
   const compact = coalesceToolActivityMessages(messages)
-  assert.equal(compact.length, 3)
+  assert.equal(compact.length, 2)
   assert.equal(compact[0].message.sourceId, "lead")
   assert.equal(compact[0].message.text, lead.text)
   assert.deepEqual(compact[0].message.parts?.map((part) => part.kind), ["text", "tools"])
-  assert.deepEqual(compact[0].message.tools.map((call) => call.name), ["Bash", "Read"])
+  assert.deepEqual(compact[0].message.tools.map((call) => call.name), ["Bash", "Read", "Edit", "Bash", "Bash"])
   assert.equal(compact[0].message.parts?.[1].kind, "tools")
-  assert.equal(compact[0].message.parts?.[1].kind === "tools" ? compact[0].message.parts[1].tools.length : 0, 2)
-  assert.equal(compact[1].message.sourceId, "batch-b")
-  assert.equal(compact[1].message.tools[0].backgroundState, "background")
-  assert.equal(compact[2].message.sourceId, "batch-c")
+  assert.equal(compact[0].message.parts?.[1].kind === "tools" ? compact[0].message.parts[1].tools.length : 0, 5)
+  assert.equal(compact[0].message.tools[3].backgroundState, "background")
+  assert.equal(compact[1].message.sourceId, "finished-event")
 })
 
 test("the latest tool stays at the runtime tail across the completed inter-call gap", () => {
@@ -218,6 +223,11 @@ test("activity labels are gerunds with a clean fallback for arbitrary tools", ()
   assert.equal(toolActivityLabel(tool("Grep", { detail: "ToolCalls" })), "Searching for ToolCalls")
   assert.equal(toolActivityLabel(tool("Bash", { desc: "Run focused tests", detail: "nub --test" })), "Running focused tests")
   assert.equal(toolActivityLabel(tool("Bash", { desc: "Checking generated output" })), "Checking generated output")
+  assert.equal(
+    toolActivityLabel(tool("Bash", { desc: "Final workflow validation", detail: "cd /a/very/long/path && actionlint" })),
+    "Running Final workflow validation",
+    "an authored noun-phrase description must suppress the raw command fallback",
+  )
   assert.equal(toolActivityLabel(tool("Todos")), "Updating the plan")
   assert.equal(toolActivityLabel(tool("mcp__example__frobnicate")), "Using frobnicate")
 })
