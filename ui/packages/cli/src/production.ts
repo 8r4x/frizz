@@ -33,7 +33,7 @@ import {
 } from "@fray-ui/server/project-launch";
 import { createSupervisorShutdownHandler, startDevSupervisor } from "@fray-ui/server/dev-supervisor";
 import { handoffToRegistrySuccessor, npmRegistryReleaseAdapter, planRegistryUpdate, PRODUCTION_REEXEC_FLAG } from "./production-update.ts";
-import { assertLaunchPrerequisites } from "./preflight.ts";
+import { assertLaunchPrerequisites, ensureNativeHelperPermissions } from "./preflight.ts";
 
 /** How long an abandoned supervisor gets to drain on SIGTERM before it is SIGKILLed. */
 const ABANDON_GRACE_MS = 3_000;
@@ -113,6 +113,8 @@ function openOrPrint(port: number, reused: boolean): void {
 
 async function runSupervisor(port: number, token: string): Promise<never> {
   assertLaunchPrerequisites();
+  // Registry installs may have skipped node-pty's post-install; repair it before anything spawns a pty.
+  ensureNativeHelperPermissions();
   const owner = adoptProjectLaunchOwner(target, token, "supervisor");
   const env = projectLaunchEnvironment({ ...process.env, FRAY_PRODUCTION_SUPERVISOR: "1" }, target, owner.token);
   const webDist = join(import.meta.dirname, "..", "web-dist");
