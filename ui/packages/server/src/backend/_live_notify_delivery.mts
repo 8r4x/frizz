@@ -34,8 +34,8 @@ import { cwdSlug, type Project } from "../project.ts"
 import type { AgentBackend } from "./types.ts"
 
 const FLEET = Number(process.argv[2] ?? 5)
-const CHARS = Number(process.argv[3] ?? 8000)
-const HOLD_S = Number(process.argv[4] ?? 150)
+const LINES = Number(process.argv[3] ?? 45)
+const HOLD_S = Number(process.argv[4] ?? 300)
 const claudeBin = execFileSync("which", ["claude"], { encoding: "utf8" }).trim()
 const stateDir = mkdtempSync(join(tmpdir(), "bnotif-state-"))
 const cwd = realpathSync(mkdtempSync(join(tmpdir(), "bnotif-repo-")))
@@ -87,9 +87,10 @@ const slug = "notify-delivery-live"
 const PROMPT = [
   `Dispatch ${FLEET} background sub-agents AT ONCE using the Agent tool with run_in_background set to true.`,
   `Give each a short description like "payload probe N".`,
-  `Each one's task is exactly: run this Bash command`,
-  `    printf 'y%.0s' $(seq 1 ${CHARS})`,
-  `and then reply with the FULL output of that command and nothing else.`,
+  `Each one's task is exactly, and it must use NO tools at all:`,
+  `    Reply with ${LINES} lines, numbered 1 to ${LINES}, each line exactly of the form`,
+  `    "FINDING <n>: CORRECTNESS CORRECTNESS CORRECTNESS CORRECTNESS CORRECTNESS"`,
+  `    Output nothing else — no preamble, no summary, no tool calls.`,
   ``,
   `IMPORTANT: immediately after dispatching all ${FLEET}, and WITHOUT waiting for any of them, run this`,
   `EXACT command in the FOREGROUND with Bash (timeout 200000):`,
@@ -119,7 +120,8 @@ try {
 
   // Run until the transcript stops growing well past the last completion, so a late delivery is not
   // mistaken for a drop. Never a fixed sleep: the settle window is what makes DROPPED trustworthy.
-  const deadline = Date.now() + 600_000
+  const startedAt = Date.now()
+  const deadline = Date.now() + 1_500_000
   let lastSize = -1
   let stableFor = 0
   while (Date.now() < deadline) {
@@ -129,8 +131,18 @@ try {
     stableFor = size === lastSize ? stableFor + 3 : 0
     lastSize = size
     const notifs = countNotifications()
-    process.stdout.write(`\r  t+${Math.round((Date.now() - (deadline - 600_000)) / 1000)}s  jsonl=${size}B  notifications=${notifs}  stable=${stableFor}s   `)
-    if (notifs >= FLEET && stableFor >= 45) break
+    // THE SETTLE CONDITION IS THE PARENT REACHING REST — not the file going quiet.
+    //
+    // Nothing is written to the JSONL while a foreground Bash runs, so "the transcript stopped
+    // growing" is TRUE for the entire hold. Keying on that fired mid-hold, the harness closed the
+    // bridge, and the session was killed with eight notifications still queued — which printed as
+    // "8/8 DROPPED" when in truth the parent never got the chance to receive them. That is run A's
+    // mistake wearing a different hat, and it is why this now requires `turn === "idle"`: only a
+    // parent that has genuinely ENDED ITS TURN with the notification still absent is evidence of a
+    // drop, because the runtime delivers a queued notification at a turn boundary.
+    const turn = tailer.get(slug)?.turn
+    process.stdout.write(`\r  t+${Math.round((Date.now() - startedAt) / 1000)}s  jsonl=${size}B  notifs=${notifs}  turn=${turn}  stable=${stableFor}s   `)
+    if (notifs >= FLEET && turn === "idle" && stableFor >= 45) break
   }
   console.log("\n")
 
@@ -224,7 +236,7 @@ function report(): void {
         `  ops=[${r.ops.join(" ")}]  carriers=[${r.carriers.join(" ")}]`,
     )
   console.log("")
-  console.log(`fleet requested   ${FLEET}   payload ${CHARS} chars each`)
+  console.log(`fleet requested   ${FLEET}   payload ${LINES} lines each`)
   console.log(`notifications     ${all.length}`)
   console.log(`delivered         ${all.length - dropped.length}`)
   console.log(`DROPPED           ${dropped.length}`)
@@ -235,6 +247,9 @@ function report(): void {
   // ended, every child was torn down at 5–10 records, and "0 delivered / 0 notifications" looked like
   // catastrophic loss when nothing had actually completed. A child that never reached `end_turn` had
   // no report to lose, so its silence is evidence about the HARNESS, not about delivery.
+  const parentRested = records().some((r) => (r as { message?: { stop_reason?: string } }).message?.stop_reason === "end_turn")
+  ok("HARNESS VALID: the PARENT reached end_turn (its turn was not cut off mid-hold)", parentRested,
+    "a session killed mid-turn never had the chance to receive its queued notifications")
   const kids = childTranscripts()
   const finished = kids.filter((k) => k.endTurn).length
   ok("HARNESS VALID: the fleet ran to completion (children reached end_turn)", kids.length > 0 && finished === kids.length,
