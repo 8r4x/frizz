@@ -334,3 +334,56 @@ test("edited files are counted once per file, whatever shape the write arrived i
   // named Edit with the file only in `detail`.
   assert.equal(editedFileCount([{ name: "Edit", detail: "src/gone.ts" }, { name: "apply_patch", detail: "src/gone.ts" }]), 1)
 })
+
+function thoughtMessage(sourceId: string, text: string, at = "2026-07-30T12:00:01.000Z"): ChatMessage {
+  return { sourceId, role: "assistant", kind: "event", text, tools: [], parts: [], at }
+}
+
+test("thinking inside a run folds into it instead of splitting one burst in two", () => {
+  const compact = coalesceToolActivityMessages([
+    toolMessage("a", [tool("Bash", { detail: "git log" })]),
+    thoughtMessage("t", "Thought for 24s"),
+    toolMessage("b", [tool("Bash", { detail: "git diff" })], "2026-07-30T12:00:02.000Z"),
+  ])
+
+  assert.equal(compact.length, 1)
+  assert.equal(compact[0].message.sourceId, "a")
+  assert.deepEqual(
+    compact[0].message.tools.map((call) => call.thought ?? call.detail),
+    ["git log", "Thought for 24s", "git diff"],
+  )
+})
+
+test("a thought with no run above it keeps its own row", () => {
+  const compact = coalesceToolActivityMessages([
+    thoughtMessage("t", "Thought for 24s"),
+    toolMessage("a", [tool("Bash", { detail: "git log" })]),
+  ])
+
+  assert.deepEqual(compact.map((entry) => entry.message.sourceId), ["t", "a"])
+})
+
+test("a wake divider is not thinking and still ends the run", () => {
+  const boundary: ChatMessage = {
+    sourceId: "wake", role: "assistant", kind: "event", boundary: true,
+    text: "Background task «boot» finished", tools: [], parts: [],
+  }
+  const compact = coalesceToolActivityMessages([
+    toolMessage("a", [tool("Bash")]),
+    boundary,
+    toolMessage("b", [tool("Bash")]),
+  ])
+
+  assert.deepEqual(compact.map((entry) => entry.message.sourceId), ["a", "wake", "b"])
+})
+
+test("folded thinking never becomes the live activity gerund", () => {
+  const compact = coalesceToolActivityMessages([
+    toolMessage("a", [tool("Bash", { detail: "git log", status: "completed" })]),
+    thoughtMessage("t", "Thought for 24s"),
+  ])
+  const live = liveToolActivityTail(compact.map((entry) => entry.message))
+
+  assert.equal(live?.name, "Bash")
+  assert.equal(currentToolActivity(compact[0].message.tools).tool?.name, "Bash")
+})

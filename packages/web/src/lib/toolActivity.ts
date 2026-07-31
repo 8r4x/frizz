@@ -1,4 +1,4 @@
-import type { TranscriptMessage, TranscriptToolCall } from "@fray-ui/shared"
+import { THOUGHT_EVENT_PREFIX, type TranscriptMessage, type TranscriptToolCall } from "@fray-ui/shared"
 import type { ChatMessage } from "../hooks.ts"
 
 export interface ToolActivityMessage {
@@ -24,6 +24,30 @@ function readableToolName(name: string): string {
 
 function normalizedToolName(name: string): string {
   return readableToolName(name).toLowerCase()
+}
+
+/**
+ * The model thinking, as a member of an activity run.
+ *
+ * A "Thought for Ns" event is a MESSAGE of its own, so it used to end the run: a provider that thought
+ * halfway through a batch turned one burst into `Ran 4 tool calls` / `Thought for 24s` /
+ * `Ran 1 tool call` (maintainer 2026-07-31: "I don't think it makes sense for us to interleave tool
+ * calls and thinking like this. The thinking block should just collapse"). It is now folded into the
+ * run as this pseudo-entry: the collapsed row stays ONE line, and expanding shows the thought where it
+ * actually happened. Codex `reasoning` rows are deliberately NOT folded — they carry real content, are
+ * already their own disclosure, and arrive nearly every turn, so absorbing them would delete reasoning
+ * from the surface rather than tidy it.
+ */
+export function thoughtActivityEntry(text: string): TranscriptToolCall {
+  return { name: "thought", thought: text }
+}
+
+/** True for the server's own thinking event line (see THOUGHT_EVENT_PREFIX / transcript.ts). */
+export function isThoughtEventMessage(message: ChatMessage): boolean {
+  return message.role === "assistant"
+    && message.kind === "event"
+    && !message.boundary
+    && message.text.startsWith(THOUGHT_EVENT_PREFIX)
 }
 
 /** Calls that keep their dedicated card instead of entering the minimal activity disclosure. */
@@ -131,6 +155,14 @@ export function coalesceToolActivityMessages(messages: readonly ChatMessage[]): 
 
   messages.forEach((message, messageIndex) => {
     if (transparentAssistantMessage(message)) return
+    // Thinking INSIDE a run is folded into it and keeps the run open, so the calls either side of it
+    // stay one disclosure (see thoughtActivityEntry). A thought with no run above it — the model
+    // thinking before it has done anything — still gets its own row: there is nothing to fold into,
+    // and that row is the whole reason the line exists.
+    if (isThoughtEventMessage(message) && activityTail) {
+      activityTail.message = appendToolTail(activityTail.message, [thoughtActivityEntry(message.text)], message.at)
+      return
+    }
     const tools = pureToolMessage(message)
     if (tools && activityTail) {
       activityTail.message = appendToolTail(activityTail.message, tools, message.at)
@@ -151,7 +183,12 @@ export function liveToolActivityTail(messages: readonly ChatMessage[]): Transcri
     // Optimistic queued user bubbles are pinned separately and have not interrupted the active turn.
     if (message.queued) continue
     const tools = messageToolTail(message)
-    return tools?.[tools.length - 1]
+    // Past any folded-in thinking: the shimmer reports what the model is DOING, and a thought carries
+    // no activity to name (it would read as "Using thought").
+    for (let t = (tools?.length ?? 0) - 1; t >= 0; t--) {
+      if (tools?.[t].thought === undefined) return tools?.[t]
+    }
+    return undefined
   }
   return undefined
 }
@@ -403,14 +440,18 @@ function rawToolActivityLabel(tool: Pick<TranscriptToolCall, "name" | "detail" |
 }
 
 /** Prefer the newest pending call; otherwise summarize the final call in the settled batch. */
-export function currentToolActivity<T extends Pick<TranscriptToolCall, "status">>(tools: readonly T[]): {
+export function currentToolActivity<T extends Pick<TranscriptToolCall, "status" | "thought">>(tools: readonly T[]): {
   tool: T | undefined
   pending: boolean
 } {
   for (let i = tools.length - 1; i >= 0; i--) {
     if (tools[i].status === "pending") return { tool: tools[i], pending: true }
   }
-  return { tool: tools[tools.length - 1], pending: false }
+  // Folded-in thinking is not an activity to summarize (see thoughtActivityEntry).
+  for (let i = tools.length - 1; i >= 0; i--) {
+    if (tools[i].thought === undefined) return { tool: tools[i], pending: false }
+  }
+  return { tool: undefined, pending: false }
 }
 
 /** Tools whose whole job is to write a file — the ones the digest reports as "edited". */
