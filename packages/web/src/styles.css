@@ -35,6 +35,23 @@
      OWN explicit duration and are unaffected. */
   --default-transition-duration: 120ms;
   --default-transition-timing-function: cubic-bezier(0, 0, 0.2, 1);
+
+  /* The corner EVERY block-level element wears — the shell a transcript card, a tool card, a code
+     fence, a table, an image or a queue banner is drawn on. One value, because the thing that made
+     the transcript read as a pile of unrelated shapes was these disagreeing: a 16px signal card sat
+     directly above a 6px tool card and an 8px image, and no two of them looked like the same product
+     (maintainer 2026-07-31, on a shot of the GitHub wake card above the tool-batch bar: "we should
+     make the rendering consistent across all of these block-level elements. I like the new GitHub
+     notification with the big corner radius").
+
+     16px is `rounded-2xl`, so JSX spells it with that Tailwind token and CSS spells it with this var;
+     they are the same number on purpose. `BLOCK_RADIUS` in TranscriptCard.tsx is the JSX half.
+
+     This governs OUTER containers only. Anything NESTED inside one — an option row in a question
+     card, a card's action button, a to-do row, an inline code chip — keeps the 6px control radius,
+     because TranscriptCard's shell is built on `cardRadius − buttonRadius == inset` and a nested
+     corner has to stay tighter than the corner containing it or the two stop reading as concentric. */
+  --block-radius: 16px;
 }
 
 /* min-height (not height): the PAGE is the app's one scroll container — content taller than the
@@ -732,7 +749,7 @@ a[href] {
 .md-body pre {
   background: var(--color-bg);
   border: 1px solid var(--color-border);
-  border-radius: 6px;
+  border-radius: var(--block-radius);
   padding: 0.7em 0.8em;
   overflow-x: auto;
 }
@@ -810,17 +827,40 @@ a[href] {
   border-top: 1px solid var(--color-border);
   margin: 1em 0;
 }
+/* A table is a block-level element like any other, so it wears the shared corner — which
+   `border-collapse: collapse` cannot do: collapsed borders are painted by the CELLS, so the perimeter
+   runs square straight through the rounded corner and `overflow` clips it into four stubs. Separate
+   borders move the perimeter onto the TABLE box, where the radius applies; each cell then draws only
+   its right and bottom rule and the last column/row drop theirs so the interior grid still meets the
+   frame exactly once. `overflow-x: auto` computes overflow-y to `auto` as well, which is what clips
+   the header fill into the top corners. */
+/* `fit-content`, not `100%`: as a `display: block` box the table lays its columns out at their natural
+   width, so a 100%-wide box drew the new perimeter across the whole message column with the cells
+   huddled at the left end — an empty frame. The border has to hug what it frames. `max-width: 100%`
+   keeps a wide table inside the column, where `overflow-x` still scrolls it. */
 .md-body table {
-  border-collapse: collapse;
-  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  width: fit-content;
+  max-width: 100%;
   display: block;
   overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--block-radius);
 }
 .md-body th,
 .md-body td {
-  border: 1px solid var(--color-border);
+  border: 0;
+  border-right: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
   padding: 0.32em 0.55em;
   text-align: left;
+}
+.md-body tr > *:last-child {
+  border-right: 0;
+}
+.md-body tr:last-child > * {
+  border-bottom: 0;
 }
 /* GFM column alignment (`| :---: |`). marked emits it as the `align` presentation attribute, which the
    blanket `text-align: left` above outranks — so honor it explicitly. */

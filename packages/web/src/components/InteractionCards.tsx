@@ -25,6 +25,7 @@ import {
 } from "../api/interaction-cache.ts"
 import { pendingInteractionScope, usePendingInteractions } from "../hooks.ts"
 import { ApprovalDetails } from "./ApprovalDetails.ts"
+import { BLOCK_RADIUS } from "./TranscriptCard.tsx"
 import {
   canonicalInteractionDecisions,
   initialInteractionDraft,
@@ -81,7 +82,7 @@ export function InteractionStack({
       <div
         data-interactions-error
         role="alert"
-        className={`rounded-lg border border-amber-500/35 bg-amber-500/[0.07] px-3.5 py-3 text-[12px] text-amber-100 ${className}`}
+        className={`${BLOCK_RADIUS} border border-amber-500/35 bg-amber-500/[0.07] px-3.5 py-3 text-[12px] text-amber-100 ${className}`}
       >
         <div className="font-medium">Pending requests could not be loaded.</div>
         <div className="mt-1 break-words text-amber-100/75">{errorText(query.error)}</div>
@@ -501,7 +502,7 @@ function InteractionApprovalCard({
       data-interaction-id={record.id}
       data-interaction-kind={record.payload.kind}
       data-delivery-effect={record.delivery?.effect}
-      className="min-w-0 rounded-lg border border-accent/45 bg-accent/[0.065] shadow-sm shadow-black/15 outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+      className={`min-w-0 ${BLOCK_RADIUS} border border-accent/45 bg-accent/[0.065] shadow-sm shadow-black/15 outline-none focus-visible:ring-2 focus-visible:ring-accent/60`}
     >
       <div className="flex min-w-0 items-start gap-3 border-b border-accent/20 px-4 py-3">
         <ShieldCheck aria-hidden="true" size={16} className="mt-0.5 shrink-0 text-accent" />

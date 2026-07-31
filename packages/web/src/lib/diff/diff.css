@@ -2,12 +2,17 @@
    dark palette tuned to the fray theme (see styles.css --color-* vars). Import this where the diff
    is rendered. Class names are namespaced `fray-diff-*` / `ftk-*` (fray token kind). */
 
+/* `--block-radius` (styles.css) is the corner EVERY block-level element in the app wears — a signal
+   card, a code fence, a table, an image, and these tool cards. It used to be 6px here, which put a
+   tool card and the ```done card directly above it in two visibly different design languages
+   (maintainer 2026-07-31). `overflow: hidden` is what makes it hold: the header carries a panel-2
+   fill edge to edge, and without the clip that fill paints square right through the arc. */
 .fray-diff {
   font-family: var(--font-mono);
   font-size: 12.5px;
   line-height: 1.55;
   border: 1px solid var(--color-border);
-  border-radius: 6px;
+  border-radius: var(--block-radius);
   overflow: hidden;
   background: var(--color-bg);
 }
@@ -85,7 +90,7 @@
   font-size: 12.5px;
   line-height: 1.55;
   border: 1px solid var(--color-border);
-  border-radius: 6px;
+  border-radius: var(--block-radius);
   overflow: hidden;
   background: var(--color-bg);
 }

@@ -50,6 +50,21 @@ export const QUEUE_WRAP = "[overflow-wrap:anywhere] [&_pre]:whitespace-pre-wrap 
 // The tone color lands on the icon AND the title together, as shadcn's `[&>svg]:text-current` does:
 // they are one object — more so now that the glyph sits at the opposite end of the row, where a
 // mismatched color would read as an unrelated badge rather than as the title's own mark.
+// The corner EVERY block-level element wears — this card, a tool card, a code fence, a table, an
+// image, a queue banner. It is the Tailwind half of `--block-radius` in styles.css (both 16px, and
+// they must stay equal): JSX imports this, CSS uses the var. Cards used to be the only thing rounded
+// this far, so a 16px signal card sat directly above a 6px tool card and an 8px image and no two of
+// them read as the same product (maintainer 2026-07-31: "we should make the rendering consistent
+// across all of these block-level elements. I like the new GitHub notification with the big corner
+// radius").
+//
+// OUTER containers only. A row or button NESTED inside one keeps the 6px control corner
+// (CARD_ACTION_RADIUS below) — that is the same concentric rule, not an exception to it.
+export const BLOCK_RADIUS = "rounded-2xl"
+// The same corner on the TOP two only — for a shell whose bottom corners are carried by something
+// else (the queue card's sticky header, which must not round its own bottom edge against the body).
+export const BLOCK_RADIUS_TOP = "rounded-t-2xl"
+
 export type CardTone = "neutral" | "attention" | "caution" | "danger"
 const CARD_TONES: Record<CardTone, { border: string; head: string }> = {
   neutral: { border: "border-border-strong", head: "text-fg" },
@@ -160,7 +175,7 @@ export function TranscriptCard({
 } & Omit<ComponentPropsWithoutRef<"div">, "children" | "className">) {
   const { border, head } = CARD_TONES[tone]
   return (
-    <div {...rest} className={`min-w-0 rounded-2xl border ${border} bg-panel-2 p-3 ${className}`}>
+    <div {...rest} className={`min-w-0 ${BLOCK_RADIUS} border ${border} bg-panel-2 p-3 ${className}`}>
       <CardHead icon={icon} label={label} head={head} aside={aside} />
       {children != null && <CardContent>{children}</CardContent>}
     </div>

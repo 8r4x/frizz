@@ -10,9 +10,10 @@ import { orderQueue, queued, displayTitle, lastActiveLabelAt } from "../groups.t
 import { useLiveAnswering } from "../lib/answering.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
 import { Message, NativeInputRequiredCard, PermPolicyNote, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText } from "./ChatView.tsx"
-import { CARD_PRIMARY_ACTION } from "./TranscriptCard.tsx"
+import { BLOCK_RADIUS, BLOCK_RADIUS_TOP, CARD_PRIMARY_ACTION } from "./TranscriptCard.tsx"
 import { AwaitingBackgroundCard } from "./AwaitingBackgroundCard.tsx"
 import { agentCompletionCall } from "../lib/subAgentCompletion.ts"
+import { coalesceToolActivityMessages } from "../lib/toolActivity.ts"
 import { prefs } from "../lib/prefs.ts"
 import { ThreadComposerBox } from "./ThreadComposerBox.tsx"
 import { BackgroundOpsStrip, ThreadSlugContext, QueueDismissContext } from "./ChatView.tsx"
@@ -538,7 +539,7 @@ function BoardErrorsBanner({ board }: { board: BoardSnapshot | null }) {
   const legacy = board?.errors ?? []
   if (items.length === 0 && legacy.length === 0) return null
   return (
-    <div className="mb-6 rounded-md border border-amber-500/25 bg-amber-500/[0.06] px-3.5 py-2.5 text-[12px] text-amber-200/90">
+    <div className={`mb-6 ${BLOCK_RADIUS} border border-amber-500/25 bg-amber-500/[0.06] px-3.5 py-2.5 text-[12px] text-amber-200/90`}>
       <div className="font-medium mb-0.5">Board errors</div>
       {items.length > 0
         ? items.slice(0, 6).map((it, i) => (
@@ -631,7 +632,7 @@ function IntermediateSummary({ toolCount, stepCount, onExpand }: { toolCount: nu
       onClick={onExpand}
       onMouseDown={(e) => e.preventDefault()}
       aria-label={`Expand ${summary} of intermediate agent activity`}
-      className="petite-caps group flex w-full items-center gap-2 rounded-md border border-border/60 bg-panel-2/40 px-3 py-2 text-left text-[12px] text-muted outline-none transition-colors hover:border-border hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
+      className={`petite-caps group flex w-full items-center gap-2 ${BLOCK_RADIUS} border border-border/60 bg-panel-2/40 px-3 py-2 text-left text-[12px] text-muted outline-none transition-colors hover:border-border hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60`}
     >
       <ChevronsUpDown aria-hidden="true" size={13} className="shrink-0 opacity-70 transition-opacity group-hover:opacity-100" />
       <span className="tabular-nums">{summary}</span>
@@ -797,7 +798,29 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   const collapseIntermediate =
     !intermediateExpanded && stickyUserIdx >= 0 && firstRenderedIdx !== lastRenderedIdx && (hiddenStepCount >= 1 || hiddenToolCount >= 1)
   const visibleStart = resolveVisibleStart(messages, visibleStartId, lastUserIdx)
-  const visible = messages.slice(visibleStart)
+  const visible = useMemo(() => messages.slice(visibleStart), [messages, visibleStart])
+  // The SAME presentation-only coalescing the thread view and the sub-agent drawer run (ChatView's
+  // coalescedActivityMessages): a provider that chunks one burst into 26 assistant records must not
+  // mint 26 `Ran 1 tool call` disclosures, and a "Thought for Ns" in the middle of that burst must not
+  // split it in two (maintainer 2026-07-31: "I don't think it makes sense for us to interleave tool
+  // calls and thinking like this"). Expanding this card's intermediate bar used to be exactly that
+  // wall, because the card was the one transcript surface still rendering raw server order.
+  // Each entry keeps its ORIGINAL index so every index-addressed prop below — paired answers, the
+  // sticky ask, the collapse span — keeps addressing server truth rather than the compacted array.
+  //
+  // The run is CUT after the last agent prose (lastRenderedIdx). That message renders `textOnly` under
+  // the collapse, so anything absorbed into it is dropped from the page — and calls made AFTER the
+  // agent's closing prose sit OUTSIDE the collapsed span (they are not in hiddenToolCount), so they
+  // would vanish with nothing standing in for them. Cutting there keeps them their own rows.
+  const coalescedVisible = useMemo(() => {
+    const cut = lastRenderedIdx >= visibleStart ? lastRenderedIdx - visibleStart + 1 : 0
+    const coalesce = (slice: TranscriptMessage[], offset: number) =>
+      coalesceToolActivityMessages(slice).map((entry) => ({ ...entry, messageIndex: entry.messageIndex + offset }))
+    return [
+      ...coalesce(visible.slice(0, cut), visibleStart),
+      ...coalesce(visible.slice(cut), visibleStart + cut),
+    ]
+  }, [visible, visibleStart, lastRenderedIdx])
   const hasMore = visibleStart > 0 || q.data?.hasEarlier === true
 
   useLayoutEffect(() => {
@@ -975,17 +998,17 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
     <ThreadSlugContext.Provider value={thread.id}>
     <QueueDismissContext.Provider value={queueDismiss}>
     {/* NO overflow-hidden: it would clip the sticky header out of stickiness. The header carries
-        rounded-t so the card's top corners still look clipped; the root's rounded-lg handles the bottom. */}
+        rounded-t so the card's top corners still look clipped; the root's BLOCK_RADIUS handles the bottom. */}
     <div
       data-queue-card-root={thread.id}
       data-queue-leaving={leaving}
       style={bottomScrollReserve ? { marginBottom: bottomScrollReserve } : undefined}
-      className={`flex flex-col min-w-0 max-w-full rounded-lg border border-border-strong bg-panel shadow-lg shadow-black/25 transition-opacity ${resolving ? "opacity-40" : ""}`}
+      className={`flex flex-col min-w-0 max-w-full ${BLOCK_RADIUS} border border-border-strong bg-panel shadow-lg shadow-black/25 transition-opacity ${resolving ? "opacity-40" : ""}`}
     >
       {/* Sticky-header CONTAINING BLOCK, deliberately EXCLUDING the footer: position:sticky is clamped
           to its containing block, so wrapping only the header + body here stops the header at the
           footer's top edge as the card scrolls off. Without it the header rides all the way to the
-          card-root bottom, where its square bottom corners jut past the root's rounded-lg border — the
+          card-root bottom, where its square bottom corners jut past the root's rounded border — the
           sticky header "breaking out" of the card border during the scroll-off unstick. The footer sits
           BELOW this wrapper, so the root's rounded bottom corners are always the footer's, never the
           square-cornered header's. (No overflow here — that would neuter the header's stickiness.) */}
@@ -993,10 +1016,10 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
       {/* STICKY header: title + backing-doc filename + status_text on the left, whole-item icon actions
           on the right. Pins to the scroll container's top (opaque bg + bottom rule) as the body scrolls
           under it, so the actions stay reachable through a long card. Rounding is STATE-DEPENDENT:
-          collapsed with no footer (a foreign/archived card) the header IS the whole card and takes full
-          rounded-lg; otherwise it is rounded-top-only + a border-b, the root's rounded-lg carrying the
+          collapsed with no footer (a foreign/archived card) the header IS the whole card and takes the full
+          block radius; otherwise it is rounded-top-only + a border-b, the root's radius carrying the
           bottom corners (a rounded-top + border-b would read as squared/doubled edges inside the shell). */}
-      <div ref={headerRef} className={`sticky top-0 z-10 flex items-center gap-2 bg-panel px-5 py-3.5 max-[800px]:top-10 ${collapsed ? "rounded-lg" : "rounded-t-lg border-b border-border/60"}`}>
+      <div ref={headerRef} className={`sticky top-0 z-10 flex items-center gap-2 bg-panel px-5 py-3.5 max-[800px]:top-10 ${collapsed ? BLOCK_RADIUS : `${BLOCK_RADIUS_TOP} border-b border-border/60`}`}>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1">
             <div className="min-w-0 flex-1 truncate font-semibold text-[15px] leading-snug" title={displayTitle(thread)}>
@@ -1117,10 +1140,9 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
               // messages plus the tool bands batched into the first/last messages — is replaced by ONE
               // summary bar. The pinned ask and loaded-earlier history still render in full around it.
               let intermediateBarEmitted = false
-              visible.forEach((m, i) => {
+              coalescedVisible.forEach(({ message: m, messageIndex: globalIdx }, i) => {
                 if (m.queued) return
                 if (messageRendersNothing(m)) return
-                const globalIdx = base + i
                 if (collapseIntermediate && globalIdx >= firstRenderedIdx && globalIdx <= lastRenderedIdx) {
                   const isFirst = globalIdx === firstRenderedIdx
                   const isLast = globalIdx === lastRenderedIdx
@@ -1172,17 +1194,17 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                   return
                 }
                 if (prevTailIsMeta !== null) out.push(<VSpace key={`s${i}`} h={prevTailIsMeta && messageHeadIsMeta(m) ? 6 : STEP} />)
-                const sourceKey = m.sourceId ?? `legacy-${base + i}`
+                const sourceKey = m.sourceId ?? `legacy-${globalIdx}`
                 // The most recent user message sticks just below the header (StickyUserBand carries the
                 // source-id + sticky marker itself) unless the pref is off, and collapses as a hover-to-
                 // expand bubble; everything else — and the ask when sticky is off — flows in a plain wrapper.
-                const isSticky = base + i === stickyUserIdx && stickyUserMessage
+                const isSticky = globalIdx === stickyUserIdx && stickyUserMessage
                 const msg = (
                   <Message
                     m={m}
                     dense
                     answering={answeringForMessage(m)}
-                    paired={paired[base + i]}
+                    paired={paired[globalIdx]}
                     sticky={isSticky}
                   />
                 )

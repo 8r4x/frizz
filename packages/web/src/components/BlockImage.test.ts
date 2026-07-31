@@ -10,7 +10,8 @@ test("screenshots are horizontally centered without stretching their intrinsic f
 
   assert.ok(blockImage, "BlockImage source should remain discoverable")
   assert.match(blockImage, /data-local-image="true"/)
-  assert.match(blockImage, /className="[^"]*\bself-center\b[^"]*"/)
+  // A template literal, not a quoted string: the class list interpolates the shared BLOCK_RADIUS token.
+  assert.match(blockImage, /className=\{`[^`]*\bself-center\b[^`]*`\}/)
   assert.doesNotMatch(blockImage, /\bself-start\b/)
   assert.ok(markdownImage, "Markdown screenshot styles should remain discoverable")
   assert.match(markdownImage, /display:\s*block/)
