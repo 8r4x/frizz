@@ -100,7 +100,9 @@ const messages: TranscriptMessage[] = [
     role: "assistant",
     text: "",
     tools: [],
-    parts: [toolsPart([call({ name: "Bash", command: "wait %1", desc: "Waiting for background sleep 45" })])],
+    // A yielded/background Bash is still an ordinary tool-call record. Its separate lifecycle event
+    // is the visible boundary; the launch itself must not fracture this run into digest/card/digest.
+    parts: [toolsPart([call({ name: "Bash", command: "wait %1", desc: "Waiting for background sleep 45", backgroundState: "background" })])],
   },
 
   // Another separate message, this time a 2-call batch (boundary + intra in one message).
@@ -145,8 +147,10 @@ const messages: TranscriptMessage[] = [
             textPart("   "),
             toolsPart([call({
               name: "Bash",
-              command: "cat out.log",
-              desc: "Printing the captured output",
+              command: "cd /fixture/fray && actionlint .github/workflows/release.yml .github/workflows/ci.yml",
+              // Noun-phrase descriptions occur in real Claude Bash calls. The authored description
+              // must still beat the command fallback even though it is not already a gerund.
+              desc: "Final workflow validation",
               // Deliberately completed in BOTH states. The live fixture models the inter-call gap:
               // the turn is still running, so this remains the bottom gerund until a real boundary.
               status: "completed",
