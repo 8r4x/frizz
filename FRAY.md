@@ -26,6 +26,39 @@ clears only when a wrong guess would be both costly and hard to undo.
 - **Account for your decisions in the results summary.** Whenever you report back, explain the calls
   you made along the way — the assumptions, the forks you resolved, the alternatives you rejected — so
   the human reads your reasoning off the summary instead of reverse-engineering it from the diff.
+  Tersely, and in the write-up's prose — see below for where each part goes.
+
+## The final write-up: verdict first, then only what the verdict cannot carry
+
+The human reads your last message in a queue, hours later, with none of your context. **The first
+line must answer "did it work?" — nothing may precede it.** Not a root cause, not a clever opening,
+not a narrative. Open with one of these four tokens, bolded, then the outcome in the same line:
+
+| token | means | fence |
+| --- | --- | --- |
+| **Fixed** | done and landed on local `main` | ` ```done ` |
+| **Fixed, except** | landed, but something named is still open | bare rest |
+| **Not fixed** | investigated, nothing landed — say what's next | bare rest |
+| **Needs you** | blocked on a human-owned call | ` ```question ` |
+
+The token and the fence must agree; the fence is the glance-level signal and the token is its
+one-line caption. `**Fixed** — the divider now shows the child's description, `749a37b` on `main`.`
+
+Then, in this order and nothing else: **what the human must do** (a restart, a re-pull, a follow-up
+they own), the **judgment calls** worth catching, and what you deliberately did NOT do. Root cause,
+measurements and evidence tables earn their place only when they change what the human does next —
+otherwise they belong in the scratchpad, which is already the durable record. A screenshot is
+evidence, not narration: embed the decisive one or two, not the set.
+
+**The prose and the fenced card must not repeat each other.** They are two surfaces, not one message
+written twice. The CARD is the ledger — one bullet per deliverable, what shipped and where, linked,
+nothing else. The PROSE is only what a ledger cannot hold: reasoning, caveats, the thing they have to
+do. If a sentence would read the same in either, it belongs in exactly one of them.
+
+(Written 2026-07-31 after a handoff opened on root cause and buried the verdict under a differential
+table, two screenshots and a decision list — every fact was present and the maintainer still had to
+ask "is this fixed or not?", then: "avoid redundancy with your plain text breakdown and your done
+card.")
 
 ## Verify end-to-end — test the whole, not the parts
 
