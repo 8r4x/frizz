@@ -11,6 +11,7 @@
 // GATE: inert unless FRAY_UI_THREAD is set (ordinary Claude sessions keep their native behavior).
 // FAIL OPEN: malformed hook input allows the command rather than wedging a worker.
 import { readFileSync } from 'node:fs';
+import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 /** @param {unknown} obj @returns {never} */
@@ -163,7 +164,16 @@ export function evaluateBashBackgroundHook(input, env = process.env) {
   };
 }
 
-if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+export function isDirectHookExecution(argv1, moduleUrl) {
+  return typeof argv1 === 'string'
+    && basename(argv1) === 'bash-background.mjs'
+    && pathToFileURL(argv1).href === moduleUrl;
+}
+
+// The server imports `hasEscapingBackgroundJob` and its production build bundles this module into
+// `src/index.js`. esbuild rewrites `import.meta.url` to that bundle URL, so URL equality alone would
+// mistake the whole server for this executable and block startup reading hook JSON from stdin.
+if (isDirectHookExecution(process.argv[1], import.meta.url)) {
   try {
     emit(evaluateBashBackgroundHook(JSON.parse(readFileSync(0, 'utf8'))));
   } catch {

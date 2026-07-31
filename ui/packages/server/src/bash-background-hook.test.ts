@@ -2,7 +2,8 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import { dirname, join } from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
+import { isDirectHookExecution } from "../../../../cc-worker/hooks/bash-background.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const hook = join(here, "../../../../cc-worker/hooks/bash-background.mjs")
@@ -69,4 +70,10 @@ test("Bash denial tells the worker the tracked replacement", () => {
   assert.match(reason, /run_in_background:true/)
   assert.match(reason, /Claude task ID/)
   assert.match(reason, /finish with `wait`/)
+})
+
+test("bundling the detector into Fray cannot turn the server entry into the hook executable", () => {
+  const serverEntry = "/artifact/runtime/src/index.js"
+  assert.equal(isDirectHookExecution(serverEntry, "file:///artifact/runtime/src/index.js"), false)
+  assert.equal(isDirectHookExecution(hook, pathToFileURL(hook).href), true)
 })
