@@ -5,17 +5,14 @@ import test from "node:test"
 // (same pattern as the other *.e2e.test.ts here): start `vite` in packages/web and set
 // FRAY_TOOL_BATCH_SPACING_E2E_URL to its origin.
 //
-// The invariant (maintainer 2026-07-27, "there's a bigger gap between independent batches as opposed to
-// within a batch"): two ADJACENT tool cards sit at the same 6px pitch however the turn was chunked —
-// batched inside one assistant message, or split across successive ones. The tailer chunks a burst of
-// calls arbitrarily, so the chunking must not be legible as spacing. Measured in the browser rather than
-// asserted on the tree because the bug was a container `gap` on a surface that never went through the
-// spacer walk — only real layout catches that.
+// The invariant after the minimal renderer: provider batching is invisible while collapsed, and after
+// explicit expansion the detailed cards still use one 6px pitch. Measured in the browser rather than
+// asserted on the tree because both disclosure grouping and card spacing are layout behavior.
 const baseUrl = process.env.FRAY_TOOL_BATCH_SPACING_E2E_URL
 
 const TIGHT = 6
-// The prose control: the one boundary that must NOT be tight. Its exact height is font-dependent, so
-// assert only that it is comfortably wider than the tool run.
+// Prose controls: boundaries on either side of a prose-bearing message must NOT be tight. Their exact
+// heights are font-dependent, so assert only that they are comfortably wider than the tool run.
 const PROSE_MIN = 30
 
 async function launch() {
@@ -51,16 +48,17 @@ async function gaps(page: import("puppeteer").Page, nth: number) {
   }, nth)
 }
 
-// A tool card that follows PROSE is the control — it keeps the full between-block step. Identified by
-// the one fixture card whose message opens with "Confirming the marker file landed."
-const isProseBoundary = (g: { to: string }) => g.to.startsWith("Read/private/tmp/out.log")
+// Tool cards on either side of PROSE are the controls — they keep the full between-block step. Pure
+// tool-only provider turns coalesce into one display message, so a detailed-card seam that crosses
+// display-message roots is exactly a prose seam in this fixture.
+const isProseBoundary = (g: { sameMessage: boolean }) => !g.sameMessage
 
 for (const [surface, query, column] of [
   ["thread transcript", "", 0],
   // The drawer mounts over the thread, so it is the SECOND column on the page.
   ["sub-agent drawer", "?surface=child", 1],
 ] as const) {
-  test(`${surface}: adjacent tool cards keep one pitch across batch boundaries`, {
+  test(`${surface}: provider batches share one disclosure and expanded cards keep one pitch`, {
     skip: !baseUrl,
     timeout: 60_000,
   }, async () => {
@@ -68,6 +66,16 @@ for (const [surface, query, column] of [
     try {
       await page.goto(`${baseUrl}/tool-batch-spacing-fixture.html${query}`, { waitUntil: "networkidle0" })
       await page.waitForFunction((n) => document.querySelectorAll("[data-transcript-column]").length > n, {}, column)
+      const collapsed = await page.evaluate((idx) => {
+        const scope = document.querySelectorAll("[data-transcript-column]")[idx]
+        const disclosures = [...scope.querySelectorAll<HTMLElement>("[data-tool-activity] button")]
+        const labels = disclosures.map((button) => button.getAttribute("aria-label") ?? "")
+        const visibleCards = [...scope.querySelectorAll<HTMLElement>(".fray-bash")].filter((card) => card.offsetParent !== null).length
+        disclosures.forEach((button) => button.click())
+        return { labels, visibleCards }
+      }, column)
+      assert.equal(collapsed.visibleCards, 0, "ordinary cards stay unmounted until the disclosure is expanded")
+      assert.ok(collapsed.labels.some((label) => /Expand [2-9]\d* tool calls/.test(label)), "successive provider batches coalesce into a multi-call disclosure")
       await page.waitForSelector(".fray-bash")
       await new Promise((r) => setTimeout(r, 600))
 
@@ -78,14 +86,15 @@ for (const [surface, query, column] of [
       for (const g of tool) {
         assert.equal(g.gap, TIGHT, `${g.from} → ${g.to} (sameMessage=${g.sameMessage}) must sit at the tight run`)
       }
-      // Both shapes are actually present — otherwise the assertion above is vacuous.
+      // The expanded detail actually contains adjacent cards — otherwise the assertion above is vacuous.
       assert.ok(tool.some((g) => g.sameMessage), "fixture must contain an intra-batch pair")
-      assert.ok(tool.some((g) => !g.sameMessage), "fixture must contain a cross-message pair")
 
       // …and the prose adjacency is NOT collapsed with them.
       const prose = measured.filter(isProseBoundary)
-      assert.equal(prose.length, 1, "expected exactly one prose-adjacent card")
-      assert.ok(prose[0].gap >= PROSE_MIN, `prose boundary must keep its break, got ${prose[0].gap}px`)
+      assert.equal(prose.length, 3, "expected every prose-adjacent card seam")
+      for (const g of prose) {
+        assert.ok(g.gap >= PROSE_MIN, `prose boundary must keep its break, got ${g.gap}px`)
+      }
 
       assert.deepEqual(errors, [], "no console/page errors")
     } finally {

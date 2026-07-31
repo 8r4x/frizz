@@ -68,6 +68,7 @@ import { PROVIDER_LABEL } from "../lib/signIn.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
 import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
+import { coalesceToolActivityMessages, currentToolActivity, isToolActivityException, settledToolActivityLabel, toolActivityLabel } from "../lib/toolActivity.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
 
 // Answer types moved to lib/questionBlocks.ts (shared by the queue card, the thread view, and the
@@ -181,6 +182,10 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
   // Raw server order — each message renders its `parts` in block order (fidelity). Memoized so
   // useLiveAnswering's `liveMsg` identity check compares objects from THIS same list.
   const messages = useMemo(() => q.data?.messages ?? [], [q.data])
+  // Presentation-only coalescing: provider batching must not mint one loader per pure tool turn.
+  // Original indices ride beside the display message so sticky asks and paired answers continue to
+  // address server truth, never the compacted array.
+  const activityMessages = useMemo(() => coalesceToolActivityMessages(messages), [messages])
   // Question↔answer pairing for "Answers:" user messages, precomputed at the LIST level (the lookback
   // needs the whole list; Message renders per-message). null — a stable primitive — at every ordinary
   // index, so the memoized Message only sees a `paired` prop change on actual answers-messages.
@@ -382,18 +387,19 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
         ) : (
           <>
             {withMessageSpacers(
-              messages,
+              activityMessages.map((entry) => entry.message),
               (m, i) => {
+                const messageIndex = activityMessages[i].messageIndex
                 // The current ask sticks to the pane top (unless the pref is off) as a collapsed,
                 // hover-to-expand bubble; every other message flows normally.
-                const isSticky = i === lastUserIdx && stickyUserMessage
+                const isSticky = messageIndex === lastUserIdx && stickyUserMessage
                 const msg = (
                   <Message
                     key={i}
                     m={m}
                     answering={answeringForMessage(m)}
                     showSendButton
-                    paired={paired[i]}
+                    paired={paired[messageIndex]}
                     sticky={isSticky}
                   />
                 )
@@ -568,13 +574,19 @@ function VirtualizedThreadTranscript({
   loadEarlier: () => void
   jumpOverlay: HTMLElement | null
 }) {
-  const messageRows = useMemo(() => buildVirtualTranscriptMessageRows(
-    messages,
-    messageRendersNothing,
-    messageHeadIsMeta,
-    messageTailIsMeta,
-    STEP,
-  ), [messages])
+  const messageRows = useMemo(() => {
+    const activityMessages = coalesceToolActivityMessages(messages)
+    return buildVirtualTranscriptMessageRows(
+      activityMessages.map((entry) => entry.message),
+      messageRendersNothing,
+      messageHeadIsMeta,
+      messageTailIsMeta,
+      STEP,
+    ).map((row) => ({
+      ...row,
+      messageIndex: activityMessages[row.messageIndex].messageIndex,
+    }))
+  }, [messages])
   const lastUserIdx = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === "user" && !messages[i].queued) return i
@@ -1435,11 +1447,10 @@ export function messageHeadIsTool(m: ChatMessage): boolean {
   }
   return (m.tools?.length ?? 0) > 0
 }
-// A lightweight single-line META label — a collapsed "Thought for Ns"/"Agent … finished" event or a
-// collapsed Codex reasoning row. These share the SAME petite-caps line box as a "N tool calls" batch
-// header (TRANSCRIPT_META_LABEL_CLASS), so per the "one rhythm" intent (transcriptMetaLabels.ts) they
-// join the tight 6px tool run instead of forcing a 14px break on both sides. A BOUNDARY event is a
-// section-break divider, not a quiet label — it keeps STEP.
+// A lightweight single-line META label — a "Thought for Ns"/"Agent … finished" event or collapsed
+// Codex reasoning row. The minimal tool disclosure is now a prose-sized gerund, but all three remain
+// subordinate transcript activity and therefore join the tight 6px run instead of forcing a 14px
+// break on both sides. A BOUNDARY event is a section-break divider, not a quiet label — it keeps STEP.
 function isMetaLabelMessage(m: ChatMessage): boolean {
   return (m.kind === "event" && !m.boundary) || m.kind === "reasoning"
 }
@@ -1651,12 +1662,6 @@ function collapseTools(tools: TranscriptMessage["tools"]): CollapsedTool[] {
   return out
 }
 
-// Tool calls render as a SUBORDINATE activity band — never as status. The green ● was retired
-// because a filled dot reads as a pending/success indicator; the transcript carries no per-tool
-// status, so we imply none. Each call is one quiet mono line: a per-tool lucide icon + the
-// Claude-Code grammar `Name(target)`, dimmer and smaller than prose, all consecutive calls bundled
-// under one hairline left rule so a burst reads as a single column of activity beside the response.
-
 // Prettify the raw tool name: MCP tools arrive as `mcp__Server__do_thing` — show the last segment.
 function prettyToolName(name: string): string {
   const seg = name.split("__").pop() || name
@@ -1674,65 +1679,69 @@ function shortenTarget(detail: string): string {
   return detail
 }
 
-// A run of >4 tool lines collapses behind a single "N tool calls" chevron toggle so a long tail of
-// activity doesn't dwarf the prose it belongs to.
-const COLLAPSE_AT = 4
-
 // `at` is the emitting assistant message's ISO timestamp — the moment the model issued this batch of
 // calls, and therefore the clock a pending FOREGROUND card times itself against. Optional: a pre-restart
 // server projects messages without it, and a card with no clock marks itself immediately.
-function ToolCalls({ tools, dense, at }: { tools: CollapsedTool[]; dense?: boolean; at?: string }) {
+function MinimalToolActivity({ tools, at }: { tools: CollapsedTool[]; at?: string }) {
   const [expanded, setExpanded] = useState(false)
   const cardsId = useId()
   const total = tools.reduce((n, t) => n + t.count, 0)
-  // Dense surfaces (queue cards) condense ANY run of more than one call behind the summary toggle;
-  // the full thread view keeps the higher threshold.
-  const collapsible = tools.length > (dense ? 1 : COLLAPSE_AT)
-  const showItems = !collapsible || expanded
-
-  // Peer blocks in call order: a run of plain tool lines coalesces into ONE tight column (they're
-  // sub-lines of a single activity band, not separate blocks), while each diff block stands alone.
-  // Peers — the toggle, each line-run, each diff — are separated by explicit spacers (withSpacers).
-  const blocks: ReactNode[] = []
-  if (collapsible) {
-    blocks.push(
-      // Small-caps summary label (same treatment as the AGENTS section headings), chevron on the
-      // RIGHT, flush-left with the tool lines it reveals.
+  const activity = currentToolActivity(tools)
+  const label = activity.pending && activity.tool ? toolActivityLabel(activity.tool) : settledToolActivityLabel(total)
+  return (
+    <div data-tool-activity data-tool-activity-state={activity.pending ? "pending" : "settled"} className="flex min-w-0 flex-col">
       <button
-        key="toggle"
         type="button"
         onClick={() => setExpanded((v) => !v)}
         onMouseDown={(e) => e.preventDefault()}
         aria-controls={cardsId}
         aria-expanded={expanded}
-        aria-label={`${expanded ? "Collapse" : "Expand"} ${total} tool calls`}
-        className={`${TRANSCRIPT_META_LABEL_CLASS} flex items-center gap-1 self-start rounded outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60`}
+        aria-label={`${expanded ? "Collapse" : "Expand"} ${total} tool ${total === 1 ? "call" : "calls"}: ${label}`}
+        className="group flex w-full min-w-0 items-center gap-2 rounded py-0.5 text-left text-[13px] leading-5 text-muted outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
       >
-        {/* Label stays "N tool calls" in BOTH states — the rotating chevron alone signals open/closed. */}
-        <span className="tabular-nums">{total} tool calls</span>
-        {/* No vertical nudge: the 12px icon's ink center already sits on the petite-caps optical center. */}
-        <ChevronRight aria-hidden="true" size={12} className={`shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} />
-      </button>,
-    )
-  }
-  if (showItems) {
-    // EVERY tool call is a card now (the plain `Name(detail)` one-liner rendering was retired). ONE
-    // accumulator, ZERO kind-dependent flushing: ADJACENT CARDS ARE ALWAYS 6px APART — Edit next to
-    // Bash next to a header-only card all sit at the same tight rhythm — while the whole band sits a
-    // full STEP (14px) from surrounding prose. No other spacing values exist inside a tool band.
-    const cards = tools.map((t, i) => <ToolCardRouter key={i} t={t} startedAt={at} />)
-    blocks.push(
-      <div key="cards" id={collapsible ? cardsId : undefined} className="flex flex-col">
-        {withSpacers(cards, 6)}
-      </div>,
-    )
+        <span
+          aria-live="polite"
+          title={label}
+          className={`min-w-0 flex-1 truncate ${activity.pending ? "shimmer-text" : "text-muted"}`}
+        >
+          {label}
+        </span>
+        <ChevronRight aria-hidden="true" size={13} className={`ml-auto size-[1em] shrink-0 -translate-y-[0.088em] text-muted/70 transition-transform group-hover:text-current ${expanded ? "rotate-90" : ""}`} />
+      </button>
+      {expanded && (
+        <div id={cardsId} className="mt-1.5 flex flex-col">
+          {withSpacers(tools.map((tool, i) => <ToolCardRouter key={i} t={tool} startedAt={at} />), 6)}
+        </div>
+      )}
+      {!expanded && <div id={cardsId} hidden />}
+    </div>
+  )
+}
+
+// Default-minimal tool rendering. Ordinary calls become one gerund disclosure regardless of batch
+// size; dedicated background-shell and sub-agent cards split the run and remain visible. This keeps
+// those long-lived/drillable operations out of an opaque loader without giving every file read and
+// grep its own transcript card.
+function ToolCalls({ tools, at }: { tools: CollapsedTool[]; dense?: boolean; at?: string }) {
+  const runs: { exceptional: boolean; tools: CollapsedTool[] }[] = []
+  for (const tool of tools) {
+    const exceptional = isToolActivityException(tool)
+    const previous = runs[runs.length - 1]
+    if (previous?.exceptional === exceptional) previous.tools.push(tool)
+    else runs.push({ exceptional, tools: [tool] })
   }
 
   return (
     <div className="flex flex-col">
-      {withSpacers(blocks)}
-      {/* Keep aria-controls resolvable while the expensive card run is not mounted. */}
-      {collapsible && !showItems && <div id={cardsId} hidden />}
+      {withSpacers(runs.map((run, runIndex) => (
+        run.exceptional
+          ? (
+              <div key={`exceptions-${runIndex}`} className="flex flex-col">
+                {withSpacers(run.tools.map((tool, i) => <ToolCardRouter key={i} t={tool} startedAt={at} />), 6)}
+              </div>
+            )
+          : <MinimalToolActivity key={`activity-${runIndex}`} tools={run.tools} at={at} />
+      )), 6)}
     </div>
   )
 }
@@ -3696,8 +3705,8 @@ function EventLine({ text, boundary, sourceId }: { text: string; boundary?: bool
 }
 
 // A Codex model-reasoning SUMMARY — the coalesced `summary[]` steps of a turn's reasoning records
-// (Claude's thinking is redacted at every seam, so this is Codex-only). A PEER of the "N tool calls"
-// and "Thought for Ns" transcript-metadata labels: same petite-caps whisper (TRANSCRIPT_META_LABEL_CLASS),
+// (Claude's thinking is redacted at every seam, so this is Codex-only). A peer of the "Thought for Ns"
+// transcript-metadata label: same petite-caps whisper (TRANSCRIPT_META_LABEL_CLASS),
 // content-width, chevron flush-right of the label — so the three quiet-metadata rows read as one family
 // (this is the "align thought metadata labels" work). Collapsed shows just the "reasoning" label; the
 // whole row toggles to reveal the train of thought as muted markdown in a ruled block. The `.fray-reasoning`

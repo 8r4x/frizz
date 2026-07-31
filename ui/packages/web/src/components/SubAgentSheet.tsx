@@ -5,6 +5,7 @@ import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
 import { subAgentProfileLabel } from "../lib/subAgentProfile.ts"
+import { coalesceToolActivityMessages } from "../lib/toolActivity.ts"
 import { ChildDrillSlugContext, Message, VSpace, WorkingIndicator, withMessageSpacers } from "./ChatView.tsx"
 import { Composer } from "./Composer.tsx"
 import { Sheet } from "./ui/Sheet.tsx"
@@ -63,6 +64,7 @@ export function SubAgentSheet({
 
   const q = useSubAgentTranscript(slug, subId)
   const messages = useMemo(() => q.data?.messages ?? [], [q.data])
+  const activityMessages = useMemo(() => coalesceToolActivityMessages(messages), [messages])
   const state = q.data?.state
   const running = state === "running"
   // Unavailable = the RPC errored (e.g. a pre-restart server without this endpoint), the id is unknown
@@ -136,7 +138,7 @@ export function SubAgentSheet({
                     6px — and a child's transcript is nearly all tool calls, so the chunking the tailer
                     happens to have chosen was the most visible thing on the surface. */}
                 <div data-transcript-column className="flex flex-col px-6 py-5">
-                  {withMessageSpacers(messages, (m, i) => <Message key={i} m={m} />)}
+                  {withMessageSpacers(activityMessages.map((entry) => entry.message), (m, i) => <Message key={i} m={m} />)}
                   {/* Exactly the regular transcript's tail treatment: the status follows the latest
                       message inside the scroller, rather than occupying a special fixed strip above
                       the conversation. A sub-agent drawer is a conversation, not a log dashboard. */}

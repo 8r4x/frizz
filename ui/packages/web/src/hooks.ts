@@ -16,13 +16,11 @@ import { reconcileLatestPage, type PaginatedTranscriptData } from "./lib/transcr
 export type ChatMessage = TranscriptMessage & { queued?: boolean; deliveryId?: string }
 export type TranscriptData = Partial<Omit<PaginatedTranscriptData, "messages">> & { messages: ChatMessage[] }
 
-// (mergeToolRuns was DELETED with the ordered-parts fidelity fix. Its whole job was to fold
-// consecutive tool-only turns into one band so adjacent collapsed "5 tool calls"/"3 tool calls"
-// toggles didn't look broken — moot now that every call renders as a uniform card and each assistant
-// message renders its `parts` IN BLOCK ORDER. Folding fought that ordered walk: it hoisted a following
-// turn's tools above a lead-in's prose and, under `parts`, would have dropped a folded turn's cards
-// entirely. VISUAL ORDER == TURN ORDER is the invariant; the renderer is now dumb and correct — two
-// adjacent tool-only turns simply render as two adjacent card runs, which is fine.)
+// `mergeToolRuns` stays deleted: mutating transcript truth before the ordered-parts walk hoisted tools
+// across prose and lost block fidelity. The minimal renderer now performs a narrower PRESENTATION-ONLY
+// coalescing in lib/toolActivity.ts: consecutive messages that contain nothing but ordinary tool calls
+// share one disclosure, while prose, background shells and sub-agent operations are hard boundaries.
+// VISUAL ORDER == TURN ORDER remains the invariant; no persisted/query-cached message is rewritten.
 
 // React-only helpers live here, not in store.ts, because store.ts is also imported by
 // non-React code (api/sse.ts) that has no business pulling in React/valtio hooks.
