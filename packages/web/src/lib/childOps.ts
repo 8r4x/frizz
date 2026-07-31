@@ -114,6 +114,49 @@ export const CHILD_DISMISS_NOUN = { AGENT: "sub-agent", SHELL: "background shell
 
 export type ChildOpRecord = { readonly state: string; readonly id?: string }
 
+// ── THE SUBTREE UNDER ONE SUB-AGENT — what a sub-agent DRAWER's ops strip lists ──────────────────
+//
+// The strip under a THREAD's prompt box lists the thread's whole child forest. The same strip under a
+// SUB-AGENT drawer's prompt box has to list only what hangs off THAT child — otherwise a drawer opened
+// on one branch would advertise its siblings' work as its own.
+//
+// The board already carries the tree: every descendant row names its dispatcher in `parentId` (absent
+// at depth 1, where the thread itself is the parent). This walks it from `rootId` down, depth-first, so
+// the rows come out in the reading order the flat list already uses.
+//
+// `displayDepth` is a SEPARATE reading from `depth`, and the distinction is load-bearing. `depth` stays
+// the row's true distance from the THREAD — `childOpDismisser` keys the × off it (a descendant's
+// dispatch lives in an ancestor's transcript, so retiring it by id is a no-op) and re-basing it would
+// hand every direct child of this sub-agent an × that silently does nothing. `displayDepth` is purely
+// the indent: 1 for a child this sub-agent dispatched itself, so the drawer's column starts flush the
+// way the thread's does instead of inheriting a two-step indent from its position in the thread's tree.
+export function childOpSubtree<T extends { readonly id?: string; readonly parentId?: string }>(
+  ops: readonly T[],
+  rootId: string,
+): (T & { readonly displayDepth: number })[] {
+  const kids = new Map<string, T[]>()
+  for (const op of ops) {
+    if (!op.parentId) continue
+    const list = kids.get(op.parentId)
+    if (list) list.push(op)
+    else kids.set(op.parentId, [op])
+  }
+  const out: (T & { displayDepth: number })[] = []
+  // A cycle cannot arise from the tailer's own derivation, but this list is foreign data by the time it
+  // reaches the client and a self-parented row would spin here forever.
+  const seen = new Set<string>([rootId])
+  const walk = (parentId: string, displayDepth: number): void => {
+    for (const op of kids.get(parentId) ?? []) {
+      if (op.id && seen.has(op.id)) continue
+      if (op.id) seen.add(op.id)
+      out.push({ ...op, displayDepth })
+      if (op.id) walk(op.id, displayDepth + 1)
+    }
+  }
+  walk(rootId, 1)
+  return out
+}
+
 const unresolved = (op: ChildOpRecord): boolean => op.state === "running" || op.state === "stale" || op.state === "rested"
 
 export function visibleChildOps<T extends ChildOpRecord>(ops: readonly T[], surface: "rail"): readonly (T & { id: string })[]

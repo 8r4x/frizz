@@ -5,7 +5,7 @@ import * as RadixTabs from "@radix-ui/react-tabs"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight, FileText, Hash, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, ShieldCheck, Sparkles, X, type LucideIcon } from "lucide-react"
-import type { AwaitingHint, BgShellView, NativeInputRequired as NativeInputRequiredData, PendingAsk, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@fray-ui/shared"
+import type { AwaitingHint, BgShellView, NativeInputRequired as NativeInputRequiredData, PendingAsk, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@fray-ui/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
@@ -40,7 +40,7 @@ import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
 import { FOREGROUND_MARK_AFTER_MS, foregroundToolIsRunning, hasRunningToolIndicator, isPendingForegroundTool, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
 import { formatToolDuration } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
-import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, mergeBackgroundShells, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
+import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, childOpSubtree, mergeBackgroundShells, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
 import { agentReading } from "../lib/agentReading.ts"
@@ -120,7 +120,7 @@ function isLiveTranscriptBackgroundTool(tool: TranscriptToolCall): boolean {
 // telemetry still reports bgShells:[]. Present those calls through the EXISTING anchored ops strip and
 // remove only their live copy from the conversation. Once a shell resolves, its completed historical
 // card returns at its canonical transcript position.
-function transcriptBackgroundShells(messages: readonly ChatMessage[]): (BgShellView & TranscriptShellRecord)[] {
+export function transcriptBackgroundShells(messages: readonly ChatMessage[]): (BgShellView & TranscriptShellRecord)[] {
   const shells: (BgShellView & TranscriptShellRecord)[] = []
   for (const message of messages) {
     for (const tool of message.tools) {
@@ -139,7 +139,7 @@ function transcriptBackgroundShells(messages: readonly ChatMessage[]): (BgShellV
   return shells
 }
 
-function withoutLiveTranscriptBackgroundTools(messages: readonly ChatMessage[]): ChatMessage[] {
+export function withoutLiveTranscriptBackgroundTools(messages: readonly ChatMessage[]): ChatMessage[] {
   return messages.map((message) => {
     if (!message.tools.some(isLiveTranscriptBackgroundTool)) return message
     const tools = message.tools.filter((tool) => !isLiveTranscriptBackgroundTool(tool))
@@ -732,6 +732,29 @@ function VirtualizedThreadTranscript({
     anchorTo: "end",
     followOnAppend: true,
     scrollEndThreshold: TAIL_FOLLOW_PX,
+    // THE SWALLOWED WHEEL NOTCH — why scrolling back through a long thread stutters.
+    //
+    // A row above the reader that has never been measured mounts at its ESTIMATE and then corrects to
+    // its real height, which on this transcript is routinely 300-750px against a 108px estimate. Every
+    // one of those corrections makes the virtualizer compensate, and its compensation is written as
+    // `scrollTo(getScrollOffset() + delta)` — where `getScrollOffset()` is the virtualizer's own CACHED
+    // offset, refreshed only when a scroll EVENT runs. The event fires at the top of the frame and the
+    // ResizeObserver that triggers the correction fires at the bottom of it, so anything the reader
+    // scrolled in between — every compositor-driven wheel notch — is simply not in that cached value.
+    // The correction therefore lands at (where the reader WAS) + delta and throws their scroll away.
+    // Measured on a real thread: 28 of 147 upward frames moved the content 0px instead of 40px, and a
+    // wrapped `scrollTo` caught writes landing 84px BEHIND the live offset while every correction in
+    // flight was positive.
+    //
+    // So apply a correction as what it actually is — a RELATIVE nudge against wherever the reader has
+    // got to — and leave real destinations (`scrollToEnd`, `scrollToIndex`) absolute. `adjustments` is
+    // set only on the correction path, and is a per-call delta: virtual-core folds it into its cached
+    // offset and resets it to 0 immediately after each call, so it never accumulates across calls.
+    scrollToFn: (offset, { adjustments, behavior }, instance) => {
+      const element = instance.scrollElement
+      if (!element) return
+      element.scrollTo({ top: adjustments === undefined ? offset : element.scrollTop + adjustments, behavior })
+    },
   })
   const [atEnd, setAtEnd] = useState(true)
   // Tail-follow state, in refs because syncTailFollow runs from layout/observer/listener callbacks that
@@ -3657,6 +3680,7 @@ export function BackgroundOpsStrip({
   className = "px-4 pb-2 pt-1",
   includeAgents = true,
   transcriptShells = [],
+  parentAgentId,
 }: {
   slug: string
   className?: string
@@ -3667,13 +3691,26 @@ export function BackgroundOpsStrip({
   // CLAUDE shell shows up here AND in the board's telemetry — `launchId` is what lets the two rows
   // reconcile into one (see mergeBackgroundShells).
   transcriptShells?: readonly (BgShellView & TranscriptShellRecord)[]
+  // SCOPE the strip to one sub-agent's own subtree — the SubAgentSheet's prompt box, where "the ops
+  // running underneath this" means the children THIS child dispatched, not the thread's whole forest.
+  // Absent ⇒ the thread-wide reading every other surface wants.
+  //
+  // It also switches the SHELL source off the board. `bgShells` is derived from the SESSION's JSONL, so
+  // every row in it belongs to the thread's own worker; a sub-agent's background shells live only in
+  // that child's own transcript, which is what `transcriptShells` carries here. Merging the board list
+  // in would credit this child with its parent's watchers.
+  parentAgentId?: string
 }) {
   const board = useBoard()
   const thread = threadBySlug(board, slug)
-  const agents = includeAgents ? thread?.subAgents ?? [] : []
+  const allAgents = thread?.subAgents ?? []
+  // `displayDepth` rides only the scoped rows (see childOpSubtree); the thread-wide reading indents off
+  // `depth` as it always has, so the field is optional here rather than back-filled onto every row.
+  const agents: readonly (SubAgentView & { displayDepth?: number })[] =
+    !includeAgents ? [] : parentAgentId ? childOpSubtree(allAgents, parentAgentId) : allAgents
   // A single shell arrives through BOTH provider board telemetry and transcript projection; they are
   // reconciled on the launch tool_use id (see mergeBackgroundShells for why label+startedAt could not).
-  const shells = mergeBackgroundShells(thread?.bgShells ?? [], transcriptShells)
+  const shells = parentAgentId ? [...transcriptShells] : mergeBackgroundShells(thread?.bgShells ?? [], transcriptShells)
   const total = agents.length + shells.length
   // This is intentionally independent of transcript cards: it sits immediately below the affected
   // prompt box so a resting worker that owns a live shell still reads as active at a glance. Do not
@@ -3695,7 +3732,10 @@ export function BackgroundOpsStrip({
           label={s.label}
           state={s.state}
           density="sheet"
-          depth={s.depth}
+          // The INDENT reading (see childOpSubtree): inside a sub-agent drawer a row's distance is
+          // measured from that sub-agent, while `s.depth` — the distance from the thread, which decides
+          // whether the × is honest — stays untouched on the record childOpDismisser reads.
+          depth={s.displayDepth ?? s.depth}
           startedAt={s.startedAt}
           // The ops strip is where the full live reading belongs: the child's current step plus how far
           // it has got. All three are absent for a tmux/codex child, which just reads as it did before.

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { useProjectDir, useSubAgentTranscript } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
@@ -6,7 +6,7 @@ import { showToast } from "../store.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
 import { subAgentProfileLabel } from "../lib/subAgentProfile.ts"
 import { coalesceToolActivityMessages, historicalToolActivityMessages, liveToolActivityTail, toolActivityLabel } from "../lib/toolActivity.ts"
-import { ChildDrillSlugContext, Message, VSpace, WorkingIndicator, withMessageSpacers, workingIndicatorGap } from "./ChatView.tsx"
+import { BackgroundOpsStrip, ChildDrillSlugContext, Message, VSpace, WorkingIndicator, transcriptBackgroundShells, withMessageSpacers, withoutLiveTranscriptBackgroundTools, workingIndicatorGap } from "./ChatView.tsx"
 import { Composer } from "./Composer.tsx"
 import { Sheet } from "./ui/Sheet.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
@@ -68,7 +68,13 @@ export function SubAgentSheet({
   const messages = useMemo(() => q.data?.messages ?? [], [q.data])
   const state = q.data?.state
   const running = state === "running"
-  const coalescedActivityMessages = useMemo(() => coalesceToolActivityMessages(messages), [messages])
+  // A sub-agent's own background shells, exactly as the thread view derives its own: the board's
+  // `bgShells` telemetry is read off the SESSION's JSONL, so it never holds a child's shells — this
+  // child's transcript is the only place they exist. Lifted out of the conversation into the ops strip
+  // for the same reason the thread does it (one live row, anchored, instead of a card that scrolls away).
+  const liveTranscriptShells = useMemo(() => transcriptBackgroundShells(messages), [messages])
+  const presentationMessages = useMemo(() => withoutLiveTranscriptBackgroundTools(messages), [messages])
+  const coalescedActivityMessages = useMemo(() => coalesceToolActivityMessages(presentationMessages), [presentationMessages])
   const liveToolActivity = running
     ? liveToolActivityTail(coalescedActivityMessages.map((entry) => entry.message))
     : undefined
@@ -172,6 +178,12 @@ export function SubAgentSheet({
             note={q.data?.steerNote ?? null}
             stoppable={q.data?.stoppable === true}
             stopNote={q.data?.stopNote ?? null}
+            // The same anchored strip the thread's prompt box carries, scoped to THIS child's own
+            // subtree. Without it a sub-agent that fanned out read as idle in its own drawer while its
+            // grandchildren were still working — the one surface where that fan-out is the whole story.
+            ops={(className) => (
+              <BackgroundOpsStrip slug={slug} parentAgentId={subId} transcriptShells={liveTranscriptShells} className={className} />
+            )}
           />
         </>
       )}
@@ -193,6 +205,7 @@ function SubAgentSteerFooter({
   note,
   stoppable,
   stopNote,
+  ops,
 }: {
   slug: string
   subId: string
@@ -201,6 +214,17 @@ function SubAgentSteerFooter({
   note: string | null
   stoppable: boolean
   stopNote: string | null
+  // Rows for the work running UNDER this sub-agent. A RENDER PROP rather than a node, because this
+  // footer has two shapes and the strip needs different chrome in each: inside the prompt panel it is
+  // just padding under the box (the same composition ThreadComposerBox uses), and where there is no
+  // panel at all it has to draw the panel's own top rule and background itself.
+  //
+  // The second shape is not an edge case — it is the reading that matters most. A child whose own run
+  // has ENDED is neither steerable nor stoppable and carries no note, so it renders no footer; that is
+  // exactly the `rested` state the board emits only when live grandchildren are still hanging off it.
+  // Folding the strip into the panel alone would have hidden the fan-out in precisely the drawer that
+  // exists to show it.
+  ops?: (className: string) => ReactNode
 }) {
   const [message, setMessage] = useState("")
   const [busy, setBusy] = useState(false)
@@ -246,13 +270,17 @@ function SubAgentSteerFooter({
 
   if (!steerable && !stoppable) {
     const unavailableNote = note ?? stopNote
-    if (!unavailableNote) return null
+    // Nothing to steer, nothing to stop, nothing to explain — the strip is the whole footer, so it
+    // carries the panel's chrome. It still renders NOTHING when no work hangs off this child, so a
+    // settled drawer keeps its bare bottom edge rather than gaining an empty bordered band.
+    if (!unavailableNote) return <>{ops?.("w-full shrink-0 border-t border-border bg-panel px-4 py-3")}</>
     return (
       <div data-subagent-steer-note className="w-full shrink-0 border-t border-border bg-panel px-3 py-3">
         <div className="px-1 pb-2 text-[11.5px] text-muted/70">{unavailableNote}</div>
         <div className="pl-1.5">
           <SubAgentProfileReadout subagentType={subagentType} />
         </div>
+        {ops?.("px-1 pb-2 pt-1.5")}
       </div>
     )
   }
@@ -281,6 +309,7 @@ function SubAgentSteerFooter({
         {steerable && !stoppable && stopNote && (
           <div className="mt-2 px-1 text-[11.5px] text-muted/70">{stopNote}</div>
         )}
+        {ops?.("px-1 pb-2 pt-1.5")}
       </div>
       {stoppable && (
         <footer
