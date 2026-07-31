@@ -36,6 +36,7 @@ import type { AgentBackend } from "./types.ts"
 const FLEET = Number(process.argv[2] ?? 5)
 const LINES = Number(process.argv[3] ?? 45)
 const HOLD_S = Number(process.argv[4] ?? 300)
+const MIX = process.argv.includes("mix")
 const claudeBin = execFileSync("which", ["claude"], { encoding: "utf8" }).trim()
 const stateDir = mkdtempSync(join(tmpdir(), "bnotif-state-"))
 const cwd = realpathSync(mkdtempSync(join(tmpdir(), "bnotif-repo-")))
@@ -92,6 +93,21 @@ const PROMPT = [
   `    "FINDING <n>: CORRECTNESS CORRECTNESS CORRECTNESS CORRECTNESS CORRECTNESS"`,
   `    Output nothing else — no preamble, no summary, no tool calls.`,
   ``,
+  // MIXED-MODE arm. The suspected trigger is not batch SIZE but a batch whose emitted attachments do
+  // not all carry a `commandMode`: `rt` counts only those that do, while `Jr` counts every consumed
+  // prompt/task-notification command, so a mismatch takes the "partial emission" branch and removes
+  // the whole batch — notifications included. `Eop` builds task-registry `queued_command` attachments
+  // with NO commandMode at all, and SendMessage traffic is what puts those in the same fold.
+  //
+  // This mirrors the real corpus precisely: on 0bb9560b at 19:25:53 two agent notifications were
+  // removed at ONE instant while the parent was firing five SendMessage calls at other children.
+  // Runs A–F had no SendMessage traffic whatsoever, which may be exactly why they never dropped.
+  ...(MIX
+    ? [
+        `Then, still in this same turn and BEFORE anything else, send a message to EACH of the ${FLEET}`,
+        `agents you just dispatched using the SendMessage tool — the text can be "keep going".`,
+      ]
+    : []),
   `IMPORTANT: immediately after dispatching all ${FLEET}, and WITHOUT waiting for any of them, run this`,
   `EXACT command in the FOREGROUND with Bash (timeout 200000):`,
   `    end=$(( $(date +%s) + ${HOLD_S} )); until [ $(date +%s) -ge $end ]; do sleep 2; done; echo HELD`,
