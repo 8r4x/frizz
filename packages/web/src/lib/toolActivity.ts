@@ -216,28 +216,100 @@ function target(tool: Pick<TranscriptToolCall, "detail">): string | undefined {
   return detail || undefined
 }
 
+/**
+ * Imperative first words a provider still sends despite the worker prompt asking for a gerund, mapped
+ * to the gerund the shimmer should show. Curated rather than derived: English spelling rules alone
+ * cannot tell a verb from a noun, so a generic `+ing` would turn the noun phrase "Final workflow
+ * validation" into "Finaling workflow validation". Words that are also common nouns (`test`, `check`,
+ * `diff`, `patch`) are still safe here, because as a description's FIRST word they read as the verb.
+ */
 const IMPERATIVE_GERUNDS: Record<string, string> = {
+  add: "Adding",
+  analyze: "Analyzing",
+  apply: "Applying",
+  audit: "Auditing",
+  benchmark: "Benchmarking",
   build: "Building",
+  bump: "Bumping",
   capture: "Capturing",
   check: "Checking",
+  clean: "Cleaning",
   collect: "Collecting",
+  commit: "Committing",
   compare: "Comparing",
+  confirm: "Confirming",
+  copy: "Copying",
+  count: "Counting",
   create: "Creating",
+  debug: "Debugging",
+  delete: "Deleting",
+  diff: "Diffing",
+  disable: "Disabling",
+  dispatch: "Dispatching",
+  drive: "Driving",
+  dump: "Dumping",
+  edit: "Editing",
+  enable: "Enabling",
+  extract: "Extracting",
+  fetch: "Fetching",
+  find: "Finding",
+  fix: "Fixing",
+  format: "Formatting",
+  generate: "Generating",
+  grep: "Grepping",
   inspect: "Inspecting",
+  install: "Installing",
+  kill: "Killing",
+  launch: "Launching",
+  lint: "Linting",
   list: "Listing",
+  load: "Loading",
+  measure: "Measuring",
+  merge: "Merging",
+  migrate: "Migrating",
+  move: "Moving",
   open: "Opening",
+  parse: "Parsing",
+  patch: "Patching",
+  poll: "Polling",
   print: "Printing",
+  probe: "Probing",
+  profile: "Profiling",
+  publish: "Publishing",
+  pull: "Pulling",
+  push: "Pushing",
+  query: "Querying",
   read: "Reading",
+  rebase: "Rebasing",
+  refactor: "Refactoring",
+  regenerate: "Regenerating",
+  remove: "Removing",
+  rename: "Renaming",
   render: "Rendering",
+  reproduce: "Reproducing",
+  restart: "Restarting",
+  revert: "Reverting",
+  review: "Reviewing",
   run: "Running",
+  save: "Saving",
+  scan: "Scanning",
   search: "Searching",
+  seed: "Seeding",
+  spawn: "Spawning",
   start: "Starting",
   stop: "Stopping",
+  summarize: "Summarizing",
+  sync: "Syncing",
+  tag: "Tagging",
   test: "Testing",
+  trace: "Tracing",
   typecheck: "Typechecking",
+  update: "Updating",
+  validate: "Validating",
   verify: "Verifying",
   wait: "Waiting",
   watch: "Watching",
+  write: "Writing",
 }
 
 function gerundDescription(description: string | undefined, fallback: string): string {
@@ -247,10 +319,12 @@ function gerundDescription(description: string | undefined, fallback: string): s
   const first = (firstSpace === -1 ? clean : clean.slice(0, firstSpace)).replace(/[.:]$/, "")
   if (/ing$/i.test(first)) return first.charAt(0).toUpperCase() + first.slice(1) + (firstSpace === -1 ? "" : clean.slice(firstSpace))
   const gerund = IMPERATIVE_GERUNDS[first.toLowerCase()]
-  // An authored description is always a better activity label than the raw command in `fallback`.
-  // Some providers send a noun phrase rather than an imperative (for example, "Final workflow
-  // validation"). Keep it intact behind a gerund instead of leaking `Running <long command>`.
-  if (!gerund) return `Running ${clean}`
+  // An authored description is always a better activity label than the raw command in `fallback`, so
+  // anything we cannot convert is shown AS WRITTEN (sentence-cased) rather than leaking
+  // `Running <long command>`. It is never prefixed with `Running`: that word is a claim about what
+  // the tool is doing, and pasted in front of a noun phrase or an unrecognized verb it produces
+  // nonsense like "Running Final workflow validation".
+  if (!gerund) return clean.charAt(0).toUpperCase() + clean.slice(1)
   return gerund + (firstSpace === -1 ? "" : clean.slice(firstSpace))
 }
 

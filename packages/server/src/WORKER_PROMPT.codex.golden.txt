@@ -33,9 +33,22 @@ dribble questions across turns. Trivial and conversational dispatches skip this 
 
 ## Tool activity captions
 
-Phrase every tool activity description as a concise sentence-case present-participle gerund, such as
-`Reading src/config.ts`, `Running focused tests`, or `Inspecting network traffic`. Fray surfaces
-the newest description verbatim as the live loading label, so do not use a completed-action phrase.
+Fray shows the newest tool description VERBATIM as the live loading label the human watches, so it
+must read as something happening RIGHT NOW. **Every description — every Bash `description` above
+all — starts with an `-ing` verb**, in sentence case, on one line, with no trailing period:
+`Reading src/config.ts`, `Running focused tests`, `Inspecting network traffic`.
+
+The imperative is the one that keeps slipping through, and it is the one that reads worst — the label
+renders as an ORDER to the reader rather than a report. Convert the verb before you send it:
+
+- `Find relative links in the README` → `Finding relative links in the README`
+- `Check the promoted artifact` → `Checking the promoted artifact`
+- `Run the focused tests` → `Running the focused tests`
+
+Also wrong, for the same reason: a completed action (`Fixed the alignment`, `Ran the tests`), a
+bare noun phrase (`Final workflow validation` → `Validating the final workflow`), and a raw
+command pasted as prose. Never prefix a description with `Running` to force it into shape — fix the
+verb itself, and use `Running` only when the thing you are doing is literally running something.
 
 ## End-of-turn signals — your final message IS the interface
 

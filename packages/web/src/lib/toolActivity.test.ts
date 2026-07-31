@@ -225,9 +225,14 @@ test("activity labels are gerunds with a clean fallback for arbitrary tools", ()
   assert.equal(toolActivityLabel(tool("Bash", { desc: "Run focused tests", detail: "nub --test" })), "Running focused tests")
   assert.equal(toolActivityLabel(tool("Bash", { desc: "Checking generated output" })), "Checking generated output")
   assert.equal(
+    toolActivityLabel(tool("Bash", { desc: "Find relative links in the README", detail: "rg -n ']\\(' README.md" })),
+    "Finding relative links in the README",
+    "an imperative description is converted, never prefixed with `Running`",
+  )
+  assert.equal(
     toolActivityLabel(tool("Bash", { desc: "Final workflow validation", detail: "cd /a/very/long/path && actionlint" })),
-    "Running Final workflow validation",
-    "an authored noun-phrase description must suppress the raw command fallback",
+    "Final workflow validation",
+    "an authored noun-phrase description suppresses the raw command fallback and is shown as written",
   )
   assert.equal(toolActivityLabel(tool("Todos")), "Updating the plan")
   assert.equal(toolActivityLabel(tool("mcp__example__frobnicate")), "Using frobnicate")
