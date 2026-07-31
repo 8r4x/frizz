@@ -2143,7 +2143,7 @@ function codexToolCall(name: string, input: unknown, callId?: string): Transcrip
     return { name: "Edit", detail: patchSummary(patch), input: capToolInput(patch) }
   }
   return {
-    name: name && name.trim() ? redactToolPayload(name.trim()) : "tool",
+    name: name && name.trim() ? codexToolLabel(redactToolPayload(name.trim())) : "tool",
     detail: toolDetail(input),
     input: renderToolInput(input),
   }
@@ -2569,9 +2569,49 @@ function wrappedRunSummary(calls: WrappedInvocation[]): string {
 }
 
 function wrappedToolLabel(name: string): string {
-  if (name === "request_user_input") return "Ask"
-  if (name === "view_image") return "View image"
-  return name
+  return codexToolLabel(name)
+}
+
+// A human label for a codex tool card. Codex names its tools in snake_case and, unlike Claude, ships
+// no display name, so the generic branch was titling cards `navigate_page`, `evaluate_script`,
+// `take_snapshot`, `wait_for`, `resize_page`, `click` — raw identifiers sitting beside proper labels
+// like "Bash" and "Screenshot". The named cases are the tools worth a verb of their own; everything
+// else falls back to sentence case, so a tool nobody has enumerated yet still reads as a label rather
+// than as code (and stays in step with the repo's sentence-case copy rule).
+function codexToolLabel(name: string): string {
+  const known: Record<string, string> = {
+    request_user_input: "Ask",
+    view_image: "View image",
+    navigate_page: "Navigate",
+    evaluate_script: "Evaluate",
+    take_snapshot: "Snapshot",
+    list_pages: "Pages",
+    new_page: "New page",
+    close_page: "Close page",
+    select_page: "Select page",
+    list_console_messages: "Console",
+    get_console_message: "Console message",
+    list_network_requests: "Network",
+    get_network_request: "Network request",
+    press_key: "Press key",
+    fill_form: "Fill form",
+    handle_dialog: "Dialog",
+    upload_file: "Upload",
+    wait_for: "Wait for",
+    resize_page: "Resize",
+  }
+  const hit = known[name]
+  if (hit) return hit
+  // A fully-namespaced MCP id (`mcp__chrome_devtools__resize_page`) is the worst card title of all.
+  // The server segment is already implied by the surrounding thread, so keep only the tool and label
+  // THAT — via the same table, so a namespaced tool and its bare twin read identically.
+  const ns = name.split("__")
+  if (ns.length > 2 && ns[0] === "mcp" && ns[ns.length - 1]) return codexToolLabel(ns[ns.length - 1])
+  // Only reshape a plain snake_case/lowercase identifier. Anything already capitalized or otherwise
+  // punctuated is left exactly as codex named it.
+  if (!/^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/.test(name)) return name
+  const words = name.split("_")
+  return words[0].charAt(0).toUpperCase() + words[0].slice(1) + (words.length > 1 ? ` ${words.slice(1).join(" ")}` : "")
 }
 
 function wrappedArgumentDetail(args: string): string | undefined {

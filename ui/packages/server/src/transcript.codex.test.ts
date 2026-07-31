@@ -730,7 +730,9 @@ test("codex unknown tool degrades to a generic card (name + a hint), never a thr
     { type: "response_item", payload: { type: "function_call", call_id: "c1", name: "web_search", arguments: JSON.stringify({ query: "codex rollout schema" }) } },
   ])
   const call = parseCodexTranscript(raw)[0].tools[0]
-  assert.equal(call.name, "web_search")
+  // The card is still the GENERIC one (no command, no edit) — but an unrecognized codex tool is now
+  // titled by its sentence-cased name rather than by the raw snake_case identifier.
+  assert.equal(call.name, "Web search")
   assert.equal(call.detail, "codex rollout schema")
   assert.equal(call.command, undefined)
   assert.equal(call.edit, undefined)
@@ -1116,4 +1118,27 @@ test("codex peer messages render as message cards; an encrypted body explains it
   assert.equal(followed.sendTo, "batch2_plan")
   assert.equal(sent.sendType, undefined)
   assert.equal(plain.sendBody, "check the staging deploy too")
+})
+
+// Codex names its tools in snake_case and ships no display name, so the generic branch used to title
+// cards with the raw identifier — `navigate_page`, `evaluate_script`, and at worst the fully
+// namespaced `mcp__chrome_devtools__resize_page` — sitting beside proper labels like "Bash".
+test("codex tool cards are titled with human labels, including unknown and MCP-namespaced tools", () => {
+  const call = (id: string, name: string) => [
+    { type: "response_item", payload: { type: "function_call", call_id: id, name, arguments: "{}" } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: id, output: "ok" } },
+  ]
+  const raw = rollout([
+    ...call("a", "navigate_page"),
+    ...call("b", "take_snapshot"),
+    ...call("c", "mcp__chrome_devtools__resize_page"),
+    // Never enumerated anywhere — must still read as a label, not as code.
+    ...call("d", "nextjs_index"),
+    // Already a proper label: left exactly as codex named it.
+    ...call("e", "SomeVendorTool"),
+  ])
+  assert.deepEqual(
+    parseCodexTranscript(raw).flatMap((m) => m.tools).map((t) => t.name),
+    ["Navigate", "Snapshot", "Resize", "Nextjs index", "SomeVendorTool"],
+  )
 })
