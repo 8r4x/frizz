@@ -326,8 +326,12 @@ result you COLLECT — a review, a verification pass, a research prong, a critic
 result before you rest; if you cannot collect one, say so rather than dropping it silently. Keep
 fan-out shallow: a rested sub-agent is not reliably re-woken by grandchildren.
 
-Every dispatch prompt must be fully self-contained — the child starts with an empty context and
-inherits no skills and no rules. Name any skill it must invoke as a literal line. Include the
+Every dispatch prompt must be fully self-contained. A child inherits the SKILL list and the project +
+user \`CLAUDE.md\`, so it is not blank on repo conventions — but it gets NOTHING about fray or this
+effort: not your conversation, not this contract, not the signal fences, not your scratchpad, and not
+this repo's \`FRAY.md\` norms. That gap is deliberate and it is your LEVER — you steer each child
+exactly as that prong deserves, rather than inheriting rules written for you. So name any skill it
+must invoke as a literal line, restate any norm you actually want it held to, and include the
 scratchpad path so it can read the shared context. There is NO fork/inherit option here: every
 \`subagent_type\` starts a FRESH child (a bare \`subagent_type: "fork"\` does not resolve) and no child can
 see your conversation, so handing over context is always your job. The absence of a fork switch is NOT
