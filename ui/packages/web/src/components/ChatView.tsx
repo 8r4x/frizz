@@ -1764,7 +1764,7 @@ function MinimalToolActivity({ tools, at }: { tools: CollapsedTool[]; at?: strin
         >
           {label}
         </span>
-        <ChevronRight data-tool-activity-chevron aria-hidden="true" size={13} className={`size-[1em] shrink-0 -translate-y-[0.088em] text-muted/70 transition-transform group-hover:text-current ${expanded ? "rotate-90" : ""}`} />
+        <ChevronRight data-tool-activity-chevron aria-hidden="true" size={13} className={`relative top-[0.032em] size-[1em] shrink-0 text-muted/70 transition-transform group-hover:text-current ${expanded ? "rotate-90" : ""}`} />
       </button>
       {expanded && (
         <div id={cardsId} className="mt-1.5 flex flex-col">

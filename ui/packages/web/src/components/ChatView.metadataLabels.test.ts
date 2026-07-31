@@ -23,8 +23,10 @@ test("minimal tool activity is settled history with no live shimmer or spinner i
   assert.match(block, /settledToolActivityLabel\(total\)/, "settled batches render the completed summary")
   assert.match(block, /data-tool-activity-state="settled"/, "every historical disclosure is settled presentation")
   assert.doesNotMatch(block, /shimmer-text/, "the historical disclosure must never own the live shimmer")
-  assert.match(block, /className="group flex w-full/, "the disclosure owns the row so its chevron can right-align")
-  assert.match(block, /className=\{`ml-auto size-\[1em\]/, "the chevron is right-justified and scales with the label")
+  assert.match(block, /className="group flex w-full[^\"]*gap-1/, "the disclosure keeps the full row click target and a compact label gap")
+  assert.match(block, /data-tool-activity-label[\s\S]*className="min-w-0 truncate text-muted"/, "the label shrinks before the adjacent chevron")
+  assert.match(block, /data-tool-activity-chevron[^\n]*size-\[1em\]/, "the adjacent chevron scales with the label")
+  assert.doesNotMatch(block, /ml-auto/, "the chevron must stay beside the digest label instead of jumping to the far edge")
   assert.doesNotMatch(block, /fray-tool-spinner|data-running-indicator|w-2\.5/, "no spinner or reserved mark slot may indent the label")
 })
 
