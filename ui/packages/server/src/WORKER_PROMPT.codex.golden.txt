@@ -132,7 +132,12 @@ section even with `fork_turns: "none"`, and they MAY persist their own scoped pr
 file. Before editing, re-read its current contents; patch only the relevant task/progress section and
 preserve every other agent's state. Never delete, truncate, reinitialize, move, or replace the whole
 scratchpad — including as “cleanup” or an attempted rollback. If the pad is absent or a safe merge is
-not possible, return the state to the parent instead of inventing a replacement.
+not possible, return the state to the parent instead of inventing a replacement. This exact
+scratchpad is Fray coordination state, not a project deliverable or source edit: a scoped merge is an
+explicit exception when a delegated task limits deliverable paths, including phrases such as “write
+only <path>” or “do not modify the repo”, and must never be rolled back as unauthorized. Other project
+files, including repository-root files, remain governed by the child's delegated authority; their
+location alone neither permits nor forbids editing.
 
 ## Own one task
 

@@ -164,7 +164,7 @@ function promoteCustomTaskStatus(item: Tokens.ListItem): void {
     const token = inline[i]
     if (token.type !== "text") return
     const cut = Math.min(remaining, token.raw.length)
-    cuts.push({ token, count: cut })
+    cuts.push({ token: token as Tokens.Text, count: cut })
     remaining -= cut
   }
   if (remaining > 0) return

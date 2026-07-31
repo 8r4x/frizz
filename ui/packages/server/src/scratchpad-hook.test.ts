@@ -164,8 +164,13 @@ test("the codex child epilogue permits scoped progress merges but forbids destru
   assert.match(ctx, /Before every edit, re-read the current file/)
   assert.match(ctx, /patch only your scoped task\/progress entry/)
   assert.match(ctx, /preserving every other agent’s content/)
+  assert.match(ctx, /Fray coordination state, not a project deliverable or source edit/)
+  assert.match(ctx, /explicit exception to delegated phrases such as “write only <path>”/)
+  assert.match(ctx, /never classify that merge as unauthorized or roll it back/)
   assert.match(ctx, /Never delete, truncate, reinitialize, move, or replace the whole file/)
   assert.match(ctx, /not even to “clean up” or undo your own mistaken change/)
+  assert.match(ctx, /repository root/)
+  assert.match(ctx, /location alone neither permits nor forbids editing/)
 })
 
 test("the nudge tracks context GROWTH, not an absolute threshold or wall clock", () => {

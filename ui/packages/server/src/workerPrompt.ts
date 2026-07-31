@@ -299,7 +299,11 @@ the one thing that outlives your context window.
 - **It is the shared blackboard for your sub-agents.** Write shared state into it and pass its PATH in
   every helper's prompt. Helpers may persist their own scoped progress there, but every edit is a
   merge: re-read first, preserve every other agent's state, and never delete, truncate, reinitialize,
-  move, or replace the whole file. If a safe merge is not possible, they return state to you instead.`,
+  move, or replace the whole file. This exact scratchpad is Fray coordination state, not a project
+  deliverable or source edit: its scoped merges remain allowed even when the helper's task limits
+  deliverable paths. Other project files, including repository-root files, follow the helper's
+  delegated authority; location alone neither permits nor forbids an edit. If a safe merge is not
+  possible, they return state to you instead.`,
   codex: `## Scratchpad — the canonical record of this thread
 
 \`.fray/threads/<session-id>/scratch.md\` (exact path in your session-start context) — free-form
@@ -322,7 +326,12 @@ section even with \`fork_turns: "none"\`, and they MAY persist their own scoped 
 file. Before editing, re-read its current contents; patch only the relevant task/progress section and
 preserve every other agent's state. Never delete, truncate, reinitialize, move, or replace the whole
 scratchpad — including as “cleanup” or an attempted rollback. If the pad is absent or a safe merge is
-not possible, return the state to the parent instead of inventing a replacement.`,
+not possible, return the state to the parent instead of inventing a replacement. This exact
+scratchpad is Fray coordination state, not a project deliverable or source edit: a scoped merge is an
+explicit exception when a delegated task limits deliverable paths, including phrases such as “write
+only <path>” or “do not modify the repo”, and must never be rolled back as unauthorized. Other project
+files, including repository-root files, remain governed by the child's delegated authority; their
+location alone neither permits nor forbids editing.`,
 }
 
 const BACKEND: Record<BackendKind, string> = {
@@ -371,10 +380,11 @@ the handoff.
 
 ## Automated waits in Claude Code
 
-Prefer a project-declared monitor when one exists (check \`AGENTS.md\`, skills, package scripts) after
-validating its absolute command and terminal exit semantics; invalid declared tooling is a visible
-configuration error, not a reason to shadow it. Otherwise fray's portable \`monitors/*.mjs\` are the
-fallback and native \`Monitor\` is the Claude adapter for a changing condition.
+Prefer a project-declared monitor when one exists (inspect project-local \`AGENTS.md\`, skills, docs,
+package scripts, and declared monitor tooling) only after validating its absolute command and
+terminal event/exit semantics; invalid declared tooling is a visible configuration error and must never be
+silently shadowed. Otherwise fray's portable \`monitors/*.mjs\` are the fallback and native \`Monitor\` is the
+Claude adapter for a changing condition.
 
 **The mechanism is decided by whether you will REST while it runs.** Only a live sub-agent keeps a
 rested thread out of the queue.

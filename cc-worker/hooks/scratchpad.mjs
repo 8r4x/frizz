@@ -148,9 +148,14 @@ if (mode === 'subagent-start') {
         '⟦shared scratchpad — merge only⟧ `' + relPath + '` is the canonical document shared with ' +
         'the top-level `/root` worker. You MAY read it and update your own task progress. Before every ' +
         'edit, re-read the current file, then patch only your scoped task/progress entry while ' +
-        'preserving every other agent’s content. Never delete, truncate, reinitialize, move, or ' +
-        'replace the whole file — not even to “clean up” or undo your own mistaken change. If the ' +
-        'file is absent or you cannot merge safely, return your state to the parent without writing.',
+        'preserving every other agent’s content. This exact file is Fray coordination state, not a ' +
+        'project deliverable or source edit: a scoped merge is an explicit exception to delegated ' +
+        'phrases such as “write only <path>” or “do not modify the repo”; never classify that merge ' +
+        'as unauthorized or roll it back. Never delete, truncate, reinitialize, move, or replace the ' +
+        'whole file — not even to “clean up” or undo your own mistaken change. Other project files, ' +
+        'including files at the repository root, remain governed by your delegated authority; their ' +
+        'location alone neither permits nor forbids editing. If the file is absent or you cannot ' +
+        'merge safely, return your state to the parent without writing.',
     },
   }));
   process.exit(0);
