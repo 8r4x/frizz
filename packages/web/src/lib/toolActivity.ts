@@ -7,9 +7,14 @@ export interface ToolActivityMessage {
   messageIndex: number
 }
 
+// Calls that DISPATCH a child, address one, or block on one — the transcript is built around them, so
+// they keep a dedicated card and split the activity run. Deliberately NOT here: codex's `list_agents`
+// ("Agents · list live agents"), which is a plain READ of the roster — it starts nothing, addresses
+// nobody, and its whole body is a one-line count, so a model that polls it mid-burst was splitting one
+// batch into `Ran 1 tool call` / a standalone Agents card / `Ran 4 tool calls` (maintainer 2026-07-31:
+// "The agent listing should not be specially handled here. It's a tool call like any other").
 const SUB_AGENT_TOOL_NAMES = new Set([
   "agent",
-  "agents",
   "follow up",
   "interrupt",
   "send message",

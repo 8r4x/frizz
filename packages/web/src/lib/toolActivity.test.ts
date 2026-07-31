@@ -89,6 +89,23 @@ test("prose and sub-agent cards split runs while background Bash stays ordinary 
   assert.equal(isToolActivityException(tool("Read")), false)
 })
 
+// codex's `list_agents` is a roster READ, not a dispatch. It used to sit in SUB_AGENT_TOOL_NAMES, so a
+// model that polled it mid-burst broke one batch into `Ran 1 tool call` / a standalone Agents card /
+// `Ran 4 tool calls`.
+test("the agent listing folds into the ordinary activity run", () => {
+  const listing = tool("Agents", { detail: "list live agents", output: "3 agents · 2 running · 1 completed", status: "completed", durationMs: 104 })
+  assert.equal(isToolActivityException(listing), false)
+
+  const compact = coalesceToolActivityMessages([
+    toolMessage("one", [tool("Read", { detail: "src/a.ts" })]),
+    toolMessage("listing", [listing], "2026-07-30T12:00:01.000Z"),
+    toolMessage("two", [tool("Grep"), tool("Edit")], "2026-07-30T12:00:02.000Z"),
+  ])
+
+  assert.equal(compact.length, 1)
+  assert.deepEqual(compact[0].message.tools.map((call) => call.name), ["Read", "Agents", "Grep", "Edit"])
+})
+
 test("a prose tool tail absorbs background Bash until the real rendered boundary", () => {
   const first = tool("Bash", { desc: "Starting the focused build", status: "completed" })
   const lead: ChatMessage = {
