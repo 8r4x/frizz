@@ -21,8 +21,8 @@
     "runtime"
   ],
   "scripts": {
-    "prepack": "nub ./scripts/prepare-package.mjs && nub ./scripts/build-package.mjs && nub ./scripts/publish-manifest.mjs --strip",
-    "postpack": "nub ./scripts/publish-manifest.mjs --restore"
+    "prepack": "node ./scripts/prepare-package.mjs && node ./scripts/build-package.mjs && node ./scripts/publish-manifest.mjs --strip",
+    "postpack": "node ./scripts/publish-manifest.mjs --restore"
   },
   "dependencies": {
     "@parcel/watcher": "^2.5",

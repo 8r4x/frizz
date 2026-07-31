@@ -58,10 +58,29 @@ const quote = (value) => `'${value.replaceAll("'", `"'"'`)}'`;
 // shell still reaches the worker, so letting an API key supersede the subscription stays available.
 const body = `#!/bin/sh\n${MARKER}\nexec env FRAY_SOURCE_COMMAND=${quote(command)} nub --no-env-file ${quote(launcher)} "$@"\n`;
 
+/** Exactly the launcher this run would write — i.e. already current, nothing to do. */
 function isOwned(path) {
   try {
     if (!lstatSync(path).isFile()) return false;
     return readFileSync(path, "utf8") === body;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Written by THIS installer, whatever checkout it points at.
+ *
+ * A byte-for-byte comparison against `body` cannot tell "someone else's fray-dev" from "our own
+ * launcher aimed at a path that moved" — and the second is routine: move or re-clone the checkout, or
+ * relocate the CLI inside it, and the embedded path changes. Guarding replacement on the exact body
+ * therefore refused to upgrade our own shim and said `is not the Fray source launcher` about a file
+ * whose first comment line is that very marker. Ownership is the marker; the body is only currency.
+ */
+function isOurs(path) {
+  try {
+    if (!lstatSync(path).isFile()) return false;
+    return readFileSync(path, "utf8").includes(MARKER);
   } catch {
     return false;
   }
@@ -121,7 +140,7 @@ function writeAtomic(path, contents) {
 const label = "Fray development source launcher";
 
 if (args.has("--uninstall")) {
-  if (existsSync(target) && isOwned(target)) {
+  if (existsSync(target) && isOurs(target)) {
     unlinkSync(target);
     console.log(`removed ${target}`);
   } else console.log(`no ${label} found at ${target}`);
@@ -138,7 +157,7 @@ if (args.has("--check")) {
 }
 
 mkdirSync(binDir, { recursive: true });
-if (targetExists(target) && !isOwned(target) && !args.has("--force")) {
+if (targetExists(target) && !isOurs(target) && !args.has("--force")) {
   console.error(
     `${target} already exists and is not the Fray source launcher; rerun with --force to replace it`
   );

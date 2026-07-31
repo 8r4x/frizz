@@ -11,7 +11,7 @@
     "fray-dev:check": "nub scripts/install-global-cli.mjs --check",
     "fray-dev:uninstall": "nub scripts/install-global-cli.mjs --uninstall",
     "install:global": "nub scripts/install-global-cli.mjs",
-    "typecheck": "tsc -b packages/shared packages/rpc packages/server packages/cli && nub run --filter @fray-ui/web typecheck",
+    "typecheck": "tsc -b packages/shared packages/rpc packages/server packages/cli && pnpm --filter @fray-ui/web typecheck",
     "test": "nub --test --test-force-exit 'scripts/**/*.test.mjs' 'packages/shared/src/**/*.test.ts' 'packages/server/src/**/*.test.ts' 'packages/cli/src/**/*.test.ts' 'packages/web/src/**/*.test.ts'"
   },
   "devDependencies": {

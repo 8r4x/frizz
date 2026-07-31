@@ -1,0 +1,103 @@
+name: release
+
+# Publishes `frayui` whenever packages/cli/package.json lands on main with a version that is not yet
+# on the registry. Bump the version, merge, and the release happens — there is no tag to push and no
+# separate release command, which suits a repo that lands work straight on main.
+#
+# Auth is npm Trusted Publishing (OIDC): no NPM_TOKEN, no secret to rotate or leak. That binds the
+# right to publish to THIS repository and THIS workflow file, which is why the filename is load-bearing
+# — renaming release.yml breaks publishing until the trusted publisher is reconfigured on npmjs.com.
+# Trusted publishing also attaches provenance automatically; passing --provenance is unnecessary.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - packages/cli/package.json
+  # Lets a failed or interrupted release be retried without an empty version bump.
+  workflow_dispatch:
+
+# Two releases racing would fight over the same version; let an in-flight one finish rather than
+# cancelling it mid-publish.
+concurrency:
+  group: release-frayui
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # required for Trusted Publishing (OIDC)
+      contents: write # tag the released commit and create the GitHub release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26.x"
+          # Without an explicit registry-url npm has no registry to exchange the OIDC token against.
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+
+      # Trusted Publishing needs npm >= 11.5.1. Node 26 ships a new enough npm today; upgrading
+      # explicitly keeps this workflow correct if the bundled npm ever regresses.
+      - name: Use an npm that supports trusted publishing
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      # A release must not be the first time the tree is compiled. The full suite is deliberately NOT
+      # a gate here: it drives tmux and real provider CLIs and has never run on a CI box, so making it
+      # block publishing would break releases for reasons unrelated to the release.
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Resolve version and decide whether to publish
+        id: decide
+        run: |
+          VERSION=$(node -p "require('./packages/cli/package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # Ask the registry rather than diffing commits: idempotent, so a re-run, a revert-and-reland,
+          # or a workflow_dispatch can never double-publish or fail on an already-released version.
+          if npm view "frayui@$VERSION" version > /dev/null 2>&1; then
+            echo "frayui@$VERSION is already published; nothing to do"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "frayui@$VERSION is not on the registry; publishing"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # prepack builds web-dist, the esbuild bundles and the runtime closure, then strips pnpm's
+      # workspace: specifiers from the manifest; postpack restores the checked-in file.
+      - name: Publish to npm
+        if: steps.decide.outputs.publish == 'true'
+        run: npm publish
+        working-directory: packages/cli
+
+      - name: Tag the released commit
+        if: steps.decide.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.decide.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$VERSION" -m "frayui v$VERSION"
+          git push origin "v$VERSION"
+
+      - name: Create the GitHub release
+        if: steps.decide.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.decide.outputs.version }}
+        run: |
+          gh release create "v$VERSION" \
+            --title "frayui v$VERSION" \
+            --notes "Published to npm: https://www.npmjs.com/package/frayui/v/$VERSION" \
+            --verify-tag
