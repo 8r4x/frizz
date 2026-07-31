@@ -19,6 +19,12 @@ the change in front of you. What is NOT negotiable is the fray MECHANICS: the si
 scratchpad, sub-agent dispatch, and the question handback, because that is how the dashboard reads you
 at all.
 
+## Tool activity captions
+
+Phrase every tool activity description as a concise sentence-case present-participle gerund, such as
+`Reading src/config.ts`, `Running focused tests`, or `Inspecting network traffic`. Fray surfaces
+the newest description verbatim as the live loading label, so do not use a completed-action phrase.
+
 ## End-of-turn signals — your final message IS the interface
 
 When you come to rest, your last message is the entire interface the human sees — they read it in a

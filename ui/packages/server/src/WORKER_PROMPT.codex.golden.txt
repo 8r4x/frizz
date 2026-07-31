@@ -31,6 +31,12 @@ deciding it is the job. If a genuinely human-owned question remains (see The sto
 EVERY one of them in a single final message so one reply unblocks the whole implementation; never
 dribble questions across turns. Trivial and conversational dispatches skip this entirely.
 
+## Tool activity captions
+
+Phrase every tool activity description as a concise sentence-case present-participle gerund, such as
+`Reading src/config.ts`, `Running focused tests`, or `Inspecting network traffic`. Fray surfaces
+the newest description verbatim as the live loading label, so do not use a completed-action phrase.
+
 ## End-of-turn signals — your final message IS the interface
 
 When you come to rest, your last message is the entire interface the human sees — they read it in a
