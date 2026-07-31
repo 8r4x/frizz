@@ -1,5 +1,15 @@
 import type { ChatMessage } from "../hooks.ts"
 
+// The extra air beneath what the human said, on top of the ordinary STEP. A user message opens a turn,
+// and a little more room under its bottom edge is what separates "what I asked" from "what happened
+// next" (maintainer 2026-07-31: "a little more space underneath each user message, maybe 3 px more").
+//
+// It lands on the LAST message of a run, never on each one: consecutive user messages are one utterance
+// the human split across sends, and spacing them apart internally would break up the very thing this
+// exists to set off. Lives HERE rather than beside STEP in ChatView because ChatView imports this
+// module, so this is the end of the dependency that both spacing implementations can share.
+export const USER_TAIL_EXTRA = 3
+
 export interface VirtualTranscriptMessageRow {
   key: string
   message: ChatMessage
@@ -102,19 +112,28 @@ export function buildVirtualTranscriptMessageRows(
   const rows: VirtualTranscriptMessageRow[] = []
   const keyCounts = new Map<string, number>()
   let previousTailIsMeta: boolean | null = null
+  let previousIsUser = false
 
   messages.forEach((message, messageIndex) => {
     if (message.queued || rendersNothing(message)) return
     const baseKey = message.sourceId ?? legacyMessageKey(message)
     const duplicate = keyCounts.get(baseKey) ?? 0
     keyCounts.set(baseKey, duplicate + 1)
+    const base = previousTailIsMeta === null ? 0 : previousTailIsMeta && headIsMeta(message) ? 6 : step
+    // A little extra air under the human's own words — but only where a RUN of them ends, so two
+    // messages the human split across sends stay one utterance. See USER_TAIL_EXTRA in ChatView.
+    // A row's `gap` renders ABOVE it, so this is charged to the row that FOLLOWS the user message,
+    // which is what puts the space under whatever that message ended with — an inlined screenshot
+    // included, rather than under its text.
+    const extra = base > 0 && previousIsUser && message.role !== "user" ? USER_TAIL_EXTRA : 0
     rows.push({
       key: duplicate === 0 ? baseKey : `${baseKey}:${duplicate}`,
       message,
       messageIndex,
-      gap: previousTailIsMeta === null ? 0 : previousTailIsMeta && headIsMeta(message) ? 6 : step,
+      gap: base + extra,
     })
     previousTailIsMeta = tailIsMeta(message)
+    previousIsUser = message.role === "user"
   })
 
   return rows

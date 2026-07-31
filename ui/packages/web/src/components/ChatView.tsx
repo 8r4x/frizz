@@ -51,7 +51,7 @@ import { InteractionStack } from "./InteractionCards.tsx"
 // surface can render them without importing the thread view. QuestionBlockCard in particular is
 // shared with the native-AskUserQuestion path, which reaches it through InteractionCards.tsx —
 // a file THIS one imports, so the card could not have stayed here without a module cycle.
-import { CARD_ACTION_EXPLAINER, CARD_BODY, CARD_PRIMARY_ACTION, CARD_PRIMARY_BUTTON, CardActions, CardContent, CardHead, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
+import { CARD_ACTION_EXPLAINER, CARD_ACTION_RADIUS, CARD_BODY, CARD_PRIMARY_ACTION, CARD_PRIMARY_BUTTON, CardActions, CardContent, CardHead, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 // The resting card, shared with the queue (TodosView passes it the event-Snooze; these two surfaces
 // deliberately pass no action — see the module header).
@@ -67,7 +67,7 @@ import { SignInModal } from "./SignInModal.tsx"
 import { PROVIDER_LABEL } from "../lib/signIn.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
-import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
+import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, USER_TAIL_EXTRA, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
 import { coalesceToolActivityMessages, historicalToolActivityMessages, isToolActivityException, liveToolActivityTail, settledToolActivityLabel, toolActivityLabel } from "../lib/toolActivity.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
 
@@ -1565,10 +1565,15 @@ export function workingIndicatorGap(messages: readonly ChatMessage[]): number {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]
     if (m.queued || messageRendersNothing(m)) continue
-    return messageTailIsMeta(m) ? 6 : STEP
+    if (messageTailIsMeta(m)) return 6
+    return STEP + (m.role === "user" ? USER_TAIL_EXTRA : 0)
   }
   return 0
 }
+
+// USER_TAIL_EXTRA (the extra air under the last user message of a run) is defined in
+// lib/virtualTranscript.ts — the VIRTUALIZED row builder is the production path, and both spacing
+// implementations have to charge the same number.
 
 // THE between-message rhythm, in ONE place. Every surface that stacks messages goes through this —
 // the thread transcript and the sub-agent drawer — so no surface can invent its own gap. That is the
@@ -1588,15 +1593,22 @@ export function withMessageSpacers(
   skip?: (m: ChatMessage, i: number) => boolean,
 ): ReactNode[] {
   const out: ReactNode[] = []
-  let prevTailIsMeta: boolean | null = null
+  let prev: ChatMessage | null = null
   messages.forEach((m, i) => {
     if (skip?.(m, i)) return
     if (messageRendersNothing(m)) return
-    // 6px when two META rows abut across the boundary — a tool band OR a "Thought for Ns" / reasoning
-    // label (see messageTailIsMeta), so the meta-label column reads as one rhythm.
-    if (prevTailIsMeta !== null) out.push(<VSpace key={`s${i}`} h={prevTailIsMeta && messageHeadIsMeta(m) ? 6 : STEP} />)
+    if (prev !== null) {
+      // 6px when two META rows abut across the boundary — a tool band OR a "Thought for Ns" / reasoning
+      // label (see messageTailIsMeta), so the meta-label column reads as one rhythm.
+      const base = messageTailIsMeta(prev) && messageHeadIsMeta(m) ? 6 : STEP
+      // ...and a little extra under the human's own words, but only where the run of them ENDS —
+      // see USER_TAIL_EXTRA. Measured against the NEXT rendered message, so a user message followed
+      // by another user message keeps the plain step between them.
+      const extra = prev.role === "user" && m.role !== "user" ? USER_TAIL_EXTRA : 0
+      out.push(<VSpace key={`s${i}`} h={base + extra} />)
+    }
     out.push(render(m, i))
-    prevTailIsMeta = messageTailIsMeta(m)
+    prev = m
   })
   return out
 }
@@ -1785,7 +1797,10 @@ function MinimalToolActivity({ tools, at }: { tools: CollapsedTool[]; at?: strin
         aria-controls={cardsId}
         aria-expanded={expanded}
         aria-label={`${expanded ? "Collapse" : "Expand"} ${total} tool ${total === 1 ? "call" : "calls"}: ${label}`}
-        className="group flex w-full min-w-0 items-center gap-1 rounded py-0.5 text-left text-[13px] leading-5 text-muted outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
+        // Shares TRANSCRIPT_META_LABEL_CLASS rather than restating its type scale — this row and
+        // "Thought for Ns" alternate in one column, and the two drifted apart while the size was
+        // copied here by hand.
+        className={`group flex w-full min-w-0 items-center gap-1 rounded py-0.5 text-left outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 ${TRANSCRIPT_META_LABEL_CLASS}`}
       >
         <span
           data-tool-activity-label
@@ -3235,7 +3250,7 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
           <CardActions>
             <StateButton
               thread={doneThread}
-              className={`text-[11px] ${CARD_PRIMARY_BUTTON}`}
+              className={`${CARD_ACTION_RADIUS} text-[11px] ${CARD_PRIMARY_BUTTON}`}
               iconClassName={ICON_LABEL_NUDGE}
               onArchived={queueDismiss?.dismiss}
               onDismissCancel={queueDismiss?.cancel}
@@ -3374,7 +3389,10 @@ export function ProviderFaultCard({
             onClick={() => retry(retryText)}
             disabled={retrying}
             onMouseDown={(e) => e.preventDefault()}
-            className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-fg/90 transition-colors hover:bg-panel hover:border-border-strong disabled:opacity-60"
+            // The secondary sibling departs from the primary on FILL only — it stays outlined so the
+            // pair keeps a hierarchy — never on the corner, which is a property of sitting in a card's
+            // action row rather than of being the card's verb.
+            className={`shrink-0 ${CARD_ACTION_RADIUS} border border-border px-2 py-1 text-[11px] text-fg/90 transition-colors hover:bg-panel hover:border-border-strong disabled:opacity-60`}
           >
             Retry
           </button>
@@ -3911,16 +3929,17 @@ export function WorkingIndicator({ since, activityLabel }: { since?: string; act
       // is the LIVE member of that column, and a shorter line box put its ink 1px nearer the card above
       // than a settled "Thought for Ns" in the same slot. Sharing the box is what makes the alternation
       // between them read as one rhythm — the tone stays the shimmer's own.
-      className="flex items-baseline gap-2 text-[13px] leading-5"
+      className={`flex items-baseline gap-2 ${TRANSCRIPT_META_LABEL_CLASS}`}
     >
-      {/* The label is now a project-relative path (see relativeToolPaths), so it rarely wraps — but a
-          deep one at a narrow width still does, and it used to take the elapsed time over the edge with
-          it: `828m 49s` broke at its OWN space and the minutes clipped outside the panel. A duration is
-          one value and never breaks mid-value, and it no longer shrinks, so the label absorbs the whole
-          wrap — breaking inside the path where a line can't hold it. Breaking a path mid-segment is
-          plainly worse-looking than not wrapping at all, and plainly better than clipping the row: at a
-          width this narrow those are the only two outcomes, and this one loses nothing. */}
-      <span className="min-w-0 break-words shimmer-text">{activityLabel ?? "Working…"}</span>
+      {/* ONE LINE, always — the row is a live status reading, and a status reading that changes height
+          as a path gets longer makes the whole tail jump. The label TRUNCATES (maintainer 2026-07-31:
+          "prevent the actual gerund from ever breaking onto two lines. It should get truncated
+          instead"); it used to wrap instead, on the argument that breaking a path mid-segment beat
+          clipping it. That trade no longer has to be made: the label is a project-relative path
+          now (see relativeToolPaths), so at any realistic width there is nothing left to clip.
+          The duration keeps `shrink-0 whitespace-nowrap` — it is one value and must never break at its
+          own space, which is exactly how `828m 49s` used to put the minutes outside the panel. */}
+      <span className="min-w-0 truncate shimmer-text">{activityLabel ?? "Working…"}</span>
       <span className="shrink-0 whitespace-nowrap tabular-nums text-[12px] text-muted/60">{durationLabel}</span>
     </div>
   )

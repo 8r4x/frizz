@@ -4,7 +4,9 @@ import test from "node:test"
 import { TRANSCRIPT_META_LABEL_CLASS } from "../lib/transcriptMetaLabels.ts"
 
 test("quiet transcript events use the same regular light-grey scale as activity rows", () => {
-  assert.equal(TRANSCRIPT_META_LABEL_CLASS, "text-[13px] leading-5 text-muted")
+  // 14px is the ASSISTANT PROSE size (`.md-body`), which these rows deliberately match — they were a
+  // 13px second scale interleaved with the prose, and tone (not size) is what makes them recede.
+  assert.equal(TRANSCRIPT_META_LABEL_CLASS, "text-[14px] leading-5 text-muted")
 
   const source = readFileSync(new URL("./ChatView.tsx", import.meta.url), "utf8")
   // The quiet event line's own root. It gained a `group/msg relative` host for the hover-revealed
@@ -23,7 +25,11 @@ test("minimal tool activity is settled history with no live shimmer or spinner i
   assert.match(block, /settledToolActivityLabel\(total\)/, "settled batches render the completed summary")
   assert.match(block, /data-tool-activity-state="settled"/, "every historical disclosure is settled presentation")
   assert.doesNotMatch(block, /shimmer-text/, "the historical disclosure must never own the live shimmer")
-  assert.match(block, /className="group flex w-full[^\"]*gap-1/, "the disclosure keeps the full row click target and a compact label gap")
+  assert.match(block, /className=\{`group flex w-full[^`]*gap-1/, "the disclosure keeps the full row click target and a compact label gap")
+  // It consumes the shared scale rather than restating one: this row alternates with "Thought for Ns"
+  // in a single column, and the two drifted apart while the size was copied here by hand.
+  assert.match(block, /\$\{TRANSCRIPT_META_LABEL_CLASS\}/, "the disclosure must consume the shared metadata-label class")
+  assert.doesNotMatch(block, /text-\[1[0-9]px\]/, "and must not restate its own type scale")
   assert.match(block, /data-tool-activity-label[\s\S]*className="min-w-0 truncate text-muted"/, "the label shrinks before the adjacent chevron")
   assert.match(block, /data-tool-activity-chevron[^\n]*size-\[1em\]/, "the adjacent chevron scales with the label")
   assert.doesNotMatch(block, /ml-auto/, "the chevron must stay beside the digest label instead of jumping to the far edge")
@@ -37,9 +43,11 @@ test("the current gerund replaces Working in the exact bottom shimmer span", () 
   assert.match(block, /data-working-indicator/, "the runtime tail needs a stable browser-QA target")
   assert.match(block, /<span className="[^"]*shimmer-text">\{activityLabel \?\? "Working…"\}<\/span>/, "tool activity and generic Working must use the exact same shimmer element")
   assert.equal((block.match(/shimmer-text/g) ?? []).length, 1, "the runtime tail must have one shimmer treatment")
-  // The label now carries a file path, so it is the part that wraps: it may shrink below its longest
-  // token and break inside it. The elapsed reading is one value and holds its line and its width.
-  assert.match(block, /<span className="min-w-0 break-words shimmer-text"/, "the label absorbs the wrap instead of overflowing the row")
+  // ONE LINE, always. The label TRUNCATES rather than wrapping (maintainer 2026-07-31: "prevent the
+  // actual gerund from ever breaking onto two lines. It should get truncated instead") — a live status
+  // reading that grows taller as a path lengthens makes the whole transcript tail jump.
+  assert.match(block, /<span className="min-w-0 truncate shimmer-text"/, "the label truncates to one line")
+  assert.doesNotMatch(block, /break-words/, "and never wraps")
   assert.match(block, /\{durationLabel\}/, "the runtime tail still reads its own elapsed time")
   assert.match(block, /<span className="shrink-0 whitespace-nowrap [^"]*">\{durationLabel\}<\/span>/, "the elapsed reading never breaks mid-value or shrinks")
 })
