@@ -339,8 +339,44 @@ export function currentToolActivity<T extends Pick<TranscriptToolCall, "status">
   return { tool: tools[tools.length - 1], pending: false }
 }
 
-export function settledToolActivityLabel(total: number): string {
-  return `Ran ${total} tool ${total === 1 ? "call" : "calls"}`
+/** Tools whose whole job is to write a file — the ones the digest reports as "edited". */
+const FILE_WRITING_TOOL_NAMES = new Set(["edit", "multiedit", "write", "apply patch"])
+
+/** The collapsed render shape merges consecutive edits to one file, so `edits` is the plural of `edit`. */
+export interface FileWritingTool {
+  name: string
+  detail?: string
+  edit?: { file: string }
+  edits?: { file: string }[]
+}
+
+/**
+ * How many DISTINCT files a settled run wrote.
+ *
+ * Creation, deletion and modification all collapse to one "edited" reading — the digest is a one-line
+ * recap, not a changelog, and splitting it three ways buys nothing (maintainer 2026-07-31: "no need to
+ * be pedantic"). The path comes from the structured `edit` payload where there is one; a codex
+ * apply_patch the server could not reconstruct (a `Delete File`, a multi-file hunk) still arrives named
+ * Edit with the file as its `detail`, which is why the name check is the fallback rather than dead code.
+ * A Bash `rm`/`mv` is deliberately not inspected — the digest counts file tools, not shell side effects.
+ */
+export function editedFileCount(tools: readonly FileWritingTool[]): number {
+  const files = new Set<string>()
+  for (const tool of tools) {
+    for (const edit of tool.edits ?? (tool.edit ? [tool.edit] : [])) {
+      if (edit.file.trim()) files.add(edit.file.trim())
+    }
+    if (tool.edit || tool.edits?.length) continue
+    const detail = tool.detail?.trim()
+    if (detail && FILE_WRITING_TOOL_NAMES.has(normalizedToolName(tool.name))) files.add(detail)
+  }
+  return files.size
+}
+
+export function settledToolActivityLabel(total: number, editedFiles = 0): string {
+  const calls = `Ran ${total} tool ${total === 1 ? "call" : "calls"}`
+  if (editedFiles === 0) return calls
+  return `${calls}, edited ${editedFiles} file${editedFiles === 1 ? "" : "s"}`
 }
 
 export type ToolActivityTool = TranscriptMessage["tools"][number]

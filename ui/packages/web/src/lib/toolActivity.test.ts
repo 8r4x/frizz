@@ -8,6 +8,7 @@ import {
   historicalToolActivityMessages,
   isToolActivityException,
   liveToolActivityTail,
+  editedFileCount,
   settledToolActivityLabel,
   toolActivityLabel,
 } from "./toolActivity.ts"
@@ -301,4 +302,30 @@ test("the newest pending call drives the live label, then the final call drives 
   assert.deepEqual(currentToolActivity(settled), { tool: settled[1], pending: false })
   assert.equal(settledToolActivityLabel(1), "Ran 1 tool call")
   assert.equal(settledToolActivityLabel(settled.length), "Ran 2 tool calls")
+})
+
+test("the digest reports how many distinct files the run edited", () => {
+  assert.equal(settledToolActivityLabel(27, 4), "Ran 27 tool calls, edited 4 files")
+  assert.equal(settledToolActivityLabel(3, 1), "Ran 3 tool calls, edited 1 file")
+  // A run that wrote nothing keeps the bare reading rather than trailing an "edited 0 files".
+  assert.equal(settledToolActivityLabel(3, 0), "Ran 3 tool calls")
+})
+
+test("edited files are counted once per file, whatever shape the write arrived in", () => {
+  assert.equal(editedFileCount([]), 0)
+  assert.equal(editedFileCount([{ name: "Read", detail: "src/a.ts" }, { name: "Bash", detail: "rm src/b.ts" }]), 0)
+  assert.equal(
+    editedFileCount([
+      // The collapsed shape merges consecutive edits to one file into a single `edits` entry.
+      { name: "Edit", detail: "src/a.ts", edits: [{ file: "src/a.ts" }, { file: "src/a.ts" }] },
+      { name: "Edit", detail: "src/a.ts", edit: { file: "src/a.ts" } },
+      // A creation reads as an edit — Write ships the whole file as the new side.
+      { name: "Write", detail: "src/b.ts", edit: { file: "src/b.ts" } },
+      { name: "Read", detail: "src/c.ts" },
+    ]),
+    2,
+  )
+  // A codex apply_patch the server could not reconstruct (a Delete File, a multi-file hunk) arrives
+  // named Edit with the file only in `detail`.
+  assert.equal(editedFileCount([{ name: "Edit", detail: "src/gone.ts" }, { name: "apply_patch", detail: "src/gone.ts" }]), 1)
 })

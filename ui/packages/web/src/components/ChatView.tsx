@@ -68,7 +68,7 @@ import { PROVIDER_LABEL } from "../lib/signIn.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
 import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, USER_TAIL_EXTRA, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
-import { coalesceToolActivityMessages, historicalToolActivityMessages, isToolActivityException, liveToolActivityTail, settledToolActivityLabel, toolActivityLabel } from "../lib/toolActivity.ts"
+import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isToolActivityException, liveToolActivityTail, settledToolActivityLabel, toolActivityLabel } from "../lib/toolActivity.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
 
 // Answer types moved to lib/questionBlocks.ts (shared by the queue card, the thread view, and the
@@ -1799,7 +1799,7 @@ function MinimalToolActivity({ tools, at }: { tools: CollapsedTool[]; at?: strin
   const [expanded, setExpanded] = useState(false)
   const cardsId = useId()
   const total = tools.reduce((n, t) => n + t.count, 0)
-  const label = settledToolActivityLabel(total)
+  const label = settledToolActivityLabel(total, editedFileCount(tools))
   return (
     <div data-tool-activity data-tool-activity-state="settled" className="flex min-w-0 flex-col">
       <button
