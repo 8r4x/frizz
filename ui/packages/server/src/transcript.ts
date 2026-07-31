@@ -573,6 +573,17 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
           // Guard on peerFrom: only a bubble the enqueue actually recognized as a child's report gets the
           // child's id. Stamping it on an unattributed bubble would assert an origin nothing established.
           if (dispatchId && entry.message.peerFrom) entry.message.peerDispatchId = dispatchId
+          // RELABEL to the child's DESCRIPTION. `origin.from` is only ever the subagent_type, because
+          // fray's own worker dispatch hook strips `name` — so an upward report rendered as
+          // «fray:opus-xhigh», which names the profile rather than the work and is identical across
+          // every child sharing that cell. `senderTaskId` is the child's agentId, which is exactly the
+          // child's agentId, and childDispatchIds already translates that into the DISPATCH tool_use id that
+          // `agentDispatches` is keyed by — the same translation `dispatchId` above performs.
+          // Falls back to the profile when the dispatch was never folded (an older or truncated session),
+          // which is strictly what it rendered before.
+          const dispatched = dispatchId ? agentDispatches.get(dispatchId) : undefined
+          const described = dispatched?.call.detail?.trim()
+          if (described && entry.message.peerFrom) entry.message.peerFrom = described
           if (thisTs) prevTs = thisTs // a child's report is a real turn, exactly like a human follow-up
           lastAssistantId = null // …so it breaks the assistant-record merge chain too
         } else {
@@ -580,7 +591,12 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
           // wrote one. Prefer this record's STRUCTURED fields — it carries `from` and `body` already
           // separated — and fall back to parsing the wrapper out of `prompt` when they are absent.
           const parsed = prompt.trim() ? parseAgentMessage(prompt) : undefined
-          const from = str(peerOrigin.from) || str(peerOrigin.name) || parsed?.from || ""
+          // Same relabel as the resolved-bubble arm above, and it has to be repeated here rather than
+          // hoisted: this branch BUILDS the message instead of stamping an existing one, so there is no
+          // shared assignment to patch. The dispatch's description wins over `origin.from`, which is only
+          // ever the subagent_type once fray's worker dispatch hook has stripped `name`.
+          const describedHere = (dispatchId ? agentDispatches.get(dispatchId) : undefined)?.call.detail?.trim()
+          const from = describedHere || str(peerOrigin.from) || str(peerOrigin.name) || parsed?.from || ""
           const body = parsed?.body ?? (typeof peerOrigin.body === "string" ? peerOrigin.body : "")
           // Unattributable or bodiless → render NOTHING. That is the long-standing behavior for a peer
           // record this build cannot resolve, and it is the SAFER failure: a child's words wearing the
