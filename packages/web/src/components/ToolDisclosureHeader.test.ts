@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
+import { ToolDisclosureHeader, isToolDisclosureAction } from "./ToolDisclosureHeader.ts"
 
 function disclosureBounds(html: string): { start: number; end: number } {
   const marker = html.indexOf("data-tool-disclosure")
@@ -93,4 +93,42 @@ test("renders a running indicator only when the individual tool disclosure suppl
   assert.match(running, /relative -top-px shrink-0 transition-transform/, "the disclosure glyph receives its optical vertical correction")
   assert.doesNotMatch(terminal, /data-running-indicator/)
   assert.doesNotMatch(terminal, /fray-live-dot/)
+})
+
+// The whole row toggles, so it must READ as clickable — its Bash/Todo siblings are one big <button>
+// and pick the pointer cursor up from the global `button:not(:disabled)` rule in styles.css. This row
+// is a div and has to ask for it. Still no role and no tab stop: the chevron remains the one control
+// assistive tech sees, exactly as the sibling-structure tests above require.
+test("the row itself reads as clickable without becoming a second control", () => {
+  const html = renderToStaticMarkup(
+    createElement(ToolDisclosureHeader, {
+      className: "fray-bash-header",
+      controls: "read-body-1",
+      expanded: false,
+      label: "Expand Read: /repo/src/app.ts",
+      onToggle: () => {},
+      children: createElement("a", { href: "cursor://file/repo/src/app.ts" }, "app.ts"),
+    }),
+  )
+
+  const row = html.slice(0, html.indexOf(">") + 1)
+  assert.match(row, /class="fray-bash-header w-full cursor-pointer text-left"/)
+  assert.doesNotMatch(html, /role="button"/)
+  assert.doesNotMatch(html, /tabindex/i)
+})
+
+// The "unless there's some kind of link within it" clause. A click is handed back to whatever owns it
+// — a file deep-link, the sub-agent drill-in, the chevron (whose own handler already toggled, so
+// standing down here is also what stops a double toggle) — and every other pixel falls through to the
+// disclosure. `closest`, not identity: a click can land on a glyph or a truncating span inside one.
+test("a header click defers to an action it landed inside, and to nothing else", () => {
+  const inside = (selector: string) => ({ closest: (s: string) => (s.includes(selector) ? {} : null) })
+
+  assert.equal(isToolDisclosureAction(inside("a,")), true, "a file path link owns its click")
+  assert.equal(isToolDisclosureAction(inside("button")), true, "the sub-agent drill-in and the chevron own theirs")
+  assert.equal(isToolDisclosureAction(inside('[role="button"]')), true, "so does an ARIA button")
+  assert.equal(isToolDisclosureAction({ closest: () => null }), false, "a label, a path's dead space or the meta reading toggles")
+  assert.equal(isToolDisclosureAction(null), false)
+  assert.equal(isToolDisclosureAction(undefined), false)
+  assert.equal(isToolDisclosureAction({}), false, "a target with no closest() is not an action")
 })
