@@ -4,21 +4,26 @@ import { showToast } from "../store.ts"
 
 // THE × ON A CHILD-OPERATION ROW — one action, for all three surfaces that list children.
 //
-// It retires the op from TRACKING (server-side `dismissOp`), which is not a process kill: fray does not
-// own the child processes. What it clears is the row and the Done-warning count it feeds, so a finished
-// op whose terminal notification never landed stops holding a thread hostage.
+// It asks the server to STOP the child before retiring it from tracking. Broker-backed Claude
+// sub-agents have a real provider stop control; runtimes without one still retain the original
+// phantom-row escape hatch, but the toast says plainly that the work may still be running.
 //
-// No optimism: `dismissOp` calls the board's onChange, so the row disappears on the next board frame.
-// On failure the row simply stays and the next frame reconciles — the toast is the only thing to say.
+// No optimism: the server refreshes the board after it has applied that policy. If a real stop throws,
+// it deliberately does not retire the row; the error toast is the only client-side bookkeeping.
 // (This lives beside `lib/childOps.ts` rather than inside it because that module is the row's pure
 // vocabulary, importable by an SSR test with no store or transport behind it.)
 export function dismissChildOp(slug: string, id: string): void {
-  rpc.dismissBackgroundOp({ slug, id }).catch((error: unknown) => {
-    showToast(`Dismiss failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 80)}`)
-  })
+  rpc.stopBackgroundOp({ slug, id })
+    .then(({ stopped, note }) => {
+      if (stopped) showToast("Sub-agent stopped")
+      else if (note) showToast(`${note} The row was cleared, but the work may still be running.`, { duration: 7000 })
+    })
+    .catch((error: unknown) => {
+      showToast(`Couldn’t stop: ${(error instanceof Error ? error.message : String(error)).slice(0, 100)}`, { duration: 7000 })
+    })
 }
 
-// WHICH rows may carry the ×, on every surface. Dismiss retires a tracked op BY ITS DISPATCH ID, and a
+// WHICH rows may carry the ×, on every surface. Stop retires a tracked op BY ITS DISPATCH ID, and a
 // descendant's dispatch lives in an ANCESTOR's transcript — this thread never tracked it, so the call
 // would be a silent no-op. A control that does nothing is worse than no control, so a descendant row
 // (and an id-less one, which has no handle at all) simply has no ×.

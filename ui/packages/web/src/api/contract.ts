@@ -82,9 +82,12 @@ export interface Api {
   subAgentSteer(input: { slug: string; id: string; message: string; deliveryId?: string }): Promise<{ delivered: boolean }>
   subAgentStop(input: { slug: string; id: string }): Promise<{ stopped: boolean }>
   backgroundShellOutput(input: { slug: string; id: string }): Promise<{ command: string | null; output: string; truncated: boolean; state: "running" | "done" | "gone" }>
-  // The × on a live sub-agent / background-shell row: retire the op from tracking. `dismissed:false`
-  // when the id is no longer live (already gone).
-  dismissBackgroundOp(input: { slug: string; id: string }): Promise<{ dismissed: boolean }>
+  // The × on a live sub-agent / background-shell row. It MEANS stop: the server tries the real
+  // provider control first and only then retires the row. `stopped` says whether work was actually
+  // terminated; `note` is why it could not be, when there is a reason worth telling the operator —
+  // without it the row would vanish while the child kept running, which is the whole bug this
+  // endpoint replaced. `dismissed:false` when the id was no longer live to retire.
+  stopBackgroundOp(input: { slug: string; id: string }): Promise<{ stopped: boolean; dismissed: boolean; note: string | null }>
   // Scoped typed requests are read/answered only for the current registered session. There is
   // deliberately no browser create method: provider adapters alone can journal a request.
   pendingInteractions(input: ListInteractionsInput): Promise<ListInteractionsResult>
@@ -191,7 +194,7 @@ export const PROCEDURES = {
   subAgentSteer: "mutation",
   subAgentStop: "mutation",
   backgroundShellOutput: "query",
-  dismissBackgroundOp: "mutation",
+  stopBackgroundOp: "mutation",
   pendingInteractions: "query",
   interactionGet: "query",
   interactionResolve: "mutation",

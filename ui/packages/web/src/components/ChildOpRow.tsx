@@ -9,6 +9,7 @@ import {
   CHILD_ARROW_CLASS,
   CHILD_DISMISS_NOUN,
   CHILD_DISMISS_TITLE,
+  CHILD_DISMISS_VERB,
   CHILD_OPEN_TITLE,
   CHILD_QUIET_SHELL_TITLE,
   CHILD_RESTED_DOT_CLASS,
@@ -240,8 +241,8 @@ export function ChildOpRow({
           type="button"
           onClick={onDismiss}
           onMouseDown={(e) => e.stopPropagation()}
-          title={CHILD_DISMISS_TITLE}
-          aria-label={`Dismiss ${CHILD_DISMISS_NOUN[kind]}: ${label}`}
+          title={CHILD_DISMISS_TITLE[kind]}
+          aria-label={`${CHILD_DISMISS_VERB[kind]} ${CHILD_DISMISS_NOUN[kind]}: ${label}`}
           className="shrink-0 rounded-sm p-0.5 text-muted/45 outline-none transition-colors hover:text-fg focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
         >
           <X size={11} />

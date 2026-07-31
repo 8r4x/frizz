@@ -73,7 +73,20 @@ function compactCount(n: number | undefined): string | undefined {
 // affordance, which meant the rail and the queue card showed the same phantom child and offered no way
 // to retire it. WHICH rows may carry it is a property of the ROW (a direct child with an id — see
 // lib/dismissChildOp.ts), never of the surface it happens to be rendered on.
-export const CHILD_DISMISS_TITLE = "Dismiss — stop tracking this finished operation"
+//
+// The tooltip is per-KIND because the two kinds can promise different things, and the × promising a kill
+// it cannot deliver is the exact complaint that made it a real stop (maintainer 2026-07-30: "The fucking
+// X button didn't actually kill the sub-agent. it removed it from my UI, but then I click on the title
+// and it's still running."). A sub-AGENT on a broker-backed thread has a real provider stop control, so
+// its × leads with "stop"; a background SHELL has none — fray learns it exists by reading the worker's
+// transcript and holds no handle on the process — so its × only ever claims to clear the row. Where an
+// agent's runtime has no stop either (a tmux thread, a codex thread), the row cannot know that, so the
+// SERVER says so in the toast rather than the tooltip guessing.
+export const CHILD_DISMISS_TITLE = {
+  AGENT: "Stop — end this sub-agent and clear the row",
+  SHELL: "Clear the row — fray can't stop a background shell",
+} as const
+export const CHILD_DISMISS_VERB = { AGENT: "Stop", SHELL: "Clear" } as const
 export const CHILD_DISMISS_NOUN = { AGENT: "sub-agent", SHELL: "background shell" } as const
 
 // ── LIVENESS FILTERS — the surfaces' policies, in ONE place ──────────────────────────────────────

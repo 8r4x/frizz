@@ -525,6 +525,14 @@ export function createRouter(ctx: AppContext) {
     const blocked = (note: string | null) => ({ sessionId: null, note })
     const info = ctx.tailer.subAgent(slug, id)
     if (!info || info.state !== "running") return blocked(null)
+    // A background SHELL shares the same op map and the same × as a sub-agent, but `stopTask` is a
+    // TASK control — there is no task behind a `Bash run_in_background`, and fray holds no pid for it
+    // (it learns the shell exists by folding the worker's transcript). Say THAT rather than fall
+    // through to the taskId branch below, whose "did not publish the task identifier" reads like a
+    // provider glitch instead of the categorical limit it is.
+    if (ctx.tailer.backgroundShell?.(slug, id)) {
+      return blocked("Fray tracks a background shell by reading the worker's transcript and holds no handle on its process, so it can't be stopped from here.")
+    }
     const row = ctx.storage.getSession(slug)
     if (!row) return blocked(null)
     if (row.backend === "codex") {
@@ -810,15 +818,47 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // Manual dismiss (the × on a live sub-agent / background-shell row): retire the op from tracking as
-    // if its terminal signal had arrived. The escape hatch for a finished op whose completion was never
-    // recorded while its parent stays alive — the residual the `stopped` recovery cannot reach. Not a
-    // process kill (fray does not own the child processes); it clears the phantom row + its Done-warning
-    // count. `dismissed:false` when the id is not live (already gone / unknown) — the UI just refreshes.
-    dismissBackgroundOp: mutation({
+    // THE × ON A LIVE CHILD ROW. It means STOP, and it now tries to actually stop.
+    //
+    // It used to mean only "retire this op from tracking", which is what the maintainer hit
+    // (2026-07-30): "The fucking X button didn't actually kill the sub-agent. it removed it from my UI,
+    // but then I click on the title and it's still running." A control that clears the row while the
+    // work keeps burning tokens is worse than no control — it hides live work behind a gesture that
+    // reads as a kill. So the order here is stop FIRST, retire second:
+    //
+    //  1. STOPPABLE (a broker-backed claude row's live child with a task id) → the real provider
+    //     control, `Query.stopTask`, awaited to the daemon's answer. Then retire, so the row leaves
+    //     every live surface on this click's own board frame instead of waiting for the fold.
+    //  2. The stop THREW → do NOT retire. A failed stop means the child is still working, and hiding
+    //     it is exactly the bug above; the row stays and the error reaches the operator.
+    //  3. NOT stoppable (a tmux claude thread, a codex thread, a background shell, a stale/finished
+    //     op) → retire anyway, because clearing a phantom is the escape hatch the × was built for and
+    //     is still the only way to unstick a finished op whose completion was never recorded. But
+    //     return the REASON, so the client can say plainly that the work may still be running rather
+    //     than letting the row vanish silently. `note` is null when there is nothing worth saying —
+    //     a stale/gone op is already finished as far as anything can tell.
+    //
+    // `dismissed:false` when the id was not live to retire (already gone / unknown) — the UI refreshes.
+    stopBackgroundOp: mutation({
       input: z.object({ slug: ThreadSlug, id: z.string() }).strict(),
-      output: z.object({ dismissed: z.boolean() }),
-      handler: async ({ input }) => ({ dismissed: ctx.tailer.dismissOp?.(input.slug, input.id) ?? false }),
+      output: z.object({ stopped: z.boolean(), dismissed: z.boolean(), note: z.string().nullable() }),
+      handler: async ({ input }) => {
+        const target = subAgentStoppable(input.slug, input.id)
+        let stopped = false
+        let note: string | null = null
+        if (target.sessionId !== null) {
+          const bridge = ctx.claudeBroker
+          // subAgentStoppable already required the broker; this is the type narrowing, not a policy.
+          if (!bridge) throw new Error("Claude session broker is unavailable; cannot stop this sub-agent")
+          await bridge.stopSubAgent({ threadSlug: input.slug, sessionId: target.sessionId, taskId: target.taskId })
+          stopped = true
+        } else {
+          note = target.note
+        }
+        const dismissed = ctx.tailer.dismissOp?.(input.slug, input.id) ?? false
+        ctx.board.refresh()
+        return { stopped, dismissed, note }
+      },
     }),
 
     dispatch: mutation({

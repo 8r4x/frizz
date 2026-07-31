@@ -22,7 +22,13 @@ import type { Tailer } from "./tailer.ts"
 
 type SubAgentInfo = ReturnType<Tailer["subAgent"]>
 
-function harness(subAgent: (slug: string, id: string) => SubAgentInfo) {
+function harness(subAgent: (slug: string, id: string) => SubAgentInfo, opts: {
+  // Present ⇒ the id resolves as a background SHELL. Only stopBackgroundOp's tests need this; the
+  // steer/stop tests never reach the shell branch because their ids resolve as agents.
+  backgroundShell?: () => { command?: string; outputFile?: string; state: "running" | "done" } | undefined
+  // Make the real provider stop FAIL, to pin that a failed stop must not retire the row.
+  stopThrows?: Error
+} = {}) {
   const dir = mkdtempSync(join(tmpdir(), "fray-subagent-steer-"))
   const project: Project = { dir, id: "steer", name: "test", label: "test", stateDir: dir, cwdSlug: "test" }
   const storage = createStorage(join(dir, "ui.db"))
@@ -35,6 +41,7 @@ function harness(subAgent: (slug: string, id: string) => SubAgentInfo) {
     start: async () => {},
     stop: async () => {},
   }
+  const dismissals: { slug: string; id: string }[] = []
   const tailer: Tailer = {
     get: () => undefined,
     foreignIds: () => [],
@@ -43,6 +50,11 @@ function harness(subAgent: (slug: string, id: string) => SubAgentInfo) {
     start: () => {},
     stop: () => {},
     tick: () => {},
+    dismissOp: (slug: string, id: string) => {
+      dismissals.push({ slug, id })
+      return true
+    },
+    ...(opts.backgroundShell ? { backgroundShell: opts.backgroundShell } : {}),
   }
   const steers: { threadSlug: string; sessionId: string; subAgentId: string; text: string }[] = []
   const stops: { threadSlug: string; sessionId: string; taskId: string }[] = []
@@ -57,11 +69,12 @@ function harness(subAgent: (slug: string, id: string) => SubAgentInfo) {
         steers.push(input)
       },
       stopSubAgent: async (input: { threadSlug: string; sessionId: string; taskId: string }) => {
+        if (opts.stopThrows) throw opts.stopThrows
         stops.push(input)
       },
     },
   } as unknown as AppContext
-  return { dir, ctx, storage, router: createRouter(ctx), steers, stops }
+  return { dir, ctx, storage, router: createRouter(ctx), steers, stops, dismissals }
 }
 
 function row(slug: string, over: Partial<SessionRow> = {}): SessionRow {
@@ -193,6 +206,87 @@ test("subAgentStop refuses runtimes without a real provider stop path", async ()
     assert.deepEqual(noId.stops, [])
   } finally {
     rmSync(noId.dir, { recursive: true, force: true })
+  }
+})
+
+// ── THE × ON A CHILD ROW (stopBackgroundOp) ─────────────────────────────────────────────────────
+//
+// The × used to ONLY retire tracking, which is what the maintainer hit (2026-07-30): "The fucking X
+// button didn't actually kill the sub-agent. it removed it from my UI, but then I click on the title
+// and it's still running." These pin the three branches that make the control honest again — a real
+// stop where one exists, no silent retire when the stop failed, and a stated REASON when the runtime
+// has no stop at all. The reason matters as much as the kill: a row that vanishes while the work
+// keeps burning tokens is the bug, whether or not fray could have prevented it.
+
+test("the × STOPS a broker-backed child for real, then retires the row", async () => {
+  const h = harness(() => RUNNING_DIRECT)
+  try {
+    seed(h.storage, "t")
+    const result = await h.router.stopBackgroundOp.handler({ input: { slug: "t", id: "toolu_child" } })
+    assert.deepEqual(result, { stopped: true, dismissed: true, note: null })
+    assert.deepEqual(h.stops, [{ threadSlug: "t", sessionId: "sid-t", taskId: "agent-runtime-child" }], "the provider control ran")
+    assert.deepEqual(h.dismissals, [{ slug: "t", id: "toolu_child" }], "and only then did the row leave tracking")
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true })
+  }
+})
+
+test("a FAILED stop leaves the row on the board — hiding live work is the bug this replaced", async () => {
+  const h = harness(() => RUNNING_DIRECT, { stopThrows: new Error("broker daemon is not holding this session") })
+  try {
+    seed(h.storage, "t")
+    await assert.rejects(
+      () => h.router.stopBackgroundOp.handler({ input: { slug: "t", id: "toolu_child" } }),
+      /broker daemon is not holding this session/,
+    )
+    assert.deepEqual(h.dismissals, [], "a child that may still be running must keep its row")
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true })
+  }
+})
+
+test("a runtime with no stop path still clears the row, but SAYS the work may survive", async () => {
+  // A tmux claude thread — the maintainer's own repro. Its sub-agents run inside the CLI process and
+  // there is no per-child control channel at all, so the × can only clear the row. It must not do that
+  // silently: the note is the whole difference between an honest control and the original complaint.
+  const tmux = harness(() => RUNNING_DIRECT)
+  try {
+    seed(tmux.storage, "t", { claudeRuntime: null })
+    const result = await tmux.router.stopBackgroundOp.handler({ input: { slug: "t", id: "toolu_child" } })
+    assert.equal(result.stopped, false)
+    assert.equal(result.dismissed, true, "the phantom-row escape hatch survives")
+    assert.match(result.note ?? "", /needs the Claude session broker/)
+    assert.deepEqual(tmux.stops, [], "nothing was sent to a bridge that could not carry it")
+  } finally {
+    rmSync(tmux.dir, { recursive: true, force: true })
+  }
+
+  // A background SHELL gets its own sentence rather than the taskId branch's "did not publish the task
+  // identifier", which reads like a provider glitch instead of the categorical limit it is.
+  const shell = harness(
+    () => ({ outputFile: "/tmp/sh.log", state: "running", direct: false }),
+    { backgroundShell: () => ({ command: "npm run dev", outputFile: "/tmp/sh.log", state: "running" as const }) },
+  )
+  try {
+    seed(shell.storage, "t")
+    const result = await shell.router.stopBackgroundOp.handler({ input: { slug: "t", id: "toolu_sh" } })
+    assert.equal(result.stopped, false)
+    assert.equal(result.dismissed, true)
+    assert.match(result.note ?? "", /holds no handle on its process/)
+  } finally {
+    rmSync(shell.dir, { recursive: true, force: true })
+  }
+})
+
+test("the × on an already-settled op is a quiet retire — no stop attempt, and nothing worth saying", async () => {
+  const h = harness(() => ({ outputFile: "/tmp/child.jsonl", state: "stale", direct: true, taskId: "agent-runtime-child" }))
+  try {
+    seed(h.storage, "t")
+    const result = await h.router.stopBackgroundOp.handler({ input: { slug: "t", id: "toolu_child" } })
+    assert.deepEqual(result, { stopped: false, dismissed: true, note: null }, "a finished op needs no warning banner")
+    assert.deepEqual(h.stops, [])
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true })
   }
 })
 

@@ -142,12 +142,17 @@ test("a quiet SHELL breathes instead of going flat, on the ops row", () => {
 test("the dismiss × exists only when onDismiss is supplied, and sits directly after the title", () => {
   const withX = render({ density: "sheet", onOpen: () => {}, onDismiss: () => {}, startedAt: TWELVE_MIN_AGO })
   assert.match(withX, /data-op-row/)
-  assert.match(withX, /aria-label="Dismiss sub-agent: Audit the drawer ops strip"/)
-  assert.match(withX, /title="Dismiss — stop tracking this finished operation"/)
-  assert.match(render({ density: "sheet", kind: "SHELL", onDismiss: () => {} }), /aria-label="Dismiss background shell: Audit the drawer ops strip"/)
+  assert.match(withX, /aria-label="Stop sub-agent: Audit the drawer ops strip"/)
+  assert.match(withX, /title="Stop — end this sub-agent and clear the row"/)
+  // A background SHELL says CLEAR, not stop: fray holds no handle on its process, so the × on that row
+  // only ever promises to clear the line. Pinning the difference keeps the agent copy from being
+  // pasted onto a control that cannot honour it.
+  const shell = render({ density: "sheet", kind: "SHELL", onDismiss: () => {} })
+  assert.match(shell, /aria-label="Clear background shell: Audit the drawer ops strip"/)
+  assert.match(shell, /title="Clear the row — fray can&#x27;t stop a background shell"/)
   // ORDER is the point of the 2026-07-27 move: title → × → reading. At the far right, past the
   // reading, the × read as too subtle to find.
-  const order = ["Audit the drawer ops strip", "Dismiss sub-agent", "Working for 12m"].map((needle) => withX.indexOf(needle))
+  const order = ["Audit the drawer ops strip", "Stop sub-agent", "Working for 12m"].map((needle) => withX.indexOf(needle))
   assert.ok(order.every((i) => i >= 0) && order[0] < order[1] && order[1] < order[2], `title → × → reading, got ${order}`)
   // …and it is visible at rest, not revealed by a hover the reader has to guess at.
   assert.doesNotMatch(withX, /opacity-0/)
@@ -167,12 +172,12 @@ test("every density renders the identical dismiss ×, in the same place on the l
   for (const density of DENSITIES) {
     const html = render({ density, onOpen: () => {}, onDismiss: () => {}, startedAt: TWELVE_MIN_AGO })
     assert.match(html, /data-op-row/, `${density} must mark itself as a row carrying the ×`)
-    assert.match(html, /aria-label="Dismiss sub-agent: Audit the drawer ops strip"/, `${density} must render the × with the shared label`)
-    assert.match(html, /title="Dismiss — stop tracking this finished operation"/, `${density} × carries the shared tooltip`)
+    assert.match(html, /aria-label="Stop sub-agent: Audit the drawer ops strip"/, `${density} must render the × with the shared label`)
+    assert.match(html, /title="Stop — end this sub-agent and clear the row"/, `${density} × carries the shared tooltip`)
     assert.doesNotMatch(html, /opacity-0/, `${density} × is visible at rest, never hover-revealed`)
     // title → × → reading on every surface, the rail included: its duration used to ride INSIDE the
     // label button, which would have put the × on the far side of the reading.
-    const order = ["Audit the drawer ops strip", "Dismiss sub-agent", "Working for 12m"].map((needle) => html.indexOf(needle))
+    const order = ["Audit the drawer ops strip", "Stop sub-agent", "Working for 12m"].map((needle) => html.indexOf(needle))
     assert.ok(order.every((i) => i >= 0) && order[0] < order[1] && order[1] < order[2], `${density}: title → × → reading, got ${order}`)
   }
 })
