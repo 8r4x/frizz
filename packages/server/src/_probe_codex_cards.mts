@@ -1,6 +1,6 @@
 // Runs the REAL projectCodexTranscript over REAL rollout files and reports the tool cards it
 // produces, so the "write_stdin renders as its own card" claim is measured, not inferred from
-// reading the parser. Usage: nub ui/packages/server/src/_probe_codex_cards.mts [days] [topN]
+// reading the parser. Usage: nub packages/server/src/_probe_codex_cards.mts [days] [topN]
 import { readFileSync, readdirSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"

@@ -8,16 +8,37 @@ The UI has ZERO intelligence: all orchestration wisdom lives in the user-editabl
 
 ## Repo layout
 
+**The repo root IS the published `frayui` package** — root `package.json` is the manifest, `src/` is
+the launcher, `npm publish` runs from the root, and the root `README.md` is the npmjs.com page.
+
 | Path | What it is |
 | --- | --- |
-| [`packages/`](packages/) | The app — `shared`, `rpc`, `server`, `web`, `cli` (see **Packages** below). |
+| [`src/`](src/) | The `frayui` launcher itself — artifact build/promote/verify, port + lock, browser launch. |
+| [`packages/`](packages/) | The app workspace — `shared`, `rpc`, `server`, `web` (see **Packages** below). |
 | [`board/`](board/) | The zero-dep `.fray/` board parser + thread writer. The server SHELLS OUT to it; never re-implement it. |
 | [`cc-worker/`](cc-worker/) | The Claude Code plugin every dispatched agent loads: worker contract seed, sub-agent profiles, hooks. |
 | [`monitors/`](monitors/) | Portable CI/PR/review watchers, synced into `cc-worker/skills/gh/scripts/`. |
-| [`scripts/`](scripts/) | Dev + verification tooling (`seed-*` fixtures, `verify-*` harnesses, `shot.mjs`). |
+| [`scripts/`](scripts/) | Packaging (`prepare-package.mjs`, `build-*.mjs`) + dev tooling (`seed-*`, `verify-*`, `shot.mjs`). |
 
 `board/` used to be `cc/scripts/fray/` — `cc/` was the Claude Code **plugin** port back when fray
 itself shipped as an agent plugin rather than an app. The plugin is retired; the parser is not.
+
+## Developing fray
+
+```sh
+nub install
+nub run fray-dev:install     # one-time: ~/.local/bin/fray-dev -> this checkout's launcher source
+```
+
+Then from any Git repo: `fray-dev` (foreground; Ctrl-C stops only that workspace's server).
+`fray-dev /path/to/repo` selects a repository, `--no-app` prints the URL instead of opening a browser,
+`--app` opts into the legacy dedicated window, `--status` reports workspace/port/supervisor PID, and
+`--stop` stops the UI server while agent tmux sessions survive. `fray-dev:check` verifies the shim
+without changing it; `fray-dev:uninstall` removes only that owned shim. Use
+`FRAY_BIN_DIR=/another/bin` to install elsewhere.
+
+Gates: `pnpm run typecheck` and `pnpm test`. CI (`.github/workflows/ci.yml`) runs only the checks that
+need no install, tmux, or provider CLI; the full suite is local-only by design.
 
 ## Invariants
 
@@ -66,10 +87,11 @@ itself shipped as an agent plugin rather than an app. The plugin is retired; the
   `tailer.ts` (JSONL), `dispatch.ts` (thread file create + prompt compose + spawn),
   `settings.ts`.
 - `web` — React 19 + Vite 8 + Tailwind v4 + valtio + TanStack Query + xterm.js.
-- `cli` — the `frayui` bin published to npm, plus the source-backed `fray-dev` shim: canonicalize
-  cwd's Git root, health-check/reuse its detached supervisor, atomically allocate/persist an isolated
-  port, then open the URL. Locks and logs live under `~/.fray/projects/<id>/`; `src/browser.ts` is
-  vendored from Gluon via gent. See **CLI launcher** below.
+
+Plus root `src/` — the `frayui` launcher (NOT a workspace package): canonicalize cwd's Git root,
+health-check/reuse its detached supervisor, atomically allocate/persist an isolated port, then open the
+URL. Locks and logs live under `~/.fray/projects/<id>/`; `src/browser.ts` is vendored from Gluon via
+gent. See **CLI launcher** below.
 
 ## CLI launcher
 
