@@ -82,7 +82,7 @@ export function InteractionStack({
       <div
         data-interactions-error
         role="alert"
-        className={`${BLOCK_RADIUS} border border-amber-500/35 bg-amber-500/[0.07] px-3.5 py-3 text-[12px] text-amber-100 ${className}`}
+        className={`${BLOCK_RADIUS} border border-amber-500/35 bg-amber-500/[0.07] p-4 text-[12px] text-amber-100 ${className}`}
       >
         <div className="font-medium">Pending requests could not be loaded.</div>
         <div className="mt-1 break-words text-amber-100/75">{errorText(query.error)}</div>

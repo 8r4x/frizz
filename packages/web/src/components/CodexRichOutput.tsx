@@ -37,7 +37,7 @@ function Card({ directive, icon, title, meta, children }: { directive: CodexHost
   return (
     <section
       data-codex-directive={directive.name}
-      className={`min-w-0 ${BLOCK_RADIUS} border border-border bg-panel-2/75 px-3 py-2`}
+      className={`min-w-0 ${BLOCK_RADIUS} border border-border bg-panel-2/75 p-4`}
     >
       <div className="flex min-w-0 items-center gap-2">
         <span className="flex h-4 w-4 shrink-0 items-center justify-center text-muted" aria-hidden>{icon}</span>
@@ -217,7 +217,7 @@ export function MermaidDiagram({ source }: { source: string }) {
 
   if (state.error) {
     return (
-      <section data-mermaid-state="error" className={`${BLOCK_RADIUS} border border-border bg-panel-2/75 px-3 py-2.5`}>
+      <section data-mermaid-state="error" className={`${BLOCK_RADIUS} border border-border bg-panel-2/75 p-4`}>
         <div className="text-[12px] font-medium text-fg">Diagram unavailable</div>
         <div className="mt-1 text-[11px] text-muted">{state.error}</div>
         <pre className="mt-2 overflow-x-auto whitespace-pre-wrap rounded-md bg-bg p-2 font-mono-keep text-[11px] text-muted">{source}</pre>
@@ -225,5 +225,5 @@ export function MermaidDiagram({ source }: { source: string }) {
     )
   }
   if (!state.html) return <div data-mermaid-state="loading" role="status" aria-label="Rendering diagram" className={`h-24 animate-pulse ${BLOCK_RADIUS} bg-panel-2`} />
-  return <div data-mermaid-state="ready" className={`overflow-x-auto ${BLOCK_RADIUS} border border-border bg-panel-2/75 p-3 [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full`} dangerouslySetInnerHTML={{ __html: state.html }} />
+  return <div data-mermaid-state="ready" className={`overflow-x-auto ${BLOCK_RADIUS} border border-border bg-panel-2/75 p-4 [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full`} dangerouslySetInnerHTML={{ __html: state.html }} />
 }

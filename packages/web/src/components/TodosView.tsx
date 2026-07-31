@@ -539,7 +539,7 @@ function BoardErrorsBanner({ board }: { board: BoardSnapshot | null }) {
   const legacy = board?.errors ?? []
   if (items.length === 0 && legacy.length === 0) return null
   return (
-    <div className={`mb-6 ${BLOCK_RADIUS} border border-amber-500/25 bg-amber-500/[0.06] px-3.5 py-2.5 text-[12px] text-amber-200/90`}>
+    <div className={`mb-6 ${BLOCK_RADIUS} border border-amber-500/25 bg-amber-500/[0.06] px-4 py-2.5 text-[12px] text-amber-200/90`}>
       <div className="font-medium mb-0.5">Board errors</div>
       {items.length > 0
         ? items.slice(0, 6).map((it, i) => (
@@ -632,7 +632,7 @@ function IntermediateSummary({ toolCount, stepCount, onExpand }: { toolCount: nu
       onClick={onExpand}
       onMouseDown={(e) => e.preventDefault()}
       aria-label={`Expand ${summary} of intermediate agent activity`}
-      className={`petite-caps group flex w-full items-center gap-2 ${BLOCK_RADIUS} border border-border/60 bg-panel-2/40 px-3 py-2 text-left text-[12px] text-muted outline-none transition-colors hover:border-border hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60`}
+      className={`petite-caps group flex w-full items-center gap-2 ${BLOCK_RADIUS} border border-border/60 bg-panel-2/40 px-4 py-2 text-left text-[12px] text-muted outline-none transition-colors hover:border-border hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60`}
     >
       <ChevronsUpDown aria-hidden="true" size={13} className="shrink-0 opacity-70 transition-opacity group-hover:opacity-100" />
       <span className="tabular-nums">{summary}</span>

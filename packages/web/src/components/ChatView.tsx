@@ -375,7 +375,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
       {q.transportFallback && (
         <div
           data-transcript-sync-fallback
-          className={`mx-6 mt-3 flex flex-wrap items-center gap-2.5 ${BLOCK_RADIUS} border border-border-strong bg-panel-2 px-3 py-2 text-[12px]`}
+          className={`mx-6 mt-3 flex flex-wrap items-center gap-2.5 ${BLOCK_RADIUS} border border-border-strong bg-panel-2 px-4 py-2.5 text-[12px]`}
           title={q.transportFallback.kind === "payload-too-large"
             ? `Live payload ${q.transportFallback.actualBytes} bytes; socket limit ${q.transportFallback.maxBytes} bytes`
             : `Transcript read budget reached (${q.transportFallback.scope}); retry after about ${q.transportFallback.retryAfterMs}ms`}
@@ -1168,7 +1168,7 @@ function VirtualizedThreadTranscript({
             ) : row.kind === "transport-fallback" ? (
               transportFallback ? <div className="px-6 pt-3"><div
                 data-transcript-sync-fallback
-                className={`flex flex-wrap items-center gap-2.5 ${BLOCK_RADIUS} border border-border-strong bg-panel-2 px-3 py-2 text-[12px]`}
+                className={`flex flex-wrap items-center gap-2.5 ${BLOCK_RADIUS} border border-border-strong bg-panel-2 px-4 py-2.5 text-[12px]`}
                 title={transportFallback.kind === "payload-too-large"
                   ? `Live payload ${transportFallback.actualBytes} bytes; socket limit ${transportFallback.maxBytes} bytes`
                   : `Transcript read budget reached (${transportFallback.scope}); retry after about ${transportFallback.retryAfterMs}ms`}
@@ -3117,7 +3117,7 @@ function AnswersCard({ answers, queued, sourceId }: { answers: PairedAnswer[]; q
   return (
     <div data-fray-msg={sourceId} className={`group/msg relative self-end flex w-full max-w-[85%] flex-col items-end ${queued ? "opacity-50" : ""}`}>
       <MessageDebugId sourceId={sourceId} side="left" />
-      <div className={`w-full min-w-0 ${BLOCK_RADIUS} rounded-br-sm border border-border-strong bg-elevated px-3.5 py-3`}>
+      <div className={`w-full min-w-0 ${BLOCK_RADIUS} rounded-br-sm border border-border-strong bg-elevated p-4`}>
         <CardHead icon={ListChecks} label="Answers" />
         <CardContent>
           <div className="flex flex-col gap-2.5">
@@ -3199,7 +3199,7 @@ export function BlockFile({ path }: { path: string }) {
   return (
     <button
       type="button"
-      className={`local-file-action inline-flex max-w-full items-center gap-1.5 ${BLOCK_RADIUS} border border-border bg-panel-2 px-2.5 py-1.5 text-left align-top no-underline hover:border-accent`}
+      className={`local-file-action inline-flex max-w-full items-center gap-1.5 ${BLOCK_RADIUS} border border-border bg-panel-2 px-3 py-1.5 text-left align-top no-underline hover:border-accent`}
       data-local-path={path}
       title={path}
     >
@@ -3272,7 +3272,7 @@ export function InlineVisualization({ file }: { file: string }) {
   }, [])
 
   if (available === false || !src) {
-    return <div role="status" className={`${BLOCK_RADIUS} border border-border bg-panel-2 px-3 py-2 text-[12px] text-muted`}>Visualization unavailable: <span className="font-mono-keep break-all">{file}</span></div>
+    return <div role="status" className={`${BLOCK_RADIUS} border border-border bg-panel-2 px-4 py-2.5 text-[12px] text-muted`}>Visualization unavailable: <span className="font-mono-keep break-all">{file}</span></div>
   }
   if (available === null) return <div role="status" className={`h-20 animate-pulse ${BLOCK_RADIUS} bg-panel-2`} aria-label={`Loading ${file}`} />
   return (
@@ -3777,7 +3777,7 @@ export function PendingAskCard({ ask, onTerminal }: { ask: PendingAsk; onTermina
                   // A non-interactive OPTION ROW (clearly display-only — no hover, no cursor-pointer).
                   // `bg-elevated`, one step above the card's own panel-2 fill — the same relationship the
                   // question card's chips have to their card, so a row reads as a row on every surface.
-                  <div key={j} className="rounded-md border border-border bg-elevated px-2.5 py-1.5 text-[12px] text-fg/80">
+                  <div key={j} className="rounded-md border border-border bg-elevated px-3 py-1.5 text-[12px] text-fg/80">
                     <span className="font-medium text-fg/90">{o.label}</span>
                     {o.description && <span className="text-muted/70"> — {o.description}</span>}
                   </div>

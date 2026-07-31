@@ -57,9 +57,10 @@ function ItemRow({ item }: { item: GithubWakeItem }) {
       )}
     </>
   )
-  // `-mx-2 px-2` lets the hover fill bleed into the card's own padding so the row reads as a full-width
-  // target, while the icon still starts on the card's content edge — the same x as the kind header's.
-  const shape = "-mx-2 flex items-center gap-1 rounded-md px-2 py-1 text-[12px] leading-5"
+  // `-mx-4 px-4` is the CARD'S OWN INSET negated and re-applied, so the hover fill bleeds exactly to the
+  // card edge and the row reads as a full-width target, while the icon still starts on the card's content
+  // edge — the same x as the kind header's. If the shell's padding moves, this moves with it.
+  const shape = "-mx-4 flex items-center gap-1 rounded-md px-4 py-1 text-[12px] leading-5"
   if (!item.url) return <div className={shape}>{body}</div>
   return (
     <a

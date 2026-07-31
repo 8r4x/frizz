@@ -41,17 +41,23 @@
      the transcript read as a pile of unrelated shapes was these disagreeing: a 16px signal card sat
      directly above a 6px tool card and an 8px image, and no two of them looked like the same product
      (maintainer 2026-07-31, on a shot of the GitHub wake card above the tool-batch bar: "we should
-     make the rendering consistent across all of these block-level elements. I like the new GitHub
-     notification with the big corner radius").
+     make the rendering consistent across all of these block-level elements").
 
-     16px is `rounded-2xl`, so JSX spells it with that Tailwind token and CSS spells it with this var;
+     12px is `rounded-xl`, so JSX spells it with that Tailwind token and CSS spells it with this var;
      they are the same number on purpose. `BLOCK_RADIUS` in TranscriptCard.tsx is the JSX half.
 
+     It shipped at 16px for a day and was too much (maintainer, same day: "that radius goes a little
+     overboard sometimes, especially with the tables looking pretty weird. It starts to impinge in
+     expanded view"). The impingement is the real defect and it is a PAIR of numbers, not one: an arc
+     eats the top-left of its own box, so a block whose content starts ~5px in — a table cell at
+     0.32em, a tool card's code body at 10px — had its first characters crowded by the curve. So the
+     radius came down AND every block's inset went up (cells to 0.4em/0.8em, tool headers and bodies
+     to 12px, code fences to 1em, cards to p-4). Change one of those without the other and the
+     crowding comes back.
+
      This governs OUTER containers only. Anything NESTED inside one — an option row in a question
-     card, a card's action button, a to-do row, an inline code chip — keeps the 6px control radius,
-     because TranscriptCard's shell is built on `cardRadius − buttonRadius == inset` and a nested
-     corner has to stay tighter than the corner containing it or the two stop reading as concentric. */
-  --block-radius: 16px;
+     card, a card's action button, a to-do row, an inline code chip — keeps the 6px control radius. */
+  --block-radius: 12px;
 }
 
 /* min-height (not height): the PAGE is the app's one scroll container — content taller than the
@@ -750,7 +756,7 @@ a[href] {
   background: var(--color-bg);
   border: 1px solid var(--color-border);
   border-radius: var(--block-radius);
-  padding: 0.7em 0.8em;
+  padding: 0.75em 1em;
   overflow-x: auto;
 }
 .md-body pre code {
@@ -853,7 +859,7 @@ a[href] {
   border: 0;
   border-right: 1px solid var(--color-border);
   border-bottom: 1px solid var(--color-border);
-  padding: 0.32em 0.55em;
+  padding: 0.4em 0.8em;
   text-align: left;
 }
 .md-body tr > *:last-child {

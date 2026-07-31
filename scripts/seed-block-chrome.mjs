@@ -39,13 +39,13 @@ const PROSE = `Here is what the block chrome has to hold together.
 
 > Every element the transcript sets off from the prose is one family.
 
-| Block | Today | Wanted |
+| Block | Before | Now |
 | --- | --- | --- |
-| Signal card | 16px | 16px |
-| Tool card | 6px | 16px |
+| Signal card | 16px | 12px |
+| Tool card | 6px | 12px |
 
 \`\`\`ts
-export const BLOCK_RADIUS = "rounded-2xl"
+export const BLOCK_RADIUS = "rounded-xl"
 \`\`\``
 
 const WAKE = formatGithubWakeSteer({
@@ -80,7 +80,7 @@ const records = [
   // A local image and a local non-image path render as their own block elements (BlockImage /
   // BlockFile), which nothing else in this thread exercises.
   text(11.5, `Here is the shot and the plan it came from.\n\n${projectDir}/attachments/block-radius-table.png\n\n${projectDir}/package.json`, "end_turn"),
-  text(12, "Landed the shared block radius on `main`.\n\n```done\n- Unified every transcript block on the card's 16px corner in [`diff.css`](https://github.com/acme/app).\n- `nub run typecheck` green.\n```"),
+  text(12, "Landed the shared block radius on `main`.\n\n```done\n- Unified every transcript block on the card's 12px corner in [`diff.css`](https://github.com/acme/app).\n- `nub run typecheck` green.\n```"),
   { ...user(13, `${WAKE}\n\n${wakeDeliveryToken("b".repeat(64))}`) },
   text(14, "One call is genuinely yours.\n\n```question\nShould the fenced code block keep its own tighter corner?\n\n- A. No — one radius everywhere (recommended: it is the whole point of the sweep)\n- B. Yes — a code fence is prose furniture, not a card\n```"),
 ]

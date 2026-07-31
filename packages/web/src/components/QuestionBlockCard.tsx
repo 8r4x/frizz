@@ -201,7 +201,7 @@ export function QuestionBlockCard({
               // resize-none + overflow-hidden hand height control to the auto-grow effect (no manual
               // drag handle, no inner scrollbar). Focus or content = the accent border (the selection
               // lives HERE now); the tinted bg marks an actual answer.
-              className={`col-span-full w-full resize-none overflow-hidden rounded-md border px-2.5 py-1.5 text-[12px] leading-snug text-fg/90 outline-none placeholder:text-muted/80 transition-colors ${
+              className={`col-span-full w-full resize-none overflow-hidden rounded-md border px-3 py-1.5 text-[12px] leading-snug text-fg/90 outline-none placeholder:text-muted/80 transition-colors ${
                 freetext.trim() ? "border-accent bg-accent/10" : "border-border bg-transparent hover:bg-panel-2 focus:border-accent"
               }`}
             />
@@ -267,7 +267,7 @@ function Chip({
       onClick={onClick}
       onMouseDown={(e) => e.preventDefault()}
       title={recTitle}
-      className={`text-left rounded-md border px-2.5 py-1.5 text-[12px] leading-snug outline-none transition-colors flex items-start gap-2 ${
+      className={`text-left rounded-md border px-3 py-1.5 text-[12px] leading-snug outline-none transition-colors flex items-start gap-2 ${
         selected
           ? "border-accent bg-accent/10 text-fg"
           : disabled

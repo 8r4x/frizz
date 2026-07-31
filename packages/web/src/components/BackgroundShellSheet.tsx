@@ -83,7 +83,7 @@ export function BackgroundShellSheet({
                       </button>
                     )}
                   </div>
-                  <pre data-background-shell-command className={`font-mono-keep overflow-x-auto whitespace-pre-wrap break-words ${BLOCK_RADIUS} border border-border bg-bg/75 px-3 py-2.5 text-[12px] leading-relaxed text-fg/85`}>{command || (query.isLoading ? "Loading…" : "Command unavailable for this background operation.")}</pre>
+                  <pre data-background-shell-command className={`font-mono-keep overflow-x-auto whitespace-pre-wrap break-words ${BLOCK_RADIUS} border border-border bg-bg/75 px-4 py-2.5 text-[12px] leading-relaxed text-fg/85`}>{command || (query.isLoading ? "Loading…" : "Command unavailable for this background operation.")}</pre>
                 </section>
                 <section>
                   <div className="mb-2 flex items-center gap-2">
@@ -92,7 +92,7 @@ export function BackgroundShellSheet({
                     {query.data?.truncated && <span className="text-[10.5px] text-muted/50">Showing latest 512 KB</span>}
                   </div>
                   {output ? (
-                    <pre data-background-shell-output className={`font-mono-keep min-h-40 whitespace-pre-wrap break-words ${BLOCK_RADIUS} border border-border bg-[#090b10] px-3 py-3 text-[12px] leading-relaxed text-fg/85`}>{output}</pre>
+                    <pre data-background-shell-output className={`font-mono-keep min-h-40 whitespace-pre-wrap break-words ${BLOCK_RADIUS} border border-border bg-[#090b10] px-4 py-3 text-[12px] leading-relaxed text-fg/85`}>{output}</pre>
                   ) : (
                     <div data-background-shell-output className={`flex min-h-40 items-center justify-center ${BLOCK_RADIUS} border border-border bg-[#090b10] px-4 text-center text-[12px] text-muted/60`}>
                       {state === "done" ? "No output was captured." : "No output yet."}

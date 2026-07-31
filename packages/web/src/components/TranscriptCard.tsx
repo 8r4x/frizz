@@ -50,20 +50,24 @@ export const QUEUE_WRAP = "[overflow-wrap:anywhere] [&_pre]:whitespace-pre-wrap 
 // The tone color lands on the icon AND the title together, as shadcn's `[&>svg]:text-current` does:
 // they are one object — more so now that the glyph sits at the opposite end of the row, where a
 // mismatched color would read as an unrelated badge rather than as the title's own mark.
+
 // The corner EVERY block-level element wears — this card, a tool card, a code fence, a table, an
-// image, a queue banner. It is the Tailwind half of `--block-radius` in styles.css (both 16px, and
+// image, a queue banner. It is the Tailwind half of `--block-radius` in styles.css (both 12px, and
 // they must stay equal): JSX imports this, CSS uses the var. Cards used to be the only thing rounded
-// this far, so a 16px signal card sat directly above a 6px tool card and an 8px image and no two of
-// them read as the same product (maintainer 2026-07-31: "we should make the rendering consistent
-// across all of these block-level elements. I like the new GitHub notification with the big corner
-// radius").
+// this far, so a signal card sat directly above a 6px tool card and an 8px image and no two of them
+// read as the same product (maintainer 2026-07-31: "we should make the rendering consistent across
+// all of these block-level elements").
+//
+// It went out at 16px first and that was too round (maintainer, same day: "goes a little overboard
+// sometimes… It starts to impinge in expanded view"). See the var in styles.css for why the fix is
+// this number AND every block's inset together, not the radius alone.
 //
 // OUTER containers only. A row or button NESTED inside one keeps the 6px control corner
-// (CARD_ACTION_RADIUS below) — that is the same concentric rule, not an exception to it.
-export const BLOCK_RADIUS = "rounded-2xl"
+// (CARD_ACTION_RADIUS below).
+export const BLOCK_RADIUS = "rounded-xl"
 // The same corner on the TOP two only — for a shell whose bottom corners are carried by something
 // else (the queue card's sticky header, which must not round its own bottom edge against the body).
-export const BLOCK_RADIUS_TOP = "rounded-t-2xl"
+export const BLOCK_RADIUS_TOP = "rounded-t-xl"
 
 export type CardTone = "neutral" | "attention" | "caution" | "danger"
 const CARD_TONES: Record<CardTone, { border: string; head: string }> = {
@@ -134,21 +138,29 @@ export function CardContent({ children }: { children: ReactNode }) {
 // about all three of fill (panel-2 / elevated / an accent or red wash), border color, and whether they
 // carried a shadow — which is what made nine sibling cards read as nine unrelated shapes.
 //
-// Radius and padding are ONE decision, not two, because together they set whether the action button's
-// corner relates to the card's. Two nested corners share an arc centre iff `cardRadius − buttonRadius ==
-// inset`, so with the inset uniform (p-3 + the 1px border = 13px) and the action on the standard 6px
-// control corner, the card wants ~19px. rounded-2xl (16px) lands 4.2px off — inside the ~2-3px band
-// where the eye stops reading the two corners as unrelated, and the closest an in-vocabulary token gets.
+// Radius and padding are ONE decision, not two, and which rule binds them depends on which is bigger.
+// This card spent a day at the CONCENTRIC solve — two nested corners share an arc centre iff
+// `cardRadius − buttonRadius == inset`, which at a 13px inset (p-3 + the 1px border) and the standard
+// 6px control corner wanted ~19px, and 16px was the closest in-vocabulary token. The maintainer then
+// asked for the opposite trade (2026-07-31): less radius, more inset, because 16px "goes a little
+// overboard" and the tight inset let the arc crowd the content ("it starts to impinge in expanded
+// view"). That inverts the geometry — at p-4 (a 17px inset) and a 12px corner the solve runs NEGATIVE,
+// so there is no button radius that could be concentric with this card.
 //
-// The earlier shape — 16px padding on an 8px card — could not get there from any button radius: it put
-// the corners 18-21px apart, and the concentric solve wanted a SQUARE button, which the maintainer
-// rejected as "a little too pointy" (2026-07-31). Trimming the inset is what buys the roundness back;
-// it is the same lever, and the same arithmetic, as the composer's footer chip (Composer.tsx).
+// That is not a compromise, it is a different regime, and it is the one to reason in from here: once
+// the inset EXCEEDS the radius, the action sits entirely clear of the arc, the two corners never share
+// a corner region, and the eye reads them as independent rather than as mismatched. So the button keeps
+// the ordinary control corner (CARD_ACTION_RADIUS) and does NOT track this card's radius. Only go back
+// to the concentric solve if the inset ever drops below the radius again.
 //
-// The padding is uniform, so the bottom gap equals the sides. It reads deeper than an equal metric gap
-// under a text line would, because leading donates optical space that a solid filled button does not —
-// that asymmetry is exactly why an equal 12px used to look tight beside a 16px side gap, and why the
-// answer is a smaller uniform inset rather than a deeper bottom one.
+// The wider inset is also what makes the corner safe for the card's CONTENT: an arc eats the top-left
+// of its own box, so the same 12px/16px pairing is applied to every other block (styles.css
+// `--block-radius`, the tool cards in lib/diff/diff.css) rather than to this card alone.
+//
+// The padding stays UNIFORM, so the bottom gap equals the sides. It reads a touch deeper than an equal
+// metric gap under a text line would, because leading donates optical space that a solid filled button
+// does not — but the answer to that is not an asymmetric inset, it is that the whole card is now roomy
+// enough for the difference to stop registering.
 export function TranscriptCard({
   tone = "neutral",
   icon,
@@ -175,7 +187,7 @@ export function TranscriptCard({
 } & Omit<ComponentPropsWithoutRef<"div">, "children" | "className">) {
   const { border, head } = CARD_TONES[tone]
   return (
-    <div {...rest} className={`min-w-0 ${BLOCK_RADIUS} border ${border} bg-panel-2 p-3 ${className}`}>
+    <div {...rest} className={`min-w-0 ${BLOCK_RADIUS} border ${border} bg-panel-2 p-4 ${className}`}>
       <CardHead icon={icon} label={label} head={head} aside={aside} />
       {children != null && <CardContent>{children}</CardContent>}
     </div>
@@ -213,12 +225,12 @@ export const CARD_ACTION_EXPLAINER = "min-w-0 flex-1 text-[11px] leading-snug te
 // The ONLY departure is a genuinely secondary sibling standing beside the primary (the provider-fault
 // card's "Retry" next to "Sign in"), which stays outlined so the pair keeps a hierarchy.
 export const CARD_PRIMARY_BUTTON = "bg-fg px-2.5 py-1 text-bg hover:opacity-90"
-// The corner a card's action wears — the ordinary control radius, kept there ON PURPOSE. The card's
-// radius and padding are what were moved to make it read right against the corner (see the shell above);
-// tightening the BUTTON instead was tried first and rejected, because at a 17px inset the concentric
-// solve runs to a square and every step toward it just reads pointy without buying a visible
-// relationship. Do not re-derive this one on its own: it is the dependent term of `cardRadius −
-// buttonRadius == inset`, and changing it alone breaks a triple that is currently 4.2px from exact.
+// The corner a card's action wears — the ordinary control radius, and now an INDEPENDENT one. It used
+// to be the dependent term of `cardRadius − buttonRadius == inset`; at the current p-4 inset and 12px
+// card corner that solve runs negative, so the button no longer has a concentric target to hit and the
+// card's arc no longer reaches it (see the shell above). Squaring it off was tried under the old
+// geometry and rejected as "a little too pointy" (maintainer 2026-07-31), which is the other reason it
+// stays here. Do not re-derive it from the card's radius unless the inset drops back below it.
 export const CARD_ACTION_RADIUS = "rounded-md"
 // The same verb with the icon+label layout every card action uses. Cards differ only in what they pass
 // beyond this (shrink-0, a disabled treatment), never in the fill.
