@@ -1,10 +1,23 @@
-# fray-ui architecture (read this before touching any package)
+# fray architecture (read this before touching any package)
 
-fray-ui is a workspace-scoped orchestration surface for fray: a localhost server + web client
-(opened as a chromeless Chrome `--app=` window) showing a sidebar of `.fray/` threads and, for the
-selected thread, a live embedded Claude Code terminal. The UI has ZERO intelligence: all
-orchestration wisdom lives in the user-editable dispatch preamble (settings) and in the worker
-plugin (`../cc-worker/`). The full plan: `../plans/standalone-ui.md`.
+fray is a workspace-scoped orchestration surface: a localhost server + web client (a browser tab by
+default) showing a sidebar of threads and, for the selected thread, a live embedded agent terminal.
+The UI has ZERO intelligence: all orchestration wisdom lives in the user-editable dispatch preamble
+(settings), in the repo's own `FRAY.md`, and in the worker plugin (`cc-worker/`). The original plan:
+`plans/standalone-ui.md`.
+
+## Repo layout
+
+| Path | What it is |
+| --- | --- |
+| [`packages/`](packages/) | The app — `shared`, `rpc`, `server`, `web`, `cli` (see **Packages** below). |
+| [`board/`](board/) | The zero-dep `.fray/` board parser + thread writer. The server SHELLS OUT to it; never re-implement it. |
+| [`cc-worker/`](cc-worker/) | The Claude Code plugin every dispatched agent loads: worker contract seed, sub-agent profiles, hooks. |
+| [`monitors/`](monitors/) | Portable CI/PR/review watchers, synced into `cc-worker/skills/gh/scripts/`. |
+| [`scripts/`](scripts/) | Dev + verification tooling (`seed-*` fixtures, `verify-*` harnesses, `shot.mjs`). |
+
+`board/` used to be `cc/scripts/fray/` — `cc/` was the Claude Code **plugin** port back when fray
+itself shipped as an agent plugin rather than an app. The plugin is retired; the parser is not.
 
 ## Invariants
 
@@ -39,7 +52,7 @@ plugin (`../cc-worker/`). The full plan: `../plans/standalone-ui.md`.
   old ` ```question approval ` gate (one Approve button that sent on click) was dropped 2026-07-26;
   its token now degrades to a plain question so legacy transcripts still render.
   Answers compose into one follow-up numbered by ORIGINAL block position ("Answers:\n2. …"). The
-  contract lives in ui/WORKER_PROMPT.md + cc-worker's SKILL/deny-ask hook — keep all three aligned.
+  contract lives in packages/server/src/workerPrompt.ts + cc-worker's SKILL/deny-ask hook — keep all three aligned.
 
 ## Packages
 
@@ -53,10 +66,65 @@ plugin (`../cc-worker/`). The full plan: `../plans/standalone-ui.md`.
   `tailer.ts` (JSONL), `dispatch.ts` (thread file create + prompt compose + spawn),
   `settings.ts`.
 - `web` — React 19 + Vite 8 + Tailwind v4 + valtio + TanStack Query + xterm.js.
-- `cli` — canonical source-backed `fray` bin (`fray-ui` compatibility alias): canonicalize cwd's Git
-  root, health-check/reuse its detached dev supervisor, atomically allocate/persist an isolated port,
-  then open or focus the chromeless window. Locks and logs live under
-  `~/.fray/projects/<id>/`; `src/browser.ts` is vendored from Gluon via gent.
+- `cli` — the `frayui` bin published to npm, plus the source-backed `fray-dev` shim: canonicalize
+  cwd's Git root, health-check/reuse its detached supervisor, atomically allocate/persist an isolated
+  port, then open the URL. Locks and logs live under `~/.fray/projects/<id>/`; `src/browser.ts` is
+  vendored from Gluon via gent. See **CLI launcher** below.
+
+## CLI launcher
+
+Two entry points, deliberately distinct:
+
+- **`npx frayui`** (published package) runs directly from what it ships. `prepare-package.mjs`
+  stages the full runtime closure at prepack: `web-dist/` (built client), `runtime/board/` (the board
+  parser the server shells out to), and `runtime/cc-worker/` (the worker plugin dispatch loads).
+  `production.ts` points `FRAY_SCRIPTS_DIR` / `FRAY_WORKER_PLUGIN_DIR` at those. `runtime/` MUST
+  mirror the repo root, because cc-worker's shims reach back relatively (`../../board`).
+- **`fray-dev`** (`nub run fray-dev:install`) is source-backed at launch only: the shim holds an
+  absolute pointer to this checkout's CLI entrypoint. On each fresh launch it selects a
+  verified immutable artifact matching the current source fingerprint, reuses an identical global one,
+  or builds and promotes one. **The running server never watches the checkout and never runs HMR** —
+  edits do nothing until you stop fray and relaunch.
+
+State is keyed by a stable checkout UUID: an ordinary worktree keeps it in `git config --local fray.id`,
+each linked worktree in its private Git admin dir, so siblings stay isolated. Canonical real paths make
+a checkout opened through a symlink reuse the same instance. Managed repos use
+`tmux -L fray-repo-<UUID>`; `FRAY_TMUX_SOCKET` is an unmanaged escape hatch used verbatim.
+
+### Browser launch modes
+
+The default launch makes one standard OS request to open the localhost URL in the default browser; the
+browser decides which window receives it. fray does not scan, reuse, focus, or privately address tabs.
+
+`--app` preserves the legacy dedicated/chromeless window as an explicit opt-in. On macOS that window
+gets its own Dock name and icon: on first opt-in launch the launcher silently installs the fray PWA
+into the project's browser profile over CDP (`--remote-debugging-pipe` → `PWA.install` +
+`PWA.changeAppUserSettings(displayMode: standalone)`; windowless, ~3-4s, once per machine). Chrome then
+generates a real app-shim bundle at `~/Applications/Chrome Apps.localized/fray.app` and every launch
+goes through it. Why it works this way (all verified empirically on Chrome 150 / macOS):
+
+- A plain `--app=` window is owned by the Chrome browser process — the Dock shows "Google Chrome", no
+  launch flag changes it, and a hand-rolled `.app` that `exec`s Chrome loses its identity the moment
+  Chrome's Cocoa startup re-registers the process. Chrome's generated app-shim is the only mechanism
+  that yields an own Dock identity.
+- The CDP `PWA.*` domain is only exposed on `--remote-debugging-pipe` connections (port-based
+  websocket clients lack `AllowUnsafeOperations`), and a CDP install defaults the app to open-in-a-tab
+  — `changeAppUserSettings(displayMode: "standalone")` is the required second half.
+- Shim detection is stateless: scan shim `Info.plist`s for `CrAppModeShortcutURL` == the launch URL and
+  `CrAppModeUserDataDir` under the project profile. (Chrome's generated app id is NOT a reproducible
+  hash of the URL — don't try.)
+
+Failure at any opt-in app step falls back silently to a plain `--app` window.
+`packages/web/public/favicon.svg` is the canonical artwork; `nub scripts/generate-icons.mjs`
+regenerates its six tracked PNG derivatives (`--check` detects drift, `--refresh-app-icons` refreshes
+ICNS in idle shims). *Windows/Linux Dock branding is an unwired TODO:* Windows would set an
+`AppUserModelID` on a generated `.lnk`; Linux (X11) would pass `--class=fray` + a `.desktop` file whose
+`StartupWMClass` matches.
+
+### Running against a repo outside this monorepo
+
+Set `FRAY_SCRIPTS_DIR` to the board parser directory and `FRAY_WORKER_PLUGIN_DIR` to the `cc-worker`
+plugin directory. The published package does this for you.
 
 ## Conventions
 

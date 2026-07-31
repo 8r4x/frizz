@@ -2,9 +2,9 @@
 
 `monitors/` is Fray's canonical, dependency-free Node.js implementation of active GitHub CI and
 human-review waits. It requires only Node.js and a logged-in `gh`; it never reads or prints a token.
-The shipped copies in `codex/skills/fray-orchestrator/scripts/` and `cc-worker/skills/gh/scripts/`
-are generated from this directory by `node scripts/sync-portable-monitors.mjs`. Verify them without
-writing with `node scripts/sync-portable-monitors.mjs --check`.
+The shipped copies in `cc-worker/skills/gh/scripts/` are generated from this directory by
+`node scripts/sync-portable-monitors.mjs`. Verify them without writing with
+`node scripts/sync-portable-monitors.mjs --check`.
 
 Run an explicitly selected monitor, never a script found merely because its filename looks familiar:
 
