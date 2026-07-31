@@ -1646,8 +1646,9 @@ export function createRouter(ctx: AppContext) {
     }),
 
     // Provider subscription quota (5h + weekly rate-limit windows) for the sidebar status bar. Codex
-    // reads clean from the rollout JSONL fray already tails; Claude delegates to Claude Code's own
-    // non-interactive `/usage` command. Never throws — degrades to per-provider "unavailable".
+    // reads live from the app-server's `account/rateLimits/read`, falling back to the rollout JSONL
+    // fray already tails; Claude delegates to Claude Code's own non-interactive `/usage` command.
+    // Never throws — degrades to per-provider "unavailable".
     quota: query({
       input: z.object({ force: z.boolean().optional() }).strict().optional(),
       output: QuotaSnapshot,

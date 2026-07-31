@@ -1,12 +1,30 @@
 import { join } from "node:path"
 import { readdirSync, statSync, openSync, readSync, fstatSync, closeSync } from "node:fs"
+import { spawn } from "node:child_process"
 import type { ProviderQuota, QuotaWindow } from "@fray-ui/shared"
 import { defaultCodexHome } from "./codex.ts"
+// The SAME handshake identity the dispatch path uses, so the app-server sees one consistent client.
+import { CLIENT_INFO, CLIENT_CAPABILITIES } from "./codex-app-server.ts"
 
-// Read the Codex subscription quota (5-hour + weekly rate-limit windows) from the SAME rollout JSONL
-// files fray already tails — no credentials, no network. Every Codex `token_count` event carries a
-// `rate_limits` block that is ACCOUNT-GLOBAL (identical across concurrent sessions), so the freshest
-// one from the most-recently-written rollout is the whole account's live state:
+// The Codex subscription quota (5-hour + weekly rate-limit windows) has TWO sources, in this order:
+//
+//   1. LIVE — the app-server's `account/rateLimits/read`, which is what the Codex TUI itself renders.
+//      It answers for the account that is signed in RIGHT NOW.
+//   2. ROLLOUT TAIL — the `rate_limits` block on the last `token_count` event of the newest rollout
+//      JSONL. Free and offline-safe, but it is only a CACHE of whichever account last ran a turn.
+//
+// The fallback ordering is not cosmetic: rollouts carry NO account identity (verified — `session_meta`
+// has session_id/cwd/originator/cli_version/git and nothing about the account), so after `codex login`
+// switches accounts, every rollout on disk still describes the OLD one. That is exactly how fray came
+// to show "1% remaining" from an exhausted previous account while `codex` in a terminal reported a
+// fresh 100% (2026-07-31). Nothing local can re-attribute those files, so the live read has to be
+// primary and the tail only a degradation path for when the app-server can't be reached.
+
+// ---- source 2: the rollout tail ----
+//
+// Every Codex `token_count` event carries a `rate_limits` block that is ACCOUNT-GLOBAL (identical
+// across concurrent sessions of the same account), so the freshest one from the most-recently-written
+// rollout is that account's last known state:
 //
 //   {"type":"token_count","info":{…},"rate_limits":{
 //     "limit_id":"codex","plan_type":"pro",
@@ -88,17 +106,23 @@ function readTail(path: string): string {
   }
 }
 
+// Build a QuotaWindow from an already-normalized (usedPercent, minutes, resetsAt) triple. Label by
+// window LENGTH rather than trusting the primary/secondary names: 300 min = 5h, 10080 min = weekly;
+// anything else falls back to an hour count. usedPercent is 0..100 (remaining = 100 - usedPercent).
+function makeWindow(used: number | undefined, minutes: number | undefined, resetsAt: number | undefined): QuotaWindow | undefined {
+  if (used === undefined) return undefined
+  const key = minutes === 300 ? "5h" : minutes && minutes >= 10080 ? "weekly" : minutes ? `${Math.round(minutes / 60)}h` : "window"
+  const label = key === "weekly" ? "Weekly" : key
+  return { key, label, usedPercent: used, resetsAt }
+}
+
+const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined)
+
+// The rollout (snake_case) spelling of a window.
 function toWindow(raw: unknown): QuotaWindow | undefined {
   if (!raw || typeof raw !== "object") return undefined
   const w = raw as RawWindow
-  const used = typeof w.used_percent === "number" && Number.isFinite(w.used_percent) ? w.used_percent : undefined
-  if (used === undefined) return undefined
-  const minutes = typeof w.window_minutes === "number" ? w.window_minutes : undefined
-  // Label by window length: 300 min = 5h, 10080 min = weekly; anything else falls back to an hour count.
-  const key = minutes === 300 ? "5h" : minutes && minutes >= 10080 ? "weekly" : minutes ? `${Math.round(minutes / 60)}h` : "window"
-  const label = key === "weekly" ? "Weekly" : key
-  const resetsAt = typeof w.resets_at === "number" && Number.isFinite(w.resets_at) ? w.resets_at : undefined
-  return { key, label, usedPercent: used, resetsAt }
+  return makeWindow(num(w.used_percent), num(w.window_minutes), num(w.resets_at))
 }
 
 // Parse the LAST token_count event out of a rollout's raw text → its rate_limits, or undefined. Scans
@@ -130,19 +154,9 @@ export function parseCodexQuotaFromRollout(raw: string): ProviderQuota | undefin
   return undefined
 }
 
-// Short read-through memo — the rate_limits state changes only per turn and the newest rollout is small
-// to tail, but repeated 60s polls shouldn't re-walk the tree every time. Keyed by codexHome so distinct
-// homes (tests) never collide.
-const TTL_MS = 20_000
-const memo = new Map<string, { at: number; quota: ProviderQuota }>()
-
-// The Codex provider quota (RPC-facing). Walks the newest handful of rollouts, returns the freshest
-// rate_limits it can parse, and degrades to a neutral "unavailable" (never throws) when Codex has no
-// sessions yet or none recorded a rate_limits block.
-export function readCodexQuota(codexHome = defaultCodexHome()): ProviderQuota {
-  const now = Date.now()
-  const hit = memo.get(codexHome)
-  if (hit && now - hit.at < TTL_MS) return hit.quota
+// The rollout-derived quota, or a neutral "unavailable" when Codex has no sessions yet or none
+// recorded a rate_limits block. Never throws.
+export function readCodexQuotaFromRollouts(codexHome = defaultCodexHome()): ProviderQuota {
   let quota: ProviderQuota = { status: "unavailable", windows: [], detail: "No recent Codex session" }
   try {
     const rollouts: string[] = []
@@ -167,6 +181,160 @@ export function readCodexQuota(codexHome = defaultCodexHome()): ProviderQuota {
     }
   } catch {
     quota = { status: "unavailable", windows: [], detail: "Codex rollouts unreadable" }
+  }
+  return quota
+}
+
+// ---- source 1: the live app-server read ----
+//
+// `account/rateLimits/read` is the method the Codex TUI itself calls to paint its limits line, so it is
+// authoritative and always describes the CURRENTLY signed-in account. Its window fields are camelCase
+// (`usedPercent`, `windowDurationMins`, `resetsAt`) where the rollout's are snake_case — the two shapes
+// are otherwise the same, hence the separate reader below. Response, verified live against codex-cli
+// 0.146.0 on 2026-07-31:
+//
+//   {"result":{"rateLimits":{"limitId":"codex","planType":"pro",
+//     "primary":{"usedPercent":0,"windowDurationMins":10080,"resetsAt":1786130265},
+//     "secondary":null,"credits":{…}}, "rateLimitsByLimitId":{…}, "rateLimitResetCredits":{…}}}
+//
+// `rateLimitsByLimitId` additionally breaks the account down per model family; fray shows the account
+// aggregate, so only the top-level `rateLimits` is read.
+
+// The camelCase (app-server) spelling of a window.
+function toLiveWindow(raw: unknown): QuotaWindow | undefined {
+  if (!raw || typeof raw !== "object") return undefined
+  const w = raw as Record<string, unknown>
+  return makeWindow(num(w.usedPercent), num(w.windowDurationMins), num(w.resetsAt))
+}
+
+/** Parse an `account/rateLimits/read` result into a ProviderQuota. Pure; undefined if unusable. */
+export function parseCodexQuotaFromRateLimits(result: unknown): ProviderQuota | undefined {
+  if (!result || typeof result !== "object") return undefined
+  const rl = (result as Record<string, unknown>).rateLimits
+  if (!rl || typeof rl !== "object") return undefined
+  const r = rl as Record<string, unknown>
+  const windows = [toLiveWindow(r.primary), toLiveWindow(r.secondary)].filter((x): x is QuotaWindow => x !== undefined)
+  if (windows.length === 0) return undefined
+  const planType = typeof r.planType === "string" ? r.planType : undefined
+  return { status: "ok", planType, windows }
+}
+
+// One short-lived `codex app-server` (~0.7-0.9s measured end to end): initialize → initialized →
+// account/rateLimits/read → SIGKILL. Deliberately a fresh process rather than the project's dispatch
+// daemon: that daemon is per-project and only exists while threads run, whereas the sidebar chip polls
+// whether or not anything is dispatched. Bounded by `timeoutMs` and total — resolves undefined on a
+// missing binary, a signed-out account, a protocol change, or a hang, and the caller degrades to the
+// rollout tail.
+export function queryCodexRateLimits(
+  codexHome = defaultCodexHome(),
+  codexBin = "codex",
+  timeoutMs = 12_000,
+): Promise<ProviderQuota | undefined> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(codexBin, ["app-server"], {
+        stdio: ["pipe", "pipe", "ignore"],
+        env: { ...process.env, CODEX_HOME: codexHome },
+      })
+    } catch {
+      resolve(undefined)
+      return
+    }
+
+    let settled = false
+    const finish = (quota: ProviderQuota | undefined) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      try {
+        child.kill("SIGKILL")
+      } catch {
+        /* already gone */
+      }
+      resolve(quota)
+    }
+    const timer = setTimeout(() => finish(undefined), timeoutMs)
+
+    const send = (msg: object) => {
+      try {
+        child.stdin?.write(JSON.stringify(msg) + "\n")
+      } catch {
+        finish(undefined)
+      }
+    }
+
+    child.on("error", () => finish(undefined))
+    child.on("exit", () => finish(undefined))
+
+    // Line-framed JSON-RPC on stdout. Ignore every notification; we only care about our two replies.
+    let buf = ""
+    child.stdout?.on("data", (chunk: Buffer) => {
+      buf += chunk.toString("utf8")
+      // A stuck/garbage stream must not grow without bound.
+      if (buf.length > 4 * 1024 * 1024) buf = buf.slice(-64 * 1024)
+      let nl: number
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl)
+        buf = buf.slice(nl + 1)
+        if (!line.trim()) continue
+        let msg: Record<string, unknown>
+        try {
+          msg = JSON.parse(line) as Record<string, unknown>
+        } catch {
+          continue
+        }
+        if (msg.id === 1) {
+          // Handshake done: the app-server requires the `initialized` notification before it will
+          // serve account methods.
+          send({ jsonrpc: "2.0", method: "initialized" })
+          send({ jsonrpc: "2.0", id: 2, method: "account/rateLimits/read", params: {} })
+        } else if (msg.id === 2) {
+          finish(parseCodexQuotaFromRateLimits(msg.result))
+        }
+      }
+    })
+
+    send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { clientInfo: CLIENT_INFO, capabilities: CLIENT_CAPABILITIES },
+    })
+  })
+}
+
+// Short read-through memo. The live read spawns a process, so repeated 60s polls (and several browser
+// windows) must not each pay for one. Keyed by codexHome so distinct homes (tests) never collide.
+const TTL_MS = 20_000
+const memo = new Map<string, { at: number; quota: ProviderQuota }>()
+
+/** Test seam: drop the memo so a test can observe a fresh read. */
+export function resetCodexQuotaMemo(): void {
+  memo.clear()
+}
+
+// The Codex provider quota (RPC-facing): the live app-server reading when it can be had, else the
+// rollout tail. Never throws.
+export async function readCodexQuota(codexHome = defaultCodexHome(), codexBin = "codex"): Promise<ProviderQuota> {
+  const now = Date.now()
+  const hit = memo.get(codexHome)
+  if (hit && now - hit.at < TTL_MS) return hit.quota
+
+  let quota: ProviderQuota | undefined
+  try {
+    quota = await queryCodexRateLimits(codexHome, codexBin)
+  } catch {
+    quota = undefined
+  }
+  // The tail can only ever describe the account that last ran a turn, so label it: after an account
+  // switch it is the ONLY thing that can still show a stale number, and the popover should say so.
+  if (!quota) {
+    const fallback = readCodexQuotaFromRollouts(codexHome)
+    quota =
+      fallback.status === "ok"
+        ? { ...fallback, detail: "From the last local session — sign-in state unconfirmed" }
+        : fallback
   }
   memo.set(codexHome, { at: now, quota })
   return quota

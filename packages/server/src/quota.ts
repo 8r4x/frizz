@@ -2,15 +2,17 @@ import type { QuotaSnapshot, ProviderQuota } from "@fray-ui/shared"
 import { readCodexQuota } from "./backend/codex-quota.ts"
 import { readClaudeQuota } from "./backend/claude-quota.ts"
 
-// The polled provider-quota snapshot the sidebar status bar renders. Codex comes from the rollout JSONL
-// Fray already tails. Claude delegates to Claude Code's non-interactive `/usage` command so Claude Code
-// owns credential storage, token refresh, endpoint retries, and fallback behavior.
+// The polled provider-quota snapshot the sidebar status bar renders. Codex comes from the app-server's
+// live `account/rateLimits/read` (the rollout JSONL fray tails is only its offline fallback, since a
+// rollout cannot say which account wrote it). Claude delegates to Claude Code's non-interactive
+// `/usage` command so Claude Code owns credential storage, token refresh, endpoint retries, and
+// fallback behavior.
 //
 // FIXTURE SEAM: set FRAY_QUOTA_FIXTURE to one of the named states below to return deterministic data
 // instead of touching the live sources. This lets the UI be exercised (and screenshotted) across all
 // visual states without invoking a real provider CLI or reading real credentials.
 
-function fixture(name: string): QuotaSnapshot | undefined {
+async function fixture(name: string): Promise<QuotaSnapshot | undefined> {
   const hour = 3600
   const now = Math.floor(Date.now() / 1000)
   const claudeOk: ProviderQuota = {
@@ -50,9 +52,9 @@ function fixture(name: string): QuotaSnapshot | undefined {
       // is signed in yet has no window data, so the popover shows the failure detail + the recheck spinner.
       return { claude: { status: "unavailable", windows: [], detail: "Usage endpoint unreachable" }, codex: codexOk }
     case "codex-real":
-      // REAL Codex quota from the local rollout tail, with Claude stubbed unavailable so QA never
-      // invokes the user's Claude CLI. Proves the clean Codex path end-to-end in the UI.
-      return { claude: { status: "unavailable", windows: [], detail: "Live call disabled for QA" }, codex: readCodexQuota() }
+      // REAL Codex quota (live app-server read, rollout tail as fallback), with Claude stubbed
+      // unavailable so QA never invokes the user's Claude CLI. Proves the Codex path end-to-end in the UI.
+      return { claude: { status: "unavailable", windows: [], detail: "Live call disabled for QA" }, codex: await readCodexQuota() }
     default:
       return undefined
   }
@@ -63,7 +65,7 @@ export async function readQuota(opts: { claudeBin?: string; force?: boolean } = 
   // leaking into a real deploy can't silently paint fabricated quota numbers.
   const fx = process.env.FRAY_QUOTA_FIXTURE
   if (fx && process.env.NODE_ENV !== "production") {
-    const snap = fixture(fx)
+    const snap = await fixture(fx)
     if (snap) {
       console.warn(`[fray-ui] quota: serving FIXTURE "${fx}" (FRAY_QUOTA_FIXTURE set; dev-only seam)`)
       return snap
@@ -71,7 +73,7 @@ export async function readQuota(opts: { claudeBin?: string; force?: boolean } = 
   }
   const [claude, codex] = await Promise.all([
     readClaudeQuota(opts.claudeBin, {}, { force: opts.force }),
-    Promise.resolve(readCodexQuota()),
+    readCodexQuota(),
   ])
   return { claude, codex }
 }

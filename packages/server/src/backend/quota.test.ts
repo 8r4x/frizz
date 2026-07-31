@@ -1,9 +1,9 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { parseCodexQuotaFromRollout } from "./codex-quota.ts"
+import { parseCodexQuotaFromRollout, parseCodexQuotaFromRateLimits, readCodexQuota, resetCodexQuotaMemo } from "./codex-quota.ts"
 import { parseClaudeUsage, parseClaudeUsageOutput, tokenFromCredentialsJson, readClaudeQuota, refreshClaudeQuotaInBackground, claudeQuotaRefreshSettled } from "./claude-quota.ts"
 
 // ---- Codex rollout parsing ----
@@ -69,6 +69,91 @@ test("codex: last token_count wins; junk lines skipped", () => {
 test("codex: no rate_limits anywhere → undefined", () => {
   assert.equal(parseCodexQuotaFromRollout(JSON.stringify({ type: "response_item" })), undefined)
   assert.equal(parseCodexQuotaFromRollout(""), undefined)
+})
+
+// ---- Codex live app-server (account/rateLimits/read) parsing ----
+
+test("codex live: camelCase rateLimits → windows labeled by windowDurationMins", () => {
+  // Captured verbatim from codex-cli 0.146.0 (fields fray ignores trimmed).
+  const q = parseCodexQuotaFromRateLimits({
+    rateLimits: {
+      limitId: "codex",
+      planType: "pro",
+      primary: { usedPercent: 0, windowDurationMins: 10080, resetsAt: 1786130265 },
+      secondary: { usedPercent: 12.5, windowDurationMins: 300, resetsAt: 1786100000 },
+      credits: { hasCredits: false, unlimited: false, balance: "0" },
+    },
+    rateLimitsByLimitId: { codex_bengalfox: { primary: { usedPercent: 99, windowDurationMins: 10080 } } },
+  })
+  assert.equal(q?.status, "ok")
+  assert.equal(q?.planType, "pro")
+  // Per-model `rateLimitsByLimitId` is ignored — only the account aggregate is shown.
+  assert.deepEqual(q?.windows.map((w) => [w.key, w.usedPercent]), [["weekly", 0], ["5h", 12.5]])
+  assert.equal(q?.windows[0]!.resetsAt, 1786130265)
+})
+
+test("codex live: 0% used is a real reading, not a missing one", () => {
+  // The exact regression: a freshly-switched account reads 0 and must NOT be discarded as falsy.
+  const q = parseCodexQuotaFromRateLimits({
+    rateLimits: { planType: "pro", primary: { usedPercent: 0, windowDurationMins: 10080, resetsAt: 1 }, secondary: null },
+  })
+  assert.equal(q?.status, "ok")
+  assert.equal(q?.windows.length, 1)
+  assert.equal(q?.windows[0]!.usedPercent, 0)
+})
+
+test("codex live: null/absent windows → undefined so the caller falls back", () => {
+  // Real shape seen on a `limit_id:"premium"` session: both windows null.
+  assert.equal(parseCodexQuotaFromRateLimits({ rateLimits: { limitId: "premium", primary: null, secondary: null } }), undefined)
+  assert.equal(parseCodexQuotaFromRateLimits({ rateLimits: {} }), undefined)
+  assert.equal(parseCodexQuotaFromRateLimits({}), undefined)
+  assert.equal(parseCodexQuotaFromRateLimits(undefined), undefined)
+  assert.equal(parseCodexQuotaFromRateLimits("nope"), undefined)
+})
+
+test("codex live: snake_case rollout spelling is NOT accepted here", () => {
+  // The two sources genuinely differ; accepting both in one reader would hide a protocol change.
+  assert.equal(
+    parseCodexQuotaFromRateLimits({ rateLimits: { primary: { used_percent: 40, window_minutes: 10080 } } }),
+    undefined,
+  )
+})
+
+test("codex: a failed live read degrades to the rollout tail, labeled as unconfirmed", async () => {
+  // `codexBin` points at a binary that cannot answer, so the live path resolves undefined.
+  const dir = await mkdtemp(join(tmpdir(), "fray-codex-quota-"))
+  try {
+    const day = join(dir, "sessions", "2026", "07", "31")
+    await mkdir(day, { recursive: true })
+    await writeFile(
+      join(day, "rollout-2026-07-31T00-00-00-aaaa.jsonl"),
+      JSON.stringify({
+        type: "event_msg",
+        payload: { type: "token_count", rate_limits: { plan_type: "pro", primary: { used_percent: 99, window_minutes: 10080, resets_at: 7 } } },
+      }) + "\n",
+    )
+    resetCodexQuotaMemo()
+    const q = await readCodexQuota(dir, join(dir, "definitely-not-a-real-codex-binary"))
+    assert.equal(q.status, "ok")
+    assert.equal(q.windows[0]!.usedPercent, 99)
+    assert.match(q.detail ?? "", /last local session/i)
+  } finally {
+    resetCodexQuotaMemo()
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("codex: a failed live read with no rollouts stays a clean unavailable", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fray-codex-quota-"))
+  try {
+    resetCodexQuotaMemo()
+    const q = await readCodexQuota(dir, join(dir, "definitely-not-a-real-codex-binary"))
+    assert.equal(q.status, "unavailable")
+    assert.deepEqual(q.windows, [])
+  } finally {
+    resetCodexQuotaMemo()
+    await rm(dir, { recursive: true, force: true })
+  }
 })
 
 // ---- Claude usage endpoint parsing ----
