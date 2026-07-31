@@ -23,6 +23,14 @@ if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
 	exit 0 # initial commit: nothing to compare against
 fi
 
+# A merge's deletions are computed by git from the two sides, not by a hand-built index, so the bug
+# this guards against cannot arise here — while a conflicted delete/modify CAN legitimately leave a
+# staged deletion beside a file still on disk. FRAY.md mandates merging branches back into main, so
+# exempt merges rather than have the documented workflow trip a guard aimed at something else.
+if [ -e "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+	exit 0
+fi
+
 # Staged deletions whose file is nonetheless still present on disk.
 phantom=$(git diff --cached --diff-filter=D --name-only -z HEAD |
 	while IFS= read -r -d '' path; do
