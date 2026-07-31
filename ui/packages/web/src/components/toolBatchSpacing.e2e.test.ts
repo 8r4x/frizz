@@ -107,16 +107,31 @@ for (const [surface, query, column] of [
         const scope = document.querySelectorAll("[data-transcript-column]")[idx]
         const disclosures = [...scope.querySelectorAll<HTMLElement>("[data-tool-activity] button")]
         const labels = disclosures.map((button) => button.getAttribute("aria-label") ?? "")
+        const disclosureGeometry = disclosures.map((button) => {
+          const label = button.querySelector<HTMLElement>("[data-tool-activity-label]")!
+          const chevron = button.querySelector<SVGElement>("[data-tool-activity-chevron]")!
+          const buttonRect = button.getBoundingClientRect()
+          const labelRect = label.getBoundingClientRect()
+          const chevronRect = chevron.getBoundingClientRect()
+          return {
+            gap: Math.round((chevronRect.left - labelRect.right) * 10) / 10,
+            trailingSpace: Math.round((buttonRect.right - chevronRect.right) * 10) / 10,
+          }
+        })
         const visibleCards = [...scope.querySelectorAll<HTMLElement>(".fray-bash")].filter((card) => card.offsetParent !== null).length
         const hasWorkingIndicator = scope.querySelector("[data-working-indicator]") !== null
         disclosures.forEach((button) => button.click())
-        return { labels, visibleCards, hasWorkingIndicator }
+        return { labels, disclosureGeometry, visibleCards, hasWorkingIndicator }
       }, column)
       assert.equal(collapsed.visibleCards, 0, "settled detail stays unmounted until its disclosure is expanded")
       assert.equal(collapsed.hasWorkingIndicator, false, "settled transcripts have no runtime tail")
       assert.equal(collapsed.labels.length, 2, "only the two prose-delimited activity runs get disclosures")
       assert.match(collapsed.labels[0], /Expand 7 tool calls: Ran 7 tool calls/, "the first prose tool tail absorbs all three following provider batches")
       assert.match(collapsed.labels[1], /Expand 3 tool calls: Ran 3 tool calls/, "the second prose tool tail absorbs the following provider batch")
+      for (const geometry of collapsed.disclosureGeometry) {
+        assert.ok(geometry.gap >= 3 && geometry.gap <= 5, `digest chevron must sit directly beside its label, got ${geometry.gap}px`)
+        assert.ok(geometry.trailingSpace > 20, "the full transcript row remains the click target after moving the chevron")
+      }
       await page.waitForSelector(".fray-bash")
       await new Promise((r) => setTimeout(r, 600))
 

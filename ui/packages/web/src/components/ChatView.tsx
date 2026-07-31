@@ -1755,15 +1755,16 @@ function MinimalToolActivity({ tools, at }: { tools: CollapsedTool[]; at?: strin
         aria-controls={cardsId}
         aria-expanded={expanded}
         aria-label={`${expanded ? "Collapse" : "Expand"} ${total} tool ${total === 1 ? "call" : "calls"}: ${label}`}
-        className="group flex w-full min-w-0 items-center gap-2 rounded py-0.5 text-left text-[13px] leading-5 text-muted outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
+        className="group flex w-full min-w-0 items-center gap-1 rounded py-0.5 text-left text-[13px] leading-5 text-muted outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
       >
         <span
+          data-tool-activity-label
           title={label}
-          className="min-w-0 flex-1 truncate text-muted"
+          className="min-w-0 truncate text-muted"
         >
           {label}
         </span>
-        <ChevronRight aria-hidden="true" size={13} className={`ml-auto size-[1em] shrink-0 -translate-y-[0.088em] text-muted/70 transition-transform group-hover:text-current ${expanded ? "rotate-90" : ""}`} />
+        <ChevronRight data-tool-activity-chevron aria-hidden="true" size={13} className={`size-[1em] shrink-0 -translate-y-[0.088em] text-muted/70 transition-transform group-hover:text-current ${expanded ? "rotate-90" : ""}`} />
       </button>
       {expanded && (
         <div id={cardsId} className="mt-1.5 flex flex-col">
