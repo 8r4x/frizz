@@ -18,6 +18,7 @@ import { splitQuestionBlocks, parseQuestionBlock, type QuestionKind, type BlockA
 import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
 import { parseAnswersCard, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
 import { GithubWakeCard } from "./GithubWakeCard.tsx"
+import { WakeDivider } from "./WakeDivider.tsx"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
 import { sendEagerFollowUp } from "../lib/eagerComposerSubmission.ts"
 import { useUnqueueFollowUp, useUnqueueSupported } from "../lib/unqueueFollowUp.ts"
@@ -3834,32 +3835,6 @@ export function PendingAskCard({ ask, onTerminal }: { ask: PendingAsk; onTermina
         </button>
       </CardActions>
     </TranscriptCard>
-  )
-}
-
-// The hairline+label+hairline chrome of a WAKE DIVIDER — the one rendering both kinds of child
-// completion now share. A background shell coming to rest, a Monitor timing out, and a sub-agent
-// finishing are the same class of event (a child the worker launched has reached a terminal state,
-// usually re-invoking the agent), and they now read the same way: a centred section break that stands
-// out from the tool cards around it, rather than one of them being a card indistinguishable from a
-// hundred others (maintainer 2026-07-27). `label` is the whole line for a shell; the agent divider
-// passes nodes so its title can be a drill-in link.
-function WakeDivider({ children, sourceId, ariaLabel, marker }: { children: ReactNode; sourceId?: string; ariaLabel?: string; marker?: string }) {
-  return (
-    <div
-      data-fray-msg={sourceId}
-      data-wake-divider={marker}
-      className="group/msg relative my-1 flex items-center gap-3"
-      // A divider carrying an interactive title is not an ARIA `separator` (a separator may not own a
-      // focus stop), so only the inert shell-wake form takes the role — via `ariaLabel`.
-      role={ariaLabel ? "separator" : undefined}
-      aria-label={ariaLabel}
-    >
-      <MessageDebugId sourceId={sourceId} />
-      <span aria-hidden="true" className="h-px flex-1 bg-border/70" />
-      <span className="petite-caps flex min-w-0 items-center gap-1 break-words text-center text-[12px] text-muted/70">{children}</span>
-      <span aria-hidden="true" className="h-px flex-1 bg-border/70" />
-    </div>
   )
 }
 

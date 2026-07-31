@@ -4,6 +4,10 @@ import test from "node:test"
 import { shortDebugId } from "./MessageDebugId.tsx"
 
 const chatView = () => readFileSync(new URL("./ChatView.tsx", import.meta.url), "utf8")
+// The wake divider's host moved OUT of ChatView when the divider was extracted into its own module
+// (so the GitHub wake card could wear it without a cycle). It is still one of the message roots this
+// file enumerates — scan it alongside ChatView rather than dropping it from the count.
+const wakeDivider = () => readFileSync(new URL("./WakeDivider.tsx", import.meta.url), "utf8")
 
 test("shortDebugId shows only the part that varies between messages", () => {
   // sessionId is constant across a thread — the byte offset is the distinguishing part.
@@ -40,9 +44,12 @@ test("the per-message debug handle never joins the pagination-anchor attribute",
 })
 
 test("every message root hosts a debug chip in a named hover group", () => {
-  const source = chatView()
-  const hosts = [...source.matchAll(/data-fray-msg=\{(m\.sourceId|sourceId)\}[^>]*className=\{?[`"]([^`"]*)/g)]
-  // assistant turn, user bubble, answers card, event line, boundary rule, reasoning block
+  // Both files that define a message root, so extracting one into its own module cannot quietly drop
+  // it from this guarantee — which is exactly what the divider extraction would otherwise have done.
+  const sources = [chatView(), wakeDivider()]
+  const hosts = sources.flatMap((source) => [...source.matchAll(/data-fray-msg=\{(m\.sourceId|sourceId)\}[^>]*className=\{?[`"]([^`"]*)/g)])
+  // assistant turn, user bubble, answers card, event line, boundary rule, reasoning block — plus the
+  // wake divider, now in WakeDivider.tsx.
   assert.equal(hosts.length, 6, "each rendered message variant must expose its own debug handle")
   for (const [, , className] of hosts) {
     assert.match(className, /group\/msg/, "host must open the NAMED hover group the chip keys off")
@@ -50,8 +57,10 @@ test("every message root hosts a debug chip in a named hover group", () => {
   }
   // A bare `group` would also be toggled by any ancestor group (the ops strip uses one), so the
   // name is what keeps the chip scoped to its own message.
-  assert.equal([...source.matchAll(/group-hover\/msg:/g)].length, 0, "the chip's group-hover lives in MessageDebugId, not ChatView")
-  assert.equal([...source.matchAll(/<MessageDebugId /g)].length, 6)
+  for (const source of sources) {
+    assert.equal([...source.matchAll(/group-hover\/msg:/g)].length, 0, "the chip's group-hover lives in MessageDebugId, not its hosts")
+  }
+  assert.equal(sources.reduce((n, source) => n + [...source.matchAll(/<MessageDebugId /g)].length, 0), 6)
 })
 
 test("the chip is absolutely positioned so it never perturbs virtualizer measurement", () => {
