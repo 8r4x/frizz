@@ -2,8 +2,8 @@ import { useMemo, useState } from "react"
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ChatMessage } from "./hooks.ts"
-import { Message, withMessageSpacers } from "./components/ChatView.tsx"
-import { coalesceToolActivityMessages } from "./lib/toolActivity.ts"
+import { Message, VSpace, WorkingIndicator, withMessageSpacers } from "./components/ChatView.tsx"
+import { coalesceToolActivityMessages, historicalToolActivityMessages, pendingToolActivityTail, toolActivityLabel } from "./lib/toolActivity.ts"
 import "./styles.css"
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -49,11 +49,23 @@ const exceptionMessage = callMessage("exceptions", [
   },
 ])
 
-function Transcript({ messages }: { messages: ChatMessage[] }) {
-  const display = useMemo(() => coalesceToolActivityMessages(messages), [messages])
+function Transcript({ messages, running = false }: { messages: ChatMessage[]; running?: boolean }) {
+  const coalesced = useMemo(() => coalesceToolActivityMessages(messages), [messages])
+  const liveTool = running ? pendingToolActivityTail(coalesced.map((entry) => entry.message)) : undefined
+  const activityLabel = liveTool ? toolActivityLabel(liveTool) : undefined
+  const display = useMemo(
+    () => running ? historicalToolActivityMessages(coalesced) : coalesced,
+    [coalesced, running],
+  )
   return (
     <div data-transcript-column className="flex flex-col">
       {withMessageSpacers(display.map((entry) => entry.message), (message, index) => <Message key={index} m={message} />)}
+      {running && (
+        <>
+          {messages.length > 0 && <VSpace />}
+          <WorkingIndicator activityLabel={activityLabel} />
+        </>
+      )}
     </div>
   )
 }
@@ -70,7 +82,7 @@ function Fixture() {
       <section className="mx-auto max-w-[760px] rounded-xl border border-border bg-panel px-5 py-5 shadow-xl shadow-black/30 sm:px-7">
         <header className="mb-6 border-b border-border pb-4">
           <h1 className="text-[16px] font-semibold">Minimal tool activity</h1>
-          <p className="mt-1 text-[12px] text-muted">One continuously rewritten gerund, with the detailed tool cards one click away.</p>
+          <p className="mt-1 text-[12px] text-muted">The bottom Working shimmer becomes the current gerund; settled tool runs return as one digest.</p>
         </header>
 
         <div className="flex flex-col gap-7">
@@ -90,7 +102,7 @@ function Fixture() {
                 Add next batch
               </button>
             </div>
-            <Transcript messages={liveMessages} />
+            <Transcript messages={liveMessages} running />
           </section>
 
           <section data-fixture-settled>

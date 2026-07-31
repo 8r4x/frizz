@@ -5,7 +5,7 @@ import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
 import { subAgentProfileLabel } from "../lib/subAgentProfile.ts"
-import { coalesceToolActivityMessages, hasPendingToolActivityTail } from "../lib/toolActivity.ts"
+import { coalesceToolActivityMessages, historicalToolActivityMessages, pendingToolActivityTail, toolActivityLabel } from "../lib/toolActivity.ts"
 import { ChildDrillSlugContext, Message, VSpace, WorkingIndicator, withMessageSpacers } from "./ChatView.tsx"
 import { Composer } from "./Composer.tsx"
 import { Sheet } from "./ui/Sheet.tsx"
@@ -19,8 +19,9 @@ import { SheetHeader } from "./ui/SheetHeader.tsx"
 // IT IS NO LONGER READ-ONLY, and it no longer reads as a log:
 //
 //  · LIVENESS (always). A running child gets the same tail treatment as a top-level transcript:
-//    the latest pending tool owns the shimmering gerund; generic "Working…" returns when no tool is
-//    active. It belongs INSIDE the scroller, not in a special fixed strip above the conversation.
+//    the latest pending tool replaces "Working…" in the bottom runtime row; generic "Working…"
+//    remains the fallback. It belongs INSIDE the scroller, not in a special fixed strip above the
+//    conversation.
 //  · STEERING (only where it is real). A user message addressed with the child's dispatch tool_use id
 //    is routed by the CLI INTO that child's own conversation. Measured live against claude 2.1.220 /
 //    SDK 0.3.207: the child acted on it and only the CHILD's transcript carried the token, while the
@@ -64,10 +65,18 @@ export function SubAgentSheet({
 
   const q = useSubAgentTranscript(slug, subId)
   const messages = useMemo(() => q.data?.messages ?? [], [q.data])
-  const activityMessages = useMemo(() => coalesceToolActivityMessages(messages), [messages])
   const state = q.data?.state
   const running = state === "running"
-  const showWorking = running && !hasPendingToolActivityTail(activityMessages.map((entry) => entry.message))
+  const coalescedActivityMessages = useMemo(() => coalesceToolActivityMessages(messages), [messages])
+  const liveToolActivity = running
+    ? pendingToolActivityTail(coalescedActivityMessages.map((entry) => entry.message))
+    : undefined
+  const liveActivityLabel = liveToolActivity ? toolActivityLabel(liveToolActivity) : undefined
+  const activityMessages = useMemo(
+    () => running ? historicalToolActivityMessages(coalescedActivityMessages) : coalescedActivityMessages,
+    [coalescedActivityMessages, running],
+  )
+  const showWorking = running
   // Unavailable = the RPC errored (e.g. a pre-restart server without this endpoint), the id is unknown
   // ("gone"), or a settled child (done/stale) whose transcript file is empty/cleaned. A RUNNING child
   // with no messages yet is just starting → a spinner, not "unavailable".
@@ -145,7 +154,7 @@ export function SubAgentSheet({
                       the conversation. A sub-agent drawer is a conversation, not a log dashboard. */}
                   {showWorking && <>
                     {messages.length > 0 && <VSpace />}
-                    <WorkingIndicator since={startedAt} />
+                    <WorkingIndicator since={startedAt} activityLabel={liveActivityLabel} />
                   </>}
                 </div>
               </ChildDrillSlugContext.Provider>

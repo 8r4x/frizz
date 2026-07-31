@@ -58,28 +58,65 @@ for (const [surface, query, column] of [
   // The drawer mounts over the thread, so it is the SECOND column on the page.
   ["sub-agent drawer", "?surface=child", 1],
 ] as const) {
-  test(`${surface}: provider batches share one disclosure and expanded cards keep one pitch`, {
+  test(`${surface}: live gerund stays at the bottom, then settled batches keep one pitch`, {
     skip: !baseUrl,
     timeout: 60_000,
   }, async () => {
     const { browser, page, errors } = await launch()
     try {
-      await page.goto(`${baseUrl}/tool-batch-spacing-fixture.html${query}`, { waitUntil: "networkidle0" })
+      const fixtureUrl = (state: "live" | "settled") => {
+        const url = new URL("/tool-batch-spacing-fixture.html", baseUrl)
+        if (query) url.searchParams.set("surface", "child")
+        if (state === "settled") url.searchParams.set("state", "settled")
+        return url.href
+      }
+
+      await page.goto(fixtureUrl("live"), { waitUntil: "networkidle0" })
+      await page.waitForFunction((n) => document.querySelectorAll("[data-transcript-column]").length > n, {}, column)
+      await page.waitForFunction((idx) => {
+        const scope = document.querySelectorAll("[data-transcript-column]")[idx]
+        return scope?.querySelector("[data-working-indicator]")?.textContent?.includes("Printing the captured output")
+      }, {}, column)
+      const live = await page.evaluate((idx) => {
+        const scope = document.querySelectorAll("[data-transcript-column]")[idx]
+        const disclosures = [...scope.querySelectorAll<HTMLElement>("[data-tool-activity] button")]
+        const labels = disclosures.map((button) => button.getAttribute("aria-label") ?? "")
+        const visibleCards = [...scope.querySelectorAll<HTMLElement>(".fray-bash")].filter((card) => card.offsetParent !== null).length
+        const working = scope.querySelector<HTMLElement>("[data-working-indicator]")
+        const shimmer = working?.querySelector<HTMLElement>(".shimmer-text")
+        return {
+          labels,
+          visibleCards,
+          workingText: working?.textContent ?? "",
+          workingActivity: working?.dataset.workingActivity,
+          shimmerText: shimmer?.textContent ?? "",
+          pendingDisclosures: scope.querySelectorAll('[data-tool-activity-state="pending"]').length,
+        }
+      }, column)
+      assert.equal(live.visibleCards, 0, "ordinary cards stay unmounted until a settled disclosure is expanded")
+      assert.equal(live.labels.length, 1, "the pending run stays out of transcript history")
+      assert.match(live.labels[0], /Expand 7 tool calls: Ran 7 tool calls/, "the earlier settled run keeps one historical digest")
+      assert.equal(live.workingActivity, "tool", "the ordinary Working slot identifies its tool-label state")
+      assert.equal(live.shimmerText, "Printing the captured output", "the newest gerund owns the existing bottom shimmer")
+      assert.doesNotMatch(live.workingText, /Working…/, "the gerund replaces rather than accompanies generic Working")
+      assert.equal(live.pendingDisclosures, 0, "no historical disclosure may carry live state")
+
+      await page.goto(fixtureUrl("settled"), { waitUntil: "networkidle0" })
       await page.waitForFunction((n) => document.querySelectorAll("[data-transcript-column]").length > n, {}, column)
       const collapsed = await page.evaluate((idx) => {
         const scope = document.querySelectorAll("[data-transcript-column]")[idx]
         const disclosures = [...scope.querySelectorAll<HTMLElement>("[data-tool-activity] button")]
         const labels = disclosures.map((button) => button.getAttribute("aria-label") ?? "")
         const visibleCards = [...scope.querySelectorAll<HTMLElement>(".fray-bash")].filter((card) => card.offsetParent !== null).length
-        const hasGenericWorking = (scope.textContent ?? "").includes("Working…")
+        const hasWorkingIndicator = scope.querySelector("[data-working-indicator]") !== null
         disclosures.forEach((button) => button.click())
-        return { labels, visibleCards, hasGenericWorking }
+        return { labels, visibleCards, hasWorkingIndicator }
       }, column)
-      assert.equal(collapsed.visibleCards, 0, "ordinary cards stay unmounted until the disclosure is expanded")
-      assert.equal(collapsed.hasGenericWorking, false, "the pending tool gerund replaces the generic Working shimmer")
+      assert.equal(collapsed.visibleCards, 0, "settled detail stays unmounted until its disclosure is expanded")
+      assert.equal(collapsed.hasWorkingIndicator, false, "settled transcripts have no runtime tail")
       assert.equal(collapsed.labels.length, 2, "only the two prose-delimited activity runs get disclosures")
-      assert.match(collapsed.labels[0], /Expand 7 tool calls:/, "the first prose tool tail absorbs all three following provider batches")
-      assert.match(collapsed.labels[1], /Expand 3 tool calls:/, "the second prose tool tail absorbs the following provider batch")
+      assert.match(collapsed.labels[0], /Expand 7 tool calls: Ran 7 tool calls/, "the first prose tool tail absorbs all three following provider batches")
+      assert.match(collapsed.labels[1], /Expand 3 tool calls: Ran 3 tool calls/, "the second prose tool tail absorbs the following provider batch")
       await page.waitForSelector(".fray-bash")
       await new Promise((r) => setTimeout(r, 600))
 

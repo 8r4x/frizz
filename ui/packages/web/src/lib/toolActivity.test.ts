@@ -5,8 +5,9 @@ import type { ChatMessage } from "../hooks.ts"
 import {
   coalesceToolActivityMessages,
   currentToolActivity,
-  hasPendingToolActivityTail,
+  historicalToolActivityMessages,
   isToolActivityException,
+  pendingToolActivityTail,
   settledToolActivityLabel,
   toolActivityLabel,
 } from "./toolActivity.ts"
@@ -130,7 +131,7 @@ test("a prose message's ordinary tool tail owns following provider batches until
   assert.equal(compact[2].message.sourceId, "batch-c")
 })
 
-test("the latest pending tool shimmer replaces the generic working tail", () => {
+test("the latest pending tool moves to the runtime tail until the whole run settles", () => {
   const settled = toolMessage("settled", [tool("Read", { status: "completed" })])
   const pending = toolMessage("pending", [tool("Bash", { desc: "Running focused tests", status: "pending" })])
   const queued: ChatMessage = {
@@ -143,9 +144,66 @@ test("the latest pending tool shimmer replaces the generic working tail", () => 
   }
 
   const compact = coalesceToolActivityMessages([settled, pending, queued])
-  assert.equal(hasPendingToolActivityTail(compact.map((entry) => entry.message)), true)
+  assert.equal(pendingToolActivityTail(compact.map((entry) => entry.message)), pending.tools[0])
+  const liveHistory = historicalToolActivityMessages(compact)
+  assert.deepEqual(liveHistory.map((entry) => entry.message.sourceId), ["queued"])
+  assert.equal(
+    liveHistory.some((entry) => entry.message.role === "assistant"),
+    false,
+    "a live pure-tool run must not render a partial historical disclosure",
+  )
+
   pending.tools[0].status = "completed"
-  assert.equal(hasPendingToolActivityTail(coalesceToolActivityMessages([settled, pending]).map((entry) => entry.message)), false)
+  const completed = coalesceToolActivityMessages([settled, pending])
+  assert.equal(pendingToolActivityTail(completed.map((entry) => entry.message)), undefined)
+  const history = historicalToolActivityMessages(completed)
+  assert.equal(history.length, 1)
+  assert.deepEqual(history[0].message.tools.map((call) => call.name), ["Read", "Bash"])
+})
+
+test("a live tool tail is removed without hiding the prose that introduced it", () => {
+  const pending = tool("Read", { detail: "src/render.tsx", status: "pending" })
+  const lead: ChatMessage = {
+    sourceId: "lead",
+    role: "assistant",
+    text: "I found the renderer.",
+    tools: [pending],
+    parts: [
+      { kind: "text", text: "I found the renderer." },
+      { kind: "tools", tools: [pending] },
+    ],
+  }
+
+  const compact = coalesceToolActivityMessages([lead])
+  const liveHistory = historicalToolActivityMessages(compact)
+  assert.equal(pendingToolActivityTail(compact.map((entry) => entry.message)), pending)
+  assert.equal(liveHistory.length, 1)
+  assert.equal(liveHistory[0].message.text, "I found the renderer.")
+  assert.deepEqual(liveHistory[0].message.tools, [])
+  assert.deepEqual(liveHistory[0].message.parts, [{ kind: "text", text: "I found the renderer." }])
+
+  pending.status = "completed"
+  const settledHistory = historicalToolActivityMessages(coalesceToolActivityMessages([lead]))
+  assert.equal(settledHistory[0].message.tools.length, 1)
+  assert.deepEqual(settledHistory[0].message.parts?.map((part) => part.kind), ["text", "tools"])
+})
+
+test("only the final live tail leaves history; an earlier pending run ended by prose remains", () => {
+  const earlier = toolMessage("earlier", [tool("Read", { status: "pending" })])
+  const boundary: ChatMessage = {
+    sourceId: "boundary",
+    role: "assistant",
+    text: "That check is complete.",
+    tools: [],
+    parts: [{ kind: "text", text: "That check is complete." }],
+  }
+  const latest = toolMessage("latest", [tool("Bash", { status: "pending" })])
+
+  const history = historicalToolActivityMessages(
+    coalesceToolActivityMessages([earlier, boundary, latest]),
+  )
+  assert.deepEqual(history.map((entry) => entry.message.sourceId), ["earlier", "boundary"])
+  assert.equal(history[0].message.tools[0].status, "pending")
 })
 
 test("activity labels are gerunds with a clean fallback for arbitrary tools", () => {

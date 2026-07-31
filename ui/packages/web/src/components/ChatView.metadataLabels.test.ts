@@ -16,15 +16,25 @@ test("quiet transcript events use the same regular light-grey scale as activity 
   assert.match(source, /<MessageDebugId sourceId=\{sourceId\} \/>\s*\{text\}/, "event line still renders its text verbatim beside the chip")
 })
 
-test("minimal tool activity is a full-width shimmer disclosure with no spinner indentation", () => {
+test("minimal tool activity is settled history with no live shimmer or spinner indentation", () => {
   const source = readFileSync(new URL("./ChatView.tsx", import.meta.url), "utf8")
   const block = source.match(/function MinimalToolActivity[\s\S]*?\n}/)?.[0]
   assert.ok(block, "MinimalToolActivity must exist")
-  assert.match(block, /activity\.pending \? "shimmer-text" : "text-muted"/, "only live gerunds shimmer")
   assert.match(block, /settledToolActivityLabel\(total\)/, "settled batches render the completed summary")
+  assert.match(block, /data-tool-activity-state="settled"/, "every historical disclosure is settled presentation")
+  assert.doesNotMatch(block, /shimmer-text/, "the historical disclosure must never own the live shimmer")
   assert.match(block, /className="group flex w-full/, "the disclosure owns the row so its chevron can right-align")
   assert.match(block, /className=\{`ml-auto size-\[1em\]/, "the chevron is right-justified and scales with the label")
   assert.doesNotMatch(block, /fray-tool-spinner|data-running-indicator|w-2\.5/, "no spinner or reserved mark slot may indent the label")
+})
+
+test("the current gerund replaces Working in the exact bottom shimmer span", () => {
+  const source = readFileSync(new URL("./ChatView.tsx", import.meta.url), "utf8")
+  const block = source.match(/export function WorkingIndicator[\s\S]*?\n}/)?.[0]
+  assert.ok(block, "WorkingIndicator must exist")
+  assert.match(block, /data-working-indicator/, "the runtime tail needs a stable browser-QA target")
+  assert.match(block, /<span className="shimmer-text">\{activityLabel \?\? "Working…"\}<\/span>/, "tool activity and generic Working must use the exact same shimmer element")
+  assert.equal((block.match(/shimmer-text/g) ?? []).length, 1, "the runtime tail must have one shimmer treatment")
 })
 
 test("codex reasoning toggle is a peer of quiet metadata labels", () => {

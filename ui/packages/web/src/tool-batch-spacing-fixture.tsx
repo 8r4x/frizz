@@ -25,6 +25,7 @@ import "./styles.css"
 
 const SLUG = "tool-batch-spacing"
 const PARAMS = new URLSearchParams(location.search)
+const SETTLED = PARAMS.get("state") === "settled"
 
 const thread = {
   id: SLUG,
@@ -40,7 +41,7 @@ const thread = {
   agents: [],
   errors: [],
   warnings: [],
-  runtime: "idle",
+  runtime: SETTLED ? "idle" : "running",
   unread: false,
   archived: false,
   hasPlan: false,
@@ -92,14 +93,14 @@ const messages: TranscriptMessage[] = [
     ],
   },
 
-  // A SEPARATE message with a yielded/background call — provider batching and shell lifecycle state
-  // are both presentation-transparent, so this still belongs to the activity run that started in a1.
+  // A SEPARATE message with one call. Provider batching is presentation-transparent, so this still
+  // belongs to the activity run that started in a1.
   {
     sourceId: "a3",
     role: "assistant",
     text: "",
     tools: [],
-    parts: [toolsPart([call({ name: "Bash", command: "wait %1", desc: "Waiting for background sleep 45", backgroundState: "background", status: "pending" })])],
+    parts: [toolsPart([call({ name: "Bash", command: "wait %1", desc: "Waiting for background sleep 45" })])],
   },
 
   // Another separate message, this time a 2-call batch (boundary + intra in one message).
@@ -142,7 +143,12 @@ const messages: TranscriptMessage[] = [
           parts: [
             toolsPart([call({ name: "Bash", command: "ls -la", desc: "List the temp dir" })]),
             textPart("   "),
-            toolsPart([call({ name: "Bash", command: "cat out.log", desc: "Printing the captured output", status: "pending" })]),
+            toolsPart([call({
+              name: "Bash",
+              command: "cat out.log",
+              desc: "Printing the captured output",
+              status: SETTLED ? "completed" : "pending",
+            })]),
           ],
         },
       ] as unknown as TranscriptMessage[])),
@@ -160,7 +166,7 @@ window.fetch = async (input, init) => {
   // The SUB-AGENT DRAWER reads its child's transcript from its own RPC — same messages, so the two
   // surfaces are directly comparable.
   if (url.pathname === "/rpc/subAgentTranscript") {
-    return new Response(JSON.stringify({ result: { messages, state: "done" } }), {
+    return new Response(JSON.stringify({ result: { messages, state: SETTLED ? "done" : "running" } }), {
       headers: { "content-type": "application/json" },
     })
   }

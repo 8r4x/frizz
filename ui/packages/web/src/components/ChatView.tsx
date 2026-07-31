@@ -5,7 +5,7 @@ import * as RadixTabs from "@radix-ui/react-tabs"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight, FileText, Hash, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, ShieldCheck, Sparkles, X, type LucideIcon } from "lucide-react"
-import type { AwaitingHint, NativeInputRequired as NativeInputRequiredData, PendingAsk, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@fray-ui/shared"
+import type { AwaitingHint, BgShellView, NativeInputRequired as NativeInputRequiredData, PendingAsk, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@fray-ui/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBoard, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
@@ -68,7 +68,7 @@ import { PROVIDER_LABEL } from "../lib/signIn.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
 import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
-import { coalesceToolActivityMessages, currentToolActivity, hasPendingToolActivityTail, isToolActivityException, settledToolActivityLabel, toolActivityLabel } from "../lib/toolActivity.ts"
+import { coalesceToolActivityMessages, historicalToolActivityMessages, isToolActivityException, pendingToolActivityTail, settledToolActivityLabel, toolActivityLabel } from "../lib/toolActivity.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
 
 // Answer types moved to lib/questionBlocks.ts (shared by the queue card, the thread view, and the
@@ -111,6 +111,43 @@ function useChildDrillSlug(): string | null {
 // without threading either through the fence renderer. Null off the queue (the thread drawer), where there
 // is no queue to scroll — there the fence buttons behave as before (archive/snooze, no scroll).
 export const QueueDismissContext = createContext<{ dismiss: () => void; cancel: () => void } | null>(null)
+
+function isLiveTranscriptBackgroundTool(tool: TranscriptToolCall): boolean {
+  return tool.status === "pending" && tool.backgroundState === "background"
+}
+
+// Codex's deliberate `yield_control()` shell lifecycle is transcript-native, while the older board
+// telemetry still reports bgShells:[]. Present those calls through the EXISTING anchored ops strip and
+// remove only their live copy from the conversation. Once a shell resolves, its completed historical
+// card returns at its canonical transcript position.
+function transcriptBackgroundShells(messages: readonly ChatMessage[]): BgShellView[] {
+  const shells: BgShellView[] = []
+  for (const message of messages) {
+    for (const tool of message.tools) {
+      if (!isLiveTranscriptBackgroundTool(tool)) continue
+      if (!message.at) continue
+      shells.push({
+        label: tool.desc ?? tool.detail ?? tool.command ?? "Background command",
+        startedAt: message.at,
+        state: "running",
+      })
+    }
+  }
+  return shells
+}
+
+function withoutLiveTranscriptBackgroundTools(messages: readonly ChatMessage[]): ChatMessage[] {
+  return messages.map((message) => {
+    if (!message.tools.some(isLiveTranscriptBackgroundTool)) return message
+    const tools = message.tools.filter((tool) => !isLiveTranscriptBackgroundTool(tool))
+    const parts = message.parts?.map((part) =>
+      part.kind === "tools"
+        ? { ...part, tools: part.tools.filter((tool) => !isLiveTranscriptBackgroundTool(tool)) }
+        : part,
+    ).filter((part) => part.kind !== "tools" || part.tools.length > 0)
+    return { ...message, tools, parts }
+  })
+}
 
 // The default thread surface: the session transcript (parsed server-side from the JSONL) rendered
 // as a conversation — assistant prose as markdown, tool calls as compact one-liners, a spinner
@@ -182,13 +219,23 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
   // Raw server order — each message renders its `parts` in block order (fidelity). Memoized so
   // useLiveAnswering's `liveMsg` identity check compares objects from THIS same list.
   const messages = useMemo(() => q.data?.messages ?? [], [q.data])
+  const liveTranscriptShells = useMemo(() => transcriptBackgroundShells(messages), [messages])
+  const presentationMessages = useMemo(() => withoutLiveTranscriptBackgroundTools(messages), [messages])
   // Presentation-only coalescing: provider batching must not mint one loader per pure tool turn.
   // Original indices ride beside the display message so sticky asks and paired answers continue to
   // address server truth, never the compacted array.
-  const activityMessages = useMemo(() => coalesceToolActivityMessages(messages), [messages])
-  // A pending tool disclosure IS the turn-in-flight readout. Do not append a second generic
-  // "Working…" shimmer beneath it; that row returns naturally once the tool run settles.
-  const showWorking = running && !hasPendingToolActivityTail(activityMessages.map((entry) => entry.message))
+  const coalescedActivityMessages = useMemo(() => coalesceToolActivityMessages(presentationMessages), [presentationMessages])
+  const liveToolActivity = running
+    ? pendingToolActivityTail(coalescedActivityMessages.map((entry) => entry.message))
+    : undefined
+  const liveActivityLabel = liveToolActivity ? toolActivityLabel(liveToolActivity) : undefined
+  // A live tool run belongs in the existing bottom runtime slot, never in transcript history. Once
+  // it settles, the whole coalesced run returns as one `Ran N tool calls` disclosure.
+  const activityMessages = useMemo(
+    () => running ? historicalToolActivityMessages(coalescedActivityMessages) : coalescedActivityMessages,
+    [coalescedActivityMessages, running],
+  )
+  const showWorking = running
   // Question↔answer pairing for "Answers:" user messages, precomputed at the LIST level (the lookback
   // needs the whole list; Message renders per-message). null — a stable primitive — at every ordinary
   // index, so the memoized Message only sees a `paired` prop change on actual answers-messages.
@@ -293,7 +340,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
           slug={slug}
           transcriptRef={transcriptRef}
           transcriptKey={q.data?.transcriptKey}
-          messages={messages}
+          messages={presentationMessages}
           paired={paired}
           answeringForMessage={answeringForMessage}
           thread={thread}
@@ -434,7 +481,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
             ) : thread?.runtime === "perm-prompt" ? (
               <PermPromptBanner onTerminal={copyTerminalCommand} />
             ) : showWorking ? (
-              <WorkingIndicator since={thread?.lastUserAt} />
+              <WorkingIndicator since={thread?.lastUserAt} activityLabel={liveActivityLabel} />
             ) : thread?.awaitingBackground ? (
               // The rest itself, stated. Last in the chain because every branch above is a HARDER
               // reading of the same slot; this one is the benign case and never outranks them. It can
@@ -493,7 +540,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
         <ThreadActionBar
           slug={slug}
           onTerminal={copyTerminalCommand}
-          ops={<BackgroundOpsStrip slug={slug} className="px-1 pb-2 pt-1.5" />}
+          ops={<BackgroundOpsStrip slug={slug} transcriptShells={liveTranscriptShells} className="px-1 pb-2 pt-1.5" />}
         />
       </div>
     </RadixTabs.Content>
@@ -577,9 +624,16 @@ function VirtualizedThreadTranscript({
   loadEarlier: () => void
   jumpOverlay: HTMLElement | null
 }) {
-  const activityMessages = useMemo(() => coalesceToolActivityMessages(messages), [messages])
-  const pendingToolActivity = hasPendingToolActivityTail(activityMessages.map((entry) => entry.message))
-  const showWorking = running && !pendingToolActivity
+  const coalescedActivityMessages = useMemo(() => coalesceToolActivityMessages(messages), [messages])
+  const liveToolActivity = running
+    ? pendingToolActivityTail(coalescedActivityMessages.map((entry) => entry.message))
+    : undefined
+  const liveActivityLabel = liveToolActivity ? toolActivityLabel(liveToolActivity) : undefined
+  const activityMessages = useMemo(
+    () => running ? historicalToolActivityMessages(coalescedActivityMessages) : coalescedActivityMessages,
+    [coalescedActivityMessages, running],
+  )
+  const showWorking = running
   const messageRows = useMemo(() => {
     return buildVirtualTranscriptMessageRows(
       activityMessages.map((entry) => entry.message),
@@ -1121,7 +1175,7 @@ function VirtualizedThreadTranscript({
                 ) : thread?.runtime === "perm-prompt" ? (
                   <PermPromptBanner onTerminal={copyTerminalCommand} />
                 ) : showWorking ? (
-                  <WorkingIndicator since={thread?.lastUserAt} />
+                  <WorkingIndicator since={thread?.lastUserAt} activityLabel={liveActivityLabel} />
                 ) : thread?.awaitingBackground ? (
                   // See the non-virtualized chain above: last branch, benign case, no Snooze here.
                   <AwaitingBackgroundCard thread={thread} />
@@ -1691,10 +1745,9 @@ function MinimalToolActivity({ tools, at }: { tools: CollapsedTool[]; at?: strin
   const [expanded, setExpanded] = useState(false)
   const cardsId = useId()
   const total = tools.reduce((n, t) => n + t.count, 0)
-  const activity = currentToolActivity(tools)
-  const label = activity.pending && activity.tool ? toolActivityLabel(activity.tool) : settledToolActivityLabel(total)
+  const label = settledToolActivityLabel(total)
   return (
-    <div data-tool-activity data-tool-activity-state={activity.pending ? "pending" : "settled"} className="flex min-w-0 flex-col">
+    <div data-tool-activity data-tool-activity-state="settled" className="flex min-w-0 flex-col">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
@@ -1705,9 +1758,8 @@ function MinimalToolActivity({ tools, at }: { tools: CollapsedTool[]; at?: strin
         className="group flex w-full min-w-0 items-center gap-2 rounded py-0.5 text-left text-[13px] leading-5 text-muted outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
       >
         <span
-          aria-live="polite"
           title={label}
-          className={`min-w-0 flex-1 truncate ${activity.pending ? "shimmer-text" : "text-muted"}`}
+          className="min-w-0 flex-1 truncate text-muted"
         >
           {label}
         </span>
@@ -1912,6 +1964,30 @@ export function ToolStatusMeta({ status, backgroundState, liveBackgroundState, e
   )
 }
 
+// A yielded command's result reports how long the INITIAL tool budget ran before yielding. That is
+// not the command's duration: rendering it on a still-RUNNING Bash card froze the readout at values
+// such as "11 sec" for hours. Pending Bash cards measure from their original transcript timestamp and
+// tick live; completed cards keep the provider-derived fixed duration.
+function useBashDuration(status: ToolStatus | undefined, startedAt: string | undefined, fixedDurationMs: number | undefined): number | undefined {
+  const started = startedAt ? Date.parse(startedAt) : Number.NaN
+  const live = status === "pending" && Number.isFinite(started)
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!live) return
+    const tick = () => setNow(Date.now())
+    let interval: ReturnType<typeof setInterval> | undefined
+    const first = setTimeout(() => {
+      tick()
+      interval = setInterval(tick, 1_000)
+    }, 1_000 - (Date.now() % 1_000))
+    return () => {
+      clearTimeout(first)
+      if (interval) clearInterval(interval)
+    }
+  }, [live, startedAt])
+  return live ? Math.max(now - started, 0) : fixedDurationMs
+}
+
 function contextualDetail(detail?: string, cwd?: string, sessionId?: string | number): string | undefined {
   // "in <dir>" earns its space only when the command ran somewhere OTHER than the project root. codex
   // stamps every exec_command with an absolute `workdir`, which for the overwhelming majority of calls
@@ -2097,6 +2173,7 @@ function BashBlock({
   const [expanded, setExpanded] = useState(false)
   const [outExpanded, setOutExpanded] = useState(false)
   const bodyId = useId()
+  const shownDurationMs = useBashDuration(status, startedAt, durationMs)
   const lineCount = useMemo(() => command.split("\n").length, [command])
   const long = lineCount > BASH_MAX_LINES
   // Codex ships the command's stdout/stderr in the same rollout (Claude doesn't), so a codex Bash card
@@ -2124,7 +2201,7 @@ function BashBlock({
           <span className="min-w-0 truncate text-[11.5px] text-muted" title={shownDesc}>{shownDesc ?? ""}</span>
         </span>
         <span className="flex shrink-0 items-center gap-2">
-          <ToolStatusMeta status={status} backgroundState={backgroundState} liveBackgroundState={liveBackgroundState} exitCode={exitCode} durationMs={durationMs} />
+          <ToolStatusMeta status={status} backgroundState={backgroundState} liveBackgroundState={liveBackgroundState} exitCode={exitCode} durationMs={shownDurationMs} />
           {expandable && <ChevronRight aria-hidden="true" size={12} className={`shrink-0 text-muted transition-transform ${open ? "rotate-90" : ""}`} />}
         </span>
       </button>
@@ -3462,17 +3539,27 @@ export function BackgroundOpsStrip({
   slug,
   className = "px-4 pb-2 pt-1",
   includeAgents = true,
+  transcriptShells = [],
 }: {
   slug: string
   className?: string
   // Queue cards render live sub-agents as compact child lines directly under their composer. They
   // still use this strip for unrelated background shells/Monitors, so suppress agent duplication.
   includeAgents?: boolean
+  // Codex deliberate background execs are transcript-native; its board telemetry is still empty.
+  transcriptShells?: readonly BgShellView[]
 }) {
   const board = useBoard()
   const thread = threadBySlug(board, slug)
   const agents = includeAgents ? thread?.subAgents ?? [] : []
-  const shells = thread?.bgShells ?? []
+  const shells = [...(thread?.bgShells ?? [])]
+  const shellKeys = new Set(shells.map((shell) => shell.id ? `id:${shell.id}` : `${shell.label}\u0000${shell.startedAt ?? ""}`))
+  for (const shell of transcriptShells) {
+    const key = shell.id ? `id:${shell.id}` : `${shell.label}\u0000${shell.startedAt ?? ""}`
+    if (shellKeys.has(key)) continue
+    shellKeys.add(key)
+    shells.push(shell)
+  }
   const total = agents.length + shells.length
   // This is intentionally independent of transcript cards: it sits immediately below the affected
   // prompt box so a resting worker that owns a live shell still reads as active at a glance. Do not
@@ -3757,11 +3844,11 @@ function Dots() {
   return <span className="inline-block w-2.5 h-2.5 rounded-full border border-muted/70 border-t-transparent animate-spin" />
 }
 
-// The turn-in-flight banner: shimmering "Working…" (the ambient AI-at-work treatment) followed by a
-// dimmed elapsed timer. The baseline is the last real user interaction (server-derived, so it reads
-// as true turn duration and survives reloads); a thread with no usable timestamp falls back to
+// The turn-in-flight banner: the latest tool's gerund replaces "Working…" in THIS same bottom slot
+// and THIS same shimmer span. The baseline is the last real user interaction (server-derived, so it
+// reads as true turn duration and survives reloads); a thread with no usable timestamp falls back to
 // mount time. Ticks once a second — cheap, and unmounts with the banner.
-export function WorkingIndicator({ since }: { since?: string }) {
+export function WorkingIndicator({ since, activityLabel }: { since?: string; activityLabel?: string }) {
   const [baseline] = useState(() => {
     const t = Date.parse(since ?? "")
     return Number.isFinite(t) && t <= Date.now() ? t : Date.now()
@@ -3772,11 +3859,15 @@ export function WorkingIndicator({ since }: { since?: string }) {
     return () => clearInterval(id)
   }, [])
   const s = Math.max(0, Math.floor((now - baseline) / 1000))
-  const label = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`
+  const durationLabel = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`
   return (
-    <div className="flex items-baseline gap-2 text-[13px]">
-      <span className="shimmer-text">Working…</span>
-      <span className="tabular-nums text-[12px] text-muted/60">{label}</span>
+    <div
+      data-working-indicator
+      data-working-activity={activityLabel ? "tool" : "generic"}
+      className="flex items-baseline gap-2 text-[13px]"
+    >
+      <span className="shimmer-text">{activityLabel ?? "Working…"}</span>
+      <span className="tabular-nums text-[12px] text-muted/60">{durationLabel}</span>
     </div>
   )
 }
