@@ -1,4 +1,7 @@
 import { spawnSync } from "node:child_process";
+import { chmodSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 
 export interface CommandProbe {
   (command: string): boolean;
@@ -68,6 +71,49 @@ export function assertLaunchPrerequisites(
       throw new Error(
         `required executable \`${executable}\` is not available on PATH; install ${executable} and relaunch Fray`
       );
+  }
+}
+
+export interface NativeHelperOptions {
+  platform?: NodeJS.Platform;
+  arch?: string;
+  /** Resolves node-pty's package.json; injectable so the repair is testable without the real module. */
+  resolvePty?: () => string;
+  stat?: (path: string) => { mode: number };
+  chmod?: (path: string, mode: number) => void;
+}
+
+/**
+ * Mark node-pty's `spawn-helper` executable when the install left it unreadable-as-a-program.
+ *
+ * node-pty ships prebuilt `spawn-helper` binaries and relies on its own `post-install` script to set
+ * the executable bit. npm 11 blocks dependency install scripts by default (`allow-scripts`), so a
+ * plain `npm i frayui` — and `npx frayui`, which installs the same way — leaves the helper at 0644
+ * and EVERY pty spawn dies with `posix_spawnp failed.`: no terminal panes and no agent sessions at
+ * all. The source checkout hides this because `@fray-ui/server` carries a postinstall that chmods it;
+ * the registry package cannot rely on a script npm may refuse to run, so the launcher repairs the bit
+ * itself before anything spawns a pty. Idempotent, best-effort, and a no-op on Windows (conpty has no
+ * helper) — a failure here is left for the pty spawn itself to report.
+ */
+export function ensureNativeHelperPermissions(options: NativeHelperOptions = {}): void {
+  const platform = options.platform ?? process.platform;
+  if (platform === "win32") return;
+  const stat = options.stat ?? ((path: string) => statSync(path));
+  const chmod = options.chmod ?? ((path: string, mode: number) => chmodSync(path, mode));
+  const resolvePty =
+    options.resolvePty ?? (() => createRequire(import.meta.url).resolve("node-pty/package.json"));
+  try {
+    const helper = join(
+      dirname(resolvePty()),
+      "prebuilds",
+      `${platform}-${options.arch ?? process.arch}`,
+      "spawn-helper"
+    );
+    const mode = stat(helper).mode;
+    if ((mode & 0o111) === 0o111) return;
+    chmod(helper, mode | 0o755);
+  } catch {
+    // node-pty resolved elsewhere, or the helper is missing/read-only. Nothing actionable here.
   }
 }
 
