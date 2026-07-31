@@ -21,7 +21,7 @@
 // worker plugin, and cc's hooks/skills/agents are gone. But a machine can still carry a CACHED cc
 // install from before the retirement, whose hooks fire in every repo gated on cc's opt-IN sentinel.
 // A fresh worker never runs `fray on`, so such a cc is already dormant; we write cc's own per-session
-// `off` sentinel anyway via the shared config API (cc/scripts/fray survives as cc-worker's board
+// `off` sentinel anyway via the shared config API (board survives as cc-worker's board
 // implementation) so a stale install is guaranteed inert. Cheap belt-and-suspenders. See DECISIONS.md.
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';

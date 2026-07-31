@@ -4,11 +4,11 @@ A workspace-scoped UI layer over fray: a sidebar of agent threads on the left, a
 
 ## What we learned from recon
 
-**Fray side** (`cc/scripts/fray/`): the data layer already exists and is UI-ready.
+**Fray side** (`board/`): the data layer already exists and is UI-ready.
 
-- `fray --json` (`cc/scripts/fray/index.mjs:547`) emits `{ config, threads[], errors[], warnings[] }`; each thread carries `id, title, status, status_text, mechanism (human|threads|timer), humanBlocked, ready, dependsOn, owner, revalidate, agents[], blockers[]`. This is the read model, done.
+- `fray --json` (`board/index.mjs:547`) emits `{ config, threads[], errors[], warnings[] }`; each thread carries `id, title, status, status_text, mechanism (human|threads|timer), humanBlocked, ready, dependsOn, owner, revalidate, agents[], blockers[]`. This is the read model, done.
 - The modules are pure, dependency-free Node `.mjs` — a server can `import` them directly instead of shelling out. `config.mjs` is the schema authority (status vocab, block-mechanism derivation, staleness math).
-- `fray-update` (`cc/scripts/fray/thread-update.mjs`) is the structured, atomic write path — the UI never hand-edits thread markdown.
+- `fray-update` (`board/thread-update.mjs`) is the structured, atomic write path — the UI never hand-edits thread markdown.
 - The worker contract ("here's your thread file, edit it in place, statuses mean X") is already written down in `cc/skills/fray/SKILL.md`. The UI reuses it verbatim as the dispatch preamble.
 - Threads live in `<repo>/.fray/*.md` → workspace scoping is free: one server instance per repo, watching that repo's `.fray/` only.
 
@@ -108,7 +108,7 @@ ui/
     shared/     # zod schemas / types
 ```
 
-Server imports `cc/scripts/fray/*.mjs` directly (they're zero-dep by design) — no duplicate parser, no drift. New deps beyond GENT's set: `node-pty`, `@xterm/xterm` (+ `@xterm/addon-fit`, `@xterm/addon-webgl`), `ws` (terminal I/O wants a WebSocket; SSE stays for everything else).
+Server imports `board/*.mjs` directly (they're zero-dep by design) — no duplicate parser, no drift. New deps beyond GENT's set: `node-pty`, `@xterm/xterm` (+ `@xterm/addon-fit`, `@xterm/addon-webgl`), `ws` (terminal I/O wants a WebSocket; SSE stays for everything else).
 
 ## UI sketch
 

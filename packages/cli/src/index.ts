@@ -188,7 +188,7 @@ async function runSupervisor(
             environment: {
               FRAY_STABLE_WEB_DIST: artifact.webDir,
               FRAY_STABLE_ARTIFACT: artifact.digest,
-              FRAY_SCRIPTS_DIR: join(artifact.runtimeDir, "cc", "scripts", "fray"),
+              FRAY_SCRIPTS_DIR: join(artifact.runtimeDir, "board"),
               // The bundled runtime resolves its worker plugin from the verified artifact closure.
               FRAY_WORKER_PLUGIN_DIR: join(artifact.runtimeDir, "cc-worker"),
             },

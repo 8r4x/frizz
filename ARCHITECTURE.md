@@ -12,7 +12,7 @@ plugin (`../cc-worker/`). The full plan: `../plans/standalone-ui.md`.
   repo's `.fray/` and only the matching `~/.claude/projects/<cwd-slug>/` session logs. No
   cross-repo anything.
 - **Fray files are the source of truth for thread status.** The server imports the board logic
-  from `../../cc/scripts/fray/*.mjs` (zero-dep, plain node) — NEVER duplicate the parser. Writes
+  from `../../board/*.mjs` (zero-dep, plain node) — NEVER duplicate the parser. Writes
   to thread files go through the same code paths as `fray-update` (import `thread-update.mjs`
   helpers), never hand-rolled markdown edits.
 - **Session JSONL (`~/.claude/projects/<slug>/<session-id>.jsonl`) is telemetry only** —

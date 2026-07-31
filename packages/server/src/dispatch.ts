@@ -594,7 +594,7 @@ export function buildClaudeCommand(opts: {
   return argv
 }
 
-// The fray-worker plugin (single-thread worker contract + hooks), a sibling of cc/ in the Fray
+// The fray-worker plugin (single-thread worker contract + hooks), a sibling of board/ in the Fray
 // source tree. Deployed artifacts carry it at runtime/cc-worker, but pnpm may load this module
 // through a nested store rather than the flat node_modules layout. Search module ancestors so the
 // closure remains discoverable in either layout; an explicitly verified artifact path wins.

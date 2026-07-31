@@ -10,16 +10,16 @@ what was ported from the orchestrator `cc/` plugin, what was dropped, and why.
 ## Shared source, bundled runtime closure
 
 - **`scripts/fray/config.mjs` and `scripts/fray/agent-bindings.mjs` are THIN SHIMS** that
-  `export *` from `../../../cc/scripts/fray/*.mjs`. cc-worker never copies config/vocab/binding
+  `export *` from `../../../board/*.mjs`. cc-worker never copies config/vocab/binding
   logic — there is exactly one source of truth (cc's). This assumes cc is a sibling dir (`../../cc/`
   from the plugin root), the same assumption fray-ui's server makes (`ARCHITECTURE.md`: it imports
-  the board logic from `../../cc/scripts/fray/*.mjs`).
+  the board logic from `../../board/*.mjs`).
 - **`bin/fray` and `bin/fray-update`** are cc's exact shim pattern, resolving cc's real scripts at
-  `../../cc/scripts/fray/{index,thread-update}.mjs` relative to the bin file (cwd-independent). They
+  `../../board/{index,thread-update}.mjs` relative to the bin file (cwd-independent). They
   land on the worker's Bash PATH the way cc's do. `fray-update` is the worker's primary tool for
   owning its one thread file; `fray` lets it read/validate the board.
 - **Portable artifact rule:** `packages/cli/src/artifacts.ts` copies the exact sibling
-  `cc/scripts/fray/` module closure to `runtime/cc/scripts/fray/`, beside `runtime/cc-worker/`.
+  `board/` module closure to `runtime/board/`, beside `runtime/cc-worker/`.
   The existing shims therefore resolve inside an immutable artifact when the source checkout is gone;
   both the worker and cc closure are hashed in `manifest.runtimeFiles` and required at read time.
 - **`agents/*.md`** are copied UNCHANGED from `cc/agents/` (16 profiles) — a worker dispatches its
@@ -77,7 +77,7 @@ what was ported from the orchestrator `cc/` plugin, what was dropped, and why.
 worker session starts in the same repo, do both plugins' hooks fire (double-hook)?
 
 **Finding — NO, not by default. cc is inert in a fresh worker session.** cc's every hook is gated on
-`frayActive(projectDir, sessionId)` (`cc/scripts/fray/config.mjs`). That gate is **opt-IN per
+`frayActive(projectDir, sessionId)` (`board/config.mjs`). That gate is **opt-IN per
 session**: it requires `.fray/` to exist AND a per-session sentinel at
 `.fray/.session-state/<session_id>` containing `on` (written by `fray on` / the orchestrator fray
 skill's Step 0). With no sentinel it returns **false** — the documented default:
@@ -331,7 +331,7 @@ TWO-SIDED DEFENSE:
   repair.
 
 MECHANISM:
-- `cc/scripts/fray/index.mjs` `--json` gains a parallel `errorItems: [{file, kind, message}]`
+- `board/index.mjs` `--json` gains a parallel `errorItems: [{file, kind, message}]`
   (`kind: 'no-frontmatter'` = repairable, else `'other'`). The parser classifies — it knows exactly
   why it rejected the file. The legacy `errors: string[]` array is emitted UNCHANGED alongside it.
 - `errorItems` flows through `readBoard`/`fray.ts` → `board.ts assemble()` → `BoardSnapshot` +

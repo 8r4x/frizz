@@ -78,7 +78,7 @@ function fixture(root: string, content: string): string {
   mkdirSync(join(dir, "runtime", "cc-worker", ".claude-plugin"), { recursive: true });
   mkdirSync(join(dir, "runtime", "cc-worker", "hooks"), { recursive: true });
   mkdirSync(join(dir, "runtime", "cc-worker", "bin"), { recursive: true });
-  mkdirSync(join(dir, "runtime", "cc", "scripts", "fray"), { recursive: true });
+  mkdirSync(join(dir, "runtime", "board"), { recursive: true });
   mkdirSync(join(dir, "runtime", "prompts"), { recursive: true });
   writeFileSync(join(dir, "web", "index.html"), content);
   writeFileSync(join(dir, "web", "assets", "app.js"), "console.log('ok')");
@@ -94,10 +94,10 @@ function fixture(root: string, content: string): string {
   writeFileSync(join(dir, "runtime", "cc-worker", "hooks", "agent-bind.mjs"), "bind");
   writeFileSync(join(dir, "runtime", "cc-worker", "bin", "fray"), "board");
   writeFileSync(join(dir, "runtime", "cc-worker", "bin", "fray-update"), "update");
-  writeFileSync(join(dir, "runtime", "cc", "scripts", "fray", "config.mjs"), "config");
-  writeFileSync(join(dir, "runtime", "cc", "scripts", "fray", "agent-bindings.mjs"), "bindings");
-  writeFileSync(join(dir, "runtime", "cc", "scripts", "fray", "index.mjs"), "index");
-  writeFileSync(join(dir, "runtime", "cc", "scripts", "fray", "thread-update.mjs"), "update");
+  writeFileSync(join(dir, "runtime", "board", "config.mjs"), "config");
+  writeFileSync(join(dir, "runtime", "board", "agent-bindings.mjs"), "bindings");
+  writeFileSync(join(dir, "runtime", "board", "index.mjs"), "index");
+  writeFileSync(join(dir, "runtime", "board", "thread-update.mjs"), "update");
   const manifest = {
       version: 1,
       digest: "",
@@ -117,10 +117,10 @@ function fixture(root: string, content: string): string {
         "cc-worker/hooks/agent-bind.mjs": hash("bind"),
         "cc-worker/bin/fray": hash("board"),
         "cc-worker/bin/fray-update": hash("update"),
-        "cc/scripts/fray/config.mjs": hash("config"),
-        "cc/scripts/fray/agent-bindings.mjs": hash("bindings"),
-        "cc/scripts/fray/index.mjs": hash("index"),
-        "cc/scripts/fray/thread-update.mjs": hash("update"),
+        "board/config.mjs": hash("config"),
+        "board/agent-bindings.mjs": hash("bindings"),
+        "board/index.mjs": hash("index"),
+        "board/thread-update.mjs": hash("update"),
       },
     };
   manifest.digest = fixtureDigest(manifest);
@@ -278,7 +278,7 @@ test("artifact verification rejects a worker closure omitted from the runtime ma
   const digest = fixture(root, "known-good");
   const manifestPath = join(root, digest, "manifest.json");
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  delete manifest.runtimeFiles["cc/scripts/fray/index.mjs"];
+  delete manifest.runtimeFiles["board/index.mjs"];
   writeFileSync(manifestPath, JSON.stringify(manifest));
   assert.throws(() => readFrayArtifact(digest, root), /failed manifest validation/);
 });
@@ -470,10 +470,10 @@ test("a captured source snapshot remains usable after the checkout changes", () 
     "cc-worker/hooks/agent-bind.mjs",
     "cc-worker/bin/fray",
     "cc-worker/bin/fray-update",
-    "cc/scripts/fray/config.mjs",
-    "cc/scripts/fray/agent-bindings.mjs",
-    "cc/scripts/fray/index.mjs",
-    "cc/scripts/fray/thread-update.mjs",
+    "board/config.mjs",
+    "board/agent-bindings.mjs",
+    "board/index.mjs",
+    "board/thread-update.mjs",
   ]) {
     // The worker-plugin closure lives INSIDE the source root: the workspace is the repo root now, so
     // cc-worker/ and cc/ are siblings of packages/ rather than a reach-back above the source.
@@ -630,7 +630,7 @@ test("a real Nub/esbuild artifact boots its WebSocket-capable server and loads i
           FRAY_DEV_PORT: String(port),
           FRAY_STABLE_ARTIFACT: artifact.digest,
           FRAY_STABLE_WEB_DIST: artifact.webDir,
-          FRAY_SCRIPTS_DIR: join(artifact.runtimeDir, "cc", "scripts", "fray"),
+          FRAY_SCRIPTS_DIR: join(artifact.runtimeDir, "board"),
           FRAY_WORKER_PLUGIN_DIR: join(artifact.runtimeDir, "cc-worker"),
         },
         target,
@@ -692,10 +692,10 @@ test.skip("legacy deploy snapshot harness is superseded by the real bundled-arti
     "cc-worker/hooks/agent-bind.mjs",
     "cc-worker/bin/fray",
     "cc-worker/bin/fray-update",
-    "cc/scripts/fray/config.mjs",
-    "cc/scripts/fray/agent-bindings.mjs",
-    "cc/scripts/fray/index.mjs",
-    "cc/scripts/fray/thread-update.mjs",
+    "board/config.mjs",
+    "board/agent-bindings.mjs",
+    "board/index.mjs",
+    "board/thread-update.mjs",
   ]) {
     mkdirSync(dirname(join(root, file)), { recursive: true });
     writeFileSync(join(root, file), `${file}\n`);
@@ -864,8 +864,8 @@ test.skip("legacy deploy cleanup harness is superseded by the bundled-artifact s
     writeFileSync(join(plugin, file), "export {}\n");
   }
   for (const file of ["config.mjs", "agent-bindings.mjs", "index.mjs", "thread-update.mjs"]) {
-    mkdirSync(join(root, "cc", "scripts", "fray"), { recursive: true });
-    writeFileSync(join(root, "cc", "scripts", "fray", file), "export {}\n");
+    mkdirSync(join(root, "board"), { recursive: true });
+    writeFileSync(join(root, "board", file), "export {}\n");
   }
   mkdirSync(bin);
   const pnpm = join(bin, "pnpm");
@@ -912,7 +912,7 @@ test.skip("legacy deploy worker harness is superseded by the bundled-artifact sm
   mkdirSync(join(plugin, "hooks"), { recursive: true });
   mkdirSync(join(plugin, "bin"), { recursive: true });
   mkdirSync(join(plugin, "scripts", "fray"), { recursive: true });
-  mkdirSync(join(root, "cc", "scripts", "fray"), { recursive: true });
+  mkdirSync(join(root, "board"), { recursive: true });
   mkdirSync(bin);
   writeFileSync(join(plugin, ".claude-plugin", "plugin.json"), '{"name":"fray"}\n');
   writeFileSync(join(plugin, "skills", "worker", "SKILL.md"), "worker\n");
@@ -929,12 +929,12 @@ process.stdout.write(JSON.stringify({ scratch: ".fray/threads/" + sessionId + "/
 `
   );
   writeFileSync(join(plugin, "hooks", "agent-bind.mjs"), "bind\n");
-  writeFileSync(join(plugin, "scripts", "fray", "config.mjs"), `export * from "../../../cc/scripts/fray/config.mjs";\n`);
-  writeFileSync(join(plugin, "scripts", "fray", "agent-bindings.mjs"), `export * from "../../../cc/scripts/fray/agent-bindings.mjs";\n`);
-  writeFileSync(join(plugin, "bin", "fray"), `await import(new URL("../../cc/scripts/fray/index.mjs", import.meta.url));\n`);
-  writeFileSync(join(plugin, "bin", "fray-update"), `await import(new URL("../../cc/scripts/fray/thread-update.mjs", import.meta.url));\n`);
+  writeFileSync(join(plugin, "scripts", "fray", "config.mjs"), `export * from "../../../board/config.mjs";\n`);
+  writeFileSync(join(plugin, "scripts", "fray", "agent-bindings.mjs"), `export * from "../../../board/agent-bindings.mjs";\n`);
+  writeFileSync(join(plugin, "bin", "fray"), `await import(new URL("../../board/index.mjs", import.meta.url));\n`);
+  writeFileSync(join(plugin, "bin", "fray-update"), `await import(new URL("../../board/thread-update.mjs", import.meta.url));\n`);
   writeFileSync(
-    join(root, "cc", "scripts", "fray", "config.mjs"),
+    join(root, "board", "config.mjs"),
     `import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 export const currentSessionId = (explicit) => explicit || process.env.CLAUDE_CODE_SESSION_ID || null;
@@ -945,9 +945,9 @@ export const setSessionOverride = (project, sessionId, state) => {
 };
 `
   );
-  writeFileSync(join(root, "cc", "scripts", "fray", "agent-bindings.mjs"), "export const recordBinding = () => true; export const threadFromPrompt = () => null;\n");
-  writeFileSync(join(root, "cc", "scripts", "fray", "index.mjs"), "process.stdout.write(\"portable-board\\n\");\n");
-  writeFileSync(join(root, "cc", "scripts", "fray", "thread-update.mjs"), "process.stdout.write(\"portable-update\\n\");\n");
+  writeFileSync(join(root, "board", "agent-bindings.mjs"), "export const recordBinding = () => true; export const threadFromPrompt = () => null;\n");
+  writeFileSync(join(root, "board", "index.mjs"), "process.stdout.write(\"portable-board\\n\");\n");
+  writeFileSync(join(root, "board", "thread-update.mjs"), "process.stdout.write(\"portable-update\\n\");\n");
   const pnpm = join(bin, "pnpm");
   writeFileSync(
     pnpm,
@@ -972,7 +972,7 @@ printf 'export const dispatch = true\\n' > "$6/node_modules/@fray-ui/server/src/
     assert.equal(existsSync(join(bundled, "skills", "worker", "SKILL.md")), true);
     assert.equal(existsSync(join(bundled, "skills", "gh", "scripts", "ci-watch.mjs")), true);
     assert.equal(existsSync(join(bundled, "hooks", "session-seed.mjs")), true);
-    assert.equal(existsSync(join(artifact.runtimeDir, "cc", "scripts", "fray", "config.mjs")), true);
+    assert.equal(existsSync(join(artifact.runtimeDir, "board", "config.mjs")), true);
     assert.equal(
       resolve(dirname(join(artifact.runtimeDir, "node_modules", "@fray-ui", "server", "src", "dispatch.js")), "../../../../cc-worker"),
       bundled,
@@ -984,19 +984,19 @@ printf 'export const dispatch = true\\n' > "$6/node_modules/@fray-ui/server/src/
       "plugin files are manifest-verified runtime inputs"
     );
     assert.equal(
-      artifact.manifest.runtimeFiles["cc/scripts/fray/index.mjs"] !== undefined,
+      artifact.manifest.runtimeFiles["board/index.mjs"] !== undefined,
       true,
-      "the cc script closure is manifest-verified alongside the worker plugin"
+      "the board script closure is manifest-verified alongside the worker plugin"
     );
     const cleanHome = join(root, "clean-home")
     const project = join(root, "project")
     mkdirSync(join(project, ".fray", "threads", "portable-session"), { recursive: true })
     writeFileSync(join(project, ".fray", "threads", "portable-session", "scratch.md"), "# scratch\n")
     // Erase the checkout closure before invoking the copied artifact. The hook and both executable
-    // shims must resolve only runtime/{cc-worker,cc}, with no global Fray config/plugin to help.
+    // shims must resolve only runtime/{cc-worker,board}, with no global Fray config/plugin to help.
     rmSync(source, { recursive: true, force: true })
     rmSync(plugin, { recursive: true, force: true })
-    rmSync(join(root, "cc"), { recursive: true, force: true })
+    rmSync(join(root, "board"), { recursive: true, force: true })
     const cleanEnv = {
       PATH: process.env.PATH ?? "",
       HOME: cleanHome,

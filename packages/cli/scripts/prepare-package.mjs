@@ -7,10 +7,10 @@ import { execFileSync } from "node:child_process"
 // from the source checkout at launch), the registry package runs directly from what it ships, so
 // prepack must stage every runtime closure the server reaches for at run time:
 //   1. web-dist         — the built web client the server serves.
-//   2. runtime/cc/scripts/fray — the fray board parser the server SHELLS OUT to (server/src/fray.ts).
+//   2. runtime/board — the fray board parser the server SHELLS OUT to (server/src/fray.ts).
 //   3. runtime/cc-worker       — the Claude worker plugin every dispatched agent loads (dispatch.ts).
 // production.ts points FRAY_SCRIPTS_DIR / FRAY_WORKER_PLUGIN_DIR at (2)/(3); the cc-worker shims
-// resolve the board via `../../cc/scripts/fray` relative to the plugin, so the two MUST share the
+// resolve the board via `../../board` relative to the plugin, so the two MUST share the
 // `runtime/` parent (mirrors the source-checkout artifact layout in cli/src/artifacts.ts).
 const here = dirname(fileURLToPath(import.meta.url))
 const cli = resolve(here, "..")
@@ -37,7 +37,7 @@ const stage = (from, to, label) => {
   if (!existsSync(from)) throw new Error(`Fray runtime closure source is missing: ${label} (${from})`)
   cpSync(from, to, { recursive: true, filter: (s) => !skip(s) })
 }
-stage(resolve(repo, "cc/scripts/fray"), resolve(runtime, "cc/scripts/fray"), "cc/scripts/fray")
+stage(resolve(repo, "board"), resolve(runtime, "board"), "board")
 stage(resolve(repo, "cc-worker"), resolve(runtime, "cc-worker"), "cc-worker")
 
 // Fail loudly if the closure the server asserts at runtime did not land (mirrors
@@ -48,10 +48,10 @@ const required = [
   "cc-worker/hooks/agent-bind.mjs",
   "cc-worker/bin/fray",
   "cc-worker/bin/fray-update",
-  "cc/scripts/fray/config.mjs",
-  "cc/scripts/fray/agent-bindings.mjs",
-  "cc/scripts/fray/index.mjs",
-  "cc/scripts/fray/thread-update.mjs",
+  "board/config.mjs",
+  "board/agent-bindings.mjs",
+  "board/index.mjs",
+  "board/thread-update.mjs",
 ]
 for (const file of required) {
   if (!existsSync(resolve(runtime, file))) throw new Error(`Fray runtime closure is missing ${file} after staging`)

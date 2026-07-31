@@ -61,7 +61,7 @@ function bootServer(artifact, target, token, label) {
         FRAY_TMUX_SOCKET: `fray-survival-${PORT}-${process.pid}`,
         FRAY_STABLE_ARTIFACT: artifact.digest,
         FRAY_STABLE_WEB_DIST: artifact.webDir,
-        FRAY_SCRIPTS_DIR: join(artifact.runtimeDir, "cc", "scripts", "fray"),
+        FRAY_SCRIPTS_DIR: join(artifact.runtimeDir, "board"),
         FRAY_WORKER_PLUGIN_DIR: join(artifact.runtimeDir, "cc-worker"),
       },
       target,

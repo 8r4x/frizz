@@ -260,24 +260,24 @@ function workerPluginSourceDir(sourceDir: string): string {
   return resolve(sourceDir, "cc-worker");
 }
 
-// cc-worker intentionally shares the board/update implementation with cc. The deploy artifact is
-// allowed no source-checkout reach-back, so carry the exact scripts closure beside the plugin at
-// runtime/cc/scripts/fray (the shims' existing relative imports resolve there).
-function workerPluginCcClosureSourceDir(sourceDir: string): string {
-  return resolve(sourceDir, "cc", "scripts", "fray");
+// cc-worker intentionally shares the board/update implementation with `board/`. The deploy artifact
+// is allowed no source-checkout reach-back, so carry the exact board closure beside the plugin at
+// runtime/board (the shims' existing relative imports resolve there).
+function workerPluginBoardClosureSourceDir(sourceDir: string): string {
+  return resolve(sourceDir, "board");
 }
 
 /**
  * The fray source closure, as an explicit ALLOWLIST of repo-root entries.
  *
  * The workspace used to live in a `ui/` subtree, so a snapshot could be "that one directory, plus a
- * reach-back to cc-worker and cc/scripts/fray". The workspace is now the repo root itself, and the
+ * reach-back to cc-worker and the board closure". The workspace is now the repo root itself, and the
  * root also holds `.claude/worktrees` (entire sibling checkouts), `plans/`, `attachments/`, and
  * scratch dirs. This MUST stay an allowlist rather than an extension of the ignore set: a blocklist
  * silently swallows every new root directory, which bloats the snapshot and — worse — makes the
  * fingerprint a moving target, so every capture would race "source changed during capture".
  */
-const FRAY_SOURCE_DIRECTORIES = ["packages", "scripts", "cc", "cc-worker"] as const;
+const FRAY_SOURCE_DIRECTORIES = ["packages", "scripts", "board", "cc-worker"] as const;
 const FRAY_SOURCE_FILES = [
   "package.json",
   "pnpm-lock.yaml",
@@ -299,10 +299,10 @@ const WORKER_PLUGIN_REQUIRED_FILES = [
   "cc-worker/hooks/agent-bind.mjs",
   "cc-worker/bin/fray",
   "cc-worker/bin/fray-update",
-  "cc/scripts/fray/config.mjs",
-  "cc/scripts/fray/agent-bindings.mjs",
-  "cc/scripts/fray/index.mjs",
-  "cc/scripts/fray/thread-update.mjs",
+  "board/config.mjs",
+  "board/agent-bindings.mjs",
+  "board/index.mjs",
+  "board/thread-update.mjs",
 ] as const;
 
 // The worker contract used to ship as markdown under runtime/prompts/ and get read at dispatch time;
@@ -512,7 +512,7 @@ export function captureFraySourceSnapshot(
   let lastFailure = "source changed during capture";
   for (let attempt = 1; attempt <= SOURCE_SNAPSHOT_MAX_ATTEMPTS; attempt++) {
     const dir = join(root, `${SOURCE_SNAPSHOT_PREFIX}${process.pid}-${randomUUID()}`);
-    // The snapshot mirrors the repo root itself, so cc-worker's `../../cc/scripts/fray` reach-back
+    // The snapshot mirrors the repo root itself, so cc-worker's `../../board` reach-back
     // and the workspace's own relative paths resolve inside it exactly as they do in the checkout.
     const snapshotSource = dir;
     const trees = fraySourceTrees(source, dir);
@@ -874,7 +874,7 @@ export function buildFrayArtifact(
   const snapshot = captureFraySourceSnapshot(sourceDir, root);
   const source = snapshot.sourceDir;
   const workerPlugin = workerPluginSourceDir(source);
-  const workerPluginCcClosure = workerPluginCcClosureSourceDir(source);
+  const workerPluginBoardClosure = workerPluginBoardClosureSourceDir(source);
   const staging = join(root, `.staging-${process.pid}-${randomUUID()}`);
   const runCommand = options.runCommand ?? runArtifactCommand;
   try {
@@ -915,7 +915,7 @@ export function buildFrayArtifact(
       recursive: true,
       preserveTimestamps: true,
     });
-    cpSync(workerPluginCcClosure, join(staging, "runtime", "cc", "scripts", "fray"), {
+    cpSync(workerPluginBoardClosure, join(staging, "runtime", "board"), {
       recursive: true,
       preserveTimestamps: true,
     });

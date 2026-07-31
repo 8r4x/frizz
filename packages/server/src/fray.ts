@@ -6,7 +6,7 @@ import { ThreadSlug } from "@fray-ui/shared"
 
 const execFileP = promisify(execFile)
 
-// We SHELL OUT to the fray board scripts (cc/scripts/fray/*.mjs) rather than importing them.
+// We SHELL OUT to the fray board scripts (board/*.mjs) rather than importing them.
 // They are zero-dep plain node but pull in a wide internal module graph (ownership, bindings,
 // agent-status, decisions) and read the project via CLAUDE_PROJECT_DIR/cwd — invoking the CLI
 // with that env is the robust, drift-proof path (the board logic is never duplicated here, per
@@ -18,7 +18,7 @@ const execFileP = promisify(execFile)
 export function frayScriptsDir(): string {
   if (process.env.FRAY_SCRIPTS_DIR) return process.env.FRAY_SCRIPTS_DIR
   // src/ -> server -> packages -> <repo root>
-  return resolve(import.meta.dirname, "..", "..", "..", "cc", "scripts", "fray")
+  return resolve(import.meta.dirname, "..", "..", "..", "board")
 }
 
 // The per-thread shape emitted by `fray --json` (index.mjs, the --json branch). Parsed
@@ -104,7 +104,7 @@ export async function readBoard(projectDir: string, scriptsDir = frayScriptsDir(
     threads: rawThreads.filter((thread) => ThreadSlug.safeParse(thread?.id).success),
     errors: [...(Array.isArray(parsed.errors) ? parsed.errors : []), ...invalidErrors],
     warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
-    // Additive: absent on a pre-update fray script (older cc/scripts) → [] (the board just loses the
+    // Additive: absent on a pre-update fray script (older board scripts) → [] (the board just loses the
     // repair affordance, never the plain error strings).
     errorItems: [...(Array.isArray(parsed.errorItems) ? parsed.errorItems : []), ...invalidErrorItems],
   }

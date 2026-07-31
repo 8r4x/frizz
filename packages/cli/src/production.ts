@@ -121,9 +121,9 @@ async function runSupervisor(port: number, token: string): Promise<never> {
   // The registry package runs directly from what it ships, so it carries its own runtime closure
   // (staged by scripts/prepare-package.mjs). The server SHELLS OUT to the board parser and every
   // dispatched worker loads the plugin, so both must be pointed at the bundled copies — the
-  // monorepo-relative default in server/src/fray.ts resolves to a non-existent node_modules/cc path.
+  // monorepo-relative default in server/src/fray.ts resolves to a non-existent node_modules/board path.
   const runtimeDir = join(import.meta.dirname, "..", "runtime");
-  const scriptsDir = join(runtimeDir, "cc", "scripts", "fray");
+  const scriptsDir = join(runtimeDir, "board");
   const workerPluginDir = join(runtimeDir, "cc-worker");
   // The published package runs as an esbuild bundle (dist/frayui.js); the server child and the
   // detached daemon are emitted as sibling bundles in the same dist/ by scripts/build-package.mjs.

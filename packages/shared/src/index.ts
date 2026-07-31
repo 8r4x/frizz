@@ -40,7 +40,7 @@ export function isAllowedAttachmentName(name: string): boolean {
 // The <input accept> value for the file picker: every allowed extension as `.ext`.
 export const ATTACHMENT_ACCEPT = ATTACHMENT_EXTENSIONS.map((e) => `.${e}`).join(",")
 
-// ---- Fray board vocabulary (mirrors cc/scripts/fray/config.mjs) ----
+// ---- Fray board vocabulary (mirrors board/config.mjs) ----
 
 // Declaration order IS the lifecycle order (STATUS_ORDER = FrayStatus.options), consumed by the
 // status pickers and the roadmap-count ordering. `needs-human` is a FIRST-CLASS status — the declared
