@@ -40,7 +40,7 @@ test("ordinary tool turns coalesce across provider batches while retaining a sta
   assert.equal(compact[0].messageIndex, 0)
 })
 
-test("prose, background shells, and sub-agent cards split ordinary activity runs", () => {
+test("background shells stay in the run while visible prose and sub-agent cards split it", () => {
   const background = toolMessage("background", [
     tool("Bash", { command: "nub run dev", backgroundState: "background", status: "pending" }),
   ])
@@ -74,17 +74,13 @@ test("prose, background shells, and sub-agent cards split ordinary activity runs
   const compact = coalesceToolActivityMessages(messages)
   assert.deepEqual(compact.map((entry) => entry.message.sourceId), [
     "one",
-    "background",
-    "two",
     "agent",
     "three",
     "prose",
     "four",
   ])
-  assert.deepEqual(compact[0].message.tools.map((call) => call.name), ["Read"])
-  assert.deepEqual(compact[1].message.tools.map((call) => call.name), ["Bash"])
-  assert.deepEqual(compact[2].message.tools.map((call) => call.name), ["Grep"])
-  assert.equal(isToolActivityException(background.tools[0]), true)
+  assert.deepEqual(compact[0].message.tools.map((call) => call.name), ["Read", "Bash", "Grep"])
+  assert.equal(isToolActivityException(background.tools[0]), false)
   assert.equal(isToolActivityException(tool("Bash", { backgroundState: "unknown" })), true)
   assert.equal(isToolActivityException(agent.tools[0]), true)
   assert.equal(isToolActivityException(tool("Send message", { sendTo: "main" })), true)
@@ -118,16 +114,13 @@ test("a prose message's ordinary tool tail owns following provider batches until
   ]
 
   const compact = coalesceToolActivityMessages(messages)
-  assert.equal(compact.length, 3)
+  assert.equal(compact.length, 1)
   assert.equal(compact[0].message.sourceId, "lead")
   assert.equal(compact[0].message.text, lead.text)
   assert.deepEqual(compact[0].message.parts?.map((part) => part.kind), ["text", "tools"])
-  assert.deepEqual(compact[0].message.tools.map((call) => call.name), ["Bash", "Read"])
+  assert.deepEqual(compact[0].message.tools.map((call) => call.name), ["Bash", "Read", "Bash", "Write"])
   assert.equal(compact[0].message.parts?.[1].kind, "tools")
-  assert.equal(compact[0].message.parts?.[1].kind === "tools" ? compact[0].message.parts[1].tools.length : 0, 2)
-  assert.equal(compact[1].message.sourceId, "batch-b")
-  assert.equal(compact[1].message.tools[0].backgroundState, "background")
-  assert.equal(compact[2].message.sourceId, "batch-c")
+  assert.equal(compact[0].message.parts?.[1].kind === "tools" ? compact[0].message.parts[1].tools.length : 0, 4)
 })
 
 test("the latest pending tool shimmer replaces the generic working tail", () => {

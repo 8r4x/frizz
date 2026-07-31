@@ -1,5 +1,6 @@
 import { useEffect } from "react"
 import { createRoot } from "react-dom/client"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ChatMessage } from "./hooks.ts"
 import { Message } from "./components/ChatView.tsx"
 import "./styles.css"
@@ -30,6 +31,8 @@ const messages: ChatMessage[] = [
   { sourceId: "a2", role: "assistant", text: "Recommend a caller-owned bounded cache keyed on the normalized id, with a regression test for the empty-input path.", tools: [], parts: [] },
 ]
 
+const queryClient = new QueryClient()
+
 function Fixture() {
   useEffect(() => {
     // Auto-expand the SECOND reasoning block so the single screenshot captures collapsed + expanded.
@@ -51,4 +54,8 @@ function Fixture() {
   )
 }
 
-createRoot(document.getElementById("root")!).render(<Fixture />)
+createRoot(document.getElementById("root")!).render(
+  <QueryClientProvider client={queryClient}>
+    <Fixture />
+  </QueryClientProvider>,
+)

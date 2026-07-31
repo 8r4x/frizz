@@ -3739,7 +3739,9 @@ function ReasoningBlock({ text, durationMs, sourceId }: { text: string; duration
         className={`${TRANSCRIPT_META_LABEL_CLASS} flex items-center gap-1 self-start rounded outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60`}
       >
         <span>{label}</span>
-        <ChevronRight aria-hidden="true" size={12} className={`shrink-0 transition-transform ${open ? "rotate-90" : ""}`} />
+        {/* Lucide's chevron ink sits 1.15px below the 13px label's cap-band centre. The same
+            -0.088em correction used by the peer tool-activity chevron leaves a ~0px residual. */}
+        <ChevronRight aria-hidden="true" size={13} className={`size-[1em] shrink-0 -translate-y-[0.088em] transition-transform ${open ? "rotate-90" : ""}`} />
       </button>
       {open && (
         <div id={bodyId} className="fray-reasoning mt-1.5 ml-[5px] border-l border-border/70 pl-3">
