@@ -589,10 +589,16 @@ a[href] {
   -webkit-mask: var(--md-task-glyph) center / calc(var(--md-task-box) * 10 / 15) no-repeat;
   mask: var(--md-task-glyph) center / calc(var(--md-task-box) * 10 / 15) no-repeat;
 }
-/* [x] complete — the sidebar's done mark exactly: muted box, lucide `Check` at strokeWidth 3. */
+/* [x] complete — the sidebar's done mark exactly: muted box, lucide `Check` at strokeWidth 3.
+   The viewBox is shifted `-0.5` in y ON PURPOSE, and it is the whole optical correction for this
+   glyph. `mask-position: center` centres the VIEWBOX, but lucide's check is not centred inside it:
+   its path runs (20,6)→(9,17)→(4,12), so with a 3-wide round-capped stroke the ink spans y 4.5..18.5
+   — centre 11.5, half a unit ABOVE the box's 12. Rendered honestly that leaves the tick riding high
+   in its checkbox (measured 0.24px at a 14px box). Correcting it in the glyph's OWN coordinates
+   rather than with a transform means it needs no unit and cannot drift with the font size. */
 .md-body .md-task-checked {
   color: color-mix(in srgb, var(--color-muted) 85%, transparent);
-  --md-task-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
+  --md-task-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -0.5 24 24' fill='none' stroke='%23fff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
 }
 /* [-] cancelled — lucide `X` at the same weight, at the family's FAINTEST tone. The struck text
    below is what actually carries the state; the mark only confirms it. */
@@ -615,11 +621,14 @@ a[href] {
   position: absolute;
   top: 50%;
   left: 50%;
-  /* Deliberately fatter than lucide's 0.222: the check and the X beside it carry 10/15 of the box in
-     ink, and a dot at the literal SquareDot ratio read as a speck against them — the row looked
-     unfinished rather than in flight. 0.4 puts its ink mass in the same family. */
-  width: calc(var(--md-task-box) * 0.4);
-  height: calc(var(--md-task-box) * 0.4);
+  /* Fatter than lucide's literal 0.222, which read as a speck beside the check and the X — but a
+     SOLID disc is far heavier per unit of diameter than an outlined mark, and 0.4 overshot into
+     being the heaviest thing in the column (measured 12.65% ink coverage against the check's 5.81%,
+     a 2.18× spread). 0.31 puts a filled dot at ~7.5%, inside the family.
+     See scripts/verify-md-task-glyph-centering.mjs — bbox parity is the WRONG target here, since a
+     dot is legitimately compact; equal ink WEIGHT is what makes the column read evenly. */
+  width: calc(var(--md-task-box) * 0.31);
+  height: calc(var(--md-task-box) * 0.31);
   transform: translate(-50%, -50%);
   border-radius: 50%;
   background: currentColor;
@@ -637,12 +646,23 @@ a[href] {
   align-items: center;
   justify-content: center;
   font-family: var(--font-sans);
-  font-size: calc(var(--md-task-box) * 0.82);
+  /* The sidebar's own ratio: `Glyph` is a 10px bold char in a 15px StatusBox. An earlier 0.82 here
+     made the "?" the tallest mark in the family by half again (ink 0.589 of the box against the X's
+     0.419) — it read as a different-sized mark, not a quieter one. */
+  font-size: calc(var(--md-task-box) * 10 / 15);
   font-weight: 700;
   line-height: 1;
-  /* Per-glyph, not shared: the question mark has no descender, so its ink rides high in the line box
-     that `align-items: center` centres. Measured against the box's own centre. */
-  padding-top: calc(var(--md-task-box) * 0.06);
+  /* Per-glyph, and PIXEL-measured (scripts/verify-md-task-glyph-centering.mjs) rather than reasoned
+     about — this is a text glyph, so no DOM rect can see where its ink falls. `align-items: center`
+     centres the LINE BOX, whose descender space the "?" does not use, and the advance width is not
+     symmetric about the ink either. Both corrections are fractions of the box, so they scale.
+     An earlier `padding-top` guess here overshot and left the mark 0.68px LOW at a 14px box; padding
+     is also the wrong tool, since `align-items: center` re-centres in the reduced area and only half
+     of it lands.
+     In `em`, i.e. against the ::after's OWN font-size — this corrects a FONT metric, so that is the
+     dependency it must track. Written as a fraction of the box instead, it silently went 0.13px out
+     the moment the glyph was resized. */
+  transform: translate(0.0105em, -0.0136em);
 }
 /* The row's TEXT carries the state too — a checklist where every line is equally bright makes the
    reader re-read the glyphs to find what is still live. Mirrors TodoBlock's TODO_ROW_TEXT; cancelled
