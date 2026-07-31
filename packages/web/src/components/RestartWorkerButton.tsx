@@ -45,7 +45,12 @@ export function RestartWorkerButton({ thread }: { thread: ThreadView }) {
           setBusy(true)
           restartWorker(queryClient, thread.id).finally(() => setBusy(false))
         }}
-        className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12px] font-medium text-fg/75 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 disabled:cursor-not-allowed disabled:opacity-45"
+        // Wears the SAME pill as the verbs beside it (the snooze group's exact border + surface). It
+        // shipped borderless for one review pass and read as a static label rather than a control —
+        // in a strip where every other verb is a bordered pill, the bare one is the odd mark out, and
+        // this one restarts a process. Tone stays at fg/75, below Mark-as-done, so the hierarchy still
+        // says "maintenance verb": the BOX says clickable, the TONE says secondary.
+        className="flex items-center gap-1.5 rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] font-medium text-fg/75 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 disabled:cursor-not-allowed disabled:opacity-45"
       >
         {busy ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
         Restart worker
