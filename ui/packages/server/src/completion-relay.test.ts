@@ -1,9 +1,9 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import {
-  isModelFacingCarrier, isAgentReport, blockTaskIds, parseReportBlock, repairedTaskIds,
-  repairMessage, reportsDueForRepair, reportKind, REPAIR_MARKER, REPORT_REPAIR_AFTER_MS, type QueuedReport,
-} from "./report-delivery.ts"
+  isModelFacingCarrier, isAgentReport, blockTaskIds, parseReportBlock, relayedTaskIds,
+  relayMessage, completionsDueForRelay, reportKind, RELAY_MARKER, RELAY_AFTER_MS, type QueuedReport,
+} from "./completion-relay.ts"
 
 // Shaped exactly like the real thing (see the corpus quoted in report-delivery.ts).
 const block = (over: Partial<{ taskId: string; toolUseId: string; status: string; summary: string; result: string; outputFile: string }> = {}): string => {
@@ -70,25 +70,25 @@ test("blockTaskIds reads every id in a recovery block and drops the orphan senti
 
 test("a repair is idempotent through the TRANSCRIPT — its own marker resolves it on re-fold", () => {
   const report: QueuedReport = { taskId: "a26ab44059b4cf3db", kind: "agent", chars: 14796, outputFile: "/t/a.output", summary: 'Agent "Impact analysis" finished' }
-  const msg = repairMessage(report)
+  const msg = relayMessage(report)
   // This is the load-bearing round-trip: what fray injects must be readable back as delivery evidence
   // for exactly this task-id, or a fray restart repairs the same report forever.
-  assert.deepEqual(repairedTaskIds(msg), ["a26ab44059b4cf3db"])
-  assert.deepEqual(repairedTaskIds("ordinary prose with no marker"), [])
+  assert.deepEqual(relayedTaskIds(msg), ["a26ab44059b4cf3db"])
+  assert.deepEqual(relayedTaskIds("ordinary prose with no marker"), [])
 })
 
 test("the repair names the file and refuses to pretend the agent read anything", () => {
-  const msg = repairMessage({ taskId: "a1", kind: "agent", chars: 14796, outputFile: "/t/a.output", summary: 'Agent "Impact analysis" finished' })
+  const msg = relayMessage({ taskId: "a1", kind: "agent", chars: 14796, outputFile: "/t/a.output", summary: 'Agent "Impact analysis" finished' })
   assert.ok(msg.includes("/t/a.output"), "must point at the report on disk")
   assert.ok(msg.includes("14,796"), "must state what was lost")
-  assert.ok(msg.includes(REPAIR_MARKER))
+  assert.ok(msg.includes(RELAY_MARKER))
   // A pointer, never the payload — re-injecting the text would re-feed the runtime the thing it just
   // failed to move, and the file holds more than the truncated excerpt anyway.
   assert.ok(msg.length < 1000, `repair must stay compact, was ${msg.length}`)
 })
 
 test("with no output file the repair says so rather than pointing at nothing", () => {
-  const msg = repairMessage({ taskId: "a1", kind: "agent", chars: 0 })
+  const msg = relayMessage({ taskId: "a1", kind: "agent", chars: 0 })
   assert.ok(!msg.includes("undefined"), msg)
   assert.ok(msg.includes("not recoverable"), msg)
 })
@@ -96,23 +96,45 @@ test("with no output file the repair says so rather than pointing at nothing", (
 test("nothing is repaired while a turn is in flight — the report may still be arriving", () => {
   const now = Date.parse("2026-07-30T12:00:00Z")
   const old: QueuedReport = { taskId: "a1", kind: "agent", chars: 10, queuedAt: "2026-07-30T11:00:00Z" }
-  assert.deepEqual(reportsDueForRepair([old], { nowMs: now, atRest: false }), [])
-  assert.deepEqual(reportsDueForRepair([old], { nowMs: now, atRest: true }).map((r) => r.taskId), ["a1"])
+  assert.deepEqual(completionsDueForRelay([old], { nowMs: now, atRest: false, sinceMs: 0 }), [])
+  assert.deepEqual(completionsDueForRelay([old], { nowMs: now, atRest: true, sinceMs: 0 }).map((r) => r.taskId), ["a1"])
 })
 
 test("a freshly queued report is left alone until the age floor passes", () => {
   const now = Date.parse("2026-07-30T12:00:00Z")
   const fresh: QueuedReport = { taskId: "a1", kind: "agent", chars: 10, queuedAt: new Date(now - 1_000).toISOString() }
-  assert.deepEqual(reportsDueForRepair([fresh], { nowMs: now, atRest: true }), [])
-  const ripe: QueuedReport = { taskId: "a2", kind: "agent", chars: 10, queuedAt: new Date(now - REPORT_REPAIR_AFTER_MS - 1).toISOString() }
-  assert.deepEqual(reportsDueForRepair([ripe], { nowMs: now, atRest: true }).map((r) => r.taskId), ["a2"])
+  assert.deepEqual(completionsDueForRelay([fresh], { nowMs: now, atRest: true, sinceMs: 0 }), [])
+  const ripe: QueuedReport = { taskId: "a2", kind: "agent", chars: 10, queuedAt: new Date(now - RELAY_AFTER_MS - 1).toISOString() }
+  assert.deepEqual(completionsDueForRelay([ripe], { nowMs: now, atRest: true, sinceMs: 0 }).map((r) => r.taskId), ["a2"])
 })
 
-test("an unparseable timestamp makes a report due, never eternally un-repairable", () => {
+test("an undatable completion is treated as HISTORY, never relayed", () => {
+  // Deliberately the opposite of the old policy. An absent/garbage stamp is exactly the shape a
+  // re-folded historical record has, and the cost of guessing wrong is spamming a live agent about
+  // work it finished days ago — the failure the watermark exists to prevent.
   const now = Date.parse("2026-07-30T12:00:00Z")
   for (const queuedAt of [undefined, "", "not-a-date"]) {
     const r: QueuedReport = { taskId: "a1", kind: "agent", chars: 10, queuedAt }
-    assert.deepEqual(reportsDueForRepair([r], { nowMs: now, atRest: true }).map((x) => x.taskId), ["a1"], String(queuedAt))
+    assert.deepEqual(completionsDueForRelay([r], { nowMs: now, atRest: true, sinceMs: 0 }), [], String(queuedAt))
+  }
+})
+
+test("THE WATERMARK: a completion queued before this process started is never relayed", () => {
+  const boot = Date.parse("2026-07-30T12:00:00Z")
+  const now = boot + 10 * 60_000
+  const old: QueuedReport = { taskId: "old", kind: "agent", chars: 10, queuedAt: new Date(boot - 60_000).toISOString() }
+  const fresh: QueuedReport = { taskId: "new", kind: "agent", chars: 10, queuedAt: new Date(boot + 60_000).toISOString() }
+  const due = completionsDueForRelay([old, fresh], { nowMs: now, atRest: true, sinceMs: boot })
+  assert.deepEqual(due.map((r) => r.taskId), ["new"], "history stays history; only this run is relayed")
+})
+
+test("the relay is INVISIBLE in the timeline — it opens with a <fray-…> noise prefix", () => {
+  // transcript.ts NOISE_PREFIXES already contains "<fray-", and isInjectedNoise skips those records,
+  // so the thread renders exactly as it did before. No UI change, no card, no narration.
+  for (const kind of ["agent", "shell"] as const) {
+    const msg = relayMessage({ taskId: "a1", kind, chars: 10, outputFile: "/t/o", summary: "x" })
+    assert.ok(msg.trimStart().startsWith("<fray-"), `${kind}: ${msg.slice(0, 40)}`)
+    assert.deepEqual(relayedTaskIds(msg), ["a1"], "still resolves itself on re-fold")
   }
 })
 
@@ -130,12 +152,12 @@ test("a SHELL notification is tracked too — its output survives but its WAKE d
 })
 
 test("a shell repair is a WAKE, not a reading assignment", () => {
-  const msg = repairMessage({
+  const msg = relayMessage({
     taskId: "bqt3teief", kind: "shell", chars: 0, outputFile: "/t/b.output",
     summary: 'Background command "Run the clippy gate" completed (exit code 0)',
   })
   assert.ok(msg.includes("never woken"), msg)
   assert.ok(msg.includes("/t/b.output"), msg)
   assert.ok(!msg.includes("READ THAT FILE"), "a shell's output was always retrievable — do not scold")
-  assert.deepEqual(repairedTaskIds(msg), ["bqt3teief"], "still idempotent through the transcript")
+  assert.deepEqual(relayedTaskIds(msg), ["bqt3teief"], "still idempotent through the transcript")
 })

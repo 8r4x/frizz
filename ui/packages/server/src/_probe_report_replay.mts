@@ -24,7 +24,7 @@ import { createStorage } from "./storage.ts"
 import { Bus } from "./bus.ts"
 import { cwdSlug, type Project } from "./project.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
-import { MAX_TRACKED_REPORTS } from "./report-delivery.ts"
+import { MAX_TRACKED_REPORTS } from "./completion-relay.ts"
 import type { AgentBackend } from "./backend/types.ts"
 
 const files = process.argv.slice(2)

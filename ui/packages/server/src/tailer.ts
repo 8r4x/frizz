@@ -17,9 +17,9 @@ import { classifyLimitRecord } from "./backend/usage-limit.ts"
 import { parseDeliveryLedger, correlateDeliveryRecord, ageDeliveries, serializeDeliveryLedger, type DeliveryLedgerItem } from "./delivery-ledger.ts"
 import { createCodexSubAgentTracker, type CodexSubAgentTracker } from "./codex-subagents.ts"
 import {
-  isModelFacingCarrier, reportKind, blockTaskIds, parseReportBlock, repairedTaskIds,
+  isModelFacingCarrier, reportKind, blockTaskIds, parseReportBlock, relayedTaskIds,
   MAX_TRACKED_REPORTS, type QueuedReport,
-} from "./report-delivery.ts"
+} from "./completion-relay.ts"
 import {
   createTailStateCache,
   decodeTailState,
@@ -1378,11 +1378,11 @@ function trackReportDelivery(state: TailState, rec: Record, raw: string): void {
 
 // A repair fray injected is a plain user record, so the notification fold above never sees it. This is
 // what makes the repair idempotent across a re-fold without persisting anything — see report-delivery.
-function trackReportRepairs(state: TailState, rec: Record): void {
+function trackRelayEchoes(state: TailState, rec: Record): void {
   if (!isModelFacingCarrier(rec.type)) return
   const text = notificationText(rec)
   if (!text) return
-  for (const id of repairedTaskIds(text)) {
+  for (const id of relayedTaskIds(text)) {
     state.deliveredReports.add(id)
     state.queuedReports.delete(id)
   }
@@ -1657,7 +1657,7 @@ export function applyRecord(state: TailState, rec: Record): void {
   // self-guards on shape + tracked ids).
   trackCompletions(state, rec)
   // A repair fray injected earlier carries no <task-notification>, so it needs its own pass.
-  trackReportRepairs(state, rec)
+  trackRelayEchoes(state, rec)
 }
 
 // Derive the final-message-dependent fields (preview + question flag + done/awaiting fence) from the

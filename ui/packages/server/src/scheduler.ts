@@ -9,7 +9,7 @@ import type { LimitFault } from "./backend/types.ts"
 import { limitFaultResetKey, limitPauseIsStale, quotaWindowKeyFor, quotaWindowRecovered, textResetInstant } from "./backend/usage-limit.ts"
 import { createWakeDeliveryStore, type WakeDelivery } from "./wake-store.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
-import { reportsDueForRepair, repairMessage, MAX_REPAIRS_PER_TICK } from "./report-delivery.ts"
+import { completionsDueForRelay, relayMessage } from "./completion-relay.ts"
 import {
   createGithubReviewFetcher,
   isBotGithubActor,
@@ -1109,15 +1109,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const tele = deps.tailer.get(row.slug)
       const dropped = tele?.droppedReports
       if (!dropped?.length || tele?.turn !== "idle") continue
-      // NEWEST first, and capped: one corpus thread accumulated 383 lost shell notifications, and
-      // firing all of them at a freshly-woken agent would bury it. The remainder is LOGGED, never
-      // silently truncated — the next tick takes the next few, and each keeps its own delivery id.
-      const due = reportsDueForRepair(dropped, { nowMs, atRest: true })
-        .slice()
-        .sort((a, b) => String(b.queuedAt ?? "").localeCompare(String(a.queuedAt ?? "")))
-      if (due.length > MAX_REPAIRS_PER_TICK)
-        log(`waker: ${row.slug} has ${due.length} undelivered reports — repairing the newest ${MAX_REPAIRS_PER_TICK} this tick`)
-      for (const report of due.slice(0, MAX_REPAIRS_PER_TICK)) {
+      // No cap and no ordering games: the watermark in completion-relay.ts means only completions
+      // dropped during THIS process are eligible, so the due set is the handful a live thread actually
+      // lost — not the hundreds of historical drops sitting in a long transcript.
+      for (const report of completionsDueForRelay(dropped, { nowMs, atRest: true })) {
         const fenceId = reportFenceId(report.taskId)
         const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
         if (outbox.get(deliveryId)) continue // this report already has its one repair
@@ -1127,7 +1122,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           sessionId: row.session_id,
           fenceId,
           hintKey: `${REPORT_HINT_PREFIX}${report.taskId}`,
-          message: repairMessage(report),
+          message: relayMessage(report),
           reason: `sub-agent report never reached the model (${report.summary ?? report.taskId})`,
         }, nowMs).delivery
         log(`waker: queued ${row.slug} — ${item.reason}`)

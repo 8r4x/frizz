@@ -26,7 +26,7 @@
 // repairs on ABSENCE, which is correct whatever the upstream cause turns out to be.
 //
 // IDEMPOTENCE IS CARRIED BY THE TRANSCRIPT, not by a persisted flag. The repair fray injects is itself
-// a user record, and it embeds `REPAIR_MARKER` + the task-id. On any later re-fold — a fray restart, a
+// a user record, and it embeds `RELAY_MARKER` + the task-id. On any later re-fold — a fray restart, a
 // cold resume, a full re-read of the file — that record is model-facing evidence for exactly this
 // task-id, so the report resolves as delivered and is never repaired twice. Nothing to persist,
 // nothing to migrate, and the evidence lives in the same file as the thing it is evidence about.
@@ -48,8 +48,17 @@ export interface QueuedReport {
   chars: number
 }
 
-/** Marker embedded in an injected repair so a later re-fold reads it as delivery evidence. */
-export const REPAIR_MARKER = "fray-report-repair"
+/**
+ * Marker opening every relayed completion.
+ *
+ * The `<fray-…>` shape is deliberate and load-bearing TWICE. It is already in transcript.ts's
+ * `NOISE_PREFIXES`, so `isInjectedNoise` skips the record and the relay never renders in the
+ * timeline — the thread looks exactly as it did before, which is the point: fray is repairing a
+ * runtime failure, not narrating one at the human. And because the marker carries the task id, the
+ * same record is model-facing evidence for that id on any later re-fold, which is what makes the
+ * relay idempotent with nothing persisted.
+ */
+export const RELAY_MARKER = "fray-relay"
 
 // Bounds the tracking map. Sized GENEROUSLY on purpose: an evicted entry is a lost report that fray
 // then silently declines to repair, which is precisely the failure this module exists to end — so the
@@ -62,11 +71,20 @@ export const MAX_TRACKED_REPORTS = 256
 // still is not in its context" — this timer is only the floor under that check, sized well past a
 // normal queue-to-delivery gap (35 ms on the measured cold-rest delivery, sub-second on every other
 // delivered sample in the corpus).
-export const REPORT_REPAIR_AFTER_MS = 90_000
-// A single thread in the corpus accumulated 383 lost shell notifications. Repairing all of them at
-// once would bury the agent, so a tick takes only the newest few and the pass LOGS the remainder
-// rather than silently truncating — the next tick picks those up.
-export const MAX_REPAIRS_PER_TICK = 3
+export const RELAY_AFTER_MS = 90_000
+// ── THE WATERMARK ──────────────────────────────────────────────────────────────────────────────────
+// fray relays only completions that were queued AFTER this process came up.
+//
+// Without it, switching this on points fray at every historical drop in the transcript — hundreds per
+// long-lived thread — and the first thing a resumed agent would receive is a wall of notices about
+// work it finished days ago. An earlier draft tried to soften that with a per-tick cap, which was
+// treating the symptom: the backlog is not a rate problem, it is a relevance problem. A completion
+// that was lost last Tuesday is history, and replaying it teaches the agent nothing it can act on.
+//
+// Captured at module load, so it is the process start instant. A fray restart moves it forward and
+// the (at most a few) completions dropped across the restart window are given up deliberately — that
+// is a far better trade than resurrecting a week of dead notifications.
+export const RELAY_EPOCH_MS = Date.now()
 
 /**
  * Is this record shape one that puts the notification into the MODEL's context?
@@ -155,9 +173,9 @@ export function parseReportBlock(block: string, at?: string, taskId = ""): Omit<
  * The repair is not a `<task-notification>`, so the ordinary notification fold will never see it. This
  * is what closes the idempotence loop described at the top of the file.
  */
-export function repairedTaskIds(text: string): string[] {
-  if (!text.includes(REPAIR_MARKER)) return []
-  return [...text.matchAll(new RegExp(`${REPAIR_MARKER}:([A-Za-z0-9_-]+)`, "g"))].map((m) => m[1])
+export function relayedTaskIds(text: string): string[] {
+  if (!text.includes(RELAY_MARKER)) return []
+  return [...text.matchAll(new RegExp(`<${RELAY_MARKER}:([A-Za-z0-9_-]+)>`, "g"))].map((m) => m[1])
 }
 
 /**
@@ -171,9 +189,9 @@ export function repairedTaskIds(text: string): string[] {
  * It is addressed to the agent, in the imperative, because it is not an FYI: the agent's next action
  * has to change. It names the file, the size, and what was lost.
  */
-export function repairMessage(report: QueuedReport): string {
+export function relayMessage(report: QueuedReport): string {
   const who = report.summary?.replace(/\s+/g, " ").trim() || `Background op ${report.taskId}`
-  const tag = `[${REPAIR_MARKER}:${report.taskId}]`
+  const tag = `<${RELAY_MARKER}:${report.taskId}>`
   // A SHELL's repair is a WAKE, not a reading assignment. Its output was always retrievable; what was
   // lost is the fact that it finished, which is what should have re-invoked the agent. Keep it short —
   // the agent's own next step is obvious once it knows.
@@ -205,18 +223,27 @@ export function repairMessage(report: QueuedReport): string {
  * turn boundary, so once the agent has finished a turn and the report STILL is not in its context,
  * waiting longer cannot help — the delivery that was going to happen already didn't.
  */
-export function reportsDueForRepair(
+export function completionsDueForRelay(
   reports: Iterable<QueuedReport>,
-  opts: { nowMs: number; atRest: boolean; afterMs?: number },
+  opts: { nowMs: number; atRest: boolean; afterMs?: number; sinceMs?: number },
 ): QueuedReport[] {
   if (!opts.atRest) return []
-  const afterMs = opts.afterMs ?? REPORT_REPAIR_AFTER_MS
+  const afterMs = opts.afterMs ?? RELAY_AFTER_MS
+  const sinceMs = opts.sinceMs ?? RELAY_EPOCH_MS
   const due: QueuedReport[] = []
   for (const r of reports) {
     const queuedMs = r.queuedAt ? Date.parse(r.queuedAt) : Number.NaN
-    // An unparseable/absent stamp must not make a report eternally un-repairable — treat it as due,
-    // since it can only have been queued before now.
-    if (Number.isNaN(queuedMs) || opts.nowMs - queuedMs >= afterMs) due.push(r)
+    // No usable stamp ⇒ cannot prove it belongs to THIS process, so it is history by default. This is
+    // the opposite of the old policy (treat it as due) and deliberately so: an undatable completion is
+    // exactly the shape a re-folded historical record has, and the cost of guessing wrong is spamming
+    // a live agent about dead work.
+    if (Number.isNaN(queuedMs)) continue
+    if (queuedMs < sinceMs) continue          // the WATERMARK — history, not this run
+    if (nowMinus(opts.nowMs, queuedMs) >= afterMs) due.push(r)
   }
   return due
+}
+
+function nowMinus(nowMs: number, thenMs: number): number {
+  return nowMs - thenMs
 }
