@@ -44,6 +44,23 @@ test("task-list items emit a state-carrying marker, not a bare bullet", () => {
   assert.doesNotMatch(html, /<input/, "an interactive control has no place in a transcript")
 })
 
+test("Obsidian-flavoured task states render as inert status marks", () => {
+  const html = renderBlock("- [/] active\n- [-] cancelled\n- [?] blocked")
+  assert.match(html, /<span class="md-task md-task-in-progress" title="In progress"><\/span> active/)
+  assert.match(html, /<span class="md-task md-task-cancelled" title="Cancelled"><\/span> cancelled/)
+  assert.match(html, /<span class="md-task md-task-blocked" title="Blocked"><\/span> blocked/)
+  assert.doesNotMatch(html, /\[\/\]|\[-\]|\[\?\]/)
+})
+
+test("custom task markers are recognized only at the start of list items", () => {
+  assert.equal(render("prose [/] stays literal"), "prose [/] stays literal")
+  assert.equal(render("`[/]` stays code"), "<code>[/]</code> stays code")
+  const fenced = renderBlock("```markdown\n- [/] stays code\n```")
+  assert.match(fenced, /\[\/\] stays code/)
+  assert.doesNotMatch(fenced, /md-task-in-progress/)
+  assert.match(renderBlock("- ordinary text with [/] inside"), /\[\/\] inside/)
+})
+
 test("a list that does not start at 1 emits its own numbering", () => {
   assert.match(renderBlock("17. first\n18. second"), /^<ol start="17">/)
   assert.match(renderBlock("1. first\n2. second"), /^<ol>/)

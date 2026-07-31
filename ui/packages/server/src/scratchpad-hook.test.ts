@@ -138,7 +138,8 @@ test("every silence gate holds: project registration under fray, sub-agents, and
   // The repo-local `.claude/settings.json` copy defers to the plugin one inside a fray worker.
   assert.equal(runHook(dir, ["--mode=session-start", "--via=project"], evt, { FRAY_UI_THREAD: "t" }), "")
   assert.notEqual(runHook(dir, ["--mode=session-start", "--via=project"], evt), "")
-  // Load-bearing for the ONE-scratchpad rule: a sub-agent never acts against its dispatcher's pad.
+  // Sub-agents do not get root re-ground/nudge injections; their dedicated start epilogue owns the
+  // collaborative editing contract instead.
   assert.equal(runHook(dir, ["--mode=session-start"], { ...evt, agent_id: "sub-1" }), "")
   assert.equal(runHook(dir, ["--mode=session-start"], evt, { FRAY_SCRATCHPAD_HOOK: "off" }), "")
   // …but a non-off value never disables it: absence means ON now.
@@ -147,41 +148,24 @@ test("every silence gate holds: project registration under fray, sub-agents, and
   assert.equal(runHook(dir, ["--mode=session-start"], { source: "compact" }, { CLAUDE_CODE_SESSION_ID: "" }), "")
 })
 
-test("the codex guard denies child access to the canonical root pad and leaves root/unrelated calls alone", () => {
+test("the codex child epilogue permits scoped progress merges but forbids destructive replacement", () => {
   const dir = newProject()
-  const relative = `.fray/threads/${SID}/scratch.md`
-  const absolute = padPath(dir)
-  const child = { session_id: "codex-rollout-id", agent_id: "/root/reviewer", hook_event_name: "PreToolUse" }
-
-  for (const toolEvent of [
-    { tool_name: "apply_patch", tool_input: { patch: `*** Delete File: ${absolute}` } },
-    { tool_name: "exec_command", tool_input: { cmd: `cat > ${relative} <<'EOF'\nchild state\nEOF` } },
-    { tool_name: "exec_command", tool_input: { cmd: `cat ${relative}` } },
-  ]) {
-    const out = JSON.parse(runHook(dir, [`--session=${SID}`, "--mode=guard"], { ...child, ...toolEvent }))
-    assert.equal(out.hookSpecificOutput.hookEventName, "PreToolUse")
-    assert.equal(out.hookSpecificOutput.permissionDecision, "deny")
-    assert.match(out.hookSpecificOutput.permissionDecisionReason, /belongs to the top-level \/root worker/)
-  }
-
-  assert.equal(
-    runHook(dir, [`--session=${SID}`, "--mode=guard"], {
-      ...child,
-      tool_name: "exec_command",
-      tool_input: { cmd: "git status --short" },
-    }),
-    "",
-    "a child's unrelated tool calls are not the guard's concern"
-  )
-  assert.equal(
-    runHook(dir, [`--session=${SID}`, "--mode=guard"], {
+  const out = JSON.parse(
+    runHook(dir, [`--session=${SID}`, "--mode=subagent-start"], {
       session_id: "codex-rollout-id",
-      tool_name: "apply_patch",
-      tool_input: { patch: `*** Delete File: ${absolute}` },
-    }),
-    "",
-    "the top-level root owns the pad and remains able to maintain it"
+      agent_id: "/root/reviewer",
+      hook_event_name: "SubagentStart",
+    })
   )
+  assert.equal(out.hookSpecificOutput.hookEventName, "SubagentStart")
+  const ctx = out.hookSpecificOutput.additionalContext as string
+  assert.match(ctx, new RegExp(`\\.fray/threads/${SID}/scratch\\.md`))
+  assert.match(ctx, /You MAY read it and update your own task progress/)
+  assert.match(ctx, /Before every edit, re-read the current file/)
+  assert.match(ctx, /patch only your scoped task\/progress entry/)
+  assert.match(ctx, /preserving every other agent’s content/)
+  assert.match(ctx, /Never delete, truncate, reinitialize, move, or replace the whole file/)
+  assert.match(ctx, /not even to “clean up” or undo your own mistaken change/)
 })
 
 test("the nudge tracks context GROWTH, not an absolute threshold or wall clock", () => {
@@ -370,13 +354,13 @@ test("the codex hook config is built unconditionally, and carries what codex req
   // Codex silently SKIPS untrusted hook definitions, so without this the config is delivered and ignored.
   assert.equal(cfg.bypass_hook_trust, true)
   // Codex exposes no PreCompact/PostCompact wire type, so summarizer steering stays Claude-only.
-  // PreToolUse carries the root-pad ownership guard; the remaining events inject or nudge.
-  assert.deepEqual(Object.keys(cfg.hooks ?? {}).sort(), ["PostToolUse", "PreToolUse", "SessionStart", "UserPromptSubmit"])
+  // SubagentStart carries the shared-pad merge-only epilogue; the rest inject or nudge.
+  assert.deepEqual(Object.keys(cfg.hooks ?? {}).sort(), ["PostToolUse", "SessionStart", "SubagentStart", "UserPromptSubmit"])
   for (const entries of Object.values(cfg.hooks ?? {})) {
     const cmd = entries[0].hooks[0].command
     assert.match(cmd, /--session="sid-1"/, "fray's thread id must override codex's own reported session id")
     assert.doesNotMatch(cmd, /--enabled/, "there is no opt-in flag any more")
     assert.match(cmd, /scratchpad\.mjs/)
   }
-  assert.match(cfg.hooks?.PreToolUse?.[0]?.hooks[0]?.command ?? "", /--mode=guard/)
+  assert.match(cfg.hooks?.SubagentStart?.[0]?.hooks[0]?.command ?? "", /--mode=subagent-start/)
 })

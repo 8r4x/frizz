@@ -24,7 +24,7 @@ const EPILOGUE = `
 
 ---
 [ORCHESTRATION EPILOGUE — auto-appended by the fray worker dispatch hook] You are a helper sub-agent for a fray-ui worker. Your final message is the handoff: report your outcome/status; what you did; changed files, artifacts, and commit SHA when applicable; verification or evidence and its result; caveats or unresolved work; and the next action when one remains. A bare "done" or progress-only message is not a complete handoff.
-Do not edit the worker's scratchpad or other \`.fray/\` state unless your prompt explicitly asks you to.
+The worker's scratchpad is shared: you may read it and merge your own scoped progress into it. Re-read before every edit, preserve every other agent's content, and never delete, truncate, reinitialize, move, or replace the whole file. Do not edit other \`.fray/\` state unless your prompt explicitly asks you to.
 You have an upward channel while you work: \`SendMessage({to: "main", summary: "<5-10 words>", message: "…"})\` delivers to your dispatcher. Use it when the dispatcher acting before you finish could change the outcome—for example, when you hit an unresolved blocker, complete a milestone another task needs, or discover that your instructions should change. Do not use it for routine progress updates.`;
 
 /** @param {unknown} obj @returns {never} */

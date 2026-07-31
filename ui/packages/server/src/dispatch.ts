@@ -197,35 +197,58 @@ function ensureSafeDirectDirectory(parent: string, name: string): string {
   return real
 }
 
-// The scratchpad skeleton (a CONVENTION, never validated): an H1, a one-line orientation, and the
-// working sections. The worker owns it from here — this is only the starting shape. Backend-aware:
-// a claude worker's pad is ALSO the fleet blackboard its sub-agents read (hence "## Shared context"),
-// but a codex worker runs solo (fray dispatches no codex sub-agents), so its pad is purely
-// compaction memory — the blackboard framing + shared section are dropped.
+// The scratchpad skeleton (a CONVENTION, never validated): a compact continuity structure plus a
+// visible task-status/collaboration legend. It remains ordinary Markdown rather than a machine schema;
+// workers can reshape it as the effort demands. Both backends share it with sub-agents, so stable
+// per-agent subsections + merge-only edits keep concurrent progress useful instead of destructive.
 export function scratchpadContent(title: string, kind: BackendKind = "claude"): string {
+  const guide = `> Status legend: \`[ ]\` pending · \`[/]\` in progress · \`[x]\` complete · \`[-]\` cancelled · \`[?]\` blocked / needs input
+> Collaboration: re-read before every edit; preserve existing content; keep each agent's updates under its own \`### <agent path>\` subsection in Agent progress. Never delete, truncate, reinitialize, move, or replace the whole file.`
   if (kind === "codex") {
     return `# Scratchpad — ${title}
 
-The canonical record of this thread and your compaction-survival mechanism — keep your task list, the approach and what you rejected, the human's decisions, and anything that must outlive your context here.
+The canonical record of this thread, your compaction-survival mechanism, and the progress document shared with native sub-agents.
+
+${guide}
+
+## Goal
 
 ## Task list
 
 - [ ]
 
-## Notes
+## Decisions
+
+## Shared context
+
+## Agent progress
+
+## Verification
+
+## Next action
 `
   }
   return `# Scratchpad — ${title}
 
-The canonical record of this thread, your compaction-survival mechanism, and the blackboard your sub-agents read — keep your task list, the approach and what you rejected, the human's decisions, and anything that must outlive your context here.
+The canonical record of this thread, your compaction-survival mechanism, and the blackboard your sub-agents read and update.
+
+${guide}
+
+## Goal
 
 ## Task list
 
 - [ ]
 
+## Decisions
+
 ## Shared context
 
-## Notes
+## Agent progress
+
+## Verification
+
+## Next action
 `
 }
 
@@ -305,8 +328,8 @@ export function codexScratchpadHookConfig(
     bypass_hook_trust: true,
     hooks: {
       // Native Codex children inherit the root scratchpad mandate even with `fork_turns:"none"`.
-      // Prompt ownership is the semantic contract; this tool-layer deny is the destructive backstop.
-      PreToolUse: [cmd("--mode=guard")],
+      // Constrain it structurally at child start: shared writes, but only merge-style scoped edits.
+      SubagentStart: [cmd("--mode=subagent-start")],
       SessionStart: [cmd("--mode=session-start")],
       UserPromptSubmit: [cmd("--mode=nudge")],
       PostToolUse: [cmd("--mode=nudge --event=PostToolUse")],
@@ -328,8 +351,8 @@ export function scratchpadHookScript(): string | undefined {
 export function composePrompt(sessionId: string, prompt: string, kind: BackendKind = "claude"): string {
   const scratch =
     kind === "codex"
-      ? `Your scratchpad is \`.fray/threads/${sessionId}/scratch.md\` — the CANONICAL record of this thread and your compaction-survival mechanism. Keep your task list, the approach and what you rejected, the human's decisions, and anything that must outlive your context IN it, written as you go; re-read it after any compaction or resume before asserting anything. This path belongs only to the top-level \`/root\` worker. Native sub-agents may inherit this instruction even with \`fork_turns:"none"\`; any non-root agent must not read, create, edit, replace, move, or delete the parent scratchpad.`
-      : `Your scratchpad is \`.fray/threads/${sessionId}/scratch.md\` — the CANONICAL record of this thread, your compaction-survival mechanism, and the shared blackboard for your sub-agents. Keep your task list, the approach and what you rejected, the human's decisions, and anything that must outlive your context IN it, written as you go; re-read it after any compaction or resume, and pass its path to every sub-agent you dispatch.`
+      ? `Your scratchpad is \`.fray/threads/${sessionId}/scratch.md\` — the CANONICAL record of this thread, your compaction-survival mechanism, and a shared progress document for native sub-agents. Keep your task list, the approach and what you rejected, the human's decisions, and anything that must outlive your context IN it, written as you go; re-read it after any compaction or resume before asserting anything. Native sub-agents may read it and merge their own scoped progress into it, but must re-read before each edit, preserve all existing content, and never delete, truncate, reinitialize, move, or replace the whole file.`
+      : `Your scratchpad is \`.fray/threads/${sessionId}/scratch.md\` — the CANONICAL record of this thread, your compaction-survival mechanism, and the shared blackboard for your sub-agents. Keep your task list, the approach and what you rejected, the human's decisions, and anything that must outlive your context IN it, written as you go; re-read it after any compaction or resume, and pass its path to every sub-agent you dispatch. Sub-agents may merge their own scoped progress into it, but must re-read before each edit, preserve all existing content, and never delete, truncate, reinitialize, move, or replace the whole file.`
   // The banner makes the system→human handoff unmistakable to the worker, and NOTHING of fray's is
   // allowed below it: the framing note goes here, ABOVE, so everything past the banner is the
   // operator's prompt byte for byte. That is also what the transcript projectors cut on
@@ -345,8 +368,8 @@ export function composePrompt(sessionId: string, prompt: string, kind: BackendKi
 export function scratchpadOrientation(sessionId: string, planPath?: string | null, kind: BackendKind = "claude"): string {
   const scratch =
     kind === "codex"
-      ? `SCRATCHPAD: .fray/threads/${sessionId}/scratch.md — the CANONICAL record of this thread and your compaction-survival mechanism (write your task list, the approach and what you rejected, and anything that must outlive your context there, as you go; re-read it after any compaction or resume). This path is owned only by the top-level \`/root\` worker. Native sub-agents can inherit this instruction even with \`fork_turns:"none"\`; every non-root agent must not read, create, edit, replace, move, or delete the parent scratchpad.`
-      : `SCRATCHPAD: .fray/threads/${sessionId}/scratch.md — the CANONICAL record of this thread, your compaction-survival mechanism, and the shared blackboard for your sub-agents (write your task list, the approach and what you rejected, and anything that must outlive your context there, as you go; re-read it after any compaction or resume; pass this path in every sub-agent prompt).`
+      ? `SCRATCHPAD: .fray/threads/${sessionId}/scratch.md — the CANONICAL record of this thread, your compaction-survival mechanism, and a shared progress document for native sub-agents (write your task list, the approach and what you rejected, and anything that must outlive your context there, as you go; re-read it after any compaction or resume). Native sub-agents may read it and merge their own scoped progress into it, but must re-read before each edit, preserve all existing content, and never delete, truncate, reinitialize, move, or replace the whole file.`
+      : `SCRATCHPAD: .fray/threads/${sessionId}/scratch.md — the CANONICAL record of this thread, your compaction-survival mechanism, and the shared blackboard for your sub-agents (write your task list, the approach and what you rejected, and anything that must outlive your context there, as you go; re-read it after any compaction or resume; pass this path in every sub-agent prompt). Sub-agents may merge their own scoped progress into it, but must re-read before each edit, preserve all existing content, and never delete, truncate, reinitialize, move, or replace the whole file.`
   const lines = [scratch]
   if (planPath) lines.push(`PLAN: ${planPath} — the durable plan artifact this thread works from; read it FIRST.`)
   return lines.join("\n")

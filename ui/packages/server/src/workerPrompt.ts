@@ -297,8 +297,9 @@ the one thing that outlives your context window.
   versus merely believed, your task list and its state, and the single next action. Keep it current —
   rewrite it as the shape of the work changes instead of appending forever.
 - **It is the shared blackboard for your sub-agents.** Write shared state into it and pass its PATH in
-  every helper's prompt; they read it, you consolidate their results back into it. It stays YOURS to
-  write — helpers read it and never edit it.`,
+  every helper's prompt. Helpers may persist their own scoped progress there, but every edit is a
+  merge: re-read first, preserve every other agent's state, and never delete, truncate, reinitialize,
+  move, or replace the whole file. If a safe merge is not possible, they return state to you instead.`,
   codex: `## Scratchpad — the canonical record of this thread
 
 \`.fray/threads/<session-id>/scratch.md\` (exact path in your session-start context) — free-form
@@ -316,11 +317,12 @@ why, decisions the human made or reversed (in their own words), what is VERIFIED
 merely believed, your task list and its state, and the single next action. Keep it current — rewrite
 it as the shape of the work changes instead of appending forever.
 
-**Ownership is literal.** The named path belongs only to the top-level \`/root\` worker. Native Codex
-sub-agents can inherit this section even with \`fork_turns: "none"\`; inherited instructions do not
-transfer ownership. If your agent path is anything other than \`/root\`, do not read, create, edit,
-replace, move, or delete the parent scratchpad — and never “clean it up.” Keep task state in your
-final return, or in a distinct path the parent explicitly assigned.`,
+**The pad is collaborative, but every edit is a merge.** Native Codex sub-agents can inherit this
+section even with \`fork_turns: "none"\`, and they MAY persist their own scoped progress in the same
+file. Before editing, re-read its current contents; patch only the relevant task/progress section and
+preserve every other agent's state. Never delete, truncate, reinitialize, move, or replace the whole
+scratchpad — including as “cleanup” or an attempted rollback. If the pad is absent or a safe merge is
+not possible, return the state to the parent instead of inventing a replacement.`,
 }
 
 const BACKEND: Record<BackendKind, string> = {
@@ -338,7 +340,7 @@ effort: not your conversation, not this contract, not the signal fences, not you
 this repo's \`FRAY.md\` norms. That gap is deliberate and it is your LEVER — you steer each child
 exactly as that prong deserves, rather than inheriting rules written for you. So name any skill it
 must invoke as a literal line, restate any norm you actually want it held to, and include the
-scratchpad path so it can read the shared context. There is NO fork/inherit option here: every
+scratchpad path so it can read the shared context and merge its own scoped progress. There is NO fork/inherit option here: every
 \`subagent_type\` starts a FRESH child (a bare \`subagent_type: "fork"\` does not resolve) and no child can
 see your conversation, so handing over context is always your job. The absence of a fork switch is NOT
 a blocker to report — write what the child needs into the pad or the prompt, or do the work inline.
@@ -468,9 +470,10 @@ When delegation is explicitly authorized:
    checks, and expected return. You own every child you create: collect and reconcile all returns into
    the original TASK before resting or reporting completion. Once spawned, a child runs to a terminal
    return: use \`send_message\` or a queued follow-up for changed direction, never \`interrupt_agent\`,
-   except on an explicit user instruction naming that interruption. Restate that the parent thread's
-   \`.fray/threads/<session-id>/scratch.md\` is off-limits: children can inherit its root-only mandate
-   even with \`fork_turns: "none"\`, and must return state upward rather than touching that file.
+   except on an explicit user instruction naming that interruption. Tell the child it may merge its
+   own scoped progress into the shared \`.fray/threads/<session-id>/scratch.md\`, but it must re-read
+   before editing, preserve every other agent's content, and never delete, truncate, reinitialize,
+   move, or replace the whole file.
 3. Route by judgment required, independently of the task label:
    - \`gpt-5.6-terra\` + \`medium\` for most ordinary research, bounded implementation, verification,
      review, and planning.

@@ -112,12 +112,83 @@ const headerlessTableExtension: TokenizerAndRendererExtension = {
   },
 }
 
+// Obsidian-flavoured task states used by the shared scratchpad. GFM only recognizes `[ ]` and `[x]`;
+// Marked therefore tokenizes `[/]`, `[-]`, and `[?]` as ordinary list-item text. Promote ONLY a
+// marker at the start of a list item — never the same bracket sequence in prose or code — into an
+// inert status mark. Keeping this as a token transform rather than a raw-Markdown regex means fenced
+// code, inline code, and non-list prose remain byte-for-byte literal.
+type FrayTaskStatus = "/" | "-" | "?"
+type FrayTaskStatusToken = {
+  type: "frayTaskStatus"
+  raw: string
+  status: FrayTaskStatus
+}
+
+const CUSTOM_TASK_STATUS = /^\[([/\-?])\][ \t]+/
+const TASK_STATUS_META: Record<FrayTaskStatus, { className: string; label: string }> = {
+  "/": { className: "md-task-in-progress", label: "In progress" },
+  "-": { className: "md-task-cancelled", label: "Cancelled" },
+  "?": { className: "md-task-blocked", label: "Blocked" },
+}
+
+const customTaskStatusExtension: TokenizerAndRendererExtension = {
+  name: "frayTaskStatus",
+  level: "inline",
+  // Tokens are inserted by `promoteCustomTaskStatus`; this tokenizer deliberately never claims
+  // source text on its own, because only the enclosing list-item walk can prove the marker's position.
+  tokenizer() {
+    return undefined
+  },
+  renderer(token) {
+    const { status } = token as FrayTaskStatusToken
+    const meta = TASK_STATUS_META[status]
+    return `<span class="md-task ${meta.className}" title="${meta.label}"></span> `
+  },
+}
+
+/** Turn a custom marker at the start of one list item into a renderer-owned status token. */
+function promoteCustomTaskStatus(item: Tokens.ListItem): void {
+  if (item.task) return // `[ ]` / `[x]` stay on Marked's native GFM path.
+  const match = CUSTOM_TASK_STATUS.exec(item.text)
+  if (!match) return
+  const firstBlock = item.tokens[0]
+  const inline = firstBlock && "tokens" in firstBlock ? firstBlock.tokens : undefined
+  if (!Array.isArray(inline)) return
+
+  // Remove the marker from the already-tokenized inline run. Normally it is one leading Text token,
+  // but consume across adjacent Text tokens too so a future Marked tokenizer split cannot duplicate
+  // part of the raw marker.
+  let remaining = match[0].length
+  const cuts: Array<{ token: Tokens.Text; count: number }> = []
+  for (let i = 0; i < inline.length && remaining > 0; i++) {
+    const token = inline[i]
+    if (token.type !== "text") return
+    const cut = Math.min(remaining, token.raw.length)
+    cuts.push({ token, count: cut })
+    remaining -= cut
+  }
+  if (remaining > 0) return
+
+  for (const { token, count } of cuts) {
+    token.raw = token.raw.slice(count)
+    token.text = token.text.slice(count)
+  }
+  for (let i = inline.length - 1; i >= 0; i--)
+    if (inline[i].type === "text" && !inline[i].raw) inline.splice(i, 1)
+
+  item.text = item.text.slice(match[0].length)
+  inline.unshift({ type: "frayTaskStatus", raw: match[0], status: match[1] as FrayTaskStatus } as Token)
+}
+
 // Exported so markdown.test.ts can drive the EXACT configuration the app renders with: mdToHtml
 // itself can't run under `node --test` (the sanitizer needs a DOM), but everything here is pure.
 export const MARKDOWN_OPTIONS = {
   breaks: true,
-  extensions: [headerlessTableExtension],
+  extensions: [headerlessTableExtension, customTaskStatusExtension],
   tokenizer: strikethroughTokenizer,
+  walkTokens(token: Token) {
+    if (token.type === "list_item") promoteCustomTaskStatus(token as Tokens.ListItem)
+  },
   renderer: {
     code: ({ text, lang }: Tokens.Code) => renderHighlightedCode(text, lang),
     // GFM task lists. marked's default is `<input type="checkbox" disabled>`, which the render
@@ -166,7 +237,7 @@ const ALLOWED_TAGS = new Set([
   "blockquote", "ul", "ol", "li", "a", "img", "button", "table", "thead", "tbody", "tr", "th", "td", "span",
 ])
 const ALLOWED_ATTRS = new Set(["href", "src", "alt", "title", "type", "class", "data-local-path", "data-local-image"])
-const ALLOWED_CLASS = /^(?:hljs(?:-[a-z0-9_-]+)?|language-[a-z0-9-]+|md-task(?:-checked)?)$/
+const ALLOWED_CLASS = /^(?:hljs(?:-[a-z0-9_-]+)?|language-[a-z0-9-]+|md-task(?:-(?:checked|in-progress|cancelled|blocked))?)$/
 
 // Attributes admitted only on the tag that gives them meaning, and only with a well-formed value.
 // Both carry information the author wrote and the flat allowlist above was silently discarding:

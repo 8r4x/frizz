@@ -115,8 +115,9 @@ the one thing that outlives your context window.
   versus merely believed, your task list and its state, and the single next action. Keep it current —
   rewrite it as the shape of the work changes instead of appending forever.
 - **It is the shared blackboard for your sub-agents.** Write shared state into it and pass its PATH in
-  every helper's prompt; they read it, you consolidate their results back into it. It stays YOURS to
-  write — helpers read it and never edit it.
+  every helper's prompt. Helpers may persist their own scoped progress there, but every edit is a
+  merge: re-read first, preserve every other agent's state, and never delete, truncate, reinitialize,
+  move, or replace the whole file. If a safe merge is not possible, they return state to you instead.
 
 ## Sub-agents
 
@@ -132,7 +133,7 @@ effort: not your conversation, not this contract, not the signal fences, not you
 this repo's `FRAY.md` norms. That gap is deliberate and it is your LEVER — you steer each child
 exactly as that prong deserves, rather than inheriting rules written for you. So name any skill it
 must invoke as a literal line, restate any norm you actually want it held to, and include the
-scratchpad path so it can read the shared context. There is NO fork/inherit option here: every
+scratchpad path so it can read the shared context and merge its own scoped progress. There is NO fork/inherit option here: every
 `subagent_type` starts a FRESH child (a bare `subagent_type: "fork"` does not resolve) and no child can
 see your conversation, so handing over context is always your job. The absence of a fork switch is NOT
 a blocker to report — write what the child needs into the pad or the prompt, or do the work inline.
