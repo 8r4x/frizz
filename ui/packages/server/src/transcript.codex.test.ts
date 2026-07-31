@@ -999,3 +999,121 @@ test("the exec-wrapper envelope still parses unchanged (status, exit code, body)
   assert.equal(call.exitCode, 0)
   assert.equal(call.output, "a.txt\nb.txt")
 })
+
+// ---- The DIRECT (unified-exec) tool protocol renders like the wrapper protocol ----
+// Codex ships two generations of the same tools. The wrapper form (`exec` custom_tool_call carrying JS)
+// had cases for write_stdin/exec_command; the direct `function_call` form did not, so its polls fell to
+// the generic tail and rendered as cards literally named `write_stdin` — 4706 of them across 386 real
+// rollouts, second only to Bash, because 96.9% of write_stdin calls send chars:"" purely to poll.
+test("codex direct-form stdin polls fold into the command that yielded, and never mint their own card", () => {
+  const raw = rollout([
+    { type: "response_item", payload: { type: "function_call", call_id: "c1", name: "exec_command", arguments: JSON.stringify({ cmd: "npm run build", workdir: "/repo" }) } },
+    // A command that YIELDS announces its session where an exit code would go — the slot nothing read.
+    { type: "response_item", payload: { type: "function_call_output", call_id: "c1", output: "Chunk ID: aa11\nWall time: 1.0 seconds\nProcess running with session ID 53228\nOriginal token count: 3\nOutput:\nbuilding…\n" } },
+    { type: "response_item", payload: { type: "function_call", call_id: "p1", name: "write_stdin", arguments: JSON.stringify({ session_id: 53228, chars: "", yield_time_ms: 30000 }) } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: "p1", output: "Chunk ID: bb22\nWall time: 30.0 seconds\nProcess running with session ID 53228\nOriginal token count: 5\nOutput:\nstill going…\n" } },
+    { type: "response_item", payload: { type: "function_call", call_id: "p2", name: "write_stdin", arguments: JSON.stringify({ session_id: 53228, chars: "", yield_time_ms: 30000 }) } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: "p2", output: "Chunk ID: cc33\nWall time: 2.0 seconds\nProcess exited with code 0\nOriginal token count: 2\nOutput:\ndone\n" } },
+  ])
+  const tools = parseCodexTranscript(raw)[0].tools
+  // ONE card for the whole lifecycle: the command, not the command plus two polls.
+  assert.equal(tools.length, 1)
+  assert.equal(tools[0].name, "Bash")
+  assert.equal(tools[0].command, "npm run build")
+  assert.equal(tools[0].sessionId, 53228)
+  // The exit arrived on the final poll, so the command reads completed rather than forever-running.
+  assert.equal(tools[0].status, "completed")
+  assert.doesNotMatch(JSON.stringify(tools), /write_stdin/)
+})
+
+// A real Ctrl-C is a control action the reader wants to see, so it stays a card of its own.
+test("codex direct-form write_stdin that actually writes stays visible, and Ctrl-C reads as an interrupt", () => {
+  const raw = rollout([
+    { type: "response_item", payload: { type: "function_call", call_id: "k", name: "write_stdin", arguments: JSON.stringify({ session_id: 7, chars: "\u0003" }) } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: "k", output: "Chunk ID: dd44\nWall time: 0.1 seconds\nProcess exited with code 130\nOriginal token count: 0\nOutput:\n" } },
+    { type: "response_item", payload: { type: "function_call", call_id: "w", name: "write_stdin", arguments: JSON.stringify({ session_id: 7, chars: "yes\n" }) } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: "w", output: "Chunk ID: ee55\nWall time: 0.1 seconds\nProcess exited with code 0\nOriginal token count: 0\nOutput:\n" } },
+  ])
+  const tools = parseCodexTranscript(raw)[0].tools
+  assert.deepEqual(tools.map((t) => t.name), ["Interrupt process", "Write stdin"])
+  assert.match(tools[1].input ?? "", /yes/)
+})
+
+// The `wait`/cell generation is the same shape one protocol older. Its ids are an INDEPENDENT counter
+// from PTY session ids and the two co-occur in one rollout, so the registry must keep them apart.
+test("codex `wait` polls fold into their script, and a cell id never resolves to the same-numbered session", () => {
+  const raw = rollout([
+    { type: "response_item", payload: { type: "function_call", call_id: "s1", name: "exec_command", arguments: JSON.stringify({ cmd: "./long-script.sh" }) } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: "s1", output: "Chunk ID: a1\nWall time: 1.0 seconds\nScript running with cell ID 49\nOriginal token count: 0\nOutput:\n" } },
+    { type: "response_item", payload: { type: "function_call", call_id: "w1", name: "wait", arguments: JSON.stringify({ cell_id: 49, yield_time_ms: 10000, max_tokens: 500 }) } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: "w1", output: "Chunk ID: a2\nWall time: 9.0 seconds\nProcess exited with code 0\nOriginal token count: 1\nOutput:\nfinished\n" } },
+    // A DIFFERENT mechanism that happens to reuse the number 49 as a PTY session id. It must not attach
+    // to the script above, and its own poll must find IT rather than the script.
+    { type: "response_item", payload: { type: "function_call", call_id: "s2", name: "exec_command", arguments: JSON.stringify({ cmd: "tail -f log" }) } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: "s2", output: "Chunk ID: b1\nWall time: 1.0 seconds\nProcess running with session ID 49\nOriginal token count: 0\nOutput:\n" } },
+    { type: "response_item", payload: { type: "function_call", call_id: "p3", name: "write_stdin", arguments: JSON.stringify({ session_id: 49, chars: "" }) } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: "p3", output: "Chunk ID: b2\nWall time: 1.0 seconds\nProcess exited with code 0\nOriginal token count: 1\nOutput:\ntailed\n" } },
+  ])
+  const tools = parseCodexTranscript(raw)[0].tools
+  assert.deepEqual(tools.map((t) => t.command), ["./long-script.sh", "tail -f log"])
+  assert.equal(tools.length, 2)
+  // Each poll landed on its OWN owner: the script got "finished", the tail got "tailed".
+  assert.match(tools[0].output ?? "", /finished/)
+  assert.match(tools[1].output ?? "", /tailed/)
+})
+
+// ---- Codex's thinking becomes the card's caption ----
+// codex's exec carries no `description` field the way Claude's Bash does, so a codex card could only be
+// titled by its own flattened command (0 of 29104 cards across the corpus had a caption). But codex emits
+// a reasoning step immediately before nearly every call, and that step's bold header is precisely the
+// status line its TUI prints above the command.
+test("a codex reasoning header captions the tool call it precedes, once, without swallowing the command", () => {
+  const raw = rollout([
+    { type: "response_item", payload: { type: "reasoning", summary: [{ type: "summary_text", text: "**Planning worktree inspection and commit**" }] } },
+    { type: "response_item", payload: { type: "function_call", call_id: "a", name: "exec_command", arguments: JSON.stringify({ cmd: "git status --short" }) } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: "a", output: "Chunk ID: z1\nWall time: 0.1 seconds\nProcess exited with code 0\nOriginal token count: 1\nOutput:\nM f.ts\n" } },
+    // No new thinking before this one — the caption is SPENT, so it must not repeat down the batch.
+    { type: "response_item", payload: { type: "function_call", call_id: "b", name: "exec_command", arguments: JSON.stringify({ cmd: "git diff" }) } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: "b", output: "Chunk ID: z2\nWall time: 0.1 seconds\nProcess exited with code 0\nOriginal token count: 1\nOutput:\n" } },
+  ])
+  // The reasoning block is its own message ahead of the tools, so take the message that has them.
+  const tools = parseCodexTranscript(raw).flatMap((m) => m.tools)
+  assert.equal(tools[0].desc, "Planning worktree inspection and commit")
+  assert.equal(tools[1].desc, undefined)
+  // The caption is additive: the command it describes is still on the card.
+  assert.equal(tools[0].command, "git status --short")
+})
+
+test("a codex reasoning step that is prose rather than a bold header captions nothing", () => {
+  const raw = rollout([
+    { type: "response_item", payload: { type: "reasoning", summary: [{ type: "summary_text", text: "I am weighing whether the fixture should stay on disk for manual QA." }] } },
+    { type: "response_item", payload: { type: "function_call", call_id: "a", name: "exec_command", arguments: JSON.stringify({ cmd: "ls" }) } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: "a", output: "Chunk ID: y1\nWall time: 0.1 seconds\nProcess exited with code 0\nOriginal token count: 1\nOutput:\nf.ts\n" } },
+  ])
+  assert.equal(parseCodexTranscript(raw).flatMap((m) => m.tools)[0].desc, undefined)
+})
+
+// ---- Peer messaging says what it can, and says why it can't say the rest ----
+test("codex peer messages render as message cards; an encrypted body explains itself instead of reading as a bug", () => {
+  const encrypted = "gAAAAABqU-akIizxXc0EnAT4vtESZIFClmfVfTOMv8q1siCAOyuV-UeURhiWLfpZ7TXdJiEZAqnqUO_DLc5TO4PF"
+  const raw = rollout([
+    { type: "response_item", payload: { type: "function_call", call_id: "s", name: "send_message", arguments: JSON.stringify({ target: "bun_project_survey", message: encrypted }) } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: "s", output: "" } },
+    { type: "response_item", payload: { type: "function_call", call_id: "f", name: "followup_task", arguments: JSON.stringify({ target: "batch2_plan", message: encrypted }) } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: "f", output: "" } },
+    // An unencrypted body (older codex builds) must still render verbatim.
+    { type: "response_item", payload: { type: "function_call", call_id: "p", name: "send_message", arguments: JSON.stringify({ target: "scout", message: "check the staging deploy too" }) } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: "p", output: "" } },
+  ])
+  const [sent, followed, plain] = parseCodexTranscript(raw)[0].tools
+  assert.equal(sent.sendTo, "bun_project_survey")
+  assert.equal(sent.sendSummary, "bun_project_survey")
+  assert.match(sent.sendBody ?? "", /Codex encrypts inter-agent message bodies/)
+  // Never leak the token, and never show the bare redaction marker as if it were the message.
+  assert.doesNotMatch(JSON.stringify([sent, followed, plain]), /gAAAA|\[encrypted payload\]/)
+  // A queued follow-up is not a mid-turn steer, so the card carries its own verb.
+  assert.equal(followed.sendType, "codex_followup")
+  assert.equal(followed.sendTo, "batch2_plan")
+  assert.equal(sent.sendType, undefined)
+  assert.equal(plain.sendBody, "check the staging deploy too")
+})

@@ -878,11 +878,15 @@ const TRUNC_MARKER = "\n… (truncated)"
 // or Codex collaboration's opaque encrypted `message` blobs. The transcript is a broad UI surface,
 // so redact common secret forms before any payload is retained or summarized. This is deliberately
 // presentation-only: the raw JSONL remains untouched.
+// What a redacted Fernet token becomes. Shared so codexPeerMessageCall can recognise an encrypted
+// inter-agent body by the marker this redactor mints, instead of keeping a rival copy of the pattern.
+const ENCRYPTED_PAYLOAD = "[encrypted payload]"
+
 function redactToolPayload(s: string): string {
   return redactCredentialSyntax(s)
     // Fernet payloads commonly end in base64 padding. A trailing word-boundary left that padding
     // behind (`[encrypted payload]==`) and made the redaction visibly incomplete.
-    .replace(/gAAAA[A-Za-z0-9_-]{40,}={0,2}/g, "[encrypted payload]")
+    .replace(/gAAAA[A-Za-z0-9_-]{40,}={0,2}/g, ENCRYPTED_PAYLOAD)
     .replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*?-----END [^-\r\n]*PRIVATE KEY-----/gi, "[redacted private key]")
     .replace(/\b(?:eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(?:AKIA|ASIA)[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{16,}|sk_live_[A-Za-z0-9]{16,}|sk-(?:proj-)?[A-Za-z0-9_-]{16,}|github_pat_[A-Za-z0-9_]{16,}|gh[pousr]_[A-Za-z0-9_]{16,})\b/g, "[redacted]")
     // Inputs are usually JSON, so the key's closing quote sits between the word and colon. Accept it
@@ -1940,8 +1944,8 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
             if (!call.desc) call.desc = pendingCaption
             pendingCaption = undefined
           }
-          const isPoll = call.name === "Poll process" && call.sessionId !== undefined
-          const owner = isPoll ? shellSessions.get(String(call.sessionId)) : undefined
+          const isPoll = (call.name === "Poll process" || call.name === "Wait") && call.sessionId !== undefined
+          const owner = isPoll ? shellSessions.get(runningKey(call.name, call.sessionId!)) : undefined
           // Polls are lifecycle updates, not independent shell work. Keep an unpaired poll visible as
           // UNKNOWN so a partial/reloaded transcript never fabricates a completed command.
           if (!owner) {
@@ -1976,7 +1980,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
               pending.owner.call.status = "pending"
               pending.owner.call.backgroundState = "background"
             } else {
-              shellSessions.delete(String(pending.call.sessionId))
+              shellSessions.delete(runningKey(pending.call.name, pending.call.sessionId!))
               const total = elapsedBetween(pending.owner.at, ev.at)
               // Transcript timestamps are sometimes coalesced by a rollout writer. Prefer a real
               // positive start→exit span; otherwise preserve the yielded result's own duration rather
@@ -1998,7 +2002,16 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
               pending.call.sessionId = result.sessionId
               pending.call.status = "pending"
               pending.call.backgroundState = "background"
-              shellSessions.set(String(result.sessionId), { call: pending.call, at: pending.at })
+              shellSessions.set(runningKey("Poll process", result.sessionId), { call: pending.call, at: pending.at })
+            }
+            // The same shape one protocol generation earlier: a script that yielded announces
+            // "Script running with cell ID N" and is polled by `wait` rather than by write_stdin.
+            // Registered under its own key namespace because cell ids and PTY session ids are
+            // independent counters that DO co-occur in one rollout — cell 49 is not session 49.
+            if (result.cellId !== undefined && result.exitCode === undefined) {
+              shellSessions.set(runningKey("Wait", result.cellId), { call: pending.call, at: pending.at })
+              pending.call.status = "pending"
+              pending.call.backgroundState = "background"
             }
           }
           break
@@ -2192,8 +2205,12 @@ function codexDirectToolCall(name: string, obj: Record<string, unknown>, callId?
       const ms = typeof obj.timeout_ms === "number" ? obj.timeout_ms : undefined
       return { name: "Wait for agents", detail: ms !== undefined ? `up to ${formatCompactDuration(ms)}` : "mailbox update" }
     }
-    case "wait":
-      return { name: "Wait", detail: strField(obj.cell_id) ? `cell ${strField(obj.cell_id)}` : "running tool" }
+    case "wait": {
+      // Carries the cell id as `sessionId` so the poll fold-in can find its owning script, exactly as a
+      // write_stdin poll carries the PTY session id. runningKey keeps the two id spaces apart.
+      const cell = typeof obj.cell_id === "number" || typeof obj.cell_id === "string" ? obj.cell_id : undefined
+      return { name: "Wait", detail: cell !== undefined ? `cell ${cell}` : "running tool", sessionId: cell }
+    }
     case "view_image": {
       // Without this case a direct view_image function_call fell to the generic branch: the raw
       // snake_case name, no picture, and — because codexResultSummary suppresses the placeholder only
@@ -2218,6 +2235,14 @@ function codexDirectToolCall(name: string, obj: Record<string, unknown>, callId?
     default:
       return undefined
   }
+}
+
+// Key for the live-process registry. Codex has two independent generations of yielded execution — a
+// PTY `session_id` polled by write_stdin, and a script `cell_id` polled by `wait` — whose id counters
+// are unrelated and which appear together in the same rollout, so "cell 49" must never resolve to
+// "session 49". The poll card's own name is what says which registry it is asking about.
+function runningKey(pollName: string, id: string | number): string {
+  return `${pollName === "Wait" ? "cell" : "pty"}:${id}`
 }
 
 // The one-line caption a codex reasoning step offers the tool card that follows it. Codex writes its
@@ -2249,13 +2274,16 @@ const CAPTION_MAX = 120
 // Say so IN the card rather than leaving an empty row that reads like a fray bug. A message that does
 // arrive in the clear (older/unencrypted codex builds) still renders verbatim.
 function codexPeerMessageCall(label: string, target: string | undefined, obj: Record<string, unknown>): TranscriptToolCall {
-  const raw = strField(obj.message)
-  const encrypted = raw !== undefined && CODEX_ENCRYPTED_MESSAGE.test(raw.trim())
-  const body = !raw
+  // strField has ALREADY run redactToolPayload, so an encrypted body arrives here as the redaction
+  // marker, never as the raw Fernet token. Detect that marker rather than re-testing the token shape:
+  // one authority decides what "encrypted" looks like, so this can't drift out of step with it.
+  const redacted = strField(obj.message)
+  const encrypted = redacted === ENCRYPTED_PAYLOAD
+  const body = !redacted
     ? undefined
     : encrypted
       ? "_Codex encrypts inter-agent message bodies — the text is not recoverable from the rollout. Open the recipient's own thread to read what it received._"
-      : capToolInput(redactToolPayload(raw))
+      : capToolInput(redacted)
   return {
     name: label,
     detail: target,
@@ -2266,10 +2294,6 @@ function codexPeerMessageCall(label: string, target: string | undefined, obj: Re
     ...(label === "Follow up" ? { sendType: "codex_followup" } : {}),
   }
 }
-
-// A Fernet token — codex's envelope for an inter-agent message body. Kept in step with the redaction
-// pattern in redactToolPayload, which rewrites the same shape to "[encrypted payload]".
-const CODEX_ENCRYPTED_MESSAGE = /^gAAAA[A-Za-z0-9_-]{40,}={0,2}$/
 
 // A codex dispatch's model+effort cell ("gpt-5.6-terra/high"), the analogue of a Claude dispatch's
 // `subagent_type` tag. Matches the label codex-subagents.ts puts on the live tracked entry.
@@ -2681,6 +2705,8 @@ interface CodexToolResult {
   exitCode?: number
   durationMs?: number
   sessionId?: string | number
+  // A yielded SCRIPT's cell id (the `wait`-polled generation), kept separate from sessionId — see runningKey.
+  cellId?: string | number
 }
 
 // Unified exec returns response-content text blocks. Once backend/codex flattens them, the first block
@@ -2712,7 +2738,10 @@ function codexToolResult(text: string): CodexToolResult {
   // reader at all, so every direct-form poll stayed an orphan card).
   const sessionMatch = text.match(/Process running with session ID\s*(\d+)/)
   const sessionId = sessionMatch ? Number(sessionMatch[1]) : undefined
-  return { output: output || undefined, status, exitCode, durationMs, sessionId }
+  // The script generation's equivalent announcement, polled by `wait` instead of write_stdin.
+  const cellMatch = text.match(/Script running with cell ID\s*(\d+)/)
+  const cellId = cellMatch ? Number(cellMatch[1]) : undefined
+  return { output: output || undefined, status, exitCode, durationMs, sessionId, cellId }
 }
 
 // Result text is untrusted command/tool output: words such as "0 failed" and documentation about a
