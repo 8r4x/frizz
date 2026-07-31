@@ -7,6 +7,7 @@ import {
   assertArtifactHostCompatible,
   defaultArtifactRoot,
   ensureStableFrayArtifact,
+  promoteCurrentSourceArtifact,
   promoteFrayArtifact,
   readFrayArtifact,
   readStableArtifact,
@@ -199,25 +200,15 @@ async function runSupervisor(
           watch: false,
           updateRestart: async () => {
             // Build and verify before touching the healthy child. No source edit can enter this path.
+            // An unverifiable current artifact leaves us without a rollback target but does not
+            // block the update — see promoteCurrentSourceArtifact.
             try {
-              const current = readStableArtifact(
+              const { previous } = promoteCurrentSourceArtifact(
                 workspace.stateDir,
-                defaultArtifactRoot()
-              );
-              if (!current)
-                throw new Error(
-                  "the currently promoted Fray artifact is missing or failed verification"
-                );
-              const candidate = buildFrayArtifact(
                 sourceWorkspaceDir(),
                 defaultArtifactRoot()
               );
-              updateRollbackArtifact = current;
-              promoteFrayArtifact(
-                workspace.stateDir,
-                candidate.digest,
-                defaultArtifactRoot()
-              );
+              updateRollbackArtifact = previous;
               return { state: "ready" as const };
             } catch (error) {
               return {

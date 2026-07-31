@@ -123,7 +123,16 @@ export class RestartSupervisorProxy {
     if (this.restartInFlight) return this.restartInFlight
     this.state = "restarting"
     this.message = undefined
-    const work = action().then(
+    // Yield one turn before running the action. The durable update's artifact build is SYNCHRONOUS
+    // (execFileSync through the whole typecheck + web build + bundle), so invoking it inline would
+    // block this event loop for tens of seconds — and the 202 ack the caller writes right after
+    // this returns would not reach the browser until the build was already over, leaving the client
+    // unable to arm its reload before the supervisor re-execs. The state flip above is synchronous,
+    // so no status read can observe "ready" in the gap.
+    const work = (async () => {
+      await new Promise<void>((resume) => setImmediate(resume))
+      return action()
+    })().then(
       (result) => {
         this.state = result.state
         this.message = result.message

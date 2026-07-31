@@ -1209,6 +1209,32 @@ export function ensureStableFrayArtifact(
   return artifact;
 }
 
+/**
+ * Update & Restart's artifact step: build the checkout's current source, promote it, and hand back
+ * the artifact it replaced as the single rollback target.
+ *
+ * The currently promoted artifact is read ONLY for that rollback slot; it is deliberately NOT a
+ * precondition. One built before source tightened artifact validation — a new
+ * WORKER_PLUGIN_REQUIRED_FILES entry, say — stops verifying while its child keeps serving perfectly
+ * happily, and refusing to update THEN disables the one control that moves the instance past it.
+ * promoteFrayArtifact takes the same position on a broken previous pointer.
+ */
+export function promoteCurrentSourceArtifact(
+  stateDir: string,
+  sourceDir: string,
+  root = defaultArtifactRoot(),
+  options: EnsureStableArtifactOptions = {}
+): { candidate: FrayArtifact; previous: FrayArtifact | undefined } {
+  const previous = readStableArtifact(stateDir, root) ?? undefined;
+  options.onProgress?.("Building immutable artifact from current source");
+  const candidate = options.build
+    ? options.build(sourceDir, root)
+    : buildFrayArtifact(sourceDir, root, { onProgress: options.onProgress });
+  options.onProgress?.("Promoting verified immutable artifact");
+  promoteFrayArtifact(stateDir, candidate.digest, root);
+  return { candidate, previous };
+}
+
 /** Atomically select a verified artifact. The old current digest remains the single rollback slot. */
 export function promoteFrayArtifact(
   stateDir: string,

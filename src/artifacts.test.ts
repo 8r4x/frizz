@@ -27,6 +27,7 @@ import {
   currentArtifactHost,
   ensureStableFrayArtifact,
   findReusableFrayArtifact,
+  promoteCurrentSourceArtifact,
   promoteFrayArtifact,
   publishFrayArtifactStaging,
   readFrayArtifact,
@@ -412,6 +413,51 @@ test("a stopped workspace refreshes its stable pointer to the current source fin
   assert.equal(selected.digest, current);
   assert.equal(readStableArtifact(state, root)?.digest, current);
   assert.equal(built, false);
+});
+
+test("Update & Restart promotes even when the artifact it replaces no longer verifies", () => {
+  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-update-unverifiable-"));
+  const state = join(root, "state");
+  const source = sourceFixture(root);
+  const stale = fixture(root, "stale");
+  promoteFrayArtifact(state, stale, root);
+
+  // Exactly how a live instance goes stale: source tightened WORKER_PLUGIN_REQUIRED_FILES after this
+  // artifact was built, so its manifest no longer lists a now-required board closure entry. The
+  // digest field and every file stay put — only validation moved — and its child keeps serving.
+  const manifestPath = join(root, stale, "manifest.json");
+  const staleManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  delete staleManifest.runtimeFiles["board/index.mjs"];
+  writeFileSync(manifestPath, JSON.stringify(staleManifest));
+  assert.equal(readStableArtifact(state, root), null);
+
+  const built = fixture(root, "candidate");
+  const { candidate, previous } = promoteCurrentSourceArtifact(state, source, root, {
+    build: () => readFrayArtifact(built, root),
+  });
+
+  // No rollback target survives an unverifiable predecessor, but the update itself must land — it is
+  // the only control that moves this instance onto an artifact the current source can verify.
+  assert.equal(candidate.digest, built);
+  assert.equal(previous, undefined);
+  assert.equal(readStableArtifact(state, root)?.digest, built);
+});
+
+test("Update & Restart hands back the verified artifact it replaced as the rollback target", () => {
+  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-update-rollback-"));
+  const state = join(root, "state");
+  const source = sourceFixture(root);
+  const current = fixture(root, "current");
+  promoteFrayArtifact(state, current, root);
+
+  const built = fixture(root, "candidate");
+  const { candidate, previous } = promoteCurrentSourceArtifact(state, source, root, {
+    build: () => readFrayArtifact(built, root),
+  });
+
+  assert.equal(candidate.digest, built);
+  assert.equal(previous?.digest, current);
+  assert.equal(readStableArtifact(state, root)?.digest, built);
 });
 
 test("a relevant untracked source file does not reuse a stale artifact", () => {

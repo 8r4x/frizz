@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react"
+import { useSnapshot } from "valtio"
 import { RefreshCw } from "lucide-react"
 import { canRestart, canUpdateRestart, FRAY_SUPERVISOR_STATUS_WAKE_EVENT, getFraySupervisorStatus, requestFrayRestart, requestFrayUpdateRestart } from "../api/restart.ts"
 import { showToast, store } from "../store.ts"
@@ -74,11 +75,13 @@ export function RestartActionButton({
 
 /** Global recovery action. It stays mounted in App chrome even when the app child is unhealthy. */
 export function RestartFrayButton() {
+  const snap = useSnapshot(store)
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | undefined>()
   const [available, setAvailable] = useState<boolean | null>(null)
   const [updateAvailable, setUpdateAvailable] = useState(false)
+  const requested = useRef(false)
   const controlRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -93,8 +96,19 @@ export function RestartFrayButton() {
 
   if (available !== true) return null
 
+  // A failure the SUPERVISOR reports (a build that won't compile, an artifact that won't promote)
+  // never reaches the click handler's catch — the POST was accepted, and the overlay simply drops
+  // when a poll observes "failed". Its only trace was a 7-second toast, which is why a broken update
+  // read as "the modal flashed and nothing happened". Once this session has asked for an update,
+  // keep the supervisor's own reason on screen. It clears itself when the state leaves "failed".
+  const reportedFailure = requested.current && snap.controlPlaneState === "failed"
+    ? snap.controlPlaneMessage ?? "Fray did not become ready"
+    : undefined
+  const shownError = error ?? reportedFailure
+
   const updateAndRestart = async () => {
     if (busy) return
+    requested.current = true
     setOpen(false)
     setBusy(true)
     setError(undefined)
@@ -147,8 +161,11 @@ export function RestartFrayButton() {
         onBlur={() => setOpen(false)}
         onClick={() => void updateAndRestart()}
       />
-      {error && <p role="alert" className="absolute right-0 top-[calc(100%+0.5rem)] z-50 w-[min(23rem,calc(100vw-1.5rem))] rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-[12px] leading-relaxed text-red-200">{error}</p>}
-      <UpdateRestartPopover open={open && !error} update={updateAvailable} />
+      {/* Anchored like the popover above it: this control sits in the top-LEFT status bar, so the
+          old right-0 anchor hung a 23rem panel off the left of the viewport — where the one message
+          explaining a failed update would never be read. */}
+      {shownError && <p role="alert" className="fixed left-3 right-3 top-12 z-50 w-auto rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-[12px] leading-relaxed text-red-200 sm:absolute sm:right-auto sm:left-0 sm:top-[calc(100%+0.5rem)] sm:w-[min(23rem,calc(100vw-1.5rem))]">{shownError}</p>}
+      <UpdateRestartPopover open={open && !shownError} update={updateAvailable} />
     </div>
   )
 }
