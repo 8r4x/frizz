@@ -1,6 +1,6 @@
 name: release
 
-# Publishes `frayui` whenever packages/cli/package.json lands on main with a version that is not yet
+# Publishes `frayui` whenever package.json lands on main with a version that is not yet
 # on the registry. Bump the version, merge, and the release happens — there is no tag to push and no
 # separate release command, which suits a repo that lands work straight on main.
 #
@@ -13,7 +13,7 @@ on:
   push:
     branches: [main]
     paths:
-      - packages/cli/package.json
+      - package.json
   # Lets a failed or interrupted release be retried without an empty version bump.
   workflow_dispatch:
 
@@ -62,7 +62,7 @@ jobs:
       - name: Resolve version and decide whether to publish
         id: decide
         run: |
-          VERSION=$(node -p "require('./packages/cli/package.json').version")
+          VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           # Ask the registry rather than diffing commits: idempotent, so a re-run, a revert-and-reland,
           # or a workflow_dispatch can never double-publish or fail on an already-released version.
@@ -79,7 +79,6 @@ jobs:
       - name: Publish to npm
         if: steps.decide.outputs.publish == 'true'
         run: npm publish
-        working-directory: packages/cli
 
       - name: Tag the released commit
         if: steps.decide.outputs.publish == 'true'
