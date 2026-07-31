@@ -68,6 +68,17 @@ const childMessages: TranscriptMessage[] = [
     tools: [{ name: "Agent", detail: "Write property tests for the tier boundaries", subagentType: "fray:sonnet-high", agentId: "grandchild-1", agentStatus: "completed", agentElapsedMs: 420_000, agentCompletion: true, status: "completed" }],
     parts: [{ kind: "tools", tools: [{ name: "Agent", detail: "Write property tests for the tier boundaries", subagentType: "fray:sonnet-high", agentId: "grandchild-1", agentStatus: "completed", agentElapsedMs: 420_000, agentCompletion: true, status: "completed" }] }],
   },
+  // The child's OWN upward report, as a SendMessage tool call. In the DRAWER this must stay the bordered
+  // card WITH its body: the chat's report divider says "click the title to read the whole message", and
+  // this record is where that message actually lives. It is the half of the pair the 2026-07-31 divider
+  // change deliberately did not hollow out.
+  {
+    sourceId: "c-a45",
+    role: "assistant",
+    text: "",
+    tools: [{ name: "SendMessage", detail: "flagging the rounding mode early", sendTo: "main", sendSummary: "flagging the rounding mode early", sendBody: "The tier table rounds half-away-from-zero, not half-even.\n\nThat changes the boundary fix you asked for — every tier edge at exactly .005 lands a cent high. Say if you want me to switch the mode rather than patch the edges.", status: "completed" }],
+    parts: [{ kind: "tools", tools: [{ name: "SendMessage", detail: "flagging the rounding mode early", sendTo: "main", sendSummary: "flagging the rounding mode early", sendBody: "The tier table rounds half-away-from-zero, not half-even.\n\nThat changes the boundary fix you asked for — every tier edge at exactly .005 lands a cent high. Say if you want me to switch the mode rather than patch the edges.", status: "completed" }] }],
+  },
   {
     sourceId: "c-a5",
     role: "assistant",
@@ -132,6 +143,33 @@ const dispatchCall: TranscriptToolCall = {
 }
 const completionCall: TranscriptToolCall = { ...dispatchCall, agentCompletion: true }
 
+// The parent STEERING that same child mid-flight. The server has already translated the raw `to`
+// agentId into the child's DISPATCH tool_use id + its description (childDispatchIds → agentDispatches),
+// which is what makes the divider's title readable and drillable. A long body and summary ride along
+// deliberately: the divider must render NEITHER, and the drawer's card must render BOTH.
+const steerCall: TranscriptToolCall = {
+  name: "SendMessage",
+  detail: "narrow the audit to the boundary rounding",
+  sendTo: "agent_01H9ZQ4K7X",
+  sendSummary: "narrow the audit to the boundary rounding",
+  sendBody: "Skip the currency formatting — it is covered. Focus only on the tier boundary rounding and report the exact inputs that round the wrong way.",
+  sendDispatchId: "agent-done",
+  sendTargetLabel: "Audit the pricing parser for edge cases",
+  status: "completed",
+  durationMs: 900,
+}
+// A codex peer call: the target was never dispatch-acked in this transcript, so there is no dispatch id
+// and the title must degrade to PLAIN TEXT rather than a dead link.
+const followupCall: TranscriptToolCall = {
+  name: "Follow up",
+  detail: "codex-child-2",
+  sendTo: "codex-child-2",
+  sendSummary: "codex-child-2",
+  sendType: "codex_followup",
+  sendBody: "_Codex encrypts inter-agent message bodies._",
+  status: "completed",
+}
+
 const tool = (call: TranscriptToolCall): TranscriptMessage => ({
   sourceId: `t-${call.detail ?? call.name}`,
   role: "assistant",
@@ -166,7 +204,9 @@ const afterMessages: TranscriptMessage[] = [
   { sourceId: "u1", role: "user", text: "Refactor the pricing parser and verify it end-to-end.", tools: [], parts: [{ kind: "text", text: "Refactor the pricing parser and verify it end-to-end." }] },
   { sourceId: "a1", role: "assistant", text: "Dispatching an audit sub-agent, then reading the tier table myself.", tools: [], parts: [{ kind: "text", text: "Dispatching an audit sub-agent, then reading the tier table myself." }] },
   tool(dispatchCall),
+  { ...tool(steerCall), sourceId: "steer" },
   seaOfTools,
+  { ...tool(followupCall), sourceId: "followup" },
   shellLaunch,
   { ...tool(completionCall), sourceId: "completion" },
   { sourceId: "a2", role: "assistant", text: "The audit came back with three off-by-one-cent boundaries; folding the fix in now.", tools: [], parts: [{ kind: "text", text: "The audit came back with three off-by-one-cent boundaries; folding the fix in now." }] },
@@ -176,9 +216,12 @@ const afterMessages: TranscriptMessage[] = [
 
 // The SAME timeline, with the completion point drawing what it used to: a second AgentBlock card,
 // identical to the launch card six rows up and to every other card in the band.
-const beforeMessages: TranscriptMessage[] = afterMessages.map((m) =>
-  m.sourceId === "completion" ? { ...m, tools: [dispatchCall], parts: [{ kind: "tools" as const, tools: [dispatchCall] }] } : m,
-)
+// The peer-message rows are dropped here rather than shown in their old card form: which rendering they
+// take is decided by CONTEXT (SendMessageBlock reads ThreadSlugContext), and both panels are thread
+// chats, so a "before" copy would draw the new divider and read as a claim the change never made.
+const beforeMessages: TranscriptMessage[] = afterMessages
+  .filter((m) => m.sourceId !== "steer" && m.sourceId !== "followup")
+  .map((m) => (m.sourceId === "completion" ? { ...m, tools: [dispatchCall], parts: [{ kind: "tools" as const, tools: [dispatchCall] }] } : m))
 
 function Transcript({ messages, label }: { messages: TranscriptMessage[]; label: string }) {
   return (

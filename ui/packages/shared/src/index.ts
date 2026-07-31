@@ -1338,16 +1338,28 @@ export const TranscriptToolCall = z.object({
   agentCompletion: z.boolean().optional(),
   // ---- SendMessage (peer / agent-to-agent messaging) block ----
   // Set only for a `SendMessage` tool_use (an orchestrator steering a sub-agent, or a teammate note).
-  // The client promotes such a call into a SendMessageCard (same quiet card family as Bash/Read/Agent):
-  // `sendTo` is the recipient agent name (rendered prominently as "→ <name>"), `sendSummary` the short
-  // one-line recap shown in the header, `sendBody` the (capped) message body rendered as markdown in the
-  // expandable card body, and `sendType` the message type when it is NOT a plain "message" (e.g.
-  // "shutdown_request"). All optional so a pre-restart server / older transcript falls back to the plain
-  // generic `SendMessage(detail)` card.
+  // The client promotes such a call into the centred WAKE DIVIDER the sub-agent completion and upward
+  // report already draw (maintainer 2026-07-31: "render 'Steered' or SendMessage using the same full
+  // width notifications, the horizontal rule style component that we render when an agent completes").
+  // `sendTo` is the recipient agent id/name, `sendSummary` the short recap, `sendBody` the (capped)
+  // message body, and `sendType` the message type when it is NOT a plain "message" (e.g.
+  // "shutdown_request"). Summary and body are retained because the SUB-AGENT DRAWER — where the same
+  // call is read as the child's own record — still needs them; the parent's divider renders neither.
+  // All optional so a pre-restart server / older transcript falls back to a bare divider.
   sendTo: z.string().optional(), // recipient agent id/name (the SendMessage `to`)
   sendSummary: z.string().optional(), // the short recap (the SendMessage `summary`)
   sendBody: z.string().optional(), // the capped message body (the SendMessage `message`/`content`)
   sendType: z.string().optional(), // the message type when not a plain "message" (e.g. "shutdown_request")
+  // The steer's DRILL-IN pair, set only when the server could resolve `sendTo` to a child this same
+  // transcript dispatched. A Claude `SendMessage` addresses its target by AGENT ID, which is both
+  // meaningless to a reader and not a key any drawer resolves — every sub-agent lookup goes through the
+  // DISPATCH tool_use id. The server owns that translation (childDispatchIds, the one record where a
+  // child's two identities meet) and ships the result: `sendDispatchId` is what the divider's title
+  // opens, `sendTargetLabel` the dispatch's own description, which is what the title reads.
+  // Absent on codex (its peer tools name a target that was never dispatch-acked here) and on `to:"main"`
+  // — in both cases the divider degrades to plain text rather than a link to an unavailable drawer.
+  sendDispatchId: z.string().optional(),
+  sendTargetLabel: z.string().optional(),
   // ---- SendUserFile (Claude Code file delivery) block ----
   // Set only for a `SendUserFile` tool_use — the worker surfacing files (screenshots, artifacts) to the
   // human. The client promotes such a call into a SentFilesCard that renders the delivered files inline

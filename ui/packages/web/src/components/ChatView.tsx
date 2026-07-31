@@ -400,7 +400,10 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
           tool-card column reads uniformly no matter how the turns were chunked. */}
       {/* data-transcript-column marks a stack of messages whose rhythm comes from withMessageSpacers.
           Every such column is gap-less by construction; the marker is what the spacing e2e measures. */}
-      <div data-transcript-column className="flex min-h-full flex-col px-6 py-5">
+      {/* pb > pt on purpose: the bottom edge butts against the non-scrolling composer footer, so the
+          last row needs more air under it than the first row needs above the header to read as
+          "the transcript ends here" rather than as text crowding the prompt box. */}
+      <div data-transcript-column className="flex min-h-full flex-col px-6 pt-5 pb-8">
         {count === 0 ? (
           <div className="flex-1 flex items-center justify-center text-sm text-muted">
             {q.isPending ? (
@@ -1691,6 +1694,8 @@ export interface CollapsedTool {
   sendSummary?: string
   sendBody?: string
   sendType?: string
+  sendDispatchId?: string
+  sendTargetLabel?: string
   // Set for a SendUserFile (file delivery) call: the SentFilesCard renders the delivered files inline —
   // `sentImages` are servable cache paths shown as pictures, `sentFiles` non-image basenames as openable
   // chips, `caption` the label. Stands alone — never folds into a ×N count.
@@ -1731,7 +1736,7 @@ function collapseTools(tools: TranscriptMessage["tools"]): CollapsedTool[] {
       out.push({ name: t.name, detail: t.detail, prompt: t.prompt, input: t.input, subagentType: t.subagentType, agentId: t.agentId, agentStatus: t.agentStatus, agentElapsedMs: t.agentElapsedMs, output: t.output, status: t.status, durationMs: t.durationMs, count: 1 })
     } else if (t.sendTo !== undefined || t.sendBody !== undefined) {
       // A SendMessage (peer message) renders as its own SendMessageCard — never folds into a ×N run.
-      out.push({ name: t.name, detail: t.detail, sendTo: t.sendTo, sendSummary: t.sendSummary, sendBody: t.sendBody, sendType: t.sendType, status: t.status, durationMs: t.durationMs, count: 1 })
+      out.push({ name: t.name, detail: t.detail, sendTo: t.sendTo, sendSummary: t.sendSummary, sendBody: t.sendBody, sendType: t.sendType, sendDispatchId: t.sendDispatchId, sendTargetLabel: t.sendTargetLabel, status: t.status, durationMs: t.durationMs, count: 1 })
     } else if (t.outputImage) {
       // A screenshot / image tool result (chrome-devtools `take_screenshot`, an image Read) renders as its
       // own ToolImageCard showing the picture inline — never folds into a ×N run.
@@ -1867,7 +1872,7 @@ export function ToolCardRouter({ t, startedAt }: { t: CollapsedTool; startedAt?:
   // (codex — it encrypts the dispatch message, so there is no prompt to show, but the child is still
   // tracked and drillable). Gating on the prompt alone left every codex sub-agent as a mute generic card.
   if (t.prompt || t.agentId) return <AgentBlock detail={t.detail} prompt={t.prompt} input={t.input} subagentType={t.subagentType} agentId={t.agentId} agentStatus={t.agentStatus} agentElapsedMs={t.agentElapsedMs} status={t.status} durationMs={t.durationMs} output={t.output} />
-  if (t.sendTo !== undefined || t.sendBody !== undefined) return <SendMessageCard to={t.sendTo} summary={t.sendSummary} body={t.sendBody ?? ""} type={t.sendType} status={t.status} durationMs={t.durationMs} />
+  if (t.sendTo !== undefined || t.sendBody !== undefined) return <SendMessageBlock to={t.sendTo} summary={t.sendSummary} body={t.sendBody ?? ""} type={t.sendType} dispatchId={t.sendDispatchId} targetLabel={t.sendTargetLabel} status={t.status} durationMs={t.durationMs} />
   if (t.outputImage) return <ToolImageCard name={t.name} detail={t.detail} outputImage={t.outputImage} output={t.output} status={t.status} durationMs={t.durationMs} />
   if (t.sentImages || t.sentFiles) return <SentFilesCard images={t.sentImages ?? []} files={t.sentFiles ?? []} caption={t.caption} status={t.status} durationMs={t.durationMs} />
   // The built-in to-do list, ahead of the generic input/output card (a codex plan's `explanation` rides
@@ -2543,6 +2548,47 @@ export function AgentBlock({
   )
 }
 
+// THE VERB A PEER MESSAGE READS AS — one authority, because two surfaces render it (the parent's
+// divider and the drawer's card) and a drift between them would report the same event two ways.
+//
+// "Steered", not "Sent → <recipient>" (maintainer 2026-07-28). The recipient was rendered as the
+// salient token, but a SendMessage to a background agent addresses it by raw agentId — so the most
+// prominent thing on the card was a meaningless hash. What the reader needs is the VERB: this turn
+// steered another agent.
+//
+// …except when the recipient is `main`, which INVERTS the direction: that is a background child
+// reporting UP to the conversation that dispatched it, so the verb must not claim the child steered its
+// own parent. Seen in a sub-agent's drawer, which is exactly where an upward report is read from (the
+// chat's report line drills in here), the card read "Steered" for a message the child had sent to its
+// dispatcher.
+// …and a codex `followup_task` is neither: it QUEUES more work onto an existing sub-agent rather
+// than steering the turn in flight, so it gets its own verb instead of borrowing "Steered".
+function sendMessageVerb(to: string | undefined, type: string | undefined): string {
+  if (type === "shutdown_request") return "Shutdown"
+  if (type === "codex_followup") return "Followed up"
+  return to === "main" ? "Reported" : "Steered"
+}
+
+// WHICH OF THE TWO PEER-MESSAGE RENDERINGS THIS SURFACE GETS.
+//
+// In a THREAD's chat the maintainer's ruling (2026-07-31) applies: "render 'Steered' or SendMessage
+// using the same full width notifications, the horizontal rule style component that we render when an
+// agent completes." A steer is the same class of event as a completion or an upward report — a child
+// this turn touched reaching a notable state — so it draws the same divider and carries no body.
+//
+// In the SUB-AGENT DRAWER it must stay the CARD, and that is not an inconsistency — it is the other
+// half of the same design. The divider's whole contract is "click the title and read it there": a
+// steer's text lands in the child's transcript as an incoming message, and an upward report's text is
+// read off the child's own `SendMessage` record, which is exactly this card. Hollowing the card out too
+// would leave the message unreadable on every surface. `ThreadSlugContext` is set only on a real
+// thread's chat (the drawer deliberately provides ChildDrillSlugContext instead), so it is the honest
+// test for which surface this is.
+function SendMessageBlock({ to, summary, body, type, dispatchId, targetLabel, status, durationMs }: { to?: string; summary?: string; body: string; type?: string; dispatchId?: string; targetLabel?: string; status?: ToolStatus; durationMs?: number }) {
+  const inThreadChat = useContext(ThreadSlugContext) !== null
+  if (inThreadChat) return <SendMessageLine to={to} type={type} dispatchId={dispatchId} targetLabel={targetLabel} />
+  return <SendMessageCard to={to} summary={summary} body={body} type={type} status={status} durationMs={durationMs} />
+}
+
 // A SendMessage (peer / agent-to-agent messaging) rendered as a sibling of AgentBlock/BashBlock: the
 // SAME quiet bordered card family, but purpose-built to read as "this agent steered that one" rather
 // than a generic SendMessage(...) tool line. The header leads with the petite-caps kind label
@@ -2552,9 +2598,11 @@ export function AgentBlock({
 // with a "Show all N lines" affordance, exactly like the Bash/Read/Agent bodies). Default state mirrors
 // AgentBlock: COLLAPSED when a summary already conveys the gist, OPEN when there's no summary so a
 // bodied message isn't hidden behind a chevron showing nothing but the recipient.
+//
+// This is now the DRAWER-ONLY rendering — see SendMessageBlock for why the thread's own chat draws a
+// divider instead, and why this one has to keep its body.
 const SEND_MAX_LINES = 16
 function SendMessageCard({ to, summary, body, type, status, durationMs }: { to?: string; summary?: string; body: string; type?: string; status?: ToolStatus; durationMs?: number }) {
-  const isShutdown = type === "shutdown_request"
   const [open, setOpen] = useState(!summary)
   const [expanded, setExpanded] = useState(false)
   const bodyId = useId()
@@ -2562,20 +2610,7 @@ function SendMessageCard({ to, summary, body, type, status, durationMs }: { to?:
   const lineCount = useMemo(() => body.split("\n").length, [body])
   const long = lineCount > SEND_MAX_LINES
   const hasBody = !!body.trim()
-  // "Steered", not "Sent → <recipient>" (maintainer 2026-07-28). The recipient was rendered as the
-  // salient token, but a SendMessage to a background agent addresses it by raw agentId — so the most
-  // prominent thing on the card was a meaningless hash. What the reader needs is the VERB: this turn
-  // steered another agent. The recipient stays in the aria-label, where an id is still an identifier
-  // rather than noise.
-  //
-  // …except when the recipient is `main`, which INVERTS the direction: that is a background child
-  // reporting UP to the conversation that dispatched it, and the verb is what this card is for, so it
-  // must not claim the child steered its own parent. Seen in a sub-agent's drawer, which is exactly where
-  // an upward report is read from (the chat's report line drills in here), the card read "Steered" for a
-  // message the child had sent to its dispatcher.
-  // …and a codex `followup_task` is neither: it QUEUES more work onto an existing sub-agent rather
-  // than steering the turn in flight, so it gets its own verb instead of borrowing "Steered".
-  const label = isShutdown ? "Shutdown" : type === "codex_followup" ? "Followed up" : to === "main" ? "Reported" : "Steered"
+  const label = sendMessageVerb(to, type)
   return (
     <div className="fray-bash">
       <button
@@ -3833,6 +3868,64 @@ function SubAgentReportLine({ from, dispatchId, sourceId }: { from: string; disp
         <span className="shrink-0">»</span>
       </span>
       <span className="shrink-0">reported</span>
+    </WakeDivider>
+  )
+}
+
+// THE OUTGOING HALF of the pair above — this turn calling `SendMessage` to steer a child it dispatched
+// (or `shutdown_request`/codex `followup_task`, which address the same class of recipient). Maintainer
+// 2026-07-31: "render 'Steered' or SendMessage using the same full width notifications, the horizontal
+// rule style component that we render when an agent completes. In the case of Claude Code, clicking on
+// the title should open up the sub-agent in the drawer."
+//
+// So it drops the bordered SendMessageCard for the SAME divider the completion and report lines draw.
+// The three now read as one family, which is the point: they are the three things that happen between a
+// worker and its children, and a bordered card for one of them sat in the tool band the divider exists
+// to stand out from.
+//
+// It carries NO summary and NO body — the same ruling the report line took ("Do not include any piece
+// of the message in that component… I should just have to click on the title, then I can see the whole
+// message if I want to"). The steer's text is not lost: it lands in the child's transcript as an
+// incoming message, which is precisely what the title opens.
+//
+// The TITLE is the child's dispatch DESCRIPTION and the link target its DISPATCH tool_use id — both
+// resolved server-side (sendTargetLabel/sendDispatchId), because the raw `to` is an agentId that reads
+// as a hash and resolves to nothing. Codex peer calls name a target that was never dispatch-acked here,
+// so they keep that target as plain text rather than becoming a dead link.
+function SendMessageLine({ to, type, dispatchId, targetLabel, sourceId }: { to?: string; type?: string; dispatchId?: string; targetLabel?: string; sourceId?: string }) {
+  const slug = useChildDrillSlug()
+  const verb = sendMessageVerb(to, type)
+  // `to === "main"` is an upward report, whose recipient is the conversation itself — there is no title
+  // worth showing and nothing to drill into, so the divider states the verb alone.
+  const title = to === "main" ? undefined : (targetLabel ?? to)
+  const canDrill = !!(slug && dispatchId)
+  return (
+    <WakeDivider sourceId={sourceId} marker="agent-steer" ariaLabel={canDrill ? undefined : `${verb}${title ? ` ${title}` : ""}`}>
+      <span className="shrink-0">{verb}</span>
+      {/* Guillemets OUTSIDE the truncating title, and the title the only shrinkable part — the same
+          construction the completion and report lines use, so a long child description clips cleanly at
+          a narrow width instead of pushing the divider's hairline off the pane. */}
+      {title && (
+        <span className="flex min-w-0 items-center">
+          <span className="shrink-0">«</span>
+          {canDrill ? (
+            <button
+              type="button"
+              data-subagent-steer-open
+              title={CHILD_OPEN_TITLE.AGENT}
+              aria-label={`${CHILD_OPEN_TITLE.AGENT}: ${title}`}
+              onClick={() => pushSubAgentDrawer(slug!, dispatchId!, { label: title })}
+              onMouseDown={(e) => e.preventDefault()}
+              className="min-w-0 truncate rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
+            >
+              {title}
+            </button>
+          ) : (
+            <span className="min-w-0 truncate">{title}</span>
+          )}
+          <span className="shrink-0">»</span>
+        </span>
+      )}
     </WakeDivider>
   )
 }

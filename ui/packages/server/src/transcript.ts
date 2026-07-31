@@ -748,6 +748,19 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
             // An Agent dispatch is registered by its tool_use id so a later completion notification can
             // back-fill its terminal state and drop an inline event line into the flow.
             if (call.agentId) agentDispatches.set(call.agentId, { at: rec.timestamp, call })
+            // A STEER's drill-in pair. `sendTo` is the recipient's AGENT ID, which no drawer resolves and
+            // no reader can read; childDispatchIds turns it into the DISPATCH tool_use id every sub-agent
+            // lookup is keyed by, and that dispatch's own description is the title the divider shows.
+            // Ordering is safe by construction: the launch ack that populates childDispatchIds is the
+            // record that HANDED the model this agentId, so it always precedes any steer naming it.
+            // `main` is the upward direction (a child reporting to its dispatcher) and never a child of
+            // this transcript, so it is excluded rather than looked up and missed.
+            if (call.sendTo && call.sendTo !== "main") {
+              const dispatchId = childDispatchIds.get(call.sendTo)
+              const described = dispatchId ? agentDispatches.get(dispatchId)?.call.detail?.trim() : undefined
+              if (dispatchId) call.sendDispatchId = dispatchId
+              if (described) call.sendTargetLabel = described
+            }
             if (call.backgroundState === "background" && typeof block.id === "string") backgroundShells.set(block.id, { at: rec.timestamp, call })
           }
           if (typeof block.id === "string" && calls.length > 0) {
