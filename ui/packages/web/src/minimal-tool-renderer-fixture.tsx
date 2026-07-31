@@ -29,6 +29,7 @@ const exceptionMessage = callMessage("exceptions", [
     detail: "nub run dev",
     desc: "Run the disposable dev server",
     command: "nub run dev",
+    cwd: "/tmp/fray-fixture/worktree",
     backgroundState: "background",
     status: "pending",
   },

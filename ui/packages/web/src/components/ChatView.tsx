@@ -1758,7 +1758,7 @@ export function ToolCardRouter({ t, startedAt }: { t: CollapsedTool; startedAt?:
     return <DiffBlock edits={t.edits} meta={<ToolStatusMeta status={t.status} backgroundState={t.backgroundState} liveBackgroundState={liveBackgroundState} exitCode={t.exitCode} durationMs={t.durationMs} />} />
   }
   if (t.command) {
-    return <BashBlock command={t.command} desc={t.desc ?? t.detail} output={t.output} status={t.status} backgroundState={t.backgroundState} liveBackgroundState={liveBackgroundState} exitCode={t.exitCode} cwd={t.cwd} sessionId={t.sessionId} durationMs={t.durationMs} startedAt={startedAt} />
+    return <BashBlock command={t.command} desc={t.desc ?? t.detail} output={t.output} status={t.status} backgroundState={t.backgroundState} liveBackgroundState={liveBackgroundState} exitCode={t.exitCode} sessionId={t.sessionId} durationMs={t.durationMs} startedAt={startedAt} />
   }
   if (t.read) return <ReadBlock detail={t.detail} read={t.read} status={t.status} durationMs={t.durationMs} />
   // A dispatch renders as an AgentBlock on EITHER signal: a prompt (Claude) or just the correlation id
@@ -1772,7 +1772,7 @@ export function ToolCardRouter({ t, startedAt }: { t: CollapsedTool; startedAt?:
   // `input`, which that branch would claim first).
   if (t.todos) return <TodoBlock todos={t.todos} note={t.input} meta={<ToolStatusMeta status={t.status} durationMs={t.durationMs} />} />
   if (t.input || t.output) {
-    return <BashBlock name={t.name} command={t.input ?? ""} desc={t.detail} output={t.output} status={t.status} backgroundState={t.backgroundState} liveBackgroundState={liveBackgroundState} exitCode={t.exitCode} cwd={t.cwd} sessionId={t.sessionId} durationMs={t.durationMs} inputLabel="input" startedAt={startedAt} />
+    return <BashBlock name={t.name} command={t.input ?? ""} desc={t.detail} output={t.output} status={t.status} backgroundState={t.backgroundState} liveBackgroundState={liveBackgroundState} exitCode={t.exitCode} sessionId={t.sessionId} durationMs={t.durationMs} inputLabel="input" startedAt={startedAt} />
   }
   return <ToolCard name={t.name} detail={t.detail} count={t.count} status={t.status} backgroundState={t.backgroundState} liveBackgroundState={liveBackgroundState} exitCode={t.exitCode} cwd={t.cwd} sessionId={t.sessionId} durationMs={t.durationMs} startedAt={startedAt} />
 }
@@ -2071,7 +2071,6 @@ function BashBlock({
   backgroundState,
   liveBackgroundState,
   exitCode,
-  cwd,
   sessionId,
   durationMs,
   inputLabel,
@@ -2085,7 +2084,6 @@ function BashBlock({
   backgroundState?: TranscriptToolCall["backgroundState"]
   liveBackgroundState?: "running" | "stale"
   exitCode?: number
-  cwd?: string
   sessionId?: string | number
   durationMs?: number
   inputLabel?: string
@@ -2101,7 +2099,9 @@ function BashBlock({
   // carries an `output` pane below the command — clamped + independently expandable like the command.
   const outLineCount = useMemo(() => (output ? output.split("\n").length : 0), [output])
   const outLong = outLineCount > BASH_MAX_LINES
-  const shownDesc = contextualDetail(desc, cwd, sessionId)
+  // A command's working directory is execution metadata, not useful header copy. Keep yielded-session
+  // context when present, but let the authored description stand on its own for ordinary Bash calls.
+  const shownDesc = contextualDetail(desc, undefined, sessionId)
   const expandable = Boolean(command || output)
   return (
     <div className="fray-bash">
