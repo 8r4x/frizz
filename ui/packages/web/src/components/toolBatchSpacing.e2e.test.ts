@@ -94,10 +94,10 @@ for (const [surface, query, column] of [
         }
       }, column)
       assert.equal(live.visibleCards, 0, "ordinary cards stay unmounted until a settled disclosure is expanded")
-      assert.equal(live.labels.length, 1, "the pending run stays out of transcript history")
+      assert.equal(live.labels.length, 1, "the completed inter-call run stays out of history while the turn is live")
       assert.match(live.labels[0], /Expand 7 tool calls: Ran 7 tool calls/, "the earlier settled run keeps one historical digest")
       assert.equal(live.workingActivity, "tool", "the ordinary Working slot identifies its tool-label state")
-      assert.equal(live.shimmerText, "Printing the captured output", "the newest gerund owns the existing bottom shimmer")
+      assert.equal(live.shimmerText, "Printing the captured output", "the newest completed call keeps owning the bottom shimmer between calls")
       assert.doesNotMatch(live.workingText, /Working…/, "the gerund replaces rather than accompanies generic Working")
       assert.equal(live.pendingDisclosures, 0, "no historical disclosure may carry live state")
 

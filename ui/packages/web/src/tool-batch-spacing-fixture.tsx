@@ -147,7 +147,9 @@ const messages: TranscriptMessage[] = [
               name: "Bash",
               command: "cat out.log",
               desc: "Printing the captured output",
-              status: SETTLED ? "completed" : "pending",
+              // Deliberately completed in BOTH states. The live fixture models the inter-call gap:
+              // the turn is still running, so this remains the bottom gerund until a real boundary.
+              status: "completed",
             })]),
           ],
         },

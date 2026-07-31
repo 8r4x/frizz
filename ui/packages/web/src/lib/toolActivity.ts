@@ -145,27 +145,26 @@ export function coalesceToolActivityMessages(messages: readonly ChatMessage[]): 
   return out
 }
 
-/** The latest pending ordinary tool, when the landed assistant tail is still an activity run. */
-export function pendingToolActivityTail(messages: readonly ChatMessage[]): TranscriptToolCall | undefined {
+/** The newest ordinary call in the landed assistant tail, regardless of its individual status. */
+export function liveToolActivityTail(messages: readonly ChatMessage[]): TranscriptToolCall | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]
     // Optimistic queued user bubbles are pinned separately and have not interrupted the active turn.
     if (message.queued) continue
     const tools = messageToolTail(message)
-    if (!tools) return undefined
-    const activity = currentToolActivity(tools)
-    return activity.pending ? activity.tool : undefined
+    return tools?.[tools.length - 1]
   }
   return undefined
 }
 
-function withoutPendingToolTail(message: ChatMessage): ChatMessage {
+function withoutLiveToolTail(message: ChatMessage): ChatMessage {
   const tail = messageToolTail(message)
-  if (!tail || !currentToolActivity(tail).pending) return message
+  if (!tail) return message
 
   // `message.tools` is the flattened provider view while `parts` preserves exact render order.
-  // Remove the whole live run from both: completed calls in that run must not mint a partial
-  // historical digest while a later call is still pending.
+  // Remove the whole live run from both. A completed latest call is still live while the turn is
+  // running: revealing its digest during the inter-call gap makes the row jump to `Ran N` +
+  // `Working…`, only to disappear again when the next call lands.
   const tools = message.tools.length >= tail.length
     ? message.tools.slice(0, message.tools.length - tail.length)
     : message.tools.filter((tool) => !tail.includes(tool))
@@ -186,8 +185,9 @@ function withoutPendingToolTail(message: ChatMessage): ChatMessage {
 /**
  * Historical transcript rows exclude the live ordinary-tool tail.
  *
- * Its newest pending call supplies the bottom runtime gerund instead. Once every call settles, the
- * unmodified coalesced message returns here and renders one `Ran N tool calls` disclosure.
+ * Its newest call supplies the bottom runtime gerund instead. Callers use this only while the turn
+ * is running, so individual call completion cannot flash a digest between sequential calls. Once a
+ * visible block ends the run—or the turn goes idle—the unmodified message renders `Ran N tool calls`.
  */
 export function historicalToolActivityMessages(
   entries: readonly ToolActivityMessage[],
@@ -196,8 +196,7 @@ export function historicalToolActivityMessages(
   for (let i = entries.length - 1; i >= 0; i--) {
     const message = entries[i].message
     if (message.queued) continue
-    const tail = messageToolTail(message)
-    if (tail && currentToolActivity(tail).pending) liveTailMessage = message
+    if (messageToolTail(message)) liveTailMessage = message
     break
   }
 
@@ -205,7 +204,7 @@ export function historicalToolActivityMessages(
   const out: ToolActivityMessage[] = []
   for (const entry of entries) {
     const message = entry.message === liveTailMessage
-      ? withoutPendingToolTail(entry.message)
+      ? withoutLiveToolTail(entry.message)
       : entry.message
     if (transparentAssistantMessage(message)) continue
     out.push(message === entry.message ? entry : { ...entry, message })

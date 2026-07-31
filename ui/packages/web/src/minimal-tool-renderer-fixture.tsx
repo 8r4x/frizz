@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ChatMessage } from "./hooks.ts"
 import { Message, VSpace, WorkingIndicator, withMessageSpacers } from "./components/ChatView.tsx"
-import { coalesceToolActivityMessages, historicalToolActivityMessages, pendingToolActivityTail, toolActivityLabel } from "./lib/toolActivity.ts"
+import { coalesceToolActivityMessages, historicalToolActivityMessages, liveToolActivityTail, toolActivityLabel } from "./lib/toolActivity.ts"
 import "./styles.css"
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -51,7 +51,7 @@ const exceptionMessage = callMessage("exceptions", [
 
 function Transcript({ messages, running = false }: { messages: ChatMessage[]; running?: boolean }) {
   const coalesced = useMemo(() => coalesceToolActivityMessages(messages), [messages])
-  const liveTool = running ? pendingToolActivityTail(coalesced.map((entry) => entry.message)) : undefined
+  const liveTool = running ? liveToolActivityTail(coalesced.map((entry) => entry.message)) : undefined
   const activityLabel = liveTool ? toolActivityLabel(liveTool) : undefined
   const display = useMemo(
     () => running ? historicalToolActivityMessages(coalesced) : coalesced,

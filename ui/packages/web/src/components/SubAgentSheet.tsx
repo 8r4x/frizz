@@ -5,7 +5,7 @@ import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
 import { subAgentProfileLabel } from "../lib/subAgentProfile.ts"
-import { coalesceToolActivityMessages, historicalToolActivityMessages, pendingToolActivityTail, toolActivityLabel } from "../lib/toolActivity.ts"
+import { coalesceToolActivityMessages, historicalToolActivityMessages, liveToolActivityTail, toolActivityLabel } from "../lib/toolActivity.ts"
 import { ChildDrillSlugContext, Message, VSpace, WorkingIndicator, withMessageSpacers } from "./ChatView.tsx"
 import { Composer } from "./Composer.tsx"
 import { Sheet } from "./ui/Sheet.tsx"
@@ -69,7 +69,7 @@ export function SubAgentSheet({
   const running = state === "running"
   const coalescedActivityMessages = useMemo(() => coalesceToolActivityMessages(messages), [messages])
   const liveToolActivity = running
-    ? pendingToolActivityTail(coalescedActivityMessages.map((entry) => entry.message))
+    ? liveToolActivityTail(coalescedActivityMessages.map((entry) => entry.message))
     : undefined
   const liveActivityLabel = liveToolActivity ? toolActivityLabel(liveToolActivity) : undefined
   const activityMessages = useMemo(

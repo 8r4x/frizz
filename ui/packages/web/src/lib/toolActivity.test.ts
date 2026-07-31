@@ -7,7 +7,7 @@ import {
   currentToolActivity,
   historicalToolActivityMessages,
   isToolActivityException,
-  pendingToolActivityTail,
+  liveToolActivityTail,
   settledToolActivityLabel,
   toolActivityLabel,
 } from "./toolActivity.ts"
@@ -131,7 +131,7 @@ test("a prose message's ordinary tool tail owns following provider batches until
   assert.equal(compact[2].message.sourceId, "batch-c")
 })
 
-test("the latest pending tool moves to the runtime tail until the whole run settles", () => {
+test("the latest tool stays at the runtime tail across the completed inter-call gap", () => {
   const settled = toolMessage("settled", [tool("Read", { status: "completed" })])
   const pending = toolMessage("pending", [tool("Bash", { desc: "Running focused tests", status: "pending" })])
   const queued: ChatMessage = {
@@ -144,7 +144,7 @@ test("the latest pending tool moves to the runtime tail until the whole run sett
   }
 
   const compact = coalesceToolActivityMessages([settled, pending, queued])
-  assert.equal(pendingToolActivityTail(compact.map((entry) => entry.message)), pending.tools[0])
+  assert.equal(liveToolActivityTail(compact.map((entry) => entry.message)), pending.tools[0])
   const liveHistory = historicalToolActivityMessages(compact)
   assert.deepEqual(liveHistory.map((entry) => entry.message.sourceId), ["queued"])
   assert.equal(
@@ -155,10 +155,17 @@ test("the latest pending tool moves to the runtime tail until the whole run sett
 
   pending.tools[0].status = "completed"
   const completed = coalesceToolActivityMessages([settled, pending])
-  assert.equal(pendingToolActivityTail(completed.map((entry) => entry.message)), undefined)
-  const history = historicalToolActivityMessages(completed)
-  assert.equal(history.length, 1)
-  assert.deepEqual(history[0].message.tools.map((call) => call.name), ["Read", "Bash"])
+  assert.equal(liveToolActivityTail(completed.map((entry) => entry.message)), pending.tools[0])
+  assert.deepEqual(
+    historicalToolActivityMessages(completed),
+    [],
+    "individual completion must not flash the digest while the turn is still running",
+  )
+  assert.deepEqual(
+    completed[0].message.tools.map((call) => call.name),
+    ["Read", "Bash"],
+    "the idle caller can reveal the unmodified coalesced digest",
+  )
 })
 
 test("a live tool tail is removed without hiding the prose that introduced it", () => {
@@ -176,14 +183,14 @@ test("a live tool tail is removed without hiding the prose that introduced it", 
 
   const compact = coalesceToolActivityMessages([lead])
   const liveHistory = historicalToolActivityMessages(compact)
-  assert.equal(pendingToolActivityTail(compact.map((entry) => entry.message)), pending)
+  assert.equal(liveToolActivityTail(compact.map((entry) => entry.message)), pending)
   assert.equal(liveHistory.length, 1)
   assert.equal(liveHistory[0].message.text, "I found the renderer.")
   assert.deepEqual(liveHistory[0].message.tools, [])
   assert.deepEqual(liveHistory[0].message.parts, [{ kind: "text", text: "I found the renderer." }])
 
   pending.status = "completed"
-  const settledHistory = historicalToolActivityMessages(coalesceToolActivityMessages([lead]))
+  const settledHistory = coalesceToolActivityMessages([lead])
   assert.equal(settledHistory[0].message.tools.length, 1)
   assert.deepEqual(settledHistory[0].message.parts?.map((part) => part.kind), ["text", "tools"])
 })
@@ -213,6 +220,14 @@ test("activity labels are gerunds with a clean fallback for arbitrary tools", ()
   assert.equal(toolActivityLabel(tool("Bash", { desc: "Checking generated output" })), "Checking generated output")
   assert.equal(toolActivityLabel(tool("Todos")), "Updating the plan")
   assert.equal(toolActivityLabel(tool("mcp__example__frobnicate")), "Using frobnicate")
+})
+
+test("the newest call drives the live gerund even when an earlier call remains pending", () => {
+  const earlier = tool("Read", { detail: "src/old.ts", status: "pending" })
+  const newest = tool("Bash", { desc: "Inspect PR review state and comments", status: "completed" })
+  const compact = coalesceToolActivityMessages([toolMessage("parallel", [earlier, newest])])
+  assert.equal(liveToolActivityTail(compact.map((entry) => entry.message)), newest)
+  assert.equal(toolActivityLabel(newest), "Inspecting PR review state and comments")
 })
 
 test("the newest pending call drives the live label, then the final call drives settled history", () => {

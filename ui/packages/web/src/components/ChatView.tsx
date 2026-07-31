@@ -68,7 +68,7 @@ import { PROVIDER_LABEL } from "../lib/signIn.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
 import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
-import { coalesceToolActivityMessages, historicalToolActivityMessages, isToolActivityException, pendingToolActivityTail, settledToolActivityLabel, toolActivityLabel } from "../lib/toolActivity.ts"
+import { coalesceToolActivityMessages, historicalToolActivityMessages, isToolActivityException, liveToolActivityTail, settledToolActivityLabel, toolActivityLabel } from "../lib/toolActivity.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
 
 // Answer types moved to lib/questionBlocks.ts (shared by the queue card, the thread view, and the
@@ -226,7 +226,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
   // address server truth, never the compacted array.
   const coalescedActivityMessages = useMemo(() => coalesceToolActivityMessages(presentationMessages), [presentationMessages])
   const liveToolActivity = running
-    ? pendingToolActivityTail(coalescedActivityMessages.map((entry) => entry.message))
+    ? liveToolActivityTail(coalescedActivityMessages.map((entry) => entry.message))
     : undefined
   const liveActivityLabel = liveToolActivity ? toolActivityLabel(liveToolActivity) : undefined
   // A live tool run belongs in the existing bottom runtime slot, never in transcript history. Once
@@ -626,7 +626,7 @@ function VirtualizedThreadTranscript({
 }) {
   const coalescedActivityMessages = useMemo(() => coalesceToolActivityMessages(messages), [messages])
   const liveToolActivity = running
-    ? pendingToolActivityTail(coalescedActivityMessages.map((entry) => entry.message))
+    ? liveToolActivityTail(coalescedActivityMessages.map((entry) => entry.message))
     : undefined
   const liveActivityLabel = liveToolActivity ? toolActivityLabel(liveToolActivity) : undefined
   const activityMessages = useMemo(
