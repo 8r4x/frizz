@@ -324,6 +324,17 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
   // lookup is keyed by the dispatch id, so this is the translation the peer arm needs. Forward-only, and
   // that is sound: a child must exist before it can report, so its ack always precedes its message.
   const childDispatchIds = new Map<string, string>()
+  // Dispatch tool_use id → that dispatch's DESCRIPTION, and unlike `agentDispatches` it is never
+  // consumed. It exists because the completion arm DELETES from `agentDispatches` to dedupe a task-id
+  // that re-notifies (see dispatches.delete in completionEvents), which silently took the child's title
+  // with it: a child that FINISHES before its upward report is materialized into the parent's context
+  // had its report relabelled against an entry that was already gone, so the divider fell back to
+  // `origin.from` and read «fray:opus-high» — the profile, identical across every child sharing that
+  // cell. Measured on the maintainer's own thread, 2 of 11 reports landed after their child's
+  // notification and lost their titles exactly this way. The two lifetimes are genuinely different —
+  // completion correlation is one-shot, a title is wanted for as long as the transcript renders — so
+  // they are two maps rather than one with a subtler consume rule.
+  const dispatchLabels = new Map<string, string>()
   // For "Thought for Ns" events: the previous SUBSTANTIVE (assistant/user) record's timestamp, and the
   // message id we last emitted a thinking event for (so a turn's several thinking records emit ≤1 line).
   let prevTs: string | undefined
@@ -578,13 +589,19 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
           // RELABEL to the child's DESCRIPTION. `origin.from` is only ever the subagent_type, because
           // fray's own worker dispatch hook strips `name` — so an upward report rendered as
           // «fray:opus-xhigh», which names the profile rather than the work and is identical across
-          // every child sharing that cell. `senderTaskId` is the child's agentId, which is exactly the
-          // child's agentId, and childDispatchIds already translates that into the DISPATCH tool_use id that
-          // `agentDispatches` is keyed by — the same translation `dispatchId` above performs.
-          // Falls back to the profile when the dispatch was never folded (an older or truncated session),
-          // which is strictly what it rendered before.
-          const dispatched = dispatchId ? agentDispatches.get(dispatchId) : undefined
-          const described = dispatched?.call.detail?.trim()
+          // every child sharing that cell. `senderTaskId` is the child's agentId, and childDispatchIds
+          // already translates that into the DISPATCH tool_use id — the same translation `dispatchId`
+          // above performs.
+          //
+          // Read from `dispatchLabels`, NOT from `agentDispatches`: the completion arm consumes the
+          // latter, so a child that FINISHED before its report was materialized into the parent's context
+          // relabelled against an entry that was already gone and fell back to the profile. That is the
+          // common case, not the edge — a mid-flight report and the child's own completion are often
+          // queued together, and the completion notification wins the race into the transcript.
+          //
+          // Falls back to the profile when the dispatch was never folded at all (an older or truncated
+          // session), which is strictly what it rendered before.
+          const described = dispatchId ? dispatchLabels.get(dispatchId) : undefined
           if (described && entry.message.peerFrom) entry.message.peerFrom = described
           if (thisTs) prevTs = thisTs // a child's report is a real turn, exactly like a human follow-up
           lastAssistantId = null // …so it breaks the assistant-record merge chain too
@@ -597,7 +614,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
           // hoisted: this branch BUILDS the message instead of stamping an existing one, so there is no
           // shared assignment to patch. The dispatch's description wins over `origin.from`, which is only
           // ever the subagent_type once fray's worker dispatch hook has stripped `name`.
-          const describedHere = (dispatchId ? agentDispatches.get(dispatchId) : undefined)?.call.detail?.trim()
+          const describedHere = dispatchId ? dispatchLabels.get(dispatchId) : undefined
           const from = describedHere || str(peerOrigin.from) || str(peerOrigin.name) || parsed?.from || ""
           const body = parsed?.body ?? (typeof peerOrigin.body === "string" ? peerOrigin.body : "")
           // Unattributable or bodiless → render NOTHING. That is the long-standing behavior for a peer
@@ -749,6 +766,8 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
             // An Agent dispatch is registered by its tool_use id so a later completion notification can
             // back-fill its terminal state and drop an inline event line into the flow.
             if (call.agentId) agentDispatches.set(call.agentId, { at: rec.timestamp, call })
+            // …and its TITLE separately, because the map above is consumed on completion (see dispatchLabels).
+            if (call.agentId && call.detail?.trim()) dispatchLabels.set(call.agentId, call.detail.trim())
             // A STEER's drill-in pair. `sendTo` is the recipient's AGENT ID, which no drawer resolves and
             // no reader can read; childDispatchIds turns it into the DISPATCH tool_use id every sub-agent
             // lookup is keyed by, and that dispatch's own description is the title the divider shows.
@@ -758,7 +777,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
             // this transcript, so it is excluded rather than looked up and missed.
             if (call.sendTo && call.sendTo !== "main") {
               const dispatchId = childDispatchIds.get(call.sendTo)
-              const described = dispatchId ? agentDispatches.get(dispatchId)?.call.detail?.trim() : undefined
+              const described = dispatchId ? dispatchLabels.get(dispatchId) : undefined
               if (dispatchId) call.sendDispatchId = dispatchId
               if (described) call.sendTargetLabel = described
             }

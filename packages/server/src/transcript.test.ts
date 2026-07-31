@@ -1847,6 +1847,58 @@ test("an attachment-only peer delivery still renders — a child's report never 
   assert.equal(users[0].displayText, "Blocked: the fixture needs a token I don't have.")
 })
 
+test("a report that lands AFTER its child finished still wears the child's title", () => {
+  // The regression the maintainer hit: `Sub-agent «fray:opus-high» reported` — the profile, identical
+  // across every child sharing that cell. A mid-flight report and the child's own completion are often
+  // queued together and the completion wins the race into the parent's context, and the completion arm
+  // CONSUMES the dispatch (dispatches.delete, deduping a task-id that re-notifies through up to three
+  // carriers). Relabelling read that consumed map, so the title vanished exactly when the child was
+  // quickest. Measured on the maintainer's own thread: 2 of 11 reports, both in this order.
+  const body = "DACL verdict: the ACL is inherited, not set."
+  const raw = peerWrap("fray:opus-high", body)
+  const ordered = (lines: string[]) =>
+    parseTranscript([
+      ...dispatchLines("toolu_LATE", "a030397e040165a66", "Reconcile host-prep list and root-cause python"),
+      ...lines,
+    ].join("\n")).filter((m) => m.role === "user" && m.peerFrom)[0]
+
+  const notified = taskNotification("toolu_LATE", "failed", "2026-07-01T00:00:05.000Z")
+  const afterCompletion = ordered([notified, enqueueLine(raw), removeLine(raw), peerDeliverLine("fray:opus-high", body, "a030397e040165a66")])
+  assert.equal(afterCompletion.peerFrom, "Reconcile host-prep list and root-cause python", "the title must outlive the completion that consumed the dispatch")
+  assert.equal(afterCompletion.peerDispatchId, "toolu_LATE", "…and it is still a drawer link")
+
+  // The other order was never broken; pin it so a future consume rule cannot trade one for the other.
+  const beforeCompletion = ordered([enqueueLine(raw), removeLine(raw), peerDeliverLine("fray:opus-high", body, "a030397e040165a66"), notified])
+  assert.equal(beforeCompletion.peerFrom, "Reconcile host-prep list and root-cause python")
+
+  // ATTACHMENT-ONLY delivery takes the same relabel and must survive the same race.
+  const attachmentOnly = ordered([notified, peerDeliverLine("fray:opus-high", body, "a030397e040165a66")])
+  assert.equal(attachmentOnly.peerFrom, "Reconcile host-prep list and root-cause python")
+})
+
+test("a steer to a child that already finished still names the child, not its agentId", () => {
+  // The same consumed-dispatch read, on the OUTGOING half. `to` is the child's agentId — a hash the
+  // divider would show verbatim — so losing `sendTargetLabel` costs the steer its title outright. This
+  // is the harder-hit path of the two: over this machine's corpus 659 of 1075 steers rendered a bare
+  // agentId, and 105 do now (the rest have no dispatch in the window to name).
+  const steer = (id: string) =>
+    JSON.stringify({
+      type: "assistant", timestamp: "2026-07-01T00:00:20.000Z",
+      message: { id: "ms", content: [{ type: "tool_use", id, name: "SendMessage", input: { to: "a030397e040165a66", message: "New direction: drop the re-measurement." } }] },
+    })
+  const call = (lines: string[]) =>
+    parseTranscript([...dispatchLines("toolu_STEER", "a030397e040165a66", "Re-measure macOS and Linux at HEAD"), ...lines].join("\n"))
+      .flatMap((m) => m.tools)
+      .find((t) => t.name === "SendMessage")!
+
+  const afterCompletion = call([taskNotification("toolu_STEER", "completed", "2026-07-01T00:00:10.000Z"), steer("toolu_S1")])
+  assert.equal(afterCompletion.sendTargetLabel, "Re-measure macOS and Linux at HEAD")
+  assert.equal(afterCompletion.sendDispatchId, "toolu_STEER", "the drill-in target is the DISPATCH id, never the agentId")
+
+  const stillLive = call([steer("toolu_S2")])
+  assert.equal(stillLive.sendTargetLabel, "Re-measure macOS and Linux at HEAD")
+})
+
 test("a malformed wrapper degrades to a plain bubble rather than an unattributed card", () => {
   // No sender and no body are both plumbing, not a report. The card's whole point is the label, so
   // drawing one without it would be worse than not drawing it.
