@@ -277,12 +277,14 @@ function workerPluginBoardClosureSourceDir(sourceDir: string): string {
  * silently swallows every new root directory, which bloats the snapshot and — worse — makes the
  * fingerprint a moving target, so every capture would race "source changed during capture".
  */
-const FRAY_SOURCE_DIRECTORIES = ["packages", "scripts", "board", "cc-worker"] as const;
+const FRAY_SOURCE_DIRECTORIES = ["src", "packages", "scripts", "board", "cc-worker"] as const;
 const FRAY_SOURCE_FILES = [
   "package.json",
   "pnpm-lock.yaml",
   "pnpm-workspace.yaml",
   "tsconfig.base.json",
+  // The root package's own tsconfig — `tsc -b … .` in the snapshot cannot resolve without it.
+  "tsconfig.json",
 ] as const;
 
 /** The allowlisted source directories that actually exist, as snapshot trees rooted at `destination`. */
@@ -682,7 +684,6 @@ function dependencyCellInputs(source: string, host: FrayArtifactHost): string {
   const inputs = [
     "package.json",
     "pnpm-lock.yaml",
-    "packages/cli/package.json",
     "packages/server/package.json",
     "packages/shared/package.json",
     "packages/rpc/package.json",
@@ -898,7 +899,7 @@ export function buildFrayArtifact(
     mkdirSync(join(staging, "runtime", "src"), { recursive: true, mode: 0o700 });
     runCommand(
       [
-        "packages/cli/scripts/build-runtime.mjs",
+        "scripts/build-runtime.mjs",
         join(staging, "runtime", "src", "index.js"),
         ...DETACHED_DAEMON_ENTRIES,
       ],

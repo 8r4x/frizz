@@ -30,23 +30,21 @@ fray-dev --foreground           # compatibility spelling; Fray already runs in t
 
 ## Production npm launcher
 
-The development command above is deliberately source-backed. The intended production command is a
-separate registry package: `npx frayui` will run the npm-resolved `frayui` package and never follow
-this checkout. The current package metadata still uses the working name `fray`; migrating it to the
-single-file `frayui` bundle is a separate release-packaging slice. When a published release is
-available, **Update & Restart** will ask npm for a fresh immutable package execution cache, drain only
-Fray's disposable HTTP control plane, and start that cache with the
-same project identity, port, SQLite state, tmux socket, and provider sessions. It does not edit the
-currently executing `npx` cache or replace an arbitrary global installation.
+The development command above is deliberately source-backed. The production command is the published
+registry package: `npx frayui` runs the npm-resolved `frayui` package and never follows this
+checkout. **Update & Restart** asks npm for a fresh immutable package execution cache, drains only
+Fray's disposable HTTP control plane, and starts that cache with the same project identity, port,
+SQLite state, tmux socket, and provider sessions. It does not edit the currently executing `npx`
+cache or replace an arbitrary global installation.
 
-This repository has **not** published the package or verified ownership/availability of the unscoped
-`frayui` npm name. The current workspace dependencies still need a maintainer-selected release closure (publish the
-`@fray-ui/*` runtime packages, or build one audited bundled runtime tarball) before `npx frayui` can
-be released; the npm publisher account and that packaging decision require maintainer action.
-Until then, `fray-dev` is the supported command for this checkout.
+`frayui` is published on npm and the repo root IS that package: `npm publish` runs from the repo
+root, and `.github/workflows/release.yml` publishes automatically via npm Trusted Publishing whenever
+a version bump lands on `main`. The `@fray-ui/*` workspace packages stay private and unpublished —
+esbuild absorbs them into the shipped bundle, so there is no runtime closure left to release
+separately. `fray-dev` remains the command for running this checkout's source.
 
 `fray-dev` is source-backed only at launch: the installed shim contains an absolute, shell-safe pointer
-to this checkout's `packages/cli/src/index.ts`, not a copied build. On each fresh launch after that
+to this checkout's `src/index.ts`, not a copied build. On each fresh launch after that
 workspace's Fray supervisor has stopped, it selects a verified immutable artifact matching the current
 source fingerprint, reuses an identical global artifact when one exists, or builds and promotes one
 automatically. No manual `build`/`promote` step or repeated shim install is required. The running server
@@ -127,7 +125,7 @@ a `.desktop` file whose `StartupWMClass=fray` matches it. Both are documented TO
 
 1. Workspace-scoped: one server per repo, launched from the repo root, watching only that repo's `.fray/`.
 2. `.fray/` thread files are the source of truth for thread status — the server imports fray's own
-   board parser (`cc/scripts/fray/*.mjs`), never re-implements it.
+   board parser (`board/*.mjs`), never re-implements it.
 3. Session JSONL (`~/.claude/projects/<slug>/*.jsonl`) is telemetry only: liveness + previews, parsed defensively.
 4. Agents are top-level processes in detached tmux sessions on the workspace's private, UUID-keyed socket.
 5. The web terminal attaches per-viewer via node-pty (`tmux attach`); closing a tab kills only that attach client.

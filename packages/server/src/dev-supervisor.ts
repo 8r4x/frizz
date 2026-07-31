@@ -248,9 +248,15 @@ export function classifyDevChange(path: string, roots = defaultDevWatchRoots()):
   }
   if (!SOURCE_EXTENSIONS.has(extname(name))) return null
 
+  // The CLI is the published root package, so its source is `src/` at the workspace root rather than
+  // a member of `packages/`. It is the launcher itself: an edit here cannot be picked up by recycling
+  // the disposable child, only by re-execing the parent. This branch must come BEFORE the
+  // packages/-shaped check below, which would otherwise drop every launcher edit on the floor — and
+  // do it silently, leaving a dev server serving code the developer had already changed.
+  if (parts[0] === "src") return "launcher"
+
   if (parts[0] !== "packages" || parts[2] !== "src") return null
   const pkg = packageName
-  if (pkg === "cli") return "launcher"
   if (pkg === "server") {
     if (name === "dev-supervisor.ts" || name === "dev.ts") return "launcher"
     return "child"

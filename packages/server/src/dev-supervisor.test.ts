@@ -35,7 +35,8 @@ test("dev supervisor classifies runtime and launcher/config changes without touc
   const server = join(workspace, "packages", "server", "src")
   const shared = join(workspace, "packages", "shared", "src")
   const rpc = join(workspace, "packages", "rpc", "src")
-  const cli = join(workspace, "packages", "cli", "src")
+  // The CLI is the published root package: its source is src/ at the workspace root.
+  const cli = join(workspace, "src")
   const sdk = join(workspace, "packages", "claude-agent-sdk-runtime")
   assert.equal(isDevServerSource(join(server, "router.ts")), true)
   assert.equal(isDevServerSource(join(server, "backend", "codex.ts")), true)
@@ -49,6 +50,12 @@ test("dev supervisor classifies runtime and launcher/config changes without touc
   assert.equal(classifyDevChange(join(sdk, "package.json")), "child")
   assert.equal(classifyDevChange(join(server, "dev-supervisor.ts")), "launcher")
   assert.equal(classifyDevChange(join(cli, "index.ts")), "launcher")
+  // Root src/ is the launcher itself. A nested file must classify too: the packages/-shaped rule that
+  // follows it would return null for every one of these, and do it silently — a dev server left
+  // serving a launcher the developer had already edited.
+  assert.equal(classifyDevChange(join(cli, "artifacts.ts")), "launcher")
+  assert.equal(classifyDevChange(join(cli, "nested", "deep.ts")), "launcher")
+  assert.equal(isDevServerSource(join(cli, "launcher.ts")), true)
   assert.equal(classifyDevChange(join(workspace, "packages", "server", "package.json")), "launcher")
   assert.equal(classifyDevChange(join(workspace, "packages", "shared", "package.json")), "launcher")
   assert.equal(classifyDevChange(join(workspace, "package.json")), "launcher")

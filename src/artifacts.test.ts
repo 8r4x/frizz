@@ -36,11 +36,11 @@ import {
 import {
   acquireProjectLaunchOwner,
   projectLaunchEnvironment,
-} from "../../server/src/project-launch.ts";
+} from "../packages/server/src/project-launch.ts";
 import {
   DETACHED_DAEMON_ENTRIES,
   detachedDaemonOutputName,
-} from "../../server/src/detached-daemons.ts";
+} from "../packages/server/src/detached-daemons.ts";
 
 const hash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
@@ -493,7 +493,7 @@ test("a captured source snapshot remains usable after the checkout changes", () 
 
 test("artifact creation typechecks the coherent source snapshot before either build", () => {
   const root = mkdtempSync(join(tmpdir(), "fray-artifacts-typecheck-order-"));
-  const source = resolve(import.meta.dirname, "..", "..", "..");
+  const source = resolve(import.meta.dirname, "..");
   const calls: Array<{ args: string[]; source: string }> = [];
 
   assert.throws(
@@ -580,7 +580,7 @@ async function stopArtifactChild(
 
 test("a real Nub/esbuild artifact boots its WebSocket-capable server and loads its immutable native cell", async () => {
   const root = mkdtempSync(join(tmpdir(), "fray-artifacts-real-bundle-"));
-  const source = resolve(import.meta.dirname, "..", "..", "..");
+  const source = resolve(import.meta.dirname, "..");
   let child: ReturnType<typeof spawnChild> | undefined;
   let releaseOwner: (() => boolean) | undefined;
   try {
@@ -674,7 +674,7 @@ test.skip("legacy deploy snapshot harness is superseded by the real bundled-arti
   const versionFile = join(source, "packages", "web", "src", "version.txt");
   const bin = join(root, "bin");
   mkdirSync(dirname(versionFile), { recursive: true });
-  mkdirSync(join(source, "packages", "cli"), { recursive: true });
+  mkdirSync(join(source, "src"), { recursive: true });
   mkdirSync(join(source, "packages", "shared"), { recursive: true });
   mkdirSync(join(source, "node_modules"), { recursive: true });
   mkdirSync(join(source, "packages", "web", "node_modules", "@fray-ui"), {

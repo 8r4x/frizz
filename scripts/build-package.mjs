@@ -17,13 +17,12 @@ import { basename, dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { rmSync, existsSync } from "node:fs"
 import { build } from "esbuild"
-import { DETACHED_DAEMON_ENTRIES, detachedDaemonOutputName } from "../../server/src/detached-daemons.ts"
+import { DETACHED_DAEMON_ENTRIES, detachedDaemonOutputName } from "../packages/server/src/detached-daemons.ts"
 
 const here = dirname(fileURLToPath(import.meta.url))
-const cli = resolve(here, "..")
-// The workspace root IS the repo root: packages/cli -> packages -> <repo>.
-const workspace = resolve(cli, "..", "..")
-const dist = resolve(cli, "dist")
+// The published package IS the repo root: scripts/ -> <repo>.
+const workspace = resolve(here, "..")
+const dist = resolve(workspace, "dist")
 
 const shared = {
   bundle: true,
@@ -46,7 +45,7 @@ const shared = {
 rmSync(dist, { recursive: true, force: true })
 
 const entries = {
-  "frayui.js": "packages/cli/src/production.ts",
+  "frayui.js": "src/production.ts",
   "dev-child.js": "packages/server/src/dev-child.ts",
 }
 // Every detached daemon ships as its own real sibling .js — derived, never hand-listed.

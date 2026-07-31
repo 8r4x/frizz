@@ -1,6 +1,6 @@
 // These pin the packaging invariant that a detached daemon must be a REAL FILE at runtime. The
 // end-to-end proof — that a promoted artifact actually ships each daemon and that node can load it
-// from there — lives in packages/cli/src/artifacts.test.ts, because only a real build can show it.
+// from there — lives in src/artifacts.test.ts, because only a real build can show it.
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
@@ -53,7 +53,7 @@ test("the entry resolver prefers the bundled .js, falls back to source .ts, and 
 // artifact build emits and then asserts. So the pattern itself is banned in shipped server/CLI code:
 // reintroducing it fails here, naming the file, instead of on a user's machine a build later.
 test("no shipped module resolves a sibling .ts at runtime — that path does not exist in an artifact", () => {
-  const roots = [join(workspaceRoot, "packages", "server", "src"), join(workspaceRoot, "packages", "cli", "src")]
+  const roots = [join(workspaceRoot, "packages", "server", "src"), join(workspaceRoot, "src")]
   // The ONE exemption, and it is a knowing one. dev-supervisor.ts forks dev-bootstrap.ts, but the dev
   // supervisor is the SOURCE launcher — `fray-dev` runs from a checkout where that file exists.
   // Emitting it into artifacts to close the gap was tried and REVERTED: it woke a control-plane fork

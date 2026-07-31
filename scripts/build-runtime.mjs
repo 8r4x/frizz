@@ -22,7 +22,7 @@ const shared = {
   logLevel: "silent",
 };
 
-await build({ ...shared, entryPoints: ["packages/cli/src/index.ts"], outfile: output });
+await build({ ...shared, entryPoints: ["src/index.ts"], outfile: output });
 
 // Detached daemons are spawned as their OWN `node <file>` process, so each needs a real file beside
 // the bundle — an import edge is not enough. See packages/server/src/detached-daemons.ts, which owns

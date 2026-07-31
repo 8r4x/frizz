@@ -11,15 +11,14 @@ import { execFileSync } from "node:child_process"
 //   3. runtime/cc-worker       — the Claude worker plugin every dispatched agent loads (dispatch.ts).
 // production.ts points FRAY_SCRIPTS_DIR / FRAY_WORKER_PLUGIN_DIR at (2)/(3); the cc-worker shims
 // resolve the board via `../../board` relative to the plugin, so the two MUST share the
-// `runtime/` parent (mirrors the source-checkout artifact layout in cli/src/artifacts.ts).
+// `runtime/` parent (mirrors the source-checkout artifact layout in src/artifacts.ts).
 const here = dirname(fileURLToPath(import.meta.url))
-const cli = resolve(here, "..")
-// The workspace root IS the repo root: packages/cli -> packages -> <repo>.
-const repo = resolve(cli, "..", "..")
+// The published package IS the repo root: scripts/ -> <repo>.
+const repo = resolve(here, "..")
 
 // 1. Web client.
 const webDist = resolve(repo, "packages/web/dist")
-const webTarget = resolve(cli, "web-dist")
+const webTarget = resolve(repo, "web-dist")
 execFileSync("pnpm", ["--dir", repo, "--filter", "@fray-ui/web", "build"], { stdio: "pipe" })
 if (!existsSync(webDist)) throw new Error("Fray web build did not produce packages/web/dist")
 rmSync(webTarget, { recursive: true, force: true })
@@ -31,7 +30,7 @@ const skip = (src) => {
   const base = src.split("/").pop() ?? ""
   return base === "node_modules" || base.endsWith(".test.mjs")
 }
-const runtime = resolve(cli, "runtime")
+const runtime = resolve(repo, "runtime")
 rmSync(runtime, { recursive: true, force: true })
 const stage = (from, to, label) => {
   if (!existsSync(from)) throw new Error(`Fray runtime closure source is missing: ${label} (${from})`)

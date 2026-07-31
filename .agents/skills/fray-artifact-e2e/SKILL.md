@@ -22,7 +22,7 @@ catches it.
 
 ### 1. Launch a real promoted-artifact instance, isolated
 
-`fray-dev` (= `nub … packages/cli/src/index.ts`) builds/promotes an artifact from CURRENT SOURCE and runs
+`fray-dev` (= `nub … src/index.ts`) builds/promotes an artifact from CURRENT SOURCE and runs
 it. Two gotchas:
 
 - **You are probably running inside a fray worker**, so your env has `FRAY_DEV_CHILD=1` and `FRAY_LAUNCH_*`.

@@ -11,9 +11,9 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { stripWorkspaceDependencies } from "../src/publish-manifest.ts"
 
-const cli = dirname(dirname(fileURLToPath(import.meta.url)))
-const manifestPath = join(cli, "package.json")
-const backupPath = join(cli, "package.json.publish-backup")
+const repo = dirname(dirname(fileURLToPath(import.meta.url)))
+const manifestPath = join(repo, "package.json")
+const backupPath = join(repo, "package.json.publish-backup")
 const mode = process.argv[2]
 
 if (mode === "--strip") {

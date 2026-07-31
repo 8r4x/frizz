@@ -21,12 +21,12 @@ import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
-import { resolveProject } from "../../server/src/project.ts";
+import { resolveProject } from "../packages/server/src/project.ts";
 import {
   acquireGlobalLaunchLockSync,
   resolveGitWorktree,
-} from "../../server/src/project-identity.ts";
-import { deriveProjectSocket, deriveSocket } from "../../server/src/tmux.ts";
+} from "../packages/server/src/project-identity.ts";
+import { deriveProjectSocket, deriveSocket } from "../packages/server/src/tmux.ts";
 import {
   acquireProjectLaunchOwner,
   defaultProcessPlatformAdapter,
@@ -35,7 +35,7 @@ import {
   registerProjectLaunchDelegate,
   type ProcessPlatformAdapter,
   type ProjectLaunchTarget,
-} from "../../server/src/project-launch.ts";
+} from "../packages/server/src/project-launch.ts";
 import {
   acquireGlobalLaunchLock,
   choosePort,
@@ -80,16 +80,16 @@ const launcherModuleUrl = pathToFileURL(
   join(import.meta.dirname, "launcher.ts")
 ).href;
 const projectModuleUrl = pathToFileURL(
-  join(import.meta.dirname, "..", "..", "server", "src", "project.ts")
+  join(import.meta.dirname, "..", "packages", "server", "src", "project.ts")
 ).href;
 const projectIdentityModuleUrl = pathToFileURL(
-  join(import.meta.dirname, "..", "..", "server", "src", "project-identity.ts")
+  join(import.meta.dirname, "..", "packages", "server", "src", "project-identity.ts")
 ).href;
 const projectLaunchModuleUrl = pathToFileURL(
-  join(import.meta.dirname, "..", "..", "server", "src", "project-launch.ts")
+  join(import.meta.dirname, "..", "packages", "server", "src", "project-launch.ts")
 ).href;
 const cliEntry = join(import.meta.dirname, "index.ts");
-const uiRoot = join(import.meta.dirname, "..", "..", "..");
+const uiRoot = join(import.meta.dirname, "..");
 
 function spawnLaunchProtocolChild(
   kind: "owner" | "delegate",
@@ -1796,14 +1796,7 @@ test("global first-id lock rejects a reused PID generation instead of blocking o
 
 test("installer manages only an executable source-backed immutable fray-dev shim idempotently", () => {
   const dir = mkdtempSync(join(tmpdir(), "fray-global-bin-"));
-  const script = join(
-    import.meta.dirname,
-    "..",
-    "..",
-    "..",
-    "scripts",
-    "install-global-cli.mjs"
-  );
+  const script = join(import.meta.dirname, "..", "scripts", "install-global-cli.mjs");
   try {
     execFileSync(process.execPath, [script, `--bin-dir=${dir}`], {
       encoding: "utf8",
@@ -1814,7 +1807,7 @@ test("installer manages only an executable source-backed immutable fray-dev shim
     // Only nub's disk-read `.env*` vars are dropped; a shell-exported key still reaches the worker.
     assert.match(body, /nub --no-env-file/);
     assert.match(body, /FRAY_SOURCE_COMMAND='fray-dev'/);
-    assert.match(body, /packages\/cli\/src\/index\.ts/);
+    assert.match(body, /\/src\/index\.ts/);
     assert.match(body, /\bnub\b/);
     assert.match(
       execFileSync(shim, ["--help"], { encoding: "utf8" }),
@@ -1890,16 +1883,35 @@ test("installer manages only an executable source-backed immutable fray-dev shim
   }
 });
 
+test("installer upgrades its OWN current-marker shim when the checkout path moved", () => {
+  // Moving the checkout — or moving the CLI inside it, as the root-package layout did — changes the
+  // path embedded in the shim. Ownership is the MARKER, so this is an upgrade, not a foreign file:
+  // comparing the whole body made the installer refuse to replace a launcher it had written itself,
+  // reporting "is not the Fray source launcher" about a file whose first comment line is that marker.
+  const dir = mkdtempSync(join(tmpdir(), "fray-global-bin-moved-"));
+  const script = join(import.meta.dirname, "..", "scripts", "install-global-cli.mjs");
+  const shim = join(dir, "fray-dev");
+  try {
+    writeFileSync(
+      shim,
+      "#!/bin/sh\n# fray-dev-source-launcher:v5\nexec env FRAY_SOURCE_COMMAND='fray-dev' nub --no-env-file '/old/checkout/packages/cli/src/index.ts' \"$@\"\n",
+      { mode: 0o755 }
+    );
+    // No --force: the marker makes it ours to replace.
+    execFileSync(process.execPath, [script, `--bin-dir=${dir}`], { encoding: "utf8" });
+    const body = readFileSync(shim, "utf8");
+    assert.match(body, /\/src\/index\.ts/);
+    assert.doesNotMatch(body, /old\/checkout/);
+    execFileSync(process.execPath, [script, "--uninstall", `--bin-dir=${dir}`], { encoding: "utf8" });
+    assert.equal(existsSync(shim), false, "uninstall removes a shim we own");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("installer rejects marker-bearing stale or altered shims", () => {
   const dir = mkdtempSync(join(tmpdir(), "fray-global-bin-stale-"));
-  const script = join(
-    import.meta.dirname,
-    "..",
-    "..",
-    "..",
-    "scripts",
-    "install-global-cli.mjs"
-  );
+  const script = join(import.meta.dirname, "..", "scripts", "install-global-cli.mjs");
   const shim = join(dir, "fray-dev");
   try {
     writeFileSync(
@@ -1930,7 +1942,7 @@ test("installer rejects marker-bearing stale or altered shims", () => {
     execFileSync(process.execPath, [script, "--force", `--bin-dir=${dir}`], {
       encoding: "utf8",
     });
-    assert.match(readFileSync(shim, "utf8"), /packages\/cli\/src\/index\.ts/);
+    assert.match(readFileSync(shim, "utf8"), /\/src\/index\.ts/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1938,7 +1950,7 @@ test("installer rejects marker-bearing stale or altered shims", () => {
 
 test("forced install replaces a symlink itself without changing its target", () => {
   const dir = mkdtempSync(join(tmpdir(), "fray-global-bin-symlink-"));
-  const script = join(import.meta.dirname, "..", "..", "..", "scripts", "install-global-cli.mjs");
+  const script = join(import.meta.dirname, "..", "scripts", "install-global-cli.mjs");
   const shim = join(dir, "fray-dev");
   const protectedTarget = join(dir, "protected-command");
   const protectedBody = "#!/bin/sh\necho protected\n";
@@ -1966,7 +1978,7 @@ test("forced install replaces a symlink itself without changing its target", () 
 
 test("concurrent installer processes publish only complete shims and clean up temporary files", async () => {
   const dir = mkdtempSync(join(tmpdir(), "fray-global-bin-atomic-"));
-  const script = join(import.meta.dirname, "..", "..", "..", "scripts", "install-global-cli.mjs");
+  const script = join(import.meta.dirname, "..", "scripts", "install-global-cli.mjs");
   try {
     const children = Array.from({ length: 8 }, () =>
       spawnChild(process.execPath, [script, `--bin-dir=${dir}`], {
@@ -1979,7 +1991,7 @@ test("concurrent installer processes publish only complete shims and clean up te
     }
     const shim = readFileSync(join(dir, "fray-dev"), "utf8");
     assert.match(shim, /fray-dev-source-launcher:v5/);
-    assert.match(shim, /packages\/cli\/src\/index\.ts/);
+    assert.match(shim, /\/src\/index\.ts/);
     assert.deepEqual(readdirSync(dir), ["fray-dev"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });

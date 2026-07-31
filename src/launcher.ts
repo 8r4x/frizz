@@ -591,7 +591,7 @@ export function sourceWorkspaceDir(env: NodeJS.ProcessEnv = process.env): string
   // from the source the operator launched, rather than treating the artifact cache as source.
   return env.FRAY_SOURCE_DIR
     ? resolve(env.FRAY_SOURCE_DIR)
-    : resolve(import.meta.dirname, "..", "..", "..");
+    : resolve(import.meta.dirname, "..");
 }
 
 export function sourceLabel(): string {

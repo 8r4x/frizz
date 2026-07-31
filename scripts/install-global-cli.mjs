@@ -45,7 +45,7 @@ const binDirArg = process.argv
 const binDir = binDirArg || process.env.FRAY_BIN_DIR || join(homedir(), ".local", "bin");
 const target = join(binDir, command);
 const launcher = realpathSync(
-  fileURLToPath(new URL("../packages/cli/src/index.ts", import.meta.url))
+  fileURLToPath(new URL("../src/index.ts", import.meta.url))
 );
 const quote = (value) => `'${value.replaceAll("'", `"'"'`)}'`;
 // `--no-env-file` disables nub's automatic `.env*` discovery for the launcher process only. nub

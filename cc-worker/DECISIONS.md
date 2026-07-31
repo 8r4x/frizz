@@ -18,7 +18,7 @@ what was ported from the orchestrator `cc/` plugin, what was dropped, and why.
   `../../board/{index,thread-update}.mjs` relative to the bin file (cwd-independent). They
   land on the worker's Bash PATH the way cc's do. `fray-update` is the worker's primary tool for
   owning its one thread file; `fray` lets it read/validate the board.
-- **Portable artifact rule:** `packages/cli/src/artifacts.ts` copies the exact sibling
+- **Portable artifact rule:** `src/artifacts.ts` copies the exact sibling
   `board/` module closure to `runtime/board/`, beside `runtime/cc-worker/`.
   The existing shims therefore resolve inside an immutable artifact when the source checkout is gone;
   both the worker and cc closure are hashed in `manifest.runtimeFiles` and required at read time.
@@ -144,7 +144,7 @@ fray-ui workers. What landed:
   derived from that skill's `:92-150`/`:242-317`/`:463` framing). Also added a status-field
   discipline section (later split into `activity` + `status_text` — see the follow-up) and an
   "awaiting your OWN sub-agent is NOT blocked" clarification.
-- **`ui/WORKER_PROMPT.md`** (fray-ui system prompt, not in this plugin) — carries the terse version
+- **`packages/server/src/workerPrompt.ts`** (fray-ui system prompt, not in this plugin) — carries the terse version
   of the same three: a "Status discipline" block, the model/effort doctrine in the Sub-agents
   section, and a "Thread types" section. This is the maintainer's explicit ask that the preset
   vocabulary ride in the SYSTEM prompt passed to every worker. No dispatch.ts change, so no fray-ui
@@ -168,9 +168,9 @@ Three maintainer refinements landed on top of the port:
 `activity` = the form-constrained LIVE label the UI renders beside the spinner (single line, ≤100
 chars, present-progressive gerund); `status_text` = the classic 1–2-sentence human gloss that also
 doubles as THE ask on a human-`blocked` thread (queue cards headline it; no gerund constraint). The
-gerund/≤100 discipline moved OFF `status_text` and ONTO `activity` in `ui/WORKER_PROMPT.md` +
+gerund/≤100 discipline moved OFF `status_text` and ONTO `activity` in `packages/server/src/workerPrompt.ts` +
 `skills/worker/SKILL.md`. (UI-side `activity` plumbing/rendering — board JSON → ThreadView → listing
-row — is a SIBLING agent's scope; not touched here beyond `ui/WORKER_PROMPT.md`.)
+row — is a SIBLING agent's scope; not touched here beyond `packages/server/src/workerPrompt.ts`.)
 
 **2. New PostToolUse validation hook — `hooks/thread-frontmatter-validate.mjs`** (matcher
 `Edit|Write|MultiEdit`, wired in `hooks/hooks.json`). Gated on FRAY_UI_THREAD + a top-level
@@ -193,7 +193,7 @@ files + their frontmatter from `fray-<model>-<effort>` to `<model>-<effort>` (ba
 dispatches read `fray:opus-high` etc. Renamed the worker skill dir + frontmatter `fray-worker` →
 `worker` (giving `fray:worker`, not the stutter `fray:fray-worker`). The plugin DIRECTORY stays
 `cc-worker/` (dispatch.ts points at that path — unchanged, no server restart). Every reference in
-`ui/WORKER_PROMPT.md`, both skills, the hooks, and this file was updated; a grep for the old prefix token is clean.
+`packages/server/src/workerPrompt.ts`, both skills, the hooks, and this file was updated; a grep for the old prefix token is clean.
 
 **Accepted name collision.** The old GLOBAL orchestrator plugin (`cc/`) is ALSO named `fray`. This is
 accepted as harmless: `cc/` is disabled in `~/.claude/settings.json` (`"fray@fray": false`) and, even
@@ -216,7 +216,7 @@ shell-out, so they take effect on the next board rebuild with NO server restart.
   machine field, which reads as needs-human via the inlined `effectiveStatus`) REQUIRES a
   `status_text` (hard BLOCK); a machine-`blocked` thread with no mechanism field is a WARN suggesting
   needs-human (not a block — legacy tolerance); >1 mechanism stays a block.
-- **`skills/worker/SKILL.md` + `ui/WORKER_PROMPT.md` + `hooks/session-seed.mjs`** — the worker status
+- **`skills/worker/SKILL.md` + `packages/server/src/workerPrompt.ts` + `hooks/session-seed.mjs`** — the worker status
   guidance rewritten to the new contract: an ask OR a result needing review → `status: needs-human`
   with a `status_text` ask ("Review: …"); `blocked` is machine-only; `done` means NOTHING is left for
   the human (Mark-as-done is the human's acknowledgment — never jump straight to `done` when review
@@ -360,7 +360,7 @@ GONE: no thread files, no frontmatter, no `status`/`activity`/`status_text`, no 
 `blocked` machine fields, no `hasPlan`/`## Plan`, no `fray-update`. Workers now SIGNAL through their
 FINAL MESSAGE and PERSIST through a SCRATCHPAD. This is the cc-worker-side realignment.
 
-**The new signal model (taught in `ui/WORKER_PROMPT.md` §"End-of-turn signals" + `skills/worker/SKILL.md`):**
+**The new signal model (taught in `packages/server/src/workerPrompt.ts` §"End-of-turn signals" + `skills/worker/SKILL.md`):**
 - **Bare rest is quiet** — a rested thread with no fence does NOT enter Needs-you and is not a human
   handoff. Human handoff is explicit via `question` (or a real process-level block).
 - **` ```done `** — work complete + stands; body = 1–4 lines of what shipped + where. Renders a
@@ -483,7 +483,7 @@ discoverable.
 ## 2026-07-12: runtime release gate — real CDP evidence plus independent review
 
 Major UI, server, and control-plane work may no longer reach `done` from unit/integration/mocked
-evidence alone. The canonical `ui/WORKER_PROMPT.md` contract now requires real Chrome CDP QA against
+evidence alone. The canonical `packages/server/src/workerPrompt.ts` contract now requires real Chrome CDP QA against
 a disposable full stack, relevant active/idle/error/restart coverage, desktop+narrow screenshots,
 console/network inspection, and an explicit correctness+aesthetics assessment. Chrome DevTools MCP is
 preferred when it is available to the current provider; `agent-browser` or the repository Puppeteer

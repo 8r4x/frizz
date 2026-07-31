@@ -22,7 +22,7 @@ import { randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { buildFrayArtifact } from "../packages/cli/src/artifacts.ts"
+import { buildFrayArtifact } from "../src/artifacts.ts"
 import { acquireProjectLaunchOwner, projectLaunchEnvironment } from "../packages/server/src/project-launch.ts"
 import { createRpcClient } from "./lib/rpc-client.mjs"
 
