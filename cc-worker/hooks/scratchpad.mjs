@@ -13,16 +13,15 @@
 // This hook closes both, and deliberately targets scratch.md rather than a second file of its own.
 // An earlier revision shipped a separate `carryover.md` brief; it was redundant with the scratchpad
 // and made the worker maintain two overlapping documents. ONE doc per thread is the rule — the
-// scratchpad the dispatcher already provisions, already names in the system prompt, and already
-// forbids sub-agents from writing (see agent-dispatch.mjs).
+// scratchpad the dispatcher already provisions, already names in the system prompt, and shares with
+// sub-agents under the merge-only contract (see agent-dispatch.mjs).
 //
-// CODEX CHILD GUARD — native Codex sub-agents inherit the root conversation's system/user scratchpad
-// instructions even with `fork_turns:"none"`. That makes a child mistake the ROOT thread's path for
-// its own mandatory pad. This was observed corrupting the root twice: one child replaced then deleted
-// it, and later children replaced it with their own task notes. The `guard` mode is a PreToolUse
-// backstop: a child (`agent_id` present) cannot use any tool against the canonical root path. This is
-// intentionally stronger than trying to classify shell text as read versus write — children get
-// self-contained task prompts and return state upward; the root pad is not their workspace.
+// CODEX CHILD EPILOGUE — native Codex sub-agents inherit the root conversation's system/user
+// scratchpad instructions even with `fork_turns:"none"`. Sharing the thread pad is useful: a child
+// can persist progress even if the root later compacts. But an undifferentiated "keep it current"
+// mandate once made a child replace the whole document with its task notes, then DELETE that
+// replacement as a misguided rollback after realizing it had clobbered the root's state. The
+// `subagent-start` mode preserves collaborative writes while requiring merge-only, scoped edits.
 //
 // THE RE-READ SIDE — injection, not a reminder. On compaction/resume the head of scratch.md is
 // spliced into the context window by the harness, before the model's first token, alongside a
@@ -105,7 +104,7 @@ if (/^(off|0|false|no|disabled)$/i.test((process.env.FRAY_SCRATCHPAD_HOOK ?? '')
 // registration note in DECISIONS.md) so a fray worker never injects twice.
 if (via === 'project' && (process.env.FRAY_UI_THREAD ?? '').trim()) process.exit(0);
 
-/** @type {{ agent_id?: unknown, agentId?: unknown, source?: string, trigger?: string, session_id?: string, transcript_path?: string, tool_name?: unknown, tool_input?: unknown }} */
+/** @type {{ agent_id?: unknown, agentId?: unknown, source?: string, trigger?: string, session_id?: string, transcript_path?: string }} */
 let input = {};
 try {
   input = JSON.parse(readFileSync(0, 'utf8'));
@@ -113,9 +112,9 @@ try {
   /* no stdin / not JSON → fall back to env for the session id */
 }
 const childId = input.agent_id ?? input.agentId;
-// Sub-agent contexts are silent on every reinforcement mode. The guard is the one exception: it must
-// inspect a child's tool call in order to protect the root pad.
-if (childId && mode !== 'guard') process.exit(0);
+// Sub-agent contexts are silent on every reinforcement mode. The child-only epilogue is the one
+// exception: it constrains the undifferentiated scratchpad instruction the child otherwise inherits.
+if (childId && mode !== 'subagent-start') process.exit(0);
 
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
@@ -140,26 +139,23 @@ const threadDir = join(projectDir, '.fray', 'threads', sid);
 const relPath = '.fray/threads/' + sid + '/' + SCRATCH_FILE;
 const absPath = join(threadDir, SCRATCH_FILE);
 
-// ── mode: guard (Codex PreToolUse) ──────────────────────────────────────────────────────────────
-if (mode === 'guard') {
-  // Root calls need no decision. Child calls that do not address the root pad are unrelated.
-  if (!childId) process.exit(0);
-  let toolInput = '';
-  try {
-    toolInput = JSON.stringify(input.tool_input ?? {});
-  } catch {
-    // An unserializable input cannot contain the ordinary string path forms this guard recognizes.
-  }
-  if (!toolInput.includes(relPath) && !toolInput.includes(absPath)) process.exit(0);
-
+// ── mode: subagent-start (Codex child-only merge epilogue) ───────────────────────────────────────
+if (mode === 'subagent-start') {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
-      hookEventName: 'PreToolUse',
-      permissionDecision: 'deny',
-      permissionDecisionReason:
-        'This is a native sub-agent, but `' + relPath + '` belongs to the top-level /root worker. ' +
-        'Do not read, create, edit, replace, move, or delete the parent scratchpad. Keep task state ' +
-        'in your final return, or use a distinct path the parent explicitly assigned.',
+      hookEventName: 'SubagentStart',
+      additionalContext:
+        '⟦shared scratchpad — merge only⟧ `' + relPath + '` is the canonical document shared with ' +
+        'the top-level `/root` worker. You MAY read it and update your own task progress. Before every ' +
+        'edit, re-read the current file, then patch only your scoped task/progress entry while ' +
+        'preserving every other agent’s content. This exact file is Fray coordination state, not a ' +
+        'project deliverable or source edit: a scoped merge is an explicit exception to delegated ' +
+        'phrases such as “write only <path>” or “do not modify the repo”; never classify that merge ' +
+        'as unauthorized or roll it back. Never delete, truncate, reinitialize, move, or replace the ' +
+        'whole file — not even to “clean up” or undo your own mistaken change. Other project files, ' +
+        'including files at the repository root, remain governed by your delegated authority; their ' +
+        'location alone neither permits nor forbids editing. If the file is absent or you cannot ' +
+        'merge safely, return your state to the parent without writing.',
     },
   }));
   process.exit(0);
@@ -198,6 +194,9 @@ function substanceLength(text) {
       if (!t) return false;
       if (t.startsWith('#')) return false; // headings
       if (/^[-*]\s*\[\s*\]\s*$/.test(t)) return false; // an empty task box
+      // The visible legend/collaboration guide provisioned in every new pad. They teach the shared
+      // editing contract but are not evidence that the worker has recorded any task state yet.
+      if (/^>\s*(?:Status legend:|Collaboration:)/.test(t)) return false;
       // The provisioned orientation line. Matched on the CONCEPT rather than a leading word, because
       // the wording has changed once already and pads written under the old shape are still on disk —
       // anchoring on a prefix silently reclassified a template as "written", which made an empty pad

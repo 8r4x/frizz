@@ -30,6 +30,10 @@ test("the markdown sanitizer keeps authored meaning and blocks every scripted es
         handlers,
         // shape
         taskBoxes: Array.from(document.querySelectorAll("[data-case=tasklist] .md-task")).map((n) => n.className),
+        customTaskBoxes: Array.from(document.querySelectorAll("[data-case=tasklist-custom] .md-task")).map((n) => ({
+          className: n.className,
+          title: n.getAttribute("title"),
+        })),
         looseBoxes: Array.from(document.querySelectorAll("[data-case=tasklist-loose] li > p > .md-task")).map((n) => n.className),
         olStart: document.querySelector("[data-case=olstart] ol")?.getAttribute("start") ?? null,
         headAlign: Array.from(document.querySelectorAll("[data-case=align] th")).map((n) => getComputedStyle(n).textAlign),
@@ -64,6 +68,11 @@ test("the markdown sanitizer keeps authored meaning and blocks every scripted es
 
     // --- authored meaning survives ---
     assert.deepEqual(seen.taskBoxes, ["md-task md-task-checked", "md-task"], "checked state must be visible")
+    assert.deepEqual(seen.customTaskBoxes, [
+      { className: "md-task md-task-in-progress", title: "In progress" },
+      { className: "md-task md-task-cancelled", title: "Cancelled" },
+      { className: "md-task md-task-blocked", title: "Blocked" },
+    ], "custom task state and its label must survive sanitizing")
     assert.deepEqual(seen.looseBoxes, ["md-task md-task-checked", "md-task"], "loose task items too")
     assert.equal(seen.olStart, "17", "a list that starts at 17 keeps its numbering")
     assert.deepEqual(seen.headAlign, ["left", "center", "right"], "GFM column alignment is honored")

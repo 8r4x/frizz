@@ -286,6 +286,10 @@ test("loadWorkerPrompt: the backend-AGNOSTIC core is present in BOTH contracts",
     assert.match(c, /let it run to its terminal return/)
     assert.match(c, /partially applied edits, tests, and owned processes/)
     assert.match(c, /only the affected service, never by stopping a writer/)
+    assert.match(c, /scratchpad is Fray coordination state, not a project deliverable or source edit/)
+    assert.match(c, /deliverable paths/)
+    assert.match(c, /repository-root files/)
+    assert.match(c, /location alone neither permits nor forbids/)
     assert.match(c, /!\[descriptive alt\]\(\/absolute\/path\.png\)/)
     assert.match(c, /eligible absolute local image paths through its guarded local-image proxy/)
   }
@@ -454,7 +458,7 @@ test("visual-evidence handoffs: provider contracts keep embeds safe, useful, and
 
 // ---- composePrompt: the first VISIBLE user message's scratchpad line is backend-aware ----
 
-test("composePrompt keeps each backend's distinct sub-agent scratchpad ownership", () => {
+test("composePrompt keeps each backend's shared sub-agent scratchpad contract", () => {
   const claude = composePrompt("sid", "do the thing", "claude")
   assert.match(claude, /shared blackboard for your sub-agents/)
   assert.match(claude, /pass its path to every sub-agent you dispatch/)
@@ -463,9 +467,10 @@ test("composePrompt keeps each backend's distinct sub-agent scratchpad ownership
   const codex = composePrompt("sid", "do the thing", "codex")
   assert.doesNotMatch(codex, /blackboard/)
   assert.match(codex, /compaction-survival mechanism/)
-  assert.match(codex, /belongs only to the top-level `\/root` worker/)
-  assert.match(codex, /may inherit this instruction even with `fork_turns:"none"`/)
-  assert.match(codex, /must not read, create, edit, replace, move, or delete the parent scratchpad/)
+  assert.match(codex, /shared progress document for native sub-agents/)
+  assert.match(codex, /may read it and merge their own scoped progress into it/)
+  assert.match(codex, /re-read before each edit/)
+  assert.match(codex, /never delete, truncate, reinitialize, move, or replace the whole file/)
   assert.ok(codex.endsWith("do the thing")) // the task still rides through, and rides through LAST
 })
 
@@ -520,7 +525,7 @@ test("composePrompt round-trips through the BROKER's enqueue record with the sam
 
 // ---- scratchpadOrientation: the SYSTEM-level line is backend-aware ----
 
-test("scratchpadOrientation gives codex root-only ownership; claude keeps its blackboard (default unchanged)", () => {
+test("scratchpadOrientation gives codex a merge-only shared pad; claude keeps its blackboard", () => {
   const claude = scratchpadOrientation("sid", null, "claude")
   assert.match(claude, /shared blackboard for your sub-agents/)
   assert.equal(scratchpadOrientation("sid", null), claude)
@@ -528,9 +533,10 @@ test("scratchpadOrientation gives codex root-only ownership; claude keeps its bl
   const codex = scratchpadOrientation("sid", null, "codex")
   assert.doesNotMatch(codex, /blackboard/)
   assert.match(codex, /compaction-survival mechanism/)
-  assert.match(codex, /owned only by the top-level `\/root` worker/)
-  assert.match(codex, /can inherit this instruction even with `fork_turns:"none"`/)
-  assert.match(codex, /must not read, create, edit, replace, move, or delete the parent scratchpad/)
+  assert.match(codex, /shared progress document for native sub-agents/)
+  assert.match(codex, /may read it and merge their own scoped progress into it/)
+  assert.match(codex, /preserve all existing content/)
+  assert.match(codex, /never delete, truncate, reinitialize, move, or replace the whole file/)
 
   // The plan line is agnostic and appended for both.
   assert.match(scratchpadOrientation("sid", ".fray/plans/x.md", "codex"), /PLAN: \.fray\/plans\/x\.md/)
@@ -538,15 +544,27 @@ test("scratchpadOrientation gives codex root-only ownership; claude keeps its bl
 
 // ---- scratchpadContent: the pad skeleton is backend-aware ----
 
-test("scratchpadContent(codex) is compaction-only (no fleet-blackboard / Shared context section)", () => {
+test("scratchpadContent seeds a flexible shared structure and Obsidian-flavoured status legend", () => {
   const claude = scratchpadContent("t", "claude")
-  assert.match(claude, /blackboard your sub-agents read/)
+  assert.match(claude, /blackboard your sub-agents read and update/)
   assert.match(claude, /## Shared context/)
   assert.equal(scratchpadContent("t"), claude) // default = claude (unchanged)
 
   const codex = scratchpadContent("t", "codex")
   assert.doesNotMatch(codex, /blackboard/)
-  assert.doesNotMatch(codex, /Shared context/)
-  assert.doesNotMatch(codex, /sub-agent/)
-  assert.match(codex, /## Task list/)
+  assert.match(codex, /progress document shared with native sub-agents/)
+  for (const body of [claude, codex]) {
+    assert.match(body, /`\[ \]` pending/)
+    assert.match(body, /`\[\/\]` in progress/)
+    assert.match(body, /`\[x\]` complete/)
+    assert.match(body, /`\[-\]` cancelled/)
+    assert.match(body, /`\[\?\]` blocked \/ needs input/)
+    assert.match(body, /re-read before every edit/)
+    assert.match(body, /own `### <agent path>` subsection/)
+    assert.match(body, /scoped scratchpad merge is Fray coordination state/)
+    assert.match(body, /allowed when a delegated task limits its deliverable paths/)
+    assert.match(body, /Never delete, truncate, reinitialize, move, or replace the whole file/)
+    for (const section of ["Goal", "Task list", "Decisions", "Shared context", "Agent progress", "Verification", "Next action"])
+      assert.match(body, new RegExp(`## ${section}`))
+  }
 })

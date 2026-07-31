@@ -8,6 +8,7 @@ import { mdToHtml } from "./lib/markdown.ts"
 // are an escape battery against the widened rule that unwraps a disallowed tag instead of deleting it.
 export const SHAPE: [string, string][] = [
   ["tasklist", "- [x] Reproduce the failing fixture\n- [ ] Bisect to the offending commit"],
+  ["tasklist-custom", "- [/] Implement the fix\n- [-] Drop the rejected approach\n- [?] Confirm the human-owned decision"],
   ["tasklist-loose", "- [x] First item\n\n- [ ] Second item"],
   ["olstart", "17. `install.sandbox` — the baseline policy\n18. `run.sandbox` — the default"],
   ["align", "| left | mid | right |\n| :--- | :---: | ---: |\n| a | b | c |"],

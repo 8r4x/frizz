@@ -867,3 +867,44 @@ Suite 2419 pass / 0 fail (two timing-sensitive tests — `app-socket` coalescing
 buffer — flaked under parallel load and pass in isolation; neither touches this change), typecheck
 clean, and the drawer was re-driven in a real browser: the field is gone, and the Prompts section
 measures as exactly two children at the standard 24px `gap-6` with no orphaned container left behind.
+
+## 2026-07-30 (eighth pass): native Codex children merge the shared scratchpad
+
+An apparent post-compaction continuity failure in thread `9540edc3-4807-4bb0-8e36-5940f92b452b`
+was not path loss and was not Claude's on-disk token broker. The affected thread was a Codex session.
+At its first compaction the worker immediately read the correct exact path; at a later compaction it
+again addressed the correct path and got `ENOENT`. The directory and sibling artifacts remained.
+
+The missing file was child corruption. Native child `/root/auditstatus_prepare`, launched with
+`fork_turns:"none"`, still inherited the parent's developer-level `SCRATCHPAD:` mandate. It reasoned
+"Planning isolated scratch creation" and replaced the parent's exact pad with its own `# SEA corpus
+preparation` notes. Two minutes later it noticed the mistake, reasoned "Reverting unauthorized root
+scratch changes", and tried to remove its replacement. A shell `rm -f` was denied, but its fallback
+`apply_patch` `*** Delete File` succeeded. It could not restore the content it had overwritten, so the
+pad remained absent until the root compacted nearly an hour later. `fork_turns:"none"` removes
+conversational turns; it does not remove the root worker's base/developer instructions.
+
+The deliberately prompt-level fix preserves the useful part of that inheritance:
+
+- The Codex worker contract, system orientation, and first task message now make the pad explicitly
+  collaborative. Children may read it and persist their own progress, but every edit is a merge:
+  re-read first, patch only a scoped agent/task section, and preserve all existing state. Every
+  native-child dispatch restates that rule.
+- Codex registers `scratchpad.mjs --mode=subagent-start` as a `SubagentStart` hook. It injects the
+  child-only epilogue structurally on every native dispatch: the child may update its scoped progress,
+  but may never delete, truncate, reinitialize, move, or replace the whole file — including as cleanup
+  or rollback after a mistake. This fixes the observed failure without a filesystem guard or a
+  single-writer restriction.
+- Newly provisioned pads recommend a light structure rather than enforce a machine schema: Goal,
+  Task list, Decisions, Shared context, per-agent progress, Verification, and Next action. A visible
+  legend uses `[ ]` pending, `[/]` in progress, `[x]` complete, `[-]` cancelled, and `[?]` blocked.
+  Fray's Markdown renderer recognizes all five while the source stays readable in Obsidian/plain text.
+- If a pad is unexpectedly absent or empty after compaction/resume, the re-grounding injection says
+  the exact path is authoritative, forbids searching neighboring thread pads or broadly reloading repo
+  docs, and tells the root to reconstruct from the retained summary plus directly named handoffs.
+
+The root's apparently confused recovery is now explained too. The post-compaction hook correctly
+reported that the pad had no substantive content, and the root's first call addressed the correct
+exact path and got `ENOENT`. Only then did it search worktrees, list the surviving thread directory,
+and read older handoffs to reconstruct state. Its "Writing initial scratch file" reasoning label was
+model narration for recreating a currently absent file, not evidence that no pad had existed before.

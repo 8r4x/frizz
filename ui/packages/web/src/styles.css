@@ -520,7 +520,9 @@ a[href] {
   height: 0.85em;
   margin-left: -1.25em;
   margin-right: 0.4em;
-  vertical-align: -0.06em;
+  /* Measured against the prose cap band at the shipped 14px size: -0.06em left the box 0.65px
+     high; -0.105em leaves a 0.02px residual. */
+  vertical-align: -0.105em;
   border: 1px solid var(--color-muted);
   border-radius: 3px;
 }
@@ -538,6 +540,44 @@ a[href] {
   border: solid var(--color-bg);
   border-width: 0 1.5px 1.5px 0;
   transform: rotate(45deg);
+}
+.md-body .md-task-in-progress,
+.md-body .md-task-blocked {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+.md-body .md-task-in-progress::after {
+  content: "";
+  position: absolute;
+  left: 0.39em;
+  top: 0.11em;
+  width: 1px;
+  height: 0.57em;
+  border-radius: 1px;
+  background: currentColor;
+  transform: rotate(32deg);
+}
+.md-body .md-task-cancelled::after {
+  content: "";
+  position: absolute;
+  left: 0.16em;
+  top: calc(50% - 0.5px);
+  width: 0.51em;
+  height: 1px;
+  border-radius: 1px;
+  background: currentColor;
+}
+.md-body .md-task-blocked::after {
+  content: "?";
+  position: absolute;
+  inset: 0;
+  font-size: 0.72em;
+  font-weight: 700;
+  line-height: 1.05em;
+  text-align: center;
+  /* The monospace question mark's ink rides high inside its line box; this is per-glyph, not the
+     shared box alignment above. Measured/reviewed at 14px and 28px. */
+  transform: translateY(0.14em);
 }
 .md-body a {
   color: var(--color-accent);

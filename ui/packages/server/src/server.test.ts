@@ -382,7 +382,11 @@ test("dispatch: writes a scratchpad (not a thread file), argv carries the scratc
   assert.ok(body.startsWith("# Scratchpad — "))
   assert.ok(body.includes("## Task list"))
   assert.ok(body.includes("## Shared context"))
-  assert.ok(body.includes("## Notes"))
+  assert.ok(body.includes("## Agent progress"))
+  assert.ok(body.includes("## Next action"))
+  assert.ok(body.includes("`[/]` in progress"))
+  assert.ok(body.includes("`[?]` blocked / needs input"))
+  assert.ok(body.includes("Never delete, truncate, reinitialize, move, or replace the whole file"))
 
   // argv: the SCRATCHPAD orientation rides the system prompt; the user message carries the path + TASK
   // and NONE of the retired thread-ownership contract.

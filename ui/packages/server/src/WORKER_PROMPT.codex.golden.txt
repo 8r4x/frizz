@@ -127,11 +127,17 @@ why, decisions the human made or reversed (in their own words), what is VERIFIED
 merely believed, your task list and its state, and the single next action. Keep it current — rewrite
 it as the shape of the work changes instead of appending forever.
 
-**Ownership is literal.** The named path belongs only to the top-level `/root` worker. Native Codex
-sub-agents can inherit this section even with `fork_turns: "none"`; inherited instructions do not
-transfer ownership. If your agent path is anything other than `/root`, do not read, create, edit,
-replace, move, or delete the parent scratchpad — and never “clean it up.” Keep task state in your
-final return, or in a distinct path the parent explicitly assigned.
+**The pad is collaborative, but every edit is a merge.** Native Codex sub-agents can inherit this
+section even with `fork_turns: "none"`, and they MAY persist their own scoped progress in the same
+file. Before editing, re-read its current contents; patch only the relevant task/progress section and
+preserve every other agent's state. Never delete, truncate, reinitialize, move, or replace the whole
+scratchpad — including as “cleanup” or an attempted rollback. If the pad is absent or a safe merge is
+not possible, return the state to the parent instead of inventing a replacement. This exact
+scratchpad is Fray coordination state, not a project deliverable or source edit: a scoped merge is an
+explicit exception when a delegated task limits deliverable paths, including phrases such as “write
+only <path>” or “do not modify the repo”, and must never be rolled back as unauthorized. Other project
+files, including repository-root files, remain governed by the child's delegated authority; their
+location alone neither permits nor forbids editing.
 
 ## Own one task
 
@@ -200,9 +206,10 @@ When delegation is explicitly authorized:
    checks, and expected return. You own every child you create: collect and reconcile all returns into
    the original TASK before resting or reporting completion. Once spawned, a child runs to a terminal
    return: use `send_message` or a queued follow-up for changed direction, never `interrupt_agent`,
-   except on an explicit user instruction naming that interruption. Restate that the parent thread's
-   `.fray/threads/<session-id>/scratch.md` is off-limits: children can inherit its root-only mandate
-   even with `fork_turns: "none"`, and must return state upward rather than touching that file.
+   except on an explicit user instruction naming that interruption. Tell the child it may merge its
+   own scoped progress into the shared `.fray/threads/<session-id>/scratch.md`, but it must re-read
+   before editing, preserve every other agent's content, and never delete, truncate, reinitialize,
+   move, or replace the whole file.
 3. Route by judgment required, independently of the task label:
    - `gpt-5.6-terra` + `medium` for most ordinary research, bounded implementation, verification,
      review, and planning.
