@@ -351,6 +351,87 @@ test("real collaboration shapes show targets/summaries, never encrypted messages
   assert.doesNotMatch(JSON.stringify([sent, agents, spawned, waited]), /gAAAA|encrypted payload/)
 })
 
+// ---- a codex child REPORTING BACK (the completion notification that used to vanish) ----
+// A `spawn_agent` child does not return through the parent's tool result — that only carries the spawn
+// ack. It reports LATER, as an inter-agent `response_item/agent_message` addressed author → recipient.
+// parseCodexLine dropped that record entirely, so a codex thread orchestrating a dozen children showed
+// a run of Spawn-agent cards and then nothing ever coming back (383 dropped records in one real
+// orchestration rollout). Shapes below are verbatim from that rollout.
+function agentMessage(author: string, recipient: string, type: string, body: string, at?: string) {
+  return {
+    type: "response_item",
+    ...(at ? { timestamp: at } : {}),
+    payload: {
+      type: "agent_message",
+      author,
+      recipient,
+      content: [
+        { type: "input_text", text: `Message Type: ${type}\nTask name: ${recipient}\nSender: ${author}\nPayload:\n${body}` },
+        { type: "encrypted_content", data: "gAAAAABqbMTRjP0uenKvddqxbODpjhMbID3F" },
+      ],
+    },
+  }
+}
+
+test("a codex child's FINAL_ANSWER draws the completion divider and back-fills its launch card", () => {
+  const raw = rollout([
+    { timestamp: "2026-07-11T00:00:00.000Z", type: "response_item", payload: { type: "function_call", call_id: "spawn1", name: "spawn_agent", arguments: JSON.stringify({ task_name: "release_audit", model: "gpt-5.6-terra", reasoning_effort: "medium" }) } },
+    { timestamp: "2026-07-11T00:00:01.000Z", type: "response_item", payload: { type: "function_call_output", call_id: "spawn1", output: JSON.stringify({ task_name: "/root/release_audit", nickname: "Peirce the 2nd" }) } },
+    agentMessage("/root/release_audit", "/root", "FINAL_ANSWER", "**P0** — the release gate never runs `nub compile`.", "2026-07-11T00:03:20.000Z"),
+  ])
+  const msgs = projectCodexTranscript(raw)
+  const completion = msgs.flatMap((m) => m.tools).find((t) => t.agentCompletion)
+  assert.ok(completion, "the child's terminal return renders the wake divider the Claude path draws")
+  assert.equal(completion.detail, "release_audit")
+  assert.equal(completion.agentStatus, "completed")
+  // Elapsed is dispatch → report (200s), never the spawn call's own latency.
+  assert.equal(completion.agentElapsedMs, 200_000)
+  // It is a COPY: the launch card keeps its own identity and is back-filled, not replaced.
+  const launch = msgs.flatMap((m) => m.tools).find((t) => t.name === "Spawn agent" && !t.agentCompletion)
+  assert.equal(launch?.agentStatus, "completed")
+  assert.equal(completion.agentId, "spawn1", "the divider drills into the child under its DISPATCH id")
+  // The divider is its own message at the position the report landed, so later parent prose renders below it.
+  assert.equal(msgs.at(-1)?.tools[0]?.agentCompletion, true)
+})
+
+test("a codex child's mid-flight MESSAGE draws the peer report line, linked to its dispatch", () => {
+  const raw = rollout([
+    { type: "response_item", payload: { type: "function_call", call_id: "spawn2", name: "spawn_agent", arguments: JSON.stringify({ task_name: "bun_survey" }) } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: "spawn2", output: JSON.stringify({ task_name: "/root/bun_survey" }) } },
+    // Every MESSAGE in the reference rollout has an EMPTY plaintext payload (its text rides the
+    // encrypted block), and it must STILL surface — the line renders no excerpt by design, so the
+    // divider itself is the whole signal.
+    agentMessage("/root/bun_survey", "/root", "MESSAGE", ""),
+  ])
+  const report = projectCodexTranscript(raw).find((m) => m.role === "user" && m.peerFrom)
+  assert.equal(report?.peerFrom, "bun_survey")
+  assert.equal(report?.peerDispatchId, "spawn2", "the DISPATCH id is what the drawer resolves")
+})
+
+test("codex inter-agent records that are not a child reporting up surface nothing", () => {
+  // OUTBOUND (the shape a CHILD's own rollout carries): recipient is the descendant, and its plaintext
+  // Payload is empty anyway — the real body rides the sibling encrypted block.
+  const outbound = rollout([agentMessage("/root", "/root/bun_survey", "NEW_TASK", "")])
+  assert.deepEqual(projectCodexTranscript(outbound), [])
+  // A child that reports before any spawn card exists (a resumed rollout) degrades to nothing rather
+  // than inventing a completion divider with no dispatch to drill into.
+  const orphan = rollout([agentMessage("/root/gone", "/root", "FINAL_ANSWER", "done")])
+  assert.deepEqual(projectCodexTranscript(orphan).flatMap((m) => m.tools), [])
+  // An unrecognized message type is never rendered blind.
+  const unknown = rollout([agentMessage("/root/x", "/root", "SOMETHING_NEW", "body")])
+  assert.deepEqual(projectCodexTranscript(unknown), [])
+})
+
+test("a REJECTED codex spawn can never be credited with a later child's report", () => {
+  const raw = rollout([
+    { type: "response_item", payload: { type: "function_call", call_id: "spawn3", name: "spawn_agent", arguments: JSON.stringify({ task_name: "platform_proof" }) } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: "spawn3", output: "collab spawn failed: agent thread limit reached" } },
+    agentMessage("/root/platform_proof", "/root", "FINAL_ANSWER", "impossible — this child never existed"),
+  ])
+  const msgs = projectCodexTranscript(raw)
+  assert.equal(msgs.flatMap((m) => m.tools).some((t) => t.agentCompletion), false)
+})
+
 test("tool payloads are bounded/redacted and call-only records remain visibly pending", () => {
   const raw = rollout([
     { type: "response_item", payload: { type: "function_call", call_id: "secret", name: "exec_command", arguments: JSON.stringify({ cmd: "export FRAY_API_TOKEN=super-secret-value\nprintf ok" }) } },

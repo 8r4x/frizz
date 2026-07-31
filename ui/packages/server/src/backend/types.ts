@@ -52,6 +52,13 @@ export type NormalizedEvent =
   // costs nothing; only the transcript projection reads it, and only to decode it to disk once.
   | { kind: "tool-result"; at?: string; id: string; text: string; image?: string }
   | { kind: "reasoning"; at?: string; text: string } // model-reasoning SUMMARY (Codex plaintext summary[]; Claude thinking is redacted → never emitted)
+  // A CHILD sub-agent reporting UPWARD into this session — codex's inter-agent `agent_message` record,
+  // whose `author` is the child's agent path and whose `recipient` is ours. `final` splits the child's
+  // TERMINAL return (codex "FINAL_ANSWER" — the completion notification) from a mid-flight progress
+  // report ("MESSAGE"); the two render as the two wake dividers the Claude path already draws. This is
+  // the child's output, NOT this session's, so the fold treats it as activity and nothing more.
+  // Codex-only: Claude delivers both upward shapes as ordinary (synthetic) user records instead.
+  | { kind: "agent-report"; at?: string; author: string; text: string; final: boolean }
   | { kind: "title"; title: string } // backend's own session auto-title (ai-title / codex thread title)
   // Context COMPACTION: the harness replaced the conversation with a summary, so everything above this
   // point is gone from the agent's context. Both providers record it (Claude: a system/compact_boundary

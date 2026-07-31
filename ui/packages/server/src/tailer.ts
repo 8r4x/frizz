@@ -1742,6 +1742,15 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
       // final message recomputes it), so a normalized backend must not let tool motion excuse a fence.
       state.sawRecords = true
       break
+    case "agent-report":
+      // A CHILD reported upward (codex inter-agent agent_message). It is real session motion — the
+      // activity-clock bump above is the point, since a parent that spends an hour waiting on children
+      // is working, not stalled — but it is the CHILD's output, so it moves nothing else: not the turn
+      // (the child's arrival does not open one; codex records `trigger_turn:false` and brackets any
+      // real wake with its own task_started), not the preview or fence (those belong to THIS agent's
+      // final message), and neither rest-time key. The child's own lifecycle rides codex-subagents.ts.
+      state.sawRecords = true
+      break
     case "title":
       // The backend's own session auto-title (codex thread title / Claude ai-title). Never touches turn.
       state.aiTitle = ev.title

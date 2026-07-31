@@ -504,6 +504,69 @@ test("parseCodexLine: sidecar records (session_meta, turn_context, world_state, 
   assert.deepEqual(parseCodexLine(reasoning), [])
 })
 
+// ---- response_item/agent_message: codex's INTER-AGENT channel ----
+// A spawn_agent child returns through this record, not through the parent's tool result. Shapes are
+// verbatim from a real 19k-line orchestration rollout (263 FINAL_ANSWER + 125 MESSAGE, all recipient
+// "/root"); before this arm existed parseCodexLine dropped every one of them.
+function interAgent(author: string, recipient: string, type: string, body: string): string {
+  return JSON.stringify({
+    timestamp: "2026-07-31T01:00:39.106Z",
+    type: "response_item",
+    payload: {
+      type: "agent_message",
+      id: "amsg_019fb5b0-0323-7533-8508-42ec8b42abbc",
+      author,
+      recipient,
+      content: [
+        { type: "input_text", text: `Message Type: ${type}\nTask name: ${recipient}\nSender: ${author}\nPayload:\n${body}` },
+        { type: "encrypted_content", data: "gAAAAABqbMTRjP0uenKvddqxbODpjhMbID3F" },
+      ],
+    },
+  })
+}
+
+test("parseCodexLine: a child's inter-agent message → agent-report, FINAL_ANSWER splitting the terminal return from a progress MESSAGE", () => {
+  assert.deepEqual(parseCodexLine(interAgent("/root/node_license_audit", "/root", "FINAL_ANSWER", "## Finding\n\nNode's notices must ship with the artifact.")), [
+    { kind: "agent-report", at: "2026-07-31T01:00:39.106Z", author: "/root/node_license_audit", text: "## Finding\n\nNode's notices must ship with the artifact.", final: true },
+  ])
+  // Every MESSAGE in the corpus has an EMPTY plaintext payload (its body rides the sibling encrypted
+  // block). It must still report: the divider it draws carries no excerpt anyway, so suppressing the
+  // empty ones would hide mid-flight progress entirely.
+  assert.deepEqual(parseCodexLine(interAgent("/root/bun_project_survey", "/root", "MESSAGE", "")), [
+    { kind: "agent-report", at: "2026-07-31T01:00:39.106Z", author: "/root/bun_project_survey", text: "", final: false },
+  ])
+})
+
+test("parseCodexLine: only a DESCENDANT's message is a report — the outbound shape and unknown types yield nothing", () => {
+  // What a CHILD's own rollout carries: the parent addressing it. Verified empty-payloaded in a real
+  // child rollout, and rendering it in the parent would attribute the parent's own words to a child.
+  assert.deepEqual(parseCodexLine(interAgent("/root", "/root/bun_project_survey", "NEW_TASK", "")), [])
+  assert.deepEqual(parseCodexLine(interAgent("/root", "/root/bun_project_survey", "MESSAGE", "steer")), [])
+  // A sibling/unrelated path is not a descendant of ours either.
+  assert.deepEqual(parseCodexLine(interAgent("/other/child", "/root", "FINAL_ANSWER", "x")), [])
+  // A future message type is not rendered blind, and a record with no readable block yields nothing.
+  assert.deepEqual(parseCodexLine(interAgent("/root/x", "/root", "SOMETHING_NEW", "body")), [])
+  assert.deepEqual(parseCodexLine(JSON.stringify({ type: "response_item", payload: { type: "agent_message", author: "/root/x", recipient: "/root", content: [{ type: "encrypted_content", data: "gAAAA" }] } })), [])
+})
+
+test("applyEvent: an agent-report is session ACTIVITY and nothing else — it never moves the turn, preview, fence or rest time", () => {
+  const state = newTailState("t", "sid", "/x")
+  applyEvent(state, { kind: "turn-end", at: "2026-07-31T01:00:00.000Z", finalText: "the parent's answer\n\n```awaiting\nhuman: review\n```" })
+  const restedAt = state.lastAssistantAt
+  const fence = state.lastFence
+  const preview = state.lastAssistant
+  applyEvent(state, { kind: "agent-report", at: "2026-07-31T01:00:39.106Z", author: "/root/child", text: "the CHILD's answer", final: true })
+  // The clock advances (a parent waiting on children is working, not stalled) …
+  assert.equal(state.lastActivityAt, "2026-07-31T01:00:39.106Z")
+  // … and nothing else moves: a child's return must not re-open the parent's turn, nor excuse or
+  // overwrite the fence/preview/rest time that belong to the parent's OWN final message.
+  assert.equal(state.turn, "idle")
+  assert.equal(state.lastAssistantAt, restedAt)
+  assert.deepEqual(state.lastFence, fence)
+  assert.equal(state.lastAssistant, preview)
+  assert.equal(state.lastUserAt, undefined)
+})
+
 test("parseCodexLine: response_item/reasoning WITH summary[] → one reasoning event joining the summary_text items", () => {
   const line = JSON.stringify({
     timestamp: "2026-07-15T14:42:06.000Z",

@@ -518,12 +518,69 @@ export function parseCodexLine(line: string): NormalizedEvent[] {
         .join("\n\n")
       return text ? [{ kind: "reasoning", at, text }] : []
     }
+    // Codex's INTER-AGENT channel. A `spawn_agent` child does not return through the parent's tool
+    // result (that only carries the spawn ack) — it reports back LATER, as its own `agent_message`
+    // record addressed `author` → `recipient`, and that record IS the completion notification the
+    // worker keeps saying it received. Without this arm all 383 of them in a real orchestration
+    // rollout were dropped on the floor, so a codex thread running a dozen children showed a run of
+    // Spawn-agent cards and then nothing ever coming back.
+    //
+    // DIRECTION GUARD: the same record type carries the parent's outbound NEW_TASK/MESSAGE in the
+    // CHILD's rollout. Only a message from a DESCENDANT is a report to us — and the outbound form is
+    // worthless anyway, its `Payload:` being empty because the real body rides the sibling
+    // `encrypted_content` block (verified against a real child rollout).
+    if (pt === "agent_message") {
+      const author = typeof p.author === "string" ? p.author : ""
+      const recipient = typeof p.recipient === "string" ? p.recipient : ""
+      if (!author || !recipient || !author.startsWith(`${recipient}/`)) return []
+      const report = parseCodexAgentReport(p.content)
+      return report ? [{ kind: "agent-report", at, author, text: report.body, final: report.final }] : []
+    }
     // response_item/message (the duplicate API echo) is intentionally dropped.
     return []
   }
 
   // session_meta / turn_context / world_state and any unknown envelope type: sidecar → no events.
   return []
+}
+
+// The plaintext half of an inter-agent `agent_message`. Its content array holds an `input_text` block
+// carrying a fixed four-line envelope and then the body:
+//
+//   Message Type: FINAL_ANSWER        ← the child's terminal return; MESSAGE = a mid-flight report
+//   Task name: /root                  ← the recipient (us), already on the record as `recipient`
+//   Sender: /root/b14_launcher_bootstrap   ← ditto, `author`
+//   Payload:
+//   <the child's markdown>
+//
+// The structured `author`/`recipient` fields are preferred over the prose lines (same values, no
+// parsing), so only the type and the body are read here. An unrecognized type surfaces nothing rather
+// than guessing: NEW_TASK is an OUTBOUND shape (see the direction guard) and a future type is not
+// something to render blind.
+//
+// An EMPTY body is still a report. The two types split cleanly on this — across the reference
+// orchestration rollout every one of the 263 FINAL_ANSWERs carries its markdown here while all 125
+// MESSAGEs are empty, their text riding the sibling `encrypted_content` block instead. Suppressing the
+// empty ones would hide mid-flight progress entirely, and it would cost nothing to show: the report
+// line renders no excerpt of the body by design (maintainer 2026-07-29), so the divider IS the signal.
+function parseCodexAgentReport(content: unknown): { final: boolean; body: string } | undefined {
+  if (!Array.isArray(content)) return undefined
+  let text: string | undefined
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue
+    const b = block as { type?: unknown; text?: unknown }
+    if (b.type === "input_text" && typeof b.text === "string") {
+      text = b.text
+      break
+    }
+  }
+  if (!text) return undefined
+  const type = text.match(/^Message Type:[ \t]*(\S+)/)?.[1]
+  if (type !== "FINAL_ANSWER" && type !== "MESSAGE") return undefined
+  const marker = text.match(/^Payload:[ \t]*$/m)
+  if (!marker || marker.index === undefined) return undefined
+  const body = text.slice(marker.index + marker[0].length).replace(/^\n/, "").trim()
+  return { final: type === "FINAL_ANSWER", body }
 }
 
 // ---- codex MULTI-AGENT signals (sub-agent visibility) ----

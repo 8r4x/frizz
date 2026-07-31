@@ -1858,6 +1858,8 @@ function logDirOf(project: Project): string {
 //   tool-result    → back-filled onto the matching call's `output` by call_id
 //   user-message   → a human bubble (the first strips the dispatch scaffolding + discovery sentinel)
 //   reasoning      → a standalone expandable "reasoning" message (codex's plaintext summary[])
+//   agent-report   → a wake divider: the completion copy of the child's dispatch card (final), or the
+//                    peer report line (mid-flight) — the same two the Claude path draws
 //   turn-start     → ignored (a bracket, not content)
 //   turn-end       → ignored unless it carries finalText no assistant-text already surfaced (defensive)
 //   title          → ignored (board telemetry only)
@@ -1880,6 +1882,13 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
   // Codex yielded PTYs identify the real shell lifecycle by `session_id`, not by the wrapper call id.
   // Keep this map while projecting so later write_stdin polls back-fill the originating Bash card.
   const shellSessions = new Map<string, ShellOwner>()
+  // Live `Spawn agent` cards by TASK NAME, so a child's later `agent-report` can find the dispatch that
+  // launched it. The report names its sender by agent PATH ("/root/b14_launcher_bootstrap") and the
+  // spawn by bare task name — the tail segment joins them, exactly as codex-subagents.ts's agentLabel
+  // does. Latest-wins, which is also codex's own rule: it reuses a task name only once the previous
+  // holder is gone. A REJECTED spawn is removed (see the tool-result arm) — it produced no child, so
+  // nothing may ever correlate to it.
+  const agentDispatches = new Map<string, { call: TranscriptToolCall; at?: string }>()
   // The last FINAL assistant text rendered, so a task_complete.last_agent_message that merely echoes it
   // isn't surfaced twice (the common case); a genuinely-different finalText is a defensive fallback.
   let lastFinalText: string | null = null
@@ -1974,6 +1983,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
             pushToolPart(m, call)
             m.tools.push(call)
           }
+          if (call.name === "Spawn agent" && call.detail) agentDispatches.set(call.detail, { call, at: ev.at })
           if (ev.id) pendingCalls.set(ev.id, {
             call,
             at: ev.at,
@@ -2025,6 +2035,13 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
             if (result.output) pending.call.output = capRead(result.output)
           } else {
             applyCodexToolResult(pending.call, result)
+            // A rejected spawn (the "agent thread limit reached" class) created no child, so retract it
+            // from the correlation map — applyCodexToolResult has just cleared its drill-in id for the
+            // same reason, and a later same-named report must not be attributed to a dispatch that
+            // never ran.
+            if (pending.call.name === "Spawn agent" && !pending.call.agentId && pending.call.detail) {
+              if (agentDispatches.get(pending.call.detail)?.call === pending.call) agentDispatches.delete(pending.call.detail)
+            }
             // Ctrl-C is a terminal lifecycle event for the command it targeted. The interrupt card
             // remains visible as the control action, while the command stops reading "running".
             if (pending.interruptedOwner && result.status !== "failed") {
@@ -2101,6 +2118,57 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
             const projection = userProjection(text, out.length === 0)
             out.push({ sourceId, role: "user", text, ...projection, tools: [], parts: [], at: ev.at })
           }
+          break
+        }
+        case "agent-report": {
+          // A CHILD reporting upward. Both shapes render as the wake dividers the Claude path already
+          // draws, because they are the same two events: a sub-agent finishing, and a sub-agent
+          // reporting mid-flight. Both CLOSE the open assistant message, for the reason the compaction
+          // arm below closes it: the divider is pushed at this position in `out`, so text the parent
+          // writes afterwards must start a NEW message — appending it to `cur` would render it above a
+          // divider it happened after.
+          cur = null
+          turnReasoning = null
+          const label = ev.author.split("/").filter(Boolean).pop() ?? ev.author
+          const dispatch = agentDispatches.get(label)
+          if (ev.final) {
+            // The child's terminal return. Re-emit its dispatch card at THIS position, flagged
+            // `agentCompletion`, so the client draws the centred "Sub-agent «…» completed" divider
+            // clickable into the finished child's run log — exactly what completionEvents does for a
+            // Claude <task-notification>. The launch card keeps its own state; this is a copy.
+            // With no dispatch to copy (the launch scrolled out of a resumed rollout) there is no card
+            // to clone and nothing renders — the same degradation completionEvents takes.
+            // The dispatch deliberately STAYS in the map. A child that is warm-resumed (`followup_task`)
+            // finishes again and sends a second FINAL_ANSWER, which is a real second completion — the
+            // tailer's tracker resurrects and re-retires that same child under the same dispatch id.
+            // Consuming the entry would silence every round after the first (122 of 263 in the
+            // reference rollout) and orphan the later reports' drill-in link.
+            if (!dispatch) break
+            const elapsedMs = elapsedBetween(dispatch.at, ev.at)
+            dispatch.call.agentStatus = "completed"
+            if (elapsedMs !== undefined) {
+              dispatch.call.agentElapsedMs = elapsedMs
+              dispatch.call.durationMs = elapsedMs
+            }
+            const finished: TranscriptToolCall = { ...dispatch.call, agentCompletion: true }
+            out.push({ sourceId, role: "assistant", text: "", tools: [finished], parts: [{ kind: "tools", tools: [finished] }], at: ev.at })
+            break
+          }
+          // A mid-flight progress report. `peerFrom` + `peerDispatchId` are precisely the pair the
+          // client's SubAgentReportLine consumes; the id is the DISPATCH call_id (what a drawer
+          // resolves), never the child's own path. The body rides `text`/`displayText` so the drawer
+          // and search keep it, while the line itself renders no excerpt of it by design.
+          out.push({
+            sourceId,
+            role: "user",
+            text: ev.text,
+            displayText: ev.text,
+            peerFrom: label,
+            ...(dispatch?.call.agentId ? { peerDispatchId: dispatch.call.agentId } : {}),
+            tools: [],
+            parts: [],
+            at: ev.at,
+          })
           break
         }
         case "compaction": {

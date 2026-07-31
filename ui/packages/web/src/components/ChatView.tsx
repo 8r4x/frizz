@@ -23,7 +23,7 @@ import { sendEagerFollowUp } from "../lib/eagerComposerSubmission.ts"
 import { useUnqueueFollowUp, useUnqueueSupported } from "../lib/unqueueFollowUp.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
-import { messagePresentationText } from "../lib/messagePresentation.ts"
+import { lastAskIndex, messagePresentationText } from "../lib/messagePresentation.ts"
 import { snoozePresetInstant, formatSnoozeWake } from "../lib/snooze.ts"
 import { AWAITING_FALLBACK_TITLE, AWAITING_PARK_BUTTON, awaitingHintSentence, awaitingParkAction, awaitingPresentationLine } from "../lib/awaitingPresentation.ts"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
@@ -240,13 +240,10 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
   // needs the whole list; Message renders per-message). null — a stable primitive — at every ordinary
   // index, so the memoized Message only sees a `paired` prop change on actual answers-messages.
   const paired = useMemo(() => pairAllAnswers(messages), [messages])
-  // The most recent LANDED user message (queued/optimistic follow-ups pin to the bottom and aren't the
-  // "current ask") — pinned to the top of the pane via StickyUserBand so it stays visible while the
-  // agent's reply scrolls under it. -1 when the transcript has no user message yet.
-  const lastUserIdx = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === "user" && !messages[i].queued) return i
-    return -1
-  }, [messages])
+  // The CURRENT ASK — the human's most recent landed turn (see lastAskIndex for what is excluded and
+  // why) — pinned to the top of the pane via StickyUserBand so it stays visible while the agent's reply
+  // scrolls under it. -1 when the transcript has no human turn yet.
+  const lastUserIdx = useMemo(() => lastAskIndex(messages), [messages])
   // Client view pref: how (or whether) to pin the current ask to the pane top. `off` → no pin.
   const { stickyUserMessage } = useSnapshot(prefs)
   // Question-block interactivity in the thread view. `multiMessage`: unlike the queue card (live ask
@@ -654,12 +651,7 @@ function VirtualizedThreadTranscript({
       messageIndex: activityMessages[row.messageIndex].messageIndex,
     }))
   }, [activityMessages])
-  const lastUserIdx = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "user" && !messages[i].queued) return i
-    }
-    return -1
-  }, [messages])
+  const lastUserIdx = useMemo(() => lastAskIndex(messages), [messages])
   const hasRuntimeStatus = Boolean(
     (thread?.providerFault && !thread.foreign)
       || (thread?.limitPause && !thread.foreign)
@@ -3796,10 +3788,14 @@ function SubAgentReportLine({ from, dispatchId, sourceId }: { from: string; disp
     <WakeDivider sourceId={sourceId} marker="agent-report" ariaLabel={canDrill ? undefined : `Sub-agent ${from} reported`}>
       <span className="shrink-0">Sub-agent</span>
       {/* Guillemets OUTSIDE the truncating element, per the completion line: a title clipped at a narrow
-          width still closes its quote. `from` is the child's subagent_type — the dispatch hook strips
-          `name`, so it is the only label there is. */}
-      <span className="flex shrink-0 items-center">
-        <span>«</span>
+          width still closes its quote. The TITLE is the only part allowed to shrink (`min-w-0 truncate`
+          on it and on its flex host) — a `shrink-0` wrapper here let a long name push the whole divider
+          past the pane at 420px, losing its left hairline, while the completion line beside it clipped
+          cleanly. Codex task names are long snake_case identifiers, so that is the common case, not the
+          edge. `from` is the child's label — its codex task name, or on Claude its subagent_type, since
+          the dispatch hook strips `name`. */}
+      <span className="flex min-w-0 items-center">
+        <span className="shrink-0">«</span>
         {canDrill ? (
           <button
             type="button"
@@ -3808,14 +3804,14 @@ function SubAgentReportLine({ from, dispatchId, sourceId }: { from: string; disp
             aria-label={`${CHILD_OPEN_TITLE.AGENT}: ${from}`}
             onClick={() => pushSubAgentDrawer(slug!, dispatchId!, { label: from, subagentType: from })}
             onMouseDown={(e) => e.preventDefault()}
-            className="rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
+            className="min-w-0 truncate rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
           >
             {from}
           </button>
         ) : (
-          <span>{from}</span>
+          <span className="min-w-0 truncate">{from}</span>
         )}
-        <span>»</span>
+        <span className="shrink-0">»</span>
       </span>
       <span className="shrink-0">reported</span>
     </WakeDivider>
