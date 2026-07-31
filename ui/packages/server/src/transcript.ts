@@ -1868,10 +1868,18 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
   // (→ null) so the next assistant content starts a fresh message.
   let cur: TranscriptMessage | null = null
   // Tool calls awaiting their function_call_output, keyed by call_id — the codex analogue of pendingReads.
-  const pendingCalls = new Map<string, { call: TranscriptToolCall; at?: string; owner?: { call: TranscriptToolCall; at?: string }; orphanPoll?: boolean }>()
+  type ShellOwner = { call: TranscriptToolCall; at?: string; background: boolean }
+  const pendingCalls = new Map<string, {
+    call: TranscriptToolCall
+    at?: string
+    owner?: ShellOwner
+    interruptedOwner?: ShellOwner
+    orphanPoll?: boolean
+    explicitBackground?: boolean
+  }>()
   // Codex yielded PTYs identify the real shell lifecycle by `session_id`, not by the wrapper call id.
   // Keep this map while projecting so later write_stdin polls back-fill the originating Bash card.
-  const shellSessions = new Map<string, { call: TranscriptToolCall; at?: string }>()
+  const shellSessions = new Map<string, ShellOwner>()
   // The last FINAL assistant text rendered, so a task_complete.last_agent_message that merely echoes it
   // isn't surfaced twice (the common case); a genuinely-different finalText is a defensive fallback.
   let lastFinalText: string | null = null
@@ -1956,6 +1964,9 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
           }
           const isPoll = (call.name === "Poll process" || call.name === "Wait") && call.sessionId !== undefined
           const owner = isPoll ? shellSessions.get(runningKey(call.name, call.sessionId!)) : undefined
+          const interruptedOwner = call.name === "Interrupt process" && call.sessionId !== undefined
+            ? shellSessions.get(runningKey("Poll process", call.sessionId))
+            : undefined
           // Polls are lifecycle updates, not independent shell work. Keep an unpaired poll visible as
           // UNKNOWN so a partial/reloaded transcript never fabricates a completed command.
           if (!owner) {
@@ -1963,7 +1974,14 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
             pushToolPart(m, call)
             m.tools.push(call)
           }
-          if (ev.id) pendingCalls.set(ev.id, { call, at: ev.at, owner, orphanPoll: isPoll && !owner })
+          if (ev.id) pendingCalls.set(ev.id, {
+            call,
+            at: ev.at,
+            owner,
+            interruptedOwner,
+            orphanPoll: isPoll && !owner,
+            explicitBackground: codexExplicitBackground(ev.name, ev.input),
+          })
           break
         }
         case "tool-result": {
@@ -1989,7 +2007,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
             applyCodexToolResult(pending.owner.call, result)
             if (result.terminal !== true) {
               pending.owner.call.status = "pending"
-              pending.owner.call.backgroundState = "background"
+              pending.owner.call.backgroundState = pending.owner.background ? "background" : undefined
             } else {
               shellSessions.delete(runningKey(pending.call.name, pending.call.sessionId!))
               const total = elapsedBetween(pending.owner.at, ev.at)
@@ -2007,22 +2025,38 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
             if (result.output) pending.call.output = capRead(result.output)
           } else {
             applyCodexToolResult(pending.call, result)
+            // Ctrl-C is a terminal lifecycle event for the command it targeted. The interrupt card
+            // remains visible as the control action, while the command stops reading "running".
+            if (pending.interruptedOwner && result.status !== "failed") {
+              pending.interruptedOwner.call.status = "cancelled"
+              shellSessions.delete(runningKey("Poll process", pending.call.sessionId!))
+              const total = elapsedBetween(pending.interruptedOwner.at, ev.at)
+              if (total !== undefined && total > 0) pending.interruptedOwner.call.durationMs = total
+            }
             // Ctrl-C is a one-shot control action, never a detached process launch. Its receipt can
             // echo the target session id without meaning the interrupt itself remains live.
             if (pending.call.name !== "Interrupt process" && result.sessionId !== undefined && result.exitCode === undefined) {
               pending.call.sessionId = result.sessionId
               pending.call.status = "pending"
-              pending.call.backgroundState = "background"
-              shellSessions.set(runningKey("Poll process", result.sessionId), { call: pending.call, at: pending.at })
+              pending.call.backgroundState = pending.explicitBackground ? "background" : undefined
+              shellSessions.set(runningKey("Poll process", result.sessionId), {
+                call: pending.call,
+                at: pending.at,
+                background: pending.explicitBackground === true,
+              })
             }
             // The same shape one protocol generation earlier: a script that yielded announces
             // "Script running with cell ID N" and is polled by `wait` rather than by write_stdin.
             // Registered under its own key namespace because cell ids and PTY session ids are
             // independent counters that DO co-occur in one rollout — cell 49 is not session 49.
             if (result.cellId !== undefined && result.exitCode === undefined) {
-              shellSessions.set(runningKey("Wait", result.cellId), { call: pending.call, at: pending.at })
+              shellSessions.set(runningKey("Wait", result.cellId), {
+                call: pending.call,
+                at: pending.at,
+                background: pending.explicitBackground === true,
+              })
               pending.call.status = "pending"
-              pending.call.backgroundState = "background"
+              pending.call.backgroundState = pending.explicitBackground ? "background" : undefined
             }
           }
           break
@@ -2148,7 +2182,7 @@ export function latestTranscriptWindow(messages: readonly TranscriptMessage[]): 
     const message = messages[i]
     if (!message.sourceId) continue
     const tools = message.tools.filter(
-      (call) => call.status === "pending" && call.backgroundState !== undefined,
+      (call) => call.status === "pending" && call.backgroundState === "background",
     )
     if (tools.length === 0) continue
     pinned.push({
@@ -2287,6 +2321,45 @@ function codexDirectToolCall(name: string, obj: Record<string, unknown>, callId?
 // "session 49". The poll card's own name is what says which registry it is asking about.
 function runningKey(pollName: string, id: string | number): string {
   return `${pollName === "Wait" ? "cell" : "pty"}:${id}`
+}
+
+// A yielded process is not automatically a background operation. Ordinary foreground commands yield
+// a session/cell handle whenever they outlive one tool-call budget; the caller still owns and polls
+// them inline. The unified exec protocol's deliberate background handoff is explicit: it calls
+// `yield_control()` before awaiting the process. Keep that distinction structural (outside strings and
+// comments), so a command which merely prints or documents `yield_control()` is never misclassified.
+function codexExplicitBackground(name: string, input: unknown): boolean {
+  return name === "exec" && typeof input === "string" && hasExecutableCall(input, "yield_control")
+}
+
+function hasExecutableCall(source: string, name: string): boolean {
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i]
+    if (c === "\"" || c === "'" || c.charCodeAt(0) === 96) {
+      i = skipJsString(source, i)
+      continue
+    }
+    if (c === "/" && source[i + 1] === "/") {
+      const end = source.indexOf("\n", i + 2)
+      if (end === -1) return false
+      i = end
+      continue
+    }
+    if (c === "/" && source[i + 1] === "*") {
+      const end = source.indexOf("*/", i + 2)
+      if (end === -1) return false
+      i = end + 1
+      continue
+    }
+    if (!source.startsWith(name, i)) continue
+    const before = source[i - 1]
+    const after = source[i + name.length]
+    if ((before && /[\w$]/.test(before)) || (after && /[\w$]/.test(after))) continue
+    let cursor = i + name.length
+    while (/\s/.test(source[cursor] ?? "")) cursor++
+    if (source[cursor] === "(") return true
+  }
+  return false
 }
 
 // The one-line caption a codex reasoning step offers the tool card that follows it. Codex writes its
@@ -2828,7 +2901,7 @@ function codexToolResult(text: string): CodexToolResult {
   // calls poll, and registering it here is what lets projectCodexTranscript fold those polls into this
   // command's card (the wrapper protocol got the id from its JSON result; the direct protocol had no
   // reader at all, so every direct-form poll stayed an orphan card).
-  const sessionMatch = text.match(/Process running with session ID\s*(\d+)/)
+  const sessionMatch = text.match(/(?:Process running with session ID\s*|^SESSION_ID=)(\d+)/m)
   const sessionId = sessionMatch ? Number(sessionMatch[1]) : undefined
   // The script generation's equivalent announcement, polled by `wait` instead of write_stdin.
   const cellMatch = text.match(/Script running with cell ID\s*(\d+)/)
@@ -2907,6 +2980,11 @@ function unifiedToolResult(text: string): CodexToolResult | undefined {
   }
 
   const output = body.replace(/^Script error:\r?\n/, "").trim()
+  // Some wrappers surface a yielded nested exec as a plain SESSION_ID marker, then return from the
+  // wrapper itself. The process is still live: register the id so subsequent direct write_stdin polls
+  // update this originating Bash card instead of minting one UNKNOWN poll card per check.
+  const escapedSessionMatch = output.match(/^SESSION_ID=(\d+)$/m)
+  const sessionId = escapedSessionMatch ? Number(escapedSessionMatch[1]) : undefined
   return {
     output: output || undefined,
     status:
@@ -2916,7 +2994,8 @@ function unifiedToolResult(text: string): CodexToolResult | undefined {
           ? "failed"
           : "completed",
     durationMs: wrapperDurationMs,
-    terminal: true,
+    terminal: sessionId === undefined,
+    sessionId,
   }
 }
 

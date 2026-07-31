@@ -260,7 +260,7 @@ text(r);
   assert.deepEqual(planned.todos, [{ text: "one", status: "completed" }, { text: "two", status: "in_progress" }])
 })
 
-test("Codex yielded shell remains running until its matching session poll has an exit code", () => {
+test("Codex yielded FOREGROUND shell remains pending until its matching session poll has an exit code", () => {
   const exec = `const r = await tools.exec_command({ cmd: "sleep 5", yield_time_ms: 10 }); text(r);`
   const poll = `const r = await tools.write_stdin({ session_id: 71, chars: "", yield_time_ms: 10 }); text(r);`
   const raw = rollout([
@@ -272,7 +272,7 @@ test("Codex yielded shell remains running until its matching session poll has an
   const tools = parseCodexTranscript(raw)[0].tools
   assert.equal(tools.length, 1, "related poll is grouped rather than rendered as another completed shell")
   assert.equal(tools[0].status, "pending")
-  assert.equal(tools[0].backgroundState, "background")
+  assert.equal(tools[0].backgroundState, undefined, "a session_id is continuation, not a background handoff")
   assert.equal(tools[0].sessionId, 71)
 })
 
@@ -1002,6 +1002,22 @@ test("the exec-wrapper envelope still parses unchanged (status, exit code, body)
   assert.equal(call.output, "a.txt\nb.txt")
 })
 
+test("an escaped SESSION_ID wrapper owns later direct polls instead of minting UNKNOWN cards", () => {
+  const raw = rollout([
+    { type: "response_item", payload: { type: "custom_tool_call", call_id: "launch", name: "exec", input: `const r = await tools.exec_command({cmd:"nub ci-watch"}); text("SESSION_ID=" + r.session_id);` } },
+    { type: "response_item", payload: { type: "custom_tool_call_output", call_id: "launch", output: "Script completed\nWall time: 1.0 seconds\nOutput:\nSESSION_ID=30796" } },
+    { type: "response_item", payload: { type: "function_call", call_id: "poll", name: "write_stdin", arguments: JSON.stringify({ session_id: 30796, chars: "", yield_time_ms: 30000 }) } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: "poll", output: "Chunk ID: done\nWall time: 2.0 seconds\nProcess exited with code 0\nOriginal token count: 1\nOutput:\ngreen\n" } },
+  ])
+  const tools = parseCodexTranscript(raw)[0].tools
+  assert.equal(tools.length, 1)
+  assert.equal(tools[0].name, "Bash")
+  assert.equal(tools[0].sessionId, 30796)
+  assert.equal(tools[0].status, "completed")
+  assert.equal(tools[0].backgroundState, undefined)
+  assert.match(tools[0].output ?? "", /green/)
+})
+
 // ---- The DIRECT (unified-exec) tool protocol renders like the wrapper protocol ----
 // Codex ships two generations of the same tools. The wrapper form (`exec` custom_tool_call carrying JS)
 // had cases for write_stdin/exec_command; the direct `function_call` form did not, so its polls fell to
@@ -1066,7 +1082,7 @@ test("codex `wait` polls fold into their script, and a cell id never resolves to
 
 test("real cell/wait terminal envelopes retire their owning shell without requiring an exit code", () => {
   const lifecycle = (terminal: "completed" | "failed" | "terminated") => rollout([
-    { type: "response_item", payload: { type: "custom_tool_call", call_id: `launch-${terminal}`, name: "exec", input: `const r = await tools.exec_command({cmd:"long-${terminal}",yield_time_ms:30000}); text(r.output);` } },
+    { type: "response_item", payload: { type: "custom_tool_call", call_id: `launch-${terminal}`, name: "exec", input: `const running = tools.exec_command({cmd:"long-${terminal}",yield_time_ms:30000}); yield_control(); const r = await running; text(r.output);` } },
     { type: "response_item", payload: { type: "custom_tool_call_output", call_id: `launch-${terminal}`, output: "Script running with cell ID 39\nWall time 11.0 seconds\nOutput:\n" } },
     { type: "response_item", payload: { type: "function_call", call_id: `wait-${terminal}`, name: "wait", arguments: JSON.stringify({ cell_id: "39", yield_time_ms: 30000, max_tokens: 10000 }) } },
     { type: "response_item", payload: { type: "function_call_output", call_id: `wait-${terminal}`, output: `Script ${terminal}\nWall time 16.7 seconds\nOutput:\n${terminal}-output` } },

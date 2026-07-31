@@ -154,12 +154,15 @@ export function evaluateBashBackgroundHook(input, env = process.env) {
     ? String(input.tool_input?.command ?? '')
     : '';
   if (!hasEscapingBackgroundJob(command)) return {};
+  const codex = typeof input?.model === 'string';
   return {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
       permissionDecisionReason:
-        'Fray blocked an untracked shell background job (`&`). Shell job control can return from Bash without a Claude task ID, so Fray cannot report completion or wake this agent. For a long-running local command, remove `&` and call Bash with `run_in_background:true`. For bounded parallel work inside one Bash call, finish with `wait` (after `kill`, if used) or own cleanup with an EXIT trap.',
+        codex
+          ? 'Fray blocked an untracked shell background job (`&`). Shell job control can return without a Codex lifecycle handle, so Fray cannot report completion or wake this agent. For work that must continue while you do something else, remove `&` and use the managed unified exec pattern: start `tools.exec_command(...)`, call `yield_control()`, then await and fully drain that same process. A returned `session_id` alone is only foreground continuation. For bounded parallel work inside one shell call, finish with `wait` (after `kill`, if used) or own cleanup with an EXIT trap.'
+          : 'Fray blocked an untracked shell background job (`&`). Shell job control can return from Bash without a Claude task ID, so Fray cannot report completion or wake this agent. For a long-running local command, remove `&` and call Bash with `run_in_background:true`. For bounded parallel work inside one Bash call, finish with `wait` (after `kill`, if used) or own cleanup with an EXIT trap.',
     },
   };
 }
@@ -175,7 +178,10 @@ export function isDirectHookExecution(argv1, moduleUrl) {
 // mistake the whole server for this executable and block startup reading hook JSON from stdin.
 if (isDirectHookExecution(process.argv[1], import.meta.url)) {
   try {
-    emit(evaluateBashBackgroundHook(JSON.parse(readFileSync(0, 'utf8'))));
+    const env = process.argv.includes('--fray-ui-thread')
+      ? { ...process.env, FRAY_UI_THREAD: process.env.FRAY_UI_THREAD || 'codex-worker' }
+      : process.env;
+    emit(evaluateBashBackgroundHook(JSON.parse(readFileSync(0, 'utf8')), env));
   } catch {
     emit({});
   }

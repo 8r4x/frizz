@@ -198,9 +198,10 @@ function ensureSafeDirectDirectory(parent: string, name: string): string {
 }
 
 // The scratchpad skeleton (a CONVENTION, never validated): a compact continuity structure plus a
-// visible task-status/collaboration legend. It remains ordinary Markdown rather than a machine schema;
-// workers can reshape it as the effort demands. Both backends share it with sub-agents, so stable
-// per-agent subsections + merge-only edits keep concurrent progress useful instead of destructive.
+// visible task-status/collaboration legend. Its body remains ordinary free-form Markdown; workers may
+// optionally prepend the reserved `stop_hook` frontmatter described in the contract. Both backends
+// share it with sub-agents, so stable per-agent subsections + merge-only edits keep concurrent progress
+// useful instead of destructive.
 export function scratchpadContent(title: string, kind: BackendKind = "claude"): string {
   const guide = `> Status legend: \`[ ]\` pending · \`[/]\` in progress · \`[x]\` complete · \`[-]\` cancelled · \`[?]\` blocked / needs input
 > Collaboration: re-read before every edit; preserve existing content; keep each agent's updates under its own \`### <agent path>\` subsection in Agent progress. A scoped scratchpad merge is Fray coordination state and remains allowed when a delegated task limits its deliverable paths. Never delete, truncate, reinitialize, move, or replace the whole file.`
@@ -324,9 +325,29 @@ export function codexScratchpadHookConfig(
       },
     ],
   })
+  const bashBackgroundHook = join(dirname(hookScript), "bash-background.mjs")
+  const scratchpadStopHook = join(dirname(hookScript), "scratchpad-stop.mjs")
   return {
     bypass_hook_trust: true,
     hooks: {
+      // Codex canonicalizes both direct and unified exec_command calls as Bash and exposes their
+      // command at tool_input.command. Register the same lifecycle guard as Claude; the explicit flag
+      // is necessary because the shared app-server daemon cannot carry a per-conversation env marker.
+      PreToolUse: [{
+        matcher: "^Bash$",
+        hooks: [{
+          type: "command",
+          command: `node ${JSON.stringify(bashBackgroundHook)} --fray-ui-thread`,
+        }],
+      }],
+      // An optional scratchpad-frontmatter reminder can keep a worker from forgetting owned work when
+      // it tries to rest. The hook itself persists the two-minute anti-loop cooldown.
+      Stop: [{
+        hooks: [{
+          type: "command",
+          command: `node ${JSON.stringify(scratchpadStopHook)} --session=${JSON.stringify(sessionId)}`,
+        }],
+      }],
       // Native Codex children inherit the root scratchpad mandate even with `fork_turns:"none"`.
       // Constrain it structurally at child start: shared writes, but only merge-style scoped edits.
       SubagentStart: [cmd("--mode=subagent-start")],

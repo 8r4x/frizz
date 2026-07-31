@@ -72,6 +72,24 @@ test("Bash denial tells the worker the tracked replacement", () => {
   assert.match(reason, /finish with `wait`/)
 })
 
+test("Codex Bash denial points at the managed yield_control lifecycle", () => {
+  const result = spawnSync(process.execPath, [hook, "--fray-ui-thread"], {
+    input: JSON.stringify({
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "cargo test > /tmp/test.log 2>&1 &" },
+      model: "gpt-5.6-sol",
+    }),
+    encoding: "utf8",
+    env: { ...process.env, FRAY_UI_THREAD: "" },
+  })
+  assert.equal(result.status, 0, result.stderr)
+  const reason = JSON.parse(result.stdout).hookSpecificOutput?.permissionDecisionReason ?? ""
+  assert.match(reason, /yield_control\(\)/)
+  assert.match(reason, /session_id.*foreground continuation/)
+  assert.doesNotMatch(reason, /run_in_background/)
+})
+
 test("bundling the detector into Fray cannot turn the server entry into the hook executable", () => {
   const serverEntry = "/artifact/runtime/src/index.js"
   assert.equal(isDirectHookExecution(serverEntry, "file:///artifact/runtime/src/index.js"), false)

@@ -18,6 +18,7 @@ import { scratchpadContent, codexScratchpadHookConfig } from "./dispatch.ts"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const HOOK = join(here, "../../../../cc-worker/hooks/scratchpad.mjs")
+const STOP_HOOK = join(here, "../../../../cc-worker/hooks/scratchpad-stop.mjs")
 const SID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 
 function newProject(): string {
@@ -66,6 +67,15 @@ function runHook(
       ...env,
     },
   })
+}
+
+function runStopHook(dir: string): Record<string, unknown> {
+  const stdout = execFileSync("node", [STOP_HOOK, `--session=${SID}`], {
+    input: JSON.stringify({ hook_event_name: "Stop", session_id: "codex-rollout-id" }),
+    encoding: "utf8",
+    env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+  })
+  return JSON.parse(stdout)
 }
 
 function additionalContext(stdout: string): string {
@@ -331,6 +341,23 @@ test("--session overrides the reported id, so a codex worker finds FRAY's pad an
   assert.match(explicit, new RegExp(`\\.fray/threads/${SID}/scratch\\.md`))
 })
 
+test("scratchpad stop_hook frontmatter blocks once, cools down for two minutes, and deregisters by removal", () => {
+  const dir = newProject()
+  const reason = "Collect managed shell cell 77 before resting.\nRemove this field after its terminal result."
+  writePad(dir, `---\nstop_hook: |\n  ${reason.replace("\n", "\n  ")}\n---\n# Scratchpad\n`)
+  assert.deepEqual(runStopHook(dir), { decision: "block", reason })
+  assert.deepEqual(runStopHook(dir), {}, "a forgotten key must not create a tight Stop-hook loop")
+
+  writeFileSync(
+    join(dir, ".fray", "threads", SID, ".stop-hook-state.json"),
+    JSON.stringify({ lastFiredAt: Date.now() - 120_001 }),
+  )
+  assert.deepEqual(runStopHook(dir), { decision: "block", reason }, "the reminder may fire again after two minutes")
+
+  writePad(dir, "# Scratchpad\n\nThe operation is complete.\n")
+  assert.deepEqual(runStopHook(dir), {}, "removing the key is deregistration")
+})
+
 test("a codex rollout carries no readable claude usage, so the nudge degrades to silence", () => {
   const dir = newProject()
   writePad(dir, "content\n")
@@ -360,12 +387,20 @@ test("the codex hook config is built unconditionally, and carries what codex req
   assert.equal(cfg.bypass_hook_trust, true)
   // Codex exposes no PreCompact/PostCompact wire type, so summarizer steering stays Claude-only.
   // SubagentStart carries the shared-pad merge-only epilogue; the rest inject or nudge.
-  assert.deepEqual(Object.keys(cfg.hooks ?? {}).sort(), ["PostToolUse", "SessionStart", "SubagentStart", "UserPromptSubmit"])
-  for (const entries of Object.values(cfg.hooks ?? {})) {
+  assert.deepEqual(Object.keys(cfg.hooks ?? {}).sort(), ["PostToolUse", "PreToolUse", "SessionStart", "Stop", "SubagentStart", "UserPromptSubmit"])
+  for (const [event, entries] of Object.entries(cfg.hooks ?? {})) {
     const cmd = entries[0].hooks[0].command
-    assert.match(cmd, /--session="sid-1"/, "fray's thread id must override codex's own reported session id")
-    assert.doesNotMatch(cmd, /--enabled/, "there is no opt-in flag any more")
-    assert.match(cmd, /scratchpad\.mjs/)
+    if (event === "PreToolUse") {
+      assert.match(cmd, /bash-background\.mjs/)
+      assert.match(cmd, /--fray-ui-thread/)
+    } else if (event === "Stop") {
+      assert.match(cmd, /scratchpad-stop\.mjs/)
+      assert.match(cmd, /--session="sid-1"/)
+    } else {
+      assert.match(cmd, /--session="sid-1"/, "fray's thread id must override codex's own reported session id")
+      assert.doesNotMatch(cmd, /--enabled/, "there is no opt-in flag any more")
+      assert.match(cmd, /scratchpad\.mjs/)
+    }
   }
   assert.match(cfg.hooks?.SubagentStart?.[0]?.hooks[0]?.command ?? "", /--mode=subagent-start/)
 })

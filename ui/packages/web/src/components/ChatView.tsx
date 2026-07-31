@@ -3553,11 +3553,19 @@ export function BackgroundOpsStrip({
   const thread = threadBySlug(board, slug)
   const agents = includeAgents ? thread?.subAgents ?? [] : []
   const shells = [...(thread?.bgShells ?? [])]
-  const shellKeys = new Set(shells.map((shell) => shell.id ? `id:${shell.id}` : `${shell.label}\u0000${shell.startedAt ?? ""}`))
+  // A single shell can arrive through both provider board telemetry (which has its tool-use id) and
+  // transcript projection (which currently has only launch label+time). Index BOTH identities for
+  // every board row; choosing the id *instead of* the launch identity rendered the same process twice.
+  const boardShellKeys = new Set(shells.flatMap((shell) => [
+    ...(shell.id ? [`id:${shell.id}`] : []),
+    `launch:${shell.label}\u0000${shell.startedAt ?? ""}`,
+  ]))
   for (const shell of transcriptShells) {
-    const key = shell.id ? `id:${shell.id}` : `${shell.label}\u0000${shell.startedAt ?? ""}`
-    if (shellKeys.has(key)) continue
-    shellKeys.add(key)
+    const keys = [
+      ...(shell.id ? [`id:${shell.id}`] : []),
+      `launch:${shell.label}\u0000${shell.startedAt ?? ""}`,
+    ]
+    if (keys.some((key) => boardShellKeys.has(key))) continue
     shells.push(shell)
   }
   const total = agents.length + shells.length
