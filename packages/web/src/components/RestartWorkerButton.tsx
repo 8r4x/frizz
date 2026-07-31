@@ -21,6 +21,11 @@ import { Tooltip } from "./Tooltip.tsx"
 // where `import.meta.env.DEV` is statically replaced with `false` — so this early return makes the whole
 // component dead code and the string never reaches the shipped bundle at all.
 //
+// Optional-chained because the SSR test runner has no Vite: `node --test` renders this component through
+// react-dom/server with `import.meta.env` simply UNDEFINED, and the bare member access threw a TypeError
+// that failed ThreadLifecycleFooter.done.test.ts. Under Vite the object always exists, so `?.` costs
+// nothing in either build and the dead-code elimination above is unaffected.
+//
 // OFFERED only where it is both meaningful and safe:
 //  • a session thread, not a read-only foreign row;
 //  • Claude — a codex thread takes its hooks as per-conversation config, and the bridge's fresh-process
@@ -35,7 +40,7 @@ export function RestartWorkerButton({ thread }: { thread: ThreadView }) {
   const queryClient = useQueryClient()
   const [busy, setBusy] = useState(false)
 
-  if (!import.meta.env.DEV) return null
+  if (!import.meta.env?.DEV) return null
   if (thread.kind !== "session" || thread.foreign) return null
   if (thread.backend === "codex") return null
   if (thread.runtime === "exited") return null
