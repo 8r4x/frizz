@@ -6,7 +6,7 @@ import { showToast } from "../store.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
 import { subAgentProfileLabel } from "../lib/subAgentProfile.ts"
 import { coalesceToolActivityMessages, historicalToolActivityMessages, liveToolActivityTail, toolActivityLabel } from "../lib/toolActivity.ts"
-import { ChildDrillSlugContext, Message, VSpace, WorkingIndicator, withMessageSpacers } from "./ChatView.tsx"
+import { ChildDrillSlugContext, Message, VSpace, WorkingIndicator, withMessageSpacers, workingIndicatorGap } from "./ChatView.tsx"
 import { Composer } from "./Composer.tsx"
 import { Sheet } from "./ui/Sheet.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
@@ -153,7 +153,9 @@ export function SubAgentSheet({
                       message inside the scroller, rather than occupying a special fixed strip above
                       the conversation. A sub-agent drawer is a conversation, not a log dashboard. */}
                   {showWorking && <>
-                    {messages.length > 0 && <VSpace />}
+                    {/* The shimmer joins the tight meta run when the child's last rendered row is a
+                        tool band or a thought label — the same rule the thread transcript uses. */}
+                    <VSpace h={workingIndicatorGap(activityMessages.map((entry) => entry.message))} />
                     <WorkingIndicator since={startedAt} activityLabel={liveActivityLabel} />
                   </>}
                 </div>

@@ -459,7 +459,15 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
               // (rendered after the working/pending indicators, below) — not interleaved here.
               (m) => !!m.queued,
             )}
-            {(thread?.providerFault || thread?.limitPause || frozenAsk || nativeInputRequired || thread?.runtime === "perm-prompt" || showWorking || thread?.awaitingBackground) && <VSpace />}
+            {/* Same rule as the virtualized path's runtime-status row: the Working… rung is a quiet meta
+                line that joins the tight run under a meta tail; every card rung keeps STEP. */}
+            {(thread?.providerFault || thread?.limitPause || frozenAsk || nativeInputRequired || thread?.runtime === "perm-prompt" || showWorking || thread?.awaitingBackground) && (
+              <VSpace h={
+                showWorking && !thread?.providerFault && !thread?.limitPause && !frozenAsk && !nativeInputRequired && thread?.runtime !== "perm-prompt"
+                  ? workingIndicatorGap(activityMessages.map((entry) => entry.message))
+                  : STEP
+              } />
+            )}
             {/* A frozen native AskUserQuestion takes precedence over the generic perm banner and the
                 Working… spinner — it's the salient state (the safety net). Background sub-agents/shells
                 are NOT surfaced here anymore: they live in the anchored ops strip (below), which is
@@ -661,6 +669,18 @@ function VirtualizedThreadTranscript({
       || showWorking
       || thread?.awaitingBackground,
   )
+  // Which rung of the runtime-status ladder (rendered below, hardest reading first) wins. Only its
+  // Working… rung is a quiet meta row rather than a card, and only that rung joins the tight run —
+  // see workingIndicatorGap.
+  const runtimeStatusGap = useMemo(() => {
+    const workingWins = showWorking
+      && !(thread?.providerFault && !thread.foreign)
+      && !(thread?.limitPause && !thread.foreign)
+      && !(thread?.pendingInteraction ? undefined : thread?.pendingAsk)
+      && !nativeInputRequired
+      && thread?.runtime !== "perm-prompt"
+    return workingWins ? workingIndicatorGap(activityMessages.map((entry) => entry.message)) : STEP
+  }, [activityMessages, nativeInputRequired, showWorking, thread])
   const rows = useMemo<VirtualThreadRow[]>(() => {
     const next: VirtualThreadRow[] = [{ key: "interactions", kind: "interactions" }]
     if (transportFallback) next.push({ key: "transport-fallback", kind: "transport-fallback" })
@@ -1163,7 +1183,7 @@ function VirtualizedThreadTranscript({
                 />
               </div>
             ) : row.kind === "runtime-status" ? (
-              <div className="px-6" style={{ paddingTop: STEP }}>
+              <div className="px-6" style={{ paddingTop: runtimeStatusGap }}>
                 {thread?.providerFault && !thread.foreign ? (
                   <ProviderFaultCard slug={slug} sessionId={thread.sessionId} fault={thread.providerFault} retryText={lastUserIdx >= 0 ? messages[lastUserIdx]?.text : undefined} />
                 ) : thread?.limitPause && !thread.foreign ? (
@@ -1538,6 +1558,23 @@ export function messageHasRenderableText(m: ChatMessage): boolean {
 }
 export function VSpace({ h = STEP }: { h?: number }) {
   return <div aria-hidden className="shrink-0" style={{ height: h }} />
+}
+
+// The leading gap for the "Working…" shimmer that tails a live transcript. The shimmer is a quiet
+// single-line 13px row — the LIVE continuation of the very meta column that "Thought for Ns" and the
+// tool bands form above it — so it joins their tight 6px run rather than breaking to STEP whenever the
+// last rendered message ends in a meta row. (Maintainer 2026-07-31: "there's more space above the
+// working shimmer than there is below the 'Thought for 37 seconds'" — the shimmer sat at STEP under a
+// pair of agent tool bands that were themselves 6px under the thought label.) Prose above it still
+// gets the full break, and every other occupant of the runtime-status slot is a card, which keeps STEP.
+// Returns 0 when nothing rendered above — a leading spacer would then indent the whole column.
+export function workingIndicatorGap(messages: readonly ChatMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.queued || messageRendersNothing(m)) continue
+    return messageTailIsMeta(m) ? 6 : STEP
+  }
+  return 0
 }
 
 // THE between-message rhythm, in ONE place. Every surface that stacks messages goes through this —
@@ -3873,7 +3910,11 @@ export function WorkingIndicator({ since, activityLabel }: { since?: string; act
     <div
       data-working-indicator
       data-working-activity={activityLabel ? "tool" : "generic"}
-      className="flex items-baseline gap-2 text-[13px]"
+      // `leading-5` is the meta label's line box (TRANSCRIPT_META_LABEL_CLASS), not decoration: this row
+      // is the LIVE member of that column, and a shorter line box put its ink 1px nearer the card above
+      // than a settled "Thought for Ns" in the same slot. Sharing the box is what makes the alternation
+      // between them read as one rhythm — the tone stays the shimmer's own.
+      className="flex items-baseline gap-2 text-[13px] leading-5"
     >
       <span className="shimmer-text">{activityLabel ?? "Working…"}</span>
       <span className="tabular-nums text-[12px] text-muted/60">{durationLabel}</span>
