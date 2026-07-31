@@ -31,7 +31,7 @@ export function isToolActivityException(tool: Pick<
   TranscriptToolCall,
   "name" | "backgroundState" | "prompt" | "agentId" | "sendTo" | "sendBody"
 >): boolean {
-  return tool.backgroundState === "unknown"
+  return tool.backgroundState !== undefined
     || tool.prompt !== undefined
     || tool.agentId !== undefined
     || tool.sendTo !== undefined
