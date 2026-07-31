@@ -25,7 +25,7 @@ import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { lastAskIndex, messagePresentationText } from "../lib/messagePresentation.ts"
 import { snoozePresetInstant, formatSnoozeWake } from "../lib/snooze.ts"
-import { AWAITING_FALLBACK_TITLE, AWAITING_PARK_BUTTON, awaitingHintSentence, awaitingParkAction, awaitingPresentationLine } from "../lib/awaitingPresentation.ts"
+import { AWAITING_FALLBACK_TITLE, AWAITING_PARK_BUTTON, awaitingHintSentence, awaitingParkAction, awaitingPresentationLine, prWatchRefs } from "../lib/awaitingPresentation.ts"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { prefs } from "../lib/prefs.ts"
 import { canAdoptThread } from "../lib/adoption.ts"
@@ -51,7 +51,7 @@ import { InteractionStack } from "./InteractionCards.tsx"
 // surface can render them without importing the thread view. QuestionBlockCard in particular is
 // shared with the native-AskUserQuestion path, which reaches it through InteractionCards.tsx —
 // a file THIS one imports, so the card could not have stayed here without a module cycle.
-import { BLOCK_RADIUS, CARD_ACTION_EXPLAINER, CARD_ACTION_RADIUS, CARD_BODY, CARD_PRIMARY_ACTION, CARD_PRIMARY_BUTTON, CardActions, CardContent, CardHead, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
+import { BLOCK_RADIUS, CARD_ACTION_EXPLAINER, CARD_ACTION_RADIUS, CARD_BODY, CARD_LINK, CARD_PRIMARY_ACTION, CARD_PRIMARY_BUTTON, CardActions, CardContent, CardHead, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 // The resting card, shared with the queue (TodosView passes it the event-Snooze; these two surfaces
 // deliberately pass no action — see the module header).
@@ -3361,14 +3361,46 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   // A watch is active observation, not elapsed time. Keep the hourglass for actual timer/human holds
   // and give pr-watch its own scanning mark; the scheduler-facing hint itself stays out of the prose.
   const AwaitingIcon = hints.some((hint) => hint.kind === "pr-watch") ? Radar : Hourglass
+  // The PRs the watcher is actually on, as LINKS. The title states the wait and the body is the
+  // worker's own prose, so without these the one thing the card is ABOUT — which PR? — was unreachable:
+  // the hint is the only place the ref exists, and the prose usually names a bare "#15524" or nothing
+  // (maintainer 2026-07-31, "obviously this should have a link to the PR being watched"). ONE ref rides
+  // the title row in the same `aside` slot the GitHub wake card uses for its ref; SEVERAL get a wrapped
+  // row of their own under the prose, because `aside` is shrink-0 and a six-PR fence would shove the
+  // heading off a narrow queue card.
+  const watched = prWatchRefs(hints)
   return (
-    <TranscriptCard icon={AwaitingIcon} label={parkTitle}>
+    <TranscriptCard data-awaiting-fence icon={AwaitingIcon} label={parkTitle} aside={watched.length === 1 ? <WatchedRef watch={watched[0]} /> : undefined}>
       <div
         className={`md-inline ${CARD_BODY}${wrap ? ` ${QUEUE_WRAP}` : ""}`}
         dangerouslySetInnerHTML={{ __html: awaitingHtml }}
       />
+      {watched.length > 1 && (
+        // `gap-x-3` rather than a punctuation separator: the refs are a set of targets, not a sentence,
+        // and a wrapped "·" stranded at a line end reads as a typo. They wrap onto as many lines as the
+        // card's width needs — six refs take three rows on a phone-width queue card without overflowing
+        // it. `mt-2` (against the prose's own 20px leading) is what makes the block read as its own
+        // group rather than as one more line of the paragraph.
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5">
+          {watched.map((watch) => (
+            <WatchedRef key={watch.ref} watch={watch} />
+          ))}
+        </div>
+      )}
       {canAct && fenceThread && <AwaitingParkButton thread={fenceThread} hints={hints} />}
     </TranscriptCard>
+  )
+}
+
+// One watched PR reference. A worker writes the `pr-watch:` value by hand, so a ref that isn't
+// `owner/repo#N` still says WHAT is being watched — it degrades to muted text in the same position
+// rather than to a dead link or to nothing at all.
+function WatchedRef({ watch }: { watch: { ref: string; url: string | null } }) {
+  if (!watch.url) return <span className="text-[12px] text-muted">{watch.ref}</span>
+  return (
+    <a href={watch.url} target="_blank" rel="noreferrer noopener" className={`${CARD_LINK} text-[12px]`}>
+      {watch.ref}
+    </a>
   )
 }
 

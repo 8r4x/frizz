@@ -218,6 +218,13 @@ export function CardActions({ children, className = "" }: { children: ReactNode;
 // way instead of re-deriving the muted scale and the flex behavior at each call site.
 export const CARD_ACTION_EXPLAINER = "min-w-0 flex-1 text-[11px] leading-snug text-muted/70"
 
+// A LINK inside a card — the app's link language, straight off `.md-body a` in styles.css: accent,
+// underlined, 2px offset. A link has to LOOK like one at rest; `text-fg` with a hover-only underline
+// reads as a plain label, and nobody hovers a label to find out. Shared by every card that carries a
+// GitHub reference (the wake card's title-row ref, the awaiting card's watched PRs) so a ref renders
+// identically wherever the human meets it.
+export const CARD_LINK = "text-accent underline underline-offset-2 decoration-accent/40 hover:decoration-accent"
+
 // The primary (light-on-dark) verb EVERY card's main action wears — the done card's white
 // "Mark as done" chrome. Exported because this is a rule, not a per-card choice (maintainer 2026-07-24:
 // the buttons inside these cards should ALWAYS be white): a card is a request for one action, and the

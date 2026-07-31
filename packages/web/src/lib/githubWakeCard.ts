@@ -30,12 +30,3 @@ export function wakeCardTitle(count: number, label: string, actor?: string): str
   if (count !== 1) return `${count} new items`
   return actor ? `New ${label} from @${actor}` : `New ${label}`
 }
-
-// `owner/repo#N` → the PR's own URL. Every item normally carries its own permalink, but the ref line
-// must stay clickable even when GitHub returned no per-item url (a shape surprise degrades the item
-// links, and the card should still get the human to the PR). Null when the ref isn't the expected
-// shape, in which case the card renders it as plain text rather than a broken link.
-export function wakeRefUrl(ref: string): string | null {
-  const m = /^([A-Za-z0-9][\w.-]*)\/([A-Za-z0-9][\w.-]*)#(\d+)$/.exec(ref)
-  return m ? `https://github.com/${m[1]}/${m[2]}/pull/${m[3]}` : null
-}

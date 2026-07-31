@@ -1,4 +1,5 @@
 import { canonicalSnoozeInstant, isValidAwaitingTimer, type AwaitingHint } from "@fray-ui/shared"
+import { githubRefUrl } from "./githubRef.ts"
 import { formatSnoozeWake } from "./snooze.ts"
 
 /** The awaiting card's TITLE when no hint is parkable (legacy pr/ci/session, or an elapsed/malformed
@@ -67,6 +68,27 @@ export function awaitingParkAction(
 
 function lowerCalendarLead(value: string): string {
   return value.replace(/^(Today|Tomorrow)/, (day) => day.toLowerCase())
+}
+
+/** The PRs a `pr-watch` fence is watching, in fence order, deduped — the one thing the card is ABOUT.
+ *  A card titled "PR watcher armed" that offers no way to REACH the PR is a dead end: the hint is the
+ *  only place the ref exists (awaitingHintSentence deliberately keeps pr-watch out of the prose, and
+ *  the worker's own body often names a bare "#15524" or nothing at all), so the ref has to reach the
+ *  human as a structured, clickable thing rather than as more copy (maintainer 2026-07-31: "obviously
+ *  this should have a link to the PR being watched").
+ *
+ *  `url` is null when the value isn't `owner/repo#N` — a worker can write anything on that line, and a
+ *  malformed one still names what is being watched, so the card shows it as plain text rather than
+ *  hiding it or offering a broken link. Empty for every non-pr-watch fence. */
+export function prWatchRefs(hints: readonly AwaitingHint[]): { ref: string; url: string | null }[] {
+  const seen = new Set<string>()
+  return hints.flatMap((hint) => {
+    if (hint.kind !== "pr-watch") return []
+    const ref = hint.value.trim()
+    if (!ref || seen.has(ref)) return []
+    seen.add(ref)
+    return [{ ref, url: githubRefUrl(ref) }]
+  })
 }
 
 export function awaitingHintSentence(hints: readonly AwaitingHint[], nowMs = Date.now()): string | null {

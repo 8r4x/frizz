@@ -8,21 +8,17 @@
 import type { ReactNode } from "react"
 import { Bell, Bot, Github, User } from "lucide-react"
 import { parseGithubWakeSteer, type GithubWakeItem } from "@fray-ui/shared"
-import { CARD_BODY, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
+import { CARD_BODY, CARD_LINK, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { MessageDebugId } from "./MessageDebugId.tsx"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
-import { wakeCardTitle, wakeItemAge, wakeRefUrl } from "../lib/githubWakeCard.ts"
+import { githubRefUrl } from "../lib/githubRef.ts"
+import { wakeCardTitle, wakeItemAge } from "../lib/githubWakeCard.ts"
 
 // A 12px lucide glyph beside a 12px label at `gap-1`, with the measured optical nudge — the same
 // icon+label rhythm every dense row in the app uses. The card's own kind glyph is NOT one of these:
 // it lives in TranscriptCard's left gutter at 14px, and the rows below start where the TITLE does, so
 // the card reads down one spine rather than two.
 const ROW_ICON = `shrink-0 ${ICON_LABEL_NUDGE}`
-
-// The app's link language, straight off `.md-body a` in styles.css: accent, underlined, 2px offset.
-// A link has to LOOK like one at rest — `text-fg` with a hover-only underline reads as a plain label,
-// and nobody hovers a label to find out.
-const CARD_LINK = "text-accent underline underline-offset-2 decoration-accent/40 hover:decoration-accent"
 
 function WakeShell({ sourceId, children }: { sourceId?: string; children: ReactNode }) {
   // NOT `self-end`: right-justification is the human's side of the conversation, and that placement is
@@ -87,7 +83,7 @@ export function GithubWakeCard({ text, sourceId, wrap }: { text: string; sourceI
       </WakeShell>
     )
   }
-  const refUrl = wakeRefUrl(steer.ref)
+  const refUrl = githubRefUrl(steer.ref)
   const total = steer.items.length + steer.omitted
   // A card carrying exactly ONE item is the common case by far, and it used to render a heading plus a
   // single row — which read as a table with one entry and an empty second column (maintainer

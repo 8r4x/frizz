@@ -7,6 +7,7 @@ import {
   awaitingHintSentence,
   awaitingParkAction,
   awaitingPresentationLine,
+  prWatchRefs,
 } from "./awaitingPresentation.ts"
 
 const now = Date.parse("2026-07-21T18:00:00.000Z")
@@ -136,6 +137,38 @@ test("park kinds without a declared instant defer to the caller's preset, and un
     awaitingParkAction([{ kind: "timer", value: "not-a-time" }, { kind: "timer", value: "2026-07-21T21:00:00Z" }], now)?.timerUntil,
     "2026-07-21T21:00:00.000Z",
   )
+})
+
+// The hint is the ONLY place the watched PR exists — awaitingHintSentence keeps pr-watch out of the
+// prose on purpose — so the card's link has to come from here, in fence order and deduped.
+test("prWatchRefs surfaces every watched PR as a link target, in fence order", () => {
+  assert.deepEqual(prWatchRefs([{ kind: "pr-watch", value: "dependabot/dependabot-core#15524" }]), [
+    { ref: "dependabot/dependabot-core#15524", url: "https://github.com/dependabot/dependabot-core/pull/15524" },
+  ])
+  // Several watches across several repos keep the order the worker declared them in.
+  assert.deepEqual(
+    prWatchRefs([
+      { kind: "pr-watch", value: "withastro/astro#17487" },
+      { kind: "timer", value: "2026-07-21T21:00:00Z" },
+      { kind: "pr-watch", value: "vitejs/vite#23019" },
+    ]).map((w) => w.ref),
+    ["withastro/astro#17487", "vitejs/vite#23019"],
+  )
+  // A repeated line is one PR, not two chips pointing at the same place.
+  assert.deepEqual(
+    prWatchRefs([
+      { kind: "pr-watch", value: "acme/app#7" },
+      { kind: "pr-watch", value: " acme/app#7 " },
+    ]).length,
+    1,
+  )
+  // A hand-written value that isn't `owner/repo#N` still NAMES what is watched, so it survives with a
+  // null url and the card renders it as plain text rather than as a broken link.
+  assert.deepEqual(prWatchRefs([{ kind: "pr-watch", value: "the release PR" }]), [{ ref: "the release PR", url: null }])
+  // Nothing to link on any other fence — including the legacy `pr` kind, which is not a watcher.
+  assert.deepEqual(prWatchRefs([]), [])
+  assert.deepEqual(prWatchRefs([{ kind: "pr", value: "owner/repo#7" }, { kind: "human", value: "Alice" }]), [])
+  assert.deepEqual(prWatchRefs([{ kind: "pr-watch", value: "   " }]), [])
 })
 
 test("body and action join as clean prose without period-dash punctuation", () => {
