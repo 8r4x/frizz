@@ -1758,7 +1758,10 @@ test("an attachment-only peer delivery still renders — a child's report never 
   const users = parseTranscript([...dispatchLines("toolu_ONLY", "aabbccdd"), peerDeliverLine("fray:opus-max", body, "aabbccdd")].join("\n"))
     .filter((m) => m.role === "user" && m.peerFrom)
   assert.equal(users.length, 1)
-  assert.equal(users[0].peerFrom, "fray:opus-max")
+  // Labelled by the dispatch DESCRIPTION now, not the subagent_type: origin.from is only ever the
+  // profile once fray's worker dispatch hook has stripped `name`, so the render prefers the folded
+  // dispatch's own description. The profile remains the fallback when no dispatch was folded.
+  assert.equal(users[0].peerFrom, "probe")
   assert.equal(users[0].peerDispatchId, "toolu_ONLY")
   assert.equal(users[0].displayText, "Blocked: the fixture needs a token I don't have.")
 })
