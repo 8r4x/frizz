@@ -117,15 +117,28 @@ const headerlessTableExtension: TokenizerAndRendererExtension = {
 // marker at the start of a list item — never the same bracket sequence in prose or code — into an
 // inert status mark. Keeping this as a token transform rather than a raw-Markdown regex means fenced
 // code, inline code, and non-list prose remain byte-for-byte literal.
-type FrayTaskStatus = "/" | "-" | "?"
+//
+// ALL FIVE states travel this one path, GFM's two included — `item.task` is cleared so Marked's own
+// checkbox branch never runs. That is what lets the item's own text be wrapped (below): Marked's
+// LOOSE-list branch injects the checkbox HTML into the first TEXT token at render time, so a wrapper
+// placed there during the walk would have displaced the checkbox and silently dropped it. One path
+// also means one status vocabulary and one set of tooltips instead of two.
+type FrayTaskStatus = " " | "x" | "/" | "-" | "?"
 type FrayTaskStatusToken = {
   type: "frayTaskStatus"
   raw: string
   status: FrayTaskStatus
 }
 
-const CUSTOM_TASK_STATUS = /^\[([/\-?])\][ \t]+/
+// GFM requires a SPACE after the bracket, so a bare `- [ ]` with nothing after it is not a task item
+// to Marked and rendered as the literal text "[ ]". That shape is not hypothetical: it is what the
+// scratchpad skeleton in server/dispatch.ts writes into every new thread's Task list. `[ ]` and `[x]`
+// are therefore accepted here too, but ONLY at end-of-item — with trailing text they are still
+// Marked's to tokenize, and `item.task` is already true by the time this runs.
+const CUSTOM_TASK_STATUS = /^\[([ xX/\-?])\](?:[ \t]+|[ \t]*$)/
 const TASK_STATUS_META: Record<FrayTaskStatus, { className: string; label: string }> = {
+  " ": { className: "", label: "To do" },
+  x: { className: "md-task-checked", label: "Done" },
   "/": { className: "md-task-in-progress", label: "In progress" },
   "-": { className: "md-task-cancelled", label: "Cancelled" },
   "?": { className: "md-task-blocked", label: "Blocked" },
@@ -134,68 +147,100 @@ const TASK_STATUS_META: Record<FrayTaskStatus, { className: string; label: strin
 const customTaskStatusExtension: TokenizerAndRendererExtension = {
   name: "frayTaskStatus",
   level: "inline",
-  // Tokens are inserted by `promoteCustomTaskStatus`; this tokenizer deliberately never claims
-  // source text on its own, because only the enclosing list-item walk can prove the marker's position.
+  // Tokens are inserted by `promoteTaskItem`; this tokenizer deliberately never claims source text on
+  // its own, because only the enclosing list-item walk can prove the marker's position.
   tokenizer() {
     return undefined
   },
   renderer(token) {
     const { status } = token as FrayTaskStatusToken
     const meta = TASK_STATUS_META[status]
-    return `<span class="md-task ${meta.className}" title="${meta.label}"></span> `
+    return `<span class="md-task${meta.className ? ` ${meta.className}` : ""}" title="${meta.label}"></span> `
   },
 }
 
-/** Turn a custom marker at the start of one list item into a renderer-owned status token. */
-function promoteCustomTaskStatus(item: Tokens.ListItem): void {
-  if (item.task) return // `[ ]` / `[x]` stay on Marked's native GFM path.
-  const match = CUSTOM_TASK_STATUS.exec(item.text)
-  if (!match) return
+// The item's OWN text, wrapped so the row's finished/cancelled styling (dimmed, struck) lands on it
+// alone. Without the wrapper the only handle was the `<li>`, and `text-decoration` PROPAGATES with no
+// way for a descendant to switch it off — so a live sub-task under a cancelled parent came out struck
+// through. A nested list is a sibling of this span, so it is untouched by construction.
+type FrayTaskTextToken = { type: "frayTaskText"; raw: string; tokens: Token[] }
+
+const taskTextExtension: TokenizerAndRendererExtension = {
+  name: "frayTaskText",
+  level: "inline",
+  tokenizer() {
+    return undefined
+  },
+  renderer(this: { parser: { parseInline: (tokens: Token[]) => string } }, token) {
+    return `<span class="md-task-text">${this.parser.parseInline((token as FrayTaskTextToken).tokens)}</span>`
+  },
+}
+
+/** Turn one list item's task marker — GFM's or Obsidian's — into renderer-owned status + text tokens. */
+function promoteTaskItem(item: Tokens.ListItem): void {
   const firstBlock = item.tokens[0]
   const inline = firstBlock && "tokens" in firstBlock ? firstBlock.tokens : undefined
   if (!Array.isArray(inline)) return
+  if (inline[0]?.type === "frayTaskStatus") return // already walked
 
-  // Remove the marker from the already-tokenized inline run. Normally it is one leading Text token,
-  // but consume across adjacent Text tokens too so a future Marked tokenizer split cannot duplicate
-  // part of the raw marker.
-  let remaining = match[0].length
-  const cuts: Array<{ token: Tokens.Text; count: number }> = []
-  for (let i = 0; i < inline.length && remaining > 0; i++) {
-    const token = inline[i]
-    if (token.type !== "text") return
-    const cut = Math.min(remaining, token.raw.length)
-    cuts.push({ token: token as Tokens.Text, count: cut })
-    remaining -= cut
+  let status: FrayTaskStatus
+  let raw: string
+  if (item.task) {
+    status = item.checked ? "x" : " "
+    raw = ""
+    item.task = false
+    item.checked = undefined
+  } else {
+    const match = CUSTOM_TASK_STATUS.exec(item.text)
+    if (!match) return
+
+    // Remove the marker from the already-tokenized inline run. Normally it is one leading Text token,
+    // but consume across adjacent Text tokens too so a future Marked tokenizer split cannot duplicate
+    // part of the raw marker.
+    let remaining = match[0].length
+    const cuts: Array<{ token: Tokens.Text; count: number }> = []
+    for (let i = 0; i < inline.length && remaining > 0; i++) {
+      const token = inline[i]
+      if (token.type !== "text") return
+      const cut = Math.min(remaining, token.raw.length)
+      cuts.push({ token: token as Tokens.Text, count: cut })
+      remaining -= cut
+    }
+    if (remaining > 0) return
+
+    for (const { token, count } of cuts) {
+      token.raw = token.raw.slice(count)
+      token.text = token.text.slice(count)
+    }
+    for (let i = inline.length - 1; i >= 0; i--)
+      if (inline[i].type === "text" && !inline[i].raw) inline.splice(i, 1)
+
+    item.text = item.text.slice(match[0].length)
+    status = (match[1] === "X" ? "x" : match[1]) as FrayTaskStatus
+    raw = match[0]
   }
-  if (remaining > 0) return
 
-  for (const { token, count } of cuts) {
-    token.raw = token.raw.slice(count)
-    token.text = token.text.slice(count)
-  }
-  for (let i = inline.length - 1; i >= 0; i--)
-    if (inline[i].type === "text" && !inline[i].raw) inline.splice(i, 1)
-
-  item.text = item.text.slice(match[0].length)
-  inline.unshift({ type: "frayTaskStatus", raw: match[0], status: match[1] as FrayTaskStatus } as Token)
+  const rest = inline.splice(0, inline.length)
+  inline.push({ type: "frayTaskStatus", raw, status } as Token)
+  if (rest.length) inline.push({ type: "frayTaskText", raw: "", tokens: rest } as Token)
 }
 
 // Exported so markdown.test.ts can drive the EXACT configuration the app renders with: mdToHtml
 // itself can't run under `node --test` (the sanitizer needs a DOM), but everything here is pure.
 export const MARKDOWN_OPTIONS = {
   breaks: true,
-  extensions: [headerlessTableExtension, customTaskStatusExtension],
+  extensions: [headerlessTableExtension, customTaskStatusExtension, taskTextExtension],
   tokenizer: strikethroughTokenizer,
   walkTokens(token: Token) {
-    if (token.type === "list_item") promoteCustomTaskStatus(token as Tokens.ListItem)
+    if (token.type === "list_item") promoteTaskItem(token as Tokens.ListItem)
   },
   renderer: {
     code: ({ text, lang }: Tokens.Code) => renderHighlightedCode(text, lang),
-    // GFM task lists. marked's default is `<input type="checkbox" disabled>`, which the render
+    // No `checkbox` override: marked's default is `<input type="checkbox" disabled>`, which the render
     // allowlist below drops — so `- [x] done` and `- [ ] todo` came out as identical plain bullets and
-    // a checklist lost the only thing it was communicating. An inert span (drawn by `.md-task` in
-    // styles.css) keeps the state visible without putting a form control in a transcript.
-    checkbox: ({ checked }: { checked: boolean }) => `<span class="md-task${checked ? " md-task-checked" : ""}"></span>`,
+    // a checklist lost the only thing it was communicating. `promoteTaskItem` now takes GFM's two
+    // states off that branch entirely and emits the same inert `.md-task` span the Obsidian three get,
+    // so this hook has nothing left to render.
   },
 }
 
@@ -237,7 +282,7 @@ const ALLOWED_TAGS = new Set([
   "blockquote", "ul", "ol", "li", "a", "img", "button", "table", "thead", "tbody", "tr", "th", "td", "span",
 ])
 const ALLOWED_ATTRS = new Set(["href", "src", "alt", "title", "type", "class", "data-local-path", "data-local-image"])
-const ALLOWED_CLASS = /^(?:hljs(?:-[a-z0-9_-]+)?|language-[a-z0-9-]+|md-task(?:-(?:checked|in-progress|cancelled|blocked))?)$/
+const ALLOWED_CLASS = /^(?:hljs(?:-[a-z0-9_-]+)?|language-[a-z0-9-]+|md-task(?:-(?:checked|in-progress|cancelled|blocked|text))?)$/
 
 // Attributes admitted only on the tag that gives them meaning, and only with a well-formed value.
 // Both carry information the author wrote and the flat allowlist above was silently discarding:

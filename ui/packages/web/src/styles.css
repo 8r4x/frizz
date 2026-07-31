@@ -502,82 +502,163 @@ a[href] {
 .md-body li::marker {
   color: var(--color-muted);
 }
-/* GFM task lists. lib/markdown.ts renders the checkbox as an inert `.md-task` span (marked's real
-   `<input>` is neither in the render allowlist nor appropriate inside a transcript), so the box is
-   drawn here and the item drops its own bullet. `> p >` catches the loose-list shape, where the span
-   lands inside a paragraph. */
+/* ── Obsidian-flavoured task lists ──────────────────────────────────────────────────────────────
+   lib/markdown.ts renders the checkbox as an inert `.md-task` span (marked's real `<input>` is
+   neither in the render allowlist nor appropriate inside a transcript), so every mark is drawn HERE.
+
+   THE REFERENCE IS THE SIDEBAR (maintainer 2026-07-31: "reference the sidebar UI for good looking
+   box-with-icons"), and that is not a coincidence — Sidebar.tsx's own comment describes its rail
+   indicators as "a markdown-task CHECKBOX family … Obsidian-flavored: every state is the SAME
+   rounded-rect outer box with a glyph inside". This block is that family rendered in prose, so the
+   two surfaces speak one language:
+
+     StatusBox   15px border-box · 1px border · radius 4 · border-muted/45 (accent: border-accent/90)
+     its glyph   lucide at 10/15 of the box, strokeWidth 3, text-muted/75 — or a bold sans char
+
+   Every number below is that geometry expressed as a fraction of `--md-task-box`, so it scales with
+   the type instead of being pinned in px (the previous marks pinned 1px/1.5px strokes, which left
+   the check and the slash as hairlines against a 64px box).
+
+   The inner glyphs are lucide paths carried as `mask-image` data URIs. Inline `<svg>` is impossible
+   here — the sanitizer drops it WITH its subtree — but a mask lives in the stylesheet, which the
+   sanitizer never sees, so the geometry is lucide's exactly and `currentColor` still paints it.
+
+   COLOUR follows TodoBlock.tsx's ruling for the same states: only the LIVE rows take the accent,
+   because "twenty green checks would shout louder than the prose they belong to". Done is
+   monochrome (it was a solid accent fill, and it dominated every list it appeared in). */
+.md-body {
+  --md-task-box: 1em;
+  /* The task list's own gutter, wide enough to hold the box: 0.3em inset + 1em box + 0.45em gap. A
+     MIXED list (task items beside plain bullets) widens as a whole, so one list keeps one text
+     column rather than two. */
+  --md-task-gutter: 1.75em;
+  /* Must track this block's own line-height — the box is positioned, so it has no line box of its
+     own to ride and the first line's geometry has to be reconstructed from these two numbers. */
+  --md-task-line: 1.7em;
+}
+.md-body ul:has(> li > .md-task),
+.md-body ul:has(> li > p > .md-task),
+.md-body ol:has(> li > .md-task),
+.md-body ol:has(> li > p > .md-task) {
+  padding-left: var(--md-task-gutter);
+}
+/* The box gets its OWN column and is taken out of the inline flow — it is not a character in the
+   sentence (maintainer 2026-07-31: "checkbox on left, text on right. the checkbox should not be
+   inlined"). Two things follow, and both were broken while it was inline: every wrapped line now
+   starts under the TEXT instead of under the box, and the space marked emits after the span is
+   dropped as leading whitespace, so line one no longer starts ~0.6em right of line two.
+   `> p >` catches the loose-list shape, where the span lands inside a paragraph. */
 .md-body li:has(> .md-task),
 .md-body li:has(> p > .md-task) {
   list-style: none;
-}
-/* Hangs in the gutter the disc marker vacated, so the item's text starts — and WRAPS — at exactly the
-   same x as a plain bullet's: the box's own margins sum with its width to zero advance
-   (-1.25 + 0.85 + 0.4). */
-.md-body .md-task {
-  display: inline-block;
   position: relative;
-  width: 0.85em;
-  height: 0.85em;
-  margin-left: -1.25em;
-  margin-right: 0.4em;
-  /* Measured against the prose cap band at the shipped 14px size: -0.06em left the box 0.65px
-     high; -0.105em leaves a 0.02px residual. */
-  vertical-align: -0.105em;
-  border: 1px solid var(--color-muted);
-  border-radius: 3px;
+  /* An EMPTY item (`- [ ]`, which every new scratchpad ships) has no in-flow content once the box is
+     positioned out, so its `<li>` would collapse to zero height and hide the box. One line's worth. */
+  min-height: 1.7em;
 }
-.md-body .md-task-checked {
-  border-color: var(--color-accent);
-  background: var(--color-accent);
+.md-body .md-task {
+  position: absolute;
+  left: calc(0.3em - var(--md-task-gutter));
+  /* Centres the box's ink on the CAP BAND of the first line — not on the line box, which is what
+     `(line - box) / 2` alone gives and which left the box 2.64px LOW at 14px (the eye reads a mark
+     against baseline→cap-height, and the em box hangs a descender's worth below that). Built from
+     measured, purely font-relative terms so it scales exactly:
+       (line − 1em) / 2   half-leading: the em box's top inside the line box
+       + 0.331em          the cap band's centre below the em box top (baseline 0.714em, cap 0.638em)
+       − box / 2          centre the box on it
+     Re-measured at 14px and 28px; residual 0.00px at both. A CSS-drawn mark's ink IS its border box,
+     so this one correction serves all five states — there is no per-glyph term to add. */
+  top: calc((var(--md-task-line) - 1em) / 2 + 0.331em - var(--md-task-box) / 2);
+  box-sizing: border-box;
+  width: var(--md-task-box);
+  height: var(--md-task-box);
+  /* StatusBox's 1px on a 15px box. `max()` keeps it a crisp device pixel at the shipped 14px, where
+     the pure ratio would ask for 0.93px, without pinning it — at 28px it is a true 1.87px. */
+  border: max(1px, calc(var(--md-task-box) / 15)) solid color-mix(in srgb, var(--color-muted) 45%, transparent);
+  border-radius: calc(var(--md-task-box) * 4 / 15);
 }
-.md-body .md-task-checked::after {
+/* The inner glyph, centred in the box's INTERIOR (inset:0 on a border-box element resolves against
+   the padding box), at StatusBox's 10/15. */
+.md-body .md-task-checked::after,
+.md-body .md-task-cancelled::after,
+.md-body .md-task-blocked::after {
   content: "";
   position: absolute;
-  left: 0.28em;
-  top: 0.09em;
-  width: 0.2em;
-  height: 0.42em;
-  border: solid var(--color-bg);
-  border-width: 0 1.5px 1.5px 0;
-  transform: rotate(45deg);
+  inset: 0;
+  background-color: currentColor;
+  -webkit-mask: var(--md-task-glyph) center / calc(var(--md-task-box) * 10 / 15) no-repeat;
+  mask: var(--md-task-glyph) center / calc(var(--md-task-box) * 10 / 15) no-repeat;
 }
+/* [x] complete — the sidebar's done mark exactly: muted box, lucide `Check` at strokeWidth 3. */
+.md-body .md-task-checked {
+  color: color-mix(in srgb, var(--color-muted) 85%, transparent);
+  --md-task-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
+}
+/* [-] cancelled — lucide `X` at the same weight, at the family's FAINTEST tone. The struck text
+   below is what actually carries the state; the mark only confirms it. */
+.md-body .md-task-cancelled {
+  color: color-mix(in srgb, var(--color-muted) 55%, transparent);
+  border-color: color-mix(in srgb, var(--color-muted) 30%, transparent);
+  --md-task-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 6 6 18'/%3E%3Cpath d='m6 6 12 12'/%3E%3C/svg%3E");
+}
+/* [/] in progress and [?] blocked are the two LIVE rows, and the only two that spend the accent. */
 .md-body .md-task-in-progress,
 .md-body .md-task-blocked {
-  border-color: var(--color-accent);
   color: var(--color-accent);
+  border-color: color-mix(in srgb, var(--color-accent) 90%, transparent);
 }
+/* [/] in progress — the static reading of the rail's BoxSpinner, and TodoBlock's `SquareDot` for the
+   same state: a centred accent dot. lucide draws that dot as r=1 under a 2-wide stroke, i.e. 4 of the
+   18-unit square — 0.222 of the box. */
 .md-body .md-task-in-progress::after {
   content: "";
   position: absolute;
-  left: 0.39em;
-  top: 0.11em;
-  width: 1px;
-  height: 0.57em;
-  border-radius: 1px;
-  background: currentColor;
-  transform: rotate(32deg);
-}
-.md-body .md-task-cancelled::after {
-  content: "";
-  position: absolute;
-  left: 0.16em;
-  top: calc(50% - 0.5px);
-  width: 0.51em;
-  height: 1px;
-  border-radius: 1px;
+  top: 50%;
+  left: 50%;
+  /* Deliberately fatter than lucide's 0.222: the check and the X beside it carry 10/15 of the box in
+     ink, and a dot at the literal SquareDot ratio read as a speck against them — the row looked
+     unfinished rather than in flight. 0.4 puts its ink mass in the same family. */
+  width: calc(var(--md-task-box) * 0.4);
+  height: calc(var(--md-task-box) * 0.4);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
   background: currentColor;
 }
+/* [?] blocked — the sidebar's `Glyph`: a bold char at 10/15 of the box, centred. It is a real `?`
+   rather than an icon because that is the character the author typed, and the rail already reads a
+   "?" as "needs your input". SANS, not the inherited mono — the mono question mark reads as a keycap
+   at prose size. */
 .md-body .md-task-blocked::after {
   content: "?";
-  position: absolute;
-  inset: 0;
-  font-size: 0.72em;
+  background: none;
+  -webkit-mask: none;
+  mask: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-sans);
+  font-size: calc(var(--md-task-box) * 0.82);
   font-weight: 700;
-  line-height: 1.05em;
-  text-align: center;
-  /* The monospace question mark's ink rides high inside its line box; this is per-glyph, not the
-     shared box alignment above. Measured/reviewed at 14px and 28px. */
-  transform: translateY(0.14em);
+  line-height: 1;
+  /* Per-glyph, not shared: the question mark has no descender, so its ink rides high in the line box
+     that `align-items: center` centres. Measured against the box's own centre. */
+  padding-top: calc(var(--md-task-box) * 0.06);
+}
+/* The row's TEXT carries the state too — a checklist where every line is equally bright makes the
+   reader re-read the glyphs to find what is still live. Mirrors TodoBlock's TODO_ROW_TEXT; cancelled
+   additionally strikes through, which is what Obsidian itself does and the fastest "this is dead"
+   signal in the list.
+   These land on `.md-task-text` — the item's OWN inline run — rather than on the `<li>`, so a nested
+   sub-list is a SIBLING of the styling and stays live by construction. It cannot be done from the
+   `<li>`: `text-decoration` propagates to descendants and the spec gives them no way to switch it
+   off, so a live sub-task under a cancelled parent came out struck through. */
+.md-body .md-task-checked + .md-task-text {
+  color: color-mix(in srgb, var(--color-muted) 90%, transparent);
+}
+.md-body .md-task-cancelled + .md-task-text {
+  color: color-mix(in srgb, var(--color-muted) 65%, transparent);
+  text-decoration: line-through;
+  text-decoration-thickness: from-font;
 }
 .md-body a {
   color: var(--color-accent);

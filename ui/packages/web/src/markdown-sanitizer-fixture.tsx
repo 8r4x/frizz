@@ -10,6 +10,10 @@ export const SHAPE: [string, string][] = [
   ["tasklist", "- [x] Reproduce the failing fixture\n- [ ] Bisect to the offending commit"],
   ["tasklist-custom", "- [/] Implement the fix\n- [-] Drop the rejected approach\n- [?] Confirm the human-owned decision"],
   ["tasklist-loose", "- [x] First item\n\n- [ ] Second item"],
+  ["tasklist-nested", "- [-] Drop the rejected approach\n  - [ ] still live"],
+  // GFM wants a space after the bracket, so a bare marker is the shape server/dispatch.ts writes into
+  // every new scratchpad's Task list and the one most likely to regress back to literal text.
+  ["tasklist-empty", "- [ ]\n- [x]"],
   ["olstart", "17. `install.sandbox` — the baseline policy\n18. `run.sandbox` — the default"],
   ["align", "| left | mid | right |\n| :--- | :---: | ---: |\n| a | b | c |"],
   ["generic", "The handler returns Promise<void> and then logs the slug."],

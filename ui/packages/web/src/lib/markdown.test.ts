@@ -39,17 +39,43 @@ test("strikethrough: the ~~two-tilde~~ form still strikes, and still nests inlin
 // what's checkable here is that marked EMITS the markup the sanitizer now has to preserve.
 test("task-list items emit a state-carrying marker, not a bare bullet", () => {
   const html = renderBlock("- [x] shipped\n- [ ] pending")
-  assert.match(html, /<span class="md-task md-task-checked"><\/span> shipped/)
-  assert.match(html, /<span class="md-task"><\/span> pending/)
+  assert.match(html, /<span class="md-task md-task-checked" title="Done"><\/span> <span class="md-task-text">shipped<\/span>/)
+  assert.match(html, /<span class="md-task" title="To do"><\/span> <span class="md-task-text">pending<\/span>/)
   assert.doesNotMatch(html, /<input/, "an interactive control has no place in a transcript")
 })
 
 test("Obsidian-flavoured task states render as inert status marks", () => {
   const html = renderBlock("- [/] active\n- [-] cancelled\n- [?] blocked")
-  assert.match(html, /<span class="md-task md-task-in-progress" title="In progress"><\/span> active/)
-  assert.match(html, /<span class="md-task md-task-cancelled" title="Cancelled"><\/span> cancelled/)
-  assert.match(html, /<span class="md-task md-task-blocked" title="Blocked"><\/span> blocked/)
+  assert.match(html, /<span class="md-task md-task-in-progress" title="In progress"><\/span> <span class="md-task-text">active<\/span>/)
+  assert.match(html, /<span class="md-task md-task-cancelled" title="Cancelled"><\/span> <span class="md-task-text">cancelled<\/span>/)
+  assert.match(html, /<span class="md-task md-task-blocked" title="Blocked"><\/span> <span class="md-task-text">blocked<\/span>/)
   assert.doesNotMatch(html, /\[\/\]|\[-\]|\[\?\]/)
+})
+
+// The item's own inline run is wrapped so the row's finished/cancelled styling lands on IT, not on the
+// `<li>`. `text-decoration` propagates with no way for a descendant to opt out, so styling the `<li>`
+// struck through a live sub-task nested under a cancelled parent.
+test("a task item's own text is wrapped, and a nested sub-list stays outside that wrapper", () => {
+  const html = renderBlock("- [-] dropped\n  - [ ] still live")
+  assert.match(html, /<span class="md-task md-task-cancelled" title="Cancelled"><\/span> <span class="md-task-text">dropped<\/span>/)
+  // The sub-list is a SIBLING of the wrapper, never inside it.
+  assert.doesNotMatch(html, /<span class="md-task-text">[^<]*<ul/)
+  assert.match(html, /<span class="md-task-text">dropped<\/span>\s*<ul>/)
+})
+
+// GFM needs a space AFTER the bracket, so Marked reads a bare `- [ ]` as the literal text "[ ]" — and
+// that is exactly what server/dispatch.ts writes into every new thread's scratchpad Task list.
+test("an empty task item is a checkbox, not the literal text", () => {
+  const html = renderBlock("- [ ]\n- [x]\n- [/]")
+  assert.match(html, /<span class="md-task" title="To do"><\/span>/)
+  assert.match(html, /<span class="md-task md-task-checked" title="Done"><\/span>/)
+  assert.match(html, /<span class="md-task md-task-in-progress" title="In progress"><\/span>/)
+  assert.doesNotMatch(html, /\[ \]|\[x\]|\[\/\]/, "no marker may survive as literal text")
+})
+
+// An uppercase `[X]` is GFM-legal and reaches the same state as `[x]`.
+test("an uppercase checked marker is the checked state", () => {
+  assert.match(renderBlock("- [X] shipped"), /md-task md-task-checked/)
 })
 
 test("custom task markers are recognized only at the start of list items", () => {

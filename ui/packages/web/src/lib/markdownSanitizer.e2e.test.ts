@@ -30,6 +30,13 @@ test("the markdown sanitizer keeps authored meaning and blocks every scripted es
         handlers,
         // shape
         taskBoxes: Array.from(document.querySelectorAll("[data-case=tasklist] .md-task")).map((n) => n.className),
+        // The item's own inline run, wrapped so the row's dimmed/struck styling cannot reach a nested
+        // sub-list. Its class has to survive the allowlist like every other one here.
+        taskTexts: Array.from(document.querySelectorAll("[data-case=tasklist] .md-task-text")).map((n) => n.textContent),
+        nestedStaysOutside: !document.querySelector("[data-case=tasklist-nested] .md-task-text ul"),
+        nestedChildText: document.querySelector("[data-case=tasklist-nested] ul ul .md-task-text")?.textContent ?? null,
+        emptyBoxes: Array.from(document.querySelectorAll("[data-case=tasklist-empty] .md-task")).map((n) => n.className),
+        emptyText: document.querySelector("[data-case=tasklist-empty]")?.textContent?.trim(),
         customTaskBoxes: Array.from(document.querySelectorAll("[data-case=tasklist-custom] .md-task")).map((n) => ({
           className: n.className,
           title: n.getAttribute("title"),
@@ -74,6 +81,13 @@ test("the markdown sanitizer keeps authored meaning and blocks every scripted es
       { className: "md-task md-task-blocked", title: "Blocked" },
     ], "custom task state and its label must survive sanitizing")
     assert.deepEqual(seen.looseBoxes, ["md-task md-task-checked", "md-task"], "loose task items too")
+    assert.deepEqual(seen.taskTexts, ["Reproduce the failing fixture", "Bisect to the offending commit"],
+      "each item's own text is wrapped, and the wrapper survives sanitizing")
+    assert.ok(seen.nestedStaysOutside, "a nested sub-list must be a SIBLING of the text wrapper, never inside it")
+    assert.equal(seen.nestedChildText, "still live", "the live sub-task keeps its own text")
+    assert.deepEqual(seen.emptyBoxes, ["md-task", "md-task md-task-checked"],
+      "a bare `- [ ]` — what every new scratchpad ships — is a checkbox, not literal text")
+    assert.equal(seen.emptyText, "", "and it leaves no marker text behind")
     assert.equal(seen.olStart, "17", "a list that starts at 17 keeps its numbering")
     assert.deepEqual(seen.headAlign, ["left", "center", "right"], "GFM column alignment is honored")
     assert.equal(seen.genericText, "The handler returns Promise and then logs the slug.",
