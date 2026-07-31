@@ -20,9 +20,10 @@ import { createScheduler } from "../packages/server/src/scheduler.ts"
 import { createGithubReviewFetcher } from "../packages/server/src/github-review.ts"
 
 const PR = "nubjs/nub#587"
+// The same PR as a parsed ref, for the direct live reads scenario B derives its fixture from.
+const REF = { owner: "nubjs", repo: "nub", number: 587 }
 const STALE_AT = "2026-07-29T07:36:03Z" // @colinhacks — already handled; what the worker wrongly re-read
 const FRESH_AT = "2026-07-29T15:39:28Z" // @colinhacks — the wake's real subject
-const LATER_AT = "2026-07-29T15:46:04Z" // @pullfrog's first review, which landed minutes later
 
 let failures = 0
 function check(label, ok, detail = "") {
@@ -105,21 +106,39 @@ console.log(`\nA. the reported wake — one fresh comment from an author who had
 }
 
 // ---- B. THE BURST, on the same real PR ------------------------------------------------------------
-// A worker resting since noon that is polled ONCE after 15:47 has three real fresh items waiting. The
-// old code named `fresh[0]` — @pullfrog's 15:47 review — and marked the other two seen, so the
-// maintainer's 15:39 comment would have been swallowed and never mentioned to anyone.
+// A worker polled ONCE after several items landed has a whole burst waiting. The old code named
+// `fresh[0]` and marked the rest seen, so every other item was swallowed and never mentioned to anyone.
+//
+// The burst is chosen FROM LIVE DATA rather than pinned to instants. It used to name three fixed
+// timestamps from 2026-07-29, and that quietly went dead: the production fetcher reads
+// `reviews(last: 50)`, nubjs/nub#587 has since grown past 79 reviews, and the pinned ones slid out of
+// the window — so the burst could not form and this scenario failed against a perfectly correct steer.
+// Pinning to a moving PR is the bug; deriving the fixture from whatever the fetcher can currently see
+// tests the same invariant and cannot rot.
 console.log(`\nB. a burst collected in one poll — every item must be named`)
 {
-  const resumes = await run("burst", { fenceAt: "2026-07-29T12:00:00.000Z", fetchGithubReview: asOf("2026-07-29T16:00:00Z") })
+  const snap = await live(REF)
+  if (snap.status !== "ok") throw new Error(`live read failed: ${JSON.stringify(snap.failure ?? snap)}`)
+  const dated = snap.activity.filter((a) => a.at && a.url).sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+  const burst = dated.slice(-3)
+  check("the PR still exposes at least 3 datable items to burst", burst.length === 3, `${burst.length} item(s)`)
+  // Baseline just before the oldest of the three, then reveal all three in one later poll. The fence
+  // sits AT the baseline instant, not before it: a fence older than the baseline leaves real post-fence
+  // activity visible to the very first poll, which then wakes on THAT and delivers a burst of items
+  // this scenario never chose — a false failure that reads exactly like a broken steer.
+  const baselineAt = new Date(Date.parse(burst[0].at) - 1000).toISOString()
+  const resumes = await run("burst", { fenceAt: baselineAt, ticks: [asOf(baselineAt), asOf(burst[2].at)] })
   check("woke exactly once", resumes.length === 1, `${resumes.length} resume(s)`)
   const msg = resumes[0]?.message ?? ""
   console.log(`\n--- the steer a real worker now receives ---\n${msg}\n---\n`)
-  check("counts the whole burst", /^👤 3 new GitHub items on nubjs\/nub#587\./.test(msg))
-  check("names the maintainer's comment the old code would have dropped", msg.includes(FRESH_AT) && msg.includes("@colinhacks"))
-  check("names the later bot reviews too", msg.includes(LATER_AT) && msg.includes("@pullfrog"))
-  check("lists them oldest-first, the order they were written", msg.indexOf(FRESH_AT) < msg.indexOf(LATER_AT))
+  check("counts the whole burst", new RegExp(String.raw`^(👤|🤖) 3 new GitHub items on nubjs/nub#587\.`).test(msg))
+  for (const item of burst) check(`names @${item.actor}'s ${item.at} item`, msg.includes(item.at) && msg.includes(`@${item.actor}`))
+  check(
+    "lists them oldest-first, the order they were written",
+    msg.indexOf(burst[0].at) < msg.indexOf(burst[1].at) && msg.indexOf(burst[1].at) < msg.indexOf(burst[2].at),
+  )
   check("every named item carries its own permalink", msg.split("\n").filter((l) => l.startsWith("- ")).every((l) => /https:\/\/github\.com\//.test(l)))
-  check("never names the stale, already-handled comment", !msg.includes(STALE_AT))
+  check("never names activity from before the baseline", !msg.includes(STALE_AT))
 }
 
 // ---- C. NEGATIVE CONTROL --------------------------------------------------------------------------
