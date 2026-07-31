@@ -1384,3 +1384,72 @@ test("dismissing a Codex thread stops its turn through the bridge", async () => 
   assert.equal(h.storage.getSession(slug)?.exited, 1)
   h.storage.close()
 })
+
+// ── Restart worker (the operator-driven freshProcess) ────────────────────────────────────────────
+// A worker reads its plugin (hooks) and system prompt ONCE, at process start, so the only way to move a
+// running one onto a newer fray build is to replace the process. `freshProcess` is how the operator
+// asks; these pin the two refusals, because a restart that quietly degrades to an ordinary follow-up is
+// worse than an error — the operator would believe their worker came back on the new build when it is
+// still the old process.
+function restartHarness(subAgents: { state: string }[] = []) {
+  const tailer = { ...noopTailer, get: () => ({ turn: "idle", subAgents }) as never }
+  const h = harness(tailer)
+  const slug = "restart-me"
+  h.storage.upsertSession(row(slug))
+  h.storage.setBackend(slug, "claude")
+  h.storage.setClaudeRuntime(slug, "broker")
+  const calls: { text: string; freshProcess?: boolean }[] = []
+  ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = {
+    followUp: async (input: { text: string; freshProcess?: boolean }) => void calls.push(input),
+  }
+  return { h, slug, calls }
+}
+
+test("Restart worker retires the live process, carrying the continuation into the fresh one", async () => {
+  const { h, slug, calls } = restartHarness()
+  await h.router.followUp.handler({
+    input: { slug, sessionId: `sid-${slug}`, message: "come back on current tooling", freshProcess: true },
+  })
+  assert.equal(calls.length, 1, "the message still reaches the worker")
+  assert.equal(calls[0].freshProcess, true, "and it lands in a process that has just started")
+  h.storage.close()
+})
+
+// fray's completion invariant: an agent runs to its terminal return. A restart kills the parent's
+// in-memory sub-agents, so a parent with live background work is off limits — the same carve-out
+// needsFreshProcessForLimit already makes for the usage-limit restart.
+test("Restart worker refuses a worker whose sub-agents are still running, and delivers nothing", async () => {
+  const { h, slug, calls } = restartHarness([{ state: "running" }])
+  await assert.rejects(
+    h.router.followUp.handler({
+      input: { slug, sessionId: `sid-${slug}`, message: "restart please", freshProcess: true },
+    }),
+    /sub-agents still running; restarting it would kill them/,
+  )
+  assert.deepEqual(calls, [], "the refusal is total — no half-delivered follow-up")
+  h.storage.close()
+})
+
+// An ordinary follow-up on that same thread is untouched: only the restart verb is fenced off.
+test("a plain follow-up still reaches a worker whose sub-agents are running", async () => {
+  const { h, slug, calls } = restartHarness([{ state: "running" }])
+  await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "extra context" } })
+  assert.equal(calls.length, 1)
+  assert.notEqual(calls[0].freshProcess, true, "and it does NOT restart the process behind their backs")
+  h.storage.close()
+})
+
+test("Restart worker is refused on a thread that is not a broker-backed Claude worker", async () => {
+  const h = harness()
+  const slug = "codex-restart"
+  h.storage.upsertSession(row(slug))
+  h.storage.setBackend(slug, "codex")
+  h.storage.setCodexRuntime(slug, "app-server")
+  await assert.rejects(
+    h.router.followUp.handler({
+      input: { slug, sessionId: `sid-${slug}`, message: "restart please", freshProcess: true },
+    }),
+    /broker-backed Claude worker/,
+  )
+  h.storage.close()
+})
