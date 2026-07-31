@@ -1900,7 +1900,13 @@ export function ToolStatusMeta({ status, backgroundState, liveBackgroundState, e
 }
 
 function contextualDetail(detail?: string, cwd?: string, sessionId?: string | number): string | undefined {
-  const context = cwd ? `in ${shortenTarget(cwd)}` : sessionId !== undefined && !detail?.includes(String(sessionId)) ? `session ${sessionId}` : undefined
+  // "in <dir>" earns its space only when the command ran somewhere OTHER than the project root. codex
+  // stamps every exec_command with an absolute `workdir`, which for the overwhelming majority of calls
+  // IS the project root — and shortenTarget can't strip that, because it only strips the `root + "/"`
+  // PREFIX and an exact match has no trailing slash. So every card carried the same absolute path, and
+  // once codex cards gained a reasoning caption that redundant suffix was truncating the caption away.
+  const where = cwd && cwd !== store.board?.projectDir ? `in ${shortenTarget(cwd)}` : undefined
+  const context = cwd ? where : sessionId !== undefined && !detail?.includes(String(sessionId)) ? `session ${sessionId}` : undefined
   return [detail, context].filter(Boolean).join(" · ") || undefined
 }
 
