@@ -77,6 +77,9 @@ const records = [
   user(9, [result("t_todo", "Todos have been modified successfully.")]),
   asst(10, [call("t_agent", "Task", { subagent_type: "fray:opus-high", description: "Audit the block radii", prompt: "List every block-level container in the transcript and its corner radius." })]),
   user(11, [result("t_agent", "Nine containers, four distinct radii.")]),
+  // A local image and a local non-image path render as their own block elements (BlockImage /
+  // BlockFile), which nothing else in this thread exercises.
+  text(11.5, `Here is the shot and the plan it came from.\n\n${projectDir}/attachments/block-radius-table.png\n\n${projectDir}/package.json`, "end_turn"),
   text(12, "Landed the shared block radius on `main`.\n\n```done\n- Unified every transcript block on the card's 16px corner in [`diff.css`](https://github.com/acme/app).\n- `nub run typecheck` green.\n```"),
   { ...user(13, `${WAKE}\n\n${wakeDeliveryToken("b".repeat(64))}`) },
   text(14, "One call is genuinely yours.\n\n```question\nShould the fenced code block keep its own tighter corner?\n\n- A. No — one radius everywhere (recommended: it is the whole point of the sweep)\n- B. Yes — a code fence is prose furniture, not a card\n```"),
