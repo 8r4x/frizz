@@ -48,11 +48,11 @@ Drive the PROXY url.
 
 ### 2. Dispatch through the real RPC surface
 
-Use `ui/scripts/lib/rpc-client.mjs` (never hand-rolled fetch — queries are `GET /rpc/<name>?input=`,
+Use `scripts/lib/rpc-client.mjs` (never hand-rolled fetch — queries are `GET /rpc/<name>?input=`,
 mutations `POST`, every response is `{result}`/`{error}`):
 
 ```js
-import { createRpcClient } from ".../ui/scripts/lib/rpc-client.mjs"
+import { createRpcClient } from ".../scripts/lib/rpc-client.mjs"
 const api = createRpcClient(`http://127.0.0.1:${PROXY}/`); await api.waitForHealth()
 const { slug, sessionId } = await api.mutate("dispatch", { prompt: "Reply with exactly HELLO-OK then stop." })
 // poll for the agent's reply — this is the real end-to-end signal, not a status field

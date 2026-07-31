@@ -20,10 +20,10 @@ The recommended choices below are proposals, not decisions. The design is implem
 
 ### Markdown questions remain unstarted
 
-- `ui/packages/web/src/lib/answering.ts` still exposes one `liveMsg`. `useLiveAnswering` scans backward, returns an empty block list at the first later non-empty user message, and attaches one `MessageAnswering` controller only to the last substantive assistant message.
+- `packages/web/src/lib/answering.ts` still exposes one `liveMsg`. `useLiveAnswering` scans backward, returns an empty block list at the first later non-empty user message, and attaches one `MessageAnswering` controller only to the last substantive assistant message.
 - `ChatView.tsx` and `TodosView.tsx` still pass `answering` only when `m === liveMsg`. Historical question blocks render read-only.
 - `questionBlocks.ts` parses and composes blocks but has no question identity or lifecycle. Its `BlockAnswer` state is keyed only by a block's positional number within the one live message.
-- `TranscriptMessage` in `ui/packages/shared/src/index.ts` has no message ID. Claude parsing sees a raw `message.id` internally and Codex parsing sees append-only rollout records, but neither source identity crosses the transcript API.
+- `TranscriptMessage` in `packages/shared/src/index.ts` has no message ID. Claude parsing sees a raw `message.id` internally and Codex parsing sees append-only rollout records, but neither source identity crosses the transcript API.
 - `tailer.ts` still maintains `lastAssistantHasQuestion`. Assistant final text replaces the boolean; any later user message clears it. `pendingQuestion` remains `turn === "idle" && lastAssistantHasQuestion`.
 - `board.ts` still consumes that one boolean. It has no open-question count or per-question state.
 - Searches under `ui/packages` found no addressed-question store, `questionId`, `openQuestions`, `dismissQuestion`, question revision, or expected-question-revision API.
@@ -31,7 +31,7 @@ The recommended choices below are proposals, not decisions. The design is implem
 
 ### Current work that materially constrains the design
 
-The dirty tree adds `ui/packages/shared/src/interactions.ts`, `ui/packages/server/src/interaction-store.ts`, interaction RPCs in `router.ts`, Queue integration in `board.ts`, and `InteractionCards.tsx`. That system already supplies:
+The dirty tree adds `packages/shared/src/interactions.ts`, `packages/server/src/interaction-store.ts`, interaction RPCs in `router.ts`, Queue integration in `board.ts`, and `InteractionCards.tsx`. That system already supplies:
 
 - durable SQLite journals scoped by project, thread slug, session ID, session epoch, and capability revision;
 - opaque interaction IDs, response IDs, record revisions, compare-and-swap mutations, idempotent replay, expiration, and session-replacement cancellation;
@@ -43,16 +43,16 @@ Those are implementation precedents, not a reason to convert fenced markdown int
 
 The current native-input infrastructure also constrains delivery ownership:
 
-- `ui/packages/server/src/resume.ts` is the single live-inject/dead-resume conversational path. It already fences session and `runtime_generation` changes, protects permission handoffs, and reattaches the backend-native ID (`agent_session_id ?? session_id`). Question delivery must call an expectation-aware extension of this path; it must not add a parallel tmux sender.
-- `ui/packages/server/src/backend/codex-app-server.ts` owns Codex delivery. Its `followUp(...)` makes the steer-vs-start decision atomically against the live turn and dedupes on `deliveryId` via the `codex_app_server_delivery` table. Question delivery must go through the bridge for Codex. (This bullet previously described `permission-controller.ts`'s `queueFollowUp` — the tmux composer's durable input queue. That transport is retired and the function no longer exists; `permission-controller.ts` is now a Claude-only permission handoff.)
-- `ui/packages/server/src/backend/claude-agent-sdk.ts`, `claude-agent-sdk-protocol.ts`, their tests/fixtures, and `ui/packages/claude-agent-sdk-runtime/` are **started read-only native-interaction infrastructure**, not hypothetical files and not enabled markdown delivery. They are the intended future typed Claude request/response path if fork 4 later expands. The markdown first cut neither deletes nor writes through them.
+- `packages/server/src/resume.ts` is the single live-inject/dead-resume conversational path. It already fences session and `runtime_generation` changes, protects permission handoffs, and reattaches the backend-native ID (`agent_session_id ?? session_id`). Question delivery must call an expectation-aware extension of this path; it must not add a parallel tmux sender.
+- `packages/server/src/backend/codex-app-server.ts` owns Codex delivery. Its `followUp(...)` makes the steer-vs-start decision atomically against the live turn and dedupes on `deliveryId` via the `codex_app_server_delivery` table. Question delivery must go through the bridge for Codex. (This bullet previously described `permission-controller.ts`'s `queueFollowUp` — the tmux composer's durable input queue. That transport is retired and the function no longer exists; `permission-controller.ts` is now a Claude-only permission handoff.)
+- `packages/server/src/backend/claude-agent-sdk.ts`, `claude-agent-sdk-protocol.ts`, their tests/fixtures, and `packages/claude-agent-sdk-runtime/` are **started read-only native-interaction infrastructure**, not hypothetical files and not enabled markdown delivery. They are the intended future typed Claude request/response path if fork 4 later expands. The markdown first cut neither deletes nor writes through them.
 
 ### Verification performed during this audit
 
 The following focused command passed 200 tests:
 
 ```sh
-cd ui
+cd .
 pnpm exec node --test \
   packages/web/src/lib/questionBlocks.test.ts \
   packages/web/src/lib/answersMessage.test.ts \
@@ -294,13 +294,13 @@ The raw body snapshot is needed for old-question delivery context, fallback rend
 
 Enforce every leaf and aggregate bound in shared wire schemas and again before storage/composition. An oversized/invalid block is persisted as `source_invalid`, never actionable, with a bounded diagnostic; it is not silently truncated into a different question.
 
-Stored markdown remains inert text. Every browser surface, including out-of-window snapshots, renders it through the question-safe branch of `ui/packages/web/src/lib/markdown.ts`: `marked`, the existing tag/attribute allowlist, and an `href` allowlist that retains only absolute `http:` or `https:` URLs. Strip relative, protocol-relative, fragment, `javascript:`, `data:`, `file:`, and every other scheme; force retained links to `target="_blank" rel="noopener noreferrer"`. The current sanitizer only strips `javascript:` and therefore must be hardened before snapshot rendering is enabled. No endpoint returns pre-rendered HTML, and no component may inject stored body text without that sanitizer. The server composes delivery from stored normalized markdown; the client submits only the bounded answer value.
+Stored markdown remains inert text. Every browser surface, including out-of-window snapshots, renders it through the question-safe branch of `packages/web/src/lib/markdown.ts`: `marked`, the existing tag/attribute allowlist, and an `href` allowlist that retains only absolute `http:` or `https:` URLs. Strip relative, protocol-relative, fragment, `javascript:`, `data:`, `file:`, and every other scheme; force retained links to `target="_blank" rel="noopener noreferrer"`. The current sanitizer only strips `javascript:` and therefore must be hardened before snapshot rendering is enabled. No endpoint returns pre-rendered HTML, and no component may inject stored body text without that sanitizer. The server composes delivery from stored normalized markdown; the client submits only the bounded answer value.
 
 `answered`, `declined`, `dismissed`, and their explicit unconfirmed variants are addressed/terminal. `cancelled` is not a user dismissal; it records that the owning session/source is no longer current. Terminal records remain queryable for read-only rendering and audit, but the normal list endpoint may return only records needed by the transcript window plus every pending state defined below.
 
 ### Discovery and reconciliation
 
-Question discovery belongs on the server at a final-message boundary, not in React. Startup needs a publication barrier. Today `ui/packages/server/src/index.ts` creates the application and `app-socket.ts` server, then starts the board producer, then the tailer producer, then permission control. Board start can therefore assemble before tailer priming; the new design must not bolt question bootstrap onto a later tail tick.
+Question discovery belongs on the server at a final-message boundary, not in React. Startup needs a publication barrier. Today `packages/server/src/index.ts` creates the application and `app-socket.ts` server, then starts the board producer, then the tailer producer, then permission control. Board start can therefore assemble before tailer priming; the new design must not bolt question bootstrap onto a later tail tick.
 
 Add a `question bootstrap` startup phase immediately after `createContext` and before application/application-socket construction. No board snapshot, socket keyframe, RPC read, or producer invalidation may be published until the phase has durably classified every registered session as `ready` or `activation_error`:
 
@@ -754,12 +754,12 @@ The later implementation should be staged so one owner controls each shared seam
 
 Own:
 
-- `ui/packages/shared/src/questions.ts` (new schemas/types)
-- `ui/packages/shared/src/index.ts` (`TranscriptMessage.sourceMessageId`, `ThreadView` count, events/RPC types)
-- `ui/packages/server/src/transcript.ts` (canonical pre-cap Claude/Codex projector and source IDs)
-- `ui/packages/server/src/tailer.ts` (shared transcript-incarnation binding/rotation detector; no independent offset identity)
-- `ui/packages/server/src/backend/claude.ts` and `backend/codex.ts` (final-boundary metadata only where the projector cannot consume the raw record directly)
-- pure fence scanning extracted from or shared with `ui/packages/web/src/lib/questionBlocks.ts`
+- `packages/shared/src/questions.ts` (new schemas/types)
+- `packages/shared/src/index.ts` (`TranscriptMessage.sourceMessageId`, `ThreadView` count, events/RPC types)
+- `packages/server/src/transcript.ts` (canonical pre-cap Claude/Codex projector and source IDs)
+- `packages/server/src/tailer.ts` (shared transcript-incarnation binding/rotation detector; no independent offset identity)
+- `packages/server/src/backend/claude.ts` and `backend/codex.ts` (final-boundary metadata only where the projector cannot consume the raw record directly)
+- pure fence scanning extracted from or shared with `packages/web/src/lib/questionBlocks.ts`
 - transcript/parser identity tests for both backends
 
 This must land before persistence or UI so no downstream code invents positional IDs.
@@ -768,33 +768,33 @@ This must land before persistence or UI so no downstream code invents positional
 
 Own:
 
-- `ui/packages/server/src/question-store.ts` and optionally `question-delivery.ts` (new)
-- `ui/packages/server/src/storage.ts`
+- `packages/server/src/question-store.ts` and optionally `question-delivery.ts` (new)
+- `packages/server/src/storage.ts`
 - a dedicated final-message discovery/bootstrap seam (do not give this owner `tailer.ts`, which belongs to source/incarnation work above)
-- `ui/packages/server/src/board.ts`
-- `ui/packages/server/src/router.ts`
-- `ui/packages/server/src/context.ts`
-- `ui/packages/server/src/index.ts` (insert question-bootstrap phase before application/application-socket and producers)
-- `ui/packages/server/src/app-socket.ts` (publication readiness gate in the narrow socket dependency)
-- `ui/packages/server/src/resume.ts` (expected session/generation/delivery-ID API and shared thread transport serialization)
-- `ui/packages/server/src/permission-controller.ts` (question delivery IDs, exact Codex queue witness, and serialization with permission handoff)
-- `ui/packages/server/src/tmux.ts` (exact-pane Claude text/paste primitive; question delivery never targets a reusable slug)
+- `packages/server/src/board.ts`
+- `packages/server/src/router.ts`
+- `packages/server/src/context.ts`
+- `packages/server/src/index.ts` (insert question-bootstrap phase before application/application-socket and producers)
+- `packages/server/src/app-socket.ts` (publication readiness gate in the narrow socket dependency)
+- `packages/server/src/resume.ts` (expected session/generation/delivery-ID API and shared thread transport serialization)
+- `packages/server/src/permission-controller.ts` (question delivery IDs, exact Codex queue witness, and serialization with permission handoff)
+- `packages/server/src/tmux.ts` (exact-pane Claude text/paste primitive; question delivery never targets a reusable slug)
 - focused store/router/board/tailer/resume tests
 
 This owner decides transaction and crash-window behavior. `interaction-store.ts` is reference code; modifying its schema to hold fenced questions is outside the recommended scope.
 
-`ui/packages/server/src/backend/claude-agent-sdk.ts`, `claude-agent-sdk-protocol.ts`, their fixtures/tests, and `ui/packages/claude-agent-sdk-runtime/` remain read-only infrastructure in the markdown-only cut. They become owned only in a separately approved typed-native phase.
+`packages/server/src/backend/claude-agent-sdk.ts`, `claude-agent-sdk-protocol.ts`, their fixtures/tests, and `packages/claude-agent-sdk-runtime/` remain read-only infrastructure in the markdown-only cut. They become owned only in a separately approved typed-native phase.
 
 ### 3. Web cache/controller and surfaces
 
 Own:
 
-- `ui/packages/web/src/lib/answering.ts` (replace positional controller)
-- `ui/packages/web/src/lib/questionBlocks.ts`
-- a new `ui/packages/web/src/api/question-cache.ts`
-- `ui/packages/web/src/hooks.ts`
-- `ui/packages/web/src/components/ChatView.tsx`
-- `ui/packages/web/src/components/TodosView.tsx`
+- `packages/web/src/lib/answering.ts` (replace positional controller)
+- `packages/web/src/lib/questionBlocks.ts`
+- a new `packages/web/src/api/question-cache.ts`
+- `packages/web/src/hooks.ts`
+- `packages/web/src/components/ChatView.tsx`
+- `packages/web/src/components/TodosView.tsx`
 - focused controller/cache/render tests and browser E2E
 
 Treat `InteractionCards.tsx` as read-only precedent unless a genuinely generic, security-neutral cache helper is extracted. Do not make both UI owners edit `ChatView.tsx` or `TodosView.tsx` in parallel.
