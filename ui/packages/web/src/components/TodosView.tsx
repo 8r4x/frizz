@@ -9,7 +9,8 @@ import { useBoard, asThreads, useTranscript } from "../hooks.ts"
 import { orderQueue, queued, displayTitle, lastActiveLabelAt } from "../groups.ts"
 import { useLiveAnswering } from "../lib/answering.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
-import { CARD_PRIMARY_BUTTON, Message, NativeInputRequiredCard, PermPolicyNote, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText } from "./ChatView.tsx"
+import { Message, NativeInputRequiredCard, PermPolicyNote, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText } from "./ChatView.tsx"
+import { CARD_PRIMARY_ACTION } from "./TranscriptCard.tsx"
 import { AwaitingBackgroundCard } from "./AwaitingBackgroundCard.tsx"
 import { agentCompletionCall } from "../lib/subAgentCompletion.ts"
 import { prefs } from "../lib/prefs.ts"
@@ -149,10 +150,12 @@ function AwaitingBackgroundBanner({ thread, onSnooze, onSnoozeFailed }: {
           disabled={pending}
           onMouseDown={(e) => e.preventDefault()}
           title="Hide this card until a sub-agent returns"
-          // The white card-action fill (CARD_PRIMARY_BUTTON), same as the awaiting card's Snooze it
-          // stacks under: parking is this banner's one verb, and the recessed outline it used to wear
-          // read as a disabled affordance sitting right below an identical white one.
-          className={`flex shrink-0 items-center gap-1 rounded-md text-[11px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-45 ${CARD_PRIMARY_BUTTON}`}
+          // The shared card-action chrome, same as the awaiting card's Snooze it stacks under: parking
+          // is this banner's one verb, and the recessed outline it used to wear read as a disabled
+          // affordance sitting right below an identical white one. Taking CARD_PRIMARY_ACTION rather
+          // than restating it is what keeps the two stacked Snoozes from drifting apart on a corner or
+          // a fill — they had already been hand-copied once.
+          className={`disabled:opacity-45 ${CARD_PRIMARY_ACTION}`}
         >
           {/* Measured, not guessed: the icon read 1.58px LOW here. See lib/iconAlign.ts for why box
               centering leaves a descender-free label's ink high, and why leading-none is not the fix. */}

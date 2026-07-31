@@ -140,7 +140,7 @@ export function StateButton({
   thread,
   onArchived,
   onDismissCancel,
-  className = "border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] text-fg/80 hover:bg-panel-2 hover:text-fg",
+  className = "rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] text-fg/80 hover:bg-panel-2 hover:text-fg",
   iconClassName = "",
 }: {
   thread: ThreadView
@@ -148,6 +148,11 @@ export function StateButton({
   // Undo an optimistic dismissal (queue only). Present ⇒ the click may dismiss the card BEFORE the RPC
   // returns and reinstate it if the server declines; absent ⇒ the button waits for the round-trip.
   onDismissCancel?: () => void
+  // Carries the CORNER as well as the fill, because the two surfaces disagree about it: the footer is a
+  // free-standing control at rounded-md, while the in-card copy takes the tighter card-action radius so
+  // it relates to the card's own corner (TranscriptCard's CARD_ACTION_RADIUS). It cannot be hardcoded
+  // below and overridden here — two same-specificity Tailwind utilities resolve by stylesheet order,
+  // not by string order, so the winner would be arbitrary.
   className?: string
   // The optical nudge for the Check, which is font- AND size-dependent (lib/iconAlign.ts). The FOOTER
   // keeps its own 12px scale and needs none; the in-card copy runs at the shared 11px card-action
@@ -209,7 +214,7 @@ export function StateButton({
         aria-label="Mark as done"
         title="Mark as done"
         onMouseDown={(event) => event.preventDefault()}
-        className={`flex items-center gap-1 rounded-md font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-45 ${className}`}
+        className={`flex items-center gap-1 font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-45 ${className}`}
       >
         <Check size={12} className={iconClassName} />
         Mark as done
