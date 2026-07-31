@@ -74,8 +74,56 @@ test("every burst line carries its own actor icon, and a suffix-less app still r
 test("the header count is authoritative — a truncated or padded burst is refused, not guessed", () => {
   const text = formatGithubWakeSteer(burst)
   assert.ok(parseGithubWakeSteer(text))
-  assert.equal(parseGithubWakeSteer(text.split("\n").slice(0, -1).join("\n")), null, "a dropped line must not parse as a smaller burst")
+  // Drop the last ITEM line, not the last line: the steer now ends on a review-read tail the parser
+  // discards, so slicing the raw end would only remove a line that never carried an item.
+  const lines = text.split("\n")
+  const lastItem = lines.map((l, i) => [l, i] as const).filter(([l]) => l.startsWith("- ")).at(-1)![1]
+  assert.equal(
+    parseGithubWakeSteer(lines.filter((_, i) => i !== lastItem).join("\n")),
+    null,
+    "a dropped line must not parse as a smaller burst",
+  )
   assert.equal(parseGithubWakeSteer(text.replace("3 new GitHub items", "4 new GitHub items")), null)
+})
+
+// The defect this tail exists for: a review app files an empty-bodied review whose substance is inline
+// comments, and the permalink's obvious read returns that empty body. A woken worker spent four calls
+// finding the endpoint that answers it in one (2026-07-31, nubjs/nub#587).
+test("a review wake names the one call that reads its inline comments", () => {
+  const review: GithubWakeSteer = {
+    ref: "nubjs/nub#587",
+    omitted: 0,
+    items: [{ label: "review comment", actor: "pullfrog", bot: true, at: "2026-07-31T20:33:58Z", url: "https://github.com/nubjs/nub/pull/587#pullrequestreview-4831999377" }],
+  }
+  const text = formatGithubWakeSteer(review)
+  assert.match(text, /^gh api --paginate repos\/nubjs\/nub\/pulls\/587\/reviews\/4831999377\/comments$/m)
+  // The permalink still ends its own line — the tail is a separate paragraph, so no autolinker can
+  // swallow the command into the href.
+  assert.ok(text.split("\n")[0].endsWith("#pullrequestreview-4831999377"))
+  assert.deepEqual(parseGithubWakeSteer(text), review, "the tail is derived, so it must not survive the parse")
+})
+
+test("the read tail is per-review, deduped, and absent when nothing woke a review", () => {
+  const cmds = (s: GithubWakeSteer) => formatGithubWakeSteer(s).split("\n").filter((l) => l.startsWith("gh api "))
+  // `burst` holds one issue comment and TWO distinct reviews.
+  assert.deepEqual(cmds(burst), [
+    "gh api --paginate repos/nubjs/nub/pulls/587/reviews/4810252801/comments",
+    "gh api --paginate repos/nubjs/nub/pulls/587/reviews/4810267375/comments",
+  ])
+  assert.deepEqual(cmds(single), [], "a plain issue comment carries its substance in its own body")
+  const twice = { ...burst, items: [burst.items[1], { ...burst.items[1], label: "approval", actor: "dana", bot: false }] }
+  assert.deepEqual(cmds({ ...twice, omitted: 1 }), ["gh api --paginate repos/nubjs/nub/pulls/587/reviews/4810252801/comments"], "one review, one command")
+})
+
+// The tail lines must never be mistaken for the card's own content, in either direction.
+test("the read tail neither adds items nor lets prose masquerade as one", () => {
+  const text = formatGithubWakeSteer(burst)
+  assert.equal(parseGithubWakeSteer(text)?.items.length, 3, "three items, not five")
+  assert.equal(
+    parseGithubWakeSteer("A review's body is often empty because its substance is inline comments. Read them, one call each:\ngh api --paginate repos/a/b/pulls/1/reviews/2/comments"),
+    null,
+    "the tail alone is not a wake",
+  )
 })
 
 test("ordinary prose never masquerades as a wake card", () => {

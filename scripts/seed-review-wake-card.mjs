@@ -1,0 +1,113 @@
+// Seed a disposable adhoc stack with SIMULATED workers whose last turn is a DELIVERED pr-watch wake —
+// the exact user-turn text the scheduler pastes into a worker's composer, delivery token and all.
+//
+// This is the browser gate for the review-read tail on the wake steer: the tail speaks to the WORKER,
+// and `GithubWakeCard` renders from `parseGithubWakeSteer`'s structured result rather than from the raw
+// text, so the tail must be invisible to the human. That claim is only worth anything if the REAL card
+// renders the REAL delivered string — hence a JSONL the production tailer reads, not a props fixture.
+//
+// Usage: nub scripts/seed-review-wake-card.mjs --home=/abs/temp-home --socket=fray-adhoc-NNNN-PID
+import { execFileSync } from "node:child_process"
+import { mkdirSync, writeFileSync, globSync } from "node:fs"
+import { join } from "node:path"
+import { formatGithubWakeSteer, wakeDeliveryToken } from "../packages/shared/src/index.ts"
+
+const flags = Object.fromEntries(
+  process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
+)
+const { home, socket, cwd = "/Users/colinmcd94/Documents/projects/fray" } = flags
+if (!home || !socket) {
+  console.error("usage: node seed-review-wake-card.mjs --home=/abs/temp-home --socket=<tmux-socket>")
+  process.exit(1)
+}
+
+const db = globSync(join(home, ".fray/projects/*/ui.db"))[0]
+if (!db) throw new Error(`no ui.db under ${home}/.fray/projects — is the stack booted?`)
+const jsonlDir = join(home, ".claude", "projects", cwd.replace(/[/.]/g, "-"))
+mkdirSync(jsonlDir, { recursive: true })
+
+const ago = (mins) => new Date(Date.now() - mins * 60_000).toISOString().replace(/\.\d+Z$/, "Z")
+const PR = "https://github.com/nubjs/nub/pull/587"
+
+const CASES = [
+  {
+    // The reported case, byte for byte: an empty-bodied @pullfrog review. Carries ONE tail line.
+    slug: "wake-review",
+    title: "wake · one review (tail present)",
+    steer: {
+      ref: "nubjs/nub#587",
+      omitted: 0,
+      items: [{ label: "review comment", actor: "pullfrog", bot: true, at: ago(4), url: `${PR}#pullrequestreview-4831999377` }],
+    },
+  },
+  {
+    // TWO distinct reviews in one poll ⇒ two tail lines, plus a comment that earns none. The burst is
+    // where a leaked tail would be most obvious: the card draws a row per item, and a tail rendered as
+    // content would show up as two extra rows.
+    slug: "wake-burst",
+    title: "wake · burst, two reviews + a comment",
+    steer: {
+      ref: "nubjs/nub#587",
+      omitted: 0,
+      items: [
+        { label: "comment", actor: "colinhacks", bot: false, at: ago(12), url: `${PR}#issuecomment-5120099362` },
+        { label: "review comment", actor: "pullfrog", bot: true, at: ago(8), url: `${PR}#pullrequestreview-4831999377` },
+        { label: "approval", actor: "dana", bot: false, at: ago(5), url: `${PR}#pullrequestreview-4810267375` },
+      ],
+    },
+  },
+  {
+    // CONTROL — an issue comment carries its substance in its own body, so no tail is emitted at all.
+    // This card is the "before" picture: whatever the two above render, this must match it exactly.
+    slug: "wake-comment",
+    title: "wake · one comment (no tail — control)",
+    steer: {
+      ref: "nubjs/nub#587",
+      omitted: 0,
+      items: [{ label: "comment", actor: "colinhacks", bot: false, at: ago(4), url: `${PR}#issuecomment-5120099362` }],
+    },
+  },
+]
+
+CASES.forEach((c, n) => {
+  const sessionId = `${c.slug}-0000-4000-8000-000000000000`.slice(0, 36)
+  const tmuxName = `fray-${c.slug}`
+  const at = ago(3)
+  const text = `${formatGithubWakeSteer(c.steer)}\n\n${wakeDeliveryToken(`${c.slug}`.padEnd(64, "0"))}`
+  const records = [
+    {
+      parentUuid: null, isSidechain: false, type: "user",
+      message: { role: "user", content: `TASK:\n${c.title}` },
+      uuid: `1000000${n}-0000-4000-8000-000000000001`.slice(-36), timestamp: ago(20), session_id: sessionId, cwd,
+    },
+    {
+      parentUuid: null, isSidechain: false, type: "assistant",
+      message: {
+        model: "claude-opus-5", id: `msg_${c.slug}_a`, type: "message", role: "assistant",
+        content: [{ type: "text", text: "Pushed the fix and the regression test. CI came back green, so the branch is ready for review.\n\n```awaiting\npr-watch: nubjs/nub#587\nWatching for review.\n```" }],
+        stop_reason: "end_turn", usage: { input_tokens: 2, output_tokens: 40 },
+      },
+      uuid: `1000000${n}-0000-4000-8000-000000000002`.slice(-36), timestamp: ago(15), session_id: sessionId, cwd,
+    },
+    // THE wake, recorded exactly as the scheduler delivers it: an ordinary user turn whose text is the
+    // steer plus the machine-facing token.
+    {
+      parentUuid: null, isSidechain: false, type: "user",
+      message: { role: "user", content: text },
+      uuid: `1000000${n}-0000-4000-8000-000000000003`.slice(-36), timestamp: at, session_id: sessionId, cwd,
+    },
+  ]
+  writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
+
+  try {
+    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"], { stdio: "ignore" })
+  } catch {
+    /* already exists */
+  }
+  execFileSync("sqlite3", [
+    db,
+    `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
+     VALUES ('${c.slug}', '${sessionId}', '${tmuxName}', '${at}', '${c.title}', 'claude', 'opus', 'high', 'default', '${at}')`,
+  ])
+  console.log(`seeded ${c.slug}`)
+})

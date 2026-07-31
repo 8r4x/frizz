@@ -1033,12 +1033,48 @@ function wakeItemTail(item: GithubWakeItem): string {
   return `${item.at ? ` at ${item.at}` : ""}${item.url ? `: ${item.url}` : ""}`
 }
 
+// ---- the review-read tail -------------------------------------------------------------------------
+// A review's substance is routinely NOT its body. A review app files an empty-bodied review carrying N
+// inline comments, so the permalink above lands on an anchor whose obvious read — `gh api …/reviews/ID`
+// — hands back `body: ""` and the worker has to GUESS where the content went.
+//
+// A worker woken by exactly that spent FOUR calls getting to it (2026-07-31, nubjs/nub#587): the body,
+// the body again in full to be sure, a `…/pulls/N/comments` sweep filtered by `pull_request_review_id`
+// that silently hit the 100-item default page, and finally the same sweep with `--paginate`. The one
+// endpoint that answers the question in a single call — `…/pulls/N/reviews/ID/comments` — was never
+// reached. So the steer names that call outright, fully materialized, once per review it woke for.
+//
+// The tail is DERIVED from the items and never stored: the parser drops these lines and rebuilds the
+// steer from the header and item lines alone, which is what keeps the round-trip exact without adding a
+// field to GithubWakeSteer. It is also invisible to the human — GithubWakeCard renders from the PARSE,
+// not from this text — so it costs the card nothing to speak to the worker here.
+const WAKE_REVIEW_LEAD = "A review's body is often empty because its substance is inline comments. Read them, one call each:"
+const WAKE_REVIEW_CMD = /^gh api --paginate repos\/\S+$/
+
+// The review permalink is the only place the review id exists, but owner/repo/number come from `ref`,
+// which the wake format already validates — so a surprising URL costs the hint, never a wrong command.
+function wakeReviewReads({ ref, items }: GithubWakeSteer): string[] {
+  const [repo, number] = ref.split("#")
+  const ids = new Set<string>()
+  for (const item of items) {
+    const id = /#pullrequestreview-(\d+)$/.exec(item.url ?? "")?.[1]
+    if (id) ids.add(id)
+  }
+  return [...ids].map((id) => `gh api --paginate repos/${repo}/pulls/${number}/reviews/${id}/comments`)
+}
+
+function wakeReviewTail(steer: GithubWakeSteer): string {
+  const reads = wakeReviewReads(steer)
+  return reads.length ? `\n\n${WAKE_REVIEW_LEAD}\n${reads.join("\n")}` : ""
+}
+
 export function formatGithubWakeSteer({ ref, items, omitted }: GithubWakeSteer): string {
   const icon = items.some((i) => !i.bot) ? "👤" : "🤖"
+  const reviewTail = wakeReviewTail({ ref, items, omitted })
   if (items.length === 1 && omitted === 0) {
     const item = items[0]
     const url = item.url ? `: ${item.url}` : "."
-    return `${icon} New GitHub ${item.label} on ${ref} from @${item.actor}${item.at ? ` at ${item.at}` : ""}. Read that exact ${item.label} — ${WAKE_SCOPE} — and continue${url}`
+    return `${icon} New GitHub ${item.label} on ${ref} from @${item.actor}${item.at ? ` at ${item.at}` : ""}. Read that exact ${item.label} — ${WAKE_SCOPE} — and continue${url}${reviewTail}`
   }
   const more = omitted > 0 ? `\n- …and ${omitted} more not listed — check ${ref} for the rest` : ""
   // The blank line separates the instruction from the items. Fray's transcript renders a delivered
@@ -1049,7 +1085,7 @@ export function formatGithubWakeSteer({ ref, items, omitted }: GithubWakeSteer):
   // the card want — the header icon alone cannot say it, and a login is not a reliable tell (@pullfrog
   // is a GitHub App with no `[bot]` suffix). It is also what makes the format round-trip losslessly.
   const lines = items.map((i) => `- ${i.bot ? "🤖" : "👤"} ${i.label} from @${i.actor}${wakeItemTail(i)}`).join("\n")
-  return `${icon} ${items.length + omitted} new GitHub items on ${ref}. Read exactly these — ${WAKE_SCOPE} — and continue:\n\n${lines}${more}`
+  return `${icon} ${items.length + omitted} new GitHub items on ${ref}. Read exactly these — ${WAKE_SCOPE} — and continue:\n\n${lines}${more}${reviewTail}`
 }
 
 const WAKE_REF = String.raw`[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*#\d+`
@@ -1077,7 +1113,15 @@ export function parseGithubWakeSteer(text: string): GithubWakeSteer | null {
     ...(at ? { at } : {}),
     ...(url ? { url } : {}),
   })
-  const lines = text.trim().split("\n")
+  // The review-read tail is regenerated from the items by the formatter, so it is DROPPED here rather
+  // than parsed — that is what lets the steer speak to the worker without the card gaining a field it
+  // would have to render. Blank lines go with it: the burst loop already skipped them, and the
+  // single-item shape has to survive counting as one line once a tail is appended below it.
+  const lines = text
+    .trim()
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && line !== WAKE_REVIEW_LEAD && !WAKE_REVIEW_CMD.test(line))
   const single = lines.length === 1 ? WAKE_SINGLE.exec(lines[0]) : null
   if (single) {
     return { ref: single[3], omitted: 0, items: [item(single[2], single[4], single[1] === "🤖", single[5], single[6])] }
@@ -1087,7 +1131,6 @@ export function parseGithubWakeSteer(text: string): GithubWakeSteer | null {
   const items: GithubWakeItem[] = []
   let omitted = 0
   for (const line of lines.slice(1)) {
-    if (!line.trim()) continue
     const more = WAKE_MORE.exec(line)
     if (more) {
       omitted = Number(more[1])

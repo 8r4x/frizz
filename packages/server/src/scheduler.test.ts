@@ -551,6 +551,11 @@ test("pr-watch: a BURST between polls is enumerated in full, oldest first — no
       `- 👤 comment from @carol at ${t1}: https://github.com/acme/app/pull/391#issuecomment-1`,
       `- 🤖 comment from @coderabbitai[bot] at ${t2}: https://github.com/acme/app/pull/391#issuecomment-2`,
       `- 👤 approval from @dana at ${t3}: https://github.com/acme/app/pull/391#pullrequestreview-3`,
+      // Dana's approval is the only REVIEW in the burst, so the steer's derived tail names exactly one
+      // read — the two issue comments carry their substance in their own bodies and need no help.
+      "",
+      "A review's body is often empty because its substance is inline comments. Read them, one call each:",
+      "gh api --paginate repos/acme/app/pulls/391/reviews/3/comments",
     ].join("\n"),
   )
 })

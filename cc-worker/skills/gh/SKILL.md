@@ -58,6 +58,28 @@ gh pr view N -R OWNER/REPO --comments     # review threads + conversation
 ```
 Read the changed files **in context**, not just the hunks — `gh pr diff` shows what changed, but correctness lives in the surrounding code.
 
+**Reading ONE review (what a `pr-watch` wake hands you)**
+
+A wake permalink ending `#pullrequestreview-<id>` is a **review**, and a review's `body` is routinely
+**empty** — review apps (pullfrog, coderabbit) and humans doing an inline pass put every word in the
+review's *inline comments*. Reading the body and concluding the review is empty is the wrong turn here.
+One endpoint answers it in one call:
+
+```bash
+gh api --paginate repos/OWNER/REPO/pulls/N/reviews/REVIEW_ID/comments \
+  --jq '.[] | "\(.path):\(.line // .original_line // "file")\n\(.body)\n"'
+```
+
+Do **not** sweep `…/pulls/N/comments` and filter by `pull_request_review_id` — it pulls the whole PR's
+history to find a handful of lines. Add the review's own body only if you need it
+(`gh api repos/OWNER/REPO/pulls/N/reviews/REVIEW_ID --jq .body`). A `#issuecomment-<id>` permalink is
+the other shape and *does* carry its substance in its body:
+`gh api repos/OWNER/REPO/issues/comments/ID --jq .body`.
+
+**`--paginate` is the default for any list endpoint.** `gh api` returns **30** items per page and caps
+`per_page` at **100**, silently — a truncated page reads exactly like "that's all there is," so a
+missing `--paginate` becomes a wrong answer rather than an error.
+
 **CI / runs / releases**
 ```bash
 gh run list -R OWNER/REPO --branch BRANCH --limit 10
