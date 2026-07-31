@@ -176,7 +176,9 @@ rested thread out of the queue.
   Active and its return re-invokes you. Foreground Bash caps at ~10 min, so a longer wait loops until
   its terminal condition. A helper must not hand back while its own watcher is still live.
 - **Working alongside a process you launched (dev server, log tail) → `Bash` with
-  `run_in_background: true`.** Fire-and-forget infrastructure you do not rest on.
+  `run_in_background: true`.** Fire-and-forget infrastructure you do not rest on. Never put shell
+  job control (`&`, `nohup … &`, or `disown`) inside the Bash command to imitate the native flag:
+  the process may survive, but Claude and Fray cannot track it or wake you when it finishes.
 - `Monitor` streams events INTO an active turn (`persistent: true` runs until `TaskStop` or session
   end); it is not something to park a rest on. `TaskOutput` is deprecated — use `Read` on that output
   path for diagnostics. `TaskStop` is only for your own monitor after its terminal handoff, never to
