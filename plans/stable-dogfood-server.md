@@ -10,7 +10,7 @@ This is the smallest robust staged architecture. It reuses the existing project 
 
 ## What exists now and why it fails for NUB
 
-The current source launcher (`ui/packages/cli/src/index.ts` and `launcher.ts`) resolves the Git checkout into one project identity and state directory, allocates a port plus `port + 39000` for Vite HMR, and runs a durable supervisor. The supervisor (`dev-supervisor.ts`) watches the whole Fray workspace. Edits to server/shared/RPC replace the disposable control-plane child; edits to launcher/config also re-exec the supervisor. Web edits are served through Vite middleware and HMR from the same source checkout. The child owns HTTP, Vite, tailers, SQLite handles, wake scheduler, and WebSocket transports.
+The current source launcher (`packages/cli/src/index.ts` and `launcher.ts`) resolves the Git checkout into one project identity and state directory, allocates a port plus `port + 39000` for Vite HMR, and runs a durable supervisor. The supervisor (`dev-supervisor.ts`) watches the whole Fray workspace. Edits to server/shared/RPC replace the disposable control-plane child; edits to launcher/config also re-exec the supervisor. Web edits are served through Vite middleware and HMR from the same source checkout. The child owns HTTP, Vite, tailers, SQLite handles, wake scheduler, and WebSocket transports.
 
 That is reasonable for a single developer scratch server, but not for the shared dogfood board: every agent's edit is an input to the same watcher. Child replacement closes HTTP/WebSocket/Vite state and changes `bootId`; browser clients necessarily reconnect or reload. If a source edit is temporarily invalid, the supervisor preserves the watcher and reports failure, but the real board has still been churned by unrelated development work.
 
@@ -75,7 +75,7 @@ fray-dev preview --stop <id>
 
 ## Artifact and source implementation
 
-1. Add a production artifact builder for all launch-time code, not merely `web/dist`. The output must contain compiled/bundled JS for CLI/server/shared/RPC/runtime and the hashed web dist, with a locked dependency closure. The stable launcher executes the artifact entrypoint, never TypeScript modules in `ui/packages/**/src` and never workspace `node_modules` through source symlinks.
+1. Add a production artifact builder for all launch-time code, not merely `web/dist`. The output must contain compiled/bundled JS for CLI/server/shared/RPC/runtime and the hashed web dist, with a locked dependency closure. The stable launcher executes the artifact entrypoint, never TypeScript modules in `packages/**/src` and never workspace `node_modules` through source symlinks.
 2. Store builds under a private Fray build root, e.g. `~/.fray/builds/<artifact-digest>/`, using a staging directory plus fsync/rename and a verified immutable manifest. Mark the artifact read-only after verification. Keep an atomically written per-project `stable.json` that names `current`, `previous`, compatibility metadata, and promotion time.
 3. Treat the build root as tooling-owned. No preview, server process, or browser process writes artifacts after publication; no cleanup removes a digest referenced by `stable.json`, a live owner record, or a retained rollback slot.
 4. Change the stable control-plane boot to `dev: false`: serve the artifact's static web dist, no Vite middleware, no watcher, and no HMR companion socket. The stable port allocator therefore reserves only the HTTP port. Preview HMR, if implemented later, reserves its private companion port.

@@ -23,7 +23,7 @@ Two layers, use both as the change demands:
 
 ## 1. The isolated disposable stack
 
-`ui/scripts/adhoc-stack.mjs` boots a complete fray-ui instance sandboxed on every axis so it can never
+`scripts/adhoc-stack.mjs` boots a complete fray-ui instance sandboxed on every axis so it can never
 touch the maintainer's live instance, real `~/.fray` SQLite, or real worker tmux:
 
 - `HOME` → a fresh temp dir (the SQLite DB + `server.lock` live in an empty `~/.fray` there)
@@ -80,7 +80,7 @@ unstyled and every geometry assertion after it fails for a reason that has nothi
 > This is not a style note. It was a real, repeated complaint (maintainer 2026-07-28: *"it keeps opening
 > tabs in my actual real Chrome"*), and the cause was this file recommending the MCP first — see below.
 
-### Default, and the one you should almost always use: `ui/scripts/shot.mjs` (puppeteer)
+### Default, and the one you should almost always use: `scripts/shot.mjs` (puppeteer)
 `shot.mjs` launches its **own isolated headless Chrome** every run — a fresh `puppeteer_dev_chrome_profile-*`
 temp dir, no shared profile, no collision, no window. It works in the background unconditionally and cannot
 disturb the maintainer. It screenshots and runs an in-page `evaluate` in one shot, and prints any
@@ -124,7 +124,7 @@ An empty board proves the shell renders but not much else. To exercise real flow
 surface or the UI itself (type a task in the composer via `shot.mjs`'s evaluate / CDP `fill`)
 so the state is created the way production creates it — never hand-write rows into the sandbox SQLite.
 
-**Use `ui/scripts/lib/rpc-client.mjs`. Never hand-roll `fetch` against `/rpc`.** Two details are easy to
+**Use `scripts/lib/rpc-client.mjs`. Never hand-roll `fetch` against `/rpc`.** Two details are easy to
 get wrong, and both fail SILENTLY — you get a plausible wrong answer instead of an error, which is how a
 harness ends up "proving" something it never tested:
 - **queries are `GET /rpc/<name>?input=<json>`, mutations are `POST /rpc/<name>`.** POSTing a query does
@@ -176,7 +176,7 @@ the tailer only needs three things, all inside the sandbox:
 
 Browser QA can't reach tmux sockets, the resume/wake path, SQLite migrations, or the scheduler. For those,
 write a small `Nub` harness that spins the **real** resource and asserts the **real** function — mocks prove
-nothing about tmux. Pattern (`ui/scripts/verify-legacy-wake.mjs` is a worked example for the legacy-socket
+nothing about tmux. Pattern (`scripts/verify-legacy-wake.mjs` is a worked example for the legacy-socket
 wake fix):
 
 ```

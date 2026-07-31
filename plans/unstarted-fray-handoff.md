@@ -16,8 +16,8 @@ Interactive slash commands do not map cleanly onto Fray's rendered thread UI. Th
 
 ### Evidence that it is unstarted
 
-- The current UI has a generic `Cmd+K` action/thread palette in `ui/packages/web/src/components/CommandPalette.tsx`, but it does not expose provider slash commands.
-- Claude's `/rename` has a deliberately special-purpose implementation in `ui/packages/server/src/rename-controller.ts`; current comments explicitly say Codex has no equivalent. This proves one command was handled, not that a general slash-command design was started.
+- The current UI has a generic `Cmd+K` action/thread palette in `packages/web/src/components/CommandPalette.tsx`, but it does not expose provider slash commands.
+- Claude's `/rename` has a deliberately special-purpose implementation in `packages/server/src/rename-controller.ts`; current comments explicitly say Codex has no equivalent. This proves one command was handled, not that a general slash-command design was started.
 - Repository searches found no Conductor research, provider command inventory, capability model, or slash-command UX plan outside unrelated OpenCode entrypoints and `/rename` handling.
 - Terminal, transcript, and rendering code is already modified, so terminal reliability itself is **started work** and must not be reclassified as a new implementation. Only the unstarted slash-command product investigation belongs here.
 
@@ -32,16 +32,16 @@ Interactive slash commands do not map cleanly onto Fray's rendered thread UI. Th
 
 ### Likely relevant modules
 
-- `ui/packages/web/src/components/CommandPalette.tsx`
-- `ui/packages/web/src/components/TerminalPane.tsx`
-- `ui/packages/web/src/components/ThreadActionBar.tsx`
-- `ui/packages/web/src/components/ChatView.tsx`
-- `ui/packages/server/src/rename-controller.ts`
-- `ui/packages/server/src/tmux.ts`
-- `ui/packages/server/src/terminal.ts`
-- `ui/packages/server/src/backend/claude.ts`
-- `ui/packages/server/src/backend/codex.ts`
-- `ui/packages/shared/src/index.ts`
+- `packages/web/src/components/CommandPalette.tsx`
+- `packages/web/src/components/TerminalPane.tsx`
+- `packages/web/src/components/ThreadActionBar.tsx`
+- `packages/web/src/components/ChatView.tsx`
+- `packages/server/src/rename-controller.ts`
+- `packages/server/src/tmux.ts`
+- `packages/server/src/terminal.ts`
+- `packages/server/src/backend/claude.ts`
+- `packages/server/src/backend/codex.ts`
+- `packages/shared/src/index.ts`
 
 ### Required verification for any later implementation
 
@@ -68,8 +68,8 @@ Questions embedded in a thread are currently positional: only the latest substan
 ### Evidence that it is unstarted
 
 - `.fray/question-stacking.md` records root-cause analysis and proposed forks with `status: planning`; every implementation step remains unchecked.
-- `ui/packages/web/src/lib/answering.ts` still exposes one `liveMsg`, walks backward to one trailing assistant message, and returns no questions after the first later user message.
-- `ui/packages/server/src/tailer.ts` still derives `pendingQuestion` from `lastAssistantHasQuestion` while the turn is idle.
+- `packages/web/src/lib/answering.ts` still exposes one `liveMsg`, walks backward to one trailing assistant message, and returns no questions after the first later user message.
+- `packages/server/src/tailer.ts` still derives `pendingQuestion` from `lastAssistantHasQuestion` while the turn is idle.
 - Searches found no addressed-question store, stable `(message, block)` question identity, per-question dismiss action, or persisted open-question collection.
 - The broader native-interaction/permission work in the dirty tree is already started and must not be conflated with this markdown-question lifecycle feature.
 
@@ -87,16 +87,16 @@ The exact scope is uncertain because the planning file records recommendations b
 
 ### Likely relevant modules
 
-- `ui/packages/web/src/lib/answering.ts`
-- `ui/packages/web/src/lib/questionBlocks.ts`
-- `ui/packages/web/src/components/ChatView.tsx`
-- `ui/packages/web/src/components/TodosView.tsx`
-- `ui/packages/web/src/components/InteractionCards.tsx`
-- `ui/packages/server/src/tailer.ts`
-- `ui/packages/server/src/board.ts`
-- `ui/packages/server/src/storage.ts`
-- `ui/packages/server/src/router.ts`
-- `ui/packages/shared/src/index.ts`
+- `packages/web/src/lib/answering.ts`
+- `packages/web/src/lib/questionBlocks.ts`
+- `packages/web/src/components/ChatView.tsx`
+- `packages/web/src/components/TodosView.tsx`
+- `packages/web/src/components/InteractionCards.tsx`
+- `packages/server/src/tailer.ts`
+- `packages/server/src/board.ts`
+- `packages/server/src/storage.ts`
+- `packages/server/src/router.ts`
+- `packages/shared/src/index.ts`
 
 ### Required verification for any later implementation
 

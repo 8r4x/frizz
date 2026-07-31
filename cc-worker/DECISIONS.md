@@ -12,13 +12,13 @@ what was ported from the orchestrator `cc/` plugin, what was dropped, and why.
 - **`scripts/fray/config.mjs` and `scripts/fray/agent-bindings.mjs` are THIN SHIMS** that
   `export *` from `../../../cc/scripts/fray/*.mjs`. cc-worker never copies config/vocab/binding
   logic — there is exactly one source of truth (cc's). This assumes cc is a sibling dir (`../../cc/`
-  from the plugin root), the same assumption fray-ui's server makes (`ui/ARCHITECTURE.md`: it imports
+  from the plugin root), the same assumption fray-ui's server makes (`ARCHITECTURE.md`: it imports
   the board logic from `../../cc/scripts/fray/*.mjs`).
 - **`bin/fray` and `bin/fray-update`** are cc's exact shim pattern, resolving cc's real scripts at
   `../../cc/scripts/fray/{index,thread-update}.mjs` relative to the bin file (cwd-independent). They
   land on the worker's Bash PATH the way cc's do. `fray-update` is the worker's primary tool for
   owning its one thread file; `fray` lets it read/validate the board.
-- **Portable artifact rule:** `ui/packages/cli/src/artifacts.ts` copies the exact sibling
+- **Portable artifact rule:** `packages/cli/src/artifacts.ts` copies the exact sibling
   `cc/scripts/fray/` module closure to `runtime/cc/scripts/fray/`, beside `runtime/cc-worker/`.
   The existing shims therefore resolve inside an immutable artifact when the source checkout is gone;
   both the worker and cc closure are hashed in `manifest.runtimeFiles` and required at read time.
@@ -277,7 +277,7 @@ auto-resolved one must never card as "Needs you"), and surfaces the last allow/d
 the only durable record an approval leaves anywhere, since allows are never written to the transcript.
 A marker with no `decision` (an older plugin build) still blocks exactly as before.
 
-VERIFICATION: `ui/scripts/verify-perm-marker.mjs` runs the REAL hook the way Claude Code does and
+VERIFICATION: `scripts/verify-perm-marker.mjs` runs the REAL hook the way Claude Code does and
 asserts every branch. The allow path was additionally driven against a REAL interactive `claude` (it
 cannot be exercised under `claude -p`, where PermissionRequest hooks do not fire).
 
@@ -370,7 +370,7 @@ FINAL MESSAGE and PERSIST through a SCRATCHPAD. This is the cc-worker-side reali
   hint lines, kind ∈ pr|ci|timer|session. NEVER for a human wait.
 - **` ```question `** — unchanged grammar (question / approval / multi / danger; trailing `- A. …`
   options + `Recommendation:`), now the ONLY handback-for-input; no status flip accompanies it.
-- CONSISTENCY: the taught grammar matches the shared parser (`ui/packages/shared/src/index.ts`
+- CONSISTENCY: the taught grammar matches the shared parser (`packages/shared/src/index.ts`
   `ThreadFence` kind ∈ done|awaiting, `AwaitingHint` kind ∈ pr|ci|timer|session). Opening line is
   exactly ` ```done `/` ```awaiting ` (nothing after the language word); exactly one fence, at the end.
 
@@ -427,7 +427,7 @@ section adds "pass the scratchpad path into helper prompts." `skills/dialectic` 
 hook still gates on it. (b) The scratchpad path convention is `.fray/threads/<session-id>/scratch.md` where
 `<session-id>` is the pinned `--session-id` (the same id the SessionStart hook sees as `session_id`);
 the seed hook NAMES that concrete path to the worker, so dispatch must keep pinning `--session-id`.
-(c) `ui/packages/server/src/dispatch.ts` `composePrompt()` STILL emits the dead per-thread contract
+(c) `packages/server/src/dispatch.ts` `composePrompt()` STILL emits the dead per-thread contract
 ("You own `.fray/<slug>.md` … set `status: blocked` … Set `status: done`") — that is server-vertical
 scope (not editable here), but it now CONTRADICTS the v2 WORKER_PROMPT and must be rewritten to the
 fence/scratchpad model (or dropped) by the dispatch owner. Flagged to server-core.
@@ -501,7 +501,7 @@ or report the gate unmet.
 ## 2026-07-21: Plugin slim-down — one contract copy, gh is the only injected skill
 
 The plugin stops shipping three of its four skills. `skills/worker` is DELETED: it was a second copy
-of the worker contract whose single source is `ui/packages/server/src/workerPrompt.ts` (the system
+of the worker contract whose single source is `packages/server/src/workerPrompt.ts` (the system
 prompt, rebuilt on every dispatch/resume and compaction-immune) — every contract edit had to be made
 twice, and the copies drifted. The session-seed pointer sentences that said "Load the `fray:worker`
 skill for the full contract" now point at the system-prompt contract only, and the contract tests pin
@@ -582,7 +582,7 @@ VERIFIED LIVE against cli 2.1.220, in an isolated `/tmp` project, not by proxy:
 - The `UserPromptSubmit` nudge fired live and reported ~31k tokens computed from the real transcript,
   confirming the usage parser works against Claude Code's actual format and not just a fixture.
 
-Regression net: `ui/packages/server/src/carryover-hook.test.ts` executes the real script over its
+Regression net: `packages/server/src/carryover-hook.test.ts` executes the real script over its
 wire contract (argv + stdin JSON + stdout) rather than asserting on its source.
 
 ## 2026-07-30 (same day, revised): carryover COLLAPSED into the scratchpad; the nudge moved mid-turn

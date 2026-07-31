@@ -34,7 +34,7 @@ test("worker guidance prefers declared tooling and makes no Luna child mandatory
   assert.match(claude, /workflow name.*event|workflow name plus event/)
   assert.match(claude, /use native `Monitor`/)
 
-  const promptDir = join(root, "ui/packages/server/src")
+  const promptDir = join(root, "packages/server/src")
   const codexPrompt = readFileSync(join(promptDir, "WORKER_PROMPT.codex.golden.txt"), "utf8")
   const claudePrompt = readFileSync(join(promptDir, "WORKER_PROMPT.claude.golden.txt"), "utf8")
   for (const prompt of [codexPrompt, claudePrompt]) {

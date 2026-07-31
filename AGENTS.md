@@ -57,7 +57,7 @@ must carry the inspected screenshots, console/page-error evidence, the optical-r
 explicit browser-cleanup confirmation. This does not apply to purely non-UI changes.
 
 **Load the `adhoc-cdp` skill for how** — the isolated disposable stack, the headless screenshot paths
-(Chrome DevTools MCP preferred, `ui/scripts/shot.mjs` as the reliable background fallback), which states
+(Chrome DevTools MCP preferred, `scripts/shot.mjs` as the reliable background fallback), which states
 and widths to capture, browser process hygiene (one owned instance per task; never a global close or a
 broad `pkill`), and how to embed evidence so fray renders it inline.
 
@@ -105,7 +105,7 @@ discovers this path natively); `.claude/skills/<name>` is a relative symlink int
 so Claude Code discovers the identical content. When adding a skill, create it under
 `.agents/skills/` and add the symlink; verified end-to-end 2026-07-21 with `adhoc-cdp` (Claude lists
 it through the symlink, `codex exec` resolves it at `.agents/skills/adhoc-cdp/SKILL.md`). Shared
-tooling scripts follow the same rule: one copy in an agent-neutral location (e.g. `ui/scripts/`),
+tooling scripts follow the same rule: one copy in an agent-neutral location (e.g. `scripts/`),
 referenced from skills — never duplicated into agent-specific config trees.
 
 # Use Nub for the Node toolchain

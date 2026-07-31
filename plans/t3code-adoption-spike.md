@@ -23,7 +23,7 @@ at `apps/server/src/provider/Layers/ClaudeAdapter.ts:3200` with `method: "canUse
 the `CLAUDE_CONFIG_DIR`-not-`HOME` keychain rationale at `apps/server/src/provider/Drivers/ClaudeHome.ts:27`;
 `EventNdjsonStream = "native" | "canonical" | "orchestration"` at
 `apps/server/src/provider/Layers/EventNdjsonLogger.ts:31`. On the fray side: `persistSession: true` at
-`ui/packages/server/src/backend/claude-agent-broker.ts:92`, `tailer.ts` is 2,737 lines, `NormalizedEvent`
+`packages/server/src/backend/claude-agent-broker.ts:92`, `tailer.ts` is 2,737 lines, `NormalizedEvent`
 carries 10 kinds with the "Claude's OWN fold does NOT route through this union" note, and the broker
 bridge is default-ON.
 
@@ -57,7 +57,7 @@ are foreground and interactive. It is *not* fine for fray, whose threads are una
 dispatches and where a fray restart during a dev cycle is routine.
 
 Fray's broker already solves this, and its own header says so
-(`ui/packages/server/src/backend/claude-agent-broker.ts`): *"the session OUTLIVES fray, so fray
+(`packages/server/src/backend/claude-agent-broker.ts`): *"the session OUTLIVES fray, so fray
 reconnects to the LIVE session after a restart instead of cold resume-from-disk, while keeping
 structured TYPED control (no TUI scraping, no tmux, no PTY — stream-json is pipes)."* It is a detached
 daemon with adopt-on-restart, keyed per session id, with owner-checked cleanup and idle exit.
@@ -130,7 +130,7 @@ heuristic for permission prompts, and the poll-tick latency floor.
 `packages/contracts/src/providerRuntime.ts` — 47 event types plus `CanonicalItemType` (14 item kinds)
 and `CanonicalRequestType` (9 approval kinds): turn lifecycle, item lifecycle, content deltas,
 approvals, structured user-input requests, sub-tasks, hooks, token usage, rate limits, MCP status,
-model reroutes. Fray's `NormalizedEvent` (`ui/packages/server/src/backend/types.ts:42`) has 10 kinds
+model reroutes. Fray's `NormalizedEvent` (`packages/server/src/backend/types.ts:42`) has 10 kinds
 and its own comment admits Claude bypasses it — so it is a lowest-common-denominator view only Codex
 drives, and a third agent means a third private fold.
 
@@ -182,7 +182,7 @@ already tracks Claude quota per account.
 `packages/effect-codex-app-server` is 42,860 generated lines + ~1,200 hand-written, from
 `openai/codex` → `codex-rs/app-server-protocol/schema/json` at a pinned commit. That path exists on
 `main` upstream and publishes both `schema/json/` and `schema/typescript/`. Fray hand-wrote 3,490 lines
-in `ui/packages/server/src/backend/codex-app-server.ts`, audited against Rust at tag `rust-v0.144.1`,
+in `packages/server/src/backend/codex-app-server.ts`, audited against Rust at tag `rust-v0.144.1`,
 behind a gate accepting exactly 0.144.1 — so every Codex bump is a fresh manual audit.
 
 ## Tier 3 — cheap, worth noting
@@ -205,7 +205,7 @@ behind a gate accepting exactly 0.144.1 — so every Codex bump is a fresh manua
    `UserInputQuestion[]` (options, labels), blocked on a Deferred, answered by returning
    `{behavior:"allow", updatedInput:{questions, answers}}`. Abort-aware: interrupting the turn resolves
    it empty and denies. This is the direct replacement for fray's ` ```question ` fence convention,
-   which exists only because the tmux era had no channel. Fray's `ui/ARCHITECTURE.md` records two prior
+   which exists only because the tmux era had no channel. Fray's `ARCHITECTURE.md` records two prior
    designs (blocking MCP tool; `fray-ask` CLI + sidecars) built and rejected as fragile — `canUseTool`
    interception is a third option with none of those failure modes: no timeout, no sidecar state, no
    markdown parsing, and structurally impossible for the agent to "forget the format."
