@@ -360,7 +360,7 @@ test("a background shell completion emits a labeled turn-boundary event that bre
   // …AND a boundary event line rides the wake point carrying the cause label (desc + exit code)…
   const boundary = msgs[1]
   assert.equal(boundary.kind, "event")
-  assert.equal(boundary.boundary, true)
+  assert.equal(boundary.boundary, "wake") // a background shell returning — the kind is what puts the terminal glyph on the divider
   assert.equal(boundary.text, "Background task «Start vite from web package dir» exited 143")
   // …and the post-wake turn is its OWN message (the merge chain was broken), not merged into the launch.
   assert.equal(msgs.length, 3)
@@ -1440,7 +1440,7 @@ test("claude compaction renders a boundary divider carrying its token bracket, a
       "assistant/message:Let me re-read my scratchpad.",
     ],
   )
-  assert.equal(msgs[1].boundary, true) // the centered divider rule
+  assert.equal(msgs[1].boundary, "compaction") // the centered divider rule, and NOT a `wake` — nothing ran, so it takes no glyph
   assert.equal(msgs[1].at, "2026-07-21T00:05:00.000Z")
 })
 
@@ -1449,7 +1449,7 @@ test("claude compaction without usable metadata still renders the divider (bare 
   const msgs = projectClaudeTranscript(raw)
   assert.equal(msgs.length, 1)
   assert.equal(msgs[0].text, "Context compacted")
-  assert.equal(msgs[0].boundary, true)
+  assert.equal(msgs[0].boundary, "compaction")
 })
 
 test("a synthetic provider AUTH-error record renders NO assistant bubble (the recovery card is its only surface)", () => {

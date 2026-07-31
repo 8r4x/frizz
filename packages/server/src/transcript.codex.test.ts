@@ -950,7 +950,7 @@ test("codex compaction renders a boundary divider bracketed by the token reading
   const msgs = parseCodexTranscript(raw)
   const i = msgs.findIndex((m) => m.kind === "event")
   assert.ok(i > 0, "the compaction emits a message")
-  assert.equal(msgs[i].boundary, true) // the centered divider rule, not a quiet inline label
+  assert.equal(msgs[i].boundary, "compaction") // the centered divider rule, not a quiet inline label — and named as a compaction, so it never takes the shell glyph a `wake` boundary wears
   assert.equal(msgs[i].text, "Context compacted — 242k → 37k tokens")
   assert.equal(msgs[i].at, "2026-07-11T00:11:00.000Z") // positioned at the compaction, not at the reading after it
   // Compaction lands MID-turn: the text either side of it must stay on its own side of the divider.

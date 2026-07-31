@@ -4,7 +4,7 @@ import { useSnapshot } from "valtio"
 import * as RadixTabs from "@radix-ui/react-tabs"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight, FileText, Hash, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, ShieldCheck, Sparkles, X, type LucideIcon } from "lucide-react"
+import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Bot, Check, ChevronRight, FileText, Hash, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, ShieldCheck, Sparkles, TerminalSquare, X, type LucideIcon } from "lucide-react"
 import type { AwaitingHint, BgShellView, NativeInputRequired as NativeInputRequiredData, PendingAsk, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@fray-ui/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
@@ -3854,7 +3854,7 @@ function AgentCompletionLine({ call, sourceId }: { call: TranscriptToolCall; sou
   const { tail } = subAgentCompletionOutcome(call)
   const canDrill = !!(slug && call.agentId)
   return (
-    <WakeDivider sourceId={sourceId} marker="agent" ariaLabel={canDrill ? undefined : `Sub-agent ${title} ${tail}`}>
+    <WakeDivider icon={Bot} sourceId={sourceId} marker="agent" ariaLabel={canDrill ? undefined : `Sub-agent ${title} ${tail}`}>
       <span className="shrink-0">Sub-agent</span>
       {/* The guillemets sit OUTSIDE the truncating element (and inside a gap-less nested flex) so a
           title clipped at a narrow width still closes its quote — `«a long title…` reads as broken
@@ -3908,7 +3908,7 @@ function SubAgentReportLine({ from, dispatchId, sourceId }: { from: string; disp
   // translation; see peerDispatchId. No id ⇒ plain text, never a dead link.
   const canDrill = !!(slug && dispatchId)
   return (
-    <WakeDivider sourceId={sourceId} marker="agent-report" ariaLabel={canDrill ? undefined : `Sub-agent ${from} reported`}>
+    <WakeDivider icon={Bot} sourceId={sourceId} marker="agent-report" ariaLabel={canDrill ? undefined : `Sub-agent ${from} reported`}>
       <span className="shrink-0">Sub-agent</span>
       {/* Guillemets OUTSIDE the truncating element, per the completion line: a title clipped at a narrow
           width still closes its quote. The TITLE is the only part allowed to shrink (`min-w-0 truncate`
@@ -3969,7 +3969,7 @@ function SendMessageLine({ to, type, dispatchId, targetLabel, sourceId }: { to?:
   const title = to === "main" ? undefined : (targetLabel ?? to)
   const canDrill = !!(slug && dispatchId)
   return (
-    <WakeDivider sourceId={sourceId} marker="agent-steer" ariaLabel={canDrill ? undefined : `${verb}${title ? ` ${title}` : ""}`}>
+    <WakeDivider icon={Bot} sourceId={sourceId} marker="agent-steer" ariaLabel={canDrill ? undefined : `${verb}${title ? ` ${title}` : ""}`}>
       <span className="shrink-0">{verb}</span>
       {/* Guillemets OUTSIDE the truncating title, and the title the only shrinkable part — the same
           construction the completion and report lines use, so a long child description clips cleanly at
@@ -4002,11 +4002,23 @@ function SendMessageLine({ to, type, dispatchId, targetLabel, sourceId }: { to?:
 // A quiet transcript annotation ("Thought for Ns"), or — with `boundary` — the wake divider a
 // background task/shell completion emits. Muted ~12px, no bubble, no icon chrome, sitting at the same
 // message rhythm as everything around it.
-function EventLine({ text, boundary, sourceId }: { text: string; boundary?: boolean; sourceId?: string }) {
-  // A turn BOUNDARY (an external wake — a background task/shell completion re-invoked the agent): a
-  // centered divider rule carrying the cause label ON it, so two consecutive assistant turns don't read
-  // as one bubble. This IS the section break the plain event line deliberately avoids.
-  if (boundary) return <WakeDivider sourceId={sourceId} marker="event" ariaLabel={text}>{text}</WakeDivider>
+function EventLine({ text, boundary, sourceId }: { text: string; boundary?: TranscriptMessage["boundary"]; sourceId?: string }) {
+  // A turn BOUNDARY: a centered divider rule carrying the cause label ON it, so two consecutive
+  // assistant turns don't read as one bubble. This IS the section break the plain event line
+  // deliberately avoids.
+  //
+  // The glyph is why the server names the KIND rather than sending a bare flag. A `wake` is a
+  // background shell/task coming back, and it takes the terminal glyph the rest of the app already uses
+  // for a background shell (BackgroundShellSheet, ExternalTerminalCommand). A `compaction` is not a
+  // child returning at all — nothing ran, the provider just dropped the conversation above this line —
+  // so it takes NO glyph rather than borrowing one that would misname it.
+  if (boundary) {
+    return (
+      <WakeDivider icon={boundary === "wake" ? TerminalSquare : undefined} sourceId={sourceId} marker="event" ariaLabel={text}>
+        {text}
+      </WakeDivider>
+    )
+  }
   // Transcript PUNCTUATION ("Thought for Ns", a context-compaction note) — a quiet, left-justified
   // regular light-grey line. No flanking dividers: it reads as a subtle annotation, not a section
   // break, and uses the same type scale as the adjacent activity gerund/digest.

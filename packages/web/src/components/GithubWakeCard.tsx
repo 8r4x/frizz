@@ -20,7 +20,7 @@ import { Bell, Bot, Github, User } from "lucide-react"
 import { parseGithubWakeSteer, type GithubWakeItem } from "@fray-ui/shared"
 import { CARD_BODY, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { MessageDebugId } from "./MessageDebugId.tsx"
-import { WakeDivider, WAKE_DIVIDER_ICON, WAKE_DIVIDER_IDENT } from "./WakeDivider.tsx"
+import { WakeDivider, WAKE_DIVIDER_IDENT } from "./WakeDivider.tsx"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { wakeCardTitle, wakeItemAge } from "../lib/githubWakeCard.ts"
@@ -117,6 +117,7 @@ export function GithubWakeCard({ text, sourceId, wrap }: { text: string; sourceI
   return (
     <div className="flex flex-col">
       <WakeDivider
+        icon={Github}
         sourceId={sourceId}
         marker="github"
         // Only the inert form takes the separator role — a divider carrying a focusable link may not.
@@ -124,7 +125,6 @@ export function GithubWakeCard({ text, sourceId, wrap }: { text: string; sourceI
         // spells it, and its test pins the wording.
         ariaLabel={href ? undefined : `${wakeCardTitle(total, steer.items[0].label, only?.actor)} on ${steer.ref}`}
       >
-        <Github size={12} className={WAKE_DIVIDER_ICON} />
         {/* The label TRUNCATES rather than wrapping. At queue-rail width the full sentence does not
             fit, and a divider whose label wraps to four lines stops being a hairline at all — it was
             the first thing that broke when this shape was tried.

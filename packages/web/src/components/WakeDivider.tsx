@@ -10,9 +10,15 @@
 // (maintainer 2026-07-27). `children` is the whole line for a shell; the agent and GitHub dividers pass
 // nodes so their titles can be links.
 import type { ReactNode } from "react"
+import type { LucideIcon } from "lucide-react"
 import { MessageDebugId } from "./MessageDebugId.tsx"
 
-export function WakeDivider({ children, sourceId, ariaLabel, marker }: { children: ReactNode; sourceId?: string; ariaLabel?: string; marker?: string }) {
+// `icon` is a prop rather than something each caller renders into `children`, so the glyph's size, its
+// position at the head of the label, and the measured petite-caps nudge below are stated ONCE. Five
+// dividers wear one now (maintainer 2026-07-31, on the GitHub one: "I like it so much that I think we
+// should include a similar icon for the other hairline dividers"), and five hand-rolled copies of a
+// sub-pixel optical correction is exactly how a family drifts apart.
+export function WakeDivider({ icon: Icon, children, sourceId, ariaLabel, marker }: { icon?: LucideIcon; children: ReactNode; sourceId?: string; ariaLabel?: string; marker?: string }) {
   return (
     <div
       data-fray-msg={sourceId}
@@ -25,7 +31,10 @@ export function WakeDivider({ children, sourceId, ariaLabel, marker }: { childre
     >
       <MessageDebugId sourceId={sourceId} />
       <span aria-hidden="true" className="h-px flex-1 bg-border/70" />
-      <span className="petite-caps flex min-w-0 items-center gap-1 break-words text-center text-[12px] text-muted/70">{children}</span>
+      <span className="petite-caps flex min-w-0 items-center gap-1 break-words text-center text-[12px] text-muted/70">
+        {Icon && <Icon aria-hidden="true" size={12} className={WAKE_DIVIDER_ICON} />}
+        {children}
+      </span>
       <span aria-hidden="true" className="h-px flex-1 bg-border/70" />
     </div>
   )
@@ -36,7 +45,8 @@ export function WakeDivider({ children, sourceId, ariaLabel, marker }: { childre
 // prose — the surrounding frame words are what the petite-caps treatment is for.
 export const WAKE_DIVIDER_IDENT = "[font-variant-caps:normal]"
 
-// A lucide glyph riding a divider's label. It does NOT take ICON_LABEL_NUDGE, and the reason is the
+// The glyph treatment `WakeDivider` applies to its `icon`. Not exported for callers to re-apply — they
+// pass the icon and this is what happens to it. It does NOT take ICON_LABEL_NUDGE, and the reason is the
 // petite caps: that nudge is calibrated against a NORMAL-case label, which inks from cap-top to
 // baseline, while this label inks from roughly x-height to baseline. The text's optical centre is
 // therefore ~1.2px LOWER here, so a glyph centred by `items-center` reads HIGH rather than low — the
@@ -48,9 +58,16 @@ export const WAKE_DIVIDER_IDENT = "[font-variant-caps:normal]"
 // mono. Both stacks want the SAME sign and nearly the same amount, unlike ICON_LABEL_NUDGE, so this is
 // one constant rather than a font-flipped variable. Residual after correcting: +0.09px / −0.03px.
 //
+// And it is GLYPH-INDEPENDENT, which is worth stating because it contradicts the usual rule that every
+// glyph needs its own correction. Re-measured across all three icons the dividers wear — Github (10px
+// ink), SquareTerminal (9px), Bot (8px) — every one lands on the SAME residual, +0.09px under system-ui
+// and −0.03px under mono. Lucide centres a glyph's ink inside its 24-unit viewBox, so only the ink's
+// EXTENT varies between them and its CENTRE does not; the amount to move that centre is therefore one
+// number. A non-lucide mark (an octicon, an emoji, an <img>) has no such guarantee — measure it.
+//
 // CALIBRATED FOR THE SIZE THAT SHIPS — this divider's 12px label in an 18px line box — and NOT claimed
 // scale-invariant. The label's leading is a fixed 18px, so doubling the type size does not double the
 // line box the glyph is centred in, and the required correction grows ~4x rather than 2x. The `em`
 // spelling is the safer default if the scale and the leading ever move together; if either moves
 // alone, re-measure rather than trusting this number.
-export const WAKE_DIVIDER_ICON = "shrink-0 translate-y-[0.04em]"
+const WAKE_DIVIDER_ICON = "shrink-0 translate-y-[0.04em]"

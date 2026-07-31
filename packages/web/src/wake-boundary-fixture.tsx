@@ -23,7 +23,7 @@ const messages: ChatMessage[] = [
     sourceId: "b1",
     role: "assistant",
     kind: "event",
-    boundary: true,
+    boundary: "wake",
     text: "Background task «Start vite from web package dir» exited 143",
     tools: [],
     parts: [],

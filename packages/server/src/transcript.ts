@@ -67,7 +67,7 @@ function compactionLabel(preTokens?: number, postTokens?: number): string {
   return shrank ? `Context compacted — ${formatTokens(preTokens!)} → ${formatTokens(postTokens!)} tokens` : "Context compacted"
 }
 function compactionMessage(sourceId: string, at: string | undefined, preTokens?: number, postTokens?: number): TranscriptMessage {
-  return { sourceId, role: "assistant", kind: "event", boundary: true, text: compactionLabel(preTokens, postTokens), tools: [], parts: [], at }
+  return { sourceId, role: "assistant", kind: "event", boundary: "compaction", text: compactionLabel(preTokens, postTokens), tools: [], parts: [], at }
 }
 
 // Normalize line endings to LF. A human follow-up injected through the agent's TERMINAL round-trips with
@@ -1700,7 +1700,7 @@ function completionEvents(
         // paint as one bubble. Emit a `boundary` event line at the wake point so the timeline shows a
         // divider carrying the cause ("Background task «…» exited N"). The caller resets lastAssistantId,
         // so this also breaks the assistant-record merge chain across the wake.
-        out.push({ role: "assistant", kind: "event", boundary: true, text: backgroundWakeLabel(shell.call, status, block), tools: [], parts: [], at })
+        out.push({ role: "assistant", kind: "event", boundary: "wake", text: backgroundWakeLabel(shell.call, status, block), tools: [], parts: [], at })
         continue
       }
       dispatches.delete(id)
