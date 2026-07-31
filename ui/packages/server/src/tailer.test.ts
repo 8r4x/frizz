@@ -1241,7 +1241,7 @@ test("tailer: subAgent() resolves a LIVE child, then its RETAINED completion, th
   t.tick()
   // `direct` = this session's OWN live Agent-tool child, i.e. the one case a steer can be addressed
   // at. Everything else the lookup can resolve is readable but not addressable.
-  assert.deepEqual(t.subAgent("t", "toolu_bg"), { outputFile: "/tmp/tasks/abc123.output", state: "running", direct: true, taskId: "abc123" })
+  assert.deepEqual(t.subAgent("t", "toolu_bg"), { outputFile: "/tmp/tasks/abc123.output", state: "running", direct: true, taskId: "abc123", startedAt: "2026-07-01T00:00:01.000Z" })
   assert.equal(t.subAgent("t", "toolu_unknown"), undefined, "an id we never dispatched → undefined (router maps to gone)")
 
   // completion retains the child as "done" — still resolvable for review after it leaves the live set
@@ -1250,7 +1250,14 @@ test("tailer: subAgent() resolves a LIVE child, then its RETAINED completion, th
   assert.deepEqual(t.get("t")?.subAgents, [], "gone from the LIVE surface")
   // RETAINED, so still readable — but never steerable: a finished child cannot receive anything, and
   // addressing one MISDELIVERS to the parent's main thread rather than failing (measured live).
-  assert.deepEqual(t.subAgent("t", "toolu_bg"), { outputFile: "/tmp/tasks/abc123.output", state: "done", direct: false })
+  assert.deepEqual(t.subAgent("t", "toolu_bg"), {
+    outputFile: "/tmp/tasks/abc123.output",
+    state: "done",
+    direct: false,
+    startedAt: "2026-07-01T00:00:01.000Z",
+    finishedAt: "2026-07-01T00:00:09.000Z",
+    outcome: "completed",
+  })
 })
 
 test("tailer: a resolved-but-missing output file (deleted child transcript) degrades to stale", () => {

@@ -88,7 +88,7 @@ import { createClaudeRenameController } from "./rename-controller.ts"
 import { awaitingFenceIdentity, isActionableAwaitingHint } from "./awaiting.ts"
 import { getDispatchPreferences, setDispatchPreference } from "./dispatch-preferences.ts"
 import { isBrokerClaudeRow, type SessionRow, type Storage } from "./storage.ts"
-import type { SessionTelemetry } from "./tailer.ts"
+import type { SessionTelemetry, SubAgentLookup } from "./tailer.ts"
 import { resolvePlanFile, deletePlanFile } from "./plan-files.ts"
 import { providerResumeCommand, tmuxAttachCommand } from "./external-terminal.ts"
 import { readBackgroundShellOutput } from "./background-shell-output.ts"
@@ -445,6 +445,40 @@ export async function stopAndForgetRegisteredRuntime(
   return forgotten
 }
 
+type TranscriptPageView = z.infer<typeof TranscriptPage>
+type AgentLifecycle = Pick<SubAgentLookup, "startedAt" | "finishedAt" | "outcome">
+
+// A spawn tool result measures only the dispatch RPC (often <1s), not the child it launched. Codex's
+// terminal child lifecycle lives in the tailer rather than in its parent rollout, so overlay the
+// retained start/finish/outcome onto both flat and block-ordered transcript projections before they
+// cross the RPC boundary. This returns fresh objects instead of mutating transcript cache entries.
+export function projectAgentLifecycles(
+  page: TranscriptPageView,
+  lookup: (id: string) => AgentLifecycle | undefined,
+): TranscriptPageView {
+  const projectTool = (tool: TranscriptPageView["messages"][number]["tools"][number]) => {
+    if (!tool.agentId || tool.agentStatus) return tool
+    const lifecycle = lookup(tool.agentId)
+    if (!lifecycle?.outcome) return tool
+    const start = lifecycle.startedAt ? Date.parse(lifecycle.startedAt) : Number.NaN
+    const finish = lifecycle.finishedAt ? Date.parse(lifecycle.finishedAt) : Number.NaN
+    const elapsed = Number.isFinite(start) && Number.isFinite(finish) && finish >= start ? finish - start : undefined
+    return {
+      ...tool,
+      agentStatus: lifecycle.outcome,
+      ...(elapsed === undefined ? {} : { agentElapsedMs: elapsed }),
+    }
+  }
+  return {
+    ...page,
+    messages: page.messages.map((message) => ({
+      ...message,
+      tools: message.tools.map(projectTool),
+      parts: message.parts.map((part) => part.kind === "tools" ? { ...part, tools: part.tools.map(projectTool) } : part),
+    })),
+  }
+}
+
 // The typed RPC surface. Every handler is thin: state mutations go through fray scripts
 // (thread files) or tmux (agents), then rebuild the board so a fresh snapshot fans out on SSE.
 export function createRouter(ctx: AppContext) {
@@ -621,7 +655,8 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         // Registry row → its session's transcript; foreign slug (a session id) → resolved directly; else [].
         // backendFor routes a codex thread through the codex rollout reader (else it renders empty).
-        return readLatestThreadTranscriptPage(ctx.project, ctx.storage, input.slug, ctx.backendFor)
+        const page = readLatestThreadTranscriptPage(ctx.project, ctx.storage, input.slug, ctx.backendFor)
+        return projectAgentLifecycles(page, (id) => ctx.tailer.subAgent(input.slug, id))
       },
     }),
 
@@ -631,7 +666,8 @@ export function createRouter(ctx: AppContext) {
       input: TranscriptEarlierInput,
       output: TranscriptPage,
       handler: async ({ input }) => {
-        return readEarlierThreadTranscriptPage(ctx.project, ctx.storage, input.slug, input.cursor, ctx.backendFor)
+        const page = readEarlierThreadTranscriptPage(ctx.project, ctx.storage, input.slug, input.cursor, ctx.backendFor)
+        return projectAgentLifecycles(page, (id) => ctx.tailer.subAgent(input.slug, id))
       },
     }),
 

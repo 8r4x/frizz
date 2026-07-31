@@ -1818,6 +1818,19 @@ function sameForeign(a: { id: string }[], b: { id: string }[]): boolean {
   return true
 }
 
+export interface SubAgentLookup {
+  outputFile?: string
+  outputFormat?: "codex"
+  state: "running" | "stale" | "done"
+  direct: boolean
+  taskId?: string
+  // Lifecycle instants/outcome let the transcript RPC replace an Agent dispatch CALL's latency with
+  // the CHILD's real runtime. Optional for descendants, whose sidecars do not carry a terminal row.
+  startedAt?: string
+  finishedAt?: string
+  outcome?: "completed" | "failed" | "killed"
+}
+
 export interface Tailer {
   get(slug: string): SessionTelemetry | undefined
   // FOREIGN session ids (JSONL files in the project dir with no registry row — maintainer terminals)
@@ -1836,7 +1849,7 @@ export interface Tailer {
   // firing a message that would silently land on the main thread instead.
   // `taskId` is the provider's session-wide background-task handle. Unlike `direct`, which controls
   // steer safety, it is available for descendants too and is what the SDK's stopTask accepts.
-  subAgent(slug: string, id: string): { outputFile?: string; outputFormat?: "codex"; state: "running" | "stale" | "done"; direct: boolean; taskId?: string } | undefined
+  subAgent(slug: string, id: string): SubAgentLookup | undefined
   // Read-only background-shell drawer lookup. Output content stays server-side until the scoped query.
   backgroundShell?(slug: string, id: string): { command?: string; outputFile?: string; state: "running" | "done" } | undefined
   // Manual dismiss of a live background op (the × on an op row): retire it from tracking as if a
@@ -2696,7 +2709,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   // the drill-in drawer's server-side lookup. Checks the LIVE map first (running/stale), then the
   // RETAINED ring (a completed child kept for review → "done"). Undefined only when the id is unknown
   // to both (never dispatched, or aged out of the ring) → the router maps that to "gone".
-  function subAgentLookup(slug: string, id: string): { outputFile?: string; outputFormat?: "codex"; state: "running" | "stale" | "done"; direct: boolean; taskId?: string } | undefined {
+  function subAgentLookup(slug: string, id: string): SubAgentLookup | undefined {
     const state = states.get(slug)
     if (!state || !registeredStateIsCurrent(state)) return undefined
     // `outputFormat` is spread in only when set, so a Claude child's lookup shape is byte-identical.
@@ -2709,9 +2722,18 @@ export function createTailer(deps: TailerDeps): Tailer {
       state: entryStale(live, now()) ? "stale" : "running",
       direct: live.kind === "agent",
       ...(live.taskId ? { taskId: live.taskId } : {}),
+      startedAt: live.startedAt,
     }
     const dead = state.retiredSubAgents.get(id)
-    if (dead) return { outputFile: dead.outputFile, ...(dead.outputFormat ? { outputFormat: dead.outputFormat } : {}), state: "done", direct: false }
+    if (dead) return {
+      outputFile: dead.outputFile,
+      ...(dead.outputFormat ? { outputFormat: dead.outputFormat } : {}),
+      state: "done",
+      direct: false,
+      ...(dead.startedAt ? { startedAt: dead.startedAt } : {}),
+      ...(dead.finishedAt ? { finishedAt: dead.finishedAt } : {}),
+      outcome: dead.status,
+    }
     // A DESCENDANT — a child of a child, of a child, at any depth. Its dispatch is in an ANCESTOR's
     // transcript rather than this thread's, so neither map above can hold it; the flat sidecar index
     // resolves it by the same tool_use id. Still undefined when nothing matches, so an id fray genuinely

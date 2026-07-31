@@ -18,6 +18,7 @@ import {
   hasPendingPermissionChange,
   hasUnresolvedBackgroundOps,
   isAppServerCodexRow,
+  projectAgentLifecycles,
   stopAndForgetRegisteredRuntime,
   stopRegisteredRuntime,
   stopRuntimeBySlug,
@@ -49,6 +50,32 @@ const noopTailer: Tailer = {
   stop: () => {},
   tick: () => {},
 }
+
+test("agent lifecycle overlay replaces spawn latency with the retained child runtime", () => {
+  const dispatch = {
+    name: "Spawn agent",
+    detail: "review-runtime",
+    agentId: "call_child",
+    status: "completed" as const,
+    durationMs: 533,
+  }
+  const page = {
+    messages: [{ role: "assistant" as const, text: "", tools: [dispatch], parts: [{ kind: "tools" as const, tools: [dispatch] }] }],
+    beforeCursor: null,
+    hasEarlier: false,
+    reachedTurnBoundary: true,
+    transcriptKey: "test-key",
+  }
+  const projected = projectAgentLifecycles(page, (id) => id === "call_child" ? {
+    startedAt: "2026-07-31T14:50:00.000Z",
+    finishedAt: "2026-07-31T15:03:00.000Z",
+    outcome: "completed",
+  } : undefined)
+  const expected = { ...dispatch, agentStatus: "completed" as const, agentElapsedMs: 13 * 60_000 }
+  assert.deepEqual(projected.messages[0].tools[0], expected)
+  assert.deepEqual(projected.messages[0].parts[0], { kind: "tools", tools: [expected] }, "ordered parts receive the same overlay")
+  assert.equal("agentStatus" in page.messages[0].tools[0], false, "the transcript cache projection is not mutated")
+})
 
 test("GitHub dispatch payload preserves the exact captured backend profile (no permission passthrough)", () => {
   const batch = {

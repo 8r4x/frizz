@@ -101,11 +101,12 @@ export function agentReading(input: AgentReadingInput): AgentReading | null {
     }
   }
 
-  // 3. NO child record — the call's own status is all that is left. "cancelled" is the same event as a
-  //    killed child, so it says the same word: the reader must not be able to tell that fray lost the
-  //    correlation.
+  // 3. NO child record — the call's own status is all that is left. A SUCCESSFUL spawn call says only
+  //    that dispatch returned; its duration is RPC latency, NOT the child runtime. Render nothing rather
+  //    than claiming a 13-minute agent "ran for 533 ms". Failed/cancelled calls never launched a child,
+  //    so their own terminal timing remains honest and useful.
   if (status === "pending") return { label: "running", tone: "muted", title: "Running", showSpinner: true }
-  if (!status && durationMs === undefined) return null
+  if (status !== "failed" && status !== "cancelled") return null
   const failed = status === "failed"
   const stopped = status === "cancelled"
   const exact = precise(durationMs)

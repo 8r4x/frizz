@@ -39,10 +39,10 @@ test("a tracked child reads a BARE runtime — the mark on its left is what says
   assert.match(agentReading({ liveState: "rested", liveElapsedMs: 4 * MIN })!.title, /^Dispatched/)
 })
 
-// THE CORE INVARIANT. Losing the correlation to a child is fray's problem, not the reader's: the same
-// event must produce the same word and the same tone either way. This is what "cancelled" in amber
-// beside "stopped" in gray was violating.
-test("whether a child record survived never changes the words or the tone", () => {
+// A failed/cancelled dispatch has no child runtime to overlay, but its terminal words and tone still
+// match the corresponding child outcome. This is what "cancelled" in amber beside "stopped" in gray
+// was violating.
+test("terminal failures keep the same words and tone when no child record exists", () => {
   const tracked = agentReading({ agentStatus: "killed", agentElapsedMs: 41 * MIN })!
   const orphaned = agentReading({ status: "cancelled", durationMs: 41 * MIN })!
   assert.equal(orphaned.label, tracked.label, "an interrupted dispatch says 'stopped' with or without a child record")
@@ -59,7 +59,7 @@ test("only a genuine failure is toned as one", () => {
   const failures = [{ agentStatus: "failed" as const }, { status: "failed" as const, durationMs: 1 }]
   const rest = [
     { agentStatus: "completed" as const }, { agentStatus: "killed" as const },
-    { status: "completed" as const, durationMs: 1 }, { status: "cancelled" as const, durationMs: 1 },
+    { status: "cancelled" as const, durationMs: 1 },
     { status: "pending" as const }, { liveState: "running" as const, liveElapsedMs: 1 },
   ]
   for (const input of failures) assert.equal(agentReading(input)!.tone, "failed", JSON.stringify(input))
@@ -84,6 +84,8 @@ test("durations are the spelled-out minute-resolution form, with the precise val
 test("nothing to report renders nothing, never a fabricated reading", () => {
   assert.equal(agentReading({}), null)
   assert.equal(agentReading({ status: undefined, durationMs: undefined }), null)
+  assert.equal(agentReading({ status: "completed", durationMs: 533 }), null, "a spawn call's latency is not the child runtime")
+  assert.equal(agentReading({ durationMs: 533 }), null, "legacy status-less call timing is equally insufficient")
   // A resolved child with no elapsed still reports its outcome — the verb is the load-bearing part.
   assert.deepEqual(agentReading({ agentStatus: "killed" }), { label: "stopped", duration: undefined, tone: "muted", title: "Stopped after an unknown time", showSpinner: false })
 })
