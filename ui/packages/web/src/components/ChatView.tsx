@@ -2431,7 +2431,9 @@ function SendMessageCard({ to, summary, body, type, status, durationMs }: { to?:
   // must not claim the child steered its own parent. Seen in a sub-agent's drawer, which is exactly where
   // an upward report is read from (the chat's report line drills in here), the card read "Steered" for a
   // message the child had sent to its dispatcher.
-  const label = isShutdown ? "Shutdown" : to === "main" ? "Reported" : "Steered"
+  // …and a codex `followup_task` is neither: it QUEUES more work onto an existing sub-agent rather
+  // than steering the turn in flight, so it gets its own verb instead of borrowing "Steered".
+  const label = isShutdown ? "Shutdown" : type === "codex_followup" ? "Followed up" : to === "main" ? "Reported" : "Steered"
   return (
     <div className="fray-bash">
       <button

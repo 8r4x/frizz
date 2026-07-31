@@ -1873,6 +1873,15 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
   // sees the whole chain in one place rather than scattered single-step teasers. Reset (→ null) at each
   // turn boundary (turn-start / a human turn) so the next turn opens a fresh block.
   let turnReasoning: TranscriptMessage | null = null
+  // The most recent reasoning HEADER, waiting to caption the next tool card (see codexReasoningCaption).
+  // Codex's exec_command carries no `description` field the way Claude's Bash does, so a codex tool card
+  // could only ever be titled by its own flattened command. But codex thinks immediately before nearly
+  // every call (30772 reasoning steps vs 29104 tool cards across 386 real rollouts — very close to 1:1),
+  // and that step's bold header ("**Planning worktree inspection and commit**") is precisely the status
+  // line its TUI prints above the command. Hand it to the card as `desc` and a codex transcript reads
+  // like a Claude one, with the command still a click away in the card body. Consumed by the FIRST card
+  // that follows, so a batch is captioned once rather than repeating the same line down the batch.
+  let pendingCaption: string | undefined
   // Timestamp of the PREVIOUS event (any kind), so each reasoning step's THINKING time is its gap from
   // the event before it. Summed onto the turn's reasoning block as durationMs → the "Thought for Ns"
   // label. Tool-EXECUTION time never lands here: it's the gap on a function_call_output, not on a
@@ -1924,6 +1933,13 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
           const m = openAssistant(ev.at, sourceId)
           const call = codexToolCall(ev.name, ev.input, ev.id)
           call.status = "pending"
+          // Caption this card with the thinking step that preceded it, unless the card already carries
+          // a purpose-built title. Consumed either way: a poll folding into its owner must still spend
+          // the caption, or a stale header would surface on some later, unrelated command.
+          if (pendingCaption) {
+            if (!call.desc) call.desc = pendingCaption
+            pendingCaption = undefined
+          }
           const isPoll = call.name === "Poll process" && call.sessionId !== undefined
           const owner = isPoll ? shellSessions.get(String(call.sessionId)) : undefined
           // Polls are lifecycle updates, not independent shell work. Keep an unpaired poll visible as
@@ -2006,6 +2022,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
               out.push(turnReasoning)
             }
             cur = null
+            pendingCaption = codexReasoningCaption(text) ?? pendingCaption
           }
           break
         }
@@ -2136,9 +2153,29 @@ function codexDirectToolCall(name: string, obj: Record<string, unknown>, callId?
         input: compactFields(obj, ["agent_type", "fork_context", "fork_turns", "service_tier"]),
       }
     case "send_message":
-      return { name: "Send message", detail: target }
+      return codexPeerMessageCall("Send message", target, obj)
     case "followup_task":
-      return { name: "Follow up", detail: target }
+      return codexPeerMessageCall("Follow up", target, obj)
+    case "write_stdin": {
+      // Codex's unified exec drives a yielded PTY through write_stdin — but the overwhelming majority
+      // of these calls send `chars: ""` purely to POLL for more output (4551/4695 = 96.9% across 386
+      // real rollouts). The WRAPPER protocol already normalizes them (codexExecWrapperCall below), but
+      // without the same case here the DIRECT function_call form fell through to codexToolCall's
+      // generic tail and rendered as its own card literally named `write_stdin` — 4706 of them, the
+      // second most common card in the whole corpus, and one long-running command alone minted 153.
+      // Normalizing onto the same shape lets projectCodexTranscript's poll fold-in (which keys on
+      // "Poll process" + sessionId) collapse them into the originating Bash card for BOTH protocols.
+      const sessionId = typeof obj.session_id === "number" || typeof obj.session_id === "string" ? obj.session_id : undefined
+      const chars = typeof obj.chars === "string" ? obj.chars : undefined
+      const isPoll = chars === "" || chars === undefined
+      const isInterrupt = chars === "\u0003"
+      return {
+        name: isPoll ? "Poll process" : isInterrupt ? "Interrupt process" : "Write stdin",
+        detail: sessionId !== undefined ? `session ${sessionId}` : "running process",
+        input: isPoll ? undefined : capToolInput(isInterrupt ? "Ctrl-C" : chars!),
+        sessionId,
+      }
+    }
     case "update_plan": {
       // Codex's to-do list. The direct function_call form ships real JSON, so the plan is already an
       // array of objects here; the JS-wrapper form goes through codexExecWrapperCall's scanner instead.
@@ -2182,6 +2219,57 @@ function codexDirectToolCall(name: string, obj: Record<string, unknown>, callId?
       return undefined
   }
 }
+
+// The one-line caption a codex reasoning step offers the tool card that follows it. Codex writes its
+// summary as markdown bold headers — 30752 of 30772 summary blocks across 386 real rollouts are header
+// lines and nothing else — so the LAST header in the step is the thought immediately preceding the call.
+// Returns undefined for a step that is plain prose (the 0.1% case), leaving the previous caption in
+// place rather than titling a command with a half-sentence of narration.
+function codexReasoningCaption(text: string): string | undefined {
+  let caption: string | undefined
+  for (const line of text.split("\n")) {
+    const m = /^\s*\*\*(.+?)\*\*\s*$/.exec(line)
+    if (m) caption = m[1].trim()
+  }
+  return caption && caption.length <= CAPTION_MAX ? caption : undefined
+}
+// A caption replaces the command summary in the card header, so an over-long one would push the
+// command out of view entirely. Codex headers run ~30-60 chars; anything past this is not a header.
+const CAPTION_MAX = 120
+
+// Codex's peer-messaging tools (`send_message` steers a live sub-agent; `followup_task` queues more
+// work onto one). Both used to render as a bare `{name, detail: target}` generic card — a row that
+// named the recipient and showed NOTHING of what was said, which is exactly why the maintainer could
+// not tell what a "FOLLOW UP" card had done. Promote them onto the same SendMessageCard family Claude's
+// SendMessage uses, so the verb leads and the body is expandable.
+//
+// The body is usually unrecoverable: codex Fernet-encrypts inter-agent `message` payloads (821/821
+// across 386 real rollouts — send_message, followup_task AND spawn_agent alike), and the tool's own
+// result is an empty string, so there is no plaintext anywhere in the parent transcript to render.
+// Say so IN the card rather than leaving an empty row that reads like a fray bug. A message that does
+// arrive in the clear (older/unencrypted codex builds) still renders verbatim.
+function codexPeerMessageCall(label: string, target: string | undefined, obj: Record<string, unknown>): TranscriptToolCall {
+  const raw = strField(obj.message)
+  const encrypted = raw !== undefined && CODEX_ENCRYPTED_MESSAGE.test(raw.trim())
+  const body = !raw
+    ? undefined
+    : encrypted
+      ? "_Codex encrypts inter-agent message bodies — the text is not recoverable from the rollout. Open the recipient's own thread to read what it received._"
+      : capToolInput(redactToolPayload(raw))
+  return {
+    name: label,
+    detail: target,
+    sendTo: target,
+    sendSummary: target,
+    ...(body ? { sendBody: body } : {}),
+    // Drives the card's verb. "Steered" (the SendMessage default) is wrong for a queued follow-up.
+    ...(label === "Follow up" ? { sendType: "codex_followup" } : {}),
+  }
+}
+
+// A Fernet token — codex's envelope for an inter-agent message body. Kept in step with the redaction
+// pattern in redactToolPayload, which rewrites the same shape to "[encrypted payload]".
+const CODEX_ENCRYPTED_MESSAGE = /^gAAAA[A-Za-z0-9_-]{40,}={0,2}$/
 
 // A codex dispatch's model+effort cell ("gpt-5.6-terra/high"), the analogue of a Claude dispatch's
 // `subagent_type` tag. Matches the label codex-subagents.ts puts on the live tracked entry.
@@ -2617,7 +2705,14 @@ function codexToolResult(text: string): CodexToolResult {
         : "completed"
   const seconds = Number(text.match(/(?:Wall time:?|Wall time seconds:)\s*([0-9.]+)/i)?.[1])
   const durationMs = Number.isFinite(seconds) ? seconds * 1000 : undefined
-  return { output: output || undefined, status, exitCode, durationMs }
+  // A command that YIELDED rather than exited says so in the same envelope slot the exit code would
+  // occupy: "Process running with session ID 53228". That id is what the model's later write_stdin
+  // calls poll, and registering it here is what lets projectCodexTranscript fold those polls into this
+  // command's card (the wrapper protocol got the id from its JSON result; the direct protocol had no
+  // reader at all, so every direct-form poll stayed an orphan card).
+  const sessionMatch = text.match(/Process running with session ID\s*(\d+)/)
+  const sessionId = sessionMatch ? Number(sessionMatch[1]) : undefined
+  return { output: output || undefined, status, exitCode, durationMs, sessionId }
 }
 
 // Result text is untrusted command/tool output: words such as "0 failed" and documentation about a
