@@ -330,7 +330,13 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
         role={virtualized ? "region" : undefined}
         aria-label={virtualized ? "Thread conversation" : undefined}
         aria-busy={virtualized && loadingEarlier ? true : undefined}
-        className="relative min-h-0 flex-1 overflow-y-auto outline-none [overflow-anchor:none] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-fg/60"
+        // pb-3 is the transcript viewport's OWN bottom air, on the scroller rather than on either
+        // content path: the virtualized transcript sizes its content div to the virtualizer's exact
+        // totalSize (no room for a trailing pad there), and the eager path's column already carries
+        // py-5, so putting it here is the one place both paths end up with the same gap to the
+        // non-scrolling composer footer. 20px of trailing space read as the last row crowding the
+        // prompt box; 32px reads as an ending.
+        className="relative min-h-0 flex-1 overflow-y-auto pb-3 outline-none [overflow-anchor:none] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-fg/60"
       >
       {virtualized && count > 0 ? (
         <VirtualizedThreadTranscript
@@ -400,10 +406,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
           tool-card column reads uniformly no matter how the turns were chunked. */}
       {/* data-transcript-column marks a stack of messages whose rhythm comes from withMessageSpacers.
           Every such column is gap-less by construction; the marker is what the spacing e2e measures. */}
-      {/* pb > pt on purpose: the bottom edge butts against the non-scrolling composer footer, so the
-          last row needs more air under it than the first row needs above the header to read as
-          "the transcript ends here" rather than as text crowding the prompt box. */}
-      <div data-transcript-column className="flex min-h-full flex-col px-6 pt-5 pb-8">
+      <div data-transcript-column className="flex min-h-full flex-col px-6 py-5">
         {count === 0 ? (
           <div className="flex-1 flex items-center justify-center text-sm text-muted">
             {q.isPending ? (
@@ -544,7 +547,11 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
       {/* This entire footer is deliberately non-scrolling: transcript history alone overflows. */}
       {/* Prompt box FIRST, then the background-ops strip UNDERNEATH it at the very bottom (maintainer
           2026-07-09): running sub-agents / shells / monitors sit below the composer, not above it. */}
-      <div data-thread-chat-footer className="z-10 shrink-0 border-t border-border bg-panel">
+      {/* ONE hairline, at the queue card's weight. `border-border/60` is exactly the rule the queue
+          card draws under its header (TodosView); the chat footer used to draw full-strength
+          `border-border` AND have ThreadActionBar draw a second one under it, which stacked into a
+          2px rule. Keep the separator on THIS wrapper only — the bar inside is padding-only. */}
+      <div data-thread-chat-footer className="z-10 shrink-0 border-t border-border/60 bg-panel">
         <ThreadActionBar
           slug={slug}
           onTerminal={copyTerminalCommand}
