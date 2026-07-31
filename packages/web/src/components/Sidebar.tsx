@@ -284,6 +284,33 @@ export function SectionHeader({ label, count, collapsed, onToggle }: { label: st
   )
 }
 
+// The title's trailing adornments — the provider mark, the `terminal` tag, the legacy status chip —
+// are ATOMIC inline boxes, and the line breaker is free to break right BEFORE one even though no
+// whitespace separates it from the title. On a wrapping title that regularly stranded the provider
+// mark ALONE on a second line, with the whole title above it (maintainer 2026-07-31: "often the only
+// thing that breaks onto the new line is the agent icon"). Glue them to the title's LAST WORD in a
+// nowrap group so the pair wraps together instead.
+//
+// The group takes the whole last word when it is short enough to fit the narrowest rail beside the
+// adornments, and otherwise just its TAIL — gluing a rail-wide token whole would overflow instead of
+// wrapping. Cutting a long token is safe: an element boundary mid-word adds no break opportunity of
+// its own, so the head still breaks exactly where `break-words` would have broken it, and the mark
+// keeps a dozen characters of company either way.
+const MAX_GLUED_TITLE_WORD = 16
+const GLUED_TITLE_TAIL = 12
+function TitleWithTrailers({ title, children }: { title: string; children: ReactNode }) {
+  const text = title.trimEnd()
+  const wordStart = text.lastIndexOf(" ") + 1
+  const cut = text.length - wordStart <= MAX_GLUED_TITLE_WORD ? wordStart : text.length - GLUED_TITLE_TAIL
+  if (cut >= text.length) return <>{title}{children}</>
+  return (
+    <>
+      {text.slice(0, cut)}
+      <span className="whitespace-nowrap">{text.slice(cut)}{children}</span>
+    </>
+  )
+}
+
 // One THREAD row. Session rows (the default): the derived session indicator, the title, a foreign
 // read-only tag, an awaiting hint gloss, and the activity + live-sub-agent suffix. NO Mark-as verb —
 // session threads use Archive in the persistent thread footer. A LEGACY row
@@ -364,17 +391,18 @@ export const ThreadRow = memo(function ThreadRow({
         </span>
           <span className="min-w-0 flex-1 flex flex-col">
           <span className={`break-words text-[13px] leading-[19px] ${dimLabel ? "text-fg/50" : held ? "text-fg/75" : "text-fg/90"}`}>
-            {displayTitle(t)}
-            {!legacy && <ProviderMark backend={t.backend} className="ml-1" />}
-            {foreign && (
-              <span
-                className="petite-caps ml-1.5 inline-block rounded border border-border/60 px-1 align-[2px] text-[9.5px] leading-[14px] text-muted/55"
-                title="Read-only — running in an external terminal"
-              >
-                terminal
-              </span>
-            )}
-            {legacy && <StatusChip status={t.archived ? "archived" : t.status} />}
+            <TitleWithTrailers title={displayTitle(t)}>
+              {!legacy && <ProviderMark backend={t.backend} className="ml-1" />}
+              {foreign && (
+                <span
+                  className="petite-caps ml-1.5 inline-block rounded border border-border/60 px-1 align-[2px] text-[9.5px] leading-[14px] text-muted/55"
+                  title="Read-only — running in an external terminal"
+                >
+                  terminal
+                </span>
+              )}
+              {legacy && <StatusChip status={t.archived ? "archived" : t.status} />}
+            </TitleWithTrailers>
           </span>
           {hasSubtitle && (
             <span className="mt-0.5 flex flex-col gap-0.5 min-w-0 text-[11.5px] leading-[15px]">

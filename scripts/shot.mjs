@@ -5,8 +5,13 @@
 //
 // Usage:
 //   nub scripts/shot.mjs <url> [out.png] [evalExprOr@file] [--before=exprOr@file] [--w=1440] [--h=900] [--wait=1500]
+//     [--clip=<css selector>] [--pad=8] [--dsf=2]
 //   evalExpr: a JS expression string evaluated in page context (completion value → printed as JSON).
 //   @file:    read the expression from a file (e.g. an occlusion routine).
+//   --clip:   shoot only that element's box (+ --pad px of margin) instead of the viewport, and --dsf
+//             raises the device pixel ratio — together they make a 27px row judgeable without zooming
+//             the page (a `zoom`/`transform` hack reflows this app's centered layout and moves the very
+//             thing you were trying to photograph off-screen).
 import { readFileSync } from "node:fs"
 import puppeteer from "puppeteer"
 
@@ -26,7 +31,7 @@ if (!url) {
 const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox", "--force-color-profile=srgb"] })
 try {
   const page = await browser.newPage()
-  await page.setViewport({ width: W, height: H, deviceScaleFactor: 2 })
+  await page.setViewport({ width: W, height: H, deviceScaleFactor: Number(flags.dsf) || 2 })
   const errors = []
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()) })
   page.on("pageerror", (e) => errors.push(String(e)))
@@ -37,7 +42,16 @@ try {
     await page.evaluate(expr)
   }
   if (out) {
-    await page.screenshot({ path: out, fullPage: false })
+    const clip = flags.clip
+      ? await page.evaluate((sel, pad) => {
+          const el = document.querySelector(sel)
+          if (!el) return null
+          const r = el.getBoundingClientRect()
+          return { x: Math.max(0, r.x - pad), y: Math.max(0, r.y - pad), width: r.width + pad * 2, height: r.height + pad * 2 }
+        }, flags.clip, Number(flags.pad) || 8)
+      : null
+    if (flags.clip && !clip) console.error(`clip selector matched nothing: ${flags.clip}`)
+    await page.screenshot({ path: out, fullPage: false, ...(clip ? { clip } : {}) })
     console.error("shot ->", out)
   }
   if (evalArg) {

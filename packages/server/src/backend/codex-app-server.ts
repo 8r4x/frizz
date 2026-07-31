@@ -66,7 +66,7 @@ export function selectCodexHostKind(
   if (flagValue === "1" || flagValue === "true") return nativeSupported ? "native" : "daemon"
   return nativeSupported ? "native" : "daemon"
 }
-export const CODEX_APP_SERVER_SUPPORTED_VERSION = "0.144.6"
+export const CODEX_APP_SERVER_SUPPORTED_VERSION = "0.146.0"
 // Upgrade policy: the AUDITED version is an exact coordinate — changing it requires a fresh
 // generated-protocol audit plus a source audit at the matching immutable Rust tag/commit, then a new
 // fingerprint and contract fixtures. These coordinates are intentionally runtime-visible diagnostics,
@@ -75,8 +75,8 @@ export const CODEX_APP_SERVER_SUPPORTED_VERSION = "0.144.6"
 // The ACCEPTANCE RULE is deliberately not that exact coordinate — see codexVersionVerdict below.
 export const CODEX_APP_SERVER_PROTOCOL_REVISION = Object.freeze({
   packageVersion: CODEX_APP_SERVER_SUPPORTED_VERSION,
-  sourceTag: "rust-v0.144.6",
-  sourceCommit: "5d1fbf26c43abc65a203928b2e31561cb039e06d",
+  sourceTag: "rust-v0.146.0",
+  sourceCommit: "e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
 })
 /** Numeric semver compare; a version that will not parse sorts BELOW everything (fails closed). */
 export function compareCodexVersions(a: string, b: string): number {
@@ -102,8 +102,9 @@ export type CodexVersionVerdict =
  * every two days, fray has no tmux fallback for it (dispatch.ts throws), and `ensureConnected` gates
  * ALL EIGHT operation entry points — dispatch, follow-up, steer, interrupt, resume, warm-up, settings.
  * So one `npm i -g @openai/codex` turned every Codex thread into a permanent hard failure recoverable
- * only by editing a source constant and rebuilding fray. Measured 2026-07-27: the pin is 0.144.6 and
- * `@openai/codex@0.145.0` was already published.
+ * only by editing a source constant and rebuilding fray. The drift is continuous: the pin was 0.144.6
+ * on 2026-07-27 with `@openai/codex@0.145.0` already published, and by 2026-07-31 the installed stable
+ * was 0.146.0 — which is the re-audit this pin now records.
  *
  * The rule now: a FLOOR that refuses, and a CEILING that only warns.
  *  - BELOW the audited version → refuse. An older binary may genuinely lack params fray sends, and

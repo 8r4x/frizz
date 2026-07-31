@@ -334,9 +334,9 @@ test("bridge is the sole codex transport (always enabled) and negotiates exact i
   assert.deepEqual(h.calls[0]!.args, ["app-server", "--stdio"])
   assert.equal(h.calls[0]!.binary, "/opt/codex")
   assert.deepEqual(CODEX_APP_SERVER_PROTOCOL_REVISION, {
-    packageVersion: "0.144.6",
-    sourceTag: "rust-v0.144.6",
-    sourceCommit: "5d1fbf26c43abc65a203928b2e31561cb039e06d",
+    packageVersion: "0.146.0",
+    sourceTag: "rust-v0.146.0",
+    sourceCommit: "e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
   })
   assert.notEqual(h.calls[0]!.env, process.env, "the child receives a point-in-time environment snapshot")
   for (const key of ["HOME", "PATH", "CODEX_HOME", "OPENAI_API_KEY"] as const) {
@@ -1637,17 +1637,26 @@ test("an OLDER Codex fails negotiation before any thread is created", async () =
   h.close()
 })
 
+/** One minor above the audited pin — always "newer", whatever the pin is re-audited to. */
+function aheadOfPin(): string {
+  const [major, minor] = CODEX_APP_SERVER_SUPPORTED_VERSION.split(".").map(Number)
+  return `${major}.${minor + 1}.0`
+}
+
 test("a NEWER Codex RUNS, and records that it is ahead of the audit", async () => {
   // This case used to be a hard refusal, and that made one `npm i -g @openai/codex` a total,
   // permanent Codex outage: no tmux fallback, every operation gated behind ensureConnected, recovery
   // only by editing a source constant and rebuilding fray. codex ships a stable roughly every two
-  // days, and 0.145.0 was already published while fray pinned 0.144.6.
-  const h = harness("0.145.0")
+  // days, so the pin is behind a published stable almost immediately after every re-audit.
+  // Derived from the pin rather than written as a literal: a re-pin used to silently turn this test's
+  // hardcoded "newer" version into an OLDER one, testing the refusal path under the ahead path's name.
+  const ahead = aheadOfPin()
+  const h = harness(ahead)
   const session = await h.bridge.startDisposableSession({ threadSlug: "newer", sessionId: "newer-session", cwd: h.dir })
   assert.ok(session, "a newer app-server is usable")
   assert.equal(h.processes[0]!.clientRequests.some((message) => message.method === "thread/start"), true)
   assert.ok(
-    h.diagnostics.some((d) => (d as { event?: string; received?: string }).event === "version-ahead" && (d as { received?: string }).received === "0.145.0"),
+    h.diagnostics.some((d) => (d as { event?: string; received?: string }).event === "version-ahead" && (d as { received?: string }).received === ahead),
     `diagnostics were ${JSON.stringify(h.diagnostics)}`,
   )
   h.close()

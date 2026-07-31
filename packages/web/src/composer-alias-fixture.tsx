@@ -136,7 +136,7 @@ function DrawerSurface() {
           </p>
         ))}
       </div>
-      <div data-thread-chat-footer className="z-10 shrink-0 border-t border-border bg-panel">
+      <div data-thread-chat-footer className="z-10 shrink-0 border-t border-border/60 bg-panel">
         <ThreadActionBar slug={SLUG} ops={<BackgroundOpsStrip slug={SLUG} className="px-1 pb-2 pt-1.5" />} />
       </div>
     </div>

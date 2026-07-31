@@ -20,7 +20,7 @@ export function ThreadActionBar({ slug, ops }: { slug: string; onTerminal?: () =
   // composer, no verbs. Say so plainly instead of the follow-up box (there's no tmux stdin to steer).
   if (thread.foreign) {
     return (
-      <div className="shrink-0 border-t border-border bg-panel px-4 py-3 text-[11.5px] text-muted/70">
+      <div className="shrink-0 px-4 py-3 text-[11.5px] text-muted/70">
         Read-only — running in an external terminal.
       </div>
     )
@@ -32,7 +32,12 @@ export function ThreadActionBar({ slug, ops }: { slug: string; onTerminal?: () =
       surface="chatComposer"
       id="followup-input"
       placeholder="Follow up…"
-      className="shrink-0 border-t border-border bg-panel px-3 py-3"
+      // PADDING ONLY — no border, no background. The separator + panel fill belong to the
+      // [data-thread-chat-footer] wrapper in ChatView that hosts this bar; carrying them here too
+      // stacked a second hairline directly under the first, so the line above the prompt box read
+      // as a 2px rule instead of the queue card's single hairline. Same shape as the queue card's
+      // own call site (TodosView: `shrink-0 px-5 pb-3 pt-0`) and as drawer-composer-footer-fixture.
+      className="shrink-0 px-3 py-3"
       ops={ops}
     />
   )

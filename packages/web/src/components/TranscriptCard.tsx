@@ -119,12 +119,21 @@ export function CardContent({ children }: { children: ReactNode }) {
 // about all three of fill (panel-2 / elevated / an accent or red wash), border color, and whether they
 // carried a shadow — which is what made nine sibling cards read as nine unrelated shapes.
 //
-// The bottom padding is a step DEEPER than the top (pb-4 vs pt-3) and that asymmetry is deliberate. The
-// top gap sits under a text line, whose leading already donates optical space; the bottom gap sits under
-// the action row, whose button is a solid filled block that inks all the way to its own box edge. At an
-// equal 12px metric the bottom therefore read visibly tighter than the sides (maintainer 2026-07-31).
-// 16px also makes the bottom gap 17px counting the border — equal to the side gap, which is what lets
-// the action button's bottom-left corner be reasoned about against the card's corner at all.
+// Radius and padding are ONE decision, not two, because together they set whether the action button's
+// corner relates to the card's. Two nested corners share an arc centre iff `cardRadius − buttonRadius ==
+// inset`, so with the inset uniform (p-3 + the 1px border = 13px) and the action on the standard 6px
+// control corner, the card wants ~19px. rounded-2xl (16px) lands 4.2px off — inside the ~2-3px band
+// where the eye stops reading the two corners as unrelated, and the closest an in-vocabulary token gets.
+//
+// The earlier shape — 16px padding on an 8px card — could not get there from any button radius: it put
+// the corners 18-21px apart, and the concentric solve wanted a SQUARE button, which the maintainer
+// rejected as "a little too pointy" (2026-07-31). Trimming the inset is what buys the roundness back;
+// it is the same lever, and the same arithmetic, as the composer's footer chip (Composer.tsx).
+//
+// The padding is uniform, so the bottom gap equals the sides. It reads deeper than an equal metric gap
+// under a text line would, because leading donates optical space that a solid filled button does not —
+// that asymmetry is exactly why an equal 12px used to look tight beside a 16px side gap, and why the
+// answer is a smaller uniform inset rather than a deeper bottom one.
 export function TranscriptCard({
   tone = "neutral",
   icon,
@@ -151,7 +160,7 @@ export function TranscriptCard({
 } & Omit<ComponentPropsWithoutRef<"div">, "children" | "className">) {
   const { border, head } = CARD_TONES[tone]
   return (
-    <div {...rest} className={`min-w-0 rounded-lg border ${border} bg-panel-2 px-4 ${children == null ? "py-3" : "pt-3 pb-4"} ${className}`}>
+    <div {...rest} className={`min-w-0 rounded-2xl border ${border} bg-panel-2 p-3 ${className}`}>
       <CardHead icon={icon} label={label} head={head} aside={aside} />
       {children != null && <CardContent>{children}</CardContent>}
     </div>
@@ -189,20 +198,13 @@ export const CARD_ACTION_EXPLAINER = "min-w-0 flex-1 text-[11px] leading-snug te
 // The ONLY departure is a genuinely secondary sibling standing beside the primary (the provider-fault
 // card's "Retry" next to "Sign in"), which stays outlined so the pair keeps a hierarchy.
 export const CARD_PRIMARY_BUTTON = "bg-fg px-2.5 py-1 text-bg hover:opacity-90"
-// The corner a card's action wears, one step TIGHTER than the ordinary rounded-md control (maintainer
-// 2026-07-31: the Snooze corner should read concentric with the card's). Concentric means the two
-// corner arcs share a centre, which holds iff `cardRadius − buttonRadius == inset` — the same rule
-// spelled out on the composer's footer chip (Composer.tsx), where it was met by shrinking the inset to
-// 6px. Here BOTH other terms are already fixed: the inset is 17px (px-4 + the 1px border) because every
-// card's action starts on the same x as its title and body, and the card is rounded-lg because it nests
-// inside the queue card's own rounded-lg — growing it to the 23px an exact solve wants would leave the
-// callout three times rounder than its own parent, which is the very inversion being complained about.
-// So the arcs cannot literally share a centre, and the button radius is the only term left to move. It
-// moves DOWN: offset falls monotonically as the radius shrinks (measured 21.2px at 6 → 18.4px at 4 →
-// 12.7px at 0), and 0 is where the control stops reading as a button at all beside 100-odd rounded-md
-// siblings. 4px is the tightest step that still reads as a control, and it is what kills the lozenge
-// look a 6px radius gave a 24px-tall button.
-export const CARD_ACTION_RADIUS = "rounded-sm"
+// The corner a card's action wears — the ordinary control radius, kept there ON PURPOSE. The card's
+// radius and padding are what were moved to make it read right against the corner (see the shell above);
+// tightening the BUTTON instead was tried first and rejected, because at a 17px inset the concentric
+// solve runs to a square and every step toward it just reads pointy without buying a visible
+// relationship. Do not re-derive this one on its own: it is the dependent term of `cardRadius −
+// buttonRadius == inset`, and changing it alone breaks a triple that is currently 4.2px from exact.
+export const CARD_ACTION_RADIUS = "rounded-md"
 // The same verb with the icon+label layout every card action uses. Cards differ only in what they pass
 // beyond this (shrink-0, a disabled treatment), never in the fill.
 export const CARD_PRIMARY_ACTION = `flex shrink-0 items-center gap-1 ${CARD_ACTION_RADIUS} text-[11px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 ${CARD_PRIMARY_BUTTON}`

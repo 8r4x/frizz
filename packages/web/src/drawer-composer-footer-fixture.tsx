@@ -75,7 +75,7 @@ function Fixture() {
             </article>
           ))}
         </div>
-        <footer data-thread-chat-footer className="z-10 shrink-0 border-t border-border bg-panel">
+        <footer data-thread-chat-footer className="z-10 shrink-0 border-t border-border/60 bg-panel">
           <div data-thread-action-bar className="px-3 py-3">
             <Composer
               surface="drawerFooterFixture"
