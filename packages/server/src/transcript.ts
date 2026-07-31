@@ -11,6 +11,7 @@ import {
   isWakeDelivery,
   parseAgentMessage,
   stripWakeDeliveryToken,
+  THOUGHT_EVENT_PREFIX,
   type TranscriptMessage,
   type TranscriptPage,
   type TranscriptTodo,
@@ -442,7 +443,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         if (thisTs && prevTs) {
           const gap = Date.parse(thisTs) - Date.parse(prevTs)
           if (Number.isFinite(gap) && gap >= THINK_MIN_MS) {
-            out.push({ sourceId, role: "assistant", kind: "event", text: `Thought for ${fmtThinkDur(gap)}`, tools: [], parts: [], at: thisTs })
+            out.push({ sourceId, role: "assistant", kind: "event", text: `${THOUGHT_EVENT_PREFIX}${fmtThinkDur(gap)}`, tools: [], parts: [], at: thisTs })
             lastAssistantId = null
           }
         }
@@ -761,7 +762,12 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
               if (dispatchId) call.sendDispatchId = dispatchId
               if (described) call.sendTargetLabel = described
             }
-            if (call.backgroundState === "background" && typeof block.id === "string") backgroundShells.set(block.id, { at: rec.timestamp, call })
+            // The launch id rides the CALL as well as this map: the client reconciles its ops-strip row
+            // against the board's tracked shell by exactly this key (see TranscriptToolCall.shellId).
+            if (call.backgroundState === "background" && typeof block.id === "string") {
+              call.shellId = block.id
+              backgroundShells.set(block.id, { at: rec.timestamp, call })
+            }
           }
           if (typeof block.id === "string" && calls.length > 0) {
             pendingTools.set(block.id, { calls, name: String(block.name ?? "tool"), at: rec.timestamp })
@@ -1269,7 +1275,12 @@ function attachToolResults(
     // "a background bash script completed, but it did not resume the agent" (2026-07-30).
     const promoted = entry.calls[0]
     if (promoted && text && autoBackgroundedToolResult(text) && b.is_error !== true) {
-      for (const call of entry.calls) call.backgroundState = "background"
+      for (const call of entry.calls) {
+        call.backgroundState = "background"
+        // Same launch key as a deliberate background launch — the tailer parks an auto-backgrounded
+        // shell under its original tool_use id too, so the strip can still reconcile the two rows.
+        call.shellId = b.tool_use_id
+      }
       if (!backgroundShells.has(b.tool_use_id)) backgroundShells.set(b.tool_use_id, { at: entry.at, call: promoted })
     }
     // A successful Agent result is launch metadata, not child completion. Keep waiting for the

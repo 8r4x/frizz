@@ -286,6 +286,10 @@ test("background Bash launch stays running through its acknowledgement and only 
   const live = parseTranscript([launch, acknowledged].join("\n"))[0].tools[0]
   assert.equal(live.status, "pending")
   assert.equal(live.backgroundState, "background")
+  // The launch tool_use id, which is also the key the TAILER tracks this shell under. The ops strip
+  // lists the same shell from both sources and reconciles them on exactly this — it used to reconcile on
+  // label+startedAt, and the two sources do not share an instant (see lib/childOps mergeBackgroundShells).
+  assert.equal(live.shellId, "bash-bg")
 
   const completed = parseTranscript([launch, acknowledged, taskNotification("bash-bg", "completed", "2026-07-01T00:00:05.000Z")].join("\n"))[0].tools[0]
   assert.equal(completed.status, "completed")
@@ -490,6 +494,7 @@ test("a FOREGROUND Bash auto-backgrounded on timeout keeps its card pending, the
   const detached = parseTranscript([launch, handoff].join("\n"))[0].tools[0]
   assert.equal(detached.status, "pending", "the handoff ack is not the command's result — the shell is still running")
   assert.equal(detached.backgroundState, "background", "from the handoff on it is an ordinary detached shell")
+  assert.equal(detached.shellId, "bash-fg", "the tailer parks an auto-backgrounded shell under its ORIGINAL tool_use id too, so the strip can still reconcile the two rows")
 
   // Correlating by TASK id alone (the notification shape that carries no tool-use-id) proves the
   // handoff's "(ID: …)" was captured, not just the tool_use pairing.

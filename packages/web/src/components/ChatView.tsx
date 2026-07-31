@@ -40,7 +40,7 @@ import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
 import { FOREGROUND_MARK_AFTER_MS, foregroundToolIsRunning, hasRunningToolIndicator, isPendingForegroundTool, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
 import { formatToolDuration } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
-import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, visibleChildOps } from "../lib/childOps.ts"
+import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, mergeBackgroundShells, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
 import { agentReading } from "../lib/agentReading.ts"
@@ -51,7 +51,7 @@ import { InteractionStack } from "./InteractionCards.tsx"
 // surface can render them without importing the thread view. QuestionBlockCard in particular is
 // shared with the native-AskUserQuestion path, which reaches it through InteractionCards.tsx —
 // a file THIS one imports, so the card could not have stayed here without a module cycle.
-import { CARD_ACTION_EXPLAINER, CARD_ACTION_RADIUS, CARD_BODY, CARD_PRIMARY_ACTION, CARD_PRIMARY_BUTTON, CardActions, CardContent, CardHead, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
+import { BLOCK_RADIUS, CARD_ACTION_EXPLAINER, CARD_ACTION_RADIUS, CARD_BODY, CARD_PRIMARY_ACTION, CARD_PRIMARY_BUTTON, CardActions, CardContent, CardHead, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 // The resting card, shared with the queue (TodosView passes it the event-Snooze; these two surfaces
 // deliberately pass no action — see the module header).
@@ -120,16 +120,19 @@ function isLiveTranscriptBackgroundTool(tool: TranscriptToolCall): boolean {
 // telemetry still reports bgShells:[]. Present those calls through the EXISTING anchored ops strip and
 // remove only their live copy from the conversation. Once a shell resolves, its completed historical
 // card returns at its canonical transcript position.
-function transcriptBackgroundShells(messages: readonly ChatMessage[]): BgShellView[] {
-  const shells: BgShellView[] = []
+function transcriptBackgroundShells(messages: readonly ChatMessage[]): (BgShellView & TranscriptShellRecord)[] {
+  const shells: (BgShellView & TranscriptShellRecord)[] = []
   for (const message of messages) {
     for (const tool of message.tools) {
       if (!isLiveTranscriptBackgroundTool(tool)) continue
       if (!message.at) continue
       shells.push({
         label: tool.desc ?? tool.detail ?? tool.command ?? "Background command",
+        // The projected MESSAGE's instant, which is the only one this side has — and is NOT the launch
+        // record's, so it can never be reconciled against the board's row. `launchId` is what does that.
         startedAt: message.at,
         state: "running",
+        ...(tool.shellId ? { launchId: tool.shellId } : {}),
       })
     }
   }
@@ -372,7 +375,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
       {q.transportFallback && (
         <div
           data-transcript-sync-fallback
-          className="mx-6 mt-3 flex flex-wrap items-center gap-2.5 rounded-md border border-border-strong bg-panel-2 px-3 py-2 text-[12px]"
+          className={`mx-6 mt-3 flex flex-wrap items-center gap-2.5 ${BLOCK_RADIUS} border border-border-strong bg-panel-2 px-3 py-2 text-[12px]`}
           title={q.transportFallback.kind === "payload-too-large"
             ? `Live payload ${q.transportFallback.actualBytes} bytes; socket limit ${q.transportFallback.maxBytes} bytes`
             : `Transcript read budget reached (${q.transportFallback.scope}); retry after about ${q.transportFallback.retryAfterMs}ms`}
@@ -1142,7 +1145,7 @@ function VirtualizedThreadTranscript({
             ) : row.kind === "transport-fallback" ? (
               transportFallback ? <div className="px-6 pt-3"><div
                 data-transcript-sync-fallback
-                className="flex flex-wrap items-center gap-2.5 rounded-md border border-border-strong bg-panel-2 px-3 py-2 text-[12px]"
+                className={`flex flex-wrap items-center gap-2.5 ${BLOCK_RADIUS} border border-border-strong bg-panel-2 px-3 py-2 text-[12px]`}
                 title={transportFallback.kind === "payload-too-large"
                   ? `Live payload ${transportFallback.actualBytes} bytes; socket limit ${transportFallback.maxBytes} bytes`
                   : `Transcript read budget reached (${transportFallback.scope}); retry after about ${transportFallback.retryAfterMs}ms`}
@@ -1713,6 +1716,11 @@ export interface CollapsedTool {
   // like the prompt/read/command entries, stands alone — two consecutive lists are two different list
   // states and must never fold into a ×2 count.
   todos?: TranscriptTodo[]
+  // Set for a "Thought for Ns" line the coalescer folded INTO this activity run (see
+  // lib/toolActivity.thoughtActivityEntry). It is not a call: it never counts toward the disclosure's
+  // `Ran N tool calls`, and it renders as the same quiet meta row EventLine draws — just inside the
+  // expansion, at the point in the run where the model actually stopped to think.
+  thought?: string
   count: number
 }
 
@@ -1725,7 +1733,11 @@ function collapseTools(tools: TranscriptMessage["tools"]): CollapsedTool[] {
   const out: CollapsedTool[] = []
   for (const t of tools) {
     const last = out[out.length - 1]
-    if (t.edit) {
+    if (t.thought !== undefined) {
+      // Folded-in thinking stands alone: two identical "Thought for 24s" lines are two separate pauses
+      // and must never read as one ×2 row.
+      out.push({ name: t.name, thought: t.thought, count: 1 })
+    } else if (t.edit) {
       const hasResultContext = Boolean(t.input || t.output || t.status || t.exitCode !== undefined)
       if (last && last.edits && !hasResultContext && !last.input && !last.output && !last.status && last.edits[0].file === t.edit.file) last.edits.push(t.edit)
       else out.push({ name: t.name, detail: t.detail, edits: [t.edit], input: t.input, output: t.output, status: t.status, backgroundState: t.backgroundState, exitCode: t.exitCode, cwd: t.cwd, sessionId: t.sessionId, durationMs: t.durationMs, count: 1 })
@@ -1798,8 +1810,19 @@ function shortenTarget(detail: string): string {
 function MinimalToolActivity({ tools, at }: { tools: CollapsedTool[]; at?: string }) {
   const [expanded, setExpanded] = useState(false)
   const cardsId = useId()
-  const total = tools.reduce((n, t) => n + t.count, 0)
+  // Folded-in thinking rides in `tools` but is not a call — it must not inflate `Ran N tool calls`.
+  const total = tools.reduce((n, t) => (t.thought === undefined ? n + t.count : n), 0)
   const label = settledToolActivityLabel(total, editedFileCount(tools))
+  // A run whose only member is a thought has no disclosure to hide behind — the live tool tail is
+  // withheld during a running turn (historicalToolActivityMessages), which can empty a run down to the
+  // thought it absorbed. Render it as the plain meta row it was before the fold, not as `Ran 0`.
+  if (total === 0) {
+    return (
+      <div className="flex flex-col">
+        {withSpacers(tools.map((tool, i) => <ToolCardRouter key={i} t={tool} startedAt={at} />), 6)}
+      </div>
+    )
+  }
   return (
     <div data-tool-activity data-tool-activity-state="settled" className="flex min-w-0 flex-col">
       <button
@@ -1868,6 +1891,9 @@ export function ToolCardRouter({ t, startedAt }: { t: CollapsedTool; startedAt?:
   const board = useBoard()
   const thread = slug ? threadBySlug(board, slug) : undefined
   const liveBackgroundState = liveBackgroundOperationState(t, thread?.bgShells ?? [])
+  // Thinking the coalescer folded into this run — the same quiet meta line EventLine draws, rendered
+  // at the point in the expansion where the model actually stopped to think.
+  if (t.thought !== undefined) return <div className={TRANSCRIPT_META_LABEL_CLASS}>{t.thought}</div>
   if (t.edits && t.status !== "failed" && t.status !== "cancelled") {
     return <DiffBlock edits={t.edits} meta={<ToolStatusMeta status={t.status} backgroundState={t.backgroundState} liveBackgroundState={liveBackgroundState} exitCode={t.exitCode} durationMs={t.durationMs} />} />
   }
@@ -2816,7 +2842,7 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
           // in the app uses. A KEYBOARD focus ring still has to exist, so it keeps the accent — but
           // OFFSET onto the near-black page, which is the only place this yellow reads clean and is how
           // every other focus ring in the app is drawn.
-          className={`relative rounded-2xl rounded-br-sm bg-user-bubble px-3.5 py-2 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere] text-bg ${queued ? "opacity-50" : ""} ${unqueueable ? "cursor-pointer transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg" : ""} ${unqueuePending ? "!opacity-30" : ""} ${sticky ? `transition-[max-height] duration-200 ease-out ${scrollable ? "overflow-y-auto" : "overflow-hidden"}` : ""}`}
+          className={`relative ${BLOCK_RADIUS} rounded-br-sm bg-user-bubble px-3.5 py-2 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere] text-bg ${queued ? "opacity-50" : ""} ${unqueueable ? "cursor-pointer transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg" : ""} ${unqueuePending ? "!opacity-30" : ""} ${sticky ? `transition-[max-height] duration-200 ease-out ${scrollable ? "overflow-y-auto" : "overflow-hidden"}` : ""}`}
         >
           {prose}
           {/* Fade the last ~2.5rem of text into the bubble colour — keeps the box fully rounded + opaque
@@ -3068,7 +3094,7 @@ function AnswersCard({ answers, queued, sourceId }: { answers: PairedAnswer[]; q
   return (
     <div data-fray-msg={sourceId} className={`group/msg relative self-end flex w-full max-w-[85%] flex-col items-end ${queued ? "opacity-50" : ""}`}>
       <MessageDebugId sourceId={sourceId} side="left" />
-      <div className="w-full min-w-0 rounded-2xl rounded-br-sm border border-border-strong bg-elevated px-3.5 py-3">
+      <div className={`w-full min-w-0 ${BLOCK_RADIUS} rounded-br-sm border border-border-strong bg-elevated px-3.5 py-3`}>
         <CardHead icon={ListChecks} label="Answers" />
         <CardContent>
           <div className="flex flex-col gap-2.5">
@@ -3133,7 +3159,7 @@ export function BlockImage({ path, hideCaption, altText }: { path: string; hideC
         data-local-path={path}
         data-local-image="true"
         onError={() => setBroken(true)}
-        className="max-w-full max-h-[420px] w-auto self-center cursor-pointer rounded-lg border border-border object-contain"
+        className={`max-w-full max-h-[420px] w-auto self-center cursor-pointer ${BLOCK_RADIUS} border border-border object-contain`}
       />
       {!hideCaption && <figcaption className="font-mono-keep text-[11px] text-muted/60 break-all">{base}</figcaption>}
     </figure>
@@ -3150,7 +3176,7 @@ export function BlockFile({ path }: { path: string }) {
   return (
     <button
       type="button"
-      className="local-file-action inline-flex max-w-full items-center gap-1.5 rounded-lg border border-border bg-panel-2 px-2.5 py-1.5 text-left align-top no-underline hover:border-accent"
+      className={`local-file-action inline-flex max-w-full items-center gap-1.5 ${BLOCK_RADIUS} border border-border bg-panel-2 px-2.5 py-1.5 text-left align-top no-underline hover:border-accent`}
       data-local-path={path}
       title={path}
     >
@@ -3223,9 +3249,9 @@ export function InlineVisualization({ file }: { file: string }) {
   }, [])
 
   if (available === false || !src) {
-    return <div role="status" className="rounded-lg border border-border bg-panel-2 px-3 py-2 text-[12px] text-muted">Visualization unavailable: <span className="font-mono-keep break-all">{file}</span></div>
+    return <div role="status" className={`${BLOCK_RADIUS} border border-border bg-panel-2 px-3 py-2 text-[12px] text-muted`}>Visualization unavailable: <span className="font-mono-keep break-all">{file}</span></div>
   }
-  if (available === null) return <div role="status" className="h-20 animate-pulse rounded-lg bg-panel-2" aria-label={`Loading ${file}`} />
+  if (available === null) return <div role="status" className={`h-20 animate-pulse ${BLOCK_RADIUS} bg-panel-2`} aria-label={`Loading ${file}`} />
   return (
     <iframe
       ref={iframeRef}
@@ -3637,28 +3663,17 @@ export function BackgroundOpsStrip({
   // Queue cards render live sub-agents as compact child lines directly under their composer. They
   // still use this strip for unrelated background shells/Monitors, so suppress agent duplication.
   includeAgents?: boolean
-  // Codex deliberate background execs are transcript-native; its board telemetry is still empty.
-  transcriptShells?: readonly BgShellView[]
+  // Codex deliberate background execs are transcript-native; its board telemetry is still empty. A
+  // CLAUDE shell shows up here AND in the board's telemetry — `launchId` is what lets the two rows
+  // reconcile into one (see mergeBackgroundShells).
+  transcriptShells?: readonly (BgShellView & TranscriptShellRecord)[]
 }) {
   const board = useBoard()
   const thread = threadBySlug(board, slug)
   const agents = includeAgents ? thread?.subAgents ?? [] : []
-  const shells = [...(thread?.bgShells ?? [])]
-  // A single shell can arrive through both provider board telemetry (which has its tool-use id) and
-  // transcript projection (which currently has only launch label+time). Index BOTH identities for
-  // every board row; choosing the id *instead of* the launch identity rendered the same process twice.
-  const boardShellKeys = new Set(shells.flatMap((shell) => [
-    ...(shell.id ? [`id:${shell.id}`] : []),
-    `launch:${shell.label}\u0000${shell.startedAt ?? ""}`,
-  ]))
-  for (const shell of transcriptShells) {
-    const keys = [
-      ...(shell.id ? [`id:${shell.id}`] : []),
-      `launch:${shell.label}\u0000${shell.startedAt ?? ""}`,
-    ]
-    if (keys.some((key) => boardShellKeys.has(key))) continue
-    shells.push(shell)
-  }
+  // A single shell arrives through BOTH provider board telemetry and transcript projection; they are
+  // reconciled on the launch tool_use id (see mergeBackgroundShells for why label+startedAt could not).
+  const shells = mergeBackgroundShells(thread?.bgShells ?? [], transcriptShells)
   const total = agents.length + shells.length
   // This is intentionally independent of transcript cards: it sits immediately below the affected
   // prompt box so a resting worker that owns a live shell still reads as active at a glance. Do not

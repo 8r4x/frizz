@@ -111,6 +111,7 @@ export const CHILD_DISMISS_NOUN = { AGENT: "sub-agent", SHELL: "background shell
 // for a child that still has running work under it (see anchorRoots in tailer.ts), so hiding it would
 // hide the live grandchildren indented beneath it — which is exactly the disappearance this vocabulary
 // keeps having to fix.
+
 export type ChildOpRecord = { readonly state: string; readonly id?: string }
 
 const unresolved = (op: ChildOpRecord): boolean => op.state === "running" || op.state === "stale" || op.state === "rested"
@@ -121,4 +122,46 @@ export function visibleChildOps<T extends ChildOpRecord>(ops: readonly T[], surf
   if (surface === "card") return ops.filter(unresolved)
   if (surface === "rail") return ops.filter((op): op is T & { id: string } => Boolean(op.id) && unresolved(op))
   return ops
+}
+
+// ── ONE background shell, reported by TWO sources — reconciling them ─────────────────────────────
+//
+// The ops strip lists a live shell from the board's tracked telemetry (which carries the launching
+// tool_use id, so its row drills in) and from the transcript projection (Codex's background execs are
+// transcript-native and the older board telemetry reports none for them). A Claude shell shows up in
+// BOTH, so the strip has to recognize the two rows as one process.
+//
+// It used to reconcile on label + startedAt, and that key does not hold. The board's instant is the
+// tool_use RECORD's timestamp; the transcript's is the projected MESSAGE's — and an assistant turn whose
+// prose lands before its call makes them differ by seconds. Measured on the launch the maintainer caught
+// (nub session ccc520d9, 2026-07-31): three records share one message id at 19:11:27.256 (thinking),
+// 19:11:28.190 (text) and 19:11:32.200 (the Bash tool_use). The message keeps the FIRST rendered
+// record's instant, so the two rows carried startedAt four seconds apart, rendered the identical label
+// and identical "8m" duration, and the strip drew both — one clickable, one not.
+//
+// So the LAUNCH ID is the key: `shellId` off the transcript card is by construction the same tool_use id
+// the tailer tracks the shell under. Label+startedAt survives only as the fallback for a transcript from
+// a pre-restart server that ships no `shellId` — matching there is better than the duplicate.
+export type ShellRecord = { readonly id?: string; readonly label: string; readonly startedAt?: string }
+
+// Deliberately NOT folded into `id`: `id` is the drill-in handle, and a transcript row is drawn only
+// because the board did NOT track that shell — so there is nothing for a drawer to open. The launch id
+// identifies the row; it does not make it clickable.
+export type TranscriptShellRecord = ShellRecord & { readonly launchId?: string }
+
+const shellKeys = (shell: TranscriptShellRecord): string[] => {
+  const launch = shell.launchId ?? shell.id
+  return [...(launch ? [`id:${launch}`] : []), `launch:${shell.label}\u0000${shell.startedAt ?? ""}`]
+}
+
+export function mergeBackgroundShells<T extends ShellRecord>(board: readonly T[], transcript: readonly (T & TranscriptShellRecord)[]): T[] {
+  const out = [...board]
+  // Every board row is indexed under BOTH identities: keying on the id alone let a transcript row with
+  // no `launchId` (a pre-restart server) through, which is the duplicate this whole function exists for.
+  const seen = new Set(out.flatMap(shellKeys))
+  for (const shell of transcript) {
+    if (shellKeys(shell).some((key) => seen.has(key))) continue
+    out.push(shell)
+  }
+  return out
 }

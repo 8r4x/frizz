@@ -1306,6 +1306,18 @@ export const TranscriptToolCall = z.object({
   // provider confirmed a live child/session; `unknown` means we saw a poll for an unpaired session.
   // Neither is rendered as done merely because the wrapper call returned.
   backgroundState: z.enum(["background", "unknown"]).optional(),
+  // The launching tool_use id of a `background` shell — the SAME key the tailer tracks that shell under
+  // (BgShellView.id), and therefore the only exact way to tell "the board's row and this transcript card
+  // are one process" from "two processes the model described identically".
+  //
+  // The ops strip lists a live shell from BOTH sources, and it used to reconcile them on
+  // label+startedAt. That key cannot hold: the board's instant is the tool_use RECORD's timestamp while
+  // the transcript's is the projected MESSAGE's, and an assistant turn whose prose lands before its call
+  // makes those differ by seconds (measured: 19:11:28.190 vs 19:11:32.200 on one real launch), so the
+  // same shell rendered twice — once clickable, once not. Optional: absent on codex (whose background
+  // execs are transcript-native and have no board row to collide with) and on pre-restart servers,
+  // which fall back to the label+startedAt key.
+  shellId: z.string().optional(),
   exitCode: z.number().int().optional(),
   // Execution context/result metadata that is useful in a compact card header without dumping a
   // backend envelope. `cwd` comes from exec_command's workdir/cwd, `sessionId` identifies a yielded
@@ -1376,8 +1388,20 @@ export const TranscriptToolCall = z.object({
   // call into a TodoBlock — a checklist card, one row per task with its status. Optional, so a
   // pre-restart server / older transcript falls back to the generic card.
   todos: z.array(TranscriptTodo).optional(),
+  // ---- Thinking, absorbed into an activity run (CLIENT-SYNTHESIZED — the server never emits this) ----
+  // A "Thought for Ns" line the client folded INTO the surrounding tool-activity run so the model
+  // thinking between two calls stops splitting one batch into two `Ran N tool calls` disclosures
+  // (maintainer 2026-07-31: "I don't think it makes sense for us to interleave tool calls and thinking
+  // like this. The thinking block should just collapse"). It carries the event's own text and renders
+  // as a quiet row INSIDE the expanded disclosure, so nothing is lost — see lib/toolActivity.ts. It
+  // lives on this schema only so the client's collapsed-tool pipeline stays one type end to end.
+  thought: z.string().optional(),
 })
 export type TranscriptToolCall = z.infer<typeof TranscriptToolCall>
+
+// The one spelling of a thinking event line, shared so the client can recognize the server's own
+// emission without pattern-matching a string it doesn't own (transcript.ts emits exactly one).
+export const THOUGHT_EVENT_PREFIX = "Thought for "
 
 // One block-ordered PART of an assistant turn — the fidelity fix. A turn's content interleaves text
 // and tool_use blocks in a meaningful order (a "Let me draft the notes:" lead-in sits DIRECTLY above
