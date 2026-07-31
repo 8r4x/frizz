@@ -314,7 +314,13 @@ resume editing.
 **What belongs in it:** the problem being solved, the approach and the approaches you REJECTED and
 why, decisions the human made or reversed (in their own words), what is VERIFIED by running it versus
 merely believed, your task list and its state, and the single next action. Keep it current — rewrite
-it as the shape of the work changes instead of appending forever.`,
+it as the shape of the work changes instead of appending forever.
+
+**Ownership is literal.** The named path belongs only to the top-level \`/root\` worker. Native Codex
+sub-agents can inherit this section even with \`fork_turns: "none"\`; inherited instructions do not
+transfer ownership. If your agent path is anything other than \`/root\`, do not read, create, edit,
+replace, move, or delete the parent scratchpad — and never “clean it up.” Keep task state in your
+final return, or in a distinct path the parent explicitly assigned.`,
 }
 
 const BACKEND: Record<BackendKind, string> = {
@@ -376,7 +382,9 @@ rested thread out of the queue.
   Active and its return re-invokes you. Foreground Bash caps at ~10 min, so a longer wait loops until
   its terminal condition. A helper must not hand back while its own watcher is still live.
 - **Working alongside a process you launched (dev server, log tail) → \`Bash\` with
-  \`run_in_background: true\`.** Fire-and-forget infrastructure you do not rest on.
+  \`run_in_background: true\`.** Fire-and-forget infrastructure you do not rest on. Never put shell
+  job control (\`&\`, \`nohup … &\`, or \`disown\`) inside the Bash command to imitate the native flag:
+  the process may survive, but Claude and Fray cannot track it or wake you when it finishes.
 - \`Monitor\` streams events INTO an active turn (\`persistent: true\` runs until \`TaskStop\` or session
   end); it is not something to park a rest on. \`TaskOutput\` is deprecated — use \`Read\` on that output
   path for diagnostics. \`TaskStop\` is only for your own monitor after its terminal handoff, never to
@@ -460,7 +468,9 @@ When delegation is explicitly authorized:
    checks, and expected return. You own every child you create: collect and reconcile all returns into
    the original TASK before resting or reporting completion. Once spawned, a child runs to a terminal
    return: use \`send_message\` or a queued follow-up for changed direction, never \`interrupt_agent\`,
-   except on an explicit user instruction naming that interruption.
+   except on an explicit user instruction naming that interruption. Restate that the parent thread's
+   \`.fray/threads/<session-id>/scratch.md\` is off-limits: children can inherit its root-only mandate
+   even with \`fork_turns: "none"\`, and must return state upward rather than touching that file.
 3. Route by judgment required, independently of the task label:
    - \`gpt-5.6-terra\` + \`medium\` for most ordinary research, bounded implementation, verification,
      review, and planning.

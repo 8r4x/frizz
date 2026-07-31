@@ -147,6 +147,43 @@ test("every silence gate holds: project registration under fray, sub-agents, and
   assert.equal(runHook(dir, ["--mode=session-start"], { source: "compact" }, { CLAUDE_CODE_SESSION_ID: "" }), "")
 })
 
+test("the codex guard denies child access to the canonical root pad and leaves root/unrelated calls alone", () => {
+  const dir = newProject()
+  const relative = `.fray/threads/${SID}/scratch.md`
+  const absolute = padPath(dir)
+  const child = { session_id: "codex-rollout-id", agent_id: "/root/reviewer", hook_event_name: "PreToolUse" }
+
+  for (const toolEvent of [
+    { tool_name: "apply_patch", tool_input: { patch: `*** Delete File: ${absolute}` } },
+    { tool_name: "exec_command", tool_input: { cmd: `cat > ${relative} <<'EOF'\nchild state\nEOF` } },
+    { tool_name: "exec_command", tool_input: { cmd: `cat ${relative}` } },
+  ]) {
+    const out = JSON.parse(runHook(dir, [`--session=${SID}`, "--mode=guard"], { ...child, ...toolEvent }))
+    assert.equal(out.hookSpecificOutput.hookEventName, "PreToolUse")
+    assert.equal(out.hookSpecificOutput.permissionDecision, "deny")
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /belongs to the top-level \/root worker/)
+  }
+
+  assert.equal(
+    runHook(dir, [`--session=${SID}`, "--mode=guard"], {
+      ...child,
+      tool_name: "exec_command",
+      tool_input: { cmd: "git status --short" },
+    }),
+    "",
+    "a child's unrelated tool calls are not the guard's concern"
+  )
+  assert.equal(
+    runHook(dir, [`--session=${SID}`, "--mode=guard"], {
+      session_id: "codex-rollout-id",
+      tool_name: "apply_patch",
+      tool_input: { patch: `*** Delete File: ${absolute}` },
+    }),
+    "",
+    "the top-level root owns the pad and remains able to maintain it"
+  )
+})
+
 test("the nudge tracks context GROWTH, not an absolute threshold or wall clock", () => {
   const dir = newProject()
   const stale = { FRAY_SCRATCHPAD_STALE_TOKENS: "60000" }
@@ -277,8 +314,10 @@ test("an EMPTY pad still re-grounds after compaction, and says the pad is empty"
   // "You lost your context and your pad is empty" is the most urgent thing the next turn can hear —
   // staying silent here was the old behavior and it left the worker with nothing.
   assert.match(ctx, /⟦scratchpad — reground here⟧/)
-  assert.match(ctx, /RE-READ IT NOW/)
-  assert.match(ctx, /nothing substantive in it/)
+  assert.match(ctx, /absent or has nothing substantive in it/)
+  assert.match(ctx, /That exact path is authoritative/)
+  assert.match(ctx, /do not search other `\.fray\/threads\/\*\/scratch\.md` files/)
+  assert.match(ctx, /retained compaction summary/)
 })
 
 test("--session overrides the reported id, so a codex worker finds FRAY's pad and not its own", () => {
@@ -330,13 +369,14 @@ test("the codex hook config is built unconditionally, and carries what codex req
   }
   // Codex silently SKIPS untrusted hook definitions, so without this the config is delivered and ignored.
   assert.equal(cfg.bypass_hook_trust, true)
-  // Only the events codex can actually inject from: it exposes no PreCompact/PostCompact wire type,
-  // so the summarizer-steering channel is deliberately Claude-only.
-  assert.deepEqual(Object.keys(cfg.hooks ?? {}).sort(), ["PostToolUse", "SessionStart", "UserPromptSubmit"])
+  // Codex exposes no PreCompact/PostCompact wire type, so summarizer steering stays Claude-only.
+  // PreToolUse carries the root-pad ownership guard; the remaining events inject or nudge.
+  assert.deepEqual(Object.keys(cfg.hooks ?? {}).sort(), ["PostToolUse", "PreToolUse", "SessionStart", "UserPromptSubmit"])
   for (const entries of Object.values(cfg.hooks ?? {})) {
     const cmd = entries[0].hooks[0].command
     assert.match(cmd, /--session="sid-1"/, "fray's thread id must override codex's own reported session id")
     assert.doesNotMatch(cmd, /--enabled/, "there is no opt-in flag any more")
     assert.match(cmd, /scratchpad\.mjs/)
   }
+  assert.match(cfg.hooks?.PreToolUse?.[0]?.hooks[0]?.command ?? "", /--mode=guard/)
 })

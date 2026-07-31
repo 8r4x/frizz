@@ -454,16 +454,18 @@ test("visual-evidence handoffs: provider contracts keep embeds safe, useful, and
 
 // ---- composePrompt: the first VISIBLE user message's scratchpad line is backend-aware ----
 
-test("composePrompt(claude) keeps the sub-agent blackboard framing; codex drops it", () => {
+test("composePrompt keeps each backend's distinct sub-agent scratchpad ownership", () => {
   const claude = composePrompt("sid", "do the thing", "claude")
   assert.match(claude, /shared blackboard for your sub-agents/)
   assert.match(claude, /pass its path to every sub-agent you dispatch/)
   assert.equal(composePrompt("sid", "do the thing"), claude) // default = claude (unchanged)
 
   const codex = composePrompt("sid", "do the thing", "codex")
-  assert.doesNotMatch(codex, /sub-agent/)
   assert.doesNotMatch(codex, /blackboard/)
   assert.match(codex, /compaction-survival mechanism/)
+  assert.match(codex, /belongs only to the top-level `\/root` worker/)
+  assert.match(codex, /may inherit this instruction even with `fork_turns:"none"`/)
+  assert.match(codex, /must not read, create, edit, replace, move, or delete the parent scratchpad/)
   assert.ok(codex.endsWith("do the thing")) // the task still rides through, and rides through LAST
 })
 
@@ -518,15 +520,17 @@ test("composePrompt round-trips through the BROKER's enqueue record with the sam
 
 // ---- scratchpadOrientation: the SYSTEM-level line is backend-aware ----
 
-test("scratchpadOrientation(codex) drops the blackboard framing; claude keeps it (default unchanged)", () => {
+test("scratchpadOrientation gives codex root-only ownership; claude keeps its blackboard (default unchanged)", () => {
   const claude = scratchpadOrientation("sid", null, "claude")
   assert.match(claude, /shared blackboard for your sub-agents/)
   assert.equal(scratchpadOrientation("sid", null), claude)
 
   const codex = scratchpadOrientation("sid", null, "codex")
-  assert.doesNotMatch(codex, /sub-agent/)
   assert.doesNotMatch(codex, /blackboard/)
   assert.match(codex, /compaction-survival mechanism/)
+  assert.match(codex, /owned only by the top-level `\/root` worker/)
+  assert.match(codex, /can inherit this instruction even with `fork_turns:"none"`/)
+  assert.match(codex, /must not read, create, edit, replace, move, or delete the parent scratchpad/)
 
   // The plan line is agnostic and appended for both.
   assert.match(scratchpadOrientation("sid", ".fray/plans/x.md", "codex"), /PLAN: \.fray\/plans\/x\.md/)

@@ -1,0 +1,79 @@
+#!/bin/sh
+# Refuse a commit that records files as DELETED while they are still sitting in the working tree.
+#
+# Why this exists. Many agents share this one working tree and one git index, so the standing advice
+# is to build a commit in a private index (`GIT_INDEX_FILE=/tmp/idx git add … && git commit`) rather
+# than let a concurrent `git add` ride along. That advice has a trap: a temp index path that does not
+# exist yet starts EMPTY, not as a copy of HEAD. `git add` then puts your two files into an otherwise
+# empty index, and `git commit` faithfully writes a tree containing exactly those two files — which
+# means every other tracked file in the repo is committed as a deletion. The working tree is never
+# touched, so nothing looks wrong until someone checks out that commit.
+#
+# The fix for the person writing the commit is `git read-tree HEAD` right after setting the temp path
+# (or, better, just `git commit -- <paths>`, which needs no temp index at all). The fix for everyone
+# else is this hook, because that advice has been skipped at least twice.
+#
+# The predicate is deliberately narrow. A real deletion — `git rm`, deleting a directory, a refactor
+# that removes files — takes the file off disk too, so it will NOT trip this. Only a staged deletion
+# whose path still EXISTS in the working tree is reported, and that combination is almost always the
+# empty-index bug. The rare legitimate case is `git rm --cached` (untrack but keep the file), which is
+# what --no-verify is for.
+
+if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
+	exit 0 # initial commit: nothing to compare against
+fi
+
+# A merge's deletions are computed by git from the two sides, not by a hand-built index, so the bug
+# this guards against cannot arise here — while a conflicted delete/modify CAN legitimately leave a
+# staged deletion beside a file still on disk. FRAY.md mandates merging branches back into main, so
+# exempt merges rather than have the documented workflow trip a guard aimed at something else.
+if [ -e "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+	exit 0
+fi
+
+# Staged deletions whose file is nonetheless still present on disk.
+phantom=$(git diff --cached --diff-filter=D --name-only -z HEAD |
+	while IFS= read -r -d '' path; do
+		[ -e "$path" ] && printf '%s\n' "$path"
+	done)
+
+count=$(printf '%s' "$phantom" | grep -c . || true)
+[ "$count" -eq 0 ] && exit 0
+
+tracked=$(git ls-tree -r --name-only HEAD | wc -l | tr -d ' ')
+
+cat >&2 <<EOF
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  COMMIT BLOCKED — it would delete $count file(s) that still exist on disk
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+This commit records $count of the repo's $tracked tracked files as DELETED, but every
+one of them is still present in the working tree. That is almost never a real
+deletion — it is the signature of committing through an EMPTY index.
+
+Most likely cause: a private index that was never seeded from HEAD, e.g.
+    GIT_INDEX_FILE=/tmp/idx git add <paths> && git commit     # <-- /tmp/idx starts EMPTY
+
+Fix it with whichever fits:
+
+  1. Just use a path-scoped commit — no temp index needed, and a concurrent
+     \`git add\` by another agent still cannot ride along:
+         git commit -m "…" -- <paths>
+
+  2. If you genuinely need a private index (e.g. \`git apply --cached\` to slice
+     one hunk out of a file another agent is also editing), seed it first:
+         export GIT_INDEX_FILE=/tmp/idx; rm -f "\$GIT_INDEX_FILE"
+         git read-tree HEAD          # <-- the step that was missing
+         git add <paths>
+         git diff --cached HEAD --stat   # verify EXACTLY your files
+         git commit -F msg
+
+First few paths this commit would delete:
+$(printf '%s\n' "$phantom" | head -8 | sed 's/^/    /')
+
+If you really did mean to untrack these while keeping them on disk
+(\`git rm --cached\`), re-run with --no-verify.
+
+EOF
+exit 1
