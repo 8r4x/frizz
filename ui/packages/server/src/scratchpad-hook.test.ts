@@ -170,7 +170,8 @@ test("the codex child epilogue permits scoped progress merges but forbids destru
   assert.equal(out.hookSpecificOutput.hookEventName, "SubagentStart")
   const ctx = out.hookSpecificOutput.additionalContext as string
   assert.match(ctx, new RegExp(`\\.fray/threads/${SID}/scratch\\.md`))
-  assert.match(ctx, /You MAY read it and update your own task progress/)
+  assert.match(ctx, /Update your own task progress in it as you work/)
+  assert.match(ctx, /rather than leaving the root as its sole writer/)
   assert.match(ctx, /Before every edit, re-read the current file/)
   assert.match(ctx, /patch only your scoped task\/progress entry/)
   assert.match(ctx, /preserving every other agent’s content/)

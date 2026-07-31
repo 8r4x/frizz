@@ -146,8 +146,9 @@ if (mode === 'subagent-start') {
       hookEventName: 'SubagentStart',
       additionalContext:
         '⟦shared scratchpad — merge only⟧ `' + relPath + '` is the canonical document shared with ' +
-        'the top-level `/root` worker. You MAY read it and update your own task progress. Before every ' +
-        'edit, re-read the current file, then patch only your scoped task/progress entry while ' +
+        'the top-level `/root` worker. Update your own task progress in it as you work rather than ' +
+        'leaving the root as its sole writer. Before every edit, re-read the current file, then ' +
+        'patch only your scoped task/progress entry while ' +
         'preserving every other agent’s content. This exact file is Fray coordination state, not a ' +
         'project deliverable or source edit: a scoped merge is an explicit exception to delegated ' +
         'phrases such as “write only <path>” or “do not modify the repo”; never classify that merge ' +

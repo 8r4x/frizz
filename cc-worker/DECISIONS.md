@@ -908,3 +908,16 @@ reported that the pad had no substantive content, and the root's first call addr
 exact path and got `ENOENT`. Only then did it search worktrees, list the surviving thread directory,
 and read older handoffs to reconstruct state. Its "Writing initial scratch file" reasoning label was
 model narration for recreating a currently absent file, not evidence that no pad had existed before.
+
+## 2026-07-31: shared scratchpad updates are expected, not merely permitted
+
+The collaborative contract above said children *may* update the shared scratchpad. A root worker then
+treated batch file ownership and a dynamic-orchestrator mega-doc's single-writer rule as reasons to
+centralize scratchpad writes and even make the pad immutable. That was the opposite of the intended
+blackboard pattern.
+
+The worker contract, dispatch orientation, Codex child hook, and Claude dispatch epilogue now say each
+sub-agent should merge its own scoped progress as it works. Deliverable file ownership never includes
+the Fray scratchpad, and a root must reconcile concurrent scoped updates rather than act as sole
+writer. The existing merge-safety rules remain unchanged: re-read first, preserve all other content,
+and never delete, truncate, reinitialize, move, or replace the pad.

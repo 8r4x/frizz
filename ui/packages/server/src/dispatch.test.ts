@@ -468,7 +468,8 @@ test("composePrompt keeps each backend's shared sub-agent scratchpad contract", 
   assert.doesNotMatch(codex, /blackboard/)
   assert.match(codex, /compaction-survival mechanism/)
   assert.match(codex, /shared progress document for native sub-agents/)
-  assert.match(codex, /may read it and merge their own scoped progress into it/)
+  assert.match(codex, /Each native sub-agent should merge its own scoped progress into it/)
+  assert.match(codex, /rather than leaving the root as its sole writer/)
   assert.match(codex, /re-read before each edit/)
   assert.match(codex, /never delete, truncate, reinitialize, move, or replace the whole file/)
   assert.ok(codex.endsWith("do the thing")) // the task still rides through, and rides through LAST
@@ -534,7 +535,8 @@ test("scratchpadOrientation gives codex a merge-only shared pad; claude keeps it
   assert.doesNotMatch(codex, /blackboard/)
   assert.match(codex, /compaction-survival mechanism/)
   assert.match(codex, /shared progress document for native sub-agents/)
-  assert.match(codex, /may read it and merge their own scoped progress into it/)
+  assert.match(codex, /Each native sub-agent should merge its own scoped progress into it/)
+  assert.match(codex, /rather than leaving the root as its sole writer/)
   assert.match(codex, /preserve all existing content/)
   assert.match(codex, /never delete, truncate, reinitialize, move, or replace the whole file/)
 

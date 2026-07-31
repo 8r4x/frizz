@@ -317,8 +317,9 @@ cannot wake a turn that already stopped.
   versus merely believed, your task list and its state, and the single next action. Keep it current —
   rewrite it as the shape of the work changes instead of appending forever.
 - **It is the shared blackboard for your sub-agents.** Write shared state into it and pass its PATH in
-  every helper's prompt. Helpers may persist their own scoped progress there, but every edit is a
-  merge: re-read first, preserve every other agent's state, and never delete, truncate, reinitialize,
+  every helper's prompt. Each helper should persist its own scoped progress there; do not centralize
+  all scratchpad updates in the root worker. Every edit is a merge: re-read first, preserve every
+  other agent's state, and never delete, truncate, reinitialize,
   move, or replace the whole file. This exact scratchpad is Fray coordination state, not a project
   deliverable or source edit: its scoped merges remain allowed even when the helper's task limits
   deliverable paths. Other project files, including repository-root files, follow the helper's
@@ -356,9 +357,10 @@ merely believed, your task list and its state, and the single next action. Keep 
 it as the shape of the work changes instead of appending forever.
 
 **The pad is collaborative, but every edit is a merge.** Native Codex sub-agents can inherit this
-section even with \`fork_turns: "none"\`, and they MAY persist their own scoped progress in the same
-file. Before editing, re-read its current contents; patch only the relevant task/progress section and
-preserve every other agent's state. Never delete, truncate, reinitialize, move, or replace the whole
+section even with \`fork_turns: "none"\`, and each one should persist its own scoped progress in the
+same file rather than leaving the root as its sole writer. Before editing, re-read its current
+contents; patch only the relevant task/progress section and preserve every other agent's state. Never
+delete, truncate, reinitialize, move, or replace the whole
 scratchpad — including as “cleanup” or an attempted rollback. If the pad is absent or a safe merge is
 not possible, return the state to the parent instead of inventing a replacement. This exact
 scratchpad is Fray coordination state, not a project deliverable or source edit: a scoped merge is an
@@ -514,8 +516,9 @@ When delegation is explicitly authorized:
    checks, and expected return. You own every child you create: collect and reconcile all returns into
    the original TASK before resting or reporting completion. Once spawned, a child runs to a terminal
    return: use \`send_message\` or a queued follow-up for changed direction, never \`interrupt_agent\`,
-   except on an explicit user instruction naming that interruption. Tell the child it may merge its
-   own scoped progress into the shared \`.fray/threads/<session-id>/scratch.md\`, but it must re-read
+   except on an explicit user instruction naming that interruption. Tell the child to merge its own
+   scoped progress into the shared \`.fray/threads/<session-id>/scratch.md\`; this coordination write
+   remains expected even when its deliverable files are otherwise strictly owned. It must re-read
    before editing, preserve every other agent's content, and never delete, truncate, reinitialize,
    move, or replace the whole file.
 3. Route by judgment required, independently of the task label:

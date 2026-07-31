@@ -135,8 +135,9 @@ cannot wake a turn that already stopped.
   versus merely believed, your task list and its state, and the single next action. Keep it current —
   rewrite it as the shape of the work changes instead of appending forever.
 - **It is the shared blackboard for your sub-agents.** Write shared state into it and pass its PATH in
-  every helper's prompt. Helpers may persist their own scoped progress there, but every edit is a
-  merge: re-read first, preserve every other agent's state, and never delete, truncate, reinitialize,
+  every helper's prompt. Each helper should persist its own scoped progress there; do not centralize
+  all scratchpad updates in the root worker. Every edit is a merge: re-read first, preserve every
+  other agent's state, and never delete, truncate, reinitialize,
   move, or replace the whole file. This exact scratchpad is Fray coordination state, not a project
   deliverable or source edit: its scoped merges remain allowed even when the helper's task limits
   deliverable paths. Other project files, including repository-root files, follow the helper's
