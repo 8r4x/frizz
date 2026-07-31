@@ -35,7 +35,10 @@ function WakeShell({ sourceId, children }: { sourceId?: string; children: ReactN
   )
 }
 
-function ItemRow({ item, showLabel }: { item: GithubWakeItem; showLabel: boolean }) {
+// Rows exist only for a BURST (or a capped burst): a lone item is said entirely by the card's title,
+// so there is nothing left for a row to add. Each row therefore always names its own kind — a burst
+// routinely mixes an approval with two comments, and the counted heading cannot say which is which.
+function ItemRow({ item }: { item: GithubWakeItem }) {
   const Icon = item.bot ? Bot : User
   const age = wakeItemAge(item.at)
   const body = (
@@ -43,9 +46,7 @@ function ItemRow({ item, showLabel }: { item: GithubWakeItem; showLabel: boolean
       <Icon size={12} className={`${ROW_ICON} text-muted/70`} />
       <span className="min-w-0 flex-1 truncate">
         <span className="font-medium text-fg/90">@{item.actor}</span>
-        {/* The heading already names the kind when there is only one item ("New comment"), so repeating
-            it on the row read as a stutter: "New comment / @colinhacks · comment". */}
-        {showLabel && <span className="text-muted"> · {item.label}</span>}
+        <span className="text-muted"> · {item.label}</span>
       </span>
       {age && (
         // The exact instant stays available on hover; the row shows the age, which is what a human
@@ -87,34 +88,64 @@ export function GithubWakeCard({ text, sourceId, wrap }: { text: string; sourceI
   }
   const refUrl = wakeRefUrl(steer.ref)
   const total = steer.items.length + steer.omitted
-  // Which PR this is about, read INSIDE the heading rather than beside it: "New review comment on
-  // owner/repo#587" (maintainer 2026-07-29). It is the card's subject, so it belongs in the sentence
-  // that names the card — on its own body line it pushed the activity down and read as the first of
-  // the rows, and parked at the header's right edge it read as an unrelated badge. The ref keeps the
-  // app's accent link language so it still LOOKS clickable at rest; an unparseable ref degrades to
-  // muted text in the same position rather than to a dead link.
+  // A card carrying exactly ONE item is the common case by far, and it used to render a heading plus a
+  // single row — which read as a table with one entry and an empty second column (maintainer
+  // 2026-07-31). Collapsed, it is one line: the whole event on the left, the PR it happened on right
+  // justified. The row's two jobs move INTO that line — the actor joins the title, and the title
+  // itself carries the item's permalink, which is the one link the worker actually needs.
+  const only = steer.items.length === 1 && steer.omitted === 0 ? steer.items[0] : null
+  // Which PR this is about, RIGHT justified on the title row (maintainer 2026-07-31), in the shared
+  // `aside` slot every card's trailing reference uses. It was previously read inside the heading
+  // ("New review comment on owner/repo#587"), which works while the heading is short but competes
+  // with the actor now that the title names who filed the thing. The ref keeps the app's accent link
+  // language so it still LOOKS clickable at rest; an unparseable ref degrades to muted text in the
+  // same position rather than to a dead link.
   const ref = refUrl ? (
-    <a href={refUrl} target="_blank" rel="noreferrer noopener" className={CARD_LINK}>
+    <a href={refUrl} target="_blank" rel="noreferrer noopener" className={`${CARD_LINK} text-[12px]`}>
       {steer.ref}
     </a>
   ) : (
-    <span className="text-muted">{steer.ref}</span>
+    <span className="text-[12px] text-muted">{steer.ref}</span>
+  )
+  const title = wakeCardTitle(total, steer.items[0].label, only?.actor)
+  // The permalink rides the TITLE in the collapsed card, because the row that used to carry it is
+  // gone and "read that exact comment" is the whole point of the wake. Without a per-item url (a
+  // GitHub shape surprise) the title stays plain text and the ref link is still the way through.
+  const age = only ? wakeItemAge(only.at) : null
+  const label = (
+    <>
+      {only?.url ? (
+        <a href={only.url} target="_blank" rel="noreferrer noopener" className="underline decoration-fg/25 underline-offset-2 hover:decoration-fg">
+          {title}
+        </a>
+      ) : (
+        title
+      )}
+      {age && (
+        // `nowrap` keeps the age one unit: on a narrow queue card the title wraps, and a bare "ago"
+        // stranded on its own last line reads as a broken sentence.
+        <span title={only?.at} className="whitespace-nowrap font-normal text-muted/70">
+          {" · "}
+          {age}
+        </span>
+      )}
+    </>
   )
   return (
     <WakeShell sourceId={sourceId}>
-      <TranscriptCard icon={Github} label={<>{wakeCardTitle(total, steer.items[0].label)} on {ref}</>}>
-        <div className="flex flex-col">
-          {steer.items.map((item) => (
-            <ItemRow
-              key={item.url ?? `${item.actor}-${item.at ?? ""}-${item.label}`}
-              item={item}
-              showLabel={steer.items.length > 1}
-            />
-          ))}
-        </div>
-        {steer.omitted > 0 && (
-          // Never let the card imply it listed everything: the steer counted these but did not name them.
-          <div className="mt-1 text-[11px] leading-5 text-muted/60">…and {steer.omitted} more not listed</div>
+      <TranscriptCard icon={Github} label={label} aside={ref}>
+        {only ? undefined : (
+          <>
+            <div className="flex flex-col">
+              {steer.items.map((item) => (
+                <ItemRow key={item.url ?? `${item.actor}-${item.at ?? ""}-${item.label}`} item={item} />
+              ))}
+            </div>
+            {steer.omitted > 0 && (
+              // Never let the card imply it listed everything: the steer counted these but did not name them.
+              <div className="mt-1 text-[11px] leading-5 text-muted/60">…and {steer.omitted} more not listed</div>
+            )}
+          </>
         )}
       </TranscriptCard>
     </WakeShell>

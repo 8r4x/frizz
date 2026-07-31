@@ -22,10 +22,13 @@ export function wakeItemAge(at: string | undefined, nowMs = Date.now()): string 
   return `${Math.floor(days / 365)}y ago`
 }
 
-// The card's own heading. One item reads as the specific thing that happened ("New comment"); several
-// read as a count, because naming three kinds in a heading is worse than counting them.
-export function wakeCardTitle(count: number, label: string): string {
-  return count === 1 ? `New ${label}` : `${count} new items`
+// The card's own heading. One item reads as the WHOLE event in one sentence — the kind and who filed
+// it, "New comment from @pullfrog[bot]" (maintainer 2026-07-31) — so the card needs no row beneath it
+// and the `@actor …… age` line that used to sit there, reading as a one-row table, is gone. Several
+// items read as a count, because naming three kinds in a heading is worse than counting them.
+export function wakeCardTitle(count: number, label: string, actor?: string): string {
+  if (count !== 1) return `${count} new items`
+  return actor ? `New ${label} from @${actor}` : `New ${label}`
 }
 
 // `owner/repo#N` → the PR's own URL. Every item normally carries its own permalink, but the ref line

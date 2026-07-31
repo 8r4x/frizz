@@ -40,6 +40,17 @@ const CASES = [
     }),
   },
   {
+    // The commonest wake of all: a review app, whose login carries its own `[bot]` suffix. The single
+    // card must say the whole event on one line — "New review comment from @pullfrog[bot]".
+    slug: "wake-bot",
+    title: "wake · one bot review comment",
+    steer: formatGithubWakeSteer({
+      ref: "nubjs/nub#587",
+      omitted: 0,
+      items: [{ label: "review comment", actor: "pullfrog[bot]", bot: true, at: ago(11), url: "https://github.com/nubjs/nub/pull/587#discussion_r2411100933" }],
+    }),
+  },
+  {
     slug: "wake-approval",
     title: "wake · an approval, no permalink",
     steer: formatGithubWakeSteer({

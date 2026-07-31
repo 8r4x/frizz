@@ -142,14 +142,18 @@ export function TranscriptCard({
   // rides the title instead of taking a body line of its own, which keeps the body for the card's
   // actual content.
   aside?: ReactNode
-  children: ReactNode
+  // Optional, because one card is legitimately its own headline: the GitHub wake card for a SINGLE
+  // item says everything it has in the title row ("New comment from @pullfrog[bot]"), and an empty
+  // CardContent would still spend its top gap on nothing. The padding then reads as a one-line card
+  // rather than as a card missing its body.
+  children?: ReactNode
   className?: string
 } & Omit<ComponentPropsWithoutRef<"div">, "children" | "className">) {
   const { border, head } = CARD_TONES[tone]
   return (
-    <div {...rest} className={`min-w-0 rounded-lg border ${border} bg-panel-2 px-4 pt-3 pb-4 ${className}`}>
+    <div {...rest} className={`min-w-0 rounded-lg border ${border} bg-panel-2 px-4 ${children == null ? "py-3" : "pt-3 pb-4"} ${className}`}>
       <CardHead icon={icon} label={label} head={head} aside={aside} />
-      <CardContent>{children}</CardContent>
+      {children != null && <CardContent>{children}</CardContent>}
     </div>
   )
 }

@@ -22,10 +22,13 @@ test("wakeItemAge is a compact age, and refuses to invent one", () => {
   assert.equal(wakeItemAge("not a date", now), null)
 })
 
-test("wakeCardTitle names one item and counts several", () => {
+test("wakeCardTitle says the whole single event, and counts several", () => {
+  assert.equal(wakeCardTitle(1, "comment", "pullfrog[bot]"), "New comment from @pullfrog[bot]")
+  assert.equal(wakeCardTitle(1, "change request", "colinhacks"), "New change request from @colinhacks")
+  // No actor to name (a burst collapsed to one row, or a shape surprise) still reads as a sentence.
   assert.equal(wakeCardTitle(1, "comment"), "New comment")
-  assert.equal(wakeCardTitle(1, "change request"), "New change request")
-  assert.equal(wakeCardTitle(3, "comment"), "3 new items")
+  // A count never names an actor, even when one is passed: the burst has several.
+  assert.equal(wakeCardTitle(3, "comment", "pullfrog[bot]"), "3 new items")
 })
 
 test("wakeRefUrl builds the PR link, and returns null rather than a broken one", () => {
