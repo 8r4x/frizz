@@ -9,16 +9,61 @@
 // tool cards around it, rather than one of them being a card indistinguishable from a hundred others
 // (maintainer 2026-07-27). `children` is the whole line for a shell; the agent and GitHub dividers pass
 // nodes so their titles can be links.
+//
+// It is no longer only for wakes. The queue card's collapsed intermediate run wears it too (maintainer
+// 2026-07-31), and it is the same reading problem: an ELISION between two pieces of prose is a section
+// break, so it wants a centred rule and not the bordered panel it used to be. That one is CLICKABLE —
+// see `onClick` below.
 import type { ReactNode } from "react"
 import type { LucideIcon } from "lucide-react"
 import { MessageDebugId } from "./MessageDebugId.tsx"
+
+// An INTERACTIVE divider — one whose whole row is the affordance, like the queue card's collapsed
+// intermediate run — renders its root as a `<button>` instead of a `<div>`. It therefore cannot carry a
+// `sourceId`: the debug chip is itself a button, and a button inside a button is invalid HTML and
+// unreachable by keyboard. The union states that instead of leaving it to a comment, which is honest
+// anyway — an interactive divider stands in for a SPAN of messages, so it has no single one to identify.
+type WakeDividerProps = { icon?: LucideIcon; children: ReactNode; ariaLabel?: string; marker?: string } & (
+  | { onClick: () => void; sourceId?: never }
+  | { onClick?: never; sourceId?: string }
+)
 
 // `icon` is a prop rather than something each caller renders into `children`, so the glyph's size, its
 // position at the head of the label, and the measured petite-caps nudge below are stated ONCE. Five
 // dividers wear one now (maintainer 2026-07-31, on the GitHub one: "I like it so much that I think we
 // should include a similar icon for the other hairline dividers"), and five hand-rolled copies of a
 // sub-pixel optical correction is exactly how a family drifts apart.
-export function WakeDivider({ icon: Icon, children, sourceId, ariaLabel, marker }: { icon?: LucideIcon; children: ReactNode; sourceId?: string; ariaLabel?: string; marker?: string }) {
+export function WakeDivider({ icon: Icon, children, sourceId, ariaLabel, marker, onClick }: WakeDividerProps) {
+  // The chrome itself, identical in both roots. The `group-hover/wake:` variants are inert on the inert
+  // form (nothing names that group there) and are what makes the clickable form respond as ONE row —
+  // its hairlines brighten with its label, so the affordance is the whole rule rather than the words.
+  const chrome = (
+    <>
+      <MessageDebugId sourceId={sourceId} />
+      <span aria-hidden="true" className="h-px flex-1 bg-border/70 transition-colors group-hover/wake:bg-border" />
+      <span className="petite-caps flex min-w-0 items-center gap-1 break-words text-center text-[12px] text-muted/70 transition-colors group-hover/wake:text-fg">
+        {Icon && <Icon aria-hidden="true" size={12} className={WAKE_DIVIDER_ICON} />}
+        {children}
+      </span>
+      <span aria-hidden="true" className="h-px flex-1 bg-border/70 transition-colors group-hover/wake:bg-border" />
+    </>
+  )
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        data-wake-divider={marker}
+        onClick={onClick}
+        // Keep the reader's text selection where it was — the same side-channel courtesy every other
+        // transcript affordance extends (see MessageDebugId, the sub-agent drill-in links).
+        onMouseDown={(e) => e.preventDefault()}
+        aria-label={ariaLabel}
+        className="group/wake group/msg relative my-1 flex w-full items-center gap-3 rounded-sm text-left outline-none focus-visible:ring-1 focus-visible:ring-fg/60"
+      >
+        {chrome}
+      </button>
+    )
+  }
   return (
     <div
       data-fray-msg={sourceId}
@@ -29,13 +74,7 @@ export function WakeDivider({ icon: Icon, children, sourceId, ariaLabel, marker 
       role={ariaLabel ? "separator" : undefined}
       aria-label={ariaLabel}
     >
-      <MessageDebugId sourceId={sourceId} />
-      <span aria-hidden="true" className="h-px flex-1 bg-border/70" />
-      <span className="petite-caps flex min-w-0 items-center gap-1 break-words text-center text-[12px] text-muted/70">
-        {Icon && <Icon aria-hidden="true" size={12} className={WAKE_DIVIDER_ICON} />}
-        {children}
-      </span>
-      <span aria-hidden="true" className="h-px flex-1 bg-border/70" />
+      {chrome}
     </div>
   )
 }

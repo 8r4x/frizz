@@ -9,15 +9,17 @@ import "./styles.css"
 // Browser QA for the higher-level "intermediate logs collapse" in the queue card (QCard). The card shows
 // the TEXT ONLY of the agent's first and last messages; EVERYTHING between their prose — the fully-hidden
 // middle messages AND the tool calls batched into the first/last messages themselves — collapses behind
-// ONE summary bar with a stacked-chevron (ChevronsUpDown) expand glyph. So the card reads: pinned ask →
-// first message's narration (text only) → collapse bar → final message (text only). Clicking is one-way:
-// the full log (all tool bands restored) renders and the bar unmounts.
+// ONE HAIRLINE DIVIDER (the transcript's WakeDivider chrome) whose label is the stacked-chevron
+// ChevronsUpDown expand glyph, the tool-call count, and "Click to expand". So the card reads: pinned ask →
+// first message's narration (text only) → collapse divider → final message (text only). Clicking is
+// one-way: the full log (all tool bands restored) renders and the divider unmounts.
 //   ?variant=heavy   (default) a user ask + an opening narration (WITH batched tools) + several tool-heavy
-//                    intermediate steps + a final question. First message's tools must fold into the bar.
-//   ?variant=single  user ask + ONE assistant reply (no middle → NO collapse bar, control case)
-//   ?variant=notools user ask + a couple of prose-only intermediate steps (bar shows "N steps", no tools)
+//                    intermediate steps + a final question. First message's tools must fold into the divider.
+//   ?variant=single  user ask + ONE assistant reply (no middle → NO collapse divider, control case)
+//   ?variant=notools user ask + a couple of prose-only intermediate steps. NOTHING is counted (the step
+//                    count was dropped), so this pins the zero-tool label: just "Click to expand".
 //   ?variant=batchedends  user ask + first(narration + tools) + ONE middle step + final(summary text + a
-//                         trailing tool). BOTH ends' tools fold into the bar; both texts show tool-free.
+//                         trailing tool). BOTH ends' tools fold into the divider; both texts show tool-free.
 //   ?variant=questionthentool  user ask + narration + a FINAL question + a trailing TOOLS-ONLY message.
 //                         Regression guard: the final-text anchor stays on the question (chips stay live);
 //                         the text-less tool message must NOT steal the anchor and hide the question.
@@ -51,12 +53,10 @@ const event = (text: string): TranscriptMessage => ({ role: "assistant", kind: "
 // what the trailing-event regression must not hide.
 const finalQuestion = [
   "```question",
-  "I've added the collapse bar. Which label reads best?",
+  "I've added the collapse divider. Which label reads best?",
   "",
-  "- A. **`11 tool calls · 3 steps`** — combined (current default).",
-  "- B. Just **`11 tool calls`** — leaner.",
-  "",
-  "Recommendation: **A** — the step count adds useful context.",
+  "- A. **`11 tool calls · Click to expand`** — names the scale and the affordance (recommended).",
+  "- B. Just **`Click to expand`** — leaner, but the reader can't tell how much is hidden.",
   "```",
 ].join("\n")
 
@@ -100,7 +100,7 @@ const trailingevent: TranscriptMessage[] = [
 
 const single: TranscriptMessage[] = [
   { sourceId: "u-cur", role: "user", text: "Quick one — what's the current default label?", tools: [], parts: [] },
-  withId(asst("It's the combined `N tool calls · M steps` form. Nothing intermediate here, so no collapse bar should appear.")),
+  withId(asst("It's the `N tool calls · Click to expand` hairline. Nothing intermediate here, so no collapse divider should appear.")),
 ]
 
 const notools: TranscriptMessage[] = [
@@ -111,8 +111,9 @@ const notools: TranscriptMessage[] = [
 ]
 
 // Tools batched into BOTH the first and the last agent message. The final message is a normal summary
-// (not a question) with a trailing tool call. After collapse: first + last show text only, and the bar
-// counts every tool across the span (2 first + 2 middle + 1 last = 5) with 1 fully-hidden middle step.
+// (not a question) with a trailing tool call. After collapse: first + last show text only, and the
+// divider counts every tool across the span (2 first + 2 middle + 1 last = 5). The one fully-hidden
+// middle step is still hidden, it is simply no longer counted in the label.
 const batchedends: TranscriptMessage[] = [
   { sourceId: "u-cur", role: "user", text: "Rename the flag and update its callers.", tools: [], parts: [] },
   withId(asst("On it — let me locate the flag definition and every reader first.", [

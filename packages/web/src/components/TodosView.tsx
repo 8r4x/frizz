@@ -22,6 +22,7 @@ import { ThreadLifecycleFooter } from "./ThreadLifecycleFooter.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
 import { QueueSubAgentLines, hasQueueSubAgentLines } from "./QueueSubAgentLines.tsx"
+import { WakeDivider } from "./WakeDivider.tsx"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { LastActive } from "./LastActive.tsx"
 import { CopyTerminalCommandButton, useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
@@ -614,30 +615,38 @@ function CardSlot({ leaving, slug, children }: { leaving: boolean; slug: string;
   )
 }
 
-// The higher-level, turn-level collapse bar: ONE row standing in for the entire intermediate run
-// between the pinned user ask and the agent's final message. Shares the per-message ToolCalls toggle's
-// petite-caps readout, but is deliberately distinct as a bordered, full-width affordance (the toggle is
-// borderless) carrying the stacked-chevron ChevronsUpDown expand glyph. Clicking is ONE-WAY: it reveals the full log and the
-// bar unmounts; there is no re-collapse (the maintainer's ask).
-function IntermediateSummary({ toolCount, stepCount, onExpand }: { toolCount: number; stepCount: number; onExpand: () => void }) {
-  const pieces: string[] = []
-  if (toolCount > 0) pieces.push(`${toolCount} tool call${toolCount === 1 ? "" : "s"}`)
-  if (stepCount > 0) pieces.push(`${stepCount} step${stepCount === 1 ? "" : "s"}`)
-  // Never empty: the bar only renders when at least one of the two is > 0 (see collapseIntermediate).
-  const summary = pieces.join(" · ")
+// The higher-level, turn-level collapse: ONE HAIRLINE DIVIDER standing in for the entire intermediate
+// run between the pinned user ask and the agent's final message. It wears the very chrome every other
+// divider in the transcript wears (WakeDivider) rather than the bordered, full-width panel it used to
+// be — an ELISION between two pieces of prose is a section break, and as a box it read as a card
+// competing with the messages it sits between (maintainer 2026-07-31). It keeps the stacked-chevron
+// ChevronsUpDown expand glyph, which is now the divider's `icon` and so inherits the one measured
+// petite-caps nudge instead of a second hand-rolled correction.
+//
+// The STEP COUNT went with the box (same ask). Tool calls are the scale a reader actually judges an
+// elided run by, and a hairline label carrying two numbers plus its own affordance text is a rule with
+// a sentence on it. Steps still decide WHETHER to collapse (see collapseIntermediate) — a prose-only
+// intermediate run is still worth hiding — so a zero-tool divider simply reads "Click to expand".
+//
+// Clicking is ONE-WAY: it reveals the full log and the divider unmounts; there is no re-collapse
+// (the maintainer's ask).
+function IntermediateSummary({ toolCount, onExpand }: { toolCount: number; onExpand: () => void }) {
+  const tools = toolCount > 0 ? `${toolCount} tool call${toolCount === 1 ? "" : "s"}` : ""
   return (
-    <button
-      type="button"
-      data-intermediate-summary
+    <WakeDivider
+      icon={ChevronsUpDown}
+      marker="intermediate-summary"
       onClick={onExpand}
-      onMouseDown={(e) => e.preventDefault()}
-      aria-label={`Expand ${summary} of intermediate agent activity`}
-      className={`petite-caps group flex w-full items-center gap-2 ${BLOCK_RADIUS} border border-border/60 bg-panel-2/40 px-4 py-2 text-left text-[12px] text-muted outline-none transition-colors hover:border-border hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60`}
+      ariaLabel={`Expand ${tools ? `${tools} of ` : ""}intermediate agent activity`}
     >
-      <ChevronsUpDown aria-hidden="true" size={13} className="shrink-0 opacity-70 transition-opacity group-hover:opacity-100" />
-      <span className="tabular-nums">{summary}</span>
-      <span className="ml-auto text-[11px] opacity-60 transition-opacity group-hover:opacity-100">Show</span>
-    </button>
+      {tools && (
+        <>
+          <span className="shrink-0 tabular-nums">{tools}</span>
+          <span aria-hidden="true" className="shrink-0 opacity-50">·</span>
+        </>
+      )}
+      <span className="shrink-0">Click to expand</span>
+    </WakeDivider>
   )
 }
 
@@ -649,7 +658,7 @@ function IntermediateSummary({ toolCount, stepCount, onExpand }: { toolCount: nu
 const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnresolve }: { thread: ThreadView; leaving: boolean; onResolve: (slug: string) => void; onUnresolve: (slug: string) => void }) {
   const [collapsed, setCollapsed] = useState(false)
   // Higher-level (turn-level) collapse: the whole run of INTERMEDIATE steps between the pinned last
-  // user message and the final agent message is hidden behind a single summary bar by default, so a
+  // user message and the final agent message is hidden behind a single summary divider by default, so a
   // triage card shows "what I asked" + "what the agent is saying NOW" without the wall of tool calls
   // in between. Deliberately ONE-WAY — expanding is a commitment to read the full log; there is no
   // re-collapse (the maintainer's ask). Distinct from the per-message ToolCalls collapse, which is
@@ -719,7 +728,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
     return -1
   }, [messages])
   // The last TEXT-BEARING agent message — the agent's CURRENT standing signal, shown (text only) below
-  // the collapse bar. Requires renderable PROSE (messageHasRenderableText), not just "renders something":
+  // the collapse divider. Requires renderable PROSE (messageHasRenderableText), not just "renders something":
   // because this anchor is rendered `textOnly`, a trailing TOOLS-ONLY message (text "") has nothing to
   // show, so it must NOT become the anchor. When the agent asked and then RESTED, this trailing text
   // message IS the ```question that carries the answer chips; when the agent kept working past its ask
@@ -749,7 +758,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
     }
     return -1
   }, [messages, stickyUserIdx])
-  // What the summary bar hides. The first and last agent messages render TEXT ONLY (the maintainer: the
+  // What the summary divider hides. The first and last agent messages render TEXT ONLY (the maintainer: the
   // tool calls batched into them "are almost never useful"), so EVERYTHING between them collapses — the
   // fully-hidden middle messages AND the tool bands batched into the first/last messages themselves.
   //   hiddenToolCount = every tool call across [firstRenderedIdx .. lastRenderedIdx] inclusive.
@@ -791,9 +800,9 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
     }
     return { hiddenStepCount: steps, hiddenToolCount: tools, visibleBackgroundMessages: backgroundMessages }
   }, [messages, firstRenderedIdx, lastRenderedIdx])
-  // Collapse the intermediate run behind ONE summary bar unless the reader has opted into the full log.
+  // Collapse the intermediate run behind ONE summary divider unless the reader has opted into the full log.
   // Gated on a real pinned ask (stickyUserIdx >= 0) and a distinct first/last agent message so a single
-  // agent turn (nothing intermediate) never hides its own batched tools behind an anchorless bar. Fires
+  // agent turn (nothing intermediate) never hides its own batched tools behind an anchorless divider. Fires
   // when there is ANYTHING to hide — middle steps OR tool calls batched into the first/last message.
   const collapseIntermediate =
     !intermediateExpanded && stickyUserIdx >= 0 && firstRenderedIdx !== lastRenderedIdx && (hiddenStepCount >= 1 || hiddenToolCount >= 1)
@@ -803,7 +812,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // coalescedActivityMessages): a provider that chunks one burst into 26 assistant records must not
   // mint 26 `Ran 1 tool call` disclosures, and a "Thought for Ns" in the middle of that burst must not
   // split it in two (maintainer 2026-07-31: "I don't think it makes sense for us to interleave tool
-  // calls and thinking like this"). Expanding this card's intermediate bar used to be exactly that
+  // calls and thinking like this"). Expanding this card's intermediate divider used to be exactly that
   // wall, because the card was the one transcript surface still rendering raw server order.
   // Each entry keeps its ORIGINAL index so every index-addressed prop below — paired answers, the
   // sticky ask, the collapse span — keeps addressing server truth rather than the compacted array.
@@ -1138,7 +1147,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
               // Higher-level turn collapse. The first and last agent messages render TEXT ONLY; the whole
               // span [firstRenderedIdx .. lastRenderedIdx] between their prose — the fully-hidden middle
               // messages plus the tool bands batched into the first/last messages — is replaced by ONE
-              // summary bar. The pinned ask and loaded-earlier history still render in full around it.
+              // summary divider. The pinned ask and loaded-earlier history still render in full around it.
               let intermediateBarEmitted = false
               coalescedVisible.forEach(({ message: m, messageIndex: globalIdx }, i) => {
                 if (m.queued) return
@@ -1148,9 +1157,9 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                   const isLast = globalIdx === lastRenderedIdx
                   // Fully-hidden middle message.
                   if (!isFirst && !isLast) return
-                  // The bar sits between the first message's prose and the last message's prose — emit it
+                  // The divider sits between the first message's prose and the last message's prose — emit it
                   // once, just before the last message (firstRenderedIdx !== lastRenderedIdx here, so the
-                  // two are distinct rows and the bar always lands after any first-message text).
+                  // two are distinct rows and the divider always lands after any first-message text).
                   if (isLast && !intermediateBarEmitted) {
                     if (hiddenToolCount > 0 || hiddenStepCount > 0) {
                       if (prevTailIsMeta !== null) out.push(<VSpace key="im-space" h={STEP} />)
@@ -1158,7 +1167,6 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                         <IntermediateSummary
                           key="intermediate-summary"
                           toolCount={hiddenToolCount}
-                          stepCount={hiddenStepCount}
                           onExpand={() => setIntermediateExpanded(true)}
                         />,
                       )
@@ -1180,7 +1188,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                     intermediateBarEmitted = true
                   }
                   // A first/last message that is pure batched tool calls (no prose) contributes no row —
-                  // its calls are already folded into the bar — so skip it and leave no dangling spacer.
+                  // its calls are already folded into the divider — so skip it and leave no dangling spacer.
                   if (!messageHasRenderableText(m)) return
                   if (prevTailIsMeta !== null) out.push(<VSpace key={`s${i}`} h={STEP} />)
                   const textKey = m.sourceId ?? `legacy-${globalIdx}`
