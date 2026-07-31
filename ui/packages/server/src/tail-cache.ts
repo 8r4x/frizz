@@ -111,18 +111,30 @@ interface EncodedMap {
   __map: [string, unknown][]
 }
 
+interface EncodedSet {
+  __set: unknown[]
+}
+
 const isEncodedMap = (value: unknown): value is EncodedMap =>
   Boolean(value) && typeof value === "object" && Array.isArray((value as EncodedMap).__map)
+const isEncodedSet = (value: unknown): value is EncodedSet =>
+  Boolean(value) && typeof value === "object" && Array.isArray((value as EncodedSet).__set)
 
 export function encodeTailState(state: object): string {
   return JSON.stringify(state, (_key, value) =>
-    value instanceof Map ? { __map: [...value.entries()] } : value,
+    value instanceof Map ? { __map: [...value.entries()] }
+      : value instanceof Set ? { __set: [...value.values()] }
+        : value,
   )
 }
 
 export function decodeTailState(json: string): Record<string, unknown> | null {
   try {
-    const value = JSON.parse(json, (_key, raw) => (isEncodedMap(raw) ? new Map(raw.__map) : raw))
+    const value = JSON.parse(json, (_key, raw) =>
+      isEncodedMap(raw) ? new Map(raw.__map)
+        : isEncodedSet(raw) ? new Set(raw.__set)
+          : raw,
+    )
     return value && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : null

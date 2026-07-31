@@ -78,10 +78,11 @@ const cachedSlugs = (h: Harness): string[] => {
 
 // ---- the codec ----
 
-test("tail-cache codec: round-trips Maps, and every field it was not told about", () => {
+test("tail-cache codec: round-trips Maps and Sets, and every field it was not told about", () => {
   const state = {
     slug: "t", offset: 42, partial: "xy", turn: "idle",
     subAgents: new Map([["toolu_1", { kind: "agent", label: "child", startedAt: stamp(1) }]]),
+    deliveredReports: new Set(["task-1"]),
     // A field the codec has never heard of must survive: the whole point of a generic codec is that
     // the next TailState field cannot be silently dropped by someone forgetting to add it here.
     somethingAddedLater: { nested: [1, 2, 3] },
@@ -91,6 +92,8 @@ test("tail-cache codec: round-trips Maps, and every field it was not told about"
   assert.equal(back.offset, 42)
   assert.ok(back.subAgents instanceof Map, "a Map must come back as a Map, not a plain object")
   assert.equal((back.subAgents as Map<string, { label: string }>).get("toolu_1")?.label, "child")
+  assert.ok(back.deliveredReports instanceof Set, "a Set must come back as a Set, not a plain object")
+  assert.deepEqual([...back.deliveredReports as Set<string>], ["task-1"])
   assert.deepEqual(back.somethingAddedLater, { nested: [1, 2, 3] })
 })
 

@@ -3125,10 +3125,12 @@ export function createTailer(deps: TailerDeps): Tailer {
     const decoded = decodeTailState(entry.state)
     if (!decoded) return false
     if (decoded.offset !== entry.offset || typeof decoded.partial !== "string") return false
-    // The three Maps must have survived the round trip as Maps; a blob that says otherwise is corrupt.
-    for (const field of ["subAgents", "retiredSubAgents", "retiredShells"]) {
+    // Lifecycle collections must survive the round trip with their native collection types; a plain
+    // object here crashes the incremental fold on the first completion after restart.
+    for (const field of ["subAgents", "retiredSubAgents", "queuedReports", "retiredShells"]) {
       if (!(decoded[field] instanceof Map)) return false
     }
+    if (!(decoded.deliveredReports instanceof Set)) return false
     // `Record` is shadowed in this module by the JSONL record interface — spell the index type out.
     const target = state as unknown as { [key: string]: unknown }
     for (const [key, value] of Object.entries(decoded)) {
