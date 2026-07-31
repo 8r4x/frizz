@@ -10,7 +10,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { deriveAgentState, DEFAULT_DROPPED_MIN, DEFAULT_IDLE_MIN } from './agent-status.mjs';
@@ -129,7 +129,9 @@ function fixture({ status = 'active', agentId = 'A_newest', ageMin, rested = fal
   // MUST live there (not under os.tmpdir(), which is /var/folders/... on macOS).
   const projSlug = 'proj-slug';
   const session = 'sess-123';
-  const claudeRoot = mkdtempSync(join('/private/tmp', 'claude-fraytest-'));
+  // deriveTasksDir globs exactly ['/tmp','/private/tmp'], so the fixture MUST live under one of
+  // them — os.tmpdir() would not be found. macOS has both (/tmp -> /private/tmp); Linux only /tmp.
+  const claudeRoot = mkdtempSync(join(existsSync('/private/tmp') ? '/private/tmp' : '/tmp', 'claude-fraytest-'));
   const tasksDir = join(claudeRoot, projSlug, session, 'tasks');
   mkdirSync(tasksDir, { recursive: true });
   const now = Date.now();

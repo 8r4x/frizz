@@ -15,7 +15,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -134,7 +134,9 @@ function longRunningFixture({ runtimeMin, outputAgeMin, status = 'active' }) {
     JSON.stringify({ ts: dispatchedIso, agent_id: agentId, thread: 'watch', label: 'ci-watch' }) + '\n');
 
   const projSlug = `proj-${uid}`, session = `sess-${uid}`;
-  const claudeRoot = mkdtempSync(join('/private/tmp', 'claude-fraytest-'));
+  // deriveTasksDir globs exactly ['/tmp','/private/tmp'], so the fixture MUST live under one of
+  // them — os.tmpdir() would not be found. macOS has both (/tmp -> /private/tmp); Linux only /tmp.
+  const claudeRoot = mkdtempSync(join(existsSync('/private/tmp') ? '/private/tmp' : '/tmp', 'claude-fraytest-'));
   const tasksDir = join(claudeRoot, projSlug, session, 'tasks');
   mkdirSync(tasksDir, { recursive: true });
   const p = join(tasksDir, `${agentId}.output`);
