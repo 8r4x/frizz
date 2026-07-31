@@ -2,18 +2,16 @@
 // The registry launcher is intentionally separate from index.ts. `fray-dev` follows mutable
 // checkout source; `fray` runs the package that npm resolved and never turns an npx cache into a
 // deployment directory.
-import { spawn } from "node:child_process";
-import { closeSync, openSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { launchApp, launchBrowserTab } from "./browser.ts";
 import {
   acquireGlobalLaunchLock,
   choosePort,
   expectedOwnerHealth,
   liveWorkspaceOwner,
   parseCliArgs,
-  pidIsAlive,
   probeFray,
   readPreferredPort,
   resolveWorkspace,
@@ -35,10 +33,36 @@ import { createSupervisorShutdownHandler, startDevSupervisor } from "@fray-ui/se
 import { handoffToRegistrySuccessor, npmRegistryReleaseAdapter, planRegistryUpdate, PRODUCTION_REEXEC_FLAG } from "./production-update.ts";
 import { assertLaunchPrerequisites, ensureNativeHelperPermissions } from "./preflight.ts";
 
-/** How long an abandoned supervisor gets to drain on SIGTERM before it is SIGKILLed. */
-const ABANDON_GRACE_MS = 3_000;
 const PACKAGE_NAME = process.env.FRAY_REGISTRY_PACKAGE ?? "frayui";
-const PACKAGE_VERSION = process.env.npm_package_version ?? "0.0.1";
+
+/**
+ * The version THIS bundle actually is, read from the package.json it ships inside.
+ *
+ * It used to be `process.env.npm_package_version ?? "0.0.1"`, and npm sets that variable only for
+ * lifecycle scripts — NOT when a bin runs through the npx shim, which is how every real user starts
+ * Fray. So the launcher reported itself as `0.0.1` forever. Measured end-to-end against the published
+ * package: a genuine 0.1.1 install served `artifactDigest: "npm:frayui@0.0.1"`, and still served
+ * `0.0.1` after updating itself to 0.1.2.
+ *
+ * That is not cosmetic. `planRegistryUpdate(PACKAGE_NAME, PACKAGE_VERSION, …)` compares this against
+ * the registry's latest, so a permanent `0.0.1` makes every version look newer: the "already current"
+ * branch below is unreachable, and Update Fray reinstalls-and-restarts even when nothing is stale.
+ *
+ * `import.meta.dirname` is the bundle's own directory (`<package>/dist`), the same base `webDist` and
+ * `runtimeDir` resolve from below — so this reads the package.json that was published alongside it.
+ * The env var stays as a fallback for anyone launching through a lifecycle script.
+ */
+function resolvePackageVersion(): string {
+  try {
+    const manifest = JSON.parse(readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8")) as { version?: unknown };
+    if (typeof manifest.version === "string" && manifest.version.trim()) return manifest.version.trim();
+  } catch {
+    // Fall through — a launcher that cannot read its own manifest must still boot.
+  }
+  return process.env.npm_package_version ?? "0.0.1";
+}
+
+const PACKAGE_VERSION = resolvePackageVersion();
 const rawArgs = process.argv.slice(2);
 const reexec = rawArgs.includes(PRODUCTION_REEXEC_FLAG);
 const args = rawArgs.filter((arg) => arg !== PRODUCTION_REEXEC_FLAG);
@@ -51,7 +75,20 @@ const options: CliOptions = (() => {
   try { return parseCliArgs(args); } catch (error) { return fail(error); }
 })();
 if (options.help) {
-  console.log("Fray production launcher\n\nUsage: npx frayui [options] [repository]\n\nRuns the npm-resolved immutable Fray package. Use fray-dev only for a source checkout.");
+  console.log(
+    `Fray production launcher
+
+Usage: npx ${PACKAGE_NAME} [options] [repository]
+
+Runs the npm-resolved immutable Fray package, then opens it in your default browser. Use fray-dev
+only for a source checkout.
+
+Options:
+  --app                use the legacy dedicated app window instead of a browser tab
+  --no-app             print the URL without opening a browser
+  --port <port>        request a fixed port for a new workspace server
+  -h, --help           show this help`,
+  );
   process.exit(0);
 }
 if (options.dev || rawArgs.includes("--prod")) fail("--dev and --prod are not available from the registry launcher");
@@ -70,34 +107,6 @@ process.chdir(workspace.root);
 const target = workspaceLaunchTarget(workspace);
 const expected = expectedOwnerHealth(target, readProjectLaunchOwner(workspace.stateDir));
 
-/**
- * Terminate a detached supervisor this launcher started and then abandoned, and confirm it is gone.
- * Signals the process GROUP (spawn used `detached: true`, so the child leads its own group and its
- * forked control plane is in it) — SIGTERM for a clean drain, then SIGKILL once the grace expires.
- * Best-effort by necessity, but it must never itself throw: the caller is already reporting a
- * launch failure and that message is what the operator needs to see.
- */
-async function abandonLaunchedChild(pid: number | undefined, port: number): Promise<void> {
-  if (!pid) return;
-  const signalGroup = (signal: NodeJS.Signals) => {
-    try { process.kill(-pid, signal); return true; } catch { /* group gone */ }
-    try { process.kill(pid, signal); return true; } catch { return false; }
-  };
-  if (!signalGroup("SIGTERM")) return;
-  const deadline = Date.now() + ABANDON_GRACE_MS;
-  while (Date.now() < deadline) {
-    if (!pidIsAlive(pid)) return;
-    await delay(100);
-  }
-  signalGroup("SIGKILL");
-  await delay(200);
-  if (pidIsAlive(pid)) {
-    console.error(
-      `fray: could not stop the abandoned Fray supervisor (pid ${pid}, port ${port}); stop it manually before retrying`,
-    );
-  }
-}
-
 async function existingPort(): Promise<number | undefined> {
   const owner = liveWorkspaceOwner(workspace.stateDir, target);
   const ports = [owner?.port, readPreferredPort(workspace.stateDir)].filter((value): value is number => !!value);
@@ -105,10 +114,35 @@ async function existingPort(): Promise<number | undefined> {
   return undefined;
 }
 
-function openOrPrint(port: number, reused: boolean): void {
+/**
+ * Hand the operator the running board. This is deliberately the SAME contract as the source
+ * launcher's openOrPrint (index.ts): a plain launch opens the default browser, `--app` opens the
+ * dedicated app window, `--no-app` prints the URL and nothing else, and a browser that refuses to
+ * open degrades to the URL instead of failing the launch.
+ *
+ * It printed the URL and stopped there from the day this file was written, so `npx frayui` never
+ * opened anything while `fray-dev` always did — the whole divergence the operator hit.
+ */
+async function openOrPrint(port: number, reused: boolean): Promise<void> {
   const url = `http://127.0.0.1:${port}`;
   console.log(`${reused ? "reusing" : "started"} Fray ${PACKAGE_VERSION} for ${workspace.root}`);
-  console.log(url);
+  if (options.noApp) {
+    console.log(url);
+    return;
+  }
+  try {
+    if (options.appMode) {
+      await launchApp(url, { dataPath: join(workspace.stateDir, "browser-profile") });
+      console.log(`${reused ? "focused" : "opened"} Fray app — ${url}`);
+    } else {
+      await launchBrowserTab(url);
+      console.log(`requested Fray in your default browser — ${url}`);
+    }
+  } catch {
+    console.log(
+      `Could not open the ${options.appMode ? "Fray app window" : "default browser"}. Open manually: ${url}`,
+    );
+  }
 }
 
 async function runSupervisor(port: number, token: string): Promise<never> {
@@ -131,6 +165,24 @@ async function runSupervisor(port: number, token: string): Promise<never> {
   // under node_modules). In a source checkout this launcher is never executed — fray-dev uses index.ts.
   const childEntry = fileURLToPath(new URL("./dev-child.js", import.meta.url));
   let plannedUpdate: Awaited<ReturnType<typeof planRegistryUpdate>> | undefined;
+
+  // Whether the registry actually has something newer, refreshed on a timer and READ FROM CACHE.
+  // The status endpoint is polled by every open tab, so it must never reach the network; and the
+  // answer only changes when someone publishes, so a slow cadence is plenty. Starts optimistic
+  // (`true`) so the button keeps its current appearance until the first probe lands — the operator
+  // never sees it flip from Restart to Update a second after load.
+  let updateAvailable = true;
+  const refreshUpdateAvailable = async (): Promise<void> => {
+    try {
+      updateAvailable = (await planRegistryUpdate(PACKAGE_NAME, PACKAGE_VERSION, npmRegistryReleaseAdapter)) !== null;
+    } catch {
+      // A registry we cannot reach is not evidence that we are current. Leave the last known answer.
+    }
+  };
+  void refreshUpdateAvailable();
+  const updateAvailablePoll = setInterval(() => void refreshUpdateAvailable(), 30 * 60 * 1000);
+  updateAvailablePoll.unref();
+
   const supervisor = await startDevSupervisor({
     port,
     cwd: workspace.root,
@@ -141,10 +193,11 @@ async function runSupervisor(port: number, token: string): Promise<never> {
     watch: false,
     childEntry,
     childEnvironment: () => ({ FRAY_STABLE_WEB_DIST: webDist, FRAY_STABLE_ARTIFACT: `npm:${PACKAGE_NAME}@${PACKAGE_VERSION}`, FRAY_SCRIPTS_DIR: scriptsDir, FRAY_WORKER_PLUGIN_DIR: workerPluginDir }),
+    updateAvailable: () => updateAvailable,
     updateRestart: async () => {
       try {
         const plan = await planRegistryUpdate(PACKAGE_NAME, PACKAGE_VERSION, npmRegistryReleaseAdapter);
-        if (!plan) return { state: "failed" as const, message: `Fray ${PACKAGE_VERSION} is already current` };
+        if (!plan) { updateAvailable = false; return { state: "failed" as const, message: `Fray ${PACKAGE_VERSION} is already current` }; }
         plannedUpdate = plan;
         // npm only writes its own cache. The healthy supervisor is deliberately left up until the
         // server has drained its child and proxy immediately before durableReexec below.
@@ -178,39 +231,37 @@ try {
     await runSupervisor(options.port, token);
   }
   const existing = await existingPort();
-  if (existing) { openOrPrint(existing, true); process.exit(0); }
+  if (existing) { await openOrPrint(existing, true); process.exit(0); }
   const claim = tryAcquireProjectLaunchOwner(target, "launcher");
   if (claim.kind !== "acquired") throw new Error("Fray is starting for this project; retry shortly");
-  const release = await acquireGlobalLaunchLock();
+  let release: (() => void) | undefined = await acquireGlobalLaunchLock();
   try {
     const port = await choosePort(options.port, readPreferredPort(workspace.stateDir));
-    if (options.foreground) await runSupervisor(port, claim.lease.token);
-    const log = openSync(join(workspace.stateDir, "fray.log"), "a");
-    const child = spawn(process.execPath, [process.argv[1]!, "--foreground", "--no-app", "--port", String(port)], {
-      cwd: workspace.root,
-      detached: true,
-      env: projectLaunchEnvironment({ ...process.env, FRAY_PRODUCTION_SUPERVISOR: "1" }, target, claim.lease.token),
-      stdio: ["ignore", log, log],
-    });
-    child.unref();
-    closeSync(log);
-    try {
-      // Progress-tracked: a boot that keeps reporting steps keeps the launcher's patience, so a large
-      // board on a busy machine is no longer indistinguishable from a wedge. See waitForWorkspace.
-      await waitForWorkspace(
+    // The supervisor owns the rest of this process's life (runSupervisor never returns), so start it
+    // WITHOUT awaiting and race it against health. Awaiting it directly is what made everything below
+    // unreachable: parseCliArgs pins `foreground` to true, so the old `if (options.foreground) await
+    // runSupervisor(...)` always won and a cold `npx frayui` never printed its URL, never opened a
+    // browser, and never released the lock it took — the detached-spawn branch that used to follow was
+    // dead code the day parseCliArgs stopped honouring --detach.
+    const running = runSupervisor(port, claim.lease.token);
+    // Progress-tracked: a boot that keeps reporting steps keeps the launcher's patience, so a large
+    // board on a busy machine is no longer indistinguishable from a wedge. See waitForWorkspace.
+    // `running` stays in the race so a supervisor that dies while booting reports immediately.
+    await Promise.race([
+      waitForWorkspace(
         port,
         expectedOwnerHealth(target, readProjectLaunchOwner(workspace.stateDir)),
         undefined,
         { stateDir: workspace.stateDir },
-      );
-    } catch (error) {
-      // NEVER leave the child we gave up on. It is DETACHED and in its own process group, so without
-      // this it goes right on booting, binds the port it was told to use, publishes ownership, and
-      // contends with the operator's next attempt — they get the failure message AND a stray control
-      // plane. Signal the whole group so the supervisor's own forked child dies with it.
-      await abandonLaunchedChild(child.pid, port);
-      throw error;
-    }
-    openOrPrint(port, false);
-  } finally { release(); claim.lease.release(); }
+      ),
+      running,
+    ]);
+    // Hold the machine-global allocation lock only until the port is actually listening. It must NOT
+    // span the foreground server lifetime, or a single `npx frayui` blocks every other repository's
+    // launch on this machine until it is stopped.
+    release();
+    release = undefined;
+    await openOrPrint(port, false);
+    await running;
+  } finally { release?.(); claim.lease.release(); }
 } catch (error) { fail(error); }

@@ -30,6 +30,16 @@ export interface RestartSupervisorProxyOptions {
   restart: () => Promise<RestartResult>
   /** Build/validate/promote a new immutable artifact, then restart the child. Omitted for legacy mode. */
   updateRestart?: () => Promise<RestartResult>
+  /**
+   * Is a NEWER artifact actually available right now? Distinct from `updateRestart`, which only says
+   * the verb is WIRED — a distinction the UI needs and could not previously make, so a fully current
+   * production Fray still advertised "Update Fray" and reinstalled its own version on click.
+   *
+   * Must be a CHEAP cached read: this runs on every status poll, so it may never touch the network.
+   * Omitting it means "assume available", which keeps fray-dev (where an update rebuilds from source
+   * and is always meaningful) behaving exactly as before.
+   */
+  updateAvailable?: () => boolean
   /** Status is intentionally available without a child, for a useful recovery UI. */
   status?: () => { state: RestartControlState; message?: string; artifactDigest?: string }
 }
@@ -102,7 +112,7 @@ export class RestartSupervisorProxy {
     })
   }
 
-  private status(): { state: RestartControlState; message?: string; artifactDigest?: string; updateRestart: boolean } {
+  private status(): { state: RestartControlState; message?: string; artifactDigest?: string; updateRestart: boolean; updateAvailable?: boolean } {
     const delegated = this.options.status?.()
     // The disposable child can quite correctly still report ready while the durable owner is building
     // a successor. The owner is the authority for that transition; never leak the old child's ready
@@ -116,6 +126,9 @@ export class RestartSupervisorProxy {
       // Never infer this from the generic protocol: legacy/static supervisors can recover a child
       // but cannot build and promote the canonical Fray artifact.
       updateRestart: typeof this.options.updateRestart === "function",
+      // Sent ONLY when the launcher can actually answer it, so an older client — and fray-dev, which
+      // has no notion of "already current" — keeps today's behaviour on its absence.
+      ...(this.options.updateAvailable ? { updateAvailable: this.options.updateAvailable() === true } : {}),
     }
   }
 

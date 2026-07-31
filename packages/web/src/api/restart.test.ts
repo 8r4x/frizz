@@ -54,3 +54,25 @@ test("an accepted update transition is not misreported as a restart failure", as
   const accepted = async () => response(JSON.stringify({ protocol: 1, state: "restarting" }), 202)
   assert.equal((await requestFrayUpdateRestart(accepted as typeof fetch)).state, "restarting")
 })
+
+// The two conditions behind the Update-vs-Restart label. Conflating them shipped: production reported
+// only the CAPABILITY, so a fully current Fray still offered "Update Fray" and a click reinstalled its
+// own version and restarted the app for nothing.
+test("the update label needs the verb wired AND a newer artifact to actually exist", () => {
+  const status = (over: Record<string, unknown>) =>
+    ({ protocol: 1, state: "ready", ...over }) as Parameters<typeof canUpdateRestart>[0]
+
+  assert.equal(canUpdateRestart(status({ updateRestart: true, updateAvailable: true })), true)
+  assert.equal(
+    canUpdateRestart(status({ updateRestart: true, updateAvailable: false })), false,
+    "already current ⇒ offer a plain Restart, never an Update that installs nothing",
+  )
+  assert.equal(
+    canUpdateRestart(status({ updateRestart: true })), true,
+    "absent ⇒ assume available, so fray-dev (which can always rebuild from source) is unchanged",
+  )
+  assert.equal(
+    canUpdateRestart(status({ updateRestart: false, updateAvailable: true })), false,
+    "availability can never conjure the verb on a supervisor that cannot promote an artifact",
+  )
+})

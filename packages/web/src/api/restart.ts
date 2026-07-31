@@ -11,6 +11,13 @@ export interface FraySupervisorStatus {
   artifactDigest?: string
   /** Only fray-dev's durable supervisor can safely build and promote a replacement artifact. */
   updateRestart?: boolean
+  /**
+   * Is a newer artifact actually available? Sent only by a launcher that can answer it (the registry
+   * launcher, which knows its own version and the registry's latest). ABSENT means "cannot tell —
+   * assume yes", which is right for fray-dev, where an update rebuilds from source and is always
+   * meaningful.
+   */
+  updateAvailable?: boolean
 }
 
 /** Wakes the app-level status monitor immediately after a control action is accepted. */
@@ -21,9 +28,20 @@ export function canRestart(status: FraySupervisorStatus | null): boolean {
   return status !== null
 }
 
-/** Legacy/static supervisors intentionally omit this capability, so their recovery endpoint is not surfaced as an update action. */
+/**
+ * Should this button offer to UPDATE rather than merely restart?
+ *
+ * Two conditions, and conflating them was a real shipped bug: `updateRestart` says the verb is WIRED
+ * (legacy/static supervisors omit it, so their recovery endpoint is never surfaced as an update), while
+ * `updateAvailable` says a newer artifact actually EXISTS. With only the first, a fully up-to-date
+ * production Fray still read "Update Fray" and a click reinstalled its own version and restarted the
+ * app for nothing — measured end-to-end against the published package.
+ *
+ * `updateAvailable` absent ⇒ treated as available, so fray-dev (which can always rebuild from source,
+ * and has no "already current" notion) is unchanged.
+ */
 export function canUpdateRestart(status: FraySupervisorStatus | null): boolean {
-  return status?.updateRestart === true
+  return status?.updateRestart === true && status.updateAvailable !== false
 }
 
 export async function getFraySupervisorStatus(fetcher: typeof fetch = fetch): Promise<FraySupervisorStatus | null> {

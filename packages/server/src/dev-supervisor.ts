@@ -98,6 +98,8 @@ export interface DevSupervisorOptions {
   childArgs?: string[]
   /** Stable-mode only: build/preflight a candidate before the controlled child restart. */
   updateRestart?: () => Promise<RestartResult>
+  /** Cheap CACHED "is a newer artifact actually available" read; see RestartSupervisorProxy. */
+  updateAvailable?: () => boolean
   /** Restore the known-good artifact selection if its replacement cannot become ready. */
   rollbackUpdate?: () => Promise<void> | void
   /**
@@ -456,6 +458,7 @@ class Supervisor implements DevSupervisor {
       childPort: () => this.childPort,
       restart: () => this.restartFromBrowser(),
       updateRestart: this.updateRestart ? () => this.updateFromBrowser() : undefined,
+      updateAvailable: opts.updateAvailable,
       status: () => {
         if (this.browserRestart || this.restartRunning) return { state: "restarting" as const }
         const failed = this.child === null && this.boot === null
