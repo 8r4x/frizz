@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { seedBoard } from "../store.ts"
 import { useBoard } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
+import { displayTitle } from "../groups.ts"
 import { resolveThreadRoute } from "../lib/threadRouteState.ts"
 import {
   clampThreadTab,
@@ -57,14 +58,14 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
     rpc.threadSeen({ slug }).catch(() => {})
   }, [atRest, slug, thread?.lastActivityAt])
 
-  // The tab carries the WORKSPACE, not the thread: "owner/repo | Fray". A standalone thread page is
-  // usually one of several open at once on the same repo, and the thread's own title is already the
-  // first thing on the page — repeating it in the tab spent the whole (short) visible width on the
-  // part the user can see anyway, and truncated the repo they were actually distinguishing by.
+  // "<thread> · owner/repo | Fray". The thread title LEADS because a tab truncates from the end and
+  // several of these are usually open on the same repo at once — the thread is what tells them apart.
+  // The workspace identity trails as "owner/repo | Fray", the same mark the installed app window uses.
   useEffect(() => {
     const projectLabel = board?.projectLabel ?? board?.projectName
-    document.title = projectLabel ? `${projectLabel} | Fray` : "Fray"
-  }, [board?.projectLabel, board?.projectName])
+    const threadLabel = thread ? displayTitle(thread) : slug
+    document.title = projectLabel ? `${threadLabel} · ${projectLabel} | Fray` : `${threadLabel} · Fray`
+  }, [board?.projectLabel, board?.projectName, slug, thread])
 
   return (
     <TooltipProvider>
