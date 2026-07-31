@@ -131,6 +131,18 @@ export const SubAgentView = z.object({
   // server that doesn't emit it yet → the drill-in drawer's entry point is simply not offered. Present
   // → the banner row / AgentBlock is clickable and resolves this exact child's transcript.
   id: z.string().optional(),
+  // Can fray actually END this child's work right now? Computed SERVER-side (board.ts, the one place
+  // holding both the session row and the tailer's telemetry) and never re-derived by a client — the
+  // same discipline as `steerable`, and for the same reason: the policy depends on the thread's
+  // TRANSPORT, which the browser has no honest way to know.
+  //
+  // It exists because the × that offers to stop a child must not appear on a row where stopping is
+  // impossible (maintainer 2026-07-30: "We shouldn't show the X if it doesn't fucking work"). Only a
+  // broker-backed Claude thread has a per-child control channel (`Query.stopTask`); a tmux thread runs
+  // its sub-agents inside the CLI process and a codex thread inside its own, and neither exposes one.
+  // Absent/false on a pre-restart server's snapshot ⇒ the × is simply not offered on a RUNNING row,
+  // which fails toward showing no control rather than a false one.
+  stoppable: z.boolean().optional(),
   // ISO8601 of the child transcript's last append (its output file's mtime — the SAME signal that
   // decides running vs stale). Surfaced so a row can show "last active 6 min ago": the state alone only
   // says quiet-for-15-min, not HOW quiet. Optional — absent before the output path resolves, or on a

@@ -185,6 +185,23 @@ function hasLiveBackgroundWork(tele: SessionTelemetry | undefined): boolean {
   return Boolean(tele?.subAgents?.some((agent) => isDirectSubAgent(agent) && agent.state === "running"))
 }
 
+// Whether each live child can ACTUALLY be ended, answered here because this is the only place that
+// holds both the session row (which knows the transport) and the tailer's telemetry (which knows the
+// children). The client renders the stop × off this and never re-derives it — see SubAgentView.stoppable.
+//
+// Only a broker-backed Claude thread has a per-child control channel: `Query.stopTask`, whose registry
+// is session-wide (so a DESCENDANT is as reachable as a direct child — whether the × is offered on a
+// descendant ROW is a separate client-side question about whether the row can then be cleared). A tmux
+// claude thread runs its sub-agents inside the CLI process and a codex thread inside its own; neither
+// exposes anything to address one child with, so their rows must not offer a stop at all.
+//
+// Only RUNNING rows are marked: a stale/rested row's × means "clear this from the list", which needs no
+// provider control and works everywhere. The flag answers "can this be KILLED", not "can this be clicked".
+function stampStoppable(agents: ThreadView["subAgents"], row: SessionRow): ThreadView["subAgents"] {
+  if (!isBrokerClaudeRow(row)) return agents
+  return agents.map((agent) => (agent.state === "running" ? { ...agent, stoppable: true } : agent))
+}
+
 // The awaiting-background card's trigger: the thread's OWN dispatched work is still live — a sub-agent
 // OR a launched background shell. Broader than hasLiveBackgroundWork (which is sub-agents only, for the
 // crash net): a launched shell is still work the human may want SURFACED, and the never-returns problem
@@ -550,7 +567,7 @@ function sessionThreadView(
     spawnedAt: row.spawned_at,
     lastActivityAt: tele?.lastActivityAt,
     lastAssistantAt: tele?.lastAssistantAt,
-    subAgents: tele?.subAgents ?? [],
+    subAgents: stampStoppable(tele?.subAgents ?? [], row),
     bgShells: tele?.bgShells ?? [],
     pendingAsk: tele?.pendingAsk ? { questions: tele.pendingAsk.questions } : undefined,
     nativeInputRequired: tele?.nativeInputRequired,

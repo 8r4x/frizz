@@ -109,6 +109,10 @@ export function ChildOpRow({
   // already have with their thread row. Clamped: a runaway depth must step the row, never push the label
   // out of a narrow rail entirely.
   const nestIndent = Math.min(Math.max((depth ?? 1) - 1, 0), 4) * 13
+  // Which of the ×'s two honest meanings this row's control carries. A running row only ever receives
+  // an `onDismiss` when the server said it is stoppable (lib/dismissChildOp.ts), so "running" here is
+  // always a real kill; everything else is retiring a finished op.
+  const dismissTone = running ? "running" : "settled"
   const openTitle = CHILD_OPEN_TITLE[kind]
   const rowTitle = title ?? (clickable ? openTitle : undefined)
 
@@ -241,8 +245,8 @@ export function ChildOpRow({
           type="button"
           onClick={onDismiss}
           onMouseDown={(e) => e.stopPropagation()}
-          title={CHILD_DISMISS_TITLE[kind]}
-          aria-label={`${CHILD_DISMISS_VERB[kind]} ${CHILD_DISMISS_NOUN[kind]}: ${label}`}
+          title={CHILD_DISMISS_TITLE[dismissTone]}
+          aria-label={`${CHILD_DISMISS_VERB[dismissTone]} ${CHILD_DISMISS_NOUN[kind]}: ${label}`}
           className="shrink-0 rounded-sm p-0.5 text-muted/45 outline-none transition-colors hover:text-fg focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
         >
           <X size={11} />

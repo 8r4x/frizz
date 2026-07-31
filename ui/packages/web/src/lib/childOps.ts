@@ -74,19 +74,23 @@ function compactCount(n: number | undefined): string | undefined {
 // to retire it. WHICH rows may carry it is a property of the ROW (a direct child with an id — see
 // lib/dismissChildOp.ts), never of the surface it happens to be rendered on.
 //
-// The tooltip is per-KIND because the two kinds can promise different things, and the × promising a kill
-// it cannot deliver is the exact complaint that made it a real stop (maintainer 2026-07-30: "The fucking
-// X button didn't actually kill the sub-agent. it removed it from my UI, but then I click on the title
-// and it's still running."). A sub-AGENT on a broker-backed thread has a real provider stop control, so
-// its × leads with "stop"; a background SHELL has none — fray learns it exists by reading the worker's
-// transcript and holds no handle on the process — so its × only ever claims to clear the row. Where an
-// agent's runtime has no stop either (a tmux thread, a codex thread), the row cannot know that, so the
-// SERVER says so in the toast rather than the tooltip guessing.
+// The copy is per-STATE, because the × does two different honest things and must claim only the one it
+// will actually do. This is the second half of the maintainer's 2026-07-30 ruling — first "the X button
+// didn't actually kill the sub-agent", then, when a shell's × cleared the row and confessed in a toast
+// that the work was probably still going: "We shouldn't show the X if it doesn't fucking work."
+//
+//   RUNNING  — the row is only given a × when the server says the child is STOPPABLE
+//              (lib/dismissChildOp.ts), so here the word can be "stop" and mean it.
+//   STALE / RESTED — nothing is running to stop. The × retires a finished op from tracking, which is
+//              the phantom escape hatch it was built for, so it says "clear" and promises nothing more.
+//
+// A running row that cannot be stopped carries no × at all, so no wording is needed for it — the
+// absence IS the honesty.
 export const CHILD_DISMISS_TITLE = {
-  AGENT: "Stop — end this sub-agent and clear the row",
-  SHELL: "Clear the row — fray can't stop a background shell",
+  running: "Stop — end this operation and clear the row",
+  settled: "Clear — stop tracking this finished operation",
 } as const
-export const CHILD_DISMISS_VERB = { AGENT: "Stop", SHELL: "Clear" } as const
+export const CHILD_DISMISS_VERB = { running: "Stop", settled: "Clear" } as const
 export const CHILD_DISMISS_NOUN = { AGENT: "sub-agent", SHELL: "background shell" } as const
 
 // ── LIVENESS FILTERS — the surfaces' policies, in ONE place ──────────────────────────────────────
