@@ -1,0 +1,31 @@
+name: ci
+
+# The checks that run without a workspace install, a browser, tmux, or a signed-in provider CLI.
+# The full `pnpm test` suite deliberately does NOT run here: it drives tmux and real provider CLIs,
+# so gating on it would fail for reasons unrelated to the change. `release.yml` typechecks the tree
+# before publishing.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+
+      # board/ is zero-dep plain Node by design — it runs with no install at all.
+      # Shell-expanded, not quoted: the monitors step below already proves that form on this runner.
+      - name: Board parser tests
+        run: node --test board/*.test.mjs
+
+      - name: Check portable monitor copies
+        run: node scripts/sync-portable-monitors.mjs --check
+
+      - name: Test portable monitors
+        run: node --test monitors/*.test.mjs
