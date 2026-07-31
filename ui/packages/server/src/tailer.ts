@@ -17,10 +17,6 @@ import { classifyLimitRecord } from "./backend/usage-limit.ts"
 import { parseDeliveryLedger, correlateDeliveryRecord, ageDeliveries, serializeDeliveryLedger, type DeliveryLedgerItem } from "./delivery-ledger.ts"
 import { createCodexSubAgentTracker, type CodexSubAgentTracker } from "./codex-subagents.ts"
 import {
-  isModelFacingCarrier, isAgentReport, blockTaskIds, parseReportBlock, repairedTaskIds,
-  MAX_TRACKED_REPORTS, type QueuedReport,
-} from "./report-delivery.ts"
-import {
   createTailStateCache,
   decodeTailState,
   encodeTailState,
@@ -197,11 +193,6 @@ export interface SessionTelemetry extends NormalizedTail {
   customTitle?: string
   customTitleRevision?: number
   subAgents: SubAgentView[] // live background sub-agents this session dispatched (empty when none)
-  // Completion reports the runtime accepted into its queue and never put into the model's context.
-  // A non-empty list means this agent is missing findings it believes it has. See report-delivery.ts.
-  // Optional (absent ⇒ none) to match its neighbours here and to keep every existing telemetry
-  // fixture valid — this is an additive observation, not a new required fact about a session.
-  droppedReports?: QueuedReport[]
   bgShells: BgShellView[] // live background shells this session launched (empty when none)
   pendingAsk?: PendingAskData // a pending native AskUserQuestion the session is frozen on (else absent)
   pendingQuestion: boolean // at rest with an unanswered ```question block as the last assistant message
@@ -489,16 +480,6 @@ export interface TailState extends FoldState {
   subAgents: Map<string, SubAgentEntry>
   // completed sub-agents retained for drawer review (bounded ring; NOT surfaced live) — see above
   retiredSubAgents: Map<string, RetiredSubAgent>
-  // Completion reports the runtime QUEUED but has not (yet) put into the model's context, keyed by
-  // task-id. Filled from a `queue-operation` carrier, cleared by a model-facing one. A survivor is a
-  // report the agent provably never read — see report-delivery.ts for the corpus this comes from.
-  queuedReports: Map<string, QueuedReport>
-  // Task-ids proven to have reached the model. Separate from the map above because the two carriers
-  // are NOT written in a fixed order: the queue-operation bookkeeping is FLUSHED and can land at a file
-  // position AFTER the inline attachment that delivered it (the same reordering that made carrier (c)
-  // load-bearing for background shells, tailer 2026-07-22). Without this set that late queue-op would
-  // re-park an already-delivered report and fray would "repair" a report the agent had read.
-  deliveredReports: Set<string>
   // CODEX rows only: the sub-agent tracker that fills the two maps above from `spawn_agent` /
   // sub_agent_activity / list_agents plus each child rollout's own turn brackets (codex-subagents.ts).
   // Claude fills them from `trackDispatches` instead, so this stays undefined there.
@@ -618,8 +599,6 @@ export function newTailState(
     lastAssistantHasQuestion: false,
     subAgents: new Map(),
     retiredSubAgents: new Map(),
-    queuedReports: new Map(),
-    deliveredReports: new Set(),
     retiredShells: new Map(),
     primed: false,
     turn: "in-flight",
@@ -1279,19 +1258,11 @@ function notificationText(rec: Record): string | undefined {
 }
 
 function trackCompletions(state: TailState, rec: Record): void {
-  const raw = notificationText(rec)
-  if (!raw || !raw.includes("<task-notification>")) return
-  // REPORT-DELIVERY BOOKKEEPING RUNS FIRST, and deliberately BEFORE the early-return below.
-  //
-  // That guard exists because retiring needs a live/retired row to correlate against. Delivery
-  // accounting needs no such row: what it tracks is whether the notification's TEXT ever reached the
-  // model, which is true or false regardless of what fray happens to have in its maps. Running it
-  // after the guard would silently skip exactly the notifications that arrive when the maps are empty
-  // — which, on a busy orchestrator whose children have all been retired already, is a great many.
-  trackReportDelivery(state, rec, raw)
   // A RETIRED child still anchors a live branch (see anchorRoots), and the descendants hanging off it
   // notify through here too — so an empty live map alone no longer means there is nothing to correlate.
   if (state.subAgents.size === 0 && state.retiredSubAgents.size === 0) return
+  const raw = notificationText(rec)
+  if (!raw || !raw.includes("<task-notification>")) return
   for (const block of raw.match(/<task-notification>[\s\S]*?<\/task-notification>/g) ?? []) {
     const status = block.match(/<status>([^<]*)<\/status>/)?.[1]
     // completed/failed/killed are the natural terminals. `stopped` is the RECOVERY notification a NEW
@@ -1335,68 +1306,6 @@ function trackCompletions(state: TailState, rec: Record): void {
       else if (Number.isFinite(stampedAt)) recordDescendantTerminal(state, m[1], stampedAt)
     }
     for (const entry of doomed) retireLive(state, entry, typeof rec.timestamp === "string" ? rec.timestamp : undefined, terminal)
-  }
-}
-
-// Account for whether each terminal completion report actually reached the MODEL, as opposed to merely
-// being accepted into the runtime's queue. See report-delivery.ts for why those are different things
-// and for the corpus that showed a third of them never making the second hop.
-//
-// Only TERMINAL reports are tracked: a non-terminal "running" ping carries no report to lose, and a
-// Monitor progress event is not a sub-agent report at all.
-function trackReportDelivery(state: TailState, rec: Record, raw: string): void {
-  const modelFacing = isModelFacingCarrier(rec.type)
-  const at = typeof rec.timestamp === "string" ? rec.timestamp : undefined
-  for (const block of raw.match(/<task-notification>[\s\S]*?<\/task-notification>/g) ?? []) {
-    const status = block.match(/<status>([^<]*)<\/status>/)?.[1]
-    if (status !== "completed" && status !== "failed" && status !== "killed") continue
-    // A failed/killed child has no findings to lose — its notification is a status line, not a report
-    // (measured: every `failed` in the corpus was 46–384 chars of "the agent errored"). Repairing those
-    // would spam the agent with pointers to transcripts that say nothing.
-    if (status !== "completed") {
-      for (const id of blockTaskIds(block)) state.queuedReports.delete(id)
-      continue
-    }
-    const parsed = parseReportBlock(block, at)
-    for (const id of blockTaskIds(block)) {
-      if (modelFacing) {
-        state.deliveredReports.add(id)
-        state.queuedReports.delete(id)
-        continue
-      }
-      if (!isAgentReport(parsed.summary, id)) continue // a shell's exit line is not a lost report
-      if (state.deliveredReports.has(id)) continue // already read it; a late queue-op must not re-park
-      state.queuedReports.set(id, { taskId: id, ...parsed })
-    }
-  }
-  boundReportMaps(state)
-}
-
-// A repair fray injected is a plain user record, so the notification fold above never sees it. This is
-// what makes the repair idempotent across a re-fold without persisting anything — see report-delivery.
-function trackReportRepairs(state: TailState, rec: Record): void {
-  if (!isModelFacingCarrier(rec.type)) return
-  const text = notificationText(rec)
-  if (!text) return
-  for (const id of repairedTaskIds(text)) {
-    state.deliveredReports.add(id)
-    state.queuedReports.delete(id)
-  }
-  boundReportMaps(state)
-}
-
-// Both structures are unbounded in principle (one entry per child, and a long-running orchestrator
-// dispatches hundreds), so trim oldest-first. `queuedReports` is insertion-ordered by queue time.
-function boundReportMaps(state: TailState): void {
-  while (state.queuedReports.size > MAX_TRACKED_REPORTS) {
-    const oldest = state.queuedReports.keys().next().value
-    if (oldest === undefined) break
-    state.queuedReports.delete(oldest)
-  }
-  while (state.deliveredReports.size > MAX_TRACKED_REPORTS * 4) {
-    const oldest = state.deliveredReports.values().next().value
-    if (oldest === undefined) break
-    state.deliveredReports.delete(oldest)
   }
 }
 
@@ -1652,8 +1561,6 @@ export function applyRecord(state: TailState, rec: Record): void {
   // carrier — see notificationText), so it's checked for EVERY record regardless of type (the helper
   // self-guards on shape + tracked ids).
   trackCompletions(state, rec)
-  // A repair fray injected earlier carries no <task-notification>, so it needs its own pass.
-  trackReportRepairs(state, rec)
 }
 
 // Derive the final-message-dependent fields (preview + question flag + done/awaiting fence) from the
@@ -3826,7 +3733,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // an unanswered ```question fence (a user reply clears the flag and flips the turn in-flight).
       const pendingQuestion = s.turn === "idle" && s.lastAssistantHasQuestion
       const nowMs = now()
-      return { turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: bgShellViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow }
+      return { turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), bgShells: bgShellViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.

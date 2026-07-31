@@ -53,8 +53,12 @@ try {
 
   // Strip name/team_name (they strand nested dispatches), then append the epilogue once.
   const { name: _droppedName, team_name: _droppedTeam, ...tiStripped } = ti;
+  // Idempotence is "this prompt ALREADY ENDS WITH the epilogue", not "this prompt mentions the
+  // marker anywhere". A substring test silently ate the epilogue for any prompt that merely QUOTED
+  // the marker — e.g. a worker asking a helper to report whether the epilogue reached it, which is
+  // exactly how this was caught. endsWith still catches a genuine double-fire (the only real case).
   const prompt = typeof ti.prompt === 'string' ? ti.prompt : '';
-  const updatedInput = prompt.includes('[ORCHESTRATION EPILOGUE')
+  const updatedInput = prompt.endsWith(EPILOGUE)
     ? tiStripped
     : { ...tiStripped, prompt: prompt + EPILOGUE };
 

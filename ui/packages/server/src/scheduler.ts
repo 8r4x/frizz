@@ -9,7 +9,6 @@ import type { LimitFault } from "./backend/types.ts"
 import { limitFaultResetKey, limitPauseIsStale, quotaWindowKeyFor, quotaWindowRecovered, textResetInstant } from "./backend/usage-limit.ts"
 import { createWakeDeliveryStore, type WakeDelivery } from "./wake-store.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
-import { reportsDueForRepair, repairMessage } from "./report-delivery.ts"
 import {
   createGithubReviewFetcher,
   isBotGithubActor,
@@ -269,28 +268,6 @@ function isLimitFenceId(fenceId: string): boolean {
 export function limitResumeSteer(window: LimitFault["window"]): string {
   const which = window === "weekly" ? "weekly usage limit" : window === "session" ? "session usage limit" : "usage limit"
   return `⏳ The ${which} that interrupted you has reset. Continue exactly where you left off.`
-}
-
-// ---- SOURCE 4: DROPPED SUB-AGENT REPORT REPAIR ---------------------------------------------------
-// Where the limit source asks "did the wall come down?", this one asks "is this agent missing findings
-// it believes it already has?" — and like that one it needs no registry, because the tailer's
-// `droppedReports` standing on a thread's tail IS the record (see report-delivery.ts for the corpus:
-// 242 of 498 completed sub-agent reports on one production thread reached the runtime's queue and
-// never reached the model).
-//
-// It rides the same durable outbox as the other three, which is the whole reason to put it here rather
-// than in a bespoke timer: lease → deliver → ack, retry with backoff, and — the load-bearing part —
-// a delivery id of hash(slug, sessionId, fenceId). With the TASK ID as the generation, one dropped
-// report can produce exactly ONE repair for a session, no matter how many ticks observe it. Re-nagging
-// an agent about the same lost report every minute would be its own denial of service.
-const REPORT_FENCE_PREFIX = "report"
-const REPORT_HINT_PREFIX = "report:"
-
-function reportFenceId(taskId: string): string {
-  return `${REPORT_FENCE_PREFIX}:${taskId}`
-}
-function isReportFenceId(fenceId: string): boolean {
-  return fenceId.startsWith(`${REPORT_FENCE_PREFIX}:`)
 }
 
 // ---- SOURCE 3: THE USER SNOOZE ------------------------------------------------------------------
@@ -697,16 +674,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (armedSnooze(row)?.fenceId !== item.fenceId) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
-    // A report repair is bound to a report that is STILL missing from the model's context. If the
-    // runtime delivered it late — between the tick that queued this repair and the tick that would
-    // send it — the fold drops it out of `droppedReports` and the repair reads as superseded here.
-    // That is what keeps a slow delivery from producing a repair for a report the agent has now read,
-    // and it is obtained from the fold rather than from anything the scheduler had to persist.
-    if (isReportFenceId(item.fenceId)) {
-      const stillMissing = tele.droppedReports?.some((r) => reportFenceId(r.taskId) === item.fenceId)
-      if (!stillMissing) return "superseded"
-      return tele.turn === "idle" ? "current-idle" : "current-busy"
-    }
     const fence = tele.lastFence
     if (!fence || fence.kind !== "awaiting" || !fence.hints.some(isActionable)) return "superseded"
     if (fenceIdentity(fence.hints, tele.lastActivityAt) !== item.fenceId) return "superseded"
@@ -1098,36 +1065,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   }
 
-  // ---- The dropped-report repair pass --------------------------------------------------------------
-  // `turn === "idle"` is not a courtesy here, it is the CORRECTNESS condition. The runtime hands a
-  // queued notification to the model at a turn boundary, so while a turn is in flight the report may
-  // still be about to arrive and a repair would be a lie. Once the agent has come to rest without it,
-  // the delivery that was going to happen already didn't.
-  function repairDroppedReports(nowMs: number): void {
-    for (const row of deps.storage.allSessions()) {
-      if (row.state === "archived" || row.archived === 1) continue
-      const tele = deps.tailer.get(row.slug)
-      const dropped = tele?.droppedReports
-      if (!dropped?.length || tele?.turn !== "idle") continue
-      for (const report of reportsDueForRepair(dropped, { nowMs, atRest: true })) {
-        const fenceId = reportFenceId(report.taskId)
-        const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
-        if (outbox.get(deliveryId)) continue // this report already has its one repair
-        const item = outbox.enqueue({
-          id: deliveryId,
-          slug: row.slug,
-          sessionId: row.session_id,
-          fenceId,
-          hintKey: `${REPORT_HINT_PREFIX}${report.taskId}`,
-          message: repairMessage(report),
-          reason: `sub-agent report never reached the model (${report.summary ?? report.taskId})`,
-        }, nowMs).delivery
-        log(`waker: queued ${row.slug} — ${item.reason}`)
-        checkpoint("after-enqueue", item)
-      }
-    }
-  }
-
   // ---- The user-snooze bump pass -------------------------------------------------------------------
   // Deliberately does NOT filter on `turn === "idle"` the way the fence pass does. A snooze deadline is
   // a promise to the human, so a thread that happens to be mid-turn when it crosses must not LOSE its
@@ -1328,12 +1265,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
       log(`waker: snooze-bump pass failed: ${err instanceof Error ? err.message : String(err)}`)
-    }
-    try {
-      repairDroppedReports(now())
-    } catch (err) {
-      if (err instanceof InjectedSchedulerCrash) throw err
-      log(`waker: report-repair pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     reconcileOutbox(now())
     await deliverDue()
