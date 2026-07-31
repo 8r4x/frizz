@@ -16,6 +16,14 @@
 // scratchpad the dispatcher already provisions, already names in the system prompt, and already
 // forbids sub-agents from writing (see agent-dispatch.mjs).
 //
+// CODEX CHILD GUARD — native Codex sub-agents inherit the root conversation's system/user scratchpad
+// instructions even with `fork_turns:"none"`. That makes a child mistake the ROOT thread's path for
+// its own mandatory pad. This was observed corrupting the root twice: one child replaced then deleted
+// it, and later children replaced it with their own task notes. The `guard` mode is a PreToolUse
+// backstop: a child (`agent_id` present) cannot use any tool against the canonical root path. This is
+// intentionally stronger than trying to classify shell text as read versus write — children get
+// self-contained task prompts and return state upward; the root pad is not their workspace.
+//
 // THE RE-READ SIDE — injection, not a reminder. On compaction/resume the head of scratch.md is
 // spliced into the context window by the harness, before the model's first token, alongside a
 // pointer to read the rest. A bare "remember to read your scratchpad" routes recovery through a
@@ -97,17 +105,17 @@ if (/^(off|0|false|no|disabled)$/i.test((process.env.FRAY_SCRATCHPAD_HOOK ?? '')
 // registration note in DECISIONS.md) so a fray worker never injects twice.
 if (via === 'project' && (process.env.FRAY_UI_THREAD ?? '').trim()) process.exit(0);
 
-/** @type {{ agent_id?: unknown, agentId?: unknown, source?: string, trigger?: string, session_id?: string, transcript_path?: string }} */
+/** @type {{ agent_id?: unknown, agentId?: unknown, source?: string, trigger?: string, session_id?: string, transcript_path?: string, tool_name?: unknown, tool_input?: unknown }} */
 let input = {};
 try {
   input = JSON.parse(readFileSync(0, 'utf8'));
 } catch {
   /* no stdin / not JSON → fall back to env for the session id */
 }
-// Sub-agent contexts (they carry agent_id) are skipped. This is load-bearing for the ONE-scratchpad
-// rule: a sub-agent must never nudge, inject, or key state against its dispatcher's pad — it is told
-// to read that pad and never write it (agent-dispatch.mjs), and it gets no pad of its own.
-if (input.agent_id ?? input.agentId) process.exit(0);
+const childId = input.agent_id ?? input.agentId;
+// Sub-agent contexts are silent on every reinforcement mode. The guard is the one exception: it must
+// inspect a child's tool call in order to protect the root pad.
+if (childId && mode !== 'guard') process.exit(0);
 
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
@@ -131,6 +139,31 @@ if (!sid) process.exit(0);
 const threadDir = join(projectDir, '.fray', 'threads', sid);
 const relPath = '.fray/threads/' + sid + '/' + SCRATCH_FILE;
 const absPath = join(threadDir, SCRATCH_FILE);
+
+// ── mode: guard (Codex PreToolUse) ──────────────────────────────────────────────────────────────
+if (mode === 'guard') {
+  // Root calls need no decision. Child calls that do not address the root pad are unrelated.
+  if (!childId) process.exit(0);
+  let toolInput = '';
+  try {
+    toolInput = JSON.stringify(input.tool_input ?? {});
+  } catch {
+    // An unserializable input cannot contain the ordinary string path forms this guard recognizes.
+  }
+  if (!toolInput.includes(relPath) && !toolInput.includes(absPath)) process.exit(0);
+
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason:
+        'This is a native sub-agent, but `' + relPath + '` belongs to the top-level /root worker. ' +
+        'Do not read, create, edit, replace, move, or delete the parent scratchpad. Keep task state ' +
+        'in your final return, or use a distinct path the parent explicitly assigned.',
+    },
+  }));
+  process.exit(0);
+}
 
 // Ensure the directory exists so a first Write lands. fray's dispatcher already provisions this for
 // a real thread; this only covers a session that started outside a dispatch.
@@ -211,20 +244,23 @@ if (mode === 'session-start') {
         ? '⟦scratchpad — reground here⟧ Context was just compacted. Your scratchpad `' + relPath +
           '` is the CANONICAL record of this thread and the head of it follows. RE-GROUND ON IT BEFORE ' +
           'DOING ANYTHING ELSE: re-read the full file, treat it as authoritative over anything the ' +
-          'summary implies, and re-read any code before describing or changing it.'
+          'summary implies, and re-read only the code you are about to describe or change.'
         : '⟦scratchpad — reground here⟧ This session resumed and lost its working context. Your ' +
           'scratchpad `' + relPath + '` is the CANONICAL record of this thread and the head of it ' +
           'follows. Re-read the full file before acting.';
     parts.push(lead + '\n\n' + capped(/** @type {string} */ (pad)) + '\n\n⟦end scratchpad⟧');
   } else if (lostContext) {
-    // Context is gone and there is nothing to restore. Still re-ground on the pad — it is the only
-    // durable surface there is — and say plainly that it is empty, which is the actionable fact.
+    // Context is gone and there is nothing to restore. Say plainly that the exact pad is empty and
+    // constrain reconstruction to the compact summary + named handoffs. Searching neighbouring
+    // thread pads is both expensive and unsafe: they belong to unrelated workers.
     parts.push(
       '⟦scratchpad — reground here⟧ Context was just compacted or resumed. Your scratchpad `' +
-        relPath + '` is the CANONICAL record of this thread — RE-READ IT NOW to recover your working ' +
-        'state, before asserting anything or resuming edits. It currently has nothing substantive in ' +
-        'it, so once you have re-established where you are, WRITE it: the problem, the approach and ' +
-        'the approaches you rejected, the decisions the human made, what is verified versus merely ' +
+        relPath + '` is the CANONICAL record of this thread, but it is absent or has nothing ' +
+        'substantive in it. That exact path is authoritative: do not search other ' +
+        '`.fray/threads/*/scratch.md` files for a substitute, and do not broadly reload repo docs or ' +
+        'skills merely to reconstruct context. Recover from the retained compaction summary and any ' +
+        'task-specific handoff it directly names, then WRITE this exact pad: the problem, the approach ' +
+        'and the approaches you rejected, the decisions the human made, what is verified versus merely ' +
         'believed, and the next action.',
     );
   } else {

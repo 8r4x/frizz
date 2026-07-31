@@ -304,6 +304,9 @@ export function codexScratchpadHookConfig(
   return {
     bypass_hook_trust: true,
     hooks: {
+      // Native Codex children inherit the root scratchpad mandate even with `fork_turns:"none"`.
+      // Prompt ownership is the semantic contract; this tool-layer deny is the destructive backstop.
+      PreToolUse: [cmd("--mode=guard")],
       SessionStart: [cmd("--mode=session-start")],
       UserPromptSubmit: [cmd("--mode=nudge")],
       PostToolUse: [cmd("--mode=nudge --event=PostToolUse")],
@@ -325,7 +328,7 @@ export function scratchpadHookScript(): string | undefined {
 export function composePrompt(sessionId: string, prompt: string, kind: BackendKind = "claude"): string {
   const scratch =
     kind === "codex"
-      ? `Your scratchpad is \`.fray/threads/${sessionId}/scratch.md\` — the CANONICAL record of this thread and your compaction-survival mechanism. Keep your task list, the approach and what you rejected, the human's decisions, and anything that must outlive your context IN it, written as you go; re-read it after any compaction or resume before asserting anything.`
+      ? `Your scratchpad is \`.fray/threads/${sessionId}/scratch.md\` — the CANONICAL record of this thread and your compaction-survival mechanism. Keep your task list, the approach and what you rejected, the human's decisions, and anything that must outlive your context IN it, written as you go; re-read it after any compaction or resume before asserting anything. This path belongs only to the top-level \`/root\` worker. Native sub-agents may inherit this instruction even with \`fork_turns:"none"\`; any non-root agent must not read, create, edit, replace, move, or delete the parent scratchpad.`
       : `Your scratchpad is \`.fray/threads/${sessionId}/scratch.md\` — the CANONICAL record of this thread, your compaction-survival mechanism, and the shared blackboard for your sub-agents. Keep your task list, the approach and what you rejected, the human's decisions, and anything that must outlive your context IN it, written as you go; re-read it after any compaction or resume, and pass its path to every sub-agent you dispatch.`
   // The banner makes the system→human handoff unmistakable to the worker, and NOTHING of fray's is
   // allowed below it: the framing note goes here, ABOVE, so everything past the banner is the
@@ -342,7 +345,7 @@ export function composePrompt(sessionId: string, prompt: string, kind: BackendKi
 export function scratchpadOrientation(sessionId: string, planPath?: string | null, kind: BackendKind = "claude"): string {
   const scratch =
     kind === "codex"
-      ? `SCRATCHPAD: .fray/threads/${sessionId}/scratch.md — the CANONICAL record of this thread and your compaction-survival mechanism (write your task list, the approach and what you rejected, and anything that must outlive your context there, as you go; re-read it after any compaction or resume).`
+      ? `SCRATCHPAD: .fray/threads/${sessionId}/scratch.md — the CANONICAL record of this thread and your compaction-survival mechanism (write your task list, the approach and what you rejected, and anything that must outlive your context there, as you go; re-read it after any compaction or resume). This path is owned only by the top-level \`/root\` worker. Native sub-agents can inherit this instruction even with \`fork_turns:"none"\`; every non-root agent must not read, create, edit, replace, move, or delete the parent scratchpad.`
       : `SCRATCHPAD: .fray/threads/${sessionId}/scratch.md — the CANONICAL record of this thread, your compaction-survival mechanism, and the shared blackboard for your sub-agents (write your task list, the approach and what you rejected, and anything that must outlive your context there, as you go; re-read it after any compaction or resume; pass this path in every sub-agent prompt).`
   const lines = [scratch]
   if (planPath) lines.push(`PLAN: ${planPath} — the durable plan artifact this thread works from; read it FIRST.`)
