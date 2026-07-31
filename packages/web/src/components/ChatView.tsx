@@ -742,9 +742,9 @@ function VirtualizedThreadTranscript({
     // ResizeObserver that triggers the correction fires at the bottom of it, so anything the reader
     // scrolled in between — every compositor-driven wheel notch — is simply not in that cached value.
     // The correction therefore lands at (where the reader WAS) + delta and throws their scroll away.
-    // Measured on a real thread: 28 of 147 upward frames moved the content 0px instead of 40px, and a
-    // wrapped `scrollTo` caught writes landing 84px BEHIND the live offset while every correction in
-    // flight was positive.
+    // Measured by replaying a real transcript (verify-full-scroll-jitter.mjs): 34 of 196 upward frames
+    // moved the content 0px instead of the 40px asked for, and a wrapped `scrollTo` caught writes
+    // landing 84px BEHIND the live offset while every correction in flight was positive.
     //
     // So apply a correction as what it actually is — a RELATIVE nudge against wherever the reader has
     // got to — and leave real destinations (`scrollToEnd`, `scrollToIndex`) absolute. `adjustments` is
