@@ -25,6 +25,30 @@ several agents' work, an ugly merge — all fine. Never `git stash` in the share
 concurrent agents), never force-discard someone's committed work, and never stall a landing on "the
 tree isn't clean." Keep merging into `main`.
 
+## Committing out of a tree other agents are editing
+
+**Default to `git commit -m "…" -- <paths>`.** The pathspec form commits the working-tree content of
+exactly those paths on top of `HEAD` through a temp index git seeds for you, so a concurrent `git add`
+by another agent cannot ride along and the shared index is left as you found it.
+
+**Do NOT reach for `GIT_INDEX_FILE=/tmp/idx git add … && git commit`.** A temp index path that does not
+exist yet starts EMPTY, not as a copy of `HEAD` — `git commit` then writes a tree holding only the
+paths you added, recording *every other tracked file* as deleted. The working tree is untouched, so
+nothing looks wrong until someone checks that commit out. This has cost real recovery cycles more than
+once. If you genuinely need a private index (only to `git apply --cached` one hunk out of a file
+another agent is also editing), run `git read-tree HEAD` immediately after setting the path.
+
+Either way, **verify the tree right after committing**: `git ls-tree -r --name-only HEAD | wc -l`
+should be roughly what it was before, not collapsed to the size of your change.
+
+`scripts/githooks/pre-commit` backstops this — it refuses any commit that records files as deleted
+while they still exist on disk, which a genuine `git rm` cannot trigger because that removes the file
+from disk too. It is wired through `core.hooksPath`, which is LOCAL config, so in a fresh clone run:
+
+```sh
+git config core.hooksPath scripts/githooks
+```
+
 # Web UI completion rule
 
 For any user-visible web UI change, work is not complete until end-to-end Chrome or Chromium QA has
