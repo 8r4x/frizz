@@ -34,6 +34,13 @@ export function useBoard(): BoardSnapshot | null {
   return snap.board as BoardSnapshot | null
 }
 
+// The project root every display path is shortened against (see relativeToolPaths). Narrower than
+// useBoard() on purpose: valtio tracks the single property, so a transcript row that only needs the
+// root does not re-render on unrelated board churn.
+export function useProjectDir(): string | undefined {
+  return useSnapshot(store).board?.projectDir
+}
+
 export function asThreads(threads: readonly unknown[]): ThreadView[] {
   return threads as ThreadView[]
 }

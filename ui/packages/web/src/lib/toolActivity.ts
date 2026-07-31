@@ -252,8 +252,46 @@ function gerundDescription(description: string | undefined, fallback: string): s
   return gerund + (firstSpace === -1 ? "" : clean.slice(firstSpace))
 }
 
+/**
+ * Rewrite absolute in-project paths as project-relative ones for display.
+ *
+ * `detail` carries the provider's raw input, and every Claude/Codex file tool passes an ABSOLUTE path,
+ * so the shimmer reads `Editing /Users/me/Documents/projects/fray/ui/packages/web/src/App.tsx` — one
+ * short row whose only identifying part is pushed off the end by a home prefix that never varies.
+ * Stripping the project root leaves `Editing ui/packages/web/src/App.tsx`.
+ *
+ * The root is the board's `projectDir`, which is the git toplevel of the dir the server was launched in
+ * — so when Fray runs on a linked worktree that IS the worktree root, and no separate detection is
+ * needed. A worktree a worker created underneath the project keeps its own directory in the relative
+ * path (`wt-fix/ui/…`), which is exactly the disambiguation you want. Paths outside the project are left
+ * absolute: there is no root that makes them both shorter and honest.
+ *
+ * Applied to the finished label rather than to `detail` alone so a Bash description's arguments shorten
+ * too, and every occurrence is replaced because a command line can name several paths. The trailing
+ * slash is part of the needle, so a sibling checkout (`…/fray-old/a.ts`) never matches.
+ *
+ * A path outside the project still gets its home prefix collapsed to `~` — `~/.claude/CLAUDE.md` says
+ * the same thing in a quarter of the width. The browser can't read $HOME, so it comes from the project
+ * root's own leading `/Users/<user>` or `/home/<user>`; any other shape (a repo under `/opt`, `/srv`, a
+ * volume) yields no home and those paths stay absolute rather than being cut at a guess.
+ */
+export function relativeToolPaths(label: string, projectDir: string | undefined): string {
+  const root = projectDir?.trim().replace(/\/+$/, "")
+  if (!root || root === "/" || !root.startsWith("/")) return label
+  const withinProject = label.replaceAll(`${root}/`, "")
+  const home = /^(\/(?:Users|home)\/[^/]+)(?:\/|$)/.exec(root)?.[1]
+  return home ? withinProject.replaceAll(`${home}/`, "~/") : withinProject
+}
+
 /** A concise, sentence-case gerund for the latest visible activity. */
-export function toolActivityLabel(tool: Pick<TranscriptToolCall, "name" | "detail" | "desc">): string {
+export function toolActivityLabel(
+  tool: Pick<TranscriptToolCall, "name" | "detail" | "desc">,
+  projectDir?: string,
+): string {
+  return relativeToolPaths(rawToolActivityLabel(tool), projectDir)
+}
+
+function rawToolActivityLabel(tool: Pick<TranscriptToolCall, "name" | "detail" | "desc">): string {
   const name = normalizedToolName(tool.name)
   const detail = target(tool)
   const suffix = detail ? ` ${detail}` : ""

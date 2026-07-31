@@ -222,6 +222,53 @@ test("activity labels are gerunds with a clean fallback for arbitrary tools", ()
   assert.equal(toolActivityLabel(tool("mcp__example__frobnicate")), "Using frobnicate")
 })
 
+test("in-project absolute paths render project-relative in the live label", () => {
+  const root = "/Users/me/Documents/projects/fray"
+  const edit = tool("Edit", { detail: `${root}/ui/packages/web/src/lib/toolActivity.ts` })
+  assert.equal(toolActivityLabel(edit, root), "Editing ui/packages/web/src/lib/toolActivity.ts")
+  // No root (a board snapshot that has not landed yet) leaves the label exactly as before.
+  assert.equal(toolActivityLabel(edit), `Editing ${root}/ui/packages/web/src/lib/toolActivity.ts`)
+  assert.equal(toolActivityLabel(edit, `${root}/`), "Editing ui/packages/web/src/lib/toolActivity.ts")
+
+  // Every path in the label shortens, including the ones inside a Bash description's arguments and
+  // the directory a Grep detail scopes to.
+  assert.equal(
+    toolActivityLabel(tool("Bash", { desc: `Compare ${root}/ui/a.ts against ${root}/ui/b.ts` }), root),
+    "Comparing ui/a.ts against ui/b.ts",
+  )
+  assert.equal(
+    toolActivityLabel(tool("Grep", { detail: `useProjectDir · ${root}/ui/packages/web` }), root),
+    "Searching for useProjectDir · ui/packages/web",
+  )
+
+  // A worker's own worktree under the project keeps the directory that identifies it.
+  assert.equal(
+    toolActivityLabel(tool("Edit", { detail: `${root}/wt-relative-path/ui/a.ts` }), root),
+    "Editing wt-relative-path/ui/a.ts",
+  )
+
+  // A sibling checkout that merely shares the prefix is NOT in the project, so it keeps its own path
+  // (home-collapsed, not project-relative) — the trailing slash is part of the needle.
+  assert.equal(
+    toolActivityLabel(tool("Read", { detail: "/Users/me/Documents/projects/fray-old/ui/a.ts" }), root),
+    "Reading ~/Documents/projects/fray-old/ui/a.ts",
+  )
+  // Outside the project the home prefix still collapses, inferred from the project root's own.
+  assert.equal(
+    toolActivityLabel(tool("Read", { detail: "/Users/me/.claude/CLAUDE.md" }), root),
+    "Reading ~/.claude/CLAUDE.md",
+  )
+  assert.equal(
+    toolActivityLabel(tool("Read", { detail: "/Users/me/.claude/CLAUDE.md" }), "/opt/checkouts/fray"),
+    "Reading /Users/me/.claude/CLAUDE.md",
+  )
+  // Anything with no home prefix stays absolute: there is no root that makes it shorter and honest.
+  assert.equal(toolActivityLabel(tool("Read", { detail: "/etc/hosts" }), root), "Reading /etc/hosts")
+  // A degenerate root would eat every leading slash; it is ignored instead.
+  assert.equal(toolActivityLabel(tool("Read", { detail: "/etc/hosts" }), "/"), "Reading /etc/hosts")
+  assert.equal(toolActivityLabel(tool("Read", { detail: "/etc/hosts" }), ""), "Reading /etc/hosts")
+})
+
 test("the newest call drives the live gerund even when an earlier call remains pending", () => {
   const earlier = tool("Read", { detail: "src/old.ts", status: "pending" })
   const newest = tool("Bash", { desc: "Inspect PR review state and comments", status: "completed" })

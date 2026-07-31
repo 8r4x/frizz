@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { useSubAgentTranscript } from "../hooks.ts"
+import { useProjectDir, useSubAgentTranscript } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
@@ -64,6 +64,7 @@ export function SubAgentSheet({
   const scrollerRef = useRef<HTMLDivElement>(null)
 
   const q = useSubAgentTranscript(slug, subId)
+  const projectDir = useProjectDir()
   const messages = useMemo(() => q.data?.messages ?? [], [q.data])
   const state = q.data?.state
   const running = state === "running"
@@ -71,7 +72,7 @@ export function SubAgentSheet({
   const liveToolActivity = running
     ? liveToolActivityTail(coalescedActivityMessages.map((entry) => entry.message))
     : undefined
-  const liveActivityLabel = liveToolActivity ? toolActivityLabel(liveToolActivity) : undefined
+  const liveActivityLabel = liveToolActivity ? toolActivityLabel(liveToolActivity, projectDir) : undefined
   const activityMessages = useMemo(
     () => running ? historicalToolActivityMessages(coalescedActivityMessages) : coalescedActivityMessages,
     [coalescedActivityMessages, running],

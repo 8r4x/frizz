@@ -7,7 +7,7 @@ import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Check, ChevronRight, FileText, Hash, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, ShieldCheck, Sparkles, X, type LucideIcon } from "lucide-react"
 import type { AwaitingHint, BgShellView, NativeInputRequired as NativeInputRequiredData, PendingAsk, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@fray-ui/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
-import { useBoard, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
+import { useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
 import { displayTitle, lastActiveLabelAt } from "../groups.ts"
 import { mdToHtml, mdInlineToHtml, stripFrontmatter } from "../lib/markdown.ts"
@@ -228,7 +228,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
   const liveToolActivity = running
     ? liveToolActivityTail(coalescedActivityMessages.map((entry) => entry.message))
     : undefined
-  const liveActivityLabel = liveToolActivity ? toolActivityLabel(liveToolActivity) : undefined
+  const liveActivityLabel = liveToolActivity ? toolActivityLabel(liveToolActivity, board?.projectDir) : undefined
   // A live tool run belongs in the existing bottom runtime slot, never in transcript history. Once
   // it settles, the whole coalesced run returns as one `Ran N tool calls` disclosure.
   const activityMessages = useMemo(
@@ -629,11 +629,12 @@ function VirtualizedThreadTranscript({
   loadEarlier: () => void
   jumpOverlay: HTMLElement | null
 }) {
+  const projectDir = useProjectDir()
   const coalescedActivityMessages = useMemo(() => coalesceToolActivityMessages(messages), [messages])
   const liveToolActivity = running
     ? liveToolActivityTail(coalescedActivityMessages.map((entry) => entry.message))
     : undefined
-  const liveActivityLabel = liveToolActivity ? toolActivityLabel(liveToolActivity) : undefined
+  const liveActivityLabel = liveToolActivity ? toolActivityLabel(liveToolActivity, projectDir) : undefined
   const activityMessages = useMemo(
     () => running ? historicalToolActivityMessages(coalescedActivityMessages) : coalescedActivityMessages,
     [coalescedActivityMessages, running],
@@ -3912,8 +3913,15 @@ export function WorkingIndicator({ since, activityLabel }: { since?: string; act
       // between them read as one rhythm — the tone stays the shimmer's own.
       className="flex items-baseline gap-2 text-[13px] leading-5"
     >
-      <span className="shimmer-text">{activityLabel ?? "Working…"}</span>
-      <span className="tabular-nums text-[12px] text-muted/60">{durationLabel}</span>
+      {/* The label is now a project-relative path (see relativeToolPaths), so it rarely wraps — but a
+          deep one at a narrow width still does, and it used to take the elapsed time over the edge with
+          it: `828m 49s` broke at its OWN space and the minutes clipped outside the panel. A duration is
+          one value and never breaks mid-value, and it no longer shrinks, so the label absorbs the whole
+          wrap — breaking inside the path where a line can't hold it. Breaking a path mid-segment is
+          plainly worse-looking than not wrapping at all, and plainly better than clipping the row: at a
+          width this narrow those are the only two outcomes, and this one loses nothing. */}
+      <span className="min-w-0 break-words shimmer-text">{activityLabel ?? "Working…"}</span>
+      <span className="shrink-0 whitespace-nowrap tabular-nums text-[12px] text-muted/60">{durationLabel}</span>
     </div>
   )
 }

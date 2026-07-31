@@ -35,8 +35,13 @@ test("the current gerund replaces Working in the exact bottom shimmer span", () 
   const block = source.match(/export function WorkingIndicator[\s\S]*?\n}/)?.[0]
   assert.ok(block, "WorkingIndicator must exist")
   assert.match(block, /data-working-indicator/, "the runtime tail needs a stable browser-QA target")
-  assert.match(block, /<span className="shimmer-text">\{activityLabel \?\? "Working…"\}<\/span>/, "tool activity and generic Working must use the exact same shimmer element")
+  assert.match(block, /<span className="[^"]*shimmer-text">\{activityLabel \?\? "Working…"\}<\/span>/, "tool activity and generic Working must use the exact same shimmer element")
   assert.equal((block.match(/shimmer-text/g) ?? []).length, 1, "the runtime tail must have one shimmer treatment")
+  // The label now carries a file path, so it is the part that wraps: it may shrink below its longest
+  // token and break inside it. The elapsed reading is one value and holds its line and its width.
+  assert.match(block, /<span className="min-w-0 break-words shimmer-text"/, "the label absorbs the wrap instead of overflowing the row")
+  assert.match(block, /\{durationLabel\}/, "the runtime tail still reads its own elapsed time")
+  assert.match(block, /<span className="shrink-0 whitespace-nowrap [^"]*">\{durationLabel\}<\/span>/, "the elapsed reading never breaks mid-value or shrinks")
 })
 
 test("codex reasoning toggle is a peer of quiet metadata labels", () => {

@@ -49,10 +49,14 @@ const exceptionMessage = callMessage("exceptions", [
   },
 ])
 
+// The board root the shimmer shortens absolute paths against — the fixture's stand-in for
+// BoardSnapshot.projectDir, which the real surfaces read through useProjectDir().
+const FIXTURE_PROJECT_DIR = "/Users/fixture/Documents/projects/fray"
+
 function Transcript({ messages, running = false }: { messages: ChatMessage[]; running?: boolean }) {
   const coalesced = useMemo(() => coalesceToolActivityMessages(messages), [messages])
   const liveTool = running ? liveToolActivityTail(coalesced.map((entry) => entry.message)) : undefined
-  const activityLabel = liveTool ? toolActivityLabel(liveTool) : undefined
+  const activityLabel = liveTool ? toolActivityLabel(liveTool, FIXTURE_PROJECT_DIR) : undefined
   const display = useMemo(
     () => running ? historicalToolActivityMessages(coalesced) : coalesced,
     [coalesced, running],
@@ -72,8 +76,9 @@ function Transcript({ messages, running = false }: { messages: ChatMessage[]; ru
 
 function Fixture() {
   const [liveMessages, setLiveMessages] = useState<ChatMessage[]>([
+    // Absolute, exactly as a provider reports it: the shimmer must show it project-relative.
     callMessage("live-1", [
-      { name: "Read", detail: "ui/packages/web/src/components/ChatView.tsx", status: "pending" },
+      { name: "Edit", detail: `${FIXTURE_PROJECT_DIR}/ui/packages/web/src/components/ChatView.tsx`, status: "pending" },
     ]),
   ])
   const advanced = liveMessages.length > 1
