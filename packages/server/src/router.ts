@@ -903,6 +903,23 @@ export function createRouter(ctx: AppContext) {
         if (hasPendingPermissionChange(row)) {
           throw new Error("Wait for the current permission change to finish before sending a follow-up")
         }
+        // The operator's "Restart worker" verb, enforced HERE and not only in the UI that offers it: a
+        // stale tab holds a button whose preconditions may have expired since it rendered.
+        //
+        // Both refusals THROW rather than degrading to an ordinary follow-up, because a restart that
+        // quietly becomes a plain message is the worst outcome — the operator believes their worker came
+        // back on the new build when it is still the old process.
+        if (input.freshProcess) {
+          if (!(row?.backend === "claude" && row.claude_runtime === "broker")) {
+            throw new Error("Only a broker-backed Claude worker can be restarted in place")
+          }
+          // fray's completion invariant: an agent runs to its terminal return. A restart kills the
+          // parent's in-memory sub-agents, so a parent whose child is still producing is off limits —
+          // the same carve-out needsFreshProcessForLimit already makes for the usage-limit restart.
+          if ((ctx.tailer.get(input.slug)?.subAgents ?? []).some((agent) => agent.state === "running")) {
+            throw new Error("This worker has sub-agents still running; restarting it would kill them. Wait for them to finish, then restart.")
+          }
+        }
         // Every Codex follow-up flows through the app-server bridge — no tmux composer, no queue, no
         // stale-draft class. The bridge owns the steer-vs-start decision atomically and dedups on
         // deliveryId. A LEGACY tmux Codex row (dispatched before the cutover) is migrated on its first
@@ -997,7 +1014,12 @@ export function createRouter(ctx: AppContext) {
             // needs the same treatment: while the process is still latched on its own 429, delivering
             // into it does nothing at all. Restart it instead — otherwise the button is a no-op and
             // reads as fray having ignored the click.
-            freshProcess: needsFreshProcessForLimit(
+            //
+            // `input.freshProcess` is the operator asking for it OUTRIGHT (the "Restart worker" verb),
+            // which the server cannot derive: only the human knows they want the worker back on a newer
+            // build. It is OR'd in rather than replacing the derivation, so a restart clicked on a
+            // limit-latched thread still behaves. The live-sub-agent refusal above applies to both.
+            freshProcess: input.freshProcess === true || needsFreshProcessForLimit(
               ctx.tailer.get(input.slug)?.limitFault,
               Date.now(),
               (ctx.tailer.get(input.slug)?.subAgents ?? []).some((agent) => agent.state === "running"),

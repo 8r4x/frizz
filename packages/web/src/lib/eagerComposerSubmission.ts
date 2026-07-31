@@ -122,12 +122,12 @@ export async function withDeliveryRetry(
   }
 }
 
-function deliverFollowUp(slug: string, message: string, deliveryId: string): Promise<void> {
+function deliverFollowUp(slug: string, message: string, deliveryId: string, freshProcess?: boolean): Promise<void> {
   return withDeliveryRetry(
     // Resolve the session id per ATTEMPT from the live board rather than once up front: a thread
     // re-dispatched mid-retry must bind to its CURRENT session, and the guarded followUp is what turns
     // a stale id into a clean refusal instead of a misdelivery.
-    () => rpc.followUp({ slug, sessionId: threadBySlug(store.board, slug)?.sessionId ?? "", message, deliveryId }) as Promise<void>,
+    () => rpc.followUp({ slug, sessionId: threadBySlug(store.board, slug)?.sessionId ?? "", message, deliveryId, freshProcess }) as Promise<void>,
     () => markSteered(slug),
   )
 }
@@ -140,12 +140,15 @@ function deliverFollowUp(slug: string, message: string, deliveryId: string): Pro
 // that and read as a dead button for ~2.2s — see lib/retrySession.ts.
 //
 // `failureToast` lets a non-composer caller name its own verb ("Retry failed: …"); everything else,
-// including the rollback, is identical by construction.
+// including the rollback, is identical by construction. `freshProcess` rides along for the one verb
+// that needs the message to land in a just-started worker (lib/restartWorker.ts) — it changes only
+// what the SERVER does with the delivery, so the optimistic bubble, the FIFO chain and the rollback
+// are unchanged and shared.
 export function sendEagerFollowUp(
   queryClient: QueryClient,
   slug: string,
   text: string,
-  callbacks: EagerFollowUpCallbacks & { failureToast?: (message: string) => string } = {},
+  callbacks: EagerFollowUpCallbacks & { failureToast?: (message: string) => string; freshProcess?: boolean } = {},
 ): boolean {
   const message = text.trim()
   if (!message) return false
@@ -162,7 +165,7 @@ export function sendEagerFollowUp(
     // Resolve the session id at SEND time from the live board (not render time), so a re-dispatch
     // between mount and send still binds the guarded followUp to the current session. Contention
     // refusals are retried in place — the composer only gets the message back once they are exhausted.
-    request: () => enqueueThreadSend(slug, () => deliverFollowUp(slug, message, deliveryId)),
+    request: () => enqueueThreadSend(slug, () => deliverFollowUp(slug, message, deliveryId, callbacks.freshProcess)),
     success: () => callbacks.onSuccess?.(),
     failure: (error) => {
       removeQueuedMessage(queryClient, slug, message, deliveryId)

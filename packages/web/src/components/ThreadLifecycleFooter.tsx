@@ -8,6 +8,7 @@ import { futureSnoozedUntil } from "../groups.ts"
 import { formatSnoozeWake } from "../lib/snooze.ts"
 import { CHILD_ARROW, CHILD_ARROW_CLASS } from "../lib/childOps.ts"
 import { SnoozeButton } from "./SnoozeButton.tsx"
+import { RestartWorkerButton } from "./RestartWorkerButton.tsx"
 import { ContextMeter } from "./ContextMeter.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { Dialog } from "./ui/Dialog.tsx"
@@ -62,6 +63,7 @@ export function ThreadLifecycleFooter({
         <DoneReadout />
       ) : (
         <>
+          <RestartWorkerButton thread={thread} />
           {available.snooze && <SnoozeButton thread={thread} onSnoozed={onSnoozed} />}
           <StateButton thread={thread} onArchived={onArchived} onDismissCancel={onDismissCancel} />
         </>

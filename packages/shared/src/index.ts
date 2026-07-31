@@ -818,6 +818,12 @@ export const FollowUpInput = z.object({
   message: z.string().min(1),
   // Generated once before the optimistic clear so a transport replay can be idempotent.
   deliveryId: z.string().min(1).max(200).optional(),
+  // Retire the worker's live process before delivering, so this message lands in a `claude` that has
+  // just started. The operator's "Restart worker" verb — the ONLY caller that sets it — exists because
+  // a worker inherits its plugin/hooks AND its system prompt at process start and can never pick up a
+  // newer fray build in place (hooks are read once, at startup). Everything else that needs a fresh
+  // process derives it server-side; see needsFreshProcessForLimit.
+  freshProcess: z.boolean().optional(),
 })
 export type FollowUpInput = z.infer<typeof FollowUpInput>
 
@@ -1487,11 +1493,20 @@ export const TranscriptMessage = z.object({
   // non-reasoning messages and on any reasoning block whose timing couldn't be derived.
   durationMs: z.number().nonnegative().optional(),
   // A turn-BOUNDARY marker: this `kind:"event"` line was emitted at the position an EXTERNAL wake — a
-  // background task/shell completion `<task-notification>` — re-invoked the agent and started a fresh
-  // turn. The client renders it as a centered divider rule carrying the cause label, so two consecutive
-  // assistant turns (each with its own trailing signal) no longer paint as one seamless bubble. Additive
-  // + optional: an old client ignores it and shows the plain quiet event line (graceful degrade).
-  boundary: z.boolean().optional(),
+  // This event opened a fresh turn, so it renders as a centered divider rule carrying the cause label —
+  // without it, two consecutive assistant turns (each with its own trailing signal) paint as one
+  // seamless bubble. Additive + optional: an old client ignores it and shows the plain quiet event line
+  // (graceful degrade).
+  //
+  // It names WHICH KIND of boundary, because two unrelated events earn the divider and the client has to
+  // tell them apart to put the right glyph on each:
+  //   wake       — a background task/shell completion `<task-notification>` re-invoked the agent
+  //   compaction — the provider rewrote the conversation and dropped everything above this point
+  // It was a bare boolean until the dividers grew icons (a shell glyph on a compaction line is simply
+  // wrong), and the kind has to come from the SERVER: the alternative is the client sniffing the label
+  // text, which is the guess this codebase refuses everywhere else. A string stays truthy, so any
+  // surviving `if (boundary)` reads exactly as it did.
+  boundary: z.enum(["wake", "compaction"]).optional(),
   // Block-ordered content for an assistant turn (see TranscriptPart). Defaults to [] so a pre-restart
   // server (which ships only text/tools) parses; the client renders `parts` when non-empty and falls
   // back to the legacy tools-then-text layout when it's empty. `text`/`tools` stay populated for that
