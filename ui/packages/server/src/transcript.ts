@@ -3560,6 +3560,49 @@ export function readThreadTranscript(
   return []
 }
 
+export interface AgentLifecycleProjection {
+  startedAt?: string
+  finishedAt?: string
+  outcome?: "completed" | "failed" | "killed"
+}
+
+// Overlay the tailer's retained CHILD lifecycle onto Agent launch cards. Provider tool results measure
+// only the spawn CALL, so `durationMs` must never be promoted to an agent runtime. Both the paginated
+// RPC and the live WebSocket reader call this same projection; keeping it here prevents a socket refresh
+// from replacing an enriched initial page with raw dispatch latency.
+export function projectTranscriptAgentLifecycles(
+  messages: readonly TranscriptMessage[],
+  lookup: (id: string) => AgentLifecycleProjection | undefined,
+): TranscriptMessage[] {
+  const cache = new Map<string, AgentLifecycleProjection | undefined>()
+  const projectTool = (tool: TranscriptToolCall): TranscriptToolCall => {
+    if (!tool.agentId || tool.agentStatus) return tool
+    if (!cache.has(tool.agentId)) cache.set(tool.agentId, lookup(tool.agentId))
+    const lifecycle = cache.get(tool.agentId)
+    if (!lifecycle?.outcome) return tool
+    const start = lifecycle.startedAt ? Date.parse(lifecycle.startedAt) : Number.NaN
+    const finish = lifecycle.finishedAt ? Date.parse(lifecycle.finishedAt) : Number.NaN
+    const elapsed = Number.isFinite(start) && Number.isFinite(finish) && finish >= start ? finish - start : undefined
+    return {
+      ...tool,
+      agentStatus: lifecycle.outcome,
+      ...(elapsed === undefined ? {} : { agentElapsedMs: elapsed }),
+    }
+  }
+  return messages.map((message) => ({
+    ...message,
+    tools: message.tools.map(projectTool),
+    parts: message.parts.map((part) => part.kind === "tools" ? { ...part, tools: part.tools.map(projectTool) } : part),
+  }))
+}
+
+export function projectTranscriptPageAgentLifecycles(
+  page: TranscriptPage,
+  lookup: (id: string) => AgentLifecycleProjection | undefined,
+): TranscriptPage {
+  return { ...page, messages: projectTranscriptAgentLifecycles(page.messages, lookup) }
+}
+
 // Parse a transcript from an ABSOLUTE file path (vs. project+session_id). Used for a sub-agent's own
 // JSONL (the tracked outputFile, a symlink to ~/.claude/projects/<cwd>/subagents/agent-<id>.jsonl),
 // which shares the session record format exactly — so the same mechanical block/tool extraction

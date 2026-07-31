@@ -18,13 +18,13 @@ import {
   hasPendingPermissionChange,
   hasUnresolvedBackgroundOps,
   isAppServerCodexRow,
-  projectAgentLifecycles,
   stopAndForgetRegisteredRuntime,
   stopRegisteredRuntime,
   stopRuntimeBySlug,
   stopThreadRuntime,
   validateGithubDispatchProfile,
 } from "./router.ts"
+import { projectTranscriptPageAgentLifecycles } from "./transcript.ts"
 import { createStorage, type AdoptionClaimRow, type SessionRow } from "./storage.ts"
 import type { AdoptionPaneLookup, PaneIdentity, PaneSnapshot } from "./tmux.ts"
 import type { AppContext } from "./context.ts"
@@ -66,7 +66,7 @@ test("agent lifecycle overlay replaces spawn latency with the retained child run
     reachedTurnBoundary: true,
     transcriptKey: "test-key",
   }
-  const projected = projectAgentLifecycles(page, (id) => id === "call_child" ? {
+  const projected = projectTranscriptPageAgentLifecycles(page, (id) => id === "call_child" ? {
     startedAt: "2026-07-31T14:50:00.000Z",
     finishedAt: "2026-07-31T15:03:00.000Z",
     outcome: "completed",

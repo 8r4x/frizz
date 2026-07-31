@@ -9,7 +9,7 @@ import type { Emitter } from "./bus.ts"
 import type { Project } from "./project.ts"
 import type { Storage } from "./storage.ts"
 import type { AgentBackend } from "./backend/types.ts"
-import { readThreadTranscript } from "./transcript.ts"
+import { projectTranscriptAgentLifecycles, readThreadTranscript, type AgentLifecycleProjection } from "./transcript.ts"
 import { isTrustedLocalWebSocketRequest, rejectWebSocketUpgrade } from "./local-origin.ts"
 
 // Stage-2 multiplex: a SECOND noServer WebSocket at /ws (beside the terminal WS) carrying the board
@@ -139,8 +139,12 @@ export function makeTranscriptReader(
   project: Project,
   storage: Storage,
   backendFor?: (kind?: string) => AgentBackend,
+  lifecycleFor?: (slug: string, id: string) => AgentLifecycleProjection | undefined,
 ): (slug: string) => TranscriptMessage[] {
-  return (slug: string) => readThreadTranscript(project, storage, slug, backendFor)
+  return (slug: string) => {
+    const messages = readThreadTranscript(project, storage, slug, backendFor)
+    return lifecycleFor ? projectTranscriptAgentLifecycles(messages, (id) => lifecycleFor(slug, id)) : messages
+  }
 }
 
 export interface AppSocketServer {

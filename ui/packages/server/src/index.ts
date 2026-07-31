@@ -594,7 +594,12 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         transcriptChange: ctx!.transcriptChange,
         boardSnapshot: () => ctx!.board.snapshot(),
         currentSeq: () => ctx!.board.currentSeq(),
-        readTranscript: makeTranscriptReader(ctx!.project, ctx!.storage, ctx!.backendFor),
+        readTranscript: makeTranscriptReader(
+          ctx!.project,
+          ctx!.storage,
+          ctx!.backendFor,
+          (slug, id) => ctx!.tailer.subAgent(slug, id),
+        ),
       }),
       (value) => { appSocket = value },
     )
