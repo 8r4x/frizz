@@ -203,11 +203,13 @@ function stampStoppable(agents: ThreadView["subAgents"], row: SessionRow): Threa
 }
 
 // The awaiting-background card's trigger: the thread's OWN dispatched work is still live — a sub-agent
-// OR a launched background shell. Broader than hasLiveBackgroundWork (which is sub-agents only, for the
-// crash net): a launched shell is still work the human may want SURFACED, and the never-returns problem
-// hasLiveBackgroundWork worried about (a vite dev server) is handled by the event-snooze rather than by
-// silently burying the card. This does NOT excuse a thread from the queue; it SELECTS the awaiting-
-// background handoff, which the human sees and can one-click snooze until the work returns.
+// OR a launched background shell. Broader than hasLiveBackgroundWork (which is sub-agents only): a
+// launched shell is still work the human may want SURFACED, and the never-returns problem (a vite dev
+// server) is handled by the event-snooze rather than by silently burying the card.
+//
+// It is deliberately NOT the queue excusal. Only the narrower hasLiveBackgroundWork — sub-agents, which
+// have a staleness ceiling — holds a rested thread out of the queue (see deriveNeedsYou); a shell-only
+// rest stays a visible, snoozable queue handoff so an eternal dev server can never bury its thread.
 function hasLiveOwnWork(tele: SessionTelemetry | undefined): boolean {
   return Boolean(
     tele?.subAgents?.some((agent) => isDirectSubAgent(agent) && agent.state === "running") ||
@@ -264,6 +266,10 @@ export function deriveNeedsYou(
   // The RESOLVED pause for this row (resolveLimitPause), not the raw setting — its `autoResume` bit
   // already folds in staleness, so the queue excusal and the card can never disagree.
   limitPause: ThreadView["limitPause"] = undefined,
+  // deriveAwaitingBackground passes false. The live-sub-agent excusal below is a QUEUE rule; the card
+  // states a FACT about the thread that has to survive it, or the drawer and the full-screen page blank
+  // out at rest and read as "the agent died". Every OTHER excusal is still inherited.
+  excuseLiveSubAgents = true,
 ): boolean {
   // Snooze is explicit operator lifecycle state. It must be checked before provider/question/crash
   // gates so choosing Snooze from any queue card actually parks that card until its exact deadline.
@@ -313,15 +319,37 @@ export function deriveNeedsYou(
   // (or the pause aged out), the promise is gone and it falls through to the ordinary handoff below,
   // which is the honest place for work only the human will restart.
   if (limitPause?.autoResume) return false
-  // A top-level turn that came to rest while its OWN dispatched work (sub-agents OR launched shells) is
-  // still live, with no human ask: it is awaiting results it dispatched, not the human. This is now a
-  // VISIBLE queue handoff — the informational awaiting-background card — so the human can see what's
-  // cooking, with a one-click event-snooze that hides it until the parent re-rests (a child returned).
-  // Previously a live sub-agent silently EXCUSED the rest (held, invisible); surfacing it instead is the
-  // whole point of this card. An EXITED parent with "running" children is a crash, not this card — the
-  // runtime!=="exited" guard drops it to the crash/bare-rest net below (a dead pane's children keep
-  // reading "running" until their transcript goes stale; the parent cannot actually still be waiting on
-  // them). A done fence outranks this: respect the worker's completion signal (show the done card).
+  // A top-level turn that came to rest while its OWN dispatched SUB-AGENTS are still running is not
+  // waiting on the human at all: it is waiting on results it dispatched, and a child's return
+  // re-invokes it within seconds. It is EXCUSED from the queue for exactly as long as that holds
+  // (maintainer 2026-07-30). Queueing it instead is what made the rail row DROP out of the Active
+  // section's running band into the rested band and bounce straight back up when the child returned —
+  // "there's too much layout shift as things jump between those two sections … it should only show up
+  // in the queue when it's fully rested and it has no running sub-agents". Excused, the row simply
+  // stays put with its spinner (groups.ts isActivelyRunning/hasLiveOps), and it re-enters the queue on
+  // its own once the last child is done. The awaiting-background CARD is unaffected: it is derived
+  // separately (deriveAwaitingBackground, which opts out of this excusal) and still renders in the
+  // drawer and on the full-screen page.
+  //
+  // Bounded by construction, which is why this excusal is safe: a sub-agent whose completion signal is
+  // lost goes `stale` at the tailer's 15-min staleness ceiling, and only `running` holds here — so a
+  // child that never returns stops excusing its parent instead of burying it forever.
+  //
+  // A DECLARED FENCE outranks the excusal (hence the `!tele?.lastFence` guard), because a fence is the
+  // worker's own statement about why it stopped and it earns its own card: a ```done handoff still
+  // cards as done, and a non-parked ```awaiting — pr-watch above all — stays a VISIBLE queue handoff
+  // even with a child out (maintainer 2026-07-24), so a PR watcher can never vanish merely because the
+  // worker happens to have dispatched a sub-agent.
+  if (excuseLiveSubAgents && runtime !== "exited" && hasLiveBackgroundWork(tele) && !tele?.lastFence) return false
+  // A launched background SHELL, by contrast, does NOT excuse the rest — it is a VISIBLE queue handoff,
+  // the informational awaiting-background card, with a one-click event-snooze that hides it until the
+  // parent re-rests (a child returned). A shell is indistinguishable from a dev server that never exits
+  // (26% of real launches are long-lived servers) and it has NO staleness clock, so excusing one would
+  // spin a finished thread out of the queue forever — the exact regression of maintainer 2026-07-22.
+  // An EXITED parent with "running" children is a crash, not this card — the runtime!=="exited" guard
+  // drops it to the crash/bare-rest net below (a dead pane's children keep reading "running" until
+  // their transcript goes stale; the parent cannot actually still be waiting on them). A done fence
+  // outranks this too: respect the worker's completion signal (show the done card).
   if (runtime !== "exited" && hasLiveOwnWork(tele) && tele?.lastFence?.kind !== "done") return !bgSnoozeArmed(row)
   // A final ```done fence is a CHECKED completion handoff: show its success card in the queue until the
   // human explicitly Archives the thread. Like a question, merely viewing it does not resolve it. The
@@ -372,8 +400,12 @@ export function deriveAwaitingBackground(
   // Held, not queued); this only changes the non-parked awaiting fences (pr-watch, legacy, hintless).
   if (tele?.lastFence?.kind === "done" || tele?.lastFence?.kind === "awaiting") return false
   // Every OTHER excusal deriveNeedsYou applies still outranks the card (a user wall-clock snooze, a
-  // limit pause, a delivered-but-unobserved follow-up); only the queue-owned event-snooze is dropped.
-  return deriveNeedsYou({ ...row, bg_snooze_rested_at: null }, tele, runtime, hasActionableInteraction, nowMs, limitPause)
+  // limit pause, a delivered-but-unobserved follow-up); only the queue-owned event-snooze is dropped,
+  // and the queue's live-SUB-AGENT excusal is opted out of (excuseLiveSubAgents: false). That opt-out
+  // is what keeps this flag meaningful at all now: the very threads it describes are precisely the ones
+  // that excusal removes from the queue, so inheriting it would make this function always false and
+  // blank the drawer and full-screen page for a healthy thread resting on its children.
+  return deriveNeedsYou({ ...row, bg_snooze_rested_at: null }, tele, runtime, hasActionableInteraction, nowMs, limitPause, false)
 }
 
 // The scratchpad path for a session, iff the file exists under the project dir (else undefined so the

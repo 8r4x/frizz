@@ -310,14 +310,14 @@ function hasLiveSubAgents(t: ThreadView): boolean {
 //
 // `awaitingBackground` is the ONE exception, and it is not `bgShells` by another name: it is SERVER
 // truth (board.deriveAwaitingBackground) meaning "at rest, its own dispatched work is still live, and
-// nothing harder outranks that". Reading it here keeps the bands honest for a thread whose card the
-// human EVENT-SNOOZED. Such a thread leaves the queue (needsYou false) while still cooking, and with a
-// live SUB-AGENT hasLiveSubAgents already kept it in the running band with a spinner. A shell-only
-// thread had no such signal, so it fell into the RESTED band — the queue-ordered band — with no queue
-// card behind it (found 2026-07-29: "showing up as a rested thread in my sidebar, yet there's no card
-// for it"). It does NOT re-spin finished threads: an UNSNOOZED awaiting-background thread has
-// needsYou true, so inActiveRunningBand keeps it in the rested band exactly as before, and only a
-// thread the human deliberately parked reads as running.
+// nothing harder outranks that". Reading it here keeps the bands honest for a thread with no queue card
+// behind it — one the human EVENT-SNOOZED, or (since 2026-07-30) one the server excused from the queue
+// outright because its own SUB-AGENTS are still running. Either way the thread is still cooking, and
+// with a live sub-agent hasLiveSubAgents already kept it in the running band with a spinner; a
+// shell-only thread had no such signal, so it fell into the RESTED band — the queue-ordered band — with
+// no queue card behind it (found 2026-07-29: "showing up as a rested thread in my sidebar, yet there's
+// no card for it"). It does NOT re-spin finished threads: an unsnoozed SHELL-ONLY thread still has
+// needsYou true, so inActiveRunningBand keeps it in the rested band exactly as before.
 function hasLiveOps(t: ThreadView): boolean {
   return hasLiveSubAgents(t) || t.awaitingBackground === true
 }
@@ -390,15 +390,23 @@ export function isActivelyRunning(t: ThreadView): boolean {
 }
 
 // A QUEUE HANDOFF THAT HAS ALREADY COME TO REST: the server queued it (`needsYou`) and the thread's
-// OWN turn is over (turn-idle/exited). Its dispatched sub-agents may still be spinning — that is
-// exactly the awaiting-background handoff (board.ts hasLiveOwnWork), and it deliberately keeps the
-// thread undimmed and in the Active section via isActivelyRunning/hasLiveOps. What it must NOT do is
-// make the PARENT's rail mark claim motion the parent does not have (maintainer 2026-07-27: "when an
-// agent comes to rest and shows up in the queue, it should get the ellipsis indicator in the sidebar,
-// even though its sub-agents are still spinning"). The children keep their own spinners on their own
-// indented rows (Sidebar SubAgentRows → ChildOpRow); the parent's indicator speaks for the parent.
-// This closes the drift inActiveRunningBand already flagged below ("its rail indicator may still be a
-// spinner … cosmetic"): the queued row now sits in the rested band AND reads as rested.
+// OWN turn is over (turn-idle/exited). It must not make the PARENT's rail mark claim motion the parent
+// does not have (maintainer 2026-07-27: "when an agent comes to rest and shows up in the queue, it
+// should get the ellipsis indicator in the sidebar, even though its sub-agents are still spinning").
+// The children keep their own spinners on their own indented rows (Sidebar SubAgentRows → ChildOpRow);
+// the parent's indicator speaks for the parent. A queued row therefore sits in the rested band AND
+// reads as rested.
+//
+// SINCE 2026-07-30 the live-SUB-AGENT case no longer reaches here at all: the server now excuses such a
+// thread from the queue entirely (board.deriveNeedsYou), so `needsYou` is false and the row keeps its
+// spinner in the running band — which is the point, since a row that never leaves that band never
+// churns between the two. The maintainer's ellipsis rule was scoped to a row that "shows up in the
+// queue", and one that no longer does has no reason to change appearance on resting.
+//
+// Still load-bearing for the cases that DO queue with live-looking children: a shell-only rest (never
+// excused — an eternal dev server must not bury its thread) and, critically, an EXITED parent whose
+// children keep reading "running" until their transcript goes stale. Without this the latter would
+// resolve to "working" and hide the [!] stall mark behind a spinner for a pane that is already dead.
 function restedQueueHandoff(t: ThreadView): boolean {
   return t.needsYou === true && atRest(t)
 }

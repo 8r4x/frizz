@@ -490,26 +490,45 @@ test("deriveNeedsYou: a parked human/timestamp awaiting fence stays out of the o
   assert.equal(deriveNeedsYou(row({ seen_at: LATER }), both, "turn-idle"), true)
 })
 
-test("deriveNeedsYou: every owned bare rest queues; a live SUB-AGENT/SHELL now cards as awaiting-background", () => {
+test("deriveNeedsYou: every owned bare rest queues, but a live SUB-AGENT excuses it (the shell does not)", () => {
   assert.equal(deriveNeedsYou(row({ seen_at: null, last_read_at: null }), tele({ lastActivityAt: LATER }), "turn-idle"), true)
   assert.equal(deriveNeedsYou(row({ seen_at: T0 }), tele({ lastActivityAt: LATER }), "turn-idle"), true, "viewing cannot clear rest")
   assert.equal(deriveNeedsYou(row({ seen_at: null }), tele({ turn: "idle", lastActivityAt: LATER }), "exited"), true)
-  // A rested turn with a live dispatched SUB-AGENT is now a VISIBLE awaiting-background handoff (it used
-  // to be silently excused). It stays queued until the human event-snoozes it (covered below).
-  assert.equal(deriveNeedsYou(row({ seen_at: null, rested_at: T0 }), tele({ subAgents: [{ label: "c", startedAt: T0, state: "running", id: "a1" }], lastActivityAt: LATER }), "turn-idle"), true)
-  // A live background SHELL cards the same way (it already queued as a bare rest before; now it carries
-  // the awaiting-background presentation + event-snooze instead of a plain rest card).
+  // A rested turn with a live dispatched SUB-AGENT is EXCUSED from the queue (maintainer 2026-07-30):
+  // it is awaiting its own child, not the human, and queueing it dropped its rail row out of the Active
+  // running band and back again on the child's return. It re-queues on its own once the child is done.
+  assert.equal(deriveNeedsYou(row({ seen_at: null, rested_at: T0 }), tele({ subAgents: [{ label: "c", startedAt: T0, state: "running", id: "a1" }], lastActivityAt: LATER }), "turn-idle"), false)
+  // The excusal is bounded by the tailer's staleness ceiling: only "running" holds, so a child whose
+  // completion signal was lost stops excusing its parent rather than burying it.
+  assert.equal(deriveNeedsYou(row({ seen_at: null, rested_at: T0 }), tele({ subAgents: [{ label: "c", startedAt: T0, state: "stale", id: "a1" }], lastActivityAt: LATER }), "turn-idle"), true, "a stale child no longer excuses")
+  // A live background SHELL is deliberately NOT excused — it has no staleness clock, so excusing an
+  // eternal dev server would bury its thread forever. It stays a visible, snoozable queue handoff.
   assert.equal(deriveNeedsYou(row({ rested_at: T0 }), tele({ bgShells: [{ label: "watch", startedAt: T0, state: "running" }] }), "turn-idle"), true)
 })
 
-test("deriveNeedsYou: the awaiting-background event-snooze hides the card until the parent re-rests", () => {
-  const child = tele({ subAgents: [{ label: "c", startedAt: T0, state: "running", id: "a1" }], lastActivityAt: LATER })
+test("deriveNeedsYou: a live sub-agent excuses the rest only while the worker declared NO fence", () => {
+  const child = [{ label: "c", startedAt: T0, state: "running" as const, id: "a1" }]
+  // A ```done handoff still cards as done — the worker's completion signal outranks the excusal.
+  assert.equal(deriveNeedsYou(row({ rested_at: T0 }), tele({ subAgents: child, lastFence: { kind: "done", body: "", hints: [] }, lastActivityAt: LATER }), "turn-idle"), true, "done fence still queues")
+  // A non-parked ```awaiting — pr-watch above all — stays a VISIBLE queue handoff even with a child out
+  // (maintainer 2026-07-24), so a PR watcher can never vanish because a sub-agent happens to be running.
+  const prWatch = { kind: "awaiting" as const, body: "", hints: [{ kind: "pr-watch" as const, value: "acme/app#1" }] }
+  assert.equal(deriveNeedsYou(row({ rested_at: T0 }), tele({ subAgents: child, lastFence: prWatch, lastActivityAt: LATER }), "turn-idle"), true, "pr-watch still queues")
+  // A PARKED human fence was already excused (Held) above this branch and stays that way.
+  const parked = { kind: "awaiting" as const, body: "", hints: [{ kind: "human" as const, value: "Alice must approve" }] }
+  assert.equal(deriveNeedsYou(row({ rested_at: T0 }), tele({ subAgents: child, lastFence: parked, lastActivityAt: LATER }), "turn-idle"), false)
+})
+
+test("deriveNeedsYou: the awaiting-background event-snooze hides the SHELL card until the parent re-rests", () => {
+  // Sub-agents are excused from the queue outright now, so the event-snooze governs the one case that
+  // still cards: a rest on a live background SHELL.
+  const shell = tele({ bgShells: [{ label: "watch", startedAt: T0, state: "running" }], lastActivityAt: LATER })
   // Snooze captures the CURRENT rest instant. While rested_at still equals it, the card is hidden.
-  assert.equal(deriveNeedsYou(row({ rested_at: T0, bg_snooze_rested_at: T0 }), child, "turn-idle"), false, "snoozed for this rest")
-  // The parent came to a NEW rest (a sub-agent returned) → rested_at advanced past the snooze → re-surfaces.
-  assert.equal(deriveNeedsYou(row({ rested_at: LATER, bg_snooze_rested_at: T0 }), child, "turn-idle"), true, "re-rest clears the snooze")
+  assert.equal(deriveNeedsYou(row({ rested_at: T0, bg_snooze_rested_at: T0 }), shell, "turn-idle"), false, "snoozed for this rest")
+  // The parent came to a NEW rest (the work returned) → rested_at advanced past the snooze → re-surfaces.
+  assert.equal(deriveNeedsYou(row({ rested_at: LATER, bg_snooze_rested_at: T0 }), shell, "turn-idle"), true, "re-rest clears the snooze")
   // A snooze from a prior rest never applies to a different rest instant.
-  assert.equal(deriveNeedsYou(row({ rested_at: null, bg_snooze_rested_at: T0 }), child, "turn-idle"), true)
+  assert.equal(deriveNeedsYou(row({ rested_at: null, bg_snooze_rested_at: T0 }), shell, "turn-idle"), true)
 })
 
 test("deriveAwaitingBackground: true only when own-work rest is the SOLE reason for the card", () => {
@@ -570,9 +589,10 @@ test("deriveNeedsYou: an EXITED parent surfaces even when a SUB-AGENT still read
   // silently dangled: hasLiveBackgroundWork buried the exited row instead of queuing it (found 2026-07-21).
   const childRunning = tele({ subAgents: [{ label: "c", startedAt: T0, state: "running", id: "a1" }], lastActivityAt: LATER })
   assert.equal(deriveNeedsYou(row({ seen_at: LATER }), childRunning, "exited"), true, "dead parent w/ 'running' sub-agent surfaces")
-  // The LIVE parent (turn-idle) resting on a running child now cards as awaiting-background (previously
-  // held/excused); the `runtime !== "exited"` guard is what keeps the EXITED crash case above distinct.
-  assert.equal(deriveNeedsYou(row({ seen_at: T0, rested_at: T0 }), childRunning, "turn-idle"), true)
+  // The LIVE parent (turn-idle) resting on the same running child is EXCUSED from the queue and holds
+  // its place in the rail's Active band; the `runtime !== "exited"` guard is exactly what keeps the
+  // EXITED crash case above distinct from it, so a dead pane can never borrow that excusal.
+  assert.equal(deriveNeedsYou(row({ seen_at: T0, rested_at: T0 }), childRunning, "turn-idle"), false)
   assert.equal(deriveAwaitingBackground(row({ seen_at: T0, rested_at: T0 }), childRunning, "turn-idle"), true)
   assert.equal(deriveAwaitingBackground(row({ seen_at: LATER }), childRunning, "exited"), false, "the exited crash is not an awaiting-background card")
   // A dead parent whose child has already gone STALE also surfaces — via bare rest, not the bgwork arm

@@ -409,6 +409,36 @@ test("partitionActive: an event-snoozed awaiting-background thread cooks in the 
   assert.deepEqual(rested.map((t) => t.id), ["queued-shell"])
 })
 
+// THE LAYOUT-SHIFT FIX (maintainer 2026-07-30): "if an agent has children that are still running child
+// subprocesses or subagents, but it itself has rested, it should still stay in the active agent's rail
+// instead of shifting down to the queue … it should only show up in the queue when it's fully rested and
+// it has no running sub-agents". The server stops setting needsYou for that thread
+// (board.deriveNeedsYou), and these are the two consequences on the rail that the human actually sees.
+test("partitionActive: a parent resting on a live sub-agent holds its place in the running band", () => {
+  const at = "2026-07-09T00:00:00.000Z"
+  const child = [{ id: "a1", label: "c", startedAt: at, state: "running" as const }]
+  // Mid-turn, then rested-with-the-child-still-out: the SAME row, and it must not move between them.
+  const working = thread({ id: "p", kind: "session", state: "open", runtime: "running", needsYou: false, subAgents: child, lastUserAt: at })
+  const rested = thread({ id: "p", kind: "session", state: "open", runtime: "turn-idle", needsYou: false, awaitingBackground: true, subAgents: child, lastUserAt: at })
+  assert.deepEqual(partitionActive([working]).running.map((t) => t.id), ["p"])
+  assert.deepEqual(partitionActive([rested]).running.map((t) => t.id), ["p"], "resting on a child must not drop it to the rested band")
+  // FULLY rested — the last child returned — is the one state that belongs in the queue-ordered band.
+  const done = thread({ id: "p", kind: "session", state: "open", runtime: "turn-idle", needsYou: true, subAgents: [], lastUserAt: at })
+  assert.deepEqual(partitionActive([done]).rested.map((t) => t.id), ["p"])
+})
+
+test("sessionIndicatorKind: a parent resting on a live sub-agent keeps its spinner, so the row never flickers", () => {
+  const at = "2026-07-09T00:00:00.000Z"
+  const child = [{ id: "a1", label: "c", startedAt: at, state: "running" as const }]
+  // Same glyph mid-turn and at rest-with-a-child — the point is that NOTHING about the row changes when
+  // the parent's own turn ends, which is what removes the churn the maintainer reported.
+  assert.equal(sessionIndicatorKind(thread({ kind: "session", state: "open", runtime: "running", needsYou: false, subAgents: child })), "working")
+  assert.equal(sessionIndicatorKind(thread({ kind: "session", state: "open", runtime: "turn-idle", needsYou: false, awaitingBackground: true, subAgents: child })), "working")
+  // The EXITED parent is the case restedQueueHandoff still protects: its children keep reading "running"
+  // until they go stale, and it must read as a stall, never as a spinner.
+  assert.equal(sessionIndicatorKind(thread({ kind: "session", state: "open", runtime: "exited", needsYou: true, subAgents: child })), "stalled")
+})
+
 // ---- isHeld: every rendered wait glyph belongs to the labeled dimmed Held band ----
 
 const awaitingHuman = { kind: "awaiting" as const, body: "", hints: [{ kind: "human" as const, value: "Cloudflare maintainer must approve fork CI" }] }
