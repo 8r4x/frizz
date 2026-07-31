@@ -5,6 +5,7 @@ import type { ChatMessage } from "../hooks.ts"
 import {
   coalesceToolActivityMessages,
   currentToolActivity,
+  hasPendingToolActivityTail,
   isToolActivityException,
   settledToolActivityLabel,
   toolActivityLabel,
@@ -39,7 +40,7 @@ test("ordinary tool turns coalesce across provider batches while retaining a sta
   assert.equal(compact[0].messageIndex, 0)
 })
 
-test("prose, background shells, and sub-agent operations split activity runs", () => {
+test("background shells stay in the run while visible prose and sub-agent cards split it", () => {
   const background = toolMessage("background", [
     tool("Bash", { command: "nub run dev", backgroundState: "background", status: "pending" }),
   ])
@@ -56,6 +57,13 @@ test("prose, background shells, and sub-agent operations split activity runs", (
   const messages = [
     toolMessage("one", [tool("Read")]),
     background,
+    {
+      sourceId: "empty",
+      role: "assistant",
+      text: "",
+      tools: [],
+      parts: [],
+    } satisfies ChatMessage,
     toolMessage("two", [tool("Grep")]),
     agent,
     toolMessage("three", [tool("Edit")]),
@@ -66,17 +74,71 @@ test("prose, background shells, and sub-agent operations split activity runs", (
   const compact = coalesceToolActivityMessages(messages)
   assert.deepEqual(compact.map((entry) => entry.message.sourceId), [
     "one",
-    "background",
-    "two",
     "agent",
     "three",
     "prose",
     "four",
   ])
-  assert.equal(isToolActivityException(background.tools[0]), true)
+  assert.deepEqual(compact[0].message.tools.map((call) => call.name), ["Read", "Bash", "Grep"])
+  assert.equal(isToolActivityException(background.tools[0]), false)
+  assert.equal(isToolActivityException(tool("Bash", { backgroundState: "unknown" })), true)
   assert.equal(isToolActivityException(agent.tools[0]), true)
   assert.equal(isToolActivityException(tool("Send message", { sendTo: "main" })), true)
   assert.equal(isToolActivityException(tool("Read")), false)
+})
+
+test("a prose message's ordinary tool tail owns following provider batches until the next block", () => {
+  const first = tool("Bash", { desc: "Starting the focused build", status: "completed" })
+  const lead: ChatMessage = {
+    sourceId: "lead",
+    role: "assistant",
+    text: "I found the build entry point.",
+    tools: [first],
+    parts: [
+      { kind: "text", text: "I found the build entry point." },
+      { kind: "tools", tools: [first] },
+    ],
+  }
+  const messages = [
+    lead,
+    toolMessage("batch-a", [tool("Read", { status: "completed" })]),
+    toolMessage("batch-b", [tool("Bash", { backgroundState: "background", status: "pending" })]),
+    {
+      sourceId: "empty",
+      role: "assistant",
+      text: "",
+      tools: [],
+      parts: [{ kind: "text", text: "  " }],
+    } satisfies ChatMessage,
+    toolMessage("batch-c", [tool("Write", { status: "completed" })]),
+  ]
+
+  const compact = coalesceToolActivityMessages(messages)
+  assert.equal(compact.length, 1)
+  assert.equal(compact[0].message.sourceId, "lead")
+  assert.equal(compact[0].message.text, lead.text)
+  assert.deepEqual(compact[0].message.parts?.map((part) => part.kind), ["text", "tools"])
+  assert.deepEqual(compact[0].message.tools.map((call) => call.name), ["Bash", "Read", "Bash", "Write"])
+  assert.equal(compact[0].message.parts?.[1].kind, "tools")
+  assert.equal(compact[0].message.parts?.[1].kind === "tools" ? compact[0].message.parts[1].tools.length : 0, 4)
+})
+
+test("the latest pending tool shimmer replaces the generic working tail", () => {
+  const settled = toolMessage("settled", [tool("Read", { status: "completed" })])
+  const pending = toolMessage("pending", [tool("Bash", { desc: "Running focused tests", status: "pending" })])
+  const queued: ChatMessage = {
+    sourceId: "queued",
+    role: "user",
+    text: "Also check the narrow layout.",
+    tools: [],
+    parts: [],
+    queued: true,
+  }
+
+  const compact = coalesceToolActivityMessages([settled, pending, queued])
+  assert.equal(hasPendingToolActivityTail(compact.map((entry) => entry.message)), true)
+  pending.tools[0].status = "completed"
+  assert.equal(hasPendingToolActivityTail(coalesceToolActivityMessages([settled, pending]).map((entry) => entry.message)), false)
 })
 
 test("activity labels are gerunds with a clean fallback for arbitrary tools", () => {

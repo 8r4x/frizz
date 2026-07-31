@@ -48,9 +48,9 @@ async function gaps(page: import("puppeteer").Page, nth: number) {
   }, nth)
 }
 
-// Tool cards on either side of PROSE are the controls — they keep the full between-block step. Pure
-// tool-only provider turns coalesce into one display message, so a detailed-card seam that crosses
-// display-message roots is exactly a prose seam in this fixture.
+// Tool cards in distinct prose-delimited disclosures are the control — they keep the full
+// between-block step. Provider turns inside one activity run coalesce into one display message, so a
+// detailed-card seam that crosses display-message roots is exactly the real prose break in this fixture.
 const isProseBoundary = (g: { sameMessage: boolean }) => !g.sameMessage
 
 for (const [surface, query, column] of [
@@ -71,11 +71,15 @@ for (const [surface, query, column] of [
         const disclosures = [...scope.querySelectorAll<HTMLElement>("[data-tool-activity] button")]
         const labels = disclosures.map((button) => button.getAttribute("aria-label") ?? "")
         const visibleCards = [...scope.querySelectorAll<HTMLElement>(".fray-bash")].filter((card) => card.offsetParent !== null).length
+        const hasGenericWorking = (scope.textContent ?? "").includes("Working…")
         disclosures.forEach((button) => button.click())
-        return { labels, visibleCards }
+        return { labels, visibleCards, hasGenericWorking }
       }, column)
       assert.equal(collapsed.visibleCards, 0, "ordinary cards stay unmounted until the disclosure is expanded")
-      assert.ok(collapsed.labels.some((label) => /Expand [2-9]\d* tool calls/.test(label)), "successive provider batches coalesce into a multi-call disclosure")
+      assert.equal(collapsed.hasGenericWorking, false, "the pending tool gerund replaces the generic Working shimmer")
+      assert.equal(collapsed.labels.length, 2, "only the two prose-delimited activity runs get disclosures")
+      assert.match(collapsed.labels[0], /Expand 7 tool calls:/, "the first prose tool tail absorbs all three following provider batches")
+      assert.match(collapsed.labels[1], /Expand 3 tool calls:/, "the second prose tool tail absorbs the following provider batch")
       await page.waitForSelector(".fray-bash")
       await new Promise((r) => setTimeout(r, 600))
 
@@ -91,7 +95,7 @@ for (const [surface, query, column] of [
 
       // …and the prose adjacency is NOT collapsed with them.
       const prose = measured.filter(isProseBoundary)
-      assert.equal(prose.length, 3, "expected every prose-adjacent card seam")
+      assert.equal(prose.length, 1, "only the real prose break may split the two expanded activity runs")
       for (const g of prose) {
         assert.ok(g.gap >= PROSE_MIN, `prose boundary must keep its break, got ${g.gap}px`)
       }

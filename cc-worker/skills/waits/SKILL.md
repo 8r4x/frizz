@@ -27,8 +27,8 @@ releases, or merge progression.
 Never fake Claude's native background mechanism with shell job control (`cmd &`, `nohup … &`, or
 `disown`). The child may survive after Bash returns, but it has no Claude task id, output-file
 lifecycle, completion notification, or wake. Use `run_in_background: true` with the long command
-itself in the foreground. Shell-level concurrency is only self-contained: explicitly `wait` for or
-stop every helper before that Bash call returns.
+itself in the foreground. Shell-level concurrency is only self-contained: explicitly `wait` for its
+children or own cleanup with an EXIT trap before that Bash call returns.
 
 ## Choosing a monitor implementation
 

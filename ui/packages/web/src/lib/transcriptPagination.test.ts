@@ -48,6 +48,32 @@ test("client prepend is gap-free/idempotent across a repeated response", () => {
   assert.equal(twice.beforeCursor, "cursor-1")
 })
 
+test("loading the canonical launch replaces its synthetic pinned background-shell card", () => {
+  const canonical = {
+    ...message("assistant", "old-shell-launch"),
+    tools: [{ name: "exec_command", detail: "sleep 999", status: "pending" as const, backgroundState: "background" as const }],
+  }
+  const pinned = {
+    ...canonical,
+    sourceId: "pinned-bg:old-shell-launch",
+    pinnedFromSourceId: canonical.sourceId,
+  }
+  const current = {
+    ...page([["user", "u2"], ["assistant", "a2"]], { beforeCursor: "cursor-2", hasEarlier: true }),
+    messages: [message("user", "u2"), message("assistant", "a2"), pinned],
+  }
+  const earlier = {
+    ...page([["user", "u1"]], { beforeCursor: "cursor-1", hasEarlier: true }),
+    messages: [message("user", "u1"), canonical],
+  }
+  const loaded = prependEarlierPage(current, earlier)
+  assert.deepEqual(
+    loaded.messages.map((item) => item.sourceId),
+    ["u1", "old-shell-launch", "u2", "a2"],
+    "the same lifecycle card never renders twice after history reaches its launch",
+  )
+})
+
 test("client latest reconciliation retains loaded history across concurrent append and refreshes overlap", () => {
   const loaded = prependEarlierPage(
     page([["user", "u2"], ["assistant", "a2-old"]], { beforeCursor: "cursor-2", hasEarlier: true }),

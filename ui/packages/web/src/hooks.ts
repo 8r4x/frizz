@@ -18,8 +18,8 @@ export type TranscriptData = Partial<Omit<PaginatedTranscriptData, "messages">> 
 
 // `mergeToolRuns` stays deleted: mutating transcript truth before the ordered-parts walk hoisted tools
 // across prose and lost block fidelity. The minimal renderer now performs a narrower PRESENTATION-ONLY
-// coalescing in lib/toolActivity.ts: consecutive messages that contain nothing but ordinary tool calls
-// share one disclosure, while prose, background shells and sub-agent operations are hard boundaries.
+// coalescing in lib/toolActivity.ts: a visible tool tail and its following provider-only turns share
+// one disclosure; prose and dedicated block tools such as sub-agent operations are hard boundaries.
 // VISUAL ORDER == TURN ORDER remains the invariant; no persisted/query-cached message is rewritten.
 
 // React-only helpers live here, not in store.ts, because store.ts is also imported by

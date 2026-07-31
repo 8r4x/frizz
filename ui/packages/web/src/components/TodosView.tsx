@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useSnapshot } from "valtio"
 import { ChevronsUpDown, Hourglass, Inbox } from "lucide-react"
-import type { ThreadView, BoardSnapshot } from "@fray-ui/shared"
+import type { ThreadView, BoardSnapshot, TranscriptMessage } from "@fray-ui/shared"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { pushDrawer, queueCardTargetY, showToast } from "../store.ts"
 import { rpc } from "../api/rpc.ts"
@@ -752,20 +752,40 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   //   hiddenStepCount = the middle messages hidden in their entirety (strictly between first and last).
   // Zero when the agent answered in a single message (firstRenderedIdx === lastRenderedIdx → nothing
   // intermediate). The pinned ask and loaded-earlier history sit outside this range.
-  const { hiddenStepCount, hiddenToolCount } = useMemo(() => {
-    if (firstRenderedIdx < 0 || firstRenderedIdx === lastRenderedIdx) return { hiddenStepCount: 0, hiddenToolCount: 0 }
+  const { hiddenStepCount, hiddenToolCount, visibleBackgroundMessages } = useMemo(() => {
+    if (firstRenderedIdx < 0 || firstRenderedIdx === lastRenderedIdx) {
+      return { hiddenStepCount: 0, hiddenToolCount: 0, visibleBackgroundMessages: [] as TranscriptMessage[] }
+    }
     let steps = 0
     let tools = 0
+    const backgroundMessages: TranscriptMessage[] = []
     for (let g = firstRenderedIdx; g <= lastRenderedIdx; g++) {
       const m = messages[g]
       if (!m || m.queued || messageRendersNothing(m)) continue
       // A sub-agent completion marker carries a tool call but renders as a wake DIVIDER, not a card
       // (see ChatView.agentCompletionCall) — counting it would promise a tool the expansion never shows.
       // It still counts as a step, exactly like the background-shell wake divider beside it.
-      tools += agentCompletionCall(m) ? 0 : m.tools.length
-      if (g > firstRenderedIdx && g < lastRenderedIdx) steps++
+      const completion = agentCompletionCall(m)
+      const backgroundTools = completion ? [] : m.tools.filter((tool) => tool.backgroundState !== undefined)
+      const ordinaryTools = completion ? [] : m.tools.filter((tool) => tool.backgroundState === undefined)
+      tools += ordinaryTools.length
+      if (backgroundTools.length > 0) {
+        backgroundMessages.push({
+          sourceId: m.sourceId ? `${m.sourceId}:visible-background` : undefined,
+          role: "assistant",
+          text: "",
+          tools: backgroundTools,
+          parts: [{ kind: "tools", tools: backgroundTools }],
+          at: m.at,
+        })
+      }
+      if (
+        g > firstRenderedIdx &&
+        g < lastRenderedIdx &&
+        (messageHasRenderableText(m) || ordinaryTools.length > 0 || completion !== undefined || m.kind !== undefined)
+      ) steps++
     }
-    return { hiddenStepCount: steps, hiddenToolCount: tools }
+    return { hiddenStepCount: steps, hiddenToolCount: tools, visibleBackgroundMessages: backgroundMessages }
   }, [messages, firstRenderedIdx, lastRenderedIdx])
   // Collapse the intermediate run behind ONE summary bar unless the reader has opted into the full log.
   // Gated on a real pinned ask (stickyUserIdx >= 0) and a distinct first/last agent message so a single
@@ -1107,17 +1127,32 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                   // once, just before the last message (firstRenderedIdx !== lastRenderedIdx here, so the
                   // two are distinct rows and the bar always lands after any first-message text).
                   if (isLast && !intermediateBarEmitted) {
-                    if (prevTailIsMeta !== null) out.push(<VSpace key="im-space" h={STEP} />)
-                    out.push(
-                      <IntermediateSummary
-                        key="intermediate-summary"
-                        toolCount={hiddenToolCount}
-                        stepCount={hiddenStepCount}
-                        onExpand={() => setIntermediateExpanded(true)}
-                      />,
-                    )
+                    if (hiddenToolCount > 0 || hiddenStepCount > 0) {
+                      if (prevTailIsMeta !== null) out.push(<VSpace key="im-space" h={STEP} />)
+                      out.push(
+                        <IntermediateSummary
+                          key="intermediate-summary"
+                          toolCount={hiddenToolCount}
+                          stepCount={hiddenStepCount}
+                          onExpand={() => setIntermediateExpanded(true)}
+                        />,
+                      )
+                      prevTailIsMeta = false
+                    }
+                    // Background shells are lifecycle state, not disposable intermediate chatter.
+                    // Keep their real cards visible while ordinary tool/prose activity stays behind
+                    // the summary. This is also where historical `unknown` shell-job calls surface.
+                    visibleBackgroundMessages.forEach((background, backgroundIndex) => {
+                      if (prevTailIsMeta !== null) out.push(<VSpace key={`bg-space-${backgroundIndex}`} h={STEP} />)
+                      const backgroundKey = background.sourceId ?? `visible-background-${backgroundIndex}`
+                      out.push(
+                        <div key={backgroundKey} data-transcript-source-id={backgroundKey} className="flex flex-col">
+                          <Message m={background} dense />
+                        </div>,
+                      )
+                      prevTailIsMeta = true
+                    })
                     intermediateBarEmitted = true
-                    prevTailIsMeta = false
                   }
                   // A first/last message that is pure batched tool calls (no prose) contributes no row —
                   // its calls are already folded into the bar — so skip it and leave no dangling spacer.

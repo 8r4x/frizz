@@ -19,6 +19,12 @@ const settledMessages = [
   callMessage("settled-2", [
     { name: "Grep", detail: "ToolCalls|ToolCardRouter", status: "completed", durationMs: 32 },
     { name: "Edit", detail: "ui/packages/web/src/lib/toolActivity.ts", edit: { file: "ui/packages/web/src/lib/toolActivity.ts", old: "tool calls", new: "minimal activity" }, status: "completed", durationMs: 41 },
+    ...Array.from({ length: 27 }, (_, index) => ({
+      name: "Read",
+      detail: `ui/packages/web/src/fixture-${index + 1}.ts`,
+      status: "completed" as const,
+      durationMs: 10 + index,
+    })),
   ]),
 ]
 
@@ -93,7 +99,7 @@ function Fixture() {
           </section>
 
           <section data-fixture-exceptions>
-            <h2 className="mb-2 text-[12px] font-medium text-fg/85">Dedicated background and sub-agent cards</h2>
+            <h2 className="mb-2 text-[12px] font-medium text-fg/85">Background activity with a sub-agent break</h2>
             <Transcript messages={[exceptionMessage]} />
           </section>
         </div>

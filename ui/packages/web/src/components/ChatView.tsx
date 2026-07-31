@@ -68,7 +68,7 @@ import { PROVIDER_LABEL } from "../lib/signIn.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
 import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
-import { coalesceToolActivityMessages, currentToolActivity, isToolActivityException, settledToolActivityLabel, toolActivityLabel } from "../lib/toolActivity.ts"
+import { coalesceToolActivityMessages, currentToolActivity, hasPendingToolActivityTail, isToolActivityException, settledToolActivityLabel, toolActivityLabel } from "../lib/toolActivity.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
 
 // Answer types moved to lib/questionBlocks.ts (shared by the queue card, the thread view, and the
@@ -186,6 +186,9 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
   // Original indices ride beside the display message so sticky asks and paired answers continue to
   // address server truth, never the compacted array.
   const activityMessages = useMemo(() => coalesceToolActivityMessages(messages), [messages])
+  // A pending tool disclosure IS the turn-in-flight readout. Do not append a second generic
+  // "Working…" shimmer beneath it; that row returns naturally once the tool run settles.
+  const showWorking = running && !hasPendingToolActivityTail(activityMessages.map((entry) => entry.message))
   // Question↔answer pairing for "Answers:" user messages, precomputed at the LIST level (the lookback
   // needs the whole list; Message renders per-message). null — a stable primitive — at every ordinary
   // index, so the memoized Message only sees a `paired` prop change on actual answers-messages.
@@ -409,7 +412,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
               // (rendered after the working/pending indicators, below) — not interleaved here.
               (m) => !!m.queued,
             )}
-            {(thread?.providerFault || thread?.limitPause || frozenAsk || nativeInputRequired || thread?.runtime === "perm-prompt" || running || thread?.awaitingBackground) && <VSpace />}
+            {(thread?.providerFault || thread?.limitPause || frozenAsk || nativeInputRequired || thread?.runtime === "perm-prompt" || showWorking || thread?.awaitingBackground) && <VSpace />}
             {/* A frozen native AskUserQuestion takes precedence over the generic perm banner and the
                 Working… spinner — it's the salient state (the safety net). Background sub-agents/shells
                 are NOT surfaced here anymore: they live in the anchored ops strip (below), which is
@@ -430,7 +433,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
               <NativeInputRequiredCard input={nativeInputRequired} onTerminal={copyTerminalCommand} />
             ) : thread?.runtime === "perm-prompt" ? (
               <PermPromptBanner onTerminal={copyTerminalCommand} />
-            ) : running ? (
+            ) : showWorking ? (
               <WorkingIndicator since={thread?.lastUserAt} />
             ) : thread?.awaitingBackground ? (
               // The rest itself, stated. Last in the chain because every branch above is a HARDER
@@ -574,8 +577,10 @@ function VirtualizedThreadTranscript({
   loadEarlier: () => void
   jumpOverlay: HTMLElement | null
 }) {
+  const activityMessages = useMemo(() => coalesceToolActivityMessages(messages), [messages])
+  const pendingToolActivity = hasPendingToolActivityTail(activityMessages.map((entry) => entry.message))
+  const showWorking = running && !pendingToolActivity
   const messageRows = useMemo(() => {
-    const activityMessages = coalesceToolActivityMessages(messages)
     return buildVirtualTranscriptMessageRows(
       activityMessages.map((entry) => entry.message),
       messageRendersNothing,
@@ -586,7 +591,7 @@ function VirtualizedThreadTranscript({
       ...row,
       messageIndex: activityMessages[row.messageIndex].messageIndex,
     }))
-  }, [messages])
+  }, [activityMessages])
   const lastUserIdx = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === "user" && !messages[i].queued) return i
@@ -599,7 +604,7 @@ function VirtualizedThreadTranscript({
       || (thread?.pendingInteraction ? undefined : thread?.pendingAsk)
       || nativeInputRequired
       || thread?.runtime === "perm-prompt"
-      || running
+      || showWorking
       || thread?.awaitingBackground,
   )
   const rows = useMemo<VirtualThreadRow[]>(() => {
@@ -1115,7 +1120,7 @@ function VirtualizedThreadTranscript({
                   <NativeInputRequiredCard input={nativeInputRequired} onTerminal={copyTerminalCommand} />
                 ) : thread?.runtime === "perm-prompt" ? (
                   <PermPromptBanner onTerminal={copyTerminalCommand} />
-                ) : running ? (
+                ) : showWorking ? (
                   <WorkingIndicator since={thread?.lastUserAt} />
                 ) : thread?.awaitingBackground ? (
                   // See the non-virtualized chain above: last branch, benign case, no Snooze here.
@@ -1448,9 +1453,9 @@ export function messageHeadIsTool(m: ChatMessage): boolean {
   return (m.tools?.length ?? 0) > 0
 }
 // A lightweight single-line META label — a "Thought for Ns"/"Agent … finished" event or collapsed
-// Codex reasoning row. The minimal tool disclosure is now a prose-sized gerund, but all three remain
-// subordinate transcript activity and therefore join the tight 6px run instead of forcing a 14px
-// break on both sides. A BOUNDARY event is a section-break divider, not a quiet label — it keeps STEP.
+// Codex reasoning row. Thoughts and the minimal tool disclosure now share a regular 13px light-grey
+// treatment; all remain subordinate transcript activity and therefore join the tight 6px run instead
+// of forcing a 14px break on both sides. A BOUNDARY event is a section-break divider, not a quiet label.
 function isMetaLabelMessage(m: ChatMessage): boolean {
   return (m.kind === "event" && !m.boundary) || m.kind === "reasoning"
 }
@@ -1718,10 +1723,9 @@ function MinimalToolActivity({ tools, at }: { tools: CollapsedTool[]; at?: strin
   )
 }
 
-// Default-minimal tool rendering. Ordinary calls become one gerund disclosure regardless of batch
-// size; dedicated background-shell and sub-agent cards split the run and remain visible. This keeps
-// those long-lived/drillable operations out of an opaque loader without giving every file read and
-// grep its own transcript card.
+// Default-minimal tool rendering. Ordinary calls — including yielded/background Bash lifecycles —
+// become one gerund disclosure regardless of provider batching. Dedicated block tools such as
+// sub-agent and send cards split the run and remain visible.
 function ToolCalls({ tools, at }: { tools: CollapsedTool[]; dense?: boolean; at?: string }) {
   const runs: { exceptional: boolean; tools: CollapsedTool[] }[] = []
   for (const tool of tools) {
@@ -3694,8 +3698,8 @@ function EventLine({ text, boundary, sourceId }: { text: string; boundary?: bool
   // as one bubble. This IS the section break the plain event line deliberately avoids.
   if (boundary) return <WakeDivider sourceId={sourceId} marker="event" ariaLabel={text}>{text}</WakeDivider>
   // Transcript PUNCTUATION ("Thought for Ns", a context-compaction note) — a quiet, left-justified
-  // light-gray label. No flanking dividers: it reads as a subtle annotation, not a section break.
-  // petite-caps for consistency with the other inline dispatch readouts (the Agent label, etc.).
+  // regular light-grey line. No flanking dividers: it reads as a subtle annotation, not a section
+  // break, and uses the same type scale as the adjacent activity gerund/digest.
   return (
     <div data-fray-msg={sourceId} className={`group/msg relative ${TRANSCRIPT_META_LABEL_CLASS}`}>
       <MessageDebugId sourceId={sourceId} />
@@ -3706,9 +3710,9 @@ function EventLine({ text, boundary, sourceId }: { text: string; boundary?: bool
 
 // A Codex model-reasoning SUMMARY — the coalesced `summary[]` steps of a turn's reasoning records
 // (Claude's thinking is redacted at every seam, so this is Codex-only). A peer of the "Thought for Ns"
-// transcript-metadata label: same petite-caps whisper (TRANSCRIPT_META_LABEL_CLASS),
-// content-width, chevron flush-right of the label — so the three quiet-metadata rows read as one family
-// (this is the "align thought metadata labels" work). Collapsed shows just the "reasoning" label; the
+// transcript-metadata label: same regular light-grey line (TRANSCRIPT_META_LABEL_CLASS),
+// content-width, chevron flush-right of the label — so the quiet progress rows read as one family.
+// Collapsed shows just the "reasoning" label; the
 // whole row toggles to reveal the train of thought as muted markdown in a ruled block. The `.fray-reasoning`
 // rule below quiets that body (12px/muted, and de-bolds codex's `**step header**` fragments) so an
 // expanded turn reads as a soft aside, never a wall of bold headers competing with the real answer.

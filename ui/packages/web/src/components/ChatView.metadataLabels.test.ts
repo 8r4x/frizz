@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs"
 import test from "node:test"
 import { TRANSCRIPT_META_LABEL_CLASS } from "../lib/transcriptMetaLabels.ts"
 
-test("quiet transcript events retain the shared metadata-label rhythm", () => {
-  assert.equal(TRANSCRIPT_META_LABEL_CLASS, "petite-caps text-[12px] leading-[18px] text-muted/55")
+test("quiet transcript events use the same regular light-grey scale as activity rows", () => {
+  assert.equal(TRANSCRIPT_META_LABEL_CLASS, "text-[13px] leading-5 text-muted")
 
   const source = readFileSync(new URL("./ChatView.tsx", import.meta.url), "utf8")
   // The quiet event line's own root. It gained a `group/msg relative` host for the hover-revealed
@@ -12,7 +12,7 @@ test("quiet transcript events retain the shared metadata-label rhythm", () => {
   // is unchanged, and the two additions must stay purely positional.
   const eventClass = source.match(/className=\{`group\/msg relative \$\{TRANSCRIPT_META_LABEL_CLASS\}([^`]*)`\}/)?.[1]
   assert.ok(eventClass !== undefined, "event line must consume the shared metadata-label class")
-  assert.doesNotMatch(eventClass, /(?:text-\[|leading-|text-muted\/|petite-caps)/, "event line must not override the shared type rhythm")
+  assert.doesNotMatch(eventClass, /(?:text-\[|leading-|text-muted|petite-caps)/, "event line must not override the shared type rhythm")
   assert.match(source, /<MessageDebugId sourceId=\{sourceId\} \/>\s*\{text\}/, "event line still renders its text verbatim beside the chip")
 })
 
@@ -31,7 +31,7 @@ test("codex reasoning toggle is a peer of quiet metadata labels", () => {
   const source = readFileSync(new URL("./ChatView.tsx", import.meta.url), "utf8")
   const block = source.match(/function ReasoningBlock[\s\S]*?\n}/)?.[0]
   assert.ok(block, "ReasoningBlock must exist")
-  // Same petite-caps whisper as "Thought for Ns" — not a bespoke uppercase treatment.
+  // Same regular light-grey line as "Thought for Ns" — not a bespoke uppercase treatment.
   assert.match(block, /className=\{`\$\{TRANSCRIPT_META_LABEL_CLASS\}[^`]*self-start/, "reasoning toggle must consume the shared metadata-label class")
-  assert.doesNotMatch(block, /uppercase|tracking-wide|text-\[12px\]|text-muted\/\d/, "reasoning toggle must not reintroduce a bespoke label type/color")
+  assert.doesNotMatch(block, /uppercase|tracking-wide|petite-caps|text-\[\d+px\]|text-muted\/\d/, "reasoning toggle must not reintroduce a bespoke label type/color")
 })

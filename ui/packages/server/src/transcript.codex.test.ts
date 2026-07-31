@@ -1064,6 +1064,22 @@ test("codex `wait` polls fold into their script, and a cell id never resolves to
   assert.match(tools[1].output ?? "", /tailed/)
 })
 
+test("real cell/wait terminal envelopes retire their owning shell without requiring an exit code", () => {
+  const lifecycle = (terminal: "completed" | "failed" | "terminated") => rollout([
+    { type: "response_item", payload: { type: "custom_tool_call", call_id: `launch-${terminal}`, name: "exec", input: `const r = await tools.exec_command({cmd:"long-${terminal}",yield_time_ms:30000}); text(r.output);` } },
+    { type: "response_item", payload: { type: "custom_tool_call_output", call_id: `launch-${terminal}`, output: "Script running with cell ID 39\nWall time 11.0 seconds\nOutput:\n" } },
+    { type: "response_item", payload: { type: "function_call", call_id: `wait-${terminal}`, name: "wait", arguments: JSON.stringify({ cell_id: "39", yield_time_ms: 30000, max_tokens: 10000 }) } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: `wait-${terminal}`, output: `Script ${terminal}\nWall time 16.7 seconds\nOutput:\n${terminal}-output` } },
+  ])
+  const completed = parseCodexTranscript(lifecycle("completed"))[0].tools[0]
+  assert.deepEqual(
+    { status: completed.status, backgroundState: completed.backgroundState, output: completed.output },
+    { status: "completed", backgroundState: "background", output: "completed-output" },
+  )
+  assert.equal(parseCodexTranscript(lifecycle("failed"))[0].tools[0].status, "failed")
+  assert.equal(parseCodexTranscript(lifecycle("terminated"))[0].tools[0].status, "cancelled")
+})
+
 // ---- Codex's thinking becomes the card's caption ----
 // codex's exec carries no `description` field the way Claude's Bash does, so a codex card could only be
 // titled by its own flattened command (0 of 29104 cards across the corpus had a caption). But codex emits

@@ -60,7 +60,7 @@ export function reconcileLatestPage(
   return {
     ...incoming,
     messages: [
-      ...previous.messages.slice(0, overlap.previousIndex),
+      ...previous.messages.slice(0, overlap.previousIndex).filter((message) => !message.pinnedFromSourceId),
       ...incoming.messages.slice(overlap.incomingIndex),
     ],
     beforeCursor: previous.beforeCursor,
@@ -91,7 +91,7 @@ export function reconcileLiveMessages(
   return {
     ...previous,
     messages: [
-      ...previous.messages.slice(0, overlap.previousIndex),
+      ...previous.messages.slice(0, overlap.previousIndex).filter((message) => !message.pinnedFromSourceId),
       ...incoming.slice(overlap.incomingIndex),
     ],
   }
@@ -103,11 +103,15 @@ export function prependEarlierPage(
   earlier: TranscriptPage,
 ): PaginatedTranscriptData {
   if (current.transcriptKey !== earlier.transcriptKey) return current
-  const present = new Set(current.messages.map((message) => message.sourceId).filter(Boolean))
+  const incomingCanonical = new Set(earlier.messages.map((message) => message.sourceId).filter(Boolean))
+  const retainedCurrent = current.messages.filter(
+    (message) => !message.pinnedFromSourceId || !incomingCanonical.has(message.pinnedFromSourceId),
+  )
+  const present = new Set(retainedCurrent.map((message) => message.sourceId).filter(Boolean))
   const prepend = earlier.messages.filter((message) => !message.sourceId || !present.has(message.sourceId))
   return {
     ...current,
-    messages: [...prepend, ...current.messages],
+    messages: [...prepend, ...retainedCurrent],
     beforeCursor: earlier.beforeCursor,
     hasEarlier: earlier.hasEarlier,
     reachedTurnBoundary: earlier.reachedTurnBoundary,

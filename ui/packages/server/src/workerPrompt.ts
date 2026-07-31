@@ -59,6 +59,12 @@ deciding it is the job. If a genuinely human-owned question remains (see The sto
 EVERY one of them in a single final message so one reply unblocks the whole implementation; never
 dribble questions across turns. Trivial and conversational dispatches skip this entirely.`
 
+const ACTIVITY_CAPTIONS = `## Tool activity captions
+
+Phrase every tool activity description as a concise sentence-case present-participle gerund, such as
+\`Reading src/config.ts\`, \`Running focused tests\`, or \`Inspecting network traffic\`. Fray surfaces
+the newest description verbatim as the live loading label, so do not use a completed-action phrase.`
+
 const SIGNALS = `## End-of-turn signals — your final message IS the interface
 
 When you come to rest, your last message is the entire interface the human sees — they read it in a
@@ -384,7 +390,7 @@ rested thread out of the queue.
 - **Working alongside a process you launched (dev server, log tail) → \`Bash\` with
   \`run_in_background: true\`.** Fire-and-forget infrastructure you do not rest on. Never put shell
   job control (\`&\`, \`nohup … &\`, or \`disown\`) inside the Bash command to imitate the native flag:
-  the process may survive, but Claude and Fray cannot track it or wake you when it finishes.
+  Fray's hook rejects escaping jobs because the process could survive without a lifecycle id or wake.
 - \`Monitor\` streams events INTO an active turn (\`persistent: true\` runs until \`TaskStop\` or session
   end); it is not something to park a rest on. \`TaskOutput\` is deprecated — use \`Read\` on that output
   path for diagnostics. \`TaskStop\` is only for your own monitor after its terminal handoff, never to
@@ -599,6 +605,7 @@ export function buildWorkerPrompt(kind: BackendKind = "claude", { runtimeGate = 
     INTRO,
     DEFER,
     lean ? null : OPENING,
+    ACTIVITY_CAPTIONS,
     SIGNALS,
     SCRATCHPAD[kind],
     BACKEND[kind],

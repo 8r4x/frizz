@@ -6,7 +6,7 @@
 // for it. A worker can then rest forever waiting for a notification that cannot exist.
 //
 // Block only an ESCAPING local background job. Self-contained shell concurrency remains valid when
-// the command explicitly waits for, kills, or traps its children before the Bash call returns.
+// the command explicitly waits for its children or owns them with an EXIT trap before Bash returns.
 //
 // GATE: inert unless FRAY_UI_THREAD is set (ordinary Claude sessions keep their native behavior).
 // FAIL OPEN: malformed hook input allows the command rather than wedging a worker.
@@ -72,6 +72,40 @@ function withoutQuotedRegions(command) {
       continue;
     }
     if (quote) {
+      // Double quotes may contain a complete command substitution with its OWN quote grammar:
+      // `"$(python -c 'print(f"{x&255}")')"`. Treating the f-string's double quote as the end of the
+      // outer region exposed arithmetic `&` as fake job control in a real corpus call. The outer shell
+      // waits for command substitution, so blank the balanced substitution as part of the quote.
+      if (quote === '"' && c === '$' && command[i + 1] === '(') {
+        out += '  ';
+        i += 2;
+        let depth = 1;
+        let innerQuote = '';
+        let innerEscaped = false;
+        for (; i < command.length; i++) {
+          const inner = command[i];
+          out += inner === '\n' ? '\n' : ' ';
+          if (innerEscaped) {
+            innerEscaped = false;
+            continue;
+          }
+          if (inner === '\\' && innerQuote !== "'") {
+            innerEscaped = true;
+            continue;
+          }
+          if (innerQuote) {
+            if (inner === innerQuote) innerQuote = '';
+            continue;
+          }
+          if (inner === "'" || inner === '"' || inner === '`') {
+            innerQuote = inner;
+            continue;
+          }
+          if (inner === '(') depth++;
+          else if (inner === ')' && --depth === 0) break;
+        }
+        continue;
+      }
       if (c === quote) quote = '';
       out += c === '\n' ? '\n' : ' ';
       continue;
@@ -106,10 +140,11 @@ export function hasEscapingBackgroundJob(raw) {
   }
   if (operators.length === 0) return false;
 
-  // A lifecycle action AFTER the last launch makes the command self-contained. Bare `wait` joins all
-  // jobs; targeted `wait`/`kill` and an EXIT trap are equally explicit ownership.
+  // A lifecycle action AFTER the last launch makes the command self-contained. `kill` alone does not:
+  // the signal is asynchronous, so the shell still needs a wait before returning. An EXIT trap owns
+  // cleanup at the shell boundary.
   const tail = command.slice(operators[operators.length - 1] + 1);
-  return !/\b(?:wait|kill|trap)\b/.test(tail);
+  return !(/\bwait\b/.test(tail) || /\btrap\b[^\n;]*\b(?:EXIT|0)\b/.test(tail));
 }
 
 export function evaluateBashBackgroundHook(input, env = process.env) {
@@ -123,7 +158,7 @@ export function evaluateBashBackgroundHook(input, env = process.env) {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
       permissionDecisionReason:
-        'fray worker (hook-enforced): this Bash command starts a shell-backgrounded job (`&`) and returns without waiting for or stopping it. That child may keep running, but Claude and Fray cannot track it or wake you when it finishes. Remove `&`/`nohup` and re-send the long command in the foreground with Bash `run_in_background:true`; if you intend to rest until it finishes, dispatch a background Agent that owns the wait in its foreground. Self-contained concurrency is allowed when this Bash call explicitly `wait`s for or stops every child before returning.',
+        'Fray blocked an untracked shell background job (`&`). Shell job control can return from Bash without a Claude task ID, so Fray cannot report completion or wake this agent. For a long-running local command, remove `&` and call Bash with `run_in_background:true`. For bounded parallel work inside one Bash call, finish with `wait` (after `kill`, if used) or own cleanup with an EXIT trap.',
     },
   };
 }

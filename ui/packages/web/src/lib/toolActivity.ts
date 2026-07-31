@@ -31,7 +31,7 @@ export function isToolActivityException(tool: Pick<
   TranscriptToolCall,
   "name" | "backgroundState" | "prompt" | "agentId" | "sendTo" | "sendBody"
 >): boolean {
-  return tool.backgroundState !== undefined
+  return tool.backgroundState === "unknown"
     || tool.prompt !== undefined
     || tool.agentId !== undefined
     || tool.sendTo !== undefined
@@ -39,7 +39,7 @@ export function isToolActivityException(tool: Pick<
     || SUB_AGENT_TOOL_NAMES.has(normalizedToolName(tool.name))
 }
 
-function messageToolsOnly(message: ChatMessage): TranscriptToolCall[] | null {
+function pureToolMessage(message: ChatMessage): TranscriptToolCall[] | null {
   if (message.role !== "assistant" || message.kind || message.queued) return null
   if (message.parts && message.parts.length > 0) {
     const tools: TranscriptToolCall[] = []
@@ -56,39 +56,105 @@ function messageToolsOnly(message: ChatMessage): TranscriptToolCall[] | null {
   return message.tools.every((tool) => !isToolActivityException(tool)) ? message.tools : null
 }
 
+// A provider can emit an assistant shell that contains no renderable content between two calls
+// (Codex result/bracket records do this frequently). It is not a transcript boundary merely because
+// it received a source id.
+function transparentAssistantMessage(message: ChatMessage): boolean {
+  if (message.role !== "assistant" || message.kind || message.queued) return false
+  if (message.text.trim() || message.tools.length > 0) return false
+  return !message.parts?.some((part) =>
+    part.kind === "text" ? part.text.trim().length > 0 : part.tools.length > 0,
+  )
+}
+
+// A prose-bearing message may END with tools: the prose closes the previous activity run and its tool
+// tail starts the next one. Subsequent pure-tool provider messages belong to that tail until another
+// visible block arrives. Dedicated tool cards are themselves visible blocks and therefore do not
+// qualify as a mergeable tail.
+function messageToolTail(message: ChatMessage): TranscriptToolCall[] | null {
+  if (message.role !== "assistant" || message.kind || message.queued) return null
+  if (!message.parts?.length) return pureToolMessage(message)
+  for (let i = message.parts.length - 1; i >= 0; i--) {
+    const part = message.parts[i]
+    if (part.kind === "text") {
+      if (part.text.trim()) return null
+      continue
+    }
+    if (part.tools.length === 0) continue
+    return part.tools.every((tool) => !isToolActivityException(tool)) ? part.tools : null
+  }
+  return null
+}
+
+function appendToolTail(message: ChatMessage, tools: TranscriptToolCall[], at?: string): ChatMessage {
+  const combinedTools = [...message.tools, ...tools]
+  const parts = message.parts?.map((part) =>
+    part.kind === "text" ? part : { ...part, tools: [...part.tools] },
+  ) ?? []
+  let tailIndex = -1
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const part = parts[i]
+    if (part.kind === "text") {
+      if (part.text.trim()) break
+      continue
+    }
+    if (part.tools.length > 0) {
+      tailIndex = i
+      break
+    }
+  }
+  const tailPart = parts[tailIndex]
+  if (tailPart?.kind === "tools") {
+    parts[tailIndex] = { kind: "tools", tools: [...tailPart.tools, ...tools] }
+  } else {
+    parts.push({ kind: "tools", tools })
+  }
+  return {
+    ...message,
+    at: at ?? message.at,
+    tools: combinedTools,
+    parts,
+  }
+}
+
 /**
- * Coalesce consecutive pure ordinary-tool turns into one presentation message.
+ * Coalesce a visible activity run into one presentation message.
  *
- * Providers split a long tool run into several assistant messages. Keeping those message seams would
- * leave one collapsed loader per provider batch, which is precisely the stream this renderer is meant
- * to hide. The first source id remains stable as the run grows, while `at` advances to the latest batch
- * so a pending card's clock still starts from the call it represents.
+ * Providers split a long tool run into several assistant messages and sometimes insert empty assistant
+ * records between calls. Neither is visible, so neither can mint another loader/digest. A prose-bearing
+ * message's final tools part starts a fresh run after that prose. A dedicated block tool (sub-agent,
+ * send, etc.) ends it. The first source id remains stable as the run grows, while `at` advances to the
+ * latest batch so a pending card's clock still starts from the call it represents.
  */
 export function coalesceToolActivityMessages(messages: readonly ChatMessage[]): ToolActivityMessage[] {
   const out: ToolActivityMessage[] = []
-  let previousWasToolActivity = false
+  let activityTail: ToolActivityMessage | null = null
 
   messages.forEach((message, messageIndex) => {
-    const tools = messageToolsOnly(message)
-    const previous = out[out.length - 1]
-    if (tools && previousWasToolActivity && previous) {
-      const previousTools = previous.message.parts?.flatMap((part) => part.kind === "tools" ? part.tools : []) ?? previous.message.tools
-      const combined = [...previousTools, ...tools]
-      previous.message = {
-        ...previous.message,
-        at: message.at ?? previous.message.at,
-        text: "",
-        displayText: undefined,
-        tools: combined,
-        parts: [{ kind: "tools", tools: combined }],
-      }
-    } else {
-      out.push({ message, messageIndex })
+    if (transparentAssistantMessage(message)) return
+    const tools = pureToolMessage(message)
+    if (tools && activityTail) {
+      activityTail.message = appendToolTail(activityTail.message, tools, message.at)
+      return
     }
-    previousWasToolActivity = tools !== null
+    const entry = { message, messageIndex }
+    out.push(entry)
+    activityTail = messageToolTail(message) ? entry : null
   })
 
   return out
+}
+
+/** Whether the latest landed assistant block is already rendering the live activity shimmer. */
+export function hasPendingToolActivityTail(messages: readonly ChatMessage[]): boolean {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    // Optimistic queued user bubbles are pinned separately and have not interrupted the active turn.
+    if (message.queued) continue
+    const tools = messageToolTail(message)
+    return tools ? currentToolActivity(tools).pending : false
+  }
+  return false
 }
 
 function target(tool: Pick<TranscriptToolCall, "detail">): string | undefined {

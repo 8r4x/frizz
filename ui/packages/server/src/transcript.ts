@@ -25,6 +25,7 @@ import { CODEX_FIRST_FINAL_TITLE_TRANSPORT, CODEX_LEGACY_FIRST_FINAL_TITLE_TRANS
 import { discoverTranscriptId, DISCOVERY_GRACE_MS } from "./discover.ts"
 import { isClaudeAuthErrorText } from "./tailer.ts"
 import { redactCredentialStructure, redactCredentialSyntax } from "./credential-redaction.ts"
+import { hasEscapingBackgroundJob } from "../../../../cc-worker/hooks/bash-background.mjs"
 
 // Parse a session JSONL into a renderable conversation — mechanically, no AI. Same defensive
 // posture as the tailer: bad line → skip, unknown type → ignore, never throw. Assistant messages
@@ -1348,6 +1349,12 @@ function toolCalls(block: any): TranscriptToolCall[] {
     }
     if (name === "Bash" && typeof input.command === "string" && input.command.trim()) {
       const desc = typeof input.description === "string" && input.description.trim() ? redactToolPayload(input.description.trim()).slice(0, 160) : undefined
+      const backgroundState =
+        input.run_in_background === true
+          ? "background" as const
+          : hasEscapingBackgroundJob(input.command)
+            ? "unknown" as const
+            : undefined
       return [{
         name,
         detail: bashSummary(input.command),
@@ -1355,7 +1362,10 @@ function toolCalls(block: any): TranscriptToolCall[] {
         desc,
         // A background Bash result only acknowledges that the child was launched. Keep the card live
         // until its later task-notification; no launch result can truthfully mean "done".
-        backgroundState: input.run_in_background === true ? "background" : undefined,
+        // Shell job control is visible immediately, even though no lifecycle id exists. Current Fray
+        // workers reject the attempt before execution; historical calls that escaped the guard remain
+        // honestly UNKNOWN instead of folding into an opaque "Ran N tool calls" disclosure.
+        backgroundState,
       }]
     }
     // An Agent dispatch carrying a prompt renders as its own AgentBlock card (Bash/Read family): the
@@ -1972,11 +1982,12 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
             if (shot) (pending.owner ?? pending).call.outputImage = shot
           }
           if (pending.owner) {
-            // A known write_stdin poll belongs to its originating exec_command disclosure. The wrapper
-            // may complete after yielding without a process exit, so only an explicit exit_code ends it.
+            // A known poll belongs to its originating exec_command disclosure. A PTY poll ends on an
+            // explicit exit code; the older cell/wait generation instead says `Script completed`,
+            // `Script failed`, or `Script terminated` with no numeric code. Either is terminal.
             const priorDuration = pending.owner.call.durationMs
             applyCodexToolResult(pending.owner.call, result)
-            if (result.exitCode === undefined) {
+            if (result.terminal !== true) {
               pending.owner.call.status = "pending"
               pending.owner.call.backgroundState = "background"
             } else {
@@ -2117,7 +2128,40 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
 
 export function parseCodexTranscript(raw: string, identityPrefix = "codex"): TranscriptMessage[] {
   const out = projectCodexTranscript(raw, identityPrefix)
-  return out.length > MAX_MESSAGES ? out.slice(-MAX_MESSAGES) : out
+  return latestTranscriptWindow(out)
+}
+
+const MAX_PINNED_BACKGROUND_OPERATIONS = 128
+
+// Keep unresolved shells visible after their launch message scrolls beyond the normal latest window.
+// This is the reload/restart contract: the projector rebuilt the shellSessions lifecycle from the full
+// rollout, so slicing away the still-pending launch card at the very end discarded known live state.
+// Pin a tools-only projection at the tail, adjacent to the composer: putting it at the historical head
+// would leave it above the queue card's most-recent-user window and therefore still invisible. The
+// paginated history carries the canonical message and the client replaces this synthetic card when
+// that page is loaded.
+export function latestTranscriptWindow(messages: readonly TranscriptMessage[]): TranscriptMessage[] {
+  const start = Math.max(0, messages.length - MAX_MESSAGES)
+  if (start === 0) return [...messages]
+  const pinned: TranscriptMessage[] = []
+  for (let i = 0; i < start; i++) {
+    const message = messages[i]
+    if (!message.sourceId) continue
+    const tools = message.tools.filter(
+      (call) => call.status === "pending" && call.backgroundState !== undefined,
+    )
+    if (tools.length === 0) continue
+    pinned.push({
+      sourceId: `pinned-bg:${createHash("sha256").update(message.sourceId).digest("base64url").slice(0, 24)}`,
+      pinnedFromSourceId: message.sourceId,
+      role: "assistant",
+      text: "",
+      tools,
+      parts: [{ kind: "tools", tools }],
+      at: message.at,
+    })
+  }
+  return [...messages.slice(start), ...pinned.slice(-MAX_PINNED_BACKGROUND_OPERATIONS)]
 }
 
 // Codex currently has two tool protocols: legacy function_call records and the unified custom exec
@@ -2742,6 +2786,9 @@ function stripCodexFirstPromptTitleTransport(text: string): string {
 interface CodexToolResult {
   output?: string
   status: NonNullable<TranscriptToolCall["status"]>
+  // Lifecycle verdict for a yielded process poll. PTYs carry an exit code; cell/wait results use a
+  // `Script completed|failed|terminated` envelope without one.
+  terminal?: boolean
   exitCode?: number
   durationMs?: number
   sessionId?: string | number
@@ -2759,8 +2806,13 @@ function codexToolResult(text: string): CodexToolResult {
   const output = cleanExecOutput(text)
   const exitMatch = text.match(/(?:Process exited with code|Exit code:)\s*(\d+)/)
   const exitCode = exitMatch ? Number(exitMatch[1]) : undefined
+  const scriptTerminal = text.match(/^Script (completed|failed|terminated)\b/)?.[1]
   const status: CodexToolResult["status"] =
-    exitCode !== undefined
+    scriptTerminal === "failed"
+      ? "failed"
+      : scriptTerminal === "terminated"
+        ? "cancelled"
+        : exitCode !== undefined
       ? exitCode === 0
         ? "completed"
         : "failed"
@@ -2781,7 +2833,15 @@ function codexToolResult(text: string): CodexToolResult {
   // The script generation's equivalent announcement, polled by `wait` instead of write_stdin.
   const cellMatch = text.match(/Script running with cell ID\s*(\d+)/)
   const cellId = cellMatch ? Number(cellMatch[1]) : undefined
-  return { output: output || undefined, status, exitCode, durationMs, sessionId, cellId }
+  return {
+    output: output || undefined,
+    status,
+    terminal: exitCode !== undefined || scriptTerminal !== undefined,
+    exitCode,
+    durationMs,
+    sessionId,
+    cellId,
+  }
 }
 
 // Result text is untrusted command/tool output: words such as "0 failed" and documentation about a
@@ -2807,12 +2867,13 @@ function failedToolResult(text: string): boolean {
 
 function unifiedToolResult(text: string): CodexToolResult | undefined {
   const raw = typeof text === "string" ? text : ""
-  const header = raw.match(/^Script (completed|failed)\r?\nWall time:?\s*([0-9.]+) seconds\r?\nOutput:\r?\n/)
+  const header = raw.match(/^Script (completed|failed|terminated)\r?\nWall time:?\s*([0-9.]+) seconds\r?\nOutput:\r?\n/)
   if (!header) return undefined
-  const wrapperStatus: "completed" | "failed" = header[1] === "failed" ? "failed" : "completed"
+  const wrapperStatus: CodexToolResult["status"] =
+    header[1] === "failed" ? "failed" : header[1] === "terminated" ? "cancelled" : "completed"
   const wrapperDurationMs = Number(header[2]) * 1000
   const body = raw.slice(header[0].length).trim()
-  if (!body || body === "{}") return { status: wrapperStatus, durationMs: wrapperDurationMs }
+  if (!body || body === "{}") return { status: wrapperStatus, durationMs: wrapperDurationMs, terminal: true }
 
   try {
     const parsed = JSON.parse(body) as unknown
@@ -2835,6 +2896,7 @@ function unifiedToolResult(text: string): CodexToolResult | undefined {
       return {
         output: output || undefined,
         status: nestedStatus,
+        terminal: exitCode !== undefined || sessionId === undefined,
         exitCode,
         durationMs: nestedSeconds !== undefined ? nestedSeconds * 1000 : wrapperDurationMs,
         sessionId,
@@ -2847,8 +2909,14 @@ function unifiedToolResult(text: string): CodexToolResult | undefined {
   const output = body.replace(/^Script error:\r?\n/, "").trim()
   return {
     output: output || undefined,
-    status: cancelledToolResult(output) ? "cancelled" : wrapperStatus === "failed" || failedToolResult(output) ? "failed" : "completed",
+    status:
+      wrapperStatus === "cancelled" || cancelledToolResult(output)
+        ? "cancelled"
+        : wrapperStatus === "failed" || failedToolResult(output)
+          ? "failed"
+          : "completed",
     durationMs: wrapperDurationMs,
+    terminal: true,
   }
 }
 
@@ -3278,7 +3346,8 @@ export function readLatestThreadTranscriptPage(
       projected = projectSnapshot(snapshot)
     }
   }
-  const start = Math.max(0, projected.length - MAX_MESSAGES)
+  const latest = latestTranscriptWindow(projected)
+  const canonicalStart = Math.max(0, projected.length - MAX_MESSAGES)
   // The latest window carries the delivery-ledger projection (same as readThreadTranscript): a tracked
   // follow-up renders as its gray queued bubble at the tail even before any JSONL evidence exists. The
   // LATEST page only — earlier pages are settled history a pending send can never belong to.
@@ -3287,12 +3356,12 @@ export function readLatestThreadTranscriptPage(
   // meant the bubble was present over the socket push but ABSENT on load and on every refetch.
   const row = storage.getSession(slug)
   const pageMessages = row
-    ? projectDeliveryLedger(projected.slice(start), parseDeliveryLedger(row.delivery_ledger))
-    : projected.slice(start)
+    ? projectDeliveryLedger(latest, parseDeliveryLedger(row.delivery_ledger))
+    : latest
   return {
     messages: pageMessages,
-    beforeCursor: start > 0 ? encodeTranscriptCursor(snapshot, projected[start].sourceId!) : null,
-    hasEarlier: start > 0,
+    beforeCursor: canonicalStart > 0 ? encodeTranscriptCursor(snapshot, projected[canonicalStart].sourceId!) : null,
+    hasEarlier: canonicalStart > 0,
     reachedTurnBoundary: true,
     transcriptKey: snapshot.transcriptKey,
   }

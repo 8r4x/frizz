@@ -7,6 +7,7 @@ import { DISPATCH_TASK_BANNER_MARKER, GITHUB_DISPATCH_UI_BOUNDARY, wakeDeliveryT
 import {
   frayDispatchDisplayText,
   githubDispatchDisplayText,
+  latestTranscriptWindow,
   pageProjectedTranscript,
   projectClaudeTranscript,
   parseTranscript,
@@ -232,6 +233,45 @@ test("short `a; b` Bash also ships a command block", () => {
   assert.equal(call.detail, "a; b")
 })
 
+test("a shell-backgrounded Bash attempt is visible immediately and remains identified after denial", () => {
+  const launch = JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-07-01T00:00:00.000Z",
+    message: {
+      id: "m-shell-job",
+      content: [{
+        type: "tool_use",
+        id: "bash-shell-job",
+        name: "Bash",
+        input: {
+          command: "(nub scripts/remote-build.ts --job test > /tmp/f3-test.log 2>&1) &\nsleep 2; echo build started",
+          description: "Start third build",
+        },
+      }],
+    },
+  })
+  const attempted = parseTranscript(launch)[0].tools[0]
+  assert.equal(attempted.status, "pending", "the attempted Bash call renders before a result exists")
+  assert.equal(attempted.backgroundState, "unknown", "shell job control is called out instead of folded away")
+
+  const denied = JSON.stringify({
+    type: "user",
+    timestamp: "2026-07-01T00:00:00.100Z",
+    message: {
+      content: [{
+        type: "tool_result",
+        tool_use_id: "bash-shell-job",
+        is_error: true,
+        content: "Fray blocked an untracked shell background job (`&`). Remove `&` and use Bash run_in_background:true.",
+      }],
+    },
+  })
+  const blocked = parseTranscript([launch, denied].join("\n"))[0].tools[0]
+  assert.equal(blocked.status, "failed")
+  assert.equal(blocked.backgroundState, "unknown", "the failed card remains exempt from ordinary tool collapse")
+  assert.match(blocked.output ?? "", /blocked an untracked shell background job/)
+})
+
 test("background Bash launch stays running through its acknowledgement and only task-notification ends it", () => {
   const launch = JSON.stringify({
     type: "assistant",
@@ -251,6 +291,42 @@ test("background Bash launch stays running through its acknowledgement and only 
   assert.equal(completed.status, "completed")
   assert.equal(completed.durationMs, 5000)
   assert.equal(completed.backgroundState, "background")
+})
+
+test("latest transcript window pins unresolved background shells that launched before its 300-message cap", () => {
+  const oldShell = {
+    sourceId: "old-shell-launch",
+    role: "assistant" as const,
+    text: "",
+    tools: [{
+      name: "exec_command",
+      detail: "sleep 999",
+      status: "pending" as const,
+      backgroundState: "background" as const,
+    }],
+    parts: [],
+    at: "2026-07-01T00:00:00.000Z",
+  }
+  const filler = Array.from({ length: 305 }, (_, index) => ({
+    sourceId: `filler-${index}`,
+    role: index % 2 ? "assistant" as const : "user" as const,
+    text: `message ${index}`,
+    tools: [],
+    parts: [],
+  }))
+  const latest = latestTranscriptWindow([oldShell, ...filler])
+  assert.equal(latest.length, 301, "the normal 300-message window gains one live lifecycle card")
+  const pinned = latest.at(-1)!
+  assert.equal(pinned.pinnedFromSourceId, "old-shell-launch")
+  assert.match(pinned.sourceId ?? "", /^pinned-bg:/)
+  assert.equal(pinned.tools[0], oldShell.tools[0], "the projection carries the already-folded live call")
+
+  const completed = { ...oldShell, tools: [{ ...oldShell.tools[0], status: "completed" as const }] }
+  assert.equal(
+    latestTranscriptWindow([completed, ...filler]).some((message) => message.pinnedFromSourceId),
+    false,
+    "a terminal fold removes the synthetic card on the next reload",
+  )
 })
 
 test("a background shell completion emits a labeled turn-boundary event that breaks the merge chain", () => {

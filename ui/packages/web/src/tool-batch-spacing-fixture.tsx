@@ -92,13 +92,14 @@ const messages: TranscriptMessage[] = [
     ],
   },
 
-  // A SEPARATE message with a single call — the batch boundary under test.
+  // A SEPARATE message with a yielded/background call — provider batching and shell lifecycle state
+  // are both presentation-transparent, so this still belongs to the activity run that started in a1.
   {
     sourceId: "a3",
     role: "assistant",
     text: "",
     tools: [],
-    parts: [toolsPart([call({ name: "Bash", command: "wait %1", desc: "Block until background sleep 45 exits" })])],
+    parts: [toolsPart([call({ name: "Bash", command: "wait %1", desc: "Waiting for background sleep 45", backgroundState: "background", status: "pending" })])],
   },
 
   // Another separate message, this time a 2-call batch (boundary + intra in one message).
@@ -141,12 +142,10 @@ const messages: TranscriptMessage[] = [
           parts: [
             toolsPart([call({ name: "Bash", command: "ls -la", desc: "List the temp dir" })]),
             textPart("   "),
-            toolsPart([call({ name: "Bash", command: "cat out.log", desc: "Print the captured output" })]),
+            toolsPart([call({ name: "Bash", command: "cat out.log", desc: "Printing the captured output", status: "pending" })]),
           ],
         },
       ] as unknown as TranscriptMessage[])),
-
-  { sourceId: "a7", role: "assistant", text: "BOOT-DONE", tools: [], parts: [textPart("BOOT-DONE")] },
 ] as unknown as TranscriptMessage[]
 
 const originalFetch = window.fetch

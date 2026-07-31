@@ -5,7 +5,7 @@ import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
 import { subAgentProfileLabel } from "../lib/subAgentProfile.ts"
-import { coalesceToolActivityMessages } from "../lib/toolActivity.ts"
+import { coalesceToolActivityMessages, hasPendingToolActivityTail } from "../lib/toolActivity.ts"
 import { ChildDrillSlugContext, Message, VSpace, WorkingIndicator, withMessageSpacers } from "./ChatView.tsx"
 import { Composer } from "./Composer.tsx"
 import { Sheet } from "./ui/Sheet.tsx"
@@ -18,9 +18,9 @@ import { SheetHeader } from "./ui/SheetHeader.tsx"
 //
 // IT IS NO LONGER READ-ONLY, and it no longer reads as a log:
 //
-//  · LIVENESS (always). A running child gets the exact same shimmering "Working…" tail a top-level
-//    transcript gets. It belongs after the latest message INSIDE the scroller — not in a special
-//    fixed strip above the conversation, which was a needless divergence from regular rendering.
+//  · LIVENESS (always). A running child gets the same tail treatment as a top-level transcript:
+//    the latest pending tool owns the shimmering gerund; generic "Working…" returns when no tool is
+//    active. It belongs INSIDE the scroller, not in a special fixed strip above the conversation.
 //  · STEERING (only where it is real). A user message addressed with the child's dispatch tool_use id
 //    is routed by the CLI INTO that child's own conversation. Measured live against claude 2.1.220 /
 //    SDK 0.3.207: the child acted on it and only the CHILD's transcript carried the token, while the
@@ -67,6 +67,7 @@ export function SubAgentSheet({
   const activityMessages = useMemo(() => coalesceToolActivityMessages(messages), [messages])
   const state = q.data?.state
   const running = state === "running"
+  const showWorking = running && !hasPendingToolActivityTail(activityMessages.map((entry) => entry.message))
   // Unavailable = the RPC errored (e.g. a pre-restart server without this endpoint), the id is unknown
   // ("gone"), or a settled child (done/stale) whose transcript file is empty/cleaned. A RUNNING child
   // with no messages yet is just starting → a spinner, not "unavailable".
@@ -142,7 +143,7 @@ export function SubAgentSheet({
                   {/* Exactly the regular transcript's tail treatment: the status follows the latest
                       message inside the scroller, rather than occupying a special fixed strip above
                       the conversation. A sub-agent drawer is a conversation, not a log dashboard. */}
-                  {running && <>
+                  {showWorking && <>
                     {messages.length > 0 && <VSpace />}
                     <WorkingIndicator since={startedAt} />
                   </>}

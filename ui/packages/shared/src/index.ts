@@ -1382,6 +1382,10 @@ export const TranscriptMessage = z.object({
   // transcript incarnation plus the source record that opened the rendered unit; clients use it only
   // for overlap reconciliation, keyed rendering, and scroll anchoring. Optional for rolling upgrades.
   sourceId: z.string().min(1).max(768).optional(),
+  // Latest-window projection may pin an unresolved background shell whose original launch message
+  // has scrolled into paginated history. The synthetic tools-only card points back to that canonical
+  // source so loading the earlier page can replace (not duplicate) it.
+  pinnedFromSourceId: z.string().min(1).max(768).optional(),
   role: z.enum(["user", "assistant"]),
   text: z.string(), // markdown; empty when the message was tool-calls only
   // Optional presentation-only projection of `text`. The full text remains available to persistence,
