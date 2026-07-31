@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * fray — per-thread SESSION OWNERSHIP tests. Run with `node --test cc/scripts/fray/`.
+ * fray — per-thread SESSION OWNERSHIP tests. Run with `node --test 'board/*.test.mjs'`.
  *
  * Covers the three layers:
  *   1. Pure functions — `isValidSessionId`, `effectiveOwnership`, `setOwner`/`readOwner`

@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * fray — liveness derivation + binding-join tests. Run with: `node --test cc/scripts/fray/`.
+ * fray — liveness derivation + binding-join tests. Run with: `node --test 'board/*.test.mjs'`.
  *
  * Covers the three false-positives the smart-surfacing rework fixes:
  *   1. keys on the NEWEST binding, never a superseded older agent;

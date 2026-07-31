@@ -1,35 +1,31 @@
 // @ts-check
 /**
- * fray — orchestration-hardening tests (2026-07-06). Run: `node --test 'cc/scripts/fray/*.test.mjs'`.
+ * fray — orchestration-hardening tests (2026-07-06). Run: `node --test 'board/*.test.mjs'`.
  *
- * Covers the six anti-treadmill / anti-drop behaviors:
- *   #1 STAMP-ON-AGENT-COMPLETION — an owning-agent thread edit is owner-clean, NOT drift
- *      (ownerCleanMtime / assessDrift / computeBoardDrift), and the SubagentStop hook stamps it.
- *   #2 SELF-SATISFYING STOP — an owner-clean board (⚖ empty, no non-owning drift) lets the stop
- *      through SILENTLY; a genuinely-dirty board blocks.
- *   #3 SCOPED STALENESS — reconcileStampLastInstruction names the drifted thread(s).
- *   #4 STRUCTURED queued detection — only an UNCHECKED `- [ ]` follow-up flags (hasQueuedFollowup).
- *   #5 DEBOUNCE — a `dirty` nag holds until it persists > T min AND > K turns (debounceReconcileNag).
- *   #6 WATCHER/AGENT DROP-GUARD — a long-running still-alive agent with no terminal result gets a
- *      LOUD "VERIFY DIRECTLY" line (longRunningAgentLines), surfaced by the Stop hook.
+ * Covers the anti-treadmill / anti-drop PREDICATES the board exports. (The orchestrator hooks that
+ * consumed them — fray-stop-reminder, fray-subagent-rest — retired with the plugin; only the pure
+ * functions survive, so only those are tested here.)
+ *   #1 OWNER-CLEAN — an owning-agent thread edit is owner-clean, NOT drift (ownerCleanMtime /
+ *      assessDrift / computeBoardDrift).
+ *   #2 SCOPED STALENESS — reconcileStampLastInstruction names the drifted thread(s).
+ *   #3 STRUCTURED queued detection — only an UNCHECKED `- [ ]` follow-up flags (hasQueuedFollowup).
+ *   #4 DEBOUNCE — a `dirty` nag holds until it persists > T min AND > K turns (debounceReconcileNag).
+ *   #5 WATCHER/AGENT DROP-GUARD — a long-running still-alive agent with no terminal result gets a
+ *      LOUD "VERIFY DIRECTLY" line (longRunningAgentLines).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync, utimesSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   ownerCleanMtime,
-  stampOwnerReconciled,
-  readOwnerReconciled,
   assessDrift,
   computeBoardDrift,
   hasQueuedFollowup,
   debounceReconcileNag,
   reconcileStampLastInstruction,
-  writeLastReconcile,
   DEFAULT_RECONCILE_DEBOUNCE_MIN,
   DEFAULT_RECONCILE_DEBOUNCE_TURNS,
 } from './config.mjs';
@@ -37,17 +33,9 @@ import { longRunningAgentLines } from './agent-liveness.mjs';
 import { DEFAULT_LONG_RUNTIME_MIN, DEFAULT_DROPPED_MIN } from './agent-status.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const REST_HOOK = join(HERE, '..', '..', 'hooks', 'fray-subagent-rest.mjs');
-const STOP_HOOK = join(HERE, '..', '..', 'hooks', 'fray-stop-reminder.mjs');
 const BACKSTOP = 120;
 
 /** A throwaway ACTIVATED `.fray/` project (session sentinel ON). */
-function activatedProject(sess = 'sess-oh') {
-  const dir = mkdtempSync(join(tmpdir(), 'fray-oh-'));
-  mkdirSync(join(dir, '.fray', '.session-state'), { recursive: true });
-  writeFileSync(join(dir, '.fray', '.session-state', sess), 'on\n');
-  return { dir, sess };
-}
 
 // ── #1 owner-clean predicate + owner-filtered drift ─────────────────────────────────
 test('ownerCleanMtime: a mark ≥ current mtime is clean; no mark / stale mark is not', () => {
@@ -81,28 +69,6 @@ test('assessDrift: a board whose only change is owning-agent edits is CLEAN (no 
 });
 
 // ── #1 write side: the SubagentStop hook stamps owner-reconciled ─────────────────────
-test('fray-subagent-rest: a thread-bound rest stamps .owner-reconciled to the thread mtime', () => {
-  const { dir, sess } = activatedProject();
-  try {
-    writeFileSync(join(dir, '.fray', '.dispatch-count'), '1\n'); // fray HAS dispatched here (attribution gate)
-    writeFileSync(join(dir, '.fray', 'mythread.md'), '---\ntitle: t\nstatus: active\n---\nbody\n');
-    writeFileSync(join(dir, '.fray', '.agent-bindings.jsonl'),
-      JSON.stringify({ ts: '2026-07-06T10:00:00.000Z', agent_id: 'AG1', thread: 'mythread', label: 'L' }) + '\n');
-    const threadMtime = statSync(join(dir, '.fray', 'mythread.md')).mtimeMs;
-
-    execFileSync(process.execPath, [REST_HOOK], {
-      input: JSON.stringify({ session_id: sess, agent_id: 'AG1', transcript_path: '/x/proj/sess.jsonl' }),
-      env: { ...process.env, CLAUDE_PROJECT_DIR: dir, CLAUDE_CODE_SESSION_ID: sess }, encoding: 'utf8',
-    });
-
-    const marks = readOwnerReconciled(dir);
-    assert.ok(Math.abs(marks.mythread - threadMtime) < 5, 'the owning agent reconciled the thread up to its current mtime');
-    // And that mark makes the thread owner-clean for the dirty-gate.
-    assert.equal(ownerCleanMtime(threadMtime, marks.mythread), true);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
 
 // ── #3 scoped staleness instruction ─────────────────────────────────────────────────
 test('reconcileStampLastInstruction: scoped names the threads; unscoped says every non-terminal', () => {
@@ -145,59 +111,6 @@ test('debounceReconcileNag: dirty holds for T min AND K turns; first/backstop na
 
 // ── #2 self-satisfying stop + genuine-drift block ───────────────────────────────────
 /** Run the Stop hook; return `{ blocked, ctx }` (ctx = additionalContext when it blocked). */
-function runStop(dir, sess, payload = {}) {
-  const raw = execFileSync(process.execPath, [STOP_HOOK], {
-    input: JSON.stringify({ session_id: sess, transcript_path: '/x/proj/sess.jsonl', ...payload }),
-    env: { ...process.env, CLAUDE_PROJECT_DIR: dir, CLAUDE_CODE_SESSION_ID: sess }, encoding: 'utf8',
-  });
-  if (!raw.trim()) return { blocked: false, ctx: '' };
-  const j = JSON.parse(raw);
-  return { blocked: j.decision === 'block', ctx: j.hookSpecificOutput?.additionalContext ?? '' };
-}
-
-test('fray-stop-reminder: an OWNER-CLEAN board lets the stop through SILENTLY (self-satisfying)', () => {
-  const { dir, sess } = activatedProject();
-  try {
-    // One active thread whose latest edit is its OWNING AGENT's (owner-clean), reconcile stamped
-    // in the recent past. No decisions, no rests, no bindings → nothing genuine to nag.
-    writeFileSync(join(dir, '.fray', 't.md'), '---\ntitle: t\nstatus: active\n---\nbody\n');
-    const mt = statSync(join(dir, '.fray', 't.md')).mtimeMs;
-    stampOwnerReconciled(dir, 't', mt); // the owning agent reconciled it up to here
-    writeLastReconcile(dir, Date.now() - 5 * 60_000); // thread mtime is NEWER than this → dirty WITHOUT the owner-filter
-    const r = runStop(dir, sess);
-    assert.equal(r.blocked, false, 'owner-clean + no decision/queue/rest → SILENT stop (no treadmill)');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('fray-stop-reminder: a GENUINELY-dirty board (non-owning edit) blocks with a SCOPED reconcile nudge', () => {
-  const { dir, sess } = activatedProject();
-  try {
-    writeFileSync(join(dir, '.fray', 'drift.md'), '---\ntitle: d\nstatus: active\n---\nbody\n');
-    writeLastReconcile(dir, Date.now() - 5 * 60_000); // thread edited AFTER; NO owner mark → non-owning drift
-    const r = runStop(dir, sess);
-    assert.equal(r.blocked, true, 'genuine non-owning drift blocks the idle');
-    assert.match(r.ctx, /re-ground drift/, 'the nudge names the drifted thread (scoped)');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('fray-stop-reminder: an un-drained QUEUED follow-up blocks even when the reconcile stamp is fresh', () => {
-  const { dir, sess } = activatedProject();
-  try {
-    writeFileSync(join(dir, '.fray', 'q.md'), '---\ntitle: q\nstatus: active\n---\n## Steps\n- [ ] QUEUED: dispatch the review on AG1 return\n');
-    const mt = statSync(join(dir, '.fray', 'q.md')).mtimeMs;
-    stampOwnerReconciled(dir, 'q', mt); // owner-clean (not drift) …
-    writeLastReconcile(dir, Date.now()); // … and stamp fresh — the ONLY genuine work is the un-drained queue
-    const r = runStop(dir, sess);
-    assert.equal(r.blocked, true, 'an un-drained queued follow-up is genuine work → block');
-    assert.match(r.ctx, /drain queued follow-ups in q/, 'the queued thread is named');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
 
 // ── #6 watcher/agent drop-guard ─────────────────────────────────────────────────────
 /**
@@ -271,55 +184,3 @@ test('longRunningAgentLines: a SHORT-runtime agent, and a long-runtime-but-STALE
   }
 });
 
-test('fray-stop-reminder: the drop-guard BLOCKS the idle with VERIFY DIRECTLY (the #327 forcing function)', () => {
-  const fx = longRunningFixture({ runtimeMin: DEFAULT_LONG_RUNTIME_MIN + 10, outputAgeMin: 5 });
-  try {
-    // Activate the fixture's session so the Stop hook is live.
-    mkdirSync(join(fx.dir, '.fray', '.session-state'), { recursive: true });
-    writeFileSync(join(fx.dir, '.fray', '.session-state', fx.sess), 'on\n');
-    const r = runStop(fx.dir, fx.sess, { transcript_path: fx.transcriptPath });
-    assert.equal(r.blocked, true, 'a long-running still-alive agent forces a stop block');
-    assert.match(r.ctx, /VERIFY DIRECTLY/, 'the block tells the orchestrator to check the target itself');
-    // And it dedups WITHIN a tier: the same agent at the same runtime does not re-block next idle.
-    const r2 = runStop(fx.dir, fx.sess, { transcript_path: fx.transcriptPath });
-    assert.doesNotMatch(r2.ctx, /VERIFY DIRECTLY/, 'same tier → no re-block (minimum-nag)');
-  } finally {
-    fx.cleanup();
-  }
-});
-
-test('fray-stop-reminder: the drop-guard RE-ARMS at coarse runtime multiples (a hung idle-wait watcher forces a SECOND block)', () => {
-  const fx = longRunningFixture({ runtimeMin: DEFAULT_LONG_RUNTIME_MIN + 5, outputAgeMin: 5 }); // tier 1 (~1×)
-  try {
-    mkdirSync(join(fx.dir, '.fray', '.session-state'), { recursive: true });
-    writeFileSync(join(fx.dir, '.fray', '.session-state', fx.sess), 'on\n');
-
-    // 1× → blocks (first crossing).
-    assert.match(runStop(fx.dir, fx.sess, { transcript_path: fx.transcriptPath }).ctx, /VERIFY DIRECTLY/, '1× → first block');
-    // Still tier 1 on a subsequent idle → NO re-block (a permanent-per-tier dedup keeps it minimum-nag).
-    assert.doesNotMatch(runStop(fx.dir, fx.sess, { transcript_path: fx.transcriptPath }).ctx, /VERIFY DIRECTLY/, 'still tier 1 → no re-block');
-    // The watcher stays hung and crosses ~2× → RE-ARMED → blocks AGAIN (the #327 idle-wait fix).
-    ageFixture(fx, 2 * DEFAULT_LONG_RUNTIME_MIN + 5, 5);
-    assert.match(runStop(fx.dir, fx.sess, { transcript_path: fx.transcriptPath }).ctx, /VERIFY DIRECTLY/, '2× → re-armed, blocks again');
-    // Still tier 2 → quiet again until ~3×.
-    assert.doesNotMatch(runStop(fx.dir, fx.sess, { transcript_path: fx.transcriptPath }).ctx, /VERIFY DIRECTLY/, 'still tier 2 → no re-block');
-    // Crosses ~3× → blocks a THIRD time.
-    ageFixture(fx, 3 * DEFAULT_LONG_RUNTIME_MIN + 5, 5);
-    assert.match(runStop(fx.dir, fx.sess, { transcript_path: fx.transcriptPath }).ctx, /VERIFY DIRECTLY/, '3× → re-armed again');
-  } finally {
-    fx.cleanup();
-  }
-});
-
-test('fray-stop-reminder: a fresh sub-35m agent NEVER triggers the drop-guard (no VERIFY block)', () => {
-  const fx = longRunningFixture({ runtimeMin: 10, outputAgeMin: 2 }); // well under the 1× threshold
-  try {
-    mkdirSync(join(fx.dir, '.fray', '.session-state'), { recursive: true });
-    writeFileSync(join(fx.dir, '.fray', '.session-state', fx.sess), 'on\n');
-    // The stop may still block for OTHER reasons (e.g. a first-reconcile baseline), but NEVER with
-    // a drop-guard VERIFY line — the agent has not run long enough to be a hung-watcher suspect.
-    assert.doesNotMatch(runStop(fx.dir, fx.sess, { transcript_path: fx.transcriptPath }).ctx, /VERIFY DIRECTLY/, 'sub-threshold runtime → no drop-guard');
-  } finally {
-    fx.cleanup();
-  }
-});

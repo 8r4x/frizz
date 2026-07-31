@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * fray — rest-on-waiter detection tests. Run with: `node --test cc/scripts/fray/`.
+ * fray — rest-on-waiter detection tests. Run with: `node --test 'board/*.test.mjs'`.
  *
  * The contract: detectWaiterRest MUST block every real waiter-rest final message
  * captured from production (false rests that strand a task) and MUST allow every

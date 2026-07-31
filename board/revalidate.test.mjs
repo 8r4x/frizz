@@ -1,15 +1,12 @@
 // @ts-check
 /**
- * fray — Revalidate (time-based recheck) tests. Run with: `node --test 'cc/scripts/fray/*.test.mjs'`.
+ * fray — Revalidate (time-based recheck) tests. Run with: `node --test 'board/*.test.mjs'`.
  *
  * Covers the three layers of the mechanism:
  *   1. The pure timer semantics (`revalidateState` / `formatEta`) — including the robustness
  *      contract: missing/empty/malformed `revalidate_at` → null ("no timer"), never a throw.
  *   2. The board (`index.mjs --json` + the rendered board) — due vs parked status, and the
  *      non-fatal warning for a present-but-unparseable timestamp.
- *   3. The per-turn hook (`fray-reminder.mjs`) — a DUE thread surfaces a LOUD "REVALIDATE DUE"
- *      callout; a FUTURE-dated `blocked` thread is SUPPRESSED from the awaiting-you queue AND
- *      the pending list (parked on a timer, quiet); a thread with no field is unaffected.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -22,7 +19,6 @@ import { revalidateState, formatEta, writeLastReconcile } from './config.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const INDEX = join(HERE, 'index.mjs');
-const REMINDER = join(HERE, '..', '..', 'hooks', 'fray-reminder.mjs');
 const NOW = 1_700_000_000_000;
 
 // ── pure timer semantics ──────────────────────────────────────────────────────────
@@ -121,37 +117,3 @@ function runReminder(dir, sessionId) {
   return JSON.parse(raw).hookSpecificOutput?.additionalContext ?? '';
 }
 
-test('fray-reminder: DUE thread surfaces REVALIDATE DUE; FUTURE-timer thread is fully suppressed', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'fray-reval-hook-'));
-  const sess = 'sess-reval';
-  try {
-    mkdirSync(join(dir, '.fray', '.session-state'), { recursive: true });
-    writeFileSync(join(dir, '.fray', '.session-state', sess), 'on\n');
-
-    const future = new Date(Date.now() + 8 * 3_600_000).toISOString();
-    const past = new Date(Date.now() - 3_600_000).toISOString();
-    // DUE: a `blocked` (non-human external-PR wait) thread whose re-poll timer has fired.
-    writeFileSync(join(dir, '.fray', 'pr-due.md'), `---\ntitle: due\nstatus: blocked\nstatus_text: "awaiting jdx review"\nrevalidate_at: ${past}\nlast_checked: 2026-06-01T00:00:00Z\n---\nbody\n`);
-    // PARKED: a `blocked` thread parked on a future timer — must be QUIET this turn.
-    writeFileSync(join(dir, '.fray', 'pr-parked.md'), `---\ntitle: parked\nstatus: blocked\nstatus_text: "awaiting other PR"\nrevalidate_at: ${future}\n---\nbody\n`);
-    // CONTROL: a human-`blocked` thread (no timer, no deps) — surfaces in the ⚖ awaiting-you queue.
-    writeFileSync(join(dir, '.fray', 'plain.md'), '---\ntitle: plain\nstatus: blocked\nstatus_text: "needs a human call"\n---\nbody\n');
-
-    const out = runReminder(dir, sess);
-
-    assert.match(out, /REVALIDATE DUE: pr-due/, 'the due thread surfaces loudly by name');
-    assert.match(out, /last checked 2026-06-01T00:00:00Z/, 'last_checked is shown');
-
-    // The parked (future) thread is fully quiet: not loud, not in the awaiting-you queue,
-    // not in the pending one-liner.
-    assert.doesNotMatch(out, /pr-parked/, 'the future-dated thread is suppressed entirely');
-
-    // The due thread is owned by the timer, so it is NOT also in the ⚖ awaiting-you queue.
-    assert.doesNotMatch(out, /\[pr-due\]/, 'a due thread is not double-surfaced in the decisions queue');
-
-    // The control thread (human-blocked, no timer) surfaces in the ⚖ awaiting-you queue.
-    assert.match(out, /\[plain\] needs a human call/, 'a human-blocked thread surfaces as awaiting-you');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});

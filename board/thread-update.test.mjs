@@ -1,7 +1,7 @@
 // @ts-check
 /**
  * fray — `fray-update` (thread-update.mjs) write-time invariant tests.
- * Run with: `node --test cc/scripts/fray/*.test.mjs`.
+ * Run with: `node --test board/*.test.mjs`.
  *
  * The load-bearing invariant: a `needs-human` thread — OR a `status: blocked` thread with NO
  * resolution mechanism (no non-empty `blocking_threads`/`depends_on`/`revalidate_at`), which

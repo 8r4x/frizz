@@ -1,7 +1,7 @@
 // @ts-check
 /**
  * fray — `blocking_threads` classification tests: THREAD-slug deps (backward-compatible) vs typed
- * EXTERNAL deps (`pr:`/`issue:`/`ci:`/`external:`). Run with `node --test cc/scripts/fray/`.
+ * EXTERNAL deps (`pr:`/`issue:`/`ci:`/`external:`). Run with `node --test 'board/*.test.mjs'`.
  * The `depends_on` field is still read as an alias for `blocking_threads` — one test below pins
  * that legacy path end-to-end; the rest use the canonical `blocking_threads` + `status: blocked`.
  *

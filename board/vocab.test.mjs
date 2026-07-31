@@ -1,7 +1,7 @@
 // @ts-check
 /**
  * fray — status-vocab normalization + reconcile forcing-function tests.
- * Run with: `node --test cc/scripts/fray/`.
+ * Run with: `node --test 'board/*.test.mjs'`.
  *
  * Covers the two coupled changes:
  *   1. The canonical status set + the FOREVER read-aliases (todo/plan → planned,
@@ -9,7 +9,7 @@
  *      level AND end-to-end through the board's `--json` read path (a legacy `status:` thread
  *      must validate + bucket canonically). A `blocked` thread's RESOLUTION-MECHANISM field
  *      (none → human, `blocking_threads` → threads, `revalidate_at` → timer) decides its
- *      color/urgency/ordering — verified through the board + statusline.
+ *      color/urgency/ordering — verified through the board.
  *   2. The anti-drift reconcile forcing-function — the staleness primitive, the
  *      timestamp round-trip, and the per-turn hook emitting the LOUD instruction when the
  *      last-reconcile is stale (and staying quiet when it is fresh).
@@ -17,7 +17,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, utimesSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -38,8 +38,6 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const INDEX = join(HERE, 'index.mjs');
 const DECISIONS = join(HERE, 'decisions.mjs');
-const REMINDER = join(HERE, '..', '..', 'hooks', 'fray-reminder.mjs');
-const STATUSLINE = join(HERE, '..', '..', 'statusline-fray.mjs');
 
 // ── status vocab — pure functions ────────────────────────────────────────────────
 test('STATUS is the canonical set — needs-human is first-class; enqueued/needs-decision stay read-aliases', () => {
@@ -307,82 +305,3 @@ test('board: ⚖ hoists human-blocked (no machine field); machine-blocked render
   }
 });
 
-test('statusline: human-blocked YELLOW (33) awaiting-you, active cyan (36), machine-blocked GRAY (90)', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'fray-sl-'));
-  const sess = 'sess-sl';
-  const future = new Date(Date.now() + 3_600_000).toISOString();
-  try {
-    mkdirSync(join(dir, '.fray', '.session-state'), { recursive: true });
-    writeFileSync(join(dir, '.fray', '.session-state', sess), 'on\n');
-    // human-blocked (no machine field) → yellow awaiting-you.
-    writeFileSync(join(dir, '.fray', 'd.md'), '---\ntitle: d\nstatus: blocked\nstatus_text: x\n---\nb\n');
-    writeFileSync(join(dir, '.fray', 'a.md'), '---\ntitle: a\nstatus: active\nstatus_text: x\n---\nb\n');
-    // machine-blocked (a timer field) → gray blocked, NOT awaiting-you.
-    writeFileSync(join(dir, '.fray', 'w.md'), `---\ntitle: w\nstatus: blocked\nstatus_text: x\nrevalidate_at: ${future}\n---\nb\n`);
-    const out = execFileSync(process.execPath, [STATUSLINE], {
-      input: JSON.stringify({ workspace: { project_dir: dir, current_dir: dir }, session_id: sess }),
-      env: { ...process.env }, encoding: 'utf8',
-    });
-    assert.match(out, /\x1b\[33m1 awaiting-you\x1b\[0m/, 'human-blocked is yellow (33) awaiting-you');
-    assert.match(out, /\x1b\[36m1 active\x1b\[0m/, 'active is cyan (36)');
-    assert.match(out, /\x1b\[90m1 blocked\x1b\[0m/, 'machine-blocked is gray (90)');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-// ── end-to-end: the per-turn hook fires the reconcile-stale instruction ───────────
-/** Stand up an ACTIVATED `.fray/` project (sentinel ON for `sess`), run the reminder hook. */
-function runReminder(dir, sessionId) {
-  const raw = execFileSync(process.execPath, [REMINDER], {
-    input: JSON.stringify({ session_id: sessionId, transcript_path: '/nope/proj/sess.jsonl' }),
-    env: { ...process.env, CLAUDE_PROJECT_DIR: dir, CLAUDE_CODE_SESSION_ID: sessionId },
-    encoding: 'utf8',
-  });
-  if (!raw.trim()) return '';
-  return JSON.parse(raw).hookSpecificOutput?.additionalContext ?? '';
-}
-
-test('fray-reminder: the two-trigger reconcile gate — first / dirty / backstop fire; a clean board is silent', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'fray-hook-'));
-  const sess = 'sess-recon';
-  const thread = join(dir, '.fray', 't.md');
-  const writeThread = () =>
-    writeFileSync(thread, 'title: t\nstatus: active\n\n## Status\nworking\n');
-  try {
-    mkdirSync(join(dir, '.fray', '.session-state'), { recursive: true });
-    writeFileSync(join(dir, '.fray', '.session-state', sess), 'on\n'); // activate this session
-    writeThread(); // one non-terminal (active) thread on the board
-
-    // No timestamp yet → FIRST reconcile → instruction present.
-    assert.match(runReminder(dir, sess), /BOARD RECONCILE STALE/, 'missing timestamp → instruct a first reconcile');
-
-    // Reconcile stamped AFTER the thread's last edit → clean board, within backstop → SILENT.
-    writeLastReconcile(dir, Date.now());
-    assert.doesNotMatch(runReminder(dir, sess), /BOARD RECONCILE STALE/, 'clean board within backstop → no instruction');
-
-    // A non-terminal thread edited AFTER the reconcile stamp → DIRTY. But DEBOUNCED (change #5):
-    // the FIRST sighting starts the window and stays SILENT — a burst of return-folding must not
-    // nag every turn. The nudge fires only once the window ages past both thresholds.
-    const nagStatePath = join(dir, '.fray', '.reconcile-nag-state.json');
-    writeThread(); // bumps the thread's mtime past the stamp
-    assert.doesNotMatch(runReminder(dir, sess), /BOARD RECONCILE STALE/, 'dirty first-sight is debounced → silent');
-    // Age the debounce window past both thresholds (>3m, >2 turns) → the dirty-gate now fires,
-    // and names the drifted thread (scoped staleness, change #3).
-    const st = JSON.parse(readFileSync(nagStatePath, 'utf8'));
-    writeFileSync(nagStatePath, JSON.stringify({ dirty_since_ms: Date.now() - 10 * 60_000, dirty_since_turn: 0, turns: st.turns }) + '\n');
-    const dirtyOut = runReminder(dir, sess);
-    assert.match(dirtyOut, /BOARD RECONCILE STALE/, 'dirty persisting past the debounce window fires');
-    assert.match(dirtyOut, /\bt\b/, 'the drifted thread `t` is named (scoped staleness)');
-
-    // BACKSTOP is non-bursty → NOT debounced, fires immediately: age the thread OLDER than the
-    // stamp (so it is not dirty) and stamp past the 120m backstop, with a clean debounce window.
-    const oldT = (Date.now() - 200 * 60_000) / 1000;
-    utimesSync(thread, oldT, oldT);
-    writeLastReconcile(dir, Date.now() - 121 * 60_000);
-    rmSync(nagStatePath, { force: true });
-    assert.match(runReminder(dir, sess), /BOARD RECONCILE STALE/, 'long elapsed with no thread change → backstop fires (not debounced)');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
