@@ -34,6 +34,8 @@
 /** A completion report the runtime queued. Cleared the moment a model-facing carrier names it. */
 export interface QueuedReport {
   taskId: string
+  /** An agent REPORT (its findings are unrecoverable) vs a shell WAKE (its output is on disk). */
+  kind: "agent" | "shell"
   /** The dispatch's tool_use id, when the notification carried one (the recovery shape omits it). */
   toolUseId?: string
   /** The child's transcript — the FULL report, and what the repair points at. */
@@ -61,6 +63,10 @@ export const MAX_TRACKED_REPORTS = 256
 // normal queue-to-delivery gap (35 ms on the measured cold-rest delivery, sub-second on every other
 // delivered sample in the corpus).
 export const REPORT_REPAIR_AFTER_MS = 90_000
+// A single thread in the corpus accumulated 383 lost shell notifications. Repairing all of them at
+// once would bury the agent, so a tick takes only the newest few and the pass LOGS the remainder
+// rather than silently truncating — the next tick picks those up.
+export const MAX_REPAIRS_PER_TICK = 3
 
 /**
  * Is this record shape one that puts the notification into the MODEL's context?
@@ -92,9 +98,32 @@ export function isModelFacingCarrier(recType: unknown): boolean {
  * transcript entirely, so that key matched only 76 of 170 real agent reports.
  */
 export function isAgentReport(summary: string | undefined, taskId: string): boolean {
-  if (summary?.startsWith('Agent "')) return true
-  if (summary) return false // a summary that names something else is exactly that
-  return taskId.length > 12
+  return reportKind(summary, taskId) === "agent"
+}
+
+/**
+ * An agent's REPORT and a shell's WAKE are both losable, and both matter — for different reasons.
+ *
+ * The original scoping here covered agents only, on the grounds that a shell's output stays on disk
+ * and pollable so losing its notification costs nothing a re-read cannot recover. That is true of the
+ * CONTENT and false of the WAKE, which is the entire point of a background shell: a rested agent whose
+ * build finished and was never told just sits there. Measured on the same corpus, shells are hit far
+ * harder than agents — 383 of 421 shell/monitor notifications lost on one thread (91%) against 32 of
+ * 129 agent reports — and that is exactly the "the thread stopped churning" symptom that started this
+ * whole investigation.
+ *
+ * Upstream this is anthropics/claude-code#20754 (OPEN since 2026-01-25): "Background Task
+ * Notifications Not Delivered When Multiple Agents Complete Simultaneously" — 1 of 3 completed agents
+ * notified, the rest silent. Same shape, same runtime, still unfixed.
+ */
+export function reportKind(summary: string | undefined, taskId: string): "agent" | "shell" | undefined {
+  const s = summary?.trim()
+  if (s?.startsWith('Agent "')) return "agent"
+  if (s?.startsWith("Background command") || s?.startsWith("Monitor")) return "shell"
+  if (s) return undefined // a summary naming something else is neither
+  // The recovery shape carries no per-op summary. Fall back to the id shape, which agrees with the
+  // summary perfectly across 1,178 real notifications (agent ids are long, shell/monitor ids short).
+  return taskId.length > 12 ? "agent" : "shell"
 }
 
 /** Every `<task-id>` named by a notification block (a recovery block names several at once). */
@@ -106,13 +135,15 @@ export function blockTaskIds(block: string): string[] {
 }
 
 /** Pull the fields a repair needs out of one `<task-notification>` block. */
-export function parseReportBlock(block: string, at?: string): Omit<QueuedReport, "taskId"> {
+export function parseReportBlock(block: string, at?: string, taskId = ""): Omit<QueuedReport, "taskId"> {
   const grab = (tag: string): string | undefined =>
     block.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`))?.[1]?.trim() || undefined
+  const summary = grab("summary")
   return {
+    kind: reportKind(summary, taskId) ?? "agent",
     toolUseId: grab("tool-use-id"),
     outputFile: grab("output-file"),
-    summary: grab("summary"),
+    summary,
     queuedAt: at,
     chars: grab("result")?.length ?? 0,
   }
@@ -141,13 +172,24 @@ export function repairedTaskIds(text: string): string[] {
  * has to change. It names the file, the size, and what was lost.
  */
 export function repairMessage(report: QueuedReport): string {
-  const who = report.summary?.replace(/\s+/g, " ").trim() || `Sub-agent ${report.taskId}`
+  const who = report.summary?.replace(/\s+/g, " ").trim() || `Background op ${report.taskId}`
+  const tag = `[${REPAIR_MARKER}:${report.taskId}]`
+  // A SHELL's repair is a WAKE, not a reading assignment. Its output was always retrievable; what was
+  // lost is the fact that it finished, which is what should have re-invoked the agent. Keep it short —
+  // the agent's own next step is obvious once it knows.
+  if (report.kind === "shell") {
+    const where = report.outputFile ? ` Its output is at ${report.outputFile}.` : ""
+    return [
+      `${tag} ${who} — but that completion never reached you, so you were never woken for it.`,
+      `${where} Pick the work back up where this was blocking you.`,
+    ].join("")
+  }
   const size = report.chars > 0 ? ` (~${report.chars.toLocaleString("en-US")} characters)` : ""
   const where = report.outputFile
     ? `Its full report is on disk at ${report.outputFile} — READ THAT FILE before you continue.`
     : `Its report was not recoverable from disk; re-run the work or ask the child again.`
   return [
-    `[${REPAIR_MARKER}:${report.taskId}] ${who}, but its report never reached you.`,
+    `${tag} ${who}, but its report never reached you.`,
     `The runtime queued the completion and then discarded it without delivering it${size}, so it is`,
     `NOT in your context and you have not read it, whatever your earlier summary may have implied.`,
     where,

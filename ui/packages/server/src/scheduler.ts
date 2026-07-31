@@ -9,7 +9,7 @@ import type { LimitFault } from "./backend/types.ts"
 import { limitFaultResetKey, limitPauseIsStale, quotaWindowKeyFor, quotaWindowRecovered, textResetInstant } from "./backend/usage-limit.ts"
 import { createWakeDeliveryStore, type WakeDelivery } from "./wake-store.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
-import { reportsDueForRepair, repairMessage } from "./report-delivery.ts"
+import { reportsDueForRepair, repairMessage, MAX_REPAIRS_PER_TICK } from "./report-delivery.ts"
 import {
   createGithubReviewFetcher,
   isBotGithubActor,
@@ -1109,7 +1109,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const tele = deps.tailer.get(row.slug)
       const dropped = tele?.droppedReports
       if (!dropped?.length || tele?.turn !== "idle") continue
-      for (const report of reportsDueForRepair(dropped, { nowMs, atRest: true })) {
+      // NEWEST first, and capped: one corpus thread accumulated 383 lost shell notifications, and
+      // firing all of them at a freshly-woken agent would bury it. The remainder is LOGGED, never
+      // silently truncated — the next tick takes the next few, and each keeps its own delivery id.
+      const due = reportsDueForRepair(dropped, { nowMs, atRest: true })
+        .slice()
+        .sort((a, b) => String(b.queuedAt ?? "").localeCompare(String(a.queuedAt ?? "")))
+      if (due.length > MAX_REPAIRS_PER_TICK)
+        log(`waker: ${row.slug} has ${due.length} undelivered reports — repairing the newest ${MAX_REPAIRS_PER_TICK} this tick`)
+      for (const report of due.slice(0, MAX_REPAIRS_PER_TICK)) {
         const fenceId = reportFenceId(report.taskId)
         const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
         if (outbox.get(deliveryId)) continue // this report already has its one repair

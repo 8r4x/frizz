@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import {
   isModelFacingCarrier, isAgentReport, blockTaskIds, parseReportBlock, repairedTaskIds,
-  repairMessage, reportsDueForRepair, REPAIR_MARKER, REPORT_REPAIR_AFTER_MS, type QueuedReport,
+  repairMessage, reportsDueForRepair, reportKind, REPAIR_MARKER, REPORT_REPAIR_AFTER_MS, type QueuedReport,
 } from "./report-delivery.ts"
 
 // Shaped exactly like the real thing (see the corpus quoted in report-delivery.ts).
@@ -69,7 +69,7 @@ test("blockTaskIds reads every id in a recovery block and drops the orphan senti
 })
 
 test("a repair is idempotent through the TRANSCRIPT — its own marker resolves it on re-fold", () => {
-  const report: QueuedReport = { taskId: "a26ab44059b4cf3db", chars: 14796, outputFile: "/t/a.output", summary: 'Agent "Impact analysis" finished' }
+  const report: QueuedReport = { taskId: "a26ab44059b4cf3db", kind: "agent", chars: 14796, outputFile: "/t/a.output", summary: 'Agent "Impact analysis" finished' }
   const msg = repairMessage(report)
   // This is the load-bearing round-trip: what fray injects must be readable back as delivery evidence
   // for exactly this task-id, or a fray restart repairs the same report forever.
@@ -78,7 +78,7 @@ test("a repair is idempotent through the TRANSCRIPT — its own marker resolves 
 })
 
 test("the repair names the file and refuses to pretend the agent read anything", () => {
-  const msg = repairMessage({ taskId: "a1", chars: 14796, outputFile: "/t/a.output", summary: 'Agent "Impact analysis" finished' })
+  const msg = repairMessage({ taskId: "a1", kind: "agent", chars: 14796, outputFile: "/t/a.output", summary: 'Agent "Impact analysis" finished' })
   assert.ok(msg.includes("/t/a.output"), "must point at the report on disk")
   assert.ok(msg.includes("14,796"), "must state what was lost")
   assert.ok(msg.includes(REPAIR_MARKER))
@@ -88,30 +88,54 @@ test("the repair names the file and refuses to pretend the agent read anything",
 })
 
 test("with no output file the repair says so rather than pointing at nothing", () => {
-  const msg = repairMessage({ taskId: "a1", chars: 0 })
+  const msg = repairMessage({ taskId: "a1", kind: "agent", chars: 0 })
   assert.ok(!msg.includes("undefined"), msg)
   assert.ok(msg.includes("not recoverable"), msg)
 })
 
 test("nothing is repaired while a turn is in flight — the report may still be arriving", () => {
   const now = Date.parse("2026-07-30T12:00:00Z")
-  const old: QueuedReport = { taskId: "a1", chars: 10, queuedAt: "2026-07-30T11:00:00Z" }
+  const old: QueuedReport = { taskId: "a1", kind: "agent", chars: 10, queuedAt: "2026-07-30T11:00:00Z" }
   assert.deepEqual(reportsDueForRepair([old], { nowMs: now, atRest: false }), [])
   assert.deepEqual(reportsDueForRepair([old], { nowMs: now, atRest: true }).map((r) => r.taskId), ["a1"])
 })
 
 test("a freshly queued report is left alone until the age floor passes", () => {
   const now = Date.parse("2026-07-30T12:00:00Z")
-  const fresh: QueuedReport = { taskId: "a1", chars: 10, queuedAt: new Date(now - 1_000).toISOString() }
+  const fresh: QueuedReport = { taskId: "a1", kind: "agent", chars: 10, queuedAt: new Date(now - 1_000).toISOString() }
   assert.deepEqual(reportsDueForRepair([fresh], { nowMs: now, atRest: true }), [])
-  const ripe: QueuedReport = { taskId: "a2", chars: 10, queuedAt: new Date(now - REPORT_REPAIR_AFTER_MS - 1).toISOString() }
+  const ripe: QueuedReport = { taskId: "a2", kind: "agent", chars: 10, queuedAt: new Date(now - REPORT_REPAIR_AFTER_MS - 1).toISOString() }
   assert.deepEqual(reportsDueForRepair([ripe], { nowMs: now, atRest: true }).map((r) => r.taskId), ["a2"])
 })
 
 test("an unparseable timestamp makes a report due, never eternally un-repairable", () => {
   const now = Date.parse("2026-07-30T12:00:00Z")
   for (const queuedAt of [undefined, "", "not-a-date"]) {
-    const r: QueuedReport = { taskId: "a1", chars: 10, queuedAt }
+    const r: QueuedReport = { taskId: "a1", kind: "agent", chars: 10, queuedAt }
     assert.deepEqual(reportsDueForRepair([r], { nowMs: now, atRest: true }).map((x) => x.taskId), ["a1"], String(queuedAt))
   }
+})
+
+test("a SHELL notification is tracked too — its output survives but its WAKE does not", () => {
+  // The original scoping skipped shells because the output stays on disk. That is true of the content
+  // and false of the wake, and the wake is the point: 383 of 421 shell notifications were lost on one
+  // real thread, which is what leaves an agent sitting after its build finished.
+  assert.equal(reportKind('Background command "Run the clippy gate" completed (exit code 0)', "bqt3teief"), "shell")
+  assert.equal(reportKind('Monitor event: "nub CLI build completion"', "bckovggbo"), "shell")
+  assert.equal(reportKind('Agent "Correctness review of X" finished', "a26ab44059b4cf3db"), "agent")
+  assert.equal(reportKind("Something else entirely", "a26ab44059b4cf3db"), undefined)
+  // Recovery shape: no summary, so the id shape decides.
+  assert.equal(reportKind(undefined, "bqt3teief"), "shell")
+  assert.equal(reportKind(undefined, "a26ab44059b4cf3db"), "agent")
+})
+
+test("a shell repair is a WAKE, not a reading assignment", () => {
+  const msg = repairMessage({
+    taskId: "bqt3teief", kind: "shell", chars: 0, outputFile: "/t/b.output",
+    summary: 'Background command "Run the clippy gate" completed (exit code 0)',
+  })
+  assert.ok(msg.includes("never woken"), msg)
+  assert.ok(msg.includes("/t/b.output"), msg)
+  assert.ok(!msg.includes("READ THAT FILE"), "a shell's output was always retrievable — do not scold")
+  assert.deepEqual(repairedTaskIds(msg), ["bqt3teief"], "still idempotent through the transcript")
 })

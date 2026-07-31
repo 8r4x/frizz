@@ -17,7 +17,7 @@ import { classifyLimitRecord } from "./backend/usage-limit.ts"
 import { parseDeliveryLedger, correlateDeliveryRecord, ageDeliveries, serializeDeliveryLedger, type DeliveryLedgerItem } from "./delivery-ledger.ts"
 import { createCodexSubAgentTracker, type CodexSubAgentTracker } from "./codex-subagents.ts"
 import {
-  isModelFacingCarrier, isAgentReport, blockTaskIds, parseReportBlock, repairedTaskIds,
+  isModelFacingCarrier, reportKind, blockTaskIds, parseReportBlock, repairedTaskIds,
   MAX_TRACKED_REPORTS, type QueuedReport,
 } from "./report-delivery.ts"
 import {
@@ -1357,14 +1357,18 @@ function trackReportDelivery(state: TailState, rec: Record, raw: string): void {
       for (const id of blockTaskIds(block)) state.queuedReports.delete(id)
       continue
     }
-    const parsed = parseReportBlock(block, at)
+    const parsed = parseReportBlock(block, at, blockTaskIds(block)[0] ?? "")
     for (const id of blockTaskIds(block)) {
       if (modelFacing) {
         state.deliveredReports.add(id)
         state.queuedReports.delete(id)
         continue
       }
-      if (!isAgentReport(parsed.summary, id)) continue // a shell's exit line is not a lost report
+      // Both kinds are tracked. An AGENT's findings exist only inside the notification, so losing it
+      // is a total loss of content; a SHELL's output survives on disk, but the WAKE it carries does
+      // not — and a rested agent whose build finished and was never told just sits there, which is
+      // the louder failure of the two (383 of 421 shell notifications lost on one real thread).
+      if (!reportKind(parsed.summary, id)) continue // neither shape — not ours to repair
       if (state.deliveredReports.has(id)) continue // already read it; a late queue-op must not re-park
       state.queuedReports.set(id, { taskId: id, ...parsed })
     }
