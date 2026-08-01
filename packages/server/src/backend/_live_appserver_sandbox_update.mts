@@ -17,7 +17,7 @@ import { spawn as spawnChild } from "node:child_process"
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
-import Database from "better-sqlite3"
+import Database from "../sqlite.ts"
 import { createInteractionStore } from "../interaction-store.ts"
 import {
   CodexAppServerBridge,

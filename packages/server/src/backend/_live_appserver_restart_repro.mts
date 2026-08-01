@@ -13,7 +13,7 @@ import { spawn as spawnChild, type ChildProcessWithoutNullStreams } from "node:c
 import { mkdtempSync, readdirSync, readFileSync } from "node:fs"
 import { tmpdir, homedir } from "node:os"
 import { join } from "node:path"
-import Database from "better-sqlite3"
+import Database from "../sqlite.ts"
 import { createInteractionStore } from "../interaction-store.ts"
 import { CodexAppServerBridge, type CodexAppServerSpawn } from "./codex-app-server.ts"
 

@@ -10,7 +10,7 @@
 import { mkdtempSync, existsSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import Database from "better-sqlite3"
+import Database from "../sqlite.ts"
 import { createInteractionStore } from "../interaction-store.ts"
 import { CodexAppServerBridge, type CodexAppServerDiagnostic } from "./codex-app-server.ts"
 import { killCodexAppServerDaemon, liveDaemonRecord, readDaemonExitBreadcrumb } from "./codex-app-server-host.ts"
