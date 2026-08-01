@@ -1017,19 +1017,23 @@ export function parseAgentMessage(text: string): { from: string; body: string } 
 // quietly downgrade every card in the chat to a plain text blob. Keeping the pair adjacent, with a
 // round-trip test over both, is the guard.
 
-export interface GithubWakeItem {
-  label: string // the activity's noun ("comment", "approval", "change request", …)
-  actor: string // GitHub login, no leading @
-  bot: boolean // drives the 🤖/👤 icon; an app files most of what wakes this watcher
-  at?: string // ISO8601
-  url?: string // the item's own permalink
-}
+// Zod rather than a bare interface because the SERVER hands the parsed steer to the chat on the
+// transcript message (TranscriptMessage.wakeSteer), so it has to survive wire validation.
+export const GithubWakeItem = z.object({
+  label: z.string(), // the activity's noun ("comment", "approval", "change request", …)
+  actor: z.string(), // GitHub login, no leading @
+  bot: z.boolean(), // drives the 🤖/👤 icon; an app files most of what wakes this watcher
+  at: z.string().optional(), // ISO8601
+  url: z.string().optional(), // the item's own permalink
+})
+export type GithubWakeItem = z.infer<typeof GithubWakeItem>
 
-export interface GithubWakeSteer {
-  ref: string // owner/repo#N
-  items: GithubWakeItem[]
-  omitted: number // fresh items counted but not named (the enumeration cap)
-}
+export const GithubWakeSteer = z.object({
+  ref: z.string(), // owner/repo#N
+  items: z.array(GithubWakeItem),
+  omitted: z.number(), // fresh items counted but not named (the enumeration cap)
+})
+export type GithubWakeSteer = z.infer<typeof GithubWakeSteer>
 
 const WAKE_SCOPE = "ignore older activity you have already handled"
 
@@ -1055,7 +1059,6 @@ function wakeItemTail(item: GithubWakeItem): string {
 // field to GithubWakeSteer. It is also invisible to the human — GithubWakeCard renders from the PARSE,
 // not from this text — so it costs the card nothing to speak to the worker here.
 const WAKE_REVIEW_LEAD = "A review's body is often empty because its substance is inline comments. Read them, one call each:"
-const WAKE_REVIEW_CMD = /^gh api --paginate repos\/\S+$/
 
 // The review permalink is the only place the review id exists, but owner/repo/number come from `ref`,
 // which the wake format already validates — so a surprising URL costs the hint, never a wrong command.
@@ -1106,9 +1109,23 @@ const WAKE_MULTI_HEAD = new RegExp(
 const WAKE_ITEM = /^- (👤|🤖) (.+?) from @(\S+?)(?: at (\S+?))?(?:: (\S+))?$/
 const WAKE_MORE = /^- …and (\d+) more not listed — check .+ for the rest$/
 
-// Rebuild the structured wake from its delivered text. `null` for anything that is not exactly one of
-// the two shapes above — the chat then falls back to rendering the text as-is, so a format the parser
-// does not know costs a card, never the message.
+// Rebuild the structured wake from its delivered text. `null` for anything that is not one of the two
+// shapes above — the chat then falls back to rendering the text as-is, so a format the parser does not
+// know costs a card, never the message.
+//
+// It is the FALLBACK path now: the server parses at projection time and hands the result over on
+// `TranscriptMessage.wakeSteer`, so a current client never re-derives the card from prose. This still
+// runs for a legacy transcript and for a server too old to send the field.
+//
+// UNRECOGNIZED LINES ARE DROPPED, not refused. That is the correction for a real defect: the steer
+// gained a review-read tail (c741fb1), the parser learned an allowlist for exactly those two line
+// shapes — and every ALREADY-OPEN tab, whose bundle predated it, started rendering the raw-text
+// fallback card instead of the divider. Nothing reloads those tabs: `web/api/boot.ts` adopts a new
+// server boot id in place on purpose, so an unsent draft survives a restart, which means a promoted
+// artifact routinely leaves an old parser reading a new format. An allowlist has to be taught each new
+// line and is wrong until it is; dropping what it does not recognize is right in advance. Structural
+// integrity rides on the header's own COUNT instead (below), which is what actually catches a
+// misread — a truncated or padded burst still returns null.
 export function parseGithubWakeSteer(text: string): GithubWakeSteer | null {
   // Absent fields are OMITTED rather than set to undefined, so a parsed steer is deep-equal to the one
   // the formatter was handed — which is what makes the round-trip test a real contract.
@@ -1119,16 +1136,15 @@ export function parseGithubWakeSteer(text: string): GithubWakeSteer | null {
     ...(at ? { at } : {}),
     ...(url ? { url } : {}),
   })
-  // The review-read tail is regenerated from the items by the formatter, so it is DROPPED here rather
-  // than parsed — that is what lets the steer speak to the worker without the card gaining a field it
-  // would have to render. Blank lines go with it: the burst loop already skipped them, and the
-  // single-item shape has to survive counting as one line once a tail is appended below it.
   const lines = text
     .trim()
     .split("\n")
     .map((line) => line.trim())
-    .filter((line) => line && line !== WAKE_REVIEW_LEAD && !WAKE_REVIEW_CMD.test(line))
-  const single = lines.length === 1 ? WAKE_SINGLE.exec(lines[0]) : null
+    .filter(Boolean)
+  // The FIRST line decides the shape. Anything below a single-item steer is agent-facing prose the
+  // formatter derived (today the review-read tail, tomorrow whatever the next steer gains) — the card
+  // has nothing to render from it, so it never gets a say in whether the card renders at all.
+  const single = WAKE_SINGLE.exec(lines[0] ?? "")
   if (single) {
     return { ref: single[3], omitted: 0, items: [item(single[2], single[4], single[1] === "🤖", single[5], single[6])] }
   }
@@ -1143,10 +1159,13 @@ export function parseGithubWakeSteer(text: string): GithubWakeSteer | null {
       continue
     }
     const m = WAKE_ITEM.exec(line)
-    if (!m) return null // an unrecognized line means we do not understand this message; do not guess
+    if (!m) continue // prose below the burst, not an item — see the header-count check below
     items.push(item(m[2], m[3], m[1] === "🤖", m[4], m[5]))
   }
   // The header's own count is the authority on how many landed; disagreeing with it means we misread.
+  // Now that an unrecognized line is skipped rather than refused, this is the WHOLE integrity check —
+  // a burst that lost a line to truncation, gained one to corruption, or whose item shape drifted out
+  // from under this parser lands here and returns null, exactly as before.
   if (!items.length || items.length + omitted !== Number(head[2])) return null
   return { ref: head[3], omitted, items }
 }
@@ -1535,6 +1554,17 @@ export const TranscriptMessage = z.object({
   // old client ignores it and shows the plain bubble (the previous behavior), and an old server simply
   // never sets it.
   wake: z.boolean().optional(),
+  // The STRUCTURED wake, parsed by the server from the same text the same build formatted. The chat
+  // renders the divider from this rather than re-deriving it from prose in the browser.
+  //
+  // It exists because re-deriving it in the browser is version-skewed by construction. `web/api/boot.ts`
+  // adopts a new server boot id IN PLACE (so an unsent draft survives a restart), so a promoted artifact
+  // swaps the server under tabs that keep their old bundle — and on 2026-07-31 a steer that gained two
+  // agent-facing lines met parsers that predated them, which cost every open tab its card and dumped the
+  // raw `gh api …` text into the transcript instead. Server-side, formatter and parser can never
+  // disagree. Additive + optional: absent from a legacy transcript or an older server, and the client
+  // falls back to `parseGithubWakeSteer` on the text.
+  wakeSteer: GithubWakeSteer.optional(),
   // A SUB-AGENT (or peer session) wrote this user turn, not the human — the same defect class `wake`
   // above corrects. Claude Code's agent-to-agent channel (a background child calling
   // `SendMessage({to:"main"})`) delivers UPWARD into the parent's queue like any follow-up, so the

@@ -17,7 +17,7 @@
 // shell has a body; and three marks on one row that all looked clickable (an underlined title, an
 // accent ref, the corner glyph) with no hierarchy between them.
 import { Bell, Bot, Github, User } from "lucide-react"
-import { parseGithubWakeSteer, type GithubWakeItem } from "@fray-ui/shared"
+import { parseGithubWakeSteer, type GithubWakeItem, type GithubWakeSteer } from "@fray-ui/shared"
 import { CARD_BODY, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { MessageDebugId } from "./MessageDebugId.tsx"
 import { WakeDivider, WAKE_DIVIDER_IDENT } from "./WakeDivider.tsx"
@@ -71,8 +71,12 @@ function ItemRow({ item }: { item: GithubWakeItem }) {
   )
 }
 
-export function GithubWakeCard({ text, sourceId, wrap }: { text: string; sourceId?: string; wrap?: boolean }) {
-  const steer = parseGithubWakeSteer(text)
+export function GithubWakeCard({ steer: served, text, sourceId, wrap }: { steer?: GithubWakeSteer; text: string; sourceId?: string; wrap?: boolean }) {
+  // The SERVER's parse wins, because it is the only one that cannot be a build behind the formatter
+  // that wrote this text (see TranscriptMessage.wakeSteer). Parsing here is the fallback for a legacy
+  // transcript or a server too old to send the field — it is also what this component did exclusively
+  // until a steer grew two lines the shipped parsers had never seen and every open tab lost its divider.
+  const steer = served ?? parseGithubWakeSteer(text)
   // A steer the parser doesn't recognize — a legacy transcript, a CI/timer/limit wake, a format this
   // build predates — still gets first-party chrome. Only the structured rows are lost, never the text.
   // This one stays a CARD: there is arbitrary prose to show, and a divider is a one-line shape.

@@ -48,10 +48,31 @@ test("github wake steer round-trips through its own parser", () => {
 
 // The card is a projection of the delivered text, which always arrives with the machine-facing token
 // appended — so the two must compose in that order without the token defeating the parse.
-test("a delivered wake parses after its delivery token is stripped", () => {
+//
+// The token used to make the parse FAIL, and that was asserted as the contract. It is not one worth
+// keeping: the only thing a refusal buys is that a missed strip degrades to the raw-text card WITH
+// `<!-- fray-wake:… -->` showing, which is the very bug the strip exists to prevent. A parser that
+// reads the steer either way is strictly better, and it falls out of dropping unrecognized lines.
+test("a delivered wake parses with or without its delivery token", () => {
   const delivered = `${formatGithubWakeSteer(burst)}\n\n${wakeDeliveryToken("a".repeat(64))}`
-  assert.equal(parseGithubWakeSteer(delivered), null, "the raw delivered text carries a tail the parser must not accept")
+  assert.deepEqual(parseGithubWakeSteer(delivered), burst, "a machine-facing tail must not cost the card")
   assert.deepEqual(parseGithubWakeSteer(stripWakeDeliveryToken(delivered)), burst)
+})
+
+// THE regression this file exists to prevent, stated directly: on 2026-07-31 the steer gained a
+// review-read tail, the shipped parsers had never seen those two lines, and every already-open tab
+// rendered the raw-text fallback card instead of the divider. Nothing reloads those tabs — `boot.ts`
+// adopts a new server boot id in place on purpose — so the parser has to tolerate a line the build it
+// runs in has never heard of. This asserts that for lines NO build has heard of.
+test("a steer that grew lines this parser has never seen still renders its card", () => {
+  for (const tail of [
+    "\n\nSome future paragraph a later build appends to speak to the worker.",
+    "\n\ngh gist create --public # a command shape this build does not know",
+    "\n\nA lead-in:\nline one\nline two\n\nand a trailing note",
+  ]) {
+    assert.deepEqual(parseGithubWakeSteer(formatGithubWakeSteer(single) + tail), single, tail)
+    assert.deepEqual(parseGithubWakeSteer(formatGithubWakeSteer(burst) + tail), burst, tail)
+  }
 })
 
 test("the single-item steer names the item and ends on its bare URL", () => {

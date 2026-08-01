@@ -10,8 +10,10 @@ import {
   attachmentExtension,
   isWakeDelivery,
   parseAgentMessage,
+  parseGithubWakeSteer,
   stripWakeDeliveryToken,
   THOUGHT_EVENT_PREFIX,
+  type GithubWakeSteer,
   type TranscriptMessage,
   type TranscriptPage,
   type TranscriptTodo,
@@ -154,7 +156,7 @@ function userDisplayText(text: string, first: boolean): string | undefined {
 // Both derive from the same raw record, and every site that pushes a user message needs both — keeping
 // them in one helper is what stops a new push site from shipping the display projection while silently
 // dropping the wake flag (which would put a scheduler steer back in the human's own bubble).
-function userProjection(text: string, first: boolean): { displayText?: string; wake?: true; peerFrom?: string } {
+function userProjection(text: string, first: boolean): { displayText?: string; wake?: true; wakeSteer?: GithubWakeSteer; peerFrom?: string } {
   // An UPWARD agent-to-agent message — a background child calling `SendMessage({to:"main"})` — is not
   // the human's text at all, so it is settled FIRST and returns on its own. Its body, not the
   // `<agent-message>` wrapper, is what a reader wants, and none of the projections below apply: the
@@ -163,7 +165,16 @@ function userProjection(text: string, first: boolean): { displayText?: string; w
   const peer = parseAgentMessage(text)
   if (peer) return { displayText: peer.body, peerFrom: peer.from }
   const displayText = userDisplayText(text, first)
-  return { ...(displayText ? { displayText } : {}), ...(isWakeDelivery(text) ? { wake: true as const } : {}) }
+  if (!isWakeDelivery(text)) return { ...(displayText ? { displayText } : {}) }
+  // Parse the steer HERE, not in the browser. The formatter that composed this text and the parser
+  // reading it are the same build on this side, so they cannot disagree; a browser tab is routinely a
+  // build behind (see TranscriptMessage.wakeSteer), and when it is, the chat used to lose the divider
+  // and dump the raw agent-facing steer into the transcript instead. `displayText ?? text` because the
+  // delivery token has to be off before the steer will parse, and that is exactly what the projection
+  // above stripped. A steer this build cannot read stays absent and the client falls back to its own
+  // parse — never worse than before.
+  const steer = parseGithubWakeSteer(displayText ?? text)
+  return { ...(displayText ? { displayText } : {}), wake: true as const, ...(steer ? { wakeSteer: steer } : {}) }
 }
 
 // Append a text block to a message's ordered parts, coalescing into a trailing text part (so several

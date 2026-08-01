@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir, homedir } from "node:os"
 import { join } from "node:path"
-import { DISPATCH_TASK_BANNER_MARKER, GITHUB_DISPATCH_UI_BOUNDARY, wakeDeliveryToken } from "@fray-ui/shared"
+import { DISPATCH_TASK_BANNER_MARKER, formatGithubWakeSteer, GITHUB_DISPATCH_UI_BOUNDARY, wakeDeliveryToken, type GithubWakeSteer } from "@fray-ui/shared"
 import {
   frayDispatchDisplayText,
   githubDispatchDisplayText,
@@ -82,6 +82,32 @@ test("Claude wake delivery hides the wake token in the bubble while the stored t
   // FRAY composed this turn, not the human — the chat renders it as a first-party card rather than
   // the human's own right-justified bubble, which claimed the operator had typed it.
   assert.equal(wake.wake, true)
+  // …and a limit wake is not a GitHub wake, so there is no structured steer to hand over.
+  assert.equal(wake.wakeSteer, undefined)
+})
+
+// The chat's divider must not be re-derived from prose in the browser: a tab keeps its bundle across a
+// server restart (boot.ts adopts a new boot id in place, so an unsent draft survives), so a promoted
+// artifact routinely leaves an old parser reading a newer steer — which on 2026-07-31 cost every open
+// tab its divider and dumped the raw agent-facing `gh api …` tail into the transcript. The server
+// parses instead, where formatter and parser are the same build by construction.
+test("a GitHub wake hands the chat its STRUCTURED steer, tail and token and all", () => {
+  const steer: GithubWakeSteer = {
+    ref: "nubjs/nub#645",
+    omitted: 0,
+    items: [{ label: "review comment", actor: "pullfrog", bot: true, at: "2026-08-01T01:51:51Z", url: "https://github.com/nubjs/nub/pull/645#pullrequestreview-4833228738" }],
+  }
+  // Byte for byte what the scheduler delivers: the steer, its derived review-read tail, the token.
+  const delivered = `${formatGithubWakeSteer(steer)}\n\n${wakeDeliveryToken(wakeId)}`
+  assert.match(delivered, /^gh api --paginate repos\/nubjs\/nub\/pulls\/645\/reviews\/4833228738\/comments$/m)
+  const raw = [
+    JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:00.000Z", message: { content: "orientation\n\nTASK:\nthe original task" } }),
+    JSON.stringify({ type: "assistant", timestamp: "2026-07-01T00:00:05.000Z", message: { id: "m1", content: [{ type: "text", text: "on it" }] } }),
+    JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:10.000Z", message: { content: delivered } }),
+  ].join("\n")
+  const wake = parseTranscript(raw).at(-1)!
+  assert.equal(wake.wake, true)
+  assert.deepEqual(wake.wakeSteer, steer, "the card renders from this, not from the text below it")
 })
 
 test("a wake token riding a QUEUED follow-up is hidden too, and the pending bubble still resolves", () => {

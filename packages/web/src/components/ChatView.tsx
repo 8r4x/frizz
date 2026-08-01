@@ -2960,7 +2960,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     // A scheduler wake is recorded as a user turn because it is pasted into the worker's composer —
     // but FRAY wrote it, not the human, so it must not wear the human's off-white right-justified
     // bubble. `m.wake` is the server's own tell (the delivery token it stripped), never a text guess.
-    if (m.wake) return <GithubWakeCard text={text} sourceId={m.sourceId} wrap={dense} />
+    if (m.wake) return <GithubWakeCard steer={m.wakeSteer} text={text} sourceId={m.sourceId} wrap={dense} />
     // …and the same correction for the OTHER writer of a user turn the human didn't type: a background
     // sub-agent pushing a report up to its parent through `SendMessage({to:"main"})`. `m.peerFrom` is the
     // server's own tell (it parsed the <agent-message> wrapper and put the body in displayText, which

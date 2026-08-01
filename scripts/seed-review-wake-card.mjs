@@ -67,13 +67,28 @@ const CASES = [
       items: [{ label: "comment", actor: "colinhacks", bot: false, at: ago(4), url: `${PR}#issuecomment-5120099362` }],
     },
   },
+  {
+    // THE REGRESSION CASE. A steer carrying a tail NO build has ever seen stands in for the real
+    // failure: on 2026-07-31 the steer grew the review-read tail above and every already-open tab —
+    // whose bundle predated it, because `web/api/boot.ts` adopts a new server boot id in place instead
+    // of reloading — fell back to the raw-text card and dumped the agent-facing steer into the chat.
+    // The card must render exactly like its control, and the tail must be nowhere on screen.
+    slug: "wake-future",
+    title: "wake · a tail no build has seen",
+    steer: {
+      ref: "nubjs/nub#587",
+      omitted: 0,
+      items: [{ label: "comment", actor: "colinhacks", bot: false, at: ago(4), url: `${PR}#issuecomment-5120099362` }],
+    },
+    extraTail: "\n\nSOME FUTURE INSTRUCTION this build has never heard of.\nnub run some-future-command --with-flags",
+  },
 ]
 
 CASES.forEach((c, n) => {
   const sessionId = `${c.slug}-0000-4000-8000-000000000000`.slice(0, 36)
   const tmuxName = `fray-${c.slug}`
   const at = ago(3)
-  const text = `${formatGithubWakeSteer(c.steer)}\n\n${wakeDeliveryToken(`${c.slug}`.padEnd(64, "0"))}`
+  const text = `${formatGithubWakeSteer(c.steer)}${c.extraTail ?? ""}\n\n${wakeDeliveryToken(`${c.slug}`.padEnd(64, "0"))}`
   const records = [
     {
       parentUuid: null, isSidechain: false, type: "user",
