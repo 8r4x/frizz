@@ -118,6 +118,35 @@ test("a fresh startup does not pay for the pad — only the context-losing sourc
   }
 })
 
+// Claude Code opens EVERY compaction summary with the fixed sentence "This session is being continued
+// from a previous conversation that ran out of context." It is about the conversation just summarized,
+// but it arrives when the window is emptiest and workers read it as a report on themselves and wind
+// down — nub session 5258ebe4 took its auto-compaction at transcript line 20239 and then declared
+// "I'm out of context" on 13 consecutive turns at fills of 176k-244k. This hook is the only fray text
+// that lands in that exact window, so it is where the preamble gets answered. Pinned on BOTH pad
+// states, because a compacted worker with an empty pad is the one least able to argue with it.
+test("a compaction re-ground contradicts the summary's 'ran out of context' preamble", () => {
+  for (const pad of ["# Scratchpad\n\nthe approach and why\n", scratchpadContent("some effort")]) {
+    const dir = newProject()
+    writePad(dir, pad)
+    const ctx = additionalContext(runHook(dir, ["--mode=session-start"], { session_id: SID, source: "compact" }))
+    assert.match(ctx, /ran out of context/, "the preamble is quoted so the worker knows what is being corrected")
+    assert.match(ctx, /this window is close to EMPTY again/)
+    assert.match(ctx, /compact and continue as many times as the effort needs/)
+    assert.match(ctx, /not a reason to wind down, hand off, or leave the next step to a fresh session/)
+  }
+})
+
+test("only a COMPACT start answers the preamble — a resume never saw one", () => {
+  const dir = newProject()
+  writePad(dir, "# Scratchpad\n\nthe approach and why\n")
+  for (const source of ["resume", "clear"]) {
+    const ctx = additionalContext(runHook(dir, ["--mode=session-start"], { session_id: SID, source }))
+    assert.match(ctx, /⟦scratchpad — reground here⟧/, `${source} still re-grounds`)
+    assert.doesNotMatch(ctx, /ran out of context/, `${source} gets no compaction summary, so there is nothing to correct`)
+  }
+})
+
 test("precompact emits PLAIN stdout (never JSON) so it reaches the summarizer's instructions", () => {
   const dir = newProject()
   writePad(dir, "the approach and why\n")

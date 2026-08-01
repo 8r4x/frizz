@@ -236,6 +236,23 @@ if (mode === 'session-start') {
   // empty and you just lost your context" is itself the most urgent thing the next turn can be told.
   const lostContext = input.source === 'compact' || input.source === 'resume' || input.source === 'clear'
 
+  // Claude Code opens every compaction summary with the fixed preamble "This session is being
+  // continued from a previous conversation that ran out of context." That sentence is about the
+  // conversation just SUMMARIZED, but it lands at the moment the window is emptiest, and workers read
+  // it as a report on their own state and start winding down. Measured: nub session 5258ebe4 took the
+  // auto-compaction at line 20239 and then declared "I'm out of context" / "I'm at the end of this
+  // context window" on 13 consecutive turns at fills of 176k-244k, before self-diagnosing at line
+  // 20628 — "I've been treating 'low context' as a stopping condition ... and winding down instead of
+  // working." This hook is the only fray text that lands in that exact window, so it is where the
+  // preamble gets answered. Kept to two sentences: the re-grounding instruction is the payload.
+  const compactedNote =
+    input.source === 'compact'
+      ? ' The summary opens "a previous conversation that ran out of context" — that describes the ' +
+        'conversation just summarized, not your situation now: this window is close to EMPTY again, ' +
+        'and the harness will compact and continue as many times as the effort needs. Context is not ' +
+        'a reason to wind down, hand off, or leave the next step to a fresh session.'
+      : ''
+
   if (lostContext && written) {
     // Inject the head AND point at the file: the injection is the floor (it cannot be skipped), the
     // pointer is the ceiling (the pad may be longer than the cap, and it is the canonical doc).
@@ -244,7 +261,7 @@ if (mode === 'session-start') {
         ? '⟦scratchpad — reground here⟧ Context was just compacted. Your scratchpad `' + relPath +
           '` is the CANONICAL record of this thread and the head of it follows. RE-GROUND ON IT BEFORE ' +
           'DOING ANYTHING ELSE: re-read the full file, treat it as authoritative over anything the ' +
-          'summary implies, and re-read only the code you are about to describe or change.'
+          'summary implies, and re-read only the code you are about to describe or change.' + compactedNote
         : '⟦scratchpad — reground here⟧ This session resumed and lost its working context. Your ' +
           'scratchpad `' + relPath + '` is the CANONICAL record of this thread and the head of it ' +
           'follows. Re-read the full file before acting.';
@@ -261,7 +278,7 @@ if (mode === 'session-start') {
         'skills merely to reconstruct context. Recover from the retained compaction summary and any ' +
         'task-specific handoff it directly names, then WRITE this exact pad: the problem, the approach ' +
         'and the approaches you rejected, the decisions the human made, what is verified versus merely ' +
-        'believed, and the next action.',
+        'believed, and the next action.' + compactedNote,
     );
   } else {
     // A fresh start has lost nothing — teach the contract so the pad gets written in the first place.
