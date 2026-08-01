@@ -624,7 +624,11 @@ the blocker in your final message.`,
 
 // Backend-neutral: fray injects the ONE unified `fray` MCP server into BOTH claude and codex workers,
 // so the tool and its usage are identical. Kept as one shared section (not a per-kind record) — there
-// is nothing backend-specific to say about it.
+// is nothing backend-specific to say about it. The two backends MOUNT it differently — claude via an
+// inline `--mcp-config` on the worker argv (dispatch.ts), codex via process-level `-c` overrides on
+// the app-server (backend/codex-mcp.ts) — and for a long time this comment described a codex half
+// that did not exist, so codex workers were told about a tool they did not have. If you change either
+// mounting, re-run `_live_codex_mcp_inject.mts` rather than trusting this paragraph.
 const SPAWN_THREAD = `## Spawning a separate fray thread
 
 \`mcp__fray__spawn_thread\` dispatches a brand-new, SEPARATE top-level fray thread — its own board card,

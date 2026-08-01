@@ -216,9 +216,12 @@ export interface FrayMcp {
 // The ONE canonical Chrome DevTools MCP server spec both backends inject into every worker they
 // spawn — the runtime release gate requires driving a real browser, and neither backend can assume
 // the operator configured a browser MCP themselves. Claude mounts it via inline `--mcp-config` JSON
-// (+ a server-level `--allowedTools mcp__chrome-devtools` pre-approval); codex mounts it via `-c`
-// TOML overrides (+ `default_tools_approval_mode="approve"`). Deriving both from this constant is
-// what keeps the two backends' browser tooling in lockstep — edit HERE, never in one backend alone.
+// (+ a server-level `--allowedTools mcp__chrome-devtools` pre-approval) in dispatch.ts; codex mounts
+// it via `-c` TOML overrides (+ `default_tools_approval_mode="approve"`) on the APP-SERVER's argv in
+// codex-mcp.ts — process-level, because a per-thread override mounts nothing at all. Deriving both
+// from this constant is what keeps the two backends' browser tooling in lockstep — edit HERE, never in
+// one backend alone. (The codex half was DESCRIBED here long before it was written: for a while this
+// paragraph was the only place it existed, and codex threads had no browser — read codex-mcp.ts.)
 // `--isolated` gives each worker a disposable browser profile (never the operator's own Chrome).
 export const CHROME_DEVTOOLS_MCP = {
   name: "chrome-devtools",
