@@ -19,7 +19,7 @@ import {
 } from "@fray-ui/server/logging";
 import {
   acquireGlobalLaunchLock,
-  choosePort,
+  allocatePort,
   expectedOwnerHealth,
   liveWorkspaceOwner,
   parseCliArgs,
@@ -306,8 +306,11 @@ try {
   const claim = tryAcquireProjectLaunchOwner(target, "launcher");
   if (claim.kind !== "acquired") throw new Error("Fray is starting for this project; retry shortly");
   let release: (() => void) | undefined = await acquireGlobalLaunchLock();
+  let portReservation: (() => void) | undefined;
   try {
-    const port = await choosePort(options.port, readPreferredPort(workspace.stateDir));
+    const allocation = await allocatePort(options.port, readPreferredPort(workspace.stateDir));
+    const port = allocation.port;
+    portReservation = allocation.release;
     // The supervisor owns the rest of this process's life (runSupervisor never returns), so start it
     // WITHOUT awaiting and race it against health. Awaiting it directly is what made everything below
     // unreachable: parseCliArgs pins `foreground` to true, so the old `if (options.foreground) await
@@ -315,6 +318,12 @@ try {
     // browser, and never released the lock it took — the detached-spawn branch that used to follow was
     // dead code the day parseCliArgs stopped honouring --detach.
     const running = runSupervisor(port, claim.lease.token);
+    // Allocation is the only machine-shared step, so the machine-global lock ends HERE — the port
+    // reservation above, not this lock, keeps `port` ours until the child listens. Holding it across
+    // the progress-tracked wait below meant one cold `npx frayui` could sit on it for minutes while
+    // every other repository's launcher gave up after a far shorter budget.
+    release();
+    release = undefined;
     // Progress-tracked: a boot that keeps reporting steps keeps the launcher's patience, so a large
     // board on a busy machine is no longer indistinguishable from a wedge. See waitForWorkspace.
     // `running` stays in the race so a supervisor that dies while booting reports immediately.
@@ -327,14 +336,14 @@ try {
       ),
       running,
     ]);
-    // Hold the machine-global allocation lock only until the port is actually listening. It must NOT
-    // span the foreground server lifetime, or a single `npx frayui` blocks every other repository's
-    // launch on this machine until it is stopped.
-    release();
-    release = undefined;
+    // The child is listening now, so the port defends itself. The reservation must NOT span the
+    // foreground server lifetime, or a stopped-but-unreleased claim would push this repository's next
+    // launch off its remembered port.
+    portReservation();
+    portReservation = undefined;
     await openOrPrint(port, false);
     await running;
-  } finally { release?.(); claim.lease.release(); }
+  } finally { release?.(); portReservation?.(); claim.lease.release(); }
 } catch (error) {
   logger.error("launcher", `startup failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
   if (readout) {

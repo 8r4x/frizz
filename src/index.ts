@@ -26,7 +26,7 @@ import {
 import { assertLaunchPrerequisites } from "./preflight.ts";
 import {
   acquireGlobalLaunchLock,
-  choosePort,
+  allocatePort,
   expectedOwnerHealth,
   FIRST_ARTIFACT_LAUNCH_LOCK_TIMEOUT_MS,
   helpText,
@@ -725,6 +725,7 @@ try {
   // so independent repositories can perform cold source/artifact work concurrently.
   let pinnedArtifact: ReturnType<typeof ensureStableFrayArtifact> | undefined;
   let release: (() => void) | undefined;
+  let portReservation: (() => void) | undefined;
   try {
     const sequenced = await prepareBeforeGlobalLaunchLock(
       () => {
@@ -784,10 +785,12 @@ try {
         `supervisor pid ${after.owner.pid} became unhealthy during launch; run fray-dev --status`
       );
 
-    const port = await choosePort(
+    const allocation = await allocatePort(
       options.port,
       readPreferredPort(workspace.stateDir)
     );
+    const port = allocation.port;
+    portReservation = allocation.release;
     const ownedHealth = expectedOwnerHealth(
       target,
       readProjectLaunchOwner(workspace.stateDir)
@@ -795,6 +798,14 @@ try {
     readout?.begin("server", `starting on port ${port}`);
     logger.info("launcher", `starting the control plane on port ${port}`);
     const running = runSupervisor(port, launchOwner.token, pinnedArtifact?.digest);
+    // Allocation is the only machine-shared step, so the machine-global lock ends HERE — the port
+    // reservation above, not this lock, is what keeps `port` ours until the child listens on it.
+    // Holding the lock across the health wait below is what made three repositories launched in quick
+    // succession fail: that wait is progress-tracked, so one cold boot can legitimately hold on for
+    // minutes (up to LAUNCH_HARD_TIMEOUT_MS) while every other repository's launcher gives up on the
+    // lock after its own much shorter budget.
+    release();
+    release = undefined;
     // The forked control-plane child no longer writes to this TTY (its records go to the run log, and
     // to the terminal only under --debug), so the readout keeps repainting through the health wait
     // instead of standing down the moment the child starts talking.
@@ -806,11 +817,11 @@ try {
       waitForWorkspace(port, ownedHealth, undefined, { stateDir: workspace.stateDir }),
       running,
     ]);
-    // Hold the allocation/startup lock until the port is actually listening, then release it before the
-    // foreground server lifetime. Concurrent repositories therefore allocate distinct ports without
-    // serializing their running UI servers.
-    release();
-    release = undefined;
+    // The child is listening now, so the port defends itself and the reservation has done its job. It
+    // must NOT span the foreground server lifetime, or a stopped-but-unreleased claim would push the
+    // next launch of this repository off its remembered port.
+    portReservation();
+    portReservation = undefined;
     // Settle the server step BEFORE handing off to the browser. Leaving it to `ready()` meant the
     // browser row showed a ✓ while the server row above it was still spinning — a later step
     // finishing before an earlier one, which reads as the display being wrong.
@@ -821,6 +832,7 @@ try {
     await running;
   } finally {
     release?.();
+    portReservation?.();
     launchOwner.release();
   }
 } catch (error) {

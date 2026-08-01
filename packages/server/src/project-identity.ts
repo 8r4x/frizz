@@ -26,6 +26,8 @@ import {
 // to Git's common directory. A valid existing id takes the lock-free fast path in either case.
 const GLOBAL_LOCK_NAME = "dev-launch.lock"
 const GLOBAL_LOCK_OWNER = "owner.json"
+/** Port reservations are held per port, and outlive the global lock that allocated them. */
+const PORT_LOCK_DIR = "ports"
 const INCOMPLETE_LOCK_GRACE_MS = 1_000
 const LOCK_POLL_MS = 50
 const PROJECT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu
@@ -258,6 +260,39 @@ function tryAcquireLock(lockPath: string, adapter: ProcessPlatformAdapter): (() 
 
 function tryAcquireGlobalLaunchLock(home: string, adapter: ProcessPlatformAdapter): (() => void) | undefined {
   return tryAcquireLock(globalLaunchLockPath(home), adapter)
+}
+
+export function portReservationPath(port: number, home = homedir()): string {
+  return join(canonicalHome(home), ".fray", PORT_LOCK_DIR, `${port}.lock`)
+}
+
+/**
+ * Claim a TCP port machine-wide, without blocking.
+ *
+ * WHY THIS EXISTS. `canBindPort` proves a port is free by binding and closing it, which is TOCTOU:
+ * the port is not actually held until the control-plane child listens on it, minutes later. The
+ * launchers used to paper over that by holding the machine-GLOBAL launch lock all the way through the
+ * child's health wait — correct, but it serialized every repository on this machine behind one repo's
+ * boot, and a patient (progress-tracked) boot could hold it for the full 10-minute ceiling while
+ * other launchers gave up after 10s-120s. A reservation is the exclusivity without the serialization:
+ * it OUTLIVES the global lock, so allocation stays a critical section while booting does not.
+ *
+ * Reservations are ordinary launch locks, so they inherit atomic creation and dead-generation
+ * recovery: a launcher killed mid-boot leaves a reservation the next allocation reaps.
+ */
+export function tryReservePort(
+  port: number,
+  home = homedir(),
+  adapter: ProcessPlatformAdapter = defaultProcessPlatformAdapter,
+): (() => void) | undefined {
+  const lockPath = portReservationPath(port, home)
+  const release = tryAcquireLock(lockPath, adapter)
+  if (release) return release
+  // Only a provably dead owner's reservation may be taken. A live one belongs to a launcher that is
+  // still booting on this port, which is exactly what the reservation is for.
+  const observation = observeLock(lockPath, adapter)
+  if (!observation.stale || !quarantineLock(lockPath)) return undefined
+  return tryAcquireLock(lockPath, adapter)
 }
 
 function lockTimeoutError(observation: LockObservation): Error {

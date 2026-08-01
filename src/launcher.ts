@@ -8,6 +8,7 @@ import {
   acquireGlobalLaunchLock,
   pidIsAlive,
   resolveGitProjectIdentity,
+  tryReservePort,
   type GitProjectIdentityScope,
 } from "@fray-ui/server/project-identity";
 import {
@@ -515,21 +516,70 @@ export async function choosePort(
       throw new Error(`port ${explicit} is already in use`);
     return explicit;
   }
-  const candidates = [
+  for (const port of portCandidates(preferred)) {
+    if (await available(port)) return port;
+  }
+  throw new Error(noFreePortMessage());
+}
+
+function portCandidates(preferred: number | undefined): number[] {
+  return [
     preferred,
     ...Array.from(
       { length: PORT_SCAN_COUNT },
       (_, index) => DEFAULT_PORT + index
     ),
-  ];
-  for (const port of candidates) {
-    if (port && port <= 65535 && (await available(port))) return port;
+  ].filter((port): port is number => !!port && port <= 65535);
+}
+
+function noFreePortMessage(): string {
+  return `no free Fray development port found in ${DEFAULT_PORT}-${
+    DEFAULT_PORT + PORT_SCAN_COUNT - 1
+  }`;
+}
+
+export interface PortAllocation {
+  port: number;
+  /** Drops the machine-wide reservation. Idempotent. */
+  release: () => void;
+}
+
+/**
+ * Choose a port AND hold it machine-wide until the control plane is really listening on it.
+ *
+ * The reservation is taken BEFORE the bind probe, never after: the probe proves a port is free by
+ * binding and CLOSING it, so two launchers scanning concurrently would otherwise both see the same
+ * port free and both start on it. Reserving first makes the winner unambiguous — which is what lets a
+ * caller release the machine-global launch lock as soon as allocation is done, instead of holding it
+ * across the child's entire boot and serializing every other repository on this machine behind it.
+ */
+export async function allocatePort(
+  explicit: number | undefined,
+  preferred: number | undefined,
+  options: {
+    available?: (port: number) => Promise<boolean>;
+    reserve?: (port: number) => (() => void) | undefined;
+  } = {}
+): Promise<PortAllocation> {
+  const available = options.available ?? canBindPort;
+  const reserve = options.reserve ?? ((port: number) => tryReservePort(port));
+  const claim = async (port: number): Promise<PortAllocation | undefined> => {
+    const release = reserve(port);
+    if (!release) return undefined;
+    if (await available(port)) return { port, release };
+    release();
+    return undefined;
+  };
+  if (explicit !== undefined) {
+    const allocated = await claim(explicit);
+    if (!allocated) throw new Error(`port ${explicit} is already in use`);
+    return allocated;
   }
-  throw new Error(
-    `no free Fray development port found in ${DEFAULT_PORT}-${
-      DEFAULT_PORT + PORT_SCAN_COUNT - 1
-    }`
-  );
+  for (const port of portCandidates(preferred)) {
+    const allocated = await claim(port);
+    if (allocated) return allocated;
+  }
+  throw new Error(noFreePortMessage());
 }
 
 export interface WaitForWorkspaceOptions {

@@ -24,7 +24,9 @@ import assert from "node:assert/strict";
 import { resolveProject } from "../packages/server/src/project.ts";
 import {
   acquireGlobalLaunchLockSync,
+  portReservationPath,
   resolveGitWorktree,
+  tryReservePort,
 } from "../packages/server/src/project-identity.ts";
 import { deriveProjectSocket, deriveSocket } from "../packages/server/src/tmux.ts";
 import {
@@ -38,6 +40,7 @@ import {
 } from "../packages/server/src/project-launch.ts";
 import {
   acquireGlobalLaunchLock,
+  allocatePort,
   choosePort,
   helpText,
   expectedOwnerHealth,
@@ -1613,6 +1616,94 @@ test("two distinct repositories concurrently reserve different launch ports with
   } finally {
     await Promise.all(reservations.map(({ close }) => close()));
     rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("concurrent allocators never choose the same port, even while both probe it as free", async () => {
+  const home = mkdtempSync(join(tmpdir(), "fray-port-allocation-"));
+  try {
+    // Every port answers "free" to BOTH callers. That is exactly the bind-and-close TOCTOU window
+    // canBindPort leaves open, and the reason allocation cannot rely on the probe alone once the
+    // global lock stops spanning the child's boot.
+    const available = async () => true;
+    const reserve = (port: number) => tryReservePort(port, home);
+    const [first, second] = await Promise.all([
+      allocatePort(undefined, 4919, { available, reserve }),
+      allocatePort(undefined, 4919, { available, reserve }),
+    ]);
+    assert.notEqual(first.port, second.port);
+    assert.equal([first.port, second.port].includes(4919), true);
+
+    // A released reservation is immediately reusable, so a restart keeps its remembered port.
+    const reclaimed = first.port;
+    first.release();
+    const third = await allocatePort(undefined, reclaimed, { available, reserve });
+    assert.equal(third.port, reclaimed);
+    third.release();
+    second.release();
+
+    // A rejected explicit port must not leave its reservation behind.
+    await assert.rejects(
+      allocatePort(4917, undefined, { available: async () => false, reserve }),
+      /already in use/
+    );
+    const afterFailure = tryReservePort(4917, home);
+    assert.ok(afterFailure, "a failed explicit allocation leaked its reservation");
+    afterFailure();
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a port reservation is exclusive while its owner lives and reclaimed once it dies", () => {
+  const home = mkdtempSync(join(tmpdir(), "fray-port-reservation-"));
+  try {
+    const held = tryReservePort(4919, home);
+    assert.ok(held);
+    assert.equal(tryReservePort(4919, home), undefined);
+    held();
+    assert.equal(existsSync(portReservationPath(4919, home)), false);
+
+    // A launcher killed mid-boot leaves its claim on disk; the next allocation must reclaim it
+    // rather than skipping that port forever.
+    mkdirSync(join(home, ".fray", "ports"), { recursive: true });
+    writeFileSync(
+      portReservationPath(4919, home),
+      JSON.stringify({ pid: 999_999_999 })
+    );
+    const reclaimed = tryReservePort(4919, home);
+    assert.ok(reclaimed, "a dead launcher's port reservation was never reclaimed");
+    reclaimed();
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a booting repository holds only its port reservation, never the machine-global lock", async () => {
+  const home = mkdtempSync(join(tmpdir(), "fray-launch-serialization-"));
+  try {
+    const available = async () => true;
+    const reserve = (port: number) => tryReservePort(port, home);
+
+    const releaseFirst = await acquireGlobalLaunchLock(home, 5_000);
+    const first = await allocatePort(undefined, undefined, { available, reserve });
+    // The launcher releases the machine-global lock the moment allocation is done. Everything after
+    // it — spawning the child and waiting out a progress-tracked boot that may run for minutes — is
+    // guarded by the reservation alone. Holding the lock that long is what failed a third repository
+    // launched in quick succession.
+    releaseFirst();
+
+    // So a second repository starting mid-boot takes the lock immediately, not after a boot-length
+    // wait. The tiny budget is the assertion: it cannot pass if the first launch still held the lock.
+    const releaseSecond = await acquireGlobalLaunchLock(home, 30);
+    const second = await allocatePort(undefined, undefined, { available, reserve });
+    releaseSecond();
+
+    assert.notEqual(first.port, second.port);
+    first.release();
+    second.release();
+  } finally {
+    rmSync(home, { recursive: true, force: true });
   }
 });
 
