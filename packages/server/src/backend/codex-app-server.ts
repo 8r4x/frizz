@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
 import { StringDecoder } from "node:string_decoder"
 import type { Readable, Writable } from "node:stream"
-import Database from "better-sqlite3"
+import Database from "../sqlite.ts"
 import { z } from "zod"
 import {
   INTERACTION_PROTOCOL_VERSION,
@@ -1626,7 +1626,7 @@ function correlatedFileItemKey(threadId: string, turnId: string, itemId: string)
 }
 
 export class CodexAppServerBridge {
-  private readonly db: Database.Database
+  private readonly db: Database
   private readonly now: () => Date
   private readonly makeId: () => string
   private readonly host: CodexAppServerHost

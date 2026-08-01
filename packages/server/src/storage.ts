@@ -1,4 +1,4 @@
-import Database from "better-sqlite3"
+import Database from "./sqlite.ts"
 import { ThreadSlug, slugify, tmuxSessionName } from "@fray-ui/shared"
 import { createInteractionStore, type InteractionStore } from "./interaction-store.ts"
 
@@ -282,7 +282,7 @@ export type AdoptionSpawnFenceResult<T> =
   | { acquired: true; value: T }
 
 export interface Storage {
-  db: Database.Database
+  db: Database
   interactions: InteractionStore
   getSession(slug: string): SessionRow | undefined
   allSessions(): SessionRow[]

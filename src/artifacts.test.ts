@@ -692,15 +692,17 @@ test("a real Nub/esbuild artifact boots its WebSocket-capable server and loads i
     });
     await waitForArtifactHealth(port, child, projectId, () => output);
     const nativeSmoke = `
-      // \`lib/index.js\`, not \`lib/database.js\`: since v13 the latter exports a factory that binds the
-      // addon, and only the index applies the prebuild resolution this smoke is meant to exercise.
-      import Database from ${JSON.stringify(join(artifact.runtimeDir, "node_modules", "better-sqlite3", "lib", "index.js"))};
+      // SQLite comes from the RUNTIME now, not from a staged native cell: the database moved to
+      // node:sqlite precisely so no prebuild has to be copied into the artifact and matched to the
+      // host's Node-API version. It is still smoked here, because "the artifact can open a database"
+      // is the property this test is for — only the thing that provides it changed.
+      import { DatabaseSync } from "node:sqlite";
       import pty from ${JSON.stringify(join(artifact.runtimeDir, "node_modules", "node-pty", "lib", "index.js"))};
       import watcher from ${JSON.stringify(join(artifact.runtimeDir, "node_modules", "@parcel", "watcher", "index.js"))};
       import { mkdtempSync, rmSync } from "node:fs";
       import { tmpdir } from "node:os";
       import { join } from "node:path";
-      const db = new Database(":memory:"); db.exec("create table t(x); insert into t values (1)"); if (db.prepare("select x from t").get().x !== 1) throw new Error("sqlite"); db.close();
+      const db = new DatabaseSync(":memory:"); db.exec("create table t(x); insert into t values (1)"); if (db.prepare("select x from t").get().x !== 1) throw new Error("sqlite"); db.close();
       const child = pty.spawn(process.execPath, ["-e", "process.exit(0)"], { name: "xterm-color", cols: 80, rows: 24, cwd: process.cwd(), env: process.env });
       await new Promise((resolve, reject) => child.onExit(({ exitCode }) => exitCode === 0 ? resolve() : reject(new Error("node-pty exited " + exitCode))));
       const dir = mkdtempSync(join(tmpdir(), "fray-watch-")); const sub = await watcher.subscribe(dir, () => {}); await sub.unsubscribe(); rmSync(dir, { recursive: true, force: true });

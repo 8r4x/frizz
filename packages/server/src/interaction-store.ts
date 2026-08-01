@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import type Database from "better-sqlite3"
+import type Database from "./sqlite.ts"
 import {
   INTERACTION_LIST_MAX,
   CancelInteractionInput,
@@ -507,7 +507,7 @@ export function serializeInteractionDiagnostic(value: unknown): string {
     : JSON.stringify({ interactionId: truncateUtf8(record.id, 128), lifecycle: record.lifecycle, diagnostic: "redacted" })
 }
 
-export function createInteractionStore(db: Database.Database, options: InteractionStoreOptions = {}): InteractionStore {
+export function createInteractionStore(db: Database, options: InteractionStoreOptions = {}): InteractionStore {
   const now = options.now ?? (() => new Date())
   const makeId = options.id ?? randomUUID
   const listeners = new Set<(change: InteractionChange) => void>()

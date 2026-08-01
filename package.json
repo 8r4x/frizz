@@ -9,7 +9,7 @@
   "homepage": "https://github.com/colinhacks/fray",
   "repository": { "type": "git", "url": "git+https://github.com/colinhacks/fray.git" },
   "engines": {
-    "node": "^22.14.0 || >=23.6.0"
+    "node": "^22.13.0 || >=23.4.0"
   },
   "type": "module",
   "bin": {
@@ -33,7 +33,6 @@
   },
   "dependencies": {
     "@parcel/watcher": "^2.5",
-    "better-sqlite3": "^13",
     "node-pty": "^1.1"
   },
   "devDependencies": {
@@ -46,7 +45,6 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "better-sqlite3",
       "node-pty",
       "@parcel/watcher",
       "esbuild",

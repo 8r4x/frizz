@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3"
+import type Database from "./sqlite.ts"
 
 export type WakeDeliveryState = "pending" | "leased" | "delivered" | "superseded" | "exhausted"
 
@@ -82,7 +82,7 @@ function delivery(row: WakeDeliveryRow): WakeDelivery {
   }
 }
 
-export function createWakeDeliveryStore(db: Database.Database): WakeDeliveryStore {
+export function createWakeDeliveryStore(db: Database): WakeDeliveryStore {
   db.exec(`
     CREATE TABLE IF NOT EXISTS wake_delivery (
       id              TEXT PRIMARY KEY,

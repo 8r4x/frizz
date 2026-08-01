@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
-import Database from "better-sqlite3"
+import Database from "./sqlite.ts"
 import { createStorage, type ProfileHandoffJournal, type Storage, type SessionRow } from "./storage.ts"
 
 function profileHandoff(

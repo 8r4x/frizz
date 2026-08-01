@@ -655,7 +655,6 @@ function runArtifactCommand(args: string[], source: string): void {
 }
 
 const RUNTIME_NATIVE_EXTERNALS = [
-  "better-sqlite3",
   "node-pty",
   "@parcel/watcher",
 ] as const;

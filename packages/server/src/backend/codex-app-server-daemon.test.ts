@@ -9,7 +9,7 @@ import { mkdtempSync, writeFileSync, chmodSync, existsSync, unlinkSync } from "n
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import Database from "better-sqlite3"
+import Database from "../sqlite.ts"
 import { createInteractionStore } from "../interaction-store.ts"
 import {
   codexAppServerDaemonRecordPath,

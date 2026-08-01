@@ -36,7 +36,7 @@ function ptyInstall(mode: number, platform: NodeJS.Platform = "darwin") {
 
 test("core launch preflight accepts a supported Node host with git and tmux", () => {
   assert.doesNotThrow(() =>
-    assertLaunchPrerequisites({ nodeVersion: "22.14.0", command: () => true })
+    assertLaunchPrerequisites({ nodeVersion: "22.13.0", command: () => true })
   );
 });
 
@@ -49,27 +49,27 @@ test("core launch preflight accepts newer Node majors", () => {
 test("core launch preflight rejects a Node host below the dependency floor", () => {
   assert.throws(
     () => assertLaunchPrerequisites({ nodeVersion: "18.20.0", command: () => true }),
-    /Node\.js \^22\.14\.0 \|\| >=23\.6\.0 is required \(found 18\.20\.0\)/
+    /Node\.js \^22\.13\.0 \|\| >=23\.4\.0 is required \(found 18\.20\.0\)/
   );
 });
 
-test("core launch preflight rejects Node 20, which better-sqlite3 ^13 no longer supports", () => {
+test("core launch preflight rejects Node 20, which predates node:sqlite entirely", () => {
   assert.throws(
     () => assertLaunchPrerequisites({ nodeVersion: "20.19.0", command: () => true }),
-    /Node\.js \^22\.14\.0 \|\| >=23\.6\.0 is required \(found 20\.19\.0\)/
+    /Node\.js \^22\.13\.0 \|\| >=23\.4\.0 is required \(found 20\.19\.0\)/
   );
 });
 
 test("core launch preflight rejects an old 22.x minor below the floor", () => {
   assert.throws(
     () => assertLaunchPrerequisites({ nodeVersion: "22.11.0", command: () => true }),
-    /Node\.js \^22\.14\.0 \|\| >=23\.6\.0 is required \(found 22\.11\.0\)/
+    /Node\.js \^22\.13\.0 \|\| >=23\.4\.0 is required \(found 22\.11\.0\)/
   );
 });
 
 test("core launch preflight gives an actionable error for a missing executable", () => {
   assert.throws(
-    () => assertLaunchPrerequisites({ nodeVersion: "22.14.0", command: (name) => name !== "tmux" }),
+    () => assertLaunchPrerequisites({ nodeVersion: "22.13.0", command: (name) => name !== "tmux" }),
     /required executable `tmux` is not available on PATH; Fray uses tmux for its terminal panes and interactive provider logins\. Install tmux \(`brew install tmux` on macOS, `apt install tmux` on Debian\/Ubuntu\) and relaunch Fray/
   );
 });
@@ -95,7 +95,7 @@ test("the eager executable probe leaves the Node floor to the full prerequisite 
   assert.doesNotThrow(() => assertRequiredExecutables(() => true));
   assert.throws(
     () => assertLaunchPrerequisites({ nodeVersion: "20.19.0", command: () => true }),
-    /Node\.js \^22\.14\.0 \|\| >=23\.6\.0 is required/
+    /Node\.js \^22\.13\.0 \|\| >=23\.4\.0 is required/
   );
 });
 
@@ -113,59 +113,75 @@ test("the published engines floor is exactly the floor the launcher enforces", (
   );
 });
 
-// Measured, not derived: `new Database(":memory:")` from the real published tarball segfaults on
-// 22.0-22.13 and 23.0-23.5 and works from 22.14 and 23.6 up. Bisected over 38 installed Node releases
-// against ONE install directory, so the Node binary was the only variable. A plain `>=22.14` floor
-// would still advertise 23.0-23.5, where Fray dies before the board boots.
-test("the Node floor tracks the versions better-sqlite3 was measured to survive", () => {
-  for (const version of ["22.14.0", "22.23.1", "23.6.0", "23.11.0", "24.17.0", "25.9.0", "26.5.0"]) {
+// Measured, not derived. `node:sqlite` was unflagged in 22.13 and 23.4; below that the import fails
+// outright with "No such built-in module". Confirmed by running the driver's own suite (sqlite.test.ts)
+// on 22.12, 22.13, 22.14, 23.4, 23.6, 24 and 26 — every release from 22.13 up passes it whole, and
+// 22.12 is the only one that fails, at import. A floor written as plain `>=22.13` would wrongly
+// advertise 23.0-23.3, where the module does not exist either, hence a floor per release line.
+test("the Node floor tracks the releases node:sqlite actually ships in", () => {
+  for (const version of ["22.13.0", "22.14.0", "22.23.1", "23.4.0", "23.6.0", "23.11.0", "24.17.0", "25.9.0", "26.5.0"]) {
     assert.doesNotThrow(
       () => assertLaunchPrerequisites({ nodeVersion: version, command: () => true }),
-      `${version} was measured to work`
+      `${version} ships node:sqlite and was measured to run the driver suite`
     );
   }
-  for (const version of ["20.11.0", "21.7.0", "22.0.0", "22.12.0", "22.13.0", "23.0.0", "23.5.0"]) {
+  for (const version of ["20.11.0", "21.7.0", "22.0.0", "22.11.0", "22.12.0", "23.0.0", "23.3.0"]) {
     assert.throws(
       () => assertLaunchPrerequisites({ nodeVersion: version, command: () => true }),
       /is required/,
-      `${version} segfaults and must be refused`
+      `${version} has no node:sqlite and must be refused`
     );
   }
-  assert.equal(supportedNodeRange(), "^22.14.0 || >=23.6.0");
+  assert.equal(supportedNodeRange(), "^22.13.0 || >=23.4.0");
   // MINIMUM_NODE stays the lowest supported release, for callers that want a single number.
-  assert.deepEqual({ ...MINIMUM_NODE }, { major: 22, minor: 14 });
+  assert.deepEqual({ ...MINIMUM_NODE }, { major: 22, minor: 13 });
 });
 
-// The floor has now drifted TWICE, and both times a human number went stale against a dependency.
-// So stop trusting the number: re-derive it from what better-sqlite3 actually builds against, every
-// run. Its `engines` field says `>=22` and is simply wrong — `binding.gyp` builds with
-// `NAPI_VERSION=10`, which exists only from Node 22.14 and 23.6, and an older Node does not reject the
-// addon but CRASHES registering it (EXC_BAD_ACCESS in napi_module_register_by_symbol during DLOpen).
-// When better-sqlite3 next raises NAPI_VERSION, this fails here instead of on a user's machine.
-test("the Node floor still covers the Node-API version better-sqlite3 is built against", () => {
-  const gyp = readFileSync(
-    join(
-      dirname(createRequire(import.meta.url).resolve("better-sqlite3/package.json")),
-      "binding.gyp"
-    ),
-    "utf8"
-  );
-  const required = Number(/NAPI_VERSION=(\d+)/.exec(gyp)?.[1]);
+// The floor has drifted TWICE, and both times a hand-maintained number went stale against a native
+// dependency. better-sqlite3 is gone now — the database is `node:sqlite`, which has no prebuild to go
+// stale — but node-pty and @parcel/watcher are still addons, so the guard stays and is now general:
+// it re-derives the requirement from what EVERY runtime dependency actually builds against.
+//
+// The failure it exists to prevent is not a clean error. better-sqlite3 built with NAPI_VERSION=10
+// while declaring `engines: ">=22"`, and on Node 22.12 the addon did not fail to load — Node
+// SEGFAULTED registering it (EXC_BAD_ACCESS in napi_module_register_by_symbol during DLOpen).
+test("the Node floor covers the Node-API version every native dependency builds against", () => {
+  const require = createRequire(import.meta.url);
+  const manifest = JSON.parse(
+    readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8")
+  ) as { dependencies?: Record<string, string> };
   assert.ok(
-    Number.isSafeInteger(required),
-    "could not read NAPI_VERSION from better-sqlite3's binding.gyp"
+    !("better-sqlite3" in (manifest.dependencies ?? {})),
+    "better-sqlite3 is back as a dependency; it segfaults below its NAPI floor — see sqlite.ts"
   );
-  const lines = NODE_API_AVAILABILITY[required];
+
+  let highest = 8; // Node-API 8 is the default when a binding.gyp says nothing.
+  for (const name of Object.keys(manifest.dependencies ?? {})) {
+    let gyp: string;
+    try {
+      gyp = readFileSync(join(dirname(require.resolve(`${name}/package.json`)), "binding.gyp"), "utf8");
+    } catch {
+      continue; // Not a native addon, or it ships no binding.gyp — nothing to derive.
+    }
+    const declared = Number(/NAPI_VERSION=(\d+)/.exec(gyp)?.[1]);
+    if (Number.isSafeInteger(declared)) highest = Math.max(highest, declared);
+  }
+
+  const lines = NODE_API_AVAILABILITY[highest];
   assert.ok(
     lines,
-    `better-sqlite3 now needs Node-API ${required}, which NODE_API_AVAILABILITY does not describe. ` +
+    `a dependency now needs Node-API ${highest}, which NODE_API_AVAILABILITY does not describe. ` +
       `Add it from https://nodejs.org/api/n-api.html and re-measure SUPPORTED_NODE_LINES.`
   );
-  assert.deepEqual(
-    SUPPORTED_NODE_LINES.map((line) => `${line.major}.${line.minor}`),
-    lines!.map((line) => `${line.major}.${line.minor}`),
-    `Fray advertises Node releases that cannot load better-sqlite3's Node-API ${required} addon`
-  );
+  for (const line of lines!) {
+    const ours = SUPPORTED_NODE_LINES.find((entry) => entry.major === line.major);
+    if (!ours) continue; // We advertise no release on that line at all, so nothing can load there.
+    assert.ok(
+      ours.minor >= line.minor,
+      `Fray advertises Node ${ours.major}.${ours.minor}, below the ${line.major}.${line.minor} that ` +
+        `Node-API ${highest} requires — a native dependency would crash there, not fail cleanly`
+    );
+  }
 });
 
 test("provider readiness disables only the unavailable backend and never requires gh", () => {
@@ -178,7 +194,7 @@ test("provider readiness disables only the unavailable backend and never require
   assert.deepEqual(seen, ["claude", "codex"]);
   assert.doesNotThrow(() =>
     assertLaunchPrerequisites({
-      nodeVersion: "22.14.0",
+      nodeVersion: "22.13.0",
       command: (name) => name === "git" || name === "tmux",
     })
   );

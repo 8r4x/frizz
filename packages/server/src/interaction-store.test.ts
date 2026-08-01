@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import Database from "better-sqlite3"
+import Database from "./sqlite.ts"
 import {
   INTERACTION_REQUEST_MAX_BYTES,
   InteractionRequest,

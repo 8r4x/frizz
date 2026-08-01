@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { PassThrough } from "node:stream"
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import Database from "better-sqlite3"
+import Database from "../sqlite.ts"
 import { createInteractionStore, InteractionStoreError } from "../interaction-store.ts"
 import { createStorage, type SessionRow } from "../storage.ts"
 import {

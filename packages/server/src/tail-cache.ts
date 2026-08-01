@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs"
 import { join } from "node:path"
-import type Database from "better-sqlite3"
+import type Database from "./sqlite.ts"
 
 // ── The durable tail-state cache ───────────────────────────────────────────────────────────────────
 // The tailer's FIRST tick primes every registry row by folding its ENTIRE JSONL from byte 0. On the
@@ -220,7 +220,7 @@ interface CacheRow {
   state: string
 }
 
-export function createTailStateCache(db: Database.Database, schema = foldSchemaDigest()): TailStateCache {
+export function createTailStateCache(db: Database, schema = foldSchemaDigest()): TailStateCache {
   let usable = true
   try {
     db.exec(`

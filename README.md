@@ -23,7 +23,7 @@
 
 Fray runs on macOS and Linux. Four requirements, and you probably have three already.
 
-**1. Node 22.14 or newer.** On the Node 23 line it must be 23.6+ — older releases in each line segfault inside better-sqlite3.
+**1. Node 22.13 or newer.** On the Node 23 line it must be 23.4+ — Fray's database is Node's built-in `node:sqlite`, which older releases don't ship.
 
 ```sh
 node --version

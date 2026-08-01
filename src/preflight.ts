@@ -15,42 +15,40 @@ export interface LaunchPrerequisiteOptions {
 /**
  * The Node releases Fray actually runs on, MEASURED rather than derived from dependency manifests.
  *
- * The derivation says 22.12: Vite ^8 wants `^20.19.0 || >=22.12.0`, better-sqlite3 ^13 says `>=22`,
- * and `import.meta.dirname` needs 20.11. Every one of those is a manifest claim, and on this platform
- * the manifests are wrong. Installing the real published tarball and constructing a single database —
- * `new Database(":memory:")` — SEGFAULTS (exit 139) on 22.0 through 22.13 and on 23.0 through 23.5,
- * and succeeds from 22.14 and 23.6 onward. Bisected across 38 installed Node releases against ONE
- * install directory, so the Node binary was the only variable; better-sqlite3 13.0.2 ships a single
- * N-API prebuild per platform, so the same bytes crash on one Node and work on the next.
+ * Fray's database is `node:sqlite`, unflagged in v22.13.0 and v23.4.0. Below those the module does not
+ * exist at all — the import fails with "No such built-in module" — so the floor is simply the release
+ * that shipped it. Verified by running the driver's own suite (`sqlite.test.ts`) on 22.12, 22.13,
+ * 22.14, 23.4, 23.6, 24 and 26: every release from 22.13 up passes it whole, and 22.12 is the only
+ * failure. Anything newer than the highest line listed is assumed good.
  *
- * Hence a floor PER RELEASE LINE instead of one number: `>=22.14` alone would still advertise 23.0-23.5,
- * where Fray dies before the board ever boots. Anything newer than the highest line listed is assumed
- * good — 24, 25 and 26 were all verified clean.
+ * Hence a floor PER RELEASE LINE rather than one number: a plain `>=22.13` would also advertise
+ * 23.0-23.3, where `node:sqlite` does not exist either.
+ *
+ * This was 22.14 until the database moved off better-sqlite3, whose prebuild is built with
+ * `NAPI_VERSION=10` (available only from 22.14/23.6) while the package declared `engines: ">=22"`. On
+ * an older Node that addon did not fail to load, it SEGFAULTED inside `napi_module_register_by_symbol`.
+ * A built-in module has no prebuild, no ABI and no floor that can shift under a lockfile update, so
+ * the migration deleted that whole class of failure — and, unusually, LOWERED the floor by a release.
  *
  * `package.json`'s `engines.node` mirrors this table and a test asserts they stay equal. They have
- * drifted twice now, in both directions: first `>=26` against an enforced 22.12 (an EBADENGINE warning
- * about a floor nothing checked), then `>=22.12.0` against a runtime that segfaults there. The
- * published package ships COMPILED JS, so the source workflow's Node is never the consumer's Node.
+ * drifted twice, in both directions: `>=26` against an enforced 22.12 (an EBADENGINE warning about a
+ * floor nothing checked), then `>=22.12.0` against a runtime that segfaulted there. The published
+ * package ships COMPILED JS, so the source workflow's Node is never the consumer's Node.
  */
 export const SUPPORTED_NODE_LINES = [
-  { major: 22, minor: 14 },
-  { major: 23, minor: 6 },
+  { major: 22, minor: 13 },
+  { major: 23, minor: 4 },
 ] as const;
 
 /**
- * WHY those two lines, exactly: better-sqlite3's `binding.gyp` builds with `NAPI_VERSION=10`, and
- * Node-API 10 exists only from v22.14.0 and v23.6.0 (nodejs.org/api/n-api.html version matrix). On an
- * older Node the addon is not rejected — Node crashes registering it, `EXC_BAD_ACCESS` inside
- * `napi_module_register_by_symbol` during `DLOpen`, which is the SIGSEGV this table exists to prevent.
+ * Node-API version → the release lines that first ship it, from the matrix at nodejs.org/api/n-api.html.
  *
- * better-sqlite3 13.0.2 nevertheless declares `engines: { node: ">=22" }`, so believing that field is
- * what produced a floor of 22.12 that segfaults. This table is the ground truth instead, and the test
- * beside it re-derives the floor from the dependency's ACTUAL `NAPI_VERSION` on every run — so the
- * next time better-sqlite3 raises it, the suite fails here instead of a user's board dying at boot.
- *
- * Keyed by Node-API version → the release lines that first ship it. Extend from the official matrix.
+ * Kept even though the database no longer needs it: node-pty and @parcel/watcher are still native
+ * addons. The test beside it re-derives the requirement from what those actually build against, so if
+ * either raises its Node-API version the suite fails there instead of a user's board dying at boot.
  */
 export const NODE_API_AVAILABILITY: Record<number, ReadonlyArray<{ major: number; minor: number }>> = {
+  8: [{ major: 16, minor: 0 }],
   9: [{ major: 18, minor: 17 }, { major: 20, minor: 3 }, { major: 21, minor: 0 }],
   10: [{ major: 22, minor: 14 }, { major: 23, minor: 6 }],
 };
@@ -122,7 +120,7 @@ export function commandIsAvailable(command: string): boolean {
  * a workstation may use one backend while the other is unavailable.
  *
  * The Node floor here is a genuine minimum, not a proxy for the older Node-26 gate: it is the lowest
- * version Fray's build toolchain and native modules support (see `MINIMUM_NODE`). It is complementary
+ * release that ships `node:sqlite` (see `SUPPORTED_NODE_LINES`). It is complementary
  * to `assertArtifactHostCompatible`, which only enforces that a reused artifact's Node major equals
  * the host's — that equality check cannot catch a host whose Node is simply below what the
  * dependencies need, which is precisely what this floor reports cleanly.
@@ -135,8 +133,8 @@ export function assertLaunchPrerequisites(
   if (!nodeVersionIsSupported(major!, minor!))
     throw new Error(
       `Node.js ${supportedNodeRange()} is required (found ${version}); ` +
-        `better-sqlite3 segfaults on older releases in each line, so Fray would crash on boot rather ` +
-        `than misbehave. Install a newer Node release and relaunch Fray`
+        `Fray's database is Node's built-in node:sqlite, which older releases do not ship. ` +
+        `Install a newer Node release and relaunch Fray`
     );
   assertRequiredExecutables(options.command ?? commandIsAvailable);
 }
