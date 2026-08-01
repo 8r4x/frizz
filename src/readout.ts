@@ -198,16 +198,19 @@ export class Readout {
   }
 
   private stepRow(step: Step): string {
-    const label =
-      step.state === "pending" ? this.c(ANSI.dim, step.label.padEnd(18)) : step.label.padEnd(18)
-    const detail = step.detail ? this.c(ANSI.dim, step.detail) : ""
     const elapsed =
       step.state === "active"
-        ? this.c(ANSI.dim, ` ${formatDuration(this.now() - (this.stepStartedAt.get(step.key) ?? this.now()))}`)
+        ? formatDuration(this.now() - (this.stepStartedAt.get(step.key) ?? this.now()))
         : step.ms !== undefined && step.ms >= 1_000
-        ? this.c(ANSI.dim, ` ${formatDuration(step.ms)}`)
+        ? formatDuration(step.ms)
         : ""
-    return this.fit(`  ${this.glyph(step)}  ${label}${detail}${elapsed}`)
+    // Two spaces between the detail and the duration: a single one ran them together into one token
+    // ("716d04203715 33s" read as a single field).
+    const tail = [step.detail, elapsed].filter(Boolean).join("  ")
+    // A row with nothing to say drops the label padding entirely rather than trailing 12 blanks.
+    const label = tail ? step.label.padEnd(18) : step.label
+    const styled = step.state === "pending" ? this.c(ANSI.dim, label) : label
+    return this.fit(`  ${this.glyph(step)}  ${styled}${tail ? this.c(ANSI.dim, tail) : ""}`)
   }
 
   private header(): string[] {
@@ -230,9 +233,15 @@ export class Readout {
     this.painted = lines.length
   }
 
-  /** Non-TTY (and debug) transcript: one settled, parseable row per state change. */
+  /**
+   * Non-TTY transcript: one settled, parseable row per state change, so a pipe still sees progress.
+   *
+   * Silent under `--debug`, where the log feed is the authoritative account and these rows were
+   * duplicating it in a second format ("fray: ··· artifact — checking …" immediately beside
+   * "INFO artifact Checking …"). The final ready/fail summary still prints in both modes.
+   */
   private emitPlain(step: Step): void {
-    if (this.tty && !this.debug) return
+    if (this.tty || this.debug) return
     const mark =
       step.state === "done" ? "done" : step.state === "failed" ? "failed" : step.state === "skipped" ? "skipped" : "···"
     const detail = step.detail ? ` — ${step.detail}` : ""
@@ -279,13 +288,17 @@ export class Readout {
         this.version ? ` ${this.c(ANSI.dim, `v${this.version}`)}` : ""
       }  ${this.c(ANSI.dim, `ready in ${elapsed}`)}`,
       "",
+      // Deliberately NOT truncated. These rows carry an address and a log path the operator has to
+      // be able to copy, and a clipped path is worse than a wrapped one. Truncation exists to stop a
+      // wrap desynchronizing the repaint region — and this is the last paint, so there is no region
+      // left to protect.
       ...entries.map((entry) => {
         const arrow = this.c(ANSI.green, "➜")
         const label = this.c(ANSI.bold, `${entry.label}:`.padEnd(width + 1))
         const value = entry.accent ? this.c(ANSI.cyan, entry.value) : this.c(ANSI.dim, entry.value)
-        return this.fit(`  ${arrow}  ${label} ${value}`)
+        return `  ${arrow}  ${label} ${value}`
       }),
-      ...(hint ? ["", this.fit(`  ${this.c(ANSI.dim, hint)}`)] : []),
+      ...(hint ? ["", `  ${this.c(ANSI.dim, hint)}`] : []),
       "",
     ]
     // Erase the boot region and leave the final block in the scrollback.
@@ -308,8 +321,10 @@ export class Readout {
       "",
       `  ${this.c(ANSI.red, "✗")}  ${this.c(ANSI.bold, "Fray could not start")}`,
       "",
-      ...message.split("\n").map((row) => this.fit(`     ${this.c(ANSI.red, row)}`)),
-      ...(logPath ? ["", this.fit(`     ${this.c(ANSI.dim, `Full log: ${logPath}`)}`)] : []),
+      // Not truncated, for the same reason as `ready()`: the operator has to be able to read the whole
+      // error and copy the whole path, and nothing repaints after this.
+      ...message.split("\n").map((row) => `     ${this.c(ANSI.red, row)}`),
+      ...(logPath ? ["", `     ${this.c(ANSI.dim, `Full log: ${logPath}`)}`] : []),
       "",
     ]
     const rewind = this.painted > 0 ? `\x1b[${this.painted}A\r\x1b[0J` : "\r\x1b[0J"

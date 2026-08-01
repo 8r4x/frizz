@@ -184,15 +184,20 @@ test("a pipe gets newline-delimited records and never an escape sequence", () =>
   assert.match(raw, /fray: local: http:\/\/127\.0\.0\.1:4923\/\n/);
 });
 
-test("--debug streams records and suppresses the repaint entirely", () => {
+test("--debug streams records, suppresses the repaint, and does not duplicate the feed", () => {
   const out = new Capture(true);
   const readout = new Readout({ output: out, color: false, debug: true, tickMs: 60_000 });
   readout.plan([{ key: "server", label: "Server" }]);
   readout.begin("server", "starting");
   readout.note("12:00:00 INFO  supervisor   starting Fray");
   assert.equal(out.raw.includes("\x1b["), false, "debug mode must not repaint");
-  assert.match(out.raw, /fray: ··· server — starting/);
   assert.match(out.raw, /12:00:00 INFO {2}supervisor {3}starting Fray/);
+  // The log feed is the authoritative account under --debug; the step rows would restate it in a
+  // second format right beside it.
+  assert.equal(out.raw.includes("fray: ··· server"), false, out.raw);
+  // The final summary still prints — it carries the URL, which the feed does not present as such.
+  readout.ready([{ label: "Local", value: "http://127.0.0.1:4923/" }]);
+  assert.match(out.raw, /fray: local: http:\/\/127\.0\.0\.1:4923\//);
 });
 
 test("colour is suppressed when asked, and emitted when not", () => {

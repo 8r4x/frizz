@@ -37,6 +37,24 @@ Then from any Git repo: `fray-dev` (foreground; Ctrl-C stops only that workspace
 without changing it; `fray-dev:uninstall` removes only that owned shim. Use
 `FRAY_BIN_DIR=/another/bin` to install elsewhere.
 
+### Readout and logs
+
+A TTY launch repaints a step list while booting and settles into a static block naming the address,
+the project, and this run's log. It repaints only during the boot — once that block prints, nothing
+touches the cursor again, so a stray write can never land on a live region.
+
+Every process writes the complete feed to `<stateDir>/logs/fray-<timestamp>-<pid>.log`, one file per
+run, with `logs/latest.log` pointing at the newest. The launcher passes that path down in
+`FRAY_LOG_FILE`, so the supervisor and the forked control-plane child append to the SAME file — they
+share the file, not a writer, and O_APPEND makes each short write atomic. That is what lets the child
+stay silent on a terminal the launcher is repainting without losing anything it had to say.
+Retention keeps 20 runs and nothing older than 14 days; a single file stops at 32 MB.
+`FRAY_LOG_PATH` overrides the location (a directory or an exact `.log` file).
+
+`--debug` streams that same feed to the terminal instead of the compact readout, in every process at
+once — the launcher sets `FRAY_DEBUG` in the child environment, since the child never sees the
+command line. Ctrl-C and a failed boot both print the log path.
+
 Gates: `pnpm run typecheck` and `pnpm test`. CI (`.github/workflows/ci.yml`) runs only the checks that
 need no install, tmux, or provider CLI; the full suite is local-only by design.
 

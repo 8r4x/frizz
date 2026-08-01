@@ -277,10 +277,31 @@ export function setAmbientLogger(logger: Logger): Logger {
   return logger
 }
 
-/** Format one record for a terminal that is showing the full feed. */
+/**
+ * Format one record for a terminal that is showing the full feed.
+ *
+ * LOCAL time, matching the disk format exactly. It used to be `toISOString()` (UTC), so the terminal
+ * and the log file it mirrors disagreed by the operator's whole offset — the two things you compare
+ * first when something goes wrong.
+ */
 export function formatFeedLine(record: LogRecord): string {
-  const at = new Date(record.at).toISOString().slice(11, 23)
-  return `${at} ${record.level.toUpperCase().padEnd(5)} ${record.scope.padEnd(12)} ${record.message}`
+  return formatDiskLine(record).trimEnd()
+}
+
+/**
+ * Mirror this logger's records to stderr — the `--debug` view.
+ *
+ * `enabled` defaults to the FRAY_DEBUG the launcher puts in every child's environment, so a forked
+ * process opts in without being passed `--debug` on a command line it never sees. The launchers
+ * install this explicitly; without it their own `setAmbientLogger` call bypassed the environment
+ * check and `--debug` showed the parent's records but silently dropped the control plane's.
+ */
+export function attachTerminalMirror(
+  logger: Logger,
+  enabled = process.env.FRAY_DEBUG === "1",
+): () => void {
+  if (!enabled) return () => {}
+  return logger.onRecord((record) => process.stderr.write(`${formatFeedLine(record)}\n`))
 }
 
 export function ambientLogger(): Logger {
@@ -299,9 +320,7 @@ export function ambientLogger(): Logger {
   // The whole reason the launcher can repaint is that this process says NOTHING to the shared
   // terminal by default — its records reach the operator through the run log. `--debug` sets
   // FRAY_DEBUG in the child environment and opens the tap back up.
-  if (process.env.FRAY_DEBUG === "1") {
-    logger.onRecord((record) => process.stderr.write(`${formatFeedLine(record)}\n`))
-  }
+  attachTerminalMirror(logger)
   ambient = logger
   return ambient
 }

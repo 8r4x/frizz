@@ -6,6 +6,7 @@ import { launchApp, launchBrowserTab } from "./browser.ts";
 import { Readout, tildePath } from "./readout.ts";
 import {
   appendCrashRecord,
+  attachTerminalMirror,
   createLogger,
   logEnvironment,
   runLogPath,
@@ -124,20 +125,6 @@ const readout = interactiveLaunch
   ? new Readout({ debug: options.debug, version: sourceVersion() })
   : undefined;
 
-/**
- * In `--debug` the terminal mirrors the disk feed line for line; otherwise it stays quiet and the
- * readout does the talking. Re-attached whenever the logger is replaced.
- */
-const mirrorToTerminal = (target: Logger) => {
-  if (!options.debug) return;
-  target.onRecord((record) => {
-    const at = new Date(record.at).toISOString().slice(11, 23);
-    process.stderr.write(
-      `${at} ${record.level.toUpperCase().padEnd(5)} ${record.scope.padEnd(12)} ${record.message}\n`
-    );
-  });
-};
-
 readout?.plan([
   { key: "workspace", label: "Workspace" },
   ...(options.dev ? [] : [{ key: "artifact", label: "Artifact" }]),
@@ -186,9 +173,14 @@ const logger: Logger = setAmbientLogger(
     ? createLogger({ file: process.env.FRAY_LOG_FILE, owner: false })
     : createLogger({ file: runLogPath(workspace.stateDir) })
 );
-mirrorToTerminal(logger);
-logger.info("launcher", `${sourceCommand} starting in ${options.dev ? "source" : "artifact"} mode`);
-logger.info("launcher", `workspace ${workspace.name} (${workspace.root})`);
+attachTerminalMirror(logger, options.debug || process.env.FRAY_DEBUG === "1");
+// Only the OPERATOR's invocation announces itself. The control-plane child re-enters this same entry
+// point with FRAY_DEV_CHILD=1 before reaching its own branch below, so without this guard every run
+// logged the launcher banner twice — once for the real launch and once for the child.
+if (!internalLaunch) {
+  logger.info("launcher", `${sourceCommand} starting in ${options.dev ? "source" : "artifact"} mode`);
+  logger.info("launcher", `workspace ${workspace.name} (${workspace.root})`);
+}
 readout?.settle("workspace", "done", workspace.name);
 const expectedHealth = { projectId: workspace.id, projectDir: workspace.root };
 const launchTarget = workspaceLaunchTarget(workspace);
@@ -819,6 +811,10 @@ try {
     // serializing their running UI servers.
     release();
     release = undefined;
+    // Settle the server step BEFORE handing off to the browser. Leaving it to `ready()` meant the
+    // browser row showed a ✓ while the server row above it was still spinning — a later step
+    // finishing before an earlier one, which reads as the display being wrong.
+    readout?.settle("server", "done", `port ${port}`);
     await openOrPrint(port, false);
     // The normal launcher intentionally remains attached. Its SIGINT/SIGTERM handler is installed
     // by runSupervisor and stops only this workspace's UI control plane.

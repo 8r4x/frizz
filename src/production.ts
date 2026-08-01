@@ -10,6 +10,7 @@ import { launchApp, launchBrowserTab } from "./browser.ts";
 import { Readout, tildePath } from "./readout.ts";
 import {
   appendCrashRecord,
+  attachTerminalMirror,
   createLogger,
   logEnvironment,
   runLogPath,
@@ -125,12 +126,7 @@ const logger: Logger = setAmbientLogger(
 const readout = reexec || process.env.FRAY_PRODUCTION_SUPERVISOR === "1"
   ? undefined
   : new Readout({ debug: options.debug, version: PACKAGE_VERSION });
-if (options.debug) {
-  logger.onRecord((record) => {
-    const at = new Date(record.at).toISOString().slice(11, 23);
-    process.stderr.write(`${at} ${record.level.toUpperCase().padEnd(5)} ${record.scope.padEnd(12)} ${record.message}\n`);
-  });
-}
+attachTerminalMirror(logger, options.debug || process.env.FRAY_DEBUG === "1");
 readout?.plan([
   { key: "server", label: "Server" },
   { key: "browser", label: options.noApp ? "Address" : "Browser" },

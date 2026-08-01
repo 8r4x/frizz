@@ -199,9 +199,20 @@ test("logging never throws when its directory is unusable", () => {
   }
 })
 
-test("the debug feed line keeps a fixed shape so the terminal view stays scannable", () => {
-  assert.equal(
-    formatFeedLine({ at: Date.UTC(2026, 6, 31, 9, 8, 7, 65), level: "warn", scope: "tailer", message: "slow" }),
-    "09:08:07.065 WARN  tailer       slow",
-  )
+test("the terminal feed and the disk log agree, character for character", () => {
+  const dir = scratch()
+  try {
+    // Asserted against the disk line rather than a literal clock, because both render LOCAL time and
+    // a hard-coded string would only pass in the timezone it was written in. What matters is that the
+    // two agree: they are the first two things compared when something goes wrong, and while the feed
+    // used toISOString() they disagreed by the operator's whole UTC offset.
+    const file = join(dir, "run.log")
+    const record = { at: Date.now(), level: "warn" as const, scope: "tailer", message: "slow tick" }
+    const logger = createLogger({ file, now: () => record.at })
+    logger.warn(record.scope, record.message)
+    assert.equal(formatFeedLine(record), readFileSync(file, "utf8").trimEnd())
+    assert.match(formatFeedLine(record), /^\d\d:\d\d:\d\d\.\d\d\d {2}WARN {3}tailer {8}slow tick$/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
