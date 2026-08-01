@@ -635,6 +635,12 @@ test("an exact adopted pane replaced during settle receives no delayed key and s
   }
 })
 
+// The widened settle this test injects (see below). It is also the FLOOR on how long cleanup can take:
+// the queue the tmux server still owns after the client dies is `load-buffer ; if-shell paste ;
+// run-shell <settle> ; delete-buffer`, so the private buffer cannot vanish until the settle has elapsed.
+// Measured 2026-08-01 by varying only this value: cleanup landed at ~1.3s / 3.3s / 5.1s for 1s / 3s / 5s.
+const SIGKILL_BUFFER_SETTLE_SECONDS = 5
+
 test("SIGKILL during exact atomic text-and-key transport cannot strand its private tmux buffer", { skip: !tmuxAvailable }, async () => {
   const originalSocket = socketName()
   const slug = `exact-buffer-kill-${process.pid}`
@@ -658,7 +664,7 @@ test("SIGKILL during exact atomic text-and-key transport cannot strand its priva
       // The test must replace the pane DURING the settle. Production's 250ms cannot reliably contain a
       // tmux kill plus a respawn on a loaded machine, so widen the window — the logic under test (the
       // post-settle identity RE-CHECK) is unchanged, only the wall clock it races.
-      setInputSettleSeconds(5);
+      setInputSettleSeconds(${SIGKILL_BUFFER_SETTLE_SECONDS});
       process.stdout.write("FRAY_SEND_READY\\n");
       sendTextToExpectedAdoptionPane(
         ${JSON.stringify(expected)},
@@ -693,21 +699,34 @@ test("SIGKILL during exact atomic text-and-key transport cannot strand its priva
     const signal = await new Promise<NodeJS.Signals | null>((resolve) => child.once("close", (_code, value) => resolve(value)))
     assert.equal(signal, "SIGKILL")
 
-    let buffers = ""
-    for (let attempt = 0; attempt < 100; attempt++) {
+    // `list-buffers` exits non-zero for TWO very different reasons: the query failed, or the whole tmux
+    // server is already gone — and only the second is a clean state. Collapsing both to "" (what this
+    // poll used to do) meant a broken probe satisfied the assertions below on an empty string, so the
+    // test was green exactly when its instrument failed and red when the instrument worked. Return null
+    // for "could not tell" and let the caller refuse to conclude anything from it.
+    const listBuffers = (): string | null => {
       try {
-        buffers = execFileSync("tmux", ["-L", testSocket, "list-buffers", "-F", "#{buffer_name}\t#{buffer_sample}"], {
+        return execFileSync("tmux", ["-L", testSocket, "list-buffers", "-F", "#{buffer_name}\t#{buffer_sample}"], {
           encoding: "utf8",
-          stdio: ["ignore", "pipe", "ignore"],
+          stdio: ["ignore", "pipe", "pipe"],
         })
-      } catch {
-        buffers = ""
+      } catch (error) {
+        return /no server running/i.test(String((error as { stderr?: unknown }).stderr ?? "")) ? "" : null
       }
-      if (!buffers.includes("fray-exact-")) break
-      await new Promise((resolve) => setTimeout(resolve, 5))
     }
-    assert.doesNotMatch(buffers, /fray-exact-/)
-    assert.doesNotMatch(buffers, /FRAY_SIGKILL_BUFFER_SECRET/)
+    // The old budget was 100 polls × 5ms = 500ms, against a settle this test deliberately sets to 5s —
+    // an order of magnitude too small for its own fixture, which is what made it flaky. Wait past the
+    // settle, with headroom for a loaded machine.
+    const deadline = Date.now() + SIGKILL_BUFFER_SETTLE_SECONDS * 1000 + 15_000
+    let buffers: string | null = null
+    while (Date.now() < deadline) {
+      buffers = listBuffers()
+      if (buffers !== null && !buffers.includes("fray-exact-")) break
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    assert.notEqual(buffers, null, "list-buffers never succeeded, so the buffer's fate was never observed")
+    assert.doesNotMatch(buffers!, /fray-exact-/)
+    assert.doesNotMatch(buffers!, /FRAY_SIGKILL_BUFFER_SECRET/)
   } finally {
     killSession(slug)
     setSocket(originalSocket)
