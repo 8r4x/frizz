@@ -16,7 +16,7 @@ import { agentCompletionCall } from "../lib/subAgentCompletion.ts"
 import { coalesceToolActivityMessages } from "../lib/toolActivity.ts"
 import { prefs } from "../lib/prefs.ts"
 import { ThreadComposerBox } from "./ThreadComposerBox.tsx"
-import { BackgroundOpsStrip, ThreadSlugContext, QueueDismissContext } from "./ChatView.tsx"
+import { BackgroundOpsStrip, RemoteControlLink, ThreadSlugContext, QueueDismissContext } from "./ChatView.tsx"
 import { HeaderActions } from "./HeaderActions.tsx"
 import { ThreadLifecycleFooter } from "./ThreadLifecycleFooter.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
@@ -1075,6 +1075,10 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
             by default, so opening the same session in your own terminal is entirely safe (and both CLIs
             allow it live too). Foreign/legacy rows have no Fray-owned provider session to resume. */}
         {thread.kind === "session" && thread.foreign !== true && <CopyTerminalCommandButton slug={thread.id} />}
+        {/* …and, beside it, the OTHER way to pick this session up elsewhere: a registered Claude
+            session opens in claude.ai/code or the Claude mobile app. The queue is exactly where a
+            thread gets handed off to a phone, so it belongs here and not only in the thread header. */}
+        {thread.remoteControlUrl && <RemoteControlLink url={thread.remoteControlUrl} />}
         <HeaderActions
           thread={thread}
           collapsed={collapsed}

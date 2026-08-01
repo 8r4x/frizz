@@ -1493,7 +1493,7 @@ export function ThreadHeader({ slug, tab, onStatusApplied, onClose, showReturnTo
 // Present only when the session actually registered, so a thread that could not (Remote Control off,
 // API-key auth, an org policy) never shows a link that would dead-end. `noreferrer` alongside `noopener`
 // because this leaves fray for a third-party origin, unlike the standalone-thread link above.
-function RemoteControlLink({ url }: { url: string }) {
+export function RemoteControlLink({ url }: { url: string }) {
   return (
     <Tooltip label="Open this session in the Claude app">
       <a
@@ -1501,9 +1501,15 @@ function RemoteControlLink({ url }: { url: string }) {
         target="_blank"
         rel="noopener noreferrer"
         aria-label="Open this session in the Claude app"
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
+        // Sized to its NEIGHBOUR, the copy-terminal-command button, not to the 28px HeaderActions
+        // icons: the two sit flush against each other, so a wider hover target here reads as a
+        // misaligned pair. The glyph is 13 rather than 14 for the same reason — a phone's ink fills
+        // 20 of its 24 viewBox units where the terminal square fills 18, so an equal nominal size
+        // renders it ~11% taller and visibly heavier than the icon beside it (measured in the running
+        // app: ink height 11.67px vs 10.50px; at 13 it is 10.83px).
+        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
       >
-        <Smartphone size={14} strokeWidth={1.8} />
+        <Smartphone size={13} strokeWidth={1.8} />
       </a>
     </Tooltip>
   )
