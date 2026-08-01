@@ -155,7 +155,7 @@ async function existingPort(): Promise<number | undefined> {
 async function openOrPrint(port: number, reused: boolean): Promise<void> {
   const url = `http://127.0.0.1:${port}`;
   logger.info("launcher", `${reused ? "reusing" : "started"} Fray at ${url}`);
-  readout?.settle("server", "done", `port ${port}`);
+  readout?.settle("server", "done", reused ? `already running on port ${port}` : `port ${port}`);
   let browser: string | undefined;
   if (!options.noApp) {
     readout?.begin("browser", options.appMode ? "requesting app window" : "requesting default browser");
@@ -188,7 +188,13 @@ async function openOrPrint(port: number, reused: boolean): Promise<void> {
       { label: "Project", value: `${workspace.name} — ${tildePath(workspace.root, home)}` },
       ...(logger.file ? [{ label: "Logs", value: tildePath(logger.file, home) }] : []),
     ],
-    options.debug ? undefined : "press ctrl-c to stop · run with --debug for the full event feed",
+    reused
+      ? // This launch owns nothing and exits immediately, so ctrl-c would not stop what it reopened.
+        "reopened the server already running for this project · stop it from the terminal that started it"
+      : options.debug
+        ? undefined
+        : "press ctrl-c to stop · run with --debug for the full event feed",
+    reused ? { status: `already running on port ${port}` } : undefined,
   );
 }
 

@@ -129,6 +129,35 @@ test("the ready block names one address, and it is the one to open", () => {
   assert.equal(shown.includes("Server"), false, shown);
 });
 
+test("reopening an already-running server reports what it found, not a boot time", () => {
+  const tty = new Capture(true);
+  const readout = new Readout({ output: tty, color: false, version: "0.1.2", tickMs: 60_000 });
+  readout.plan([{ key: "server", label: "Server" }]);
+  readout.begin("server");
+  readout.ready(
+    [{ label: "Local", value: "http://127.0.0.1:4923/", accent: true }],
+    "reopened the server already running for this project · run fray-dev --stop to stop it",
+    { status: "already running on port 4923" }
+  );
+  const shown = tty.rendered;
+  assert.match(shown, /FRAY v0\.1\.2\s+already running on port 4923/);
+  // "ready in 0ms" beside a reused server reads as an implausibly fast cold boot.
+  assert.equal(/ready in/.test(shown), false, shown);
+  // Ctrl-C would not stop a server this launch does not own.
+  assert.equal(shown.includes("press ctrl-c"), false, shown);
+  assert.match(shown, /reopened the server already running for this project/);
+  assert.match(shown, /run fray-dev --stop to stop it/);
+
+  // The piped/non-TTY records carry the same distinction.
+  const piped = new Capture(false);
+  const plain = new Readout({ output: piped, color: false, tickMs: 60_000 });
+  plain.ready([{ label: "Local", value: "http://127.0.0.1:4923/" }], undefined, {
+    status: "already running on port 4923",
+  });
+  assert.match(piped.rendered, /fray: already running on port 4923/);
+  assert.equal(/fray: ready in/.test(piped.rendered), false, piped.rendered);
+});
+
 test("labels in the ready block align on one column regardless of length", () => {
   const out = new Capture(true);
   const readout = new Readout({ output: out, color: false, tickMs: 60_000 });

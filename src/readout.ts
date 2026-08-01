@@ -272,12 +272,20 @@ export class Readout {
    * Replace the boot region with the block that stays on screen, then stop repainting for good.
    * `entries` are the label/value rows: the URL first, then project, source, log path.
    */
-  ready(entries: Array<{ label: string; value: string; accent?: boolean }>, hint?: string): void {
+  ready(
+    entries: Array<{ label: string; value: string; accent?: boolean }>,
+    hint?: string,
+    options: { status?: string } = {},
+  ): void {
     for (const step of this.steps) if (step.state === "active") this.settle(step.key, "done")
     const elapsed = formatDuration(this.now() - this.startedAt)
+    // A launch that only reopened an already-running server reports what it FOUND. Timing it as
+    // "ready in 138ms" described a cold boot that never happened, which read as a suspiciously fast
+    // start rather than as a reuse.
+    const status = options.status ?? `ready in ${elapsed}`
     this.stop()
     if (!this.tty || this.debug) {
-      this.out.write(`fray: ready in ${elapsed}\n`)
+      this.out.write(`fray: ${status}\n`)
       for (const entry of entries) this.out.write(`fray: ${entry.label.toLowerCase()}: ${entry.value}\n`)
       return
     }
@@ -286,7 +294,7 @@ export class Readout {
       "",
       `  ${this.c(`${ANSI.bold}${ANSI.magenta}`, "FRAY")}${
         this.version ? ` ${this.c(ANSI.dim, `v${this.version}`)}` : ""
-      }  ${this.c(ANSI.dim, `ready in ${elapsed}`)}`,
+      }  ${this.c(ANSI.dim, status)}`,
       "",
       // Deliberately NOT truncated. These rows carry an address and a log path the operator has to
       // be able to copy, and a clipped path is worse than a wrapped one. Truncation exists to stop a

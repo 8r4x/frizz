@@ -502,6 +502,12 @@ async function openOrPrint(port: number, reused: boolean): Promise<void> {
   const url = `http://127.0.0.1:${port}`;
   const home = homedir();
   logger.info("launcher", `${reused ? "reusing" : "started"} Fray at ${url} for ${workspace.root}`);
+  if (reused) {
+    // Nothing was built and nothing was started. Settle those steps for what they are, or a reuse
+    // paints as a cold boot whose artifact and server rows simply never happened.
+    readout?.settle("artifact", "skipped", "server already running");
+    readout?.settle("server", "done", `already running on port ${port}`);
+  }
   let browser: string | undefined;
   if (!options.noApp) {
     readout?.begin("browser", options.appMode ? "requesting app window" : "requesting default browser");
@@ -537,7 +543,14 @@ async function openOrPrint(port: number, reused: boolean): Promise<void> {
       { label: "Source", value: tildePath(sourceLabel(), home) },
       ...(logger.file ? [{ label: "Logs", value: tildePath(logger.file, home) }] : []),
     ],
-    options.debug ? undefined : `press ctrl-c to stop · run with --debug for the full event feed`
+    reused
+      ? // Ctrl-C is the WRONG instruction here: this launch owns nothing and exits immediately, so
+        // the server it just reopened would keep running either way.
+        `reopened the server already running for this project · run ${sourceCommand} --stop to stop it`
+      : options.debug
+        ? undefined
+        : `press ctrl-c to stop · run with --debug for the full event feed`,
+    reused ? { status: `already running on port ${port}` } : undefined
   );
 }
 
