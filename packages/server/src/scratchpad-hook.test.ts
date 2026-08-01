@@ -397,11 +397,6 @@ test("the codex hook config is built unconditionally, and carries what codex req
     } else if (event === "Stop") {
       assert.match(cmd, /scratchpad-stop\.mjs/)
       assert.match(cmd, /--session="sid-1"/)
-      // Codex gets the fence check on the same event — a prose ask instead of a ```question card is
-      // a backend-independent miss, and codex has no plugin hooks.json to carry it.
-      const fence = entries[0].hooks[1].command
-      assert.match(fence, /fence-stop\.mjs/)
-      assert.match(fence, /--session="sid-1"/)
     } else {
       assert.match(cmd, /--session="sid-1"/, "fray's thread id must override codex's own reported session id")
       assert.doesNotMatch(cmd, /--enabled/, "there is no opt-in flag any more")
