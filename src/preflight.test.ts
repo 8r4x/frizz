@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import {
   assertLaunchPrerequisites,
   assertRequiredExecutables,
   ensureNativeHelperPermissions,
+  MINIMUM_NODE,
   providerReadiness,
 } from "./preflight.ts";
 
@@ -89,6 +92,20 @@ test("the eager executable probe leaves the Node floor to the full prerequisite 
   assert.throws(
     () => assertLaunchPrerequisites({ nodeVersion: "20.19.0", command: () => true }),
     /Node\.js 22\.12 or newer is required/
+  );
+});
+
+// The floor users are TOLD about and the floor Fray enforces must be the same number. They drifted
+// once — `engines` said `>=26` while `assertLaunchPrerequisites` accepted 22.12 — so every install on
+// Node 22-25 got an EBADENGINE warning about a requirement that did not exist.
+test("the published engines floor is exactly the floor the launcher enforces", () => {
+  const manifest = JSON.parse(
+    readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8")
+  ) as { engines?: { node?: string } };
+  assert.equal(
+    manifest.engines?.node,
+    `>=${MINIMUM_NODE.major}.${MINIMUM_NODE.minor}.0`,
+    "package.json engines.node must mirror MINIMUM_NODE"
   );
 });
 

@@ -20,8 +20,14 @@ export interface LaunchPrerequisiteOptions {
  *   - the runtime uses `import.meta.dirname`, available since Node 20.11.
  * better-sqlite3 rules out Vite's 20.19 branch, so 22.12 is the tightest of these. Revisit this
  * constant when those dependency floors move.
+ *
+ * `package.json`'s `engines.node` MIRRORS this constant, and a test asserts they stay equal. They had
+ * drifted — engines said `>=26`, inherited from the source workflow, where Node runs the TypeScript
+ * directly — so `npx frayui` warned `EBADENGINE` at every user on Node 22-25 about a floor nothing
+ * enforced. The published package ships COMPILED JS (a dependency under node_modules cannot be type
+ * stripped), so the source workflow's Node is not the consumer's Node.
  */
-const MINIMUM_NODE = { major: 22, minor: 12 } as const;
+export const MINIMUM_NODE = { major: 22, minor: 12 } as const;
 
 export interface ProviderReadiness {
   claude: boolean;

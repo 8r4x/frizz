@@ -28,7 +28,7 @@ npx frayui
 
 That's the whole setup. It starts a localhost server and opens a browser tab — a dedicated workspace for that repo. **One tab per repo!**
 
-Requires Node 26+, with `git` and `tmux` on your `PATH`, and at least one of the [Claude Code](https://claude.com/claude-code) or [Codex](https://developers.openai.com/codex) CLIs signed in. You don't need both. Codex threads need `codex` 0.146.0 or newer.
+Requires Node 22.12+, with `git` and `tmux` on your `PATH`, and at least one of the [Claude Code](https://claude.com/claude-code) or [Codex](https://developers.openai.com/codex) CLIs signed in. You don't need both. Codex threads need `codex` 0.146.0 or newer.
 
 ## Designed for parallelization
 

@@ -168,7 +168,9 @@ plugin directory. The published package does this for you.
 
 ## Conventions
 
-- TypeScript run directly by Node 26 (type stripping) — no build step for server/cli; Vite builds web.
+- TypeScript run directly by Node in a source checkout (type stripping) — no build step for
+  server/cli; Vite builds web. The published package ships compiled JS instead (a dependency under
+  `node_modules` cannot be type stripped), so a consumer's Node floor is `engines`, not this one.
 - ESM everywhere, `type: "module"`.
 - Comments sparse and dense: design/invariant/provenance only.
 - Tests: `node --test`, colocated `*.test.ts`, minimal + contract-shaped.
