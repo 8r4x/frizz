@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import { RestartActionButton, UPDATE_RESTART_ICON_ROTATION, UpdateRestartPopover } from "./RestartFrayButton.tsx"
+import { RestartActionButton, RestartFailureNotice, UPDATE_RESTART_ICON_ROTATION, UpdateRestartPopover } from "./RestartFrayButton.tsx"
 
 test("Update Fray presents one calm sentence whose highlight is that threads are untouched", () => {
   const html = renderToStaticMarkup(createElement(UpdateRestartPopover, { open: true, update: true }))
@@ -47,4 +47,47 @@ test("legacy supervisors present an ordinary restart action instead of hiding th
   assert.match(html, /Restart the Fray UI\. Your running threads will not be affected\./)
   assert.equal((html.match(/<p /g) ?? []).length, 1)
   assert.doesNotMatch(html, /latest version of Fray/)
+})
+
+const supervisorLog =
+  "Command failed: nub run typecheck from /Users/x/.fray/builds/.source-snapshot-31038-bc7e214d\n" +
+  "src/groups.ts(440,27): error TS2304: Cannot find name 'restedQueueHandoff'."
+
+// The whole point of the panel: it hangs over the sidebar list and the composer, so anything
+// see-through renders the one message the user needs illegible. Both panels ride the SAME opaque
+// card, and neither may carry a tinted-transparent fill.
+test("the failure panel is an opaque card, never a translucent tint over the board", () => {
+  const html = renderToStaticMarkup(
+    createElement(RestartFailureNotice, { update: true, message: supervisorLog, onDismiss: () => undefined }),
+  )
+  const surface = html.match(/role="alert" class="([^"]*)"/)?.[1] ?? ""
+  assert.ok(surface.includes("bg-elevated"), `alert surface must be opaque, got: ${surface}`)
+  assert.ok(!/\bbg-(?!elevated\b)/.test(surface), `alert surface carries a non-elevated fill: ${surface}`)
+  // Same opaque treatment as the popover it replaces — one card, two states.
+  const popover = renderToStaticMarkup(createElement(UpdateRestartPopover, { open: true, update: true }))
+  for (const shared of ["bg-elevated", "shadow-xl", "rounded-xl"]) assert.ok(popover.includes(shared) && html.includes(shared), shared)
+})
+
+test("the supervisor's build log is contained, not spilled down the board", () => {
+  const html = renderToStaticMarkup(
+    createElement(RestartFailureNotice, { update: true, message: supervisorLog, onDismiss: () => undefined }),
+  )
+  assert.match(html, /Update failed/)
+  assert.match(html, /Fray kept running the previous version, and your threads are unaffected\./)
+  // Raw build output reads as a terminal excerpt in a height-capped, scrolling mono block, so a
+  // several-hundred-character stderr dump can't stretch the card down over the thread list.
+  const pre = html.match(/<pre class="([^"]*)"/)?.[1] ?? ""
+  assert.ok(pre.includes("font-mono"), pre)
+  assert.ok(pre.includes("max-h-64") && pre.includes("overflow-y-auto"), pre)
+  assert.ok(pre.includes("whitespace-pre-wrap") && pre.includes("break-words"), pre)
+  assert.match(html, /error TS2304/)
+})
+
+test("a failure can be dismissed, and a legacy restart names itself correctly", () => {
+  const html = renderToStaticMarkup(
+    createElement(RestartFailureNotice, { update: false, message: "boom", onDismiss: () => undefined }),
+  )
+  assert.match(html, /Restart failed/)
+  assert.doesNotMatch(html, /Update failed/)
+  assert.match(html, /aria-label="Dismiss"/)
 })

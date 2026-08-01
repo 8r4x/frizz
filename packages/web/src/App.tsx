@@ -87,8 +87,13 @@ export function App() {
         if (status.state === "failed" && destination) {
           sessionStorage.removeItem(RELOAD_AFTER_UPDATE_RESTART)
           if (announcedFailure !== status.message) {
+            // Announce the failure, never its REASON: the supervisor's message is raw build output —
+            // a `nub run typecheck` failure arrives as several hundred characters of absolute
+            // snapshot paths — and pasting that into a toast stretched a strip across the entire
+            // viewport, four lines deep, saying the same thing the failure panel beside the reload
+            // button was already showing properly. The panel owns the detail; this owns the attention.
             announcedFailure = status.message ?? "Update & Restart failed"
-            showToast(`Update & Restart failed: ${announcedFailure}`, { duration: 7000 })
+            showToast("Update & Restart failed — Fray kept running the previous version", { duration: 7000 })
           }
         }
       }

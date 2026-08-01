@@ -32,10 +32,16 @@ export function Toaster() {
   return (
     <div className={`pointer-events-none fixed right-4 z-[70] flex justify-end ${drawerOpen ? "bottom-20" : "bottom-4"}`}>
       <div
+        data-toast
         role="status"
         aria-live="polite"
         aria-atomic="true"
-        className={`flex items-center gap-2.5 rounded-lg border border-border-strong bg-elevated px-4 py-2 text-[13px] font-medium text-fg shadow-xl shadow-black/40 transition-all duration-200 ease-out ${
+        // Capped, because a toast is a STRIP and nothing may turn it into a panel. An unbounded one
+        // stretched edge to edge across a 1440px viewport and four lines deep the first time a caller
+        // passed it a supervisor's raw build log — the text has to wrap inside a strip-sized box
+        // instead. `break-words` covers the other half of that failure: a long unbroken token (an
+        // absolute path, a URL) would otherwise push straight past the cap.
+        className={`flex max-w-[min(30rem,calc(100vw-2rem))] items-center gap-2.5 break-words rounded-lg border border-border-strong bg-elevated px-4 py-2 text-[13px] font-medium text-fg shadow-xl shadow-black/40 transition-all duration-200 ease-out ${
           visible ? "translate-y-0 opacity-100" : "translate-y-8 opacity-0"
         }`}
       >
@@ -47,7 +53,7 @@ export function Toaster() {
               pushDrawer("thread", toast.link!.slug)
               store.toast = null
             }}
-            className="pointer-events-auto rounded-md border border-border px-2 py-0.5 text-[12px] text-fg/90 transition-colors hover:bg-panel-2"
+            className="pointer-events-auto shrink-0 rounded-md border border-border px-2 py-0.5 text-[12px] text-fg/90 transition-colors hover:bg-panel-2"
           >
             {toast.link.label}
           </button>
