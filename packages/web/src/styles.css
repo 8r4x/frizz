@@ -216,12 +216,39 @@ html[data-font="sans"] .fray-bash .md-body {
 /* Two runtime concerns, two hues: background shells pulse blue, sub-agents pulse the accent-yellow. */
 .fray-live-dot--shell { --live-dot: var(--color-shell); }
 .fray-live-dot--agent { --live-dot: var(--color-accent); }
-/* THE RAIL's rest-with-live-work mark, inside the status box. It stands for EITHER kind of background
-   work (a shell or a sub-agent), so it cannot use the transcript's blue/yellow split — and it must not
-   be yellow regardless: in the sidebar the accent means "awaiting you", so an accent dot there would
-   read as an ask when the thread is asking for nothing. One blue mark, one meaning: this thread is at
-   rest, but work it launched is still running. */
-.fray-live-dot--background { --live-dot: var(--color-shell); }
+/* THE RAIL's rest-with-live-work mark — a pulsing dot centred in the sidebar's 15px StatusBox. Same
+   hue, same cadence and the same meaning as `.fray-live-dot` above, but it is a mark INSIDE the
+   checkbox family's box, so it takes THAT family's geometry rather than the transcript's. Two
+   deliberate differences, both measured rather than judged:
+     • 0.31 of the box, not 0.4. `.md-task-in-progress` settled this exact question for this exact box
+       (see its block below): a solid disc is far heavier per unit of diameter than an outlined mark, so
+       0.4 measured 12.65% ink coverage against the check's 5.81% — "the heaviest thing in the column" —
+       while 0.31 puts it at ~7.5%, inside the family. The transcript's 6px dot in a 15px box IS 0.4.
+     • NO halo. The bare transcript dot carries a 1px box-shadow because nothing else frames it; here
+       the StatusBox's own border is the ring, and a halo inside it painted 8px of ink into a 13px
+       interior. Losing it also frees the pulse from animating box-shadow spread, which would have made
+       the mark's painted SIZE oscillate rather than its brightness.
+   Hue is fixed blue and never the accent: this mark stands for either kind of background work (a shell
+   or a sub-agent), and in the sidebar the accent means "awaiting you", so an accent dot would read as
+   an ask from a thread that is asking for nothing. Keep the width in sync with STATUS_BOX
+   (components/BoxSpinner.tsx) if that ever moves. */
+.fray-rail-dot {
+  width: calc(15px * 0.31);
+  height: calc(15px * 0.31);
+  border-radius: 9999px;
+  background: var(--color-shell);
+  animation: fray-rail-dot-pulse 1.25s ease-in-out infinite;
+}
+/* Brightness alone — the geometry is what says "this is the same kind of mark", so only tone may move
+   (the same ruling the quiet shell dot's breathe follows). */
+@keyframes fray-rail-dot-pulse {
+  50% { opacity: 0.45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No ring substitution needed: this dot is solid at full opacity already, and the box around it is
+     what carries the "there is a mark here" reading. */
+  .fray-rail-dot { animation: none; opacity: 1; }
+}
 @keyframes fray-live-pulse {
   50% { opacity: 0.62; box-shadow: 0 0 0 2px color-mix(in srgb, var(--live-dot) 14%, transparent); }
 }

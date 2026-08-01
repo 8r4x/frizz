@@ -6,24 +6,26 @@ import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
 
-// Browser QA for the RESTED-WITH-LIVE-WORK indicator (maintainer 2026-08-01: "if a thread has rested
-// but it still has background work going, like background shells, we should keep it in the actively
-// running rail, but we should stop the spinner and put a pulsing blue dot in the middle of the rounded
-// circle shape"). Renders the REAL <Sidebar/> — the same ThreadRow + indented SubAgentRows the app
-// draws — over a fixed five-thread board that pins each rail state against its neighbours:
+// Browser QA for the RESTED-WITH-A-BACKGROUND-SHELL indicator (maintainer 2026-08-01: "if a thread has
+// rested but it still has background work going, like background shells, we should keep it in the
+// actively running rail, but we should stop the spinner and put a pulsing blue dot in the middle of the
+// rounded circle shape" — and, scoping it, "this should not show up if there are sub-agents"). Renders
+// the REAL <Sidebar/> — the same ThreadRow + indented SubAgentRows the app draws — over a fixed
+// five-thread board that pins the one changed case against the four that must NOT change:
 //
-//   RUNNING BAND (live work — the thread's own turn, OR work it launched)
-//     B  own turn in flight + a live child        → [/] spinner   (the ONE thing that still spins)
-//     C  at rest, live child, NOT queued          → [•] blue dot  (was [/])
-//     A  at rest, QUEUED, live children           → [•] blue dot  (was […] in the rested band)
-//     E  at rest, QUEUED, background SHELL only   → [•] blue dot  (was […] in the rested band)
+//   RUNNING BAND (live work that isn't waiting on you)
+//     B  own turn in flight + a live child        → [/] spinner   (unchanged)
+//     C  at rest, live child, NOT queued          → [/] spinner   (unchanged — the child comes back)
+//     E  at rest, QUEUED, background SHELL only   → [•] blue dot  (THE CHANGE; was […], one band down)
 //   RESTED BAND (the queue order)
+//     A  at rest, QUEUED, live children           → […] ellipsis  (unchanged — 2026-07-27)
 //     D  at rest, queued, nothing out             → […] ellipsis  (unchanged baseline)
 //
-// A and E are the rows that MOVED: both keep their queue card, and both now hold their place in the
-// running band instead of dropping down the rail the moment the parent's turn ends. The dot is what
-// keeps that honest — the row stays visible without claiming motion the parent does not have. The
-// CHILD rows keep their own spinners throughout: they really are still going.
+// E is the row that MOVED, and the pair C/E is the whole point of the split: a dispatched CHILD will
+// return and re-invoke its parent, so that row is genuinely in motion and spins; a detached SHELL will
+// not, so its row is alive but still, and pulses instead. E keeps its queue card either way — a dev
+// server that never exits must not bury its thread — it just stops being punished for that with a
+// rested-band row. The CHILD rows keep their own spinners throughout: they really are still going.
 
 const base = {
   kind: "session",
@@ -52,7 +54,8 @@ const base = {
 const child = (id: string, label: string, subagentType: string, startedAt: string) =>
   ({ id, label, subagentType, startedAt, state: "running" as const })
 
-// A — THE CASE UNDER TEST. Rested, queued (the awaiting-background handoff), two live sub-agents.
+// A — the 2026-07-27 case: rested, queued (the awaiting-background handoff), two live sub-agents. It
+// keeps the ellipsis and the rested band; the shell rule below deliberately does not reach it.
 const restedQueued = {
   ...base,
   id: "refactor-pricing-parser",
@@ -82,8 +85,9 @@ const ownTurnRunning = {
   lastUserAt: "2026-07-27T09:02:00.000Z",
 } as unknown as ThreadView
 
-// C — at rest with a live child but NOT queued (its awaiting-background card is event-snoozed). Reads
-// EXACTLY like A: leaving the queue must not change how a row looks, or the rail churns on every snooze.
+// C — CONTROL, and the direct comparison for E: at rest with a live child but NOT queued (its
+// awaiting-background card is event-snoozed). Nothing has been handed to the human and the child's
+// return will re-invoke this thread, so the row is honestly still in motion → spinner.
 const cookingNotQueued = {
   ...base,
   id: "audit-broker-crash-paths",
@@ -110,9 +114,9 @@ const bareRestedQueued = {
   lastUserAt: "2026-07-27T08:55:00.000Z",
 } as unknown as ThreadView
 
-// E — THE MAINTAINER'S NAMED CASE: rested and queued with a background SHELL and no sub-agents at all.
-// A shell is never excused from the queue (an eternal dev server must not bury its thread), so this row
-// is the one that carries a queue card while sitting in the running band.
+// E — THE CASE UNDER TEST: rested and queued with a background SHELL and NO sub-agents at all. A shell
+// is never excused from the queue (an eternal dev server must not bury its thread), so this row is the
+// one that carries a queue card while sitting in the running band.
 const shellOnlyRested = {
   ...base,
   id: "wire-up-the-preview-server",

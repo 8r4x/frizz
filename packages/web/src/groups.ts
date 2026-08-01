@@ -389,20 +389,49 @@ export function isActivelyRunning(t: ThreadView): boolean {
   return t.runtime === "turn-idle" && hasLiveOps(t)
 }
 
-// RESTING ON ITS OWN BACKGROUND WORK: the thread's own turn is OVER (turn-idle) but work it launched —
-// a dispatched sub-agent, or a background shell/Monitor — is still running. It is neither "working"
-// (the parent has no motion of its own) nor plain "at rest" (something it started is still going), so
-// it gets its OWN mark: the pulsing blue dot in the rail's rounded box (maintainer 2026-08-01, "stop
-// the spinner and put a pulsing blue dot in the middle of the rounded circle shape"). That splits the
-// rail's liveness language honestly — a spinner means MY turn is in flight, a dot means work I
-// dispatched is. It replaces the ellipsis rule of 2026-07-27, which was reaching for the same
-// distinction with the only two glyphs that existed then.
+// A QUEUE HANDOFF THAT HAS ALREADY COME TO REST: the server queued it (`needsYou`) and the thread's
+// OWN turn is over (turn-idle/exited). It must not make the PARENT's rail mark claim motion the parent
+// does not have (maintainer 2026-07-27: "when an agent comes to rest and shows up in the queue, it
+// should get the ellipsis indicator in the sidebar, even though its sub-agents are still spinning").
+// The children keep their own spinners on their own indented rows (Sidebar SubAgentRows → ChildOpRow);
+// the parent's indicator speaks for the parent. A queued row therefore sits in the rested band AND
+// reads as rested.
 //
-// Gated on `turn-idle`, never `exited`: a dead pane's children keep reading "running" until their
-// transcript goes stale, and that parent must keep its [!] stall mark rather than advertise live work
-// behind a dot. hasLiveOps supplies the rest — see there for why a raw `bgShells` read would be wrong.
-function restingOnBackgroundWork(t: ThreadView): boolean {
-  return t.runtime === "turn-idle" && hasLiveOps(t)
+// SINCE 2026-07-30 the live-SUB-AGENT case no longer reaches here at all: the server now excuses such a
+// thread from the queue entirely (board.deriveNeedsYou), so `needsYou` is false and the row keeps its
+// spinner in the running band — which is the point, since a row that never leaves that band never
+// churns between the two. The maintainer's ellipsis rule was scoped to a row that "shows up in the
+// queue", and one that no longer does has no reason to change appearance on resting.
+//
+// Still load-bearing for the EXITED parent whose children keep reading "running" until their transcript
+// goes stale. Without this it would resolve to "working" and hide the [!] stall mark behind a spinner
+// for a pane that is already dead. (The other case it used to cover — a shell-only rest, never excused
+// from the queue — now has its own mark; see restingOnBackgroundShell.)
+function restedQueueHandoff(t: ThreadView): boolean {
+  return t.needsYou === true && atRest(t)
+}
+
+// RESTING ON A BACKGROUND SHELL, AND NOTHING ELSE: the thread's own turn is OVER (turn-idle) and the
+// only thing it still has out is a launched background shell/Monitor. That earns its own mark — the
+// pulsing blue dot in the rail's rounded box (maintainer 2026-08-01: "if a thread has rested but it
+// still has background work going, like background shells, we should keep it in the actively running
+// rail, but we should stop the spinner and put a pulsing blue dot in the middle of the rounded circle
+// shape").
+//
+// A LIVE SUB-AGENT IS DELIBERATELY EXCLUDED (maintainer, same day: "this should not show up if there
+// are sub-agents"), and the two are genuinely different states rather than two flavours of one. A
+// dispatched child is work the parent is WAITING ON: its return re-invokes the parent within seconds,
+// so the thread is mid-flight in substance even though its own turn ended, and the spinner tells the
+// truth. A background shell is DETACHED — the worker launched it and moved on, and 26% of real launches
+// are servers that never exit — so nothing about that thread is in motion. Hence: spinner while
+// something will come back to you, dot while something merely runs on. A thread with BOTH keeps the
+// spinner, because the sub-agent is the stronger fact.
+//
+// Gated on `turn-idle`, never `exited`: a dead pane cannot be waiting on anything, and that parent must
+// keep its [!] stall mark rather than advertise live work behind a dot. `awaitingBackground` is server
+// truth and already excludes a fenced thread — see hasLiveOps for why a raw `bgShells` read would be wrong.
+function restingOnBackgroundShell(t: ThreadView): boolean {
+  return t.runtime === "turn-idle" && t.awaitingBackground === true && !hasLiveSubAgents(t)
 }
 
 // One status-priority decision shared by the sidebar renderer and its tests. The order is important:
@@ -425,20 +454,22 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
       t.status === "needs-human",
   )
   if (explicitlyNeedsInput) return "needs-input"
-  // "Working" — the travelling spinner — is now reserved for motion the parent ACTUALLY has: its own
-  // turn in flight. A rested parent whose dispatched work is still out reads as "background" below, so
-  // no row ever spins on someone else's behalf.
-  if (t.runtime === "running" || t.runtime === "spawning") return "working"
+  // "Working" is motion the thread genuinely has: its own turn in flight (running/spawning), or a live
+  // SUB-AGENT whose return will re-invoke it, while the parent is NOT yet a handoff. A rested, queued
+  // thread falls through to the at-rest ellipsis below no matter how many sub-agents it still has out —
+  // see restedQueueHandoff. A shell-only rest is carved out because it is never motion at all; the dot
+  // below is its mark, and without this clause an event-snoozed one would still spin.
+  if (activelyRunning && !restedQueueHandoff(t) && !restingOnBackgroundShell(t)) return "working"
 
   if (isHeld(t)) return "held"
   if (t.lastFence?.kind === "done" && atRest(t)) return "done"
-  // Below the two DECLARED states on purpose. A worker that fenced ```done while a watcher it never
+  // Below the two DECLARED states on purpose. A worker that fenced ```done while a server it never
   // killed keeps running is a one-click dismissal, not live work (FRAY.md: "name it in the body and
   // fence anyway"), and a parked ```awaiting is the human's gate — either story outranks "something it
-  // launched is still going". Neither can actually collide with a live SHELL (deriveAwaitingBackground
-  // drops any fenced thread) and isHeld already yields to a live sub-agent, so this only settles the
-  // done-fence-with-a-live-child case: it keeps its [✓].
-  if (restingOnBackgroundWork(t)) return "background"
+  // launched is still going". In practice neither can collide with this at all, since
+  // deriveAwaitingBackground drops any fenced thread; the ordering states the intent rather than
+  // resolving a live conflict.
+  if (restingOnBackgroundShell(t)) return "background"
   // STALLED = this thread's PROCESS IS GONE with the work unfinished. That is exactly `canRetry`: an
   // OWNED (non-foreign) session row whose runtime is `exited`. It deliberately does NOT consult the
   // server's `crashed` bit (= exited AND turn-in-flight/live-background-work). `crashed` says only HOW
@@ -531,12 +562,14 @@ export function orderActive(threads: readonly ThreadView[], direction: QueueDire
 // The background clause is the exception the maintainer asked for twice — 2026-07-30 for sub-agents
 // ("too much layout shift as things jump between those two sections"), then 2026-08-01 for background
 // shells: "if a thread has rested but it still has background work going, like background shells, we
-// should keep it in the actively running rail". A shell-only rest is never excused from the queue (an
-// eternal dev server must not bury its thread), so it is the one row that now sits in the running band
-// WITH a queue card behind it. That is the accepted cost: the alternative is the row dropping to the
-// rested band the moment the turn ends and bouncing back up when the shell reports, which is exactly
-// the churn being complained about. Its glyph never claims motion it doesn't have — sessionIndicatorKind
-// gives it the at-rest pulsing dot, so band and glyph still tell the operator one story.
+// should keep it in the actively running rail". The sub-agent half is already handled upstream (the
+// server excuses those from the queue, so `needsYou` is false and the first clause takes them); a
+// shell-only rest is never excused (an eternal dev server must not bury its thread), so it is the one
+// row that sits in the running band WITH a queue card behind it. That is the accepted cost: the
+// alternative is the row dropping to the rested band the moment the turn ends and bouncing back up when
+// the shell reports, which is exactly the churn being complained about. Its glyph never claims motion it
+// doesn't have — sessionIndicatorKind gives it the at-rest pulsing dot, so band and glyph still tell the
+// operator one story.
 function inActiveRunningBand(t: ThreadView): boolean {
   if (isActivelyRunning(t) && t.needsYou !== true) return true
   return sessionIndicatorKind(t) === "background"

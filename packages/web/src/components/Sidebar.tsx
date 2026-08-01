@@ -573,10 +573,14 @@ export function ThreadIndicator({ t, legacy }: { t: ThreadView; legacy?: boolean
   // the spinner — the same one decision that put the row in the running band. When this hook consulted
   // the hint on its own, the glyph and the placement were two rules and drifted apart on every steer.
   const { node, tip } = legacy ? legacyIndicatorFor(t) : sessionIndicatorFor(t)
-  if (!tip) return node
+  // The resolved kind, on the shipped markup. Cheap, and it is what lets the rail's own glyphs be
+  // measured where they actually render (scripts/verify-rail-status-glyphs.mjs holds the family to one
+  // weight band) instead of against a reconstruction that can drift from the real thing.
+  const mark = legacy ? undefined : sessionIndicatorKind(t)
+  if (!tip) return mark ? <span data-rail-glyph={mark} className="flex items-center justify-center">{node}</span> : node
   return (
     <Tooltip label={tip} side="left">
-      <span className="flex items-center justify-center">{node}</span>
+      <span data-rail-glyph={mark} className="flex items-center justify-center">{node}</span>
     </Tooltip>
   )
 }
@@ -589,10 +593,11 @@ export function ThreadIndicator({ t, legacy }: { t: ThreadView; legacy?: boolean
 // STATUS = a markdown-task CHECKBOX family (maintainer 2026-07-10, Obsidian-flavored): every state is
 // the SAME rounded-rect outer box with a glyph inside, so the rail reads like a to-do list.
 //   [ ] idle        — at rest, nothing pending (empty box)
-//   [/] in progress — the rounded-RECT spinner (a segment travels the box perimeter). MY OWN TURN only.
-//   [•] background  — at rest, but work this thread LAUNCHED (a sub-agent, a background shell) is still
-//                     running: the same pulsing blue dot the transcript spends on a live shell, centered
-//                     in the box. The row keeps its place in the running band; only the motion changes.
+//   [/] in progress — the rounded-RECT spinner (a segment travels the box perimeter): this thread's own
+//                     turn, or a live SUB-AGENT whose return will re-invoke it. Both are real motion.
+//   [•] background  — at rest with only a detached background SHELL still running (never a sub-agent —
+//                     maintainer 2026-08-01). Nothing is coming back, so nothing spins; the pulsing blue
+//                     dot says "alive, not moving". The row holds its place in the running band.
 //   [?] needs input — a question / native ask / permission prompt (accent box + "?")
 //   [!] stalled     — the agent's PROCESS EXITED with the work unfinished (accent box + "!"), whether
 //                     it died mid-turn or exited after resting without a done fence. Same mark either
@@ -612,14 +617,14 @@ function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string |
     return { node: <StatusBox><Glyph ch="?" muted /></StatusBox>, tip: "Needs your input" }
   }
   if (kind === "working") return { node: <BoxSpinner />, tip: "Working" }
-  // The thread itself has stopped, so the box stops tracing — but a sub-agent or a background shell it
-  // launched is still going, and the row stays up in the running band on the strength of that. The dot
-  // is the transcript's own live-work mark (ChildOpRow, the tool disclosures), so the two surfaces agree
-  // about what "something is alive behind this" looks like.
+  // The thread has stopped and nothing is going to wake it — only a detached shell it launched is still
+  // running — so the box stops tracing and the row simply stays alive in the running band. Same blue and
+  // same pulse as the transcript's live-shell dot, sized to this box (styles.css .fray-rail-dot), so
+  // both surfaces say "a shell is alive behind this" in one language.
   if (kind === "background") {
     return {
-      node: <StatusBox><span aria-hidden className="fray-live-dot fray-live-dot--background" data-running-indicator="thread-background" /></StatusBox>,
-      tip: "At rest — background work still running",
+      node: <StatusBox><span aria-hidden className="fray-rail-dot" data-running-indicator="thread-background" /></StatusBox>,
+      tip: "At rest — a background shell is still running",
     }
   }
   if (kind === "done") return { node: <StatusBox><Check size={10} strokeWidth={3} className="text-muted/75" /></StatusBox>, tip: "Done" }
