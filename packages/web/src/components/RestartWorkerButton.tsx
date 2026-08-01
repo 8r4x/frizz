@@ -2,7 +2,7 @@ import { useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { Loader2, RefreshCw } from "lucide-react"
 import type { ThreadView } from "@fray-ui/shared"
-import { restartWorker, restartWorkerBlockedReason } from "../lib/restartWorker.ts"
+import { restartWorker } from "../lib/restartWorker.ts"
 import { useDevFrayBuild } from "../lib/devBuild.ts"
 import { Tooltip } from "./Tooltip.tsx"
 
@@ -38,8 +38,10 @@ import { Tooltip } from "./Tooltip.tsx"
 //    which is exactly what the existing Retry verb does — a second button for it would be a lie about
 //    doing something different.
 //
-// DISABLED (not hidden) while the worker has running sub-agents, so the operator learns WHY rather than
-// hunting a button that vanished. The server enforces the same refusal; this is the explanation.
+// NEVER disabled for running sub-agents. It used to be — a restart kills the parent's in-memory
+// children, so the verb greyed itself out until they finished — and that made the one recovery
+// affordance unavailable at exactly the moment it is reached for (maintainer 2026-08-01: "do not
+// disable the button when there are sub-agents running"). See lib/restartWorker.ts.
 export function RestartWorkerButton({ thread }: { thread: ThreadView }) {
   const queryClient = useQueryClient()
   const [busy, setBusy] = useState(false)
@@ -50,14 +52,11 @@ export function RestartWorkerButton({ thread }: { thread: ThreadView }) {
   if (thread.backend === "codex") return null
   if (thread.runtime === "exited") return null
 
-  const blocked = restartWorkerBlockedReason(thread)
-  const label = blocked ?? "Restart worker — same conversation, fresh process on current tooling"
-
   return (
-    <Tooltip label={label} side="top">
+    <Tooltip label="Restart worker — same conversation, fresh process on current tooling" side="top">
       <button
         type="button"
-        disabled={busy || blocked !== null}
+        disabled={busy}
         aria-label="Restart worker"
         // Focus must not leave the composer: same discipline as every other footer verb.
         onMouseDown={(e) => e.preventDefault()}
@@ -65,15 +64,19 @@ export function RestartWorkerButton({ thread }: { thread: ThreadView }) {
           setBusy(true)
           restartWorker(queryClient, thread.id).finally(() => setBusy(false))
         }}
-        // Wears the SAME pill as the verbs beside it (the snooze group's exact border + surface). It
-        // shipped borderless for one review pass and read as a static label rather than a control —
-        // in a strip where every other verb is a bordered pill, the bare one is the odd mark out, and
-        // this one restarts a process. Tone stays at fg/75, below Mark-as-done, so the hierarchy still
-        // says "maintenance verb": the BOX says clickable, the TONE says secondary.
-        className="flex items-center gap-1.5 rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] font-medium text-fg/75 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 disabled:cursor-not-allowed disabled:opacity-45"
+        // An ICON, not a labelled pill (maintainer, 2026-08-01: "It should just be a simple reload
+        // button, a simple update icon. It doesn't need to be a full button."). A borderless SQUARE
+        // rather than a bare glyph: the hover fill is what says "control", which is the job the pill's
+        // border used to do — an earlier pass shipped this as bare TEXT with no box at all and read as
+        // a static label, and that is the failure being avoided here, not the absence of a border.
+        //
+        // 28px matches the exact height of the pills beside it, so the strip keeps one baseline and the
+        // hover targets line up; it also clears the WCAG 2.2 24px minimum. The glyph stays at the
+        // strip's own 12px, so the one verb WITHOUT a label does not out-weigh the two with them, and
+        // the tone sits a step below theirs (fg/55) to keep saying "maintenance verb".
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-fg/55 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 disabled:cursor-not-allowed disabled:opacity-45"
       >
         {busy ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-        Restart worker
       </button>
     </Tooltip>
   )

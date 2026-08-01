@@ -1415,22 +1415,24 @@ test("Restart worker retires the live process, carrying the continuation into th
   h.storage.close()
 })
 
-// fray's completion invariant: an agent runs to its terminal return. A restart kills the parent's
-// in-memory sub-agents, so a parent with live background work is off limits — the same carve-out
-// needsFreshProcessForLimit already makes for the usage-limit restart.
-test("Restart worker refuses a worker whose sub-agents are still running, and delivers nothing", async () => {
+// Running sub-agents do NOT refuse the operator's restart. This asserted the OPPOSITE until
+// 2026-08-01: the completion invariant (an agent runs to its terminal return) was read as covering an
+// explicit human instruction, so the verb threw whenever a child was live — which fenced off the one
+// recovery affordance in exactly the state that motivates reaching for it, a worker stuck behind
+// background work that will not finish. The invariant governs fray's own initiative
+// (needsFreshProcessForLimit still spares a live child when FRAY chooses the restart); an operator
+// asking outright is not that.
+test("Restart worker proceeds even while sub-agents are still running", async () => {
   const { h, slug, calls } = restartHarness([{ state: "running" }])
-  await assert.rejects(
-    h.router.followUp.handler({
-      input: { slug, sessionId: `sid-${slug}`, message: "restart please", freshProcess: true },
-    }),
-    /sub-agents still running; restarting it would kill them/,
-  )
-  assert.deepEqual(calls, [], "the refusal is total — no half-delivered follow-up")
+  await h.router.followUp.handler({
+    input: { slug, sessionId: `sid-${slug}`, message: "restart please", freshProcess: true },
+  })
+  assert.equal(calls.length, 1, "the restart is delivered, not refused")
+  assert.equal(calls[0].freshProcess, true, "and it retires the live process as asked")
   h.storage.close()
 })
 
-// An ordinary follow-up on that same thread is untouched: only the restart verb is fenced off.
+// An ordinary follow-up on that same thread does NOT restart anything: only the explicit verb does.
 test("a plain follow-up still reaches a worker whose sub-agents are running", async () => {
   const { h, slug, calls } = restartHarness([{ state: "running" }])
   await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "extra context" } })

@@ -1,5 +1,4 @@
 import type { QueryClient } from "@tanstack/react-query"
-import type { ThreadView } from "@fray-ui/shared"
 import { showToast } from "../store.ts"
 import { sendEagerFollowUp } from "./eagerComposerSubmission.ts"
 
@@ -23,19 +22,14 @@ import { sendEagerFollowUp } from "./eagerComposerSubmission.ts"
 export const RESTART_WORKER_MESSAGE =
   "Your worker process was restarted so it picks up fray's current tooling (hooks and worker contract). Re-read your scratchpad, then continue exactly where you left off."
 
-// A restart kills the parent's in-memory sub-agents, and fray's completion invariant says an agent runs
-// to its terminal return — so a worker with live background work is off limits until it finishes. This
-// mirrors the carve-out needsFreshProcessForLimit already makes server-side, and the server re-checks
-// it: this is the reason the verb is disabled, not the enforcement.
-export function restartWorkerBlockedReason(thread: ThreadView): string | null {
-  if (thread.kind !== "session") return null
-  const running = thread.subAgents.filter((agent) => agent.state === "running").length
-  if (running === 0) return null
-  return running === 1
-    ? "One sub-agent is still running — restarting would kill it"
-    : `${running} sub-agents are still running — restarting would kill them`
-}
-
+// Live sub-agents do NOT gate this verb. A restart does kill the parent's in-memory children, and for a
+// while that reasoning disabled the button whenever any of them was running — but the operator reaching
+// for this verb is the one person who already knows, and the children they were being protected from
+// losing are routinely the reason the worker needs replacing in the first place. Making them wait it out
+// (maintainer 2026-08-01: "do not disable the button when there are sub-agents running") turned the one
+// recovery affordance into a control that is unavailable exactly when it is wanted. The completion
+// invariant binds fray's OWN automatic restarts — needsFreshProcessForLimit still refuses to kill a live
+// child on its own initiative — not an explicit human instruction.
 export function restartWorker(queryClient: QueryClient, slug: string): Promise<void> {
   return new Promise<void>((resolve) => {
     const started = sendEagerFollowUp(queryClient, slug, RESTART_WORKER_MESSAGE, {

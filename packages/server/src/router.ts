@@ -959,12 +959,14 @@ export function createRouter(ctx: AppContext) {
           if (!(row?.backend === "claude" && row.claude_runtime === "broker")) {
             throw new Error("Only a broker-backed Claude worker can be restarted in place")
           }
-          // fray's completion invariant: an agent runs to its terminal return. A restart kills the
-          // parent's in-memory sub-agents, so a parent whose child is still producing is off limits —
-          // the same carve-out needsFreshProcessForLimit already makes for the usage-limit restart.
-          if ((ctx.tailer.get(input.slug)?.subAgents ?? []).some((agent) => agent.state === "running")) {
-            throw new Error("This worker has sub-agents still running; restarting it would kill them. Wait for them to finish, then restart.")
-          }
+          // Running sub-agents do NOT refuse this. They used to: the completion invariant says an agent
+          // runs to its terminal return, and a restart kills the parent's in-memory children. But that
+          // invariant binds fray's OWN initiative — needsFreshProcessForLimit below still declines to
+          // kill a live child when FRAY is the one deciding to restart — and `freshProcess` is not fray
+          // deciding, it is the operator instructing. Refusing it made the recovery verb unavailable in
+          // precisely the state that motivates it: a worker wedged behind background work that will not
+          // finish (maintainer 2026-08-01: "do not disable the button when there are sub-agents
+          // running"). The children die; that is what the operator asked for and already knows.
         }
         // Reopen an archived thread HERE, above the runtime branches, because only the tmux path reaches
         // resumeThread (where this used to live alone). A broker-backed Claude row and an app-server
