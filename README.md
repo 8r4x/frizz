@@ -51,25 +51,18 @@ Fray is a browser tab, a queue, and the agent CLIs you already pay for. It bring
 - 🤖 **Claude Code *and* Codex.** Pick the backend per thread and run both against the same repo at once. Fray drives the CLIs you already have installed and signed in.
 - 😴 **Snooze.** Not everything needs an answer now. Park a card for an hour, until tomorrow morning, or until a date you pick — optionally with a follow-up prompt attached, so the thread wakes up already working on what you told it to do next.
 - 🐙 **GitHub integration.** Browse your repo's issues and pull requests without leaving the composer, and turn a selection of them into threads. Workers can read issues, diffs, and CI on their own.
-- 📝 **Fully promptmaxxed.** Fray automates none of what an orchestrator app usually automates — no worktrees, no branches, no dev server, no build integration, no workflow engine to fight with. Everything opinionated is a prompt you can edit.
+- 📝 **No magic.** A thread behaves like a Claude Code session you started yourself. Fray adds no worktrees, no branches, no dev server, no build integration, no workflow engine to fight with.
 - 🔒 **Local only.** No cloud, no account, no telemetry. The server binds `127.0.0.1` and its state lives in `~/.fray/`, never in your checkout.
 
-### One dial
+### GitHub
 
-Everything opinionated is a **prompt**, and there is exactly **one** surface you edit — a `FRAY.md` at your repo root. Its contents are injected verbatim into every thread Fray dispatches, and they *override* Fray's own defaults.
+Browse the repo's issues and pull requests from the composer, select any number of them, and each becomes its own thread.
 
-```md
-# Worker norms for this repo
+<p align="center">
+  <img src="assets/github.png" alt="The GitHub picker open over the composer, listing real open issues from colinhacks/zod with numbers, authors, and reaction counts; three are checked and a Start investigations button is enabled." width="100%">
+</p>
 
-## Git: land on local `main` — never open a pull request
-
-This repo does NOT use pull requests. Work directly on `main`, or do messy work in a
-worktree and merge it back yourself when it's done.
-```
-
-That's an excerpt from this repo's own [`FRAY.md`](FRAY.md), and it works: agents here land on local `main` and never open a PR. Whatever your repo's norms are — which gates to run before landing, how deep to review, your commit conventions — that's where they live.
-
-It's read fresh on every dispatch, so an edit takes effect on your next thread. No restart, no rebuild, no setting to go find. Fray used to have an editable prompt preamble in Settings and it was retired in favour of this, so there is exactly one operator-authored surface to reason about.
+Workers can also read issues, diffs, and CI on their own — but only read. A worker never comments, labels, closes, or merges unless you ask it to.
 
 ### The worker plugin
 
