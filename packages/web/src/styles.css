@@ -295,6 +295,41 @@ html[data-font="sans"] .fray-bash .md-body {
      a 1.5px ring, and stacking the halo outside it would make the STATIC mark the largest of the three. */
   .fray-live-dot-quiet { animation: none; opacity: 1; background: transparent; box-shadow: none; border: 1.5px solid var(--quiet-dot); }
 }
+/* RESOLVED background op / dispatch: the process is over, but the CARD still belongs to the liveness
+   column. Every dedicated card in that column now leads with a mark in one of three states — pulsing
+   (running), breathing (alive but quiet), STATIC (done) — so a reader scrolling a settled transcript
+   can find the background tasks and the dispatches without opening anything (maintainer 2026-08-01:
+   "Once they're completed, we can just render a simple blue dot with no pulsing").
+
+   It supersedes the 2026-07-29 "a resolved child gets no mark AND NO SLOT" ruling, which existed only
+   because an EMPTY 13px reservation to the left of the label read as a layout bug. The slot is now
+   FILLED, which is the thing that ruling could not have.
+
+   IT IS MUTED, NOT MERELY UNANIMATED, and that is load-bearing rather than taste. A screenshot freezes
+   the pulse, so a full-brightness static dot is pixel-identical to a live one — and the dispatch card
+   deliberately drops its state VERB for a nominal outcome, on the 2026-07-29 reasoning that "a pulsing
+   dot already says running and NO mark at all already says not running any more". Once every row has a
+   mark, that second half stops being true: a running child reading "4 min" and a finished one reading
+   "3 min" become the same row. So the tone carries what the motion used to, exactly as the quiet dot
+   below does — hue kept (it is still the runtime's own colour, so shell and agent stay apart), mixed
+   toward muted, and no animation at all.
+
+   The GEOMETRY is untouched: 6px plus the same 1px halo, because size is what says "the same kind of
+   mark" and only tone may vary — the rule the quiet dot had to be taught the hard way (2026-07-30). */
+.fray-live-dot-done {
+  display: block;
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 9999px;
+  --live-dot: var(--color-accent);
+  --done-dot: color-mix(in srgb, var(--live-dot) 50%, var(--color-muted));
+  background: var(--done-dot);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--done-dot) 28%, transparent);
+}
+.fray-live-dot-done--shell { --live-dot: var(--color-shell); }
+.fray-live-dot-done--agent { --live-dot: var(--color-accent); }
+
 @supports not (font-variant-caps: all-petite-caps) {
   .petite-caps {
     font-variant-caps: all-small-caps;

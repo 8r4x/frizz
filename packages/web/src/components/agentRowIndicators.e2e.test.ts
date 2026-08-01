@@ -45,6 +45,9 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
         return {
           text: header.innerText.replace(/\s+/g, " ").trim(),
           indicators: card.querySelectorAll("[data-running-indicator]").length,
+          // The STATIC finished dot. Deliberately a different attribute from `data-running-indicator`,
+          // whose count above is the one-indicator-per-row rule — a finished op is marked, not live.
+          doneMarks: card.querySelectorAll("[data-done-indicator]").length,
           // The left group's element order IS the mirrored shape: the mark slot (when the child has a
           // liveness reading at all), the kind label, then the title. `-1` for the slot means no slot
           // exists in the DOM — which is REQUIRED of a resolved child and a failure for a live one.
@@ -86,18 +89,27 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
         }
       }),
     )
-    assert.equal(rows.length, 8, "the fixture must cover live/stale/rested/finished/stopped/failed agent rows, plus the two with no child record")
+    assert.equal(rows.length, 9, "the fixture must cover live/stale/rested/finished/stopped/failed agent rows, plus the three with no child record")
 
-    // THE SHAPE. A child with a liveness reading leads with its mark, then "Agent"; a RESOLVED child has
-    // no mark and NO SLOT for one, so "Agent" leads and sits flush at the header's left edge. The empty
-    // reservation was a real, reported defect ("a weird gap … to the left of the word Agent"), so the
-    // absence is pinned as hard as the presence. The chevron is last on the right on every row.
-    const MARKED = 3 // rows 0-2 are the live / stale / rested children; 3-7 have all resolved.
+    // THE SHAPE. EVERY dispatch card leads with a mark, then "Agent" — the liveness column is occupied
+    // for the whole life of the row, because a dispatch card is permanent in the transcript (it never
+    // folds into the activity disclosure) and a mark that appears only while the child happens to be
+    // running is one the reader cannot find afterwards. So a resolved child wears the STATIC dot
+    // (maintainer 2026-08-01: "Once they're completed, we can just render a simple blue dot with no
+    // pulsing").
+    //
+    // This REVERSES the 2026-07-29 "no mark and NO SLOT" rule, and the reason that rule existed is worth
+    // keeping straight: the complaint was "a weird gap … to the left of the word Agent" — an EMPTY
+    // reserved slot, which reads as a layout bug. Dropping the slot was the only fix available then,
+    // because no finished glyph existed. One does now, so the slot is FILLED instead, and the defect the
+    // old rule guarded against cannot recur while every row draws something. The regression to watch for
+    // is therefore the opposite one: a row whose slot is present but empty. The one row that legitimately
+    // draws nothing is an untracked PENDING dispatch, whose reading spins instead (row 8).
     for (const [index, row] of rows.entries()) {
-      const marked = index < MARKED
-      assert.equal(row.markSlotIndex, marked ? 0 : -1, `row ${index}: ${marked ? "the liveness mark must lead the header" : "a resolved child must render no mark slot at all"}`)
-      assert.equal(row.labelIndex, marked ? 1 : 0, `row ${index}: "Agent" must ${marked ? "follow the mark" : "lead the header"}`)
-      assert.equal(marked ? row.labelOffset > 0 : row.labelOffset === 0, true, `row ${index}: "Agent" sits ${row.labelOffset}px from the left edge`)
+      const pendingUntracked = index === rows.length - 1
+      assert.equal(row.markSlotIndex, pendingUntracked ? -1 : 0, `row ${index}: ${pendingUntracked ? "an untracked pending dispatch spins in its reading and renders no mark slot" : "the liveness mark must lead the header"}`)
+      assert.equal(row.labelIndex, pendingUntracked ? 0 : 1, `row ${index}: "Agent" must ${pendingUntracked ? "lead the header" : "follow the mark"}`)
+      assert.equal(pendingUntracked ? row.labelOffset === 0 : row.labelOffset > 0, true, `row ${index}: "Agent" sits ${row.labelOffset}px from the left edge`)
       assert.ok(row.chevronIsLast, `row ${index}: the chevron must be the last thing on the row`)
     }
     // Right-justified means ONE column: every row's right-hand group ends at the same x, so a stack of
@@ -139,9 +151,12 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
     assert.match(String(rows[2].quietMark), /^rested — /)
     assert.match(rows[2].rightText, /^(\d+ min|<1 min|\d+ hr( \d+ min)?)$/)
 
-    // A completed child: no mark, no slot, just the bare runtime. A card that reports a runtime and shows
-    // no liveness mark already says "it ran and stopped", so the verb is deliberately absent.
+    // A completed child: the STATIC dot and the bare runtime. Nothing on the row is LIVE, so the running
+    // count stays 0 while the finished mark stands in the slot — the two attributes exist precisely so a
+    // permanent mark cannot be mistaken for motion. The verb is still deliberately absent: a runtime
+    // beside a mark that does not move already says "it ran and stopped".
     assert.equal(rows[3].indicators, 0)
+    assert.equal(rows[3].doneMarks, 1)
     assert.equal(rows[3].rightText, "3 min")
     assert.doesNotMatch(rows[3].text, /finished/)
 
@@ -173,6 +188,16 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
     assert.equal(rows[7].indicators, 0)
     assert.match(rows[7].rightText, /^failed · /)
     assert.deepEqual(rows[7].readingRgb, rows[5].readingRgb, "one failure, one tone, child record or not")
+    // Every resolved row carries the finished mark, whether or not a child record survived — the same
+    // "data availability must never change what the reader sees" rule the readings above follow.
+    for (const index of [4, 5, 6, 7]) assert.equal(rows[index].doneMarks, 1, `row ${index}: a resolved dispatch keeps the static mark`)
+
+    // …and the ONE row that is neither live nor resolved draws NOTHING in the slot. A pending dispatch
+    // with no child record has an UNKNOWN state, so a finished dot would be a lie; its reading spins
+    // instead, which is the row's single indicator.
+    assert.equal(rows[8].doneMarks, 0, "an untracked pending dispatch must not claim to be finished")
+    assert.equal(rows[8].indicators, 1, "…it spins in the reading instead — still exactly one indicator")
+    assert.equal(rows[8].rightText, "running")
 
     assert.deepEqual(errors, [])
     assert.deepEqual(notFound.filter((path) => path !== "/favicon.ico"), [])
@@ -241,28 +266,58 @@ test("a background shell card marks its liveness in the same slot as a dispatch 
                 })(getComputedStyle(dot).backgroundColor)
               : null,
             indicators: card.querySelectorAll("[data-running-indicator]").length,
+            doneMarks: card.querySelectorAll("[data-done-indicator]").length,
             rightText: right.innerText.replace(/\s+/g, " ").trim(),
           }
         }),
       )
     const shells = await read("[data-shell-rows] .fray-bash")
     const agents = await read("[data-agent-rows] .fray-bash")
-    assert.equal(shells.length, 7, "the fixture must cover live / quiet / untracked-detached / long-foreground / fresh-foreground / done / failed shell rows")
+    assert.equal(shells.length, 8, "the fixture must cover live / quiet / untracked-detached / long-foreground / fresh-foreground / done / failed foreground rows, plus a RESOLVED background task")
 
-    // THE SHAPE, row by row. Rows 0-3 are running — three detached, plus the FOREGROUND command that has
-    // been going long enough to earn the mark. Rows 4-6 have nothing live to show (a call issued a moment
-    // ago, and two resolved ones) and render NO slot — an empty reservation is the defect the dispatch
-    // card already had to unlearn.
-    const MARKED = 4
+    // THE SHAPE, row by row, in three groups — and the split is DETACHMENT, not merely liveness:
+    //   • rows 0-3 are running — three detached, plus the FOREGROUND command that has been going long
+    //     enough to earn the mark. Pulsing dot, one running indicator.
+    //   • rows 4-6 are FOREGROUND with nothing live (one issued a moment ago, two resolved). They render
+    //     NO slot: a foreground call folds back into the activity disclosure once settled, so marking it
+    //     would put a dot on every Read and Grep in the transcript. An empty reservation is the defect
+    //     the dispatch card already had to unlearn, and it stays unlearned here.
+    //   • row 7 is a RESOLVED BACKGROUND task: slot present, STATIC dot, zero RUNNING indicators. Its
+    //     card is permanent (a detached op never folds into the disclosure), so the mark has to outlive
+    //     the process (maintainer 2026-08-01).
+    const RUNNING = 4
+    const RESOLVED_BACKGROUND = 7
     for (const [index, row] of shells.entries()) {
-      const marked = index < MARKED
-      assert.equal(row.markSlotIndex, marked ? 0 : -1, `shell row ${index}: ${marked ? "the liveness mark must lead the header" : "a row with nothing live behind it renders no mark slot"}`)
+      const running = index < RUNNING
+      const marked = running || index === RESOLVED_BACKGROUND
+      assert.equal(row.markSlotIndex, marked ? 0 : -1, `shell row ${index}: ${marked ? "the mark must lead the header" : "a settled foreground row renders no mark slot"}`)
       assert.equal(row.labelIndex, marked ? 1 : 0, `shell row ${index}: the tool label must ${marked ? "follow the mark" : "lead the header"}`)
       assert.equal(marked ? row.labelOffset > 0 : row.labelOffset === 0, true, `shell row ${index}: the label sits ${row.labelOffset}px from the left edge`)
       // Exactly one glyph per row, and it is ALWAYS the leading mark: this family draws nothing in the
       // right-hand reading any more. A `tool-pending` spinner reappearing here is the regression.
-      assert.equal(row.indicators, marked ? 1 : 0, `shell row ${index}: one indicator at most, and only in the mark slot`)
+      assert.equal(row.indicators, running ? 1 : 0, `shell row ${index}: one running indicator at most, and only in the mark slot`)
+      assert.equal(row.doneMarks, index === RESOLVED_BACKGROUND ? 1 : 0, `shell row ${index}: only a resolved background task carries the static mark`)
     }
+
+    // The static dot is the live dot's GEOMETRY with a quieter tone — the same rule the quiet dot
+    // follows: size says "the same kind of mark", and only tone may vary. Asserted against the live row
+    // rather than against literals, so the slot can only ever drift for both at once.
+    assert.equal(shells[RESOLVED_BACKGROUND].markLeft, shells[0].markLeft, "the finished mark occupies the live mark's slot")
+    assert.equal(shells[RESOLVED_BACKGROUND].markMidY, shells[0].markMidY, "…on the same optical line")
+    assert.match(String(shells[RESOLVED_BACKGROUND].markClass), /fray-live-dot-done--shell/)
+    assert.equal(shells[RESOLVED_BACKGROUND].rightText, "done · 1 min 36 sec")
+    // Still recognisably the SHELL's blue — the hue is what says which runtime this row belongs to.
+    const [dr, dg, db] = shells[RESOLVED_BACKGROUND].markRgb!
+    assert.ok(db > dr && db > dg, `a finished background task keeps the shell blue, got rgb(${shells[RESOLVED_BACKGROUND].markRgb})`)
+    // …but QUIETER than the live one, and that is not decoration. A screenshot freezes the pulse, so a
+    // finished dot at full brightness is pixel-identical to a running one — and this card family drops
+    // its state verb for a nominal outcome precisely because "no mark" used to carry it. Tone is what
+    // carries it now, so a finished dot that matches the live dot's saturation is the regression.
+    const saturation = (rgb: number[]) => Math.max(...rgb) - Math.min(...rgb)
+    assert.ok(
+      saturation(shells[RESOLVED_BACKGROUND].markRgb!) < saturation(shells[0].markRgb!),
+      `a finished mark must read quieter than a live one, got rgb(${shells[RESOLVED_BACKGROUND].markRgb}) vs rgb(${shells[0].markRgb})`,
+    )
     // The spinner is gone from this card family entirely — it now belongs only to a dispatch with no
     // child record, which elapsed time cannot speak for.
     assert.equal(await page.$$eval("[data-shell-rows] [data-running-indicator]", (n) => n.map((e) => e.getAttribute("data-running-indicator"))).then((k) => k.filter((v) => v === "tool-pending").length), 0, "no shell row may spin")
@@ -273,7 +328,11 @@ test("a background shell card marks its liveness in the same slot as a dispatch 
     assert.equal(shells[3].markLeft, shells[0].markLeft, "a foreground shell marks itself in the detached shell's slot")
     assert.match(String(shells[3].markClass), /fray-live-dot--shell/)
     assert.deepEqual(shells[3].markRgb, shells[0].markRgb, "…in the same blue")
-    assert.equal(shells[3].rightText, "running")
+    // A LIVE duration, not a bare verb: a pending foreground Bash ticks from the call's own timestamp
+    // (useBashDuration), and this fixture row starts 42s in the past. The literal "running" this pinned
+    // could only ever have held for a row with no `startedAt` — it was red before the ejection work and
+    // is corrected here rather than left asserting something the card has never done.
+    assert.match(shells[3].rightText, /^running · \d+ sec$/)
 
     // ALIGNED, measured against the dispatch card: same slot position, same optical line, same class —
     // agents[0] is the live child, shells[0] the live shell.

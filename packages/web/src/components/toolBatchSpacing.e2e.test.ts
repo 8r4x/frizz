@@ -27,19 +27,44 @@ async function launch() {
 }
 
 // Gaps between consecutive tool cards WITHIN one message column ([data-transcript-column] — see the
-// marker's note in ChatView), tagged with whether the two cards came from the same assistant message.
+// marker's note in ChatView), tagged with WHAT LIES BETWEEN the two cards.
 // `nth` picks the column: the drawer mounts OVER the thread, so both are in the DOM at once.
+//
+// The tag used to be `sameMessage` — do the two cards share a display-message root — on the premise
+// that a coalesced run is exactly one root, so crossing one could only mean the real prose break. That
+// premise died with the background-launch ejection (2026-08-01): an ejected card is its own display
+// message, so a seam now crosses a root for THREE different reasons, only one of which is prose. The
+// tag is therefore what actually sits in the gap, which is what decides its height either way.
 async function gaps(page: import("puppeteer").Page, nth: number) {
   return page.evaluate((idx) => {
     const scope = document.querySelectorAll("[data-transcript-column]")[idx]
     const cards = [...scope.querySelectorAll(".fray-bash")]
-    const out: { gap: number; sameMessage: boolean; from: string; to: string }[] = []
+    // Classified by what is PAINTED in the gap, found by geometry — the fixture's prose shares a message
+    // root with its own tool band, so "a prose-only message root" would find nothing.
+    //   • a digest HEADER is a real row, so a seam spanning one is legitimately taller than the pitch;
+    //   • anything else with text in it is PROSE, and prose keeps the full between-block break.
+    const inGap = (top: number, bottom: number) =>
+      [...scope.querySelectorAll<HTMLElement>("*")].filter((n) => {
+        const r = n.getBoundingClientRect()
+        return r.height > 0 && r.top >= top - 0.5 && r.bottom <= bottom + 0.5
+      })
+    const out: { gap: number; spans: "nothing" | "digest" | "prose"; from: string; to: string }[] = []
     for (let i = 1; i < cards.length; i++) {
       const prev = cards[i - 1]
       const cur = cards[i]
+      const top = prev.getBoundingClientRect().bottom
+      const bottom = cur.getBoundingClientRect().top
+      const occupants = inGap(top, bottom)
+      // The HEADER ROW specifically — not merely "something inside a disclosure". The spacers BETWEEN
+      // an expanded run's cards live inside that same container, so the looser test called every
+      // intra-batch seam a digest span and left the tight-pitch assertion measuring one lonely gap.
+      const hasDigest = occupants.some((n) => n.matches("[data-tool-activity] button") || n.querySelector("[data-tool-activity] button") !== null)
+      const hasProse = occupants.some(
+        (n) => (n.textContent ?? "").trim() !== "" && !n.closest("[data-tool-activity]") && !n.closest(".fray-bash"),
+      )
       out.push({
-        gap: Math.round((cur.getBoundingClientRect().top - prev.getBoundingClientRect().bottom) * 10) / 10,
-        sameMessage: prev.closest("[data-fray-msg]") === cur.closest("[data-fray-msg]"),
+        gap: Math.round((bottom - top) * 10) / 10,
+        spans: hasProse ? "prose" : hasDigest ? "digest" : "nothing",
         from: (prev.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 30),
         to: (cur.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 30),
       })
@@ -48,10 +73,9 @@ async function gaps(page: import("puppeteer").Page, nth: number) {
   }, nth)
 }
 
-// Tool cards in distinct prose-delimited disclosures are the control — they keep the full
-// between-block step. Provider turns inside one activity run coalesce into one display message, so a
-// detailed-card seam that crosses display-message roots is exactly the real prose break in this fixture.
-const isProseBoundary = (g: { sameMessage: boolean }) => !g.sameMessage
+// A seam with NOTHING painted in it must sit at the tight run pitch — including the two either side of
+// an ejected background card, which is the arrangement the ejection introduced.
+const isProseBoundary = (g: { spans: string }) => g.spans === "prose"
 
 for (const [surface, query, column] of [
   ["thread transcript", "", 0],
@@ -93,9 +117,13 @@ for (const [surface, query, column] of [
           pendingDisclosures: scope.querySelectorAll('[data-tool-activity-state="pending"]').length,
         }
       }, column)
-      assert.equal(live.visibleCards, 0, "ordinary cards stay unmounted until a settled disclosure is expanded")
-      assert.equal(live.labels.length, 1, "the completed inter-call run stays out of history while the turn is live")
-      assert.match(live.labels[0], /Expand 7 tool calls: Ran 7 tool calls/, "the earlier settled run keeps one historical digest")
+      // The ONE visible card is the ejected background launch. Every ORDINARY card stays unmounted
+      // behind its disclosure; a detached process is the exception, because its card is the reader's
+      // only handle on something still running (lib/toolActivity.isToolActivityException).
+      assert.equal(live.visibleCards, 1, "only the ejected background launch renders a card before any disclosure is expanded")
+      assert.equal(live.labels.length, 2, "the background launch splits the run it lands in; the completed inter-call run still stays out of history")
+      assert.match(live.labels[0], /Expand 4 tool calls: Ran 4 tool calls/, "the earlier settled run digests everything up to the background launch")
+      assert.match(live.labels[1], /Expand 2 tool calls: Ran 2 tool calls/, "…and resumes as its own digest below it")
       assert.equal(live.workingActivity, "tool", "the ordinary Working slot identifies its tool-label state")
       // Shown AS WRITTEN, not prefixed: `Running` is a claim about what the tool is doing, and pasted
       // in front of a noun phrase it reads as nonsense — so an unconvertible description is only
@@ -126,11 +154,12 @@ for (const [surface, query, column] of [
         disclosures.forEach((button) => button.click())
         return { labels, disclosureGeometry, visibleCards, hasWorkingIndicator }
       }, column)
-      assert.equal(collapsed.visibleCards, 0, "settled detail stays unmounted until its disclosure is expanded")
+      assert.equal(collapsed.visibleCards, 1, "settled detail stays unmounted apart from the ejected background launch")
       assert.equal(collapsed.hasWorkingIndicator, false, "settled transcripts have no runtime tail")
-      assert.equal(collapsed.labels.length, 2, "only the two prose-delimited activity runs get disclosures")
-      assert.match(collapsed.labels[0], /Expand 7 tool calls: Ran 7 tool calls/, "the first prose tool tail absorbs all three following provider batches")
-      assert.match(collapsed.labels[1], /Expand 3 tool calls: Ran 3 tool calls/, "the second prose tool tail absorbs the following provider batch")
+      assert.equal(collapsed.labels.length, 3, "two prose-delimited runs, the first of them split by the background launch")
+      assert.match(collapsed.labels[0], /Expand 4 tool calls: Ran 4 tool calls/, "the first prose tool tail absorbs provider batches up to the background launch")
+      assert.match(collapsed.labels[1], /Expand 2 tool calls: Ran 2 tool calls/, "…and resumes across the batch below it, still presentation-transparent")
+      assert.match(collapsed.labels[2], /Expand 3 tool calls: Ran 3 tool calls/, "the second prose tool tail absorbs the following provider batch")
       for (const geometry of collapsed.disclosureGeometry) {
         assert.ok(geometry.gap >= 3 && geometry.gap <= 5, `digest chevron must sit directly beside its label, got ${geometry.gap}px`)
         assert.ok(geometry.trailingSpace > 20, "the full transcript row remains the click target after moving the chevron")
@@ -141,12 +170,18 @@ for (const [surface, query, column] of [
       const measured = await gaps(page, column)
       assert.ok(measured.length >= 8, `expected the fixture's full tool column, got ${measured.length} gaps`)
 
-      const tool = measured.filter((g) => !isProseBoundary(g))
+      const tool = measured.filter((g) => g.spans === "nothing")
       for (const g of tool) {
-        assert.equal(g.gap, TIGHT, `${g.from} → ${g.to} (sameMessage=${g.sameMessage}) must sit at the tight run`)
+        assert.equal(g.gap, TIGHT, `${g.from} → ${g.to} must sit at the tight run`)
       }
       // The expanded detail actually contains adjacent cards — otherwise the assertion above is vacuous.
-      assert.ok(tool.some((g) => g.sameMessage), "fixture must contain an intra-batch pair")
+      assert.ok(tool.length >= 4, `fixture must contain intra-batch pairs, got ${tool.length}`)
+      // …including the seam INTO the ejected background card. It is a display message of its own, so it
+      // is exactly the card that could have opened a paragraph break above itself, and it must not. (Its
+      // seam BELOW is not a bare gap — the next run's digest header sits in it — so it is covered by the
+      // `digest` class, not here.)
+      const ejected = tool.filter((g) => /Waiting for background/.test(g.to))
+      assert.equal(ejected.length, 1, `the ejected card must join the tight run above it, got ${JSON.stringify(measured)}`)
 
       // …and the prose adjacency is NOT collapsed with them.
       const prose = measured.filter(isProseBoundary)

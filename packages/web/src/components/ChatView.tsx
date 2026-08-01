@@ -41,7 +41,7 @@ import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
 import { FOREGROUND_MARK_AFTER_MS, foregroundToolIsRunning, hasRunningToolIndicator, isPendingForegroundTool, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
 import { formatToolDuration } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
-import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, childOpSubtree, mergeBackgroundShells, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
+import { CHILD_DONE_TITLE, CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, childOpSubtree, mergeBackgroundShells, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
 import { agentReading } from "../lib/agentReading.ts"
@@ -1908,9 +1908,9 @@ function MinimalToolActivity({ tools, at }: { tools: CollapsedTool[]; at?: strin
   )
 }
 
-// Default-minimal tool rendering. Ordinary calls — including yielded/background Bash lifecycles —
-// become one gerund disclosure regardless of provider batching. Dedicated block tools such as
-// sub-agent and send cards split the run and remain visible.
+// Default-minimal tool rendering. Ordinary calls become one gerund disclosure regardless of provider
+// batching. Dedicated block tools split the run and remain visible: sub-agent and send cards, and — as
+// of 2026-08-01 — every background/detached lifecycle (see lib/toolActivity.isToolActivityException).
 function ToolCalls({ tools, at }: { tools: CollapsedTool[]; dense?: boolean; at?: string }) {
   const runs: { exceptional: boolean; tools: CollapsedTool[] }[] = []
   for (const tool of tools) {
@@ -2037,6 +2037,14 @@ function useForegroundRunning(status: ToolStatus | undefined, backgroundState: T
 // the spinner it used to get at the far right is gone. Detached or not, a shell that is running right
 // now is the same fact to a reader, and splitting it across two glyphs at two edges meant the LONGEST
 // commands — the ones you actually wait on — were the least visible thing on screen.
+//
+// A FINISHED BACKGROUND op keeps the slot, statically. A detached shell never folds into the activity
+// disclosure any more (isToolActivityException), so its card is a permanent row in the transcript — and
+// a permanent row with a mark only while it happens to be running is one the reader cannot pick out
+// afterwards. The static dot says "this row is a background task" for as long as the row exists; the
+// pulse remains the thing, and the only thing, that says it is alive. A settled FOREGROUND call still
+// gets no mark at all: it lived and died inside its own batch, and marking those would put a dot on
+// every Read and Grep in the transcript.
 function ToolLiveMark({ status, backgroundState, liveBackgroundState, startedAt }: { status?: ToolStatus; backgroundState?: TranscriptToolCall["backgroundState"]; liveBackgroundState?: "running" | "stale"; startedAt?: string }) {
   const foregroundRunning = useForegroundRunning(status, backgroundState, startedAt)
   // Precedence follows the READING beside it, exactly: a tracked op's own observed state outranks the
@@ -2051,6 +2059,11 @@ function ToolLiveMark({ status, backgroundState, liveBackgroundState, startedAt 
       <span aria-hidden className="fray-live-dot-quiet fray-live-dot-quiet--shell" data-running-indicator="tool-quiet" title={CHILD_QUIET_SHELL_TITLE} />
     ) : hasRunningToolIndicator(status, backgroundState) || foregroundRunning ? (
       <span aria-hidden className="fray-live-dot fray-live-dot--shell" data-running-indicator="tool-disclosure" />
+    ) : backgroundState !== undefined ? (
+      // NOT `data-running-indicator` — that attribute means RUNNING, and the one-indicator-per-row rule
+      // is asserted through it. A finished op is marked, not live, so it wears the terminal attribute
+      // the stale and rested glyphs already establish the precedent for.
+      <span aria-hidden className="fray-live-dot-done fray-live-dot-done--shell" data-done-indicator="tool" title={CHILD_DONE_TITLE.SHELL} />
     ) : null
   if (!mark) return null
   // `-mr-1` pulls the label back to roughly the dot↔label gap the child lines use: the header's own
@@ -2540,15 +2553,19 @@ export function AgentBlock({
   // with the same slot in the same position (ToolLiveMark), in shell blue — one liveness column for the
   // whole transcript, whichever kind of thing is alive behind the card.
   //
-  // A RESOLVED child gets no mark AND NO SLOT (maintainer 2026-07-29: "there's a weird gap now to the
-  // left of the word 'Agent'"). The slot used to be reserved whether or not it drew anything, so a run of
-  // cards would align its labels down one edge — but a finished card is the COMMON case in a scrolled
-  // transcript, and an empty 13px reservation there reads as a layout bug, not as "not running any more".
-  // The alternative was inventing an always-on "finished" glyph; there isn't one, and neither existing
-  // quiet glyph can be borrowed (stale means "probably still working, just quiet" and rested means "its
-  // fan-out is stranded" — both would be false of a child that simply finished). With the slot gone a
-  // resolved dispatch card leads with its petite-caps label exactly like every other tool card in the
-  // transcript, and the runtime in the right-hand column is what says it ran and stopped.
+  // A RESOLVED child now gets the STATIC dot (maintainer 2026-08-01, extending the same ruling to
+  // dispatches: "Once they're completed, we can just render a simple blue dot with no pulsing"). It
+  // used to get no mark and no slot, because reserving an EMPTY 13px slot to the left of the label read
+  // as a layout bug (maintainer 2026-07-29: "there's a weird gap now to the left of the word 'Agent'") —
+  // and the "finished" glyph that would have filled it did not exist. Now it does: the same dot minus
+  // its animation (styles.css .fray-live-dot-done). So the slot is filled rather than reserved-and-empty,
+  // and a dispatch stays findable in a settled transcript, which is the point of keeping it out of the
+  // activity disclosure in the first place.
+  //
+  // An UNTRACKED PENDING dispatch is the one case that still draws nothing here: its reading spins
+  // instead (agentReading.showSpinner), and one running indicator per row (maintainer 2026-07-18) has
+  // held since. The static dot is for a dispatch that has genuinely resolved, never for one whose state
+  // is merely unknown.
   const mark =
     running ? (
       <span aria-hidden className="fray-live-dot fray-live-dot--agent" data-running-indicator="subagent-disclosure" />
@@ -2556,7 +2573,11 @@ export function AgentBlock({
       <span className={CHILD_STALE_DOT_CLASS} title={CHILD_STALE_TITLE} />
     ) : live?.state === "rested" ? (
       <span className={CHILD_RESTED_DOT_CLASS} title={CHILD_RESTED_TITLE} />
-    ) : null
+    ) : live || reading?.showSpinner ? null : (
+      // `data-done-indicator`, never `data-running-indicator`: the latter means RUNNING and carries the
+      // one-indicator-per-row assertion. See ToolLiveMark, which marks a finished shell the same way.
+      <span aria-hidden className="fray-live-dot-done fray-live-dot-done--agent" data-done-indicator="subagent" title={CHILD_DONE_TITLE.AGENT} />
+    )
 
   function openDrawer() {
     if (!slug || !agentId) return

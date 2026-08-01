@@ -13,7 +13,7 @@ import { Message, NativeInputRequiredCard, PermPolicyNote, PermPromptBanner, Pen
 import { BLOCK_RADIUS, BLOCK_RADIUS_TOP, CARD_PRIMARY_ACTION } from "./TranscriptCard.tsx"
 import { AwaitingBackgroundCard } from "./AwaitingBackgroundCard.tsx"
 import { agentCompletionCall } from "../lib/subAgentCompletion.ts"
-import { coalesceToolActivityMessages } from "../lib/toolActivity.ts"
+import { coalesceToolActivityMessages, isToolActivityException } from "../lib/toolActivity.ts"
 import { prefs } from "../lib/prefs.ts"
 import { ThreadComposerBox } from "./ThreadComposerBox.tsx"
 import { BackgroundOpsStrip, RemoteControlLink, ThreadSlugContext, QueueDismissContext } from "./ChatView.tsx"
@@ -761,29 +761,35 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // What the summary divider hides. The first and last agent messages render TEXT ONLY (the maintainer: the
   // tool calls batched into them "are almost never useful"), so EVERYTHING between them collapses — the
   // fully-hidden middle messages AND the tool bands batched into the first/last messages themselves.
-  //   hiddenToolCount = every tool call across [firstRenderedIdx .. lastRenderedIdx] inclusive.
+  //   hiddenToolCount = every ORDINARY tool call across [firstRenderedIdx .. lastRenderedIdx] inclusive.
   //   hiddenStepCount = the middle messages hidden in their entirety (strictly between first and last).
+  // The exceptions — the calls that keep a dedicated card anywhere in the app (background tasks and
+  // sub-agent dispatches; see lib/toolActivity.isToolActivityException) — are LIFTED OUT of the span
+  // instead: they are lifecycle state, not disposable chatter, so the card shows them for real and the
+  // divider neither hides nor counts them (maintainer 2026-08-01, on both kinds: "It's important that
+  // those show up in the chat"). ONE predicate with the transcript, so a call cannot be a card in the
+  // thread view and a hidden statistic on the queue card that summarizes the same turn.
   // Zero when the agent answered in a single message (firstRenderedIdx === lastRenderedIdx → nothing
   // intermediate). The pinned ask and loaded-earlier history sit outside this range.
-  const { hiddenStepCount, hiddenToolCount, visibleBackgroundMessages } = useMemo(() => {
+  const { hiddenStepCount, hiddenToolCount, visibleOperationMessages } = useMemo(() => {
     if (firstRenderedIdx < 0 || firstRenderedIdx === lastRenderedIdx) {
-      return { hiddenStepCount: 0, hiddenToolCount: 0, visibleBackgroundMessages: [] as TranscriptMessage[] }
+      return { hiddenStepCount: 0, hiddenToolCount: 0, visibleOperationMessages: [] as TranscriptMessage[] }
     }
     let steps = 0
     let tools = 0
-    // ONE band for the whole span, not one per source record. A provider chunks a burst of background
-    // launches across several assistant messages, and under the collapse everything between them is
-    // hidden — so they render as consecutive rows with nothing in between, and three shells started in
-    // three records read as three `Ran 1 tool call` disclosures where every other transcript surface
-    // would show `Ran 3 tool calls` (maintainer 2026-07-31: "still getting successive tool calls not
-    // getting properly batched"; the run was Starting/Capturing/Waiting, one shell per record). Built
-    // directly rather than by re-running coalesceToolActivityMessages, because these are synthesized
-    // rows with no prose or dedicated card left between them to break the run. Mirrors that coalescer
-    // otherwise: the FIRST source id keeps the row's identity stable as the run grows, while `at`
-    // advances to the newest launch so a pending card's clock starts from the call it represents.
-    const spanBackgroundTools: TranscriptToolCall[] = []
-    let backgroundSourceId: string | undefined
-    let backgroundAt: string | undefined
+    // ONE band for the whole span, not one per source record. A provider chunks a burst of launches
+    // across several assistant messages, and under the collapse everything between them is hidden — so
+    // they render as consecutive rows with nothing in between, and three shells started in three records
+    // read as three separate rows where every other transcript surface would show one run (maintainer
+    // 2026-07-31: "still getting successive tool calls not getting properly batched"; the run was
+    // Starting/Capturing/Waiting, one shell per record). Built directly rather than by re-running
+    // coalesceToolActivityMessages, because these are synthesized rows with no prose or dedicated card
+    // left between them to break the run. Mirrors that coalescer otherwise: the FIRST source id keeps
+    // the row's identity stable as the run grows, while `at` advances to the newest launch so a pending
+    // card's clock starts from the call it represents.
+    const spanOperationTools: TranscriptToolCall[] = []
+    let operationSourceId: string | undefined
+    let operationAt: string | undefined
     for (let g = firstRenderedIdx; g <= lastRenderedIdx; g++) {
       const m = messages[g]
       if (!m || m.queued || messageRendersNothing(m)) continue
@@ -791,13 +797,13 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
       // (see ChatView.agentCompletionCall) — counting it would promise a tool the expansion never shows.
       // It still counts as a step, exactly like the background-shell wake divider beside it.
       const completion = agentCompletionCall(m)
-      const backgroundTools = completion ? [] : m.tools.filter((tool) => tool.backgroundState !== undefined)
-      const ordinaryTools = completion ? [] : m.tools.filter((tool) => tool.backgroundState === undefined)
+      const operationTools = completion ? [] : m.tools.filter((tool) => isToolActivityException(tool))
+      const ordinaryTools = completion ? [] : m.tools.filter((tool) => !isToolActivityException(tool))
       tools += ordinaryTools.length
-      if (backgroundTools.length > 0) {
-        if (spanBackgroundTools.length === 0 && m.sourceId) backgroundSourceId = `${m.sourceId}:visible-background`
-        spanBackgroundTools.push(...backgroundTools)
-        backgroundAt = m.at ?? backgroundAt
+      if (operationTools.length > 0) {
+        if (spanOperationTools.length === 0 && m.sourceId) operationSourceId = `${m.sourceId}:visible-background`
+        spanOperationTools.push(...operationTools)
+        operationAt = m.at ?? operationAt
       }
       if (
         g > firstRenderedIdx &&
@@ -805,15 +811,15 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
         (messageHasRenderableText(m) || ordinaryTools.length > 0 || completion !== undefined || m.kind !== undefined)
       ) steps++
     }
-    const backgroundMessages: TranscriptMessage[] = spanBackgroundTools.length === 0 ? [] : [{
-      sourceId: backgroundSourceId,
+    const operationMessages: TranscriptMessage[] = spanOperationTools.length === 0 ? [] : [{
+      sourceId: operationSourceId,
       role: "assistant",
       text: "",
-      tools: spanBackgroundTools,
-      parts: [{ kind: "tools", tools: spanBackgroundTools }],
-      at: backgroundAt,
+      tools: spanOperationTools,
+      parts: [{ kind: "tools", tools: spanOperationTools }],
+      at: operationAt,
     }]
-    return { hiddenStepCount: steps, hiddenToolCount: tools, visibleBackgroundMessages: backgroundMessages }
+    return { hiddenStepCount: steps, hiddenToolCount: tools, visibleOperationMessages: operationMessages }
   }, [messages, firstRenderedIdx, lastRenderedIdx])
   // Collapse the intermediate run behind ONE summary divider unless the reader has opted into the full log.
   // Gated on a real pinned ask (stickyUserIdx >= 0) and a distinct first/last agent message so a single
@@ -1191,15 +1197,16 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                       )
                       prevTailIsMeta = false
                     }
-                    // Background shells are lifecycle state, not disposable intermediate chatter.
-                    // Keep their real cards visible while ordinary tool/prose activity stays behind
-                    // the summary. This is also where historical `unknown` shell-job calls surface.
-                    visibleBackgroundMessages.forEach((background, backgroundIndex) => {
-                      if (prevTailIsMeta !== null) out.push(<VSpace key={`bg-space-${backgroundIndex}`} h={STEP} />)
-                      const backgroundKey = background.sourceId ?? `visible-background-${backgroundIndex}`
+                    // Background tasks and sub-agent dispatches are lifecycle state, not disposable
+                    // intermediate chatter. Keep their real cards visible while ordinary tool/prose
+                    // activity stays behind the summary. This is also where historical `unknown`
+                    // shell-job calls surface.
+                    visibleOperationMessages.forEach((operations, operationIndex) => {
+                      if (prevTailIsMeta !== null) out.push(<VSpace key={`bg-space-${operationIndex}`} h={STEP} />)
+                      const operationKey = operations.sourceId ?? `visible-background-${operationIndex}`
                       out.push(
-                        <div key={backgroundKey} data-transcript-source-id={backgroundKey} className="flex flex-col">
-                          <Message m={background} dense />
+                        <div key={operationKey} data-transcript-source-id={operationKey} className="flex flex-col">
+                          <Message m={operations} dense />
                         </div>,
                       )
                       prevTailIsMeta = true

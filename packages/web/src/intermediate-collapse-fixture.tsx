@@ -27,9 +27,13 @@ import "./styles.css"
 //                           event AFTER it. Regression guard: the question (with answer chips) must stay
 //                           visible — a trailing event must NOT pull it into the collapsed range.
 //   ?variant=bgshells  three background shells launched in three SEPARATE assistant records across the
-//                      collapsed span (the real shape from thread `started-three-fray-in-quick-succession`).
-//                      Background shells stay visible under the divider; they must arrive as ONE
-//                      `Ran 3 tool calls` band, not three `Ran 1 tool call` rows.
+//                      collapsed span (the real shape from thread `started-three-fray-in-quick-succession`),
+//                      one of them already finished. Background tasks are lifted out of the collapse and
+//                      render as REAL CARDS — never a `Ran N tool calls` band — with a pulsing blue dot
+//                      while live and a static one once done.
+//   ?variant=dispatches  two sub-agent dispatches inside the collapsed span, one still running (tracked in
+//                      thread.subAgents) and one resolved. Same rule as background tasks: real Agent cards
+//                      under the divider, pulsing accent dot vs static accent dot.
 const params = new URLSearchParams(location.search)
 const variant = params.get("variant") ?? "heavy"
 
@@ -149,13 +153,14 @@ const questionthentool: TranscriptMessage[] = [
   withId(asst("", [tool("Read", { detail: "components/ChatView.tsx" })])),
 ]
 
-// REGRESSION GUARD for the batch seam under the collapse. Background shells are lifted OUT of the
-// collapsed span and rendered for real (they are lifecycle state, not disposable chatter), and this run
-// launches three of them from three SEPARATE assistant records with ordinary tool work in between —
-// exactly what the maintainer hit. Everything between them is hidden, so they land as consecutive rows
-// and must read as ONE `Ran 3 tool calls` band; one message per record gave three `Ran 1 tool call`s.
-const bgShell = (desc: string, command: string) =>
-  tool("Bash", { desc, detail: command, command, backgroundState: "background", status: "pending" })
+// Background tasks are lifted OUT of the collapsed span and rendered for real — they are lifecycle
+// state, not disposable chatter, and a detached process is the one class of call still going after the
+// batch that started it (maintainer 2026-08-01: "It's important that those show up in the chat"). This
+// run launches three from three SEPARATE assistant records with ordinary tool work in between — the
+// exact shape the maintainer hit — so it pins BOTH halves: three real cards rather than a batched
+// `Ran N tool calls` band, and the finished one carrying a STATIC blue dot beside the two still pulsing.
+const bgShell = (desc: string, command: string, over: Partial<TranscriptToolCall> = {}) =>
+  tool("Bash", { desc, detail: command, command, backgroundState: "background", status: "pending", ...over })
 
 const bgshells: TranscriptMessage[] = [
   { sourceId: "u-cur", role: "user", text: "Verify the relaunch path against a real server, cold and warm.", tools: [], parts: [] },
@@ -169,14 +174,51 @@ const bgshells: TranscriptMessage[] = [
     tool("Edit", { detail: "packages/server/src/project-launch.ts" }),
   ])),
   withId(asst("", [bgShell("Capturing a genuine cold start panel", "nub run dev --fresh")])),
-  withId(asst("", [bgShell("Waiting for the cold start to serve", "nub scripts/wait-for-serve.mjs 5312")])),
+  // Already finished — the state the static dot exists for. Its card is still the reader's only handle
+  // on a process that ran and ended while they were reading something else.
+  withId(asst("", [bgShell("Waiting for the cold start to serve", "nub scripts/wait-for-serve.mjs 5312", { status: "completed", durationMs: 42_000 })])),
   withId(asst("Both paths verified live.", [tool("Bash", { detail: "nub --test", desc: "Running the server suite" })])),
   withId(asst("**Fixed** — a relaunch in a repo that already has a server now says so.")),
+]
+
+// The SAME rule for dispatches (maintainer 2026-08-01: "Same for sub-agent dispatches"). One child is
+// still running — tracked in `thread.subAgents` below, which is what drives the pulsing accent mark —
+// and one has resolved, so both dot states sit under the divider at once.
+const LIVE_AGENT_ID = "agent-live-1"
+
+const dispatches: TranscriptMessage[] = [
+  { sourceId: "u-cur", role: "user", text: "Audit the transcript renderer for dropped tool states, then fix what you find.", tools: [], parts: [] },
+  withId(asst("Fanning out — one reader per surface, then I'll reconcile.", [
+    tool("Grep", { detail: "ToolCardRouter|collapseTools" }),
+  ])),
+  withId(asst("", [tool("Agent", {
+    detail: "Audit the queue card's collapse",
+    prompt: "Read packages/web/src/components/TodosView.tsx and report every tool state the queue card can drop.",
+    subagentType: "fray:opus-high",
+    agentId: LIVE_AGENT_ID,
+  })])),
+  withId(asst("While that runs, let me read the chat side myself.", [
+    tool("Read", { detail: "packages/web/src/components/ChatView.tsx", read: "…4100 lines…" }),
+    tool("Edit", { detail: "packages/web/src/lib/toolActivity.ts" }),
+  ])),
+  withId(asst("", [tool("Agent", {
+    detail: "Cross-check the sub-agent drawer",
+    prompt: "Read packages/web/src/components/SubAgentSheet.tsx and confirm it shares the parent's coalescing.",
+    subagentType: "fray:sonnet-medium",
+    agentId: "agent-done-1",
+    agentStatus: "completed",
+    agentElapsedMs: 214_000,
+  })])),
+  withId(asst("Both readers agree with what I found in the renderer.", [
+    tool("Bash", { detail: "nub --test", desc: "Running the web suite" }),
+  ])),
+  withId(asst("**Fixed** — every background lifecycle now keeps its own card.")),
 ]
 
 const messages =
   variant === "single" ? single
   : variant === "bgshells" ? bgshells
+  : variant === "dispatches" ? dispatches
   : variant === "notools" ? notools
   : variant === "batchedends" ? batchedends
   : variant === "questionthentool" ? questionthentool
@@ -206,7 +248,11 @@ const thread: ThreadViewModel = {
   foreign: false,
   backend: "claude",
   permissionMode: "default",
-  subAgents: [],
+  // The live child behind the `dispatches` variant's first Agent card — AgentBlock reads its mark and
+  // its runtime from HERE (the board's tracked set), not from the transcript call.
+  subAgents: variant === "dispatches"
+    ? [{ id: LIVE_AGENT_ID, label: "Audit the queue card's collapse", state: "running", startedAt: new Date(Date.now() - 186_000).toISOString(), depth: 1 }]
+    : [],
   bgShells: [],
   lastActivityAt: new Date().toISOString(),
 } as unknown as ThreadViewModel

@@ -7,12 +7,8 @@ export interface ToolActivityMessage {
   messageIndex: number
 }
 
-// Calls that DISPATCH a child, address one, or block on one — the transcript is built around them, so
-// they keep a dedicated card and split the activity run. Deliberately NOT here: codex's `list_agents`
-// ("Agents · list live agents"), which is a plain READ of the roster — it starts nothing, addresses
-// nobody, and its whole body is a one-line count, so a model that polls it mid-burst was splitting one
-// batch into `Ran 1 tool call` / a standalone Agents card / `Ran 4 tool calls` (maintainer 2026-07-31:
-// "The agent listing should not be specially handled here. It's a tool call like any other").
+// Calls that DISPATCH a child, address one, or block on one, recognized by NAME — the shapes that carry
+// no structural signal of their own. See isToolActivityException for why they never fold into a run.
 const SUB_AGENT_TOOL_NAMES = new Set([
   "agent",
   "follow up",
@@ -55,15 +51,36 @@ export function isThoughtEventMessage(message: ChatMessage): boolean {
     && message.text.startsWith(THOUGHT_EVENT_PREFIX)
 }
 
-/** Calls that keep their dedicated card instead of entering the minimal activity disclosure. */
+/**
+ * Calls that keep their dedicated card instead of entering the minimal activity disclosure.
+ *
+ * Two families qualify, and they qualify for the SAME reason: the call LAUNCHES something that outlives
+ * it, so the card is not a record of work already done — it is the only handle the reader has on work
+ * still running (or on a process that ran detached and finished while they were reading something else).
+ *
+ *   • A DISPATCH — it starts, addresses or blocks on a child agent.
+ *   • A BACKGROUND op — `run_in_background` Bash and Monitor (`backgroundState: "background"`), plus the
+ *     `"unknown"` shapes the parser flags (a blocked `&` job, an orphaned poll). These used to fold into
+ *     the run like any other call, which meant a detached dev server, a CI watcher and a wait-for-agents
+ *     poller were all invisible behind `Ran 7 tool calls` — the one class of call whose whole point is
+ *     that it is still going after the batch that started it (maintainer 2026-08-01: "eject background
+ *     tasks from the tool call collapsing logic. It's important that those show up in the chat").
+ *
+ * Deliberately NOT here: codex's `list_agents` ("Agents · list live agents"), which is a plain READ of
+ * the roster — it starts nothing, addresses nobody, and its whole body is a one-line count, so a model
+ * that polls it mid-burst was splitting one batch into `Ran 1 tool call` / a standalone Agents card /
+ * `Ran 4 tool calls` (maintainer 2026-07-31: "The agent listing should not be specially handled here.
+ * It's a tool call like any other").
+ */
 export function isToolActivityException(tool: Pick<
   TranscriptToolCall,
-  "name" | "prompt" | "agentId" | "sendTo" | "sendBody"
+  "name" | "prompt" | "agentId" | "sendTo" | "sendBody" | "backgroundState"
 >): boolean {
   return tool.prompt !== undefined
     || tool.agentId !== undefined
     || tool.sendTo !== undefined
     || tool.sendBody !== undefined
+    || tool.backgroundState !== undefined
     || SUB_AGENT_TOOL_NAMES.has(normalizedToolName(tool.name))
 }
 

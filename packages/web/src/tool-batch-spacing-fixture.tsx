@@ -100,8 +100,12 @@ const messages: TranscriptMessage[] = [
     role: "assistant",
     text: "",
     tools: [],
-    // A yielded/background Bash is still an ordinary tool-call record. Its separate lifecycle event
-    // is the visible boundary; the launch itself must not fracture this run into digest/card/digest.
+    // A background launch DOES fracture the run into digest/card/digest, and since 2026-08-01 that is
+    // the point rather than a defect: a detached process outlives the batch that started it, so its card
+    // is ejected from the activity disclosure and stays visible ("It's important that those show up in
+    // the chat" — see lib/toolActivity.isToolActivityException). The arrangement it produces is a real
+    // layout case, so this fixture pins ITS pitch too: the ejected card must join the tight 6px run
+    // rather than opening a paragraph break either side of itself.
     parts: [toolsPart([call({ name: "Bash", command: "wait %1", desc: "Waiting for background sleep 45", backgroundState: "background" })])],
   },
 

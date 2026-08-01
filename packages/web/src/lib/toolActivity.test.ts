@@ -42,7 +42,7 @@ test("ordinary tool turns coalesce across provider batches while retaining a sta
   assert.equal(compact[0].messageIndex, 0)
 })
 
-test("prose and sub-agent cards split runs while background Bash stays ordinary activity", () => {
+test("prose, sub-agent cards AND background launches each split the activity run", () => {
   const background = toolMessage("background", [
     tool("Bash", { command: "nub run dev", backgroundState: "background", status: "pending" }),
   ])
@@ -76,17 +76,29 @@ test("prose and sub-agent cards split runs while background Bash stays ordinary 
   const compact = coalesceToolActivityMessages(messages)
   assert.deepEqual(compact.map((entry) => entry.message.sourceId), [
     "one",
+    "background",
+    "two",
     "agent",
     "three",
     "prose",
     "four",
   ])
-  assert.deepEqual(compact[0].message.tools.map((call) => call.name), ["Read", "Bash", "Grep"])
-  assert.equal(isToolActivityException(background.tools[0]), false)
-  assert.equal(isToolActivityException(tool("Bash", { backgroundState: "unknown" })), false)
+  assert.deepEqual(
+    compact[0].message.tools.map((call) => call.name),
+    ["Read"],
+    "the background launch ends the run above it instead of being absorbed into it",
+  )
+  assert.deepEqual(compact[1].message.tools.map((call) => call.backgroundState), ["background"])
+  // A detached op keeps a dedicated card wherever it renders — the maintainer's whole point is that a
+  // background task must not disappear behind `Ran N tool calls`. `unknown` (a blocked `&` job, an
+  // orphaned poll) is a background shape too and gets the same treatment.
+  assert.equal(isToolActivityException(background.tools[0]), true)
+  assert.equal(isToolActivityException(tool("Bash", { backgroundState: "unknown" })), true)
   assert.equal(isToolActivityException(agent.tools[0]), true)
   assert.equal(isToolActivityException(tool("Send message", { sendTo: "main" })), true)
+  // An ordinary foreground call is still ordinary activity — including a long one.
   assert.equal(isToolActivityException(tool("Read")), false)
+  assert.equal(isToolActivityException(tool("Bash", { command: "nub --test", status: "pending" })), false)
 })
 
 // codex's `list_agents` is a roster READ, not a dispatch. It used to sit in SUB_AGENT_TOOL_NAMES, so a
@@ -106,7 +118,7 @@ test("the agent listing folds into the ordinary activity run", () => {
   assert.deepEqual(compact[0].message.tools.map((call) => call.name), ["Read", "Agents", "Grep", "Edit"])
 })
 
-test("a prose tool tail absorbs background Bash until the real rendered boundary", () => {
+test("a prose tool tail absorbs ordinary calls, and a background launch is what ends it", () => {
   const first = tool("Bash", { desc: "Starting the focused build", status: "completed" })
   const lead: ChatMessage = {
     sourceId: "lead",
@@ -143,15 +155,20 @@ test("a prose tool tail absorbs background Bash until the real rendered boundary
   ]
 
   const compact = coalesceToolActivityMessages(messages)
-  assert.equal(compact.length, 2)
-  assert.equal(compact[0].message.sourceId, "lead")
+  assert.deepEqual(
+    compact.map((entry) => entry.message.sourceId),
+    ["lead", "batch-b", "batch-c", "finished-event"],
+    "the detached launch gets its own row; the ordinary run resumes after it",
+  )
   assert.equal(compact[0].message.text, lead.text)
   assert.deepEqual(compact[0].message.parts?.map((part) => part.kind), ["text", "tools"])
-  assert.deepEqual(compact[0].message.tools.map((call) => call.name), ["Bash", "Read", "Edit", "Bash", "Bash"])
+  assert.deepEqual(compact[0].message.tools.map((call) => call.name), ["Bash", "Read", "Edit"])
   assert.equal(compact[0].message.parts?.[1].kind, "tools")
-  assert.equal(compact[0].message.parts?.[1].kind === "tools" ? compact[0].message.parts[1].tools.length : 0, 5)
-  assert.equal(compact[0].message.tools[3].backgroundState, "background")
-  assert.equal(compact[1].message.sourceId, "finished-event")
+  assert.equal(compact[0].message.parts?.[1].kind === "tools" ? compact[0].message.parts[1].tools.length : 0, 3)
+  assert.equal(compact[1].message.tools[0].backgroundState, "background")
+  // The empty-parts record between the launch and `batch-c` is still transparent — a provider shell with
+  // nothing renderable in it never becomes a boundary of its own.
+  assert.deepEqual(compact[2].message.tools.map((call) => call.name), ["Bash"])
 })
 
 test("the latest tool stays at the runtime tail across the completed inter-call gap", () => {
