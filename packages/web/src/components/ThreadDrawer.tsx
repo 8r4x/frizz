@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "@tanstack/react-query"
 import { store, threadBySlug, showToast } from "../store.ts"
 import type { BoardSnapshot } from "@fray-ui/shared"
 import { rpc } from "../api/rpc.ts"
+import { useInnerHtml } from "../lib/innerHtml.ts"
 import { mdToHtml, stripFrontmatter } from "../lib/markdown.ts"
 import { canAdoptThread } from "../lib/adoption.ts"
 import { Composer } from "./Composer.tsx"
@@ -69,6 +70,7 @@ export function ThreadDrawer({ id, slug, title, depth, widthDepth }: { id: numbe
   })
 
   const html = useMemo(() => mdToHtml(stripFrontmatter(body.data?.markdown ?? "")), [body.data?.markdown])
+  const inner = useInnerHtml(html)
 
   return (
     // A3 fix: the doc is a "flip" surface of the CHAT drawer for the SAME thread, not a genuine extra
@@ -87,7 +89,7 @@ export function ThreadDrawer({ id, slug, title, depth, widthDepth }: { id: numbe
             {body.isLoading ? (
               <div className="text-[13px] text-muted">Loading…</div>
             ) : html ? (
-              <div className="md-body" dangerouslySetInnerHTML={{ __html: html }} />
+              <div className="md-body" dangerouslySetInnerHTML={inner} />
             ) : (
               <div className="text-[13px] text-muted">No thread file found.</div>
             )}

@@ -15,7 +15,37 @@ export function installLocalFileLinkInterceptor(): () => void {
     void open(path, source.dataset.localImage === "true")
   }
   document.addEventListener("click", handler)
-  return () => document.removeEventListener("click", handler)
+  const failed = imageFailureHandler()
+  // `error` does NOT bubble, so the delegated listener has to run in the CAPTURE phase.
+  document.addEventListener("error", failed, true)
+  return () => {
+    document.removeEventListener("click", handler)
+    document.removeEventListener("error", failed, true)
+  }
+}
+
+// A markdown screenshot whose file is gone — a /tmp shot that was cleaned up, a removed worktree,
+// a path from another machine. `/local-image` 404s, and Chrome then paints its own broken-image glyph
+// beside the alt text, which reads as a rendering fault in Fray rather than as a missing file. Swap the
+// dead <img> for the plain path, exactly as BlockImage's onError fallback does for the React-rendered
+// case — nothing is silently swallowed, and the replacement holds one stable line instead of the
+// zero-height-then-glyph box that made the whole message reflow.
+//
+// One delegated listener for the same reason the click handler is delegated: prose is injected as raw
+// sanitized HTML on several surfaces (chat, question cards, fence cards, scratchpad and plan drawers),
+// so there is no React element to hang an onError on.
+function imageFailureHandler(): (event: Event) => void {
+  return (event) => {
+    const img = event.target
+    if (!(img instanceof HTMLImageElement) || img.dataset.localImage !== "true") return
+    const path = img.dataset.localPath ?? img.getAttribute("src") ?? ""
+    const missing = document.createElement("span")
+    missing.className = "md-image-missing font-mono-keep"
+    missing.textContent = path
+    // The author's alt text is the only description of what the picture showed; keep it reachable.
+    if (img.alt && img.alt !== path) missing.title = img.alt
+    img.replaceWith(missing)
+  }
 }
 
 async function open(path: string, image: boolean) {

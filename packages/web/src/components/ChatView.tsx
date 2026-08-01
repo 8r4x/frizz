@@ -22,6 +22,7 @@ import { WakeDivider } from "./WakeDivider.tsx"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
 import { sendEagerFollowUp } from "../lib/eagerComposerSubmission.ts"
 import { useUnqueueFollowUp, useUnqueueSupported } from "../lib/unqueueFollowUp.ts"
+import { useInnerHtml } from "../lib/innerHtml.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { lastAskIndex, messagePresentationText } from "../lib/messagePresentation.ts"
@@ -1531,12 +1532,13 @@ function Tab({ value, label }: { value: ThreadTab; label: string }) {
 function ScratchpadPane({ slug }: { slug: string }) {
   const q = useQuery({ queryKey: ["threadScratchpad", slug], queryFn: () => rpc.threadScratchpad({ slug }) })
   const html = useMemo(() => mdToHtml(q.data?.markdown ?? ""), [q.data?.markdown])
+  const inner = useInnerHtml(html)
   return (
     <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5">
       {q.isLoading ? (
         <div className="text-[13px] text-muted">Loading…</div>
       ) : html ? (
-        <div className="md-body" dangerouslySetInnerHTML={{ __html: html }} />
+        <div className="md-body" dangerouslySetInnerHTML={inner} />
       ) : (
         <div className="text-[13px] text-muted">No scratchpad yet.</div>
       )}
@@ -2756,6 +2758,7 @@ function SendMessageCard({ to, summary, body, type, status, durationMs }: { to?:
   const [expanded, setExpanded] = useState(false)
   const bodyId = useId()
   const html = useMemo(() => mdToHtml(body), [body])
+  const inner = useInnerHtml(html)
   const lineCount = useMemo(() => body.split("\n").length, [body])
   const long = lineCount > SEND_MAX_LINES
   const hasBody = !!body.trim()
@@ -2789,7 +2792,7 @@ function SendMessageCard({ to, summary, body, type, status, durationMs }: { to?:
                   content is MARKDOWN (md-body — sans, 14px) so a peer message reads like prose, not a code
                   dump. The clamp caps a long body at ~320px until "Show all" expands it. */}
               <div className={`border-t border-border px-2.5 py-2${long && !expanded ? " fray-bash-clamp" : ""}`}>
-                <div className="md-body" dangerouslySetInnerHTML={{ __html: html }} />
+                <div className="md-body" dangerouslySetInnerHTML={inner} />
               </div>
               {long && (
                 <button
@@ -3245,12 +3248,13 @@ function AnswersCard({ answers, queued, sourceId }: { answers: PairedAnswer[]; q
 
 function ProseHtml({ md, wrap }: { md: string; wrap?: boolean }) {
   const html = useMemo(() => mdToHtml(md), [md])
+  const inner = useInnerHtml(html)
   const ref = useRef<HTMLDivElement>(null)
   // Make inline-code file references clickable (opens in the user's editor/default app) once the server
   // confirms each resolves to a real file. Runs after render; a no-op when the prose has no such paths.
   useLocalFileCodeLinks(ref, html)
   if (!html) return null
-  return <div ref={ref} className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={{ __html: html }} />
+  return <div ref={ref} className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={inner} />
 }
 
 // A local absolute image path rendered inline via the gated /local-image route: rounded, bordered,
@@ -3391,9 +3395,10 @@ export function InlineVisualization({ file }: { file: string }) {
 // for non-watcher waits (with legacy pr/ci/session support), then the park button + its explainer.
 export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKind; body: string; hints: AwaitingHint[]; wrap?: boolean }) {
   const html = useMemo(() => (body ? mdToHtml(body) : ""), [body])
+  const doneInner = useInnerHtml(html)
   const awaitingHint = awaitingHintSentence(hints)
   const awaitingLine = awaitingPresentationLine(body, awaitingHint)
-  const awaitingHtml = useMemo(() => mdInlineToHtml(awaitingLine), [awaitingLine])
+  const awaitingInner = useInnerHtml(useMemo(() => mdInlineToHtml(awaitingLine), [awaitingLine]))
   // The owning thread's slug — set by the thread view AND the queue card — so the confirm button
   // resolves its thread and renders on both surfaces (null in a sub-agent's own transcript → no button).
   const slug = useContext(ThreadSlugContext)
@@ -3426,7 +3431,7 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
       // NEUTRAL tone — the green splash stood out as the only saturated color in the UI (maintainer
       // 2026-07-10). The Check + "Done" label carries the meaning; no color needed.
       <TranscriptCard icon={Check} label="Done">
-        {html && <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={{ __html: html }} />}
+        {html && <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={doneInner} />}
         {/* A white "Mark as done" button, deliberately redundant with the stable lifecycle footer — the
             same completion mutation, styled as the primary (light-on-dark) verb. Only shown when the
             thread can actually take the action. */}
@@ -3466,7 +3471,7 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
     <TranscriptCard data-awaiting-fence icon={AwaitingIcon} label={parkTitle} aside={watched.length === 1 ? <WatchedRef watch={watched[0]} /> : undefined}>
       <div
         className={`md-inline ${CARD_BODY}${wrap ? ` ${QUEUE_WRAP}` : ""}`}
-        dangerouslySetInnerHTML={{ __html: awaitingHtml }}
+        dangerouslySetInnerHTML={awaitingInner}
       />
       {watched.length > 1 && (
         // `gap-x-3` rather than a punctuation separator: the refs are a set of targets, not a sentence,

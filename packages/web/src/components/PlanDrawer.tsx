@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query"
 import { FilePlus2, Loader2, Trash2 } from "lucide-react"
 import { openNewThread, showToast } from "../store.ts"
 import { rpc } from "../api/rpc.ts"
+import { useInnerHtml } from "../lib/innerHtml.ts"
 import { mdToHtml } from "../lib/markdown.ts"
 import { Dialog } from "./ui/Dialog.tsx"
 import { Sheet } from "./ui/Sheet.tsx"
@@ -109,6 +110,7 @@ export function PlanDeleteAction({ path, onDeleted }: { path: string; onDeleted:
 export function PlanDrawer({ id, path, title, depth, widthDepth }: { id: number; path: string; title: string; depth: number; widthDepth: number }) {
   const body = useQuery({ queryKey: ["planBody", path], queryFn: () => rpc.planBody({ path }) })
   const html = useMemo(() => mdToHtml(body.data?.markdown ?? ""), [body.data?.markdown])
+  const inner = useInnerHtml(html)
 
   return (
     <Sheet id={id} depth={depth} widthDepth={widthDepth}>
@@ -119,7 +121,7 @@ export function PlanDrawer({ id, path, title, depth, widthDepth }: { id: number;
             {body.isLoading ? (
               <div className="text-[13px] text-muted">Loading…</div>
             ) : html ? (
-              <div className="md-body" dangerouslySetInnerHTML={{ __html: html }} />
+              <div className="md-body" dangerouslySetInnerHTML={inner} />
             ) : (
               <div className="text-[13px] text-muted">Empty plan.</div>
             )}

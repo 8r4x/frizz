@@ -1,4 +1,5 @@
 import { useEffect, useId, useState, type ReactNode } from "react"
+import { useInnerHtml } from "../lib/innerHtml.ts"
 import {
   Archive,
   CalendarClock,
@@ -193,6 +194,9 @@ function loadMermaid(): Promise<MermaidModule> {
 export function MermaidDiagram({ source }: { source: string }) {
   const reactId = useId()
   const [state, setState] = useState<{ html?: string; error?: string }>({})
+  // Declared above the early returns (hook order) — a rendered diagram is a large SVG, and rebuilding
+  // it from markup on every unrelated re-render is exactly what useInnerHtml exists to prevent.
+  const inner = useInnerHtml(state.html ?? "")
   useEffect(() => {
     let live = true
     setState({})
@@ -225,5 +229,5 @@ export function MermaidDiagram({ source }: { source: string }) {
     )
   }
   if (!state.html) return <div data-mermaid-state="loading" role="status" aria-label="Rendering diagram" className={`h-24 animate-pulse ${BLOCK_RADIUS} bg-panel-2`} />
-  return <div data-mermaid-state="ready" className={`overflow-x-auto ${BLOCK_RADIUS} border border-border bg-panel-2/75 p-4 [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full`} dangerouslySetInnerHTML={{ __html: state.html }} />
+  return <div data-mermaid-state="ready" className={`overflow-x-auto ${BLOCK_RADIUS} border border-border bg-panel-2/75 p-4 [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full`} dangerouslySetInnerHTML={inner} />
 }

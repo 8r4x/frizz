@@ -713,6 +713,17 @@ a[href] {
   margin-inline: auto;
   cursor: pointer;
 }
+/* The stand-in the delegated error handler (lib/local-file-links.ts) swaps in for a screenshot whose
+   file is gone. Same muted mono register as BlockImage's own fallback, and BLOCK so it occupies one
+   stable line where the picture would have been — a dead <img> collapses to zero height and then
+   repaints as Chrome's broken-glyph box, and in a virtualized transcript that height flip re-measures
+   the row and reflows everything below it. */
+.md-body .md-image-missing {
+  display: block;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--color-muted) 70%, transparent);
+  word-break: break-all;
+}
 /* Inline code is MONO inside a sans (or mono) prose run. Mono has a smaller x-height, so at the old
    0.9em it read visibly smaller than the surrounding copy. 0.95em optically matches the sans body:
    the mono glyphs land at the same apparent size as the prose around them. (Applies in both the

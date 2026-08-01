@@ -16,6 +16,7 @@
 // could only have been shared through a module cycle.
 import { Fragment, useLayoutEffect, useMemo, useRef } from "react"
 import { AlertTriangle, Check, HelpCircle, ListChecks } from "lucide-react"
+import { useInnerHtml } from "../lib/innerHtml.ts"
 import { mdInlineToHtml, mdToHtml } from "../lib/markdown.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { parseQuestionBlock, type BlockAnswer, type ParsedQuestion, type QuestionKind } from "../lib/questionBlocks.ts"
@@ -66,9 +67,10 @@ export function QuestionBlockCard({
     [question, raw, questionKind, danger],
   )
   const html = useMemo(() => mdToHtml(parsed.contextMd), [parsed.contextMd])
-  const trailingHtml = useMemo(() => (parsed.trailingMd ? mdToHtml(parsed.trailingMd) : ""), [parsed.trailingMd])
+  const contextHtml = useInnerHtml(html)
+  const trailingInner = useInnerHtml(useMemo(() => (parsed.trailingMd ? mdToHtml(parsed.trailingMd) : ""), [parsed.trailingMd]))
   const recIdx = parsed.recommendedIdx
-  const recHtml = useMemo(() => (parsed.recommendation ? mdInlineToHtml(parsed.recommendation) : ""), [parsed.recommendation])
+  const recInner = useInnerHtml(useMemo(() => (parsed.recommendation ? mdInlineToHtml(parsed.recommendation) : ""), [parsed.recommendation]))
   const isMulti = parsed.kind === "multi"
   const isDanger = parsed.danger
   const chosen = interactive?.answer.chosen ?? null
@@ -99,7 +101,7 @@ export function QuestionBlockCard({
           colour by design (and outranks a utility class on the element itself). */}
       {html && (
         <div className="text-fg">
-          <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={{ __html: html }} />
+          <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={contextHtml} />
         </div>
       )}
       {(parsed.options.length > 0 || interactive) && (
@@ -114,14 +116,7 @@ export function QuestionBlockCard({
                   wears the SAME body treatment as the context above — the FIRST group's heading is just
                   the tail of that context, so a muted caption here would make two identical things
                   render differently in one card. */}
-              {parsed.optionHeadings?.[i] && (
-                <div className="mt-1 text-fg">
-                  <div
-                    className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`}
-                    dangerouslySetInnerHTML={{ __html: mdInlineToHtml(parsed.optionHeadings[i]!.split("\n").join(" ")) }}
-                  />
-                </div>
-              )}
+              {parsed.optionHeadings?.[i] && <OptionHeading md={parsed.optionHeadings[i]!} wrap={wrap} />}
             <Chip
               label={opt}
               multi={isMulti}
@@ -211,16 +206,29 @@ export function QuestionBlockCard({
       {/* A "Note: …" footnote the worker wrote AFTER the options — rendered below the chips (muted) so
           the choices stay answerable instead of swallowing them (the old parser dropped the chips). */}
       {parsed.trailingMd && (
-        <div className={`mt-2 md-body text-[12px] text-muted/70${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={{ __html: trailingHtml }} />
+        <div className={`mt-2 md-body text-[12px] text-muted/70${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={trailingInner} />
       )}
       {/* The caption fallback survives ONLY when the recommendation didn't match an option. */}
       {parsed.recommendation && recIdx === null && (
-        <div className="md-inline mt-1.5 text-[11px] text-muted/70" dangerouslySetInnerHTML={{ __html: recHtml }} />
+        <div className="md-inline mt-1.5 text-[11px] text-muted/70" dangerouslySetInnerHTML={recInner} />
       )}
     </TranscriptCard>
   )
 }
 
+
+// A group heading between options. Its own component only so the markdown parse and the
+// dangerouslySetInnerHTML prop can be memoized per heading — a hook can't be called inside the
+// options .map(), and an inline `{ __html }` literal there would rebuild the DOM on every render
+// (see useInnerHtml).
+function OptionHeading({ md, wrap }: { md: string; wrap?: boolean }) {
+  const inner = useInnerHtml(useMemo(() => mdInlineToHtml(md.split("\n").join(" ")), [md]))
+  return (
+    <div className="mt-1 text-fg">
+      <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={inner} />
+    </div>
+  )
+}
 
 // The free-text row's identifier: one past the last option ("A. B. C." → "D.", "1. 2." → "3.").
 function nextOptionId(options: string[]): string {
@@ -259,7 +267,7 @@ function Chip({
   // inertInteractive: the chip is itself a <button>, so a link/local-file path in the option text must
   // NOT become a nested interactive element (invalid HTML + a click that both opens the link and selects
   // the option). Flatten links to spans; emphasis/code still render.
-  const labelHtml = useMemo(() => mdInlineToHtml(label, { inertInteractive: true }), [label])
+  const labelInner = useInnerHtml(useMemo(() => mdInlineToHtml(label, { inertInteractive: true }), [label]))
   return (
     <button
       type="button"
@@ -302,7 +310,7 @@ function Chip({
             Recommended
           </span>
         )}
-        <span className="md-inline" dangerouslySetInnerHTML={{ __html: labelHtml }} />
+        <span className="md-inline" dangerouslySetInnerHTML={labelInner} />
       </span>
     </button>
   )
