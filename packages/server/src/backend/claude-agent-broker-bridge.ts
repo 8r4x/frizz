@@ -21,7 +21,7 @@ import {
   parseClaudeAskUserQuestion,
   type ClaudeAskSpec,
 } from "./claude-permission-interactions.ts"
-import { CLAUDE_WORKER_CONTEXT_ENV } from "./types.ts"
+import { CLAUDE_WORKER_ENV } from "./types.ts"
 
 /** Gate for routing Claude dispatch through the session broker instead of the tmux TUI. Default ON
  *  (opt out with FRAY_CLAUDE_BROKER_BRIDGE=0). Verified end-to-end on a real PROMOTED ARTIFACT (not just
@@ -338,9 +338,9 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     const workerEnv: Record<string, string> = {
       FRAY_UI_THREAD: slug,
       // Tell the worker its token budget rather than leaving it to guess — see
-      // CLAUDE_WORKER_CONTEXT_ENV. The tmux path gets this through claudeWorkerEnvironment(); the
+      // CLAUDE_WORKER_ENV. The tmux path gets this through claudeWorkerEnvironment(); the
       // broker filters ambient env through ENV_ALLOWLIST, so it has to ride workerEnv to arrive.
-      ...CLAUDE_WORKER_CONTEXT_ENV,
+      ...CLAUDE_WORKER_ENV,
       ...(we?.permDir ? { FRAY_PERM_DIR: we.permDir } : {}),
       // The cc-worker plugin's PreToolUse hook DENIES AskUserQuestion, because on the tmux path a
       // blocking question freezes a headless worker where nobody can answer it. On the broker path

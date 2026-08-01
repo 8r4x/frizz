@@ -18,7 +18,7 @@ import { PERM_DIR_ENV, permRequestDir, type Project } from "./project.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { BoardManager } from "./board.ts"
 import type { AgentBackend, BackendKind, BuiltCommand, FrayMcp } from "./backend/types.ts"
-import { CHROME_DEVTOOLS_MCP, CLAUDE_WORKER_CONTEXT_ENV, FRAY_MCP } from "./backend/types.ts"
+import { CHROME_DEVTOOLS_MCP, CLAUDE_WORKER_ENV, FRAY_MCP } from "./backend/types.ts"
 import { buildWorkerPrompt } from "./workerPrompt.ts"
 import { codexSandbox, CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS } from "./backend/codex.ts"
 import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
@@ -688,7 +688,7 @@ function workerCap(name: string, lifted: number, env: NodeJS.ProcessEnv): string
 // predate the current fray process by days.
 export function claudeWorkerEnvironment(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   return {
-    ...CLAUDE_WORKER_CONTEXT_ENV,
+    ...CLAUDE_WORKER_ENV,
     CLAUDE_CODE_SUBAGENT_MODEL: "",
     CLAUDE_CODE_EFFORT_LEVEL: "",
     CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION: workerCap("CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION", WORKER_MAX_WEB_SEARCHES, env),

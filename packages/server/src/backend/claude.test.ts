@@ -4,6 +4,7 @@ import { createClaudeBackend, parseClaudeLine } from "./claude.ts"
 import { newTailState, computeTurn } from "../tailer.ts"
 import { buildClaudeCommand, buildClaudeResumeCommand, claudeWorkerEnvironment, loadWorkerPrompt, WORKER_MAX_CONCURRENT_SUBAGENTS, WORKER_MAX_SUBAGENTS, WORKER_MAX_WEB_SEARCHES, workerPluginDir } from "../dispatch.ts"
 import { spawnWithRunner } from "../tmux.ts"
+import { CLAUDE_WORKER_ENV } from "./types.ts"
 
 // ---- parseClaudeLine: the normalized VIEW of a Claude JSONL line (codex-facing seam; NOT the
 // behavior-critical fold — that is foldLine → applyRecord, covered by tailer.test.ts). ----
@@ -78,6 +79,7 @@ test("createClaudeBackend: buildSpawn pins the session id + prompt and clears in
   assert.equal(argv[argv.length - 1], "hello")
   assert.deepEqual(env, {
     CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "infinite",
+    BASH_DEFAULT_TIMEOUT_MS: "600000",
     CLAUDE_CODE_SUBAGENT_MODEL: "",
     CLAUDE_CODE_EFFORT_LEVEL: "",
     CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION: String(WORKER_MAX_WEB_SEARCHES),
@@ -94,6 +96,7 @@ test("createClaudeBackend sanitizes both spawn and resume without replacing Clau
   for (const built of [spawned, resumed]) {
     assert.deepEqual(built.env, {
       CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "infinite",
+      BASH_DEFAULT_TIMEOUT_MS: "600000",
       CLAUDE_CODE_SUBAGENT_MODEL: "",
       CLAUDE_CODE_EFFORT_LEVEL: "",
       CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION: String(WORKER_MAX_WEB_SEARCHES),
@@ -113,6 +116,11 @@ test("Claude worker profile sanitization reaches the tmux launch environment", (
     return calls.length === 1 ? "%1\t123\t456\n" : ""
   })
   const launch = calls[0] ?? []
+  // CLAUDE_WORKER_ENV rides the same tmux hop. Both entries are silent when dropped — the worker just
+  // quietly quits early, or has every long gate bounced to the background — so pin them here too.
+  for (const [key, value] of Object.entries(CLAUDE_WORKER_ENV)) {
+    assert.ok(launch.includes(`${key}=${value}`), `${key} must reach the tmux launch environment`)
+  }
   assert.ok(launch.includes("CLAUDE_CODE_SUBAGENT_MODEL="))
   assert.ok(launch.includes("CLAUDE_CODE_EFFORT_LEVEL="))
   assert.ok(launch.includes(`CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION=${WORKER_MAX_WEB_SEARCHES}`))

@@ -230,6 +230,15 @@ export const CHROME_DEVTOOLS_MCP = {
   startupTimeoutSec: 120,
 } as const
 
+// The environment EVERY fray Claude worker gets, on BOTH spawn paths. Kept as one record with one
+// spread per call site (claudeWorkerEnvironment() for tmux, the bridge's `workerEnv` for the broker,
+// plus the SDK's key allowlist) so a new entry cannot reach one path and silently miss the other.
+// Spread it, never re-spell a key — a typo here is silent, and each failure mode below is quiet.
+//
+// Distinct from claudeWorkerEnvironment()'s CAPS, which are tmux-only today: these are settings a
+// worker needs on whichever path it was dispatched through.
+//
+// ── CLAUDE_CODE_TOTAL_TOKENS_REMINDER ──────────────────────────────────────────────────────────
 // The token budget a Claude worker is TOLD it has. Claude Code's `totalTokensReminder` writes a
 // `<total_tokens>N tokens left</total_tokens>` block into the system prompt and after every
 // tool-result batch; `infinite` renders the literal `Infinite`. Default is `off` — no block at all.
@@ -253,11 +262,31 @@ export const CHROME_DEVTOOLS_MCP = {
 // compacts and continues rather than ending.
 //
 // The env var is the highest-precedence source, ahead of `totalTokensReminder` in settings and the
-// server-side `tengu_lapis_anchor` flag (verified against cli 2.1.220). Both spawn paths need it
-// explicitly: the tmux path via claudeWorkerEnvironment(), the broker path via its `workerEnv` (its
-// ambient env is allowlist-filtered, so an inherited value would be dropped). Spread it, never
-// re-spell the key — a typo here is silent, and the failure mode is a worker that quits at 60%.
-export const CLAUDE_WORKER_CONTEXT_ENV = { CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "infinite" } as const
+// server-side `tengu_lapis_anchor` flag (verified against cli 2.1.220). Its failure mode if dropped
+// is a worker that quits at 60% of its window.
+//
+// ── BASH_DEFAULT_TIMEOUT_MS ────────────────────────────────────────────────────────────────────
+// How long a FOREGROUND Bash call runs before Claude Code moves it to the background. Claude Code's
+// default is 120_000 (2 min) with a ceiling of 600_000 (10 min); we take the ceiling, which the
+// maintainer chose on 2026-08-01 over leaving the default.
+//
+// WHY: a worker's gates are the long commands. This repo's own `nub run test` takes ~5 min, so at the
+// 2-minute default EVERY full-suite run is bounced to the background and the worker spends a poll
+// cycle recovering a result it was going to block on anyway. The cost is real but bounded — the turn
+// is blocked for up to 10 minutes on a command the worker had nothing to do behind.
+//
+// This does NOT relax the escaping-background-job rule that hooks/bash-background.mjs enforces. That
+// hook is about lifecycle identity (`cmd &` leaves a child fray and Claude cannot wake on); this is
+// only about how long a tracked foreground call is allowed to take before the harness backgrounds it
+// ITSELF, which keeps the task id and the wake. The two are independent.
+//
+// The Bash tool's own description interpolates this (`` `timeout` is in milliseconds: default
+// ${...}, max ${...}``), so the worker is told the raised number rather than a stale 120000. The
+// ceiling is left alone: BASH_MAX_TIMEOUT_MS defaults to max(600_000, this), so it stays 600_000.
+export const CLAUDE_WORKER_ENV = {
+  CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "infinite",
+  BASH_DEFAULT_TIMEOUT_MS: "600000",
+} as const
 
 export interface SpawnOpts {
   sessionId: string // claude: pinned via --session-id. codex: advisory (id is discovered post-spawn)

@@ -45,7 +45,7 @@ import {
   type ClaudeTaskEvent,
   type ClaudeTaskUsage,
 } from "./claude-agent-sdk-protocol.ts"
-import { CLAUDE_WORKER_CONTEXT_ENV } from "./types.ts"
+import { CLAUDE_WORKER_ENV } from "./types.ts"
 import { redactCredentialSyntax } from "../credential-redaction.ts"
 
 export const CLAUDE_AGENT_SDK_FOUNDATION_FLAG = "FRAY_CLAUDE_AGENT_SDK_FOUNDATION"
@@ -95,10 +95,10 @@ const EXPLICIT_CLAUDE_ENV_KEYS = new Set<string>([
   // ready" — which is exactly how this was found, on a live session rather than in a unit test.
   "FRAY_NATIVE_ASK",
   "CLAUDE_PROJECT_DIR",
-  // The worker's token-budget block — see CLAUDE_WORKER_CONTEXT_ENV in types.ts for why a fray worker
+  // The worker's token-budget block — see CLAUDE_WORKER_ENV in types.ts for why a fray worker
   // must be told it has one. It arrives as a broker `workerEnv` override rather than by inheritance,
   // so without it here the daemon dies at startup ("environment key is not allowlisted").
-  ...Object.keys(CLAUDE_WORKER_CONTEXT_ENV),
+  ...Object.keys(CLAUDE_WORKER_ENV),
 ])
 const MAX_ENV_ENTRIES = 512
 const MAX_ENV_VALUE_BYTES = 128 * 1024
