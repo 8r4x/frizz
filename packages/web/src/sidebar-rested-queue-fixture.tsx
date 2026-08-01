@@ -6,21 +6,24 @@ import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
 
-// Browser QA for the RESTED-QUEUE indicator (maintainer 2026-07-27: "when an agent comes to rest and
-// shows up in the queue, it should get the ellipsis indicator in the sidebar, even though its
-// sub-agents are still spinning"). Renders the REAL <Sidebar/> — the same ThreadRow + indented
-// SubAgentRows the app draws — over a fixed four-thread board that pins the one changed case against
-// the three neighbours that must NOT change:
+// Browser QA for the RESTED-WITH-LIVE-WORK indicator (maintainer 2026-08-01: "if a thread has rested
+// but it still has background work going, like background shells, we should keep it in the actively
+// running rail, but we should stop the spinner and put a pulsing blue dot in the middle of the rounded
+// circle shape"). Renders the REAL <Sidebar/> — the same ThreadRow + indented SubAgentRows the app
+// draws — over a fixed five-thread board that pins each rail state against its neighbours:
 //
-//   RUNNING BAND (live work that isn't waiting on you)
-//     B  own turn in flight + a live child        → [/] spinner   (unchanged)
-//     C  at rest, live children, NOT queued       → [/] spinner   (unchanged — still just cooking)
+//   RUNNING BAND (live work — the thread's own turn, OR work it launched)
+//     B  own turn in flight + a live child        → [/] spinner   (the ONE thing that still spins)
+//     C  at rest, live child, NOT queued          → [•] blue dot  (was [/])
+//     A  at rest, QUEUED, live children           → [•] blue dot  (was […] in the rested band)
+//     E  at rest, QUEUED, background SHELL only   → [•] blue dot  (was […] in the rested band)
 //   RESTED BAND (the queue order)
-//     A  at rest, QUEUED, live children           → […] ellipsis  (THE CHANGE; was [/])
-//     D  at rest, queued, no children             → […] ellipsis  (unchanged baseline)
+//     D  at rest, queued, nothing out             → […] ellipsis  (unchanged baseline)
 //
-// In every case the CHILD rows keep their own spinners — that is the point: the parent stops claiming
-// motion it does not have, and the children go on reporting themselves.
+// A and E are the rows that MOVED: both keep their queue card, and both now hold their place in the
+// running band instead of dropping down the rail the moment the parent's turn ends. The dot is what
+// keeps that honest — the row stays visible without claiming motion the parent does not have. The
+// CHILD rows keep their own spinners throughout: they really are still going.
 
 const base = {
   kind: "session",
@@ -79,8 +82,8 @@ const ownTurnRunning = {
   lastUserAt: "2026-07-27T09:02:00.000Z",
 } as unknown as ThreadView
 
-// C — CONTROL: at rest with a live child but NOT queued (its awaiting-background card is event-snoozed).
-// Nothing has been handed to the human, so the row is honestly still cooking → spinner.
+// C — at rest with a live child but NOT queued (its awaiting-background card is event-snoozed). Reads
+// EXACTLY like A: leaving the queue must not change how a row looks, or the rail churns on every snooze.
 const cookingNotQueued = {
   ...base,
   id: "audit-broker-crash-paths",
@@ -93,7 +96,8 @@ const cookingNotQueued = {
   lastUserAt: "2026-07-27T09:01:00.000Z",
 } as unknown as ThreadView
 
-// D — BASELINE: the ordinary bare rested queue handoff that has always shown the ellipsis.
+// D — BASELINE: the ordinary bare rested queue handoff. NOTHING it launched is still running, so it is
+// the one row that keeps the ellipsis and the one row that belongs in the queue-ordered rested band.
 const bareRestedQueued = {
   ...base,
   id: "fix-queue-focus",
@@ -106,9 +110,26 @@ const bareRestedQueued = {
   lastUserAt: "2026-07-27T08:55:00.000Z",
 } as unknown as ThreadView
 
+// E — THE MAINTAINER'S NAMED CASE: rested and queued with a background SHELL and no sub-agents at all.
+// A shell is never excused from the queue (an eternal dev server must not bury its thread), so this row
+// is the one that carries a queue card while sitting in the running band.
+const shellOnlyRested = {
+  ...base,
+  id: "wire-up-the-preview-server",
+  title: "Wire up the preview server",
+  runtime: "turn-idle",
+  needsYou: true,
+  awaitingBackground: true,
+  sessionId: "aaaaaaaa-bbbb-cccc-dddd-000000000005",
+  subAgents: [],
+  bgShells: [{ label: "nub run dev --host", startedAt: "2026-07-27T09:02:00.000Z", state: "running" }],
+  lastActivityAt: "2026-07-27T09:05:40.000Z",
+  lastUserAt: "2026-07-27T08:58:00.000Z",
+} as unknown as ThreadView
+
 store.board = {
   projectDir: "/fixture/fray",
-  threads: [restedQueued, ownTurnRunning, cookingNotQueued, bareRestedQueued],
+  threads: [restedQueued, ownTurnRunning, cookingNotQueued, bareRestedQueued, shellOnlyRested],
   plans: [],
 } as unknown as BoardSnapshot
 store.drawers = []

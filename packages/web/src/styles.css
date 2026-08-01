@@ -216,6 +216,12 @@ html[data-font="sans"] .fray-bash .md-body {
 /* Two runtime concerns, two hues: background shells pulse blue, sub-agents pulse the accent-yellow. */
 .fray-live-dot--shell { --live-dot: var(--color-shell); }
 .fray-live-dot--agent { --live-dot: var(--color-accent); }
+/* THE RAIL's rest-with-live-work mark, inside the status box. It stands for EITHER kind of background
+   work (a shell or a sub-agent), so it cannot use the transcript's blue/yellow split — and it must not
+   be yellow regardless: in the sidebar the accent means "awaiting you", so an accent dot there would
+   read as an ask when the thread is asking for nothing. One blue mark, one meaning: this thread is at
+   rest, but work it launched is still running. */
+.fray-live-dot--background { --live-dot: var(--color-shell); }
 @keyframes fray-live-pulse {
   50% { opacity: 0.62; box-shadow: 0 0 0 2px color-mix(in srgb, var(--live-dot) 14%, transparent); }
 }

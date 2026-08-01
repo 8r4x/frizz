@@ -133,39 +133,62 @@ test("sessionIndicatorKind: bare queued rest stays rest while concrete input sta
   // …and a thread with no retryable process behind it is never stalled, however `crashed` reads.
   assert.equal(sessionIndicatorKind(thread({ kind: "session", foreign: true, needsYou: true, crashed: true, runtime: "exited" })), "rest")
   assert.equal(sessionIndicatorKind(thread({ kind: "session", needsYou: true, crashed: true, runtime: "none" })), "rest")
-  // A live SUB-AGENT is live work → "working", beating the future-timer held state.
-  assert.equal(sessionIndicatorKind(thread({ runtime: "turn-idle", subAgents: liveSub, lastFence: awaitingTimer })), "working")
-  // A live background SHELL is NOT live work (2026-07-22): the future-timer wait now shows through as "held".
+  // A live SUB-AGENT is live work → the at-rest "background" dot, beating the future-timer held state.
+  assert.equal(sessionIndicatorKind(thread({ runtime: "turn-idle", subAgents: liveSub, lastFence: awaitingTimer })), "background")
+  // A live background SHELL is NOT live work by itself (2026-07-22 — `bgShells` is telemetry, and the
+  // server's awaitingBackground is what speaks for the thread): the future-timer wait shows through as "held".
   assert.equal(sessionIndicatorKind(thread({ runtime: "turn-idle", bgShells: liveShell, lastFence: awaitingTimer })), "held")
   assert.equal(sessionIndicatorKind(thread({ state: "archived", needsYou: true, runtime: "exited" })), "archived")
 })
 
-// A worker that comes to rest and lands in the queue reads AT REST on the rail, even while the
-// sub-agents it dispatched keep running (maintainer 2026-07-27). The children still spin — on their
-// OWN indented rows — but the parent's mark speaks for the parent, and the parent has handed off.
-test("sessionIndicatorKind: a rested QUEUED thread is at rest even with live sub-agents", () => {
+// A worker that comes to rest while the work it dispatched keeps running gets its OWN mark — the
+// pulsing dot — never the travelling spinner (maintainer 2026-08-01: "if a thread has rested but it
+// still has background work going, like background shells, we should keep it in the actively running
+// rail, but we should stop the spinner and put a pulsing blue dot"). The spinner now means exactly one
+// thing: MY OWN turn is in flight. The children still spin on their own indented rows.
+test("sessionIndicatorKind: a rested thread with live work reads as background, never as working", () => {
   const restedInQueue = thread({ kind: "session", state: "open", needsYou: true, runtime: "turn-idle", subAgents: liveSub })
-  assert.equal(sessionIndicatorKind(restedInQueue), "rest")
-  // …and it stays in the undimmed Active section's RESTED band: only the glyph changed.
+  assert.equal(sessionIndicatorKind(restedInQueue), "background")
+  // …in the undimmed Active section, and — queue card or not — in its RUNNING band, so the row holds
+  // its place instead of dropping down the rail the instant the parent's turn ends.
   assert.equal(sectionOf(restedInQueue), "active")
   assert.equal(isHeld(restedInQueue), false)
-  assert.equal(partitionActive([restedInQueue]).rested.length, 1)
+  assert.deepEqual(partitionActive([restedInQueue]).running.map((t) => t.id), ["t"])
+  assert.equal(partitionActive([restedInQueue]).rested.length, 0)
 
-  // NOTHING else collapses into the ellipsis:
+  // NOTHING else collapses into the dot:
   // • the parent's OWN turn in flight still spins, queued or not
   assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, runtime: "running" })), "working")
   assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, runtime: "spawning" })), "working")
-  // • a rested thread with live children that is NOT a handoff (event-snoozed card, no queue entry)
-  //   keeps its spinner — that row is genuinely just cooking
-  assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, needsYou: false })), "working")
+  // • the same row event-snoozed out of the queue is the same state and the same dot — the whole point
+  //   is that leaving the queue no longer changes how the row reads
+  assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, needsYou: false })), "background")
   // • a concrete ask still wins the row
   assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, pendingQuestion: true })), "needs-input")
-  // • a done fence still reads as the completed handoff
+  // • a done fence still reads as the completed handoff — a worker that fenced ```done with a watcher
+  //   it never killed is a one-click dismissal, not live work
   assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, lastFence: { kind: "done", body: "shipped", hints: [] } })), "done")
   // • a parked wait keeps its hourglass (needsYou is false there — the server holds it out of the queue)
   assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, needsYou: false, subAgents: [], lastFence: awaitingHuman })), "held")
-  // • an EXITED parent with children still reading "running" is a stall, not a rest
+  // • an EXITED parent with children still reading "running" is a stall, not background work
   assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, runtime: "exited" })), "stalled")
+  // • and a fully rested thread — nothing of its own still out — is the plain ellipsis
+  assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, subAgents: [] })), "rest")
+})
+
+// SHELL-ONLY is the case the maintainer named, and it is the one that never leaves the queue: a
+// background shell is indistinguishable from a dev server that never exits, so the server keeps its
+// card (board.deriveNeedsYou) rather than burying the thread. The rail no longer punishes it for that.
+test("sessionIndicatorKind: a queued shell-only rest holds the running band with the dot, card and all", () => {
+  const shellRest = thread({ kind: "session", state: "open", needsYou: true, runtime: "turn-idle", awaitingBackground: true, bgShells: liveShell })
+  assert.equal(sessionIndicatorKind(shellRest), "background")
+  assert.deepEqual(partitionActive([shellRest]).running.map((t) => t.id), ["t"])
+  // The queue is untouched — only the rail band moved.
+  assert.equal(queued(shellRest), true)
+  // The shell going quiet drops it back to an ordinary queued rest, in the queue-ordered band.
+  const settled = thread({ ...shellRest, awaitingBackground: false, bgShells: [] })
+  assert.equal(sessionIndicatorKind(settled), "rest")
+  assert.deepEqual(partitionActive([settled]).rested.map((t) => t.id), ["t"])
 })
 
 // ── THE STALLED/RETRY CONTRACT ────────────────────────────────────────────────────────────────────
@@ -394,19 +417,20 @@ test("partitionActive: splits an ordered Active list into running/rested; queued
   assert.deepEqual(rested.map((t) => t.id), ["rest-old", "spin-ask", "rest-new"])
 })
 
-// THE RESTED BAND IS THE QUEUE, so every row in it must have a queue card behind it. An EVENT-SNOOZED
-// awaiting-background thread is still cooking but has left the queue (needsYou false), so it belongs in
-// the RUNNING band — which a live sub-agent already achieved via hasLiveSubAgents, and a SHELL-ONLY
-// thread did not, leaving a cardless row stranded in the rested band (maintainer 2026-07-29).
-test("partitionActive: an event-snoozed awaiting-background thread cooks in the running band, shells included", () => {
+// LIVE OWN WORK KEEPS THE ROW IN THE RUNNING BAND, snoozed or not (maintainer 2026-08-01: "keep it in
+// the actively running rail"). The queue membership no longer decides the band for these rows: an
+// event-snoozed thread has left the queue and an unsnoozed shell-only rest has NOT (a never-ending dev
+// server must keep its card), and the two must not look like different states on the rail — that churn
+// is the whole complaint. What keeps the never-ending dev server honest is the GLYPH: it stops spinning.
+test("partitionActive: a thread cooking on its own background work stays in the running band, snoozed or queued", () => {
   const shellOnly = thread({ id: "snoozed-shell", kind: "session", state: "open", runtime: "turn-idle", needsYou: false, awaitingBackground: true, subAgents: [], lastUserAt: "2026-07-09T00:00:00.000Z" })
   const withChild = thread({ id: "snoozed-child", kind: "session", state: "open", runtime: "turn-idle", needsYou: false, awaitingBackground: true, subAgents: [{ id: "a1", label: "c", startedAt: "2026-07-09T00:00:00.000Z", state: "running" }], lastUserAt: "2026-07-09T00:00:00.000Z" })
-  // UNSNOOZED is the control: awaitingBackground is true there too, but it is QUEUED, so it must stay in
-  // the rested band with its card — this is what keeps a never-ending dev server from spinning forever.
   const queuedShell = thread({ id: "queued-shell", kind: "session", state: "open", runtime: "turn-idle", needsYou: true, awaitingBackground: true, subAgents: [], lastUserAt: "2026-07-09T00:00:00.000Z" })
   const { running, rested } = partitionActive([shellOnly, withChild, queuedShell])
-  assert.deepEqual(running.map((t) => t.id), ["snoozed-shell", "snoozed-child"])
-  assert.deepEqual(rested.map((t) => t.id), ["queued-shell"])
+  assert.deepEqual(running.map((t) => t.id), ["snoozed-shell", "snoozed-child", "queued-shell"])
+  assert.deepEqual(rested.map((t) => t.id), [])
+  // None of the three spins; all three carry the at-rest dot.
+  for (const t of running) assert.equal(sessionIndicatorKind(t), "background", t.id)
 })
 
 // THE LAYOUT-SHIFT FIX (maintainer 2026-07-30): "if an agent has children that are still running child
@@ -427,15 +451,16 @@ test("partitionActive: a parent resting on a live sub-agent holds its place in t
   assert.deepEqual(partitionActive([done]).rested.map((t) => t.id), ["p"])
 })
 
-test("sessionIndicatorKind: a parent resting on a live sub-agent keeps its spinner, so the row never flickers", () => {
+test("sessionIndicatorKind: a parent resting on a live sub-agent swaps the spinner for the dot, and holds its row", () => {
   const at = "2026-07-09T00:00:00.000Z"
   const child = [{ id: "a1", label: "c", startedAt: at, state: "running" as const }]
-  // Same glyph mid-turn and at rest-with-a-child — the point is that NOTHING about the row changes when
-  // the parent's own turn ends, which is what removes the churn the maintainer reported.
+  // The row does not MOVE when the parent's own turn ends (that was the churn) — but the glyph does
+  // change, because the parent genuinely stopped and only its child is still going.
   assert.equal(sessionIndicatorKind(thread({ kind: "session", state: "open", runtime: "running", needsYou: false, subAgents: child })), "working")
-  assert.equal(sessionIndicatorKind(thread({ kind: "session", state: "open", runtime: "turn-idle", needsYou: false, awaitingBackground: true, subAgents: child })), "working")
-  // The EXITED parent is the case restedQueueHandoff still protects: its children keep reading "running"
-  // until they go stale, and it must read as a stall, never as a spinner.
+  assert.equal(sessionIndicatorKind(thread({ kind: "session", state: "open", runtime: "turn-idle", needsYou: false, awaitingBackground: true, subAgents: child })), "background")
+  // The EXITED parent is the case the turn-idle gate protects: its children keep reading "running"
+  // until they go stale, and it must read as a stall — never as a spinner, and never as live background
+  // work behind a dot.
   assert.equal(sessionIndicatorKind(thread({ kind: "session", state: "open", runtime: "exited", needsYou: true, subAgents: child })), "stalled")
 })
 

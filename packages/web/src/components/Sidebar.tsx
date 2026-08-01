@@ -589,7 +589,10 @@ export function ThreadIndicator({ t, legacy }: { t: ThreadView; legacy?: boolean
 // STATUS = a markdown-task CHECKBOX family (maintainer 2026-07-10, Obsidian-flavored): every state is
 // the SAME rounded-rect outer box with a glyph inside, so the rail reads like a to-do list.
 //   [ ] idle        — at rest, nothing pending (empty box)
-//   [/] in progress — the rounded-RECT spinner (a segment travels the box perimeter)
+//   [/] in progress — the rounded-RECT spinner (a segment travels the box perimeter). MY OWN TURN only.
+//   [•] background  — at rest, but work this thread LAUNCHED (a sub-agent, a background shell) is still
+//                     running: the same pulsing blue dot the transcript spends on a live shell, centered
+//                     in the box. The row keeps its place in the running band; only the motion changes.
 //   [?] needs input — a question / native ask / permission prompt (accent box + "?")
 //   [!] stalled     — the agent's PROCESS EXITED with the work unfinished (accent box + "!"), whether
 //                     it died mid-turn or exited after resting without a done fence. Same mark either
@@ -609,6 +612,16 @@ function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string |
     return { node: <StatusBox><Glyph ch="?" muted /></StatusBox>, tip: "Needs your input" }
   }
   if (kind === "working") return { node: <BoxSpinner />, tip: "Working" }
+  // The thread itself has stopped, so the box stops tracing — but a sub-agent or a background shell it
+  // launched is still going, and the row stays up in the running band on the strength of that. The dot
+  // is the transcript's own live-work mark (ChildOpRow, the tool disclosures), so the two surfaces agree
+  // about what "something is alive behind this" looks like.
+  if (kind === "background") {
+    return {
+      node: <StatusBox><span aria-hidden className="fray-live-dot fray-live-dot--background" data-running-indicator="thread-background" /></StatusBox>,
+      tip: "At rest — background work still running",
+    }
+  }
   if (kind === "done") return { node: <StatusBox><Check size={10} strokeWidth={3} className="text-muted/75" /></StatusBox>, tip: "Done" }
   if (kind === "stalled") {
     // ONE mark for "the process is gone". The server's `crashed` bit (exited AND turn-in-flight/live
@@ -656,9 +669,9 @@ function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string |
     return { node: <StatusBox><Clock size={9} className="text-muted/70" /></StatusBox>, tip: "Waiting on a machine" }
   }
   // At rest (no fence, nothing pending) with the process still ALIVE — a worker that came to rest
-  // WITHOUT declaring done or a machine-wait. A queued thread reaches here even with LIVE sub-agents:
-  // it has handed off, and its children spin on their own rows. (An exited one is `stalled` above; this
-  // ellipsis is now honestly reserved for a session you can still just type at.) Read it as WAITING
+  // WITHOUT declaring done or a machine-wait, and with NOTHING it launched still running (that is the
+  // pulsing dot above). (An exited one is `stalled` above; this ellipsis is now honestly reserved for a
+  // session you can still just type at.) Read it as WAITING
   // (maintainer 2026-07-10: a rested-not-done thread "should be blocked or waiting", never a stark
   // empty box and never a false check). We don't know the reason — the worker didn't fence — so: no
   // hint gloss (vs an ```awaiting fence, which carries pr/ci hints AND dims + sinks the row). The

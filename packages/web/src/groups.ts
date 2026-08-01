@@ -389,33 +389,27 @@ export function isActivelyRunning(t: ThreadView): boolean {
   return t.runtime === "turn-idle" && hasLiveOps(t)
 }
 
-// A QUEUE HANDOFF THAT HAS ALREADY COME TO REST: the server queued it (`needsYou`) and the thread's
-// OWN turn is over (turn-idle/exited). It must not make the PARENT's rail mark claim motion the parent
-// does not have (maintainer 2026-07-27: "when an agent comes to rest and shows up in the queue, it
-// should get the ellipsis indicator in the sidebar, even though its sub-agents are still spinning").
-// The children keep their own spinners on their own indented rows (Sidebar SubAgentRows → ChildOpRow);
-// the parent's indicator speaks for the parent. A queued row therefore sits in the rested band AND
-// reads as rested.
+// RESTING ON ITS OWN BACKGROUND WORK: the thread's own turn is OVER (turn-idle) but work it launched —
+// a dispatched sub-agent, or a background shell/Monitor — is still running. It is neither "working"
+// (the parent has no motion of its own) nor plain "at rest" (something it started is still going), so
+// it gets its OWN mark: the pulsing blue dot in the rail's rounded box (maintainer 2026-08-01, "stop
+// the spinner and put a pulsing blue dot in the middle of the rounded circle shape"). That splits the
+// rail's liveness language honestly — a spinner means MY turn is in flight, a dot means work I
+// dispatched is. It replaces the ellipsis rule of 2026-07-27, which was reaching for the same
+// distinction with the only two glyphs that existed then.
 //
-// SINCE 2026-07-30 the live-SUB-AGENT case no longer reaches here at all: the server now excuses such a
-// thread from the queue entirely (board.deriveNeedsYou), so `needsYou` is false and the row keeps its
-// spinner in the running band — which is the point, since a row that never leaves that band never
-// churns between the two. The maintainer's ellipsis rule was scoped to a row that "shows up in the
-// queue", and one that no longer does has no reason to change appearance on resting.
-//
-// Still load-bearing for the cases that DO queue with live-looking children: a shell-only rest (never
-// excused — an eternal dev server must not bury its thread) and, critically, an EXITED parent whose
-// children keep reading "running" until their transcript goes stale. Without this the latter would
-// resolve to "working" and hide the [!] stall mark behind a spinner for a pane that is already dead.
-function restedQueueHandoff(t: ThreadView): boolean {
-  return t.needsYou === true && atRest(t)
+// Gated on `turn-idle`, never `exited`: a dead pane's children keep reading "running" until their
+// transcript goes stale, and that parent must keep its [!] stall mark rather than advertise live work
+// behind a dot. hasLiveOps supplies the rest — see there for why a raw `bgShells` read would be wrong.
+function restingOnBackgroundWork(t: ThreadView): boolean {
+  return t.runtime === "turn-idle" && hasLiveOps(t)
 }
 
 // One status-priority decision shared by the sidebar renderer and its tests. The order is important:
 // an archived row at rest stays archived even if stale attention metadata lingers; a real human ask
 // stays a question after the worker exits; live work stays working; and a completed handoff stays a
 // check instead of being mislabelled as a crash merely because `needsYou` also puts it in the queue.
-export type SessionIndicatorKind = "archived" | "needs-input" | "working" | "done" | "stalled" | "held" | "rest"
+export type SessionIndicatorKind = "archived" | "needs-input" | "working" | "background" | "done" | "stalled" | "held" | "rest"
 
 export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   const activelyRunning = isActivelyRunning(t)
@@ -431,13 +425,20 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
       t.status === "needs-human",
   )
   if (explicitlyNeedsInput) return "needs-input"
-  // "Working" is reserved for motion the PARENT actually has: its own turn in flight (running/spawning),
-  // or a live child while the parent is NOT yet a handoff. A rested, queued thread falls through to the
-  // at-rest ellipsis below no matter how many sub-agents it still has out — see restedQueueHandoff.
-  if (activelyRunning && !restedQueueHandoff(t)) return "working"
+  // "Working" — the travelling spinner — is now reserved for motion the parent ACTUALLY has: its own
+  // turn in flight. A rested parent whose dispatched work is still out reads as "background" below, so
+  // no row ever spins on someone else's behalf.
+  if (t.runtime === "running" || t.runtime === "spawning") return "working"
 
   if (isHeld(t)) return "held"
   if (t.lastFence?.kind === "done" && atRest(t)) return "done"
+  // Below the two DECLARED states on purpose. A worker that fenced ```done while a watcher it never
+  // killed keeps running is a one-click dismissal, not live work (FRAY.md: "name it in the body and
+  // fence anyway"), and a parked ```awaiting is the human's gate — either story outranks "something it
+  // launched is still going". Neither can actually collide with a live SHELL (deriveAwaitingBackground
+  // drops any fenced thread) and isHeld already yields to a live sub-agent, so this only settles the
+  // done-fence-with-a-live-child case: it keeps its [✓].
+  if (restingOnBackgroundWork(t)) return "background"
   // STALLED = this thread's PROCESS IS GONE with the work unfinished. That is exactly `canRetry`: an
   // OWNED (non-foreign) session row whose runtime is `exited`. It deliberately does NOT consult the
   // server's `crashed` bit (= exited AND turn-in-flight/live-background-work). `crashed` says only HOW
@@ -450,8 +451,8 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   // Every branch ABOVE wins first, so an archived / needs-input / working / held / done-fenced row
   // keeps its own better-suited mark and affordance even when its process happens to be gone.
   if (canRetry(t)) return "stalled"
-  // Bare rest with a LIVE process (turn-idle, nothing pending): it can simply be typed at, so it stays
-  // the quiet […] and never advertises a recovery verb.
+  // Bare rest with a LIVE process (turn-idle, nothing pending, NOTHING it launched still running): it
+  // can simply be typed at, so it stays the quiet […] and never advertises a recovery verb.
   return "rest"
 }
 
@@ -523,12 +524,22 @@ export function orderActive(threads: readonly ThreadView[], direction: QueueDire
   return [...orderByInteraction(running), ...orderQueue(rested, direction)]
 }
 
-// The running band is strictly live work that ISN'T waiting on the human: a queued thread ALWAYS
-// belongs to the rested band so its queue card maps to a rested-band row and the marker stays
-// monotonic even in the rare spinning-yet-needs-you state. (sessionIndicatorKind now agrees: a rested
-// queued row reads as at-rest rather than spinning, so band and glyph tell the operator one story.)
+// The running band is live work: the thread's own turn in flight while it isn't waiting on the human,
+// PLUS a thread resting on background work it launched. A queued row otherwise belongs to the rested
+// band, so its queue card maps to a rested-band row and the scroll marker walks straight down the rail.
+//
+// The background clause is the exception the maintainer asked for twice — 2026-07-30 for sub-agents
+// ("too much layout shift as things jump between those two sections"), then 2026-08-01 for background
+// shells: "if a thread has rested but it still has background work going, like background shells, we
+// should keep it in the actively running rail". A shell-only rest is never excused from the queue (an
+// eternal dev server must not bury its thread), so it is the one row that now sits in the running band
+// WITH a queue card behind it. That is the accepted cost: the alternative is the row dropping to the
+// rested band the moment the turn ends and bouncing back up when the shell reports, which is exactly
+// the churn being complained about. Its glyph never claims motion it doesn't have — sessionIndicatorKind
+// gives it the at-rest pulsing dot, so band and glyph still tell the operator one story.
 function inActiveRunningBand(t: ThreadView): boolean {
-  return isActivelyRunning(t) && t.needsYou !== true
+  if (isActivelyRunning(t) && t.needsYou !== true) return true
+  return sessionIndicatorKind(t) === "background"
 }
 
 // Split an ALREADY-ordered Active list (see orderActive) into its running/rested bands WITHOUT
