@@ -70,11 +70,16 @@ export function RestartWorkerButton({ thread }: { thread: ThreadView }) {
         // border used to do — an earlier pass shipped this as bare TEXT with no box at all and read as
         // a static label, and that is the failure being avoided here, not the absence of a border.
         //
-        // 28px matches the exact height of the pills beside it, so the strip keeps one baseline and the
-        // hover targets line up; it also clears the WCAG 2.2 24px minimum. The glyph stays at the
-        // strip's own 12px, so the one verb WITHOUT a label does not out-weigh the two with them, and
-        // the tone sits a step below theirs (fg/55) to keep saying "maintenance verb".
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-fg/55 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 disabled:cursor-not-allowed disabled:opacity-45"
+        // 24px square, mirroring this app's OWN icon-action size (lib/statusBar.ts: "the WCAG 2.2
+        // minimum pointer target, and the largest size that still reads as part of a 12px text strip
+        // rather than as chrome parked next to it"). Measured against 28px in the running footer: a
+        // padded icon can never sit at the 6px the pills keep between each other, but 24px spends 12px
+        // from ink to the Snooze pill where 28px spent 14px, and the tighter one holds the strip's
+        // rhythm. The glyph stays at the strip's own 12px so the one verb WITHOUT a label does not
+        // out-weigh the two with them, and the tone sits a step below theirs (fg/55) to keep saying
+        // "maintenance verb". Ink measures 0.20px off the labels' cap band — under the ~0.3px floor
+        // where a nudge only blurs it, and tighter than the Check beside it (0.45px), so no correction.
+        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-fg/55 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 disabled:cursor-not-allowed disabled:opacity-45"
       >
         {busy ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
       </button>
