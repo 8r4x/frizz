@@ -831,7 +831,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   const visible = useMemo(() => messages.slice(visibleStart), [messages, visibleStart])
   // The SAME presentation-only coalescing the thread view and the sub-agent drawer run (ChatView's
   // coalescedActivityMessages): a provider that chunks one burst into 26 assistant records must not
-  // mint 26 `Ran 1 tool call` disclosures, and a "Thought for Ns" in the middle of that burst must not
+  // mint 26 `Ran 1 tool call` disclosures, and a quiet event line in the middle of that burst must not
   // split it in two (maintainer 2026-07-31: "I don't think it makes sense for us to interleave tool
   // calls and thinking like this"). Expanding this card's intermediate divider used to be exactly that
   // wall, because the card was the one transcript surface still rendering raw server order.
@@ -1143,7 +1143,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
           <p className="text-[13px] text-muted">{q.isLoading ? "Loading…" : thread.statusText || "No message yet."}</p>
         ) : (
           // Adjacency-based message spacing IDENTICAL to the thread drawer (messageTailIsMeta/HeadIsMeta
-          // → 6px when two meta rows — tool band or "Thought for Ns"/reasoning label — abut, else STEP) —
+          // → 6px when a CARD abuts a meta row, else STEP — see messageGap) —
           // so a batched vs split tool run reads the same here as in the drawer. No flex gap; explicit
           // spacers between rendered messages.
           <div ref={messageListRef} className="flex flex-col">

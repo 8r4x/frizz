@@ -831,23 +831,20 @@ test("a duplicate terminal notification re-renders the completion card only once
   assert.equal(msgs.length, 2) // dispatch card + exactly one completion card
 })
 
-// ---- long thinking windows ----
+// ---- long thinking windows (no longer surfaced; see the test below) ----
 const userRec = (ts: string) => JSON.stringify({ type: "user", timestamp: ts, message: { content: "go" } })
 const thinkRec = (ts: string, mid: string) => JSON.stringify({ type: "assistant", timestamp: ts, message: { id: mid, content: [{ type: "thinking", signature: "sig", thinking: "" }] } })
 const bashRec = (ts: string, mid: string) => JSON.stringify({ type: "assistant", timestamp: ts, message: { id: mid, content: [{ type: "tool_use", name: "Bash", input: { command: "ls" } }] } })
 
-test("a long gap before a thinking block → 'Thought for Ns' event; the turn's card is not absorbed", () => {
+test("a long thinking window leaves NO row behind, only the turn's own card", () => {
+  // Claude's thinking content is redacted, so this line could only ever have reported a DURATION — and a
+  // permanent row whose whole payload is "the model paused here" is what the transcript stopped carrying
+  // (maintainer 2026-08-01: "it should never show up persistently like that"). The live shimmer says
+  // `Thinking…` while it is happening, which is when the fact is worth something.
   const msgs = parseTranscript([userRec("2026-07-01T00:00:00.000Z"), thinkRec("2026-07-01T00:00:30.000Z", "m1"), bashRec("2026-07-01T00:00:31.000Z", "m1")].join("\n"))
-  const ev = msgs.find((m) => m.kind === "event")
-  assert.ok(ev, "a long thinking gap emits an event")
-  assert.equal(ev!.text, "Thought for 30s")
+  assert.equal(msgs.filter((m) => m.kind === "event").length, 0, "a thinking window emits no event line at any duration")
   const toolMsg = msgs.find((m) => m.role === "assistant" && m.kind === undefined && m.tools.length > 0)
-  assert.ok(toolMsg, "the turn's tool card is its own message, never merged into the event line")
-})
-
-test("a short gap before a thinking block emits no event", () => {
-  const msgs = parseTranscript([userRec("2026-07-01T00:00:00.000Z"), thinkRec("2026-07-01T00:00:05.000Z", "m2"), bashRec("2026-07-01T00:00:06.000Z", "m2")].join("\n"))
-  assert.equal(msgs.filter((m) => m.kind === "event").length, 0)
+  assert.ok(toolMsg, "the turn's tool card is still its own message")
 })
 
 test("a thinking-only record opening a NEW turn does not glue that turn onto the previous one", () => {

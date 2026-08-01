@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-// Runtime coverage for the LIVE TAIL's rhythm — the "Working…" shimmer that closes a running
+// Runtime coverage for the LIVE TAIL's rhythm — the shimmer that closes a running
 // transcript. Skipped unless a Vite URL serving the fixtures is provided (same pattern as the other
 // *.e2e.test.ts here): start `vite` in packages/web and set FRAY_WORKING_TAIL_SPACING_E2E_URL to its
 // origin.
@@ -97,7 +97,7 @@ const CAP_WHITE = `(() => {
     const b = baselineOf(firstText(el))
     return Math.round((capTop(b.font, b.baseline) - card.bottom) * 100) / 100
   }
-  const label = [...document.querySelectorAll('[data-fray-msg="m1"] span')].find((s) => s.children.length === 0 && s.textContent.trim().startsWith("Thought"))
+  const label = [...document.querySelectorAll('[data-fray-msg="m1"] span')].find((s) => s.children.length === 0 && s.textContent.trim() === "Reasoning")
   return {
     shimmer: white(document.querySelector("[data-working-indicator] .shimmer-text")),
     settledLabel: white(label),

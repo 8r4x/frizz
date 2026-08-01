@@ -6,25 +6,23 @@ import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
 
-// Browser QA for the QUIET META COLUMN — the `Ran N tool calls` digest, a `Thought for Ns` line and the
-// live shimmer, stacked (maintainer 2026-08-01: "All of these labels are way too close together.
-// Specifically, the ran 8 tool calls, the thought, and then the active shimmer. I thought we'd dropped
-// the 'thought for the x seconds' thing entirely, actually?").
+// Browser QA for the QUIET META COLUMN — the `Ran N tool calls` digest, a collapsed reasoning row and
+// the live shimmer, stacked (maintainer 2026-08-01: "All of these labels are way too close together.
+// Specifically, the ran 8 tool calls, the thought, and then the active shimmer").
 //
 // The transcript below is the REAL one from that screenshot, session 1dbbe276 records 1..51, replayed
-// shape-for-shape: an opening prose message, a run of 8 calls with a `Thought for 25s` folded into it,
-// a QUEUED steer, a standalone `Thought for 33s`, and a live two-call tail whose newest member supplies
-// the shimmer's gerund.
+// shape-for-shape minus the thinking rows the transcript no longer carries: an opening prose message, a
+// run of 8 calls, a QUEUED steer, and a live two-call tail whose newest member supplies the shimmer's
+// gerund.
 //
 // The queued bubble is the whole point. It renders at the BOTTOM of the pane (never inline), yet it used
 // to end the activity run in coalesceToolActivityMessages — which stranded the run above as a settled
-// digest and left the thought below it with nothing to fold into.
+// digest for no cause the reader could see.
 //
 // Three controls:
 //   ?steer=landed — the same column with the steer DELIVERED. Breaking the run is correct there, so the
-//                   thought keeps its own row and the shimmer follows it: the LABEL↔LABEL rhythm.
-//   ?state=settled — the turn is over, so nothing is withheld: the whole run returns as one digest with
-//                   both thoughts folded inside it.
+//                   calls above it settle into their own digest.
+//   ?state=settled — the turn is over, so nothing is withheld: the whole run returns as one digest.
 //   ?stack=three   — THREE bare labels in a row, which is the arrangement the report was actually about.
 //                   It survives the queued-steer fix because a Codex `reasoning` row is deliberately NOT
 //                   folded into a run (it carries real content and is already its own disclosure), so it
@@ -106,7 +104,6 @@ const messages = [
   },
   { sourceId: "m2", role: "assistant", text: "", tools: [], parts: [{ kind: "tools", tools: [bash("Searching for the ownership error string", "grep -rn 'is owned by uid' packages/server/src")] }], at: AGO(380) },
   { sourceId: "m3", role: "assistant", text: "", tools: [], parts: [{ kind: "tools", tools: [{ name: "Read", detail: "/Users/colinmcd94/Documents/projects/fray/packages/server/src/tmux.ts" }] }], at: AGO(360) },
-  { sourceId: "m4", role: "assistant", kind: "event", text: "Thought for 25s", tools: [], parts: [], at: AGO(330) },
   {
     sourceId: "m5",
     role: "assistant",
@@ -150,9 +147,6 @@ const messages = [
         at: AGO(160),
         ...(STEER_LANDED ? {} : { queued: true }),
       }] as unknown as TranscriptMessage[])),
-  ...(THREE_STACK
-    ? []
-    : ([{ sourceId: "m9", role: "assistant", kind: "event", text: "Thought for 33s", tools: [], parts: [], at: AGO(140) }] as unknown as TranscriptMessage[])),
   {
     sourceId: "m10",
     role: "assistant",

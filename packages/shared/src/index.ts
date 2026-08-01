@@ -640,10 +640,22 @@ export type QuotaSnapshot = z.infer<typeof QuotaSnapshot>
 export const ProviderAuth = z.enum(["authed", "signed-out", "unknown"])
 export type ProviderAuth = z.infer<typeof ProviderAuth>
 
+// WHICH account each credential belongs to — the email the provider's own on-disk account record
+// carries. Purely informational (the quota popover answers "signed in as who?"); nothing gates on it,
+// so every field is optional and an unreadable record simply yields nothing rather than an error.
+// Deliberately a SIBLING of the per-provider auth verdicts rather than nested with them: the gate's
+// shape (`snapshot[backend] === "signed-out"`) is load-bearing in dispatch and must not move.
+export const AccountEmails = z.object({
+  claude: z.string().max(320).optional(),
+  codex: z.string().max(320).optional(),
+})
+export type AccountEmails = z.infer<typeof AccountEmails>
+
 // The per-provider auth snapshot the new-thread gate reads — one entry per agent backend.
 export const AuthSnapshot = z.object({
   claude: ProviderAuth,
   codex: ProviderAuth,
+  emails: AccountEmails,
 })
 export const AccountLogoutInput = z.object({ backend: z.enum(["claude", "codex"]) }).strict()
 export type AccountLogoutInput = z.infer<typeof AccountLogoutInput>
@@ -1462,20 +1474,8 @@ export const TranscriptToolCall = z.object({
   // call into a TodoBlock — a checklist card, one row per task with its status. Optional, so a
   // pre-restart server / older transcript falls back to the generic card.
   todos: z.array(TranscriptTodo).optional(),
-  // ---- Thinking, absorbed into an activity run (CLIENT-SYNTHESIZED — the server never emits this) ----
-  // A "Thought for Ns" line the client folded INTO the surrounding tool-activity run so the model
-  // thinking between two calls stops splitting one batch into two `Ran N tool calls` disclosures
-  // (maintainer 2026-07-31: "I don't think it makes sense for us to interleave tool calls and thinking
-  // like this. The thinking block should just collapse"). It carries the event's own text and renders
-  // as a quiet row INSIDE the expanded disclosure, so nothing is lost — see lib/toolActivity.ts. It
-  // lives on this schema only so the client's collapsed-tool pipeline stays one type end to end.
-  thought: z.string().optional(),
 })
 export type TranscriptToolCall = z.infer<typeof TranscriptToolCall>
-
-// The one spelling of a thinking event line, shared so the client can recognize the server's own
-// emission without pattern-matching a string it doesn't own (transcript.ts emits exactly one).
-export const THOUGHT_EVENT_PREFIX = "Thought for "
 
 // One block-ordered PART of an assistant turn — the fidelity fix. A turn's content interleaves text
 // and tool_use blocks in a meaningful order (a "Let me draft the notes:" lead-in sits DIRECTLY above
@@ -1514,8 +1514,11 @@ export const TranscriptMessage = z.object({
   kind: z.enum(["event", "reasoning"]).optional(),
   // Wall-clock the model spent THINKING, in ms — set only on a `kind:"reasoning"` message. Derived from
   // the rollout's per-step reasoning timestamps (Σ of each reasoning step's gap from the event before it,
-  // which excludes tool-execution time). Drives the "Thought for N seconds" label. Optional: absent on
-  // non-reasoning messages and on any reasoning block whose timing couldn't be derived.
+  // which excludes tool-execution time). NOT rendered: it used to caption the reasoning disclosure as
+  // "Thought for N seconds", and a permanent row reporting how long the model paused is exactly what the
+  // transcript no longer carries (see ReasoningBlock). Kept because it is the server's own measurement
+  // and costs nothing to project. Optional: absent on non-reasoning messages and on any reasoning block
+  // whose timing couldn't be derived.
   durationMs: z.number().nonnegative().optional(),
   // A turn-BOUNDARY marker: this `kind:"event"` line was emitted at the position an EXTERNAL wake — a
   // This event opened a fresh turn, so it renders as a centered divider rule carrying the cause label —

@@ -369,24 +369,9 @@ test("edited files are counted once per file, whatever shape the write arrived i
   assert.equal(editedFileCount([{ name: "Edit", detail: "src/gone.ts" }, { name: "apply_patch", detail: "src/gone.ts" }]), 1)
 })
 
-function thoughtMessage(sourceId: string, text: string, at = "2026-07-30T12:00:01.000Z"): ChatMessage {
+function eventMessage(sourceId: string, text: string, at = "2026-07-30T12:00:01.000Z"): ChatMessage {
   return { sourceId, role: "assistant", kind: "event", text, tools: [], parts: [], at }
 }
-
-test("thinking inside a run folds into it instead of splitting one burst in two", () => {
-  const compact = coalesceToolActivityMessages([
-    toolMessage("a", [tool("Bash", { detail: "git log" })]),
-    thoughtMessage("t", "Thought for 24s"),
-    toolMessage("b", [tool("Bash", { detail: "git diff" })], "2026-07-30T12:00:02.000Z"),
-  ])
-
-  assert.equal(compact.length, 1)
-  assert.equal(compact[0].message.sourceId, "a")
-  assert.deepEqual(
-    compact[0].message.tools.map((call) => call.thought ?? call.detail),
-    ["git log", "Thought for 24s", "git diff"],
-  )
-})
 
 test("a queued steer is transparent to the run it sits inside", () => {
   // The bubble is pinned to the BOTTOM of the pane and never drawn inline, so nothing visible separates
@@ -401,16 +386,12 @@ test("a queued steer is transparent to the run it sits inside", () => {
   const compact = coalesceToolActivityMessages([
     toolMessage("a", [tool("Bash", { detail: "git log" })]),
     steer,
-    thoughtMessage("t", "Thought for 33s"),
     toolMessage("b", [tool("Bash", { detail: "git diff" })], "2026-07-30T12:00:02.000Z"),
   ])
 
   // The bubble keeps its slot — the callers that pin it read this list — but the run is unbroken.
   assert.deepEqual(compact.map((entry) => entry.message.sourceId), ["a", "steer"])
-  assert.deepEqual(
-    compact[0].message.tools.map((call) => call.thought ?? call.detail),
-    ["git log", "Thought for 33s", "git diff"],
-  )
+  assert.deepEqual(compact[0].message.tools.map((call) => call.detail), ["git log", "git diff"])
 })
 
 test("a DELIVERED steer still ends the run", () => {
@@ -423,20 +404,22 @@ test("a DELIVERED steer still ends the run", () => {
   const compact = coalesceToolActivityMessages([
     toolMessage("a", [tool("Bash", { detail: "git log" })]),
     steer,
-    thoughtMessage("t", "Thought for 33s"),
     toolMessage("b", [tool("Bash", { detail: "git diff" })], "2026-07-30T12:00:02.000Z"),
   ])
 
-  assert.deepEqual(compact.map((entry) => entry.message.sourceId), ["a", "steer", "t", "b"])
+  assert.deepEqual(compact.map((entry) => entry.message.sourceId), ["a", "steer", "b"])
 })
 
-test("a thought with no run above it keeps its own row", () => {
+test("a quiet event line still ends the run it follows", () => {
+  // Thinking no longer reaches the client at all, but a compaction note / "Agent … finished" line does,
+  // and those are real transcript punctuation: the calls either side of one are not one batch.
   const compact = coalesceToolActivityMessages([
-    thoughtMessage("t", "Thought for 24s"),
     toolMessage("a", [tool("Bash", { detail: "git log" })]),
+    eventMessage("c", "Context compacted — 142k tokens dropped"),
+    toolMessage("b", [tool("Bash", { detail: "git diff" })], "2026-07-30T12:00:02.000Z"),
   ])
 
-  assert.deepEqual(compact.map((entry) => entry.message.sourceId), ["t", "a"])
+  assert.deepEqual(compact.map((entry) => entry.message.sourceId), ["a", "c", "b"])
 })
 
 test("a wake divider is not thinking and still ends the run", () => {
@@ -453,13 +436,12 @@ test("a wake divider is not thinking and still ends the run", () => {
   assert.deepEqual(compact.map((entry) => entry.message.sourceId), ["a", "wake", "b"])
 })
 
-test("folded thinking never becomes the live activity gerund", () => {
+test("the newest call in the landed tail names the live gerund", () => {
   const compact = coalesceToolActivityMessages([
-    toolMessage("a", [tool("Bash", { detail: "git log", status: "completed" })]),
-    thoughtMessage("t", "Thought for 24s"),
+    toolMessage("a", [tool("Bash", { detail: "git log", status: "completed" }), tool("Grep", { detail: "resolver", status: "pending" })]),
   ])
   const live = liveToolActivityTail(compact.map((entry) => entry.message))
 
-  assert.equal(live?.name, "Bash")
-  assert.equal(currentToolActivity(compact[0].message.tools).tool?.name, "Bash")
+  assert.equal(live?.name, "Grep")
+  assert.equal(currentToolActivity(compact[0].message.tools).tool?.name, "Grep")
 })

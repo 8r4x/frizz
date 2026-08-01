@@ -18,7 +18,7 @@ const messages: ChatMessage[] = [
     tools: [],
     parts: [],
   },
-  { sourceId: "e1", role: "assistant", kind: "event", text: "Thought for 6s", tools: [], parts: [] },
+  { sourceId: "e1", role: "assistant", kind: "event", text: "Agent «restart-popover-copy» finished — 4m", tools: [], parts: [] },
   {
     sourceId: "b1",
     role: "assistant",

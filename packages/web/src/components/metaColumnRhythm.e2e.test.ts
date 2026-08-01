@@ -1,18 +1,17 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-// Runtime coverage for the QUIET META COLUMN — the `Ran N tool calls` digest, a `Thought for Ns` line
+// Runtime coverage for the QUIET META COLUMN — the `Ran N tool calls` digest, a collapsed reasoning row
 // and the live shimmer. Skipped unless a Vite URL serving the fixtures is provided (same pattern as the
 // other *.e2e.test.ts here): start `vite` in packages/web and set FRAY_META_COLUMN_RHYTHM_E2E_URL to
 // its origin.
 //
 // Two invariants, both from the same report (maintainer 2026-08-01, on a column reading `Ran 8 tool
-// calls` / `Thought for 33s` / the shimmer: "All of these labels are way too close together … I thought
-// we'd dropped the 'thought for the x seconds' thing entirely, actually?"):
+// calls` / `Thought for 33s` / the shimmer: "All of these labels are way too close together"):
 //
 //   1. A QUEUED steer is invisible inline — it is pinned to the bottom of the pane — so it must not end
-//      the activity run it happens to sit inside. It used to, which is what stranded the run above it as
-//      a settled digest and left the next turn's thought with nothing to fold into.
+//      the activity run it happens to sit inside. It used to, which stranded the calls above it as a
+//      settled digest for no cause the reader could see.
 //   2. Two bare single-line LABEL rows sit at the ordinary STEP. The 6px tight run needs a bordered
 //      CARD on at least one side of the seam — two borders that close together still read as two
 //      blocks, whereas two bare grey lines that close together read as one wrapped paragraph.
@@ -69,9 +68,9 @@ test("a queued steer is transparent to the activity run, and label rows keep the
 }, async () => {
   const { browser, page, errors } = await launch()
   try {
-    // 1. The reported state: the steer is still QUEUED, so nothing visible separates the run above it
-    //    from the thought below. The whole thing is one live run — withheld from history behind the
-    //    shimmer — so neither a digest nor a standalone thought may appear between the prose and it.
+    // 1. The reported state: the steer is still QUEUED, so nothing visible breaks the run it sits in.
+    //    The whole thing is one live run — withheld from history behind the shimmer — so no digest may
+    //    appear between the prose and it.
     await page.goto(fixtureUrl(""), { waitUntil: "domcontentloaded" })
     await page.waitForSelector("[data-working-indicator]")
     const queued = await column(page)
@@ -80,30 +79,30 @@ test("a queued steer is transparent to the activity run, and label rows keep the
     assert.deepEqual(queued.digests, [], "a live run stays behind the shimmer — the queued steer must not strand it as a settled digest")
     assert.equal(queued.shimmer, "Finding callers of the socket resolver", "the newest ordinary call still names the shimmer")
 
-    // 2. SETTLED: the turn is over, so the whole run returns as ONE digest with both thoughts folded
-    //    inside it — never `Ran 8` / `Thought for 33s` / `Ran 2`.
+    // 2. SETTLED: the turn is over, so the whole run returns as ONE digest — never `Ran 8` / `Ran 2`
+    //    split by the bubble that was never drawn between them.
     await page.goto(fixtureUrl("?state=settled"), { waitUntil: "domcontentloaded" })
     await page.waitForSelector("[data-tool-activity] button")
     const settled = await column(page)
-    assert.deepEqual(settled.digests, ["Expand 10 tool calls: Ran 10 tool calls"], "one digest for the whole run; folded thinking never counts toward it")
-    assert.ok(!settled.order!.includes("m9"), "the folded thought has no row of its own")
+    assert.deepEqual(settled.digests, ["Expand 10 tool calls: Ran 10 tool calls"], "one digest for the whole run")
+    assert.deepEqual(settled.order, ["m0", "m1", "m8", "m11"], "the queued bubbles still render last, below the settled column")
 
-    // 3. CONTROL — the steer LANDED, so it genuinely ends the run: the digest settles, the next turn's
-    //    thought keeps its own row, and the shimmer follows it. That is the LABEL↔LABEL pair.
+    // 3. CONTROL — the steer LANDED, so it genuinely ends the run: it sits inline and the calls above it
+    //    settle into their own digest, which is exactly what must NOT happen while it is still queued.
     await page.goto(fixtureUrl("?steer=landed"), { waitUntil: "domcontentloaded" })
     await page.waitForSelector("[data-working-indicator]")
     const landed = await column(page)
-    assert.deepEqual(landed.order, ["m0", "m1", "m8", "m9", "SHIMMER", "m11"], "a delivered steer sits inline, between the run it interrupted and the thought it provoked")
+    assert.deepEqual(landed.order, ["m0", "m1", "m8", "SHIMMER", "m11"], "a delivered steer sits inline, between the run it interrupted and the one it started")
     assert.deepEqual(landed.digests, ["Expand 8 tool calls: Ran 8 tool calls"], "the interrupted run settles at its real count")
-    near(landed.gapAbove!.SHIMMER, STEP, "the shimmer under a bare label row")
-    // ...and the human's own words still open a wider break below them, so the label step did not
-    // quietly flatten the rest of the rhythm into one uniform gap.
-    assert.ok(landed.gapAbove!.m9 > STEP, `a user bubble above the thought keeps its break, got ${landed.gapAbove!.m9}px`)
+    // The human's own words still open a wider break below them, so the label step did not quietly
+    // flatten the rest of the rhythm into one uniform gap.
+    assert.ok(landed.gapAbove!.SHIMMER > STEP, `a user bubble above the shimmer keeps its break, got ${landed.gapAbove!.SHIMMER}px`)
 
-    // 4. THE reported arrangement, and the one this rhythm exists for: three bare labels in a row. It
-    //    outlives the queued-steer fix because a Codex `reasoning` row is deliberately never folded into
-    //    a run, so it splits one — digest, label, shimmer. Every seam is the ordinary step; none may
-    //    fall back to the card run, which is what made the column paint as one block of grey.
+    // 4. THE reported arrangement, and the one this rhythm exists for: three bare labels in a row. A
+    //    Codex `reasoning` row splits a run — digest, label, shimmer — and codex thinks before nearly
+    //    every call, so this is the common shape rather than an edge case. Every seam is the ordinary
+    //    step; none may fall back to the card run, which is what made the column paint as one block of
+    //    grey.
     await page.goto(fixtureUrl("?stack=three"), { waitUntil: "domcontentloaded" })
     await page.waitForSelector("[data-working-indicator]")
     const three = await column(page)

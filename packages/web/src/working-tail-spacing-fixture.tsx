@@ -10,7 +10,8 @@ import { pushSubAgentDrawer, store } from "./store.ts"
 import "./styles.css"
 
 // Browser QA for the LIVE TAIL's rhythm (maintainer 2026-07-31: "there's more space above the working
-// shimmer than there is below the 'Thought for 37 seconds'"). The reported column is reproduced exactly:
+// shimmer than there is below the 'Thought for 37 seconds'" — that row reads "Reasoning" now, but the
+// geometry the report was about is unchanged). The reported column is reproduced exactly:
 // a reasoning label, then two Agent dispatch cards, then the running Working… row. The label sits 6px
 // above the first card (the tight meta run), so the shimmer under the last card must sit at 6px too —
 // it is the same column of quiet activity rows, still being written.

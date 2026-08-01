@@ -12,7 +12,6 @@ import {
   parseAgentMessage,
   parseGithubWakeSteer,
   stripWakeDeliveryToken,
-  THOUGHT_EVENT_PREFIX,
   type GithubWakeSteer,
   type TranscriptMessage,
   type TranscriptPage,
@@ -346,10 +345,6 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
   // completion correlation is one-shot, a title is wanted for as long as the transcript renders — so
   // they are two maps rather than one with a subtler consume rule.
   const dispatchLabels = new Map<string, string>()
-  // For "Thought for Ns" events: the previous SUBSTANTIVE (assistant/user) record's timestamp, and the
-  // message id we last emitted a thinking event for (so a turn's several thinking records emit ≤1 line).
-  let prevTs: string | undefined
-  let thinkingMsgId: string | null = null
   // Human follow-ups QUEUED to a mid-turn worker (Claude Code's message queue). A human message sent
   // while the agent is working NEVER lands as a normal user record — the session JSONL records the
   // lifecycle only as sidecar: an `enqueue` queue-operation, a `remove`/`dequeue`, and finally a
@@ -453,27 +448,14 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
       return
     }
 
-    // Long THINKING window: an assistant record that opens a NEW turn with a (redacted) thinking block,
-    // reached after a long quiet gap. Thinking CONTENT is redacted in the JSONL (a `signature` + an
-    // empty `thinking` field — verified against real transcripts), so the only observable is the
-    // wall-clock span from the previous substantive record; we surface that as a quiet event line.
+    // A long THINKING window used to be surfaced here as a `Thought for Ns` event line. It is not any
+    // more: Claude's thinking CONTENT is redacted in the JSONL (a `signature` + an empty `thinking`
+    // field), so the line could only ever report a DURATION — a permanent row in the transcript whose
+    // entire content was "the model paused here". The live shimmer already says `Thinking…` while it
+    // happens, which is when that fact is worth anything (maintainer 2026-08-01: "If the agent is in
+    // fact thinking, then we could show thinking in the shimmer, but it should never show up
+    // persistently like that").
     const thisTs = typeof rec.timestamp === "string" ? rec.timestamp : undefined
-    if (rec.type === "assistant" && hasThinking(rec.message?.content)) {
-      const mid = typeof rec.message?.id === "string" ? rec.message.id : null
-      if (mid !== thinkingMsgId) {
-        thinkingMsgId = mid
-        if (thisTs && prevTs) {
-          const gap = Date.parse(thisTs) - Date.parse(prevTs)
-          if (Number.isFinite(gap) && gap >= THINK_MIN_MS) {
-            out.push({ sourceId, role: "assistant", kind: "event", text: `${THOUGHT_EVENT_PREFIX}${fmtThinkDur(gap)}`, tools: [], parts: [], at: thisTs })
-            lastAssistantId = null
-          }
-        }
-      }
-    }
-    // Advance the substantive clock (assistant/user records bound a thinking window; sidecar and
-    // notification records do not).
-    if (thisTs && (rec.type === "assistant" || rec.type === "user")) prevTs = thisTs
 
     // CONTEXT COMPACTION — everything above this line left the agent's context. Claude writes the
     // boundary as its own system record and hands us the exact token bracket; the ~20 000-character
@@ -570,7 +552,6 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
           out.push({ sourceId, role: "user", text: prompt, ...deliveredProjection, tools: [], parts: [], at: thisTs })
         }
         deliveredDedupe = prompt
-        if (thisTs) prevTs = thisTs // a delivered human turn is substantive — it bounds the next thinking window
         lastAssistantId = null // …and breaks the assistant-record merge chain, like any user message
       }
       // A PEER delivery — an UPWARD `SendMessage({to:"main"})` from a background sub-agent. It is not a
@@ -614,7 +595,6 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
           // session), which is strictly what it rendered before.
           const described = dispatchId ? dispatchLabels.get(dispatchId) : undefined
           if (described && entry.message.peerFrom) entry.message.peerFrom = described
-          if (thisTs) prevTs = thisTs // a child's report is a real turn, exactly like a human follow-up
           lastAssistantId = null // …so it breaks the assistant-record merge chain too
         } else {
           // ATTACHMENT-ONLY: the enqueue scrolled out of the render window, or an older session never
@@ -643,7 +623,6 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
               parts: [],
               at: thisTs,
             })
-            if (thisTs) prevTs = thisTs
             lastAssistantId = null
           }
         }
@@ -752,8 +731,8 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         if (isClaudeAuthErrorText(errText)) return
       }
       const id = typeof msg.id === "string" ? msg.id : null
-      // Never merge into an EVENT line (a "Thought for Ns" emitted from this same turn's thinking
-      // record sits at the tail with role:"assistant") — an event is punctuation, not a message body.
+      // Never merge into an EVENT line (a compaction note or an "Agent … finished" line sits at the tail
+      // with role:"assistant") — an event is punctuation, not a message body.
       const tail = out.length > 0 ? out[out.length - 1] : undefined
       const target =
         id !== null && id === lastAssistantId && tail && tail.role === "assistant" && tail.kind === undefined
@@ -969,20 +948,6 @@ const SEND_BODY_CAP = 4000
 function capSendBody(s: string): string {
   const safe = redactToolPayload(s)
   return safe.length > SEND_BODY_CAP ? safe.slice(0, SEND_BODY_CAP) + TRUNC_MARKER : safe
-}
-
-// A thinking window shorter than this doesn't earn an event line (routine sub-20s pauses are noise);
-// ~20s catches the genuinely long "the model sat and thought" moments the maintainer wants surfaced.
-const THINK_MIN_MS = 20_000
-// True when an assistant record carries a (redacted) thinking block — the "the model thought" signal.
-function hasThinking(content: unknown): boolean {
-  return Array.isArray(content) && content.some((b) => b && typeof b === "object" && (b as { type?: string }).type === "thinking")
-}
-// Coarse seconds-granularity duration for a thinking window: "42s", "1m 20s".
-function fmtThinkDur(ms: number): string {
-  const secs = Math.round(ms / 1000)
-  if (secs < 60) return `${secs}s`
-  return `${Math.floor(secs / 60)}m ${secs % 60}s`
 }
 
 // EVERY Bash call ships its `command` so the client renders it as a collapsed BashBlock card (the
@@ -1968,9 +1933,11 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
   // that follows, so a batch is captioned once rather than repeating the same line down the batch.
   let pendingCaption: string | undefined
   // Timestamp of the PREVIOUS event (any kind), so each reasoning step's THINKING time is its gap from
-  // the event before it. Summed onto the turn's reasoning block as durationMs → the "Thought for Ns"
-  // label. Tool-EXECUTION time never lands here: it's the gap on a function_call_output, not on a
-  // reasoning record, so it's excluded. The large idle between turns sits on a turn-start, also excluded.
+  // the event before it. Summed onto the turn's reasoning block as durationMs — a measurement nothing
+  // renders any more (see TranscriptMessage.durationMs), kept because it costs nothing and is the only
+  // place the number exists. Tool-EXECUTION time never lands here: it's the gap on a function_call_output,
+  // not on a reasoning record, so it's excluded. The large idle between turns sits on a turn-start, also
+  // excluded.
   let prevEventAt: string | undefined
   // Context-compaction bracket. Codex records the event but measures nothing, so the size of the loss
   // comes from the token_count readings on either side: `lastContextTokens` is the newest reading seen,

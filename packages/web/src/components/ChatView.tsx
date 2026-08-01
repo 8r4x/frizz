@@ -1527,8 +1527,8 @@ export const STEP = 14
 // bordered block with its own inset, so 6px of clear space between two borders already reads as a
 // separation — which is why a burst of tool calls can sit this close without turning to mush.
 //
-// It was never for two bare LABEL rows — `Ran N tool calls`, `Thought for Ns`, a collapsed reasoning
-// row, the live shimmer. A label has no border and no inset, so the gap is the ONLY separation there is,
+// It was never for two bare LABEL rows — `Ran N tool calls`, a collapsed `Reasoning` row, the live
+// shimmer. A label has no border and no inset, so the gap is the ONLY separation there is,
 // and two labels are not one batch: they are two separate statements. Those take the ordinary STEP (see
 // messageGap). At 6px they sat 26px apart — the rows are 14px/20px and assistant prose is 14px/1.7 =
 // 23.8px — so three stacked read as one wrapped paragraph of grey rather than as three lines (maintainer
@@ -1584,8 +1584,8 @@ export function messageTailIsTool(m: ChatMessage): boolean {
 export function messageHeadIsTool(m: ChatMessage): boolean {
   return messageHeadTools(m) !== null
 }
-// A lightweight single-line META label — a "Thought for Ns"/"Agent … finished" event or collapsed
-// Codex reasoning row. Thoughts and the minimal tool disclosure share one regular light-grey treatment
+// A lightweight single-line META label — an "Agent … finished"/compaction event or a collapsed Codex
+// reasoning row. Thoughts and the minimal tool disclosure share one regular light-grey treatment
 // (TRANSCRIPT_META_LABEL_CLASS); all remain subordinate transcript activity and therefore join the tight
 // run instead of forcing a full STEP break on both sides. A BOUNDARY event is a section-break divider,
 // not a quiet label.
@@ -1649,7 +1649,7 @@ export function VSpace({ h = STEP }: { h?: number }) {
 }
 
 // The leading gap for the shimmer that tails a live transcript. The shimmer is a quiet single-line row
-// — the LIVE continuation of the very meta column that "Thought for Ns" and the tool bands form above
+// — the LIVE continuation of the very meta column that the reasoning rows and tool bands form above
 // it — so it joins their tight run rather than breaking to STEP whenever the last rendered message ends
 // in a CARD. (Maintainer 2026-07-31: "there's more space above the working shimmer than there is below
 // the 'Thought for 37 seconds'" — the shimmer sat at STEP under a pair of agent cards that were
@@ -1792,11 +1792,6 @@ export interface CollapsedTool {
   // like the prompt/read/command entries, stands alone — two consecutive lists are two different list
   // states and must never fold into a ×2 count.
   todos?: TranscriptTodo[]
-  // Set for a "Thought for Ns" line the coalescer folded INTO this activity run (see
-  // lib/toolActivity.thoughtActivityEntry). It is not a call: it never counts toward the disclosure's
-  // `Ran N tool calls`, and it renders as the same quiet meta row EventLine draws — just inside the
-  // expansion, at the point in the run where the model actually stopped to think.
-  thought?: string
   count: number
 }
 
@@ -1809,11 +1804,7 @@ function collapseTools(tools: TranscriptMessage["tools"]): CollapsedTool[] {
   const out: CollapsedTool[] = []
   for (const t of tools) {
     const last = out[out.length - 1]
-    if (t.thought !== undefined) {
-      // Folded-in thinking stands alone: two identical "Thought for 24s" lines are two separate pauses
-      // and must never read as one ×2 row.
-      out.push({ name: t.name, thought: t.thought, count: 1 })
-    } else if (t.edit) {
+    if (t.edit) {
       const hasResultContext = Boolean(t.input || t.output || t.status || t.exitCode !== undefined)
       if (last && last.edits && !hasResultContext && !last.input && !last.output && !last.status && last.edits[0].file === t.edit.file) last.edits.push(t.edit)
       else out.push({ name: t.name, detail: t.detail, edits: [t.edit], input: t.input, output: t.output, status: t.status, backgroundState: t.backgroundState, exitCode: t.exitCode, cwd: t.cwd, sessionId: t.sessionId, durationMs: t.durationMs, count: 1 })
@@ -1886,19 +1877,8 @@ function shortenTarget(detail: string): string {
 function MinimalToolActivity({ tools, at }: { tools: CollapsedTool[]; at?: string }) {
   const [expanded, setExpanded] = useState(false)
   const cardsId = useId()
-  // Folded-in thinking rides in `tools` but is not a call — it must not inflate `Ran N tool calls`.
-  const total = tools.reduce((n, t) => (t.thought === undefined ? n + t.count : n), 0)
+  const total = tools.reduce((n, t) => n + t.count, 0)
   const label = settledToolActivityLabel(total, editedFileCount(tools))
-  // A run whose only member is a thought has no disclosure to hide behind — the live tool tail is
-  // withheld during a running turn (historicalToolActivityMessages), which can empty a run down to the
-  // thought it absorbed. Render it as the plain meta row it was before the fold, not as `Ran 0`.
-  if (total === 0) {
-    return (
-      <div className="flex flex-col">
-        {withSpacers(tools.map((tool, i) => <ToolCardRouter key={i} t={tool} startedAt={at} />), 6)}
-      </div>
-    )
-  }
   return (
     <div data-tool-activity data-tool-activity-state="settled" className="flex min-w-0 flex-col">
       <button
@@ -1909,7 +1889,7 @@ function MinimalToolActivity({ tools, at }: { tools: CollapsedTool[]; at?: strin
         aria-expanded={expanded}
         aria-label={`${expanded ? "Collapse" : "Expand"} ${total} tool ${total === 1 ? "call" : "calls"}: ${label}`}
         // Shares TRANSCRIPT_META_LABEL_CLASS rather than restating its type scale — this row and
-        // "Thought for Ns" alternate in one column, and the two drifted apart while the size was
+        // the reasoning label alternate in one column, and the two drifted apart while the size was
         // copied here by hand.
         className={`group flex w-full min-w-0 items-center gap-1 rounded py-0.5 text-left outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 ${TRANSCRIPT_META_LABEL_CLASS}`}
       >
@@ -1967,9 +1947,6 @@ export function ToolCardRouter({ t, startedAt }: { t: CollapsedTool; startedAt?:
   const board = useBoard()
   const thread = slug ? threadBySlug(board, slug) : undefined
   const liveBackgroundState = liveBackgroundOperationState(t, thread?.bgShells ?? [])
-  // Thinking the coalescer folded into this run — the same quiet meta line EventLine draws, rendered
-  // at the point in the expansion where the model actually stopped to think.
-  if (t.thought !== undefined) return <div className={TRANSCRIPT_META_LABEL_CLASS}>{t.thought}</div>
   if (t.edits && t.status !== "failed" && t.status !== "cancelled") {
     return <DiffBlock edits={t.edits} meta={<ToolStatusMeta status={t.status} backgroundState={t.backgroundState} liveBackgroundState={liveBackgroundState} exitCode={t.exitCode} durationMs={t.durationMs} />} />
   }
@@ -3003,7 +2980,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
   if (m.kind === "event") return <EventLine text={m.text} boundary={m.boundary} sourceId={m.sourceId} />
   // A model-reasoning summary (Codex) — quiet punctuation like an event line, but CLICKABLE to expand
   // the full reasoning. Rendered before the role branches (its role field is nominal, like an event).
-  if (m.kind === "reasoning") return <ReasoningBlock text={m.text} durationMs={m.durationMs} sourceId={m.sourceId} />
+  if (m.kind === "reasoning") return <ReasoningBlock text={m.text} sourceId={m.sourceId} />
   // A SUB-AGENT COMPLETION — the same class of event as the background-shell wake above, so it takes
   // the same divider (see AgentCompletionLine). Routed here, before the tool-band walk, so the marker
   // copy never renders as a second AgentBlock card. Ahead of `textOnly` for the same reason the event
@@ -4068,9 +4045,9 @@ function SendMessageLine({ to, type, dispatchId, targetLabel, sourceId }: { to?:
   )
 }
 
-// A quiet transcript annotation ("Thought for Ns"), or — with `boundary` — the wake divider a
-// background task/shell completion emits. Muted ~12px, no bubble, no icon chrome, sitting at the same
-// message rhythm as everything around it.
+// A quiet transcript annotation (a context-compaction note, an "Agent … finished" line), or — with
+// `boundary` — the wake divider a background task/shell completion emits. Muted, no bubble, no icon
+// chrome, sitting at the same message rhythm as everything around it.
 function EventLine({ text, boundary, sourceId }: { text: string; boundary?: TranscriptMessage["boundary"]; sourceId?: string }) {
   // A turn BOUNDARY: a centered divider rule carrying the cause label ON it, so two consecutive
   // assistant turns don't read as one bubble. This IS the section break the plain event line
@@ -4088,9 +4065,9 @@ function EventLine({ text, boundary, sourceId }: { text: string; boundary?: Tran
       </WakeDivider>
     )
   }
-  // Transcript PUNCTUATION ("Thought for Ns", a context-compaction note) — a quiet, left-justified
-  // regular light-grey line. No flanking dividers: it reads as a subtle annotation, not a section
-  // break, and uses the same type scale as the adjacent activity gerund/digest.
+  // Transcript PUNCTUATION (a context-compaction note) — a quiet, left-justified regular light-grey
+  // line. No flanking dividers: it reads as a subtle annotation, not a section break, and uses the same
+  // type scale as the adjacent activity gerund/digest.
   return (
     <div data-fray-msg={sourceId} className={`group/msg relative ${TRANSCRIPT_META_LABEL_CLASS}`}>
       <MessageDebugId sourceId={sourceId} />
@@ -4100,23 +4077,21 @@ function EventLine({ text, boundary, sourceId }: { text: string; boundary?: Tran
 }
 
 // A Codex model-reasoning SUMMARY — the coalesced `summary[]` steps of a turn's reasoning records
-// (Claude's thinking is redacted at every seam, so this is Codex-only). A peer of the "Thought for Ns"
-// transcript-metadata label: same regular light-grey line (TRANSCRIPT_META_LABEL_CLASS),
-// content-width, chevron flush-right of the label — so the quiet progress rows read as one family.
-// Collapsed shows just the "reasoning" label; the
+// (Claude's thinking is redacted at every seam, so this is Codex-only). Same regular light-grey line as
+// the tool digest beside it (TRANSCRIPT_META_LABEL_CLASS), content-width, chevron flush-right of the
+// label — so the quiet progress rows read as one family. Collapsed shows just the "Reasoning" label; the
 // whole row toggles to reveal the train of thought as muted markdown in a ruled block. The `.fray-reasoning`
 // rule below quiets that body (12px/muted, and de-bolds codex's `**step header**` fragments) so an
 // expanded turn reads as a soft aside, never a wall of bold headers competing with the real answer.
-function ReasoningBlock({ text, durationMs, sourceId }: { text: string; durationMs?: number; sourceId?: string }) {
+//
+// The label names the CONTENT, not a duration. It used to read "Thought for N seconds", which made every
+// codex turn leave behind a permanent row whose only payload was how long the model paused — the live
+// shimmer already says `Thinking…` while that is happening, and afterwards it is not a fact worth a row
+// (maintainer 2026-08-01: "it should never show up persistently like that"). The server still measures
+// `durationMs`; nothing renders it.
+function ReasoningBlock({ text, sourceId }: { text: string; sourceId?: string }) {
   const [open, setOpen] = useState(false)
   const bodyId = useId()
-  // "Thought for N seconds" — the wall-clock the model spent thinking this turn (server-derived from the
-  // per-step reasoning gaps, tool time excluded). Sub-minute reads in whole seconds; a longer turn folds
-  // into "Nm Ms" so a multi-minute think doesn't render as a giant second count. No timing → bare "Thought".
-  const label =
-    durationMs != null && durationMs > 0
-      ? `Thought for ${durationMs < 60_000 ? `${Math.max(1, Math.round(durationMs / 1000))} seconds` : `${Math.floor(durationMs / 60_000)}m ${Math.round((durationMs % 60_000) / 1000)}s`}`
-      : "Thought"
   return (
     <div data-fray-msg={sourceId} className="group/msg relative flex flex-col">
       <MessageDebugId sourceId={sourceId} />
@@ -4129,7 +4104,7 @@ function ReasoningBlock({ text, durationMs, sourceId }: { text: string; duration
         aria-label={`${open ? "Collapse" : "Expand"} model reasoning`}
         className={`${TRANSCRIPT_META_LABEL_CLASS} flex items-center gap-1 self-start rounded outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60`}
       >
-        <span>{label}</span>
+        <span>Reasoning</span>
         {/* Lucide's chevron ink sits 1.15px below the 13px label's cap-band centre. The same
             -0.088em correction used by the peer tool-activity chevron leaves a ~0px residual. */}
         <ChevronRight aria-hidden="true" size={13} className={`size-[1em] shrink-0 -translate-y-[0.088em] transition-transform ${open ? "rotate-90" : ""}`} />
