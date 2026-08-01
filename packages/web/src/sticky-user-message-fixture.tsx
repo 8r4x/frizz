@@ -14,14 +14,14 @@ import "./styles.css"
 // and a max-height that gives a very tall ask its own internal scroll.
 //   ?surface=queue|drawer   which surface to render (default queue)
 //   ?size=short|tall        short one-line ask, or a very tall ask (exercise max-h + inner scroll)
-//   ?sticky=on|off  the client stickyUserMessage view pref (default on)
+//   ?sticky=on|off  the client stickyUserMessage view pref. Pinned ON by default HERE (the app's own
+//                   default is off) — this fixture exists to QA the pinned band, so it must show one.
 const params = new URLSearchParams(location.search)
 const surfaceParam = params.get("surface")
 const surface = surfaceParam === "drawer" ? "drawer" : surfaceParam === "fence" ? "fence" : surfaceParam === "sentfiles" ? "sentfiles" : "queue"
 const sizeParam = params.get("size")
 const size = sizeParam === "tall" ? "tall" : sizeParam === "medium" ? "medium" : "short"
-const stickyParam = params.get("sticky")
-if (stickyParam === "on" || stickyParam === "off") prefs.stickyUserMessage = stickyParam === "on"
+prefs.stickyUserMessage = params.get("sticky") !== "off"
 
 const SLUG = "sticky-demo"
 

@@ -30,7 +30,10 @@ import "./styles.css"
 const params = new URLSearchParams(location.search)
 const SEEDED = Number(params.get("messages") ?? 340)
 const CAP = 300
-if (params.get("sticky") === "off") prefs.stickyUserMessage = false
+// ?sticky=on|off — the stickyUserMessage view pref; unset leaves the app default (off), and `on`
+// is how this fixture still exercises the hoisted pinned band across a window slide.
+const stickyParam = params.get("sticky")
+if (stickyParam === "on" || stickyParam === "off") prefs.stickyUserMessage = stickyParam === "on"
 
 const SLUG = "window-slide-demo"
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })

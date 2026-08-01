@@ -24,7 +24,8 @@ export interface Prefs {
   // A custom date is deliberately one-off and never overwrites this reusable preset.
   snoozePreset: SnoozePreset
   // Whether the most-recent user message sticks to the top of a thread's scroll pane (ChatView + queue
-  // card) as a collapsed, hover-to-expand bubble. On by default.
+  // card) as a collapsed, hover-to-expand bubble. OFF by default — the ask reads best in its natural
+  // place in the flow; pinning it is the opt-in, from Settings.
   stickyUserMessage: boolean
   // Direction the Needs-you queue + the sidebar's rested band order by. FIFO (default) surfaces the
   // longest-waiting item first so the human cycles through everything; LIFO surfaces the most recently
@@ -36,12 +37,28 @@ function coerceQueueOrder(v: unknown, fallback: QueueDirection): QueueDirection 
   return v === "fifo" || v === "lifo" ? v : fallback
 }
 
+// One-time re-default markers. They ride along in the stored blob but never in `Prefs` (what
+// components read), and they are seeded into the fallback too — otherwise a browser starting FRESH
+// after a migration ships stores no marker, and the very next load would revert the deliberate
+// toggle that browser just made.
+interface RedefaultMarkers {
+  diffsRedefaulted?: boolean
+  stickyRedefaulted?: boolean
+}
+
 export function parseStoredPrefs(raw: string | null): Prefs {
-  // Compact diffs by DEFAULT — expanded diff bodies are the opt-in. Sticky user message ON by default.
-  const fallback: Prefs = { compactDiffs: true, snoozePreset: DEFAULT_SNOOZE_PRESET, stickyUserMessage: true, queueOrder: "fifo" }
+  // Compact diffs by DEFAULT — expanded diff bodies are the opt-in. Sticky user message OFF by default.
+  const fallback: Prefs & RedefaultMarkers = {
+    compactDiffs: true,
+    snoozePreset: DEFAULT_SNOOZE_PRESET,
+    stickyUserMessage: false,
+    queueOrder: "fifo",
+    diffsRedefaulted: true,
+    stickyRedefaulted: true,
+  }
   try {
     if (!raw) return fallback
-    const stored = JSON.parse(raw) as Partial<Prefs> & { diffsRedefaulted?: boolean }
+    const stored = JSON.parse(raw) as Partial<Prefs> & RedefaultMarkers
     // ONE-TIME migration (2026-07-09): the maintainer settled diffs as collapsed-by-default for
     // card-family consistency. A stored `compactDiffs: false` predating that decision was the OLD
     // default, not a choice — re-default it once. The marker makes a subsequent deliberate
@@ -49,6 +66,15 @@ export function parseStoredPrefs(raw: string | null): Prefs {
     if (!stored.diffsRedefaulted) {
       stored.compactDiffs = true
       stored.diffsRedefaulted = true
+    }
+    // ONE-TIME migration (2026-08-01): sticky user messages are no longer the default. Every browser
+    // that has touched this app already has `stickyUserMessage: true` persisted from the OLD default
+    // (the whole blob is rewritten on any pref change), so a fallback flip alone would change nothing
+    // for anyone — that stored `true` was the old default, not a choice. Re-default it once; the
+    // marker makes a subsequent deliberate Settings-toggle ON stick forever.
+    if (!stored.stickyRedefaulted) {
+      stored.stickyUserMessage = false
+      stored.stickyRedefaulted = true
     }
     return {
       ...fallback,

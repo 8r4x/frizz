@@ -90,17 +90,17 @@ try {
   }
   const settle = (ms) => new Promise((r) => setTimeout(r, ms))
   // Scope every assertion to ONE surface: the same slug can be mounted in the thread chat AND a queue
-  // card at once (they share the query cache). Within the chat, the most recent LANDED user message is
-  // ALSO rendered as a sticky pinned band, so it legitimately appears twice — collapse by text and
-  // count only the natural-flow copies, or a delivered message reads as a duplicate.
+  // card at once (they share the query cache), so a delivered message would otherwise read as a
+  // duplicate. Collapse by text within the chat surface alone.
   const bubbles = async () => {
     const all = (await page.evaluate(BUBBLES)).filter((b) => b.surface === "chat")
     const byText = new Map()
     for (const b of all) {
       const entry = byText.get(b.text) ?? { text: b.text, opacity: 1, copies: 0 }
       entry.opacity = Math.min(entry.opacity, b.opacity)
-      // The most recent LANDED user message is rendered ONLY as the sticky band (not in the flow), so
-      // count sticky and flow copies alike — "exactly one" means one bubble on screen, wherever it sits.
+      // The most recent LANDED user message renders in ONE place — the natural flow, or (with the
+      // opt-in `stickyUserMessage` pref on) the pinned band instead. Count sticky and flow copies
+      // alike: "exactly one" means one bubble on screen, wherever it sits.
       entry.copies++
       byText.set(b.text, entry)
     }

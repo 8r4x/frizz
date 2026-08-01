@@ -15,7 +15,7 @@ import "./styles.css"
 // `qc.setQueryData(["transcript", slug])` path the live socket push uses (api/socket.ts), so the render
 // → measure → scroll sequence under test is production's.
 //   ?surface=page|drawer   full-pane standalone (default) or the 460x640 drawer box
-//   ?sticky=on|off         the stickyUserMessage view pref (default on)
+//   ?sticky=on|off         the stickyUserMessage view pref (unset → the app default, which is off)
 const params = new URLSearchParams(location.search)
 const surface = params.get("surface") === "drawer" ? "drawer" : "page"
 const stickyParam = params.get("sticky")
