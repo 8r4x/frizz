@@ -8,6 +8,7 @@ import {
   ensureNativeHelperPermissions,
   MINIMUM_NODE,
   providerReadiness,
+  supportedNodeRange,
 } from "./preflight.ts";
 
 /** A node-pty layout whose spawn-helper carries `mode`, plus the chmod calls the repair makes. */
@@ -32,7 +33,7 @@ function ptyInstall(mode: number, platform: NodeJS.Platform = "darwin") {
 
 test("core launch preflight accepts a supported Node host with git and tmux", () => {
   assert.doesNotThrow(() =>
-    assertLaunchPrerequisites({ nodeVersion: "22.12.0", command: () => true })
+    assertLaunchPrerequisites({ nodeVersion: "22.14.0", command: () => true })
   );
 });
 
@@ -45,27 +46,27 @@ test("core launch preflight accepts newer Node majors", () => {
 test("core launch preflight rejects a Node host below the dependency floor", () => {
   assert.throws(
     () => assertLaunchPrerequisites({ nodeVersion: "18.20.0", command: () => true }),
-    /Node\.js 22\.12 or newer is required \(found 18\.20\.0\)/
+    /Node\.js \^22\.14\.0 \|\| >=23\.6\.0 is required \(found 18\.20\.0\)/
   );
 });
 
 test("core launch preflight rejects Node 20, which better-sqlite3 ^13 no longer supports", () => {
   assert.throws(
     () => assertLaunchPrerequisites({ nodeVersion: "20.19.0", command: () => true }),
-    /Node\.js 22\.12 or newer is required \(found 20\.19\.0\)/
+    /Node\.js \^22\.14\.0 \|\| >=23\.6\.0 is required \(found 20\.19\.0\)/
   );
 });
 
 test("core launch preflight rejects an old 22.x minor below the floor", () => {
   assert.throws(
     () => assertLaunchPrerequisites({ nodeVersion: "22.11.0", command: () => true }),
-    /Node\.js 22\.12 or newer is required \(found 22\.11\.0\)/
+    /Node\.js \^22\.14\.0 \|\| >=23\.6\.0 is required \(found 22\.11\.0\)/
   );
 });
 
 test("core launch preflight gives an actionable error for a missing executable", () => {
   assert.throws(
-    () => assertLaunchPrerequisites({ nodeVersion: "22.12.0", command: (name) => name !== "tmux" }),
+    () => assertLaunchPrerequisites({ nodeVersion: "22.14.0", command: (name) => name !== "tmux" }),
     /required executable `tmux` is not available on PATH; Fray uses tmux for its terminal panes and interactive provider logins\. Install tmux \(`brew install tmux` on macOS, `apt install tmux` on Debian\/Ubuntu\) and relaunch Fray/
   );
 });
@@ -91,22 +92,45 @@ test("the eager executable probe leaves the Node floor to the full prerequisite 
   assert.doesNotThrow(() => assertRequiredExecutables(() => true));
   assert.throws(
     () => assertLaunchPrerequisites({ nodeVersion: "20.19.0", command: () => true }),
-    /Node\.js 22\.12 or newer is required/
+    /Node\.js \^22\.14\.0 \|\| >=23\.6\.0 is required/
   );
 });
 
-// The floor users are TOLD about and the floor Fray enforces must be the same number. They drifted
-// once — `engines` said `>=26` while `assertLaunchPrerequisites` accepted 22.12 — so every install on
-// Node 22-25 got an EBADENGINE warning about a requirement that did not exist.
+// The floor users are TOLD about and the floor Fray enforces must be the same. They have drifted
+// twice, in opposite directions: `>=26` against an enforced 22.12 (EBADENGINE about a floor nothing
+// checked), then `>=22.12.0` against a runtime that segfaults there.
 test("the published engines floor is exactly the floor the launcher enforces", () => {
   const manifest = JSON.parse(
     readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8")
   ) as { engines?: { node?: string } };
   assert.equal(
     manifest.engines?.node,
-    `>=${MINIMUM_NODE.major}.${MINIMUM_NODE.minor}.0`,
-    "package.json engines.node must mirror MINIMUM_NODE"
+    supportedNodeRange(),
+    "package.json engines.node must mirror SUPPORTED_NODE_LINES"
   );
+});
+
+// Measured, not derived: `new Database(":memory:")` from the real published tarball segfaults on
+// 22.0-22.13 and 23.0-23.5 and works from 22.14 and 23.6 up. Bisected over 38 installed Node releases
+// against ONE install directory, so the Node binary was the only variable. A plain `>=22.14` floor
+// would still advertise 23.0-23.5, where Fray dies before the board boots.
+test("the Node floor tracks the versions better-sqlite3 was measured to survive", () => {
+  for (const version of ["22.14.0", "22.23.1", "23.6.0", "23.11.0", "24.17.0", "25.9.0", "26.5.0"]) {
+    assert.doesNotThrow(
+      () => assertLaunchPrerequisites({ nodeVersion: version, command: () => true }),
+      `${version} was measured to work`
+    );
+  }
+  for (const version of ["20.11.0", "21.7.0", "22.0.0", "22.12.0", "22.13.0", "23.0.0", "23.5.0"]) {
+    assert.throws(
+      () => assertLaunchPrerequisites({ nodeVersion: version, command: () => true }),
+      /is required/,
+      `${version} segfaults and must be refused`
+    );
+  }
+  assert.equal(supportedNodeRange(), "^22.14.0 || >=23.6.0");
+  // MINIMUM_NODE stays the lowest supported release, for callers that want a single number.
+  assert.deepEqual({ ...MINIMUM_NODE }, { major: 22, minor: 14 });
 });
 
 test("provider readiness disables only the unavailable backend and never requires gh", () => {
@@ -119,7 +143,7 @@ test("provider readiness disables only the unavailable backend and never require
   assert.deepEqual(seen, ["claude", "codex"]);
   assert.doesNotThrow(() =>
     assertLaunchPrerequisites({
-      nodeVersion: "22.12.0",
+      nodeVersion: "22.14.0",
       command: (name) => name === "git" || name === "tmux",
     })
   );

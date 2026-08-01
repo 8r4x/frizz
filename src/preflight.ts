@@ -13,21 +13,51 @@ export interface LaunchPrerequisiteOptions {
 }
 
 /**
- * The lowest Node the runtime dependencies actually support, derived (not guessed) from what the
- * launch chain loads and runs:
- *   - the artifact build runs Vite ^8 on the user's own machine, engines `^20.19.0 || >=22.12.0`;
- *   - the runtime links better-sqlite3 ^13, engines `>=22` (v13 moved to the N-API and dropped 20);
- *   - the runtime uses `import.meta.dirname`, available since Node 20.11.
- * better-sqlite3 rules out Vite's 20.19 branch, so 22.12 is the tightest of these. Revisit this
- * constant when those dependency floors move.
+ * The Node releases Fray actually runs on, MEASURED rather than derived from dependency manifests.
  *
- * `package.json`'s `engines.node` MIRRORS this constant, and a test asserts they stay equal. They had
- * drifted — engines said `>=26`, inherited from the source workflow, where Node runs the TypeScript
- * directly — so `npx frayui` warned `EBADENGINE` at every user on Node 22-25 about a floor nothing
- * enforced. The published package ships COMPILED JS (a dependency under node_modules cannot be type
- * stripped), so the source workflow's Node is not the consumer's Node.
+ * The derivation says 22.12: Vite ^8 wants `^20.19.0 || >=22.12.0`, better-sqlite3 ^13 says `>=22`,
+ * and `import.meta.dirname` needs 20.11. Every one of those is a manifest claim, and on this platform
+ * the manifests are wrong. Installing the real published tarball and constructing a single database —
+ * `new Database(":memory:")` — SEGFAULTS (exit 139) on 22.0 through 22.13 and on 23.0 through 23.5,
+ * and succeeds from 22.14 and 23.6 onward. Bisected across 38 installed Node releases against ONE
+ * install directory, so the Node binary was the only variable; better-sqlite3 13.0.2 ships a single
+ * N-API prebuild per platform, so the same bytes crash on one Node and work on the next.
+ *
+ * Hence a floor PER RELEASE LINE instead of one number: `>=22.14` alone would still advertise 23.0-23.5,
+ * where Fray dies before the board ever boots. Anything newer than the highest line listed is assumed
+ * good — 24, 25 and 26 were all verified clean.
+ *
+ * `package.json`'s `engines.node` mirrors this table and a test asserts they stay equal. They have
+ * drifted twice now, in both directions: first `>=26` against an enforced 22.12 (an EBADENGINE warning
+ * about a floor nothing checked), then `>=22.12.0` against a runtime that segfaults there. The
+ * published package ships COMPILED JS, so the source workflow's Node is never the consumer's Node.
  */
-export const MINIMUM_NODE = { major: 22, minor: 12 } as const;
+export const SUPPORTED_NODE_LINES = [
+  { major: 22, minor: 14 },
+  { major: 23, minor: 6 },
+] as const;
+
+/** The lowest release overall, for the message and for anything that just wants one number. */
+export const MINIMUM_NODE = SUPPORTED_NODE_LINES[0];
+
+/** The `engines.node` range this table describes, so the manifest is never hand-maintained. */
+export function supportedNodeRange(): string {
+  const highest = SUPPORTED_NODE_LINES[SUPPORTED_NODE_LINES.length - 1]!;
+  return SUPPORTED_NODE_LINES.map((line) =>
+    line === highest
+      ? `>=${line.major}.${line.minor}.0`
+      : `^${line.major}.${line.minor}.0`
+  ).join(" || ");
+}
+
+/** Is this Node one Fray is known to run on? See SUPPORTED_NODE_LINES for how "known" was decided. */
+export function nodeVersionIsSupported(major: number, minor: number): boolean {
+  if (!Number.isSafeInteger(major) || !Number.isSafeInteger(minor)) return false;
+  const line = SUPPORTED_NODE_LINES.find((entry) => entry.major === major);
+  if (line) return minor >= line.minor;
+  // Below every line we know about, or between two of them, is unsupported; above them all is fine.
+  return major > SUPPORTED_NODE_LINES[SUPPORTED_NODE_LINES.length - 1]!.major;
+}
 
 export interface ProviderReadiness {
   claude: boolean;
@@ -84,16 +114,11 @@ export function assertLaunchPrerequisites(
 ): void {
   const version = options.nodeVersion ?? process.versions.node;
   const [major, minor] = version.split(".").map(Number);
-  if (
-    !Number.isSafeInteger(major) ||
-    !Number.isSafeInteger(minor) ||
-    major < MINIMUM_NODE.major ||
-    (major === MINIMUM_NODE.major && minor < MINIMUM_NODE.minor)
-  )
+  if (!nodeVersionIsSupported(major!, minor!))
     throw new Error(
-      `Node.js ${MINIMUM_NODE.major}.${MINIMUM_NODE.minor} or newer is required (found ${version}); ` +
-        `Fray's build (Vite) and native modules (better-sqlite3) do not support older Node. ` +
-        `Install a newer Node release and relaunch Fray`
+      `Node.js ${supportedNodeRange()} is required (found ${version}); ` +
+        `better-sqlite3 segfaults on older releases in each line, so Fray would crash on boot rather ` +
+        `than misbehave. Install a newer Node release and relaunch Fray`
     );
   assertRequiredExecutables(options.command ?? commandIsAvailable);
 }
