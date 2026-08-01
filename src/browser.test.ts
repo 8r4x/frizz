@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import {
+  bundleNameMatchesManifest,
   defaultBrowserOpenCommand,
   launchBrowserTab,
 } from "./browser.ts"
@@ -72,4 +73,21 @@ test("non-macOS launch waits for the platform URL handler before reporting succe
     },
   })
   assert.equal(completed, true)
+})
+
+test("a Chrome-disambiguated shim bundle is the same app, not a stale one", () => {
+  // Chrome appends " 1", " 2", … when the bundle filename already exists, and that is the COMMON
+  // case: manifestIdFor is origin-scoped, so every project's port installs its own bundle. Rejecting
+  // the suffix made every project after the first reinstall its shim on each --app launch, which is
+  // how a real machine ended up with Fray.app, Fray 1.app, Fray 2.app and Fray 3.app.
+  assert.equal(bundleNameMatchesManifest("Fray"), true)
+  assert.equal(bundleNameMatchesManifest("Fray 1"), true)
+  assert.equal(bundleNameMatchesManifest("Fray 42"), true)
+
+  // A genuine rename must still read as stale so the bundle gets reinstalled under the new name.
+  assert.equal(bundleNameMatchesManifest("Frayed"), false)
+  assert.equal(bundleNameMatchesManifest("Fray Board"), false)
+  assert.equal(bundleNameMatchesManifest("Fray "), false)
+  assert.equal(bundleNameMatchesManifest("Fray 1x"), false)
+  assert.equal(bundleNameMatchesManifest(""), false)
 })

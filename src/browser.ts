@@ -250,11 +250,16 @@ export async function launchApp(
 //  · Chrome's generated app id is NOT reproducible as crx-id(SHA-256(start_url)) (tried; mismatch),
 //    so we never compute ids — the shim's Info.plist (CrAppModeShortcutURL / CrAppModeUserDataDir /
 //    CrAppModeShortcutID) is the source of truth for detection.
-//  · Bundle NAME: the .app filename and CFBundleName are both the manifest `name` verbatim
-//    (verified: name "Fray" → Fray.app, CFBundleName "Fray"). EXPECTED_BUNDLE_NAME must therefore
-//    track packages/web/public/manifest.webmanifest `name`. findAppShim matches on URL + data-dir
-//    (NOT name), so a bundle installed under an old name keeps launching under it forever — we
-//    treat a CFBundleName mismatch as a STALE shim and reinstall (self-heals a manifest rename).
+//  · Bundle NAME: the .app filename and CFBundleName are both the manifest `name` — but only for the
+//    FIRST bundle of that name. Chrome disambiguates a collision by appending " 1", " 2", … and
+//    collisions are routine here, since manifestIdFor is origin-scoped and every project runs on its
+//    own port (verified on a real machine: Fray.app/4917, Fray 1.app/4918, Fray 2.app/4920,
+//    Fray 3.app/4921). EXPECTED_BUNDLE_NAME must therefore track
+//    packages/web/public/manifest.webmanifest `name`, and the comparison must tolerate that numeric
+//    suffix — see bundleNameMatchesManifest. findAppShim matches on URL + data-dir (NOT name), so a
+//    bundle installed under an old name keeps launching under it forever; a name that is neither the
+//    manifest name nor one of its numbered siblings is a STALE shim and is reinstalled (self-heals a
+//    manifest rename).
 //  · SUCCESS SENTINEL: PWA.install and the standalone flip are two separate CDP calls; if install
 //    lands but the flip doesn't, the bundle exists in open-in-a-tab mode and would brand every
 //    window as Chrome forever (findAppShim would keep matching it). So after — and only after —
@@ -279,6 +284,27 @@ const CHROME_APPS_DIR = join(homedir(), "Applications", "Chrome Apps.localized")
 // manifest body — so KEEP THESE TWO IN LOCKSTEP: renaming the app means editing both, and the
 // mismatch drives the stale-shim reinstall that migrates an already-installed bundle to the new name.
 const EXPECTED_BUNDLE_NAME = "Fray"
+
+/**
+ * Does this bundle's CFBundleName belong to the CURRENT manifest name?
+ *
+ * Chrome DISAMBIGUATES a colliding bundle by appending " 1", " 2", … — and collisions are the norm
+ * here, not the exception, because `manifestIdFor` is scoped to the ORIGIN and every project gets its
+ * own port. So the second project to install a shim becomes "Fray 1", the third "Fray 2", and so on.
+ *
+ * A bare `=== EXPECTED_BUNDLE_NAME` therefore judged every project after the first permanently STALE:
+ * each `--app` launch uninstalled and reinstalled the shim, Chrome handed back the next number, and
+ * the bundle count grew without the Dock identity ever sticking. Observed on a real machine as
+ * Fray.app / Fray 1.app / Fray 2.app / Fray 3.app — four ports, four bundles, one working shim.
+ *
+ * Accepting the suffix costs nothing: findAppShim already matched this bundle on the AUTHORITATIVE
+ * pair (shortcut URL + user-data-dir), so the name is a rename check, not an identity check. A real
+ * manifest rename ("Fray" → something else) still fails this test and still heals by reinstalling.
+ */
+export function bundleNameMatchesManifest(bundleName: string): boolean {
+  if (bundleName === EXPECTED_BUNDLE_NAME) return true
+  return new RegExp(`^${EXPECTED_BUNDLE_NAME} \\d+$`).test(bundleName)
+}
 
 // The file that marks a shim install as fully completed (bundle generated AND flipped to standalone).
 const STANDALONE_SENTINEL = ".fray-pwa-standalone"
@@ -580,7 +606,7 @@ async function ensureAppShim(browserPath: string, url: string, dataPath: string)
     const existing = await findAppShim(url, dataPath)
     if (
       existing &&
-      existing.bundleName === EXPECTED_BUNDLE_NAME &&
+      bundleNameMatchesManifest(existing.bundleName) &&
       (await standaloneSentinelExists(dataPath))
     ) {
       await seedFirstRunState(dataPath) // heal profiles that predate the first-run seeding
