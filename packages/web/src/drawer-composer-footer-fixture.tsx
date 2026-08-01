@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
 import { useState } from "react"
 import type { BoardSnapshot, ThreadView } from "@fray-ui/shared"
@@ -5,6 +6,7 @@ import { BackgroundOpsStrip } from "./components/ChatView.tsx"
 import { Composer } from "./components/Composer.tsx"
 import { ProfileGridSelector } from "./components/ProfileGridSelector.tsx"
 import { ThreadLifecycleFooter } from "./components/ThreadLifecycleFooter.tsx"
+import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
 
@@ -109,4 +111,15 @@ function Fixture() {
   )
 }
 
-createRoot(document.getElementById("root")!).render(<Fixture />)
+// The same providers the real shell mounts above this footer. Without them the page threw "No
+// QueryClient set" out of RestartWorkerButton's `useQueryClient` before React committed anything, so
+// the fixture rendered an EMPTY body and its e2e died on `[data-thread-action-bar]` not existing —
+// a failure that reads as "the selector moved" rather than "the page never mounted". The strip has
+// needed a client since the restart verb joined it; the fixture predates that and was never updated.
+createRoot(document.getElementById("root")!).render(
+  <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+    <TooltipProvider>
+      <Fixture />
+    </TooltipProvider>
+  </QueryClientProvider>,
+)

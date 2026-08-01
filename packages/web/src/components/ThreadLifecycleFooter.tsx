@@ -11,6 +11,7 @@ import { SnoozeButton } from "./SnoozeButton.tsx"
 import { RestartWorkerButton } from "./RestartWorkerButton.tsx"
 import { ContextMeter } from "./ContextMeter.tsx"
 import { Tooltip } from "./Tooltip.tsx"
+import { BLOCK_RADIUS_INNER_BOTTOM } from "./TranscriptCard.tsx"
 import { Dialog } from "./ui/Dialog.tsx"
 
 // The sole home for whole-thread lifecycle controls. Queue cards render it at their natural bottom;
@@ -47,7 +48,11 @@ export function ThreadLifecycleFooter({
       // StateButton), so this is inert for them; it exists so the em-sized readouts on the left
       // inherit a scale from the strip they sit in instead of choosing one — the sizing discipline
       // ChildOpRow's duration reading landed on.
-      className={`${sticky ? "z-20" : "rounded-b-[7px]"} flex min-h-10 shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/70 bg-panel/95 px-3 pt-2 text-[12px] ${safeArea ? "pb-[max(0.5rem,env(safe-area-inset-bottom))]" : "pb-2"} backdrop-blur-sm`}
+      // Non-sticky ⇒ this strip IS the bottom of a queue card, laid flush inside the shell's 1px
+      // border, so it takes the shell's INNER corner (BLOCK_RADIUS_INNER_BOTTOM) — anything squarer
+      // paints out through the arc and erases the border there. The sticky variant sits at the bottom
+      // of a drawer whose own chrome carries the corners, so it stays square.
+      className={`${sticky ? "z-20" : BLOCK_RADIUS_INNER_BOTTOM} flex min-h-10 shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/70 bg-panel/95 px-3 pt-2 text-[12px] ${safeArea ? "pb-[max(0.5rem,env(safe-area-inset-bottom))]" : "pb-2"} backdrop-blur-sm`}
     >
       {/* Bottom-LEFT cluster: background readings and presence markers, held away from the lifecycle
           buttons by the one `mr-auto` on this group. Each child renders nothing when it has nothing to

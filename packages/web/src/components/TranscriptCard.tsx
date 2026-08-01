@@ -68,6 +68,21 @@ export const BLOCK_RADIUS = "rounded-xl"
 // The same corner on the TOP two only — for a shell whose bottom corners are carried by something
 // else (the queue card's sticky header, which must not round its own bottom edge against the body).
 export const BLOCK_RADIUS_TOP = "rounded-t-xl"
+// The BOTTOM two corners of a child laid FLUSH against the inside of a BLOCK_RADIUS shell's 1px
+// border — one pixel tighter, because the shell's PADDING box is what the child actually meets.
+//
+// A child that is squarer than that arc juts OUT through it, and since an in-flow child's background
+// paints after its parent's border, it erases the border exactly where the corner turns. That is what
+// the queue card's lifecycle footer did: it kept a literal `rounded-b-[7px]` from back when the shell
+// was 8px, so at 12px the left border ran down, dissolved through the bottom-left arc and picked back
+// up along the bottom edge — a notch on the corner of every cue card (maintainer 2026-08-01). The
+// footer's `backdrop-blur` widened it, smearing the border it was already covering.
+//
+// Written as calc() off the var rather than a second literal so the pair CANNOT drift again: change
+// `--block-radius` (and its `rounded-*` twin above) and the inner corner follows on its own.
+// (The `_` are Tailwind's escape for the spaces CSS `calc` requires around its `-`; without them the
+// declaration is a syntax error and the corner silently falls back to square.)
+export const BLOCK_RADIUS_INNER_BOTTOM = "rounded-b-[calc(var(--block-radius)_-_1px)]"
 
 export type CardTone = "neutral" | "attention" | "caution" | "danger"
 const CARD_TONES: Record<CardTone, { border: string; head: string }> = {
