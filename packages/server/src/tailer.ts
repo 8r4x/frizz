@@ -1861,6 +1861,12 @@ export interface Tailer {
   // `taskId` is the provider's session-wide background-task handle. Unlike `direct`, which controls
   // steer safety, it is available for descendants too and is what the SDK's stopTask accepts.
   subAgent(slug: string, id: string): SubAgentLookup | undefined
+  // The LIVE descendants of one sub-agent, deepest-first, as the `stopTask` handles that end them.
+  // A stop names one task, so ending a sub-agent's work means naming its whole subtree — see the
+  // implementation for the orphan-and-report-to-root failure this exists to close. Empty when the id
+  // has no live fan-out. Optional for the same reason `dismissOp` is: a narrow test stub need not
+  // have it, and a server without it degrades to the old stop-one-row behaviour.
+  subAgentDescendantTasks?(slug: string, id: string): string[]
   // Read-only background-shell drawer lookup. Output content stays server-side until the scoped query.
   backgroundShell?(slug: string, id: string): { command?: string; outputFile?: string; state: "running" | "done" } | undefined
   // Manual dismiss of a live background op (the × on an op row): retire it from tracking as if a
@@ -2516,6 +2522,62 @@ export function createTailer(deps: TailerDeps): Tailer {
   // Where the descendant's own transcript sits — the same flat dir, beside its sidecar.
   function descendantTranscript(state: TailState, meta: DescendantSidecar): string {
     return join(sessionDirOf(state), "subagents", `agent-${meta.agentId}.jsonl`)
+  }
+
+  // LIVE DESCENDANTS of one sub-agent, as the provider stop handles that end them.
+  //
+  // `stopTask` ends EXACTLY the task it names. The registry behind it is flat and session-wide, so a
+  // sub-agent's own fan-out holds registrations of its own that its parent's id does not cover:
+  // stopping the parent leaves every grandchild running, and — because that same flatness routes a
+  // completion to the SESSION's main loop rather than to whoever dispatched it — those orphans keep
+  // burning tokens and then deliver their reports into the ROOT thread, under an agent the operator
+  // watched die. Measured on nub session a0c5fba3 (2026-07-31): the × set `stoppedByUser` on
+  // `adabd4aeedf52ef6c`, whose transcript stops at 19:54:22, while its two live children — neither
+  // carrying `stoppedByUser` — went on writing until 19:56:09 and 19:56:44 and landed their results in
+  // the root transcript. So a stop that means "this work ends" has to name every task in the subtree.
+  //
+  // Keyed by the row's DISPATCH tool_use id, resolved through the same flat sidecar index the drawer
+  // uses; children link upward by the AGENT id their sidecar is named for, not by that dispatch id.
+  function subAgentDescendantTasks(slug: string, id: string): string[] {
+    const state = states.get(slug)
+    if (!state || !registeredStateIsCurrent(state)) return []
+    const all = descendantSidecars(state)
+    if (all.length === 0) return []
+    const rootAgentId = descendantSidecar(state, id)?.agentId
+    if (!rootAgentId) return [] // nothing on disk claims this dispatch — no subtree to reach
+    const byAgentId = new Map<string, DescendantSidecar>()
+    for (const meta of all) byAgentId.set(meta.agentId, meta)
+
+    // Hops from the root, or undefined when this sidecar does not descend from it. Bounded exactly
+    // like every other walk over `parentAgentId` here: the links come off an unvalidated flat
+    // directory, so a malformed or cyclic one must resolve to nothing rather than spin.
+    const depthBelowRoot = (meta: DescendantSidecar): number | undefined => {
+      let cur = meta
+      for (let hops = 1; hops <= DESCENDANT_DEPTH_MAX; hops++) {
+        if (!cur.parentAgentId) return undefined
+        if (cur.parentAgentId === rootAgentId) return hops
+        const next = byAgentId.get(cur.parentAgentId)
+        if (!next) return undefined
+        cur = next
+      }
+      return undefined
+    }
+
+    const found: Array<{ agentId: string; depth: number }> = []
+    for (const meta of all) {
+      if (meta.agentId === rootAgentId) continue
+      const depth = depthBelowRoot(meta)
+      if (depth === undefined) continue
+      // RUNNING only, for the same reason the surfaced tree is running-only: a sidecar is written once
+      // and never deleted, so admitting "stale" would fire a stop at every grandchild that ever ran.
+      if (descendantState(state, meta) !== "running") continue
+      found.push({ agentId: meta.agentId, depth })
+    }
+    // DEEPEST FIRST. The stops are sequential and a still-running agent can dispatch another child
+    // between two of them, so going bottom-up leaves no window where a freshly-spawned grandchild
+    // outlives the parent that was already stopped.
+    found.sort((a, b) => b.depth - a.depth)
+    return found.map((entry) => entry.agentId)
   }
 
   // A descendant's liveness, in order of authority.
@@ -3883,6 +3945,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.
     foreignIds: () => foreignFresh.map((f) => f.id),
     subAgent: subAgentLookup,
+    subAgentDescendantTasks,
     backgroundShell: backgroundShellLookup,
     dismissOp,
     forget(slug) {

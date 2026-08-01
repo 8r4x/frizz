@@ -70,7 +70,7 @@ window.fetch = async (input, init) => {
     return rpcResult({ messages: childMessages, ...(RESPONSES[STATE] ?? RESPONSES.rich) })
   }
   if (url.pathname === "/rpc/subAgentSteer") return rpcResult({ delivered: true })
-  if (url.pathname === "/rpc/subAgentStop") return rpcResult({ stopped: true })
+  if (url.pathname === "/rpc/subAgentStop") return rpcResult({ stopped: true, descendantsStopped: 0, note: null })
   return nativeFetch(input, init)
 }
 

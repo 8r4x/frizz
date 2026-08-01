@@ -28,6 +28,11 @@ function harness(subAgent: (slug: string, id: string) => SubAgentInfo, opts: {
   backgroundShell?: () => { command?: string; outputFile?: string; state: "running" | "done" } | undefined
   // Make the real provider stop FAIL, to pin that a failed stop must not retire the row.
   stopThrows?: Error
+  // The live subtree hanging off the stopped row, deepest-first — what the tailer reads off sidecars.
+  descendantTasks?: string[]
+  // Task ids whose stop throws, to pin that a descendant fray cannot end is COUNTED and stated
+  // rather than swallowed under a "stopped" the operator would read as "the work ended".
+  stopFailsFor?: readonly string[]
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "fray-subagent-steer-"))
   const project: Project = { dir, id: "steer", name: "test", label: "test", stateDir: dir, cwdSlug: "test" }
@@ -55,6 +60,7 @@ function harness(subAgent: (slug: string, id: string) => SubAgentInfo, opts: {
       return true
     },
     ...(opts.backgroundShell ? { backgroundShell: opts.backgroundShell } : {}),
+    ...(opts.descendantTasks ? { subAgentDescendantTasks: () => [...opts.descendantTasks!] } : {}),
   }
   const steers: { threadSlug: string; sessionId: string; subAgentId: string; text: string }[] = []
   const stops: { threadSlug: string; sessionId: string; taskId: string }[] = []
@@ -70,6 +76,7 @@ function harness(subAgent: (slug: string, id: string) => SubAgentInfo, opts: {
       },
       stopSubAgent: async (input: { threadSlug: string; sessionId: string; taskId: string }) => {
         if (opts.stopThrows) throw opts.stopThrows
+        if (opts.stopFailsFor?.includes(input.taskId)) throw new Error(`cannot stop ${input.taskId}`)
         stops.push(input)
       },
     },
@@ -172,12 +179,88 @@ test("subAgentStop uses the provider task id and works for a nested child", asyn
   try {
     seed(h.storage, "t")
     const result = await h.router.subAgentStop.handler({ input: { slug: "t", id: "toolu_grandchild" } })
-    assert.deepEqual(result, { stopped: true })
+    assert.deepEqual(result, { stopped: true, descendantsStopped: 0, note: null })
     assert.deepEqual(h.stops, [{
       threadSlug: "t",
       sessionId: "sid-t",
       taskId: "agent-runtime-grandchild",
     }])
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true })
+  }
+})
+
+// ── STOPPING A SUBTREE ──────────────────────────────────────────────────────────────────────────
+//
+// A stop names ONE task and the provider's registry is flat and session-wide, so stopping a sub-agent
+// used to leave its own fan-out running — and that same flatness delivers a completion to the SESSION,
+// so the orphans then reported into the ROOT thread under an agent the operator had watched die.
+// Measured on nub session a0c5fba3 (2026-07-31): the × set `stoppedByUser` on `adabd4aeedf52ef6c`,
+// whose transcript ends 19:54:22, while its two children — neither marked stopped — wrote until
+// 19:56:09 and 19:56:44 and landed their reports in the root transcript.
+
+test("a stop ends the whole live subtree, deepest-first, with the target last", async () => {
+  // Deepest-first is the tailer's contract; what this pins is that the router preserves that order and
+  // stops the TARGET after them, so no still-running parent can dispatch a fresh child into the gap.
+  const h = harness(() => RUNNING_DIRECT, { descendantTasks: ["agent-great", "agent-grand-a", "agent-grand-b"] })
+  try {
+    seed(h.storage, "t")
+    const result = await h.router.subAgentStop.handler({ input: { slug: "t", id: "toolu_child" } })
+    assert.deepEqual(result, { stopped: true, descendantsStopped: 3, note: null })
+    assert.deepEqual(
+      h.stops.map((s) => s.taskId),
+      ["agent-great", "agent-grand-a", "agent-grand-b", "agent-runtime-child"],
+      "every descendant is stopped before the row itself",
+    )
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true })
+  }
+})
+
+test("the × stops the subtree too, and reports the count that the vanished row cannot", async () => {
+  const h = harness(() => RUNNING_DIRECT, { descendantTasks: ["agent-grand-a", "agent-grand-b"] })
+  try {
+    seed(h.storage, "t")
+    const result = await h.router.stopBackgroundOp.handler({ input: { slug: "t", id: "toolu_child" } })
+    assert.deepEqual(result, { stopped: true, dismissed: true, note: null, descendantsStopped: 2 })
+    assert.deepEqual(h.stops.map((s) => s.taskId), ["agent-grand-a", "agent-grand-b", "agent-runtime-child"])
+    assert.deepEqual(h.dismissals, [{ slug: "t", id: "toolu_child" }])
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true })
+  }
+})
+
+test("a descendant that cannot be stopped is stated, not swallowed — and never blocks the rest", async () => {
+  // The benign cause is a race (it settled between the sidecar read and the stop), but a real failure
+  // is live work fray did not end, and the row is about to leave the board. Counting it and saying so
+  // is the whole point; a silent success here is the original bug one level down.
+  const h = harness(() => RUNNING_DIRECT, {
+    descendantTasks: ["agent-grand-a", "agent-grand-b"],
+    stopFailsFor: ["agent-grand-a"],
+  })
+  try {
+    seed(h.storage, "t")
+    const result = await h.router.stopBackgroundOp.handler({ input: { slug: "t", id: "toolu_child" } })
+    assert.equal(result.stopped, true)
+    assert.equal(result.descendantsStopped, 1, "the reachable descendant still stopped")
+    assert.match(result.note ?? "", /1 descendant could not be stopped and may still be running/)
+    assert.deepEqual(
+      h.stops.map((s) => s.taskId),
+      ["agent-grand-b", "agent-runtime-child"],
+      "one failure does not abandon the remaining descendants or the target",
+    )
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true })
+  }
+})
+
+test("a childless stop is unchanged — no note, no count, one provider call", async () => {
+  const h = harness(() => RUNNING_DIRECT, { descendantTasks: [] })
+  try {
+    seed(h.storage, "t")
+    const result = await h.router.subAgentStop.handler({ input: { slug: "t", id: "toolu_child" } })
+    assert.deepEqual(result, { stopped: true, descendantsStopped: 0, note: null })
+    assert.deepEqual(h.stops.map((s) => s.taskId), ["agent-runtime-child"])
   } finally {
     rmSync(h.dir, { recursive: true, force: true })
   }
@@ -223,7 +306,7 @@ test("the × STOPS a broker-backed child for real, then retires the row", async 
   try {
     seed(h.storage, "t")
     const result = await h.router.stopBackgroundOp.handler({ input: { slug: "t", id: "toolu_child" } })
-    assert.deepEqual(result, { stopped: true, dismissed: true, note: null })
+    assert.deepEqual(result, { stopped: true, dismissed: true, note: null, descendantsStopped: 0 })
     assert.deepEqual(h.stops, [{ threadSlug: "t", sessionId: "sid-t", taskId: "agent-runtime-child" }], "the provider control ran")
     assert.deepEqual(h.dismissals, [{ slug: "t", id: "toolu_child" }], "and only then did the row leave tracking")
   } finally {
@@ -283,7 +366,7 @@ test("the × on an already-settled op is a quiet retire — no stop attempt, and
   try {
     seed(h.storage, "t")
     const result = await h.router.stopBackgroundOp.handler({ input: { slug: "t", id: "toolu_child" } })
-    assert.deepEqual(result, { stopped: false, dismissed: true, note: null }, "a finished op needs no warning banner")
+    assert.deepEqual(result, { stopped: false, dismissed: true, note: null, descendantsStopped: 0 }, "a finished op needs no warning banner")
     assert.deepEqual(h.stops, [])
   } finally {
     rmSync(h.dir, { recursive: true, force: true })

@@ -17,12 +17,16 @@ import { showToast } from "../store.ts"
 // vocabulary, importable by an SSR test with no store or transport behind it.)
 export function dismissChildOp(slug: string, id: string): void {
   rpc.stopBackgroundOp({ slug, id })
-    .then(({ stopped }) => {
-      // Only the KILL is worth announcing. A clear needs no toast — the row leaving IS the feedback,
-      // and the `note` path is now unreachable from a click: the × is not rendered on a running row
-      // fray cannot stop. The server still returns the note as defence in depth (a row can flip to
-      // running between the board frame and the click); it just has nothing left to narrate.
-      if (stopped) showToast("Sub-agent stopped")
+    .then(({ stopped, note, descendantsStopped }) => {
+      // Only the KILL is worth announcing. A clear needs no toast — the row leaving IS the feedback.
+      if (!stopped) return
+      // The count belongs in the toast because the SUBTREE is the part the operator cannot see: the
+      // row they clicked leaves the board either way, and until this stop covered the fan-out its
+      // grandchildren kept running and reported back under an agent that was already gone. A
+      // descendant fray failed to stop rides in `note` and outranks the count — that is live work
+      // still burning, and it gets the longer toast the error path uses.
+      if (note) return showToast(`Sub-agent stopped. ${note}`, { duration: 7000 })
+      showToast(descendantsStopped > 0 ? `Sub-agent and ${descendantsStopped} descendant${descendantsStopped === 1 ? "" : "s"} stopped` : "Sub-agent stopped")
     })
     .catch((error: unknown) => {
       showToast(`Couldn’t stop: ${(error instanceof Error ? error.message : String(error)).slice(0, 100)}`, { duration: 7000 })

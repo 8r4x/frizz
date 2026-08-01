@@ -494,3 +494,49 @@ test("descendants: the provider's terminal task says DONE; silence alone only sa
     cleanup(quiet)
   }
 })
+
+// ── THE SUBTREE A STOP HAS TO NAME ──────────────────────────────────────────────────────────────
+//
+// `stopTask` ends exactly one task and its registry is flat and session-wide, so stopping a sub-agent
+// reaches none of its own fan-out. That flatness also routes a completion to the SESSION rather than
+// to whoever dispatched it, so the survivors report into the ROOT thread under an agent the operator
+// watched die (nub session a0c5fba3, 2026-07-31: the × marked `adabd4aeedf52ef6c` stopped at 19:54:22
+// and its two children wrote on until 19:56:09 and 19:56:44). These pin the enumeration that fixes it.
+
+test("subtree: a stop on the direct child names every live descendant, deepest first", () => {
+  const f = fixture()
+  try {
+    assert.deepEqual(f.tailer.subAgentDescendantTasks?.(SLUG, "toolu_child"), ["aGreat", "aGrand"],
+      "deepest first, so no still-running parent can spawn into the gap between two sequential stops")
+  } finally {
+    cleanup(f)
+  }
+})
+
+test("subtree: it is keyed on the DISPATCH id and asks the subtree below it, not the whole dir", () => {
+  const f = fixture()
+  try {
+    assert.deepEqual(f.tailer.subAgentDescendantTasks?.(SLUG, "toolu_grand"), ["aGreat"],
+      "stopping the grandchild reaches only what hangs off IT")
+    assert.deepEqual(f.tailer.subAgentDescendantTasks?.(SLUG, "toolu_great"), [],
+      "a leaf has no subtree")
+  } finally {
+    cleanup(f)
+  }
+})
+
+test("subtree: a SETTLED descendant is not stopped again, and an unknown id resolves to nothing", () => {
+  // Running-only, for the same reason the surfaced tree is: a sidecar is written once and never
+  // deleted, so admitting a finished one would fire a stop at every grandchild that ever ran.
+  const f = fixture()
+  try {
+    notifyDescendant(f.dir, "aGreat", "toolu_great")
+    f.tailer.tick()
+    assert.deepEqual(f.tailer.subAgentDescendantTasks?.(SLUG, "toolu_child"), ["aGrand"],
+      "the great-grandchild reported terminal, so it is no longer a stop target")
+    assert.deepEqual(f.tailer.subAgentDescendantTasks?.(SLUG, "toolu_nobody"), [],
+      "an id no sidecar claims resolves to nothing rather than guessing at a subtree")
+  } finally {
+    cleanup(f)
+  }
+})

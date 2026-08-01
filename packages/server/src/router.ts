@@ -546,6 +546,55 @@ export function createRouter(ctx: AppContext) {
     return { sessionId: row.session_id, taskId: info.taskId }
   }
 
+  // STOP A SUBTREE, NOT A ROW — the shared body behind both stop paths (the drawer's button and the ×).
+  //
+  // `stopTask` ends exactly the task it names, and the registry behind it is flat and session-wide, so
+  // a sub-agent's own fan-out is NOT covered by its parent's id. Stopping only the named agent leaves
+  // its children running, and that same flatness delivers their completions to the SESSION's main loop
+  // — so the orphans keep spending tokens and then report into the ROOT thread, attributed to an agent
+  // the operator watched die (maintainer, 2026-07-31, on nub session a0c5fba3: "Two orphaned
+  // grandchildren of the killed agent just reported"). The subtree walk is the fix; the ORDER is the
+  // rest of it.
+  //
+  //  · DEEPEST FIRST, then the target last. A still-running agent can dispatch another child between
+  //    two sequential stops, so bottom-up leaves no window in which a fresh grandchild outlives an
+  //    already-stopped parent.
+  //  · A DESCENDANT stop that throws is COUNTED, never swallowed and never fatal. The common cause is
+  //    benign — it settled between the sidecar read and the stop — but a genuine failure means live
+  //    work fray failed to end, and the operator has to hear that rather than read "stopped" over it.
+  //  · The TARGET's stop still throws through to the caller, which is what keeps `stopBackgroundOp`
+  //    from retiring a row whose work is still going.
+  async function stopSubAgentSubtree(
+    slug: string,
+    id: string,
+    target: { sessionId: string; taskId: string },
+  ): Promise<{ descendantsStopped: number; descendantsFailed: number }> {
+    const bridge = ctx.claudeBroker
+    if (!bridge) throw new Error("Claude session broker is unavailable; cannot stop this sub-agent")
+    let descendantsStopped = 0
+    let descendantsFailed = 0
+    for (const taskId of ctx.tailer.subAgentDescendantTasks?.(slug, id) ?? []) {
+      try {
+        await bridge.stopSubAgent({ threadSlug: slug, sessionId: target.sessionId, taskId })
+        descendantsStopped++
+      } catch {
+        descendantsFailed++
+      }
+    }
+    await bridge.stopSubAgent({ threadSlug: slug, sessionId: target.sessionId, taskId: target.taskId })
+    return { descendantsStopped, descendantsFailed }
+  }
+
+  // FAILURE ONLY. A successful fan-out is already fully described by `descendantsStopped`, and saying
+  // it twice on the wire invites the two to drift; the note exists for the one thing a count cannot
+  // express — a descendant fray asked to stop and could not, which is live work the operator is about
+  // to lose sight of when the row leaves the board.
+  function subtreeNote(result: { descendantsFailed: number }): string | null {
+    const { descendantsFailed } = result
+    if (descendantsFailed === 0) return null
+    return `${descendantsFailed} descendant${descendantsFailed === 1 ? "" : "s"} could not be stopped and may still be running.`
+  }
+
   // Every interaction RPC re-derives the project from this server and binds the requested slug to the
   // CURRENT registered session id. Foreign transcripts have no registry row; a stale page holding a
   // replaced session id fails closed instead of reading or answering the replacement's requests.
@@ -785,21 +834,15 @@ export function createRouter(ctx: AppContext) {
 
     subAgentStop: mutation({
       input: z.object({ slug: ThreadSlug, id: z.string() }).strict(),
-      output: z.object({ stopped: z.boolean() }),
+      output: z.object({ stopped: z.boolean(), descendantsStopped: z.number(), note: z.string().nullable() }),
       handler: async ({ input }) => {
         const target = subAgentStoppable(input.slug, input.id)
         if (target.sessionId === null) {
           throw new Error(target.note ?? "This sub-agent is no longer running, so it can't be stopped")
         }
-        const bridge = ctx.claudeBroker
-        if (!bridge) throw new Error("Claude session broker is unavailable; cannot stop this sub-agent")
-        await bridge.stopSubAgent({
-          threadSlug: input.slug,
-          sessionId: target.sessionId,
-          taskId: target.taskId,
-        })
+        const result = await stopSubAgentSubtree(input.slug, input.id, target)
         ctx.board.refresh()
-        return { stopped: true }
+        return { stopped: true, descendantsStopped: result.descendantsStopped, note: subtreeNote(result) }
       },
     }),
 
@@ -844,23 +887,26 @@ export function createRouter(ctx: AppContext) {
     // `dismissed:false` when the id was not live to retire (already gone / unknown) — the UI refreshes.
     stopBackgroundOp: mutation({
       input: z.object({ slug: ThreadSlug, id: z.string() }).strict(),
-      output: z.object({ stopped: z.boolean(), dismissed: z.boolean(), note: z.string().nullable() }),
+      output: z.object({ stopped: z.boolean(), dismissed: z.boolean(), note: z.string().nullable(), descendantsStopped: z.number() }),
       handler: async ({ input }) => {
         const target = subAgentStoppable(input.slug, input.id)
         let stopped = false
         let note: string | null = null
+        let descendantsStopped = 0
         if (target.sessionId !== null) {
-          const bridge = ctx.claudeBroker
-          // subAgentStoppable already required the broker; this is the type narrowing, not a policy.
-          if (!bridge) throw new Error("Claude session broker is unavailable; cannot stop this sub-agent")
-          await bridge.stopSubAgent({ threadSlug: input.slug, sessionId: target.sessionId, taskId: target.taskId })
+          // The × ends the whole subtree, not just this row — see stopSubAgentSubtree. A descendant
+          // that could not be stopped rides back in `note`, because the row is about to leave every
+          // live surface and that is the operator's only chance to hear that work is still running.
+          const result = await stopSubAgentSubtree(input.slug, input.id, target)
+          descendantsStopped = result.descendantsStopped
+          note = subtreeNote(result)
           stopped = true
         } else {
           note = target.note
         }
         const dismissed = ctx.tailer.dismissOp?.(input.slug, input.id) ?? false
         ctx.board.refresh()
-        return { stopped, dismissed, note }
+        return { stopped, dismissed, note, descendantsStopped }
       },
     }),
 
