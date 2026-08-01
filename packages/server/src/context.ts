@@ -669,15 +669,6 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
           if (diagnostic.kind !== "lifecycle" || diagnostic.phase !== "crashed") return
           frayLog.warn("broker", `claude broker ${slug}: ${diagnostic.message ?? "died without a recorded cause"}`)
         },
-        // Read per FORK, not cached at construction: flipping the setting takes effect on the next
-        // thread dispatched rather than at the next fray restart.
-        remoteControlEnabled: () => getSettings(storage).remoteControl !== false,
-        // A session registered with claude.ai. Persist it against THAT session (a slug outlives the
-        // session on it) and refresh the board so the thread's open-on-your-phone link appears without
-        // waiting for the next unrelated change.
-        onRemoteControl: (slug, sessionId, url) => {
-          if (storage.setRemoteControlUrl(slug, sessionId, url)) board.refresh()
-        },
       })
     : undefined
   resources.claudeBroker = claudeBroker

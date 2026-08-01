@@ -91,9 +91,6 @@ export interface ForkBrokerOptions {
   mcpServers?: Record<string, { type?: "stdio"; command: string; args?: string[]; env?: Record<string, string> }>
   allowedTools?: string[]
   workerEnv?: Record<string, string>
-  /** Register the forked session with claude.ai for Remote Control — see ClaudeBrokerConfig. Applies
-   *  only to a FORK: a daemon this call merely adopts registered (or didn't) at its own startup. */
-  remoteControl?: { name?: string }
   /** Override the daemon entry (tests). Defaults to the bundled/sibling claude-agent-broker. */
   daemonEntry?: string
   timeoutMs?: number
@@ -114,7 +111,6 @@ export function forkBroker(options: ForkBrokerOptions): Promise<BrokerRecord> {
     resume: options.resume,
     pluginDir: options.pluginDir, mcpServers: options.mcpServers, allowedTools: options.allowedTools,
     workerEnv: options.workerEnv,
-    remoteControl: options.remoteControl,
   }
   const entry = options.daemonEntry ?? resolveDetachedDaemonEntry(import.meta.url, "claude-agent-broker")
   const child = spawn(process.execPath, [entry], {

@@ -1007,29 +1007,3 @@ test("setProfile stamps the operator set-time; the observed write-back never tou
   s.setObservedProfileIfCurrent("pf", { sessionId: s.getSession("pf")!.session_id, generation: gen }, { model: "gpt-5.6-sol", effort: "xhigh" })
   assert.equal(s.getSession("pf")?.profile_set_at, setAt, "observed write-back leaves profile_set_at untouched")
 })
-
-// A Remote Control URL names ONE session, not a slug. A slug outlives the session on it (a respawn
-// reuses the slug with a new session id), and a link left over from the previous session would open a
-// claude.ai thread that no longer corresponds to what fray is showing — so the write is session-scoped
-// and reports whether the row was still that session.
-test("a remote control URL is written against the session it belongs to, never a reused slug", () => {
-  const s = store()
-  s.upsertSession(row({ slug: "reachable", session_id: "sid-1" }))
-  assert.equal(s.getSession("reachable")?.remote_control_url, null, "a session that never registered has no link")
-  assert.equal(s.setRemoteControlUrl("reachable", "sid-1", "https://claude.ai/code/session_abc"), true)
-  assert.equal(s.getSession("reachable")?.remote_control_url, "https://claude.ai/code/session_abc")
-
-  // An ordinary same-session upsert (a resume, an unread flip, a title write) carries no URL and must
-  // not wipe the live one — the link would vanish from the header for no reason the operator can see.
-  s.upsertSession(row({ slug: "reachable", session_id: "sid-1", unread: 1 }))
-  assert.equal(s.getSession("reachable")?.remote_control_url, "https://claude.ai/code/session_abc")
-
-  // The thread is respawned: same slug, new session. A late announcement from the OLD daemon must not
-  // land on the new row.
-  s.upsertSession(row({ slug: "reachable", session_id: "sid-2" }))
-  assert.equal(s.setRemoteControlUrl("reachable", "sid-1", "https://claude.ai/code/session_stale"), false)
-  assert.equal(s.getSession("reachable")?.remote_control_url, null, "the new session starts unregistered")
-  assert.equal(s.setRemoteControlUrl("reachable", "sid-2", "https://claude.ai/code/session_xyz"), true)
-  assert.equal(s.getSession("reachable")?.remote_control_url, "https://claude.ai/code/session_xyz")
-  s.close()
-})

@@ -17,10 +17,6 @@ export interface ClaudeBrokerClientHandlers {
   /** A tool-permission request that must be answered with answerPermission(requestId, …). */
   onPermissionRequest?: (requestId: string, request: ClaudePermissionRequest) => void
   onDiagnostic?: (diagnostic: ClaudeDiagnostic) => void
-  /** The claude.ai address this session is reachable at through Remote Control. Fires when the daemon
-   *  finishes registering, and again on every reconnect that finds a daemon already registered — so a
-   *  fray restart re-learns it rather than dropping the thread's only route to a phone. */
-  onRemoteControl?: (url: string) => void
   /** Sent on every (re)connect; carries the broker's session id. */
   onHello?: (sessionId: string) => void
   onConnect?: () => void
@@ -84,12 +80,7 @@ export function connectClaudeBroker(
       let frame: Record<string, unknown>
       try { frame = JSON.parse(line) } catch { continue }
       switch (frame.t) {
-        case "hello": {
-          handlers.onHello?.(frame.sessionId as string)
-          if (typeof frame.remoteControlUrl === "string" && frame.remoteControlUrl) handlers.onRemoteControl?.(frame.remoteControlUrl)
-          break
-        }
-        case "remote-control": if (typeof frame.url === "string" && frame.url) handlers.onRemoteControl?.(frame.url); break
+        case "hello": handlers.onHello?.(frame.sessionId as string); break
         case "event": handlers.onEvent?.(frame.event as ClaudeQueryEvent); break
         case "permission-request": handlers.onPermissionRequest?.(frame.requestId as string, frame.request as ClaudePermissionRequest); break
         case "diagnostic": handlers.onDiagnostic?.(frame.diagnostic as ClaudeDiagnostic); break

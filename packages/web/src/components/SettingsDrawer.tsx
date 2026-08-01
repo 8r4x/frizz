@@ -37,7 +37,6 @@ export const SETTINGS_HELP = {
   notifications: "Shows a desktop notification when work needs attention while this window is hidden.",
   runtimeGate: "When on, dispatched workers must verify UI/runtime changes in a real browser, screenshot the result into their handoff, and get an independent review before finishing. Turn off to drop that requirement from the worker prompt.",
   autoResumeOnLimit: "When a usage limit interrupts running threads, fray remembers every one it cut off and sends each a “continue” once the window resets. Those threads stay out of your queue while they wait. Turn off to leave them parked for you to restart by hand.",
-  remoteControl: "Registers each new Claude thread with claude.ai so you can pick it up from claude.ai/code or the Claude mobile app, and puts a link to it in the thread header. Needs a claude.ai subscription login — an API key or a long-lived token can't use Remote Control. Turn off to keep every fray session on this machine.",
 } as const
 function currentPerm(): NotifPerm {
   if (typeof Notification === "undefined") return "unsupported"
@@ -238,13 +237,6 @@ export function SettingsDrawer() {
             {/* Server setting (the wake scheduler's limit source). Absent ⇒ on, same as above. */}
             <SettingsField label="Auto-resume after usage limits" help={SETTINGS_HELP.autoResumeOnLimit}>
               <OnOffToggle value={draft.autoResumeOnLimit !== false} onChange={(on) => setTrackedDraft({ ...draft, autoResumeOnLimit: on })} />
-            </SettingsField>
-
-            {/* Server setting (applied when a Claude thread's session starts). Absent ⇒ on, same as above.
-                Takes effect on the NEXT thread dispatched — a session already running registered, or
-                didn't, when it booted. */}
-            <SettingsField label="Remote control from the Claude app" help={SETTINGS_HELP.remoteControl}>
-              <OnOffToggle value={draft.remoteControl !== false} onChange={(on) => setTrackedDraft({ ...draft, remoteControl: on })} />
             </SettingsField>
 
 

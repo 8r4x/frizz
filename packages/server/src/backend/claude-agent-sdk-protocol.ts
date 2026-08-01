@@ -317,12 +317,6 @@ export interface ClaudeInterruptReceipt {
   stillQueued: string[]
 }
 
-/** What Claude Code hands back once a session is registered for Remote Control: the claude.ai address
- *  that opens THIS session on the web or in the mobile app. */
-export interface ClaudeRemoteControlSession {
-  sessionUrl: string
-}
-
 export type ClaudeDiagnostic =
   | { kind: "stderr"; message: string; truncated: boolean }
   | { kind: "lifecycle"; phase: "started" | "closed" | "crashed"; message?: string }
