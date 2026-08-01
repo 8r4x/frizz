@@ -87,14 +87,18 @@ function compactCount(n: number | undefined): string | undefined {
 // that the work was probably still going: "We shouldn't show the X if it doesn't fucking work."
 //
 //   RUNNING  — the row is only given a × when the server says the child is STOPPABLE
-//              (lib/dismissChildOp.ts), so here the word can be "stop" and mean it.
+//              (lib/dismissChildOp.ts), so here the word can be "stop" and mean it. It now names the
+//              SUBTREE, because that is what the click ends: a stop that reached only the named agent
+//              left its own fan-out running and reporting back into this thread, so the server walks
+//              the descendants too (router.ts stopSubAgentSubtree). Under-claiming a destructive scope
+//              is the same failure as over-claiming one — the operator has to know what the × takes.
 //   STALE / RESTED — nothing is running to stop. The × retires a finished op from tracking, which is
 //              the phantom escape hatch it was built for, so it says "clear" and promises nothing more.
 //
 // A running row that cannot be stopped carries no × at all, so no wording is needed for it — the
 // absence IS the honesty.
 export const CHILD_DISMISS_TITLE = {
-  running: "Stop — end this operation and clear the row",
+  running: "Stop — end this operation and everything it spawned, then clear the row",
   settled: "Clear — stop tracking this finished operation",
 } as const
 export const CHILD_DISMISS_VERB = { running: "Stop", settled: "Clear" } as const
