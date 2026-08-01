@@ -14,6 +14,7 @@ import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { normalizeObservedThreadModel, validateThreadProfile } from "./backend/thread-profiles.ts"
 import { resolveRuntimeTurn, type ClaudeRuntimeTask } from "./backend/claude-runtime-ingest.ts"
 import { classifyLimitRecord } from "./backend/usage-limit.ts"
+import { claudeBrokerDiagnosticLogPath } from "./backend/claude-broker-diagnostics.ts"
 import { parseDeliveryLedger, correlateDeliveryRecord, ageDeliveries, serializeDeliveryLedger, type DeliveryLedgerItem } from "./delivery-ledger.ts"
 import { createCodexSubAgentTracker, type CodexSubAgentTracker } from "./codex-subagents.ts"
 import {
@@ -3298,12 +3299,22 @@ export function createTailer(deps: TailerDeps): Tailer {
     // is REDACTED from the console line and the stall sink in this case.
     const authFailure = row.backend !== "codex" && isClaudeAuthErrorText(pane)
     if (authFailure) state.authFault = "authentication_rejected"
+    // A headless row has no tmux pane at ALL (capturePaneForRowSync is skipped for it upstream), so the
+    // generic "Pane: (pane empty / unavailable)" line sent whoever read it to tmux for a runtime that
+    // never had a pane — measured cost on 2026-07-31, a real boot failure investigated at the wrong
+    // layer first. Name the evidence that DOES exist for this runtime instead: for the broker that is the
+    // daemon's own diagnostics log, which records the session's lifecycle and any dropped input.
+    const evidence = isBrokerClaudeRow(row) && deps.project.stateDir
+      ? `no tmux pane (broker runtime). Daemon diagnostics: ${claudeBrokerDiagnosticLogPath(deps.project.stateDir, row.session_id)}`
+      : isHeadlessRow(row)
+      ? `no tmux pane (headless ${row.backend === "codex" ? "codex app-server" : "claude broker"} runtime)`
+      : ""
     const detail = authFailure
       ? "(claude authentication failure — pane content redacted; sign in and retry)"
-      : pane.trim() || "(pane empty / unavailable)"
+      : pane.trim() || evidence || "(pane empty / unavailable)"
     frayLog.error(
       "tailer",
-      `thread ${row.slug} (session ${row.session_id}): no transcript ${DISCOVERY_GRACE_MS / 1000}s after dispatch — likely a boot failure. Pane:\n${detail.slice(0, 4000)}`,
+      `thread ${row.slug} (session ${row.session_id}): no transcript ${DISCOVERY_GRACE_MS / 1000}s after dispatch — likely a boot failure. ${isHeadlessRow(row) && !pane.trim() && !authFailure ? "" : "Pane:\n"}${detail.slice(0, 4000)}`,
     )
     try {
       mkdirSync(STALL_LOG_DIR, { recursive: true })

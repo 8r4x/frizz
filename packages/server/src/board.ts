@@ -557,9 +557,19 @@ function sessionThreadView(
       : false
   // App-server threads write their rollout synchronously at thread/start, so a transient "no transcript
   // yet" must not degrade a healthy headless thread to the "exited"/stalled crash affordance.
+  //
+  // That guarantee is CODEX's alone, and blanket-suppressing on isHeadlessRow took the broker with it.
+  // A broker claude row writes nothing until the agent processes its first input, so zero transcript
+  // bytes past DISCOVERY_GRACE_MS is not a transient — it is precisely the boot failure the tailer has
+  // already captured (it sets noTranscript and captureStall together). The headlessStalled probe above
+  // does not cover it either: that trips only on a DEAD daemon, and this failure leaves the daemon and
+  // its claude child ALIVE and idle. Observed live 2026-07-31 on thread
+  // `the-landlock-people-i-m-interested`: the tailer logged the boot failure at 60s, the board threw the
+  // flag away here, and the thread spun `running` for 29 minutes on an agent that never received its
+  // opening prompt — until a human archived it by hand.
   const runtime = degradeIfNoTranscript(
     deriveRuntime(row.slug, row, storage, tele?.turn, tele?.permPrompt ?? false, headlessStalled),
-    isHeadlessRow(row) ? false : tele?.noTranscript,
+    isHeadlessRow(row) && !isBrokerClaudeRow(row) ? false : tele?.noTranscript,
   )
   const state = effectiveSessionState(row, registeredLegacyTerminal)
   const archived = state === "archived"

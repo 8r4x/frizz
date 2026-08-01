@@ -834,6 +834,42 @@ test("degradeIfNoTranscript: only a live-pane spinner (running) downgrades to th
   }
 })
 
+// A broker claude thread whose agent never received its opening prompt writes ZERO transcript bytes,
+// which the tailer flags noTranscript (with captureStall) once DISCOVERY_GRACE_MS passes. The board used
+// to discard that flag for every headless row — a suppression whose stated reason is CODEX's alone
+// (an app-server writes its rollout synchronously at thread/start, so "no transcript yet" is transient
+// there). A broker row has no such guarantee, and the other broker stall probe (headlessStalled) only
+// trips on a DEAD daemon — so a thread with a LIVE, idle daemon and no transcript spun `running`
+// forever. Live on 2026-07-31 that was 29 minutes on `the-landlock-people-i-m-interested` before a human
+// archived it by hand.
+test("a broker claude thread with no transcript reads as stalled, while a codex app-server thread does not", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fray-board-notranscript-"))
+  const project: Project = { dir, id: "project-nt", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
+  const storage = createStorage(join(dir, "ui.db"))
+  storage.upsertSession(row({ slug: "broker", session_id: "sess-broker", tmux_name: "fray-broker" }))
+  storage.setBackend("broker", "claude")
+  storage.setClaudeRuntime("broker", "broker")
+  storage.upsertSession(row({ slug: "codex", session_id: "sess-codex", tmux_name: "fray-codex" }))
+  storage.setBackend("codex", "codex")
+  storage.setCodexRuntime("codex", "app-server")
+
+  // Both are mid-turn with no transcript — the identical telemetry the tailer produces for a boot
+  // failure. Only the runtime kind may distinguish them.
+  const tailer = {
+    get: () => tele({ turn: "in-flight", noTranscript: true }),
+    foreignIds: () => [], subAgent: () => undefined, forget: () => {},
+    start: () => {}, stop: () => {}, tick: () => {},
+  } satisfies Tailer
+  const board = createBoard(project, storage, new Bus(), tailer, "notranscript-boot")
+  const threads = board.refresh().threads
+  const broker = threads.find((t) => t.id === "broker")!
+  const codex = threads.find((t) => t.id === "codex")!
+
+  assert.equal(broker.runtime, "exited", "the broker thread surfaces the stall instead of spinning `running`")
+  assert.notEqual(codex.runtime, "exited", "a codex app-server thread keeps its transient-rollout grace")
+  rmSync(dir, { recursive: true, force: true })
+})
+
 // ---- codex app-server stall detection (four threads spun on `running` for hours, 2026-07-22) ----
 
 test("appServerTurnStalled: only a turn nobody is driving, and only once the read-skew grace has passed", () => {

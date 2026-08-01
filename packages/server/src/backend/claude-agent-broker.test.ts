@@ -63,6 +63,39 @@ async function waitForRows(dir: string, predicate: (rows: ReturnType<typeof capt
   }
 }
 
+// The diagnostics log recorded a DROPPED input but never a RECEIVED one, and the drop line fires only
+// when `handle.send` REJECTS. A send that never completes — an agent wedged before it drains stdin —
+// left the file byte-identical to one where the frame never arrived at all, so the two were
+// indistinguishable. That ambiguity is what stalled the 2026-07-31 investigation into a thread whose
+// diagnostics held a single `started` line. Receipt is now recorded: ids and sizes ONLY, because the
+// message text is the operator's content and must never be written to a diagnostics file.
+test("the daemon records every input frame on receipt, without the message text", { timeout: 15_000 }, async () => {
+  const sessionId = randomUUID()
+  const logDir = mkdtempSync(join(tmpdir(), "cbroker-diag-"))
+  const diagnosticLogPath = join(logDir, "diag.log")
+  const b = startBroker("basic", { sessionId, diagnosticLogPath })
+  const SECRET = "the Landlock people, and this text must never reach the diagnostics file"
+  try {
+    const c = clientWith(b.socketPath)
+    await new Promise((r) => setTimeout(r, 300))
+    const id = randomUUID()
+    c.client.sendInput({ id, text: SECRET })
+    await c.waitEvent((e) => e.kind === "result")
+
+    const log = readFileSync(diagnosticLogPath, "utf8")
+    const received = log.split("\n").filter(Boolean).map((l) => JSON.parse(l))
+      .filter((r) => typeof r.diagnostic?.message === "string" && r.diagnostic.message.startsWith("input received:"))
+    assert.equal(received.length, 1, "exactly one receipt line for one input frame")
+    assert.match(received[0].diagnostic.message, new RegExp(`id=${id}\\b`), "the receipt names the input's id")
+    assert.match(received[0].diagnostic.message, new RegExp(`chars=${SECRET.length}\\b`), "the receipt carries the size")
+    assert.ok(!log.includes(SECRET), "the operator's prompt text is NEVER written to the diagnostics log")
+    c.client.close()
+  } finally {
+    await b.close()
+    rmSync(logDir, { recursive: true, force: true })
+  }
+})
+
 test("broker relays a typed permission request and forwards the decision", { timeout: 15_000 }, async () => {
   const b = startBroker("permission")
   try {

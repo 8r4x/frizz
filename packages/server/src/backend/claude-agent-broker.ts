@@ -253,6 +253,20 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
         let msg: Record<string, unknown>; try { msg = JSON.parse(line) } catch { continue }
         if (msg.t === "input") {
           const message = msg.message as ClaudeInputMessage
+          // Record RECEIPT, not only failure. The drop path below fires ONLY when `handle.send`
+          // REJECTS; a send that simply never completes — the agent wedged before it drains stdin — is
+          // identically silent, so from this log the two were indistinguishable. That cost a whole
+          // investigation on 2026-07-31: a thread whose agent never produced a transcript left a
+          // diagnostics file containing one `started` line and nothing else, with no way to tell whether
+          // the opening prompt had ever crossed this socket. One line per input settles it forever.
+          // PERSISTED ONLY, never relayed to fray: this is forensics, not an event the operator needs,
+          // and the relay channel surfaces as worker stderr. Ids and sizes only — the message TEXT is
+          // the operator's content and must never land in a diagnostics file.
+          writeDiagnostic?.({
+            kind: "stderr",
+            message: `input received: id=${message?.id ?? "?"} chars=${typeof message?.text === "string" ? message.text.length : 0}${message?.parentToolUseId ? ` addressed=${message.parentToolUseId}` : ""}`,
+            truncated: false,
+          })
           // NEVER swallow this. The `input` frame carries no reply, so this catch was the only place a
           // refused send existed at all — and it threw the evidence away. fray had already answered the
           // operator's RPC with success and opened an `enqueued` ledger item that by design never times
