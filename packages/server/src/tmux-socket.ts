@@ -44,7 +44,8 @@ export interface TmuxSocketPane {
 
 export type TmuxSocketObservation =
   | { kind: "absent" }
-  | { kind: "unknown" }
+  /** `reason` carries what tmux actually said, so an unreadable server is diagnosable from the error. */
+  | { kind: "unknown"; reason?: string }
   | {
       kind: "present"
       projectId: string | null
@@ -141,6 +142,46 @@ function tmuxSocketIsAbsent(error: unknown): boolean {
   return /(?:no server running|no sessions|failed to connect|error connecting to .*\((?:no such file or directory|connection refused)\))/iu.test(stderr)
 }
 
+/**
+ * `execFileSync` reports two very different failures through one thrown error. When tmux RAN and
+ * exited non-zero, the error carries its `stderr`. When the binary could not be executed at all —
+ * not installed, or not executable — nothing ran, `stderr` is `undefined`, and only `syscall`
+ * (`"spawnSync tmux"`) says so.
+ *
+ * Reading that empty stderr as "tmux answered something we don't recognise" is what made a machine
+ * with no tmux report a socket OWNERSHIP problem: a first `npx frayui` on a stock Mac died accusing
+ * the user's own `fray.id` of being duplicate or corrupt. Socket resolution runs from
+ * `resolveWorkspace`, well before `assertLaunchPrerequisites` gets to give its accurate answer, so
+ * the classification has to be right here.
+ */
+function tmuxCouldNotRun(error: unknown): boolean {
+  const syscall = error && typeof error === "object" && "syscall" in error
+    ? (error as { syscall?: unknown }).syscall
+    : undefined
+  return typeof syscall === "string" && syscall.startsWith("spawnSync")
+}
+
+export function tmuxUnavailableError(error: unknown): Error {
+  const code = error && typeof error === "object" && "code" in error ? String((error as { code?: unknown }).code) : ""
+  return new Error(
+    `required executable \`tmux\` could not be run${code ? ` (${code})` : ""}; ` +
+      `Fray needs tmux on PATH for its terminal panes and interactive provider logins. ` +
+      `Install tmux (\`brew install tmux\`, \`apt install tmux\`) and relaunch Fray`,
+  )
+}
+
+/** The first line of whatever tmux printed, bounded so a runaway server cannot inflate the error. */
+function unknownReason(error: unknown): string | undefined {
+  const stderr = errorStderr(error).trim() ||
+    (error instanceof Error ? error.message.trim() : "")
+  const first = stderr.split("\n", 1)[0]?.trim()
+  return first ? first.slice(0, 200) : undefined
+}
+
+function observationDetail(observation: TmuxSocketObservation): string {
+  return observation.kind === "unknown" && observation.reason ? ` tmux said: ${observation.reason}` : ""
+}
+
 const INSPECTION_FORMAT = [
   "#{session_name}",
   "#{pane_id}",
@@ -197,9 +238,10 @@ export const productionTmuxSocketRuntime: TmuxSocketRuntime = {
       )
       return parseTmuxSocketInspection(output)
     } catch (error) {
+      if (tmuxCouldNotRun(error)) throw tmuxUnavailableError(error)
       return tmuxSocketIsAbsent(error)
         ? { kind: "absent" }
-        : { kind: "unknown" }
+        : { kind: "unknown", reason: unknownReason(error) }
     }
   },
   label(socket, anchor, marker) {
@@ -398,7 +440,7 @@ function validateFullSocket(
   if (observation.kind === "absent") return
   if (observation.kind === "unknown" || markerKind(observation, target) !== "exact") {
     throw new Error(
-      `Fray's derived full project tmux socket ${socket} has unknown or foreign ownership; no sessions were contacted or mutated. This can indicate duplicate or corrupt fray.id values, or a canonical-root collision.`
+      `Fray's derived full project tmux socket ${socket} has unknown or foreign ownership; no sessions were contacted or mutated. This can indicate duplicate or corrupt fray.id values, or a canonical-root collision.${observationDetail(observation)}`
     )
   }
 }
@@ -419,7 +461,7 @@ function chooseLegacy(
   claimInProgress = false,
 ): string {
   if (observation.kind === "unknown") {
-    throw new Error("Fray could not verify the legacy tmux socket; no sessions were contacted")
+    throw new Error(`Fray could not verify the legacy tmux socket; no sessions were contacted.${observationDetail(observation)}`)
   }
   if (observation.kind === "absent") {
     if (keepEmptyForLiveOwner) return writeMigration(target, legacySocket, fullSocket, "legacy").selectedSocket

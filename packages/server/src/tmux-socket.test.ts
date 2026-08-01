@@ -9,6 +9,7 @@ import {
   deriveSocket,
   deriveWorktreeSocket,
   parseTmuxSocketInspection,
+  productionTmuxSocketRuntime,
   readTmuxSocketMigration,
   resolveProjectTmuxSocket,
   resolveProjectTmuxSocketSelection,
@@ -183,6 +184,40 @@ test("a new repository fails closed when its complete socket is already markerle
   )
   assert.equal(readTmuxSocketMigration(h.target.stateDir), null)
   assert.deepEqual(h.calls, [{ kind: "inspect", socket: h.fullSocket }])
+})
+
+// A machine with no tmux at all must never be told its PROJECT IDENTITY is corrupt. `execFileSync`
+// reports "the binary never ran" with an undefined stderr, which used to read as "tmux answered
+// something we don't recognise" — so the first `npx frayui` on a stock Mac died accusing the user's
+// own fray.id of being duplicate or corrupt (reported 2026-08-01) instead of saying `install tmux`.
+test("a machine without tmux reports the missing executable, not a socket ownership problem", (t) => {
+  const originalPath = process.env.PATH
+  t.after(() => {
+    if (originalPath === undefined) delete process.env.PATH
+    else process.env.PATH = originalPath
+  })
+  process.env.PATH = join(tmpdir(), "fray-absent-toolchain-do-not-create")
+
+  assert.throws(
+    () => productionTmuxSocketRuntime.inspect(deriveSocket(PROJECT_ID)),
+    (error: Error) => {
+      assert.match(error.message, /required executable `tmux` could not be run \(ENOENT\)/)
+      assert.match(error.message, /Install tmux .* and relaunch Fray/)
+      assert.doesNotMatch(error.message, /ownership|fray\.id/)
+      return true
+    },
+  )
+})
+
+test("an unreadable tmux server carries what tmux actually said into the failure", (t) => {
+  const h = harness()
+  t.after(() => h.cleanup())
+  h.set(h.fullSocket, { kind: "unknown", reason: "lost server" })
+
+  assert.throws(
+    () => resolveProjectTmuxSocket(h.target, { runtime: h.runtime }),
+    /has unknown or foreign ownership;.*canonical-root collision\. tmux said: lost server/su,
+  )
 })
 
 test("an old repository retains an exactly marked legacy server without relabeling or touching full", (t) => {
