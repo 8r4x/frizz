@@ -1,9 +1,9 @@
 import { join } from "node:path"
 import { homedir, platform } from "node:os"
-import { readFileSync } from "node:fs"
+import { readFileSync, statSync } from "node:fs"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import type { AuthSnapshot, ProviderAuth } from "@fray-ui/shared"
+import type { AccountEmails, AuthSnapshot, ProviderAuth } from "@fray-ui/shared"
 import { tokenFromCredentialsJson } from "./claude-quota.ts"
 import { defaultCodexHome } from "./codex.ts"
 
@@ -199,6 +199,99 @@ export async function readClaudePreflightAuth(opts?: { claudeBin?: string; cwd?:
   return readClaudeAuthStatusCli({ claudeBin: opts?.claudeBin, ...(opts?.cwd ? { cwd: opts.cwd } : {}) })
 }
 
+// ---- Which ACCOUNT each credential belongs to ----
+// Purely informational: the quota popover answers "signed in as who?". Nothing gates on it, so every
+// reader here returns undefined rather than throwing, and an unreadable/absent record is simply "we
+// don't know" — never an error the caller has to handle.
+//
+// Read from the providers' OWN on-disk account records, never from a CLI. `claude auth status --json`
+// does report the email, but this file's preflight comment explains at length why the CLI must not sit
+// on the signed-in path (measured 5449ms → "unknown" under fleet load); the same reasoning applies
+// tenfold to a decorative label.
+
+// An email-shaped string, capped at the RFC-max 320 chars — the shared AccountEmails schema rejects
+// anything longer, and a corrupt account record must not put arbitrary text into the popover.
+function asEmail(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined
+  const email = value.trim()
+  return email.length <= 320 && /^[^\s@]+@[^\s@]+$/.test(email) ? email : undefined
+}
+
+// Claude Code's account record. NOTE this is `.claude.json` beside the config dir, NOT the
+// `.credentials.json` INSIDE it: the credential file (and the Keychain item that replaces it on macOS)
+// carries the token and no identity at all. With CLAUDE_CONFIG_DIR set, Claude Code moves this file
+// into that dir, so it tracks the same override claudeConfigDir() honors.
+function claudeAccountFile(): string {
+  const override = process.env.CLAUDE_CONFIG_DIR
+  return override && override.trim() ? join(override, ".claude.json") : join(homedir(), ".claude.json")
+}
+
+// That file also holds Claude Code's entire per-project history — it is routinely a few hundred KB, and
+// readAuthSnapshot runs on a 2s poll while the sign-in terminal is open. Memoize on (path, mtime, size)
+// so the parse happens once per actual write instead of once per poll.
+let claudeAccountMemo: { path: string; mtimeMs: number; size: number; email: string | undefined } | undefined
+export function readClaudeAccountEmail(path = claudeAccountFile()): string | undefined {
+  let stat: { mtimeMs: number; size: number }
+  try {
+    stat = statSync(path)
+  } catch {
+    return undefined
+  }
+  const memo = claudeAccountMemo
+  if (memo && memo.path === path && memo.mtimeMs === stat.mtimeMs && memo.size === stat.size) return memo.email
+  let email: string | undefined
+  try {
+    const doc = JSON.parse(readFileSync(path, "utf8")) as { oauthAccount?: { emailAddress?: unknown } }
+    email = asEmail(doc?.oauthAccount?.emailAddress)
+  } catch {
+    email = undefined
+  }
+  claudeAccountMemo = { path, mtimeMs: stat.mtimeMs, size: stat.size, email }
+  return email
+}
+
+// Codex keeps no plaintext account record: the identity lives in the OIDC id_token inside auth.json.
+// Read the payload segment WITHOUT verifying the signature — this is a display label sourced from the
+// user's own credential file, not an authorization decision, and fray has no key to verify it against.
+// An expired id_token still names the right account (Codex refreshes in place), so expiry is ignored.
+export function readCodexAccountEmail(codexHome = defaultCodexHome()): string | undefined {
+  let doc: { tokens?: { id_token?: unknown } }
+  try {
+    doc = JSON.parse(readFileSync(join(codexHome, "auth.json"), "utf8")) as typeof doc
+  } catch {
+    return undefined
+  }
+  const idToken = doc?.tokens?.id_token
+  if (typeof idToken !== "string") return undefined
+  const payload = idToken.split(".")[1]
+  if (!payload) return undefined
+  try {
+    return asEmail((JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { email?: unknown }).email)
+  } catch {
+    return undefined
+  }
+}
+
+// Both providers' account emails. Independent and individually best-effort: one provider's unreadable
+// record never costs the other its label. An API-key-only Codex install has no id_token and therefore
+// no email — that is a normal outcome, not a failure.
+export function readAccountEmails(): AccountEmails {
+  const emails: AccountEmails = {}
+  const claude = tryRead(readClaudeAccountEmail)
+  const codex = tryRead(readCodexAccountEmail)
+  if (claude) emails.claude = claude
+  if (codex) emails.codex = codex
+  return emails
+}
+
+function tryRead(read: () => string | undefined): string | undefined {
+  try {
+    return read()
+  } catch {
+    return undefined
+  }
+}
+
 // The per-provider auth snapshot the new-thread gate reads. Never throws — each provider degrades to
 // "unknown" independently, and the gate fails open on "unknown".
 //
@@ -219,5 +312,15 @@ export async function readAuthSnapshot(opts?: { claudeBin?: string }): Promise<A
       .catch((): ProviderAuth => "unknown"),
     Promise.resolve().then(() => readCodexAuthState()).catch((): ProviderAuth => "unknown"),
   ])
-  return { claude, codex }
+  // A signed-out provider has no account to name, and a stale email under a signed-out chip would read
+  // as "still signed in as…". Only report the label for a credential we actually found.
+  const emails = readAccountEmails()
+  return {
+    claude,
+    codex,
+    emails: {
+      ...(claude === "signed-out" ? {} : emails.claude ? { claude: emails.claude } : {}),
+      ...(codex === "signed-out" ? {} : emails.codex ? { codex: emails.codex } : {}),
+    },
+  }
 }

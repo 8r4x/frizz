@@ -17,6 +17,30 @@ const pass = (m) => { console.log("pass:", m); results.push(true) }
 const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox", "--force-color-profile=srgb"] })
 try {
   const page = await browser.newPage()
+
+  // Open a quota chip's popover and only return once its content is actually mounted. A bare
+  // click+waitForSelector is not enough: waitForSelector can match a wrapper Radix then discards when
+  // the click landed mid-commit, and every measurement after it evaluates against null. Retry the
+  // click instead of measuring a popover that isn't there.
+  const openChip = async (label) => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await page.click(`[aria-label^="${label}"]`)
+      try {
+        await page.waitForFunction(
+          () => {
+            const w = document.querySelector("[data-radix-popper-content-wrapper]")
+            return !!w && w.getBoundingClientRect().height > 0
+          },
+          { timeout: 3000, polling: 100 },
+        )
+        await new Promise((r) => setTimeout(r, 350))
+        if (await page.evaluate(() => !!document.querySelector("[data-radix-popper-content-wrapper]"))) return
+      } catch {
+        // fall through to the retry
+      }
+    }
+    throw new Error(`the ${label} chip never opened its popover`)
+  }
   const errors = []
   page.on("console", (m) => { if (m.type() === "error" && !m.text().includes("favicon")) errors.push(m.text()) })
   page.on("pageerror", (e) => errors.push(String(e)))
@@ -90,9 +114,7 @@ try {
   await new Promise((r) => setTimeout(r, 250))
 
   // ---- 3. the quota popover, opened with a REAL click -------------------------------------------
-  await page.click('[aria-label^="Claude"]')
-  await page.waitForSelector('[data-radix-popper-content-wrapper]', { timeout: 5000 })
-  await new Promise((r) => setTimeout(r, 350))
+  await openChip("Claude")
   const quotaPop = await page.$eval("[data-radix-popper-content-wrapper]", (p) => {
     const r = p.getBoundingClientRect()
     return { x: Math.round(r.x), y: Math.round(r.y), bottom: Math.round(r.bottom), right: Math.round(r.right) }
@@ -105,8 +127,72 @@ try {
   }
   await page.screenshot({ path: join(OUT, "03-quota-popover.png") })
 
+  // The account line: the popover names WHICH account the credential belongs to, on its own row under
+  // the provider/plan header and above the per-window breakdown.
+  const account = await page.evaluate(() => {
+    const pop = document.querySelector("[data-radix-popper-content-wrapper]")
+    const row = pop.querySelector("[data-quota-account]")
+    if (!row) return { missing: true, text: pop.innerText }
+    // The header is the account row's own previous sibling — an exact handle. Do NOT reach for a
+    // structural selector like "div > div": the popper wrapper's first child is PopoverContent itself,
+    // so that matches the whole card and every "is it below the header" check passes vacuously.
+    const header = row.previousElementSibling
+    const list = pop.querySelector("ul")
+    const r = row.getBoundingClientRect()
+    return {
+      text: row.textContent,
+      title: row.getAttribute("title"),
+      clipped: row.scrollWidth > row.clientWidth + 1,
+      insidePopover: r.right <= pop.getBoundingClientRect().right + 1,
+      belowHeader: r.top >= header.getBoundingClientRect().bottom - 1,
+      aboveWindows: r.bottom <= list.getBoundingClientRect().top + 1,
+    }
+  })
+  console.log("account line:", JSON.stringify(account))
+  if (account.missing) fail(`the popover shows no account email: ${account.text}`)
+  else if (account.belowHeader && account.aboveWindows && account.insidePopover && !account.clipped) {
+    pass(`the account line reads "${account.text}", sits under the header and above the windows, unclipped`)
+  } else fail(`the account line is misplaced or clipped: ${JSON.stringify(account)}`)
+
+  // A signed-out provider must NOT be labelled with a leftover account (the server omits it, and the
+  // popover leads with Sign in instead). Codex is the signed-out one in ?state=signedout.
+  await page.keyboard.press("Escape")
+  await page.goto(`${BASE}?state=signedout`, { waitUntil: "domcontentloaded", timeout: 20000 })
+  await page.waitForSelector("[data-quota-bar] button", { timeout: 20000 })
+  await new Promise((r) => setTimeout(r, 600))
+  await openChip("Codex")
+  const signedOutText = await page.$eval("[data-radix-popper-content-wrapper]", (p) => p.innerText)
+  if (!/@/.test(signedOutText)) pass(`a signed-out provider carries no account line ("${signedOutText.replace(/\n/g, " · ")}")`)
+  else fail(`the signed-out popover still names an account: ${signedOutText.replace(/\n/g, " · ")}`)
+  await page.screenshot({ path: join(OUT, "03b-signed-out-popover.png") })
+
+  // A long address must truncate inside the popover rather than widen or overflow it.
+  await page.keyboard.press("Escape")
+  await page.goto(`${BASE}?state=longemail`, { waitUntil: "domcontentloaded", timeout: 20000 })
+  await page.waitForSelector("[data-quota-bar] button", { timeout: 20000 })
+  await new Promise((r) => setTimeout(r, 600))
+  await openChip("Claude")
+  const longEmail = await page.evaluate(() => {
+    const pop = document.querySelector("[data-radix-popper-content-wrapper]")
+    const row = pop.querySelector("[data-quota-account]")
+    const popBox = pop.getBoundingClientRect()
+    return {
+      popWidth: Math.round(popBox.width),
+      truncated: row.scrollWidth > row.clientWidth,
+      title: row.getAttribute("title"),
+      overflows: row.getBoundingClientRect().right > popBox.right + 1,
+    }
+  })
+  console.log("long email:", JSON.stringify(longEmail))
+  if (longEmail.popWidth <= 240 && longEmail.truncated && !longEmail.overflows && /@/.test(longEmail.title ?? "")) {
+    pass(`a long address truncates at the 15rem cap (popover stays ${longEmail.popWidth}px) and keeps the full value in title`)
+  } else fail(`a long address broke the popover: ${JSON.stringify(longEmail)}`)
+  await page.screenshot({ path: join(OUT, "03c-long-email-popover.png") })
+
   // ---- 4. narrow viewport ------------------------------------------------------------------------
   await page.keyboard.press("Escape")
+  await page.goto(BASE, { waitUntil: "domcontentloaded", timeout: 20000 })
+  await page.waitForSelector("[data-quota-bar] button", { timeout: 20000 })
   await page.setViewport({ width: 420, height: 640, deviceScaleFactor: 2 })
   await new Promise((r) => setTimeout(r, 500))
   const narrow = await page.evaluate(() => {
@@ -122,8 +208,11 @@ try {
     }
   })
   console.log("narrow:", JSON.stringify(narrow))
-  if (narrow.codexRight <= narrow.viewport && !narrow.bodyOverflows && narrow.barHeight === 24) {
-    pass(`narrow (420px): the bar stays one 24px line, the last chip is reachable, no horizontal overflow`)
+  // 28px = the bar's documented h-7 (StatusBar.tsx: h-7 at top-2.5 holds the old h-6/top-3 optical
+  // centre while giving the fill 2px around the 24px icon targets). This assertion still read 24 from
+  // the h-6 era and had been failing on every run since.
+  if (narrow.codexRight <= narrow.viewport && !narrow.bodyOverflows && narrow.barHeight === 28) {
+    pass(`narrow (420px): the bar stays one 28px line, the last chip is reachable, no horizontal overflow`)
   } else {
     fail(`narrow viewport broke the bar: ${JSON.stringify(narrow)}`)
   }

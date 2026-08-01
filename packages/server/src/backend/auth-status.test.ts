@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { parseClaudeAuthStatusJson, readAuthSnapshot, readClaudeAuthState, readClaudeAuthStatusCli, readClaudePreflightAuth, readCodexAuthState, readCodexBinaryState } from "./auth-status.ts"
+import { parseClaudeAuthStatusJson, readAuthSnapshot, readClaudeAccountEmail, readClaudeAuthState, readClaudeAuthStatusCli, readClaudePreflightAuth, readCodexAccountEmail, readCodexAuthState, readCodexBinaryState } from "./auth-status.ts"
 
 // Codex reads env keys BEFORE the file, so a file-based test must run with those keys cleared or an
 // ambient OPENAI_API_KEY in the dev shell would mask the file logic. Clears + restores around fn.
@@ -250,4 +250,100 @@ test("readCodexBinaryState: present, ENOENT→missing, everything-else→unknown
   assert.equal(await readCodexBinaryState("codex", (async () => { throw Object.assign(new Error("exit 1"), { code: 1 }) }) as never), "unknown")
   // a timeout is NOT missing — fail open, never trap a working-but-slow environment.
   assert.equal(await readCodexBinaryState("codex", (async () => { throw Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }) }) as never), "unknown")
+})
+
+// ---- Account emails (the quota popover's "signed in as who?") ----
+
+// A JWT the way Codex stores one: three dot-separated base64url segments, of which only the payload is
+// ever read. Signed with nothing — fray does not verify it (see readCodexAccountEmail).
+function idToken(payload: unknown): string {
+  return `hdr.${Buffer.from(JSON.stringify(payload), "utf8").toString("base64url")}.sig`
+}
+
+test("codex account email: read from the id_token payload, absent for an API-key-only install", () => {
+  withTmp((dir) => {
+    writeFileSync(join(dir, "auth.json"), JSON.stringify({ tokens: { id_token: idToken({ email: "someone@example.com" }) } }))
+    assert.equal(readCodexAccountEmail(dir), "someone@example.com")
+  })
+  // API-key auth carries no id_token — a normal outcome, not a failure.
+  withTmp((dir) => {
+    writeFileSync(join(dir, "auth.json"), JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "sk-live", tokens: null }))
+    assert.equal(readCodexAccountEmail(dir), undefined)
+  })
+})
+
+test("codex account email: every malformed shape degrades to undefined, never throws", () => {
+  withTmp((dir) => {
+    assert.equal(readCodexAccountEmail(dir), undefined) // no auth.json at all
+    writeFileSync(join(dir, "auth.json"), "{ not json")
+    assert.equal(readCodexAccountEmail(dir), undefined)
+    writeFileSync(join(dir, "auth.json"), JSON.stringify({ tokens: { id_token: "nodots" } }))
+    assert.equal(readCodexAccountEmail(dir), undefined)
+    writeFileSync(join(dir, "auth.json"), JSON.stringify({ tokens: { id_token: "hdr.!!!not-base64!!!.sig" } }))
+    assert.equal(readCodexAccountEmail(dir), undefined)
+    // A payload that decodes but names no email, and one whose "email" isn't email-shaped: the label
+    // is rendered verbatim in the UI, so a corrupt record must not smuggle arbitrary text into it.
+    writeFileSync(join(dir, "auth.json"), JSON.stringify({ tokens: { id_token: idToken({ sub: "u_1" }) } }))
+    assert.equal(readCodexAccountEmail(dir), undefined)
+    writeFileSync(join(dir, "auth.json"), JSON.stringify({ tokens: { id_token: idToken({ email: "not an email" }) } }))
+    assert.equal(readCodexAccountEmail(dir), undefined)
+    writeFileSync(join(dir, "auth.json"), JSON.stringify({ tokens: { id_token: idToken({ email: `${"a".repeat(320)}@example.com` }) } }))
+    assert.equal(readCodexAccountEmail(dir), undefined)
+  })
+})
+
+test("claude account email: read from .claude.json's oauthAccount, memoized until the file changes", () => {
+  withTmp((dir) => {
+    const file = join(dir, ".claude.json")
+    assert.equal(readClaudeAccountEmail(file), undefined) // absent
+    writeFileSync(file, JSON.stringify({ oauthAccount: { emailAddress: "colin@example.com" }, projects: {} }))
+    assert.equal(readClaudeAccountEmail(file), "colin@example.com")
+    // The memo is keyed on (path, mtime, size) — a rewrite with different content must be picked up,
+    // not served from the previous parse.
+    writeFileSync(file, JSON.stringify({ oauthAccount: { emailAddress: "someone-else@example.com" }, projects: { a: 1 } }))
+    assert.equal(readClaudeAccountEmail(file), "someone-else@example.com")
+    // Signed out of the account but the config file survives (Claude Code drops oauthAccount).
+    writeFileSync(file, JSON.stringify({ projects: { a: 1, b: 2 } }))
+    assert.equal(readClaudeAccountEmail(file), undefined)
+    writeFileSync(file, "{ truncated")
+    assert.equal(readClaudeAccountEmail(file), undefined)
+  })
+})
+
+test("readAuthSnapshot: never labels a signed-out provider with a leftover email", async () => {
+  const savedConfig = process.env.CLAUDE_CONFIG_DIR
+  const savedKeychain = process.env.FRAY_KEYCHAIN_DISABLED
+  const savedCodexHome = process.env.CODEX_HOME
+  const savedCodexEnv = CODEX_ENV_KEYS.map((k) => [k, process.env[k]] as const)
+  try {
+    for (const k of CODEX_ENV_KEYS) delete process.env[k]
+    await withTmpAsync(async (dir) => {
+      // Both providers signed out, yet both account records still name an account — exactly the state
+      // a `claude auth logout` leaves behind, since it clears the credential and not the config file.
+      process.env.CLAUDE_CONFIG_DIR = dir
+      process.env.FRAY_KEYCHAIN_DISABLED = "1"
+      process.env.CODEX_HOME = dir
+      writeFileSync(join(dir, ".claude.json"), JSON.stringify({ oauthAccount: { emailAddress: "stale@example.com" } }))
+      writeFileSync(join(dir, "auth.json"), JSON.stringify({ tokens: { id_token: idToken({ email: "stale-codex@example.com" }) } }))
+      const signedOut = await readAuthSnapshot({ claudeBin: "/nonexistent/claude-absent" })
+      assert.equal(signedOut.claude, "signed-out")
+      assert.deepEqual(signedOut.emails, {})
+
+      // Same records, but with a live credential for each → both labels appear.
+      writeFileSync(join(dir, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "tok" } }))
+      writeFileSync(join(dir, "auth.json"), JSON.stringify({ tokens: { access_token: "tok", id_token: idToken({ email: "live-codex@example.com" }) } }))
+      const authed = await readAuthSnapshot({ claudeBin: "/nonexistent/claude-absent" })
+      assert.equal(authed.claude, "authed")
+      assert.equal(authed.codex, "authed")
+      assert.deepEqual(authed.emails, { claude: "stale@example.com", codex: "live-codex@example.com" })
+    })
+  } finally {
+    for (const [k, v] of savedCodexEnv) if (v === undefined) delete process.env[k]; else process.env[k] = v
+    if (savedConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = savedConfig
+    if (savedKeychain === undefined) delete process.env.FRAY_KEYCHAIN_DISABLED
+    else process.env.FRAY_KEYCHAIN_DISABLED = savedKeychain
+    if (savedCodexHome === undefined) delete process.env.CODEX_HOME
+    else process.env.CODEX_HOME = savedCodexHome
+  }
 })

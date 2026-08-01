@@ -86,21 +86,22 @@ export function QuotaChips() {
 
   return (
     <div data-quota-bar className="flex shrink-0 items-center gap-2.5 text-[11px]">
-      <QuotaChip backend="claude" quota={quota.data?.claude} auth={auth.data?.claude} loading={quota.isLoading} fetching={quota.isFetching || rechecking} onRecheck={() => recheck("claude")} />
-      <QuotaChip backend="codex" quota={quota.data?.codex} auth={auth.data?.codex} loading={quota.isLoading} fetching={quota.isFetching || rechecking} onRecheck={() => recheck("codex")} />
+      <QuotaChip backend="claude" quota={quota.data?.claude} auth={auth.data?.claude} email={auth.data?.emails?.claude} loading={quota.isLoading} fetching={quota.isFetching || rechecking} onRecheck={() => recheck("claude")} />
+      <QuotaChip backend="codex" quota={quota.data?.codex} auth={auth.data?.codex} email={auth.data?.emails?.codex} loading={quota.isLoading} fetching={quota.isFetching || rechecking} onRecheck={() => recheck("codex")} />
     </div>
   )
 }
 
 // One provider's chip: the provider mark + the 5-HOUR window's remaining quota, as a percentage. Clicking
-// opens a Popover with the full per-window breakdown (both windows + reset times + plan) — and forces a
-// fresh quota+auth read, so the chip doubles as the recheck control.
+// opens a Popover with the full per-window breakdown (both windows + reset times + plan), the account the
+// credential belongs to — and forces a fresh quota+auth read, so the chip doubles as the recheck control.
 // Signed out → the em dash, and the popover offers Sign in. Unavailable → a muted dash whose Popover
 // explains why; loading (first fetch) → a quiet non-interactive placeholder.
 function QuotaChip({
   backend,
   quota,
   auth,
+  email,
   loading,
   fetching,
   onRecheck,
@@ -108,6 +109,7 @@ function QuotaChip({
   backend: Backend
   quota: ProviderQuota | undefined
   auth: ProviderAuth | undefined
+  email: string | undefined
   loading: boolean
   fetching: boolean
   onRecheck: () => void
@@ -175,11 +177,28 @@ function QuotaChip({
         {/* Drops DOWN from the bar. The chips sit at the very top of the viewport now, so the old
             side="top" would have had nowhere to go but a collision flip on every single open. */}
         <PopoverContent side="bottom" align="start" className="w-[min(15rem,calc(100vw-1.5rem))] p-3 text-[11px] leading-relaxed text-fg">
-          <div className="mb-1.5 flex items-center gap-1.5 font-medium">
-            <ProviderMark backend={backend} />
-            <span>{providerLabel}</span>
-            {!signedOut && quota?.planType && <span className="text-muted/70">· {cap(quota.planType)} plan</span>}
-            {fetching && <Loader2 size={11} className="animate-spin text-muted/60" aria-label="Rechecking" />}
+          {/* The IDENTITY block: who this provider is, which plan, and which account — one unit, held
+              together by its own tight internal leading and separated from the numbers below by mb-2.
+              Measured cap-band gaps: 10.9px inside the block vs 18.9px to the first window row, so the
+              email reads as part of the header rather than as a homeless row between two blocks. At the
+              original mt-0.5/mb-1.5 those gaps were 12.9 and 16.9 — too close to call either way. */}
+          <div className="mb-2">
+            <div className="flex items-center gap-1.5 font-medium">
+              <ProviderMark backend={backend} />
+              <span>{providerLabel}</span>
+              {!signedOut && quota?.planType && <span className="text-muted/70">· {cap(quota.planType)} plan</span>}
+              {fetching && <Loader2 size={11} className="animate-spin text-muted/60" aria-label="Rechecking" />}
+            </div>
+            {/* WHICH account this is. Sits above the quota/unavailable/sign-in branch because it is an
+                AUTH fact, not a quota one — a provider whose usage endpoint is down still knows who you
+                are, and that is exactly when "am I on the right account?" gets asked. Tone matches the
+                plan label beside it (both are identity metadata, so the block reads as one). Selectable
+                and title-carrying, so a long address stays copyable past the 15rem truncation. */}
+            {email && (
+              <div data-quota-account className="truncate text-muted/70 select-text" title={email}>
+                {email}
+              </div>
+            )}
           </div>
           {signedOut ? (
             <div className="flex flex-col gap-2.5">

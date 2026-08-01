@@ -13,7 +13,8 @@ import "./styles.css"
 //   ?state=weeklywall — a HEALTHY 5h window behind a nearly-spent weekly one. The chip must still read
 //                       the 5h number; this is the state where the old "swap to the tightest window"
 //                       headline used to hijack it and show the weekly figure instead.
-//   ?state=signedout  — Codex signed out (em dash + Sign in popover)
+//   ?state=signedout  — Codex signed out (em dash + Sign in popover, and NO account line)
+//   ?state=longemail  — an account address past the popover's width, to check the truncation
 //   ?connection=closed|connecting
 //   ?identity=loading|unavailable
 
@@ -44,10 +45,20 @@ const quota =
           codex: { status: "ok", planType: "pro", windows: windows(41, 29) },
         }
 
+// `emails` is the account each credential belongs to — the popover's "signed in as who?" line. A
+// signed-out provider carries none (the server omits it rather than leave a stale label under an em
+// dash), and ?state=longemail pins the truncation at the popover's 15rem cap.
+const emails =
+  state === "signedout"
+    ? { claude: "colin@pullfrog.com" }
+    : state === "longemail"
+      ? { claude: "colin.mcdonnell.with.a.long.name@some-long-company-domain.example.com", codex: "colinmcd94@gmail.com" }
+      : { claude: "colin@pullfrog.com", codex: "colinmcd94@gmail.com" }
+
 const auth =
   state === "signedout"
-    ? { claude: "authed", codex: "signed-out" }
-    : { claude: "authed", codex: "authed" }
+    ? { claude: "authed", codex: "signed-out", emails }
+    : { claude: "authed", codex: "authed", emails }
 
 const nativeFetch = window.fetch.bind(window)
 window.fetch = async (input, init) => {
