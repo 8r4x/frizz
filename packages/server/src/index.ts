@@ -38,6 +38,7 @@ import {
 } from "./project-launch.ts"
 import * as tmux from "./tmux.ts"
 import { createBootProgressPublisher } from "./boot-progress.ts"
+import { log as frayLog } from "./logging.ts"
 
 export const SERVER_SHUTDOWN_TIMEOUT_MS = 4_000
 export const SERVER_FORCE_EXIT_MS = 5_000
@@ -357,8 +358,9 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     diagnostics.push(event)
     if (opts.shutdownDiagnostic) opts.shutdownDiagnostic(event)
     else {
-      console.error(
-        `[fray-ui] shutdown ${event.phase}: ${event.message}${event.error instanceof Error ? ` — ${event.error.message}` : ""}`,
+      frayLog.warn(
+        "shutdown",
+        `${event.phase}: ${event.message}${event.error instanceof Error ? ` — ${event.error.message}` : ""}`,
       )
     }
   }
@@ -633,8 +635,9 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         })
       } catch (error) {
         if (opts.requireDevWeb) throw error
-        console.warn(
-          `[fray-ui] vite dev middleware unavailable — serving API only: ${error instanceof Error ? error.message : error}`,
+        frayLog.warn(
+          "server",
+          `vite dev middleware unavailable — serving API only: ${error instanceof Error ? error.message : error}`,
         )
       }
     }
@@ -722,8 +725,12 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       port,
       bootId: ctx!.bootId,
     }))
-    console.log(
-      `[fray-ui] server on http://127.0.0.1:${port} (${opts.dev ? "dev" : "prod"}) — project ${ctx.project.name}`,
+    // The launcher owns what the operator sees; this is the control plane's PRIVATE port behind the
+    // supervisor proxy, and printing it beside the real one left two addresses on screen with no way
+    // to tell which to open. It belongs in the log.
+    frayLog.info(
+      "server",
+      `control plane listening on 127.0.0.1:${port} (${opts.dev ? "dev" : "prod"}) — project ${ctx.project.name}`,
     )
 
     startupPhase = "signal handlers"

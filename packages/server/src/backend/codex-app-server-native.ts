@@ -39,6 +39,7 @@ import { StringDecoder } from "node:string_decoder"
 import { WebSocket } from "ws"
 import type { CodexAppServerProcess } from "./codex-app-server.ts"
 import type { CodexAppServerAttachment, CodexAppServerHost, CodexAppServerHostOptions } from "./codex-app-server-host.ts"
+import { log as frayLog } from "../logging.ts"
 
 export interface NativeListenerRecord {
   projectId: string
@@ -357,7 +358,7 @@ export const nativeListenCodexAppServerHost: CodexAppServerHost = async (options
         droppedWhileDetached: PRESUMED_LOSSY_REJOIN,
       }
     }
-    console.error(`[fray-ui] codex app-server native listener unavailable (${(error as Error).message}); falling back to an in-process app-server — turns will NOT survive a fray restart`)
+    frayLog.error("codex", `codex app-server native listener unavailable (${(error as Error).message}); falling back to an in-process app-server — turns will NOT survive a fray restart`)
     const child = spawn(options.codexBin, ["app-server", "--stdio"], { cwd: options.cwd, env: options.env, stdio: ["pipe", "pipe", "pipe"] })
     return { process: child as unknown as CodexAppServerProcess, generation: randomUUID(), reattached: false, daemonPid: process.pid, droppedWhileDetached: 0 }
   }

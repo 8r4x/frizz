@@ -11,6 +11,7 @@ import {
   tmuxProjectRootHash,
   validateTmuxSocketName,
 } from "./tmux-socket.ts"
+import { log as frayLog } from "./logging.ts"
 
 const execFileAsync = promisify(execFile)
 
@@ -444,7 +445,7 @@ export function spawnWithRunner(
   } catch {
     // Intentionally exclude the original error, stderr, argv, cwd, and environment. Any one of them
     // can contain the full user prompt or credentials; stage + created-bit is enough to operate.
-    console.error(`[fray-ui] tmux worker spawn failed (stage=${stage}, created=${identity ? "yes" : "no"})`)
+    frayLog.error("tmux", `worker spawn failed (stage=${stage}, created=${identity ? "yes" : "no"})`)
     throw new TmuxSpawnError(stage, identity)
   }
 }

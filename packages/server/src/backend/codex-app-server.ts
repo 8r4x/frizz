@@ -31,6 +31,7 @@ import {
   type CodexAppServerHost,
 } from "./codex-app-server-host.ts"
 import { nativeListenCodexAppServerHost } from "./codex-app-server-native.ts"
+import { log as frayLog } from "../logging.ts"
 
 // Foundation-only bridge. It is deliberately not an AgentBackend: no current/default Codex TUI
 // session can accidentally cross this boundary. Context now wires it unconditionally
@@ -2525,7 +2526,7 @@ export class CodexAppServerBridge {
         })
         if (version !== aheadVersionWarned) {
           aheadVersionWarned = version
-          console.warn(`[fray-ui] ${verdict.message}`)
+          frayLog.warn("codex", verdict.message)
         }
       }
       handshaking = false

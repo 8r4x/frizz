@@ -57,6 +57,7 @@ import {
   type ShutdownBarrierOptions,
   type ShutdownDiagnostic,
 } from "./shutdown.ts"
+import { log as frayLog } from "./logging.ts"
 
 export const CONTEXT_STARTUP_CLEANUP_TIMEOUT_MS = 4_000
 
@@ -549,7 +550,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // FRAY_ORPHAN_REAPER_OFF disables it for disposable adhoc/test stacks (mirrors FRAY_WAKERS_OFF) so a
   // throwaway instance never reaps the real machine's processes.
   if (!process.env.FRAY_ORPHAN_REAPER_OFF) {
-    contextUnsubscribers.push(startOrphanReaper({ log: (m) => console.log(`[fray-ui] ${m}`) }))
+    contextUnsubscribers.push(startOrphanReaper({ log: (m) => frayLog.info("reaper", m) }))
   }
   opts.startup?.afterPhase?.("orphan reaper")
   reconcileSessions(storage)
@@ -663,7 +664,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         // per death rather than a card nobody asked for.
         onDiagnostic: (slug, _sessionId, diagnostic) => {
           if (diagnostic.kind !== "lifecycle" || diagnostic.phase !== "crashed") return
-          console.log(`[fray-ui] claude broker ${slug}: ${diagnostic.message ?? "died without a recorded cause"}`)
+          frayLog.warn("broker", `claude broker ${slug}: ${diagnostic.message ?? "died without a recorded cause"}`)
         },
       })
     : undefined

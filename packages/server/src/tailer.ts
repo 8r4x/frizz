@@ -29,6 +29,7 @@ import {
   type TailCacheEntry,
   type TailStateCache,
 } from "./tail-cache.ts"
+import { log as frayLog } from "./logging.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
 // (~/.claude/projects/<cwdSlug>/<session_id>.jsonl) to derive liveness telemetry — last activity
@@ -3300,8 +3301,9 @@ export function createTailer(deps: TailerDeps): Tailer {
     const detail = authFailure
       ? "(claude authentication failure — pane content redacted; sign in and retry)"
       : pane.trim() || "(pane empty / unavailable)"
-    console.error(
-      `[fray-ui] thread ${row.slug} (session ${row.session_id}): no transcript ${DISCOVERY_GRACE_MS / 1000}s after dispatch — likely a boot failure. Pane:\n${detail.slice(0, 4000)}`,
+    frayLog.error(
+      "tailer",
+      `thread ${row.slug} (session ${row.session_id}): no transcript ${DISCOVERY_GRACE_MS / 1000}s after dispatch — likely a boot failure. Pane:\n${detail.slice(0, 4000)}`,
     )
     try {
       mkdirSync(STALL_LOG_DIR, { recursive: true })
@@ -3762,8 +3764,9 @@ export function createTailer(deps: TailerDeps): Tailer {
         overBudgetTicks++
         // Log the first, then decimate: a saturated server must not spend its remaining budget logging.
         if (overBudgetTicks === 1 || overBudgetTicks % 30 === 0) {
-          console.error(
-            `[fray-ui] tailer tick took ${Math.round(elapsed)}ms (poll ${POLL_MS}ms, ${states.size} sessions) — ` +
+          frayLog.warn(
+            "tailer",
+            `tick took ${Math.round(elapsed)}ms (poll ${POLL_MS}ms, ${states.size} sessions) — ` +
             `the event loop is blocked for that long, so RPCs and board pushes are delayed (occurrence ${overBudgetTicks})`,
           )
         }
@@ -3785,7 +3788,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   function reportTickFailure(error: unknown): void {
     tickFailures++
     if (tickFailures === 1 || tickFailures % 50 === 0) {
-      console.error(`[fray-ui] tailer tick threw (occurrence ${tickFailures}; the loop keeps running): ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
+      frayLog.error("tailer", `tick threw (occurrence ${tickFailures}; the loop keeps running): ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
     }
   }
 

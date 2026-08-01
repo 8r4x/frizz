@@ -1,7 +1,17 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { launchApp, launchBrowserTab } from "./browser.ts";
-import { StartupProgress } from "./startup-progress.ts";
+import { Readout, tildePath } from "./readout.ts";
+import {
+  appendCrashRecord,
+  createLogger,
+  logEnvironment,
+  runLogPath,
+  setAmbientLogger,
+  type Logger,
+} from "@fray-ui/server/logging";
 import {
   buildFrayArtifact,
   assertArtifactHostCompatible,
@@ -53,6 +63,31 @@ function fail(error: unknown): never {
   process.exit(1);
 }
 
+/**
+ * The last thing the operator sees when the board stops. Ctrl-C used to print nothing whatsoever, so
+ * a clean shutdown and a crashed one looked identical, and neither told you where to read the log.
+ */
+function printFarewell(code: number): void {
+  const suffix = logger.file ? `\n  log: ${tildePath(logger.file, homedir())}` : "";
+  process.stdout.write(
+    code === 0
+      ? `\n  Fray stopped. Agent sessions in tmux keep running.${suffix}\n\n`
+      : `\n  Fray stopped with errors (exit ${code}).${suffix}\n\n`
+  );
+}
+
+/** The version this checkout reports, for the readout header. Best-effort; never fails a launch. */
+function sourceVersion(): string | undefined {
+  try {
+    const manifest = JSON.parse(
+      readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8")
+    ) as { version?: unknown };
+    return typeof manifest.version === "string" ? manifest.version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const argv = process.argv.slice(2);
 const sourceCommand = process.env.FRAY_SOURCE_COMMAND ?? "fray-dev";
 const command = ["build", "promote", "restart"].includes(argv[0] ?? "")
@@ -78,17 +113,38 @@ const internalLaunch =
   process.env.FRAY_DAEMON_CHILD === "1" ||
   process.env.FRAY_DEV_REEXEC === "1" ||
   process.env.FRAY_DEV_CHILD === "1";
-const startupProgress =
+const interactiveLaunch =
   !internalLaunch &&
   !options.stop &&
   !options.status &&
   command !== "restart" &&
-  command !== "promote"
-    ? new StartupProgress()
-    : undefined;
-startupProgress?.phase(
-  options.dev ? "Preparing source development server" : "Preparing Fray startup"
-);
+  command !== "promote";
+
+const readout = interactiveLaunch
+  ? new Readout({ debug: options.debug, version: sourceVersion() })
+  : undefined;
+
+/**
+ * In `--debug` the terminal mirrors the disk feed line for line; otherwise it stays quiet and the
+ * readout does the talking. Re-attached whenever the logger is replaced.
+ */
+const mirrorToTerminal = (target: Logger) => {
+  if (!options.debug) return;
+  target.onRecord((record) => {
+    const at = new Date(record.at).toISOString().slice(11, 23);
+    process.stderr.write(
+      `${at} ${record.level.toUpperCase().padEnd(5)} ${record.scope.padEnd(12)} ${record.message}\n`
+    );
+  });
+};
+
+readout?.plan([
+  { key: "workspace", label: "Workspace" },
+  ...(options.dev ? [] : [{ key: "artifact", label: "Artifact" }]),
+  { key: "server", label: "Server" },
+  { key: "browser", label: options.noApp ? "Address" : "Browser" },
+]);
+readout?.begin("workspace");
 
 let workspace: Workspace;
 try {
@@ -106,13 +162,34 @@ try {
 } catch (error) {
   // Report ONCE — `fail()` prints too, and doing both showed the operator the same sentence twice
   // under two prefixes, which reads like two separate failures.
-  if (startupProgress) {
-    startupProgress.fail(error instanceof Error ? error.message : String(error));
+  //
+  // No project is known yet, so this record goes to the machine-level fallback directory rather than
+  // a per-project one. Written directly: there is no logger to own, and none is worth creating for a
+  // launch that is already over.
+  const fallback = runLogPath();
+  appendCrashRecord(
+    fallback,
+    `workspace resolution failed: ${error instanceof Error ? error.stack ?? error.message : error}`
+  );
+  if (readout) {
+    readout.fail(error instanceof Error ? error.message : String(error), fallback);
     process.exit(1);
   }
   fail(error);
 }
 process.chdir(workspace.root);
+// The project is known now, so this run's log belongs in its state directory, beside every other
+// per-project artifact a reader debugging this board already looks at. A forked child inherits the
+// parent's path through the environment instead of opening its own.
+const logger: Logger = setAmbientLogger(
+  process.env.FRAY_LOG_FILE
+    ? createLogger({ file: process.env.FRAY_LOG_FILE, owner: false })
+    : createLogger({ file: runLogPath(workspace.stateDir) })
+);
+mirrorToTerminal(logger);
+logger.info("launcher", `${sourceCommand} starting in ${options.dev ? "source" : "artifact"} mode`);
+logger.info("launcher", `workspace ${workspace.name} (${workspace.root})`);
+readout?.settle("workspace", "done", workspace.name);
 const expectedHealth = { projectId: workspace.id, projectDir: workspace.root };
 const launchTarget = workspaceLaunchTarget(workspace);
 
@@ -146,6 +223,10 @@ async function runSupervisor(
     {
       ...process.env,
       FRAY_DIRECT_SUPERVISOR: "1",
+      // Every descendant appends to THIS run's log. That is what lets the control-plane child stay
+      // silent on the terminal without its records being lost.
+      ...logEnvironment(logger, options.debug ? "debug" : "info"),
+      ...(options.debug ? { FRAY_DEBUG: "1" } : {}),
     },
     target,
     launchOwner.token
@@ -295,8 +376,15 @@ async function runSupervisor(
     release: () => {
       launchOwner.release();
     },
-    exit: (code) => process.exit(code),
-    error: (line) => console.error(line),
+    exit: (code) => {
+      // Ctrl-C printed nothing at all before this. Say the board stopped, and where the complete
+      // record of the run it just ended can be read.
+      logger.info("launcher", `stopped with code ${code}`);
+      printFarewell(code);
+      process.exit(code);
+    },
+    error: (line) =>
+      logger.error("supervisor", line.startsWith("[fray-ui] ") ? line.slice(10) : line),
   });
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
@@ -322,21 +410,19 @@ if (
 
 if (command === "build") {
   try {
-    startupProgress?.phase("Preparing immutable Fray artifact");
     const artifact = buildFrayArtifact(
       sourceWorkspaceDir(),
       defaultArtifactRoot(),
-      { onProgress: (message) => startupProgress?.phase(message) }
+      { onProgress: (message) => logger.info("artifact", message) }
     );
-    startupProgress?.complete("Immutable Fray artifact is ready");
+    logger.info("artifact", `built ${artifact.digest}`);
     console.log(`built Fray artifact ${artifact.digest}`);
     console.log(`web: ${artifact.webDir}`);
     process.exit(0);
   } catch (error) {
-    startupProgress?.fail(
-      `Immutable artifact build failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`
+    logger.error(
+      "artifact",
+      `build failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`
     );
     fail(error);
   }
@@ -413,35 +499,54 @@ async function claimProjectLaunch(): Promise<
   }
 }
 
+/**
+ * Hand the operator the running board and print the block that stays on screen.
+ *
+ * Exactly ONE address appears here, and it is the one to open. The old readout printed the control
+ * plane's private child port as well ("server on http://127.0.0.1:51739") — two ports, no indication
+ * which was real. That port is an implementation detail and now goes to the log only.
+ */
 async function openOrPrint(port: number, reused: boolean): Promise<void> {
   const url = `http://127.0.0.1:${port}`;
-  startupProgress?.clearLine();
-  console.log(`${reused ? "reusing" : "started"} Fray for ${workspace.root}`);
-  console.log(`source: ${sourceLabel()}`);
-  if (options.noApp) console.log(url);
-  else {
-    startupProgress?.phase(
-      options.appMode ? "Requesting Fray app window" : "Requesting default browser"
-    );
-    let opened: string;
+  const home = homedir();
+  logger.info("launcher", `${reused ? "reusing" : "started"} Fray at ${url} for ${workspace.root}`);
+  let browser: string | undefined;
+  if (!options.noApp) {
+    readout?.begin("browser", options.appMode ? "requesting app window" : "requesting default browser");
     try {
       if (options.appMode) {
-        await launchApp(url, {
-          dataPath: join(workspace.stateDir, "browser-profile"),
-        });
-        opened = `${reused ? "focused" : "opened"} Fray app — ${url}`;
+        await launchApp(url, { dataPath: join(workspace.stateDir, "browser-profile") });
+        browser = reused ? "focused the Fray app window" : "opened the Fray app window";
       } else {
         await launchBrowserTab(url);
-        opened = `requested Fray in your default browser — ${url}`;
+        browser = "opened in your default browser";
       }
-    } catch {
-      const target = options.appMode ? "Fray app window" : "default browser";
-      opened = `Could not open the ${target}. Open manually: ${url}`;
+      logger.info("launcher", browser);
+    } catch (error) {
+      browser = `could not open the ${options.appMode ? "app window" : "default browser"} — open the address above`;
+      logger.warn("launcher", `${browser}: ${error instanceof Error ? error.message : error}`);
     }
-    // Clear the animated phase line before printing so the record never glues onto the spinner.
-    startupProgress?.clearLine();
-    console.log(opened);
+    readout?.settle("browser", "done", browser);
+  } else {
+    readout?.settle("browser", "done", url);
   }
+
+  if (!readout) {
+    // `--status`, internal launches and pipes keep the plain, parseable records.
+    console.log(`${reused ? "reusing" : "started"} Fray for ${workspace.root}`);
+    console.log(`source: ${sourceLabel()}`);
+    console.log(url);
+    return;
+  }
+  readout.ready(
+    [
+      { label: "Local", value: `${url}/`, accent: true },
+      { label: "Project", value: `${workspace.name} — ${tildePath(workspace.root, home)}` },
+      { label: "Source", value: tildePath(sourceLabel(), home) },
+      ...(logger.file ? [{ label: "Logs", value: tildePath(logger.file, home) }] : []),
+    ],
+    options.debug ? undefined : `press ctrl-c to stop · run with --debug for the full event feed`
+  );
 }
 
 async function stopWorkspace(): Promise<void> {
@@ -592,7 +697,6 @@ try {
   }
   if (before.health && before.port) {
     await openOrPrint(before.port, true);
-    startupProgress?.complete("Fray is ready");
     process.exit(0);
   }
   if (before.owner && !readProjectLaunchOwner(workspace.stateDir)) {
@@ -605,7 +709,6 @@ try {
     } catch {}
     if (before.health && before.port) {
       await openOrPrint(before.port, true);
-      startupProgress?.complete("Fray is ready");
       process.exit(0);
     }
     throw new Error(
@@ -622,7 +725,6 @@ try {
   const projectClaim = await claimProjectLaunch();
   if ("reusePort" in projectClaim) {
     await openOrPrint(projectClaim.reusePort, true);
-    startupProgress?.complete("Fray is ready");
     process.exit(0);
   }
   const launchOwner = projectClaim;
@@ -634,26 +736,33 @@ try {
   try {
     const sequenced = await prepareBeforeGlobalLaunchLock(
       () => {
-        startupProgress?.phase("Checking Fray launch prerequisites");
+        logger.info("launcher", "checking launch prerequisites");
         assertLaunchPrerequisites();
         // The verified digest is passed to the foreground supervisor generation so a source mutation
         // after this point cannot alter its first child.
         return options.dev
           ? undefined
           : (() => {
-              startupProgress?.phase("Preparing immutable Fray artifact");
+              readout?.begin("artifact", "checking for a verified build");
               const artifact = ensureStableFrayArtifact(
                 workspace.stateDir,
                 sourceWorkspaceDir(),
                 defaultArtifactRoot(),
-                { onProgress: (message) => startupProgress?.phase(message) }
+                {
+                  onProgress: (message) => {
+                    logger.info("artifact", message);
+                    readout?.detail("artifact", message.toLowerCase());
+                  },
+                }
               );
               assertArtifactHostCompatible(artifact);
+              readout?.settle("artifact", "done", artifact.digest.slice(0, 12));
               return artifact;
             })();
       },
       () => {
-        startupProgress?.phase("Waiting for Fray startup lock");
+        readout?.begin("server", "waiting for the machine-wide startup lock");
+        logger.info("launcher", "waiting for the machine-wide startup lock");
         // This lock protects only machine-shared port allocation and initial supervisor startup.
         // Artifact publication handles same-digest winners independently of this critical section.
         return acquireGlobalLaunchLock(
@@ -673,7 +782,6 @@ try {
     const after = await existingHealth();
     if (after.health && after.port) {
       await openOrPrint(after.port, true);
-      startupProgress?.complete("Fray is ready");
       release();
       release = undefined;
       launchOwner.release();
@@ -692,11 +800,13 @@ try {
       target,
       readProjectLaunchOwner(workspace.stateDir)
     );
-    startupProgress?.phase("Starting Fray server");
+    readout?.begin("server", `starting on port ${port}`);
+    logger.info("launcher", `starting the control plane on port ${port}`);
     const running = runSupervisor(port, launchOwner.token, pinnedArtifact?.digest);
-    // From here the forked control-plane child logs to the same TTY. Go line-oriented so its
-    // records (and the supervisor's own) land on their own rows instead of gluing onto the spinner.
-    startupProgress?.beginConcurrentLogs("Waiting for Fray server health");
+    // The forked control-plane child no longer writes to this TTY (its records go to the run log, and
+    // to the terminal only under --debug), so the readout keeps repainting through the health wait
+    // instead of standing down the moment the child starts talking.
+    readout?.detail("server", "waiting for health");
     // Progress-tracked (see waitForWorkspace): the flat deadline made a slow-but-healthy boot — a big
     // board, or a busy machine — indistinguishable from a wedge. `running` still wins the race the
     // moment the in-process supervisor itself fails, so a real failure is reported immediately.
@@ -710,7 +820,6 @@ try {
     release();
     release = undefined;
     await openOrPrint(port, false);
-    startupProgress?.complete("Fray is ready");
     // The normal launcher intentionally remains attached. Its SIGINT/SIGTERM handler is installed
     // by runSupervisor and stops only this workspace's UI control plane.
     await running;
@@ -719,10 +828,19 @@ try {
     launchOwner.release();
   }
 } catch (error) {
-  startupProgress?.fail(
-    `Fray startup failed: ${
-      error instanceof Error ? error.message : String(error)
-    }`
+  logger.error(
+    "launcher",
+    `startup failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`
   );
+  if (readout) {
+    const where = readout.activeStep();
+    readout.fail(
+      `${where ? `${where.label.toLowerCase()}: ` : ""}${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      logger.file ?? undefined
+    );
+    process.exit(1);
+  }
   fail(error);
 }

@@ -25,6 +25,7 @@ import {
   CODEX_APP_SERVER_SUPPORTED_VERSION,
   CodexAppServerBridge,
 } from "./codex-app-server.ts"
+import { captureLogRecords } from "../logging.ts"
 
 // A stand-in for `codex app-server --stdio`: answers `initialize`, echoes a marker for `ping`, and
 // can be told to emit an unsolicited notification after a delay (the "a turn completed while nobody
@@ -252,9 +253,9 @@ test("codex daemon: killing the daemon tears down the app-server and prunes the 
 // so it gets its own proof rather than being trusted because it looks obvious.
 test("codex daemon: a daemon that cannot start falls back to an in-process app-server", async () => {
   const h = harness()
-  const errors: string[] = []
-  const consoleError = console.error
-  console.error = (...args: unknown[]) => { errors.push(args.join(" ")) }
+  // The fallback announces itself through the run log rather than the console now; assert against
+  // the channel that actually carries it.
+  const captured = captureLogRecords()
   try {
     const attachment = await daemonCodexAppServerHost({
       ...options(h),
@@ -273,14 +274,14 @@ test("codex daemon: a daemon that cannot start falls back to an in-process app-s
       assert.equal((echoed.result as { echo?: string })?.echo, "fallback", "and serves ordinary requests")
       // Degrading silently would be its own trap — the operator loses restart survival and must be told.
       assert.ok(
-        errors.some((line) => /falling back to an in-process app-server/.test(line)),
-        `the degradation is announced, not silent — saw ${JSON.stringify(errors)}`,
+        captured.messages().some((line) => /falling back to an in-process app-server/.test(line)),
+        `the degradation is announced, not silent — saw ${JSON.stringify(captured.messages())}`,
       )
     } finally {
       attachment.process.kill()
     }
   } finally {
-    console.error = consoleError
+    captured.restore()
     killCodexAppServerDaemon(h.stateDir, PROJECT)
   }
 })

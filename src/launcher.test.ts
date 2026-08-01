@@ -406,6 +406,7 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
     status: false,
     help: false,
     dev: false,
+    debug: false,
     port: undefined,
     repoPath: undefined,
   });
@@ -417,10 +418,15 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
     status: false,
     help: false,
     dev: false,
+    debug: false,
     port: 5123,
     repoPath: undefined,
   });
   assert.equal(parseCliArgs(["--dev"]).dev, true);
+  // --debug swaps the compact readout for the full event feed; it is orthogonal to --dev.
+  assert.equal(parseCliArgs(["--debug"]).debug, true);
+  assert.equal(parseCliArgs(["--debug"]).dev, false);
+  assert.equal(parseCliArgs(["--no-app", "--debug"]).debug, true);
   assert.equal(
     parseCliArgs(["--no-app", "/tmp/repo with spaces"]).repoPath,
     "/tmp/repo with spaces"
@@ -438,6 +444,7 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
   assert.throws(() => parseCliArgs(["--mystery"]), /unknown option/);
   assert.match(helpText(), /always runs in the foreground/);
   assert.match(helpText(), /default browser/);
+  assert.match(helpText(), /--debug\s+stream the full event feed/);
   assert.match(helpText(), /--app\s+use the legacy dedicated app window/);
   assert.match(
     helpText(),

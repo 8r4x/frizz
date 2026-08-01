@@ -35,6 +35,7 @@ import {
   pasteText,
   TmuxSpawnError,
 } from "./tmux.ts"
+import { captureLogRecords } from "./logging.ts"
 
 const tmuxAvailable = (() => {
   try {
@@ -281,9 +282,9 @@ test("a name-targeted call for an absent slug never reaches its `-2` neighbour",
 test("spawn diagnostics never expose prompt argv, cwd, environment credentials, stderr, or exec errors", () => {
   const secret = "github_pat_PRIVATE_CREDENTIAL"
   const prompt = "the full private user prompt"
-  const logs: string[] = []
-  const originalError = console.error
-  console.error = (...args: unknown[]) => void logs.push(args.map(String).join(" "))
+  // The diagnostic travels through the run log now, not the console, so capture THAT channel — the
+  // redaction guarantee this test exists for is unchanged, only where the line lands.
+  const captured = captureLogRecords()
   let thrown: unknown
   try {
     spawnWithRunner(
@@ -301,11 +302,11 @@ test("spawn diagnostics never expose prompt argv, cwd, environment credentials, 
   } catch (error) {
     thrown = error
   } finally {
-    console.error = originalError
+    captured.restore()
   }
   assert.ok(thrown instanceof TmuxSpawnError)
   assert.equal(thrown.message, "worker spawn failed")
-  const rendered = `${logs.join("\n")}\n${String(thrown)}`
+  const rendered = `${captured.messages().join("\n")}\n${String(thrown)}`
   assert.doesNotMatch(rendered, new RegExp(secret))
   assert.doesNotMatch(rendered, new RegExp(prompt))
   assert.doesNotMatch(rendered, /GITHUB_TOKEN|\/private\//)

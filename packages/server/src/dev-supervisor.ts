@@ -21,6 +21,7 @@ import {
   type ProjectLaunchTarget,
 } from "./project-launch.ts"
 import { RestartSupervisorProxy, type RestartResult } from "./restart-supervisor.ts"
+import { log as frayLog } from "./logging.ts"
 
 export const DEV_RESTART_DEBOUNCE_MS = 180
 export const DEV_CRASH_STABLE_MS = 5000
@@ -157,6 +158,11 @@ export const SUPERVISOR_ESCALATE_GRACE_MS = 500
  * launcher that ignores Ctrl-C. Escalation still releases the tokenized launch owner — a forced exit
  * must not strand the project — and reports a non-zero code because the drain did not complete.
  */
+/** Call sites still build "[fray-ui] …" strings; the logger owns that framing now. */
+function stripPrefix(line: string): string {
+  return line.startsWith("[fray-ui] ") ? line.slice("[fray-ui] ".length) : line
+}
+
 export function createSupervisorShutdownHandler(options: SupervisorShutdownHandlerOptions): () => void {
   const now = options.now ?? (() => Date.now())
   const escalateAfterMs = options.escalateAfterMs ?? SUPERVISOR_ESCALATE_GRACE_MS
@@ -448,8 +454,11 @@ class Supervisor implements DevSupervisor {
     }
     this.supervisorLock = resolve(opts.launchTarget.stateDir, "dev-supervisor.lock")
     this.ownerToken = opts.launchOwnerToken
-    this.logLine = opts.log ?? ((line) => console.log(line))
-    this.errorLine = opts.error ?? ((line) => console.error(line))
+    // Default to the run log, NOT the terminal. The launcher repaints a region there and cannot
+    // clear writes it did not make; every supervisor record the operator actually needs is either
+    // surfaced through the readout or streamed by `--debug`.
+    this.logLine = opts.log ?? ((line) => frayLog.info("supervisor", stripPrefix(line)))
+    this.errorLine = opts.error ?? ((line) => frayLog.error("supervisor", stripPrefix(line)))
     this.updateRestart = opts.updateRestart
     this.rollbackUpdate = opts.rollbackUpdate
     this.durableReexec = opts.durableReexec

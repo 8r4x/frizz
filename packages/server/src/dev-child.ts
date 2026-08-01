@@ -11,11 +11,23 @@ import {
   verifyProjectLaunchDelegate,
 } from "./project-launch.ts"
 import { ShutdownTimeoutError } from "./shutdown.ts"
+import { log as frayLog } from "./logging.ts"
+
+// A control-plane child that dies must leave its reason in the run log, not only on a terminal the
+// launcher may have already repainted past. Its stdio is still inherited, so an uncaught stack would
+// otherwise land on the operator's screen and nowhere durable.
+process.on("uncaughtException", (error) => {
+  frayLog.error("dev-child", `uncaught exception: ${error instanceof Error ? error.stack ?? error.message : error}`)
+  process.exit(1)
+})
+process.on("unhandledRejection", (reason) => {
+  frayLog.error("dev-child", `unhandled rejection: ${reason instanceof Error ? reason.stack ?? reason.message : reason}`)
+})
 
 const rawPort = process.env.FRAY_DEV_PORT
 const port = Number(rawPort)
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
-  console.error(`[fray-ui] invalid FRAY_DEV_PORT for dev child: ${rawPort ?? "<unset>"}`)
+  frayLog.error("dev-child", `invalid FRAY_DEV_PORT: ${rawPort ?? "<unset>"}`)
   process.exit(1)
 }
 
@@ -89,16 +101,16 @@ try {
       // Do not turn that diagnostic into an immediate process exit: doing so repeatedly kills clean
       // late drains and makes the supervisor log a misleading restart storm.
       if (err instanceof ShutdownTimeoutError) {
-        console.warn(`[fray-ui] dev child shutdown exceeded ${err.timeoutMs}ms; retaining ownership while the drain completes`)
+        frayLog.warn("dev-child", `shutdown exceeded ${err.timeoutMs}ms; retaining ownership while the drain completes`)
         try {
           await server.shutdownFence.whenSafe()
           process.exit(0)
           return
         } catch (drainError) {
-          console.error(`[fray-ui] dev child late shutdown drain failed: ${drainError instanceof Error ? drainError.stack ?? drainError.message : drainError}`)
+          frayLog.error("dev-child", `late shutdown drain failed: ${drainError instanceof Error ? drainError.stack ?? drainError.message : drainError}`)
         }
       }
-      console.error(`[fray-ui] dev child shutdown failed: ${err instanceof Error ? err.stack ?? err.message : err}`)
+      frayLog.error("dev-child", `shutdown failed: ${err instanceof Error ? err.stack ?? err.message : err}`)
       process.exit(1)
     }
   }
@@ -110,6 +122,6 @@ try {
   // A crashed/killed supervisor must not leave an unsupervised control plane behind.
   process.once("disconnect", () => void shutdown())
 } catch (err) {
-  console.error(`[fray-ui] dev child failed to start: ${err instanceof Error ? err.stack ?? err.message : err}`)
+  frayLog.error("dev-child", `failed to start: ${err instanceof Error ? err.stack ?? err.message : err}`)
   process.exit(1)
 }

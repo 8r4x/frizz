@@ -28,6 +28,7 @@ import { StringDecoder } from "node:string_decoder"
 import { resolveDetachedDaemonEntry } from "../detached-daemons.ts"
 import { stopNativeListener } from "./codex-app-server-native.ts"
 import type { CodexAppServerProcess } from "./codex-app-server.ts"
+import { log as frayLog } from "../logging.ts"
 
 export interface CodexAppServerDaemonRecord {
   projectId: string
@@ -379,7 +380,7 @@ export const daemonCodexAppServerHost: CodexAppServerHost = async (options) => {
     // app-server was an ordinary child of this runtime. So a daemon that cannot start must cost the
     // survival property, never Codex. Without this, one packaging slip took out every Codex dispatch,
     // follow-up, steer and interrupt at once (2026-07-23) with only a cryptic toast to go on.
-    console.error(`[fray-ui] codex app-server daemon unavailable (${(error as Error).message}); falling back to an in-process app-server — turns will NOT survive a fray restart`)
+    frayLog.error("codex", `codex app-server daemon unavailable (${(error as Error).message}); falling back to an in-process app-server — turns will NOT survive a fray restart`)
     return inProcessCodexAppServer(options)
   }
 }

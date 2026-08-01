@@ -1,6 +1,7 @@
 import type { QuotaSnapshot, ProviderQuota } from "@fray-ui/shared"
 import { readCodexQuota } from "./backend/codex-quota.ts"
 import { readClaudeQuota } from "./backend/claude-quota.ts"
+import { log as frayLog } from "./logging.ts"
 
 // The polled provider-quota snapshot the sidebar status bar renders. Codex comes from the app-server's
 // live `account/rateLimits/read` (the rollout JSONL fray tails is only its offline fallback, since a
@@ -67,7 +68,7 @@ export async function readQuota(opts: { claudeBin?: string; force?: boolean } = 
   if (fx && process.env.NODE_ENV !== "production") {
     const snap = await fixture(fx)
     if (snap) {
-      console.warn(`[fray-ui] quota: serving FIXTURE "${fx}" (FRAY_QUOTA_FIXTURE set; dev-only seam)`)
+      frayLog.warn("quota", `serving FIXTURE "${fx}" (FRAY_QUOTA_FIXTURE set; dev-only seam)`)
       return snap
     }
   }

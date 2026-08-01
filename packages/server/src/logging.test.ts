@@ -1,0 +1,207 @@
+import assert from "node:assert/strict"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { test } from "node:test"
+import {
+  appendCrashRecord,
+  createLogger,
+  defaultLogRoot,
+  formatFeedLine,
+  latestLogPath,
+  logEnvironment,
+  pruneRunLogs,
+  runLogPath,
+} from "./logging.ts"
+
+function scratch(): string {
+  return mkdtempSync(join(tmpdir(), "fray-logging-"))
+}
+
+test("the run log lives beside the project's other state, not under an imported convention", () => {
+  const stateDir = "/home/someone/.fray/projects/abcd"
+  assert.equal(defaultLogRoot(stateDir), join(stateDir, "logs"))
+  // No project yet (a failure before the workspace resolves) falls back to the machine-level dir.
+  assert.equal(defaultLogRoot(undefined, "/home/someone"), "/home/someone/.fray/logs")
+})
+
+test("a run log is named for its instant and pid so a crash points at one exact file", () => {
+  const path = runLogPath("/state", new Date(2026, 6, 31, 16, 42, 11), 4242, "/home/x", {})
+  assert.equal(path, join("/state", "logs", "fray-2026-07-31T16-42-11-4242.log"))
+})
+
+test("FRAY_LOG_PATH accepts either a directory or an exact file", () => {
+  const at = new Date(2026, 6, 31, 16, 42, 11)
+  assert.equal(
+    runLogPath("/state", at, 7, "/home/x", { FRAY_LOG_PATH: "/tmp/logs" }),
+    join("/tmp/logs", "fray-2026-07-31T16-42-11-7.log"),
+  )
+  assert.equal(
+    runLogPath("/state", at, 7, "/home/x", { FRAY_LOG_PATH: "/tmp/exact.log" }),
+    "/tmp/exact.log",
+  )
+})
+
+test("records land on disk in a human-readable, aligned form", () => {
+  const dir = scratch()
+  try {
+    const file = join(dir, "run.log")
+    const logger = createLogger({ file, now: () => Date.UTC(2026, 6, 31, 12, 0, 0) })
+    logger.info("launcher", "workspace fray")
+    logger.error("supervisor", "child exited")
+    const written = readFileSync(file, "utf8").split("\n").filter(Boolean)
+    assert.equal(written.length, 2)
+    assert.match(written[0]!, /INFO {2}\s+launcher\s+workspace fray$/)
+    assert.match(written[1]!, /ERROR\s+supervisor\s+child exited$/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("the level threshold drops quieter records everywhere, including on disk", () => {
+  const dir = scratch()
+  try {
+    const file = join(dir, "run.log")
+    const logger = createLogger({ file, level: "warn" })
+    const seen: string[] = []
+    logger.onRecord((record) => seen.push(record.message))
+    logger.debug("tailer", "a debug record")
+    logger.info("tailer", "an info record")
+    logger.warn("tailer", "a warning record")
+    assert.deepEqual(seen, ["a warning record"])
+    const written = readFileSync(file, "utf8")
+    assert.equal(written.includes("a debug record"), false)
+    assert.equal(written.includes("an info record"), false)
+    assert.equal(written.includes("a warning record"), true)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("an owner sweeps retention and repoints latest.log; an adopting child does neither", () => {
+  const dir = scratch()
+  try {
+    const logs = join(dir, "logs")
+    mkdirSync(logs, { recursive: true })
+    for (let index = 0; index < 25; index++) {
+      const path = join(logs, `fray-old-${index}.log`)
+      writeFileSync(path, "x")
+      // Distinct mtimes so "newest N" is well defined.
+      const when = new Date(2026, 0, 1 + index)
+      utimesSync(path, when, when)
+    }
+    const owner = createLogger({ file: join(logs, "fray-new.log") })
+    owner.info("launcher", "hello")
+    const remaining = readdirSync(logs).filter((name) => name !== "latest.log")
+    assert.equal(remaining.length <= 21, true, `expected retention to sweep, saw ${remaining.length}`)
+    assert.equal(existsSync(latestLogPath(logs)), true, "the owner publishes a latest.log pointer")
+    // The pointer resolves to this run's content.
+    assert.equal(readFileSync(latestLogPath(logs), "utf8").includes("hello"), true)
+
+    const before = readdirSync(logs).length
+    const child = createLogger({ file: join(logs, "fray-new.log"), owner: false })
+    child.info("dev-child", "adopted")
+    assert.equal(readdirSync(logs).length, before, "an adopting child must not prune its parent's history")
+    assert.equal(readFileSync(join(logs, "fray-new.log"), "utf8").includes("adopted"), true)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("retention drops anything past the count OR older than the age bound", () => {
+  const dir = scratch()
+  try {
+    const fresh = join(dir, "fray-fresh.log")
+    const ancient = join(dir, "fray-ancient.log")
+    writeFileSync(fresh, "x")
+    writeFileSync(ancient, "x")
+    const old = new Date(Date.now() - 40 * 24 * 60 * 60 * 1_000)
+    utimesSync(ancient, old, old)
+    pruneRunLogs(dir, 20, 14)
+    assert.equal(existsSync(fresh), true, "a recent log within the count survives")
+    assert.equal(existsSync(ancient), false, "an old log is swept even though the count allows it")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("a wedged subsystem cannot fill the disk", () => {
+  const dir = scratch()
+  try {
+    const file = join(dir, "run.log")
+    const logger = createLogger({ file, maxBytes: 400 })
+    for (let index = 0; index < 200; index++) logger.info("tailer", `tick ${index}`)
+    const written = readFileSync(file, "utf8")
+    assert.equal(written.length < 600, true, `expected the cap to hold, saw ${written.length} bytes`)
+    assert.match(written, /log truncated at 400 bytes/)
+    assert.equal(logger.file, null, "a capped logger reports no usable file")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("two processes appending to one file interleave without losing a record", () => {
+  const dir = scratch()
+  try {
+    const file = join(dir, "run.log")
+    // Exactly the supervisor/child arrangement: separate loggers, same path, O_APPEND.
+    const supervisor = createLogger({ file })
+    const child = createLogger({ file, owner: false })
+    for (let index = 0; index < 50; index++) {
+      supervisor.info("supervisor", `s${index}`)
+      child.info("dev-child", `c${index}`)
+    }
+    const lines = readFileSync(file, "utf8").split("\n").filter(Boolean)
+    assert.equal(lines.length, 100, "every record from both writers survives")
+    assert.equal(lines.filter((line) => line.includes("dev-child")).length, 50)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("the child environment carries the parent's file so its records are never lost", () => {
+  const dir = scratch()
+  try {
+    const file = join(dir, "run.log")
+    const logger = createLogger({ file })
+    assert.deepEqual(logEnvironment(logger, "info"), {
+      FRAY_LOG_FILE: file,
+      FRAY_LOG_LEVEL: "info",
+    })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("a crash record can be written without owning a logger", () => {
+  const dir = scratch()
+  try {
+    const file = join(dir, "nested", "run.log")
+    appendCrashRecord(file, "workspace resolution failed: not a git repository")
+    assert.match(readFileSync(file, "utf8"), /ERROR\s+crash\s+workspace resolution failed/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("logging never throws when its directory is unusable", () => {
+  const dir = scratch()
+  try {
+    // A path whose parent is a FILE cannot be created; the launch must still proceed.
+    const blocker = join(dir, "blocker")
+    writeFileSync(blocker, "not a directory")
+    const logger = createLogger({ file: join(blocker, "run.log") })
+    assert.equal(logger.file, null)
+    assert.doesNotThrow(() => logger.error("launcher", "still alive"))
+    assert.doesNotThrow(() => appendCrashRecord(join(blocker, "run.log"), "boom"))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("the debug feed line keeps a fixed shape so the terminal view stays scannable", () => {
+  assert.equal(
+    formatFeedLine({ at: Date.UTC(2026, 6, 31, 9, 8, 7, 65), level: "warn", scope: "tailer", message: "slow" }),
+    "09:08:07.065 WARN  tailer       slow",
+  )
+})

@@ -166,7 +166,9 @@ export class Readout {
     const step = this.steps.find((candidate) => candidate.key === key)
     if (!step) return
     step.state = state
-    if (detail !== undefined) step.detail = detail
+    // A settled step drops any leftover sub-phase: "starting" described work that is now finished, so
+    // keeping it would leave the row reading "done server — starting".
+    step.detail = detail
     const startedAt = this.stepStartedAt.get(key)
     if (startedAt !== undefined) step.ms = this.now() - startedAt
     this.emitPlain(step)

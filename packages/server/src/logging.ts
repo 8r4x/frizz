@@ -167,8 +167,11 @@ export interface Logger {
 }
 
 export interface LoggerOptions {
-  /** Absolute path of the run log. Omit to derive one from `stateDir`. */
-  file?: string
+  /**
+   * Absolute path of the run log. Omit to derive one from `stateDir`; pass `null` for a logger that
+   * keeps nothing on disk and only feeds its listeners.
+   */
+  file?: string | null
   stateDir?: string
   /** Records below this level are dropped everywhere, including on disk. */
   level?: LogLevel
@@ -196,16 +199,16 @@ function openLogFile(path: string): number | null {
 }
 
 export function createLogger(options: LoggerOptions = {}): Logger {
-  const path = options.file ?? runLogPath(options.stateDir)
-  const dir = join(path, "..")
+  const path = options.file === null ? null : options.file ?? runLogPath(options.stateDir)
   const level = options.level ?? "debug"
   const now = options.now ?? Date.now
   const threshold = LEVEL_ORDER[level]
   const maxBytes = options.maxBytes ?? MAX_LOG_BYTES
-  let fd = openLogFile(path)
+  let fd = path === null ? null : openLogFile(path)
   // Only the process that OWNS this run's directory sweeps retention and repoints `latest`. A forked
   // child adopts its parent's path from the environment and must not prune its parent's history.
-  if (fd !== null && options.owner !== false) {
+  if (fd !== null && path !== null && options.owner !== false) {
+    const dir = join(path, "..")
     pruneRunLogs(dir)
     linkLatest(dir, path)
   }
@@ -282,10 +285,15 @@ export function formatFeedLine(record: LogRecord): string {
 
 export function ambientLogger(): Logger {
   if (ambient) return ambient
-  const inherited = process.env[LOG_FILE_ENV]
+  const inherited = process.env[LOG_FILE_ENV] ?? process.env[LOG_PATH_ENV]
   const level = process.env[LOG_LEVEL_ENV] as LogLevel | undefined
+  // A process that was never TOLD where to log does not invent a file. Both launchers call
+  // `setAmbientLogger` with an explicit path, and they pass it to every child through the
+  // environment — so a run is always captured, while merely importing this module (a unit test, a
+  // script) writes nothing. Without this, `pnpm test` scattered a file per test process into
+  // ~/.fray/logs and pruned the operator's real history along the way.
   const logger = createLogger({
-    ...(inherited ? { file: inherited, owner: false } : {}),
+    ...(inherited ? { file: inherited, owner: false } : { file: null }),
     ...(level && level in LEVEL_ORDER ? { level } : {}),
   })
   // The whole reason the launcher can repaint is that this process says NOTHING to the shared
@@ -308,6 +316,29 @@ export const log = {
   info: (scope: string, message: string) => ambientLogger().info(scope, message),
   warn: (scope: string, message: string) => ambientLogger().warn(scope, message),
   error: (scope: string, message: string) => ambientLogger().error(scope, message),
+}
+
+/**
+ * Collect everything logged while `body` runs, writing nothing to disk.
+ *
+ * These diagnostics used to be `console.error` calls, and the tests that guard them captured the
+ * console. They travel through the logger now, so this is how a test asserts "the degradation is
+ * announced, not silent" against the channel that actually carries it.
+ */
+export function captureLogRecords(): { records: LogRecord[]; messages: () => string[]; restore: () => void } {
+  const previous = ambient
+  const records: LogRecord[] = []
+  const capture = createLogger({ file: null })
+  capture.onRecord((record) => records.push(record))
+  ambient = capture
+  return {
+    records,
+    messages: () => records.map((record) => record.message),
+    restore: () => {
+      capture.close()
+      ambient = previous
+    },
+  }
 }
 
 /**

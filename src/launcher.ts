@@ -22,6 +22,7 @@ import {
 } from "@fray-ui/server/project-launch";
 import { resolveProjectTmuxSocketSelection } from "@fray-ui/server/tmux-socket";
 import { readBootProgress } from "@fray-ui/server/boot-progress";
+import { defaultLogRoot, latestLogPath } from "@fray-ui/server/logging";
 import { DEFAULT_PORT } from "@fray-ui/shared";
 
 export { acquireGlobalLaunchLock, pidIsAlive };
@@ -47,6 +48,8 @@ export interface CliOptions {
   help: boolean;
   /** Deliberately unsafe source/HMR control plane, never selected implicitly. */
   dev: boolean;
+  /** Stream the full event feed to the terminal instead of the compact readout. */
+  debug: boolean;
   port?: number;
   /** Optional Git repository to serve. Defaults to the caller's current directory. */
   repoPath?: string;
@@ -140,6 +143,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     "--dev",
     "--prod",
     "--port",
+    "--debug",
   ]);
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
@@ -164,6 +168,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     status: args.has("--status"),
     help: args.has("--help") || args.has("-h"),
     dev: args.has("--dev"),
+    debug: args.has("--debug"),
     port,
     repoPath,
   };
@@ -184,6 +189,7 @@ Options:
   --foreground         accepted for compatibility; fray-dev always runs in the foreground
   --dev                explicitly use the unsafe source watcher and Vite/HMR instead of an immutable artifact
   --port <port>        request a fixed port for a new workspace server
+  --debug              stream the full event feed to the terminal instead of the compact readout
   --status             report this workspace's stable server and artifact
   --stop               stop this workspace's UI supervisor (tmux agents keep running)
   -h, --help           show this help
@@ -598,9 +604,17 @@ export function sourceLabel(): string {
   return realpathSync(sourceWorkspaceDir());
 }
 
+/**
+ * The tail of this workspace's most recent run log, for a failure message that can show what the
+ * server was doing when it gave up.
+ *
+ * This used to read `<stateDir>/dev.log` — a file Fray has never written since the detached
+ * supervisor was removed — and had no callers, so the diagnostic it appeared to offer always came
+ * back empty. It now reads the run log that `@fray-ui/server/logging` actually produces.
+ */
 export function logTail(stateDir: string, maxChars = 4000): string {
   try {
-    const value = readFileSync(join(stateDir, "dev.log"), "utf8");
+    const value = readFileSync(latestLogPath(defaultLogRoot(stateDir)), "utf8");
     return value.slice(-maxChars).trim();
   } catch {
     return "";

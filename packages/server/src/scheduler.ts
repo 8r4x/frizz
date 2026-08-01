@@ -25,6 +25,7 @@ export {
   parseGithubReviewActivities,
   type GithubReviewActivity,
 } from "./github-review.ts"
+import { log as frayLog } from "./logging.ts"
 
 // ---- DURABLE TIMER WAKER + PR-WATCH + LEGACY COMPATIBILITY ----------------------------------------
 // New workers use `awaiting` for a PR-activity watcher (`pr-watch:`), a specific external HUMAN gate
@@ -531,7 +532,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const autoResumeOnLimit = deps.autoResumeOnLimit ?? (() => true)
   const fetchPr = deps.fetchPr ?? defaultFetchPr
   const fetchGithubReview = deps.fetchGithubReview ?? createGithubReviewFetcher({ now })
-  const log = deps.log ?? ((m: string) => console.log(`[fray-ui] ${m}`))
+  const log = deps.log ?? ((m: string) => frayLog.info("scheduler", m))
   const tickMs = deps.tickMs ?? 10_000
   const pollMs = deps.pollMs ?? 60_000
   const deliveryLeaseMs = Math.max(1, deps.deliveryLeaseMs ?? 30_000)
