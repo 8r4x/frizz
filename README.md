@@ -81,6 +81,9 @@ Agents don't just stop, either — they end a turn with a fenced ` ```done `, ` 
   the browser, even stop Fray: the work keeps going, and relaunching reconnects to the session that's
   still running rather than replaying it from disk.
 - 🤖 **Claude Code *and* Codex.** Pick the backend per thread; run both side by side on the same repo.
+- 🚪 **An escape hatch, always.** One click copies the command to reach any thread from your own
+  terminal — an attach line while it's live, a provider `resume` line once it isn't. Fray is a view
+  onto your agents, not a cage around them.
 - 🎛️ **Per-thread model and effort.** Dispatch a thread on Opus at high effort, or Haiku for the
   mechanical stuff, and change your mind later — a new pick takes effect on the thread's next resume.
 - 🌲 **Sub-agents are visible.** A worker's fan-out shows up under its queue card, and you can open
@@ -93,8 +96,9 @@ Agents don't just stop, either — they end a turn with a fenced ` ```done `, ` 
 - 📋 **Plans are first-class.** A plan a worker writes to `.fray/plans/` gets its own sidebar section
   and a reader — and an **Implement this** button that opens a new thread seeded with it, so a design
   doc turns into the next piece of work instead of dying in a transcript.
-- 🐙 **Dispatch straight from GitHub.** Pick issues and PRs out of a list and fan out a batch of agents
-  at them in one shot.
+- 🐙 **Dispatch straight from GitHub.** Sign into `gh` and a GitHub icon appears in the composer:
+  browse the repo's issues and PRs, shift-click a range, and fan out up to 20 agents in one shot. The
+  prompt each one gets is a template you can edit in Settings.
 - ⏰ **Machine waits wake themselves.** A thread parked on a PR or a timer resumes on its own instead
   of sitting in your queue. CI doesn't even get that far — a worker watches its own build rather than
   handing it back to you.
@@ -104,8 +108,8 @@ Agents don't just stop, either — they end a turn with a fenced ` ```done `, ` 
   Claude mobile app.
 - 📊 **Quota at a glance.** See how much of your plan's limits you've burned before you fan out ten
   more agents.
-- 📎 **Paste and drop attachments.** Drop an image or a file into the composer and it goes to the agent
-  with your message.
+- 📎 **Paste and drop attachments.** Drag, paste, or pick an image or file on any composer. It's stored
+  outside your repo and handed to the agent as a path, so both backends just read it.
 - 🔗 **File paths are clickable.** A path an agent mentions opens in Cursor, VS Code, or your system
   editor — your pick in Settings. Threads can link to each other, too.
 - 🪄 **No magic.** Fray does nothing clever around worktrees, branches, dev servers, or build
