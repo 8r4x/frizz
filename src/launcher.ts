@@ -330,7 +330,8 @@ Options:
   --dev                explicitly use the unsafe source watcher and Vite/HMR instead of an immutable artifact
   --port <port>        request a fixed port for a new workspace server
   --host [address]     serve on a network address instead of loopback ("--host" alone means 0.0.0.0)
-  --allowed-host <name>  also accept this DNS name as the board's address (repeatable); "*" accepts any
+  --allowed-host <name>
+                       also accept this DNS name as the board's address (repeatable); "*" accepts any
   --debug              stream the full event feed to the terminal instead of the compact readout
   --status             report this workspace's stable server and artifact
   --stop               stop this workspace's UI supervisor (tmux agents keep running)

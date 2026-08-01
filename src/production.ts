@@ -102,7 +102,8 @@ Options:
   --no-app             print the URL without opening a browser
   --port <port>        request a fixed port for a new workspace server
   --host [address]     serve on a network address instead of loopback ("--host" alone means 0.0.0.0)
-  --allowed-host <name>  also accept this DNS name as the board's address (repeatable); "*" accepts any
+  --allowed-host <name>
+                       also accept this DNS name as the board's address (repeatable); "*" accepts any
   --debug              stream the full event feed to the terminal instead of the compact readout
   -h, --help           show this help
 
