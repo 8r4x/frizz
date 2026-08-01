@@ -20,16 +20,23 @@ import "./styles.css"
 // to end the activity run in coalesceToolActivityMessages — which stranded the run above as a settled
 // digest and left the thought below it with nothing to fold into.
 //
-// Two controls:
+// Three controls:
 //   ?steer=landed — the same column with the steer DELIVERED. Breaking the run is correct there, so the
 //                   thought keeps its own row and the shimmer follows it: the LABEL↔LABEL rhythm.
 //   ?state=settled — the turn is over, so nothing is withheld: the whole run returns as one digest with
 //                   both thoughts folded inside it.
+//   ?stack=three   — THREE bare labels in a row, which is the arrangement the report was actually about.
+//                   It survives the queued-steer fix because a Codex `reasoning` row is deliberately NOT
+//                   folded into a run (it carries real content and is already its own disclosure), so it
+//                   splits one: digest → reasoning label → the live tail's shimmer. Codex thinks before
+//                   nearly every call, so this is the COMMON shape, not an edge case — it is the one to
+//                   judge the label rhythm on.
 
 const SLUG = "meta-column-rhythm"
 const PARAMS = new URLSearchParams(location.search)
 const STEER_LANDED = PARAMS.get("steer") === "landed"
 const SETTLED = PARAMS.get("state") === "settled"
+const THREE_STACK = PARAMS.get("stack") === "three"
 const AGO = (seconds: number) => new Date(Date.now() - seconds * 1000).toISOString()
 
 // The report came from a sans instance, and the type family decides where a row's ink sits inside its
@@ -118,16 +125,34 @@ const messages = [
   },
   { sourceId: "m6", role: "assistant", text: "", tools: [], parts: [{ kind: "tools", tools: [bash("Probing tmux inspect behavior with and without the socket", "tmux -L probe list-sessions; echo EXIT=$?")] }], at: AGO(260) },
   { sourceId: "m7", role: "assistant", text: "", tools: [], parts: [{ kind: "tools", tools: [bash("Probing inspect with tmux absent from PATH", "env PATH=/usr/bin nub scripts/inspect.mjs; echo EXIT=$?")] }], at: AGO(200) },
-  {
-    sourceId: "m8",
-    role: "user",
-    text: "So we still require TMUX? Is that true for both Claude Code and Codex?",
-    tools: [],
-    parts: [],
-    at: AGO(160),
-    ...(STEER_LANDED ? {} : { queued: true }),
-  },
-  { sourceId: "m9", role: "assistant", kind: "event", text: "Thought for 33s", tools: [], parts: [], at: AGO(140) },
+  // The three-label stack: a Codex reasoning row splits the run, so the digest above it settles, the row
+  // itself is a second label, and the live tail below supplies the third.
+  ...(THREE_STACK
+    ? ([{
+        sourceId: "r1",
+        role: "assistant",
+        kind: "reasoning",
+        text: "The resolver is called from two places, and only one of them normalizes the canonical root first.",
+        durationMs: 33_000,
+        tools: [],
+        parts: [],
+        at: AGO(150),
+      }] as unknown as TranscriptMessage[])
+    : []),
+  ...(THREE_STACK
+    ? []
+    : ([{
+        sourceId: "m8",
+        role: "user",
+        text: "So we still require TMUX? Is that true for both Claude Code and Codex?",
+        tools: [],
+        parts: [],
+        at: AGO(160),
+        ...(STEER_LANDED ? {} : { queued: true }),
+      }] as unknown as TranscriptMessage[])),
+  ...(THREE_STACK
+    ? []
+    : ([{ sourceId: "m9", role: "assistant", kind: "event", text: "Thought for 33s", tools: [], parts: [], at: AGO(140) }] as unknown as TranscriptMessage[])),
   {
     sourceId: "m10",
     role: "assistant",
@@ -144,15 +169,17 @@ const messages = [
     ],
     at: AGO(130),
   },
-  {
-    sourceId: "m11",
-    role: "user",
-    text: "Why do we need it exactly? I thought we'd investigated how T3 code works, and they don't use TMUX. They use node PTY. What exactly led us to continue using TMUX?",
-    tools: [],
-    parts: [],
-    at: AGO(20),
-    queued: true,
-  },
+  ...(THREE_STACK
+    ? []
+    : ([{
+        sourceId: "m11",
+        role: "user",
+        text: "Why do we need it exactly? I thought we'd investigated how T3 code works, and they don't use TMUX. They use node PTY. What exactly led us to continue using TMUX?",
+        tools: [],
+        parts: [],
+        at: AGO(20),
+        queued: true,
+      }] as unknown as TranscriptMessage[])),
 ] as unknown as TranscriptMessage[]
 
 const originalFetch = window.fetch

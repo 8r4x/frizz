@@ -41,7 +41,7 @@ import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
 import { FOREGROUND_MARK_AFTER_MS, foregroundToolIsRunning, hasRunningToolIndicator, isPendingForegroundTool, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
 import { formatToolDuration } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
-import { CHILD_DONE_TITLE, CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, childOpSubtree, mergeBackgroundShells, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
+import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, childOpSubtree, mergeBackgroundShells, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
 import { agentReading } from "../lib/agentReading.ts"
@@ -1549,24 +1549,29 @@ function ScratchpadPane({ slug }: { slug: string }) {
 // or double the way adjacent margins silently do. Padding INSIDE a block (its own chrome) is fine;
 // the space BETWEEN sibling blocks is always a VSpace. STEP is the single between-block unit.
 export const STEP = 14
-// The tight run between two adjacent CARDS — bordered blocks with their own inset, where 6px of clear
-// space between two borders already reads as a separation.
+// The tight run, and the ONE thing it is for: erasing the seam between two adjacent CARDS. A card is a
+// bordered block with its own inset, so 6px of clear space between two borders already reads as a
+// separation — which is why a burst of tool calls can sit this close without turning to mush.
+//
+// It was never for two bare LABEL rows — `Ran N tool calls`, `Thought for Ns`, a collapsed reasoning
+// row, the live shimmer. A label has no border and no inset, so the gap is the ONLY separation there is,
+// and two labels are not one batch: they are two separate statements. Those take the ordinary STEP (see
+// messageGap). At 6px they sat 26px apart — the rows are 14px/20px and assistant prose is 14px/1.7 =
+// 23.8px — so three stacked read as one wrapped paragraph of grey rather than as three lines (maintainer
+// 2026-08-01, on `Ran 8 tool calls` / `Thought for 33s` / the shimmer: "All of these labels are way too
+// close together", and again after a first pass only reached 10px: "the issue I was most concerned with
+// was the fact that those three labels were all stacked so closely together").
+//
+// STEP is also the CEILING, measured rather than assumed: at 18px the labels stand further apart than
+// the prose→label boundary above them, which inverts the hierarchy and reads as three orphaned lines.
+// What makes these rows recede is their tone and size, never their spacing.
 export const META_CARD_STEP = 6
-// ...and the run between two bare single-line LABEL rows — `Ran N tool calls`, `Thought for Ns`, a
-// collapsed reasoning row, the live shimmer. A label has no border and no inset, so the card gap is all
-// the separation there is, and at 6px three of them stacked read as one wrapped paragraph rather than
-// three statements (maintainer 2026-08-01, on `Ran 8 tool calls` / `Thought for 33s` / the shimmer:
-// "All of these labels are way too close together"). These rows are 14px/20px and assistant prose is
-// 14px/1.7 = 23.8px, so at 6px their pitch was 26px — barely 2px looser than the wrapped prose above
-// them. 10px puts them at 30px, clearly apart while still tighter than a full STEP break, which is what
-// keeps the column reading as one subordinate run rather than a stack of separate blocks.
-export const META_LABEL_STEP = 10
 // Adjacent tool activity must read at the SAME tight run whether it's batched in one message or split
 // across messages (the tailer chunks a burst of tool calls arbitrarily). The boundary between two
 // messages joins that run iff the FIRST ends with a tool band AND the SECOND begins with one (tool-tail
 // → tool-head) — so a "let me check:" text-then-tool message sits at the run pitch above the next
 // message's leading tool, exactly like two batched tools. Any prose at the boundary keeps STEP (14px).
-// Which run pitch — META_CARD_STEP or META_LABEL_STEP — is then the label question below.
+// …and whether that boundary is a tight run at all, or the ordinary step, is the label question below.
 // messageTailIsTool / messageHeadIsTool inspect the LAST / FIRST rendered block; the legacy (no-parts)
 // path renders the tool band FIRST then prose, so its head is tools-if-any and its tail is
 // tools-only-if-no-prose.
@@ -1621,9 +1626,9 @@ export function messageTailIsMeta(m: ChatMessage): boolean {
 export function messageHeadIsMeta(m: ChatMessage): boolean {
   return isMetaLabelMessage(m) || messageHeadIsTool(m)
 }
-// The narrower question META_LABEL_STEP turns on: does this edge draw a bare one-line LABEL, or a
-// bordered card? A tools part renders as alternating runs (ToolCalls) — ordinary calls collapse into
-// one `Ran N tool calls` digest, while a dispatch / background op keeps its own card
+// The narrower question the tight run turns on: does this edge draw a bare one-line LABEL, or a bordered
+// card? A tools part renders as alternating runs (ToolCalls) — ordinary calls collapse into one
+// `Ran N tool calls` digest, while a dispatch / background op keeps its own card
 // (isToolActivityException) — so the edge's OWN call decides, not the run as a whole.
 export function messageTailIsLabel(m: ChatMessage): boolean {
   if (isMetaLabelMessage(m)) return true
@@ -1638,11 +1643,13 @@ export function messageHeadIsLabel(m: ChatMessage): boolean {
 // THE between-message gap, in one function. Both spacing implementations (this file's plain column and
 // the virtualized row builder) call it, so neither can drift from the other.
 export function messageGap(previous: ChatMessage, next: ChatMessage): number {
-  const base = messageTailIsLabel(previous) && messageHeadIsLabel(next)
-    ? META_LABEL_STEP
-    : messageTailIsMeta(previous) && messageHeadIsMeta(next)
-      ? META_CARD_STEP
-      : STEP
+  // The tight run needs a CARD on at least one side of the seam — that is the whole of it. Two bare
+  // label rows fall through to the ordinary STEP, which is what stops a `Ran N tool calls` / thought /
+  // shimmer column from painting as one block of grey. See META_CARD_STEP.
+  const tightRun = messageTailIsMeta(previous)
+    && messageHeadIsMeta(next)
+    && !(messageTailIsLabel(previous) && messageHeadIsLabel(next))
+  const base = tightRun ? META_CARD_STEP : STEP
   // ...and a little extra under the human's own words, but only where the run of them ENDS — see
   // USER_TAIL_EXTRA. Measured against the NEXT rendered message, so a user message followed by another
   // user message keeps the plain step between them.
@@ -1670,19 +1677,20 @@ export function VSpace({ h = STEP }: { h?: number }) {
 // The leading gap for the shimmer that tails a live transcript. The shimmer is a quiet single-line row
 // — the LIVE continuation of the very meta column that "Thought for Ns" and the tool bands form above
 // it — so it joins their tight run rather than breaking to STEP whenever the last rendered message ends
-// in a meta row. (Maintainer 2026-07-31: "there's more space above the working shimmer than there is
-// below the 'Thought for 37 seconds'" — the shimmer sat at STEP under a pair of agent cards that were
-// themselves at the run pitch under the thought label.) It is itself a bare LABEL, so which pitch it
-// takes is decided the same way messageGap decides it: META_LABEL_STEP under another label,
-// META_CARD_STEP under a card. Prose above it still gets the full break, and every other occupant of
-// the runtime-status slot is a card, which keeps STEP.
+// in a CARD. (Maintainer 2026-07-31: "there's more space above the working shimmer than there is below
+// the 'Thought for 37 seconds'" — the shimmer sat at STEP under a pair of agent cards that were
+// themselves at the run pitch under the thought label.) It is itself a bare LABEL, so under ANOTHER
+// label it takes the ordinary step instead, exactly as messageGap charges that pair. Prose above it
+// still gets the full break, and every other occupant of the runtime-status slot is a card, which
+// keeps STEP.
 // Returns 0 when nothing rendered above — a leading spacer would then indent the whole column.
 export function workingIndicatorGap(messages: readonly ChatMessage[]): number {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]
     if (m.queued || messageRendersNothing(m)) continue
-    if (messageTailIsLabel(m)) return META_LABEL_STEP
-    if (messageTailIsMeta(m)) return META_CARD_STEP
+    // The shimmer is itself a bare LABEL, so it joins the tight run only under a CARD — under another
+    // label it takes the ordinary step, exactly as messageGap charges that pair.
+    if (messageTailIsMeta(m) && !messageTailIsLabel(m)) return META_CARD_STEP
     return STEP + (m.role === "user" ? USER_TAIL_EXTRA : 0)
   }
   return 0
@@ -2080,13 +2088,14 @@ function useForegroundRunning(status: ToolStatus | undefined, backgroundState: T
 // now is the same fact to a reader, and splitting it across two glyphs at two edges meant the LONGEST
 // commands — the ones you actually wait on — were the least visible thing on screen.
 //
-// A FINISHED BACKGROUND op keeps the slot, statically. A detached shell never folds into the activity
-// disclosure any more (isToolActivityException), so its card is a permanent row in the transcript — and
-// a permanent row with a mark only while it happens to be running is one the reader cannot pick out
-// afterwards. The static dot says "this row is a background task" for as long as the row exists; the
-// pulse remains the thing, and the only thing, that says it is alive. A settled FOREGROUND call still
-// gets no mark at all: it lived and died inside its own batch, and marking those would put a dot on
-// every Read and Grep in the transcript.
+// A FINISHED op — detached or not — draws NOTHING here, and no slot for it either (maintainer
+// 2026-08-01: "remove the status indicator entirely for a sub-agent or background shell that has
+// completed"). This column states ONE fact, "something is alive behind this row", so a finished op has
+// nothing to say in it; the right-hand reading already carries the outcome and the runtime. A briefly
+// shipped static "done" dot is what that ruling overturned: marking every settled card meant the column
+// was occupied on nearly every row in a scrolled transcript, which is noise wearing the costume of
+// information — and a still frame cannot show a pulse, so the finished mark had to be muted to avoid
+// reading as live, i.e. it was already conceding it had no business being there.
 function ToolLiveMark({ status, backgroundState, liveBackgroundState, startedAt }: { status?: ToolStatus; backgroundState?: TranscriptToolCall["backgroundState"]; liveBackgroundState?: "running" | "stale"; startedAt?: string }) {
   const foregroundRunning = useForegroundRunning(status, backgroundState, startedAt)
   // Precedence follows the READING beside it, exactly: a tracked op's own observed state outranks the
@@ -2101,11 +2110,6 @@ function ToolLiveMark({ status, backgroundState, liveBackgroundState, startedAt 
       <span aria-hidden className="fray-live-dot-quiet fray-live-dot-quiet--shell" data-running-indicator="tool-quiet" title={CHILD_QUIET_SHELL_TITLE} />
     ) : hasRunningToolIndicator(status, backgroundState) || foregroundRunning ? (
       <span aria-hidden className="fray-live-dot fray-live-dot--shell" data-running-indicator="tool-disclosure" />
-    ) : backgroundState !== undefined ? (
-      // NOT `data-running-indicator` — that attribute means RUNNING, and the one-indicator-per-row rule
-      // is asserted through it. A finished op is marked, not live, so it wears the terminal attribute
-      // the stale and rested glyphs already establish the precedent for.
-      <span aria-hidden className="fray-live-dot-done fray-live-dot-done--shell" data-done-indicator="tool" title={CHILD_DONE_TITLE.SHELL} />
     ) : null
   if (!mark) return null
   // `-mr-1` pulls the label back to roughly the dot↔label gap the child lines use: the header's own
@@ -2577,9 +2581,10 @@ export function AgentBlock({
   // the child. Two renderers used to split that by data availability and diverged on every visible axis;
   // that module's header documents what each of them got wrong.
   //
-  // ONE running indicator per row (maintainer 2026-07-18) still holds, now structurally: a tracked child
-  // is marked on the LEFT and its reading is a bare runtime, while an untracked pending dispatch has no
-  // mark and gets the reading's spinner. Exactly one, in every branch.
+  // ONE running indicator per row (maintainer 2026-07-18) still holds, now trivially: the reading never
+  // claims liveness at all. A tracked child is marked on the LEFT and reads a bare runtime; an untracked
+  // dispatch reads its terminal outcome or nothing. AT MOST one, in every branch, and never a second
+  // opinion about whether the child is alive.
   const reading = agentReading({
     agentStatus,
     agentElapsedMs,
@@ -2595,19 +2600,18 @@ export function AgentBlock({
   // with the same slot in the same position (ToolLiveMark), in shell blue — one liveness column for the
   // whole transcript, whichever kind of thing is alive behind the card.
   //
-  // A RESOLVED child now gets the STATIC dot (maintainer 2026-08-01, extending the same ruling to
-  // dispatches: "Once they're completed, we can just render a simple blue dot with no pulsing"). It
-  // used to get no mark and no slot, because reserving an EMPTY 13px slot to the left of the label read
-  // as a layout bug (maintainer 2026-07-29: "there's a weird gap now to the left of the word 'Agent'") —
-  // and the "finished" glyph that would have filled it did not exist. Now it does: the same dot minus
-  // its animation (styles.css .fray-live-dot-done). So the slot is filled rather than reserved-and-empty,
-  // and a dispatch stays findable in a settled transcript, which is the point of keeping it out of the
-  // activity disclosure in the first place.
+  // A RESOLVED child gets no mark AND NO SLOT (maintainer 2026-07-29: "there's a weird gap now to the
+  // left of the word 'Agent'"; re-affirmed 2026-08-01: "remove the status indicator entirely for a
+  // sub-agent or background shell that has completed"). The slot used to be reserved whether or not it
+  // drew anything, so a run of cards would align its labels down one edge — but a finished card is the
+  // COMMON case in a scrolled transcript, and an empty 13px reservation there reads as a layout bug, not
+  // as "not running any more".
   //
-  // An UNTRACKED PENDING dispatch is the one case that still draws nothing here: its reading spins
-  // instead (agentReading.showSpinner), and one running indicator per row (maintainer 2026-07-18) has
-  // held since. The static dot is for a dispatch that has genuinely resolved, never for one whose state
-  // is merely unknown.
+  // A static "finished" glyph was tried for exactly one commit and removed: filling the slot on every
+  // settled card put a mark on nearly every row, and because a still frame cannot show a pulse it had to
+  // be muted to avoid reading as live — which is the tell that it was carrying no information. With the
+  // slot gone a resolved dispatch card leads with its petite-caps label exactly like every other tool
+  // card in the transcript, and the runtime in the right-hand column is what says it ran and stopped.
   const mark =
     running ? (
       <span aria-hidden className="fray-live-dot fray-live-dot--agent" data-running-indicator="subagent-disclosure" />
@@ -2615,11 +2619,7 @@ export function AgentBlock({
       <span className={CHILD_STALE_DOT_CLASS} title={CHILD_STALE_TITLE} />
     ) : live?.state === "rested" ? (
       <span className={CHILD_RESTED_DOT_CLASS} title={CHILD_RESTED_TITLE} />
-    ) : live || reading?.showSpinner ? null : (
-      // `data-done-indicator`, never `data-running-indicator`: the latter means RUNNING and carries the
-      // one-indicator-per-row assertion. See ToolLiveMark, which marks a finished shell the same way.
-      <span aria-hidden className="fray-live-dot-done fray-live-dot-done--agent" data-done-indicator="subagent" title={CHILD_DONE_TITLE.AGENT} />
-    )
+    ) : null
 
   function openDrawer() {
     if (!slug || !agentId) return
@@ -2641,7 +2641,8 @@ export function AgentBlock({
               title={reading.title}
               label={reading.label}
               duration={reading.duration}
-              indicator={reading.showSpinner ? <span aria-hidden className="fray-tool-spinner" data-running-indicator="tool-pending" /> : null}
+              // No indicator, ever. This slot is words only: the liveness mark leads the row and is the
+              // one place the card may claim a child is alive.
             />
           )
         }

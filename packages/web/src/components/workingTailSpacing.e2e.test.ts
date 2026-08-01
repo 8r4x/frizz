@@ -17,10 +17,10 @@ import test from "node:test"
 // INK nearer the card above while every box reading said the gaps agreed.
 const baseUrl = process.env.FRAY_WORKING_TAIL_SPACING_E2E_URL
 
+// The tight run needs a CARD on at least one side: two bordered blocks 6px apart still read as two.
+// Two bare LABEL rows do not — a label has no inset, so the gap is the only separation there is, and
+// they take the ordinary STEP. See META_CARD_STEP in ChatView.
 const TIGHT = 6
-// Two bare LABEL rows get more air than two bordered cards do — a label has no inset of its own, so the
-// gap is all the separation there is. See META_LABEL_STEP in ChatView.
-const LABEL_STEP = 10
 const STEP = 14
 // The virtualizer positions rows at fractional offsets, so a measured gap lands within a sub-pixel of
 // its constant. Assert the pitch, not the rounding.
@@ -133,10 +133,10 @@ test("the live shimmer joins the meta run, and matches a settled label's optical
       `the shimmer must read as a peer of a settled meta label, got ${liveWhite.shimmer}px vs ${refWhite.settledLabel}px`,
     )
     // The same page also holds the OTHER pair: that settled label is itself a bare row, and the shimmer
-    // sits under IT — two labels, so the label step rather than the card run.
+    // sits under IT — two labels, so the ordinary step rather than the card run.
     const metaTail = await tailGap(page, false)
     assert.equal(metaTail.lastRow, "m1", "the meta control must end on the settled label")
-    near(metaTail.aboveWorking!, LABEL_STEP, "the shimmer under a bare label row")
+    near(metaTail.aboveWorking!, STEP, "the shimmer under a bare label row")
 
     // 3. CONTROL: prose under the cards restores the full break.
     await page.goto(fixtureUrl("?tail=prose"), { waitUntil: "domcontentloaded" })

@@ -13,11 +13,12 @@ import test from "node:test"
 //   1. A QUEUED steer is invisible inline — it is pinned to the bottom of the pane — so it must not end
 //      the activity run it happens to sit inside. It used to, which is what stranded the run above it as
 //      a settled digest and left the next turn's thought with nothing to fold into.
-//   2. Two bare single-line LABEL rows sit at META_LABEL_STEP, not at the 6px gap that binds two
-//      bordered CARDS. Measured in the browser because it is layout.
+//   2. Two bare single-line LABEL rows sit at the ordinary STEP. The 6px tight run needs a bordered
+//      CARD on at least one side of the seam — two borders that close together still read as two
+//      blocks, whereas two bare grey lines that close together read as one wrapped paragraph.
+//      Measured in the browser because it is layout.
 const baseUrl = process.env.FRAY_META_COLUMN_RHYTHM_E2E_URL
 
-const META_LABEL_STEP = 10
 const STEP = 14
 // The virtualizer positions rows at fractional offsets, so a measured gap lands within a sub-pixel of
 // its constant.
@@ -94,10 +95,22 @@ test("a queued steer is transparent to the activity run, and label rows keep the
     const landed = await column(page)
     assert.deepEqual(landed.order, ["m0", "m1", "m8", "m9", "SHIMMER", "m11"], "a delivered steer sits inline, between the run it interrupted and the thought it provoked")
     assert.deepEqual(landed.digests, ["Expand 8 tool calls: Ran 8 tool calls"], "the interrupted run settles at its real count")
-    near(landed.gapAbove!.SHIMMER, META_LABEL_STEP, "the shimmer under a bare label row")
-    // ...and the human's own words still open a full break below them, so raising the label step did
-    // not quietly flatten the rest of the rhythm.
+    near(landed.gapAbove!.SHIMMER, STEP, "the shimmer under a bare label row")
+    // ...and the human's own words still open a wider break below them, so the label step did not
+    // quietly flatten the rest of the rhythm into one uniform gap.
     assert.ok(landed.gapAbove!.m9 > STEP, `a user bubble above the thought keeps its break, got ${landed.gapAbove!.m9}px`)
+
+    // 4. THE reported arrangement, and the one this rhythm exists for: three bare labels in a row. It
+    //    outlives the queued-steer fix because a Codex `reasoning` row is deliberately never folded into
+    //    a run, so it splits one — digest, label, shimmer. Every seam is the ordinary step; none may
+    //    fall back to the card run, which is what made the column paint as one block of grey.
+    await page.goto(fixtureUrl("?stack=three"), { waitUntil: "domcontentloaded" })
+    await page.waitForSelector("[data-working-indicator]")
+    const three = await column(page)
+    assert.deepEqual(three.order, ["m0", "m1", "r1", "SHIMMER"], "digest, reasoning label and shimmer stack with nothing between them")
+    assert.deepEqual(three.digests, ["Expand 8 tool calls: Ran 8 tool calls"], "the reasoning row splits the run, settling the calls above it")
+    near(three.gapAbove!.r1, STEP, "a reasoning label under a settled digest")
+    near(three.gapAbove!.SHIMMER, STEP, "the shimmer under that reasoning label")
 
     assert.deepEqual(errors, [], "no console/page errors")
   } finally {
