@@ -121,12 +121,48 @@ function withoutQuotedRegions(command) {
   return out;
 }
 
+// A LOCAL shell wrapper runs its script in THIS machine's process tree, so `bash -c 'job &'` escapes
+// exactly as a bare `job &` does — the wrapper forks the job and exits. Blanking quoted regions is
+// what exempts `ssh host '… &'` (that job is remote and the ssh client still waits), but it hid the
+// local wrapper along with it, leaving a one-token bypass of the whole guard. So scan the sanitized
+// text for a wrapper, then re-read its script from the ORIGINAL command and recurse.
+//
+// Only in COMMAND POSITION. A wrapper passed as an ARGUMENT belongs to whatever program precedes it,
+// and that program decides where the script runs: `docker run img bash -c …` and
+// `limactl shell vm bash -lc …` both appear in the real corpus, and neither backgrounds anything
+// local. That is the same call the `ssh` exemption already makes. It costs the genuinely-local
+// `xargs sh -c 'job &'`, which the corpus never shows, and under-blocking is the safer miss here.
+const LOCAL_SHELL_SCRIPT = /(?:^|[\n;|&({])\s*(?:\/\S*\/)?(?:bash|sh|zsh|dash|ksh)(?:\s+-[A-Za-z]+)*\s+-[A-Za-z]*c(?=\s)/g;
+
+/**
+ * Read the quoted argument that begins at `from` in the original command, undoing only the escaping
+ * the surrounding quote itself performs.
+ * @param {string} raw @param {number} from
+ */
+function quotedArgumentAt(raw, from) {
+  let i = from;
+  while (raw[i] === ' ' || raw[i] === '\t') i++;
+  const quote = raw[i];
+  if (quote !== "'" && quote !== '"') return '';
+  let out = '';
+  for (i++; i < raw.length; i++) {
+    if (raw[i] === '\\' && quote === '"' && i + 1 < raw.length) {
+      out += raw[++i];
+      continue;
+    }
+    if (raw[i] === quote) return out;
+    out += raw[i];
+  }
+  return '';
+}
+
 /**
  * Return true when this Bash call starts a local background job and can return without joining or
  * terminating it. This is deliberately a small shell-lifecycle recognizer, not a general parser.
  * @param {unknown} raw
+ * @param {number} depth
  */
-export function hasEscapingBackgroundJob(raw) {
+export function hasEscapingBackgroundJob(raw, depth = 0) {
   if (typeof raw !== 'string' || !raw.trim()) return false;
   const command = withoutQuotedRegions(withoutHeredocBodies(raw));
   /** @type {number[]} */
@@ -139,13 +175,25 @@ export function hasEscapingBackgroundJob(raw) {
     if (before === '&' || after === '&' || before === '>' || before === '<' || after === '>' || before === '\\') continue;
     operators.push(i);
   }
-  if (operators.length === 0) return false;
+  if (operators.length > 0) {
+    // A lifecycle action AFTER the last launch makes the command self-contained. `kill` alone does
+    // not: the signal is asynchronous, so the shell still needs a wait before returning. An EXIT trap
+    // owns cleanup at the shell boundary.
+    const tail = command.slice(operators[operators.length - 1] + 1);
+    if (!(/\bwait\b/.test(tail) || /\btrap\b[^\n;]*\b(?:EXIT|0)\b/.test(tail))) return true;
+  }
 
-  // A lifecycle action AFTER the last launch makes the command self-contained. `kill` alone does not:
-  // the signal is asynchronous, so the shell still needs a wait before returning. An EXIT trap owns
-  // cleanup at the shell boundary.
-  const tail = command.slice(operators[operators.length - 1] + 1);
-  return !(/\bwait\b/.test(tail) || /\btrap\b[^\n;]*\b(?:EXIT|0)\b/.test(tail));
+  // Both sanitizers substitute character-for-character, so a match position in the sanitized text
+  // still indexes the original. A length mismatch would mean that invariant broke: fail open rather
+  // than slice the wrong bytes. The depth cap bounds `sh -c 'sh -c …'` nesting.
+  if (depth >= 3 || command.length !== raw.length) return false;
+  // `matchAll` iterates a CLONE, so the module-level regex keeps no cursor for a nested call to reset
+  // out from under this loop — `exec` on the shared object spins forever on `bash -c "sh -c '…'"`.
+  for (const match of command.matchAll(LOCAL_SHELL_SCRIPT)) {
+    const script = quotedArgumentAt(raw, match.index + match[0].length);
+    if (hasEscapingBackgroundJob(script, depth + 1)) return true;
+  }
+  return false;
 }
 
 export function evaluateBashBackgroundHook(input, env = process.env) {

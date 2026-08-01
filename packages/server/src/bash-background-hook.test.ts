@@ -45,6 +45,31 @@ test("Bash background hook denies escaping variants and asynchronous kill withou
   ]) assert.equal(output(command).permissionDecision, "deny", command)
 })
 
+// A local wrapper forks the job and exits, so its `&` escapes exactly as a bare one does. Quoted
+// regions are blanked to exempt `ssh host '… &'`, which backgrounds on the REMOTE host — that
+// blanking also hid `bash -c 'job &'`, one token away from every command the guard already denies.
+test("Bash background hook denies an escaping job inside a local shell wrapper", () => {
+  for (const command of [
+    `bash -c "nub scripts/ci-watch.ts > /tmp/ci.log 2>&1 &"`,
+    "sh -c 'server &'",
+    "zsh -lc 'server & echo started'",
+    "/bin/sh -c 'server &'",
+    "cd /tmp && bash -c 'server &'",
+    `bash -c "sh -c 'server &'"`,
+  ]) assert.equal(output(command).permissionDecision, "deny", command)
+})
+
+// A wrapper in ARGUMENT position belongs to the program before it, which decides where the script
+// runs — the same call the `ssh` exemption makes. `xargs sh -c 'job &'` is the local form this gives
+// up; the corpus never shows it, and over-blocking every containerized build would cost far more.
+test("Bash background hook leaves a shell wrapper handed to another program alone", () => {
+  for (const command of [
+    "docker run --rm -w /src rust:1-bookworm bash -c 'cargo build &'",
+    "limactl shell landlock-vm bash -lc 'df -h / | tail -1 &'",
+    "ssh host bash -lc 'remote-job &'",
+  ]) assert.deepEqual(decision(command), {}, command)
+})
+
 test("Bash background hook preserves self-contained concurrency and non-job ampersands", () => {
   for (const command of [
     "a & b & wait",
@@ -56,7 +81,11 @@ test("Bash background hook preserves self-contained concurrency and non-job ampe
     "echo one && echo two",
     "tool 2>&1 | tail -1",
     "ssh host 'nohup remote-job > /tmp/job.log 2>&1 &'",
+    "ssh host 'bash -c \"remote-job &\"'",
     "cat > probe.sh <<'EOF'\nserver &\necho $!\nEOF",
+    "bash -c 'a & b & wait'",
+    "bash -c 'cd /tmp && for s in $(cat specs); do npm pack \"$s\"; done; echo DONE'",
+    "echo 'bash -c \"server &\"' > note.txt",
   ]) assert.deepEqual(output(command), {}, command)
 })
 
