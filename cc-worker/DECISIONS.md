@@ -921,3 +921,48 @@ sub-agent should merge its own scoped progress as it works. Deliverable file own
 the Fray scratchpad, and a root must reconcile concurrent scoped updates rather than act as sole
 writer. The existing merge-safety rules remain unchanged: re-read first, preserve all other content,
 and never delete, truncate, reinitialize, move, or replace the pad.
+
+## 2026-07-31: the epilogue teaches a helper how to collect a helper of its OWN
+
+A three-level dispatch tree read, on the board, as one job done three times — root "Improve server
+logging…", child "Researching dev server readouts", grandchild "Survey dev server readouts". The
+topology was actually sound: the root's task had five research prongs, the child kept four (Vite,
+Next and wrangler source, repaint techniques, log-dir conventions, fray's own state-dir convention)
+and delegated only the pure-web prong. The grandchild's prompt was a strict subset, not a copy.
+
+What was broken was COLLECTION. The child backgrounded its helper, then hand-rolled a wait loop over
+`/private/tmp/claude-<uid>/<proj>/<session>/tasks/<agentId>.output`. That path is a **symlink** into
+`~/.claude/projects/<proj>/<session>/subagents/agent-<id>.jsonl`, so `stat -f %z` without `-L`
+returned the LINK's size — 153, the length of its target path — and `stat -f %m` returned the link's
+frozen creation mtime. Its other predicate, `grep -c '"type":"result"'`, is a known false negative
+because that record is not reliably written. Both halves false-negatived at once: a helper that was
+195 records and 413,723 bytes deep read as `size=153 age=325s results=0`. The child concluded "the
+helper's transcript is stale at only 153 bytes", discarded a live agent, and redid its work — which
+is precisely why all three levels appeared to be doing the same thing.
+
+The audience was the root cause. `workerPrompt.ts` does carry the rule ("keep fan-out shallow: a
+rested sub-agent is not reliably re-woken by grandchildren"), but that contract reaches only the ROOT
+worker — the one agent that does not spawn grandchildren — and the contract itself states children
+inherit none of it. Into that silence an inherited user-level `CLAUDE.md` ("the parent stays awake and
+polls the child's transcript inside its own turn") supplied the polling recipe, overriding the Agent
+tool's own result text ("you will be notified automatically when it completes").
+
+`hooks/agent-dispatch.mjs` is the fix's home because it fires at EVERY depth — verified against the
+real transcripts: both the depth-1 and depth-2 children received the epilogue. It is the only seam
+that reaches a nested dispatcher without depending on its parent remembering to restate the norm. The
+new paragraph states that a helper's completion arrives automatically, forbids hand-rolled wait loops
+over a transcript or `.output` path, names the symlink and `"type":"result"` failure modes concretely
+enough that a model cannot rationalize its way back into polling, and asks a dispatcher to give its
+helper a `description` naming the narrower slice so the tree stays readable.
+
+This stays within the universal-coordination boundary set on 2026-07-30: it is agent-lifecycle
+coordination, like the handoff contract and the `SendMessage` upward channel already in the epilogue,
+and imposes no build, test, git, or repo-specific policy. Rejected: denying depth-2 dispatch in the
+hook (too blunt — the decomposition was good, and this hook exists because a worker MAY spin up
+helpers), and rewriting the deliberate "keep fan-out shallow" line in `workerPrompt.ts`.
+
+`packages/server/src/agent-dispatch-hook.test.ts` is new — this hook had no test at all despite being
+load-bearing. It spawns the real hook over the real stdin contract and pins the foreground denial,
+`name`/`team_name` stripping, endsWith-idempotence (including the prompt that merely QUOTES the
+marker), the nested-dispatch paragraph, the retained coordination text, the non-worker inert path,
+and fail-open on bad input.
