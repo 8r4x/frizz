@@ -230,6 +230,35 @@ export const CHROME_DEVTOOLS_MCP = {
   startupTimeoutSec: 120,
 } as const
 
+// The token budget a Claude worker is TOLD it has. Claude Code's `totalTokensReminder` writes a
+// `<total_tokens>N tokens left</total_tokens>` block into the system prompt and after every
+// tool-result batch; `infinite` renders the literal `Infinite`. Default is `off` — no block at all.
+//
+// WHY A FRAY WORKER OVERRIDES THAT DEFAULT: with no block, the model has no signal about its budget
+// and it GUESSES — badly, and always downward. Claude Code injects nothing else about context: no
+// system-reminder in cli 2.1.220 mentions tokens, and the "Context is N% full" warning is `/context`
+// TUI text the model never sees. Measured on a real worker (nub session 5258ebe4, transcript line
+// 31014) it wrote "I'm near my context limit, so I'm not starting the linker change here" at a live
+// fill of 667,277 tokens, against auto-compact boundaries that fired at ~1,000,000 — a third of the
+// window still free. Earlier in that same session, 13 consecutive turns declared "I'm out of context"
+// at fills of 176k–244k (under a quarter of the window), and at line 20628 it named the pattern
+// itself: "I've been treating 'low context' as a stopping condition for the last several turns and
+// winding down instead of working." Eight other long worker sessions END at 616k–940k with 25–38% of
+// the window unused. Compaction is not cutting these sessions off — they are quitting early.
+//
+// `infinite` and not `countdown`: a live remaining-token count is still a shrinking number, which is
+// the exact input to the bad inference. Claude Code's own autocompact system prompt already tells the
+// model "your conversation with the user is not limited by the context window" — `Infinite` restates
+// that in the one place the model looks for a budget, and it is TRUE for a fray worker, whose session
+// compacts and continues rather than ending.
+//
+// The env var is the highest-precedence source, ahead of `totalTokensReminder` in settings and the
+// server-side `tengu_lapis_anchor` flag (verified against cli 2.1.220). Both spawn paths need it
+// explicitly: the tmux path via claudeWorkerEnvironment(), the broker path via its `workerEnv` (its
+// ambient env is allowlist-filtered, so an inherited value would be dropped). Spread it, never
+// re-spell the key — a typo here is silent, and the failure mode is a worker that quits at 60%.
+export const CLAUDE_WORKER_CONTEXT_ENV = { CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "infinite" } as const
+
 export interface SpawnOpts {
   sessionId: string // claude: pinned via --session-id. codex: advisory (id is discovered post-spawn)
   cwd: string

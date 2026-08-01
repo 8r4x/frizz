@@ -77,6 +77,7 @@ test("createClaudeBackend: buildSpawn pins the session id + prompt and clears in
   assert.ok(argv.includes("acceptEdits"))
   assert.equal(argv[argv.length - 1], "hello")
   assert.deepEqual(env, {
+    CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "infinite",
     CLAUDE_CODE_SUBAGENT_MODEL: "",
     CLAUDE_CODE_EFFORT_LEVEL: "",
     CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION: String(WORKER_MAX_WEB_SEARCHES),
@@ -92,6 +93,7 @@ test("createClaudeBackend sanitizes both spawn and resume without replacing Clau
   const resumed = backend.buildResume({ sessionId: "profile-env-resume", cwd: "/cwd", message: "M", workerContract: "", permissionMode: "auto", model: "opus", effort: "high" })
   for (const built of [spawned, resumed]) {
     assert.deepEqual(built.env, {
+      CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "infinite",
       CLAUDE_CODE_SUBAGENT_MODEL: "",
       CLAUDE_CODE_EFFORT_LEVEL: "",
       CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION: String(WORKER_MAX_WEB_SEARCHES),
