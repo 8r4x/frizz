@@ -17,8 +17,8 @@ They need very different work, and only one of them is hard.
    folder of scripts, an Obsidian vault, a `~/site` someone `scp`s. **This is the real blocker** and
    the rest of this document is about it.
 3. **"`git` isn't installed on my machine"** — genuinely rare on a machine that already has Claude
-   Code or Codex on it, and it forecloses the most attractive design in §4. Worth treating as
-   explicitly out of scope until someone actually reports it.
+   Code or Codex on it, and the only thing it costs is the `git init` offer in §6. Out of scope until
+   someone actually reports it, but cheap to reach if they do.
 
 Deciding which of these we're serving changes the answer completely. My read: **(2) with (1) folded
 in**, and keep depending on the `git` *binary*.
@@ -152,24 +152,40 @@ undo. In a plain folder there is none.** A bad turn at 2am is unrecoverable, and
 needs that safety net — someone who doesn't use version control — is exactly the one who won't have
 made a copy.
 
-So gitless mode should ship *with* a safety story, not as a bare capability. Options, best first:
+### Rejected: a hidden "shadow" repository
 
-1. **A shadow repository the user never sees.** `git init` a bare repo at
-   `~/.fray/projects/<id>/shadow.git` and drive it with `GIT_DIR`/`GIT_WORK_TREE` pointed at the
-   project, committing a snapshot before each dispatch and each turn. The user's directory stays
-   pristine — no `.git`, no staged files, no `git status` noise — and they get per-turn restore
-   points plus a real diff view of what an agent changed. This is the strongest answer to ask (2)
-   *and* a feature for existing repo users, and it keeps the `git` binary dependency, which is why
-   ask (3) is worth refusing.
-2. **Offer `git init`.** "This folder isn't a repository. Initialize one? [Y/n]" — one keystroke, and
-   the user gets real version control they can use later. Honest, tiny, and the right default for
-   someone who simply never got around to it. Weak for someone who actively doesn't want a `.git`.
-3. **Copy-on-write snapshots** into `~/.fray/projects/<id>/snapshots/`. No git dependency at all, but
-   we'd be rebuilding content-addressed storage badly. Only interesting if ask (3) becomes real.
-4. **Just warn.** Cheapest, and the option to take only if we're deliberately serving people who have
-   decided they don't want restore points.
+An earlier draft's headline idea was a bare repo at `~/.fray/projects/<id>/shadow.git`, driven with
+`GIT_DIR`/`GIT_WORK_TREE` at the project, snapshotting every turn — version control the user never
+sees. **Rejected, and it should stay rejected.** It is sketchy in ways that are not fixable by
+polish:
 
-(1) and (2) compose: offer `git init`, and if declined, fall back to the shadow repo.
+- It copies the entire contents of a directory the user never offered into a store outside it. A
+  `.env`, an `id_rsa`, a customer CSV sitting in a scratch folder all end up in `~/.fray`, and they
+  **survive deleting the project**, because the shadow lives outside it. Fray's own README promises
+  state lives outside your checkout; silently doing the reverse with your file *contents* is a
+  different promise entirely.
+- `GIT_DIR`/`GIT_WORK_TREE` are environment variables, and Fray's whole job is spawning agent
+  processes that run `git`. Any leak into a worker's environment points that agent's commits at the
+  shadow — or, in a directory that later becomes a real repo, silently mixes the two. That is a
+  data-loss footgun, not an inconvenience.
+- It grows without bound and without visibility, per turn, on a directory of unknown size.
+- Nobody asked for it, and it is invisible by design, which is precisely what makes it hard to trust.
+
+The general principle worth keeping: **Fray should not become a backup system, and it should never
+copy a user's files somewhere they did not ask for.**
+
+### What to do instead
+
+1. **Offer `git init`.** "This folder isn't a repository — initialize one so you can undo what agents
+   do? [Y/n]" — one keystroke, entirely visible, and the user ends up with real version control they
+   own and can use without Fray. This is the whole safety story for anyone who simply never got
+   around to it.
+2. **If declined, say so once and stop.** A single line on the board for a no-VCS project — *no
+   version control here; agents can't undo their edits* — and the `NO_VCS_DISCIPLINE` prompt (§5)
+   telling workers to read before they overwrite and prefer additive edits. Then leave it alone.
+
+That is the honest position: a user who declines version control has made a choice, and the right
+response is to make the consequence legible, not to invent a hidden one on their behalf.
 
 ## 7. Adjacent, nearly free
 
@@ -179,8 +195,8 @@ this product is for.
 
 - **jj**: a colocated repo already has `.git`, so it works today by accident. A non-colocated one has
   only `.jj`; `jj config set --repo fray.id <uuid>` is the direct analogue of the git call.
-- **hg / svn / fossil**: root markers for §4; identity falls through to the §3 lookup like any other
-  non-Git directory.
+- **hg / svn / fossil**: root markers for §4; identity falls through to `.fray/fray.id` (§3) like any
+  other non-Git directory.
 
 Shape: a `ProjectIdentityProvider` with `detect(dir)`, `readId`, `createId`, `scope` — the git
 implementation being the existing code moved behind it, and the file implementation being the
@@ -195,7 +211,7 @@ fallback that always matches.
 3. The `.fray/fray.id` provider plus its `~/.fray/projects/<id>/identity.json` cross-check, and the
    walk-up root discovery with the `$HOME` guard and the first-use confirmation. Drop `git` from
    `REQUIRED_EXECUTABLES` at this point, but keep probing for it, because §6 wants it.
-4. The safety story: offer `git init`, else shadow repo.
+4. The safety story: offer `git init`; if declined, the board notice and nothing more (§6).
 5. jj, if anyone asks.
 
 Steps 1-3 are the feature. Step 4 is what makes it responsible to advertise.
@@ -213,7 +229,7 @@ directory that is a repository, **almost nothing changes**:
 | Worktree = its own board | yes, via `--git-dir`/`--git-common-dir` | n/a — no worktrees |
 | GitHub picker, `pr-watch:` | yes | hidden; the fence keeps `human:`/`timer:` |
 | Worker prompt | `GIT_DISCIPLINE` | `NO_VCS_DISCIPLINE` (§5) |
-| Undo for a bad turn | the user's own history | shadow repo (§6), which itself uses Git |
+| Undo for a bad turn | the user's own history | offered `git init`, else none — and said plainly (§6) |
 
 **Existing repo projects keep using `git config --local fray.id`, and do not migrate.** Using the
 file everywhere would be one less code path, but it would hand every existing user a new tracked file
@@ -224,12 +240,12 @@ exactly this; two implementations is the point, not a compromise.
 So the honest summary is: **the git *binary* stays a soft dependency, and Git remains the better
 experience.** What goes away is the hard failure — `fray-dev must be run inside a Git repository` —
 and the assumption that a project must be a repo at all. Ask (3) from the top of this document, "no
-`git` binary anywhere", is a different and larger project, and §6 is the reason not to take it on.
+`git` binary anywhere", is a different and larger project; with §6's shadow repo rejected, the only
+thing still wanting the binary in a plain directory is the `git init` offer, so (3) is now cheap to
+reach if anyone ever asks for it.
 
 ## Open questions for the human
 
-- Which ask are we serving — (1), (2), or (3)? The answer changes whether the `git` binary stays a
-  dependency, and (3) is the only one that forecloses the shadow repo.
-- Is a per-turn shadow repo interesting as a feature for *repo* users too (a real "what did this
-  agent change" diff, and a restore point that doesn't touch their index)? If yes, it's worth
-  building first and letting gitless fall out of it.
+- Which ask are we serving — (1), (2), or (3)? My read stays **(2) with (1) folded in**.
+- Should `.fray/` ship its own `.gitignore` (§3)? It closes the committed-id hazard at the cost of
+  changing what existing users see in `git status`.
