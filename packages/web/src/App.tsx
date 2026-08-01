@@ -241,14 +241,23 @@ export function App() {
           flow; the ⌘K palette's "New thread" item and the always-visible dispatch box are the
           other doors — deliberately NOT ⌘N, which belongs to the browser.) */}
 
-      {/* CENTERED PAIR with a FIXED GUTTER: the floating sidebar column and the workpane sit side by
-          side with one constant 52px gap (gap-13 — "space-around looked weird"; a fixed gutter reads
-          calmer, and 40px read too tight), and the PAIR as a unit centers horizontally — leftover
-          space distributes on the far sides. The sidebar is VERTICALLY CENTERED in the viewport
-          (sticky, set in Sidebar.tsx) and scales clamp(240px → 30vw → 600px) so titles get real room
-          on large screens; the workpane keeps its readable 720px measure (shrinking first when space
-          runs out) and scrolls as normal top-anchored page flow. */}
-      <div className="flex min-h-screen justify-center gap-13 max-[800px]:flex-col max-[800px]:justify-start max-[800px]:gap-0 max-[800px]:px-3">
+      {/* CENTERED PAIR with a SCALING GUTTER: the floating sidebar column and the workpane sit side by
+          side ("space-around looked weird" — a deliberate gutter reads calmer), and the PAIR as a unit
+          centers horizontally — leftover space distributes on the far sides. The sidebar is VERTICALLY
+          CENTERED in the viewport (sticky, set in Sidebar.tsx) and scales clamp(272px → 34vw → 680px)
+          so titles get real room on large screens; the workpane keeps its readable 720px measure
+          (shrinking first when space runs out) and scrolls as normal top-anchored page flow.
+          TABLET BAND (801px–~1170px) — the pair used to be WIDER than the viewport there, so both
+          outer edges sat FLUSH against it while a 52px gutter ate the middle (maintainer 2026-08-01:
+          "we should never have it so the left and right edges are flush against the viewport", and
+          "reduce the gap between the sidebar and the Queue on smaller screens"). Two things keep that
+          from recurring, both CONTINUOUS so nothing jumps at a breakpoint:
+            · px-5 on the container at EVERY width — the pair centers inside the padded box and the
+              workpane (min-w-0) shrinks into it, so a side margin can never reach 0. Above ~1170px
+              there is leftover space anyway and the padding stops binding.
+            · the gutter scales clamp(28px → 3.4vw → 52px): ~28px where space is scarce, back to the
+              tuned 52px by ~1530px, where the pair has margins to spare. Wide layouts are unchanged. */}
+      <div className="flex min-h-screen justify-center gap-[clamp(28px,3.4vw,52px)] px-5 max-[800px]:flex-col max-[800px]:justify-start max-[800px]:gap-0 max-[800px]:px-3">
         {/* A genuinely fresh project keeps its centered first-task view. Once this project has had a
             Fray-owned thread or plan, the sidebar remains mounted through transient empty keyframes;
             navigation must not vanish while the live board stream reconnects or catches up. */}

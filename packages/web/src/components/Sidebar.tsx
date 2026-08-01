@@ -24,8 +24,8 @@ import type { ReactElement, ReactNode } from "react"
 
 // THE LEFT SIDEBAR — the thread list as a FLOATING column (no border, no fill: it floats in the
 // page's whitespace the way the old ToC nav did). App centers the sidebar + workpane as a PAIR with
-// a fixed gutter between them; this column is VERTICALLY CENTERED in the viewport and holds still
-// while the workpane scrolls. Width SCALES with the viewport — clamp(240px, 30vw, 600px) — so titles
+// a scaling gutter between them; this column is VERTICALLY CENTERED in the viewport and holds still
+// while the workpane scrolls. Width SCALES with the viewport — clamp(272px, 34vw, 680px) — so titles
 // get real room on large screens (titles WRAP, never truncate; captions stay one line; NEVER a
 // horizontal scrollbar — overflow-x is clipped and unbreakable tokens break).
 //
@@ -150,7 +150,11 @@ export function Sidebar() {
     // painted BEHIND the prompt box and had to escalate past 100 to be seen. That escalation is the
     // recurring "hidden underneath the prompt box" bug. Default stacking is the fix: overlays win by
     // simply being overlays. Do not re-add a z here — raise the specific overlay instead.
-    <aside className="sticky top-0 self-start h-screen w-[clamp(320px,34vw,680px)] shrink-0 flex flex-col justify-center max-[800px]:static max-[800px]:h-auto max-[800px]:w-full max-[800px]:justify-start max-[800px]:pt-16">
+    // The 272px FLOOR (was 320px) only binds in the TABLET BAND just above the 800px stack point, where
+    // 34vw is smallest and the workpane is squeezed hardest — 320px claimed ~39% of an 820px viewport
+    // for nav and left the queue with the remainder. 272px still holds the dispatch composer's profile
+    // chip and its icon buttons on one line, and hands the difference back to the queue.
+    <aside className="sticky top-0 self-start h-screen w-[clamp(272px,34vw,680px)] shrink-0 flex flex-col justify-center max-[800px]:static max-[800px]:h-auto max-[800px]:w-full max-[800px]:justify-start max-[800px]:pt-16">
       {/* The content column FILLS the aside track (no narrow inner cap). Its cap reserves 44px top AND
           bottom (symmetric, so the column stays centred): the top 44px is the band the fixed status bar
           occupies (top-2.5 + h-7 = 38px, plus a 6px gap). Below that cap the column grows and then
