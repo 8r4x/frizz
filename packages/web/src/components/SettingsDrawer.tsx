@@ -28,7 +28,7 @@ type NotifPerm = "default" | "granted" | "denied" | "unsupported"
 export const SETTINGS_HELP = {
   model: "Choose the default model used when you create or dispatch work from this project.",
   effort: "Controls the default reasoning effort for new work. Available options depend on the selected model.",
-  permissionMode: "The permission mode new Claude Code threads launch with. Auto runs safe actions and asks you to approve the risky ones in the thread. Skip all permissions is Claude Code's --dangerously-skip-permissions: the worker never asks, so nothing waits on you and nothing is checked either. Takes effect on the next thread you dispatch — a thread already running keeps the mode it launched with. Codex threads always run with full workspace access and are unaffected.",
+  permissionMode: "The permission mode new Claude Code threads launch with. Auto runs safe actions and asks you to approve the risky ones in the thread. Bypass launches the worker with --dangerously-skip-permissions: it never asks, so nothing waits on you and nothing is checked either. Takes effect on the next thread you dispatch — a thread already running keeps the mode it launched with. Codex threads always run with full workspace access and are unaffected.",
   font: "Changes the interface reading font for this browser.",
   localFileOpener: "Chooses how vetted local artifact links open. Image clicks always use the OS default viewer.",
   compact: "Collapses long diffs by default in this browser. This takes effect immediately.",

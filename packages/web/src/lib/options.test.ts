@@ -4,6 +4,7 @@ import type { CodexModel } from "@fray-ui/shared"
 import {
   backendForModel,
   CLAUDE_DISPATCH_PERMISSION_OPTIONS,
+  PERMISSION_OPTIONS,
   codexPermValue,
   claudePermValue,
   permValueFor,
@@ -106,7 +107,13 @@ test("permValueFor: dispatches to the codex vs claude mapper by backend", () => 
 test("CLAUDE_DISPATCH_PERMISSION_OPTIONS: auto and bypass only, auto first", () => {
   assert.deepEqual(CLAUDE_DISPATCH_PERMISSION_OPTIONS.map((o) => o.value), ["auto", "bypassPermissions"])
   assert.equal(CLAUDE_DISPATCH_PERMISSION_OPTIONS[0]!.label, "Auto")
-  assert.equal(CLAUDE_DISPATCH_PERMISSION_OPTIONS[1]!.label, "Skip all permissions")
-  // Every option carries the hover one-liner the settings tooltip pattern relies on.
-  for (const option of CLAUDE_DISPATCH_PERMISSION_OPTIONS) assert.ok(option.title)
+  assert.equal(CLAUDE_DISPATCH_PERMISSION_OPTIONS[1]!.label, "Bypass")
+  // Same wording as every other permission surface — the labels come from the shared maps, not a
+  // second hand-written copy, so the two can't drift.
+  for (const option of CLAUDE_DISPATCH_PERMISSION_OPTIONS) {
+    const shared = PERMISSION_OPTIONS.find((o) => o.value === option.value)!
+    assert.equal(option.label, shared.label)
+    assert.equal(option.title, shared.title)
+    assert.ok(option.title, "each option carries the hover one-liner the settings tooltip relies on")
+  }
 })

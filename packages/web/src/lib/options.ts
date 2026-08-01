@@ -39,10 +39,14 @@ export const PERMISSION_OPTIONS: SelectOption[] = PERMISSION_MODES.filter((m) =>
 // headless worker cannot answer a prompt, so `default`/`acceptEdits`/`plan` stall the thread on a modal
 // nobody is watching. Bypass is strictly MORE permissive than auto, so it is the one deviation that
 // cannot softlock. Mirrors server-side workerDispatchPermission; keep the two in step.
-export const CLAUDE_DISPATCH_PERMISSION_OPTIONS: SelectOption[] = [
-  { value: "auto", label: "Auto", title: "auto — safe actions run, risky ones ask you to approve them" },
-  { value: "bypassPermissions", label: "Skip all permissions", title: "bypass — the worker never asks, and nothing is checked (dangerous)" },
-]
+// Built from the SAME label/title maps as PERMISSION_OPTIONS above rather than a second hand-written
+// copy — one source of truth for what each mode is called, so the settings row and any other permission
+// surface can never drift apart on wording.
+export const CLAUDE_DISPATCH_PERMISSION_OPTIONS: SelectOption[] = (["auto", "bypassPermissions"] as const).map((m) => ({
+  value: m,
+  label: PERMISSION_SHORT[m],
+  title: PERMISSION_MODE_LABELS[m],
+}))
 
 // Claude Code-inspired permission accents for the dispatch form's mode readout. Bypass/full access
 // intentionally uses the ordinary readout color rather than danger-red: it is the default operating
