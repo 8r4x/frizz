@@ -1,4 +1,4 @@
-import { useCallback, useSyncExternalStore } from "react"
+import { useCallback, useMemo, useSyncExternalStore } from "react"
 import { useSnapshot } from "valtio"
 import { store } from "../store.ts"
 
@@ -97,9 +97,18 @@ export function useProjectDir(): string | undefined { return useSnapshot(store).
 export function useThreadSessionId(slug: string): string | undefined {
   return useSnapshot(store).board?.threads.find((thread) => thread.id === slug)?.sessionId
 }
+// SUBSCRIBE TO THE VALUE, NEVER TO THE SNAPSHOT OBJECT. `commit` replaces `this.snapshot` wholesale on
+// every keystroke, so a hook whose `getSnapshot` returns that object re-renders on EVERY edit to ANY
+// draft anywhere in the app — and `useLiveAnswering` calls `useDraftValues` from TodosView, near the top
+// of the board tree, so one keystroke in the composer re-rendered the entire board: every queue card,
+// every Radix tooltip/popover/menu under it. Measured before this change: 1096 React renders and 47ms of
+// render work for ONE character typed into the composer.
+//
+// `useSyncExternalStore` bails out when `getSnapshot` returns an Object.is-equal value, so returning the
+// key's own STRING makes an unrelated field's edit a genuine no-op instead of an app-wide render.
 export function useDraft(key: string): readonly [string, (value: string) => void, () => void] {
-  const snapshot = useSyncExternalStore(draftStore.subscribe, draftStore.getSnapshot, draftStore.getSnapshot)
-  const value = snapshot.entries[key]?.value ?? ""
+  const read = useCallback(() => draftStore.get(key), [key])
+  const value = useSyncExternalStore(draftStore.subscribe, read, read)
   const set = useCallback((next: string) => draftStore.set(key, next), [key])
   const clear = useCallback(() => draftStore.clear(key), [key])
   return [value, set, clear] as const
@@ -107,7 +116,18 @@ export function useDraft(key: string): readonly [string, (value: string) => void
 
 // A form can expose several independently addressed text fields. One subscription keeps duplicate
 // representations (queue card + drawer) coherent without serializing the form object itself.
+//
+// Same rule as useDraft, one step harder: the subscribed value has to collapse SEVERAL keys into one
+// Object.is-comparable primitive. JSON of exactly these keys does that — it changes when one of THEM
+// changes and not otherwise — and doubles as the memo key, so the returned Map also keeps a stable
+// identity for whatever downstream memoization depends on it.
 export function useDraftValues(keys: readonly string[]): ReadonlyMap<string, string> {
-  const snapshot = useSyncExternalStore(draftStore.subscribe, draftStore.getSnapshot, draftStore.getSnapshot)
-  return new Map(keys.map((key) => [key, snapshot.entries[key]?.value ?? ""]))
+  const read = useCallback(
+    () => JSON.stringify(Object.fromEntries(keys.map((key) => [key, draftStore.get(key)]))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `keys` is rebuilt every render by every
+    // caller; the JOINED key list is the real dependency, and it is what the callers keep stable.
+    [keys.join(" ")],
+  )
+  const serialized = useSyncExternalStore(draftStore.subscribe, read, read)
+  return useMemo(() => new Map(Object.entries(JSON.parse(serialized) as Record<string, string>)), [serialized])
 }
