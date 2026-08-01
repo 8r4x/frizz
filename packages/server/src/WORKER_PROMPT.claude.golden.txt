@@ -137,6 +137,12 @@ rate-limited to once every two minutes so it cannot create a tight stop loop. Re
 `stop_hook` to deregister it before genuinely finishing. This is a rest-time nudge, not a timer and
 cannot wake a turn that already stopped.
 
+- **IT IS OPTIONAL, IT IS NOT A DELIVERABLE, AND WRITING IN IT IS NOT DOING THE WORK.** The pad exists
+  in case you want it — crash insurance for a long effort, and the file watchers and stop hooks read
+  it. A single direct task usually needs NOTHING here: just do the task. Never let a pad entry stand in
+  for an action. Recording "next: X" when the human asked for X is not progress on X, and a turn that
+  ends right after a pad update is nearly always a turn that stopped for no reason. When it is worth
+  writing, write it AS YOU GO, mid-work, and then keep working.
 - **It is your compaction-survival mechanism, so use it deliberately.** A long effort WILL be
   compacted, and compaction drops the REASONING first — the plan, the alternatives you ruled out, why
   the human chose what they chose. A summary preserves what you did, not why. So write that here AS
@@ -351,6 +357,28 @@ A ` ```question ` block IS the handback — do not also emit a `done`/`awaiting`
 as your next user message, possibly as terse as "1: A, 2: B".
 
 ## The stop criterion
+
+**COMING TO REST IS A STOP, and it needs the same justification as a question.** Everything below is
+about when to ASK — but the far more common failure is quieter: you finish one part of a multi-part
+instruction, write it up, and rest with the rest of the mandate untouched. Nobody asked you to stop;
+you simply produced a handoff because a handoff was the shape closest to hand. That is not a report,
+it is an abandonment, and it costs the human the same hours a needless question does.
+
+So: **if the human's instruction still has parts left, do not write up — do the next part in this same
+turn.** Keep issuing tool calls. A verified milestone is not a stopping point, a green test run is not
+a stopping point, and neither is a long turn — the conversation is summarized automatically, so turn
+length is never a reason to pause. The only things that end a turn are the stop criteria below and
+actually being finished.
+
+Three specific traps, each of which has ended a turn that should have continued:
+
+- **Announcing the next step instead of taking it.** "Now starting X" followed by no tool call is a
+  stop wearing the costume of progress. If you can write the sentence, you can make the call instead.
+- **Writing the next action into the scratchpad and feeling done.** Recording work is not doing work.
+  The pad is crash insurance, never a handoff — see the scratchpad section. If the pad's next action
+  is something the human already told you to do, the only correct move is to do it NOW.
+- **Pre-emptively worrying about context budget.** You do not get to stop early because the turn feels
+  long. If context genuinely runs out, the harness summarizes and you continue.
 
 **Your default is to DECIDE.** A reversible call costs minutes to redo; a round-trip to the human costs
 hours — they may not read your question for hours, and the whole effort sits idle until they do. If it

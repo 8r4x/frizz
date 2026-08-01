@@ -166,6 +166,19 @@ test("loadWorkerPrompt(codex) is BYTE-IDENTICAL to its golden (regenerate on del
   assert.equal(loadWorkerPrompt("codex"), CODEX_GOLDEN)
 })
 
+// The contract must govern RESTING, not just asking. Before this, `The stop criterion` covered only
+// when to ask a human — so a worker that finished part one of a two-part instruction, wrote it up and
+// rested was doing something no rule addressed, and the write-up templates made it feel correct.
+test("both contracts forbid resting while the instruction still has parts left", () => {
+  for (const kind of ["claude", "codex"] as const) {
+    const c = loadWorkerPrompt(kind).replace(/\s+/g, " ")
+    assert.match(c, /COMING TO REST IS A STOP/, `${kind}: resting must be governed like a question`)
+    assert.match(c, /do not write up — do the next part in this same turn/, `${kind}: must name the remedy`)
+    assert.match(c, /Recording work is not doing work/, `${kind}: must close the scratchpad loophole`)
+    assert.match(c, /IT IS OPTIONAL, IT IS NOT A DELIVERABLE/, `${kind}: the pad must read as optional`)
+  }
+})
+
 test("loadWorkerPrompt: no unresolved {{FRAY_*}} markers survive in either backend's contract", () => {
   assert.doesNotMatch(loadWorkerPrompt("claude"), /\{\{FRAY_/)
   assert.doesNotMatch(loadWorkerPrompt("codex"), /\{\{FRAY_/)
@@ -466,13 +479,32 @@ test("composePrompt keeps each backend's shared sub-agent scratchpad contract", 
 
   const codex = composePrompt("sid", "do the thing", "codex")
   assert.doesNotMatch(codex, /blackboard/)
-  assert.match(codex, /compaction-survival mechanism/)
+  assert.match(codex, /useful crash insurance/)
   assert.match(codex, /shared progress document for native sub-agents/)
   assert.match(codex, /Each native sub-agent should merge its own scoped progress into it/)
   assert.match(codex, /rather than leaving the root as its sole writer/)
   assert.match(codex, /re-read before each edit/)
   assert.match(codex, /never delete, truncate, reinitialize, move, or replace the whole file/)
   assert.ok(codex.endsWith("do the thing")) // the task still rides through, and rides through LAST
+})
+
+// The pad is OPTIONAL and is NOT a deliverable — pinned because the opposite framing has a measured
+// behavioural cost. Presented as "the CANONICAL record" with a mandatory "next action" field, a worker
+// treats WRITING the next step as equivalent to DOING it, writes "next: X" for an X the human already
+// asked for, and rests mid-mandate. Both surfaces must keep saying optional, and must keep saying that
+// writing in it is not doing the work.
+test("every scratchpad surface presents the pad as optional and never a substitute for the work", () => {
+  for (const kind of ["claude", "codex"] as const) {
+    const prompt = composePrompt("sid", "do the thing", kind)
+    assert.match(prompt, /OPTIONAL/, `${kind} composePrompt must not present the pad as mandatory`)
+    assert.match(prompt, /never substitutes for doing the work/, `${kind} composePrompt must refuse the substitution`)
+    assert.doesNotMatch(prompt, /CANONICAL record/, `${kind} composePrompt must not re-promote the pad`)
+
+    const orientation = scratchpadOrientation("sid", null, kind)
+    assert.match(orientation, /optional/i, `${kind} orientation must not present the pad as mandatory`)
+    assert.match(orientation, /never a substitute for doing the work/, `${kind} orientation must refuse the substitution`)
+    assert.doesNotMatch(orientation, /CANONICAL record/, `${kind} orientation must not re-promote the pad`)
+  }
 })
 
 // ---- composePrompt: the system→human handoff carries a loud demarcation banner ----
@@ -533,7 +565,7 @@ test("scratchpadOrientation gives codex a merge-only shared pad; claude keeps it
 
   const codex = scratchpadOrientation("sid", null, "codex")
   assert.doesNotMatch(codex, /blackboard/)
-  assert.match(codex, /compaction-survival mechanism/)
+  assert.match(codex, /crash insurance/)
   assert.match(codex, /shared progress document for native sub-agents/)
   assert.match(codex, /Each native sub-agent should merge its own scoped progress into it/)
   assert.match(codex, /rather than leaving the root as its sole writer/)

@@ -177,7 +177,7 @@ test("settings: defaults, roundtrip, merge-over-defaults", () => {
   const def = getSettings(s)
   assert.deepEqual(def, defaultSettings())
   // Project-specific conventions live in FRAY.md, not in settings — there is no preamble field.
-  // system prompt ships separately (ui/WORKER_PROMPT.md via dispatch.ts) and is not a setting.
+  // system prompt ships separately (packages/server/src/workerPrompt.ts via dispatch.ts) and is not a setting.
   assert.equal(def.permissionMode, "auto")
   assert.equal(def.notifications, true)
 
@@ -265,10 +265,10 @@ test("composePrompt: scratchpad orientation + task, and NOT the operator's instr
 
 test("scratchpadOrientation: scratchpad line always; PLAN line only when a plan is associated", () => {
   const bare = scratchpadOrientation("sid-1")
-  assert.ok(bare.includes("SCRATCHPAD: .fray/threads/sid-1/scratch.md"))
+  assert.ok(bare.includes("SCRATCHPAD (optional): .fray/threads/sid-1/scratch.md"))
   assert.ok(!bare.includes("PLAN:"))
   const withPlan = scratchpadOrientation("sid-1", ".fray/plans/p.md")
-  assert.ok(withPlan.includes("SCRATCHPAD: .fray/threads/sid-1/scratch.md"))
+  assert.ok(withPlan.includes("SCRATCHPAD (optional): .fray/threads/sid-1/scratch.md"))
   assert.ok(withPlan.includes("PLAN: .fray/plans/p.md"))
 })
 
@@ -391,7 +391,7 @@ test("dispatch: writes a scratchpad (not a thread file), argv carries the scratc
   // argv: the SCRATCHPAD orientation rides the system prompt; the user message carries the path + TASK
   // and NONE of the retired thread-ownership contract.
   const cmd = h.spawned[0].cmd
-  assert.ok(systemPromptOf(cmd).includes(`SCRATCHPAD: .fray/threads/${sessionId}/scratch.md`))
+  assert.ok(systemPromptOf(cmd).includes(`SCRATCHPAD (optional): .fray/threads/${sessionId}/scratch.md`))
   const userPrompt = cmd[cmd.length - 1]
   assert.ok(userPrompt.includes(`.fray/threads/${sessionId}/scratch.md`))
   assert.ok(userPrompt.endsWith("\n\nDo the thing.")) // the task is the tail, directly below the banner
@@ -439,7 +439,7 @@ test("adopt: requires the legacy file, provisions a scratchpad, orientation is c
 
   // System prompt: scratchpad orientation + the adoption note framing the file as CONTEXT, not a contract.
   const sys = systemPromptOf(h.spawned[0].cmd)
-  assert.ok(sys.includes(`SCRATCHPAD: .fray/threads/${sessionId}/scratch.md`))
+  assert.ok(sys.includes(`SCRATCHPAD (optional): .fray/threads/${sessionId}/scratch.md`))
   assert.ok(sys.includes("CONTEXT, not a contract"))
   assert.ok(sys.includes("adopt-fixture.md"))
   const row = h.storage.getSession(slug)

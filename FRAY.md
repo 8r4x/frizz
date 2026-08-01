@@ -41,6 +41,14 @@ not a narrative. Open with one of these four tokens, bolded, then the outcome in
 | **Not fixed** | investigated, nothing landed — say what's next | bare rest |
 | **Needs you** | blocked on a human-owned call | ` ```question ` |
 
+**None of these apply while the instruction still has parts left — then you do not write up at all,
+you keep working in the same turn.** This table is for a turn that has genuinely ended; reaching for
+it early is the most common way an effort dies half-finished. A verified milestone, a green test run
+and a long turn are not endings. Neither is announcing the next step, and neither is recording it in
+the scratchpad — the pad is optional crash insurance, never a handoff, and writing "next: X" when the
+human asked for X is not progress on X. Two rows above describe INCOMPLETE work resting; both mean
+"nothing further is possible right now", never "I stopped at a good spot".
+
 The token and the fence must agree; the fence is the glance-level signal and the token is its
 one-line caption. `**Fixed** — the divider now shows the child's description, `749a37b` on `main`.`
 

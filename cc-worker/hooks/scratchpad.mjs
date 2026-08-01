@@ -403,15 +403,16 @@ if (mode === 'nudge') {
   emitJson(
     mtimeMs
       ? '⟦scratchpad stale⟧ Your context has grown ~' + k + 'k tokens since you last wrote `' +
-          relPath + '`. Bring it up to date now, before a compaction forces the issue — the problem, ' +
-          'the approach and what you rejected, the human\'s decisions, what is verified versus ' +
-          'believed, and the next action. Its head is injected back automatically after a compaction, ' +
-          'so it is the one thing you are guaranteed to still have.'
-      : '⟦scratchpad empty⟧ This session is ~' + k + 'k tokens deep and `' + relPath + '` still has ' +
-          'nothing substantive in it. Write it now: the problem, the approach and the approaches you ' +
-          'rejected, the human\'s decisions, what is verified versus merely believed, and the next ' +
-          'action. Its head is injected back automatically after a compaction, so it is what survives ' +
-          'when the rest of this context does not.',
+          relPath + '`. If this effort is long enough that losing your reasoning would hurt, top it up ' +
+          'in passing — the approach, what you rejected, the human\'s decisions, what is verified ' +
+          'versus believed. Its head is injected back after a compaction. This is a background note, ' +
+          'NOT a task and NOT a reason to pause: do not stop working to service it, and never end a ' +
+          'turn on it while the human\'s instruction still has parts left.'
+      : '⟦scratchpad empty⟧ This session is ~' + k + 'k tokens deep and `' + relPath + '` is empty. ' +
+          'That is fine for a single direct task — the pad is optional and writing in it is not doing ' +
+          'the work. If this effort is long or branching, a few lines on the approach and the human\'s ' +
+          'decisions will survive a compaction. This is a background note, NOT a task and NOT a reason ' +
+          'to pause: keep going with what you were asked to do.',
     event,
   );
 }
