@@ -17,11 +17,10 @@ They need very different work, and only one of them is hard.
    folder of scripts, an Obsidian vault, a `~/site` someone `scp`s. **This is the real blocker** and
    the rest of this document is about it.
 3. **"`git` isn't installed on my machine"** — genuinely rare on a machine that already has Claude
-   Code or Codex on it, and the only thing it costs is the `git init` offer in §6. Out of scope until
-   someone actually reports it, but cheap to reach if they do.
+   Code or Codex on it. Once §6 is honored, **this collapses into (2)**: nothing in a plain directory
+   calls `git` at all, so serving (2) serves (3) for free.
 
-Deciding which of these we're serving changes the answer completely. My read: **(2) with (1) folded
-in**, and keep depending on the `git` *binary*.
+My read: **(2), with (1) folded in.** They are one change, and (3) comes along with them.
 
 ## 1. What actually depends on Git today
 
@@ -119,15 +118,18 @@ Walk up from cwd to `$HOME` (never past it, never to `/`), taking the first hit:
 2. A repository marker: `.git`, and while we're here `.jj`, `.hg`, `.svn` (see §7).
 3. A project marker: `package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`, `deno.json`,
    `composer.json`, `Gemfile`… — the same heuristic every editor already uses to pick a workspace root.
-4. Otherwise **cwd**, and say so in the readout: `project: notes (no repository — using this folder)`.
+4. Otherwise **cwd**. The readout already prints the chosen root (`project: notes — ~/notes`), which
+   is the whole disclosure needed — it is a statement of what Fray picked, not a remark about what
+   the directory is or isn't.
 
 Two guards worth building in from the start:
 
 - **Never adopt `$HOME` itself** as a project root. A stray `~/package.json` would otherwise turn a
   user's entire home directory into one Fray project, with agents dispatched at it.
-- **Confirm on first use.** A one-line prompt in the readout — "no repository here; create a Fray
-  project for `~/notes`? [Y/n]" — costs one keystroke and prevents every accidental-root complaint.
-  Skip it with `--yes`, and never ask again once `.fray/fray.id` exists.
+- **Confirm the root on first use.** One line in the readout — "start a Fray project for `~/notes`?
+  [Y/n]" — costs a keystroke and prevents every accidental-root complaint. Note the phrasing: it asks
+  about the *directory Fray is about to adopt*, and says nothing about version control (§6). Skip it
+  with `--yes`, and never ask again once `.fray/fray.id` exists.
 
 ## 5. The worker prompt
 
@@ -145,23 +147,38 @@ The replacement block has real content, not just an absence:
 Also make `frayConfigBlock` and the queue's own copy stop assuming a repo — and note the FAQ already
 says "Fray doesn't own your git workflow", which becomes true rather than aspirational.
 
-## 6. The thing that makes this genuinely risky
+## 6. What Fray deliberately does NOT do here
 
-**Fray's entire product is unattended agents rewriting your files. In a repo, `git checkout` is the
-undo. In a plain folder there is none.** A bad turn at 2am is unrecoverable, and the user who most
-needs that safety net — someone who doesn't use version control — is exactly the one who won't have
-made a copy.
+**Fray has no opinion about version control.** That is a product position, not an oversight, and it
+is the one the README already makes: *"Fray adds no worktrees, no branches, no dev server, no build
+integration, no workflow engine to fight with"* and *"Fray doesn't own your git workflow."* Running
+outside a repository must not become the exception where Fray suddenly develops opinions.
+
+So, concretely, none of these:
+
+- **No `git init` offer.** Not a prompt, not a flag suggestion, not a hint in the readout. A user in a
+  plain directory has either decided about version control or hasn't thought about it, and neither is
+  Fray's business.
+- **No warning that agents can't undo.** Nobody needs a localhost dashboard editorializing about
+  their setup, and a notice nobody can action is just nagging.
+- **No snapshots, no backups, no shadow anything.** See below.
+- **No `.gitignore` writing** — already the standing promise, and it extends to not writing a
+  `.gitignore` *inside* `.fray/` unless that is chosen on its own merits (§3), not as a safety measure.
+
+The only thing that IS ours is the inverse: a worker prompt that assumes a repo when there isn't one.
+`GIT_DISCIPLINE` (`workerPrompt.ts:200`) currently tells every agent to commit small and often and to
+treat "landed" as a merge. Swapping it for `NO_VCS_DISCIPLINE` in a non-repo (§5) is **removing** an
+opinion Fray holds, not adding one — which is exactly the direction this section argues for.
 
 ### Rejected: a hidden "shadow" repository
 
 An earlier draft's headline idea was a bare repo at `~/.fray/projects/<id>/shadow.git`, driven with
 `GIT_DIR`/`GIT_WORK_TREE` at the project, snapshotting every turn — version control the user never
-sees. **Rejected, and it should stay rejected.** It is sketchy in ways that are not fixable by
-polish:
+sees. **Rejected, and it should stay rejected**, for reasons that outlive the opinionation argument:
 
 - It copies the entire contents of a directory the user never offered into a store outside it. A
   `.env`, an `id_rsa`, a customer CSV sitting in a scratch folder all end up in `~/.fray`, and they
-  **survive deleting the project**, because the shadow lives outside it. Fray's own README promises
+  **survive deleting the project**, because the shadow lives outside it. Fray's README promises its
   state lives outside your checkout; silently doing the reverse with your file *contents* is a
   different promise entirely.
 - `GIT_DIR`/`GIT_WORK_TREE` are environment variables, and Fray's whole job is spawning agent
@@ -169,23 +186,21 @@ polish:
   shadow — or, in a directory that later becomes a real repo, silently mixes the two. That is a
   data-loss footgun, not an inconvenience.
 - It grows without bound and without visibility, per turn, on a directory of unknown size.
-- Nobody asked for it, and it is invisible by design, which is precisely what makes it hard to trust.
 
-The general principle worth keeping: **Fray should not become a backup system, and it should never
-copy a user's files somewhere they did not ask for.**
+The principle worth keeping from all of it: **Fray should never copy a user's files somewhere they
+did not ask for, and should not become a backup system.**
 
-### What to do instead
+### The consequence, stated plainly
 
-1. **Offer `git init`.** "This folder isn't a repository — initialize one so you can undo what agents
-   do? [Y/n]" — one keystroke, entirely visible, and the user ends up with real version control they
-   own and can use without Fray. This is the whole safety story for anyone who simply never got
-   around to it.
-2. **If declined, say so once and stop.** A single line on the board for a no-VCS project — *no
-   version control here; agents can't undo their edits* — and the `NO_VCS_DISCIPLINE` prompt (§5)
-   telling workers to read before they overwrite and prefer additive edits. Then leave it alone.
+An agent working in a directory with no version control can destroy work, and Fray will neither
+prevent it nor mention it. That is the same deal a user already gets from running `claude` in that
+directory themselves, which is the bar Fray holds itself to everywhere else: *"a thread behaves like
+a Claude Code session you started yourself."* Document it once in the README's FAQ, where someone
+looking for it will find it, and nowhere else.
 
-That is the honest position: a user who declines version control has made a choice, and the right
-response is to make the consequence legible, not to invent a hidden one on their behalf.
+One thing falls out of this: with the `git init` offer gone, **nothing in a plain directory wants the
+`git` binary at all.** Ask (3) from the top of this document collapses into ask (2) rather than being
+a separate project.
 
 ## 7. Adjacent, nearly free
 
@@ -210,11 +225,12 @@ fallback that always matches.
    existing tests must still pass — including the concurrent-first-run one).
 3. The `.fray/fray.id` provider plus its `~/.fray/projects/<id>/identity.json` cross-check, and the
    walk-up root discovery with the `$HOME` guard and the first-use confirmation. Drop `git` from
-   `REQUIRED_EXECUTABLES` at this point, but keep probing for it, because §6 wants it.
-4. The safety story: offer `git init`; if declined, the board notice and nothing more (§6).
+   `REQUIRED_EXECUTABLES` — outright, not to a soft probe, since §6 leaves nothing that wants it.
+4. One FAQ line in the README about what a plain directory does and doesn't get. Nothing in the
+   product (§6).
 5. jj, if anyone asks.
 
-Steps 1-3 are the feature. Step 4 is what makes it responsible to advertise.
+Steps 1-3 are the feature; there is no separate safety workstream, by design.
 
 ## 9. What this does NOT do: Git stops being REQUIRED, not used
 
@@ -229,7 +245,7 @@ directory that is a repository, **almost nothing changes**:
 | Worktree = its own board | yes, via `--git-dir`/`--git-common-dir` | n/a — no worktrees |
 | GitHub picker, `pr-watch:` | yes | hidden; the fence keeps `human:`/`timer:` |
 | Worker prompt | `GIT_DISCIPLINE` | `NO_VCS_DISCIPLINE` (§5) |
-| Undo for a bad turn | the user's own history | offered `git init`, else none — and said plainly (§6) |
+| Undo for a bad turn | whatever the user set up | whatever the user set up — Fray neither supplies nor mentions one (§6) |
 
 **Existing repo projects keep using `git config --local fray.id`, and do not migrate.** Using the
 file everywhere would be one less code path, but it would hand every existing user a new tracked file
@@ -237,15 +253,14 @@ in a directory many of them have never ignored — reintroducing the committed-i
 largest population, where today it is structurally impossible. The provider interface exists for
 exactly this; two implementations is the point, not a compromise.
 
-So the honest summary is: **the git *binary* stays a soft dependency, and Git remains the better
-experience.** What goes away is the hard failure — `fray-dev must be run inside a Git repository` —
-and the assumption that a project must be a repo at all. Ask (3) from the top of this document, "no
-`git` binary anywhere", is a different and larger project; with §6's shadow repo rejected, the only
-thing still wanting the binary in a plain directory is the `git init` offer, so (3) is now cheap to
-reach if anyone ever asks for it.
+So the honest summary is: **in a repository Fray keeps using Git exactly as it does today, and in a
+plain directory it does not call Git at all.** What goes away is the hard failure — `fray-dev must be
+run inside a Git repository` — and the assumption that a project must be a repo. What does *not*
+appear is any new opinion: no offer, no warning, no fallback version control. A repo is better
+because Git is better, not because Fray rewards you for it.
 
 ## Open questions for the human
 
-- Which ask are we serving — (1), (2), or (3)? My read stays **(2) with (1) folded in**.
 - Should `.fray/` ship its own `.gitignore` (§3)? It closes the committed-id hazard at the cost of
-  changing what existing users see in `git status`.
+  changing what existing users see in `git status`. Note this is the one remaining decision that
+  could read as an opinion about Git, which is an argument for leaving it to the user.
