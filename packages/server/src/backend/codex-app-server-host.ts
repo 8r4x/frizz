@@ -27,6 +27,8 @@ import { PassThrough, Writable, type Readable } from "node:stream"
 import { StringDecoder } from "node:string_decoder"
 import { resolveDetachedDaemonEntry } from "../detached-daemons.ts"
 import { stopNativeListener } from "./codex-app-server-native.ts"
+import { codexAppServerArgv } from "./codex-mcp.ts"
+import type { FrayMcp } from "./types.ts"
 import type { CodexAppServerProcess } from "./codex-app-server.ts"
 import { log as frayLog } from "../logging.ts"
 
@@ -62,6 +64,9 @@ export interface CodexAppServerHostOptions {
   env: NodeJS.ProcessEnv
   clientInfo: Record<string, unknown>
   capabilities: Record<string, unknown>
+  /** Mounts the unified `fray` MCP server into this app-server. Absent ⇒ chrome-devtools only, the
+   *  same degradation the claude side has when the descriptor cannot be resolved. */
+  frayMcp?: FrayMcp
   /** Test seam: override the forked daemon entry. */
   daemonEntry?: string
   /** Test seam: how often the daemon re-checks that its record still names it (default 30s). */
@@ -219,6 +224,10 @@ function forkDaemon(options: CodexAppServerHostOptions): Promise<CodexAppServerD
   const payload = JSON.stringify({
     projectId, socketPath, recordPath: record, codexBin: options.codexBin, cwd: options.cwd,
     env, generation, clientInfo: options.clientInfo, capabilities: options.capabilities,
+    // The argv is built HERE, not in the daemon: the daemon is a bare forked entry that should not have
+    // to resolve fray's MCP descriptors, and building it once keeps this transport identical to the
+    // native listener's.
+    appServerArgs: codexAppServerArgv(["--stdio"], options.frayMcp),
     ...(options.reachabilityCheckMs === undefined ? {} : { reachabilityCheckMs: options.reachabilityCheckMs }),
   })
   const child = spawn(process.execPath, [options.daemonEntry ?? daemonEntry()], {
@@ -387,7 +396,7 @@ export const daemonCodexAppServerHost: CodexAppServerHost = async (options) => {
 
 /** The pre-daemon transport: `codex app-server --stdio` as an ordinary child of this runtime. */
 function inProcessCodexAppServer(options: CodexAppServerHostOptions): CodexAppServerAttachment {
-  const child = spawn(options.codexBin, ["app-server", "--stdio"], {
+  const child = spawn(options.codexBin, codexAppServerArgv(["--stdio"], options.frayMcp), {
     cwd: options.cwd,
     env: options.env,
     stdio: ["pipe", "pipe", "pipe"],
@@ -402,7 +411,7 @@ export function directChildHost(
   generationId: () => string = randomUUID,
 ): CodexAppServerHost {
   return async (options) => ({
-    process: spawnChild(options.codexBin, ["app-server", "--stdio"], { cwd: options.cwd, env: options.env }),
+    process: spawnChild(options.codexBin, codexAppServerArgv(["--stdio"], options.frayMcp), { cwd: options.cwd, env: options.env }),
     generation: generationId(),
     reattached: false,
     daemonPid: process.pid,

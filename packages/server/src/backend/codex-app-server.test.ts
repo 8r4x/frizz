@@ -331,7 +331,17 @@ test("bridge is the sole codex transport (always enabled) and negotiates exact i
   })
   assert.equal(binding.ephemeral, true)
   assert.equal(h.calls.length, 1)
-  assert.deepEqual(h.calls[0]!.args, ["app-server", "--stdio"])
+  // `app-server <mcp -c overrides…> --stdio`. The overrides sit BETWEEN the subcommand and the
+  // transport flag, and mounting them is why this is no longer a bare two-element argv: codex has no
+  // `--mcp-config`, so fray's MCP servers can only reach a worker as process-level `-c` config on the
+  // app-server itself (see codex-mcp.ts). Asserted structurally rather than byte-for-byte so adding a
+  // server does not fail this test, while DROPPING the mounting still does.
+  const args = h.calls[0]!.args
+  assert.equal(args[0], "app-server")
+  assert.equal(args[args.length - 1], "--stdio")
+  assert.ok(args.includes("-c"), "app-server argv carries no -c overrides")
+  assert.ok(args.some((a) => a.startsWith("mcp_servers.chrome-devtools=")), "chrome-devtools is not mounted")
+  assert.ok(args.some((a) => a === 'default_tools_approval_mode="approve"'), "MCP calls would be cancelled at use")
   assert.equal(h.calls[0]!.binary, "/opt/codex")
   assert.deepEqual(CODEX_APP_SERVER_PROTOCOL_REVISION, {
     packageVersion: "0.146.0",

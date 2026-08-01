@@ -233,6 +233,9 @@ export function queryCodexRateLimits(
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>
     try {
+      // DELIBERATELY BARE — no codexAppServerArgv here. This is a short-lived read of the quota
+      // endpoint, not a worker: mounting fray's MCP servers would make every quota poll fork an
+      // `npx chrome-devtools-mcp` launch for tools nothing in this path can call.
       child = spawn(codexBin, ["app-server"], {
         stdio: ["pipe", "pipe", "ignore"],
         env: { ...process.env, CODEX_HOME: codexHome },

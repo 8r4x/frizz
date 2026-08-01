@@ -37,6 +37,7 @@ import { join } from "node:path"
 import { PassThrough, Writable, type Readable } from "node:stream"
 import { StringDecoder } from "node:string_decoder"
 import { WebSocket } from "ws"
+import { codexAppServerArgv } from "./codex-mcp.ts"
 import type { CodexAppServerProcess } from "./codex-app-server.ts"
 import type { CodexAppServerAttachment, CodexAppServerHost, CodexAppServerHostOptions } from "./codex-app-server-host.ts"
 import { log as frayLog } from "../logging.ts"
@@ -260,7 +261,7 @@ async function startListener(options: CodexAppServerHostOptions): Promise<Native
   }
 
   const generation = randomUUID()
-  const child = spawn(options.codexBin, ["app-server", "--listen", `unix://${socketPath}`], {
+  const child = spawn(options.codexBin, codexAppServerArgv(["--listen", `unix://${socketPath}`], options.frayMcp), {
     cwd: options.cwd,
     env: options.env,
     detached: true,
@@ -359,7 +360,7 @@ export const nativeListenCodexAppServerHost: CodexAppServerHost = async (options
       }
     }
     frayLog.error("codex", `codex app-server native listener unavailable (${(error as Error).message}); falling back to an in-process app-server — turns will NOT survive a fray restart`)
-    const child = spawn(options.codexBin, ["app-server", "--stdio"], { cwd: options.cwd, env: options.env, stdio: ["pipe", "pipe", "pipe"] })
+    const child = spawn(options.codexBin, codexAppServerArgv(["--stdio"], options.frayMcp), { cwd: options.cwd, env: options.env, stdio: ["pipe", "pipe", "pipe"] })
     return { process: child as unknown as CodexAppServerProcess, generation: randomUUID(), reattached: false, daemonPid: process.pid, droppedWhileDetached: 0 }
   }
 }

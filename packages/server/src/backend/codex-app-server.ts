@@ -31,6 +31,7 @@ import {
   type CodexAppServerHost,
 } from "./codex-app-server-host.ts"
 import { nativeListenCodexAppServerHost } from "./codex-app-server-native.ts"
+import type { FrayMcp } from "./types.ts"
 import { log as frayLog } from "../logging.ts"
 
 // Foundation-only bridge. It is deliberately not an AgentBackend: no current/default Codex TUI
@@ -938,6 +939,9 @@ export interface CodexAppServerBridgeOptions {
   host?: CodexAppServerHost
   /** Where the daemon's record/socket live. Required for the default daemon host. */
   stateDir?: string
+  /** Mounts the unified `fray` MCP server into this project's app-server. Absent ⇒ chrome-devtools
+   *  only. MCP servers are PROCESS-level, so this is resolved once here rather than per thread. */
+  frayMcp?: FrayMcp
   now?: () => Date
   id?: () => string
   requestTimeoutMs?: number
@@ -2477,6 +2481,7 @@ export class CodexAppServerBridge {
       env: codexAppServerEnvironment(),
       clientInfo: CLIENT_INFO,
       capabilities: CLIENT_CAPABILITIES,
+      frayMcp: this.options.frayMcp,
     })
     const child = attachment.process
     let connection!: JsonlRpcConnection

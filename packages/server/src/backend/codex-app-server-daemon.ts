@@ -30,6 +30,10 @@ interface DaemonConfig {
   generation: string
   clientInfo: Record<string, unknown>
   capabilities: Record<string, unknown>
+  /** Full argv for the app-server, built by the host (codexAppServerArgv) so this daemon never has to
+   *  resolve fray's MCP descriptors itself. Absent ⇒ a bare `app-server --stdio`, which is a worker
+   *  with NO mcp tools; kept as a fallback only so an older payload cannot fail to boot. */
+  appServerArgs?: string[]
   /** Test seam only; production leaves this undefined and gets REACHABILITY_CHECK_MS. */
   reachabilityCheckMs?: number
 }
@@ -83,7 +87,7 @@ function lineReader(onLine: (line: string) => void): (chunk: Buffer | string) =>
 
 function main(): void {
   const config = readConfig()
-  const child = spawn(config.codexBin, ["app-server", "--stdio"], {
+  const child = spawn(config.codexBin, config.appServerArgs ?? ["app-server", "--stdio"], {
     cwd: config.cwd,
     env: config.env,
     stdio: ["pipe", "pipe", "pipe"],

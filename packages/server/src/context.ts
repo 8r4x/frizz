@@ -572,6 +572,9 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         // The detached app-server daemon's socket + record live under the project state dir, so a
         // later fray generation can find the app-server this one left running.
         stateDir: project.stateDir,
+        // Codex's MCP servers mount PROCESS-wide on the app-server, not per thread, so the descriptor
+        // is resolved once here — the codex twin of the per-dispatch resolveFrayMcp on the claude side.
+        frayMcp: resolveFrayMcp(project.stateDir),
         dbPath,
         interactions: storage.interactions,
         codexBin: opts.codexBin,
