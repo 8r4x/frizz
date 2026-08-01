@@ -19,24 +19,57 @@
 - **Orchestrator-style apps** feel overly complex.
 - **I'm tired of constantly switching between sessions** to check in on my agents' progress.
 
-## Quickstart
+## Getting started
+
+Fray runs on macOS and Linux. Four requirements, and you probably have three already.
+
+**1. Node 22.14 or newer.** On the Node 23 line it must be 23.6+ — older releases in each line segfault inside better-sqlite3.
 
 ```sh
-cd /path/to/your/repo
+node --version
+```
+
+**2. Git and tmux.** Fray refuses to start without either.
+
+```sh
+brew install git tmux          # macOS
+sudo apt install git tmux      # Debian/Ubuntu
+sudo dnf install git tmux      # Fedora
+```
+
+**3. An agent CLI, signed in.** Either is enough; install both to run them side by side.
+
+```sh
+npm i -g @anthropic-ai/claude-code && claude    # then /login
+npm i -g @openai/codex && codex login           # needs 0.146.0+
+```
+
+**4. Run it inside a repo.**
+
+```sh
+cd ~/taskly
 npx frayui
 ```
 
-That's the whole setup. It starts a localhost server and opens a browser tab — a dedicated workspace for that repo. **One tab per repo!**
+```
+  FRAY v0.1.5  ready in 4.0s
 
-Requires Node 22.14+ (Node 23 must be 23.6+; older releases in each line segfault inside better-sqlite3), with `git` and `tmux` on your `PATH`, and at least one of the [Claude Code](https://claude.com/claude-code) or [Codex](https://developers.openai.com/codex) CLIs signed in. You don't need both. Codex threads need `codex` 0.146.0 or newer.
+  ➜  Local:    http://127.0.0.1:4922/
+  ➜  Project:  taskly — ~/taskly
+  ➜  Logs:     ~/.fray/projects/979dae3c-fe15-4038-817e-11d0e7491959/logs/fray-2026-08-01T13-44-43-16931.log
 
-## Designed for parallelization
+  press ctrl-c to stop · run with --debug for the full event feed
+```
 
-Instead of a sidebar full of tabs — one per session, each one something you have to remember to go check — you get a **unified queue**.
+A browser tab opens on that address — a dedicated workspace for this repo. **One tab per repo!**
 
 <p align="center">
   <img src="assets/board.png" alt="The Fray board: a queue of agent threads on the right, one card asking an answerable question with lettered options; on the left, a sidebar where a running thread has fanned out four sub-agents with live timers." width="100%">
 </p>
+
+## Designed for parallelization
+
+Instead of a sidebar full of tabs — one per session, each one something you have to remember to go check — you get a **unified queue**.
 
 When an agent comes to rest needing you, a card is added to it. You can quickly evaluate what it has done since your last message and decide to answer its questions, steer it, snooze the card, or mark the session complete. You're continuously presented with a set of action items in one place, instead of constantly switching back and forth between sessions.
 
