@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useSnapshot } from "valtio"
 import { ChevronsUpDown, Hourglass, Inbox } from "lucide-react"
-import type { ThreadView, BoardSnapshot, TranscriptMessage } from "@fray-ui/shared"
+import type { ThreadView, BoardSnapshot, TranscriptMessage, TranscriptToolCall } from "@fray-ui/shared"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { pushDrawer, queueCardTargetY, showToast } from "../store.ts"
 import { rpc } from "../api/rpc.ts"
@@ -771,7 +771,19 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
     }
     let steps = 0
     let tools = 0
-    const backgroundMessages: TranscriptMessage[] = []
+    // ONE band for the whole span, not one per source record. A provider chunks a burst of background
+    // launches across several assistant messages, and under the collapse everything between them is
+    // hidden — so they render as consecutive rows with nothing in between, and three shells started in
+    // three records read as three `Ran 1 tool call` disclosures where every other transcript surface
+    // would show `Ran 3 tool calls` (maintainer 2026-07-31: "still getting successive tool calls not
+    // getting properly batched"; the run was Starting/Capturing/Waiting, one shell per record). Built
+    // directly rather than by re-running coalesceToolActivityMessages, because these are synthesized
+    // rows with no prose or dedicated card left between them to break the run. Mirrors that coalescer
+    // otherwise: the FIRST source id keeps the row's identity stable as the run grows, while `at`
+    // advances to the newest launch so a pending card's clock starts from the call it represents.
+    const spanBackgroundTools: TranscriptToolCall[] = []
+    let backgroundSourceId: string | undefined
+    let backgroundAt: string | undefined
     for (let g = firstRenderedIdx; g <= lastRenderedIdx; g++) {
       const m = messages[g]
       if (!m || m.queued || messageRendersNothing(m)) continue
@@ -783,14 +795,9 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
       const ordinaryTools = completion ? [] : m.tools.filter((tool) => tool.backgroundState === undefined)
       tools += ordinaryTools.length
       if (backgroundTools.length > 0) {
-        backgroundMessages.push({
-          sourceId: m.sourceId ? `${m.sourceId}:visible-background` : undefined,
-          role: "assistant",
-          text: "",
-          tools: backgroundTools,
-          parts: [{ kind: "tools", tools: backgroundTools }],
-          at: m.at,
-        })
+        if (spanBackgroundTools.length === 0 && m.sourceId) backgroundSourceId = `${m.sourceId}:visible-background`
+        spanBackgroundTools.push(...backgroundTools)
+        backgroundAt = m.at ?? backgroundAt
       }
       if (
         g > firstRenderedIdx &&
@@ -798,6 +805,14 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
         (messageHasRenderableText(m) || ordinaryTools.length > 0 || completion !== undefined || m.kind !== undefined)
       ) steps++
     }
+    const backgroundMessages: TranscriptMessage[] = spanBackgroundTools.length === 0 ? [] : [{
+      sourceId: backgroundSourceId,
+      role: "assistant",
+      text: "",
+      tools: spanBackgroundTools,
+      parts: [{ kind: "tools", tools: spanBackgroundTools }],
+      at: backgroundAt,
+    }]
     return { hiddenStepCount: steps, hiddenToolCount: tools, visibleBackgroundMessages: backgroundMessages }
   }, [messages, firstRenderedIdx, lastRenderedIdx])
   // Collapse the intermediate run behind ONE summary divider unless the reader has opted into the full log.

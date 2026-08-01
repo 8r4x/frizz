@@ -26,6 +26,10 @@ import "./styles.css"
 //   ?variant=trailingevent  user ask + intermediate steps + a FINAL question, then a sub-agent completion
 //                           event AFTER it. Regression guard: the question (with answer chips) must stay
 //                           visible — a trailing event must NOT pull it into the collapsed range.
+//   ?variant=bgshells  three background shells launched in three SEPARATE assistant records across the
+//                      collapsed span (the real shape from thread `started-three-fray-in-quick-succession`).
+//                      Background shells stay visible under the divider; they must arrive as ONE
+//                      `Ran 3 tool calls` band, not three `Ran 1 tool call` rows.
 const params = new URLSearchParams(location.search)
 const variant = params.get("variant") ?? "heavy"
 
@@ -145,8 +149,34 @@ const questionthentool: TranscriptMessage[] = [
   withId(asst("", [tool("Read", { detail: "components/ChatView.tsx" })])),
 ]
 
+// REGRESSION GUARD for the batch seam under the collapse. Background shells are lifted OUT of the
+// collapsed span and rendered for real (they are lifecycle state, not disposable chatter), and this run
+// launches three of them from three SEPARATE assistant records with ordinary tool work in between —
+// exactly what the maintainer hit. Everything between them is hidden, so they land as consecutive rows
+// and must read as ONE `Ran 3 tool calls` band; one message per record gave three `Ran 1 tool call`s.
+const bgShell = (desc: string, command: string) =>
+  tool("Bash", { desc, detail: command, command, backgroundState: "background", status: "pending" })
+
+const bgshells: TranscriptMessage[] = [
+  { sourceId: "u-cur", role: "user", text: "Verify the relaunch path against a real server, cold and warm.", tools: [], parts: [] },
+  withId(asst("Let me look at what the reuse path actually does today.", [
+    tool("Grep", { detail: "existing server|reuse" }),
+    tool("Read", { detail: "packages/server/src/project-launch.ts", read: "…410 lines…" }),
+  ])),
+  withId(asst("", [bgShell("Starting the first server in the sandbox", "nub run dev --port 5311")])),
+  withId(asst("Server is up — driving the warm path now.", [
+    tool("Bash", { detail: "curl -s localhost:5311/api/health", desc: "Checking the warm relaunch" }),
+    tool("Edit", { detail: "packages/server/src/project-launch.ts" }),
+  ])),
+  withId(asst("", [bgShell("Capturing a genuine cold start panel", "nub run dev --fresh")])),
+  withId(asst("", [bgShell("Waiting for the cold start to serve", "nub scripts/wait-for-serve.mjs 5312")])),
+  withId(asst("Both paths verified live.", [tool("Bash", { detail: "nub --test", desc: "Running the server suite" })])),
+  withId(asst("**Fixed** — a relaunch in a repo that already has a server now says so.")),
+]
+
 const messages =
   variant === "single" ? single
+  : variant === "bgshells" ? bgshells
   : variant === "notools" ? notools
   : variant === "batchedends" ? batchedends
   : variant === "questionthentool" ? questionthentool

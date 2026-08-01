@@ -119,7 +119,24 @@ test("the collapsed intermediate run is a hairline divider that names its tool c
     assert.equal(bare.text, "Click to expand", "with nothing to count, the label is just the affordance")
     assert.equal(bare.aria, "Expand intermediate agent activity")
 
-    // ---- 5. control: nothing intermediate, so no divider at all ----
+    // ---- 5. background shells under the divider arrive as ONE batched band ----
+    // They are lifted out of the collapsed span and rendered for real, so three shells launched from
+    // three separate assistant records land as consecutive rows with nothing between them. Building one
+    // synthesized message PER RECORD gave three `Ran 1 tool call` disclosures — the batch seam every
+    // other transcript surface erases (maintainer 2026-07-31: "still getting successive tool calls not
+    // getting properly batched").
+    await page.goto(variant("bgshells"), { waitUntil: "networkidle0" })
+    await page.waitForSelector(SEL, { timeout: 10_000 })
+    const bands = await page.$$eval("[data-tool-activity] button", (ns) =>
+      ns.map((n) => (n as HTMLElement).innerText.replace(/\s+/g, " ").trim()),
+    )
+    assert.deepEqual(
+      bands,
+      ["Ran 3 tool calls"],
+      `the three background shells must batch into one band, got ${bands.join(" | ")}`,
+    )
+
+    // ---- 6. control: nothing intermediate, so no divider at all ----
     await page.goto(variant("single"), { waitUntil: "networkidle0" })
     await page.waitForFunction(() => document.querySelectorAll("[data-fray-msg]").length > 0, { timeout: 10_000 })
     assert.equal(
