@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   assertLaunchPrerequisites,
+  assertRequiredExecutables,
   ensureNativeHelperPermissions,
   providerReadiness,
 } from "./preflight.ts";
@@ -62,7 +63,32 @@ test("core launch preflight rejects an old 22.x minor below the floor", () => {
 test("core launch preflight gives an actionable error for a missing executable", () => {
   assert.throws(
     () => assertLaunchPrerequisites({ nodeVersion: "22.12.0", command: (name) => name !== "tmux" }),
-    /required executable `tmux` is not available on PATH; install tmux and relaunch Fray/
+    /required executable `tmux` is not available on PATH; Fray uses tmux for its terminal panes and interactive provider logins\. Install tmux \(`brew install tmux` on macOS, `apt install tmux` on Debian\/Ubuntu\) and relaunch Fray/
+  );
+});
+
+// The launchers probe for these BEFORE resolving a workspace, which is what makes the diagnosis
+// eager: resolving one execs `git` and then reads the project's tmux socket, and each of those used
+// to report the absence in its own unrelated vocabulary.
+test("the eager executable probe names each missing tool and why Fray wants it", () => {
+  assert.throws(
+    () => assertRequiredExecutables((name) => name !== "git"),
+    /required executable `git` is not available on PATH; Fray identifies a project by its Git repository\./
+  );
+  assert.throws(
+    () => assertRequiredExecutables((name) => name !== "tmux"),
+    /required executable `tmux` is not available on PATH; Fray uses tmux/
+  );
+  assert.doesNotThrow(() => assertRequiredExecutables(() => true));
+});
+
+// Node's floor is deliberately NOT part of the eager probe: `--stop`/`--status`/`promote` stay
+// reachable for repair on a host whose Node is too old, and only a real launch enforces it.
+test("the eager executable probe leaves the Node floor to the full prerequisite check", () => {
+  assert.doesNotThrow(() => assertRequiredExecutables(() => true));
+  assert.throws(
+    () => assertLaunchPrerequisites({ nodeVersion: "20.19.0", command: () => true }),
+    /Node\.js 22\.12 or newer is required/
   );
 });
 

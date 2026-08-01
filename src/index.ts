@@ -23,7 +23,7 @@ import {
   readFrayArtifact,
   readStableArtifact,
 } from "./artifacts.ts";
-import { assertLaunchPrerequisites } from "./preflight.ts";
+import { assertLaunchPrerequisites, assertRequiredExecutables } from "./preflight.ts";
 import {
   acquireGlobalLaunchLock,
   allocatePort,
@@ -146,6 +146,10 @@ try {
     process.env.FRAY_DEV_REEXEC === "1";
   if (internal && !pinned)
     throw new Error("internal launch is missing its pinned project identity");
+  // Resolving a workspace already shells out to `git` and to `tmux`, so probe for them first and name
+  // whichever is missing. Internal relaunches inherit a parent that already passed. The Node floor
+  // stays in `runSupervisor`, so the repair commands remain reachable on an older runtime.
+  if (!internal) assertRequiredExecutables();
   workspace = internal
     ? workspaceFromLaunchTarget(pinned!)
     : resolveWorkspace(options.repoPath);

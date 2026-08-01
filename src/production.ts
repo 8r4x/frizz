@@ -45,7 +45,11 @@ import {
 } from "@fray-ui/server/project-launch";
 import { createSupervisorShutdownHandler, startDevSupervisor } from "@fray-ui/server/dev-supervisor";
 import { handoffToRegistrySuccessor, npmRegistryReleaseAdapter, planRegistryUpdate, PRODUCTION_REEXEC_FLAG } from "./production-update.ts";
-import { assertLaunchPrerequisites, ensureNativeHelperPermissions } from "./preflight.ts";
+import {
+  assertLaunchPrerequisites,
+  assertRequiredExecutables,
+  ensureNativeHelperPermissions,
+} from "./preflight.ts";
 
 const PACKAGE_NAME = process.env.FRAY_REGISTRY_PACKAGE ?? "frayui";
 
@@ -98,22 +102,21 @@ Runs the npm-resolved immutable Fray package, then opens it in your default brow
 only for a source checkout.
 
 Options:
-  --app                use the legacy dedicated app window instead of a browser tab
-  --no-app             print the URL without opening a browser
-  --port <port>        request a fixed port for a new workspace server
-  --host [address]     serve on a network address instead of loopback ("--host" alone means 0.0.0.0)
-  --allowed-host <name>
-                       also accept this DNS name as the board's address (repeatable); "*" accepts any
-  --debug              stream the full event feed to the terminal instead of the compact readout
-  -h, --help           show this help
+  --app                  use the legacy dedicated app window instead of a browser tab
+  --no-app               print the URL without opening a browser
+  --port <port>          request a fixed port for a new workspace server
+  --host [address]       serve on a network address instead of loopback (bare --host means 0.0.0.0)
+  --allowed-host <name>  with --host, also accept this DNS name as the board's address (repeatable)
+  --debug                stream the full event feed to the terminal instead of the compact readout
+  -h, --help             show this help
 
 Environment:
-  FRAY_HOST            same as --host
-  FRAY_ALLOWED_HOSTS   same as --allowed-host, comma separated
+  FRAY_HOST              same as --host
+  FRAY_ALLOWED_HOSTS     same as --allowed-host, comma separated
 
---host puts a board that can run shell commands as you on the network. Everyone who can reach the
-port has full control of it, so only use it on a network you trust. IP addresses work as-is; reach it
-by DNS name and you must list that name with --allowed-host.`,
+--host puts a board that can run shell commands as you on the network, and Fray has no login: anyone
+who reaches the port controls it. Only do this on a network you trust. An IP address works as-is; to
+reach the board by DNS name you must list that name with --allowed-host ("*" allows any).`,
   );
   process.exit(0);
 }
@@ -125,6 +128,11 @@ const bind = (() => {
 
 const workspace: Workspace = (() => {
   try {
+  // BEFORE the workspace is resolved: resolving it already shells out to `git` and to `tmux`, so a
+  // machine missing either learns it here, by name, instead of from whichever internal step tripped
+  // over the absence first. The Node floor stays with the rest of the prerequisites below, where a
+  // partially provisioned machine can still reach the repair commands.
+  if (!reexec) assertRequiredExecutables();
   const pinned = projectLaunchTargetFromEnvironment(process.env);
   if (reexec) {
     if (!pinned) throw new Error("registry successor is missing its pinned project identity");

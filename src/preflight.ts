@@ -28,6 +28,30 @@ export interface ProviderReadiness {
   codex: boolean;
 }
 
+/**
+ * The executables every Fray launch shells out to, with the reason each one is needed. Both are
+ * reached before any prerequisite check used to run — `resolveWorkspace` execs `git rev-parse` and
+ * then resolves the project's tmux socket — so a machine missing either was diagnosed by whichever
+ * caller happened to fail first, in that caller's vocabulary. A missing `git` reported "fray-dev
+ * must be run inside a Git repository"; a missing `tmux` reported the project's own `fray.id` as
+ * duplicate or corrupt. Say what is actually wrong, and say it before the work starts.
+ */
+const REQUIRED_EXECUTABLES = [
+  { name: "git", need: "Fray identifies a project by its Git repository" },
+  { name: "tmux", need: "Fray uses tmux for its terminal panes and interactive provider logins" },
+] as const;
+
+export function assertRequiredExecutables(command: CommandProbe = commandIsAvailable): void {
+  for (const { name, need } of REQUIRED_EXECUTABLES) {
+    if (command(name)) continue;
+    throw new Error(
+      `required executable \`${name}\` is not available on PATH; ${need}. ` +
+        `Install ${name} (\`brew install ${name}\` on macOS, \`apt install ${name}\` on Debian/Ubuntu) ` +
+        `and relaunch Fray`
+    );
+  }
+}
+
 export function commandIsAvailable(command: string): boolean {
   // `tmux --version` is not portable (macOS tmux accepts `-V` instead), so keep the probe
   // executable-specific while avoiding a shell and any persistent side effects.
@@ -65,13 +89,7 @@ export function assertLaunchPrerequisites(
         `Fray's build (Vite) and native modules (better-sqlite3) do not support older Node. ` +
         `Install a newer Node release and relaunch Fray`
     );
-  const command = options.command ?? commandIsAvailable;
-  for (const executable of ["git", "tmux"]) {
-    if (!command(executable))
-      throw new Error(
-        `required executable \`${executable}\` is not available on PATH; install ${executable} and relaunch Fray`
-      );
-  }
+  assertRequiredExecutables(options.command ?? commandIsAvailable);
 }
 
 export interface NativeHelperOptions {
