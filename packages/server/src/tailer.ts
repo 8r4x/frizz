@@ -2466,7 +2466,11 @@ export function createTailer(deps: TailerDeps): Tailer {
     for (const e of state.subAgents.values()) {
       if (e.kind !== "shell") continue
       const lastActivityAt = entryLastActivity(e)
-      out.push({ label: e.label, startedAt: e.startedAt, state: "running", id: e.toolUseId, ...(lastActivityAt ? { lastActivityAt } : {}) })
+      // `stoppable` is only HALF the answer here — "fray holds a provider task handle for this shell".
+      // board.ts ANDs it with the thread's transport before the × is offered (see BgShellView.stoppable).
+      // Emitted only when a handle exists, so the row cannot advertise a control during the window
+      // between its tool_use (which creates the entry) and its launch ack (which names the task).
+      out.push({ label: e.label, startedAt: e.startedAt, state: "running", id: e.toolUseId, ...(e.taskId ? { stoppable: true } : {}), ...(lastActivityAt ? { lastActivityAt } : {}) })
     }
     return out
   }

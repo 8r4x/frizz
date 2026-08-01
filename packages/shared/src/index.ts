@@ -199,6 +199,22 @@ export const BgShellView = z.object({
   startedAt: z.string(), // ISO8601 of the launch record
   state: z.enum(["running", "stale"]),
   id: z.string().optional(),
+  // Can fray actually END this shell right now? The same contract as SubAgentView.stoppable — computed
+  // server-side, never re-derived by a client — but it takes TWO answers, because a shell's control
+  // handle is not implied by the thread's transport alone:
+  //   · the TAILER contributes "we hold a provider task handle for this shell" (its launch ack names
+  //     one, or the task stream paired one to its tool_use id);
+  //   · the BOARD contributes "this thread has a control channel at all" (broker-backed Claude).
+  // Both must hold. The tailer's half is what closes the seconds-long window between a shell's row
+  // appearing (at its tool_use) and its task id arriving (at its launch ack), where an × keyed only on
+  // the transport would render and then fail — "We shouldn't show the X if it doesn't fucking work".
+  //
+  // Until 2026-08-01 this field did not exist and no shell could be stopped: the server refused
+  // categorically, on the belief that fray "holds no handle on its process". That was measured wrong —
+  // a background Bash is a TASK in the same session-wide registry a sub-agent lives in, so
+  // `Query.stopTask` ends it (verified end-to-end in backend/_live_shell_stop.mts: the OS process is
+  // gone inside a second).
+  stoppable: z.boolean().optional(),
   // ISO8601 of the shell output file's last write — "last active 6 min ago" for a quiet-but-live
   // watcher. Optional (see SubAgentView.lastActivityAt).
   lastActivityAt: z.string().optional(),

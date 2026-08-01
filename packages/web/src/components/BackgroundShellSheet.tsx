@@ -1,6 +1,8 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { Copy, TerminalSquare } from "lucide-react"
 import { showToast } from "../store.ts"
+import { rpc } from "../api/rpc.ts"
 import { useBackgroundShellOutput } from "../hooks.ts"
 import { elapsedSince } from "../lib/durationLabels.ts"
 import { Sheet } from "./ui/Sheet.tsx"
@@ -29,6 +31,8 @@ export function BackgroundShellSheet({
   const state = query.data?.state
   const command = query.data?.command
   const output = query.data?.output ?? ""
+  const [stopping, setStopping] = useState(false)
+  const qc = useQueryClient()
 
   // Follow live output only while the reader remains close to the bottom; inspecting earlier lines
   // must not be interrupted by the next 1.5s poll.
@@ -42,6 +46,30 @@ export function BackgroundShellSheet({
   const age = elapsedSince(startedAt)
   const stateLabel = state === "running" ? `running${age ? ` ${age}` : ""}` : state === "done" ? "finished" : state === "gone" ? "unavailable" : ""
   const unavailable = query.isError || state === "gone"
+
+  // KILL THE SHELL FROM THE DRAWER — the surface where a wedged watcher is actually diagnosed. The ops
+  // strip's × does the same thing in one click, but you only know a shell is stuck AFTER reading its
+  // output, and having to close the drawer to act on what you just read is the gap this closes.
+  //
+  // `subAgentStop`, not `stopBackgroundOp`: the drawer must not force-retire the row it is rendering.
+  // The provider's own terminal task event clears it moments later (measured in
+  // server/backend/_live_shell_stop.mts), so the state readout in this header updates on its own.
+  function stop() {
+    if (stopping) return
+    setStopping(true)
+    rpc.subAgentStop({ slug, id: shellId })
+      .then(({ note }) => {
+        // A shell has no subtree, so `note` can only carry the one failure that is specific to it: the
+        // process is dead but the WORKER could not be told, and is still waiting on it.
+        if (note) showToast(`Background shell stopped. ${note}`, { duration: 7000 })
+        else showToast("Background shell stopped — the worker was told")
+        void qc.invalidateQueries({ queryKey: ["backgroundShellOutput", slug, shellId] })
+      })
+      .catch((error: unknown) => {
+        showToast(error instanceof Error ? error.message : "Could not stop this background shell")
+      })
+      .finally(() => setStopping(false))
+  }
 
   async function copyCommand() {
     if (!command) return
@@ -102,6 +130,37 @@ export function BackgroundShellSheet({
               </div>
             )}
           </div>
+
+          {/* The lifecycle footer, mirroring SubAgentSheet's exactly — same chrome, same danger-hover,
+              same disabled-while-in-flight. It renders only for a shell fray can really end; a RUNNING
+              shell it cannot reach states why instead, because "no control and no explanation" is what
+              sent the maintainer looking for this button in the first place. A finished shell carries
+              neither (its state readout already says "finished") and keeps the bare bottom edge. */}
+          {!unavailable && query.data?.stoppable && (
+            <footer
+              aria-label="Background shell lifecycle actions"
+              data-background-shell-lifecycle-footer
+              className="flex min-h-10 w-full shrink-0 items-center justify-end gap-1.5 border-t border-border/70 bg-panel/95 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] text-[12px] backdrop-blur-sm"
+            >
+              <button
+                type="button"
+                data-stop-background-shell
+                disabled={stopping}
+                onClick={stop}
+                className="rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] text-fg/80 transition-colors hover:border-red-400/40 hover:bg-red-400/10 hover:text-red-300 disabled:opacity-50"
+              >
+                {stopping ? "Stopping…" : "Stop shell"}
+              </button>
+            </footer>
+          )}
+          {!unavailable && !query.data?.stoppable && state === "running" && query.data?.stopNote && (
+            <footer
+              data-background-shell-stop-note
+              className="w-full shrink-0 border-t border-border/70 bg-panel/95 px-4 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] text-[11.5px] text-muted/70"
+            >
+              {query.data.stopNote}
+            </footer>
+          )}
         </>
       )}
     </Sheet>

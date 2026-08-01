@@ -17,11 +17,16 @@ test("a RUNNING row gets the × only when the server says it can actually be sto
   assert.equal(has({ id: "toolu_a", state: "running", stoppable: false }), false, "an explicit false is as binding as an absent flag")
 })
 
-test("a background SHELL never offers to stop live work — it carries no stoppable field at all", () => {
-  // BgShellView has no `stoppable` (fray holds no handle on the process), so a running shell falls out
-  // by CONSTRUCTION here rather than by a kind check that could drift out of sync with the server.
-  assert.equal(has({ id: "toolu_sh", state: "running" }), false, "the exact row the maintainer clicked")
-  assert.equal(has({ id: "toolu_sh", state: "stale" }), true, "…but a finished shell can still be cleared")
+test("a background SHELL is judged by the SAME rule as a sub-agent — no kind check anywhere", () => {
+  // Until 2026-08-01 a running shell fell out here by CONSTRUCTION: BgShellView carried no `stoppable`
+  // field, because the server refused every shell stop on the belief that fray held no handle on the
+  // process. Measured wrong — a background Bash is a task in the registry `Query.stopTask` addresses,
+  // and killing it is as real as killing a sub-agent (server/backend/_live_shell_stop.mts). The field
+  // now exists on both views, and this function still cannot tell the two apart. That is the design:
+  // the ×'s availability is a property of the ROW, never of what kind of thing the row is.
+  assert.equal(has({ id: "toolu_sh", state: "running", stoppable: true }), true, "the exact row the maintainer could not kill")
+  assert.equal(has({ id: "toolu_sh", state: "running" }), false, "a shell fray holds no task handle for still shows no ×")
+  assert.equal(has({ id: "toolu_sh", state: "stale" }), true, "…and a finished shell can still be cleared")
 })
 
 test("a SETTLED row keeps its ×: clearing a finished op is the escape hatch, and it works everywhere", () => {

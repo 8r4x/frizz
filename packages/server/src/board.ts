@@ -202,6 +202,16 @@ function stampStoppable(agents: ThreadView["subAgents"], row: SessionRow): Threa
   return agents.map((agent) => (agent.state === "running" ? { ...agent, stoppable: true } : agent))
 }
 
+// The same question for a background SHELL, and it is deliberately the other way round: the tailer has
+// already said whether fray holds a provider task handle for each shell (BgShellView.stoppable), so all
+// this adds is the TRANSPORT half — and on a thread with no control channel it must REVOKE the tailer's
+// half rather than merely decline to add one. A shell on a tmux or codex thread carries a task id in
+// its launch ack just the same; nothing can be done with it from here.
+function stampStoppableShells(shells: ThreadView["bgShells"], row: SessionRow): ThreadView["bgShells"] {
+  if (isBrokerClaudeRow(row)) return shells
+  return shells.map((shell) => (shell.stoppable ? { ...shell, stoppable: false } : shell))
+}
+
 // The awaiting-background card's trigger: the thread's OWN dispatched work is still live — a sub-agent
 // OR a launched background shell. Broader than hasLiveBackgroundWork (which is sub-agents only): a
 // launched shell is still work the human may want SURFACED, and the never-returns problem (a vite dev
@@ -610,7 +620,7 @@ function sessionThreadView(
     lastActivityAt: tele?.lastActivityAt,
     lastAssistantAt: tele?.lastAssistantAt,
     subAgents: stampStoppable(tele?.subAgents ?? [], row),
-    bgShells: tele?.bgShells ?? [],
+    bgShells: stampStoppableShells(tele?.bgShells ?? [], row),
     pendingAsk: tele?.pendingAsk ? { questions: tele.pendingAsk.questions } : undefined,
     nativeInputRequired: tele?.nativeInputRequired,
     pendingQuestion: tele?.pendingQuestion ?? false,

@@ -522,28 +522,84 @@ export function createRouter(ctx: AppContext) {
     return { sessionId: row.session_id }
   }
 
-  function subAgentStoppable(slug: string, id: string): { sessionId: string; taskId: string } | { sessionId: null; note: string | null } {
+  // Can fray END this live op, and if not, why not — for a sub-agent AND for a background shell.
+  //
+  // A SHELL used to be refused here categorically: "fray tracks a background shell by reading the
+  // worker's transcript and holds no handle on its process". That was measured wrong. A background
+  // `Bash` is a TASK in the very registry `Query.stopTask` addresses — the SDK's own
+  // `backgroundTasks()` says as much ("Bash commands and subagents") — and fray has been recording its
+  // task id all along, off the launch ack ("Command running in background with ID: …") and off the
+  // `task_started` stream. `backend/_live_shell_stop.mts` drove the production path end to end: the
+  // shell's OS process was gone within a second of the stop and the row left the board on its own.
+  // The maintainer's case for this is the 24-hour wedged watcher with no way to clear it.
+  //
+  // Only two things differ between the two kinds, and both are handled below rather than by forking
+  // the function: the LIVENESS reading, and the noun in every refusal.
+  function subAgentStoppable(slug: string, id: string): { sessionId: string; taskId: string; shell: boolean } | { sessionId: null; note: string | null } {
     const blocked = (note: string | null) => ({ sessionId: null, note })
     const info = ctx.tailer.subAgent(slug, id)
-    if (!info || info.state !== "running") return blocked(null)
-    // A background SHELL shares the same op map and the same × as a sub-agent, but `stopTask` is a
-    // TASK control — there is no task behind a `Bash run_in_background`, and fray holds no pid for it
-    // (it learns the shell exists by folding the worker's transcript). Say THAT rather than fall
-    // through to the taskId branch below, whose "did not publish the task identifier" reads like a
-    // provider glitch instead of the categorical limit it is.
-    if (ctx.tailer.backgroundShell?.(slug, id)) {
-      return blocked("Fray tracks a background shell by reading the worker's transcript and holds no handle on its process, so it can't be stopped from here.")
-    }
+    if (!info) return blocked(null)
+    const shell = ctx.tailer.backgroundShell?.(slug, id)
+    const noun = shell ? "background shell" : "sub-agent"
+    // A shell has NO staleness ceiling — its entry clears on a terminal notification, so a watcher that
+    // has printed nothing for a day is still `running`, not `stale`. Read the shell's own state, which
+    // says exactly that; `info.state` runs it through the sub-agent staleness rule and would report
+    // "stale" for precisely the wedged shell this control exists to kill.
+    if (!(shell ? shell.state === "running" : info.state === "running")) return blocked(null)
     const row = ctx.storage.getSession(slug)
     if (!row) return blocked(null)
     if (row.backend === "codex") {
-      return blocked("Codex does not expose per-sub-agent interruption to Fray, so this child can't be stopped from here.")
+      return blocked(shell
+        ? "Codex runs its background commands inside its own process and exposes no way to end one, so this shell can't be stopped from here."
+        : "Codex does not expose per-sub-agent interruption to Fray, so this child can't be stopped from here.")
     }
     if (row.claude_runtime !== "broker" || !ctx.claudeBroker) {
-      return blocked("Stopping a sub-agent needs the Claude session broker; this thread runs in a terminal.")
+      return blocked(`Stopping a ${noun} needs the Claude session broker; this thread runs in a terminal.`)
     }
-    if (!info.taskId) return blocked("This sub-agent did not publish the task identifier needed to stop it.")
-    return { sessionId: row.session_id, taskId: info.taskId }
+    if (!info.taskId) return blocked(`This ${noun} did not publish the task identifier needed to stop it.`)
+    return { sessionId: row.session_id, taskId: info.taskId, shell: Boolean(shell) }
+  }
+
+  // TELL THE WORKER ITS SHELL WAS KILLED — the half the provider does not do for us.
+  //
+  // Measured (backend/_live_shell_stop_notice.mts, 2026-08-01) on a real session: stopping a SUB-AGENT
+  // injects a `<task-notification>` user record the model reads and acts on ("the sub-agent was stopped
+  // before it finished, so it never reported back"). Stopping a background SHELL injects NOTHING — the
+  // transcript gains not one record — and asked afterwards the model still believed its shell was
+  // "presumably still running … I have received no completion notification". A worker left waiting on a
+  // watcher fray already killed is the exact stall the × is meant to end, so fray supplies the missing
+  // notice itself. Shell-only, deliberately: adding one on the sub-agent path would say it twice.
+  //
+  // `[fray]` is the established prefix for a machine notice to a worker — transcript.ts NOISE_PREFIXES
+  // keeps it out of the human's chat, so this reaches the model without becoming a bubble the operator
+  // never typed.
+  //
+  // NEVER cold-starts a process. `stopSubAgent` already requires a daemon this bridge holds live, but a
+  // daemon can die in the gap, and `followUp` would then resume a whole `claude` from disk purely to
+  // announce a kill. The liveness check keeps the worst case at "nobody was there to tell", which is
+  // reported rather than hidden.
+  //
+  // `label` is read BEFORE the kill by the caller: the worker's own description of the shell ("Watching
+  // CI") is what it will recognise, and the row it comes from is retired moments later.
+  async function noticeShellStopped(slug: string, label: string): Promise<string | null> {
+    const bridge = ctx.claudeBroker
+    const row = ctx.storage.getSession(slug)
+    if (!bridge || !row) return "The worker could not be told — the Claude session broker is unavailable."
+    if (!bridge.isDaemonAlive(row.session_id)) return "The worker was not told — its session is no longer running."
+    try {
+      await bridge.followUp({
+        threadSlug: slug,
+        sessionId: row.session_id,
+        cwd: ctx.project.dir,
+        text: `[fray] The operator stopped your background shell ${JSON.stringify(label)} from the Fray dashboard. It is no longer running and will never report a result — do not wait on it. Whatever it wrote before the kill is still readable in its output file.`,
+        permissionMode: (row.permission_mode as ClaudePermissionMode | null) ?? undefined,
+        model: row.model ?? undefined,
+        effort: row.effort ?? undefined,
+      })
+      return null
+    } catch (error) {
+      return `The worker could not be told: ${error instanceof Error ? error.message : String(error)}`
+    }
   }
 
   // STOP A SUBTREE, NOT A ROW — the shared body behind both stop paths (the drawer's button and the ×).
@@ -564,13 +620,21 @@ export function createRouter(ctx: AppContext) {
   //    work fray failed to end, and the operator has to hear that rather than read "stopped" over it.
   //  · The TARGET's stop still throws through to the caller, which is what keeps `stopBackgroundOp`
   //    from retiring a row whose work is still going.
+  //  · A SHELL has no subtree — its dispatch leaves no sidecar, so `subAgentDescendantTasks` answers
+  //    empty and the loop is skipped. What it has instead is the NOTICE, fired here rather than at each
+  //    call site so no stop path can ever kill a shell silently.
   async function stopSubAgentSubtree(
     slug: string,
     id: string,
-    target: { sessionId: string; taskId: string },
-  ): Promise<{ descendantsStopped: number; descendantsFailed: number }> {
+    target: { sessionId: string; taskId: string; shell?: boolean },
+  ): Promise<{ descendantsStopped: number; descendantsFailed: number; noticeFailed: string | null }> {
     const bridge = ctx.claudeBroker
     if (!bridge) throw new Error("Claude session broker is unavailable; cannot stop this sub-agent")
+    // Read the shell's own name for itself while its row is still live — the notice below is delivered
+    // after the kill, by which point the row it came from is on its way out of tracking.
+    const shellLabel = target.shell
+      ? ctx.tailer.get(slug)?.bgShells?.find((s) => s.id === id)?.label ?? ctx.tailer.backgroundShell?.(slug, id)?.command ?? "(unnamed)"
+      : undefined
     let descendantsStopped = 0
     let descendantsFailed = 0
     for (const taskId of ctx.tailer.subAgentDescendantTasks?.(slug, id) ?? []) {
@@ -582,17 +646,25 @@ export function createRouter(ctx: AppContext) {
       }
     }
     await bridge.stopSubAgent({ threadSlug: slug, sessionId: target.sessionId, taskId: target.taskId })
-    return { descendantsStopped, descendantsFailed }
+    // AFTER the kill, never before: the notice states the shell is already dead, and a stop that throws
+    // must not leave a worker believing work ended that is still burning. A notice that fails to land
+    // is reported, not thrown — the process IS dead by this line, and turning that into an error the
+    // client reads as "the stop failed" would leave the row on the board over a delivery problem.
+    const noticeFailed = shellLabel === undefined ? null : await noticeShellStopped(slug, shellLabel)
+    return { descendantsStopped, descendantsFailed, noticeFailed }
   }
 
   // FAILURE ONLY. A successful fan-out is already fully described by `descendantsStopped`, and saying
   // it twice on the wire invites the two to drift; the note exists for the one thing a count cannot
   // express — a descendant fray asked to stop and could not, which is live work the operator is about
-  // to lose sight of when the row leaves the board.
-  function subtreeNote(result: { descendantsFailed: number }): string | null {
-    const { descendantsFailed } = result
-    if (descendantsFailed === 0) return null
-    return `${descendantsFailed} descendant${descendantsFailed === 1 ? "" : "s"} could not be stopped and may still be running.`
+  // to lose sight of when the row leaves the board. A shell notice that did not land joins it on the
+  // same terms: the operator believes the worker was told, and only this says otherwise.
+  function subtreeNote(result: { descendantsFailed: number; noticeFailed?: string | null }): string | null {
+    const { descendantsFailed, noticeFailed } = result
+    const parts: string[] = []
+    if (descendantsFailed > 0) parts.push(`${descendantsFailed} descendant${descendantsFailed === 1 ? "" : "s"} could not be stopped and may still be running.`)
+    if (noticeFailed) parts.push(noticeFailed)
+    return parts.length > 0 ? parts.join(" ") : null
   }
 
   // Every interaction RPC re-derives the project from this server and binds the requested slug to the
@@ -855,12 +927,24 @@ export function createRouter(ctx: AppContext) {
         output: z.string(),
         truncated: z.boolean(),
         state: z.enum(["running", "done", "gone"]),
+        // The same pair `subAgentTranscript` carries, for the same reason: the drawer renders a Stop
+        // button if and only if this is true, and states `stopNote` in its place when a running shell
+        // still cannot be reached. Never re-derived client-side — see subAgentStoppable.
+        stoppable: z.boolean(),
+        stopNote: z.string().nullable(),
       }),
       handler: async ({ input }) => {
         const info = ctx.tailer.backgroundShell?.(input.slug, input.id)
-        if (!info) return { command: null, output: "", truncated: false, state: "gone" as const }
+        if (!info) return { command: null, output: "", truncated: false, state: "gone" as const, stoppable: false, stopNote: null }
         const content = info.outputFile ? readBackgroundShellOutput(info.outputFile) : { output: "", truncated: false }
-        return { command: info.command ?? null, ...content, state: info.state }
+        const stop = subAgentStoppable(input.slug, input.id)
+        return {
+          command: info.command ?? null,
+          ...content,
+          state: info.state,
+          stoppable: stop.sessionId !== null,
+          stopNote: stop.sessionId === null ? stop.note : null,
+        }
       },
     }),
 
@@ -872,17 +956,19 @@ export function createRouter(ctx: AppContext) {
     // work keeps burning tokens is worse than no control — it hides live work behind a gesture that
     // reads as a kill. So the order here is stop FIRST, retire second:
     //
-    //  1. STOPPABLE (a broker-backed claude row's live child with a task id) → the real provider
-    //     control, `Query.stopTask`, awaited to the daemon's answer. Then retire, so the row leaves
-    //     every live surface on this click's own board frame instead of waiting for the fold.
+    //  1. STOPPABLE (a broker-backed claude row's live child — sub-agent OR background shell — with a
+    //     task id) → the real provider control, `Query.stopTask`, awaited to the daemon's answer. Then
+    //     retire, so the row leaves every live surface on this click's own board frame instead of
+    //     waiting for the fold. A SHELL additionally gets the notice the provider does not send (see
+    //     noticeShellStopped), so the worker is not left waiting on a watcher fray already killed.
     //  2. The stop THREW → do NOT retire. A failed stop means the child is still working, and hiding
     //     it is exactly the bug above; the row stays and the error reaches the operator.
-    //  3. NOT stoppable (a tmux claude thread, a codex thread, a background shell, a stale/finished
-    //     op) → retire anyway, because clearing a phantom is the escape hatch the × was built for and
-    //     is still the only way to unstick a finished op whose completion was never recorded. But
-    //     return the REASON, so the client can say plainly that the work may still be running rather
-    //     than letting the row vanish silently. `note` is null when there is nothing worth saying —
-    //     a stale/gone op is already finished as far as anything can tell.
+    //  3. NOT stoppable (a tmux claude thread, a codex thread, a stale/finished op) → retire anyway,
+    //     because clearing a phantom is the escape hatch the × was built for and is still the only way
+    //     to unstick a finished op whose completion was never recorded. But return the REASON, so the
+    //     client can say plainly that the work may still be running rather than letting the row vanish
+    //     silently. `note` is null when there is nothing worth saying — a stale/gone op is already
+    //     finished as far as anything can tell.
     //
     // `dismissed:false` when the id was not live to retire (already gone / unknown) — the UI refreshes.
     stopBackgroundOp: mutation({

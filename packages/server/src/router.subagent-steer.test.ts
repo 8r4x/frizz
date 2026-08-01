@@ -33,6 +33,13 @@ function harness(subAgent: (slug: string, id: string) => SubAgentInfo, opts: {
   // Task ids whose stop throws, to pin that a descendant fray cannot end is COUNTED and stated
   // rather than swallowed under a "stopped" the operator would read as "the work ended".
   stopFailsFor?: readonly string[]
+  // The board's live shells, so a shell stop can read its own label for the kill notice.
+  bgShells?: readonly { id: string; label: string }[]
+  // The broker's answer to "is this session's daemon still up" — the gate on the kill notice. Default
+  // true; false pins that fray reports the worker was NOT told rather than cold-starting a process.
+  daemonAlive?: boolean
+  // Make the notice delivery FAIL, to pin that a dead notice never turns a real kill into an error.
+  followUpThrows?: Error
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "fray-subagent-steer-"))
   const project: Project = { dir, id: "steer", name: "test", label: "test", stateDir: dir, cwdSlug: "test" }
@@ -48,7 +55,7 @@ function harness(subAgent: (slug: string, id: string) => SubAgentInfo, opts: {
   }
   const dismissals: { slug: string; id: string }[] = []
   const tailer: Tailer = {
-    get: () => undefined,
+    get: opts.bgShells ? (() => ({ bgShells: opts.bgShells }) as unknown as ReturnType<Tailer["get"]>) : () => undefined,
     foreignIds: () => [],
     subAgent,
     forget: () => {},
@@ -64,6 +71,9 @@ function harness(subAgent: (slug: string, id: string) => SubAgentInfo, opts: {
   }
   const steers: { threadSlug: string; sessionId: string; subAgentId: string; text: string }[] = []
   const stops: { threadSlug: string; sessionId: string; taskId: string }[] = []
+  // Every message fray delivered into the worker's own conversation. For these tests that is only ever
+  // the shell-kill notice — the one thing the provider does not tell a worker itself.
+  const notices: { threadSlug: string; sessionId: string; text: string }[] = []
   const ctx = {
     project,
     storage,
@@ -79,9 +89,14 @@ function harness(subAgent: (slug: string, id: string) => SubAgentInfo, opts: {
         if (opts.stopFailsFor?.includes(input.taskId)) throw new Error(`cannot stop ${input.taskId}`)
         stops.push(input)
       },
+      isDaemonAlive: () => opts.daemonAlive !== false,
+      followUp: async (input: { threadSlug: string; sessionId: string; text: string }) => {
+        if (opts.followUpThrows) throw opts.followUpThrows
+        notices.push({ threadSlug: input.threadSlug, sessionId: input.sessionId, text: input.text })
+      },
     },
   } as unknown as AppContext
-  return { dir, ctx, storage, router: createRouter(ctx), steers, stops, dismissals }
+  return { dir, ctx, storage, router: createRouter(ctx), steers, stops, dismissals, notices }
 }
 
 function row(slug: string, over: Partial<SessionRow> = {}): SessionRow {
@@ -344,20 +359,112 @@ test("a runtime with no stop path still clears the row, but SAYS the work may su
     rmSync(tmux.dir, { recursive: true, force: true })
   }
 
-  // A background SHELL gets its own sentence rather than the taskId branch's "did not publish the task
-  // identifier", which reads like a provider glitch instead of the categorical limit it is.
+  // A background SHELL on a runtime with no control channel says so in the SHELL's own words. The
+  // refusal is now about the TRANSPORT, never about the row being a shell: until 2026-08-01 every shell
+  // was refused categorically ("holds no handle on its process"), which was measured wrong.
   const shell = harness(
-    () => ({ outputFile: "/tmp/sh.log", state: "running", direct: false }),
+    () => ({ outputFile: "/tmp/sh.log", state: "running", direct: false, taskId: "bshell1" }),
     { backgroundShell: () => ({ command: "npm run dev", outputFile: "/tmp/sh.log", state: "running" as const }) },
   )
   try {
-    seed(shell.storage, "t")
+    seed(shell.storage, "t", { backend: "codex" })
     const result = await shell.router.stopBackgroundOp.handler({ input: { slug: "t", id: "toolu_sh" } })
     assert.equal(result.stopped, false)
     assert.equal(result.dismissed, true)
-    assert.match(result.note ?? "", /holds no handle on its process/)
+    assert.match(result.note ?? "", /exposes no way to end one/)
+    assert.deepEqual(shell.notices, [], "a refusal must never tell the worker its shell was killed")
   } finally {
     rmSync(shell.dir, { recursive: true, force: true })
+  }
+})
+
+// ── STOPPING A BACKGROUND SHELL ──────────────────────────────────────────────────────────────────
+//
+// The × was withheld from every running shell until 2026-08-01, on a premise that turned out to be
+// false: fray DOES hold a handle on a background Bash — the provider's own task id, which it has been
+// recording off the launch ack all along, and which `Query.stopTask` accepts (verified end-to-end in
+// backend/_live_shell_stop.mts: the OS process dies within a second). The maintainer's case was a
+// watcher wedged for 24 hours with no way to clear it.
+//
+// The NOTICE is the other half and is shell-only. Measured on a real session
+// (backend/_live_shell_stop_notice.mts): stopping a sub-agent injects a `<task-notification>` the model
+// reads and acts on; stopping a shell injects NOTHING, and the model goes on believing its shell is
+// "presumably still running". These pin that fray fills exactly that gap, and only it.
+
+const RUNNING_SHELL = () => ({ outputFile: "/tmp/sh.log", state: "running" as const, direct: false, taskId: "bshell1" })
+const SHELL_LOOKUP = () => ({ command: "npx vite --port 5231", outputFile: "/tmp/sh.log", state: "running" as const })
+
+test("the × STOPS a background shell for real, retires the row, and TELLS the worker", async () => {
+  const h = harness(RUNNING_SHELL, {
+    backgroundShell: SHELL_LOOKUP,
+    bgShells: [{ id: "toolu_sh", label: "Watching CI" }],
+  })
+  try {
+    seed(h.storage, "t")
+    const result = await h.router.stopBackgroundOp.handler({ input: { slug: "t", id: "toolu_sh" } })
+    assert.deepEqual(result, { stopped: true, dismissed: true, note: null, descendantsStopped: 0 })
+    assert.deepEqual(h.stops, [{ threadSlug: "t", sessionId: "sid-t", taskId: "bshell1" }], "the provider control ran on the shell's task id")
+    assert.deepEqual(h.dismissals, [{ slug: "t", id: "toolu_sh" }], "and only then did the row leave tracking")
+    assert.equal(h.notices.length, 1, "the worker is told exactly once")
+    // The worker must be able to tell WHICH of its shells died, so the notice carries the label the
+    // worker itself gave the launch — read off the live row BEFORE the kill retires it.
+    assert.match(h.notices[0]!.text, /^\[fray\] /, "machine plumbing, hidden from the human's chat")
+    assert.match(h.notices[0]!.text, /Watching CI/)
+    assert.match(h.notices[0]!.text, /do not wait on it/)
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true })
+  }
+})
+
+test("a shell that has been SILENT for hours is still stoppable — that is the whole point", async () => {
+  // The sub-agent staleness ceiling would call this row "stale" (nothing has written to its output for
+  // 15+ minutes) and the stop path would decline it as already-finished. A shell has no such ceiling:
+  // its entry clears on a terminal notification and nothing else, so a watcher quiet for a day is
+  // RUNNING. Reading `info.state` here instead of the shell's own state would refuse to kill precisely
+  // the wedged shell the operator came for.
+  const h = harness(
+    () => ({ outputFile: "/tmp/sh.log", state: "stale", direct: false, taskId: "bshell1" }),
+    { backgroundShell: SHELL_LOOKUP, bgShells: [{ id: "toolu_sh", label: "Watching CI" }] },
+  )
+  try {
+    seed(h.storage, "t")
+    const result = await h.router.stopBackgroundOp.handler({ input: { slug: "t", id: "toolu_sh" } })
+    assert.equal(result.stopped, true, "the shell's own liveness governs, not the sub-agent staleness rule")
+    assert.deepEqual(h.stops, [{ threadSlug: "t", sessionId: "sid-t", taskId: "bshell1" }])
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true })
+  }
+})
+
+test("a shell kill whose NOTICE cannot land is still a kill — and says the worker was not told", async () => {
+  // The process is dead by the time the notice is attempted. Turning a delivery failure into a thrown
+  // stop would leave the row on the board over a message, and the operator would read it as "the kill
+  // failed" — the opposite of what happened. It rides back in `note` instead.
+  const h = harness(RUNNING_SHELL, {
+    backgroundShell: SHELL_LOOKUP,
+    bgShells: [{ id: "toolu_sh", label: "Watching CI" }],
+    daemonAlive: false,
+  })
+  try {
+    seed(h.storage, "t")
+    const result = await h.router.stopBackgroundOp.handler({ input: { slug: "t", id: "toolu_sh" } })
+    assert.equal(result.stopped, true)
+    assert.equal(result.dismissed, true)
+    assert.match(result.note ?? "", /was not told/)
+    assert.deepEqual(h.notices, [], "a dead daemon is never cold-started just to announce a kill")
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true })
+  }
+})
+
+test("stopping a SUB-AGENT sends no fray notice — the provider already injects its own", async () => {
+  const h = harness(() => RUNNING_DIRECT)
+  try {
+    seed(h.storage, "t")
+    await h.router.stopBackgroundOp.handler({ input: { slug: "t", id: "toolu_child" } })
+    assert.deepEqual(h.notices, [], "a second notice would tell the worker the same thing twice")
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true })
   }
 })
 

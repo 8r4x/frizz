@@ -1081,6 +1081,34 @@ test("tailer: dismissOp retires a live sub-agent AND a live shell by id, immedia
   assert.equal(t.dismissOp?.("t", "toolu_ag"), false, "a second dismiss of an already-retired op is a no-op")
 })
 
+test("tailer: a shell whose task id has not arrived yet is NOT marked stoppable", () => {
+  // The window this closes: a shell's row is minted at its `tool_use` record, but the task id fray
+  // would stop it with only arrives at the LAUNCH ACK one record later. `stoppable` is what the client
+  // renders the × off, so advertising it before the handle exists puts a control on the row that would
+  // fail on click — "We shouldn't show the X if it doesn't fucking work" (maintainer 2026-07-30).
+  const h = harness()
+  h.storage.upsertSession(row())
+  const shellLine = JSON.stringify(bashBg("toolu_sh", "Watch CI", "gh run watch"))
+  fixture(h.logDir, "sid", [IN_FLIGHT, shellLine]) // the tool_use, and deliberately NO ack
+  const t = createTailer({
+    project: { cwdSlug: "x" } as Project,
+    storage: h.storage,
+    bus: h.bus,
+    onChange: () => h.changes.n++,
+    now: () => h.clock.ms,
+    paneDead: () => h.dead.v,
+    capturePane: () => h.pane.text,
+    sessionLogDir: h.logDir,
+    mtimeMs: () => Date.parse("2026-07-01T00:00:02.000Z"),
+  })
+  h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
+  t.tick()
+  const shell = t.get("t")?.bgShells[0]
+  assert.equal(shell?.id, "toolu_sh", "the row still appears — live work is never hidden")
+  assert.equal(shell?.state, "running")
+  assert.equal(shell?.stoppable, undefined, "…but it advertises no stop until fray holds the handle")
+})
+
 test("tailer: a dead pane clears its background shells — a shell cannot outlive the agent process", () => {
   const h = harness()
   h.storage.upsertSession(row())
@@ -1102,7 +1130,7 @@ test("tailer: a dead pane clears its background shells — a shell cannot outliv
 
   h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z") // <5min since shell output → live
   t.tick()
-  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Watch CI", startedAt: "2026-07-01T00:00:01.000Z", state: "running", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
+  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Watch CI", startedAt: "2026-07-01T00:00:01.000Z", state: "running", stoppable: true, lastActivityAt: "2026-07-01T00:00:02.000Z" }])
 
   // The agent process dies (its tmux pane went dead) WITHOUT a terminal notification landing for the
   // shell. The shell is a child of that process, so it died with it — the board must stop reporting it
@@ -1145,7 +1173,7 @@ test("tailer: a BROKER (headless) thread reports its live background shells — 
 
   h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
   t.tick() // prime — the tick that used to latch paneDead=true
-  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Watch CI on PR 604", startedAt: "2026-07-01T00:00:01.000Z", state: "running", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
+  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Watch CI on PR 604", startedAt: "2026-07-01T00:00:01.000Z", state: "running", stoppable: true, lastActivityAt: "2026-07-01T00:00:02.000Z" }])
   t.tick() // and the steady tick keeps it, rather than latching on a stale prime reading
   assert.equal(t.get("t")?.bgShells.length, 1, "the shell survives the steady tick")
   assert.deepEqual(deadCalls, [], "a paneless row is never sniffed for pane death")
@@ -1211,7 +1239,7 @@ test("tailer: a manual TaskStop clears a live background shell from the board vi
 
   h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
   t.tick()
-  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Boot isolated stack", startedAt: "2026-07-01T00:00:01.000Z", state: "running", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
+  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Boot isolated stack", startedAt: "2026-07-01T00:00:01.000Z", state: "running", stoppable: true, lastActivityAt: "2026-07-01T00:00:02.000Z" }])
 
   // The worker TaskStops the shell (pane still alive). Its structured result is the terminal signal.
   appendFileSync(join(h.logDir, "sid.jsonl"), JSON.stringify(taskStopResult("ba3y11c3t", "nub scripts/adhoc-stack.mjs")) + "\n")
@@ -1297,7 +1325,7 @@ test("tailer: a background shell stays running however long it is quiet; only it
 
   h.clock.ms = Date.parse("2026-07-01T00:40:00.000Z") // 40min quiet — an ordinary CI wait
   t.tick()
-  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_srv", label: "Run vite dev server", startedAt: "2026-07-01T00:00:01.000Z", state: "running", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
+  assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_srv", label: "Run vite dev server", startedAt: "2026-07-01T00:00:01.000Z", state: "running", stoppable: true, lastActivityAt: "2026-07-01T00:00:02.000Z" }])
 
   h.clock.ms = Date.parse("2026-07-01T08:00:00.000Z") // 8h quiet — a dev server left running; still "running"
   t.tick()

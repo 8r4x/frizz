@@ -15,7 +15,8 @@ import { showToast } from "../store.ts"
 // it deliberately does not retire the row; the error toast is the only client-side bookkeeping.
 // (This lives beside `lib/childOps.ts` rather than inside it because that module is the row's pure
 // vocabulary, importable by an SSR test with no store or transport behind it.)
-export function dismissChildOp(slug: string, id: string): void {
+export function dismissChildOp(slug: string, id: string, kind: "AGENT" | "SHELL" = "AGENT"): void {
+  const noun = kind === "SHELL" ? "Background shell" : "Sub-agent"
   rpc.stopBackgroundOp({ slug, id })
     .then(({ stopped, note, descendantsStopped }) => {
       // Only the KILL is worth announcing. A clear needs no toast — the row leaving IS the feedback.
@@ -24,8 +25,14 @@ export function dismissChildOp(slug: string, id: string): void {
       // row they clicked leaves the board either way, and until this stop covered the fan-out its
       // grandchildren kept running and reported back under an agent that was already gone. A
       // descendant fray failed to stop rides in `note` and outranks the count — that is live work
-      // still burning, and it gets the longer toast the error path uses.
-      if (note) return showToast(`Sub-agent stopped. ${note}`, { duration: 7000 })
+      // still burning, and it gets the longer toast the error path uses. A shell's `note` carries the
+      // other failure only it can have: the kill landed but the WORKER could not be told.
+      if (note) return showToast(`${noun} stopped. ${note}`, { duration: 7000 })
+      // A shell says who else knows. The worker is not watching the dashboard, and a stop it was never
+      // told about leaves it waiting on a watcher that will never report — so "the worker was told" is
+      // the half of this action the operator cannot otherwise verify. A sub-agent needs no such line:
+      // the provider injects its own stop notification (backend/_live_shell_stop_notice.mts).
+      if (kind === "SHELL") return showToast("Background shell stopped — the worker was told")
       showToast(descendantsStopped > 0 ? `Sub-agent and ${descendantsStopped} descendant${descendantsStopped === 1 ? "" : "s"} stopped` : "Sub-agent stopped")
     })
     .catch((error: unknown) => {
@@ -42,19 +49,27 @@ export function dismissChildOp(slug: string, id: string): void {
 //     dispatch lives in an ANCESTOR's transcript — this thread never tracked it, so the call would be
 //     a silent no-op. (`stopTask` alone could reach a descendant, but the row would then not clear,
 //     which is the same lie in the other direction. The drawer's "Stop sub-agent" covers those.)
-//  2. RUNNING, BUT NOT STOPPABLE. The row is live work fray has no channel to end: a background shell
-//     (fray learns it exists by reading the worker's transcript and holds no handle on the process),
-//     or a sub-agent on a tmux/codex thread. `stoppable` is the SERVER's answer and is never
-//     re-derived here — a BgShellView carries no such field at all, so a running shell falls out here
-//     by construction rather than by a kind check that could drift.
+//  2. RUNNING, BUT NOT STOPPABLE. The row is live work fray has no channel to end: any op on a
+//     tmux/codex thread, or one whose provider task handle fray never captured. `stoppable` is the
+//     SERVER's answer and is never re-derived here — the policy depends on the thread's TRANSPORT,
+//     which the browser has no honest way to know.
+//
+//     A background SHELL used to fall out of this clause BY CONSTRUCTION, because a BgShellView
+//     carried no `stoppable` field at all — the server refused every shell stop categorically, on the
+//     belief that fray held no handle on the process. That was measured wrong on 2026-08-01: a
+//     background Bash is a task in the same registry `Query.stopTask` addresses, and killing it is as
+//     real as killing a sub-agent (server/backend/_live_shell_stop.mts). The field now exists on both
+//     views and this clause reads them identically, which is the point — the ×'s availability is a
+//     property of the ROW, never of what kind of thing the row is.
 //  3. Everything else keeps the ×, including every stale/rested row: there the click CLEARS a finished
 //     op, which is exactly what it claims and works on every runtime.
 export function childOpDismisser(
   slug: string,
   op: { id?: string; depth?: number; state?: string; stoppable?: boolean },
+  kind: "AGENT" | "SHELL" = "AGENT",
 ): (() => void) | undefined {
   if (!op.id || !isDirectSubAgent(op)) return undefined
   if (op.state === "running" && !op.stoppable) return undefined
   const id = op.id
-  return () => dismissChildOp(slug, id)
+  return () => dismissChildOp(slug, id, kind)
 }

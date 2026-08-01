@@ -3831,7 +3831,7 @@ export function BackgroundOpsStrip({
           density="sheet"
           startedAt={s.startedAt}
           onOpen={s.id ? () => pushBackgroundShellDrawer(slug, s.id!, { label: s.label, startedAt: s.startedAt }) : undefined}
-          onDismiss={childOpDismisser(slug, s)}
+          onDismiss={childOpDismisser(slug, s, "SHELL")}
         />
       ))}
     </div>

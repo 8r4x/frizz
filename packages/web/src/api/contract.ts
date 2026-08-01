@@ -84,7 +84,7 @@ export interface Api {
   // flat, so anything less orphans the grandchildren. `descendantsStopped` counts the extra tasks
   // ended; `note` narrates the fan-out, including any descendant that could NOT be stopped.
   subAgentStop(input: { slug: string; id: string }): Promise<{ stopped: boolean; descendantsStopped: number; note: string | null }>
-  backgroundShellOutput(input: { slug: string; id: string }): Promise<{ command: string | null; output: string; truncated: boolean; state: "running" | "done" | "gone" }>
+  backgroundShellOutput(input: { slug: string; id: string }): Promise<{ command: string | null; output: string; truncated: boolean; state: "running" | "done" | "gone"; stoppable: boolean; stopNote: string | null }>
   // The × on a live sub-agent / background-shell row. It MEANS stop: the server tries the real
   // provider control first and only then retires the row. `stopped` says whether work was actually
   // terminated; `note` is why it could not be, when there is a reason worth telling the operator —
