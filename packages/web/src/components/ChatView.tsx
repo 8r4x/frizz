@@ -4,7 +4,7 @@ import { useSnapshot } from "valtio"
 import * as RadixTabs from "@radix-ui/react-tabs"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Bot, Check, ChevronRight, FileText, Hash, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, ShieldCheck, Sparkles, TerminalSquare, X, type LucideIcon } from "lucide-react"
+import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Bot, Check, ChevronRight, FileText, Hash, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, ShieldCheck, Smartphone, Sparkles, TerminalSquare, X, type LucideIcon } from "lucide-react"
 import type { AwaitingHint, BgShellView, NativeInputRequired as NativeInputRequiredData, PendingAsk, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@fray-ui/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
@@ -1446,6 +1446,7 @@ export function ThreadHeader({ slug, tab, onStatusApplied, onClose, showReturnTo
         </RadixTabs.List>
         <div className="flex shrink-0 items-center">
           {showTerminalCommand && <CopyTerminalCommandButton slug={slug} />}
+          {thread.remoteControlUrl && <RemoteControlLink url={thread.remoteControlUrl} />}
           <HeaderActions
             thread={thread}
             onDoc={hasDoc ? () => pushDrawer("doc", thread.id) : undefined}
@@ -1484,6 +1485,27 @@ export function ThreadHeader({ slug, tab, onStatusApplied, onClose, showReturnTo
         )}
       </div>
     </header>
+  )
+}
+
+// The claude.ai address a Claude session registered under through Remote Control — the one affordance
+// that tells the operator this thread can be picked up on a phone at all, and the shortest route there.
+// Present only when the session actually registered, so a thread that could not (Remote Control off,
+// API-key auth, an org policy) never shows a link that would dead-end. `noreferrer` alongside `noopener`
+// because this leaves fray for a third-party origin, unlike the standalone-thread link above.
+function RemoteControlLink({ url }: { url: string }) {
+  return (
+    <Tooltip label="Open this session in the Claude app">
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Open this session in the Claude app"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
+      >
+        <Smartphone size={14} strokeWidth={1.8} />
+      </a>
+    </Tooltip>
   )
 }
 

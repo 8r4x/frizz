@@ -65,6 +65,14 @@ export interface ClaudeBrokerBridgeDeps {
   /** Decide a tool-permission request when NOT routing to the dashboard (tests / interactions absent).
    *  Defaults to auto-allow, honoring the thread's permission mode — matching today's tmux `auto`. */
   decidePermission?: (slug: string, sessionId: string, request: ClaudePermissionRequest) => Promise<ClaudePermissionDecision>
+  /** Whether a session forked from here registers with claude.ai for Remote Control, so the operator
+   *  can drive the thread from claude.ai/code or the Claude mobile app. Read at FORK time (not cached)
+   *  so flipping the setting takes effect on the next thread rather than at the next fray restart.
+   *  Absent ⇒ off, which is what every test and headless harness wants. */
+  remoteControlEnabled?: () => boolean
+  /** The claude.ai address a session registered under. Fires once per registration and again on every
+   *  reconnect to an already-registered daemon; the consumer persists it against the thread. */
+  onRemoteControl?: (slug: string, sessionId: string, url: string) => void
   /** Observe the session/transcript event stream (board liveness / telemetry). Optional. */
   onEvent?: (slug: string, sessionId: string, event: ClaudeQueryEvent) => void
   /** Observe daemon lifecycle/stderr diagnostics from a LIVE socket. The durable copy is written by
@@ -312,6 +320,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     const client = connectClaudeBroker(record.socketPath, {
       onEvent: (event) => deps.onEvent?.(slug, sessionId, event),
       onDiagnostic: (diagnostic) => deps.onDiagnostic?.(slug, sessionId, diagnostic),
+      onRemoteControl: (url) => deps.onRemoteControl?.(slug, sessionId, url),
       onPermissionRequest: (requestId, request) => {
         // Dashboard routing when the store is wired; else the decision hook / auto-allow (tests).
         if (deps.interactions && deps.projectId) {
@@ -343,9 +352,14 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       // down, but only when a store is actually wired to render and resolve the card.
       ...(deps.interactions && deps.projectId ? { FRAY_NATIVE_ASK: "1" } : {}),
     }
+    // Remote Control is decided per FORK and named after the thread: the operator picking a session out
+    // of the claude.ai list needs to see which fray thread it is, and the slug is the identifier every
+    // other fray surface already shows them.
+    const remoteControl = deps.remoteControlEnabled?.() ? { name: `fray · ${slug}` } : undefined
     const { record, reattached } = await adoptOrForkBroker({
       stateDir: deps.stateDir, cwd, sessionId, executablePath, permissionMode, env: deps.env,
       pluginDir: we?.pluginDir, mcpServers: we?.mcpServers, allowedTools: we?.allowedTools, workerEnv,
+      remoteControl,
       ...fork,
     })
     // A RESUME that had to cold-start is the moment fray discovers a daemon died while nobody was

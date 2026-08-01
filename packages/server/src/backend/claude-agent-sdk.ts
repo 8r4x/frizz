@@ -41,6 +41,7 @@ import {
   type ClaudePermissionMode,
   type ClaudePermissionRequest,
   type ClaudeQueryEvent,
+  type ClaudeRemoteControlSession,
   type ClaudeSessionInitEvent,
   type ClaudeTaskEvent,
   type ClaudeTaskUsage,
@@ -102,6 +103,9 @@ const MAX_PERMISSION_REQUESTS = 128
 const MAX_ELICITATION_CALLBACKS = 128
 const MAX_SESSION_TITLE_DESCRIPTION_BYTES = 64 * 1024
 const MAX_SESSION_TITLE_BYTES = 2 * 1024
+// The Remote Control session label the operator picks THIS session out by in the claude.ai list. A
+// thread title, not a body — Claude's own auto-generated names are hostname-sized.
+const MAX_REMOTE_CONTROL_NAME_BYTES = 512
 const NUB_NODE_SHIM_PATH_SEGMENT = /(?:^|[\\/])nub-node-shim-[^\\/]+$/
 
 export type ClaudeSessionSelection =
@@ -165,6 +169,14 @@ export interface ClaudeQueryHandle extends AsyncIterable<ClaudeQueryEvent> {
   /** Stop the background task identified by the provider's task-notification id. */
   stopTask(taskId: string): Promise<void>
   setPermissionMode(mode: ClaudePermissionMode): Promise<void>
+  /**
+   * Register this session with claude.ai so the operator can drive it from claude.ai/code or the
+   * Claude mobile app, and resolve with the address that opens it. Rejects when the provider refuses
+   * (API-key auth, a long-lived token, an organization policy) — the caller reports that verbatim
+   * rather than leaving the thread silently unreachable. See the implementation for why an SDK
+   * session never gets a bridge on its own.
+   */
+  enableRemoteControl(name?: string): Promise<ClaudeRemoteControlSession>
   // Ask the provider to name the session from `description` and PERSIST the name as the `ai-title`
   // record fray's tailer reads. See CLAUDE_TITLE_NEEDS_EXPLICIT_REQUEST below for why the broker has
   // to ask instead of letting Claude title the session on its own.
@@ -497,6 +509,39 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
     await this.ready()
     this.assertOpen()
     await this.awaitOpenControl(this.sdkQuery.setPermissionMode(parsedMode))
+  }
+
+  // Register this session with claude.ai so it can be driven from claude.ai/code and the Claude mobile
+  // app — Claude Code's "Remote Control".
+  //
+  // A fray thread could never be reached that way, and the reason is structural rather than a
+  // credential problem: Claude Code auto-starts the bridge (its `remote-control-auto` tag) only from
+  // the interactive REPL and from the standalone `claude remote-control` server. An SDK-hosted session —
+  // which is every broker thread fray runs — gets a bridge ONLY when its host asks for one, over the
+  // `remote_control` control request (the CLI's own `remote-control-sdk` tag). So `remoteControlAtStartup`
+  // in the operator's settings cannot fire here no matter how it is set: nobody was asking.
+  //
+  // Same PROBED shape as generateSessionTitle / cancelInput above: present at runtime in
+  // @anthropic-ai/claude-agent-sdk 0.3.207, absent from its `.d.ts` `Query` interface, so an SDK bump
+  // that drops it fails loudly here instead of throwing an opaque "not a function" at the daemon.
+  //
+  // Deliberately NOT gated on ready(): the control channel is up from the CLI's initialize handshake,
+  // before any input exists, and a thread must be remote-controllable from the moment it boots rather
+  // than from its first turn. Verified live against claude 2.1.220 / SDK 0.3.207
+  // (_live_remote_control.mts): the call answers with a real `https://claude.ai/code/session_…` URL on a
+  // session that has never received an input.
+  async enableRemoteControl(name?: string): Promise<ClaudeRemoteControlSession> {
+    this.assertOpen()
+    // The name is what the operator sees in the claude.ai session list; a slug-sized label, not prose.
+    const label = name === undefined ? undefined : safeText(name, "remoteControl.name", MAX_REMOTE_CONTROL_NAME_BYTES).trim()
+    const provider = this.sdkQuery as unknown as {
+      enableRemoteControl?: (enabled: boolean, name?: string) => Promise<unknown>
+    }
+    if (typeof provider.enableRemoteControl !== "function") {
+      throw new ClaudeAgentSdkProtocolError("Claude remote control is unavailable")
+    }
+    const answer = await this.awaitOpenControl(provider.enableRemoteControl(true, label || undefined))
+    return { sessionUrl: parseRemoteControlSessionUrl(answer) }
   }
 
   async generateSessionTitle(description: string): Promise<string | undefined> {
@@ -1675,6 +1720,23 @@ function validateSessionId(value: unknown): string {
   const id = boundedId(value, "sessionId")
   if (!UUID_PATTERN.test(id)) throw new ClaudeAgentSdkProtocolError("sessionId must be a UUID")
   return id
+}
+
+// The `remote_control` control response, read STRICTLY. fray renders this as a link the operator
+// clicks, so an unreadable or non-HTTPS answer is refused rather than passed through: a session that
+// did not register must surface as a failed enable, never as a dead link in the thread header.
+export function parseRemoteControlSessionUrl(answer: unknown): string {
+  const response = objectValue(answer, "remoteControl.response")
+  const url = exactText(response.session_url, "remoteControl.sessionUrl", 2 * 1024)
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    throw new ClaudeAgentSdkProtocolError("remote control returned an unreadable session URL")
+  }
+  if (parsed.protocol !== "https:") throw new ClaudeAgentSdkProtocolError("remote control session URL must use HTTPS")
+  if (parsed.username || parsed.password) throw new ClaudeAgentSdkProtocolError("remote control session URL must not contain credentials")
+  return url
 }
 
 function validateElicitationUrl(value: string): void {

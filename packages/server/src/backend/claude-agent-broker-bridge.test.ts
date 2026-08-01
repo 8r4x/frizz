@@ -151,3 +151,98 @@ test("followUp: freshProcess retires the live daemon and cold-resumes; a plain f
     await rmEventually(dir)
   }
 })
+
+// ---- Remote Control: making a fray thread reachable from claude.ai/code and the Claude mobile app ---
+// The whole point is that an SDK session never registers on its own — Claude Code auto-starts that
+// bridge only from its interactive REPL — so a thread dispatched from the dashboard was unreachable
+// from a phone no matter how the operator's own Claude settings read. This proves fray asks (naming
+// the session after the thread), that the daemon's answer reaches the bridge, that a RECONNECT
+// re-learns it from the hello rather than losing it with the socket, and that the request is not made
+// at all when the setting is off.
+test("a session registers for remote control, names itself after the thread, and survives a reconnect", { timeout: 25_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cbrk-rc-"))
+  const exe = join(dir, "fake-claude--basic.mjs")
+  copyFileSync(fakeCli, exe); chmodSync(exe, 0o700)
+  const urls: Array<{ slug: string; sessionId: string; url: string }> = []
+  const bridge = createClaudeAgentBrokerBridge({
+    stateDir: dir, executablePath: exe,
+    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+    remoteControlEnabled: () => true,
+    onRemoteControl: (slug, sessionId, url) => urls.push({ slug, sessionId, url }),
+  })
+  const sessionId = randomUUID()
+  const slug = "reachable-thread"
+  const recordOf = () => readBrokerRecord(claudeBrokerRecordPath(dir, sessionId))
+  const captured = () => {
+    try {
+      return readFileSync(join(dir, "capture.jsonl"), "utf8")
+        .split("\n").filter(Boolean).map((l) => JSON.parse(l) as { kind: string; enabled?: boolean; name?: string })
+    } catch { return [] }
+  }
+  const waitFor = async (cond: () => boolean, ms = 10_000) => { const d = Date.now() + ms; while (!cond()) { if (Date.now() > d) throw new Error("timeout"); await sleep(50) } }
+  try {
+    await bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd: dir, prompt: "start the work", permissionMode: "default" })
+    await waitFor(() => urls.length > 0)
+    assert.deepEqual(urls[0], { slug, sessionId, url: "https://claude.ai/code/session_01FAKEfakeFAKEfake" })
+    const request = captured().find((row) => row.kind === "remote-control")
+    assert.equal(request?.enabled, true, "fray asks for remote control ON")
+    assert.equal(request?.name, `fray · ${slug}`, "the claude.ai session list names the fray thread")
+
+    // A fray restart is a RECONNECT to the same live daemon: the URL must come back on the hello,
+    // because otherwise the thread's only route to a phone dies with the socket that carried it.
+    const before = recordOf()
+    bridge.close()
+    const rejoined: string[] = []
+    const second = createClaudeAgentBrokerBridge({
+      stateDir: dir, executablePath: exe,
+      env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+      remoteControlEnabled: () => true,
+      onRemoteControl: (_slug, _sessionId, url) => rejoined.push(url),
+      ownedSessions: () => [{ threadSlug: slug, sessionId, cwd: dir }],
+    })
+    try {
+      await second.warmUp()
+      await waitFor(() => rejoined.length > 0)
+      assert.deepEqual(rejoined, ["https://claude.ai/code/session_01FAKEfakeFAKEfake"])
+      assert.equal(recordOf()?.daemonPid, before?.daemonPid, "…and it rejoined the SAME daemon rather than forking one")
+      // Asked exactly once: the daemon registered at startup, and a reattach must not re-register.
+      assert.equal(captured().filter((row) => row.kind === "remote-control").length, 1)
+    } finally {
+      second.releaseSession(slug, sessionId, "session-deleted")
+      second.close()
+    }
+  } finally {
+    try { const r = recordOf(); if (r) process.kill(r.daemonPid, "SIGKILL") } catch {}
+    await rmEventually(dir)
+  }
+})
+
+test("with remote control off, the session is never registered with claude.ai at all", { timeout: 25_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cbrk-rc-off-"))
+  const exe = join(dir, "fake-claude--basic.mjs")
+  copyFileSync(fakeCli, exe); chmodSync(exe, 0o700)
+  let announced = 0
+  const bridge = createClaudeAgentBrokerBridge({
+    stateDir: dir, executablePath: exe,
+    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+    remoteControlEnabled: () => false,
+    onRemoteControl: () => { announced++ },
+  })
+  const sessionId = randomUUID()
+  const slug = "local-only-thread"
+  const recordOf = () => readBrokerRecord(claudeBrokerRecordPath(dir, sessionId))
+  try {
+    await bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd: dir, prompt: "start the work", permissionMode: "default" })
+    // Give the daemon the same window the enabled case needed to register in.
+    await sleep(2_000)
+    const rows = readFileSync(join(dir, "capture.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { kind: string })
+    assert.ok(rows.some((row) => row.kind === "startup"), "the session really did start")
+    assert.equal(rows.filter((row) => row.kind === "remote-control").length, 0, "no registration request reaches claude.ai")
+    assert.equal(announced, 0)
+  } finally {
+    bridge.releaseSession(slug, sessionId, "session-deleted")
+    bridge.close()
+    try { const r = recordOf(); if (r) process.kill(r.daemonPid, "SIGKILL") } catch {}
+    await rmEventually(dir)
+  }
+})

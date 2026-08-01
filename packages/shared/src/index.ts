@@ -401,6 +401,10 @@ export const ThreadView = z.object({
   runtime: RuntimeState,
   sessionId: z.string().optional(),
   tmuxName: z.string().optional(),
+  // Where this session is reachable through Claude Code's Remote Control — the claude.ai address that
+  // opens THIS thread on the web or in the Claude mobile app. Present only on a Claude broker session
+  // that registered (Settings.remoteControl on, and the provider allowed it).
+  remoteControlUrl: z.string().optional(),
   unread: z.boolean(),
   archived: z.boolean(), // user hid the row from the nav; respawn/resume un-archives
   lastAssistant: z.string().optional(), // trimmed preview of last assistant text
@@ -719,6 +723,14 @@ export const Settings = z.object({
   // gets picked back up is the whole cost of a limit. Flip it off to leave the paused threads in the
   // queue for a human to restart. Optional so an old settings blob parses; absent ⇒ on.
   autoResumeOnLimit: z.boolean().optional(),
+  // Whether a Claude thread registers with claude.ai on startup so it can be driven from claude.ai/code
+  // and the Claude mobile app (Claude Code's Remote Control). ON by default: fray's own sessions were
+  // the one place Remote Control could never reach — Claude Code auto-starts that bridge only for its
+  // interactive REPL, never for the SDK-hosted sessions fray runs — so a thread dispatched from the
+  // dashboard was unreachable from a phone no matter how the operator's Claude settings read. Flip it
+  // off to keep every fray session local to this machine. Optional so an old settings blob parses;
+  // absent ⇒ on (defaultSettings pins true). Claude threads only; Codex has no equivalent.
+  remoteControl: z.boolean().optional(),
   // GitHub batch-dispatch prompt templates (the picker's per-item worker prompt). Optional: when
   // unset OR blank the server falls back to its exported DEFAULT_ISSUE_PROMPT / DEFAULT_PR_PROMPT.
   // Substitution tokens the server fills: {repo} {n} {title} {url} {labels} {body}. The leading

@@ -163,6 +163,45 @@ test("stopTask reaches the provider control channel with the exact runtime task 
   }
 })
 
+// Remote Control is the one capability an SDK session cannot get on its own: Claude Code auto-starts
+// that bridge only from its REPL, so a fray thread is unreachable from claude.ai/code and the mobile
+// app unless fray asks over this exact control request.
+test("enableRemoteControl registers the session and hands back where it is reachable", { timeout: 10_000 }, async () => {
+  const harness = startHarness("basic")
+  try {
+    // NO input and no ready() first, deliberately: a thread has to be reachable from the moment it
+    // boots, not from its first turn.
+    const session = await harness.handle.enableRemoteControl("fray · my-thread")
+    assert.equal(session.sessionUrl, "https://claude.ai/code/session_01FAKEfakeFAKEfake")
+    const records = await waitForCapture(harness.capturePath, (rows) => rows.some((row) => row.kind === "remote-control"))
+    const request = records.find((row) => row.kind === "remote-control") as CaptureRecord
+    assert.equal(request.enabled, true, "the request turns remote control ON")
+    assert.equal(request.name, "fray · my-thread", "the session is named so the operator can pick it out of the claude.ai list")
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a refused remote control surfaces the provider's own reason instead of a silent local-only session", { timeout: 10_000 }, async () => {
+  const harness = startHarness("remote-control-refused")
+  try {
+    await assert.rejects(harness.handle.enableRemoteControl("fray · my-thread"), /claude\.ai subscription/)
+  } finally {
+    await harness.close()
+  }
+})
+
+// An unreadable answer must FAIL the enable rather than reach the operator as a link: the URL is
+// rendered as a click target in the thread header, and a dead one is worse than no affordance at all.
+test("an unreadable remote control answer is refused, never passed through as a link", { timeout: 10_000 }, async () => {
+  const harness = startHarness("remote-control-unreadable")
+  try {
+    await assert.rejects(harness.handle.enableRemoteControl(), /unreadable session URL/)
+  } finally {
+    await harness.close()
+  }
+})
+
 test("session init mismatch fails ownership before exposing provider events", { timeout: 10_000 }, async () => {
   const harness = startHarness("mismatch")
   try {

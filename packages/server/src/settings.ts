@@ -20,6 +20,11 @@ export const defaultSettings = (): Settings => ({
   // exhausted subscription window should pick itself back up when the window rolls, not sit idle
   // until the operator happens to notice hours later.
   autoResumeOnLimit: true,
+  // Remote Control ON by default (opt-out): a thread you dispatched from the dashboard should be one
+  // you can pick up on your phone. Nothing else in fray can make that true — an SDK-hosted session
+  // never registers with claude.ai on its own — so leaving it off by default would mean the capability
+  // exists and nobody ever finds it.
+  remoteControl: true,
 })
 
 // Settings persist as one JSON blob under settings['settings']. Read merges over defaults

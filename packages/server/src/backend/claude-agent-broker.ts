@@ -8,8 +8,8 @@
 // Wire protocol — newline-delimited JSON frames:
 //   fray -> broker:  {t:"input", message} | {t:"permission", requestId, decision} | {t:"interrupt"} | {t:"set-mode", mode}
 //                  | {t:"cancel-input", requestId, id} | {t:"stop-task", requestId, taskId}
-//   broker -> fray:  {t:"hello", sessionId, generation} | {t:"event", event} | {t:"permission-request", requestId, request} | {t:"diagnostic", diagnostic}
-//                  | {t:"cancel-result", requestId, cancelled, error?} | {t:"stop-result", requestId, error?}
+//   broker -> fray:  {t:"hello", sessionId, generation, remoteControlUrl?} | {t:"event", event} | {t:"permission-request", requestId, request} | {t:"diagnostic", diagnostic}
+//                  | {t:"cancel-result", requestId, cancelled, error?} | {t:"stop-result", requestId, error?} | {t:"remote-control", url}
 //
 // Control actions that make a user-visible promise are REQUEST/RESPONSE pairs: `cancel-input` carries
 // the CLI's verdict about whether a message will still run, and `stop-task` returns only after the SDK
@@ -58,6 +58,12 @@ export interface ClaudeBrokerConfig {
   mcpServers?: Record<string, { type?: "stdio"; command: string; args?: string[]; env?: Record<string, string> }>
   allowedTools?: string[]
   workerEnv?: Record<string, string>
+  /** Register the session with claude.ai on startup so the operator can drive this thread from
+   *  claude.ai/code or the Claude mobile app (Claude Code's Remote Control). `name` is the label the
+   *  session is listed under. Absent ⇒ the session stays local-only, which is what every pre-existing
+   *  caller and test expects. See ClaudeQueryHandle.enableRemoteControl for why an SDK session has to
+   *  ask for this explicitly. */
+  remoteControl?: { name?: string }
   /** When set, the daemon writes a discovery record here after its socket is listening. */
   recordPath?: string
   /** When set, the daemon appends its OWN lifecycle/stderr diagnostics here, synchronously. This is
@@ -99,6 +105,10 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   let published = false
   let idleTimer: NodeJS.Timeout | undefined
   let strikes = 0
+  // The claude.ai address this session registered under, once Remote Control is up. Held on the DAEMON
+  // rather than only relayed, because the daemon outlives fray: a fray that restarts and reattaches
+  // learns the URL from the `hello` frame instead of losing it with the connection that carried it.
+  let remoteControlUrl: string | undefined
 
   const write = (sock: net.Socket, frame: unknown) => sock.write(JSON.stringify(frame) + "\n")
   const emitEvent = (event: ClaudeQueryEvent) => {
@@ -161,6 +171,33 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
       if (client) write(client, { t: "diagnostic", diagnostic })
     },
   })
+
+  // Register the session with claude.ai so this thread is reachable from claude.ai/code and the Claude
+  // mobile app. Fired ONCE per daemon, immediately — not on the first input — so a thread is
+  // remote-controllable from the moment it boots, and so a session that never gets a turn (a dispatch
+  // that stalls, a thread the operator wants to steer from a phone) is still reachable.
+  //
+  // Deliberately not awaited: registration is a network round-trip to claude.ai and nothing about the
+  // session depends on it, so a slow or refused enable must never delay the first turn. A refusal is
+  // real information though — API-key auth, a long-lived token, an org policy that disables Remote
+  // Control — and the operator would otherwise just find the thread missing from their phone, so it is
+  // recorded AND relayed as a diagnostic rather than swallowed.
+  const enableRemoteControl = (): void => {
+    if (!config.remoteControl) return
+    void handle.enableRemoteControl(config.remoteControl.name).then(
+      (session) => {
+        remoteControlUrl = session.sessionUrl
+        if (client) write(client, { t: "remote-control", url: session.sessionUrl })
+      },
+      (error: unknown) => {
+        const detail = error instanceof Error ? error.message : String(error)
+        const diagnostic = { kind: "stderr" as const, message: `remote control unavailable for this session: ${detail}`, truncated: false }
+        writeDiagnostic?.(diagnostic)
+        if (client) write(client, { t: "diagnostic", diagnostic })
+      },
+    )
+  }
+  enableRemoteControl()
 
   // ASK Claude to name the session, once, from the dispatch prompt.
   //
@@ -242,7 +279,9 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
 
   const server = net.createServer((sock) => {
     client = sock; clearTimeout(idleTimer)
-    write(sock, { t: "hello", sessionId: handle.sessionId, generation })
+    // `remoteControlUrl` rides the hello (rather than only the one-shot `remote-control` frame) so a
+    // fray that restarts and reattaches to a live daemon still learns where the session is reachable.
+    write(sock, { t: "hello", sessionId: handle.sessionId, generation, ...(remoteControlUrl ? { remoteControlUrl } : {}) })
     for (const [requestId, { request }] of pendingPermissions) write(sock, { t: "permission-request", requestId, request })
     while (eventBacklog.length) sock.write(eventBacklog.shift()!)
     let buf = ""

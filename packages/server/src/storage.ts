@@ -126,6 +126,12 @@ export interface SessionRow {
   // Claude transport: NULL/'tmux' = interactive-TUI-in-tmux; 'broker' = a session-broker-owned Agent
   // SDK session. Only meaningful for backend='claude' rows.
   claude_runtime?: string | null
+  // Where this session is reachable through Claude Code's Remote Control — the claude.ai address that
+  // opens THIS thread on the web or in the mobile app. Written by the broker bridge once the daemon
+  // finishes registering; NULL on every row that never registered (Remote Control off, a Codex row, a
+  // tmux row, or a provider that refused). Durable rather than in-memory so the link survives a fray
+  // restart, exactly like the session it points at does.
+  remote_control_url?: string | null
 }
 
 /**
@@ -491,6 +497,11 @@ export interface Storage {
   setControlErrorIfCurrent(slug: string, sessionId: string, generation: number, error: string | null): boolean
   setControlError(slug: string, error: string | null): void
   setDeliveryLedger(slug: string, ledger: string | null): void
+  /** Record where a session became reachable through Remote Control. Session-scoped rather than
+   *  slug-scoped: a slug outlives the session on it, and a URL pointing at a REPLACED session would
+   *  send the operator to a thread that no longer exists. Returns whether the row was still that
+   *  session. */
+  setRemoteControlUrl(slug: string, sessionId: string, url: string | null): boolean
   getSetting(key: string): unknown
   setSetting(key: string, value: unknown): void
   deleteSetting(key: string): void
@@ -600,6 +611,9 @@ export function createStorage(dbPath: string): Storage {
     // Claude transport discriminator: NULL/'tmux' = the interactive-TUI path in a tmux pane; 'broker'
     // = a session-broker-owned Agent SDK session (input via the bridge, liveness from it, not a pane).
     "claude_runtime TEXT",
+    // Claude Code Remote Control: the claude.ai address this session registered under, so the thread
+    // can be opened from claude.ai/code or the mobile app. NULL until (and unless) it registers.
+    "remote_control_url TEXT",
   ]) {
     try {
       db.exec(`ALTER TABLE session ADD COLUMN ${col}`)
@@ -695,8 +709,8 @@ export function createStorage(dbPath: string): Storage {
   const selOne = db.prepare<[string], SessionRow>("SELECT * FROM session WHERE slug = ?")
   const selAll = db.prepare<[], SessionRow>("SELECT * FROM session")
   const upsertStmt = db.prepare(`
-    INSERT INTO session (slug, session_id, tmux_name, spawned_at, last_read_at, unread, exited, title_auto, title_locked, title, state, snoozed_until, snooze_prompt, awaiting_fence_id, awaiting_confirmed_at, meta, seen_at, plan_path, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, control_error, runtime_generation, runtime_control, runtime_control_revision)
-    VALUES (@slug, @session_id, @tmux_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title_locked, @title, @state, @snoozed_until, @snooze_prompt, @awaiting_fence_id, @awaiting_confirmed_at, @meta, @seen_at, @plan_path, @transcript_id, @model, @effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision)
+    INSERT INTO session (slug, session_id, tmux_name, spawned_at, last_read_at, unread, exited, title_auto, title_locked, title, state, snoozed_until, snooze_prompt, awaiting_fence_id, awaiting_confirmed_at, meta, seen_at, plan_path, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, control_error, runtime_generation, runtime_control, runtime_control_revision, remote_control_url)
+    VALUES (@slug, @session_id, @tmux_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title_locked, @title, @state, @snoozed_until, @snooze_prompt, @awaiting_fence_id, @awaiting_confirmed_at, @meta, @seen_at, @plan_path, @transcript_id, @model, @effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision, @remote_control_url)
     ON CONFLICT(slug) DO UPDATE SET
       session_id = excluded.session_id,
       tmux_name  = excluded.tmux_name,
@@ -737,6 +751,15 @@ export function createStorage(dbPath: string): Storage {
       END,
       runtime_control = excluded.runtime_control,
       runtime_control_revision = excluded.runtime_control_revision,
+      -- A claude.ai Remote Control address belongs to ONE session, exactly like the awaiting
+      -- confirmation above: a re-dispatch reuses the slug with a new session, and inheriting the old
+      -- link would offer the operator a phone route to a thread that no longer exists. Within the SAME
+      -- session it is preserved unless this write carries a newer one, because most upserts (resume,
+      -- unread, title) don't carry it at all and must not wipe a live link.
+      remote_control_url = CASE
+        WHEN session.session_id = excluded.session_id THEN COALESCE(excluded.remote_control_url, session.remote_control_url)
+        ELSE excluded.remote_control_url
+      END,
       -- A re-dispatch/adopt carries a FRESH session_id, so the old discovered path is stale → adopt the
       -- incoming value (NULL for a fresh spawn); a resume spreads the existing row, preserving its cache.
       transcript_id = excluded.transcript_id,
@@ -1141,6 +1164,7 @@ export function createStorage(dbPath: string): Storage {
   )
   const controlErrorStmt = db.prepare("UPDATE session SET control_error = ? WHERE slug = ?")
   const deliveryLedgerStmt = db.prepare("UPDATE session SET delivery_ledger = ? WHERE slug = ?")
+  const remoteControlUrlStmt = db.prepare("UPDATE session SET remote_control_url = ? WHERE slug = ? AND session_id = ?")
   const getSet = db.prepare<[string], { value: string }>("SELECT value FROM settings WHERE key = ?")
   const putSet = db.prepare(
     "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -1173,6 +1197,7 @@ export function createStorage(dbPath: string): Storage {
     runtime_control_revision: row.runtime_control_revision ?? 0,
     codex_runtime: row.codex_runtime ?? null,
     claude_runtime: row.claude_runtime ?? null,
+    remote_control_url: row.remote_control_url ?? null,
   })
 
   const getAdoptionRuntimeSnapshot = db.transaction((slug: string) => ({
@@ -1742,6 +1767,7 @@ export function createStorage(dbPath: string): Storage {
       controlErrorIfCurrentStmt.run(error, slug, sessionId, generation).changes === 1,
     setControlError: (slug, error) => void controlErrorStmt.run(error, slug),
     setDeliveryLedger: (slug, ledger) => void deliveryLedgerStmt.run(ledger, slug),
+    setRemoteControlUrl: (slug, sessionId, url) => remoteControlUrlStmt.run(url, slug, sessionId).changes === 1,
     getSetting: (key) => {
       const row = getSet.get(key)
       if (!row) return undefined

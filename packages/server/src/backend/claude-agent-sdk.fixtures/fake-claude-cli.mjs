@@ -164,6 +164,17 @@ function handleHostControl(message) {
     respond(message.request_id, { title: `titled: ${String(request.description ?? "").slice(0, 40)}` })
     return
   }
+  // Registering the session with claude.ai for Remote Control. The real CLI answers with the address
+  // that opens this session in the web/mobile app; it can also REFUSE (API-key auth, a long-lived
+  // token, an org policy), which is a first-class outcome fray has to surface rather than swallow —
+  // hence the two failure scenarios beside the happy path.
+  if (request.subtype === "remote_control") {
+    record({ kind: "remote-control", enabled: request.enabled, name: request.name })
+    if (scenario === "remote-control-refused") return respondError(message.request_id, "Remote Control requires a claude.ai subscription.")
+    if (scenario === "remote-control-unreadable") return respond(message.request_id, { session_url: "not a url" })
+    respond(message.request_id, { session_url: "https://claude.ai/code/session_01FAKEfakeFAKEfake", connect_url: "", environment_id: "" })
+    return
+  }
   respondError(message.request_id, `unsupported fake control subtype ${String(request.subtype)}`)
 }
 

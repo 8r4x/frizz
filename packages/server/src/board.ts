@@ -603,6 +603,7 @@ function sessionThreadView(
     runtime,
     sessionId: row.session_id,
     tmuxName: row.tmux_name,
+    remoteControlUrl: row.remote_control_url ?? undefined,
     unread: row.unread === 1,
     archived,
     lastAssistant: tele?.lastAssistant,
