@@ -64,7 +64,7 @@ npx frayui
 A browser tab opens on that address — a dedicated workspace for this repo. **One tab per repo!**
 
 <p align="center">
-  <img src="assets/board.png" alt="The Fray board: a queue of agent threads on the right, one card asking an answerable question with lettered options; on the left, a sidebar where a running thread has fanned out four sub-agents with live timers." width="100%">
+  <img src="assets/board.png" alt="Fray running in a browser tab at 127.0.0.1:4921: a sidebar of threads on the left, and on the right a card where an agent is asking an answerable question with lettered options, above Snooze and Mark as done." width="100%">
 </p>
 
 ## Designed for parallelization
