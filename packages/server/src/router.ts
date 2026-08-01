@@ -98,8 +98,8 @@ const SlugInput = z.object({ slug: ThreadSlug }).strict()
 
 // GitHub is a delayed confirmation flow, so validate its captured tuple again at the final server
 // boundary. This intentionally rejects stale model/effort pairs; neither is normalized, clamped, or
-// replaced with Settings defaults. Permission is NOT part of the tuple: dispatch stamps the fixed
-// non-interactive mode server-side (WORKER_DISPATCH_PERMISSION).
+// replaced with Settings defaults. Permission is NOT part of the tuple: dispatch stamps it server-side
+// (workerDispatchPermission — the non-interactive floor, raised to bypass only when Settings asks).
 export function validateGithubDispatchProfile(input: z.infer<typeof GithubBatchInput>): void {
   validateThreadProfile(input.backend, input.model, input.effort)
 }

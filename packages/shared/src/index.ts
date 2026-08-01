@@ -692,6 +692,10 @@ export const LocalFileOpener = z.enum(["system", "cursor", "vscode", "finder", "
 export type LocalFileOpener = z.infer<typeof LocalFileOpener>
 
 export const Settings = z.object({
+  // The mode NEW Claude workers launch in. Settings surfaces exactly two of them — `auto` (the shipped
+  // default) and `bypassPermissions` (--dangerously-skip-permissions) — because those are the only two
+  // an unattended worker can actually run in; the server's workerDispatchPermission enforces that same
+  // floor, so a restrictive value left here by an older build cannot reach a spawn.
   permissionMode: PermissionMode,
   model: z.string().optional(), // the agent's --model value; undefined = CLI default
   // The agent backend the selected model runs on (Codex-support epic, Phase 3). Persisted ALONGSIDE
@@ -766,8 +770,9 @@ export const DispatchProfileSnapshot = z.object({
   backend: Backend,
   model: z.string().trim().min(1).max(200),
   effort: Settings.shape.effort.unwrap(),
-  // IGNORED: dispatch permission is fixed server-side (WORKER_DISPATCH_PERMISSION) — every created
-  // worker launches maximally non-interactive. Optional so old clients that still send it parse.
+  // IGNORED: dispatch permission is decided server-side (workerDispatchPermission) from the
+  // non-interactive floor plus the operator's Settings choice, never per dispatch. Optional so old
+  // clients that still send it parse.
   permissionMode: PermissionMode.optional(),
 }).strict()
 export type DispatchProfileSnapshot = z.infer<typeof DispatchProfileSnapshot>
@@ -798,8 +803,9 @@ export const DispatchInput = z.object({
   title: z.string().min(1).optional(),
   prompt: z.string().min(1),
   slug: ThreadSlug.optional(), // derived from title if omitted
-  // IGNORED: dispatch permission is fixed server-side (WORKER_DISPATCH_PERMISSION) — every created
-  // worker launches maximally non-interactive. Accepted-but-ignored so old clients still parse.
+  // IGNORED: dispatch permission is decided server-side (workerDispatchPermission) from the
+  // non-interactive floor plus the operator's Settings choice, never per dispatch. Accepted-but-ignored
+  // so old clients still parse.
   permissionMode: PermissionMode.optional(),
   model: z.string().optional(),
   // The agent backend for THIS dispatch (Codex-support epic, Phase 3). Omitted ⇒ the dispatcher

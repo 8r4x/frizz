@@ -16,6 +16,7 @@ import { Tooltip } from "./Tooltip.tsx"
 import { draftKey, useDraft, useProjectDir } from "../lib/drafts.ts"
 import {
   modelGroups,
+  CLAUDE_DISPATCH_PERMISSION_OPTIONS,
   EFFORT_OPTIONS_SETTINGS,
   codexEffortOptions,
   codexModelFor,
@@ -27,6 +28,7 @@ type NotifPerm = "default" | "granted" | "denied" | "unsupported"
 export const SETTINGS_HELP = {
   model: "Choose the default model used when you create or dispatch work from this project.",
   effort: "Controls the default reasoning effort for new work. Available options depend on the selected model.",
+  permissionMode: "The permission mode new Claude Code threads launch with. Auto runs safe actions and asks you to approve the risky ones in the thread. Skip all permissions is Claude Code's --dangerously-skip-permissions: the worker never asks, so nothing waits on you and nothing is checked either. Takes effect on the next thread you dispatch — a thread already running keeps the mode it launched with. Codex threads always run with full workspace access and are unaffected.",
   font: "Changes the interface reading font for this browser.",
   localFileOpener: "Chooses how vetted local artifact links open. Image clicks always use the OS default viewer.",
   compact: "Collapses long diffs by default in this browser. This takes effect immediately.",
@@ -143,8 +145,7 @@ export function SettingsDrawer() {
           <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-6">
             {/* Model is the FIRST control: it drives the backend, and the effort control below
                 presents the chosen backend's option set. Picking a model stamps the derived backend
-                into the draft. Permission is NOT a setting: every created worker launches with the
-                fixed non-interactive mode (WORKER_DISPATCH_PERMISSION, server-side). */}
+                into the draft. */}
             <SettingsField label="Model" help={SETTINGS_HELP.model}>
               <Select
                 variant="bordered"
@@ -165,6 +166,23 @@ export function SettingsDrawer() {
                 indicatorPosition="right"
                 ariaLabel="Effort"
               />
+            </SettingsField>
+
+            {/* The launch permission mode for NEW Claude workers. Only the two modes a headless worker
+                can actually run in are offered (see CLAUDE_DISPATCH_PERMISSION_OPTIONS); the server's
+                workerDispatchPermission enforces the same floor, so a restrictive value left in an old
+                DB can never reach a spawn. A stored mode outside the two reads as the "Auto" floor —
+                which is exactly what would be dispatched — rather than rendering the select blank. */}
+            <SettingsField label="Claude permissions" help={SETTINGS_HELP.permissionMode}>
+              <Select
+                variant="bordered"
+                value={draft.permissionMode === "bypassPermissions" ? "bypassPermissions" : "auto"}
+                onValueChange={(v) => setTrackedDraft({ ...draft, permissionMode: v as Settings["permissionMode"] })}
+                options={CLAUDE_DISPATCH_PERMISSION_OPTIONS}
+                indicatorPosition="right"
+                ariaLabel="Claude permission mode"
+              />
+              {draft.permissionMode === "bypassPermissions" && <BypassHint />}
             </SettingsField>
 
             <SettingsField label="Font" help={SETTINGS_HELP.font}>
@@ -506,6 +524,17 @@ function QueueOrderControl() {
         </button>
       ))}
     </div>
+  )
+}
+
+// Shown only while "Skip all permissions" is selected. The same quiet register as PermHint below — the
+// tooltip already carries the full explanation, and this is a standing operating mode rather than an
+// error, so it states the consequence plainly instead of shouting it in danger-red.
+function BypassHint() {
+  return (
+    <span className="text-[11px] text-muted/70">
+      New Claude threads will run every command, edit, and network call without asking you first.
+    </span>
   )
 }
 

@@ -8,8 +8,9 @@ import { CLAUDE_MODELS, EFFORTS } from "./options.ts"
 // Validate the picker's live model/effort pair immediately before the final mutation. A Codex cache
 // refresh can invalidate a model or effort while the picker is open; that must stop visibly (the
 // selector's own red line + a disabled dispatch) instead of falling back or downgrading.
-// No permissionMode participates: the server stamps every created worker with its fixed
-// non-interactive mode (WORKER_DISPATCH_PERMISSION), so the GitHub flow carries no permission choice.
+// No permissionMode participates: the server stamps every created worker itself
+// (workerDispatchPermission — the non-interactive floor, raised to bypass only when Settings asks), so
+// the GitHub flow carries no per-thread permission choice.
 export function dispatchProfileError(
   profile: DispatchProfileSnapshot,
   codexModels: readonly CodexModel[],

@@ -8,14 +8,28 @@ const tooltipSource = readFileSync(new URL("./Tooltip.tsx", import.meta.url), "u
 test("settings maps each contextual explanation to a help control", () => {
   // `subagentInstructions` is gone: the settings preamble was retired in favour of FRAY.md, so there
   // is exactly one operator-authored surface for project conventions.
-  for (const key of ["model", "effort", "font", "compact", "notifications", "runtimeGate"]) {
+  for (const key of ["model", "effort", "permissionMode", "font", "compact", "notifications", "runtimeGate"]) {
     assert.match(source, new RegExp(`\\b${key}:`), `missing settings help mapping: ${key}`)
   }
   assert.match(source, /<SettingsField label="Model" help=\{SETTINGS_HELP\.model\}/)
+  assert.match(source, /label="Claude permissions" help=\{SETTINGS_HELP\.permissionMode\}/)
   assert.match(source, /label="Compact mode" help=\{SETTINGS_HELP\.compact\}/)
   assert.match(source, /label="Desktop notifications" help=\{SETTINGS_HELP\.notifications\}/)
   // The redundant "GitHub picker prompts" group label is gone; each field carries its own label.
   assert.doesNotMatch(source, /label="GitHub picker prompts"/)
+})
+
+test("the Claude permission control offers only the two headless-safe modes and warns while bypassing", () => {
+  // The select is fed the shared two-option set, not the full PermissionMode enum, and an out-of-range
+  // stored value displays as the "auto" floor the server would actually dispatch with.
+  assert.match(source, /options=\{CLAUDE_DISPATCH_PERMISSION_OPTIONS\}/)
+  assert.match(source, /value=\{draft\.permissionMode === "bypassPermissions" \? "bypassPermissions" : "auto"\}/)
+  // Choosing bypass says what it costs, in the same quiet register as the notification hint.
+  assert.match(source, /\{draft\.permissionMode === "bypassPermissions" && <BypassHint \/>\}/)
+  const hint = source.slice(source.indexOf("function BypassHint"), source.indexOf("function PermHint"))
+  assert.match(hint, /without asking you first/)
+  // The old "Permission is NOT a setting" note described the world before this control existed.
+  assert.doesNotMatch(source, /Permission is NOT a setting/)
 })
 
 test("notification recovery aligns with its control and keeps recovery instructions visible", () => {

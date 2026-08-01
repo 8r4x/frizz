@@ -33,6 +33,17 @@ export const PERMISSION_OPTIONS: SelectOption[] = PERMISSION_MODES.filter((m) =>
   title: PERMISSION_MODE_LABELS[m],
 }))
 
+// The permission modes Settings offers as the launch mode for NEW Claude workers. Deliberately just
+// two: `auto` (the shipped default) and `bypassPermissions` (claude's --dangerously-skip-permissions).
+// The restrictive modes are absent for the same reason dispatch's floor rejects them — an unattended
+// headless worker cannot answer a prompt, so `default`/`acceptEdits`/`plan` stall the thread on a modal
+// nobody is watching. Bypass is strictly MORE permissive than auto, so it is the one deviation that
+// cannot softlock. Mirrors server-side workerDispatchPermission; keep the two in step.
+export const CLAUDE_DISPATCH_PERMISSION_OPTIONS: SelectOption[] = [
+  { value: "auto", label: "Auto", title: "auto — safe actions run, risky ones ask you to approve them" },
+  { value: "bypassPermissions", label: "Skip all permissions", title: "bypass — the worker never asks, and nothing is checked (dangerous)" },
+]
+
 // Claude Code-inspired permission accents for the dispatch form's mode readout. Bypass/full access
 // intentionally uses the ordinary readout color rather than danger-red: it is the default operating
 // mode here, while actual errors and destructive actions retain their dedicated warning styling.

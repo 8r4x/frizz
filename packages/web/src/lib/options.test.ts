@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import type { CodexModel } from "@fray-ui/shared"
 import {
   backendForModel,
+  CLAUDE_DISPATCH_PERMISSION_OPTIONS,
   codexPermValue,
   claudePermValue,
   permValueFor,
@@ -97,4 +98,15 @@ test("permValueFor: dispatches to the codex vs claude mapper by backend", () => 
   assert.equal(permValueFor("codex", "plan"), "plan")
   assert.equal(permValueFor("claude", "plan"), "auto")
   assert.equal(permValueFor("claude", "acceptEdits"), "acceptEdits")
+})
+
+// Settings offers exactly the two modes an unattended worker can run in. Adding a restrictive one here
+// would reintroduce the softlock the server's workerDispatchPermission floor exists to prevent — and it
+// would be dishonest UI besides, since that floor would coerce it straight back to auto at spawn.
+test("CLAUDE_DISPATCH_PERMISSION_OPTIONS: auto and bypass only, auto first", () => {
+  assert.deepEqual(CLAUDE_DISPATCH_PERMISSION_OPTIONS.map((o) => o.value), ["auto", "bypassPermissions"])
+  assert.equal(CLAUDE_DISPATCH_PERMISSION_OPTIONS[0]!.label, "Auto")
+  assert.equal(CLAUDE_DISPATCH_PERMISSION_OPTIONS[1]!.label, "Skip all permissions")
+  // Every option carries the hover one-liner the settings tooltip pattern relies on.
+  for (const option of CLAUDE_DISPATCH_PERMISSION_OPTIONS) assert.ok(option.title)
 })

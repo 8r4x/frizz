@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { DISPATCH_TASK_BANNER_MARKER } from "@fray-ui/shared"
-import { buildClaudeCommand, loadWorkerPrompt, composePrompt, resolveWorkerPluginDir, scratchpadOrientation, scratchpadContent, workerPluginDir, frayConfigBlock } from "./dispatch.ts"
+import { buildClaudeCommand, loadWorkerPrompt, composePrompt, resolveWorkerPluginDir, scratchpadOrientation, scratchpadContent, workerPluginDir, frayConfigBlock, workerDispatchPermission, WORKER_DISPATCH_PERMISSION } from "./dispatch.ts"
 import { parseTranscript } from "./transcript.ts"
 import { CHROME_DEVTOOLS_MCP, FRAY_MCP } from "./backend/types.ts"
 
@@ -601,4 +601,40 @@ test("scratchpadContent seeds a flexible shared structure and Obsidian-flavoured
     for (const section of ["Goal", "Task list", "Decisions", "Shared context", "Agent progress", "Verification", "Next action"])
       assert.match(body, new RegExp(`## ${section}`))
   }
+})
+
+// ---- workerDispatchPermission: the Settings-driven launch mode for a NEW worker ----
+// The floor (WORKER_DISPATCH_PERMISSION) keeps an unattended worker out of any mode that could stall it
+// on an unanswerable prompt. The ONE deviation Settings can ask for is bypassPermissions on Claude,
+// which is strictly more permissive and therefore cannot softlock.
+
+test("workerDispatchPermission: Claude launches at the auto floor unless Settings asks to bypass", () => {
+  assert.equal(workerDispatchPermission("claude", { permissionMode: "auto" }), "auto")
+  assert.equal(workerDispatchPermission("claude", { permissionMode: "bypassPermissions" }), "bypassPermissions")
+  assert.equal(WORKER_DISPATCH_PERMISSION.claude, "auto") // the floor itself is still auto
+})
+
+test("workerDispatchPermission: a restrictive stored mode can never reach a Claude spawn", () => {
+  // Settings.permissionMode accepts the whole enum (it predates this control), but every mode that
+  // would park a headless worker on a modal nobody is watching coerces back to the floor.
+  for (const mode of ["default", "acceptEdits", "plan"] as const) {
+    assert.equal(workerDispatchPermission("claude", { permissionMode: mode }), "auto")
+  }
+})
+
+test("workerDispatchPermission: codex ignores the Claude setting and stays at full access", () => {
+  // Codex has no permission-mode axis to raise — it already dispatches at danger-full-access, and the
+  // Settings control is Claude-only, so neither value may move it.
+  assert.equal(workerDispatchPermission("codex", { permissionMode: "auto" }), "bypassPermissions")
+  assert.equal(workerDispatchPermission("codex", { permissionMode: "bypassPermissions" }), "bypassPermissions")
+})
+
+test("buildClaudeCommand carries bypassPermissions through to --permission-mode", () => {
+  // The tmux fallback transport. (The broker — the default — passes the same mode into the SDK, which
+  // additionally sets allowDangerouslySkipPermissions for exactly this value.)
+  const argv = buildClaudeCommand({ sessionId: "bypass-dispatch", permissionMode: "bypassPermissions", prompt: "test", workerPrompt: "" })
+  assert.deepEqual(
+    argv.slice(argv.indexOf("--permission-mode"), argv.indexOf("--permission-mode") + 2),
+    ["--permission-mode", "bypassPermissions"],
+  )
 })

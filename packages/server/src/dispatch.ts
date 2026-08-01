@@ -449,14 +449,29 @@ function workerPermissionMode(m: PermissionMode): PermissionMode {
 }
 
 // Every fray-CREATED worker launches maximally non-interactive: an unattended headless worker cannot
-// answer an interactive prompt, so a dispatch-time permission CHOICE is a footgun, not a feature —
-// restrictive modes just stall the thread on a modal nobody is watching. Claude gets `auto`; codex
-// gets `bypassPermissions` (→ `-s danger-full-access`). The dispatch/adopt paths stamp this
-// unconditionally (client-sent permissionMode is ignored); the LIVE per-thread permission control
-// still exists to steer an already-running session.
+// answer an interactive prompt, so a RESTRICTIVE dispatch-time permission choice is a footgun, not a
+// feature — it just stalls the thread on a modal nobody is watching. Claude gets `auto`; codex gets
+// `bypassPermissions` (→ `-s danger-full-access`). These are the FLOOR the dispatch/adopt paths stamp
+// (a client-sent permissionMode is still ignored); the only thing that moves it is the operator's own
+// Settings choice — see workerDispatchPermission, which can only relax it further.
 export const WORKER_DISPATCH_PERMISSION: Record<BackendKind, PermissionMode> = {
   claude: "auto",
   codex: "bypassPermissions",
+}
+
+// The permission mode a NEW worker of `kind` actually launches with, given the operator's Settings.
+//
+// Only ONE deviation from WORKER_DISPATCH_PERMISSION is honored: a Claude worker may be dispatched in
+// `bypassPermissions` (claude's `--dangerously-skip-permissions`) when Settings asks for it. That
+// direction is safe for a headless worker BECAUSE it is strictly more permissive than `auto` — nothing
+// can stall on an unanswerable prompt. The restrictive modes stay unreachable on purpose: `default`,
+// `acceptEdits` and `plan` are the softlock this function's floor exists to prevent, so a stored value
+// left over from an older build (Settings.permissionMode predates this control and accepts the whole
+// enum) coerces back to the floor rather than quietly wedging every dispatch. Codex has no equivalent
+// axis to raise — it already launches at danger-full-access.
+export function workerDispatchPermission(kind: BackendKind, settings: Pick<Settings, "permissionMode">): PermissionMode {
+  if (kind === "claude" && settings.permissionMode === "bypassPermissions") return "bypassPermissions"
+  return WORKER_DISPATCH_PERMISSION[kind]
 }
 
 // Canonical value that describes the permission policy the backend ACTUALLY receives. Claude's
@@ -896,7 +911,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // provider/Fray signal may still replace it through the title_auto CAS.
       const registryTitle = title
       const sessionId = randomUUID()
-      const permissionMode = WORKER_DISPATCH_PERMISSION[kind]
+      const permissionMode = workerDispatchPermission(kind, settings)
       // Resolve the profile ONCE for this session. It feeds both the CLI argv and the persisted row,
       // so the thread UI describes what this dispatch actually launched with rather than whatever the
       // mutable global defaults happen to be when the drawer is opened later.
@@ -1227,7 +1242,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         throw unavailable()
       }
       const prompt = composePrompt(sessionId, task)
-      const permissionMode = WORKER_DISPATCH_PERMISSION.claude
+      const permissionMode = workerDispatchPermission("claude", settings)
       const runtimeGate = settings.runtimeGate !== false
       try {
         built = buildSpawnCommand({

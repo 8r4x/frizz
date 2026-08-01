@@ -5,8 +5,10 @@ const SETTINGS_KEY = "settings"
 
 
 export const defaultSettings = (): Settings => ({
-  // `auto` = the CLI's classifier mode: safe actions auto-approve, risky ones still prompt in
-  // the embedded terminal. Fewer invisible permission stalls than acceptEdits/default.
+  // `auto` = the CLI's classifier mode: safe actions auto-approve, risky ones still surface an approval
+  // card. Fewer invisible permission stalls than acceptEdits/default. The Settings "Claude permissions"
+  // control can raise this to `bypassPermissions` (--dangerously-skip-permissions) — the only other
+  // value a headless worker can run in, and the only deviation workerDispatchPermission honors.
   permissionMode: "auto",
   model: undefined,
   effort: undefined,

@@ -120,8 +120,9 @@ export function DispatchForm({
     }
     const input: DispatchInput = {
       prompt: prompt.trim(),
-      // No permissionMode: the server stamps every created worker with its fixed non-interactive
-      // mode (WORKER_DISPATCH_PERMISSION) — dispatch offers no permission choice.
+      // No permissionMode: the server stamps every created worker itself (workerDispatchPermission —
+      // the non-interactive floor, raised to bypass only when Settings asks). Dispatch offers no
+      // per-thread permission choice; the Settings "Claude permissions" control owns the default.
       model: resolved.model,
       backend: resolved.backend,
       effort: resolved.effort as DispatchInput["effort"],
