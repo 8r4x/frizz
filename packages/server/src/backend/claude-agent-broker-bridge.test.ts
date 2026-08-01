@@ -246,3 +246,56 @@ test("with remote control off, the session is never registered with claude.ai at
     await rmEventually(dir)
   }
 })
+
+// A provider that REFUSES (API-key auth, a long-lived token, an org policy with `disableRemoteControl`)
+// is the case where this feature could do real damage: registration is a network round-trip fray asks
+// for on every dispatch, so a refusal that took the session down with it would break threads for
+// exactly the operators who cannot use Remote Control anyway. The thread must run normally and the
+// reason must reach the operator's diagnostics rather than vanishing.
+test("a refused registration leaves the thread running and reports why", { timeout: 25_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cbrk-rc-refused-"))
+  const exe = join(dir, "fake-claude--remote-control-refused.mjs")
+  copyFileSync(fakeCli, exe); chmodSync(exe, 0o700)
+  let results = 0
+  let announced = 0
+  const diagnostics: string[] = []
+  const bridge = createClaudeAgentBrokerBridge({
+    stateDir: dir, executablePath: exe,
+    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+    remoteControlEnabled: () => true,
+    onRemoteControl: () => { announced++ },
+    onEvent: (_slug: string, _sid: string, ev: ClaudeQueryEvent) => { if (ev.kind === "result") results++ },
+    onDiagnostic: (_slug: string, _sid: string, d) => { if (d.kind === "stderr") diagnostics.push(d.message) },
+  })
+  const sessionId = randomUUID()
+  const slug = "unreachable-thread"
+  const recordOf = () => readBrokerRecord(claudeBrokerRecordPath(dir, sessionId))
+  const waitFor = async (cond: () => boolean, ms = 10_000) => { const d = Date.now() + ms; while (!cond()) { if (Date.now() > d) throw new Error("timeout"); await sleep(50) } }
+  try {
+    await bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd: dir, prompt: "start the work", permissionMode: "default" })
+    await waitFor(() => results > 0)
+    assert.ok(results > 0, "the turn completed — a refused registration is not a dead session")
+    // Asserted against the DURABLE log, not the live relay: registration is attempted while the daemon
+    // is still coming up, so whether fray is attached in time to hear the refusal is a race — the
+    // daemon's own file is the guarantee, exactly as it is for every other diagnostic here.
+    const logged = () => {
+      try { return readFileSync(join(dir, "claude-broker", `${sessionId}.diagnostics.log`), "utf8") } catch { return "" }
+    }
+    await waitFor(() => /remote control unavailable/i.test(logged()))
+    assert.match(
+      logged(),
+      /claude\.ai subscription/,
+      "the provider's own reason is carried through verbatim, not replaced by a generic failure",
+    )
+    // Whatever the live relay did or did not catch, it must never have invented a different story.
+    for (const message of diagnostics.filter((m) => /remote control/i.test(m))) {
+      assert.match(message, /remote control unavailable for this session: /)
+    }
+    assert.equal(announced, 0, "and no URL is invented for a session that never registered")
+  } finally {
+    bridge.releaseSession(slug, sessionId, "session-deleted")
+    bridge.close()
+    try { const r = recordOf(); if (r) process.kill(r.daemonPid, "SIGKILL") } catch {}
+    await rmEventually(dir)
+  }
+})
