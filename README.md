@@ -80,7 +80,8 @@ The queue is strict about what earns a card, which is what keeps it a real todo 
 Fray is a browser tab, a queue, and the agent CLIs you already pay for. It brings no model of its own, automates none of your workflow, and keeps every opinion it does have in a text file you can edit.
 
 - 🗂️ **A unified queue, not a tab strip.** Every agent that comes to rest needing you becomes a card. Work the queue top to bottom instead of polling ten terminals.
-- 🔌 **Headless, and it outlives you.** Every thread's agent runs in its own detached background process. Close the tab, quit the browser, even stop Fray — the work keeps going, and relaunching reconnects to the session that's still running rather than replaying it from disk.
+- 🔌 **Headless.** Every thread's agent runs in its own detached background process — no terminal to babysit, no window that has to stay open for work to continue.
+- 🔁 **Resumable and quittable.** Close the tab, quit the browser, ctrl-c the server, reboot. Your threads are all still there when you come back, and Fray reconnects to the ones still running rather than replaying them from disk.
 - 🤖 **Claude Code *and* Codex.** Pick the backend per thread and run both against the same repo at once. Fray drives the CLIs you already have installed and signed in.
 - 😴 **Snooze.** Not everything needs an answer now. Park a card for an hour, until tomorrow morning, or until a date you pick — optionally with a follow-up prompt attached, so the thread wakes up already working on what you told it to do next.
 - 🐙 **GitHub integration.** Browse your repo's issues and pull requests without leaving the composer, and turn a selection of them into threads. Workers can read issues, diffs, and CI on their own.
