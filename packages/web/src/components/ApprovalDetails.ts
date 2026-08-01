@@ -45,14 +45,19 @@ export function ApprovalDetails({ payload }: { payload: ApprovalPayload }) {
       payload.changes ? h(FileChangeList, { changes: payload.changes }) : null,
     )
   }
+  // Only what the operator has to read to decide: the exact text being authorized, then where it runs.
+  // The permission id and the tool name are already the card's title, so neither is repeated here.
   return h(Fragment, null,
-    h("div", { className: "text-[12px] text-muted" }, "Requested permission"),
-    h("div", { className: "mt-0.5 break-all font-mono-keep text-[12px] font-medium text-fg" }, payload.permission),
+    payload.preview
+      ? h("pre", {
+          className: "max-h-64 max-w-full min-w-0 overflow-auto rounded-md border border-border/70 bg-bg/40 px-2.5 py-2 whitespace-pre-wrap break-words font-mono-keep text-[11.5px] leading-relaxed text-fg/90",
+        }, payload.preview)
+      : null,
     payload.resourceLabel
       ? h("div", { className: "mt-1 break-all text-[11px] text-muted" }, "Resource: ", payload.resourceLabel)
       : null,
     payload.workingDirectoryLabel
-      ? h("div", { className: "mt-1 break-all text-[10.5px] text-muted/70" }, "Working directory: ", payload.workingDirectoryLabel)
+      ? h("div", { className: "mt-1.5 break-all text-[10.5px] text-muted/70" }, "Working directory: ", payload.workingDirectoryLabel)
       : null,
     payload.scopeLabel
       ? h("div", { className: "mt-2 whitespace-pre-wrap break-words text-[11px] leading-snug text-muted" }, payload.scopeLabel)

@@ -335,6 +335,10 @@ export const InteractionPayload = z.discriminatedUnion("kind", [
     ...CommonPayload,
     kind: z.literal("permission-approval"),
     permission: InteractionOpaqueId,
+    // The exact text of what is being authorized — a command, a path, a request body. Multi-line and
+    // rendered monospace, because a Bash command is the one thing the operator actually reads and a
+    // single-line label cannot hold a heredoc. Adapters redact and clamp it before it gets here.
+    preview: InteractionPreview.optional(),
     resourceLabel: plainText(1_024, 2_048).optional(),
     workingDirectoryLabel: plainText(1_024, 2_048).optional(),
     scopeLabel: InteractionDescription.optional(),

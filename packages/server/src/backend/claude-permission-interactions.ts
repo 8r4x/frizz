@@ -40,6 +40,31 @@ function clip(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text
 }
 
+// The argument that says WHAT a tool call will do, in the order the tools that actually escalate carry
+// it. It leads the preview on its own; everything else follows as a labelled line.
+const SUBJECT_KEYS = ["command", "file_path", "notebook_path", "path", "url", "pattern", "query", "prompt"]
+
+// InteractionPreview is bounded on THREE axes (16k chars, 24k UTF-8 bytes, 256 lines), and a request
+// that overruns any of them fails to parse — which would turn a display problem into a DENIED tool
+// call. These caps are low enough that the byte bound is unreachable even for all-3-byte text, so no
+// separate byte clamp is needed. Same reasoning caps the message below InteractionDescription's 8k.
+const PREVIEW_MAX_CHARS = 6_000
+const PREVIEW_MAX_LINES = 200
+
+/** Render a tool input as the text a human reads instead of the JSON a machine reads: the subject
+ *  argument verbatim (newlines intact — a heredoc is unreadable escaped), then the rest as `key: value`.
+ *  `shown` is prose the card already displays, so the arg carrying it is dropped rather than repeated. */
+function inputPreview(input: Record<string, unknown> | undefined, shown: string | undefined): string {
+  if (!input) return ""
+  const subject = SUBJECT_KEYS.find((key) => typeof input[key] === "string" && input[key] !== "")
+  const lines = Object.entries(input)
+    .filter((entry) => entry[0] !== subject && entry[1] !== "" && entry[1] !== null && entry[1] !== shown)
+    .map((entry) => `${entry[0]}: ${typeof entry[1] === "string" ? entry[1] : JSON.stringify(entry[1])}`)
+  if (subject) lines.unshift(String(input[subject]))
+  const text = redactCredentialSyntax(lines.join("\n\n")).split("\n")
+  return clip(text.length > PREVIEW_MAX_LINES ? `${text.slice(0, PREVIEW_MAX_LINES).join("\n")}\n…` : text.join("\n"), PREVIEW_MAX_CHARS)
+}
+
 /** Build the durable interaction request for a Claude tool-permission escalation, or return null when it
  *  can't be represented (never blocks the daemon — the caller falls back to a decision hook). */
 export function buildClaudePermissionInteraction(
@@ -47,18 +72,17 @@ export function buildClaudePermissionInteraction(
   owner: { projectId: string; threadSlug: string; sessionId: string; cwd: string },
 ): InteractionRequestType | null {
   const tool = request.toolName || "tool"
+  const title = clip(`Approve ${tool}?`, 150)
+  // Say the WHY once and the WHAT once. The tool name is already the title, so it is not repeated as
+  // prose, as a "requested permission", or as a resource label — the card carries each fact one time.
+  const description = request.description ? clip(redactCredentialSyntax(request.description), 1_000) : ""
+  const message = clip(
+    [description, request.blockedPath ? `Blocked path: ${clip(request.blockedPath, 500)}` : ""].filter(Boolean).join("\n\n"),
+    2_000,
+  )
   // The input is UNTRUSTED provider text; redact credential syntax and bound it hard before it ever
   // reaches a card. It is display-only and is never parsed or executed by fray.
-  let inputSummary = ""
-  try { inputSummary = clip(redactCredentialSyntax(JSON.stringify(request.input ?? {})), 3_800) } catch { inputSummary = "(uninspectable input)" }
-  const title = clip(`Approve ${tool}?`, 150)
-  const message = clip(
-    `A ${tool} tool call needs your approval before it runs.` +
-      (request.description ? `\n\n${clip(redactCredentialSyntax(request.description), 1_000)}` : "") +
-      (inputSummary ? `\n\nInput: ${inputSummary}` : "") +
-      (request.blockedPath ? `\n\nPath: ${clip(request.blockedPath, 500)}` : ""),
-    7_900,
-  )
+  const preview = inputPreview(request.input, request.description)
   const parsed = InteractionRequest.safeParse({
     protocolVersion: INTERACTION_PROTOCOL_VERSION,
     contentFormat: "plain-text",
@@ -78,11 +102,13 @@ export function buildClaudePermissionInteraction(
     providerRequestId: clip(request.requestId, 500),
     allowedDecisions: ALLOWED_DECISIONS,
     payload: {
-      title,
-      message,
       kind: "permission-approval",
-      permission: clip(request.requestId, 500),
-      resourceLabel: clip(tool, 2_000),
+      title,
+      // `permission` is the card's readable identity, the way Codex's is "network+filesystem". It was
+      // the requestId, which put a bare UUID on screen and told the operator nothing.
+      permission: singleLine(tool, 250, "tool"),
+      ...(message ? { message } : {}),
+      ...(preview ? { preview } : {}),
       workingDirectoryLabel: clip(owner.cwd, 2_000),
     },
     expiresAt: null,
