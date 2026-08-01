@@ -658,9 +658,7 @@ function VirtualizedThreadTranscript({
     return buildVirtualTranscriptMessageRows(
       activityMessages.map((entry) => entry.message),
       messageRendersNothing,
-      messageHeadIsMeta,
-      messageTailIsMeta,
-      STEP,
+      messageGap,
     ).map((row) => ({
       ...row,
       messageIndex: activityMessages[row.messageIndex].messageIndex,
@@ -1551,43 +1549,67 @@ function ScratchpadPane({ slug }: { slug: string }) {
 // or double the way adjacent margins silently do. Padding INSIDE a block (its own chrome) is fine;
 // the space BETWEEN sibling blocks is always a VSpace. STEP is the single between-block unit.
 export const STEP = 14
-// Adjacent tool cards must read at the SAME tight 6px run whether they're batched in one message or
-// split across messages (the tailer chunks a burst of tool calls arbitrarily). The gap between two
-// messages is 6px iff the FIRST ends with a tool band AND the SECOND begins with one (tool-tail →
-// tool-head) — so a "let me check:" text-then-tool message sits 6px above the next message's leading
-// tool, exactly like two batched tools. Any prose at the boundary keeps STEP (14px). messageTailIsTool
-// / messageHeadIsTool inspect the LAST / FIRST rendered block; the legacy (no-parts) path renders the
-// tool band FIRST then prose, so its head is tools-if-any and its tail is tools-only-if-no-prose.
+// The tight run between two adjacent CARDS — bordered blocks with their own inset, where 6px of clear
+// space between two borders already reads as a separation.
+export const META_CARD_STEP = 6
+// ...and the run between two bare single-line LABEL rows — `Ran N tool calls`, `Thought for Ns`, a
+// collapsed reasoning row, the live shimmer. A label has no border and no inset, so the card gap is all
+// the separation there is, and at 6px three of them stacked read as one wrapped paragraph rather than
+// three statements (maintainer 2026-08-01, on `Ran 8 tool calls` / `Thought for 33s` / the shimmer:
+// "All of these labels are way too close together"). These rows are 14px/20px and assistant prose is
+// 14px/1.7 = 23.8px, so at 6px their pitch was 26px — barely 2px looser than the wrapped prose above
+// them. 10px puts them at 30px, clearly apart while still tighter than a full STEP break, which is what
+// keeps the column reading as one subordinate run rather than a stack of separate blocks.
+export const META_LABEL_STEP = 10
+// Adjacent tool activity must read at the SAME tight run whether it's batched in one message or split
+// across messages (the tailer chunks a burst of tool calls arbitrarily). The boundary between two
+// messages joins that run iff the FIRST ends with a tool band AND the SECOND begins with one (tool-tail
+// → tool-head) — so a "let me check:" text-then-tool message sits at the run pitch above the next
+// message's leading tool, exactly like two batched tools. Any prose at the boundary keeps STEP (14px).
+// Which run pitch — META_CARD_STEP or META_LABEL_STEP — is then the label question below.
+// messageTailIsTool / messageHeadIsTool inspect the LAST / FIRST rendered block; the legacy (no-parts)
+// path renders the tool band FIRST then prose, so its head is tools-if-any and its tail is
+// tools-only-if-no-prose.
 // A sub-agent COMPLETION MARKER message (see lib/subAgentCompletion.ts) is transcript punctuation, not
 // a tool band: Message renders it as a wake divider, so every spacing predicate must treat it like the
 // boundary event it is now a peer of — never as a tool card.
-export function messageTailIsTool(m: ChatMessage): boolean {
-  if (m.kind === "event" || m.kind === "reasoning" || m.role === "user") return false
-  if (agentCompletionCall(m)) return false
+// The tools this message ENDS / BEGINS with, or null when the rendered edge is prose (or nothing at
+// all). Returning the calls rather than a boolean is what lets the label predicates below ask the one
+// further question the gap depends on: does that edge draw a one-line digest or a bordered card?
+function messageTailTools(m: ChatMessage): TranscriptToolCall[] | null {
+  if (m.kind === "event" || m.kind === "reasoning" || m.role === "user") return null
+  if (agentCompletionCall(m)) return null
   if (m.parts && m.parts.length > 0) {
     for (let i = m.parts.length - 1; i >= 0; i--) {
       const p = m.parts[i]
-      if (p.kind === "tools" ? p.tools.length > 0 : p.text.trim()) return p.kind === "tools"
+      if (p.kind === "tools" ? p.tools.length > 0 : p.text.trim()) return p.kind === "tools" ? p.tools : null
     }
-    return false
+    return null
   }
-  return (m.tools?.length ?? 0) > 0 && !m.text.trim()
+  return (m.tools?.length ?? 0) > 0 && !m.text.trim() ? m.tools : null
 }
-export function messageHeadIsTool(m: ChatMessage): boolean {
-  if (m.kind === "event" || m.kind === "reasoning" || m.role === "user") return false
-  if (agentCompletionCall(m)) return false
+function messageHeadTools(m: ChatMessage): TranscriptToolCall[] | null {
+  if (m.kind === "event" || m.kind === "reasoning" || m.role === "user") return null
+  if (agentCompletionCall(m)) return null
   if (m.parts && m.parts.length > 0) {
     for (const p of m.parts) {
-      if (p.kind === "tools" ? p.tools.length > 0 : p.text.trim()) return p.kind === "tools"
+      if (p.kind === "tools" ? p.tools.length > 0 : p.text.trim()) return p.kind === "tools" ? p.tools : null
     }
-    return false
+    return null
   }
-  return (m.tools?.length ?? 0) > 0
+  return (m.tools?.length ?? 0) > 0 ? m.tools : null
+}
+export function messageTailIsTool(m: ChatMessage): boolean {
+  return messageTailTools(m) !== null
+}
+export function messageHeadIsTool(m: ChatMessage): boolean {
+  return messageHeadTools(m) !== null
 }
 // A lightweight single-line META label — a "Thought for Ns"/"Agent … finished" event or collapsed
-// Codex reasoning row. Thoughts and the minimal tool disclosure now share a regular 13px light-grey
-// treatment; all remain subordinate transcript activity and therefore join the tight 6px run instead
-// of forcing a 14px break on both sides. A BOUNDARY event is a section-break divider, not a quiet label.
+// Codex reasoning row. Thoughts and the minimal tool disclosure share one regular light-grey treatment
+// (TRANSCRIPT_META_LABEL_CLASS); all remain subordinate transcript activity and therefore join the tight
+// run instead of forcing a full STEP break on both sides. A BOUNDARY event is a section-break divider,
+// not a quiet label.
 function isMetaLabelMessage(m: ChatMessage): boolean {
   return (m.kind === "event" && !m.boundary) || m.kind === "reasoning"
 }
@@ -1598,6 +1620,33 @@ export function messageTailIsMeta(m: ChatMessage): boolean {
 }
 export function messageHeadIsMeta(m: ChatMessage): boolean {
   return isMetaLabelMessage(m) || messageHeadIsTool(m)
+}
+// The narrower question META_LABEL_STEP turns on: does this edge draw a bare one-line LABEL, or a
+// bordered card? A tools part renders as alternating runs (ToolCalls) — ordinary calls collapse into
+// one `Ran N tool calls` digest, while a dispatch / background op keeps its own card
+// (isToolActivityException) — so the edge's OWN call decides, not the run as a whole.
+export function messageTailIsLabel(m: ChatMessage): boolean {
+  if (isMetaLabelMessage(m)) return true
+  const tools = messageTailTools(m)
+  return tools !== null && !isToolActivityException(tools[tools.length - 1])
+}
+export function messageHeadIsLabel(m: ChatMessage): boolean {
+  if (isMetaLabelMessage(m)) return true
+  const tools = messageHeadTools(m)
+  return tools !== null && !isToolActivityException(tools[0])
+}
+// THE between-message gap, in one function. Both spacing implementations (this file's plain column and
+// the virtualized row builder) call it, so neither can drift from the other.
+export function messageGap(previous: ChatMessage, next: ChatMessage): number {
+  const base = messageTailIsLabel(previous) && messageHeadIsLabel(next)
+    ? META_LABEL_STEP
+    : messageTailIsMeta(previous) && messageHeadIsMeta(next)
+      ? META_CARD_STEP
+      : STEP
+  // ...and a little extra under the human's own words, but only where the run of them ENDS — see
+  // USER_TAIL_EXTRA. Measured against the NEXT rendered message, so a user message followed by another
+  // user message keeps the plain step between them.
+  return base + (previous.role === "user" && next.role !== "user" ? USER_TAIL_EXTRA : 0)
 }
 // Matches exactly when Message returns null (an empty/thinking-only assistant turn) — such a message
 // takes no slot, so the adjacency-spacer walk must SKIP it (else two spacers stack into a double gap).
@@ -1618,19 +1667,22 @@ export function VSpace({ h = STEP }: { h?: number }) {
   return <div aria-hidden className="shrink-0" style={{ height: h }} />
 }
 
-// The leading gap for the "Working…" shimmer that tails a live transcript. The shimmer is a quiet
-// single-line 13px row — the LIVE continuation of the very meta column that "Thought for Ns" and the
-// tool bands form above it — so it joins their tight 6px run rather than breaking to STEP whenever the
-// last rendered message ends in a meta row. (Maintainer 2026-07-31: "there's more space above the
-// working shimmer than there is below the 'Thought for 37 seconds'" — the shimmer sat at STEP under a
-// pair of agent tool bands that were themselves 6px under the thought label.) Prose above it still
-// gets the full break, and every other occupant of the runtime-status slot is a card, which keeps STEP.
+// The leading gap for the shimmer that tails a live transcript. The shimmer is a quiet single-line row
+// — the LIVE continuation of the very meta column that "Thought for Ns" and the tool bands form above
+// it — so it joins their tight run rather than breaking to STEP whenever the last rendered message ends
+// in a meta row. (Maintainer 2026-07-31: "there's more space above the working shimmer than there is
+// below the 'Thought for 37 seconds'" — the shimmer sat at STEP under a pair of agent cards that were
+// themselves at the run pitch under the thought label.) It is itself a bare LABEL, so which pitch it
+// takes is decided the same way messageGap decides it: META_LABEL_STEP under another label,
+// META_CARD_STEP under a card. Prose above it still gets the full break, and every other occupant of
+// the runtime-status slot is a card, which keeps STEP.
 // Returns 0 when nothing rendered above — a leading spacer would then indent the whole column.
 export function workingIndicatorGap(messages: readonly ChatMessage[]): number {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]
     if (m.queued || messageRendersNothing(m)) continue
-    if (messageTailIsMeta(m)) return 6
+    if (messageTailIsLabel(m)) return META_LABEL_STEP
+    if (messageTailIsMeta(m)) return META_CARD_STEP
     return STEP + (m.role === "user" ? USER_TAIL_EXTRA : 0)
   }
   return 0
@@ -1640,18 +1692,17 @@ export function workingIndicatorGap(messages: readonly ChatMessage[]): number {
 // lib/virtualTranscript.ts — the VIRTUALIZED row builder is the production path, and both spacing
 // implementations have to charge the same number.
 
-// THE between-message rhythm, in ONE place. Every surface that stacks messages goes through this —
-// the thread transcript and the sub-agent drawer — so no surface can invent its own gap. That is the
-// whole point: the sub-agent drawer used to lay its messages out with a flat `gap-3.5`, which gave a
-// child's transcript 14px between successive tool-only turns and 6px inside a batch, i.e. exactly the
-// batch seam the tight run exists to erase (maintainer 2026-07-27: "there's a bigger gap between
-// independent batches as opposed to within a batch"). A container `gap` CANNOT express this rule —
-// the gap depends on the two rows it sits between — so the spacing is explicit VSpace elements and
-// the container must stay gap-less.
+// The plain (non-virtualized) message column — the sub-agent drawer. Every surface that stacks messages
+// charges its gaps through messageGap, so no surface can invent its own rhythm. That is the whole
+// point: the sub-agent drawer used to lay its messages out with a flat `gap-3.5`, which gave a child's
+// transcript 14px between successive tool-only turns and 6px inside a batch, i.e. exactly the batch
+// seam the tight run exists to erase (maintainer 2026-07-27: "there's a bigger gap between independent
+// batches as opposed to within a batch"). A container `gap` CANNOT express this rule — the gap depends
+// on the two rows it sits between — so the spacing is explicit VSpace elements and the container must
+// stay gap-less.
 //
 // Messages that render nothing are SKIPPED (no orphan or doubled spacer); `skip` drops messages the
-// caller renders elsewhere (the queued tail). A null `prevTailIsMeta` marks "nothing rendered yet" →
-// no leading spacer.
+// caller renders elsewhere (the queued tail). Nothing rendered yet → no leading spacer.
 export function withMessageSpacers(
   messages: readonly ChatMessage[],
   render: (m: ChatMessage, i: number) => ReactNode,
@@ -1662,16 +1713,7 @@ export function withMessageSpacers(
   messages.forEach((m, i) => {
     if (skip?.(m, i)) return
     if (messageRendersNothing(m)) return
-    if (prev !== null) {
-      // 6px when two META rows abut across the boundary — a tool band OR a "Thought for Ns" / reasoning
-      // label (see messageTailIsMeta), so the meta-label column reads as one rhythm.
-      const base = messageTailIsMeta(prev) && messageHeadIsMeta(m) ? 6 : STEP
-      // ...and a little extra under the human's own words, but only where the run of them ENDS —
-      // see USER_TAIL_EXTRA. Measured against the NEXT rendered message, so a user message followed
-      // by another user message keeps the plain step between them.
-      const extra = prev.role === "user" && m.role !== "user" ? USER_TAIL_EXTRA : 0
-      out.push(<VSpace key={`s${i}`} h={base + extra} />)
-    }
+    if (prev !== null) out.push(<VSpace key={`s${i}`} h={messageGap(prev, m)} />)
     out.push(render(m, i))
     prev = m
   })
@@ -4128,10 +4170,19 @@ function Dots() {
   return <span className="inline-block w-2.5 h-2.5 rounded-full border border-muted/70 border-t-transparent animate-spin" />
 }
 
-// The turn-in-flight banner: the latest tool's gerund replaces "Working…" in THIS same bottom slot
+// The turn-in-flight banner: the latest tool's gerund replaces "Thinking…" in THIS same bottom slot
 // and THIS same shimmer span. The baseline is the last real user interaction (server-derived, so it
 // reads as true turn duration and survives reloads); a thread with no usable timestamp falls back to
 // mount time. Ticks once a second — cheap, and unmounts with the banner.
+//
+// The generic reading is "Thinking…", not "Working…". It shows exactly when the turn is running and
+// liveToolActivityTail names nothing — the model is generating and has not called a tool yet: the
+// opening of a turn, the pause after it wrote prose, the step after a dispatch or background op (those
+// keep their own card and are excluded from the run — see isToolActivityException). "Working" described
+// the SESSION, which is the one thing the reader can already see from the thread being active; the
+// model composing its next move is what the slot is actually reporting, and it is what every gerund
+// beside it reports too (maintainer 2026-08-01: "Do you think it makes more sense to change it to
+// 'thinking'?").
 export function WorkingIndicator({ since, activityLabel }: { since?: string; activityLabel?: string }) {
   const [baseline] = useState(() => {
     const t = Date.parse(since ?? "")
@@ -4162,7 +4213,7 @@ export function WorkingIndicator({ since, activityLabel }: { since?: string; act
           now (see relativeToolPaths), so at any realistic width there is nothing left to clip.
           The duration keeps `shrink-0 whitespace-nowrap` — it is one value and must never break at its
           own space, which is exactly how `828m 49s` used to put the minutes outside the panel. */}
-      <span className="min-w-0 truncate shimmer-text">{activityLabel ?? "Working…"}</span>
+      <span className="min-w-0 truncate shimmer-text">{activityLabel ?? "Thinking…"}</span>
       <span className="shrink-0 whitespace-nowrap tabular-nums text-[12px] text-muted/60">{durationLabel}</span>
     </div>
   )

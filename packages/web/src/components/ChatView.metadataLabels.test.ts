@@ -36,12 +36,16 @@ test("minimal tool activity is settled history with no live shimmer or spinner i
   assert.doesNotMatch(block, /fray-tool-spinner|data-running-indicator|w-2\.5/, "no spinner or reserved mark slot may indent the label")
 })
 
-test("the current gerund replaces Working in the exact bottom shimmer span", () => {
+test("the current gerund replaces Thinking in the exact bottom shimmer span", () => {
   const source = readFileSync(new URL("./ChatView.tsx", import.meta.url), "utf8")
   const block = source.match(/export function WorkingIndicator[\s\S]*?\n}/)?.[0]
   assert.ok(block, "WorkingIndicator must exist")
   assert.match(block, /data-working-indicator/, "the runtime tail needs a stable browser-QA target")
-  assert.match(block, /<span className="[^"]*shimmer-text">\{activityLabel \?\? "Working…"\}<\/span>/, "tool activity and generic Working must use the exact same shimmer element")
+  // The generic reading names what the model is DOING with the turn — composing its next move — not
+  // that the session is alive, which the reader can already see (maintainer 2026-08-01: "Do you think
+  // it makes more sense to change it to 'thinking'?").
+  assert.match(block, /<span className="[^"]*shimmer-text">\{activityLabel \?\? "Thinking…"\}<\/span>/, "tool activity and the generic reading must use the exact same shimmer element")
+  assert.doesNotMatch(block, /"Working…"/, "the generic reading is Thinking, not Working")
   assert.equal((block.match(/shimmer-text/g) ?? []).length, 1, "the runtime tail must have one shimmer treatment")
   // ONE LINE, always. The label TRUNCATES rather than wrapping (maintainer 2026-07-31: "prevent the
   // actual gerund from ever breaking onto two lines. It should get truncated instead") — a live status

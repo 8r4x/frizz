@@ -102,38 +102,31 @@ function legacyMessageKey(message: ChatMessage): string {
   return `legacy:${message.role}:${message.kind ?? "message"}:${message.at ?? ""}:${message.text}`
 }
 
+// `gapBetween` is ChatView's messageGap — the single expression of the between-message rhythm, injected
+// rather than imported because ChatView imports this module. A row's `gap` renders ABOVE it, so the gap
+// is charged to the row that FOLLOWS: that is what puts the extra air under whatever the previous
+// message ended with (an inlined screenshot included) rather than under its text.
 export function buildVirtualTranscriptMessageRows(
   messages: readonly ChatMessage[],
   rendersNothing: (message: ChatMessage) => boolean,
-  headIsMeta: (message: ChatMessage) => boolean,
-  tailIsMeta: (message: ChatMessage) => boolean,
-  step: number,
+  gapBetween: (previous: ChatMessage, next: ChatMessage) => number,
 ): VirtualTranscriptMessageRow[] {
   const rows: VirtualTranscriptMessageRow[] = []
   const keyCounts = new Map<string, number>()
-  let previousTailIsMeta: boolean | null = null
-  let previousIsUser = false
+  let previous: ChatMessage | null = null
 
   messages.forEach((message, messageIndex) => {
     if (message.queued || rendersNothing(message)) return
     const baseKey = message.sourceId ?? legacyMessageKey(message)
     const duplicate = keyCounts.get(baseKey) ?? 0
     keyCounts.set(baseKey, duplicate + 1)
-    const base = previousTailIsMeta === null ? 0 : previousTailIsMeta && headIsMeta(message) ? 6 : step
-    // A little extra air under the human's own words — but only where a RUN of them ends, so two
-    // messages the human split across sends stay one utterance. See USER_TAIL_EXTRA in ChatView.
-    // A row's `gap` renders ABOVE it, so this is charged to the row that FOLLOWS the user message,
-    // which is what puts the space under whatever that message ended with — an inlined screenshot
-    // included, rather than under its text.
-    const extra = base > 0 && previousIsUser && message.role !== "user" ? USER_TAIL_EXTRA : 0
     rows.push({
       key: duplicate === 0 ? baseKey : `${baseKey}:${duplicate}`,
       message,
       messageIndex,
-      gap: base + extra,
+      gap: previous === null ? 0 : gapBetween(previous, message),
     })
-    previousTailIsMeta = tailIsMeta(message)
-    previousIsUser = message.role === "user"
+    previous = message
   })
 
   return rows

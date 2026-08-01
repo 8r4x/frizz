@@ -388,6 +388,48 @@ test("thinking inside a run folds into it instead of splitting one burst in two"
   )
 })
 
+test("a queued steer is transparent to the run it sits inside", () => {
+  // The bubble is pinned to the BOTTOM of the pane and never drawn inline, so nothing visible separates
+  // the calls either side of it. It used to end the run anyway: the calls above stranded into a settled
+  // `Ran N tool calls` digest, and the thought below — the next turn's opening pause — found no run to
+  // fold into and took a row of its own (maintainer 2026-08-01: "I thought we'd dropped the 'thought for
+  // the x seconds' thing entirely").
+  const steer: ChatMessage = {
+    sourceId: "steer", role: "user", queued: true,
+    text: "So we still require TMUX?", tools: [], parts: [],
+  }
+  const compact = coalesceToolActivityMessages([
+    toolMessage("a", [tool("Bash", { detail: "git log" })]),
+    steer,
+    thoughtMessage("t", "Thought for 33s"),
+    toolMessage("b", [tool("Bash", { detail: "git diff" })], "2026-07-30T12:00:02.000Z"),
+  ])
+
+  // The bubble keeps its slot — the callers that pin it read this list — but the run is unbroken.
+  assert.deepEqual(compact.map((entry) => entry.message.sourceId), ["a", "steer"])
+  assert.deepEqual(
+    compact[0].message.tools.map((call) => call.thought ?? call.detail),
+    ["git log", "Thought for 33s", "git diff"],
+  )
+})
+
+test("a DELIVERED steer still ends the run", () => {
+  // The control for the case above: once the bubble lands it is a real inline message, so the calls
+  // either side of it belong to two different turns and must not share one disclosure.
+  const steer: ChatMessage = {
+    sourceId: "steer", role: "user",
+    text: "So we still require TMUX?", tools: [], parts: [],
+  }
+  const compact = coalesceToolActivityMessages([
+    toolMessage("a", [tool("Bash", { detail: "git log" })]),
+    steer,
+    thoughtMessage("t", "Thought for 33s"),
+    toolMessage("b", [tool("Bash", { detail: "git diff" })], "2026-07-30T12:00:02.000Z"),
+  ])
+
+  assert.deepEqual(compact.map((entry) => entry.message.sourceId), ["a", "steer", "t", "b"])
+})
+
 test("a thought with no run above it keeps its own row", () => {
   const compact = coalesceToolActivityMessages([
     thoughtMessage("t", "Thought for 24s"),

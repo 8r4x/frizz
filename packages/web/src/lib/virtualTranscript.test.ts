@@ -22,9 +22,7 @@ test("virtual transcript rows omit queued and empty messages while preserving so
       message({ sourceId: "last" }),
     ],
     (candidate) => candidate.text === "",
-    () => false,
-    () => false,
-    14,
+    () => 14,
   )
   assert.deepEqual(rows.map(({ key, messageIndex, gap }) => ({ key, messageIndex, gap })), [
     { key: "first", messageIndex: 0, gap: 0 },
@@ -32,20 +30,29 @@ test("virtual transcript rows omit queued and empty messages while preserving so
   ])
 })
 
-test("virtual transcript rows keep the tight rhythm between adjacent meta rows", () => {
+test("the gap of each row is charged against the previous RENDERED message", () => {
+  // The skipped rows must not become the `previous` the gap is measured from — a queued bubble sits at
+  // the bottom of the pane, and an empty message paints nothing, so neither is a neighbour of anything.
   const rows = buildVirtualTranscriptMessageRows(
-    [message({ sourceId: "a" }), message({ sourceId: "b" }), message({ sourceId: "c" })],
+    [
+      message({ sourceId: "a" }),
+      message({ sourceId: "queued", queued: true }),
+      message({ sourceId: "b" }),
+      message({ sourceId: "c" }),
+    ],
     () => false,
-    (candidate) => candidate.sourceId !== "c",
-    (candidate) => candidate.sourceId !== "b",
-    14,
+    (previous, next) => (previous.sourceId === "a" && next.sourceId === "b" ? 10 : 14),
   )
-  assert.deepEqual(rows.map((row) => row.gap), [0, 6, 14])
+  assert.deepEqual(rows.map((row) => ({ key: row.key, gap: row.gap })), [
+    { key: "a", gap: 0 },
+    { key: "b", gap: 10 },
+    { key: "c", gap: 14 },
+  ])
 })
 
 test("legacy duplicate rows still receive unique render keys", () => {
   const duplicate = message({ sourceId: undefined })
-  const rows = buildVirtualTranscriptMessageRows([duplicate, duplicate], () => false, () => false, () => false, 14)
+  const rows = buildVirtualTranscriptMessageRows([duplicate, duplicate], () => false, () => 14)
   assert.notEqual(rows[0]?.key, rows[1]?.key)
 })
 

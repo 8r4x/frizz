@@ -177,6 +177,18 @@ export function coalesceToolActivityMessages(messages: readonly ChatMessage[]): 
 
   messages.forEach((message, messageIndex) => {
     if (transparentAssistantMessage(message)) return
+    // A QUEUED bubble is pinned to the BOTTOM of the pane and never drawn inline (every row builder
+    // skips it), so it is not a visible block between the messages it happens to sit between — and it
+    // must not end a run. It used to: a steer typed mid-turn stranded the run above it as a settled
+    // `Ran N tool calls` digest, and left the next turn's opening thought with nothing to fold into, so
+    // `Ran 8 tool calls` / `Thought for 33s` / the shimmer stacked up as three separate rows with no
+    // visible cause (maintainer 2026-08-01, on exactly that column: "I thought we'd dropped the
+    // 'thought for the x seconds' thing entirely"). It still takes its slot in `out` — the callers that
+    // pin it read this list — it simply leaves `activityTail` alone.
+    if (message.queued) {
+      out.push({ message, messageIndex })
+      return
+    }
     // Thinking INSIDE a run is folded into it and keeps the run open, so the calls either side of it
     // stay one disclosure (see thoughtActivityEntry). A thought with no run above it — the model
     // thinking before it has done anything — still gets its own row: there is nothing to fold into,

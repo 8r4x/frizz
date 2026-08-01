@@ -1,0 +1,106 @@
+import assert from "node:assert/strict"
+import test from "node:test"
+
+// Runtime coverage for the QUIET META COLUMN — the `Ran N tool calls` digest, a `Thought for Ns` line
+// and the live shimmer. Skipped unless a Vite URL serving the fixtures is provided (same pattern as the
+// other *.e2e.test.ts here): start `vite` in packages/web and set FRAY_META_COLUMN_RHYTHM_E2E_URL to
+// its origin.
+//
+// Two invariants, both from the same report (maintainer 2026-08-01, on a column reading `Ran 8 tool
+// calls` / `Thought for 33s` / the shimmer: "All of these labels are way too close together … I thought
+// we'd dropped the 'thought for the x seconds' thing entirely, actually?"):
+//
+//   1. A QUEUED steer is invisible inline — it is pinned to the bottom of the pane — so it must not end
+//      the activity run it happens to sit inside. It used to, which is what stranded the run above it as
+//      a settled digest and left the next turn's thought with nothing to fold into.
+//   2. Two bare single-line LABEL rows sit at META_LABEL_STEP, not at the 6px gap that binds two
+//      bordered CARDS. Measured in the browser because it is layout.
+const baseUrl = process.env.FRAY_META_COLUMN_RHYTHM_E2E_URL
+
+const META_LABEL_STEP = 10
+const STEP = 14
+// The virtualizer positions rows at fractional offsets, so a measured gap lands within a sub-pixel of
+// its constant.
+const near = (actual: number, expected: number, what: string) =>
+  assert.ok(Math.abs(actual - expected) < 0.5, `${what}: expected ~${expected}px, got ${actual}px`)
+
+async function launch() {
+  const { default: puppeteer } = await import("puppeteer")
+  const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox", "--force-color-profile=srgb"] })
+  const page = await browser.newPage()
+  await page.setViewport({ width: 1000, height: 800, deviceScaleFactor: 1 })
+  const errors: string[] = []
+  page.on("console", (m) => { if (m.type() === "error" && !/404|favicon/i.test(m.text())) errors.push(m.text()) })
+  page.on("pageerror", (e) => errors.push(String(e)))
+  return { browser, page, errors }
+}
+
+const fixtureUrl = (query: string) => new URL(`/meta-column-rhythm-fixture.html${query}`, baseUrl).href
+
+// Every rendered row of the transcript column in paint order, plus the live shimmer, with the box gap
+// above each. The queued bubbles render BELOW the runtime-status row, so ordering by `top` is what puts
+// them where the reader actually sees them rather than where the transcript array puts them.
+async function column(page: import("puppeteer").Page) {
+  return page.evaluate(() => {
+    const scope = document.querySelector("[data-virtualized-transcript]")
+    if (!scope) return { error: "transcript not mounted" }
+    const round = (n: number) => Math.round(n * 10) / 10
+    const items = [...scope.querySelectorAll("[data-fray-msg]")].map((e) => ({
+      id: e.getAttribute("data-fray-msg")!,
+      top: e.getBoundingClientRect().top,
+      bottom: e.getBoundingClientRect().bottom,
+    }))
+    const working = scope.querySelector("[data-working-indicator]")
+    if (working) items.push({ id: "SHIMMER", top: working.getBoundingClientRect().top, bottom: working.getBoundingClientRect().bottom })
+    items.sort((a, b) => a.top - b.top)
+    return {
+      order: items.map((i) => i.id),
+      gapAbove: Object.fromEntries(items.slice(1).map((item, i) => [item.id, round(item.top - items[i].bottom)])),
+      digests: [...scope.querySelectorAll("[data-tool-activity] button")].map((b) => b.getAttribute("aria-label") ?? ""),
+      shimmer: working?.querySelector(".shimmer-text")?.textContent ?? null,
+    }
+  })
+}
+
+test("a queued steer is transparent to the activity run, and label rows keep their own step", {
+  skip: !baseUrl,
+  timeout: 60_000,
+}, async () => {
+  const { browser, page, errors } = await launch()
+  try {
+    // 1. The reported state: the steer is still QUEUED, so nothing visible separates the run above it
+    //    from the thought below. The whole thing is one live run — withheld from history behind the
+    //    shimmer — so neither a digest nor a standalone thought may appear between the prose and it.
+    await page.goto(fixtureUrl(""), { waitUntil: "domcontentloaded" })
+    await page.waitForSelector("[data-working-indicator]")
+    const queued = await column(page)
+    assert.equal(queued.error, undefined, `fixture must mount: ${queued.error}`)
+    assert.deepEqual(queued.order, ["m0", "m1", "SHIMMER", "m8", "m11"], "the queued bubbles render below the shimmer, not inside the run")
+    assert.deepEqual(queued.digests, [], "a live run stays behind the shimmer — the queued steer must not strand it as a settled digest")
+    assert.equal(queued.shimmer, "Finding callers of the socket resolver", "the newest ordinary call still names the shimmer")
+
+    // 2. SETTLED: the turn is over, so the whole run returns as ONE digest with both thoughts folded
+    //    inside it — never `Ran 8` / `Thought for 33s` / `Ran 2`.
+    await page.goto(fixtureUrl("?state=settled"), { waitUntil: "domcontentloaded" })
+    await page.waitForSelector("[data-tool-activity] button")
+    const settled = await column(page)
+    assert.deepEqual(settled.digests, ["Expand 10 tool calls: Ran 10 tool calls"], "one digest for the whole run; folded thinking never counts toward it")
+    assert.ok(!settled.order!.includes("m9"), "the folded thought has no row of its own")
+
+    // 3. CONTROL — the steer LANDED, so it genuinely ends the run: the digest settles, the next turn's
+    //    thought keeps its own row, and the shimmer follows it. That is the LABEL↔LABEL pair.
+    await page.goto(fixtureUrl("?steer=landed"), { waitUntil: "domcontentloaded" })
+    await page.waitForSelector("[data-working-indicator]")
+    const landed = await column(page)
+    assert.deepEqual(landed.order, ["m0", "m1", "m8", "m9", "SHIMMER", "m11"], "a delivered steer sits inline, between the run it interrupted and the thought it provoked")
+    assert.deepEqual(landed.digests, ["Expand 8 tool calls: Ran 8 tool calls"], "the interrupted run settles at its real count")
+    near(landed.gapAbove!.SHIMMER, META_LABEL_STEP, "the shimmer under a bare label row")
+    // ...and the human's own words still open a full break below them, so raising the label step did
+    // not quietly flatten the rest of the rhythm.
+    assert.ok(landed.gapAbove!.m9 > STEP, `a user bubble above the thought keeps its break, got ${landed.gapAbove!.m9}px`)
+
+    assert.deepEqual(errors, [], "no console/page errors")
+  } finally {
+    await browser.close()
+  }
+})
