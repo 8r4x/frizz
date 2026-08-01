@@ -28,33 +28,40 @@ function ptyInstall(mode: number, platform: NodeJS.Platform = "darwin") {
 
 test("core launch preflight accepts a supported Node host with git and tmux", () => {
   assert.doesNotThrow(() =>
-    assertLaunchPrerequisites({ nodeVersion: "20.19.0", command: () => true })
+    assertLaunchPrerequisites({ nodeVersion: "22.12.0", command: () => true })
   );
 });
 
 test("core launch preflight accepts newer Node majors", () => {
   assert.doesNotThrow(() =>
-    assertLaunchPrerequisites({ nodeVersion: "22.12.0", command: () => true })
+    assertLaunchPrerequisites({ nodeVersion: "26.0.0", command: () => true })
   );
 });
 
 test("core launch preflight rejects a Node host below the dependency floor", () => {
   assert.throws(
     () => assertLaunchPrerequisites({ nodeVersion: "18.20.0", command: () => true }),
-    /Node\.js 20\.19 or newer is required \(found 18\.20\.0\)/
+    /Node\.js 22\.12 or newer is required \(found 18\.20\.0\)/
   );
 });
 
-test("core launch preflight rejects an old 20.x minor below the floor", () => {
+test("core launch preflight rejects Node 20, which better-sqlite3 ^13 no longer supports", () => {
   assert.throws(
-    () => assertLaunchPrerequisites({ nodeVersion: "20.11.0", command: () => true }),
-    /Node\.js 20\.19 or newer is required \(found 20\.11\.0\)/
+    () => assertLaunchPrerequisites({ nodeVersion: "20.19.0", command: () => true }),
+    /Node\.js 22\.12 or newer is required \(found 20\.19\.0\)/
+  );
+});
+
+test("core launch preflight rejects an old 22.x minor below the floor", () => {
+  assert.throws(
+    () => assertLaunchPrerequisites({ nodeVersion: "22.11.0", command: () => true }),
+    /Node\.js 22\.12 or newer is required \(found 22\.11\.0\)/
   );
 });
 
 test("core launch preflight gives an actionable error for a missing executable", () => {
   assert.throws(
-    () => assertLaunchPrerequisites({ nodeVersion: "20.19.0", command: (name) => name !== "tmux" }),
+    () => assertLaunchPrerequisites({ nodeVersion: "22.12.0", command: (name) => name !== "tmux" }),
     /required executable `tmux` is not available on PATH; install tmux and relaunch Fray/
   );
 });
@@ -69,7 +76,7 @@ test("provider readiness disables only the unavailable backend and never require
   assert.deepEqual(seen, ["claude", "codex"]);
   assert.doesNotThrow(() =>
     assertLaunchPrerequisites({
-      nodeVersion: "20.19.0",
+      nodeVersion: "22.12.0",
       command: (name) => name === "git" || name === "tmux",
     })
   );

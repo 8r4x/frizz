@@ -660,6 +660,21 @@ const RUNTIME_NATIVE_EXTERNALS = [
   "@parcel/watcher",
 ] as const;
 
+/**
+ * Prebuild directory/file stems this host can load, used to strip every other platform's binaries
+ * out of a dependency cell. The two publishers disagree on shape and on naming, so both are covered:
+ * node-pty uses a directory per target (`prebuilds/darwin-arm64/pty.node`), while better-sqlite3 v13
+ * ships one flat file per target (`prebuilds/darwin-arm64.node`) — hence the `.node` stem strip at
+ * the call site. On Linux, better-sqlite3 additionally selects a separate `linuxmusl-` binary when
+ * the runtime has no glibc; keeping both variants for the host arch costs ~2MB and removes any
+ * chance of this filter disagreeing with better-sqlite3's own load-time musl probe.
+ */
+const HOST_NATIVE_PREBUILDS = new Set(
+  platform() === "linux"
+    ? [`linux-${arch()}`, `linuxmusl-${arch()}`]
+    : [`${platform()}-${arch()}`]
+);
+
 interface FrayDependencyCellManifest {
   version: 1;
   digest: string;
@@ -777,7 +792,6 @@ function copyResolvedPackageClosure(source: string, modules: string): void {
     }
     copied.add(name);
     const destination = join(modules, ...name.split("/"));
-    const nativePrebuild = `${platform()}-${arch()}`;
     cpSync(packageDir, destination, {
       recursive: true,
       preserveTimestamps: true,
@@ -785,11 +799,12 @@ function copyResolvedPackageClosure(source: string, modules: string): void {
         if (path === packageDir) return true;
         const relativePath = relative(packageDir, path);
         if (relativePath === "node_modules" || relativePath.startsWith(`node_modules${sep}`)) return false;
-        // node-pty publishes every OS's native binaries (and large Windows debug symbols) in one
-        // package. A cell is host-bound, so retain only the exact platform/architecture loader.
+        // node-pty and better-sqlite3 both publish every OS's native binaries (and, for node-pty,
+        // large Windows debug symbols) in one package. A cell is host-bound, so retain only the
+        // loaders this host can actually load.
         if (relativePath.startsWith(`prebuilds${sep}`)) {
           const [prebuild] = relativePath.slice(`prebuilds${sep}`.length).split(sep);
-          return prebuild === nativePrebuild;
+          return HOST_NATIVE_PREBUILDS.has(prebuild.replace(/\.node$/, ""));
         }
         return true;
       },

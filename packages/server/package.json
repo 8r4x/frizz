@@ -24,7 +24,7 @@
     "@fray-ui/shared": "workspace:*",
     "@hono/node-server": "^1.13",
     "@parcel/watcher": "^2.5",
-    "better-sqlite3": "^12",
+    "better-sqlite3": "^13",
     "hono": "^4.7",
     "node-pty": "^1.1",
     "ws": "^8.18",

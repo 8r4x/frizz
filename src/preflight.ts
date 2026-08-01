@@ -16,12 +16,12 @@ export interface LaunchPrerequisiteOptions {
  * The lowest Node the runtime dependencies actually support, derived (not guessed) from what the
  * launch chain loads and runs:
  *   - the artifact build runs Vite ^8 on the user's own machine, engines `^20.19.0 || >=22.12.0`;
- *   - the runtime links better-sqlite3 ^12, engines `20.x || 22.x || 23.x || 24.x || 25.x || 26.x`
- *     (18 is dropped);
+ *   - the runtime links better-sqlite3 ^13, engines `>=22` (v13 moved to the N-API and dropped 20);
  *   - the runtime uses `import.meta.dirname`, available since Node 20.11.
- * 20.19 is the tightest of these. Revisit this constant when those dependency floors move.
+ * better-sqlite3 rules out Vite's 20.19 branch, so 22.12 is the tightest of these. Revisit this
+ * constant when those dependency floors move.
  */
-const MINIMUM_NODE = { major: 20, minor: 19 } as const;
+const MINIMUM_NODE = { major: 22, minor: 12 } as const;
 
 export interface ProviderReadiness {
   claude: boolean;

@@ -692,7 +692,9 @@ test("a real Nub/esbuild artifact boots its WebSocket-capable server and loads i
     });
     await waitForArtifactHealth(port, child, projectId, () => output);
     const nativeSmoke = `
-      import Database from ${JSON.stringify(join(artifact.runtimeDir, "node_modules", "better-sqlite3", "lib", "database.js"))};
+      // \`lib/index.js\`, not \`lib/database.js\`: since v13 the latter exports a factory that binds the
+      // addon, and only the index applies the prebuild resolution this smoke is meant to exercise.
+      import Database from ${JSON.stringify(join(artifact.runtimeDir, "node_modules", "better-sqlite3", "lib", "index.js"))};
       import pty from ${JSON.stringify(join(artifact.runtimeDir, "node_modules", "node-pty", "lib", "index.js"))};
       import watcher from ${JSON.stringify(join(artifact.runtimeDir, "node_modules", "@parcel", "watcher", "index.js"))};
       import { mkdtempSync, rmSync } from "node:fs";
