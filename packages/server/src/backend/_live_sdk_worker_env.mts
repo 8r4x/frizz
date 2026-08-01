@@ -92,15 +92,24 @@ try {
     if (path) console.log(`   transcript: ${path}`)
   }
 
-  // NOT ASSERTED: that BASH_DEFAULT_TIMEOUT_MS changes behavior. Section A proves it reaches the
-  // child; its EFFECT could not be reproduced in ANY harness. Measured, not assumed: a 150s command
-  // completes in the turn at the 120s default under both `claude -p` (tmux harness) and a raw SDK
-  // session here, so neither surface cuts it off and a check would pass identically with and without
-  // the variable. Real fray workers ARE bounced ("Command did not complete within its 120s timeout and
-  // was moved to the background"), and no CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS is set anywhere on
-  // this machine — so the trigger is something these harnesses do not reproduce and the mechanism is
-  // not fully characterized. The evidence for the raised value is a real dispatch on the promoted
-  // artifact; see the commit. Do not add a check here without a control that actually fails.
+  // NOT ASSERTED HERE: that BASH_DEFAULT_TIMEOUT_MS changes behavior — not because it doesn't, but
+  // because NO harness on this machine reproduces the trigger. Measured, not assumed: a 150s command
+  // completes in the turn at the 120s default under both `claude -p` (the tmux harness) and a raw SDK
+  // session here, so a check on either surface would pass identically with and without the variable.
+  // Nothing is gained by a check whose control cannot fail.
+  //
+  // It IS verified, on the surface that actually exhibits it — a real dispatched worker. On the
+  // promoted artifact a worker ran `sleep 150 && echo LONGRUN-OK` with no explicit timeout and no
+  // run_in_background, and the output came back IN the turn. The control is a worker spawned before
+  // this change (no BASH_DEFAULT_TIMEOUT_MS in its environment, confirmed by reading the live process),
+  // which the harness bounced at 120s with "Command did not complete within its 120s timeout and was
+  // moved to the background". Before/after on one surface rather than a simultaneous A/B, because
+  // the variable is fixed at spawn for the whole session.
+  //
+  // The mechanism is still not fully characterized: no CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS is set
+  // anywhere on this machine, which is what the binary's auto-background path reads. If you go to add
+  // a check here, first find the input these harnesses are missing — do not add one without a control
+  // that actually fails.
 
 } finally {
   rmSync(cwd, { recursive: true, force: true })

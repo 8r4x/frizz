@@ -283,6 +283,12 @@ export const CHROME_DEVTOOLS_MCP = {
 // The Bash tool's own description interpolates this (`` `timeout` is in milliseconds: default
 // ${...}, max ${...}``), so the worker is told the raised number rather than a stale 120000. The
 // ceiling is left alone: BASH_MAX_TIMEOUT_MS defaults to max(600_000, this), so it stays 600_000.
+//
+// Verified on a real dispatched worker (promoted artifact): `sleep 150 && echo LONGRUN-OK`, no
+// explicit timeout, no run_in_background — output came back IN the turn. The control is a worker
+// spawned before this change, which the harness bounced at 120s. Note that neither the `claude -p`
+// nor the raw-SDK harness reproduces that bounce, so do not "verify" this one from a stand-in; see
+// the NOT ASSERTED note in _live_sdk_worker_env.mts.
 export const CLAUDE_WORKER_ENV = {
   CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "infinite",
   BASH_DEFAULT_TIMEOUT_MS: "600000",
