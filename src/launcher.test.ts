@@ -45,7 +45,9 @@ import {
   helpText,
   expectedOwnerHealth,
   liveWorkspaceOwner,
+  networkUrls,
   parseCliArgs,
+  resolveBindSelection,
   prepareBeforeGlobalLaunchLock,
   probeFray,
   readPreferredPort,
@@ -411,6 +413,8 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
     dev: false,
     debug: false,
     port: undefined,
+    host: undefined,
+    allowedHosts: [],
     repoPath: undefined,
   });
   assert.deepEqual(parseCliArgs(["--no-app", "--foreground", "--port=5123"]), {
@@ -423,6 +427,8 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
     dev: false,
     debug: false,
     port: 5123,
+    host: undefined,
+    allowedHosts: [],
     repoPath: undefined,
   });
   assert.equal(parseCliArgs(["--dev"]).dev, true);
@@ -453,6 +459,79 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
     helpText(),
     /--dev\s+explicitly use the unsafe source watcher and Vite\/HMR/
   );
+  assert.match(helpText(), /--host \[address\]/);
+  assert.match(helpText(), /only use it on a network you trust/);
+});
+
+test("--host: a bare flag means every interface, and a value must be an address", () => {
+  assert.equal(parseCliArgs([]).host, undefined);
+  assert.equal(parseCliArgs(["--host"]).host, "0.0.0.0");
+  assert.equal(parseCliArgs(["--host", "0.0.0.0"]).host, "0.0.0.0");
+  assert.equal(parseCliArgs(["--host=0.0.0.0"]).host, "0.0.0.0");
+  assert.equal(parseCliArgs(["--host", "192.168.1.5"]).host, "192.168.1.5");
+  assert.equal(parseCliArgs(["--host", "::"]).host, "::");
+  assert.equal(parseCliArgs(["--host=[::1]"]).host, "::1");
+  // "localhost" is a spelling of the default, not a name to resolve.
+  assert.equal(parseCliArgs(["--host", "localhost"]).host, "127.0.0.1");
+  // A DNS name is refused rather than resolved: listen() would silently pick one A record and the
+  // operator would have no way to see which interface they had just exposed.
+  assert.throws(() => parseCliArgs(["--host=example.com"]), /invalid --host address/);
+  // `--host` takes an OPTIONAL value and the launcher also takes a positional repo path. The next
+  // token is only the host when it actually is an address, so this cannot eat the repository.
+  const withRepo = parseCliArgs(["--host", "/tmp/some repo"]);
+  assert.equal(withRepo.host, "0.0.0.0");
+  assert.equal(withRepo.repoPath, "/tmp/some repo");
+  const both = parseCliArgs(["--host", "10.0.0.4", "/tmp/some repo"]);
+  assert.equal(both.host, "10.0.0.4");
+  assert.equal(both.repoPath, "/tmp/some repo");
+});
+
+test("--allowed-host: repeatable, comma-splittable, lowercased and deduped", () => {
+  assert.deepEqual(parseCliArgs([]).allowedHosts, []);
+  assert.deepEqual(
+    parseCliArgs(["--allowed-host", "Fray.local", "--allowed-host=box,fray.local"]).allowedHosts,
+    ["fray.local", "box"]
+  );
+  assert.throws(() => parseCliArgs(["--allowed-host"]), /requires a value/);
+});
+
+test("resolveBindSelection: flags beat the environment, and exposure is derived not declared", () => {
+  assert.deepEqual(resolveBindSelection({ host: undefined, allowedHosts: [] }, {}), {
+    host: "127.0.0.1",
+    exposed: false,
+    allowedHosts: [],
+  });
+  assert.deepEqual(
+    resolveBindSelection({ host: undefined, allowedHosts: [] }, { FRAY_HOST: "0.0.0.0", FRAY_ALLOWED_HOSTS: "a, B" }),
+    { host: "0.0.0.0", exposed: true, allowedHosts: ["a", "b"] }
+  );
+  assert.equal(
+    resolveBindSelection({ host: "10.1.2.3", allowedHosts: [] }, { FRAY_HOST: "0.0.0.0" }).host,
+    "10.1.2.3"
+  );
+  // ::1 and localhost are still loopback: asking for them must not print a network warning.
+  assert.equal(resolveBindSelection({ host: "::1", allowedHosts: [] }, {}).exposed, false);
+  assert.throws(() => resolveBindSelection({ host: undefined, allowedHosts: [] }, { FRAY_HOST: "nope" }), /invalid --host/);
+});
+
+test("networkUrls: nothing for loopback, real interfaces for a wildcard bind", () => {
+  const interfaces = () => ({
+    lo0: [{ address: "127.0.0.1", family: "IPv4", internal: true } as never],
+    en0: [
+      { address: "192.168.1.5", family: "IPv4", internal: false } as never,
+      { address: "fe80::1", family: "IPv6", internal: false } as never,
+      { address: "2001:db8::5", family: "IPv6", internal: false } as never,
+    ],
+  });
+  assert.deepEqual(networkUrls(5173, "127.0.0.1", interfaces), []);
+  assert.deepEqual(networkUrls(5173, "0.0.0.0", interfaces), ["http://192.168.1.5:5173"]);
+  // `::` reaches v4 and v6 alike; link-local needs a zone id nobody will type, so it is dropped.
+  assert.deepEqual(networkUrls(5173, "::", interfaces), [
+    "http://192.168.1.5:5173",
+    "http://[2001:db8::5]:5173",
+  ]);
+  // A specific address is its own answer — do not enumerate interfaces it is not bound to.
+  assert.deepEqual(networkUrls(5173, "10.1.2.3", interfaces), ["http://10.1.2.3:5173"]);
 });
 
 test("workspace identity canonicalizes a symlink and survives spaces", () => {

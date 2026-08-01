@@ -3,7 +3,7 @@
 // crash.  This intentionally contains no source-watch logic: stable and legacy launchers can share it.
 import { request as requestHttp, createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http"
 import { connect } from "node:net"
-import { allowedLocalCorsOrigin, isTrustedLocalHttpRequest } from "./local-origin.ts"
+import { allowedLocalCorsOrigin, bindHostIsExposed, isTrustedLocalHttpRequest, LOOPBACK_BIND_HOST, type LocalAuthorityPolicy } from "./local-origin.ts"
 import { resolveLocalImage } from "./local-image.ts"
 
 export const SUPERVISOR_CONTROL_PREFIX = "/_fray/control"
@@ -24,6 +24,10 @@ export interface RestartResult {
 export interface RestartSupervisorProxyOptions {
   /** Public Fray port held for the supervisor's whole lifetime. */
   port: number
+  /** Bind address for the public port. Defaults to loopback; `--host` moves it onto the network. */
+  host?: string
+  /** DNS names a browser may use as this server's authority once `host` is not loopback. */
+  allowedHosts?: readonly string[]
   /** The current disposable child. Undefined means it is starting, stopped, or failed. */
   childPort: () => number | undefined
   /** Must coalesce work itself or return the same in-flight promise for repeat requests. */
@@ -81,9 +85,21 @@ export class RestartSupervisorProxy {
   private state: RestartControlState = "ready"
   private message: string | undefined
   private readonly options: RestartSupervisorProxyOptions
+  private readonly host: string
+  /**
+   * The authorities a browser may name for the PUBLIC port. This proxy is the whole boundary: it
+   * rewrites Host/Origin to the child's private loopback authority, so the child's own strict gate
+   * can never see (or reject) the real browser authority. Everything this class forwards has to be
+   * judged here first.
+   */
+  private readonly policy: LocalAuthorityPolicy
+  /** Both halves of every live upgraded pair, so close() can actually finish. See close(). */
+  private readonly upgradedSockets = new Set<import("node:stream").Duplex>()
 
   constructor(options: RestartSupervisorProxyOptions) {
     this.options = options
+    this.host = options.host ?? LOOPBACK_BIND_HOST
+    this.policy = { exposed: bindHostIsExposed(this.host), allowedHosts: options.allowedHosts ?? [] }
   }
 
   async listen(): Promise<void> {
@@ -94,12 +110,24 @@ export class RestartSupervisorProxy {
     server.on("upgrade", (req, socket, head) => this.handleUpgrade(req, socket, head))
     await new Promise<void>((resolveListen, rejectListen) => {
       server.once("error", rejectListen)
-      server.listen(this.options.port, "127.0.0.1", () => {
+      server.listen(this.options.port, this.host, () => {
         server.off("error", rejectListen)
         resolveListen()
       })
     })
     this.server = server
+  }
+
+  /**
+   * Is this request allowed to reach the child at all?
+   *
+   * Deliberately the WEAKER of the two gates: a missing Origin passes here and the child then applies
+   * its own per-route rule for it (only /health, /control/stop and `Sec-Fetch-Site: same-origin` may
+   * omit one). What this stops is the thing the child cannot: an Origin naming somebody ELSE being
+   * laundered into a valid same-origin one by proxyHeaders below.
+   */
+  private authorityAccepted(req: IncomingMessage, allowMissingOrigin = true): boolean {
+    return isTrustedLocalHttpRequest(req.headers, this.options.port, allowMissingOrigin, this.policy)
   }
 
   async close(): Promise<void> {
@@ -109,6 +137,12 @@ export class RestartSupervisorProxy {
     await new Promise<void>((resolveClose, rejectClose) => {
       server.close((error) => error ? rejectClose(error) : resolveClose())
       server.closeAllConnections()
+      // An upgraded socket is DETACHED from the http server, so closeAllConnections() cannot see it
+      // and server.close() waits on it forever. Fray always has live WebSockets (the board socket and
+      // every open terminal), so without this the proxy never finishes closing once a browser has
+      // connected. Measured: close() hung indefinitely after a single forwarded upgrade.
+      for (const socket of this.upgradedSockets) socket.destroy()
+      this.upgradedSockets.clear()
     })
   }
 
@@ -165,7 +199,7 @@ export class RestartSupervisorProxy {
   private async handleControl(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const pathname = new URL(req.url ?? "/", "http://fray.invalid").pathname
     const allowMissingOrigin = pathname === SUPERVISOR_STATUS_PATH && req.method === "GET" && req.headers["sec-fetch-site"] === "same-origin"
-    if (!isTrustedLocalHttpRequest(req.headers, this.options.port, allowMissingOrigin)) {
+    if (!this.authorityAccepted(req, allowMissingOrigin)) {
       res.writeHead(403)
       res.end("Forbidden")
       return
@@ -197,7 +231,7 @@ export class RestartSupervisorProxy {
 
   private handleLocalImage(req: IncomingMessage, res: ServerResponse): void {
     const allowMissingOrigin = req.headers.origin === undefined && req.headers["sec-fetch-site"] === "same-origin"
-    if (!isTrustedLocalHttpRequest(req.headers, this.options.port, allowMissingOrigin)) {
+    if (!this.authorityAccepted(req, allowMissingOrigin)) {
       res.writeHead(403, { "content-type": "text/plain; charset=UTF-8" })
       res.end("Forbidden")
       return
@@ -206,7 +240,7 @@ export class RestartSupervisorProxy {
     const url = new URL(req.url ?? "/", "http://fray.invalid")
     const result = resolveLocalImage(url.searchParams.get("path") ?? undefined)
     const origin = typeof req.headers.origin === "string"
-      ? allowedLocalCorsOrigin(req.headers.origin, this.options.port)
+      ? allowedLocalCorsOrigin(req.headers.origin, this.options.port, this.policy)
       : undefined
     const sharedHeaders = {
       ...(origin ? { "access-control-allow-origin": origin } : {}),
@@ -230,6 +264,11 @@ export class RestartSupervisorProxy {
   private handle(req: IncomingMessage, res: ServerResponse): void {
     if (isControlRequest(req)) {
       void this.handleControl(req, res)
+      return
+    }
+    if (!this.authorityAccepted(req)) {
+      res.writeHead(403, { "content-type": "text/plain; charset=UTF-8" })
+      res.end("Forbidden")
       return
     }
     // Keep screenshots responsive even while the disposable child is parsing large transcripts,
@@ -263,12 +302,22 @@ export class RestartSupervisorProxy {
   }
 
   private handleUpgrade(req: IncomingMessage, socket: import("node:stream").Duplex, head: Buffer): void {
+    // A browser always sends Origin on a WebSocket handshake and the child requires one, so this is
+    // the strict form of the gate — the child will never get the chance to apply it itself.
+    if (!this.authorityAccepted(req, false)) {
+      socket.destroy()
+      return
+    }
     const childPort = this.options.childPort()
     if (!childPort) {
       socket.destroy()
       return
     }
     const upstream = connect(childPort, "127.0.0.1")
+    for (const half of [socket, upstream]) {
+      this.upgradedSockets.add(half)
+      half.once("close", () => this.upgradedSockets.delete(half))
+    }
     upstream.once("connect", () => {
       const headers = proxyHeaders(req, childPort)
       // proxyHeaders drops the hop-by-hop `connection` header (right for the plain-HTTP handle()

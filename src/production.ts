@@ -20,11 +20,14 @@ import {
 import {
   acquireGlobalLaunchLock,
   allocatePort,
+  EXPOSED_WARNING,
   expectedOwnerHealth,
   liveWorkspaceOwner,
+  networkUrls,
   parseCliArgs,
   probeFray,
   readPreferredPort,
+  resolveBindSelection,
   resolveWorkspace,
   waitForWorkspace,
   workspaceFromLaunchTarget,
@@ -98,12 +101,26 @@ Options:
   --app                use the legacy dedicated app window instead of a browser tab
   --no-app             print the URL without opening a browser
   --port <port>        request a fixed port for a new workspace server
+  --host [address]     serve on a network address instead of loopback ("--host" alone means 0.0.0.0)
+  --allowed-host <name>  also accept this DNS name as the board's address (repeatable); "*" accepts any
   --debug              stream the full event feed to the terminal instead of the compact readout
-  -h, --help           show this help`,
+  -h, --help           show this help
+
+Environment:
+  FRAY_HOST            same as --host
+  FRAY_ALLOWED_HOSTS   same as --allowed-host, comma separated
+
+--host puts a board that can run shell commands as you on the network. Everyone who can reach the
+port has full control of it, so only use it on a network you trust. IP addresses work as-is; reach it
+by DNS name and you must list that name with --allowed-host.`,
   );
   process.exit(0);
 }
 if (options.dev || rawArgs.includes("--prod")) fail("--dev and --prod are not available from the registry launcher");
+
+const bind = (() => {
+  try { return resolveBindSelection(options, process.env); } catch (error) { return fail(error); }
+})();
 
 const workspace: Workspace = (() => {
   try {
@@ -176,15 +193,20 @@ async function openOrPrint(port: number, reused: boolean): Promise<void> {
   } else {
     readout?.settle("browser", "done", url);
   }
+  // A reuse did not choose this server's bind address, so it must not claim to have exposed it.
+  const network = reused ? [] : networkUrls(port, bind.host);
   if (!readout) {
     console.log(`${reused ? "reusing" : "started"} Fray ${PACKAGE_VERSION} for ${workspace.root}`);
     console.log(url);
+    for (const address of network) console.log(address);
+    if (network.length > 0) console.log(EXPOSED_WARNING);
     return;
   }
   const home = homedir();
   readout.ready(
     [
       { label: "Local", value: `${url}/`, accent: true },
+      ...network.map((address) => ({ label: "Network", value: `${address}/`, accent: true })),
       { label: "Project", value: `${workspace.name} — ${tildePath(workspace.root, home)}` },
       ...(logger.file ? [{ label: "Logs", value: tildePath(logger.file, home) }] : []),
     ],
@@ -194,7 +216,10 @@ async function openOrPrint(port: number, reused: boolean): Promise<void> {
       : options.debug
         ? undefined
         : "press ctrl-c to stop · run with --debug for the full event feed",
-    reused ? { status: `already running on port ${port}` } : undefined,
+    {
+      ...(reused ? { status: `already running on port ${port}` } : {}),
+      ...(network.length > 0 ? { warning: EXPOSED_WARNING } : {}),
+    },
   );
 }
 
@@ -247,6 +272,8 @@ async function runSupervisor(port: number, token: string): Promise<never> {
 
   const supervisor = await startDevSupervisor({
     port,
+    host: bind.host,
+    allowedHosts: bind.allowedHosts,
     cwd: workspace.root,
     stateDir: workspace.stateDir,
     launchTarget: target,
@@ -314,7 +341,7 @@ try {
   let release: (() => void) | undefined = await acquireGlobalLaunchLock();
   let portReservation: (() => void) | undefined;
   try {
-    const allocation = await allocatePort(options.port, readPreferredPort(workspace.stateDir));
+    const allocation = await allocatePort(options.port, readPreferredPort(workspace.stateDir), { host: bind.host });
     const port = allocation.port;
     portReservation = allocation.release;
     // The supervisor owns the rest of this process's life (runSupervisor never returns), so start it

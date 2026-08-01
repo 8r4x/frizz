@@ -3,8 +3,11 @@ import type { IncomingMessage } from "node:http"
 import test from "node:test"
 import {
   allowedLocalCorsOrigin,
+  bindHostIsExposed,
   isTrustedLocalHttpRequest,
   isTrustedLocalWebSocketRequest,
+  normalizeAllowedHosts,
+  normalizeBindHost,
   parseLocalHost,
   parseLocalHttpOrigin,
 } from "./local-origin.ts"
@@ -138,4 +141,61 @@ test("WebSocket policy requires a present exact same-origin Host across IPv4, lo
     `http://127.0.0.1:${PORT}`,
     { "x-forwarded-proto": "https" },
   )), false)
+})
+
+// ── --host: what an EXPOSED bind may accept as its browser authority ────────────────────────────────
+
+const EXPOSED = { exposed: true, allowedHosts: [] as string[] }
+
+test("an exposed policy admits IP literals and nothing else by default", () => {
+  // The default posture is untouched: without the policy these are all still foreign authorities.
+  for (const hostname of ["192.168.1.5", "10.0.0.4", "[2001:db8::5]"]) {
+    assert.equal(parseLocalHost(`${hostname}:${PORT}`, PORT), null, hostname)
+    assert.equal(parseLocalHost(`${hostname}:${PORT}`, PORT, EXPOSED)?.port, PORT, hostname)
+  }
+  assert.equal(parseLocalHttpOrigin(`http://192.168.1.5:${PORT}`, PORT), null)
+  assert.equal(parseLocalHttpOrigin(`http://192.168.1.5:${PORT}`, PORT, EXPOSED)?.hostname, "192.168.1.5")
+  // Loopback keeps working while exposed — the local browser tab is still the common case.
+  assert.equal(parseLocalHost(`localhost:${PORT}`, PORT, EXPOSED)?.hostname, "localhost")
+  // A DNS NAME is the whole DNS-rebinding vector, so it stays rejected until named explicitly.
+  assert.equal(parseLocalHost(`fray.local:${PORT}`, PORT, EXPOSED), null)
+  assert.equal(parseLocalHost(`fray.local:${PORT}`, PORT, { exposed: true, allowedHosts: ["fray.local"] })?.hostname, "fray.local")
+  assert.equal(parseLocalHost(`FRAY.local:${PORT}`, PORT, { exposed: true, allowedHosts: ["fray.local"] })?.hostname, "fray.local")
+  assert.equal(parseLocalHost(`other.local:${PORT}`, PORT, { exposed: true, allowedHosts: ["fray.local"] }), null)
+  assert.equal(parseLocalHost(`other.local:${PORT}`, PORT, { exposed: true, allowedHosts: ["*"] })?.hostname, "other.local")
+  // An allow-list without exposure changes nothing: the port is still unreachable from off-machine.
+  assert.equal(parseLocalHost(`fray.local:${PORT}`, PORT, { exposed: false, allowedHosts: ["fray.local"] }), null)
+  // Every canonicalization trick the loopback parser rejects is still rejected while exposed.
+  for (const host of [`192.168.1.5:${PORT + 1}`, `user@192.168.1.5:${PORT}`, `192.168.1.5:${PORT}/x`, `3232235781:${PORT}`]) {
+    assert.equal(parseLocalHost(host, PORT, EXPOSED), null, host)
+  }
+})
+
+test("an exposed request still needs Origin to match Host, and forwarded authority is never trusted", () => {
+  const host = `192.168.1.5:${PORT}`
+  assert.equal(isTrustedLocalHttpRequest({ host, origin: `http://192.168.1.5:${PORT}` }, PORT, false, EXPOSED), true)
+  // The cross-site CSRF case the whole gate exists for, now from a LAN browser.
+  assert.equal(isTrustedLocalHttpRequest({ host, origin: "http://evil.example" }, PORT, false, EXPOSED), false)
+  // Same machine, different authority: still not interchangeable.
+  assert.equal(isTrustedLocalHttpRequest({ host, origin: `http://127.0.0.1:${PORT}` }, PORT, false, EXPOSED), false)
+  assert.equal(isTrustedLocalHttpRequest({ host, origin: `http://192.168.1.5:${PORT}`, "x-forwarded-host": "x" }, PORT, false, EXPOSED), false)
+  assert.equal(allowedLocalCorsOrigin(`http://192.168.1.5:${PORT}`, PORT, EXPOSED), `http://192.168.1.5:${PORT}`)
+  assert.equal(allowedLocalCorsOrigin(`http://192.168.1.5:${PORT}`, PORT), undefined)
+  assert.equal(
+    isTrustedLocalWebSocketRequest(upgradeRequest(host, `http://192.168.1.5:${PORT}`), PORT, EXPOSED),
+    true,
+  )
+  assert.equal(isTrustedLocalWebSocketRequest(upgradeRequest(host, undefined), PORT, EXPOSED), false)
+})
+
+test("bind hosts: loopback spellings are private, wildcards are not, and names are refused", () => {
+  for (const host of ["127.0.0.1", "::1", "localhost", "[::1]"]) assert.equal(bindHostIsExposed(host), false, host)
+  for (const host of ["0.0.0.0", "::", "192.168.1.5"]) assert.equal(bindHostIsExposed(host), true, host)
+  assert.equal(normalizeBindHost("localhost"), "127.0.0.1")
+  assert.equal(normalizeBindHost(" [::1] "), "::1")
+  assert.equal(normalizeBindHost("0.0.0.0"), "0.0.0.0")
+  assert.throws(() => normalizeBindHost(""), /requires an address/)
+  assert.throws(() => normalizeBindHost("example.com"), /invalid --host address/)
+  assert.throws(() => normalizeBindHost("0.0.0.0:5173"), /invalid --host address/)
+  assert.deepEqual(normalizeAllowedHosts([" A ", "b,, B ", ""]), ["a", "b"])
 })

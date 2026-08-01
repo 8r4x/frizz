@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { createServer, request, type IncomingHttpHeaders, type RequestListener } from "node:http"
+import { connect as netConnect } from "node:net"
 import { once } from "node:events"
 import { test } from "node:test"
 import { mkdtempSync, writeFileSync } from "node:fs"
@@ -256,6 +257,165 @@ test("update acknowledgement and status stay truthful while the old child remain
   } finally {
     await proxy.close().catch(() => undefined)
     await current.close().catch(() => undefined)
+  }
+})
+
+/** Reach the proxy with an arbitrary Host/Origin pair, the way a foreign browser would. */
+async function proxied(
+  port: number,
+  path: string,
+  headers: Record<string, string>,
+  method = "GET",
+): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = request({ host: "127.0.0.1", port, path, method, headers }, (res) => {
+      let body = ""
+      res.setEncoding("utf8")
+      res.on("data", (chunk) => { body += chunk })
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, body }))
+    })
+    req.once("error", reject)
+    req.end()
+  })
+}
+
+test("the proxy refuses a foreign Origin instead of laundering it into the child's same-origin", async () => {
+  // proxyHeaders REWRITES Host and Origin to the child's private loopback authority, so the child's
+  // own gate sees a perfect same-origin request no matter who sent it. Without this check, any page
+  // in any browser on this machine could drive the whole control plane.
+  const current = await child("only")
+  const port = await freePort()
+  const proxy = new RestartSupervisorProxy({ port, childPort: () => current.port, restart: async () => ({ state: "ready" }) })
+  try {
+    await proxy.listen()
+    const host = `127.0.0.1:${port}`
+    assert.equal((await proxied(port, "/rpc/x", { host, origin: `http://127.0.0.1:${port}` }, "POST")).status, 200)
+    // A same-origin GET may legitimately omit Origin; the child still applies its own per-route rule.
+    assert.equal((await proxied(port, "/assets/app.css", { host })).status, 200)
+    for (const origin of ["http://evil.example", `http://localhost.evil:${port}`, `http://127.0.0.1:${port + 1}`]) {
+      assert.equal((await proxied(port, "/rpc/x", { host, origin }, "POST")).status, 403, origin)
+    }
+    // A Host naming somebody else is refused too, which is what stops DNS rebinding.
+    assert.equal((await proxied(port, "/rpc/x", { host: `fray.evil:${port}` }, "POST")).status, 403)
+    assert.equal((await proxied(port, "/rpc/x", { host, "x-forwarded-host": "evil.example" }, "POST")).status, 403)
+  } finally {
+    await proxy.close().catch(() => undefined)
+    await current.close().catch(() => undefined)
+  }
+})
+
+test("--host: a non-loopback bind accepts IP-literal authorities, and loopback still does not", async () => {
+  const current = await child("only")
+  const port = await freePort()
+  // Bound to the wildcard so the test can still reach it over 127.0.0.1 while the POLICY is exposed.
+  const proxy = new RestartSupervisorProxy({
+    port,
+    host: "0.0.0.0",
+    allowedHosts: ["fray.local"],
+    childPort: () => current.port,
+    restart: async () => ({ state: "ready" }),
+  })
+  try {
+    await proxy.listen()
+    for (const authority of [`192.168.1.5:${port}`, `10.0.0.4:${port}`, `fray.local:${port}`, `127.0.0.1:${port}`]) {
+      const status = (await proxied(port, "/rpc/x", { host: authority, origin: `http://${authority}` }, "POST")).status
+      assert.equal(status, 200, authority)
+    }
+    // Exposure widens WHICH authority is legitimate, never the Origin-must-match-Host rule itself.
+    assert.equal((await proxied(port, "/rpc/x", { host: `192.168.1.5:${port}`, origin: "http://evil.example" }, "POST")).status, 403)
+    assert.equal((await proxied(port, "/rpc/x", { host: `evil.example:${port}` }, "POST")).status, 403)
+  } finally {
+    await proxy.close().catch(() => undefined)
+    await current.close().catch(() => undefined)
+  }
+})
+
+test("a loopback-bound proxy rejects the LAN authority an exposed one would accept", async () => {
+  const current = await child("only")
+  const port = await freePort()
+  const proxy = new RestartSupervisorProxy({ port, childPort: () => current.port, restart: async () => ({ state: "ready" }) })
+  try {
+    await proxy.listen()
+    assert.equal((await proxied(port, "/rpc/x", { host: `192.168.1.5:${port}` }, "POST")).status, 403)
+    assert.equal((await proxied(port, "/rpc/x", { host: `fray.local:${port}` }, "POST")).status, 403)
+  } finally {
+    await proxy.close().catch(() => undefined)
+    await current.close().catch(() => undefined)
+  }
+})
+
+/** Send a raw WebSocket handshake and report whether the proxy forwarded it or hung up. */
+async function upgrade(port: number, headers: Record<string, string>): Promise<"forwarded" | "refused"> {
+  const socket = netConnect(port, "127.0.0.1")
+  await once(socket, "connect")
+  const lines = [
+    "GET /ws HTTP/1.1",
+    ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`),
+    "upgrade: websocket",
+    "connection: Upgrade",
+    "sec-websocket-version: 13",
+    "sec-websocket-key: AQIDBAUGBwgJCgsMDQ4PEC==",
+  ]
+  socket.write(`${lines.join("\r\n")}\r\n\r\n`)
+  try {
+    let received = ""
+    socket.setEncoding("utf8")
+    const done = new Promise<"forwarded" | "refused">((resolve) => {
+      socket.on("data", (chunk: string) => {
+        received += chunk
+        if (received.includes("\r\n\r\n")) resolve("forwarded")
+      })
+      socket.on("close", () => resolve(received.includes("\r\n\r\n") ? "forwarded" : "refused"))
+      socket.on("error", () => resolve("refused"))
+      // A gate that neither answers nor hangs up is its own failure. Bound it so a regression here
+      // reports as a failed assertion instead of wedging the whole suite.
+      setTimeout(() => resolve("refused"), 2_000).unref()
+    })
+    return await done
+  } finally {
+    socket.destroy()
+  }
+}
+
+test("a WebSocket upgrade is gated at the proxy, where a browser Origin is mandatory", async () => {
+  // The child requires an Origin on every upgrade, but proxyHeaders manufactures one, so the child
+  // can never enforce that itself. The terminal socket is the most privileged surface Fray has.
+  const upstream = await listen((_req, res) => res.end())
+  // An upgraded socket is DETACHED from the http server, so closeAllConnections() cannot reach it and
+  // the server never emits 'close'. Hold them here and destroy them explicitly, or teardown hangs.
+  const upgraded: import("node:stream").Duplex[] = []
+  upstream.server.on("upgrade", (_req, socket) => {
+    upgraded.push(socket)
+    socket.write("HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\n\r\n")
+  })
+  const port = await freePort()
+  const proxy = new RestartSupervisorProxy({
+    port,
+    host: "0.0.0.0",
+    childPort: () => upstream.port,
+    restart: async () => ({ state: "ready" }),
+  })
+  try {
+    await proxy.listen()
+    assert.equal(await upgrade(port, { host: `192.168.1.5:${port}`, origin: `http://192.168.1.5:${port}` }), "forwarded")
+    assert.equal(await upgrade(port, { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` }), "forwarded")
+    assert.equal(await upgrade(port, { host: `192.168.1.5:${port}` }), "refused", "no Origin")
+    assert.equal(await upgrade(port, { host: `192.168.1.5:${port}`, origin: "http://evil.example" }), "refused")
+    assert.equal(await upgrade(port, { host: `evil.example:${port}`, origin: `http://evil.example:${port}` }), "refused")
+
+    // Regression: an upgraded socket is detached from the http server, so closeAllConnections() never
+    // reaches it and close() waited on it forever. Fray always has live WebSockets once a browser is
+    // open, so this hung every shutdown that followed a real page load.
+    await assert.doesNotReject(
+      Promise.race([
+        proxy.close(),
+        new Promise((_resolve, reject) => setTimeout(() => reject(new Error("proxy.close() hung on a live upgrade")), 3_000).unref()),
+      ]),
+    )
+  } finally {
+    await proxy.close().catch(() => undefined)
+    for (const socket of upgraded) socket.destroy()
+    await upstream.close().catch(() => undefined)
   }
 })
 

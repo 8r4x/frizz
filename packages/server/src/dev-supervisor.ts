@@ -76,6 +76,13 @@ export interface DevBoot {
 
 export interface DevSupervisorOptions {
   port: number
+  /**
+   * Bind address for the PUBLIC port only. Defaults to loopback. The disposable control-plane child
+   * always stays on 127.0.0.1 regardless — the proxy is what the network reaches.
+   */
+  host?: string
+  /** DNS names a browser may use as this server's authority once `host` is not loopback. */
+  allowedHosts?: readonly string[]
   launchTarget: ProjectLaunchTarget
   launchOwnerToken: string
   cwd?: string
@@ -464,6 +471,8 @@ class Supervisor implements DevSupervisor {
     this.durableReexec = opts.durableReexec
     this.publicProxy = new RestartSupervisorProxy({
       port: opts.port,
+      host: opts.host,
+      allowedHosts: opts.allowedHosts,
       childPort: () => this.childPort,
       restart: () => this.restartFromBrowser(),
       updateRestart: this.updateRestart ? () => this.updateFromBrowser() : undefined,

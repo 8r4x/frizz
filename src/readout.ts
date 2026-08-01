@@ -275,7 +275,7 @@ export class Readout {
   ready(
     entries: Array<{ label: string; value: string; accent?: boolean }>,
     hint?: string,
-    options: { status?: string } = {},
+    options: { status?: string; warning?: string } = {},
   ): void {
     for (const step of this.steps) if (step.state === "active") this.settle(step.key, "done")
     const elapsed = formatDuration(this.now() - this.startedAt)
@@ -287,6 +287,7 @@ export class Readout {
     if (!this.tty || this.debug) {
       this.out.write(`fray: ${status}\n`)
       for (const entry of entries) this.out.write(`fray: ${entry.label.toLowerCase()}: ${entry.value}\n`)
+      if (options.warning) this.out.write(`fray: warning: ${options.warning}\n`)
       return
     }
     const width = entries.reduce((max, entry) => Math.max(max, entry.label.length), 0) + 1
@@ -306,6 +307,9 @@ export class Readout {
         const value = entry.accent ? this.c(ANSI.cyan, entry.value) : this.c(ANSI.dim, entry.value)
         return `  ${arrow}  ${label} ${value}`
       }),
+      // Yellow, above the dim hint: exposing the board off loopback is the one launch outcome the
+      // operator must not skim past, so it may not share the hint's low-contrast styling.
+      ...(options.warning ? ["", `  ${this.c(ANSI.yellow, options.warning)}`] : []),
       ...(hint ? ["", `  ${this.c(ANSI.dim, hint)}`] : []),
       "",
     ]

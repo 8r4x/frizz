@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, networkInterfaces } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -22,6 +22,13 @@ import {
   type ProcessPlatformAdapter,
 } from "@fray-ui/server/project-launch";
 import { resolveProjectTmuxSocketSelection } from "@fray-ui/server/tmux-socket";
+import {
+  ALL_INTERFACES_BIND_HOST,
+  bindHostIsExposed,
+  LOOPBACK_BIND_HOST,
+  normalizeAllowedHosts,
+  normalizeBindHost,
+} from "@fray-ui/server/local-origin";
 import { readBootProgress } from "@fray-ui/server/boot-progress";
 import { defaultLogRoot, latestLogPath } from "@fray-ui/server/logging";
 import { DEFAULT_PORT } from "@fray-ui/shared";
@@ -52,6 +59,13 @@ export interface CliOptions {
   /** Stream the full event feed to the terminal instead of the compact readout. */
   debug: boolean;
   port?: number;
+  /**
+   * Bind address for the public port. Absent means Fray's loopback default; a bare `--host` means
+   * every interface. Only ever an IP literal — see normalizeBindHost.
+   */
+  host?: string;
+  /** `--allowed-host` values: DNS names a browser may use once the port is off loopback. */
+  allowedHosts: string[];
   /** Optional Git repository to serve. Defaults to the caller's current directory. */
   repoPath?: string;
 }
@@ -105,20 +119,68 @@ export const LAUNCH_HARD_TIMEOUT_MS = 10 * 60_000;
 /** A first immutable artifact build can legitimately outlast the ordinary server-ready timeout. */
 export const FIRST_ARTIFACT_LAUNCH_LOCK_TIMEOUT_MS = 120_000;
 
+/**
+ * Does the token after a bare `--host` belong to it?
+ *
+ * `--host` takes an optional value, and the launcher also takes a positional repository path, so
+ * `fray-dev --host ~/code/app` is genuinely ambiguous to a naive "next token wins" parser — it would
+ * bind nothing and lose the repo. Every legal value here is an IP literal, so recognising one settles
+ * it without a guess: anything else is the operator's repository and `--host` stands for every interface.
+ */
+function looksLikeBindHost(value: string | undefined): boolean {
+  if (value === undefined || value.startsWith("-")) return false;
+  try {
+    normalizeBindHost(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function parseCliArgs(argv: string[]): CliOptions {
   const args = new Set(argv);
   let rawPort: string | undefined;
+  let rawHost: string | undefined;
+  const rawAllowedHosts: string[] = [];
   let repoPath: string | undefined;
+  const consumed = new Set<number>();
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]!;
+    if (consumed.has(index)) continue;
     if (arg === "--port") {
       rawPort = argv[++index];
       if (rawPort === undefined || rawPort.startsWith("-"))
         throw new Error("--port requires a value");
+      consumed.add(index);
       continue;
     }
     if (arg.startsWith("--port=")) {
       rawPort = arg.slice("--port=".length);
+      continue;
+    }
+    if (arg === "--host") {
+      if (looksLikeBindHost(argv[index + 1])) {
+        rawHost = argv[++index];
+        consumed.add(index);
+      } else {
+        rawHost = ALL_INTERFACES_BIND_HOST;
+      }
+      continue;
+    }
+    if (arg.startsWith("--host=")) {
+      rawHost = arg.slice("--host=".length);
+      continue;
+    }
+    if (arg === "--allowed-host") {
+      const value = argv[++index];
+      if (value === undefined || value.startsWith("-"))
+        throw new Error("--allowed-host requires a value");
+      consumed.add(index);
+      rawAllowedHosts.push(value);
+      continue;
+    }
+    if (arg.startsWith("--allowed-host=")) {
+      rawAllowedHosts.push(arg.slice("--allowed-host=".length));
       continue;
     }
     if (arg.startsWith("-")) continue;
@@ -132,6 +194,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     if (!Number.isInteger(port) || port < 1 || port > 65535)
       throw new Error(`invalid --port value: ${rawPort}`);
   }
+  const host = rawHost === undefined ? undefined : normalizeBindHost(rawHost);
   const known = new Set([
     "--app",
     "--no-app",
@@ -144,15 +207,18 @@ export function parseCliArgs(argv: string[]): CliOptions {
     "--dev",
     "--prod",
     "--port",
+    "--host",
+    "--allowed-host",
     "--debug",
   ]);
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
+    if (consumed.has(index)) continue;
     if (arg === "--port") {
       index++;
       continue;
     }
-    if (arg.startsWith("--port=")) continue;
+    if (arg.startsWith("--port=") || arg.startsWith("--host=") || arg.startsWith("--allowed-host=")) continue;
     if (!arg.startsWith("-") && arg === repoPath) continue;
     if (!known.has(arg)) throw new Error(`unknown option: ${arg}`);
   }
@@ -171,8 +237,81 @@ export function parseCliArgs(argv: string[]): CliOptions {
     dev: args.has("--dev"),
     debug: args.has("--debug"),
     port,
+    host,
+    allowedHosts: normalizeAllowedHosts(rawAllowedHosts),
     repoPath,
   };
+}
+
+/**
+ * Printed whenever `--host` actually puts the board on a network.
+ *
+ * Fray has no login: reaching the port IS the authorization, and the board runs shell commands as the
+ * operator. Saying "exposed" alone would understate that by a lot.
+ */
+export const EXPOSED_WARNING =
+  "Anyone who can reach this address can run commands on this machine as you. Fray has no login — only do this on a network you trust.";
+
+export interface BindSelection {
+  /** Address the public port binds. Always a literal address `listen()` accepts. */
+  host: string;
+  /** True when that address is reachable from another machine. */
+  exposed: boolean;
+  /** DNS names accepted as this server's browser authority while exposed. */
+  allowedHosts: string[];
+}
+
+/**
+ * Merge `--host` / `--allowed-host` with `FRAY_HOST` / `FRAY_ALLOWED_HOSTS`, flags winning.
+ *
+ * The environment variables exist because the people who want this run Fray from a container or a
+ * remote box where the launch command is baked into an image or a systemd unit and adding a flag is
+ * the awkward part.
+ */
+export function resolveBindSelection(
+  options: Pick<CliOptions, "host" | "allowedHosts">,
+  env: NodeJS.ProcessEnv = process.env
+): BindSelection {
+  const fromEnv = env.FRAY_HOST?.trim();
+  const host = options.host ?? (fromEnv ? normalizeBindHost(fromEnv) : LOOPBACK_BIND_HOST);
+  const allowedHosts = normalizeAllowedHosts([
+    ...options.allowedHosts,
+    ...(env.FRAY_ALLOWED_HOSTS ? [env.FRAY_ALLOWED_HOSTS] : []),
+  ]);
+  return { host, exposed: bindHostIsExposed(host), allowedHosts };
+}
+
+/**
+ * The addresses another machine can use to reach an exposed board, for the readout.
+ *
+ * A wildcard bind is the common case and reports nothing useful by itself, so enumerate the real
+ * interfaces the way every dev server does. Loopback and link-local IPv6 are dropped: the first is
+ * already printed as the local URL and the second needs a zone id no one will type.
+ */
+export function networkUrls(
+  port: number,
+  host: string,
+  interfaces: () => NodeJS.Dict<import("node:os").NetworkInterfaceInfo[]> = networkInterfaces
+): string[] {
+  if (!bindHostIsExposed(host)) return [];
+  const wildcard = host === ALL_INTERFACES_BIND_HOST || host === "::";
+  const urls: string[] = [];
+  const push = (address: string, family: string) => {
+    if (address.startsWith("fe80:")) return;
+    urls.push(family === "IPv6" ? `http://[${address}]:${port}` : `http://${address}:${port}`);
+  };
+  if (!wildcard) {
+    push(host, host.includes(":") ? "IPv6" : "IPv4");
+    return urls;
+  }
+  for (const entries of Object.values(interfaces())) {
+    for (const entry of entries ?? []) {
+      if (entry.internal) continue;
+      if (host === ALL_INTERFACES_BIND_HOST && entry.family !== "IPv4") continue;
+      push(entry.address, entry.family);
+    }
+  }
+  return urls;
 }
 
 export function helpText(command = "fray-dev"): string {
@@ -190,10 +329,20 @@ Options:
   --foreground         accepted for compatibility; fray-dev always runs in the foreground
   --dev                explicitly use the unsafe source watcher and Vite/HMR instead of an immutable artifact
   --port <port>        request a fixed port for a new workspace server
+  --host [address]     serve on a network address instead of loopback ("--host" alone means 0.0.0.0)
+  --allowed-host <name>  also accept this DNS name as the board's address (repeatable); "*" accepts any
   --debug              stream the full event feed to the terminal instead of the compact readout
   --status             report this workspace's stable server and artifact
   --stop               stop this workspace's UI supervisor (tmux agents keep running)
   -h, --help           show this help
+
+Environment:
+  FRAY_HOST            same as --host
+  FRAY_ALLOWED_HOSTS   same as --allowed-host, comma separated
+
+--host puts a board that can run shell commands as you on the network. Everyone who can reach the
+port has full control of it, so only use it on a network you trust. IP addresses work as-is; reach it
+by DNS name and you must list that name with --allowed-host.
 
 Commands:
   build                 build a new immutable candidate from the configured Fray source checkout
@@ -493,15 +642,21 @@ export function expectedOwnerHealth(
   };
 }
 
-export async function canBindPort(port: number): Promise<boolean> {
+/**
+ * Probe on the SAME address the supervisor will bind. A port free on loopback can still be taken on
+ * another interface, so probing 127.0.0.1 and then binding 0.0.0.0 hands the launcher a port that
+ * fails at listen() time — after it has already reserved it machine-wide.
+ */
+export async function canBindPort(
+  port: number,
+  host: string = LOOPBACK_BIND_HOST
+): Promise<boolean> {
   const bind = (candidate: number) =>
     new Promise<boolean>((resolveBind) => {
       const server = createServer();
       server.unref();
       server.once("error", () => resolveBind(false));
-      server.listen(candidate, "127.0.0.1", () =>
-        server.close(() => resolveBind(true))
-      );
+      server.listen(candidate, host, () => server.close(() => resolveBind(true)));
     });
   return bind(port);
 }
@@ -559,9 +714,12 @@ export async function allocatePort(
   options: {
     available?: (port: number) => Promise<boolean>;
     reserve?: (port: number) => (() => void) | undefined;
+    /** Address the caller will actually bind; the probe has to match it. */
+    host?: string;
   } = {}
 ): Promise<PortAllocation> {
-  const available = options.available ?? canBindPort;
+  const host = options.host ?? LOOPBACK_BIND_HOST;
+  const available = options.available ?? ((port: number) => canBindPort(port, host));
   const reserve = options.reserve ?? ((port: number) => tryReservePort(port));
   const claim = async (port: number): Promise<PortAllocation | undefined> => {
     const release = reserve(port);

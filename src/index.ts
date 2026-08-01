@@ -27,16 +27,19 @@ import { assertLaunchPrerequisites } from "./preflight.ts";
 import {
   acquireGlobalLaunchLock,
   allocatePort,
+  EXPOSED_WARNING,
   expectedOwnerHealth,
   FIRST_ARTIFACT_LAUNCH_LOCK_TIMEOUT_MS,
   helpText,
   liveWorkspaceOwner,
+  networkUrls,
   parseCliArgs,
   persistLauncher,
   probeFray,
   prepareBeforeGlobalLaunchLock,
   readPreferredPort,
   requestFrayStop,
+  resolveBindSelection,
   resolveWorkspace,
   sourceLabel,
   sourceWorkspaceDir,
@@ -184,6 +187,13 @@ if (!internalLaunch) {
 readout?.settle("workspace", "done", workspace.name);
 const expectedHealth = { projectId: workspace.id, projectDir: workspace.root };
 const launchTarget = workspaceLaunchTarget(workspace);
+const bind = (() => {
+  try {
+    return resolveBindSelection(options, process.env);
+  } catch (error) {
+    return fail(error);
+  }
+})();
 
 // The supervisor validates every generation by forking this same source entry with a private marker.
 // That disposable child boots only the HTTP/Vite control plane; it must never recursively supervise.
@@ -351,6 +361,8 @@ async function runSupervisor(
   try {
     supervisor = await startDevSupervisor({
       port,
+      host: bind.host,
+      allowedHosts: bind.allowedHosts,
       cwd: workspace.root,
       env: supervisorEnv,
       stateDir: workspace.stateDir,
@@ -529,16 +541,21 @@ async function openOrPrint(port: number, reused: boolean): Promise<void> {
     readout?.settle("browser", "done", url);
   }
 
+  // A reuse did not choose this server's bind address, so it must not claim to have exposed it.
+  const network = reused ? [] : networkUrls(port, bind.host);
   if (!readout) {
     // `--status`, internal launches and pipes keep the plain, parseable records.
     console.log(`${reused ? "reusing" : "started"} Fray for ${workspace.root}`);
     console.log(`source: ${sourceLabel()}`);
     console.log(url);
+    for (const address of network) console.log(address);
+    if (network.length > 0) console.log(EXPOSED_WARNING);
     return;
   }
   readout.ready(
     [
       { label: "Local", value: `${url}/`, accent: true },
+      ...network.map((address) => ({ label: "Network", value: `${address}/`, accent: true })),
       { label: "Project", value: `${workspace.name} — ${tildePath(workspace.root, home)}` },
       { label: "Source", value: tildePath(sourceLabel(), home) },
       ...(logger.file ? [{ label: "Logs", value: tildePath(logger.file, home) }] : []),
@@ -550,7 +567,10 @@ async function openOrPrint(port: number, reused: boolean): Promise<void> {
       : options.debug
         ? undefined
         : `press ctrl-c to stop · run with --debug for the full event feed`,
-    reused ? { status: `already running on port ${port}` } : undefined
+    {
+      ...(reused ? { status: `already running on port ${port}` } : {}),
+      ...(network.length > 0 ? { warning: EXPOSED_WARNING } : {}),
+    }
   );
 }
 
@@ -800,7 +820,8 @@ try {
 
     const allocation = await allocatePort(
       options.port,
-      readPreferredPort(workspace.stateDir)
+      readPreferredPort(workspace.stateDir),
+      { host: bind.host }
     );
     const port = allocation.port;
     portReservation = allocation.release;
