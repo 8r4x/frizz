@@ -55,44 +55,72 @@ Any replacement has to match these or it's a regression, not a port. This is the
 
 (3) and (4) are the ones a naive "hash the cwd" design silently loses.
 
-## 3. Identity without Git — three options
+## 3. Identity without Git — a global index, keyed by path *and* inode
 
-### A. A file in the project: `.fray/fray.id`  ← recommended
+**Recommended: a lookup in `~/.fray`, not a file in the project.** An earlier draft of this document
+had it the other way round; the reasons below reversed it.
 
-Fray already writes `.fray/` into the working tree (thread scratchpads, hook state — the README says
-so), so this adds no new footprint and no new thing to explain.
+### The store: no new store
 
-- Property 1: our own atomic write. `tmux-socket.ts:239`'s `atomicJson` (open `wx` → fsync → rename →
-  fsync dir) is exactly this, and `acquireNamedLaunchLockSync` re-keys from `commonGitDir` to the
-  canonical directory with no structural change.
-- Property 2: read after `realpathSync`, same as today.
-- Property 3: **free** — the id travels with the directory because it's *in* it. Strictly better than
-  a path-keyed registry.
-- Property 4: needs a walk-up (§4).
-- Cost: a user who deletes `.fray/` loses the mapping and gets a fresh board. Today that's advertised
-  as safe ("you can delete `.fray/` and keep every thread and setting") — that promise would have to
-  narrow, or be preserved by the alias index in option C.
+Each project's state directory already records its path — `tmux-socket-migration.json` carries
+`projectDir` (and `tmux-socket.ts:494` already *tolerates* that path changing, rewriting the record
+when it does), and so does `launcher.json`. So the reverse mapping is most of the way to existing.
 
-### B. A registry in `~/.fray`: canonical path → id
+Make it explicit rather than derived: `~/.fray/projects/<id>/identity.json` holding
+`{ version, path, dev, ino, lastSeen }`. Lookup is a readdir of `~/.fray/projects` plus one small read
+each — tens of entries, a few hundred microseconds — and it needs no separate index file, no hot file
+that concurrent launches serialize on, and **no GC**: delete a project's state directory and its entry
+is gone with it. First-run creation reuses `acquireNamedLaunchLockSync` (`project-identity.ts:323`)
+re-keyed from `commonGitDir` to a hash of the canonical path, so the concurrent-first-launch guarantee
+is the existing mechanism, unchanged.
 
-Nothing lands in the user's directory at all.
+### Key on `(dev, ino)` as well as the path — it buys back the case we were writing off
 
-- Property 3 **fails**: move or rename the folder and the board is orphaned. For a scratch folder —
-  exactly the population this feature is for — renaming is routine.
-- Property 1 needs the same lock work as A, so it saves nothing.
-- Genuinely better only if writing to the project directory is unacceptable, which it isn't, since we
-  already do.
+A same-volume rename or move **preserves a directory's inode**; only a copy, or a
+restore-from-backup, produces a new one. Measured on this machine (APFS): `mv` kept
+`16777234:1026769676` across a rename, and `cp -R` produced a different ino on the same dev.
 
-### C. A + a `~/.fray/aliases` index
+So a secondary `(dev, ino)` key survives exactly the case the path key loses. "Moved my project"
+stops being a wart we accept and becomes a case we handle, at the cost of two `stat` fields.
 
-Write `.fray/fray.id`, and also record `canonical path → id` centrally. The file wins when present;
-the index recovers a project whose `.fray/` was deleted, and detects a *copied* directory (same id at
-two paths — which is the non-git twin of the duplicate-`fray.id` case the tmux socket resolver already
-fails closed on, `tmux-socket.ts:399`).
+### The failure that actually matters is path REUSE, not a move
 
-Strictly more capable than A, and strictly more code. **Start at A, keep the index in mind for the
-copy-detection case**, which is the only failure mode that silently corrupts state rather than merely
-losing it.
+A pure path key has a worse mode than the one everybody thinks of first. Delete `~/scratch`, create a
+new `~/scratch`, and the new project silently **inherits the dead one's board** — its threads, its
+queue cards, its settings — with scratchpads that no longer exist on disk. That is worse than starting
+fresh, and for the scratch-folder population this feature serves it is *more* likely than a move.
+
+The inode key fixes this too, in the same comparison: same path + different inode ⇒ a different
+project, mint a new id. One mechanism, both directions:
+
+| path | inode | verdict |
+| --- | --- | --- |
+| match | match | the same project |
+| miss | match | it moved — adopt, and rewrite `path` |
+| match | miss | the directory was replaced — new project, new id |
+| miss | miss | new project |
+
+Also canonicalize the path for comparison: macOS's default APFS is case-INSENSITIVE, and
+`realpathSync` does not normalize case, so `~/me/Proj` and `~/me/proj` are one directory that a raw
+string key would split into two boards. The inode comparison gets this right for free, which is
+another reason not to lean on the path alone.
+
+### Rejected: a `.fray/fray.id` file in the project
+
+Tempting, because `.fray/` is already written into the working tree on first dispatch, so the file
+costs no new footprint — and the id would travel with the directory, surviving even a copy to another
+machine.
+
+That last property is the problem, in the case where Fray IS used with Git. A `.fray/fray.id` that
+gets committed — and nothing stops it; the README notes Fray deliberately does not touch your
+`.gitignore` — hands **every clone and every CI checkout the same project id**. That is precisely the
+duplicate-`fray.id` condition the tmux socket resolver fails closed on (`tmux-socket.ts:399`), which is
+how this whole thread started. `git config --local` is never committed, and that is exactly why the
+current design is safe. A file in the tree throws that away.
+
+Keep the file idea in reserve for one narrow job: if the global lookup is ever lost wholesale (a
+wiped `~/.fray`), there is nothing to reconcile against. That is a backup question, not an identity
+question.
 
 ## 4. Root discovery without `rev-parse --show-toplevel`
 
@@ -102,7 +130,7 @@ thread histories, and nothing tells you why.
 
 Walk up from cwd to `$HOME` (never past it, never to `/`), taking the first hit:
 
-1. `.fray/fray.id` — an existing Fray project always wins.
+1. A directory already known to `~/.fray` by path or inode (§3) — an existing Fray project always wins.
 2. A repository marker: `.git`, and while we're here `.jj`, `.hg`, `.svn` (see §7).
 3. A project marker: `package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`, `deno.json`,
    `composer.json`, `Gemfile`… — the same heuristic every editor already uses to pick a workspace root.
@@ -166,7 +194,8 @@ this product is for.
 
 - **jj**: a colocated repo already has `.git`, so it works today by accident. A non-colocated one has
   only `.jj`; `jj config set --repo fray.id <uuid>` is the direct analogue of the git call.
-- **hg / svn / fossil**: root markers for §4; identity can just use the `.fray/fray.id` file.
+- **hg / svn / fossil**: root markers for §4; identity falls through to the §3 lookup like any other
+  non-Git directory.
 
 Shape: a `ProjectIdentityProvider` with `detect(dir)`, `readId`, `createId`, `scope` — the git
 implementation being the existing code moved behind it, and the file implementation being the
@@ -178,9 +207,9 @@ fallback that always matches.
    ask (1) immediately and touches no identity code.
 2. Identity provider interface; move today's git code behind it unchanged (no behavior change, all
    existing tests must still pass — including the concurrent-first-run one).
-3. `.fray/fray.id` file provider + the walk-up root discovery, with the `$HOME` guard and the
-   first-use confirmation. Drop `git` from `REQUIRED_EXECUTABLES` at this point — but keep probing
-   for it, because §6 wants it.
+3. The `~/.fray/projects/<id>/identity.json` provider — path + `(dev, ino)`, the four-case table — and
+   the walk-up root discovery, with the `$HOME` guard and the first-use confirmation. Drop `git` from
+   `REQUIRED_EXECUTABLES` at this point, but keep probing for it, because §6 wants it.
 4. The safety story: offer `git init`, else shadow repo.
 5. jj, if anyone asks.
 
