@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react"
 import { useSnapshot } from "valtio"
 import { useQuery } from "@tanstack/react-query"
-import { closeGithubPicker, store, seedBoard, pushDrawer, topDrawer, topThreadSlug, showToast } from "./store.ts"
+import { closeGithubPicker, store, seedBoard, pushDrawer, resolveRoutedThread, topDrawer, topThreadSlug, showToast } from "./store.ts"
 import { useBoard } from "./hooks.ts"
 import { closeDrawerAnimated } from "./lib/overlays.ts"
 import { startRouter } from "./lib/router.ts"
@@ -193,6 +193,15 @@ export function App() {
   }, [])
 
   const board = useBoard()
+
+  // Settle a parked `/thread/<slug>` URL. It waits for the board because the destination depends on
+  // whether the thread is QUEUED — a needsYou thread's whole panel is already in the main column, so
+  // the URL scrolls to that card instead of stacking an identical drawer over it. Deliberately an
+  // EFFECT and not a store subscription: scrollToQueueCard measures a mounted `[data-queue-card]`, so
+  // it has to run after the queue commits, which for a cold deep link is the same render the board
+  // first arrives. (resolveRoutedThread no-ops unless there is a parked slug AND a board.)
+  useEffect(() => { resolveRoutedThread() }, [board, snap.routeThreadSlug])
+
   sidebarPresence.current = nextSidebarPresence(sidebarPresence.current, board)
   const showSidebar = board !== null && sidebarPresence.current.hasBeenVisible
   // A missing board is not evidence that this project is named "fray". Keep the header neutral until

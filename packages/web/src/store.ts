@@ -113,6 +113,12 @@ export const store = proxy({
   // subscription while the last complete copy remains visible and manually refreshable. All reset on reload.
   socketBoardFallback: null as SocketPayloadFallback | null,
   socketTranscriptFallbacks: {} as Record<string, SocketTranscriptFallback>,
+  // A `/thread/<slug>` URL whose destination is not settled yet. The router cannot decide it alone:
+  // a QUEUED thread already has its full card in the main column, so the URL belongs to that card,
+  // not to a drawer over it — and on a cold load the board hasn't arrived, so `needsYou` is unknown.
+  // The router parks the slug here and App resolves it the first render the board is authoritative
+  // (see resolveRoutedThread). Held slugs keep the address bar on /thread/<slug> meanwhile.
+  routeThreadSlug: null as string | null,
   // Transient bottom-center toast (e.g. "Steer failed …" when an eager reply is rejected). `id` bumps per call so
   // repeat toasts re-trigger the fade. Rendered by <Toaster>; null when nothing is showing.
   toast: null as { id: number; text: string; spinner?: boolean; sticky?: boolean; duration?: number; link?: { label: string; slug: string } } | null,
@@ -202,14 +208,32 @@ export function pushBackgroundShellDrawer(slug: string, id: string, opts: { labe
   openOrRaiseDrawer({ kind: "shell", slug, subId: id, label: opts.label, startedAt: opts.startedAt })
 }
 
-// Open a thread from a listing/notification click-through. Routing by runtime: a thread with NO
-// session ever spawned (runtime "none" — no transcript, the chat drawer would be an empty
-// placeholder) opens its fray DOCUMENT drawer instead — for a Plans-section thread the doc IS the
-// substance. Anything with a session (live or exited — exited transcripts are worth seeing) opens
-// the chat drawer. The doc drawer carries the adopt ("Start a session") affordance for the rest.
+// Open a thread from a listing/notification click-through. A QUEUED thread short-circuits to its own
+// card (see scrollToQueueCard below) — every affordance that asks to "show me this thread" obeys the
+// one rule, so nothing can stack a drawer on top of the identical panel. Otherwise routing is by
+// runtime: a thread with NO session ever spawned (runtime "none" — no transcript, the chat drawer
+// would be an empty placeholder) opens its fray DOCUMENT drawer instead — for a Plans-section thread
+// the doc IS the substance. Anything with a session (live or exited — exited transcripts are worth
+// seeing) opens the chat drawer. The doc drawer carries the adopt ("Start a session") affordance.
 export function openThread(slug: string): void {
   const t = store.board?.threads.find((x) => x.id === slug)
+  if (t?.needsYou && scrollToQueueCard(slug)) return
   pushDrawer(t && t.runtime === "none" ? "doc" : "thread", slug)
+}
+
+// Settle a parked `/thread/<slug>` URL, now that the board can say whether the thread is queued.
+// A deep link deliberately asks for the CHAT surface even for a session-less thread (unlike
+// openThread's doc-routing), so this pushes the thread layer rather than delegating — but it obeys
+// the same queue-card rule: a needsYou thread renders its whole panel inline in the main column, and
+// opening the routed drawer over it painted that panel TWICE, one half-occluding the other.
+// `routed` so a cold page paints the sheet already open instead of animating a phantom backdrop in.
+export function resolveRoutedThread(): void {
+  const slug = store.routeThreadSlug
+  if (!slug || !store.board) return
+  store.routeThreadSlug = null
+  const t = store.board.threads.find((x) => x.id === slug)
+  if (t?.needsYou && scrollToQueueCard(slug)) return
+  pushDrawer("thread", slug, { routed: true })
 }
 
 // A thread that's ALREADY in the queue (needsYou) has its full card in the main column — clicking its
