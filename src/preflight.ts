@@ -37,6 +37,24 @@ export const SUPPORTED_NODE_LINES = [
   { major: 23, minor: 6 },
 ] as const;
 
+/**
+ * WHY those two lines, exactly: better-sqlite3's `binding.gyp` builds with `NAPI_VERSION=10`, and
+ * Node-API 10 exists only from v22.14.0 and v23.6.0 (nodejs.org/api/n-api.html version matrix). On an
+ * older Node the addon is not rejected — Node crashes registering it, `EXC_BAD_ACCESS` inside
+ * `napi_module_register_by_symbol` during `DLOpen`, which is the SIGSEGV this table exists to prevent.
+ *
+ * better-sqlite3 13.0.2 nevertheless declares `engines: { node: ">=22" }`, so believing that field is
+ * what produced a floor of 22.12 that segfaults. This table is the ground truth instead, and the test
+ * beside it re-derives the floor from the dependency's ACTUAL `NAPI_VERSION` on every run — so the
+ * next time better-sqlite3 raises it, the suite fails here instead of a user's board dying at boot.
+ *
+ * Keyed by Node-API version → the release lines that first ship it. Extend from the official matrix.
+ */
+export const NODE_API_AVAILABILITY: Record<number, ReadonlyArray<{ major: number; minor: number }>> = {
+  9: [{ major: 18, minor: 17 }, { major: 20, minor: 3 }, { major: 21, minor: 0 }],
+  10: [{ major: 22, minor: 14 }, { major: 23, minor: 6 }],
+};
+
 /** The lowest release overall, for the message and for anything that just wants one number. */
 export const MINIMUM_NODE = SUPPORTED_NODE_LINES[0];
 

@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import {
   assertLaunchPrerequisites,
   assertRequiredExecutables,
   ensureNativeHelperPermissions,
   MINIMUM_NODE,
+  NODE_API_AVAILABILITY,
   providerReadiness,
+  SUPPORTED_NODE_LINES,
   supportedNodeRange,
 } from "./preflight.ts";
 
@@ -131,6 +134,38 @@ test("the Node floor tracks the versions better-sqlite3 was measured to survive"
   assert.equal(supportedNodeRange(), "^22.14.0 || >=23.6.0");
   // MINIMUM_NODE stays the lowest supported release, for callers that want a single number.
   assert.deepEqual({ ...MINIMUM_NODE }, { major: 22, minor: 14 });
+});
+
+// The floor has now drifted TWICE, and both times a human number went stale against a dependency.
+// So stop trusting the number: re-derive it from what better-sqlite3 actually builds against, every
+// run. Its `engines` field says `>=22` and is simply wrong — `binding.gyp` builds with
+// `NAPI_VERSION=10`, which exists only from Node 22.14 and 23.6, and an older Node does not reject the
+// addon but CRASHES registering it (EXC_BAD_ACCESS in napi_module_register_by_symbol during DLOpen).
+// When better-sqlite3 next raises NAPI_VERSION, this fails here instead of on a user's machine.
+test("the Node floor still covers the Node-API version better-sqlite3 is built against", () => {
+  const gyp = readFileSync(
+    join(
+      dirname(createRequire(import.meta.url).resolve("better-sqlite3/package.json")),
+      "binding.gyp"
+    ),
+    "utf8"
+  );
+  const required = Number(/NAPI_VERSION=(\d+)/.exec(gyp)?.[1]);
+  assert.ok(
+    Number.isSafeInteger(required),
+    "could not read NAPI_VERSION from better-sqlite3's binding.gyp"
+  );
+  const lines = NODE_API_AVAILABILITY[required];
+  assert.ok(
+    lines,
+    `better-sqlite3 now needs Node-API ${required}, which NODE_API_AVAILABILITY does not describe. ` +
+      `Add it from https://nodejs.org/api/n-api.html and re-measure SUPPORTED_NODE_LINES.`
+  );
+  assert.deepEqual(
+    SUPPORTED_NODE_LINES.map((line) => `${line.major}.${line.minor}`),
+    lines!.map((line) => `${line.major}.${line.minor}`),
+    `Fray advertises Node releases that cannot load better-sqlite3's Node-API ${required} addon`
+  );
 });
 
 test("provider readiness disables only the unavailable backend and never requires gh", () => {
