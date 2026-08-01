@@ -130,7 +130,7 @@ Yes — one server and one tab per repo, each fully isolated. There is deliberat
 
 macOS and Linux. Windows isn't supported.
 
-**How is this different from Conductor and friends?**
+**How is this different from the other orchestrator apps?**
 
 Those apps wrap your agents in their own workflow. Fray doesn't: it's a viewer and a queue over the CLIs you already run, with every piece of orchestration judgment sitting in editable text instead of inside the binary.
 
