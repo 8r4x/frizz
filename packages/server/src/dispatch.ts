@@ -327,6 +327,7 @@ export function codexScratchpadHookConfig(
   })
   const bashBackgroundHook = join(dirname(hookScript), "bash-background.mjs")
   const scratchpadStopHook = join(dirname(hookScript), "scratchpad-stop.mjs")
+  const fenceStopHook = join(dirname(hookScript), "fence-stop.mjs")
   return {
     bypass_hook_trust: true,
     hooks: {
@@ -341,12 +342,19 @@ export function codexScratchpadHookConfig(
         }],
       }],
       // An optional scratchpad-frontmatter reminder can keep a worker from forgetting owned work when
-      // it tries to rest. The hook itself persists the two-minute anti-loop cooldown.
+      // it tries to rest, and the fence check catches a rest that hands a decision back in prose
+      // instead of a ```question card. Each hook persists its own anti-loop guard.
       Stop: [{
-        hooks: [{
-          type: "command",
-          command: `node ${JSON.stringify(scratchpadStopHook)} --session=${JSON.stringify(sessionId)}`,
-        }],
+        hooks: [
+          {
+            type: "command",
+            command: `node ${JSON.stringify(scratchpadStopHook)} --session=${JSON.stringify(sessionId)}`,
+          },
+          {
+            type: "command",
+            command: `node ${JSON.stringify(fenceStopHook)} --session=${JSON.stringify(sessionId)}`,
+          },
+        ],
       }],
       // Native Codex children inherit the root scratchpad mandate even with `fork_turns:"none"`.
       // Constrain it structurally at child start: shared writes, but only merge-style scoped edits.

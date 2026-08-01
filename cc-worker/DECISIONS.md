@@ -966,3 +966,44 @@ load-bearing. It spawns the real hook over the real stdin contract and pins the 
 `name`/`team_name` stripping, endsWith-idempotence (including the prompt that merely QUOTES the
 marker), the nested-dispatch paragraph, the retained coordination text, the non-worker inert path,
 and fail-open on bad input.
+
+## 2026-07-31: the fence check at rest — a Stop hook for a decision handed back in prose
+
+`hooks/fence-stop.mjs` is new, wired on `Stop` for both backends (plugin `hooks.json`, and
+`codexScratchpadHookConfig` in `packages/server/src/dispatch.ts`). It blocks ONCE when a worker comes
+to rest with no ` ```question `/` ```done `/` ```awaiting ` fence and its closing text hands a decision
+back to the human, and asks it to classify: fence it as a real question, decide it, or rest again.
+
+MEASURED, then built. A scan of 532 real worker transcripts (session ids cross-referenced against every
+`~/.fray/projects/*/ui.db`), 4,709 rest turns, shows fence use decaying monotonically with session
+depth — ` ```question ` 23% at the first rest against 9% past the twentieth, ` ```done ` 31% against
+2%, fenceless 45% against 83%. The cause is DEPTH, not compaction: turns before a compaction boundary
+are already 82% fenceless, so the decay is complete before any summary is written, and compaction only
+correlates because only long sessions reach it. The contract is in the system prompt and survives
+compaction, so restating it earlier cannot help; something has to read the actual final message.
+
+ASK-ONLY, on the numbers. 9.8% of fenceless rests close by deferring a decision ("your call", "want me
+to …?"), and a prose ask is the expensive miss — it renders as an ordinary handoff card with nothing to
+click and does not break through a Snooze. Only 3% carry a landed claim, and a "that looked done" nudge
+is actively dangerous, since ` ```done ` is a DISMISSAL and "uncertain is not done" is the contract's
+own rule. A done detector was built, measured, and dropped. A trailing-question-mark rule was also
+dropped: over 3,239 fenceless rests it added exactly one hit the deferral phrases had not caught.
+
+NOT the 2026-07-02 blocking-Stop mistake. That gate demanded a FILE EDIT and forced trivial workers
+into Read/Edit dances. This one demands nothing — its third branch is "it was rhetorical, just rest
+again" — and it fires at most once per human turn.
+
+THE PAYLOAD, NOT THE TRANSCRIPT. First cut read the final message off `transcript_path` and fired on
+only two of four live broker workers: the transcript is written asynchronously, so at Stop time the
+message that just ended the turn may not be on disk. The Stop payload carries `last_assistant_message`
+and `prompt_id` (verified on the wire, cli 2.1.220); using those is exact and race-free, and `prompt_id`
+is the natural one-shot key because it is stable across a blocked continuation. Transcript parsing
+remains only as the fallback for a payload that lacks them (codex, or an older shape). After the switch,
+3/3 live workers fired.
+
+VERIFIED END TO END, not just unit-tested: real broker workers on an isolated stack, driven to a
+fenceless prose ask, were blocked and re-emitted answerable cards — two as a ` ```question ` fence, one
+by calling the native `AskUserQuestion` tool (equally answerable on the broker path, where
+`FRAY_NATIVE_ASK=1` renders it as a card). This supersedes the never-built `.fray/fenceless-rest-nudge.md`
+design, whose premise — poke EVERY fenceless rest — is wrong under the current contract, whose bare rest
+is the legitimate ordinary handoff.
