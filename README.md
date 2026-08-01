@@ -52,7 +52,7 @@ Fray is a browser tab, a queue, and the agent CLIs you already pay for. It bring
 - 😴 **Snooze.** Not everything needs an answer now. Park a card for an hour, until tomorrow morning, or until a date you pick — optionally with a follow-up prompt attached, so the thread wakes up already working on what you told it to do next.
 - 🐙 **GitHub integration.** Browse your repo's issues and pull requests without leaving the composer, and turn a selection of them into threads. Workers can read issues, diffs, and CI on their own.
 - 📝 **No magic.** A thread behaves like a Claude Code session you started yourself. Fray adds no worktrees, no branches, no dev server, no build integration, no workflow engine to fight with.
-- 🔒 **Local only.** No cloud, no account, no telemetry. The server binds `127.0.0.1` and its state lives in `~/.fray/`, never in your checkout.
+- 🔒 **Local only.** No cloud, no account, no telemetry. The server binds `127.0.0.1` by default and its state lives in `~/.fray/`, never in your checkout.
 
 ### GitHub
 
@@ -101,7 +101,7 @@ No. It drives the Claude Code or Codex CLI already installed and signed in on yo
 
 **Does anything leave my machine?**
 
-Nothing from Fray. There's no account, no telemetry, and the server binds to `127.0.0.1`. The agents themselves talk to their providers, and `gh` talks to GitHub, but Fray is a local process looking at local files.
+Nothing from Fray. There's no account, no telemetry, and the server binds to `127.0.0.1` unless you ask for otherwise with `--host`. The agents themselves talk to their providers, and `gh` talks to GitHub, but Fray is a local process looking at local files.
 
 **What happens if I close the tab?**
 
@@ -118,6 +118,19 @@ No. Fray doesn't own your git workflow and won't create branches or worktrees be
 **Can I run it on several repos at once?**
 
 Yes — one server and one tab per repo, each fully isolated. There is deliberately no cross-repo board.
+
+**Can I reach it from another machine?**
+
+Yes, with `--host` — the flag every dev server has, and it means the same thing here:
+
+```sh
+npx frayui --host              # every interface, i.e. 0.0.0.0
+npx frayui --host 192.168.1.5  # one interface
+```
+
+Fray prints the addresses to use and warns you as it starts. Reaching it by IP works as-is; reach it by name and you have to say so — `--host --allowed-host fray.local` — because an unlisted name is how DNS rebinding gets a browser to treat an attacker's page as same-origin with your board. `FRAY_HOST` and `FRAY_ALLOWED_HOSTS` do the same thing when the launch command lives in an image or a unit file.
+
+Understand what you're turning on. Fray has no login: reaching the port *is* the authorization, and the board runs shell commands as you. Only do this on a network you trust, and prefer a tunnel (`ssh -L 5173:127.0.0.1:5173 you@box`) if you just want your own board from your own laptop — that needs no flag at all.
 
 **What platforms does it run on?**
 

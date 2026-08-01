@@ -330,6 +330,61 @@ test("--host: a non-loopback bind accepts IP-literal authorities, and loopback s
   }
 })
 
+test("an exposed board supplies the Sec-Fetch stamp a LAN browser cannot send", async () => {
+  // Chrome sends Sec-Fetch-* only to a potentially-trustworthy origin, which http://192.168.1.5 is
+  // not. Fray's missing-Origin rules ask for `sec-fetch-site: same-origin`, so without the proxy
+  // vouching, --host served the shell and then 403'd every /rpc read the app made. Measured in
+  // Chrome 151: the LAN request carried neither an origin nor a sec-fetch-site header.
+  const seen: Array<Record<string, string | string[] | undefined>> = []
+  const current = await listen((req, res) => {
+    seen.push(req.headers)
+    res.writeHead(200)
+    res.end("ok")
+  })
+  const port = await freePort()
+  const exposed = new RestartSupervisorProxy({ port, host: "0.0.0.0", childPort: () => current.port, restart: async () => ({ state: "ready" }) })
+  try {
+    await exposed.listen()
+    assert.equal((await proxied(port, "/rpc/board", { host: `192.168.1.5:${port}` })).status, 200)
+    assert.equal(seen.at(-1)?.["sec-fetch-site"], "same-origin", "a LAN read is vouched for")
+
+    // Loopback is untouched even on an exposed board: the browser really can stamp that one, so the
+    // real signal is forwarded and its absence stays meaningful.
+    await proxied(port, "/rpc/board", { host: `127.0.0.1:${port}` })
+    assert.equal(seen.at(-1)?.["sec-fetch-site"], undefined, "loopback keeps the browser's own signal")
+
+    // A stamp the caller supplied is never overwritten, in either direction.
+    await proxied(port, "/rpc/board", { host: `192.168.1.5:${port}`, "sec-fetch-site": "cross-site" })
+    assert.equal(seen.at(-1)?.["sec-fetch-site"], "cross-site", "a declared cross-site request stays cross-site")
+
+    // Vouching is for the Origin-LESS case only; a present Origin still has to match, and did.
+    await proxied(port, "/rpc/board", { host: `192.168.1.5:${port}`, origin: `http://192.168.1.5:${port}` })
+    assert.equal(seen.at(-1)?.["sec-fetch-site"], undefined)
+  } finally {
+    await exposed.close().catch(() => undefined)
+    await current.close().catch(() => undefined)
+  }
+})
+
+test("a loopback-bound proxy never vouches, so its missing-Origin posture is exactly as before", async () => {
+  const seen: Array<Record<string, string | string[] | undefined>> = []
+  const current = await listen((req, res) => {
+    seen.push(req.headers)
+    res.writeHead(200)
+    res.end("ok")
+  })
+  const port = await freePort()
+  const proxy = new RestartSupervisorProxy({ port, childPort: () => current.port, restart: async () => ({ state: "ready" }) })
+  try {
+    await proxy.listen()
+    await proxied(port, "/rpc/board", { host: `127.0.0.1:${port}` })
+    assert.equal(seen.at(-1)?.["sec-fetch-site"], undefined, "the default posture invents no signal")
+  } finally {
+    await proxy.close().catch(() => undefined)
+    await current.close().catch(() => undefined)
+  }
+})
+
 test("a loopback-bound proxy rejects the LAN authority an exposed one would accept", async () => {
   const current = await child("only")
   const port = await freePort()

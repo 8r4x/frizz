@@ -55,6 +55,20 @@ export interface LocalAuthorityPolicy {
   allowedHosts?: readonly string[]
 }
 
+/**
+ * Would a browser have attached `Sec-Fetch-*` to a request naming this authority?
+ *
+ * Chrome sends Fetch Metadata only to a POTENTIALLY TRUSTWORTHY origin. `http://127.0.0.1` and
+ * `http://localhost` qualify by definition; `http://192.168.1.5` does not. So the moment `--host`
+ * puts the board on a LAN address, the whole Sec-Fetch signal silently vanishes — and every route
+ * whose missing-Origin rule leans on `Sec-Fetch-Site: same-origin` starts refusing the app's own
+ * reads. Measured in Chrome 151: a same-origin `GET /rpc/board` from the LAN page carried neither an
+ * `origin` nor a `sec-fetch-site` header, while the identical page on loopback carried both.
+ */
+export function authoritySendsFetchMetadata(authority: ParsedLocalAuthority): boolean {
+  return LOCAL_HOSTNAMES.has(authority.hostname)
+}
+
 function acceptsHostname(hostname: string, policy: LocalAuthorityPolicy | undefined): boolean {
   if (LOCAL_HOSTNAMES.has(hostname)) return true
   if (!policy?.exposed) return false

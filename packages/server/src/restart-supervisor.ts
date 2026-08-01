@@ -3,7 +3,15 @@
 // crash.  This intentionally contains no source-watch logic: stable and legacy launchers can share it.
 import { request as requestHttp, createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http"
 import { connect } from "node:net"
-import { allowedLocalCorsOrigin, bindHostIsExposed, isTrustedLocalHttpRequest, LOOPBACK_BIND_HOST, type LocalAuthorityPolicy } from "./local-origin.ts"
+import {
+  allowedLocalCorsOrigin,
+  authoritySendsFetchMetadata,
+  bindHostIsExposed,
+  isTrustedLocalHttpRequest,
+  LOOPBACK_BIND_HOST,
+  parseLocalHost,
+  type LocalAuthorityPolicy,
+} from "./local-origin.ts"
 import { resolveLocalImage } from "./local-image.ts"
 
 export const SUPERVISOR_CONTROL_PREFIX = "/_fray/control"
@@ -59,12 +67,20 @@ function recoveryPage(url: string, detail = "Fray is restarting or unavailable."
   return `<!doctype html><meta charset="utf-8"><title>Fray recovering</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:3rem;font:16px system-ui;color:#e7e7e7;background:#171717}main{max-width:36rem;padding:1.5rem;border:1px solid #444;border-radius:.75rem;background:#222}a{color:#f7d64a}</style><main><h1>Fray is recovering</h1><p>${detail}</p><p><a href="${escaped}">Try this page again</a></p></main>`
 }
 
-function proxyHeaders(req: IncomingMessage, childPort: number): Record<string, string | string[] | undefined> {
+function proxyHeaders(
+  req: IncomingMessage,
+  childPort: number,
+  vouchSameOrigin = false,
+): Record<string, string | string[] | undefined> {
   const headers = { ...req.headers }
   // The child retains Fray's strict local-origin policy. Translate public browser authority to the
   // private child authority; no external proxy authority is ever trusted.
   headers.host = `127.0.0.1:${childPort}`
   if (typeof headers.origin === "string") headers.origin = `http://127.0.0.1:${childPort}`
+  // The browser could not stamp this one (see RestartSupervisorProxy.vouchesSameOrigin), and the
+  // proxy has already checked what the stamp would have proved. Supply it so the child's own
+  // missing-Origin rules keep working instead of refusing the app's every read.
+  if (vouchSameOrigin) headers["sec-fetch-site"] = "same-origin"
   delete headers.connection
   return headers
 }
@@ -128,6 +144,28 @@ export class RestartSupervisorProxy {
    */
   private authorityAccepted(req: IncomingMessage, allowMissingOrigin = true): boolean {
     return isTrustedLocalHttpRequest(req.headers, this.options.port, allowMissingOrigin, this.policy)
+  }
+
+  /**
+   * Is this an Origin-less request that only LOOKS suspicious because the browser could not send
+   * Fetch Metadata to a non-loopback authority? See authoritySendsFetchMetadata.
+   *
+   * Fray's missing-Origin rules ask for `Sec-Fetch-Site: same-origin`, which Chrome never sends over
+   * plain HTTP to a LAN address — so without this, `--host` serves the shell and then 403s every RPC
+   * the app makes. Narrow on purpose: the Host must already be an authority this proxy accepts, there
+   * must be no Origin at all (a present one still has to match, and is rejected above if it does not),
+   * and loopback traffic is never touched, so the default posture keeps the real Sec-Fetch signal.
+   *
+   * What this gives up, stated plainly: on an exposed board a cross-site GET carries no Origin and no
+   * Fetch Metadata, so it is indistinguishable from the app's own read and is allowed. The response is
+   * still opaque to the caller (no CORS), Fray's GET procedures are reads, and every mutation is a POST
+   * — which a browser always stamps with an Origin, and which is therefore still refused.
+   */
+  private vouchesSameOrigin(req: IncomingMessage): boolean {
+    if (!this.policy.exposed) return false
+    if (req.headers.origin !== undefined || req.headers["sec-fetch-site"] !== undefined) return false
+    const host = parseLocalHost(req.headers.host, this.options.port, this.policy)
+    return !!host && !authoritySendsFetchMetadata(host)
   }
 
   async close(): Promise<void> {
@@ -198,7 +236,8 @@ export class RestartSupervisorProxy {
 
   private async handleControl(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const pathname = new URL(req.url ?? "/", "http://fray.invalid").pathname
-    const allowMissingOrigin = pathname === SUPERVISOR_STATUS_PATH && req.method === "GET" && req.headers["sec-fetch-site"] === "same-origin"
+    const sameOrigin = req.headers["sec-fetch-site"] === "same-origin" || this.vouchesSameOrigin(req)
+    const allowMissingOrigin = pathname === SUPERVISOR_STATUS_PATH && req.method === "GET" && sameOrigin
     if (!this.authorityAccepted(req, allowMissingOrigin)) {
       res.writeHead(403)
       res.end("Forbidden")
@@ -230,7 +269,8 @@ export class RestartSupervisorProxy {
   }
 
   private handleLocalImage(req: IncomingMessage, res: ServerResponse): void {
-    const allowMissingOrigin = req.headers.origin === undefined && req.headers["sec-fetch-site"] === "same-origin"
+    const allowMissingOrigin = req.headers.origin === undefined
+      && (req.headers["sec-fetch-site"] === "same-origin" || this.vouchesSameOrigin(req))
     if (!this.authorityAccepted(req, allowMissingOrigin)) {
       res.writeHead(403, { "content-type": "text/plain; charset=UTF-8" })
       res.end("Forbidden")
@@ -288,7 +328,7 @@ export class RestartSupervisorProxy {
       port: childPort,
       method: req.method,
       path: req.url,
-      headers: proxyHeaders(req, childPort),
+      headers: proxyHeaders(req, childPort, this.vouchesSameOrigin(req)),
     }, (upstreamResponse) => {
       res.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers)
       upstreamResponse.pipe(res)
