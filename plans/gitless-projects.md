@@ -83,6 +83,18 @@ Don't rely on the user's `.gitignore` to prevent it — detect it, and self-heal
 > this directory, rewrite `.fray/fray.id`, and carry on. Otherwise adopt the id and refresh the
 > record.
 
+To be clear about the location, because it looks like a new one and isn't:
+`~/.fray/projects/<id>/` is **already** where a project's entire durable state lives — `ui.db`, the
+logs, the launch owner, the artifact pointer. The README states it as the deal ("everything durable
+lives outside your checkout in `~/.fray/projects/<id>/`, so you can delete `.fray/` and keep every
+thread and setting"). `identity.json` is one small file beside the database it identifies, in a
+directory that exists the moment the project does. Nothing new is written to the home directory.
+
+Two of those files already record the project's path today — `tmux-socket-migration.json` carries
+`projectDir` and so does `launcher.json` — so the check could read one of them instead of adding a
+file. Not worth it: one is tmux-specific and would follow tmux out, the other is launch state whose
+lifetime is a run, and identity deserves a record that means what it says.
+
 No user action, no error, and a moved project still adopts its own id because the recorded path no
 longer exists. `(dev, ino)` earns its place here rather than as a primary key: a same-volume `mv`
 preserves a directory's inode while `cp -R` does not (measured on APFS — `mv` kept
@@ -94,17 +106,21 @@ inode matches a known project rejoins its board instead of silently starting a n
 deletion is advertised as safe ("you can delete `.fray/` and keep every thread and setting"), and
 this keeps the promise true.
 
-### Optional prevention: let `.fray/` ignore itself
+### Prevention: offer to ignore it, at the moment it is created
 
-A `.fray/.gitignore` containing a single `*` makes the whole directory invisible to Git —
-verified: `git status` is clean, `git check-ignore` reports `.fray/fray.id` ignored, and the
-`.gitignore` ignores *itself*, so `git add -A` cannot commit any of it. It touches only Fray's own
-directory, never the user's root `.gitignore`.
+**Decided: ask.** The first-run prompt (§4) offers to add `.fray/` to a `.gitignore` that already
+exists. That is not an opinion about the user's version control — it is Fray asking what to do about
+Fray's own footprint, at the one moment the question is in front of them.
 
-Cheap, and it makes the hazard above nearly unreachable. It is a behavior change for existing users
-(`.fray/` currently shows up in `git status` until they ignore it themselves, which the README tells
-them to do), so it is the human's call, not a detail to slip in. The detection rule above stands
-either way, because a user may deliberately commit the directory.
+Rejected alternative: a `.fray/.gitignore` containing a single `*`, which makes the directory
+invisible to Git and ignores *itself*, so `git add -A` cannot commit any of it (verified: clean `git
+status`, `check-ignore` reports both the id and the `.gitignore` as ignored). Strictly more reliable,
+and it needs no existing `.gitignore` — but it is Fray deciding unilaterally what belongs in
+someone's repository, silently, in a file they did not write. Asking is worse mechanically and better
+on the principle, and the principle is the one being defended here.
+
+The detection rule above stands either way: a user may decline, may have no `.gitignore`, or may
+commit the directory deliberately.
 
 ## 4. Root discovery without `rev-parse --show-toplevel`
 
@@ -126,10 +142,22 @@ Two guards worth building in from the start:
 
 - **Never adopt `$HOME` itself** as a project root. A stray `~/package.json` would otherwise turn a
   user's entire home directory into one Fray project, with agents dispatched at it.
-- **Confirm the root on first use.** One line in the readout — "start a Fray project for `~/notes`?
-  [Y/n]" — costs a keystroke and prevents every accidental-root complaint. Note the phrasing: it asks
-  about the *directory Fray is about to adopt*, and says nothing about version control (§6). Skip it
-  with `--yes`, and never ask again once `.fray/fray.id` exists.
+- **Confirm on first use, and say what will be written.** The prompt's job is not to ask permission
+  in the abstract — it is to name the directory Fray is about to create, at the moment it would be
+  created:
+
+  ```
+  Fray will create ~/notes/.fray/ to hold this project's id and one scratchpad per thread.
+  Everything else lives in ~/.fray/projects/. Continue? [Y/n]
+  Add .fray/ to .gitignore? [Y/n]
+  ```
+
+  The second line appears **only when a `.gitignore` already exists** in the chosen root. Fray never
+  creates one — offering to add a line to a file the user already maintains is housekeeping for
+  Fray's own footprint; creating the file would be Fray deciding they should have one, which is the
+  thing §6 rules out. Decline is remembered, not re-asked.
+
+  Skip both with `--yes`, and never ask again once `.fray/fray.id` exists.
 
 ## 5. The worker prompt
 
@@ -261,6 +289,5 @@ because Git is better, not because Fray rewards you for it.
 
 ## Open questions for the human
 
-- Should `.fray/` ship its own `.gitignore` (§3)? It closes the committed-id hazard at the cost of
-  changing what existing users see in `git status`. Note this is the one remaining decision that
-  could read as an opinion about Git, which is an argument for leaving it to the user.
+None outstanding — §3 (identity), §4 (root discovery and the first-run prompt) and §6 (no opinions)
+are all settled. The next move is step 1 of §8, which is independent of everything else here.
