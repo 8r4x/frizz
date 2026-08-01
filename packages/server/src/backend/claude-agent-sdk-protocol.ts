@@ -18,6 +18,42 @@ const UNSAFE_TEXT = /[\p{Cf}\p{Cs}\p{Zl}\p{Zp}\u0000-\u0008\u000b\u000c\u000e-\u
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/-]*$/
 const RESERVED_KEYS = new Set(["__proto__", "constructor", "prototype"])
 
+// Tab, newline and CR — the three control codes a message body legitimately contains.
+const DELIVERABLE_CONTROL_CODES = new Set([9, 10, 13])
+
+/**
+ * Is this prompt body undeliverable, as opposed to merely containing invisible characters?
+ *
+ * The operator's OWN prompt text is a different class from every other string crossing this membrane,
+ * and applying `UNSAFE_TEXT` to it refused ORDINARY text. That policy strips the whole `\p{Cf}` family
+ * because a bidi control in a rendered tool argument is a spoofing surface, and a control byte in a
+ * permission `input` decides what the provider executes. A prompt body is neither: it is the human's
+ * own words on their way into a user message's `content` — no shell, no rendering authority, and no
+ * framing risk (the broker frame is JSON.stringify'd, which escapes every one of these).
+ *
+ * U+200D ZERO WIDTH JOINER is `\p{Cf}`, so every multi-part emoji (👩‍💻, 🏳️‍🌈, 👨‍👩‍👧) was refused, along
+ * with a pasted BOM, a zero-width space and a soft hyphen. And because the daemon swallowed the
+ * refusal (`claude-agent-broker.ts`) the message then VANISHED while fray's RPC answered success.
+ * Measured live in `_live_broker_input_drop.mts`: one sentence delivered plain, and the same sentence
+ * disappeared with a single emoji appended. The identical bytes pasted into a tmux-backed thread go
+ * through untouched, so the broker path was silently stricter than its sibling for the same prompt.
+ *
+ * What stays refused is what is genuinely undeliverable: LONE surrogates (not encodable as UTF-8 on
+ * the wire) and the C0/C1 control ranges. Iterating by code point is load-bearing — a valid surrogate
+ * PAIR is one astral code point and must pass, which is what makes emoji work at all.
+ */
+export function hasUndeliverableInputText(value: string): boolean {
+  for (const character of value) {
+    const code = character.codePointAt(0)!
+    if (code >= 0xd800 && code <= 0xdfff) return true // lone surrogate
+    if (code === 0x2028 || code === 0x2029) return true // line/paragraph separator (Zl/Zp)
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
+      if (!DELIVERABLE_CONTROL_CODES.has(code)) return true
+    }
+  }
+  return false
+}
+
 export type ClaudeJsonScalar = string | number | boolean | null
 export type ClaudeJson = ClaudeJsonScalar | ClaudeJson[] | { [key: string]: ClaudeJson }
 export type ClaudeJsonObject = { [key: string]: ClaudeJson }
@@ -393,11 +429,16 @@ export function validateInputMessage(value: ClaudeInputMessage): ClaudeInputMess
   if (utf8Bytes(value.text) > CLAUDE_AGENT_SDK_MAX_INPUT_BYTES) {
     throw new ClaudeAgentSdkProtocolError(`input.text exceeds ${CLAUDE_AGENT_SDK_MAX_INPUT_BYTES} bytes`)
   }
-  const text = safeText(value.text, "input.text", CLAUDE_AGENT_SDK_MAX_INPUT_BYTES)
   // User input is an authority-bearing provider instruction, not presentation metadata. Never
-  // silently replace controls or truncate after replacement expansion: the accepted bytes must be
-  // exactly the bytes the caller supplied.
-  if (text !== value.text) throw new ClaudeAgentSdkProtocolError("input.text contains unsafe text")
+  // silently replace controls or truncate: the accepted bytes must be exactly the bytes the caller
+  // supplied, so this REFUSES rather than sanitizing — and the refusal has to reach the operator,
+  // which is why the bridge validates before `sendInput` and the daemon reports what it drops.
+  //
+  // The class is `hasUndeliverableInputText`, NOT the display-grade `UNSAFE_TEXT`: see its doc for why
+  // a prompt body must be allowed to carry the zero-width joiner that every multi-part emoji is built
+  // from. Every other string on this membrane keeps the strict policy.
+  const text = value.text
+  if (hasUndeliverableInputText(text)) throw new ClaudeAgentSdkProtocolError("input.text contains unsafe text")
   // Addressing is an opaque provider id (`toolu_…`), validated on the same bounded-id path as every
   // other id that crosses this membrane. Omitted stays omitted — the adapter turns that into the
   // null the SDK expects for a main-thread turn, so an unaddressed send is byte-identical to before.

@@ -9,7 +9,7 @@ import { adoptOrForkBroker, killBroker, liveBrokerRecord, liveBrokerRecords, cla
 import { connectClaudeBroker, type ClaudeBrokerClient } from "./claude-broker-client.ts"
 import { describeClaudeBrokerExit, readClaudeBrokerExit, type ClaudeBrokerExitRecord } from "./claude-broker-diagnostics.ts"
 import type { ClaudeDiagnostic, ClaudePermissionDecision, ClaudePermissionRequest, ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
-import { CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, validateInputMessage } from "./claude-agent-sdk-protocol.ts"
+import { CLAUDE_AGENT_SDK_MAX_INPUT_BYTES, CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, validateInputMessage } from "./claude-agent-sdk-protocol.ts"
 import type { BrokerRecord, ClaudeBrokerConfig } from "./claude-agent-broker.ts"
 import type { InteractionSessionScope, InteractionStore } from "../interaction-store.ts"
 import {
@@ -194,6 +194,35 @@ export interface ClaudeAgentBrokerBridge {
   close(): void
 }
 
+/**
+ * Validate a message BEFORE it becomes a socket frame, and say why in the operator's language.
+ *
+ * The `input` frame has no reply, so the daemon is the only place a rejection can be noticed and it has
+ * no channel to answer on — every send that reached it and failed was simply gone. Running the same pure
+ * validator on this side turns that into a thrown RPC the composer can roll back and toast, which is the
+ * whole difference between "fray refused my message" and "fray ate my message".
+ *
+ * The protocol error's own wording is a boundary label (`input.text contains unsafe text`) aimed at a
+ * developer reading a stack trace. This is the string a human reads in a toast after pressing Enter, so
+ * it names the problem and what to do about it — and it has to FIT: sendEagerFollowUp renders it as
+ * `Steer failed — ${message.slice(0, 90)}`, so anything longer is cut off mid-sentence (measured in the
+ * browser: a 150-char version rendered as "…or h"). Keep each of these under 90 characters.
+ */
+export function validatedInput(message: { id: string; text: string; parentToolUseId?: string }): ReturnType<typeof validateInputMessage> {
+  try {
+    return validateInputMessage(message)
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    if (/exceeds/.test(detail)) {
+      throw new Error(`This message is too long to send (the limit is ${CLAUDE_AGENT_SDK_MAX_INPUT_BYTES / 1024}KB). Shorten it and resend.`)
+    }
+    if (/unsafe text/.test(detail)) {
+      throw new Error("This message holds a control or incomplete character fray can't send. Edit and resend.")
+    }
+    throw new Error(`fray could not send this message: ${detail}`)
+  }
+}
+
 export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): ClaudeAgentBrokerBridge {
   const sessions = new Map<string, ActiveSession>() // keyed by slug — one active session per thread
   // Resolve the claude executable to an ABSOLUTE path ONCE: the SDK the forked daemon runs rejects a bare
@@ -353,12 +382,34 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       // A new dispatch replaces any prior session on the slug.
       const prior = sessions.get(input.threadSlug)
       if (prior) { prior.client.close(); killBroker(deps.stateDir, prior.sessionId); sessions.delete(input.threadSlug) }
+      // VALIDATED BEFORE THE SOCKET, for the reason spelled out on followUp below: a frame the daemon
+      // refuses is discarded there with nobody to tell, and for a DISPATCH that means a worker that
+      // boots, receives no task at all, and sits idle looking frozen from birth.
+      const message = validatedInput({ id: randomUUID(), text: input.prompt })
       const session = await attach(input.threadSlug, input.sessionId, input.cwd, input.permissionMode ?? "default", { appendSystemPrompt: input.appendSystemPrompt, model: input.model, effort: input.effort })
-      session.client.sendInput({ id: randomUUID(), text: input.prompt })
+      session.client.sendInput(message)
       return { binding: { threadSlug: input.threadSlug, sessionId: input.sessionId, cwd: input.cwd, generation: session.generation, state: "active" } }
     },
 
     async followUp(input) {
+      // VALIDATE HERE, not only in the daemon — the same reason steerSubAgent does, and it turned out to
+      // matter just as much on this path. `sendInput` writes a socket frame and returns; the frame has no
+      // reply; the daemon calls `handle.send(...)` and used to swallow its rejection. So a message the
+      // protocol validator refused was discarded THERE with nobody to tell, while this function returned
+      // normally, the router opened an `enqueued` ledger item (which by design never times out) and the
+      // operator watched their own message sit in the transcript as delivered, forever.
+      //
+      // Measured against a real daemon in `_live_broker_input_drop.mts`: one sentence delivered, the same
+      // sentence with a single emoji appended vanished with zero diagnostics. Most of that class is now
+      // deliverable (validateInputMessage no longer applies the display-grade class to a prompt body),
+      // but the residue — an oversized body, a C0 control, a replayed uuid — must FAIL THE OPERATOR'S
+      // SEND rather than evaporate. Running the validator before the frame is what makes that happen:
+      // the throw reaches the RPC, which rolls the optimistic bubble back and toasts.
+      //
+      // FIRST, before any process state is touched: a message that cannot be delivered must not cost a
+      // cold resume, and must certainly not cost the `freshProcess` daemon retirement below — killing the
+      // operator's worker on the way to refusing their message is the worst possible order.
+      const message = validatedInput({ id: inputIdFor(input.deliveryId), text: input.text })
       // Reattach if we don't already hold this session live (fray restarted, or it was detached). The
       // fork opts carry resume:true + the rebuilt system prompt so a DEAD daemon cold-resumes with the
       // worker contract re-applied; when the daemon is still alive they are ignored (socket reconnect).
@@ -384,7 +435,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
         input.threadSlug, input.sessionId, input.cwd, input.permissionMode ?? "default",
         { resume: true, appendSystemPrompt: input.appendSystemPrompt, model: input.model, effort: input.effort },
       )
-      session.client.sendInput({ id: inputIdFor(input.deliveryId), text: input.text })
+      session.client.sendInput(message)
     },
 
     async cancelFollowUp(input) {

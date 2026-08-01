@@ -1008,8 +1008,13 @@ test("input, JSON, environment, and executable boundaries reject unsafe payloads
       harness.handle.send({ id: INPUT_ID, text: "x".repeat(CLAUDE_AGENT_SDK_MAX_INPUT_BYTES + 1) }),
       /input\.text exceeds/,
     )
+    // A C0 control, not a format character. The example here used to be U+061C ARABIC LETTER MARK,
+    // which a prompt body now legitimately carries: `validateInputMessage` was narrowed off the
+    // display-grade class so that the U+200D every multi-part emoji is built from stops being
+    // undeliverable (see claude-agent-sdk-protocol.test.ts). What this boundary still refuses is text
+    // that cannot survive the wire, which is what the assertion is here to pin.
     await assert.rejects(
-      harness.handle.send({ id: INPUT_ID, text: `unsafe\u061cinput` }),
+      harness.handle.send({ id: INPUT_ID, text: `unsafe${String.fromCodePoint(27)}input` }),
       /unsafe text/,
     )
     const tooDeep: Record<string, unknown> = {}

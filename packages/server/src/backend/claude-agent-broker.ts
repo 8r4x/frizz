@@ -251,7 +251,26 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
       for (let nl = buf.indexOf("\n"); nl >= 0; nl = buf.indexOf("\n")) {
         const line = buf.slice(0, nl); buf = buf.slice(nl + 1); if (!line.trim()) continue
         let msg: Record<string, unknown>; try { msg = JSON.parse(line) } catch { continue }
-        if (msg.t === "input") { const message = msg.message as ClaudeInputMessage; void handle.send(message).catch(() => {}); seedSessionTitle(message) }
+        if (msg.t === "input") {
+          const message = msg.message as ClaudeInputMessage
+          // NEVER swallow this. The `input` frame carries no reply, so this catch was the only place a
+          // refused send existed at all — and it threw the evidence away. fray had already answered the
+          // operator's RPC with success and opened an `enqueued` ledger item that by design never times
+          // out, so the message rendered as delivered forever while the agent never saw a byte of it.
+          // Measured live in _live_broker_input_drop.mts before the fix: zero diagnostics, zero errors,
+          // message gone. The bridge now validates before the frame so the common refusals fail the
+          // operator's own send; this reports the residue (a duplicate uuid, a full input queue, a handle
+          // closing under the frame) on the same diagnostic channel every other drop site here uses.
+          void handle.send(message).catch((error: unknown) => {
+            const detail = error instanceof Error ? error.message : String(error)
+            const diagnostic = { kind: "stderr" as const, message: `input dropped, the agent never received it: ${detail}`, truncated: false }
+            // Persist FIRST, then relay — same order and reasoning as the SDK's onDiagnostic above: a
+            // drop is worth attributing even when no fray is attached to hear it right now.
+            writeDiagnostic?.(diagnostic)
+            if (client) write(client, { t: "diagnostic", diagnostic })
+          })
+          seedSessionTitle(message)
+        }
         else if (msg.t === "permission") { const e = pendingPermissions.get(msg.requestId as string); if (e) { pendingPermissions.delete(msg.requestId as string); e.resolve(msg.decision as ClaudePermissionDecision) } }
         else if (msg.t === "interrupt") void handle.interrupt().catch(() => {})
         else if (msg.t === "cancel-input") {
