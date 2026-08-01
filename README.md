@@ -20,7 +20,7 @@
 ## Fray is for you if you have any of these opinions
 
 - **Terminal UIs are dated** and have fundamental limitations that are incompatible with good user experience.
-- **Orchestrator-style apps** like [Conductor](https://conductor.build) and [T3 Code](https://github.com/pingdotgg/t3code) feel overly complex.
+- **Orchestrator-style apps** feel overly complex.
 - **I'm tired of constantly switching between sessions** to check in on my agents' progress.
 
 ## Quickstart
