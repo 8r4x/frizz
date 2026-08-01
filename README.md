@@ -51,6 +51,7 @@ Fray is a browser tab, a queue, and the agent CLIs you already pay for. It bring
 - 🤖 **Claude Code *and* Codex.** Pick the backend per thread and run both against the same repo at once. Fray drives the CLIs you already have installed and signed in.
 - 😴 **Snooze.** Not everything needs an answer now. Park a card for an hour, until tomorrow morning, or until a date you pick — optionally with a follow-up prompt attached, so the thread wakes up already working on what you told it to do next.
 - 🐙 **GitHub integration.** Browse your repo's issues and pull requests without leaving the composer, and turn a selection of them into threads. Workers can read issues, diffs, and CI on their own.
+- 👀 **Built-in CI and PR watchers.** A worker waiting on a build or a review doesn't hand the thread back to you to be told "keep going." It watches, and picks the work back up when the run goes green or a review lands.
 - 📝 **No magic.** A thread behaves like a Claude Code session you started yourself. Fray adds no worktrees, no branches, no dev server, no build integration, no workflow engine to fight with.
 - 🔒 **Local only.** No cloud, no account, no telemetry. The server binds `127.0.0.1` by default and its state lives in `~/.fray/`, never in your checkout.
 
@@ -63,35 +64,6 @@ Browse the repo's issues and pull requests from the composer, select any number 
 </p>
 
 Workers can also read issues, diffs, and CI on their own — but only read. A worker never comments, labels, closes, or merges unless you ask it to.
-
-### The worker plugin
-
-Fray ships a small plugin — [`cc-worker/`](cc-worker) — that every dispatched Claude agent loads. It's what makes a worker behave like a worker instead of a chat session that happens to be running unattended. Your repo's own skills and config load right alongside it.
-
-Three skills, loaded on demand rather than crammed into a system prompt:
-
-| Skill | What it carries |
-| --- | --- |
-| [`fray:handoff`](cc-worker/skills/handoff) | How to end a turn: which kind of card to leave you — finished, waiting, or a question — and worked examples of each. |
-| [`fray:waits`](cc-worker/skills/waits) | How to wait on something slow (a CI run, a release, a review) without either going silent or falsely claiming it's blocked on you. |
-| [`fray:gh`](cc-worker/skills/gh) | The `gh` playbook, including a hard read-vs-write boundary: read issues, PRs, diffs, and CI freely; never comment, label, close, or merge unless you asked. |
-
-Sixteen sub-agent profiles, one per model × effort pair — `fray:opus-high`, `fray:haiku`, and the rest of the grid. A worker splitting work across helpers picks each helper's brainpower deliberately. Fray blanks the inherited model so a child *must* choose, which is what stops a throwaway mechanical prong from quietly running at frontier rates.
-
-Hooks that fix the failure modes unattended agents actually hit:
-
-| Hook | What it prevents |
-| --- | --- |
-| Blocking dialogs | Nobody is at the keyboard, so a prompt waiting on a keypress would hang the thread forever. A worker's question becomes an answerable card instead. |
-| Escaping background jobs | A `&` or `nohup` inside a shell call gets rejected — a process with no lifecycle id outlives its session with no way to wake anyone when it finishes. |
-| Stalled tool approvals | A permission policy refuses the two genuinely catastrophic things, hands anything risky to you as an approve/deny card, and otherwise lets the work proceed rather than stalling overnight. |
-| Lost reasoning | A summary keeps what the agent *did* while dropping *why*. One hook tells the summarizer what to preserve; another keeps a scratchpad current and splices it back in. |
-
-### Waits that don't cost you a round trip
-
-An agent that needs to wait — on CI, a pull request, a release — shouldn't hand the thread back to you just to be told "keep going." So it doesn't. A worker watches its own build to completion, and for longer waits it parks on a durable one that Fray's scheduler owns: a pull request wakes the thread on any new review, comment, or approval, and a timer wakes it at an instant, surviving restarts.
-
-Only a wait that genuinely needs a *person* comes back to your queue.
 
 ## FAQ
 
@@ -148,22 +120,17 @@ Fray has its own small vocabulary. Most of it names a feature, so this doubles a
 | --- | --- |
 | **Thread** | One effort, start to finish. Not a chat tab and not a branch. The session *is* the thread — there's no sidecar document to keep in sync, and dispatching doesn't write a file into your repo. |
 | **Worker** | The agent driving a thread: a real Claude Code or Codex process, running as *you*, with your credentials and your CLI config. |
-| **Backend** | Which CLI a thread runs on. Chosen per thread; both can run against the same repo at the same time. |
-| **Profile** | A pinned model × effort pair, like `fray:opus-high`. A change applies at the thread's next resume, never mid-turn. |
 | **Sub-agent** | A helper a worker dispatches for an independent prong of its own task. Fray binds each one back to its parent, so the fan-out is visible under the parent's card. |
 | **Rested** | An agent that has ended its turn and is waiting on a human. A rested thread isn't idle, it's *your move*. |
 | **The queue** | The single list of threads that need you. A thread only earns a card when it genuinely wants a human. |
-| **Signal** | A worker doesn't just stop; it says *how* it's stopping, and Fray turns that into the card you see. Finished, waiting, or asking you something. |
 | **Snooze** | Hide a card until later — an hour, tomorrow morning, or a date you pick — optionally with a follow-up prompt attached. |
 | **Scratchpad** | A thread's durable working memory, readable under its **Doc** tab. Where a worker keeps what a summary would otherwise lose: the approach, the alternatives it rejected, the decisions you made and reversed. |
-| **Registry** | The SQLite database holding your threads and settings. It lives outside your checkout, so your board survives a `git clean`. |
-| **`FRAY.md`** | Your repo's worker norms, injected verbatim into every thread. The only dial. |
+| **`FRAY.md`** | An optional file at your repo root whose contents are injected into every thread, for when you want agents to follow your repo's own norms. |
 
 ## Docs
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — the invariants, layout, and design decisions. Read it before changing anything.
-- [`cc-worker/`](cc-worker) — the Claude Code plugin every dispatched agent loads.
-- [`FRAY.md`](FRAY.md) — this repo's own worker norms, as a worked example of the one dial.
+- [`FRAY.md`](FRAY.md) — this repo's own worker norms, as a worked example of the optional per-repo prompt.
 
 ## License
 
