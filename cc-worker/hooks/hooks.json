@@ -28,12 +28,6 @@
         ]
       },
       {
-        "matcher": "Bash",
-        "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/bash-silent-failure.mjs\"" }
-        ]
-      },
-      {
         "hooks": [
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scratchpad.mjs\" --mode=nudge --event=PostToolUse" }
         ]
