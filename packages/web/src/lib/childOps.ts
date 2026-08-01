@@ -39,16 +39,12 @@ export const CHILD_RESTED_TITLE = "rested — it stopped, but the work it launch
 // terminal notification), so it breathes rather than showing the flat stale dot — and says so.
 export const CHILD_QUIET_SHELL_TITLE = "running — no recent output"
 
-// The third state of the transcript's liveness column, and the only STATIC one: the op behind this card
-// is over. It exists because a background task and a dispatch each keep a permanent card in the chat
-// (see lib/toolActivity.isToolActivityException), so their mark has to keep saying which KIND of row it
-// is long after the motion that said "alive" has stopped. The words matter more than usual here — the
-// dot alone cannot distinguish "finished" from "still going, just not animating" — so both variants
-// spell it out, and the right-hand reading beside them carries the outcome and the runtime.
-export const CHILD_DONE_TITLE = {
-  AGENT: "finished — this dispatch is no longer running",
-  SHELL: "finished — this background task is no longer running",
-} as const
+// There is deliberately NO "finished" glyph in this vocabulary. Every mark here means the child is in
+// some state of being ALIVE — running, quiet, or stopped-with-live-descendants — so a completed one is
+// marked by the ABSENCE of a mark (maintainer 2026-08-01: "remove the status indicator entirely for a
+// sub-agent or background shell that has completed"). A static done-dot existed for one commit and was
+// removed: it put a mark on nearly every row of a settled transcript while saying nothing the row's own
+// runtime reading did not already say.
 
 export const CHILD_OPEN_TITLE = { AGENT: "Open sub-agent transcript", SHELL: "Open background shell output" } as const
 

@@ -13,15 +13,15 @@ const MIN = 60_000
 test("a resolved child reports its outcome verb, and a nominal one reports none", () => {
   assert.deepEqual(
     agentReading({ agentStatus: "completed", agentElapsedMs: 3 * MIN }),
-    { label: undefined, duration: "3 min", tone: "muted", title: "Ran for 3 min", showSpinner: false },
+    { label: undefined, duration: "3 min", tone: "muted", title: "Ran for 3 min" },
   )
   assert.deepEqual(
     agentReading({ agentStatus: "killed", agentElapsedMs: 41 * MIN }),
-    { label: "stopped", duration: "41 min", tone: "muted", title: "Stopped after 41 min", showSpinner: false },
+    { label: "stopped", duration: "41 min", tone: "muted", title: "Stopped after 41 min" },
   )
   assert.deepEqual(
     agentReading({ agentStatus: "failed", agentElapsedMs: 12 * MIN }),
-    { label: "failed", duration: "12 min", tone: "failed", title: "Failed after 12 min", showSpinner: false },
+    { label: "failed", duration: "12 min", tone: "failed", title: "Failed after 12 min" },
   )
 })
 
@@ -31,7 +31,6 @@ test("a tracked child reads a BARE runtime — the mark on its left is what says
     assert.equal(reading.label, undefined, `${liveState}: no verb — the mark carries the state`)
     assert.equal(reading.duration, "4 min")
     assert.equal(reading.tone, "muted")
-    assert.equal(reading.showSpinner, false)
   }
   // Only a RUNNING child is "working": a tooltip must never contradict the mark beside it.
   assert.match(agentReading({ liveState: "running", liveElapsedMs: 4 * MIN })!.title, /^Working for/)
@@ -57,19 +56,31 @@ test("terminal failures keep the same words and tone when no child record exists
 
 test("only a genuine failure is toned as one", () => {
   const failures = [{ agentStatus: "failed" as const }, { status: "failed" as const, durationMs: 1 }]
+  // `{ status: "pending" }` is deliberately absent: an untracked pending dispatch has no reading at all
+  // any more, so it has no tone to check (see the liveness-claim test below).
   const rest = [
     { agentStatus: "completed" as const }, { agentStatus: "killed" as const },
     { status: "cancelled" as const, durationMs: 1 },
-    { status: "pending" as const }, { liveState: "running" as const, liveElapsedMs: 1 },
+    { liveState: "running" as const, liveElapsedMs: 1 },
   ]
   for (const input of failures) assert.equal(agentReading(input)!.tone, "failed", JSON.stringify(input))
   for (const input of rest) assert.equal(agentReading(input)!.tone, "muted", JSON.stringify(input))
 })
 
-test("an untracked pending dispatch carries the row's only motion, as a neutral spinner", () => {
-  assert.deepEqual(agentReading({ status: "pending" }), { label: "running", tone: "muted", title: "Running", showSpinner: true })
-  // A TRACKED running child must not also spin: its left-hand mark is the one indicator.
-  assert.equal(agentReading({ status: "pending", liveState: "running", liveElapsedMs: MIN })!.showSpinner, false)
+// THE READING MAY NEVER CLAIM LIVENESS. An untracked pending dispatch used to render "running" beside a
+// spinner here, on the theory that "we have no record of this child" is the one thing elapsed time
+// cannot speak for. But `pending` is not evidence of life: the server holds an Agent launch pending
+// until a task-notification correlates to it, so a dispatch whose terminal signal never arrived stays
+// pending forever and that spinner advertised a child dead for hours (maintainer 2026-08-01: it "should
+// not show up under any circumstances"). Liveness now lives in exactly one place — the left-hand mark,
+// which requires an OBSERVED live child record.
+test("an untracked pending dispatch claims nothing at all", () => {
+  assert.equal(agentReading({ status: "pending" }), null)
+  // A TRACKED child still reads its runtime; the mark beside it is what says it is running.
+  assert.deepEqual(
+    agentReading({ status: "pending", liveState: "running", liveElapsedMs: MIN }),
+    { label: undefined, duration: "1 min", tone: "muted", title: "Working for 1 min" },
+  )
 })
 
 test("durations are the spelled-out minute-resolution form, with the precise value in the tooltip", () => {
@@ -87,5 +98,5 @@ test("nothing to report renders nothing, never a fabricated reading", () => {
   assert.equal(agentReading({ status: "completed", durationMs: 533 }), null, "a spawn call's latency is not the child runtime")
   assert.equal(agentReading({ durationMs: 533 }), null, "legacy status-less call timing is equally insufficient")
   // A resolved child with no elapsed still reports its outcome — the verb is the load-bearing part.
-  assert.deepEqual(agentReading({ agentStatus: "killed" }), { label: "stopped", duration: undefined, tone: "muted", title: "Stopped after an unknown time", showSpinner: false })
+  assert.deepEqual(agentReading({ agentStatus: "killed" }), { label: "stopped", duration: undefined, tone: "muted", title: "Stopped after an unknown time" })
 })

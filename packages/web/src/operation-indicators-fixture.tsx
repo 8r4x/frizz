@@ -147,11 +147,12 @@ createRoot(document.getElementById("root")!).render(
           <AgentBlock detail="Prior investigation" prompt="Investigate the earlier failure." subagentType="fray:sonnet-high" agentId="agent-stale" status="pending" />
           {/* Rested child: the hollow mark — it stopped, its own fan-out has not. */}
           <AgentBlock detail="Fan out the migration sweep" prompt="Fan out the sweep across every package." subagentType="fray:opus-high" agentId="agent-rested" status="pending" />
-          {/* Completed child: the STATIC dot — same slot, same hue, same 6px geometry as the pulsing one
-              above it, minus the animation (maintainer 2026-08-01). Read this row against the three above
-              it: every row steps in by the slot, and only MOTION separates the live from the finished.
-              It used to render no mark and no slot at all; that rule existed because an EMPTY slot read
-              as a layout bug, and a filled one is strictly better than either. */}
+          {/* Completed child: NO mark and no slot for one — the header starts flush at "Agent", and the
+              bare runtime is what says it ran and stopped. Read this row against the three above it: the
+              marked rows step in by the slot, these do not, and that is the point. A static "finished"
+              dot filled the slot here for one commit and was removed (maintainer 2026-08-01: "remove the
+              status indicator entirely for a sub-agent or background shell that has completed") — this
+              column means "something is alive behind this row", and a finished child is not. */}
           <AgentBlock detail="Diagnose remotion model routing anomaly" prompt="Diagnose the routing anomaly." subagentType="fray:opus-high" agentId="agent-done" agentStatus="completed" agentElapsedMs={183_000} status="completed" durationMs={183_000} />
           {/* A NON-nominal outcome keeps its verb — no mark can say it — but the two are TONED APART, and
               this pair is the coverage for that. A STOPPED child is not an error (interrupted, or timed
@@ -169,10 +170,12 @@ createRoot(document.getElementById("root")!).render(
               and its duration must still render here (this is what the suppression must never eat). */}
           <AgentBlock detail="Cancelled dispatch (no child record)" prompt="This dispatch was interrupted." status="cancelled" />
           <AgentBlock detail="Failed dispatch (no child record)" prompt="This dispatch failed." status="failed" durationMs={12_000} />
-          {/* The ONE row that draws no mark: a dispatch still PENDING with no child record to point at.
-              Its state is unknown rather than finished, so the static dot would be a lie — the reading
-              spins instead, and the one-indicator-per-row rule keeps the mark slot empty. Kept LAST so
-              the shape assertions can address it as the exception. */}
+          {/* A dispatch still PENDING with no child record to point at — and therefore the one row that
+              reports NOTHING at all, no mark and no reading. It used to spin here beside the word
+              "running", which was the single reading in this matrix that could be flatly false: the
+              server holds an Agent launch pending until a task-notification correlates, so a dispatch
+              whose terminal signal never arrived spun forever over a long-dead child (maintainer
+              2026-08-01: it "should not show up under any circumstances"). */}
           <AgentBlock detail="Untracked pending dispatch (no child record)" prompt="This dispatch has not been correlated yet." status="pending" />
         </ThreadSlugContext.Provider>
       </div>
@@ -207,11 +210,10 @@ createRoot(document.getElementById("root")!).render(
               disclosure once settled — marking those would put a dot on every Read and Grep. */}
           <ToolCardRouter t={{ name: "Bash", detail: "Run the unit suite", desc: "Run the unit suite", command: "npm test", status: "completed", durationMs: 32_000, count: 1 }} />
           <ToolCardRouter t={{ name: "Bash", detail: "Typecheck", desc: "Typecheck", command: "npm run typecheck", status: "failed", exitCode: 1, durationMs: 12_000, count: 1 }} />
-          {/* Resolved BACKGROUND: the STATIC blue dot, and the row that most needed one. A detached task
-              never folds back into the disclosure (isToolActivityException), so its card is permanent —
-              and a permanent card marked only while it happened to be running is one the reader cannot
-              pick out afterwards. Same slot, same blue, same 6px as the live row at the top; only the
-              motion is gone (maintainer 2026-08-01). */}
+          {/* Resolved BACKGROUND: also no mark. This is the row that most invites a finished glyph — a
+              detached task never folds back into the disclosure (isToolActivityException), so its card
+              is permanent and it is tempting to keep marking it. It states "done · 1 min 36 sec"
+              instead. Detachment does not earn a mark in this column; being ALIVE does. */}
           <ToolCardRouter t={{ name: "Bash", detail: "Warm the artifact cache", desc: "Warm the artifact cache", command: "nub scripts/warm-cache.mjs", backgroundState: "background", status: "completed", durationMs: 96_000, count: 1 }} />
         </ThreadSlugContext.Provider>
       </div>

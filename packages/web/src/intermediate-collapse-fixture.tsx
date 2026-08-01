@@ -30,10 +30,10 @@ import "./styles.css"
 //                      collapsed span (the real shape from thread `started-three-fray-in-quick-succession`),
 //                      one of them already finished. Background tasks are lifted out of the collapse and
 //                      render as REAL CARDS — never a `Ran N tool calls` band — with a pulsing blue dot
-//                      while live and a static one once done.
+//                      while live and NO mark at all once done.
 //   ?variant=dispatches  two sub-agent dispatches inside the collapsed span, one still running (tracked in
 //                      thread.subAgents) and one resolved. Same rule as background tasks: real Agent cards
-//                      under the divider, pulsing accent dot vs static accent dot.
+//                      under the divider, pulsing accent dot on the live one, nothing on the resolved one.
 const params = new URLSearchParams(location.search)
 const variant = params.get("variant") ?? "heavy"
 
@@ -158,7 +158,7 @@ const questionthentool: TranscriptMessage[] = [
 // batch that started it (maintainer 2026-08-01: "It's important that those show up in the chat"). This
 // run launches three from three SEPARATE assistant records with ordinary tool work in between — the
 // exact shape the maintainer hit — so it pins BOTH halves: three real cards rather than a batched
-// `Ran N tool calls` band, and the finished one carrying a STATIC blue dot beside the two still pulsing.
+// `Ran N tool calls` band, and only the two LIVE ones marked, the finished one flush at its label.
 const bgShell = (desc: string, command: string, over: Partial<TranscriptToolCall> = {}) =>
   tool("Bash", { desc, detail: command, command, backgroundState: "background", status: "pending", ...over })
 
@@ -174,8 +174,8 @@ const bgshells: TranscriptMessage[] = [
     tool("Edit", { detail: "packages/server/src/project-launch.ts" }),
   ])),
   withId(asst("", [bgShell("Capturing a genuine cold start panel", "nub run dev --fresh")])),
-  // Already finished — the state the static dot exists for. Its card is still the reader's only handle
-  // on a process that ran and ended while they were reading something else.
+  // Already finished — the card stays (it is the reader's only handle on a process that ran and ended
+  // while they were reading something else), but it carries no mark: the reading says "done · 42 sec".
   withId(asst("", [bgShell("Waiting for the cold start to serve", "nub scripts/wait-for-serve.mjs 5312", { status: "completed", durationMs: 42_000 })])),
   withId(asst("Both paths verified live.", [tool("Bash", { detail: "nub --test", desc: "Running the server suite" })])),
   withId(asst("**Fixed** — a relaunch in a repo that already has a server now says so.")),

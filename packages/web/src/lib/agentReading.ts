@@ -55,12 +55,6 @@ export interface AgentReading {
   tone: "muted" | "failed"
   /** The tooltip: a full sentence, carrying the PRECISE duration the minute-resolution reading rounds. */
   title: string
-  /**
-   * A pending dispatch with no child record has no liveness mark on the left, so the reading is the only
-   * place motion can live. A neutral spinner, never the background dot: an untracked dispatch is not a
-   * provably-detached job (see operationIndicators.ts), and this keeps the one-indicator-per-row rule.
-   */
-  showSpinner: boolean
 }
 
 const precise = (ms?: number): string | undefined => (ms === undefined ? undefined : formatToolDuration(ms))
@@ -83,7 +77,6 @@ export function agentReading(input: AgentReadingInput): AgentReading | null {
       duration: coarse(agentElapsedMs),
       tone: failed ? "failed" : "muted",
       title: `${stopped ? "Stopped" : failed ? "Failed" : "Ran for"}${stopped || failed ? " after" : ""} ${exact ?? "an unknown time"}`,
-      showSpinner: false,
     }
   }
 
@@ -97,7 +90,6 @@ export function agentReading(input: AgentReadingInput): AgentReading | null {
       duration: coarse(liveElapsedMs),
       tone: "muted",
       title: liveState === "running" ? `Working for ${exact ?? "an unknown time"}` : `Dispatched ${exact ?? "an unknown time"} ago`,
-      showSpinner: false,
     }
   }
 
@@ -105,7 +97,15 @@ export function agentReading(input: AgentReadingInput): AgentReading | null {
   //    that dispatch returned; its duration is RPC latency, NOT the child runtime. Render nothing rather
   //    than claiming a 13-minute agent "ran for 533 ms". Failed/cancelled calls never launched a child,
   //    so their own terminal timing remains honest and useful.
-  if (status === "pending") return { label: "running", tone: "muted", title: "Running", showSpinner: true }
+  //
+  //    A PENDING one renders nothing either, and that is the point: this reading may never claim
+  //    liveness (maintainer 2026-08-01, of the spinner that used to live here — "a right-justified
+  //    spinner with the 'running' label that should not show up under any circumstances"). `pending` is
+  //    not evidence a child is alive — the server keeps an Agent launch pending until a task-notification
+  //    correlates to it, so a dispatch whose terminal signal never arrived stays pending FOREVER and the
+  //    spinner went on advertising a child that had been dead for hours. Liveness is now stated in
+  //    exactly one place, the left-hand mark, which requires an OBSERVED live child record.
+  if (status === "pending") return null
   if (status !== "failed" && status !== "cancelled") return null
   const failed = status === "failed"
   const stopped = status === "cancelled"
@@ -115,6 +115,5 @@ export function agentReading(input: AgentReadingInput): AgentReading | null {
     duration: coarse(durationMs),
     tone: failed ? "failed" : "muted",
     title: `${stopped ? "Stopped after" : failed ? "Failed after" : "Ran for"} ${exact ?? "an unknown time"}`,
-    showSpinner: false,
   }
 }

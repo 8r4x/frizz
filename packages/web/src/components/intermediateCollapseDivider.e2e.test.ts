@@ -145,48 +145,43 @@ test("the collapsed intermediate run is a hairline divider that names its tool c
       "no ordinary-activity band may swallow a background task",
     )
 
-    // …and the MARK tells the two states apart: pulsing while live, static once done. Read as computed
-    // style, because "no pulsing" is a fact about the animation, not about the class attribute.
-    const shellMarks = await page.$$eval(".fray-bash-header [data-running-indicator], .fray-bash-header [data-done-indicator]", (ns) =>
-      ns.map((n) => {
-        const cs = getComputedStyle(n as HTMLElement)
-        const el = n as HTMLElement
-        // A finished mark carries `data-done-indicator`, never `data-running-indicator` — the latter is
-        // what the one-running-indicator-per-row rule counts, and a static dot is marked, not live.
-        const kind = el.dataset.runningIndicator ?? `done:${el.dataset.doneIndicator}`
-        // Composited onto black and read back as bytes, never parsed out of the string: this dot
-        // serialises as `color(srgb 0.41 0.59 0.79)`, whose digits a naive rgb() parse turns into noise.
-        const canvas = document.createElement("canvas")
-        canvas.width = canvas.height = 1
-        const ctx = canvas.getContext("2d")!
-        ctx.fillStyle = "#000"
-        ctx.fillRect(0, 0, 1, 1)
-        ctx.fillStyle = cs.backgroundColor
-        ctx.fillRect(0, 0, 1, 1)
-        const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data
-        return { kind, animated: cs.animationName !== "none", rgb: [r, g, b] as number[] }
-      }),
+    // …and ONLY the live ones are marked. The finished task states its outcome in words and draws no
+    // glyph at all — the liveness column means "something is alive behind this row", so a completed op
+    // has nothing to say in it (maintainer 2026-08-01). Read as computed style so a mark that stopped
+    // animating but stayed on screen would still fail here.
+    const marksIn = (selector: string) =>
+      page.$$eval(selector, (ns) =>
+        ns.map((n) => {
+          const el = n as HTMLElement
+          const cs = getComputedStyle(el)
+          return { kind: el.dataset.runningIndicator, animated: cs.animationName !== "none" }
+        }),
+      )
+    assert.deepEqual(
+      await marksIn(".fray-bash-header [data-running-indicator]"),
+      [{ kind: "tool-disclosure", animated: true }, { kind: "tool-disclosure", animated: true }],
+      "the two live shells pulse — and the finished one is not among them",
     )
     assert.deepEqual(
-      shellMarks.map((m) => [m.kind, m.animated]),
-      [["tool-disclosure", true], ["tool-disclosure", true], ["done:tool", false]],
-      "two live shells pulse; the finished one holds a static dot",
+      await page.$$eval(".fray-bash-header [data-done-indicator], .fray-bash-header .fray-tool-spinner", (ns) => ns.length),
+      0,
+      "no finished glyph and no spinner may exist on a background card",
     )
-    // The finished dot keeps the shell HUE (blue is what says which runtime the row belongs to) but at a
-    // quieter saturation — a still frame cannot show a pulse, so tone is the only thing left to tell a
-    // running task from a finished one.
-    const saturation = (c: number[]) => Math.max(...c) - Math.min(...c)
-    const [sr, sg, sb] = shellMarks[2].rgb
-    assert.ok(sb > sr && sb > sg, `the finished dot stays shell-blue, got rgb(${shellMarks[2].rgb})`)
-    assert.ok(
-      saturation(shellMarks[2].rgb) < saturation(shellMarks[0].rgb),
-      `…and reads quieter than the live one, got rgb(${shellMarks[2].rgb}) vs rgb(${shellMarks[0].rgb})`,
+    // The finished card's slot is GONE, not merely empty: its label starts flush at the header's left
+    // edge, exactly like the settled foreground cards elsewhere in the transcript.
+    const flush = await page.$$eval(".fray-bash-header", (ns) =>
+      ns.map((n) => {
+        const left = n.firstElementChild as HTMLElement
+        const label = left.querySelector(".fray-bash-label") as HTMLElement
+        return Math.round(label.getBoundingClientRect().left - left.getBoundingClientRect().left)
+      }),
     )
+    assert.ok(flush[0] > 0 && flush[1] > 0, `the two live cards step in by the mark slot, got ${flush.join(", ")}`)
+    assert.equal(flush[2], 0, `the finished card must be flush at 0, got ${flush[2]}px`)
 
     // ---- 6. sub-agent dispatches get exactly the same treatment ----
-    // "Same for sub-agent dispatches" (maintainer 2026-08-01). A resolved dispatch used to render no
-    // mark AND no slot; it now holds the static dot, so a settled transcript still says where the
-    // fan-out happened.
+    // "Same for sub-agent dispatches" (maintainer 2026-08-01) — the ejection AND the mark rule. A running
+    // child pulses; a resolved one draws nothing at all and reads its runtime in words.
     await page.goto(variant("dispatches"), { waitUntil: "networkidle0" })
     await page.waitForSelector(SEL, { timeout: 10_000 })
     const agentCards = await page.$$eval(".fray-bash-header", (ns) =>
@@ -197,40 +192,25 @@ test("the collapsed intermediate run is a hairline divider that names its tool c
       ["Agent Audit the queue card's collapse N min", "Agent Cross-check the sub-agent drawer N min"],
       `both dispatches keep their card under the divider, got ${agentCards.join(" | ")}`,
     )
-    const agentMarks = await page.$$eval(".fray-bash-header [data-running-indicator], .fray-bash-header [data-done-indicator]", (ns) =>
+    assert.deepEqual(
+      await marksIn(".fray-bash-header [data-running-indicator]"),
+      [{ kind: "subagent-disclosure", animated: true }],
+      "only the running child is marked",
+    )
+    assert.equal(
+      await page.$$eval(".fray-bash-header [data-done-indicator], .fray-bash-header .fray-tool-spinner", (ns) => ns.length),
+      0,
+      "a resolved dispatch draws no finished glyph, and nothing spins",
+    )
+    const agentFlush = await page.$$eval(".fray-bash-header", (ns) =>
       ns.map((n) => {
-        const cs = getComputedStyle(n as HTMLElement)
-        const el = n as HTMLElement
-        // A finished mark carries `data-done-indicator`, never `data-running-indicator` — the latter is
-        // what the one-running-indicator-per-row rule counts, and a static dot is marked, not live.
-        const kind = el.dataset.runningIndicator ?? `done:${el.dataset.doneIndicator}`
-        // Composited onto black and read back as bytes, never parsed out of the string: this dot
-        // serialises as `color(srgb 0.41 0.59 0.79)`, whose digits a naive rgb() parse turns into noise.
-        const canvas = document.createElement("canvas")
-        canvas.width = canvas.height = 1
-        const ctx = canvas.getContext("2d")!
-        ctx.fillStyle = "#000"
-        ctx.fillRect(0, 0, 1, 1)
-        ctx.fillStyle = cs.backgroundColor
-        ctx.fillRect(0, 0, 1, 1)
-        const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data
-        return { kind, animated: cs.animationName !== "none", rgb: [r, g, b] as number[] }
+        const left = n.firstElementChild as HTMLElement
+        const label = left.querySelector(".fray-bash-label") as HTMLElement
+        return Math.round(label.getBoundingClientRect().left - left.getBoundingClientRect().left)
       }),
     )
-    assert.deepEqual(
-      agentMarks.map((m) => [m.kind, m.animated]),
-      [["subagent-disclosure", true], ["done:subagent", false]],
-      "the running child pulses; the resolved one holds a static dot",
-    )
-    // A dispatch's finished dot keeps the AGENT hue, never the shell blue — the same "which runtime is
-    // this" reading, quieted the same way.
-    const [ar, ag, ab] = agentMarks[1].rgb
-    assert.ok(ar > ab && ag > ab, `a finished dispatch keeps the accent, got rgb(${agentMarks[1].rgb})`)
-    assert.ok(
-      saturation(agentMarks[1].rgb) < saturation(agentMarks[0].rgb),
-      `…and reads quieter than the running child, got rgb(${agentMarks[1].rgb}) vs rgb(${agentMarks[0].rgb})`,
-    )
-    assert.notDeepEqual(agentMarks[0].rgb, shellMarks[0].rgb, "the two runtime kinds stay different hues")
+    assert.ok(agentFlush[0] > 0, `the running dispatch steps in by the mark slot, got ${agentFlush[0]}px`)
+    assert.equal(agentFlush[1], 0, `the resolved dispatch must be flush at 0, got ${agentFlush[1]}px`)
 
     // ---- 7. control: nothing intermediate, so no divider at all ----
     await page.goto(variant("single"), { waitUntil: "networkidle0" })

@@ -223,34 +223,15 @@ html[data-font="sans"] .fray-bash .md-body {
   .fray-live-dot { animation: none; background: transparent; border: 2px solid var(--live-dot); box-shadow: none; }
 }
 
-/* FOREGROUND in-progress: a pending call with no detached process behind it — an ordinary command that
-   is simply taking a while. It must NOT borrow the live dot, whose whole job is to say "a background op
-   is alive" (a hue the shell/agent tokens carry). A spinner says "underway" without claiming any of
-   that. Drawn in currentColor so it inherits the meta chip's muted tone rather than adding a hue, and
-   sized to sit in the same 6px-ish slot as the dot so swapping the two never nudges the label. */
-.fray-tool-spinner {
-  display: block;
-  /* border-box, or the two 1.25px borders grow an "8px" ring to ~11px — nearly DOUBLE the 6px dot it
-     alternates with, which both broke the size relationship and widened the chip when the two swapped.
-     8px outer is deliberately a shade larger than the dot: a ring needs more area than a filled circle
-     to read at 11.5px, and the extra lightness is right for the quieter of the two states. */
-  box-sizing: border-box;
-  width: 8px;
-  height: 8px;
-  flex: 0 0 auto;
-  border-radius: 9999px;
-  border: 1.25px solid color-mix(in srgb, currentColor 28%, transparent);
-  border-top-color: currentColor;
-  animation: fray-tool-spin 0.85s linear infinite;
-}
-@keyframes fray-tool-spin {
-  to { transform: rotate(360deg); }
-}
-@media (prefers-reduced-motion: reduce) {
-  /* Same rule as the live dot: keep the mark VISIBLE, drop only the motion — an in-progress call that
-     renders nothing is indistinguishable from one that finished. */
-  .fray-tool-spinner { animation: none; border-color: color-mix(in srgb, currentColor 45%, transparent); border-top-color: currentColor; }
-}
+/* NO SPINNER LIVES HERE ANY MORE. `.fray-tool-spinner` was the dispatch card's right-hand indicator for
+   a pending call with no child record, on the theory that "we have no record of this child" is the one
+   thing elapsed time cannot speak for. It was removed 2026-08-01 ("a right-justified spinner with the
+   'running' label that should not show up under any circumstances") because the premise was wrong: the
+   server keeps an Agent launch `pending` until a task-notification correlates to it, so a dispatch whose
+   terminal signal never arrived stayed pending forever and the spinner advertised a child that had been
+   dead for hours. Liveness is stated in ONE place now — the left-hand mark, which requires an observed
+   live child record — and the right-hand slot is words only. Do not reintroduce a second indicator here
+   without a signal that can actually go false. */
 
 /* QUIET-LIVE dot: a background subshell / Monitor that is still a live process but has not touched its
    output in a while (a dev server waiting, a Monitor with no output file at all). It is ALIVE, not
@@ -295,40 +276,13 @@ html[data-font="sans"] .fray-bash .md-body {
      a 1.5px ring, and stacking the halo outside it would make the STATIC mark the largest of the three. */
   .fray-live-dot-quiet { animation: none; opacity: 1; background: transparent; box-shadow: none; border: 1.5px solid var(--quiet-dot); }
 }
-/* RESOLVED background op / dispatch: the process is over, but the CARD still belongs to the liveness
-   column. Every dedicated card in that column now leads with a mark in one of three states — pulsing
-   (running), breathing (alive but quiet), STATIC (done) — so a reader scrolling a settled transcript
-   can find the background tasks and the dispatches without opening anything (maintainer 2026-08-01:
-   "Once they're completed, we can just render a simple blue dot with no pulsing").
-
-   It supersedes the 2026-07-29 "a resolved child gets no mark AND NO SLOT" ruling, which existed only
-   because an EMPTY 13px reservation to the left of the label read as a layout bug. The slot is now
-   FILLED, which is the thing that ruling could not have.
-
-   IT IS MUTED, NOT MERELY UNANIMATED, and that is load-bearing rather than taste. A screenshot freezes
-   the pulse, so a full-brightness static dot is pixel-identical to a live one — and the dispatch card
-   deliberately drops its state VERB for a nominal outcome, on the 2026-07-29 reasoning that "a pulsing
-   dot already says running and NO mark at all already says not running any more". Once every row has a
-   mark, that second half stops being true: a running child reading "4 min" and a finished one reading
-   "3 min" become the same row. So the tone carries what the motion used to, exactly as the quiet dot
-   below does — hue kept (it is still the runtime's own colour, so shell and agent stay apart), mixed
-   toward muted, and no animation at all.
-
-   The GEOMETRY is untouched: 6px plus the same 1px halo, because size is what says "the same kind of
-   mark" and only tone may vary — the rule the quiet dot had to be taught the hard way (2026-07-30). */
-.fray-live-dot-done {
-  display: block;
-  width: 6px;
-  height: 6px;
-  flex: 0 0 auto;
-  border-radius: 9999px;
-  --live-dot: var(--color-accent);
-  --done-dot: color-mix(in srgb, var(--live-dot) 50%, var(--color-muted));
-  background: var(--done-dot);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--done-dot) 28%, transparent);
-}
-.fray-live-dot-done--shell { --live-dot: var(--color-shell); }
-.fray-live-dot-done--agent { --live-dot: var(--color-accent); }
+/* NO "FINISHED" DOT EITHER. `.fray-live-dot-done` briefly filled the liveness slot on every settled
+   background/dispatch card so they stayed findable in a scrolled transcript. Removed 2026-08-01
+   ("remove the status indicator entirely for a sub-agent or background shell that has completed"): the
+   whole column means "something is alive behind this row", so marking finished rows put a glyph on
+   nearly every row while saying nothing the row's own runtime reading did not. Its own design conceded
+   this — a still frame cannot show a pulse, so the finished dot had to be MUTED to avoid reading as
+   live. A completed op is marked by the ABSENCE of a mark, and the slot is dropped with it. */
 
 @supports not (font-variant-caps: all-petite-caps) {
   .petite-caps {

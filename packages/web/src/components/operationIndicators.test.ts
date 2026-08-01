@@ -44,19 +44,21 @@ test("a detached call marks instantly; a foreground one marks on elapsed time", 
   }
 })
 
-// The spinner is no longer a SHELL glyph, but it is not dead: a dispatch with no child record still
-// spins (AgentBlock), because "we have no record of this child" is the one thing elapsed time cannot
-// speak for. So its CSS keeps its coverage — and above all keeps NOT being a --live-dot hue, which is
-// what would let it read as a runtime it has never been.
-test("the dispatch spinner keeps its mark under reduced motion, in the chip's own tone", () => {
+// THE SPINNER IS GONE, and so is the static "finished" dot that briefly replaced the absent mark. Both
+// were second opinions about liveness in a column that already has one, and both could be WRONG: the
+// spinner rode the dispatch call's `pending`, which the server never clears when a task-notification
+// fails to correlate, so it advertised long-dead children indefinitely (maintainer 2026-08-01: it
+// "should not show up under any circumstances"; and "remove the status indicator entirely for a
+// sub-agent or background shell that has completed"). This pins their ABSENCE, because the failure mode
+// is somebody reintroducing a glyph that cannot go false.
+test("no second liveness glyph exists — the left-hand mark is the only one", () => {
   const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8")
-  // currentColor, NOT a --live-dot hue: the spinner must never read as the shell blue or agent accent.
-  assert.match(css, /\.fray-tool-spinner \{[^}]*border-top-color: currentColor/)
-  assert.doesNotMatch(css, /\.fray-tool-spinner \{[^}]*--live-dot/)
-  assert.match(css, /\.fray-tool-spinner \{[^}]*animation: fray-tool-spin/)
-  assert.match(css, /@keyframes fray-tool-spin/)
-  // Motion off, mark still drawn — an in-progress call that renders nothing reads as finished.
-  assert.match(css, /\.fray-tool-spinner \{ animation: none; border-color:/)
+  assert.doesNotMatch(css, /^\.fray-tool-spinner \{/m, "the dispatch spinner must stay removed")
+  assert.doesNotMatch(css, /@keyframes fray-tool-spin\b/, "…along with its animation")
+  assert.doesNotMatch(css, /^\.fray-live-dot-done/m, "a completed op is marked by the ABSENCE of a mark")
+  // The genuinely-live glyphs remain: pulsing for running, breathing for alive-but-quiet.
+  assert.match(css, /\.fray-live-dot \{[^}]*animation: fray-live-pulse/)
+  assert.match(css, /\.fray-live-dot-quiet \{[^}]*animation: fray-live-breathe/)
 })
 
 // THE THRESHOLD is a noise filter: nearly every call resolves in well under a second, and marking those
