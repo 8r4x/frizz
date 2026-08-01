@@ -460,7 +460,23 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
     /--dev\s+explicitly use the unsafe source watcher and Vite\/HMR/
   );
   assert.match(helpText(), /--host \[address\]/);
-  assert.match(helpText(), /only use it on a network you trust/);
+  assert.match(helpText(), /Only do this on a network you trust/);
+  // The command name is a parameter, so no description may hard-code one. `--foreground` did, and
+  // read as advice about a different binary whenever the launcher was invoked under another name.
+  assert.doesNotMatch(helpText("frayctl"), /fray-dev/);
+  assert.match(helpText("frayctl"), /--foreground\s+accepted for compatibility; frayctl/);
+});
+
+test("help stays readable: one description column, and nothing wider than a terminal", () => {
+  // --allowed-host is exactly as wide as the old column, so adding it silently pushed its own
+  // description two columns right of every other option's and forced a hanging line.
+  const columns = new Set<number>();
+  for (const line of helpText().split("\n")) {
+    assert.ok(line.length <= 100, `help line is ${line.length} columns: ${line}`);
+    const entry = /^ {2}(\S+(?: \S+)?) {2,}\S/.exec(line);
+    if (entry) columns.add(entry[0].length - 1);
+  }
+  assert.equal(columns.size, 1, `options, environment and commands must share one column, saw ${[...columns]}`);
 });
 
 test("--host: a bare flag means every interface, and a value must be an address", () => {

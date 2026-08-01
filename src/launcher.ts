@@ -319,36 +319,35 @@ export function helpText(command = "fray-dev"): string {
 
 Usage: ${command} [options] [repository]
 
-Run from any Git repository, or pass an explicit repository path. Fray serves a verified immutable artifact
-for that workspace, automatically selecting or safely building one on first launch, then opens it in your default browser;
-source edits never restart the shared board.
+Run from any Git repository, or pass an explicit repository path. Fray serves a verified immutable
+artifact for that workspace, selecting or safely building one on first launch, then opens it in your
+default browser; source edits never restart the shared board.
 
 Options:
-  --app                use the legacy dedicated app window instead of a browser tab
-  --no-app             print the URL without opening a browser
-  --foreground         accepted for compatibility; fray-dev always runs in the foreground
-  --dev                explicitly use the unsafe source watcher and Vite/HMR instead of an immutable artifact
-  --port <port>        request a fixed port for a new workspace server
-  --host [address]     serve on a network address instead of loopback ("--host" alone means 0.0.0.0)
-  --allowed-host <name>
-                       also accept this DNS name as the board's address (repeatable); "*" accepts any
-  --debug              stream the full event feed to the terminal instead of the compact readout
-  --status             report this workspace's stable server and artifact
-  --stop               stop this workspace's UI supervisor (tmux agents keep running)
-  -h, --help           show this help
+  --app                  use the legacy dedicated app window instead of a browser tab
+  --no-app               print the URL without opening a browser
+  --foreground           accepted for compatibility; ${command} always runs in the foreground
+  --dev                  explicitly use the unsafe source watcher and Vite/HMR, not an artifact
+  --port <port>          request a fixed port for a new workspace server
+  --host [address]       serve on a network address instead of loopback (bare --host means 0.0.0.0)
+  --allowed-host <name>  with --host, also accept this DNS name as the board's address (repeatable)
+  --debug                stream the full event feed to the terminal instead of the compact readout
+  --status               report this workspace's stable server and artifact
+  --stop                 stop this workspace's UI supervisor (tmux agents keep running)
+  -h, --help             show this help
 
 Environment:
-  FRAY_HOST            same as --host
-  FRAY_ALLOWED_HOSTS   same as --allowed-host, comma separated
-
---host puts a board that can run shell commands as you on the network. Everyone who can reach the
-port has full control of it, so only use it on a network you trust. IP addresses work as-is; reach it
-by DNS name and you must list that name with --allowed-host.
+  FRAY_HOST              same as --host
+  FRAY_ALLOWED_HOSTS     same as --allowed-host, comma separated
 
 Commands:
-  build                 build a new immutable candidate from the configured Fray source checkout
-  promote <digest>      explicitly select a verified candidate for this workspace
-  restart               restart the currently promoted artifact without building
+  build                  build a new immutable candidate from the configured Fray source checkout
+  promote <digest>       explicitly select a verified candidate for this workspace
+  restart                restart the currently promoted artifact without building
+
+--host puts a board that can run shell commands as you on the network, and Fray has no login: anyone
+who reaches the port controls it. Only do this on a network you trust. An IP address works as-is; to
+reach the board by DNS name you must list that name with --allowed-host ("*" allows any).
 
 An immutable artifact is the default. --dev is the only explicit unsafe source watcher/HMR mode.
 `;
