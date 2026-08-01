@@ -144,20 +144,21 @@ Two guards worth building in from the start:
   user's entire home directory into one Fray project, with agents dispatched at it.
 - **Confirm on first use, and say what will be written.** The prompt's job is not to ask permission
   in the abstract — it is to name the directory Fray is about to create, at the moment it would be
-  created:
+  created. The maintainer's copy, verbatim:
 
   ```
-  Fray will create ~/notes/.fray/ to hold this project's id and one scratchpad per thread.
-  Everything else lives in ~/.fray/projects/. Continue? [Y/n]
-  Add .fray/ to .gitignore? [Y/n]
+  Fray writes into a .fray directory to store session state. 
+  This directory will be created automatically and added to .gitignore.
+  Continue? [Y/n] >
   ```
 
-  The second line appears **only when a `.gitignore` already exists** in the chosen root. Fray never
-  creates one — offering to add a line to a file the user already maintains is housekeeping for
-  Fray's own footprint; creating the file would be Fray deciding they should have one, which is the
-  thing §6 rules out. Decline is remembered, not re-asked.
+  Skip it with `--yes`, and never ask again once `.fray/fray.id` exists.
 
-  Skip both with `--yes`, and never ask again once `.fray/fray.id` exists.
+  **One detail to settle:** line 2 states the `.gitignore` addition as fact, but the standing rule is
+  to append only to a `.gitignore` that already exists — Fray creating one would be Fray deciding the
+  user should have version control, which §6 rules out. So in a directory with no `.gitignore` the
+  sentence is not true as written. Either drop that sentence in that case, or create the file. The
+  copy above is exact for the common case; the no-`.gitignore` variant is the human's call.
 
 ## 5. The worker prompt
 
@@ -286,6 +287,56 @@ plain directory it does not call Git at all.** What goes away is the hard failur
 run inside a Git repository` — and the assumption that a project must be a repo. What does *not*
 appear is any new opinion: no offer, no warning, no fallback version control. A repo is better
 because Git is better, not because Fray rewards you for it.
+
+## 10. What is in `~/.fray`, and what could be project-local
+
+The question this document kept provoking — *why write to the home directory at all?* — deserves the
+measurements rather than an argument. Taken from this machine, 35 projects:
+
+| | where | size | could it be project-local? |
+| --- | --- | --- | --- |
+| `builds/` — promoted Fray artifacts | `~/.fray` | **1.8 GB**, 59 digests | **No.** One artifact serves every project; per-project means copying the runtime 35 times |
+| `ports/`, the global launch lock | `~/.fray` | ~0 | **No.** Port allocation coordinates ACROSS projects; that is what makes it global |
+| `quota-cache/` | `~/.fray` | 4 KB | **No.** Keyed by provider account, not by project |
+| `projects/<id>/browser-profile` | `~/.fray` | **1.51 GB** | Technically yes, and obviously not — that is a Chrome profile per project, in someone's source tree |
+| `projects/<id>/` everything else — `ui.db`, logs, attachments, daemon records, locks | `~/.fray` | **27.8 MB total**, ~800 KB per project | **Yes.** This is the part a reasonable person means by "session state" |
+| daemon sockets | `$TMPDIR` | — | Already neither: hashed into `$TMPDIR` because a unix socket path cannot exceed 104 bytes on macOS (`claude-broker-host.ts:29`) |
+
+So the split is: **two large caches and one cross-project coordinator that cannot move, a Chrome
+profile nobody wants in their repo, and about 800 KB per project of actual session state that
+genuinely could live in `.fray/`.**
+
+Worth correcting an implication from earlier in this document: socket path length is *not* an
+argument for `~/.fray`. Sockets already live in `$TMPDIR` under a 16-hex-char hash for exactly that
+reason, and the record that points at them notes "long paths are fine here". The layout question is
+about size, sharing and coordination — not about paths.
+
+### If the 800 KB moved into `.fray/`
+
+For, honestly:
+
+- The project becomes self-contained. Move it, copy it to another machine, and its threads come with
+  it — the same property that made the id belong there (§3).
+- No orphaned state. Today, deleting a project directory leaves its state dir behind forever; there
+  are 35 of them here, and no one can say which still have a directory on the other end.
+- It answers this question permanently, which has non-trivial value for a tool asking people to trust
+  it with a repo.
+
+Against:
+
+- **A live SQLite database in a synced directory is a corruption hazard.** Dropbox, iCloud Drive and
+  OneDrive do not understand WAL files, and a scratch folder is exactly the kind of place that gets
+  synced. `~/.fray` is not.
+- It inverts a promise the README currently makes — "everything durable lives outside your checkout
+  … you can delete `.fray/` and keep every thread and setting" — and that promise is load-bearing for
+  the §3 recovery rule.
+- `ui.db-wal`/`ui.db-shm` churn inside a working tree, which every `git status` and every file
+  watcher in the user's editor will see. The `.gitignore` offer covers Git; it does not cover the
+  watcher.
+
+**Not a decision this document needs to make.** Gitless projects work identically either way, and the
+`.fray/fray.id` file (§3) is settled regardless. Recorded here so the layout question is answered
+with numbers next time it comes up, rather than re-litigated.
 
 ## Open questions for the human
 
