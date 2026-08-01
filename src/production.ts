@@ -3,9 +3,19 @@
 // checkout source; `fray` runs the package that npm resolved and never turns an npx cache into a
 // deployment directory.
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { launchApp, launchBrowserTab } from "./browser.ts";
+import { Readout, tildePath } from "./readout.ts";
+import {
+  appendCrashRecord,
+  createLogger,
+  logEnvironment,
+  runLogPath,
+  setAmbientLogger,
+  type Logger,
+} from "@fray-ui/server/logging";
 import {
   acquireGlobalLaunchLock,
   choosePort,
@@ -87,6 +97,7 @@ Options:
   --app                use the legacy dedicated app window instead of a browser tab
   --no-app             print the URL without opening a browser
   --port <port>        request a fixed port for a new workspace server
+  --debug              stream the full event feed to the terminal instead of the compact readout
   -h, --help           show this help`,
   );
   process.exit(0);
@@ -104,6 +115,28 @@ const workspace: Workspace = (() => {
   } catch (error) { return fail(error); }
 })();
 process.chdir(workspace.root);
+// Every launch leaves a complete record on disk, so a crash is never silent. The forked control-plane
+// child appends to this same file rather than writing to the terminal the readout is repainting.
+const logger: Logger = setAmbientLogger(
+  process.env.FRAY_LOG_FILE
+    ? createLogger({ file: process.env.FRAY_LOG_FILE, owner: false })
+    : createLogger({ file: runLogPath(workspace.stateDir) }),
+);
+const readout = reexec || process.env.FRAY_PRODUCTION_SUPERVISOR === "1"
+  ? undefined
+  : new Readout({ debug: options.debug, version: PACKAGE_VERSION });
+if (options.debug) {
+  logger.onRecord((record) => {
+    const at = new Date(record.at).toISOString().slice(11, 23);
+    process.stderr.write(`${at} ${record.level.toUpperCase().padEnd(5)} ${record.scope.padEnd(12)} ${record.message}\n`);
+  });
+}
+readout?.plan([
+  { key: "server", label: "Server" },
+  { key: "browser", label: options.noApp ? "Address" : "Browser" },
+]);
+readout?.begin("server", "starting");
+logger.info("launcher", `frayui ${PACKAGE_VERSION} starting for ${workspace.root}`);
 const target = workspaceLaunchTarget(workspace);
 const expected = expectedOwnerHealth(target, readProjectLaunchOwner(workspace.stateDir));
 
@@ -125,24 +158,42 @@ async function existingPort(): Promise<number | undefined> {
  */
 async function openOrPrint(port: number, reused: boolean): Promise<void> {
   const url = `http://127.0.0.1:${port}`;
-  console.log(`${reused ? "reusing" : "started"} Fray ${PACKAGE_VERSION} for ${workspace.root}`);
-  if (options.noApp) {
+  logger.info("launcher", `${reused ? "reusing" : "started"} Fray at ${url}`);
+  readout?.settle("server", "done", `port ${port}`);
+  let browser: string | undefined;
+  if (!options.noApp) {
+    readout?.begin("browser", options.appMode ? "requesting app window" : "requesting default browser");
+    try {
+      if (options.appMode) {
+        await launchApp(url, { dataPath: join(workspace.stateDir, "browser-profile") });
+        browser = reused ? "focused the Fray app window" : "opened the Fray app window";
+      } else {
+        await launchBrowserTab(url);
+        browser = "opened in your default browser";
+      }
+      logger.info("launcher", browser);
+    } catch (error) {
+      browser = `could not open the ${options.appMode ? "app window" : "default browser"} — open the address above`;
+      logger.warn("launcher", `${browser}: ${error instanceof Error ? error.message : error}`);
+    }
+    readout?.settle("browser", "done", browser);
+  } else {
+    readout?.settle("browser", "done", url);
+  }
+  if (!readout) {
+    console.log(`${reused ? "reusing" : "started"} Fray ${PACKAGE_VERSION} for ${workspace.root}`);
     console.log(url);
     return;
   }
-  try {
-    if (options.appMode) {
-      await launchApp(url, { dataPath: join(workspace.stateDir, "browser-profile") });
-      console.log(`${reused ? "focused" : "opened"} Fray app — ${url}`);
-    } else {
-      await launchBrowserTab(url);
-      console.log(`requested Fray in your default browser — ${url}`);
-    }
-  } catch {
-    console.log(
-      `Could not open the ${options.appMode ? "Fray app window" : "default browser"}. Open manually: ${url}`,
-    );
-  }
+  const home = homedir();
+  readout.ready(
+    [
+      { label: "Local", value: `${url}/`, accent: true },
+      { label: "Project", value: `${workspace.name} — ${tildePath(workspace.root, home)}` },
+      ...(logger.file ? [{ label: "Logs", value: tildePath(logger.file, home) }] : []),
+    ],
+    options.debug ? undefined : "press ctrl-c to stop · run with --debug for the full event feed",
+  );
 }
 
 async function runSupervisor(port: number, token: string): Promise<never> {
@@ -150,7 +201,16 @@ async function runSupervisor(port: number, token: string): Promise<never> {
   // Registry installs may have skipped node-pty's post-install; repair it before anything spawns a pty.
   ensureNativeHelperPermissions();
   const owner = adoptProjectLaunchOwner(target, token, "supervisor");
-  const env = projectLaunchEnvironment({ ...process.env, FRAY_PRODUCTION_SUPERVISOR: "1" }, target, owner.token);
+  const env = projectLaunchEnvironment(
+    {
+      ...process.env,
+      FRAY_PRODUCTION_SUPERVISOR: "1",
+      ...logEnvironment(logger, options.debug ? "debug" : "info"),
+      ...(options.debug ? { FRAY_DEBUG: "1" } : {}),
+    },
+    target,
+    owner.token,
+  );
   const webDist = join(import.meta.dirname, "..", "web-dist");
   // The registry package runs directly from what it ships, so it carries its own runtime closure
   // (staged by scripts/prepare-package.mjs). The server SHELLS OUT to the board parser and every
@@ -215,7 +275,22 @@ async function runSupervisor(port: number, token: string): Promise<never> {
       process.exit(0);
     },
   });
-  const stop = createSupervisorShutdownHandler({ close: () => supervisor.close(), force: () => supervisor.forceStop(), release: () => owner.release(), exit: (code) => process.exit(code), error: (line) => console.error(line) });
+  const stop = createSupervisorShutdownHandler({
+    close: () => supervisor.close(),
+    force: () => supervisor.forceStop(),
+    release: () => owner.release(),
+    exit: (code) => {
+      logger.info("launcher", `stopped with code ${code}`);
+      const suffix = logger.file ? `\n  log: ${tildePath(logger.file, homedir())}` : "";
+      process.stdout.write(
+        code === 0
+          ? `\n  Fray stopped. Agent sessions in tmux keep running.${suffix}\n\n`
+          : `\n  Fray stopped with errors (exit ${code}).${suffix}\n\n`,
+      );
+      process.exit(code);
+    },
+    error: (line) => logger.error("supervisor", line.startsWith("[fray-ui] ") ? line.slice(10) : line),
+  });
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
   void supervisor.stopRequested.then(stop);
@@ -264,4 +339,15 @@ try {
     await openOrPrint(port, false);
     await running;
   } finally { release?.(); claim.lease.release(); }
-} catch (error) { fail(error); }
+} catch (error) {
+  logger.error("launcher", `startup failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+  if (readout) {
+    const where = readout.activeStep();
+    readout.fail(
+      `${where ? `${where.label.toLowerCase()}: ` : ""}${error instanceof Error ? error.message : String(error)}`,
+      logger.file ?? undefined,
+    );
+    process.exit(1);
+  }
+  fail(error);
+}
