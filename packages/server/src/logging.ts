@@ -1,0 +1,328 @@
+import {
+  appendFileSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs"
+import { homedir } from "node:os"
+import { join } from "node:path"
+
+// ── Structured logging, shared by every Fray process ───────────────────────────────────────────────
+// Fray's readout used to be whatever each subsystem happened to console.log, printed straight to a TTY
+// that the launcher, the supervisor and the forked control-plane child all wrote to at once. Two
+// consequences, both of which the operator saw every launch: the launcher had to abandon its animated
+// progress line the moment the child started talking (it cannot clear another process' output), and a
+// crash left nothing behind to read afterwards.
+//
+// So every record now goes through here. The DISK sink is unconditional and is the complete feed; the
+// terminal is a deliberately thin view onto it. `--debug` widens the terminal view back to everything.
+//
+// Processes share one log FILE, not one writer: each opens it O_APPEND and writes whole lines. POSIX
+// guarantees an O_APPEND write smaller than PIPE_BUF lands atomically at the end, so the child and its
+// supervisor interleave records without a lock or an IPC hop, and a child that dies mid-write cannot
+// truncate what the supervisor already wrote.
+
+export type LogLevel = "debug" | "info" | "warn" | "error"
+
+const LEVEL_ORDER: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 }
+
+export interface LogRecord {
+  at: number
+  level: LogLevel
+  /** The subsystem speaking: "launcher", "supervisor", "server", "tailer", … */
+  scope: string
+  message: string
+}
+
+/** Env carried into forked children so they append to the same file at the same verbosity. */
+export const LOG_FILE_ENV = "FRAY_LOG_FILE"
+export const LOG_LEVEL_ENV = "FRAY_LOG_LEVEL"
+/** Operator override, accepting either a directory or an exact `.log` path (wrangler's convention). */
+export const LOG_PATH_ENV = "FRAY_LOG_PATH"
+
+/** Both bounds apply: 20 runs is nothing to someone who restarts constantly, 14 days nothing to someone who runs it twice. */
+const RETAINED_RUNS = 20
+const RETAINED_DAYS = 14
+/** Fray's debug feed is chatty; a wedged subsystem must not be able to fill the disk. */
+const MAX_LOG_BYTES = 32 * 1024 * 1024
+
+export function defaultLogRoot(stateDir?: string, home = homedir()): string {
+  // Per PROJECT, because Fray serves one board per repository and a merged machine-wide log would
+  // interleave unrelated boards. `~/.fray` is already this tool's state root (artifacts, per-project
+  // directories, the global launch lock), so logs live beside them rather than under a second
+  // convention imported for this one subsystem.
+  //
+  // Deliberately NOT `env-paths`/XDG/`~/Library/Logs`: fray keeps one dotdir on every platform, and
+  // splitting one subsystem out of it would make the crash message platform-conditional for no gain.
+  return stateDir ? join(stateDir, "logs") : join(home, ".fray", "logs")
+}
+
+function runStamp(at: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0")
+  return (
+    `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}` +
+    `T${pad(at.getHours())}-${pad(at.getMinutes())}-${pad(at.getSeconds())}`
+  )
+}
+
+/**
+ * The path for THIS run. One file per launch, so "the server just died, here is its log" is an exact
+ * path rather than a directory to go rummaging in.
+ *
+ * `FRAY_LOG_PATH` overrides the location and takes either a directory (a run file is named inside it)
+ * or an exact `.log` path, which is what makes CI capture and `--debug > file` painless.
+ */
+export function runLogPath(
+  stateDir?: string,
+  at = new Date(),
+  pid = process.pid,
+  home = homedir(),
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const name = `fray-${runStamp(at)}-${pid}.log`
+  const override = env[LOG_PATH_ENV]?.trim()
+  if (override) return override.endsWith(".log") ? override : join(override, name)
+  return join(defaultLogRoot(stateDir, home), name)
+}
+
+/** The stable path a crash message can name without knowing which run produced it. */
+export function latestLogPath(dir: string): string {
+  return join(dir, "latest.log")
+}
+
+/**
+ * Point `latest.log` at this run. A symlink where the platform allows one; otherwise a plain file
+ * holding the real path, which still gives a reader one place to look.
+ */
+function linkLatest(dir: string, target: string): void {
+  const link = latestLogPath(dir)
+  try {
+    rmSync(link, { force: true })
+    symlinkSync(target, link)
+  } catch {
+    try {
+      writeFileSync(link, `${target}\n`, { mode: 0o600 })
+    } catch {
+      // Purely a convenience pointer; the run path is reported directly regardless.
+    }
+  }
+}
+
+/**
+ * Drop run logs beyond `keep`, and any older than `days` regardless of count.
+ * Best-effort throughout: retention must never fail a launch.
+ */
+export function pruneRunLogs(dir: string, keep = RETAINED_RUNS, days = RETAINED_DAYS, now = Date.now()): void {
+  let entries: string[]
+  try {
+    entries = readdirSync(dir).filter((name) => name.endsWith(".log") && name !== "latest.log")
+  } catch {
+    return
+  }
+  const dated = entries
+    .map((name) => {
+      try {
+        return { name, at: statSync(join(dir, name)).mtimeMs }
+      } catch {
+        return { name, at: 0 }
+      }
+    })
+    .sort((a, b) => b.at - a.at)
+  const cutoff = now - days * 24 * 60 * 60 * 1_000
+  const stale = dated.filter((entry, index) => index >= keep || entry.at < cutoff)
+  for (const entry of stale) {
+    try {
+      rmSync(join(dir, entry.name), { force: true })
+    } catch {
+      // A log we cannot delete is inert; it simply ages out on a later launch.
+    }
+  }
+}
+
+function formatDiskLine(record: LogRecord): string {
+  const at = new Date(record.at)
+  const pad = (value: number, width = 2) => String(value).padStart(width, "0")
+  const clock =
+    `${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}.${pad(at.getMilliseconds(), 3)}`
+  // Fixed-width level and scope so the message column lines up when you open the file. This is read by
+  // a human after a crash far more often than it is parsed, so favour the eye.
+  return `${clock}  ${record.level.toUpperCase().padEnd(5)}  ${record.scope.padEnd(12)}  ${record.message}\n`
+}
+
+export interface Logger {
+  debug(scope: string, message: string): void
+  info(scope: string, message: string): void
+  warn(scope: string, message: string): void
+  error(scope: string, message: string): void
+  /** Where the complete feed is being written, or null when disk logging is unavailable. */
+  file: string | null
+  /** Terminal records are handed here instead of being printed, so a readout can own the TTY. */
+  onRecord(listener: (record: LogRecord) => void): () => void
+  close(): void
+}
+
+export interface LoggerOptions {
+  /** Absolute path of the run log. Omit to derive one from `stateDir`. */
+  file?: string
+  stateDir?: string
+  /** Records below this level are dropped everywhere, including on disk. */
+  level?: LogLevel
+  /** Stop writing past this many bytes rather than filling the disk. */
+  maxBytes?: number
+  /**
+   * Whether this process owns the log directory. The owner sweeps retention and repoints
+   * `latest.log`; a forked child that adopted its parent's path must do neither. Defaults to true.
+   */
+  owner?: boolean
+  /** Test seam. */
+  now?: () => number
+}
+
+function openLogFile(path: string): number | null {
+  try {
+    mkdirSync(join(path, ".."), { recursive: true, mode: 0o700 })
+    // O_APPEND: every write is positioned at the current end of file by the kernel, so concurrent
+    // processes cannot overwrite each other even without any coordination between them.
+    return openSync(path, "a", 0o600)
+  } catch {
+    // A launch must never fail because logging could not be set up. Degrade to terminal-only.
+    return null
+  }
+}
+
+export function createLogger(options: LoggerOptions = {}): Logger {
+  const path = options.file ?? runLogPath(options.stateDir)
+  const dir = join(path, "..")
+  const level = options.level ?? "debug"
+  const now = options.now ?? Date.now
+  const threshold = LEVEL_ORDER[level]
+  const maxBytes = options.maxBytes ?? MAX_LOG_BYTES
+  let fd = openLogFile(path)
+  // Only the process that OWNS this run's directory sweeps retention and repoints `latest`. A forked
+  // child adopts its parent's path from the environment and must not prune its parent's history.
+  if (fd !== null && options.owner !== false) {
+    pruneRunLogs(dir)
+    linkLatest(dir, path)
+  }
+  let written = 0
+  const listeners = new Set<(record: LogRecord) => void>()
+
+  const emit = (recordLevel: LogLevel, scope: string, message: string) => {
+    if (LEVEL_ORDER[recordLevel] < threshold) return
+    const record: LogRecord = { at: now(), level: recordLevel, scope, message }
+    if (fd !== null) {
+      try {
+        const line = formatDiskLine(record)
+        if (written + line.length > maxBytes) {
+          // Stop rather than grow without bound; a wedged subsystem can emit forever.
+          writeSync(fd, `--- log truncated at ${maxBytes} bytes ---\n`)
+          fd = null
+        } else {
+          writeSync(fd, line)
+          written += line.length
+        }
+      } catch {
+        // The descriptor went away (disk full, directory removed). Stop trying; keep the process alive.
+        fd = null
+      }
+    }
+    for (const listener of listeners) {
+      try {
+        listener(record)
+      } catch {
+        // A broken presenter must not take down the subsystem that logged.
+      }
+    }
+  }
+
+  return {
+    debug: (scope, message) => emit("debug", scope, message),
+    info: (scope, message) => emit("info", scope, message),
+    warn: (scope, message) => emit("warn", scope, message),
+    error: (scope, message) => emit("error", scope, message),
+    get file() {
+      return fd === null ? null : path
+    },
+    onRecord(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    close() {
+      listeners.clear()
+      fd = null
+    },
+  }
+}
+
+// ── The process-wide logger ────────────────────────────────────────────────────────────────────────
+// Subsystems (the tailer, the scheduler, the codex backend) are deep in the call graph and have no
+// route to a logger handed down from the launcher. They call `log.*` and it resolves the ambient one.
+//
+// A forked child has no launcher to configure it, so it adopts the file its parent named in the
+// environment. That is the whole mechanism by which the control-plane child's records reach the same
+// file as the supervisor's, with no IPC and no pipe.
+
+let ambient: Logger | null = null
+
+export function setAmbientLogger(logger: Logger): Logger {
+  ambient = logger
+  return logger
+}
+
+/** Format one record for a terminal that is showing the full feed. */
+export function formatFeedLine(record: LogRecord): string {
+  const at = new Date(record.at).toISOString().slice(11, 23)
+  return `${at} ${record.level.toUpperCase().padEnd(5)} ${record.scope.padEnd(12)} ${record.message}`
+}
+
+export function ambientLogger(): Logger {
+  if (ambient) return ambient
+  const inherited = process.env[LOG_FILE_ENV]
+  const level = process.env[LOG_LEVEL_ENV] as LogLevel | undefined
+  const logger = createLogger({
+    ...(inherited ? { file: inherited, owner: false } : {}),
+    ...(level && level in LEVEL_ORDER ? { level } : {}),
+  })
+  // The whole reason the launcher can repaint is that this process says NOTHING to the shared
+  // terminal by default — its records reach the operator through the run log. `--debug` sets
+  // FRAY_DEBUG in the child environment and opens the tap back up.
+  if (process.env.FRAY_DEBUG === "1") {
+    logger.onRecord((record) => process.stderr.write(`${formatFeedLine(record)}\n`))
+  }
+  ambient = logger
+  return ambient
+}
+
+/** Environment additions that make a forked child log into this run's file. */
+export function logEnvironment(logger: Logger, level: LogLevel = "debug"): NodeJS.ProcessEnv {
+  return logger.file ? { [LOG_FILE_ENV]: logger.file, [LOG_LEVEL_ENV]: level } : {}
+}
+
+export const log = {
+  debug: (scope: string, message: string) => ambientLogger().debug(scope, message),
+  info: (scope: string, message: string) => ambientLogger().info(scope, message),
+  warn: (scope: string, message: string) => ambientLogger().warn(scope, message),
+  error: (scope: string, message: string) => ambientLogger().error(scope, message),
+}
+
+/**
+ * Append one already-formatted line to a run log without owning a logger.
+ *
+ * The crash path uses this: by the time an uncaught exception reaches the top level the logger may be
+ * closed, so the handler reopens, writes and closes rather than trusting shared state.
+ */
+export function appendCrashRecord(path: string, message: string): void {
+  try {
+    mkdirSync(join(path, ".."), { recursive: true, mode: 0o700 })
+    appendFileSync(path, formatDiskLine({ at: Date.now(), level: "error", scope: "crash", message }), {
+      mode: 0o600,
+    })
+  } catch {
+    // Nothing useful remains to be done if even the crash record cannot be written.
+  }
+}
