@@ -76,6 +76,39 @@ export class RetryableDeliveryError extends Error {
   }
 }
 
+/**
+ * A bump/resume REACTIVATES an archived thread: the maintainer messaging an Inactive (archived) thread
+ * expects it back in Active. There is deliberately no Reopen verb anywhere in fray — the composer under
+ * the "Done" readout IS the reopen affordance (see web ThreadLifecycleFooter) — so this un-archive is
+ * the entire mechanism behind that promise, and every runtime has to honour it.
+ *
+ * It lives HERE, above `resumeThreadOwned`, because only the tmux path goes through that function. A
+ * broker-backed Claude row (detached daemon) and an app-server Codex row (bridge) both branch away in
+ * the followUp RPC long before it, so while this lived inside `resumeThreadOwned` those two reopened
+ * their WORKER without reopening their ROW: the daemon cold-resumed and started executing while the
+ * board still read `state='archived'`, which renders the thread as Done and — because an archived
+ * thread has no lifecycle verbs — leaves it with no Mark-as-done button to stop it with. Observed
+ * 2026-07-31 on a live broker thread: `claude --resume` running for minutes against a row still
+ * carrying `exited=1, state='archived'`.
+ *
+ * Called UP FRONT, before the live/dead branch, so a still-LIVE archived thread reactivates too rather
+ * than being stranded in Inactive by the live-inject path's early return. Touch the row only when it is
+ * actually archived, so an ordinary live steer emits no needless per-keystroke delta. Session-guarded:
+ * a row that was re-dispatched under us is a CAS miss, not a reopen. (The wakers scheduler never
+ * reaches this — it filters archived threads out — so this only ever un-hides a thread on an EXPLICIT
+ * human bump, never auto-resurrects a deliberately-shelved one.)
+ */
+export function reopenArchivedThreadForFollowUp(
+  deps: { storage: Pick<Storage, "setStateIfCurrent">; board: Pick<BoardManager, "refresh"> },
+  row: Pick<SessionRow, "slug" | "session_id" | "runtime_generation" | "state" | "archived">,
+): void {
+  if (row.state !== "archived" && row.archived !== 1) return
+  if (!deps.storage.setStateIfCurrent(row.slug, row.session_id, row.runtime_generation ?? 0, "open")) {
+    throw new RetryableDeliveryError("This thread changed before it could be reopened; no worker was contacted")
+  }
+  deps.board.refresh()
+}
+
 // The ONE resume/steer path, shared by the followUp RPC (a human steer) and the wakers scheduler (a
 // fired machine-wait). Kept in its own module so the scheduler can reuse it without importing the RPC
 // router. Live session → inject into the running claude (paste-buffer for multiline so newlines
@@ -1143,21 +1176,13 @@ function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string, deli
   if (runtimeBinding.kind === "conflict") {
     throw new RetryableDeliveryError("This thread has a competing adoption attempt; no worker was contacted")
   }
-  // A bump/resume REACTIVATES an archived thread: the maintainer messaging an Inactive (archived)
-  // thread expects it back in Active. Un-archive UP FRONT — before the live/dead branch — so BOTH the
-  // live-inject path (which early-returns below) and the dead-resume path reactivate uniformly; without
-  // this, bumping a still-LIVE archived thread would leave it stranded in Inactive. setState clears BOTH
-  // the lifecycle `state` and the legacy `archived` flag (stateStmt: state='open', archived=0), and the
-  // board refresh re-sections the row via the SSE delta (sectionOf keys on `state`). Touch the row only
-  // when it is actually archived so a normal live steer emits no needless per-keystroke delta. (The
-  // wakers scheduler never reaches here for an archived thread — it filters them out — so this only ever
-  // un-hides a thread on an EXPLICIT human bump, never auto-resurrects a deliberately-shelved one.)
-  if (row.state === "archived" || row.archived === 1) {
-    if (!deps.storage.setStateIfCurrent(slug, row.session_id, row.runtime_generation ?? 0, "open")) {
-      throw new RetryableDeliveryError("This thread changed before it could be reopened; no worker was contacted")
-    }
-    deps.board.refresh()
-  }
+  // Un-archive before the live/dead branch below — see reopenArchivedThreadForFollowUp for why it sits
+  // up front and why it is shared rather than inlined here. setState clears BOTH the lifecycle `state`
+  // and the legacy `archived` flag (stateStmt: state='open', archived=0), and the board refresh
+  // re-sections the row via the SSE delta (sectionOf keys on `state`). The followUp RPC also calls it
+  // for the non-tmux runtimes, which never reach this function; a second call here is a no-op because
+  // the row it re-read is already open.
+  reopenArchivedThreadForFollowUp(deps, row)
   // Stamp the send with its invisible delivery marker (delivery-marker.ts) for the COMPOSER paths only.
   // Those are the ones whose bytes the tmux+TUI paste channel rewrites, which is what makes text-based
   // delivery confirmation guesswork; the marker turns it into an id lookup. The dead-session resume

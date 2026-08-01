@@ -60,7 +60,7 @@ import { needsFreshProcessForLimit, type AppContext } from "./context.ts"
 import { appServerTurnStalled } from "./board.ts"
 import { runThreadUpdate } from "./fray.ts"
 import { repairThreadFile } from "./repair.ts"
-import { resumeThread } from "./resume.ts"
+import { reopenArchivedThreadForFollowUp, resumeThread } from "./resume.ts"
 import { appendDelivery, cancelDelivery, deliveryItem, hasDelivery } from "./delivery-ledger.ts"
 import { flushStuckComposer } from "./delivery-confirm.ts"
 import {
@@ -920,6 +920,15 @@ export function createRouter(ctx: AppContext) {
             throw new Error("This worker has sub-agents still running; restarting it would kill them. Wait for them to finish, then restart.")
           }
         }
+        // Reopen an archived thread HERE, above the runtime branches, because only the tmux path reaches
+        // resumeThread (where this used to live alone). A broker-backed Claude row and an app-server
+        // Codex row both return from their own branch below, so sending them a follow-up used to resume
+        // the WORKER while leaving the ROW archived: the thread executed away while the board read Done,
+        // and — an archived thread having no lifecycle verbs — offered no Mark-as-done button to stop it.
+        // That is the state the "send a message to reopen it" readout promises against, so it has to hold
+        // for every runtime. Raised 2026-07-31 against a live broker thread ("showing up as done… but it
+        // is actually running actively").
+        if (row) reopenArchivedThreadForFollowUp(ctx, row)
         // Every Codex follow-up flows through the app-server bridge — no tmux composer, no queue, no
         // stale-draft class. The bridge owns the steer-vs-start decision atomically and dedups on
         // deliveryId. A LEGACY tmux Codex row (dispatched before the cutover) is migrated on its first

@@ -1439,6 +1439,68 @@ test("a plain follow-up still reaches a worker whose sub-agents are running", as
   h.storage.close()
 })
 
+// ── Reopening an archived thread by messaging it (every runtime) ─────────────────────────────────
+// There is no Reopen verb in fray: an archived thread's footer states "Done" and the composer under it
+// IS the reopen affordance ("Marked done — send a message to reopen it"). The un-archive that backs that
+// promise lived inside resumeThread, which ONLY the tmux path reaches — so a broker-backed Claude row
+// and an app-server Codex row resumed their WORKER and left their ROW archived. The thread then executed
+// away while the board rendered it Done, and an archived thread has no lifecycle verbs, so there was no
+// Mark-as-done button left to stop it with. Observed 2026-07-31 on a live broker thread: a `--resume`
+// process running for minutes against a row still reading `exited=1, state='archived'`.
+test("a follow-up reopens an archived BROKER-backed Claude thread, not just its worker", async () => {
+  const { h, slug, calls } = restartHarness()
+  h.storage.setState(slug, "archived")
+  assert.equal(h.storage.getSession(slug)?.state, "archived")
+
+  await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "continue" } })
+
+  assert.equal(calls.length, 1, "the message still reaches the worker")
+  const reopened = h.storage.getSession(slug)
+  assert.equal(reopened?.state, "open", "and the row it woke is Active again, not stranded in Done")
+  assert.equal(reopened?.archived, 0, "including the legacy flag the board also honors")
+  h.storage.close()
+})
+
+test("a follow-up reopens an archived app-server CODEX thread, not just its worker", async () => {
+  const h = harness()
+  const slug = "archived-codex"
+  h.storage.upsertSession(row(slug))
+  h.storage.setBackend(slug, "codex")
+  h.storage.setCodexRuntime(slug, "app-server")
+  h.storage.setState(slug, "archived")
+
+  const sent: string[] = []
+  ;(h.ctx as { codexAppServer?: unknown }).codexAppServer = {
+    binding: () => ({ state: "active", currentTurnId: null }),
+    turnLiveness: () => undefined,
+    resumeOwnedSession: async () => {},
+    followUp: async ({ text }: { text: string }) => void sent.push(text),
+  }
+
+  await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "continue" } })
+
+  assert.deepEqual(sent, ["continue"], "the message still reaches the worker")
+  const reopened = h.storage.getSession(slug)
+  assert.equal(reopened?.state, "open")
+  assert.equal(reopened?.archived, 0)
+  h.storage.close()
+})
+
+// The reopen is session-guarded, so it cannot resurrect a row that was re-dispatched under a stale tab —
+// and it is a NO-OP on an open thread, so an ordinary live steer writes nothing per keystroke.
+test("a follow-up to an already-open thread writes no lifecycle change", async () => {
+  const { h, slug, calls } = restartHarness()
+  const before = h.storage.getSession(slug)
+
+  await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "more context" } })
+
+  assert.equal(calls.length, 1)
+  const after = h.storage.getSession(slug)
+  assert.equal(after?.state, before?.state, "the lifecycle column is untouched")
+  assert.equal(after?.archived, before?.archived)
+  h.storage.close()
+})
+
 test("Restart worker is refused on a thread that is not a broker-backed Claude worker", async () => {
   const h = harness()
   const slug = "codex-restart"
