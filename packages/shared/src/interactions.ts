@@ -339,6 +339,10 @@ export const InteractionPayload = z.discriminatedUnion("kind", [
     // rendered monospace, because a Bash command is the one thing the operator actually reads and a
     // single-line label cannot hold a heredoc. Adapters redact and clamp it before it gets here.
     preview: InteractionPreview.optional(),
+    // A shell prompt to render in FRONT of `preview`, which is how a terminal shows a command and where
+    // the working directory belongs when there is one. Set it only when the preview genuinely IS a shell
+    // command line: a file path or an MCP argument behind a `❯` would be a lie about what runs.
+    promptLabel: plainText(256, 512).optional(),
     resourceLabel: plainText(1_024, 2_048).optional(),
     workingDirectoryLabel: plainText(1_024, 2_048).optional(),
     scopeLabel: InteractionDescription.optional(),

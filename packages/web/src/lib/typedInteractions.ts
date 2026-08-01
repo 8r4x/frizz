@@ -15,7 +15,6 @@ import {
 
 export interface InteractionDeliveryPresentation {
   actionsEnabled: boolean
-  eyebrow: "Needs you" | "Sending" | "Runtime unavailable"
   status?: string
 }
 
@@ -26,16 +25,15 @@ export function interactionDeliveryPresentation(
   effect: InteractionDeliveryEffect | undefined,
 ): InteractionDeliveryPresentation {
   if (effect === "sending") {
-    return { actionsEnabled: false, eyebrow: "Sending", status: "Sending to runtime…" }
+    return { actionsEnabled: false, status: "Sending to runtime…" }
   }
   if (effect === "reconnect-required") {
     return {
       actionsEnabled: false,
-      eyebrow: "Runtime unavailable",
       status: "Runtime reconnect required before this request can be answered.",
     }
   }
-  return { actionsEnabled: true, eyebrow: "Needs you" }
+  return { actionsEnabled: true }
 }
 
 export type DecisionTone = "primary" | "danger" | "neutral"
@@ -168,17 +166,6 @@ export function canonicalInteractionDecisions(record: Pick<InteractionRecord, "p
       return spec ? [{ ...spec, id: decision.id, semantic: decision.semantic, requiresValues: requiresValues(decision.semantic) }] : []
     })
     .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id))
-}
-
-export function interactionKindLabel(kind: InteractionPayload["kind"]): string {
-  switch (kind) {
-    case "command-approval": return "Command approval"
-    case "file-approval": return "File approval"
-    case "permission-approval": return "Permission approval"
-    case "mcp-elicitation-form": return "MCP request"
-    case "mcp-elicitation-url": return "MCP authorization"
-    case "agent-question": return "Agent question"
-  }
 }
 
 export function interactionProviderLabel(kind: InteractionProvider["kind"]): string {

@@ -112,10 +112,37 @@ const CODEX_CARD = {
   },
 }
 
+// Not an approval at all — an MCP server asking for input. It is here because it is the card that KEEPS
+// the "Request details" drawer (its `source.label` is the only place the asking server is named), so it
+// is what proves the drawer still renders, and now sits underneath the buttons rather than above them.
+const MCP_CARD = {
+  slug: "perm-mcp",
+  title: "mcp · elicitation",
+  request: {
+    protocolVersion: 1,
+    contentFormat: "plain-text",
+    provider: { kind: "claude", name: "Claude session broker" },
+    source: { kind: "mcp-server", id: "chrome-devtools", label: "chrome-devtools" },
+    providerRequestId: "perm-mcp-request",
+    allowedDecisions: [
+      { id: "accept", semantic: "accept", label: "Submit" },
+      { id: "decline", semantic: "decline", label: "Decline" },
+    ],
+    payload: {
+      kind: "mcp-elicitation-form",
+      title: "Which browser profile should this run against?",
+      message: "chrome-devtools needs a profile before it can attach.",
+      protocolVersion: "2025-06-18",
+      fields: [{ id: "profile", label: "Profile", input: "text", required: true, secret: false }],
+    },
+    expiresAt: null,
+  },
+}
+
 const database = new Database(db)
 const interactions = createInteractionStore(database)
 
-for (const card of [...CARDS, CODEX_CARD]) {
+for (const card of [...CARDS, CODEX_CARD, MCP_CARD]) {
   const sessionId = `${card.slug}-0000-4000-8000-000000000000`.slice(0, 36)
   const tmuxName = `fray-${card.slug}`
   const records = [

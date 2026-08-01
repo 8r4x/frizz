@@ -125,16 +125,14 @@ test("provider-controlled names cannot replace canonical provider and source ide
 })
 
 test("durable delivery effects are the sole remount-safe action gate", () => {
-  assert.deepEqual(interactionDeliveryPresentation(undefined), { actionsEnabled: true, eyebrow: "Needs you" })
-  assert.deepEqual(interactionDeliveryPresentation("awaiting-user"), { actionsEnabled: true, eyebrow: "Needs you" })
+  assert.deepEqual(interactionDeliveryPresentation(undefined), { actionsEnabled: true })
+  assert.deepEqual(interactionDeliveryPresentation("awaiting-user"), { actionsEnabled: true })
   assert.deepEqual(interactionDeliveryPresentation("sending"), {
     actionsEnabled: false,
-    eyebrow: "Sending",
     status: "Sending to runtime…",
   })
   assert.deepEqual(interactionDeliveryPresentation("reconnect-required"), {
     actionsEnabled: false,
-    eyebrow: "Runtime unavailable",
     status: "Runtime reconnect required before this request can be answered.",
   })
 })

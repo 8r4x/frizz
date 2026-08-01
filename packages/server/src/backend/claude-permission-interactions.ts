@@ -8,6 +8,7 @@
 //
 // ONE tool on that channel is not an authorization request at all: AskUserQuestion. See the second
 // half of this file — it renders a question card and returns the ANSWER, not a grant.
+import { homedir } from "node:os"
 import {
   INTERACTION_PROTOCOL_VERSION,
   InteractionRequest,
@@ -38,6 +39,16 @@ const ALLOWED_DECISIONS: InteractionRequestType["allowedDecisions"] = [
 
 function clip(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text
+}
+
+/** `~`-shorten a path for the prompt — putting the directory in front of the command only pays off if it
+ *  stays narrow. (`src/readout.ts` has the CLI's own copy; the server package cannot import the root
+ *  project without a circular project reference, and this is four lines of pure string work.) */
+function tildePath(path: string): string {
+  const home = homedir()
+  if (!path.startsWith(home)) return path
+  const rest = path.slice(home.length)
+  return rest === "" ? "~" : rest.startsWith("/") ? `~${rest}` : path
 }
 
 // The argument that says WHAT a tool call will do, in the order the tools that actually escalate carry
@@ -72,7 +83,12 @@ export function buildClaudePermissionInteraction(
   owner: { projectId: string; threadSlug: string; sessionId: string; cwd: string },
 ): InteractionRequestType | null {
   const tool = request.toolName || "tool"
-  const title = clip(`Approve ${tool}?`, 150)
+  // A shell command is shown the way a terminal shows it: the working directory becomes the prompt in
+  // front of the command instead of a muted line under it, and the title says what is about to happen
+  // rather than naming the tool twice. Only a tool that actually takes a `command` earns that layout —
+  // a file path or an MCP argument sitting behind a `❯` would claim to be a shell line and isn't.
+  const command = typeof request.input?.command === "string" ? request.input.command : ""
+  const title = clip(command ? "Run a command?" : `Approve ${tool}?`, 150)
   // Say the WHY once and the WHAT once. The tool name is already the title, so it is not repeated as
   // prose, as a "requested permission", or as a resource label — the card carries each fact one time.
   const description = request.description ? clip(redactCredentialSyntax(request.description), 1_000) : ""
@@ -109,7 +125,9 @@ export function buildClaudePermissionInteraction(
       permission: singleLine(tool, 250, "tool"),
       ...(message ? { message } : {}),
       ...(preview ? { preview } : {}),
-      workingDirectoryLabel: clip(owner.cwd, 2_000),
+      ...(command
+        ? { promptLabel: singleLine(tildePath(owner.cwd), 250, "~", false) }
+        : { workingDirectoryLabel: clip(owner.cwd, 2_000) }),
     },
     expiresAt: null,
   })

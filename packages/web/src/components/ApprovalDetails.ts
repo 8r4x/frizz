@@ -47,11 +47,16 @@ export function ApprovalDetails({ payload }: { payload: ApprovalPayload }) {
   }
   // Only what the operator has to read to decide: the exact text being authorized, then where it runs.
   // The permission id and the tool name are already the card's title, so neither is repeated here.
+  // A `promptLabel` means the preview is a shell line, so the directory renders as its prompt — real
+  // spaces around the caret, not padding, so selecting the block copies a line you could paste.
   return h(Fragment, null,
     payload.preview
       ? h("pre", {
           className: "max-h-64 max-w-full min-w-0 overflow-auto rounded-md border border-border/70 bg-bg/40 px-2.5 py-2 whitespace-pre-wrap break-words font-mono-keep text-[11.5px] leading-relaxed text-fg/90",
-        }, payload.preview)
+        },
+        payload.promptLabel ? h("span", { className: "text-shell/90" }, payload.promptLabel) : null,
+        payload.promptLabel ? h("span", { className: "text-accent" }, " ❯ ") : null,
+        payload.preview)
       : null,
     payload.resourceLabel
       ? h("div", { className: "mt-1 break-all text-[11px] text-muted" }, "Resource: ", payload.resourceLabel)

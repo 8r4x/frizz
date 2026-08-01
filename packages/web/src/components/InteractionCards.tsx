@@ -31,7 +31,6 @@ import {
   initialInteractionDraft,
   interactionDecisionSignature,
   interactionDeliveryPresentation,
-  interactionKindLabel,
   interactionProviderLabel,
   interactionSourceLabel,
   parseInteractionDraft,
@@ -504,16 +503,15 @@ function InteractionApprovalCard({
       data-delivery-effect={record.delivery?.effect}
       className={`min-w-0 ${BLOCK_RADIUS} border border-accent/45 bg-accent/[0.065] shadow-sm shadow-black/15 outline-none focus-visible:ring-2 focus-visible:ring-accent/60`}
     >
-      <div className="flex min-w-0 items-start gap-3 border-b border-accent/20 px-4 py-3">
-        <ShieldCheck aria-hidden="true" size={16} className="mt-0.5 shrink-0 text-accent" />
-        <div className="min-w-0 flex-1">
-          <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-accent">
-            {interactionKindLabel(record.payload.kind)} · {delivery.eyebrow}
-          </div>
-          <h3 id={headingId} className="mt-0.5 break-words text-[14px] font-semibold leading-snug text-fg">
-            {record.payload.title}
-          </h3>
-        </div>
+      {/* No eyebrow. "PERMISSION APPROVAL · NEEDS YOU" in uppercase amber above "Approve Bash?" said
+          the same thing twice in a louder font, and the delivery states it also carried (sending,
+          runtime unavailable) already have their own live status line below. The title alone is the
+          heading; the amber border and the shield are what mark the card as a gate. */}
+      <div className="flex min-w-0 items-center gap-3 border-b border-accent/20 px-4 py-3">
+        <ShieldCheck aria-hidden="true" size={16} className="shrink-0 text-accent" />
+        <h3 id={headingId} className="min-w-0 flex-1 break-words text-[14px] font-semibold leading-snug text-fg">
+          {record.payload.title}
+        </h3>
       </div>
 
       <form onSubmit={onSubmit} className="min-w-0 px-4 py-3.5" noValidate>
@@ -609,6 +607,8 @@ function InteractionApprovalCard({
             ))}
           </div>
         )}
+
+        {!APPROVAL_KINDS.has(record.payload.kind) && <RequestMetadata record={record} />}
         </fieldset>
       </form>
     </article>
@@ -660,10 +660,15 @@ function InteractionPayloadBody({
     <>
       {"message" in payload && payload.message && <BoundedPlainText text={payload.message} />}
       <div className={("message" in payload && payload.message) ? "mt-3" : ""}>{content}</div>
-      <RequestMetadata record={record} />
     </>
   )
 }
+
+// An approval card names its own provider, source and scope in the body — the drawer only restated
+// them, above the buttons, in front of the decision. For an MCP elicitation or an agent question it is
+// the ONLY place `source.label` appears, which is how you learn WHICH server is asking, so it survives
+// there — underneath the decision it belongs to rather than in front of it.
+const APPROVAL_KINDS = new Set(["command-approval", "file-approval", "permission-approval"])
 
 function BoundedPlainText({ text }: { text: string }) {
   const long = text.length > 600 || text.split("\n").length > 6
