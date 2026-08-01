@@ -21,6 +21,8 @@
 //     data-corruption hazard in a persistence layer, so it is re-implemented here rather than lost.
 //   • `exec()` returns the database in better-sqlite3 and undefined in node:sqlite.
 //   • node:sqlite has no `pragma()` and no `transaction()` at all.
+// One difference is deliberate rather than corrected: a bare `transaction()` here is IMMEDIATE, not
+// DEFERRED. See transaction() for the measurement that decided it.
 import { createRequire } from "node:module"
 import "./sqlite-quiet.ts"
 import type { DatabaseSync as DatabaseSyncType, StatementSync } from "node:sqlite"
@@ -295,7 +297,22 @@ export class Database {
         this.#depth = depth
       }
     }
-    const wrapper = runWith("DEFERRED") as Transaction<A, R>
+    // The DEFAULT is IMMEDIATE, which is the one place this deliberately diverges from
+    // better-sqlite3 (whose bare `transaction()` is DEFERRED). Measured, 6 processes × 40 writes
+    // against one WAL database, each transaction reading then writing:
+    //
+    //   deferred, read-then-write   better-sqlite3 186/240   this adapter 109/240
+    //   immediate, read-then-write  better-sqlite3 240/240   this adapter 240/240
+    //
+    // A DEFERRED transaction takes a read lock first and must UPGRADE it to write. SQLite cannot
+    // always wait for that upgrade — busy_timeout does not save it — so a concurrent writer gets
+    // "database is locked" and the write is simply LOST. Both drivers lose writes there; the adapter
+    // lost more, which is what made this worth fixing rather than matching.
+    //
+    // IMMEDIATE takes the write lock up front, so a loser waits out busy_timeout instead of failing.
+    // Every transaction Fray runs without an explicit mode is a write path, and the one genuine
+    // read-only snapshot asks for `.deferred()` by name — so nothing pays for a lock it does not need.
+    const wrapper = runWith("IMMEDIATE") as Transaction<A, R>
     wrapper.default = wrapper
     wrapper.deferred = runWith("DEFERRED")
     wrapper.immediate = runWith("IMMEDIATE")

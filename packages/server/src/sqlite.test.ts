@@ -226,6 +226,45 @@ test("immediate, deferred and exclusive are all callable and all transactional",
   })
 })
 
+test("a default transaction takes the WRITE lock up front, unlike better-sqlite3's", () => {
+  // The deliberate divergence, and the reason for it. A DEFERRED transaction must upgrade its read
+  // lock to a write lock, which SQLite cannot always wait for — busy_timeout does not help, the write
+  // just fails with "database is locked" and is LOST. Measured across 6 processes × 40 read-then-write
+  // transactions: deferred managed 186/240 on better-sqlite3 and 109/240 here; immediate is 240/240 on
+  // both. Fray's default transactions are all write paths, so they take the lock they are going to need.
+  const dir = mkdtempSync(join(tmpdir(), "fray-sqlite-lock-"))
+  const path = join(dir, "t.db")
+  try {
+    const writer = new Database(path)
+    writer.pragma("journal_mode = WAL")
+    writer.exec("create table t (a integer primary key)")
+
+    const other = new Database(path)
+    other.pragma("busy_timeout = 100")
+    writer.transaction(() => {
+      // The write lock is already held, so a second connection cannot take it. That is only true if
+      // the default mode is IMMEDIATE; a DEFERRED transaction would not have acquired it yet.
+      assert.throws(() => other.exec("BEGIN IMMEDIATE"), /locked|busy/i)
+      writer.prepare("insert into t values (?)").run(1)
+    })()
+
+    // Once it commits the lock is released and the other connection proceeds normally.
+    assert.doesNotThrow(() => {
+      other.exec("BEGIN IMMEDIATE")
+      other.prepare("insert into t values (?)").run(2)
+      other.exec("COMMIT")
+    })
+    assert.deepEqual(writer.prepare("select a from t order by a").all().map((r: any) => r.a), [1, 2])
+
+    // `.deferred()` still exists for a genuine read-only snapshot that must not block writers.
+    assert.doesNotThrow(() => writer.transaction(() => writer.prepare("select count(*) c from t").get()).deferred())
+    writer.close()
+    other.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test("a constraint violation surfaces as an error and leaves the table clean", () => {
   withDb((db) => {
     db.exec("create table t (a integer primary key)")
