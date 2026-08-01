@@ -200,6 +200,32 @@ fallback that always matches.
 
 Steps 1-3 are the feature. Step 4 is what makes it responsible to advertise.
 
+## 9. What this does NOT do: Git stops being REQUIRED, not used
+
+Worth stating flatly, because "drop `git` from `REQUIRED_EXECUTABLES`" reads like more than it is.
+After all of the above, Fray launches and runs in any directory — but on a machine that has Git, in a
+directory that is a repository, **almost nothing changes**:
+
+| | in a Git repo | in a plain directory |
+| --- | --- | --- |
+| Project root | `rev-parse --show-toplevel`, as today | marker walk-up (§4) |
+| Identity | `git config --local fray.id`, as today | `.fray/fray.id` (§3) |
+| Worktree = its own board | yes, via `--git-dir`/`--git-common-dir` | n/a — no worktrees |
+| GitHub picker, `pr-watch:` | yes | hidden; the fence keeps `human:`/`timer:` |
+| Worker prompt | `GIT_DISCIPLINE` | `NO_VCS_DISCIPLINE` (§5) |
+| Undo for a bad turn | the user's own history | shadow repo (§6), which itself uses Git |
+
+**Existing repo projects keep using `git config --local fray.id`, and do not migrate.** Using the
+file everywhere would be one less code path, but it would hand every existing user a new tracked file
+in a directory many of them have never ignored — reintroducing the committed-id hazard for the
+largest population, where today it is structurally impossible. The provider interface exists for
+exactly this; two implementations is the point, not a compromise.
+
+So the honest summary is: **the git *binary* stays a soft dependency, and Git remains the better
+experience.** What goes away is the hard failure — `fray-dev must be run inside a Git repository` —
+and the assumption that a project must be a repo at all. Ask (3) from the top of this document, "no
+`git` binary anywhere", is a different and larger project, and §6 is the reason not to take it on.
+
 ## Open questions for the human
 
 - Which ask are we serving — (1), (2), or (3)? The answer changes whether the `git` binary stays a
