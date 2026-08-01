@@ -50,7 +50,7 @@ Fray is a browser tab, a queue, and the agent CLIs you already pay for. It bring
 - 🔌 **Headless, and it outlives you.** Every thread's agent runs in its own detached background process. Close the tab, quit the browser, even stop Fray — the work keeps going, and relaunching reconnects to the session that's still running rather than replaying it from disk.
 - 🤖 **Claude Code *and* Codex.** Pick the backend per thread and run both against the same repo at once. Fray drives the CLIs you already have installed and signed in.
 - 😴 **Snooze.** Not everything needs an answer now. Park a card for an hour, until tomorrow morning, or until a date you pick — optionally with a follow-up prompt attached, so the thread wakes up already working on what you told it to do next.
-- 🐙 **Built on the `gh` CLI.** If you're signed in, Fray uses it: browse your repo's issues and pull requests without leaving the composer and turn a selection of them into threads, and let a worker read issues, diffs, and CI on its own.
+- 🐙 **GitHub integration.** Browse your repo's issues and pull requests without leaving the composer, and turn a selection of them into threads. Workers can read issues, diffs, and CI on their own.
 - 📝 **Fully promptmaxxed.** Fray automates none of what an orchestrator app usually automates — no worktrees, no branches, no dev server, no build integration, no workflow engine to fight with. Everything opinionated is a prompt you can edit.
 - 🔒 **Local only.** No cloud, no account, no telemetry. The server binds `127.0.0.1` and its state lives in `~/.fray/`, never in your checkout.
 
