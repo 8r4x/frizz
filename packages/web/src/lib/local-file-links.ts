@@ -34,10 +34,16 @@ export function installLocalFileLinkInterceptor(): () => void {
 // One delegated listener for the same reason the click handler is delegated: prose is injected as raw
 // sanitized HTML on several surfaces (chat, question cards, fence cards, scratchpad and plan drawers),
 // so there is no React element to hang an onError on.
+//
+// SCOPED TO THOSE SURFACES ON PURPOSE. `data-local-image` is also carried by BlockImage's <img>, which
+// React owns and which already has its own onError fallback; swapping that node out from under React
+// would corrupt the tree it thinks it is reconciling. `.md-body`/`.md-inline` are set only by our own
+// components around sanitized markdown, so they mark exactly the images React does NOT manage.
 function imageFailureHandler(): (event: Event) => void {
   return (event) => {
     const img = event.target
     if (!(img instanceof HTMLImageElement) || img.dataset.localImage !== "true") return
+    if (!img.closest(".md-body, .md-inline")) return
     const path = img.dataset.localPath ?? img.getAttribute("src") ?? ""
     const missing = document.createElement("span")
     missing.className = "md-image-missing font-mono-keep"

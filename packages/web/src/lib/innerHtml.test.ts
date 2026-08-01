@@ -41,6 +41,9 @@ test("a markdown screenshot whose file is gone degrades to a stable path line", 
   assert.match(links, /addEventListener\("error", \w+, true\)/)
   assert.match(links, /removeEventListener\("error", \w+, true\)/)
   assert.match(links, /md-image-missing/)
+  // BlockImage's <img> carries the same data-local-image marker but is React-owned and has its own
+  // onError fallback — replacing that node would corrupt the tree React is reconciling.
+  assert.match(links, /closest\(["'`]\.md-body, \.md-inline["'`]\)/)
 
   const fallback = styles.match(/\.md-body \.md-image-missing \{[\s\S]*?\n\}/)?.[0]
   assert.ok(fallback, "the missing-screenshot fallback style should remain discoverable")
