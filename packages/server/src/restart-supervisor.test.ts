@@ -230,6 +230,33 @@ test("status advertises Update & Restart only when the durable supervisor owns t
   }
 })
 
+// The launcher is the ONLY thing that can answer "is this a development build". The client used to
+// guess with `import.meta.env.DEV`, which is false in every artifact fray-dev builds — so the dev-only
+// Restart-worker verb was compiled out of the build its author ran all day. Absent must keep meaning
+// "no", so a published Fray never grows a dev affordance.
+test("status reports a development build only when the launcher says so", async () => {
+  for (const [name, dev, expected] of [
+    ["fray-dev / pnpm dev", true, /"dev":true/],
+    ["the published frayui bin", undefined, /^(?!.*"dev")/s],
+  ] as [string, boolean | undefined, RegExp][]) {
+    const current = await child(`dev-${String(dev)}`)
+    const port = await freePort()
+    const proxy = new RestartSupervisorProxy({
+      port,
+      childPort: () => current.port,
+      restart: async () => ({ state: "ready" }),
+      ...(dev === undefined ? {} : { dev }),
+    })
+    try {
+      await proxy.listen()
+      assert.match((await get(port, SUPERVISOR_STATUS_PATH)).body, expected, name)
+    } finally {
+      await proxy.close().catch(() => undefined)
+      await current.close().catch(() => undefined)
+    }
+  }
+})
+
 test("update acknowledgement and status stay truthful while the old child remains ready", async () => {
   const current = await child("old-but-still-serving")
   const port = await freePort()

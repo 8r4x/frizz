@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { canRestart, canUpdateRestart, getFraySupervisorStatus, requestFrayRestart, requestFrayUpdateRestart } from "./restart.ts"
+import { canRestart, canUpdateRestart, getFraySupervisorStatus, isDevFrayBuild, requestFrayRestart, requestFrayUpdateRestart } from "./restart.ts"
 
 const response = (body: string, status = 200, contentType = "application/json") => new Response(body, { status, headers: { "content-type": contentType } })
 
@@ -75,4 +75,27 @@ test("the update label needs the verb wired AND a newer artifact to actually exi
     canUpdateRestart(status({ updateRestart: false, updateAvailable: true })), false,
     "availability can never conjure the verb on a supervisor that cannot promote an artifact",
   )
+})
+
+// Why a field at all: the client cannot see this. `import.meta.env.DEV` is a Vite COMPILE-TIME
+// constant, false in the production bundle every fray-dev artifact serves — so the dev-only
+// Restart-worker verb was eliminated from the build it exists for. The launcher answers instead.
+test("a development build is only ever what the supervisor explicitly reports", async () => {
+  const status = (over: Record<string, unknown>) =>
+    ({ protocol: 1, state: "ready", ...over }) as Parameters<typeof isDevFrayBuild>[0]
+
+  assert.equal(isDevFrayBuild(status({ dev: true })), true, "fray-dev / pnpm dev")
+  assert.equal(
+    isDevFrayBuild(status({})), false,
+    "a published Fray, and any supervisor predating the field, must never show a dev-only verb",
+  )
+  assert.equal(
+    isDevFrayBuild(status({ updateRestart: true })), false,
+    "Update & Restart is wired in PRODUCTION too — it can never stand in for a dev signal",
+  )
+  assert.equal(isDevFrayBuild(null), false, "an unreachable supervisor is not a licence to show one")
+
+  // And it has to survive the wire, not just the predicate.
+  const dev = async () => response(JSON.stringify({ protocol: 1, state: "ready", dev: true }))
+  assert.equal(isDevFrayBuild(await getFraySupervisorStatus(dev as typeof fetch)), true)
 })

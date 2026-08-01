@@ -108,6 +108,8 @@ export interface DevSupervisorOptions {
   updateRestart?: () => Promise<RestartResult>
   /** Cheap CACHED "is a newer artifact actually available" read; see RestartSupervisorProxy. */
   updateAvailable?: () => boolean
+  /** Launched from a source checkout (fray-dev / `pnpm dev`)? See RestartSupervisorProxy. */
+  dev?: boolean
   /** Restore the known-good artifact selection if its replacement cannot become ready. */
   rollbackUpdate?: () => Promise<void> | void
   /**
@@ -477,6 +479,7 @@ class Supervisor implements DevSupervisor {
       restart: () => this.restartFromBrowser(),
       updateRestart: this.updateRestart ? () => this.updateFromBrowser() : undefined,
       updateAvailable: opts.updateAvailable,
+      dev: opts.dev,
       status: () => {
         if (this.browserRestart || this.restartRunning) return { state: "restarting" as const }
         const failed = this.child === null && this.boot === null

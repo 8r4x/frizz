@@ -52,6 +52,18 @@ export interface RestartSupervisorProxyOptions {
    * and is always meaningful) behaving exactly as before.
    */
   updateAvailable?: () => boolean
+  /**
+   * Is this Fray a DEVELOPMENT build — launched from a source checkout by `fray-dev` (src/index.ts)
+   * or `pnpm dev` (server/src/dev.ts), rather than the published `frayui` bin (src/production.ts)?
+   *
+   * It exists because the web client cannot answer this for itself. `import.meta.env.DEV` is a Vite
+   * COMPILE-TIME constant, true only under `vite dev` middleware — and fray-dev's ordinary route
+   * builds an immutable artifact and serves the Vite PRODUCTION bundle, where it is statically
+   * `false`. So every dev-only affordance gated on it was dead-code eliminated out of the build the
+   * maintainer actually runs all day. The launcher is the only thing that truly knows, so it says so
+   * here, on the status the client already polls.
+   */
+  dev?: boolean
   /** Status is intentionally available without a child, for a useful recovery UI. */
   status?: () => { state: RestartControlState; message?: string; artifactDigest?: string }
 }
@@ -184,7 +196,7 @@ export class RestartSupervisorProxy {
     })
   }
 
-  private status(): { state: RestartControlState; message?: string; artifactDigest?: string; updateRestart: boolean; updateAvailable?: boolean } {
+  private status(): { state: RestartControlState; message?: string; artifactDigest?: string; updateRestart: boolean; updateAvailable?: boolean; dev?: boolean } {
     const delegated = this.options.status?.()
     // The disposable child can quite correctly still report ready while the durable owner is building
     // a successor. The owner is the authority for that transition; never leak the old child's ready
@@ -201,6 +213,9 @@ export class RestartSupervisorProxy {
       // Sent ONLY when the launcher can actually answer it, so an older client — and fray-dev, which
       // has no notion of "already current" — keeps today's behaviour on its absence.
       ...(this.options.updateAvailable ? { updateAvailable: this.options.updateAvailable() === true } : {}),
+      // Sent only when TRUE, so a published Fray's payload is byte-identical to what it sends today
+      // and an older client is unaffected. Absent therefore means "not a development build".
+      ...(this.options.dev ? { dev: true } : {}),
     }
   }
 

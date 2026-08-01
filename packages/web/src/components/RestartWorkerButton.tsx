@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import { Loader2, RefreshCw } from "lucide-react"
 import type { ThreadView } from "@fray-ui/shared"
 import { restartWorker, restartWorkerBlockedReason } from "../lib/restartWorker.ts"
+import { useDevFrayBuild } from "../lib/devBuild.ts"
 import { Tooltip } from "./Tooltip.tsx"
 
 // "Restart worker" — replace this thread's live `claude` process, keeping the conversation.
@@ -16,15 +17,18 @@ import { Tooltip } from "./Tooltip.tsx"
 // developed (a worker dispatched an hour ago is routinely a build behind), and it would be clutter in a
 // shipped fray, where the operator has no reason to think about which build their worker booted on.
 //
-// `import.meta.env.DEV` is the repo's existing spelling for this (perf-scan.ts) and it is a REAL gate,
-// not a runtime hide: a promoted artifact serves a Vite PRODUCTION bundle (`<build>/web/assets/*.js`),
-// where `import.meta.env.DEV` is statically replaced with `false` — so this early return makes the whole
-// component dead code and the string never reaches the shipped bundle at all.
+// The gate is the LAUNCHER's own answer, fetched at runtime (lib/devBuild.ts), and it has to be. This
+// shipped gated on `import.meta.env.DEV` and was consequently invisible to the one person it was built
+// for: that constant is true only under `vite dev` middleware, while fray-dev's ordinary route builds
+// an immutable artifact and serves the Vite PRODUCTION bundle — where Vite replaces it with `false` and
+// eliminates this component outright. Grepping the promoted bundle for "Restart worker" found nothing
+// while "Mark as done" beside it was present. Running fray-dev IS running a development build, whether
+// or not Vite is in the loop, so only the process that chose the launcher can answer this.
 //
-// Optional-chained because the SSR test runner has no Vite: `node --test` renders this component through
-// react-dom/server with `import.meta.env` simply UNDEFINED, and the bare member access threw a TypeError
-// that failed ThreadLifecycleFooter.done.test.ts. Under Vite the object always exists, so `?.` costs
-// nothing in either build and the dead-code elimination above is unaffected.
+// The trade that buys: the component and its strings now reach a published bundle and are hidden at
+// runtime instead of compiled out. Accepted deliberately — a compile-time gate cannot ever satisfy
+// "show it in the artifact I build from source", which is the entire requirement. The runtime answer
+// is strict (absent field ⇒ not dev), so a published Fray never renders it.
 //
 // OFFERED only where it is both meaningful and safe:
 //  • a session thread, not a read-only foreign row;
@@ -39,8 +43,9 @@ import { Tooltip } from "./Tooltip.tsx"
 export function RestartWorkerButton({ thread }: { thread: ThreadView }) {
   const queryClient = useQueryClient()
   const [busy, setBusy] = useState(false)
+  const devBuild = useDevFrayBuild()
 
-  if (!import.meta.env?.DEV) return null
+  if (!devBuild) return null
   if (thread.kind !== "session" || thread.foreign) return null
   if (thread.backend === "codex") return null
   if (thread.runtime === "exited") return null

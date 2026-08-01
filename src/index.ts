@@ -373,6 +373,13 @@ async function runSupervisor(
       launchTarget: target,
       launchOwnerToken: launchOwner.token,
       ...stableOptions,
+      // This file IS fray-dev: it only ever runs from a source checkout, and the published bin is
+      // src/production.ts (scripts/build-package.mjs maps "frayui.js" to it). So reaching here means
+      // a development build, on BOTH routes — the artifact one as much as `--dev`. The web client
+      // cannot work that out for itself, because the artifact route serves a Vite PRODUCTION bundle
+      // where `import.meta.env.DEV` is statically false. Stated after the spread so no launch-mode
+      // option can quietly take it away.
+      dev: true,
     });
   } catch (error) {
     launchOwner.release();

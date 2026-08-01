@@ -18,6 +18,17 @@ export interface FraySupervisorStatus {
    * meaningful.
    */
   updateAvailable?: boolean
+  /**
+   * Is this Fray a DEVELOPMENT build — launched from a source checkout by `fray-dev` or `pnpm dev`,
+   * rather than the published `frayui` bin? Sent only when true, so absent means "no".
+   *
+   * The client cannot answer this itself. `import.meta.env.DEV` is a Vite COMPILE-TIME constant, true
+   * only under `vite dev` middleware — and fray-dev's ordinary route builds an immutable artifact and
+   * serves the Vite PRODUCTION bundle, where it is statically `false`. Gating a dev-only affordance on
+   * it therefore eliminated that affordance from the build the maintainer runs all day. Only the
+   * launcher knows, so it says so here.
+   */
+  dev?: boolean
 }
 
 /** Wakes the app-level status monitor immediately after a control action is accepted. */
@@ -42,6 +53,15 @@ export function canRestart(status: FraySupervisorStatus | null): boolean {
  */
 export function canUpdateRestart(status: FraySupervisorStatus | null): boolean {
   return status?.updateRestart === true && status.updateAvailable !== false
+}
+
+/**
+ * Is Fray itself running as a development build? Deliberately strict: an unreachable supervisor, a
+ * legacy one that predates the field, and a published Fray all read the same — NOT a dev build — so a
+ * dev-only verb can never appear for someone who merely installed Fray.
+ */
+export function isDevFrayBuild(status: FraySupervisorStatus | null): boolean {
+  return status?.dev === true
 }
 
 export async function getFraySupervisorStatus(fetcher: typeof fetch = fetch): Promise<FraySupervisorStatus | null> {

@@ -39,6 +39,8 @@ if (process.env.FRAY_DEV_CHILD === "1") {
       launchTarget: target,
       launchOwnerToken: launchOwner.token,
       childEntry: process.argv[1],
+      // `pnpm dev` — source checkout, never the published bin. See RestartSupervisorProxy's `dev`.
+      dev: true,
     })
     await supervisor.firstBoot
   } catch (error) {
