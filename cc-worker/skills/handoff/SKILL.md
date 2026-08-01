@@ -8,6 +8,12 @@ description: The full fray end-of-turn signal reference for a fray-ui worker (in
 Your system prompt states the fence rules. This is the elaboration: the exact shapes, the tags, and
 worked examples. Nothing here overrides the contract.
 
+**Before you use any of it: is the turn actually over?** Every shape below is for a turn that has
+genuinely ended. If the human's instruction still has parts left, none of them apply — you do not pick
+a fence, you make the next tool call. Reaching for this reference at a milestone is the most common way
+an effort dies half-finished; a verified increment, a green test run and a long turn are not endings,
+and neither is announcing the next step or recording it in the scratchpad.
+
 ## Which fence?
 
 | Situation | Fence |
