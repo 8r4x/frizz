@@ -13,10 +13,6 @@
 <a href="https://github.com/colinhacks/fray" rel="nofollow"><img src="https://img.shields.io/github/stars/colinhacks/fray" alt="stars"></a>
 </p>
 
-<p align="center">
-  <img src="assets/board.png" alt="The Fray board: a queue of agent threads on the right, one card asking an answerable question with lettered options; on the left, a sidebar where a running thread has fanned out four sub-agents with live timers." width="100%">
-</p>
-
 ## Fray is for you if you have any of these opinions
 
 - **Terminal UIs are dated** and have fundamental limitations that are incompatible with good user experience.
@@ -37,6 +33,10 @@ Requires Node 26+, with `git` and `tmux` on your `PATH`, and at least one of the
 ## Designed for parallelization
 
 Instead of a sidebar full of tabs — one per session, each one something you have to remember to go check — you get a **unified queue**.
+
+<p align="center">
+  <img src="assets/board.png" alt="The Fray board: a queue of agent threads on the right, one card asking an answerable question with lettered options; on the left, a sidebar where a running thread has fanned out four sub-agents with live timers." width="100%">
+</p>
 
 When an agent comes to rest needing you, a card is added to it. You can quickly evaluate what it has done since your last message and decide to answer its questions, steer it, snooze the card, or mark the session complete. You're continuously presented with a set of action items in one place, instead of constantly switching back and forth between sessions.
 
