@@ -38,6 +38,16 @@ export interface ClaudeBrokerClient {
   stopTask(taskId: string): Promise<void>
   setPermissionMode(mode: string): void
   connected(): boolean
+  /**
+   * Has this client PERMANENTLY given up? Distinct from `connected()`, and the distinction is the
+   * whole point: a disconnected client is reconnecting and will flush what it buffered, while a
+   * closed one never will — every frame handed to it from here is discarded.
+   *
+   * Callers holding a session across time need this to tell "wait, it's coming back" from "this
+   * client is a corpse, get a new one". `connected()` cannot answer that: it reads false during an
+   * ordinary blip, so keying liveness on it would churn a healthy session.
+   */
+  isClosed(): boolean
   close(): void
 }
 
@@ -66,7 +76,14 @@ export function connectClaudeBroker(
   const pendingStops = new Map<string, { settle: () => void; fail: (error: Error) => void; timer: NodeJS.Timeout }>()
   let cancelSeq = 0
 
+  // Buffering while DISCONNECTED is the feature — `connect` flushes `outbound` — but buffering while
+  // CLOSED is a silent hole: nothing will ever reconnect to drain it, so the frame is discarded with
+  // the caller told nothing. That is the exact shape of "the thread went quiet": `sendInput` returns
+  // void, so followUp resolves, so the router opens an `enqueued` ledger item, and the operator
+  // watches a message the agent will never see render as delivered until it ages out an hour later.
+  // Throw instead, so the refusal reaches the operator's own send and the optimistic bubble rolls back.
   const send = (frame: unknown): void => {
+    if (closed) throw new Error("the broker connection is closed")
     const line = JSON.stringify(frame) + "\n"
     if (sock && !sock.destroyed) sock.write(line)
     else outbound.push(line)
@@ -157,6 +174,7 @@ export function connectClaudeBroker(
     }),
     setPermissionMode: (mode: string) => send({ t: "set-mode", mode }),
     connected: () => sock !== null && !sock.destroyed,
+    isClosed: () => closed,
     close: () => {
       closed = true
       for (const [, entry] of pendingCancels) { clearTimeout(entry.timer); entry.fail(new Error("the broker connection closed before the unqueue was answered")) }

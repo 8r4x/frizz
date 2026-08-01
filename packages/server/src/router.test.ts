@@ -8,6 +8,7 @@ import { Hono } from "hono"
 import { mountRouter } from "@fray-ui/rpc/server"
 import type { BoardSnapshot, Settings, ThreadView } from "@fray-ui/shared"
 import type { BoardManager } from "./board.ts"
+import { appendDelivery, parseDeliveryLedger } from "./delivery-ledger.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
 import {
   createRouter,
@@ -1412,6 +1413,48 @@ test("Restart worker retires the live process, carrying the continuation into th
   })
   assert.equal(calls.length, 1, "the message still reaches the worker")
   assert.equal(calls[0].freshProcess, true, "and it lands in a process that has just started")
+  h.storage.close()
+})
+
+// A restart RETIRES the sends the dead process was still holding. Reported 2026-08-01 by the
+// maintainer, who restarted a worker whose follow-ups had stopped arriving and found them still on
+// screen afterwards: "the old messages are still showing up as ghost bubbles". They are unreachable
+// by hand too — the unqueue click asks the NEW daemon about a uuid it never heard of and answers
+// "Too late — that message has already left the queue", the exact opposite of what happened — so
+// without this they sit there for the rest of the hour. `cancelled` tombstones are left ALONE: they
+// suppress a real JSONL bubble and retiring one would un-hide a message the operator retracted.
+test("Restart worker clears the sends the retired process was still holding", async () => {
+  const { h, slug, calls } = restartHarness()
+  appendDelivery(h.storage, slug, { id: "d-stuck-1", text: "never arrived", state: "enqueued" })
+  appendDelivery(h.storage, slug, { id: "d-stuck-2", text: "also never arrived", state: "pending" })
+  appendDelivery(h.storage, slug, { id: "d-taken-back", text: "retracted on purpose", state: "cancelled" })
+
+  await h.router.followUp.handler({
+    input: { slug, sessionId: `sid-${slug}`, message: "restarted, carry on", deliveryId: "d-restart", freshProcess: true },
+  })
+
+  const after = parseDeliveryLedger(h.storage.getSession(slug)!.delivery_ledger)
+  assert.deepEqual(
+    after.map((i) => i.id).sort(),
+    ["d-restart", "d-taken-back"],
+    "both stranded sends are gone; the restart's own entry and the tombstone remain",
+  )
+  assert.equal(calls.length, 1, "and the restart itself still went through")
+  h.storage.close()
+})
+
+// An ORDINARY follow-up must not clear them: the process holding those sends is still alive, so they
+// may yet be read. Only the restart is evidence of death.
+test("an ordinary follow-up leaves earlier outstanding sends queued", async () => {
+  const { h, slug } = restartHarness()
+  appendDelivery(h.storage, slug, { id: "d-waiting", text: "still in flight", state: "enqueued" })
+
+  await h.router.followUp.handler({
+    input: { slug, sessionId: `sid-${slug}`, message: "one more thing", deliveryId: "d-next" },
+  })
+
+  const after = parseDeliveryLedger(h.storage.getSession(slug)!.delivery_ledger)
+  assert.ok(after.some((i) => i.id === "d-waiting" && i.state === "enqueued"), "the in-flight send is untouched")
   h.storage.close()
 })
 

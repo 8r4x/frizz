@@ -189,6 +189,35 @@ export function cancelDelivery(storage: Storage, slug: string, id: string, now?:
   return items[index].text
 }
 
+/**
+ * Retire every still-outstanding send on a session whose worker process has just been REPLACED, and
+ * report how many went. Returns 0 when there was nothing to retire.
+ *
+ * A restart is positive evidence about exactly these items. `pending`/`enqueued` mean "fray handed
+ * this to a process and is still waiting for the transcript to show it"; `killBroker` then SIGTERMs
+ * that process. Anything the agent actually read is already in the JSONL, where the tailer correlates
+ * it and drops the row on its own — so what is left at this moment is provably unread, and its queued
+ * bubble is now a claim about a process that no longer exists. Left alone it lingers for the rest of
+ * UNCONFIRMED_DROP_MS (an hour), and cannot be dismissed by hand either: the unqueue click asks the
+ * NEW daemon to cancel a uuid it never heard of, gets `false`, and answers "Too late — that message
+ * has already left the queue" — the precise opposite of the truth.
+ *
+ * DROPPED, not tombstoned. A `cancelled` tombstone suppresses a matching JSONL enqueue bubble, so
+ * using one here would hide a message that DID land in the sliver before the kill but that the tailer
+ * had not yet correlated. Dropping only stops fray projecting its own synthetic bubble; if a real
+ * record exists it renders on its own. Same reasoning, and the same words, as the age-out in
+ * `ageDeliveries`: this only stops PROJECTING it; nothing about the real message is touched.
+ */
+export function retireOutstandingDeliveries(storage: Storage, slug: string): number {
+  const row = storage.getSession(slug)
+  if (!row) return 0
+  const items = parseDeliveryLedger(row.delivery_ledger)
+  const next = items.filter((item) => item.state !== "pending" && item.state !== "enqueued")
+  if (next.length === items.length) return 0
+  storage.setDeliveryLedger(slug, serializeDeliveryLedger(next))
+  return items.length - next.length
+}
+
 /** The ledger row for one send, or null when nothing outstanding carries that id. */
 export function deliveryItem(storage: Storage, slug: string, id: string): DeliveryLedgerItem | null {
   const row = storage.getSession(slug)

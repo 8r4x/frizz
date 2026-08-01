@@ -61,7 +61,7 @@ import { appServerTurnStalled } from "./board.ts"
 import { runThreadUpdate } from "./fray.ts"
 import { repairThreadFile } from "./repair.ts"
 import { reopenArchivedThreadForFollowUp, resumeThread } from "./resume.ts"
-import { appendDelivery, cancelDelivery, deliveryItem, hasDelivery } from "./delivery-ledger.ts"
+import { appendDelivery, cancelDelivery, deliveryItem, hasDelivery, retireOutstandingDeliveries } from "./delivery-ledger.ts"
 import { flushStuckComposer } from "./delivery-confirm.ts"
 import {
   readEarlierThreadTranscriptPage,
@@ -1091,6 +1091,13 @@ export function createRouter(ctx: AppContext) {
           // advances 60s past it. So open an entry — `enqueued`, because the SDK call returning IS the
           // receipt, which also keeps it out of the amber "check the terminal" state that would be
           // meaningless on a thread with no terminal. The tailer drops it as soon as the record lands.
+          // A restart RETIRED the process every earlier outstanding send was handed to, so those sends
+          // are dead and their queued bubbles are now claims about a process that no longer exists.
+          // Clear them here, BEFORE this restart's own entry is opened, so the continuation is the only
+          // thing left queued. Without this they linger the rest of the hour and cannot be dismissed by
+          // hand — the unqueue click asks the NEW daemon about a uuid it never heard of and answers
+          // "Too late — that message has already left the queue", which is exactly backwards.
+          if (input.freshProcess) retireOutstandingDeliveries(ctx.storage, input.slug)
           if (input.deliveryId) {
             appendDelivery(ctx.storage, input.slug, { id: input.deliveryId, text: input.message, state: "enqueued" })
           }

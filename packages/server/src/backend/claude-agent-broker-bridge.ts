@@ -377,7 +377,16 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
   // work exists to eliminate. Keyed on the daemon RECORD and its generation rather than on socket
   // connectivity: a LIVE daemon whose socket is momentarily flapping must be kept (the client
   // reconnects to it), while a dead daemon — or a successor that took the record — must not be.
+  //
+  // The record check alone is NOT enough, and the gap is the case this comment did not consider: a
+  // LIVE daemon whose CLIENT has permanently given up. `connectClaudeBroker` closes for good when it
+  // never lands a first connection inside its deadline, and from then on it reconnects to nothing —
+  // yet the record is still valid and the generation still matches, so this returned true and every
+  // later follow-up was handed to the corpse. Consulting `isClosed()` (not `connected()`, which reads
+  // false during the very blip we must tolerate) closes it: the session is dropped and re-attached,
+  // which is what the daemon-died path already does.
   const holdsLiveDaemon = (session: ActiveSession): boolean => {
+    if (session.client.isClosed()) return false
     const record = liveBrokerRecord(claudeBrokerRecordPath(deps.stateDir, session.sessionId))
     return record !== null && record.generation === session.generation
   }
