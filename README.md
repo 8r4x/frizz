@@ -65,6 +65,37 @@ Browse the repo's issues and pull requests from the composer, select any number 
 
 Workers can also read issues, diffs, and CI on their own — but only read. A worker never comments, labels, closes, or merges unless you ask it to.
 
+## CLI
+
+```
+$ npx frayui --help
+
+Fray production launcher
+
+Usage: npx frayui [options] [repository]
+
+Runs the npm-resolved immutable Fray package, then opens it in your default browser. Use fray-dev
+only for a source checkout.
+
+Options:
+  --app                use the legacy dedicated app window instead of a browser tab
+  --no-app             print the URL without opening a browser
+  --port <port>        request a fixed port for a new workspace server
+  --host [address]     serve on a network address instead of loopback ("--host" alone means 0.0.0.0)
+  --allowed-host <name>
+                       also accept this DNS name as the board's address (repeatable); "*" accepts any
+  --debug              stream the full event feed to the terminal instead of the compact readout
+  -h, --help           show this help
+
+Environment:
+  FRAY_HOST            same as --host
+  FRAY_ALLOWED_HOSTS   same as --allowed-host, comma separated
+
+--host puts a board that can run shell commands as you on the network. Everyone who can reach the
+port has full control of it, so only use it on a network you trust. IP addresses work as-is; reach it
+by DNS name and you must list that name with --allowed-host.
+```
+
 ## FAQ
 
 **Does Fray run its own agent or model?**
