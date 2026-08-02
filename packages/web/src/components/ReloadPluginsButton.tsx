@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Plug } from "lucide-react"
+import { Puzzle } from "lucide-react"
 import type { ThreadView } from "@fray-ui/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
@@ -59,9 +59,13 @@ export function ReloadPluginsButton({ thread }: { thread: ThreadView }) {
         // Mirrors RestartWorkerButton exactly — 24px square, borderless, 12px glyph at fg/55 — because
         // the two sit adjacent and are the same KIND of verb (maintenance, icon-only, no label). Any
         // divergence here would read as a difference in importance that does not exist.
+        // PUZZLE, not a refresh arrow: the Restart button beside this one already wears `RefreshCw`,
+        // and two adjacent icon-only verbs must not share a glyph vocabulary — the softer verb reading
+        // as "reload" and the harder one as "refresh" would invert what the operator expects. Puzzle is
+        // the near-universal "plugin/extension" mark, so it names WHAT is being reloaded instead.
         className="flex size-6 items-center justify-center rounded-md text-fg/55 hover:bg-panel-2 hover:text-fg/80 disabled:opacity-50"
       >
-        <Plug size={12} />
+        <Puzzle size={12} />
       </button>
     </Tooltip>
   )
