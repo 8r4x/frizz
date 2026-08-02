@@ -13,6 +13,7 @@ import { ReloadPluginsButton } from "./ReloadPluginsButton.tsx"
 import { ContextMeter } from "./ContextMeter.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { HeartbeatControl } from "./HeartbeatControl.tsx"
+import { StandingPromptControl } from "./StandingPromptControl.tsx"
 import { BLOCK_RADIUS_INNER_BOTTOM } from "./TranscriptCard.tsx"
 import { Dialog } from "./ui/Dialog.tsx"
 
@@ -57,13 +58,15 @@ export function ThreadLifecycleFooter({
       className={`${sticky ? "z-20" : BLOCK_RADIUS_INNER_BOTTOM} flex min-h-10 shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/70 bg-panel/95 px-3 pt-2 text-[12px] ${safeArea ? "pb-[max(0.5rem,env(safe-area-inset-bottom))]" : "pb-2"} backdrop-blur-sm`}
     >
       {/* Bottom-LEFT cluster: background readings and presence markers, held away from the lifecycle
-          buttons by the one `mr-auto` on this group. Each child renders nothing when it has nothing to
-          say, so the group is commonly empty — and an empty flex box is zero-width, which leaves the
-          strip laid out exactly as it was before any of this existed. */}
+          buttons by the one `mr-auto` on this group. The readings render nothing when they have nothing
+          to say — an empty flex box is zero-width, which is what keeps the strip laid out as it was
+          before any of this existed. StandingPromptControl is the one CONTROL here and therefore the one
+          permanent child: a button that only appears once its feature is armed cannot arm it. */}
       <span className="mr-auto flex items-center gap-1.5">
         <ContextMeter thread={thread} />
         <PendingSnooze thread={thread} />
         <HeartbeatControl thread={thread} />
+        <StandingPromptControl thread={thread} />
       </span>
       {/* Done ⇒ the strip states the state; otherwise it offers the verbs. Never both, and never
           neither: the slot on the right always says something about where the thread stands. */}
