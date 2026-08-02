@@ -22,6 +22,12 @@
 //
 // Deliberately probes a NON-default window (400_000): asserting the shipped 600_000 would pass
 // identically if the setting were ignored and the record's own default rode through.
+//
+// Pass --operator-env to probe the OTHER precedence branch instead: fray's own process carries an
+// exported CLAUDE_CODE_AUTO_COMPACT_WINDOW while the setting says something else, and the worker must
+// report the EXPORTED value. That is the "a cap is operator policy" rule (claudeWorkerEnv), and it is
+// what makes `CLAUDE_CODE_AUTO_COMPACT_WINDOW=… fray` work as a plain environment variable rather than
+// being silently overwritten by whatever the settings drawer last stored.
 import { execFileSync } from "node:child_process"
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -32,7 +38,13 @@ import { setSettings, getSettings } from "../settings.ts"
 import { claudeBrokerRecordPath, readBrokerRecord } from "./claude-broker-host.ts"
 
 process.env.FRAY_CLAUDE_BROKER_BRIDGE = "1"
+// --operator-env: export a window into fray's OWN process and store a DIFFERENT one in settings, so the
+// value the worker reports says which of the two won.
+const operatorMode = process.argv.includes("--operator-env")
 const PROBE_WINDOW = 400_000
+const OPERATOR_WINDOW = 250_000
+const EXPECTED = operatorMode ? OPERATOR_WINDOW : PROBE_WINDOW
+if (operatorMode) process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(OPERATOR_WINDOW)
 const claudeBin = execFileSync("which", ["claude"], { encoding: "utf8" }).trim()
 const repo = mkdtempSync(join(tmpdir(), "brk-ctxwin-repo-"))
 execFileSync("git", ["init", "-q", repo]); execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty", "-m", "init"])
@@ -64,9 +76,10 @@ try {
   while (!existsSync(reportFile) && Date.now() < deadline) await sleep(1_000)
 
   const reported = existsSync(reportFile) ? readFileSync(reportFile, "utf8").trim() : "(no file)"
-  ok(`the REAL worker process sees the configured window (${PROBE_WINDOW})`, reported === String(PROBE_WINDOW),
-    `worker reported ${JSON.stringify(reported)}`)
+  ok(`the REAL worker process sees ${operatorMode ? "the OPERATOR's exported" : "the configured"} window (${EXPECTED})`,
+    reported === String(EXPECTED), `worker reported ${JSON.stringify(reported)}`)
   ok("and it is not merely the shipped default riding through", reported !== "600000")
+  if (operatorMode) ok("the setting did NOT clobber the exported value", reported !== String(PROBE_WINDOW))
 
   await ctx.tailer.stop(); ctx.permissionController.stop(); ctx.deliveryConfirmer?.stop(); ctx.profileController?.stop()
   ctx.stopSubscriptions(); await ctx.scheduler.stop(); await ctx.board.stop()
