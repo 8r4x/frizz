@@ -19,7 +19,6 @@
 import { Bell, Bot, Github, User } from "lucide-react"
 import { parseGithubWakeSteer, type GithubWakeItem, type GithubWakeSteer } from "@fray-ui/shared"
 import { CARD_BODY, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
-import { MessageDebugId } from "./MessageDebugId.tsx"
 import { WakeDivider, WAKE_DIVIDER_IDENT } from "./WakeDivider.tsx"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { githubRefUrl } from "../lib/githubRef.ts"
@@ -84,8 +83,7 @@ export function GithubWakeCard({ steer: served, text, sourceId, wrap }: { steer?
   // most of what made a watcher notification read as something the operator sent.
   if (!steer) {
     return (
-      <div data-fray-msg={sourceId} data-fray-wake className="group/msg relative min-w-0 max-w-[85%]">
-        <MessageDebugId sourceId={sourceId} side="right" />
+      <div data-fray-msg={sourceId} data-fray-wake className="min-w-0 max-w-[85%]">
         <TranscriptCard icon={Bell} label="Fray">
           <div className={`${CARD_BODY} whitespace-pre-wrap [overflow-wrap:anywhere]${wrap ? ` ${QUEUE_WRAP}` : ""}`}>{text}</div>
         </TranscriptCard>

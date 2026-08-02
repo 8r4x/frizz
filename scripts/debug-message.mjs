@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Resolve a per-message debug id (the `sourceId` the chat UI's hover chip copies) back to BOTH SIDES
-// of the projection seam — the raw session-log record(s) that produced the message, and the projected
+// Resolve a per-message debug id (a message's `sourceId` — every rendered message root carries its own
+// on `data-fray-msg`, so an inspector reads one straight off the DOM) back to BOTH SIDES of the
+// projection seam — the raw session-log record(s) that produced the message, and the projected
 // TranscriptMessage the renderer actually received.
 //
 // That pairing is the whole point. A rendering bug is always one of two things, and comparing the two

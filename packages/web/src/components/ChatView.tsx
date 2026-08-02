@@ -4,7 +4,7 @@ import { useSnapshot } from "valtio"
 import * as RadixTabs from "@radix-ui/react-tabs"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Bot, Check, ChevronRight, FileText, Hash, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, ShieldCheck, Sparkles, TerminalSquare, X, type LucideIcon } from "lucide-react"
+import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, ShieldCheck, Sparkles, TerminalSquare, X, type LucideIcon } from "lucide-react"
 import type { AwaitingHint, BgShellView, NativeInputRequired as NativeInputRequiredData, PendingAsk, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@fray-ui/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
@@ -64,7 +64,6 @@ export { CARD_BODY, CARD_PRIMARY_BUTTON, CardActions, TranscriptCard } from "./T
 export { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 import { LastActive } from "./LastActive.tsx"
 import { CopyTerminalCommandButton, useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
-import { MessageDebugId } from "./MessageDebugId.tsx"
 import { SignInModal } from "./SignInModal.tsx"
 import { PROVIDER_LABEL } from "../lib/signIn.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
@@ -2869,11 +2868,8 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
   return (
     // `self-end` must stay on THIS node: the parent scroll container is a flex column and the bubble's
     // right-justification depends on being its direct child (see the group-container note above the
-    // queued-message stack). So the debug chip is hosted here rather than in a wrapper.
-    <div data-fray-msg={sourceId} className="group/msg relative self-end flex flex-col items-end gap-0.5 max-w-[85%]">
-      {/* Left gutter: a right-aligned bubble leaves empty space to its left, so the chip sits there
-          instead of over the human's own words. */}
-      <MessageDebugId sourceId={sourceId} side="left" />
+    // queued-message stack).
+    <div data-fray-msg={sourceId} className="self-end flex flex-col items-end gap-0.5 max-w-[85%]">
       {/* OFF-WHITE bubble, BLACK text — the human's words POP against the dark page + agent prose. bg-user-bubble
           is a tick less white than bg-fg so it reads as a card. whitespace-pre-wrap is load-bearing: user text
           is verbatim, so its line breaks must survive. Skipped entirely for an attachment-only send, so the
@@ -3130,12 +3126,10 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     )
   }
   // No gap on the container — between-block spacing is entirely the explicit VSpace elements.
-  // `group/msg relative` hosts the hover-revealed debug-id chip (absolutely positioned, so it adds no
-  // height and never perturbs the virtualizer's row measurement). The group is NAMED so a nested
-  // `group` elsewhere in the tree can never toggle it.
+  // `data-fray-msg` stamps this root with the message's own `sourceId`: a stable per-message handle for
+  // an inspector or an e2e selector, distinct from the pagination-anchor attribute (see the anchor test).
   return (
-    <div data-fray-msg={m.sourceId} className="group/msg relative flex flex-col text-[13px] min-w-0">
-      <MessageDebugId sourceId={m.sourceId} />
+    <div data-fray-msg={m.sourceId} className="flex flex-col text-[13px] min-w-0">
       {withSpacers(blocks)}
     </div>
   )
@@ -3164,8 +3158,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
 // answering questions 9–11 of an earlier ask rendered "1" against a question that reads "9. …".
 function AnswersCard({ answers, queued, sourceId }: { answers: PairedAnswer[]; queued?: boolean; sourceId?: string }) {
   return (
-    <div data-fray-msg={sourceId} className={`group/msg relative self-end flex w-full max-w-[85%] flex-col items-end ${queued ? "opacity-50" : ""}`}>
-      <MessageDebugId sourceId={sourceId} side="left" />
+    <div data-fray-msg={sourceId} className={`self-end flex w-full max-w-[85%] flex-col items-end ${queued ? "opacity-50" : ""}`}>
       <div className={`w-full min-w-0 ${BLOCK_RADIUS} rounded-br-sm border border-border-strong bg-elevated p-4`}>
         <CardHead icon={ListChecks} label="Answers" />
         <CardContent>
@@ -4077,10 +4070,7 @@ function EventLine({ text, boundary, sourceId }: { text: string; boundary?: Tran
   // line. No flanking dividers: it reads as a subtle annotation, not a section break, and uses the same
   // type scale as the adjacent activity gerund/digest.
   return (
-    <div data-fray-msg={sourceId} className={`group/msg relative ${TRANSCRIPT_META_LABEL_CLASS}`}>
-      <MessageDebugId sourceId={sourceId} />
-      {text}
-    </div>
+    <div data-fray-msg={sourceId} className={TRANSCRIPT_META_LABEL_CLASS}>{text}</div>
   )
 }
 
@@ -4101,8 +4091,7 @@ function ReasoningBlock({ text, sourceId }: { text: string; sourceId?: string })
   const [open, setOpen] = useState(false)
   const bodyId = useId()
   return (
-    <div data-fray-msg={sourceId} className="group/msg relative flex flex-col">
-      <MessageDebugId sourceId={sourceId} />
+    <div data-fray-msg={sourceId} className="flex flex-col">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}

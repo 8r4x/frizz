@@ -9,13 +9,9 @@ test("quiet transcript events use the same regular light-grey scale as activity 
   assert.equal(TRANSCRIPT_META_LABEL_CLASS, "text-[14px] leading-5 text-muted")
 
   const source = readFileSync(new URL("./ChatView.tsx", import.meta.url), "utf8")
-  // The quiet event line's own root. It gained a `group/msg relative` host for the hover-revealed
-  // debug-id chip, so the class is now interpolated rather than passed bare — but the RHYTHM contract
-  // is unchanged, and the two additions must stay purely positional.
-  const eventClass = source.match(/className=\{`group\/msg relative \$\{TRANSCRIPT_META_LABEL_CLASS\}([^`]*)`\}/)?.[1]
-  assert.ok(eventClass !== undefined, "event line must consume the shared metadata-label class")
-  assert.doesNotMatch(eventClass, /(?:text-\[|leading-|text-muted|petite-caps)/, "event line must not override the shared type rhythm")
-  assert.match(source, /<MessageDebugId sourceId=\{sourceId\} \/>\s*\{text\}/, "event line still renders its text verbatim beside the chip")
+  // The quiet event line's own root takes the shared class BARE — no interpolated tail to drift with —
+  // and renders its text verbatim as the root's only child.
+  assert.match(source, /className=\{TRANSCRIPT_META_LABEL_CLASS\}>\{text\}<\/div>/, "event line must consume the shared metadata-label class and render its text verbatim")
 })
 
 test("minimal tool activity is settled history with no live shimmer or spinner indentation", () => {
