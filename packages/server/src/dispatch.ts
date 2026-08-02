@@ -701,7 +701,7 @@ function workerCap(name: string, lifted: number, env: NodeJS.ProcessEnv): string
 // predate the current fray process by days.
 export function claudeWorkerEnvironment(contextWindow?: ContextWindow, env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   return {
-    ...claudeWorkerEnv(contextWindow),
+    ...claudeWorkerEnv(contextWindow, env),
     CLAUDE_CODE_SUBAGENT_MODEL: "",
     CLAUDE_CODE_EFFORT_LEVEL: "",
     CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION: workerCap("CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION", WORKER_MAX_WEB_SEARCHES, env),

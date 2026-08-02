@@ -338,14 +338,37 @@ export const CLAUDE_WORKER_ENV = {
  *  paths: tmux spawns into a tmux server whose environment may predate this fray process, so only an
  *  explicit empty entry masks a stale inherited value, and the broker forwards "" through the SDK
  *  allowlist verbatim. Claude Code's resolver guards on `if (process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW)`,
- *  so "" is falsy there and it falls through to the model default — same outcome as never setting it. */
-export function claudeWorkerEnv(contextWindow?: ContextWindow): Record<string, string> {
-  const valid = typeof contextWindow === "number" && Number.isInteger(contextWindow)
-    && contextWindow >= CONTEXT_WINDOW_MIN && contextWindow <= CONTEXT_WINDOW_MAX
+ *  so "" is falsy there and it falls through to the model default — same outcome as never setting it.
+ *
+ *  AN OPERATOR-SET VARIABLE IS NEVER CLOBBERED. If `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is already set in
+ *  fray's own process environment, that value passes through untouched and the setting stands down —
+ *  the same "a cap is operator policy" rule workerCap() applies to the sibling caps in
+ *  claudeWorkerEnvironment(). A malformed override is the one exception: Claude Code's parser would
+ *  reject it and silently drop to the model default, so fray substitutes its own configured value
+ *  rather than forwarding a number that cannot take effect.
+ *
+ *  Note this is only about fray's OWN process env. A `.claude/settings.json` `"env"` block in the
+ *  dispatched repo outranks everything here — claude applies its settings env OVER the inherited
+ *  process environment (measured on cli 2.1.220: settings 500000 + inherited 700000 ⇒ /context reports
+ *  500k), so a project that pins its own window always wins over fray's default. Claude does NOT read
+ *  `.env` files at all (measured: a `.env` holding the variable left the window at the model's 1M). */
+export function claudeWorkerEnv(contextWindow?: ContextWindow, env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const operator = env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
+  if (operator !== undefined && inContextWindowRange(Number(operator)) && /^[1-9][0-9]*$/.test(operator)) {
+    return { ...CLAUDE_WORKER_ENV, CLAUDE_CODE_AUTO_COMPACT_WINDOW: operator }
+  }
   return {
     ...CLAUDE_WORKER_ENV,
-    ...(contextWindow === undefined ? {} : { CLAUDE_CODE_AUTO_COMPACT_WINDOW: valid ? String(contextWindow) : "" }),
+    ...(contextWindow === undefined
+      ? {}
+      : { CLAUDE_CODE_AUTO_COMPACT_WINDOW: typeof contextWindow === "number" && inContextWindowRange(contextWindow) ? String(contextWindow) : "" }),
   }
+}
+
+/** A window Claude Code's own resolver would accept: an integer inside the range it parses against.
+ *  Anything else it treats as invalid and replaces with the model default, without saying so. */
+function inContextWindowRange(value: number): boolean {
+  return Number.isInteger(value) && value >= CONTEXT_WINDOW_MIN && value <= CONTEXT_WINDOW_MAX
 }
 
 // Tools a TMUX worker never gets — the argv turns this into `--disallowedTools=…`.

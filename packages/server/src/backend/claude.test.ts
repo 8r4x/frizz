@@ -312,3 +312,32 @@ test("claudeWorkerEnvironment: forwards the context window alongside the caps", 
   assert.equal(claudeWorkerEnvironment("auto", {}).CLAUDE_CODE_AUTO_COMPACT_WINDOW, "")
   assert.equal(claudeWorkerEnvironment(400_000, {}).CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION, String(WORKER_MAX_SUBAGENTS))
 })
+
+// An operator who exported CLAUDE_CODE_AUTO_COMPACT_WINDOW themselves keeps it: a cap is operator
+// policy, the same rule workerCap() applies to the sibling caps. The settings value is fray's DEFAULT,
+// not an override of the ambient process environment.
+test("claudeWorkerEnv: an operator-set window is never clobbered by the setting", () => {
+  const KEY = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+  assert.equal(claudeWorkerEnv(600_000, { [KEY]: "250000" })[KEY], "250000", "the operator's export wins over the setting")
+  assert.equal(claudeWorkerEnv("auto", { [KEY]: "250000" })[KEY], "250000", "and it wins over auto too")
+  assert.equal(claudeWorkerEnv(600_000, {})[KEY], "600000", "with nothing exported the setting applies")
+
+  // Malformed or out-of-range: Claude Code's parser rejects each of these and silently drops to the
+  // model default, so forwarding one would honor a value that cannot take effect. Fray's own configured
+  // window is the safer answer — the same call workerCap makes for the caps beside it.
+  for (const bad of ["", "0", "-5", "1_000", "1e5", "600000 ", "abc", "12.5", "+7", "99999", "1000001"]) {
+    assert.equal(claudeWorkerEnv(600_000, { [KEY]: bad })[KEY], "600000",
+      `malformed override ${JSON.stringify(bad)} must fall back to the configured window`)
+  }
+
+  // The sibling keys are untouched by whatever the operator did to this one.
+  assert.equal(claudeWorkerEnv(600_000, { [KEY]: "250000" }).CLAUDE_CODE_TOTAL_TOKENS_REMINDER, "infinite")
+})
+
+// The env seam must reach the window too, not just the caps — claudeWorkerEnvironment forwards ONE
+// environment to both, so a test (or an operator) that sets the variable sees it honored either way.
+test("claudeWorkerEnvironment: the env seam reaches the window, not just the caps", () => {
+  const KEY = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+  assert.equal(claudeWorkerEnvironment(600_000, { [KEY]: "250000" })[KEY], "250000")
+  assert.equal(claudeWorkerEnvironment(600_000, {})[KEY], "600000")
+})
