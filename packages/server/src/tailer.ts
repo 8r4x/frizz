@@ -385,6 +385,13 @@ export interface BgShellView {
   startedAt: string
   state: "running" | "stale"
   id?: string
+  /**
+   * The tailer's HALF of "can fray end this shell": we hold a provider task handle for it. The board
+   * ANDs it with the thread's transport before an × is offered — see the full contract on the shared
+   * schema, which has carried this field since the stop landed. This twin did not, so the tree did
+   * not typecheck (`tailer.test.ts` reads it) and no artifact could be built.
+   */
+  stoppable?: boolean
   lastActivityAt?: string // ISO8601 of the shell output file's last write
 }
 
