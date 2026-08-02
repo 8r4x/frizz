@@ -128,11 +128,19 @@ const bind = (() => {
 
 const workspace: Workspace = (() => {
   try {
-  // BEFORE the workspace is resolved: resolving it already shells out to `git` and to `tmux`, so a
-  // machine missing either learns it here, by name, instead of from whichever internal step tripped
-  // over the absence first. The Node floor stays with the rest of the prerequisites below, where a
-  // partially provisioned machine can still reach the repair commands.
-  if (!reexec) assertRequiredExecutables();
+  // BEFORE the workspace is resolved, because resolving it already shells out to `git` and to `tmux`
+  // and opens this project's database — so a machine missing a tool, or running a Node the database
+  // cannot survive, learns it here by name instead of from whichever internal step tripped over it
+  // first. The Node floor matters most: on an unsupported release SQLite does not misbehave, it
+  // SEGFAULTS, and a segfault mid-boot is indistinguishable from Fray being broken.
+  //
+  // `--stop` and `--status` skip the Node floor deliberately: they only read a status file and signal
+  // a process, both of which work on any runtime, and they are how someone shuts down a board after
+  // switching to a Node that cannot run one.
+  if (!reexec) {
+    if (options.stop || options.status) assertRequiredExecutables();
+    else assertLaunchPrerequisites();
+  }
   const pinned = projectLaunchTargetFromEnvironment(process.env);
   if (reexec) {
     if (!pinned) throw new Error("registry successor is missing its pinned project identity");

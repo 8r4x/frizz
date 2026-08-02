@@ -146,10 +146,15 @@ try {
     process.env.FRAY_DEV_REEXEC === "1";
   if (internal && !pinned)
     throw new Error("internal launch is missing its pinned project identity");
-  // Resolving a workspace already shells out to `git` and to `tmux`, so probe for them first and name
-  // whichever is missing. Internal relaunches inherit a parent that already passed. The Node floor
-  // stays in `runSupervisor`, so the repair commands remain reachable on an older runtime.
-  if (!internal) assertRequiredExecutables();
+  // Resolving a workspace already shells out to `git` and to `tmux` and opens this project's
+  // database, so check first and name what is wrong. The Node floor is part of it for a real launch:
+  // on an unsupported release SQLite SEGFAULTS rather than erroring, and a segfault mid-boot reads as
+  // "Fray is broken" instead of "upgrade Node". `--stop`/`--status` and the repair commands keep the
+  // executables-only check, since they only read a status file and signal a process.
+  if (!internal) {
+    if (interactiveLaunch) assertLaunchPrerequisites();
+    else assertRequiredExecutables();
+  }
   workspace = internal
     ? workspaceFromLaunchTarget(pinned!)
     : resolveWorkspace(options.repoPath);
