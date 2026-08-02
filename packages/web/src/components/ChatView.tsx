@@ -7,7 +7,7 @@ import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, ShieldCheck, Sparkles, TerminalSquare, X, type LucideIcon } from "lucide-react"
 import type { AwaitingHint, BgShellView, NativeInputRequired as NativeInputRequiredData, PendingAsk, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@fray-ui/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
-import { useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
+import { useBackgroundShellLines, useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
 import { displayTitle, lastActiveLabelAt } from "../groups.ts"
 import { mdToHtml, mdInlineToHtml, stripFrontmatter } from "../lib/markdown.ts"
@@ -42,7 +42,7 @@ import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
 import { FOREGROUND_MARK_AFTER_MS, foregroundToolIsRunning, hasRunningToolIndicator, isPendingForegroundTool, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
 import { formatToolDuration } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
-import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, childOpSubtree, mergeBackgroundShells, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
+import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, childOpSubtree, mergeBackgroundShells, shellLinesLabel, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
 import { agentReading } from "../lib/agentReading.ts"
@@ -3815,6 +3815,12 @@ export function BackgroundOpsStrip({
     const id = setInterval(() => force((n) => n + 1), 30_000)
     return () => clearInterval(id)
   }, [total])
+  // THE LIVE COUNTER on each shell row. Polled here rather than pushed on the board: output growth is a
+  // file fact the board's derived signature does not read, and the reading is wanted at seconds
+  // granularity — pushing that for every thread on the machine is churn nobody asked for (the same
+  // reason raw token counts are kept out of that signature). Scoped to the rows this strip is actually
+  // rendering, so it costs nothing when the view is closed. Hooks run before the early return below.
+  const shellLines = useBackgroundShellLines(slug, shells.flatMap((s) => (s.id && !s.outputUnavailable ? [s.id] : [])))
   if (total === 0) return null
   return (
     <div className={`flex flex-col gap-0.5 ${className}`} data-background-ops>
@@ -3844,6 +3850,10 @@ export function BackgroundOpsStrip({
           state={s.state}
           density="sheet"
           startedAt={s.startedAt}
+          // Absent until the first poll answers, and permanently absent for a shell whose output fray
+          // cannot read — never a fabricated 0 for a number we do not have.
+          counter={s.id ? shellLinesLabel(shellLines.get(s.id)) : undefined}
+          counterTitle="Lines of output so far — open the row to read them"
           // A codex shell has an id (its `processId`, which is what its × addresses) but no readable
           // output — codex keeps that inside its own session. So the two affordances part company
           // here: the row still stops, and it renders non-interactive rather than opening a drawer

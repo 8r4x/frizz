@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useEffect, useMemo } from "react"
 import { useSnapshot } from "valtio"
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query"
 import type { BoardSnapshot, InteractionRecord, ThreadView, TranscriptMessage } from "@fray-ui/shared"
@@ -228,6 +228,35 @@ export function useBackgroundShellOutput(slug: string, id: string) {
     queryFn: () => rpc.backgroundShellOutput({ slug, id }),
     refetchInterval: (query) => (query.state.data?.state === "running" ? 1500 : false),
   })
+}
+
+// The ops strip's LIVE OUTPUT COUNTER: lines produced, per shell row on screen, refreshed while any of
+// them is still running. One batched request per poll for the whole strip.
+//
+// The key carries the sorted ids, so a strip that gains or loses a shell re-keys rather than serving
+// the old set's answer; sorting keeps a re-ordered board frame from thrashing the cache.
+//
+// Polling continues while any named shell is RUNNING — including one that has no readable output yet
+// (`lines: null`), which is the state a shell sits in between its tool_use and its launch ack. Keying
+// the stop on "did anything report a number" instead stopped the poll during that window and the
+// counter never arrived. It stops when every named shell has settled, and when the server knows none
+// of them at all: a settled shell's line count cannot move again.
+//
+// SCOPED TO WHAT IS RENDERED, on purpose: this is the reason the reading is not a board field. An
+// operator looking at one thread pays for that thread's shells and nothing else, and closing the view
+// unmounts the poll entirely.
+export function useBackgroundShellLines(slug: string, ids: readonly string[]): Map<string, number> {
+  const key = [...ids].sort()
+  const query = useQuery({
+    queryKey: ["backgroundShellActivity", slug, key],
+    queryFn: () => rpc.backgroundShellActivity({ slug, ids: key }),
+    enabled: key.length > 0,
+    refetchInterval: (q) => (q.state.data && !q.state.data.shells.some((s) => s.running) ? false : 1500),
+  })
+  return useMemo(
+    () => new Map((query.data?.shells ?? []).flatMap((s) => (s.lines === null ? [] : [[s.id, s.lines] as const]))),
+    [query.data],
+  )
 }
 
 // Follow-ups are injected into the agent's terminal stdin and only surface in the transcript once the

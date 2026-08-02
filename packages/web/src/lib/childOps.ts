@@ -65,6 +65,23 @@ export function childProgressLabel(toolUses?: number, tokens?: number): string |
   return parts.length > 0 ? parts.join(" · ") : undefined
 }
 
+// ── HOW MUCH a background SHELL has printed — its live counter ───────────────────────────────────
+//
+// The row already says how LONG the shell has been running, and for a watcher that is the wrong
+// question: "12m" reads identically whether the thing is tailing a build or wedged on a dead socket.
+// Lines of output is the reading that separates the two, and it is the one that moves.
+//
+// ZERO is a real reading here and renders as "0 lines", never as nothing. A shell that has printed
+// nothing in twelve minutes is exactly the case this counter exists to expose, and an absent counter
+// would be indistinguishable from "fray cannot read this shell's output" (a codex exec), which is the
+// one situation that genuinely has no number. Compare `childProgressLabel`, where zero really does mean
+// "the provider has not reported yet".
+export function shellLinesLabel(lines: number | undefined): string | undefined {
+  if (typeof lines !== "number" || !Number.isFinite(lines) || lines < 0) return undefined
+  if (lines === 1) return "1 line"
+  return `${compactCount(lines) ?? "0"} lines`
+}
+
 // 947 → "947", 13476 → "13.5k", 132000 → "132k", 2400000 → "2.4M". A raw six-digit token count next to
 // a truncated label is noise; the magnitude is the whole reading. The decimal survives up to three
 // significant figures and is dropped past them, where it would only be adding width.

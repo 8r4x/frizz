@@ -19,6 +19,8 @@ function render(props: {
   density: ChildOpDensity
   depth?: number
   startedAt?: string
+  counter?: string
+  counterTitle?: string
   parentSlug?: string
   onOpen?: () => void
   onDismiss?: () => void
@@ -109,10 +111,18 @@ test("no density renders a model+effort tag — the profile lives on the prompt 
   }
 })
 
+// The readings group — everything right-justified at the end of the line. `ml-auto` is what pushes it
+// there, and its `text-muted/40` is the one tone every reading inside it inherits.
+function readings(html: string): string {
+  const at = html.indexOf('class="ml-auto')
+  assert.ok(at >= 0, "the row must render a right-justified readings group")
+  return html.slice(at)
+}
+
 test("the working-duration reading is right-justified on every density", () => {
   for (const density of DENSITIES) {
     const html = render({ density, onOpen: () => {}, startedAt: TWELVE_MIN_AGO })
-    assert.match(html, /class="ml-auto[^"]*"[^>]*>12m</, `${density} pushes the reading to the right edge`)
+    assert.match(readings(html), /^class="ml-auto[^"]*">(?:<[^>]*>)*12m</, `${density} pushes the reading to the right edge`)
   }
 })
 
@@ -122,12 +132,34 @@ test("the light-gray working-duration reading renders on every density, and only
     // "12m" — how long the child has been WORKING, not how recently it was active: anything still
     // listed here is running or tracked-stale, so recency was near-zero information (maintainer 2026-07-28).
     assert.match(withReading, /\b12m\b/, `${density} must render the working-duration reading`)
-    assert.match(withReading, /text-muted\/40[^>]*>12m</, `${density} reading must be the light-gray tone`)
+    assert.match(readings(withReading), /^class="[^"]*text-muted\/40/, `${density} reading must be the light-gray tone`)
     assert.match(withReading, /title="Working for 12m"/, `${density} reading carries the explicit tooltip`)
     // A child with no dispatch instant gets NO reading — never a fabricated "0s".
     // Assert the READING, not a bare duration shape: the spinner SVG carries dur="1.1s", so a loose
     // /\d+s/ matches the animation and the test passes for the wrong reason.
     assert.doesNotMatch(render({ density }), /title="Working for/, `${density} must omit the reading when absent`)
+  }
+})
+
+// ── THE LIVE COUNTER — a second reading inside the right-hand group ──────────────────────────────
+
+test("the counter sits LEFT of the duration, so the duration keeps the right edge it established", () => {
+  const html = render({ density: "sheet", kind: "SHELL", counter: "142 lines", counterTitle: "Lines of output so far", startedAt: TWELVE_MIN_AGO })
+  const group = readings(html)
+  assert.ok(group.indexOf("142 lines") < group.indexOf("12m"), "counter → duration, never the other way round")
+  assert.match(group, /·/, "the two readings are separated by the same middot the progress label uses")
+  assert.match(html, /data-child-op-counter[^>]*title="Lines of output so far"/)
+  // ONE tone for the whole group: the counter must not arrive as a second, louder gray.
+  assert.equal(group.split("text-muted/40").length - 1, 1, "the tone lives once, on the group")
+})
+
+test("the counter stands alone when the row has no duration, and leaves no gap when absent", () => {
+  const noDuration = render({ density: "sheet", kind: "SHELL", counter: "0 lines" })
+  assert.match(readings(noDuration), /^class="ml-auto[^"]*">(?:<[^>]*>)*0 lines</, "a counter alone is still right-justified")
+  assert.doesNotMatch(noDuration, /·/, "no duration ⇒ no separator dangling after the counter")
+  // Every surface that does not poll for a counter renders exactly the row it always did.
+  for (const density of DENSITIES) {
+    assert.doesNotMatch(render({ density, startedAt: TWELVE_MIN_AGO }), /data-child-op-counter/, `${density} without a counter must not render the slot`)
   }
 })
 

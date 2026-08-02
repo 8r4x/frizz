@@ -57,6 +57,8 @@ export function ChildOpRow({
   density,
   depth,
   startedAt,
+  counter,
+  counterTitle,
   parentSlug,
   onOpen,
   onDismiss,
@@ -81,6 +83,13 @@ export function ChildOpRow({
   // as near-zero information (maintainer 2026-07-28). How long it has been WORKING is the number that
   // tells you whether to go look at it.
   startedAt?: string
+  // A LIVE COUNTER for this row, rendered immediately left of the duration — "142 lines" for a
+  // background shell (see shellLinesLabel). The duration keeps the right edge it established, so a
+  // column of rows still reads its ages down one line; the counter forms a second column inside it.
+  // Absent ⇒ the row renders exactly as it did before this existed, which is the case for every row
+  // whose surface does not poll for one.
+  counter?: string
+  counterTitle?: string
   // Drill-in marker: keeps an open ThreadSheet for this slug from self-dismissing on the pointer-down,
   // so the child transcript STACKS over its parent instead of replacing it (see ThreadSheet).
   parentSlug?: string
@@ -142,10 +151,16 @@ export function ChildOpRow({
     </span>
   )
 
-  // `ml-auto` is what right-justifies it: the reading is the LAST item in the row's flex line, so it
-  // takes every pixel the (truncating) label leaves behind and sits flush at the right edge.
-  const reading: ReactNode = elapsed ? (
-    <span className="ml-auto shrink-0 pl-1.5 text-muted/40" title={`Working for ${elapsed}`}>{elapsed}</span>
+  // `ml-auto` is what right-justifies them: the readings are the LAST item in the row's flex line, so
+  // they take every pixel the (truncating) label leaves behind and sit flush at the right edge. The
+  // DURATION stays rightmost whatever else joins it — that column is what a stack of rows is read down
+  // — and the counter falls in beside it, separated by the same `·` the progress label already uses.
+  const reading: ReactNode = counter || elapsed ? (
+    <span className="ml-auto flex shrink-0 items-center gap-1 pl-1.5 text-muted/40">
+      {counter && <span data-child-op-counter title={counterTitle}>{counter}</span>}
+      {counter && elapsed && <span aria-hidden className="text-muted/25">·</span>}
+      {elapsed && <span title={`Working for ${elapsed}`}>{elapsed}</span>}
+    </span>
   ) : null
 
   const identity = (

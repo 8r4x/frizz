@@ -94,7 +94,7 @@ import { isBrokerClaudeRow, type SessionRow, type Storage } from "./storage.ts"
 import type { SessionTelemetry } from "./tailer.ts"
 import { resolvePlanFile, deletePlanFile } from "./plan-files.ts"
 import { providerResumeCommand, tmuxAttachCommand } from "./external-terminal.ts"
-import { readBackgroundShellOutput } from "./background-shell-output.ts"
+import { backgroundShellLineCount, readBackgroundShellOutput } from "./background-shell-output.ts"
 import { projectRetiredBackgroundOps, retiredOpsFor } from "./transcript.ts"
 
 const SlugInput = z.object({ slug: ThreadSlug }).strict()
@@ -985,6 +985,50 @@ export function createRouter(ctx: AppContext) {
           stoppable: stop.sessionId !== null,
           stopNote: stop.sessionId === null ? stop.note : null,
         }
+      },
+    }),
+
+    // THE LIVE COUNTER on a background shell row: how many lines of output each named shell has
+    // produced so far. Elapsed time already rides that row and it cannot answer the question the
+    // operator actually has about a watcher — "is this thing still doing anything, or is it wedged?".
+    // A number that climbs answers it at a glance; one that has sat still for ten minutes answers it
+    // the other way.
+    //
+    // A CLIENT POLL, deliberately NOT a board field. Output growth happens in a file the board's
+    // derived signature does not read, and folding it in would push a board delta per append for every
+    // thread on the machine whether or not a human is looking at one — the same churn the signature
+    // already refuses raw token counts for (tailer.ts, derivedSignature). Polled here, the cost lands
+    // only while a thread with live shells is actually on screen.
+    //
+    // BATCHED over ids because the ops strip renders them as a group: one request per poll for the
+    // whole strip, not one per row.
+    //
+    // Every id the tailer still tracks comes back, and `lines: null` — NOT an omission — is how "there
+    // is no readable output yet" is said. The distinction is what keeps the poll alive: a shell's row
+    // appears at its `tool_use` and its output path only arrives seconds later with the launch ack, so
+    // for that window the shell has no file at all. Omitting it read as "nothing here is running", the
+    // client stopped polling, and the counter never appeared for the rest of the view's life.
+    // An id the tailer no longer knows is genuinely gone and IS omitted.
+    backgroundShellActivity: query({
+      input: z.object({ slug: ThreadSlug, ids: z.array(z.string()).max(64) }).strict(),
+      output: z.object({
+        shells: z.array(z.object({
+          id: z.string(),
+          lines: z.number().nullable(),
+          // Whether the count can still move. The client stops polling once every named shell has
+          // settled, so a finished strip does not keep a timer alive for a number that cannot change.
+          running: z.boolean(),
+        })),
+      }),
+      handler: async ({ input }) => {
+        const shells: { id: string; lines: number | null; running: boolean }[] = []
+        for (const id of input.ids) {
+          const info = ctx.tailer.backgroundShell?.(input.slug, id)
+          if (!info) continue
+          const lines = info.outputFile ? backgroundShellLineCount(info.outputFile) : undefined
+          shells.push({ id, lines: lines ?? null, running: info.state === "running" })
+        }
+        return { shells }
       },
     }),
 

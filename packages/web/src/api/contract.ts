@@ -87,6 +87,10 @@ export interface Api {
   // ended; `note` narrates the fan-out, including any descendant that could NOT be stopped.
   subAgentStop(input: { slug: string; id: string }): Promise<{ stopped: boolean; descendantsStopped: number; note: string | null }>
   backgroundShellOutput(input: { slug: string; id: string }): Promise<{ command: string | null; output: string; truncated: boolean; state: "running" | "done" | "gone"; stoppable: boolean; stopNote: string | null }>
+  // The ops strip's live output counter, batched over every shell row it is showing. `lines: null` is
+  // "no readable output yet" (a shell still between its tool_use and its launch ack) — never zero, and
+  // never an omission, which would stop the poll before the path ever arrived.
+  backgroundShellActivity(input: { slug: string; ids: string[] }): Promise<{ shells: { id: string; lines: number | null; running: boolean }[] }>
   // The × on a live sub-agent / background-shell row. It MEANS stop: the server tries the real
   // provider control first and only then retires the row. `stopped` says whether work was actually
   // terminated; `note` is why it could not be, when there is a reason worth telling the operator —
@@ -204,6 +208,7 @@ export const PROCEDURES = {
   subAgentSteer: "mutation",
   subAgentStop: "mutation",
   backgroundShellOutput: "query",
+  backgroundShellActivity: "query",
   stopBackgroundOp: "mutation",
   pendingInteractions: "query",
   interactionGet: "query",
