@@ -94,6 +94,12 @@ test("live background telemetry overrides a completed launch wrapper without bor
   assert.equal(liveBackgroundOperationState({ backgroundState: "background", desc: "Unrelated shell" }, operations), undefined)
   assert.equal(liveBackgroundOperationState({ backgroundState: "unknown", desc: "Watch CI" }, operations), undefined)
   assert.equal(liveBackgroundOperationState({ name: "Interrupt process", backgroundState: "background", detail: "session 35985" }, operations), undefined)
+  // A shell the operator × killed keeps `backgroundState` (that is what keeps its card a background card
+  // rather than tool-run filler) — so the label match alone would hand a relaunched "Watch CI" its
+  // liveness right back. `cancelled` is dead, whatever else is running under the same description.
+  assert.equal(liveBackgroundOperationState({ backgroundState: "background", desc: "Watch CI", status: "cancelled" }, operations), undefined)
+  // …while a returned launch wrapper still borrows its detached watcher's state, which is the whole point.
+  assert.equal(liveBackgroundOperationState({ backgroundState: "background", desc: "Watch CI", status: "completed" }, operations), "running")
 })
 
 test("reduced motion keeps live work visible as a static ring in its own hue", () => {

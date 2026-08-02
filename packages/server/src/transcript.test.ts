@@ -1964,9 +1964,40 @@ test("a retired background op stops reading as live in the transcript", () => {
 
   const projected = projectRetiredBackgroundOps(messages, new Set(["toolu_sh"]))
   assert.equal(projected[0]!.tools[0]!.status, "cancelled", "the operator ended it — the card should say so")
-  assert.equal(projected[0]!.tools[0]!.backgroundState, undefined, "…and it leaves the live ops strip")
+  // `cancelled` alone is what removes it from every live reading (the ops strip, the liveness dot and
+  // the "background running" label are all gated on `pending`). The FACT that it was a detached shell
+  // survives, because the client reads exactly that field to keep a background op out of the coalesced
+  // tool run — erasing it turned the killed shell into an ordinary tail call and put its description
+  // back on screen as the live shimmer (see the pinned-projection test below).
+  assert.equal(projected[0]!.tools[0]!.backgroundState, "background", "it was still a background op")
   assert.equal(projected[0]!.tools[1]!.status, "pending", "an op nobody retired is untouched")
   assert.equal(projected[0]!.tools[1]!.backgroundState, "background")
+})
+
+// The maintainer killed this shell on 2026-07-30 and its description was still shimmering at the bottom
+// of the thread two days later, reading "Restarting the census sweep · 11m 57s". `latestTranscriptWindow`
+// re-mints the pin on EVERY read from the pending launch record below the window, and the retirement
+// projection runs after it — so the pin has to be dropped here or it never leaves.
+test("a retired op's pinned projection leaves the transcript instead of being re-minted forever", () => {
+  const launch = {
+    sourceId: "claude:sess:44897395",
+    role: "assistant" as const, at: "2026-07-30T17:24:25.496Z", text: "",
+    tools: [{ name: "Bash", detail: "node census.ts", desc: "Restart the census sweep", status: "pending" as const, backgroundState: "background" as const, shellId: "toolu_sh" }],
+    parts: [],
+  }
+  const messages = [
+    { sourceId: "claude:sess:1", role: "assistant" as const, at: "2026-08-02T06:19:51.615Z", text: "landed", tools: [], parts: [] },
+    { ...launch, sourceId: "pinned-bg:abc", pinnedFromSourceId: launch.sourceId },
+  ] as unknown as TranscriptMessage[]
+
+  const projected = projectRetiredBackgroundOps(messages, new Set(["toolu_sh"]))
+  assert.equal(projected.length, 1, "the synthetic tail copy is gone")
+  assert.equal(projected[0]!.sourceId, "claude:sess:1")
+
+  // A pin whose shell is still live is exactly what the pin is FOR, and it stays.
+  const live = projectRetiredBackgroundOps(messages, new Set(["toolu_unrelated"]))
+  assert.equal(live.length, 2)
+  assert.equal(live[1]!.tools[0]!.status, "pending")
 })
 
 test("the retirement projection is a no-op when nothing was retired, and never touches a settled call", () => {

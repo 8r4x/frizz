@@ -3709,17 +3709,36 @@ export function projectRetiredBackgroundOps(
   retired: ReadonlySet<string>,
 ): TranscriptMessage[] {
   if (retired.size === 0) return messages as TranscriptMessage[]
-  const projectTool = (tool: TranscriptToolCall): TranscriptToolCall => {
-    // Keyed on `shellId` — the launch tool_use id, which is exactly what the × was addressed at. A
-    // call with no shellId was never a tracked background op and is left alone.
-    if (!tool.shellId || !retired.has(tool.shellId) || tool.status !== "pending") return tool
-    return { ...tool, status: "cancelled", backgroundState: undefined }
+  // Keyed on `shellId` — the launch tool_use id, which is exactly what the × was addressed at. A call
+  // with no shellId was never a tracked background op and is left alone.
+  const isRetired = (tool: TranscriptToolCall): boolean =>
+    tool.shellId !== undefined && retired.has(tool.shellId) && tool.status === "pending"
+  // `backgroundState` SURVIVES the retirement. It briefly did not, and erasing it is what put a shell
+  // killed two days earlier into the live shimmer: that field is the marker the client's
+  // `isToolActivityException` reads to keep a background op OUT of the coalesced tool run, so a
+  // retired call stripped of it became an ordinary tool call — and `liveToolActivityTail` reads the
+  // newest ordinary call in the tail, so the bottom row read "Restarting the census sweep · 11m 57s"
+  // (maintainer 2026-08-01). Nothing needed the erasure: every live reading — the ops strip
+  // (isLiveTranscriptBackgroundTool), the liveness dot (hasRunningToolIndicator), the "background
+  // running" label — is already gated on `status === "pending"`, which `cancelled` fails on its own.
+  const projectTool = (tool: TranscriptToolCall): TranscriptToolCall =>
+    isRetired(tool) ? { ...tool, status: "cancelled" } : tool
+  const out: TranscriptMessage[] = []
+  for (const message of messages) {
+    // A PINNED projection (latestTranscriptWindow) is a synthetic tools-only copy appended after the
+    // real tail, purely to keep an UNRESOLVED shell visible once its launch message fell out of the
+    // window. A retired shell IS resolved, so the pin has nothing left to keep visible — and because
+    // the windower runs before this projection, it would otherwise be re-minted on every read, forever,
+    // carrying a days-old `at` at the bottom of the conversation. The canonical message keeps its
+    // cancelled card at its own position in paginated history.
+    if (message.pinnedFromSourceId && message.tools.length > 0 && message.tools.every(isRetired)) continue
+    out.push({
+      ...message,
+      tools: message.tools.map(projectTool),
+      parts: message.parts.map((part) => part.kind === "tools" ? { ...part, tools: part.tools.map(projectTool) } : part),
+    })
   }
-  return messages.map((message) => ({
-    ...message,
-    tools: message.tools.map(projectTool),
-    parts: message.parts.map((part) => part.kind === "tools" ? { ...part, tools: part.tools.map(projectTool) } : part),
-  }))
+  return out
 }
 
 export function projectTranscriptPageAgentLifecycles(

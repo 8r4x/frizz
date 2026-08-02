@@ -67,6 +67,7 @@ export function foregroundToolIsRunning(
 
 type BackgroundTool = {
   name?: string
+  status?: "pending" | "completed" | "failed" | "cancelled"
   backgroundState?: "background" | "unknown"
   detail?: string
   desc?: string
@@ -91,6 +92,12 @@ export function liveBackgroundOperationState(tool: BackgroundTool, operations: r
   // An interrupt receipt may carry the target session id, but it is a completed control action and
   // must never borrow the target's live background telemetry.
   if (tool.name === "Interrupt process") return undefined
+  // A shell the operator RETIRED with the × is cancelled, and it must stay dead. Matching is by display
+  // LABEL, so a relaunched shell carrying the same `desc` would otherwise hand its liveness back to the
+  // killed card — the "it came back reading RUNNING · 3433 MIN" failure, re-entered through the front
+  // door. `completed` is deliberately still eligible: a launch wrapper returns long before the watcher
+  // it detached stops running, which is the whole reason this correlation exists.
+  if (tool.status === "cancelled") return undefined
   if (tool.backgroundState !== "background") return undefined
   const candidates = new Set([operationLabel(tool.desc), operationLabel(tool.detail), operationLabel(tool.command)].filter((value): value is string => Boolean(value)))
   if (candidates.size === 0) return undefined

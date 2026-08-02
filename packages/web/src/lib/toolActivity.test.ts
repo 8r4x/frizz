@@ -445,3 +445,19 @@ test("the newest call in the landed tail names the live gerund", () => {
   assert.equal(live?.name, "Grep")
   assert.equal(currentToolActivity(compact[0].message.tools).tool?.name, "Grep")
 })
+
+// The maintainer's screenshot: the shimmer read "Restarting the census sweep · 11m 57s" for a shell they
+// had force-killed two days earlier. The server pins a below-the-window background launch at the TAIL of
+// the transcript, and the retirement projection used to strip `backgroundState` off it — which is the one
+// field that keeps a background op out of the coalesced run. Stripped, the killed shell was just the
+// newest ordinary call in the tail, and this function handed its description to the shimmer.
+test("a retired background op never becomes the live gerund", () => {
+  const retired = toolMessage("pinned-bg:abc", [
+    tool("Bash", { command: "node census.ts", desc: "Restart the census sweep", backgroundState: "background", status: "cancelled", shellId: "toolu_sh" }),
+  ])
+  const compact = coalesceToolActivityMessages([toolMessage("a", [tool("Read", { detail: "src/a.ts", status: "completed" })]), retired])
+
+  assert.equal(isToolActivityException(retired.tools[0]), true, "it is still a background card, not run filler")
+  assert.equal(compact.length, 2, "and it never folds into the run above it")
+  assert.equal(liveToolActivityTail(compact.map((entry) => entry.message)), undefined)
+})
