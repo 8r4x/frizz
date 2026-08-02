@@ -440,7 +440,13 @@ function restingOnBackgroundShell(t: ThreadView): boolean {
 // an archived row at rest stays archived even if stale attention metadata lingers; a real human ask
 // stays a question after the worker exits; live work stays working; and a completed handoff stays a
 // check instead of being mislabelled as a crash merely because `needsYou` also puts it in the queue.
-export type SessionIndicatorKind = "archived" | "needs-input" | "working" | "background" | "done" | "stalled" | "held" | "rest"
+export type SessionIndicatorKind = "archived" | "needs-input" | "working" | "background" | "done" | "stalled" | "held" | "heartbeat" | "rest"
+
+/** Does this thread carry a worker-armed heartbeat, paused or not? Paused still counts — a paused
+ * heartbeat is exactly the state the rail's play button exists to leave, so it has to stay visible. */
+export function hasHeartbeat(t: ThreadView): boolean {
+  return Boolean(t.heartbeat)
+}
 
 export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   const activelyRunning = isActivelyRunning(t)
@@ -471,6 +477,11 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   // launched is still going". In practice neither can collide with this at all, since
   // deriveAwaitingBackground drops any fenced thread; the ordering states the intent rather than
   // resolving a live conflict.
+  // ABOVE background on purpose. The case this whole feature exists for is a thread resting behind
+  // background work that may never report — and there the heartbeat is the more useful fact of the two,
+  // because it is the thing that will actually move the thread. A blue "a shell is alive" dot on a
+  // thread fray is about to nudge tells the operator the less important half of the story.
+  if (hasHeartbeat(t)) return "heartbeat"
   if (restingOnBackgroundShell(t)) return "background"
   // STALLED = this thread's PROCESS IS GONE with the work unfinished. That is exactly `canRetry`: an
   // OWNED (non-foreign) session row whose runtime is `exited`. It deliberately does NOT consult the

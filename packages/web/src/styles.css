@@ -273,6 +273,19 @@ html[data-font="sans"] .fray-bash .md-body {
      what carries the "there is a mark here" reading. */
   .fray-rail-dot { animation: none; opacity: 1; }
 }
+/* The armed heartbeat's pulse. Slower than the shell dot's 1.25s and shallower — this mark says "fray
+   will nudge this in a few minutes", not "something is happening right now", and a mark that beats as
+   urgently as live work would misreport a thread that is simply parked. Tone only, same ruling as
+   above: the glyph's geometry is what identifies it. Paused rows render without this class at all. */
+.fray-rail-heartbeat {
+  animation: fray-rail-heartbeat-pulse 2.4s ease-in-out infinite;
+}
+@keyframes fray-rail-heartbeat-pulse {
+  50% { opacity: 0.5; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fray-rail-heartbeat { animation: none; opacity: 1; }
+}
 @keyframes fray-live-pulse {
   50% { opacity: 0.62; box-shadow: 0 0 0 2px color-mix(in srgb, var(--live-dot) 14%, transparent); }
 }

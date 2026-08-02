@@ -11,6 +11,7 @@ import { SnoozeButton } from "./SnoozeButton.tsx"
 import { RestartWorkerButton } from "./RestartWorkerButton.tsx"
 import { ContextMeter } from "./ContextMeter.tsx"
 import { Tooltip } from "./Tooltip.tsx"
+import { HeartbeatControl } from "./HeartbeatControl.tsx"
 import { BLOCK_RADIUS_INNER_BOTTOM } from "./TranscriptCard.tsx"
 import { Dialog } from "./ui/Dialog.tsx"
 
@@ -61,6 +62,7 @@ export function ThreadLifecycleFooter({
       <span className="mr-auto flex items-center gap-1.5">
         <ContextMeter thread={thread} />
         <PendingSnooze thread={thread} />
+        <HeartbeatControl thread={thread} />
       </span>
       {/* Done ⇒ the strip states the state; otherwise it offers the verbs. Never both, and never
           neither: the slot on the right always says something about where the thread stands. */}

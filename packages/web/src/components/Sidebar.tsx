@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
-import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, FileText, Github, Hourglass, Loader2, RotateCcw, Timer } from "lucide-react"
+import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, FileText, Github, HeartPulse, Hourglass, Loader2, RotateCcw, Timer } from "lucide-react"
 import type { AwaitingHint, BoardSnapshot, PlanView, ThreadView } from "@fray-ui/shared"
 import { store, openThread, scrollToQueueCard, pushSubAgentDrawer, pushPlanDrawer, QUEUE_CARD_VIEWPORT_TOP, type ConnectionState } from "../store.ts"
 import { useBoard, asThreads } from "../hooks.ts"
@@ -18,6 +18,7 @@ import { ProviderMark } from "./ProviderMark.tsx"
 import { STATUS_CHIP } from "../lib/status.ts"
 import { retrySession } from "../lib/retrySession.ts"
 import { formatSnoozedUntil, formatSnoozeWake, formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
+import { formatHeartbeatInterval } from "../lib/heartbeat.ts"
 import { useOptimisticallySteered } from "../lib/steering.ts"
 import { activeSidebarSection, queueNavigationSettled, railRevealDelta, type SidebarSectionGeometry } from "../lib/sidebarScrollspy.ts"
 import type { ReactElement, ReactNode } from "react"
@@ -621,6 +622,27 @@ function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string |
   // running — so the box stops tracing and the row simply stays alive in the running band. Same blue and
   // same pulse as the transcript's live-shell dot, sized to this box (styles.css .fray-rail-dot), so
   // both surfaces say "a shell is alive behind this" in one language.
+  // The ONE colored glyph on this rail, and deliberately so: a heartbeat is the only mark here that
+  // says fray itself will act on this thread without the operator doing anything, so it reads as its
+  // own thing rather than another shade of "resting". Pink, per the maintainer. Paused drops the
+  // pulse and dims to muted — the row still shows WHAT is armed, just not as something live.
+  if (kind === "heartbeat") {
+    const beat = t.heartbeat
+    const paused = beat?.paused === true
+    const every = beat ? formatHeartbeatInterval(beat.intervalSeconds) : ""
+    return {
+      node: (
+        <StatusBox>
+          <HeartPulse
+            size={10}
+            className={paused ? "text-muted/70" : "fray-rail-heartbeat text-pink-400"}
+            data-running-indicator={paused ? "thread-heartbeat-paused" : "thread-heartbeat"}
+          />
+        </StatusBox>
+      ),
+      tip: paused ? `Heartbeat paused — every ${every} when resumed` : `Heartbeat — fray wakes this thread every ${every}`,
+    }
+  }
   if (kind === "background") {
     return {
       node: <StatusBox><span aria-hidden className="fray-rail-dot" data-running-indicator="thread-background" /></StatusBox>,
