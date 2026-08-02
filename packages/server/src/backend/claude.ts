@@ -1,6 +1,7 @@
 import { join } from "node:path"
 import { buildClaudeCommand, buildClaudeResumeCommand, claudeWorkerEnvironment, workerPluginDir } from "../dispatch.ts"
 import { parseLine as parseClaudeRecord, applyRecord, matchesPermPrompt, detectClaudeBootModal, isRealUserMessage, type TailState } from "../tailer.ts"
+import type { ContextWindow } from "@fray-ui/shared"
 import type { AgentBackend, BuiltCommand, FoldState, NativeInputRequiredData, NormalizedEvent, ResumeOpts, SpawnOpts } from "./types.ts"
 
 // ClaudeBackend: everything Claude-Code-specific behind the AgentBackend seam — the spawn/resume argv
@@ -16,6 +17,10 @@ export interface ClaudeBackendOptions {
   // <sessionId>.jsonl. Injected by the composition layer so it matches the tailer's foreign-scan dir.
   logDir: string
   claudeBin?: string // injectable dispatch executable (tests use a stand-in)
+  // The operator's configured auto-compact window, read LIVE on every spawn/resume rather than
+  // captured at construction — the backend is built once per project and outlives any settings edit.
+  // Absent (tests, the integration harness) ⇒ claudeWorkerEnv's shipped default.
+  contextWindow?: () => ContextWindow | undefined
 }
 
 // Flatten a tool_result's `content` (an array of {type:"text", text} blocks, or a bare string) into
@@ -114,7 +119,7 @@ export function createClaudeBackend(opts: ClaudeBackendOptions): AgentBackend {
         extraSystemPrompt: o.extraSystemPrompt,
         frayMcp: o.frayMcp,
       })
-      return { argv, env: claudeWorkerEnvironment(), prewrite: [] }
+      return { argv, env: claudeWorkerEnvironment(opts.contextWindow?.()), prewrite: [] }
     },
 
     buildResume(o: ResumeOpts): BuiltCommand {
@@ -130,7 +135,7 @@ export function createClaudeBackend(opts: ClaudeBackendOptions): AgentBackend {
         extraSystemPrompt: o.extraSystemPrompt,
         frayMcp: o.frayMcp,
       })
-      return { argv, env: claudeWorkerEnvironment(), prewrite: [] }
+      return { argv, env: claudeWorkerEnvironment(opts.contextWindow?.()), prewrite: [] }
     },
 
     transcriptPath(sessionId: string): string {

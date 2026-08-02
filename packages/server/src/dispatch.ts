@@ -10,6 +10,7 @@ import {
   ThreadSlug,
   slugify,
   tmuxSessionName,
+  type ContextWindow,
   type Settings,
   type PermissionMode,
   type ProviderAuth,
@@ -18,7 +19,7 @@ import { PERM_DIR_ENV, permRequestDir, type Project } from "./project.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { BoardManager } from "./board.ts"
 import type { AgentBackend, BackendKind, BuiltCommand, FrayMcp } from "./backend/types.ts"
-import { CHROME_DEVTOOLS_MCP, CLAUDE_WORKER_ENV, FRAY_MCP, WORKER_DISALLOWED_TOOLS } from "./backend/types.ts"
+import { CHROME_DEVTOOLS_MCP, claudeWorkerEnv, FRAY_MCP, WORKER_DISALLOWED_TOOLS } from "./backend/types.ts"
 import { buildWorkerPrompt } from "./workerPrompt.ts"
 import { codexSandbox, CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS } from "./backend/codex.ts"
 import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
@@ -698,9 +699,9 @@ function workerCap(name: string, lifted: number, env: NodeJS.ProcessEnv): string
 // than overridden. They are always set EXPLICITLY (never left to inheritance) because a tmux pane
 // inherits the tmux SERVER's environment — captured whenever that server first started, which may
 // predate the current fray process by days.
-export function claudeWorkerEnvironment(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+export function claudeWorkerEnvironment(contextWindow?: ContextWindow, env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   return {
-    ...CLAUDE_WORKER_ENV,
+    ...claudeWorkerEnv(contextWindow),
     CLAUDE_CODE_SUBAGENT_MODEL: "",
     CLAUDE_CODE_EFFORT_LEVEL: "",
     CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION: workerCap("CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION", WORKER_MAX_WEB_SEARCHES, env),
@@ -832,6 +833,9 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
     extraSystemPrompt?: string
     kind?: BackendKind
     runtimeGate: boolean
+    // Claude only; the codex branch never reads it. Threaded rather than read from a captured settings
+    // snapshot so a mid-run change reaches the next spawn (matching runtimeGate above).
+    contextWindow?: ContextWindow
   }): BuiltCommand {
     const frayMcp = resolveFrayMcp(deps.project.stateDir, undefined, undefined, o.slug)
     const backend = deps.backendFor?.(o.kind)
@@ -861,7 +865,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       workerPrompt: loadWorkerPrompt("claude", o.runtimeGate),
       frayMcp,
     })
-    return { argv, env: claudeWorkerEnvironment(), prewrite: [] }
+    return { argv, env: claudeWorkerEnvironment(o.contextWindow), prewrite: [] }
   }
 
   function writePrewrites(built: BuiltCommand): void {
@@ -1079,6 +1083,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         extraSystemPrompt: [scratchpadOrientation(sessionId, planPath, kind), frayConfigBlock(deps.project.dir)].filter(Boolean).join("\n\n"),
         kind,
         runtimeGate,
+        contextWindow: settings.contextWindow,
       })
 
       // Spawn BEFORE writing the registry row so a spawn failure never strands a contentless row on
@@ -1270,6 +1275,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           prompt,
           extraSystemPrompt: [scratchpadOrientation(sessionId), frayConfigBlock(deps.project.dir), adoption].filter(Boolean).join("\n\n"),
           runtimeGate,
+          contextWindow: settings.contextWindow,
         })
       } catch {
         rollback()

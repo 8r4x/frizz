@@ -762,6 +762,21 @@ export type PermissionMode = z.infer<typeof PermissionMode>
 export const LocalFileOpener = z.enum(["system", "cursor", "vscode", "finder", "copy"])
 export type LocalFileOpener = z.infer<typeof LocalFileOpener>
 
+// The bounds Claude Code itself enforces on an auto-compact window. Its resolver parses the value
+// against exactly this range and treats anything outside it as INVALID — falling back to the model
+// default SILENTLY, so an out-of-range number reads as "my setting did nothing". Mirrored here so the
+// settings drawer and the server reject it at the edge instead.
+export const CONTEXT_WINDOW_MIN = 100_000
+export const CONTEXT_WINDOW_MAX = 1_000_000
+
+// How full a Claude worker's context gets before Claude Code auto-summarizes it. `"auto"` leaves the
+// choice to Claude Code (its per-model default, 1M on the current models); a number caps it there.
+// Only ever a CAP — Claude Code takes min(model window, this), so it cannot buy a window the model
+// doesn't have. Stored as an explicit "auto" rather than as absent because absent has to keep meaning
+// "old settings blob, take the default" (getSettings merges over defaults, and JSON drops undefined).
+export const ContextWindow = z.union([z.literal("auto"), z.number().int().min(CONTEXT_WINDOW_MIN).max(CONTEXT_WINDOW_MAX)])
+export type ContextWindow = z.infer<typeof ContextWindow>
+
 export const Settings = z.object({
   // The mode NEW Claude workers launch in. Settings surfaces exactly two of them — `auto` (the shipped
   // default) and `bypassPermissions` (--dangerously-skip-permissions) — because those are the only two
@@ -805,6 +820,10 @@ export const Settings = z.object({
   // prompt can never break the thread↔.fray-file binding. Optional so old settings blobs parse.
   githubIssuePrompt: z.string().optional(),
   githubPrPrompt: z.string().optional(),
+  // How full a CLAUDE worker's context gets before it auto-summarizes — see ContextWindow. Claude-only:
+  // it lands as CLAUDE_CODE_AUTO_COMPACT_WINDOW in the worker environment, and codex has no equivalent.
+  // Optional so an old settings blob parses; absent ⇒ defaultSettings' 600k.
+  contextWindow: ContextWindow.optional(),
 })
 export type Settings = z.infer<typeof Settings>
 

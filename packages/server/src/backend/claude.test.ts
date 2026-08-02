@@ -4,7 +4,8 @@ import { createClaudeBackend, parseClaudeLine } from "./claude.ts"
 import { newTailState, computeTurn } from "../tailer.ts"
 import { buildClaudeCommand, buildClaudeResumeCommand, claudeWorkerEnvironment, loadWorkerPrompt, WORKER_MAX_CONCURRENT_SUBAGENTS, WORKER_MAX_SUBAGENTS, WORKER_MAX_WEB_SEARCHES, workerPluginDir } from "../dispatch.ts"
 import { spawnWithRunner } from "../tmux.ts"
-import { CLAUDE_WORKER_ENV } from "./types.ts"
+import { CLAUDE_WORKER_ENV, claudeWorkerEnv, WORKER_CONTEXT_WINDOW } from "./types.ts"
+import { CONTEXT_WINDOW_MAX, CONTEXT_WINDOW_MIN } from "@fray-ui/shared"
 
 // ---- parseClaudeLine: the normalized VIEW of a Claude JSONL line (codex-facing seam; NOT the
 // behavior-critical fold — that is foldLine → applyRecord, covered by tailer.test.ts). ----
@@ -80,6 +81,7 @@ test("createClaudeBackend: buildSpawn pins the session id + prompt and clears in
   assert.deepEqual(env, {
     CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "infinite",
     BASH_DEFAULT_TIMEOUT_MS: "60000",
+    CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(WORKER_CONTEXT_WINDOW),
     CLAUDE_CODE_SUBAGENT_MODEL: "",
     CLAUDE_CODE_EFFORT_LEVEL: "",
     CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION: String(WORKER_MAX_WEB_SEARCHES),
@@ -97,6 +99,7 @@ test("createClaudeBackend sanitizes both spawn and resume without replacing Clau
     assert.deepEqual(built.env, {
       CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "infinite",
       BASH_DEFAULT_TIMEOUT_MS: "60000",
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(WORKER_CONTEXT_WINDOW),
       CLAUDE_CODE_SUBAGENT_MODEL: "",
       CLAUDE_CODE_EFFORT_LEVEL: "",
       CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION: String(WORKER_MAX_WEB_SEARCHES),
@@ -146,14 +149,14 @@ const WORKER_CAPS: readonly (readonly [string, number])[] = [
 
 test("claudeWorkerEnvironment: every cap clears Claude Code's default and honors only a well-formed override", () => {
   for (const [name, lifted] of WORKER_CAPS) {
-    assert.equal(claudeWorkerEnvironment({})[name], String(lifted), `${name} is lifted when unset`)
+    assert.equal(claudeWorkerEnvironment(undefined, {})[name], String(lifted), `${name} is lifted when unset`)
     assert.ok(lifted > 20, `${name} must clear Claude Code's own default, not sit under it`)
-    assert.equal(claudeWorkerEnvironment({ [name]: "750" })[name], "750", `${name}: operator policy wins`)
+    assert.equal(claudeWorkerEnvironment(undefined, { [name]: "750" })[name], "750", `${name}: operator policy wins`)
     // Each of these is rejected by Claude Code's own parser, so passing it through would silently
     // DROP the worker back to ITS default — the fray value is the safer answer for every one of them.
     for (const bad of ["", "0", "-5", "1_000", "1e5", "20 ", "abc", "12.5", "+7"]) {
       assert.equal(
-        claudeWorkerEnvironment({ [name]: bad })[name],
+        claudeWorkerEnvironment(undefined, { [name]: bad })[name],
         String(lifted),
         `${name}: malformed override ${JSON.stringify(bad)} must fall back to the fray default`,
       )
@@ -272,4 +275,40 @@ test("parseClaudeLine's turn-end signal agrees with the authoritative fold (no d
     assert.equal(computeTurn(st, far) === "idle", c.idle, `fold idle verdict for ${c.line}`)
     assert.equal(hasTurnEnd, c.idle, `normalized turn-end agrees with fold for ${c.line}`)
   }
+})
+
+// The context window reaches the worker on BOTH spawn paths through claudeWorkerEnv, so it is pinned
+// on the shared record rather than once per path. The bounds are Claude Code's own: its resolver parses
+// CLAUDE_CODE_AUTO_COMPACT_WINDOW against 100_000…1_000_000 and treats anything outside as invalid,
+// falling back to the model default SILENTLY — so passing an out-of-range number through would look
+// configured and do nothing. "auto" is an EMPTY STRING, not an omitted key: the tmux path spawns into a
+// tmux server whose environment can predate this fray process, and only an explicit empty entry masks a
+// stale inherited value there. Claude Code guards on truthiness, so "" and unset both mean the default.
+test("claudeWorkerEnv: the context window is a validated cap, and auto masks rather than omits", () => {
+  const KEY = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+  assert.equal(claudeWorkerEnv(600_000)[KEY], "600000", "a configured window rides the worker env")
+  assert.equal(claudeWorkerEnv(undefined)[KEY], String(WORKER_CONTEXT_WINDOW), "nothing wired ⇒ the shipped default")
+  assert.equal(claudeWorkerEnv(CONTEXT_WINDOW_MIN)[KEY], String(CONTEXT_WINDOW_MIN), "the low bound is inclusive")
+  assert.equal(claudeWorkerEnv(CONTEXT_WINDOW_MAX)[KEY], String(CONTEXT_WINDOW_MAX), "the high bound is inclusive")
+
+  assert.equal(claudeWorkerEnv("auto")[KEY], "", "auto MASKS the variable so Claude Code picks its own default")
+  assert.ok(KEY in claudeWorkerEnv("auto"), "auto must emit the key, not drop it — an omitted key cannot mask")
+
+  // Out of range, or not an integer: Claude Code would reject each of these and silently use the model
+  // default, so fray masks instead of forwarding a value that only LOOKS like it took effect.
+  for (const bad of [CONTEXT_WINDOW_MIN - 1, CONTEXT_WINDOW_MAX + 1, 0, -600_000, 600_000.5, Number.NaN]) {
+    assert.equal(claudeWorkerEnv(bad as never)[KEY], "", `${bad} is not a window Claude Code would honor`)
+  }
+
+  // Everything else in the record is untouched by the window — one regression per key, not per path.
+  assert.equal(claudeWorkerEnv("auto").CLAUDE_CODE_TOTAL_TOKENS_REMINDER, "infinite")
+  assert.equal(claudeWorkerEnv(600_000).BASH_DEFAULT_TIMEOUT_MS, "60000")
+})
+
+// The tmux path's env builder must carry the window through untouched — the caps live alongside it in
+// the same record, and an earlier signature change here silently dropped the test seam's env argument.
+test("claudeWorkerEnvironment: forwards the context window alongside the caps", () => {
+  assert.equal(claudeWorkerEnvironment(400_000, {}).CLAUDE_CODE_AUTO_COMPACT_WINDOW, "400000")
+  assert.equal(claudeWorkerEnvironment("auto", {}).CLAUDE_CODE_AUTO_COMPACT_WINDOW, "")
+  assert.equal(claudeWorkerEnvironment(400_000, {}).CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION, String(WORKER_MAX_SUBAGENTS))
 })

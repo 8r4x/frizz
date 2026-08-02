@@ -1,4 +1,5 @@
 import { Settings } from "@fray-ui/shared"
+import { WORKER_CONTEXT_WINDOW } from "./backend/types.ts"
 import type { Storage } from "./storage.ts"
 
 const SETTINGS_KEY = "settings"
@@ -25,6 +26,9 @@ export const defaultSettings = (): Settings => ({
   // exhausted subscription window should pick itself back up when the window rolls, not sit idle
   // until the operator happens to notice hours later.
   autoResumeOnLimit: true,
+  // Compact a Claude worker at 600k rather than at the model's 1M default. Rationale in
+  // WORKER_CONTEXT_WINDOW (backend/types.ts); "auto" here hands the choice back to Claude Code.
+  contextWindow: WORKER_CONTEXT_WINDOW,
 })
 
 // Settings persist as one JSON blob under settings['settings']. Read merges over defaults

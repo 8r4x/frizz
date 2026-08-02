@@ -1,4 +1,4 @@
-import type { LimitWindow, PermissionMode } from "@fray-ui/shared"
+import { CONTEXT_WINDOW_MAX, CONTEXT_WINDOW_MIN, type ContextWindow, type LimitWindow, type PermissionMode } from "@fray-ui/shared"
 import type { FenceView, SubAgentView, BgShellView, PendingAskData, TurnState } from "../tailer.ts"
 
 // A turn cut off by an exhausted SUBSCRIPTION window, as a backend's fold observed it. Carries only
@@ -295,10 +295,58 @@ export const CHROME_DEVTOOLS_MCP = {
 // reproduces the auto-background bounce that real dispatched workers get, so a behavioral check
 // there passes identically with and without the variable. See the NOT ASSERTED note in
 // _live_sdk_worker_env.mts.
+//
+// ── CLAUDE_CODE_AUTO_COMPACT_WINDOW ────────────────────────────────────────────────────────────
+// How full a worker's context gets before Claude Code auto-summarizes it. Operator-configurable
+// (Settings → "Context window"); this is only the default the record carries when nothing is wired.
+//
+// Claude Code resolves the window as env var → `autoCompactWindow` in settings.json → its own
+// per-model default, then takes min(model window, configured). So this can only ever LOWER the
+// window, never raise it past what the model actually has.
+//
+// WHY 600k RATHER THAN THE MODEL'S 1M: a fray worker is a long autonomous effort that compacts and
+// keeps going, so the window is not a budget it must finish inside — it is the size of the haystack
+// every turn re-reads. Compacting at 600k trades one extra summarization for turns that carry less
+// stale context, and it caps what a single runaway turn can spend before the harness intervenes.
+//
+// NOT `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, which reads like the obvious knob and is a trap: cli 2.1.220
+// honors it only when `DISABLE_COMPACT` is ALSO set, or when the model id does not start with
+// `claude-` (a 3P gateway model). On a first-party model with compaction on it is silently ignored.
+//
+// Verified on cli 2.1.220 by driving the real TUI: with the variable at 600000 `/context` reports
+// "33.6k/600k tokens" and "Auto-compact window: 600k tokens"; the same pane without it reports
+// "33.5k/1m". Claude Code parses the value against a 100_000…1_000_000 range and treats anything
+// outside it as invalid, falling back to the model default SILENTLY — hence CONTEXT_WINDOW_MIN/MAX
+// in shared, so an out-of-range value is refused at the settings edge instead of quietly doing
+// nothing. Note the dashboard's own context dial reads `result.modelUsage[].contextWindow`, which
+// stays at the model's 1M regardless — the meter's denominator is the model window, not this.
+export const WORKER_CONTEXT_WINDOW = 600_000
+
 export const CLAUDE_WORKER_ENV = {
   CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "infinite",
   BASH_DEFAULT_TIMEOUT_MS: "60000",
+  CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(WORKER_CONTEXT_WINDOW),
 } as const
+
+/** CLAUDE_WORKER_ENV with the operator's configured context window applied — the ONE way either spawn
+ *  path should build a Claude worker's environment. `"auto"` DELETES the variable rather than picking a
+ *  number, so Claude Code falls through to its own per-model default; `undefined` (nothing wired, e.g. a
+ *  test harness) keeps the record's shipped default. An out-of-range number is dropped rather than
+ *  passed on, because Claude Code would silently ignore it and report the model default instead.
+ *
+ *  "auto" is an EMPTY STRING rather than an omitted key, and the emptiness is load-bearing on both
+ *  paths: tmux spawns into a tmux server whose environment may predate this fray process, so only an
+ *  explicit empty entry masks a stale inherited value, and the broker forwards "" through the SDK
+ *  allowlist verbatim. Claude Code's resolver guards on `if (process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW)`,
+ *  so "" is falsy there and it falls through to the model default — same outcome as never setting it. */
+export function claudeWorkerEnv(contextWindow?: ContextWindow): Record<string, string> {
+  const valid = typeof contextWindow === "number" && Number.isInteger(contextWindow)
+    && contextWindow >= CONTEXT_WINDOW_MIN && contextWindow <= CONTEXT_WINDOW_MAX
+  return {
+    ...CLAUDE_WORKER_ENV,
+    ...(contextWindow === undefined ? {} : { CLAUDE_CODE_AUTO_COMPACT_WINDOW: valid ? String(contextWindow) : "" }),
+  }
+}
 
 // Tools a TMUX worker never gets — the argv turns this into `--disallowedTools=…`.
 //
