@@ -416,17 +416,38 @@ if (process.env.FRAY_CLAUDE_BROKER) {
   // there are. Record the cause synchronously first; the handler is registered BEFORE the broker starts
   // (so a signal during startup is still attributed) and resolves the generation lazily.
   let running: RunningBroker | undefined
+  const recordExit = (reason: ClaudeBrokerExitReason, detail?: string): void => {
+    if (!config.diagnosticLogPath) return
+    createClaudeBrokerExitWriter(config.diagnosticLogPath, {
+      daemonPid: process.pid,
+      generation: running?.generation ?? config.generation ?? "",
+    })(reason, detail)
+  }
   for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
     process.on(sig, () => {
-      if (config.diagnosticLogPath) {
-        createClaudeBrokerExitWriter(config.diagnosticLogPath, {
-          daemonPid: process.pid,
-          generation: running?.generation ?? config.generation ?? "",
-        })(`signal-${sig}`)
-      }
+      recordExit(`signal-${sig}`)
       process.exit(0)
     })
   }
+  // The LAST-RESORT breadcrumb, and the reason this daemon's deaths were unattributable. Every other
+  // exit path here records itself; a throw that reached nobody recorded nothing, and node's default —
+  // print a stack, exit 1 — writes that stack to a stdio the host set to "ignore". So the log simply
+  // ended on `started`, which is byte-identical to what a SIGKILL leaves. Measured across this machine's
+  // whole broker corpus 2026-08-02: 276 daemon starts against 223 recorded exits, so 53 deaths (~19%)
+  // had NO attribution at all, and no way to tell an external kill from fray's own unhandled throw.
+  //
+  // Deliberately preserves node's semantics rather than swallowing: record, then exit NON-ZERO, exactly
+  // as an unhandled throw would have. Installing these handlers is what suppresses the default exit, so
+  // the explicit process.exit(1) is load-bearing — without it a crashed daemon would LINGER, wedged and
+  // unreachable, which is strictly worse than dying.
+  process.on("uncaughtException", (error) => {
+    recordExit("uncaught-exception", error instanceof Error ? `${error.message}\n${error.stack ?? ""}`.slice(0, 2000) : String(error))
+    process.exit(1)
+  })
+  process.on("unhandledRejection", (reason) => {
+    recordExit("unhandled-rejection", reason instanceof Error ? `${reason.message}\n${reason.stack ?? ""}`.slice(0, 2000) : String(reason))
+    process.exit(1)
+  })
   running = runClaudeBroker(config)
 } else if (startedAsProcessEntry()) {
   // Node was pointed AT THIS FILE and there is no configuration to broker. Exiting 0 here reports

@@ -65,6 +65,11 @@ export type ClaudeBrokerExitReason =
   | "idle-timeout"
   | "self-collected-record-reassigned"
   | "socket-listen-failed"
+  // The daemon threw where nothing was catching. Node's default for these is to print a stack and exit
+  // — and the host spawns this daemon with stdio:"ignore", so that stack goes NOWHERE. Before these were
+  // recorded, such a death was indistinguishable from a SIGKILL: both left the log ending on `started`.
+  | "uncaught-exception"
+  | "unhandled-rejection"
 
 /** An exit breadcrumb, appended to the SAME log as the diagnostics so a death and the stderr that
  *  preceded it read as one story. It carries `exit` rather than `diagnostic`, which is exactly what
