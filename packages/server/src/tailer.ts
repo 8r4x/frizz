@@ -1925,6 +1925,15 @@ export interface Tailer {
   subAgentDescendantTasks?(slug: string, id: string): string[]
   // Read-only background-shell drawer lookup. Output content stays server-side until the scoped query.
   backgroundShell?(slug: string, id: string): { command?: string; outputFile?: string; state: "running" | "done" } | undefined
+  // "Is the process that owned this thread's background ops gone?" — ONE authority for a question three
+  // runtimes answer differently, already computed once per tick as `paneDead` (see paneDeadForRow): a
+  // dead tmux pane, a broker whose daemon record fails its pid probe, or a headless row fray stopped.
+  // Exposed because the TRANSCRIPT producers need it too. `bgShellViews` drops a dead owner's shells
+  // from the board, but the ops strip is a UNION of that list and the transcript's own pending
+  // background cards, so the board dropping a row merely moves it — the transcript side has to hear the
+  // same fact (see projectRetiredBackgroundOps' ownerGone arm). Optional like its neighbours; a narrow
+  // test stub omits it and every caller degrades to "not gone", which is the pre-existing behaviour.
+  ownerGone?(slug: string): boolean
   // Manual dismiss of a live background op (the × on an op row): retire it from tracking as if a
   // terminal signal arrived. Returns false if it is not live (unknown id / already gone). Optional so
   // an older server without it degrades gracefully.
@@ -4173,6 +4182,9 @@ export function createTailer(deps: TailerDeps): Tailer {
     subAgent: subAgentLookup,
     subAgentDescendantTasks,
     backgroundShell: backgroundShellLookup,
+    // Registered rows only. A FOREIGN thread (a maintainer's own terminal) is not fray's to declare
+    // dead — nothing here owns its process — so it answers false and its cards are left alone.
+    ownerGone: (slug) => states.get(slug)?.paneDead ?? false,
     dismissOp,
     forget(slug) {
       states.delete(slug)

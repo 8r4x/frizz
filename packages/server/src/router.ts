@@ -571,22 +571,14 @@ export function createRouter(ctx: AppContext) {
   // and the transcript, which is derived from a `tool_use` whose terminal partner never arrives. Miss
   // this one and the ops strip simply redraws the row from the transcript side — with no × on it,
   // because a transcript-only row has nothing to address a stop at.
-  // "The process that owned this thread's background ops is gone." Broker rows only: their daemon record
-  // is a direct pid probe, the same authority board.ts stalls on. A tmux row's pane death would answer
-  // the same question, but reading tmux per transcript page is a cost this path has no business paying —
-  // and its shells already clear from the board on pane death. Fail-safe is NOT GONE: no row, no bridge,
-  // or a non-broker row all answer false, leaving the × as the only retirement, exactly as before.
-  function brokerOwnerGone(slug: string): boolean {
-    const row = ctx.storage.getSession(slug)
-    if (!row || !isBrokerClaudeRow(row) || !ctx.claudeBroker) return false
-    return !ctx.claudeBroker.isDaemonAlive(row.session_id)
-  }
-
   function retireOpsInPage(slug: string, page: TranscriptPage): TranscriptPage {
     const retired = retiredOpsFor(ctx.storage, slug)
     // A dead OWNER retires every still-pending background card on the thread, for the same reason and
-    // more strongly than the × retires one: those ops are children of the process that is gone.
-    const gone = brokerOwnerGone(slug)
+    // more strongly than the × retires one: those ops are children of the process that is gone. Read
+    // from the tailer, which already answers this once per tick for all three runtimes — a dead tmux
+    // pane as well as a dead broker daemon. Asking the broker bridge directly, as this first did, was
+    // both a second implementation of the same question and blind to every tmux row.
+    const gone = ctx.tailer.ownerGone?.(slug) ?? false
     if (retired.size === 0 && !gone) return page
     return { ...page, messages: projectRetiredBackgroundOps(page.messages, retired, gone) }
   }

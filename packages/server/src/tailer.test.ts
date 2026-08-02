@@ -1354,6 +1354,39 @@ test("defaultBrokerDaemonAlive: memoises within the TTL and re-probes after it",
   rmSync(stateDir, { recursive: true, force: true })
 })
 
+// `ownerGone` is the ONE authority the transcript producers read, and it has to answer for all three
+// runtimes — the board's own shell list already does (bgShellViews drops them on paneDead), but the ops
+// strip is a UNION of that list and the transcript's pending background cards, so dropping the board row
+// only MOVES the phantom unless the transcript hears the same fact. Scoping that to broker rows, as the
+// first cut did, left every TMUX thread's dead-pane shells still rendering "running".
+test("tailer: ownerGone answers for a tmux pane death, not just a dead broker daemon", () => {
+  const h = harness()
+  h.storage.upsertSession(row()) // a plain tmux row — no broker runtime
+  fixture(h.logDir, "sid", [IN_FLIGHT])
+  const t = createTailer({
+    project: { cwdSlug: "x" } as Project,
+    storage: h.storage,
+    bus: h.bus,
+    onChange: () => h.changes.n++,
+    now: () => h.clock.ms,
+    paneDead: () => h.dead.v,
+    capturePane: () => h.pane.text,
+    sessionLogDir: h.logDir,
+  })
+
+  h.dead.v = false
+  h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
+  t.tick()
+  assert.equal(t.ownerGone?.("t"), false, "a live pane owns its ops")
+
+  h.dead.v = true
+  t.tick()
+  assert.equal(t.ownerGone?.("t"), true, "a dead pane is a dead owner, exactly as a dead daemon is")
+
+  // A thread fray has never tailed cannot be declared dead — the fail-safe every caller relies on.
+  assert.equal(t.ownerGone?.("never-seen"), false, "an unknown slug is never reported gone")
+})
+
 // The guard on the fix above. A tmux row has no broker record to read, and a probe that answered "dead"
 // for one would empty its shells wholesale — the exact shape of the 2026-07-29 regression this file
 // already pins from the other direction (a pane sniff wrongly applied to a headless row).
