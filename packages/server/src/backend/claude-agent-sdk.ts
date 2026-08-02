@@ -40,6 +40,7 @@ import {
   type ClaudeOnElicitation,
   type ClaudePermissionMode,
   type ClaudePermissionRequest,
+  type ClaudePluginReload,
   type ClaudeQueryEvent,
   type ClaudeSessionInitEvent,
   type ClaudeTaskEvent,
@@ -174,6 +175,12 @@ export interface ClaudeQueryHandle extends AsyncIterable<ClaudeQueryEvent> {
   cancelInput(id: string): Promise<boolean>
   /** Stop the background task identified by the provider's task-notification id. */
   stopTask(taskId: string): Promise<void>
+  /**
+   * Re-read the worker plugin closure from disk IN PLACE — hooks, skills, agent profiles and MCP
+   * servers — without restarting the session. This is what `/reload-plugins` drives interactively.
+   * Returns what changed so the operator can see their edit landed.
+   */
+  reloadPlugins(): Promise<ClaudePluginReload>
   setPermissionMode(mode: ClaudePermissionMode): Promise<void>
   // Ask the provider to name the session from `description` and PERSIST the name as the `ai-title`
   // record fray's tailer reads. See CLAUDE_TITLE_NEEDS_EXPLICIT_REQUEST below for why the broker has
@@ -448,6 +455,34 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
     await this.ready()
     this.assertOpen()
     await this.awaitOpenControl(this.sdkQuery.stopTask(parsed))
+  }
+
+  // Reload the plugin closure in place. Unlike cancelAsyncMessage this IS in the SDK's `.d.ts`, so it
+  // is called directly rather than probed — but it is still checked before use, because the failure a
+  // missing method produces ("not a function") surfaces as an opaque throw out of an operator click
+  // rather than as something they can act on.
+  async reloadPlugins(): Promise<ClaudePluginReload> {
+    this.assertOpen()
+    if (typeof this.sdkQuery.reloadPlugins !== "function") {
+      throw new Error("this Claude Agent SDK build has no reloadPlugins(); fray cannot reload plugins in place")
+    }
+    await this.ready()
+    this.assertOpen()
+    const result = await this.awaitOpenControl(this.sdkQuery.reloadPlugins())
+    // Everything crossing back is bounded: this is provider-shaped data heading for a toast, and the
+    // server must not relay an unbounded array of names it never sized.
+    return {
+      plugins: Array.isArray(result?.plugins) ? result.plugins.length : 0,
+      commands: Array.isArray(result?.commands) ? result.commands.length : 0,
+      agents: Array.isArray(result?.agents) ? result.agents.length : 0,
+      mcpServers: boundedStringArray(
+        (Array.isArray(result?.mcpServers) ? result.mcpServers : []).map((s: { name?: unknown }) => String(s?.name ?? "")),
+        "reloadPlugins.mcpServers",
+        64,
+        128,
+      ).filter(Boolean),
+      errorCount: Number.isFinite(result?.error_count) ? Number(result.error_count) : 0,
+    }
   }
 
   // Unqueue a follow-up the operator has taken back.

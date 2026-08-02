@@ -8,8 +8,8 @@ import { randomUUID } from "node:crypto"
 import { adoptOrForkBroker, killBroker, liveBrokerRecord, liveBrokerRecords, claudeBrokerRecordPath, resolveClaudeExecutableAbsolute } from "./claude-broker-host.ts"
 import { connectClaudeBroker, type ClaudeBrokerClient } from "./claude-broker-client.ts"
 import { describeClaudeBrokerExit, readClaudeBrokerExit, type ClaudeBrokerExitRecord } from "./claude-broker-diagnostics.ts"
-import type { ClaudeDiagnostic, ClaudePermissionDecision, ClaudePermissionRequest, ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
-import { CLAUDE_AGENT_SDK_MAX_INPUT_BYTES, CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, validateInputMessage } from "./claude-agent-sdk-protocol.ts"
+import type { ClaudeDiagnostic, ClaudePermissionDecision, ClaudePermissionRequest, ClaudePluginReload, ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
+import { CLAUDE_AGENT_SDK_MAX_INPUT_BYTES, CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, validateInputMessage } from "./claude-agent-sdk-protocol.ts"
 import type { BrokerRecord, ClaudeBrokerConfig } from "./claude-agent-broker.ts"
 import type { InteractionSessionScope, InteractionStore } from "../interaction-store.ts"
 import {
@@ -158,6 +158,13 @@ export interface ClaudeAgentBrokerBridge {
   steerSubAgent(input: { threadSlug: string; sessionId: string; subAgentId: string; text: string; deliveryId?: string }): Promise<void>
   /** Stop one running Claude background task through the provider's task control API. */
   stopSubAgent(input: { threadSlug: string; sessionId: string; taskId: string }): Promise<void>
+  /**
+   * Re-read the worker plugin closure (hooks, skills, agent profiles, MCP servers) into the LIVE
+   * session — what `/reload-plugins` does interactively — and resolve with what changed. Requires a
+   * live daemon of this generation; never cold-starts one, because reloading into a session that has
+   * to be started first is just a start.
+   */
+  reloadPlugins(input: { threadSlug: string; sessionId: string }): Promise<ClaudePluginReload>
   /**
    * Take a follow-up BACK out of the session's command queue — the operator clicked their own queued
    * bubble to unqueue it. `deliveryId` is the id `followUp` handed the SDK, which is the uuid the CLI
@@ -619,6 +626,27 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
         throw new Error("This thread's Claude session predates sub-agent stopping — its next turn will restart on a session that supports it")
       }
       await held.client.stopTask(input.taskId)
+    },
+
+    // Re-read the worker plugin closure INTO the live session — the whole point being that the
+    // conversation survives. Before this the only way to pick up an edited hook, skill, agent profile
+    // or MCP tool was the restart button, which is a process-level reset: it throws away the running
+    // turn and the in-memory sub-agents to apply a change the session could simply re-read.
+    //
+    // Gated on the daemon's capability for the same reason stopSubAgent is: an older surviving daemon
+    // ignores the unknown frame, and the client would then sit until its deadline and report "the
+    // session did not answer" — which reads as a wedged agent rather than an out-of-date one.
+    async reloadPlugins(input) {
+      const held = current(input.threadSlug, input.sessionId)
+      if (!held || !holdsLiveDaemon(held)) {
+        if (held) { held.client.close(); sessions.delete(input.threadSlug) }
+        throw new Error("This thread's Claude session is not running, so there is nothing to reload into")
+      }
+      const record = liveBrokerRecord(claudeBrokerRecordPath(deps.stateDir, held.sessionId))
+      if (!record?.capabilities?.includes(CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS)) {
+        throw new Error("This thread's Claude session predates in-place plugin reload — its next turn will restart on a session that supports it")
+      }
+      return await held.client.reloadPlugins()
     },
 
     async warmUp() {

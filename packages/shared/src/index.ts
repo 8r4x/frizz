@@ -532,6 +532,11 @@ export const ThreadView = z.object({
   // AUTO-bump (the scheduler resumes the agent with exactly this text) rather than a reminder, which is
   // the distinction the held row's tooltip renders. Absent ⇒ the card merely re-surfaces.
   snoozePrompt: z.string().optional(),
+  // Which Claude transport serves this thread: "broker" = a session-broker-owned Agent SDK session
+  // (typed control channel), "tmux" = the interactive TUI in a pane. Only the broker can be asked to
+  // reload its plugin closure in place, so the board needs it to decide whether to offer that verb at
+  // all rather than render a button that throws.
+  claudeRuntime: z.enum(["tmux", "broker"]).optional(),
   // The worker's own recurring wake, when it has armed one. Present ⇒ the rail shows the heartbeat
   // indicator and its pause/play control; `paused` picks which of the two the control offers.
   heartbeat: ThreadHeartbeat.optional(),
@@ -969,6 +974,18 @@ export const SetThreadHeartbeatPausedInput = z.object({
   paused: z.boolean(),
 }).strict()
 export type SetThreadHeartbeatPausedInput = z.infer<typeof SetThreadHeartbeatPausedInput>
+
+// What an in-place plugin reload changed, as the board reports it. Counts answer "did my edit land?";
+// `mcpServers` carries NAMES because a reload that changes MCP tools is the one with a real cost — the
+// provider re-reads the whole conversation instead of using its prompt cache.
+export const ThreadPluginReloadResult = z.object({
+  plugins: z.number().int().min(0),
+  commands: z.number().int().min(0),
+  agents: z.number().int().min(0),
+  mcpServers: z.array(z.string()),
+  errorCount: z.number().int().min(0),
+}).strict()
+export type ThreadPluginReloadResult = z.infer<typeof ThreadPluginReloadResult>
 
 // An ```awaiting fence is a PROPOSAL. Confirming binds ONE exact final-message generation — identified
 // by the fence instant plus the hint it proposed — to durable state, so a later fence or an edited hint

@@ -666,6 +666,7 @@ function sessionThreadView(
     // Only meaningful while the snooze is still pending — a prompt without a live deadline is an
     // already-delivered (or superseded) bump the row has not been swept clean of yet.
     snoozePrompt: snoozedUntil ? row.snooze_prompt ?? undefined : undefined,
+    claudeRuntime: row.claude_runtime === "broker" ? "broker" as const : row.claude_runtime === "tmux" ? "tmux" as const : undefined,
     // A heartbeat is armed iff all three of prompt/interval/generation are set (storage writes and
     // clears them together). Projected even while PAUSED — that is the state the rail's play button
     // exists to leave.

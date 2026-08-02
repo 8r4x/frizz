@@ -8,6 +8,7 @@ import type {
   ClaudeInputMessage,
   ClaudePermissionDecision,
   ClaudePermissionRequest,
+  ClaudePluginReload,
   ClaudeQueryEvent,
 } from "./claude-agent-sdk-protocol.ts"
 
@@ -36,6 +37,12 @@ export interface ClaudeBrokerClient {
   cancelInput(id: string): Promise<boolean>
   /** Stop one provider background task and resolve only after the daemon confirms the SDK call. */
   stopTask(taskId: string): Promise<void>
+  /**
+   * Re-read the worker plugin closure from disk in the LIVE session — hooks, skills, agent profiles,
+   * MCP servers — and resolve with what changed. Resolves only after the SDK answered, so the operator
+   * is told what actually reloaded rather than that a frame was written.
+   */
+  reloadPlugins(): Promise<ClaudePluginReload>
   setPermissionMode(mode: string): void
   connected(): boolean
   /**
@@ -57,6 +64,7 @@ interface Options {
   retryDelayMs?: number
   /** How long a `cancelInput` waits for the daemon's verdict before rejecting. Default 10s. */
   cancelTimeoutMs?: number
+  reloadTimeoutMs?: number
 }
 
 export function connectClaudeBroker(
@@ -66,6 +74,9 @@ export function connectClaudeBroker(
 ): ClaudeBrokerClient {
   const retryDelayMs = options.retryDelayMs ?? 250
   const cancelTimeoutMs = options.cancelTimeoutMs ?? 10_000
+  // A reload re-scans the plugin closure and may re-handshake MCP servers, so it is genuinely slower
+  // than the bookkeeping answers cancel/stop give. Still bounded: a wedged daemon must not hang a click.
+  const reloadTimeoutMs = options.reloadTimeoutMs ?? 30_000
   let sock: net.Socket | null = null
   let closed = false
   let buf = ""
@@ -74,6 +85,7 @@ export function connectClaudeBroker(
   // In-flight cancelInput round-trips, keyed by the request id echoed on the reply.
   const pendingCancels = new Map<string, { settle: (cancelled: boolean) => void; fail: (error: Error) => void; timer: NodeJS.Timeout }>()
   const pendingStops = new Map<string, { settle: () => void; fail: (error: Error) => void; timer: NodeJS.Timeout }>()
+  const pendingReloads = new Map<string, { settle: (r: ClaudePluginReload) => void; fail: (error: Error) => void; timer: NodeJS.Timeout }>()
   let cancelSeq = 0
 
   // Buffering while DISCONNECTED is the feature — `connect` flushes `outbound` — but buffering while
@@ -119,6 +131,15 @@ export function connectClaudeBroker(
           clearTimeout(entry.timer)
           if (typeof frame.error === "string" && frame.error) entry.fail(new Error(frame.error))
           else entry.settle()
+          break
+        }
+        case "reload-result": {
+          const entry = pendingReloads.get(frame.requestId as string)
+          if (!entry) break
+          pendingReloads.delete(frame.requestId as string)
+          clearTimeout(entry.timer)
+          if (typeof frame.error === "string" && frame.error) entry.fail(new Error(frame.error))
+          else entry.settle(frame.reloaded as ClaudePluginReload)
           break
         }
       }
@@ -172,6 +193,19 @@ export function connectClaudeBroker(
       pendingStops.set(requestId, { settle: resolve, fail: reject, timer })
       send({ t: "stop-task", requestId, taskId })
     }),
+    // A reload re-scans the plugin closure and can re-handshake MCP servers, so it gets a longer
+    // deadline than an unqueue/stop — those are answered by bookkeeping the CLI already holds.
+    reloadPlugins: () => new Promise<ClaudePluginReload>((resolve, reject) => {
+      if (closed) { reject(new Error("the broker connection is closed")); return }
+      const requestId = `reload-${++cancelSeq}`
+      const timer = setTimeout(() => {
+        pendingReloads.delete(requestId)
+        reject(new Error("the Claude session did not answer the plugin reload"))
+      }, reloadTimeoutMs)
+      if (timer.unref) timer.unref()
+      pendingReloads.set(requestId, { settle: resolve, fail: reject, timer })
+      send({ t: "reload-plugins", requestId })
+    }),
     setPermissionMode: (mode: string) => send({ t: "set-mode", mode }),
     connected: () => sock !== null && !sock.destroyed,
     isClosed: () => closed,
@@ -180,6 +214,9 @@ export function connectClaudeBroker(
       for (const [, entry] of pendingCancels) { clearTimeout(entry.timer); entry.fail(new Error("the broker connection closed before the unqueue was answered")) }
       pendingCancels.clear()
       for (const [, entry] of pendingStops) { clearTimeout(entry.timer); entry.fail(new Error("the broker connection closed before the stop was answered")) }
+      pendingStops.clear()
+      for (const [, entry] of pendingReloads) { clearTimeout(entry.timer); entry.fail(new Error("the broker connection closed before the plugin reload was answered")) }
+      pendingReloads.clear()
       pendingStops.clear()
       sock?.destroy(); sock = null
     },

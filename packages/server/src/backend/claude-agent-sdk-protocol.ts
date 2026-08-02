@@ -90,6 +90,26 @@ export const CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT = "cancel-input-v1"
 // which would ignore the unknown frame and leave the UI claiming work was stopped when it was not.
 export const CLAUDE_BROKER_CAPABILITY_STOP_TASK = "stop-task-v1"
 
+// This one covers reloading the worker plugin closure IN PLACE through the Agent SDK's
+// `Query.reloadPlugins()` — the same thing `/reload-plugins` drives interactively. It exists because
+// the only way fray could previously pick up an edited hook, skill, agent profile or MCP tool was to
+// restart the worker process, which throws away the conversation to apply a file change the running
+// session could have re-read. Same gate reasoning as stop-task: an older surviving daemon ignores the
+// unknown frame, so the bridge refuses up front rather than letting the UI claim a reload happened.
+export const CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS = "reload-plugins-v1"
+
+// What a reload actually changed, bounded for the wire. Counts rather than full lists because the
+// operator is answering "did my edit land?", not auditing the closure — and `mcpServers` carries names
+// because a reload that CHANGES MCP tools is the one case with a real cost (the provider re-reads the
+// whole conversation instead of using the prompt cache), so it is worth naming.
+export interface ClaudePluginReload {
+  plugins: number
+  commands: number
+  agents: number
+  mcpServers: string[]
+  errorCount: number
+}
+
 export interface ClaudeInputMessage {
   id: string
   text: string

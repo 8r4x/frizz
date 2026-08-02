@@ -33,6 +33,7 @@ import type {
   SetThreadProfileResult,
   SetThreadHeartbeatInput,
   SetThreadHeartbeatPausedInput,
+  ThreadPluginReloadResult,
   SetThreadSnoozeInput,
   TranscriptMessage,
   TranscriptPage,
@@ -128,6 +129,8 @@ export interface Api {
   // The worker arms these itself through `mcp__fray__heartbeat`; the board only pauses and resumes.
   setThreadHeartbeat(input: SetThreadHeartbeatInput): Promise<void>
   setThreadHeartbeatPaused(input: SetThreadHeartbeatPausedInput): Promise<void>
+  // In-place plugin reload for a broker-backed Claude thread — the alternative to a hard restart.
+  reloadThreadPlugins(input: { slug: string; sessionId: string }): Promise<ThreadPluginReloadResult>
   // Event-snooze the awaiting-background card: hide it until the thread's own background work returns
   // (the parent comes to a NEW rest). No deadline and no scheduler — the board re-surfaces it the moment
   // rested_at advances. `sessionId` binds the click to the session the tab was looking at.
@@ -228,6 +231,7 @@ export const PROCEDURES = {
   setThreadSnooze: "mutation",
   setThreadHeartbeat: "mutation",
   setThreadHeartbeatPaused: "mutation",
+  reloadThreadPlugins: "mutation",
   snoozeAwaitingBackground: "mutation",
   confirmAwaiting: "mutation",
   forgetThread: "mutation",

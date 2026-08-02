@@ -9,6 +9,7 @@ import { formatSnoozeWake } from "../lib/snooze.ts"
 import { CHILD_ARROW, CHILD_ARROW_CLASS } from "../lib/childOps.ts"
 import { SnoozeButton } from "./SnoozeButton.tsx"
 import { RestartWorkerButton } from "./RestartWorkerButton.tsx"
+import { ReloadPluginsButton } from "./ReloadPluginsButton.tsx"
 import { ContextMeter } from "./ContextMeter.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { HeartbeatControl } from "./HeartbeatControl.tsx"
@@ -70,6 +71,7 @@ export function ThreadLifecycleFooter({
         <DoneReadout />
       ) : (
         <>
+          <ReloadPluginsButton thread={thread} />
           <RestartWorkerButton thread={thread} />
           {available.snooze && <SnoozeButton thread={thread} onSnoozed={onSnoozed} />}
           <StateButton thread={thread} onArchived={onArchived} onDismissCancel={onDismissCancel} />
