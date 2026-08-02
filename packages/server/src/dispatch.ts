@@ -509,12 +509,13 @@ export function resolveFrayMcp(
   stateDir: string,
   moduleUrl = import.meta.url,
   env: NodeJS.ProcessEnv = process.env,
+  slug?: string,
 ): FrayMcp | undefined {
   const pluginDir = resolveWorkerPluginDir(moduleUrl, env)
   if (!pluginDir) return undefined
   const scriptPath = join(pluginDir, "bin", FRAY_MCP.script)
   if (!existsSync(scriptPath)) return undefined
-  return { scriptPath, stateDir }
+  return { scriptPath, stateDir, ...(slug ? { slug } : {}) }
 }
 
 // Claude flags that mount the fray-injected MCP servers via ONE inline `--mcp-config` JSON and
@@ -540,7 +541,13 @@ export function claudeMcpConfig(mcp?: FrayMcp): ClaudeMcpConfig {
     // "node": Claude spawns the MCP-server process itself, and a worker's PATH varies by launch context
     // (a GUI-launched tmux, a login-shell difference) — if `node` isn't on it, the MCP server never
     // starts and the tool silently never appears in the worker. An absolute path removes that dependency.
-    mcpServers[FRAY_MCP.name] = { command: process.execPath, args: [mcp.scriptPath], env: { FRAY_STATE_DIR: mcp.stateDir } }
+    // FRAY_THREAD_SLUG is what lets a tool act on the CALLING thread (`heartbeat` arms a wake for
+    // itself). The MCP server is spawned per worker, so its env is the only channel through which it
+    // can know which thread it belongs to — nothing in the MCP protocol carries a caller identity.
+    // A resume keeps the same slug, so this stays correct across the whole life of the thread.
+    const env: Record<string, string> = { FRAY_STATE_DIR: mcp.stateDir }
+    if (mcp.slug) env.FRAY_THREAD_SLUG = mcp.slug
+    mcpServers[FRAY_MCP.name] = { command: process.execPath, args: [mcp.scriptPath], env }
     // Server-level, like chrome-devtools above: every tool the unified fray server exposes (today
     // `mcp__fray__spawn_thread`) is pre-approved, so adding one never needs an allow-list edit.
     allowedTools.push(`mcp__${FRAY_MCP.name}`)
@@ -815,6 +822,8 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
   // the local Claude builder when no resolver is injected — identical argv). Returns argv + prewrites.
   function buildSpawnCommand(o: {
     sessionId: string
+    // The thread this worker will serve, so its fray MCP server can act on its own thread.
+    slug: string
     permissionMode: PermissionMode
     model?: string
     effort?: string
@@ -823,7 +832,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
     kind?: BackendKind
     runtimeGate: boolean
   }): BuiltCommand {
-    const frayMcp = resolveFrayMcp(deps.project.stateDir)
+    const frayMcp = resolveFrayMcp(deps.project.stateDir, undefined, undefined, o.slug)
     const backend = deps.backendFor?.(o.kind)
     if (backend) {
       const built = backend.buildSpawn({
@@ -1061,6 +1070,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
 
       const built = buildSpawnCommand({
         sessionId,
+        slug,
         permissionMode,
         model,
         effort,
@@ -1252,6 +1262,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       try {
         built = buildSpawnCommand({
           sessionId,
+          slug,
           permissionMode,
           model: settings.model,
           effort: settings.effort,

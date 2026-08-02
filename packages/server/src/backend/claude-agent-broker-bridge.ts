@@ -18,7 +18,18 @@ import {
   buildClaudePermissionInteraction,
   claudePermissionDecisionFor,
 } from "./claude-permission-interactions.ts"
-import { CLAUDE_WORKER_ENV } from "./types.ts"
+import { CLAUDE_WORKER_ENV, FRAY_MCP } from "./types.ts"
+
+type BrokerMcpServers = NonNullable<ClaudeBrokerConfig["mcpServers"]>
+
+// Stamp the calling thread's slug into the fray MCP server's env, leaving every other mounted server
+// (chrome-devtools) untouched. Returns the input unchanged when there is no fray mount, so a project
+// whose plugin dir did not resolve behaves exactly as before.
+function withFrayThreadSlug(servers: BrokerMcpServers | undefined, slug: string): BrokerMcpServers | undefined {
+  const fray = servers?.[FRAY_MCP.name]
+  if (!fray) return servers
+  return { ...servers, [FRAY_MCP.name]: { ...fray, env: { ...fray.env, FRAY_THREAD_SLUG: slug } } }
+}
 
 /** Gate for routing Claude dispatch through the session broker instead of the tmux TUI. Default ON
  *  (opt out with FRAY_CLAUDE_BROKER_BRIDGE=0). Verified end-to-end on a real PROMOTED ARTIFACT (not just
@@ -363,9 +374,16 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       ...CLAUDE_WORKER_ENV,
       ...(we?.permDir ? { FRAY_PERM_DIR: we.permDir } : {}),
     }
+    // deps.workerEnv.mcpServers is computed ONCE per project, so the fray MCP server it describes has
+    // no idea which thread it will serve. A tool that acts on its OWN thread (`heartbeat`) needs that,
+    // and nothing in the MCP protocol carries a caller identity — so the slug is stamped into that
+    // server's env HERE, where it is finally known. Deliberately not left to FRAY_UI_THREAD
+    // inheritance: whether Claude Code passes its own env down to an MCP subprocess is its business,
+    // not a contract fray should depend on.
+    const mcpServers = withFrayThreadSlug(we?.mcpServers, slug)
     const { record, reattached } = await adoptOrForkBroker({
       stateDir: deps.stateDir, cwd, sessionId, executablePath, permissionMode, env: deps.env,
-      pluginDir: we?.pluginDir, mcpServers: we?.mcpServers, allowedTools: we?.allowedTools, workerEnv,
+      pluginDir: we?.pluginDir, mcpServers, allowedTools: we?.allowedTools, workerEnv,
       ...fork,
     })
     // A RESUME that had to cold-start is the moment fray discovers a daemon died while nobody was

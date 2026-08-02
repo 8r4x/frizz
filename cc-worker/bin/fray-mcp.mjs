@@ -88,15 +88,59 @@ const SPAWN_THREAD = {
   },
 }
 
+const HEARTBEAT = {
+  name: "heartbeat",
+  description:
+    "Register a RECURRING wake for YOUR OWN thread: fray re-sends you `prompt` every `interval_seconds`, " +
+    "delivered the moment you come to rest. Use it to keep a long autonomous effort moving without the human " +
+    "driving every step, and to rescue yourself from a wait that may never resolve.\n\n" +
+    "USE THIS RATHER THAN `CronCreate` or `ScheduleWakeup`. Those are Claude Code's own in-session " +
+    "schedulers and they CANNOT fire in the runtime fray runs you in: their gate stays shut for as long as " +
+    "ANY background task of yours is outstanding, so the moment you are parked behind a background shell or " +
+    "a sub-agent — exactly when a heartbeat matters — they go silent. This one is delivered by fray itself " +
+    "and is unaffected.\n\n" +
+    "A beat arrives as an ordinary user turn carrying your prompt VERBATIM, so write it as an instruction to " +
+    "your future self. A thread has AT MOST ONE heartbeat: calling this again REPLACES it. At most one beat " +
+    "is ever outstanding, and the clock runs from the last delivered beat, so a long busy stretch yields one " +
+    "catch-up beat rather than a backlog.\n\n" +
+    "STOP IT when the work it was driving is done (`action: \"stop\"`) — a heartbeat left armed on a finished " +
+    "thread wakes it forever. The human can also pause and resume it from the board.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      action: {
+        type: "string",
+        enum: ["start", "stop"],
+        description: "`start` arms (or replaces) this thread's heartbeat; `stop` disarms it.",
+      },
+      prompt: {
+        type: "string",
+        description:
+          "Required for `start`. The text delivered to you on every beat, verbatim, as a user turn. Make it " +
+          "self-contained and ACTIONABLE — say what to do and what would make it right to stop — because you " +
+          "may receive it with none of the context you have right now.",
+      },
+      interval_seconds: {
+        type: "integer",
+        description:
+          "Required for `start`. Seconds between beats (minimum 60, maximum 86400). A beat only lands when you " +
+          "are at rest, so a very short interval does not deliver faster than you actually stop.",
+      },
+    },
+    required: ["action"],
+  },
+}
+
 // The unified server's tool registry: `tools/list` returns these and `tools/call` routes by name.
 // Adding a worker-facing fray tool = one entry here + one handler in `HANDLERS` — never a second
 // MCP server, so every fray tool stays under the same `mcp__fray__*` namespace and the same
 // server-level pre-approval the dispatch layer already grants.
-const TOOLS = [SPAWN_THREAD]
+const TOOLS = [SPAWN_THREAD, HEARTBEAT]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
   [SPAWN_THREAD.name]: spawnThread,
+  [HEARTBEAT.name]: heartbeat,
 }
 
 /** @param {unknown} obj */
@@ -179,6 +223,82 @@ async function spawnThread(args) {
     `Spawned a new fray thread \`${slug}\`. It is now on the board driving independently — it reports ` +
     `to the human via its own final message, NOT back to you, so do not wait on a result from it.\n\n` +
     `Paste this link to let the human open it in the drawer:\n\n[${label}](/thread/${slug})`
+  )
+}
+
+/** POST a fray RPC procedure and return its parsed payload. Shares spawn_thread's transport rules:
+ * the port comes from server.lock and `sec-fetch-site: same-origin` satisfies the loopback gate.
+ * @param {string} procedure @param {Record<string, unknown>} body @returns {Promise<any>} */
+async function callRpc(procedure, body) {
+  const port = serverLockPort()
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), DISPATCH_TIMEOUT_MS)
+  let res
+  try {
+    res = await fetch(`http://127.0.0.1:${port}/rpc/${procedure}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+  } catch (err) {
+    throw new Error(`${procedure} request failed: ${err instanceof Error ? err.message : err}`)
+  } finally {
+    clearTimeout(timer)
+  }
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "")
+    throw new Error(`${procedure} returned HTTP ${res.status}${detail ? `: ${detail.slice(0, 500)}` : ""}`)
+  }
+  return await res.json().catch(() => null)
+}
+
+/** Which thread this MCP server belongs to. Stamped into our env at spawn (dispatch.ts for the tmux
+ * path, the broker bridge for the SDK path) because the MCP protocol carries no caller identity.
+ * FRAY_UI_THREAD is the fallback: every fray worker process is tagged with it, so it is right
+ * whenever the env is inherited — but it is not relied upon, hence the explicit var first. */
+function threadSlug() {
+  const slug = process.env.FRAY_THREAD_SLUG || process.env.FRAY_UI_THREAD
+  if (!slug) {
+    throw new Error(
+      "this fray MCP server was not told which thread it belongs to (no FRAY_THREAD_SLUG), so it cannot " +
+      "arm a heartbeat for it. This is a fray bug — report it rather than working around it.",
+    )
+  }
+  return slug
+}
+
+const HEARTBEAT_MIN_INTERVAL_SECONDS = 60
+const HEARTBEAT_MAX_INTERVAL_SECONDS = 24 * 60 * 60
+
+/** The `heartbeat` handler: arm or disarm this thread's recurring wake.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function heartbeat(args) {
+  const slug = threadSlug()
+  const action = typeof args.action === "string" ? args.action.trim() : ""
+  if (action !== "start" && action !== "stop") throw new Error("`action` must be either \"start\" or \"stop\"")
+
+  if (action === "stop") {
+    await callRpc("setThreadHeartbeat", { slug, prompt: null })
+    return "Heartbeat stopped. This thread will no longer be woken on a schedule."
+  }
+
+  const prompt = typeof args.prompt === "string" ? args.prompt.trim() : ""
+  if (!prompt) throw new Error("`prompt` is required to start a heartbeat — it is the text you will be sent on every beat")
+  const interval = typeof args.interval_seconds === "number" ? Math.round(args.interval_seconds) : NaN
+  if (!Number.isFinite(interval)) throw new Error("`interval_seconds` is required to start a heartbeat")
+  if (interval < HEARTBEAT_MIN_INTERVAL_SECONDS || interval > HEARTBEAT_MAX_INTERVAL_SECONDS) {
+    throw new Error(`\`interval_seconds\` must be between ${HEARTBEAT_MIN_INTERVAL_SECONDS} and ${HEARTBEAT_MAX_INTERVAL_SECONDS}`)
+  }
+
+  await callRpc("setThreadHeartbeat", { slug, prompt, intervalSeconds: interval })
+  const every = interval % 60 === 0 ? `${interval / 60} min` : `${interval}s`
+  return (
+    `Heartbeat armed — fray will send you this prompt every ${every}, delivered when you come to rest ` +
+    `(any beat that comes due mid-turn waits for your next rest rather than interrupting you). It replaces ` +
+    `any heartbeat this thread had before.\n\n` +
+    `Call this tool again with \`action: "stop"\` once the work it is driving is finished. The human can ` +
+    `pause and resume it from the board.`
   )
 }
 

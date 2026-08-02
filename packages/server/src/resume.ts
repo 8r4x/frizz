@@ -201,7 +201,7 @@ function spawnPinnedSession(
   // dispatch produced and re-set the env the session-seed hook reads — otherwise an opted-out project
   // would silently get the RUNTIME RELEASE GATE forced back on the moment its worker respawns.
   const runtimeGate = deps.getSettings().runtimeGate !== false
-  const frayMcp = resolveFrayMcp(deps.project.stateDir)
+  const frayMcp = resolveFrayMcp(deps.project.stateDir, undefined, undefined, row.slug)
   const built = backend
     ? backend.buildResume({
         sessionId: nativeSessionId,

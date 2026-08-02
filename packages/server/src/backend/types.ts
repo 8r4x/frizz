@@ -211,6 +211,11 @@ export const FRAY_MCP = {
 export interface FrayMcp {
   scriptPath: string
   stateDir: string
+  // The thread this MCP server belongs to, passed through as FRAY_THREAD_SLUG so a tool can act on
+  // its OWN thread (`heartbeat`). Nothing in the MCP protocol identifies the caller, and the server is
+  // spawned per worker, so its env is the only channel for this. Optional because `spawn_thread` —
+  // the only tool that predates it — does not need to know who called it.
+  slug?: string
 }
 
 // The ONE canonical Chrome DevTools MCP server spec both backends inject into every worker they
