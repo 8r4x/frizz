@@ -629,13 +629,16 @@ function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string |
     return {
       node: (
         <StatusBox>
-          {/* SIZE 9, not 10, and that half of the reasoning is about the BOX rather than the glyph, so it
-              survived this mark's predecessor unchanged: the box's CONTENT width is 13px, so a 10px glyph
+          {/* SIZE 9, not 10. That reasoning is about the BOX rather than the glyph, so it carried over
+              from this mark's predecessor unchanged: the box's CONTENT width is 13px, so a 10px glyph
               centres onto a HALF pixel and the rasteriser pushes its ink 0.5px right and 0.5px down,
-              while 9 in 13 is a whole 2px each side and lands dead centre (the shipped Check has the same
-              10px tell). scripts/verify-rail-status-glyphs.mjs carries the readings and re-measures this
-              glyph's extent and coverage against the rail family — CircleStop is a different shape from
-              the heart it replaced, so those two numbers were re-measured rather than inherited. */}
+              while 9 in 13 is a whole 2px each side (the shipped Check still has the 10px tell).
+              CircleStop is a different SHAPE from the heart it replaced, so its two family numbers were
+              re-measured rather than inherited — scripts/verify-rail-status-glyphs.mjs, 2026-08-02:
+              extent 0.55 of the box, exactly the ellipsis and the hourglass and well inside MAX_EXTENT
+              0.62, and it centres identically to the shipped dot, the hourglass and the spinner. At
+              11.89% coverage it IS the heaviest mark in the column, which is the point of the one
+              deliberately-coloured glyph and is a hair over the 11.3% the heart measured at this size. */}
           <CircleStop
             size={9}
             className="text-amber-400"
