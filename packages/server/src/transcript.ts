@@ -3685,6 +3685,32 @@ export function projectTranscriptAgentLifecycles(
   }))
 }
 
+// A background op the operator RETIRED with the × is no longer live, and the TRANSCRIPT is the second
+// place that has to learn it. The board row leaves on the click; this call does not, because the fold
+// derives it from a `tool_use` whose terminal partner never arrives — the provider writes nothing to
+// the JSONL when it stops a shell (server/backend/_live_shell_stop_notice.mts). So the ops strip drew
+// the row again from the TRANSCRIPT side, this time with no × on it at all (nothing to address), and
+// the transcript card went on reading "RUNNING · 3433 MIN". That is the maintainer's screenshot.
+//
+// `cancelled` rather than `completed`: the operator ended it, and the card should say so.
+export function projectRetiredBackgroundOps(
+  messages: readonly TranscriptMessage[],
+  retired: ReadonlySet<string>,
+): TranscriptMessage[] {
+  if (retired.size === 0) return messages as TranscriptMessage[]
+  const projectTool = (tool: TranscriptToolCall): TranscriptToolCall => {
+    // Keyed on `shellId` — the launch tool_use id, which is exactly what the × was addressed at. A
+    // call with no shellId was never a tracked background op and is left alone.
+    if (!tool.shellId || !retired.has(tool.shellId) || tool.status !== "pending") return tool
+    return { ...tool, status: "cancelled", backgroundState: undefined }
+  }
+  return messages.map((message) => ({
+    ...message,
+    tools: message.tools.map(projectTool),
+    parts: message.parts.map((part) => part.kind === "tools" ? { ...part, tools: part.tools.map(projectTool) } : part),
+  }))
+}
+
 export function projectTranscriptPageAgentLifecycles(
   page: TranscriptPage,
   lookup: (id: string) => AgentLifecycleProjection | undefined,

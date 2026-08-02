@@ -3,6 +3,8 @@ import assert from "node:assert/strict"
 import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir, homedir } from "node:os"
 import { join } from "node:path"
+import { projectRetiredBackgroundOps } from "./transcript.ts"
+import type { TranscriptMessage } from "@fray-ui/shared"
 import { DISPATCH_TASK_BANNER_MARKER, formatGithubWakeSteer, GITHUB_DISPATCH_UI_BOUNDARY, wakeDeliveryToken, type GithubWakeSteer } from "@fray-ui/shared"
 import {
   frayDispatchDisplayText,
@@ -1939,4 +1941,41 @@ test("prose that merely QUOTES an agent-message wrapper is not treated as a chil
   const users = parseTranscript(enqueueLine(quoting)).filter((m) => m.role === "user")
   assert.equal(users.length, 1)
   assert.equal(users[0].peerFrom, undefined, "a mention is not a delivery")
+})
+
+// ── A RETIRED OP LEAVES THE TRANSCRIPT TOO ───────────────────────────────────────────────────────
+//
+// The board row goes on the click; this is the OTHER surface, and forgetting it is what put the row
+// straight back on the maintainer's screen. The transcript derives a live background op from a
+// `tool_use` whose terminal partner never arrives (the provider writes nothing to the JSONL when it
+// stops a shell), so the ops strip re-drew it from the transcript side — with no × this time, because
+// a transcript-only row carries no id to address a stop at — and the card read "RUNNING · 3433 MIN".
+test("a retired background op stops reading as live in the transcript", () => {
+  const messages = [{
+    role: "assistant" as const,
+    at: "2026-07-30T17:24:27.563Z",
+    text: "",
+    tools: [
+      { name: "Bash", detail: "node census.ts", status: "pending" as const, backgroundState: "background" as const, shellId: "toolu_sh" },
+      { name: "Bash", detail: "gh run watch", status: "pending" as const, backgroundState: "background" as const, shellId: "toolu_other" },
+    ],
+    parts: [],
+  }] as unknown as TranscriptMessage[]
+
+  const projected = projectRetiredBackgroundOps(messages, new Set(["toolu_sh"]))
+  assert.equal(projected[0]!.tools[0]!.status, "cancelled", "the operator ended it — the card should say so")
+  assert.equal(projected[0]!.tools[0]!.backgroundState, undefined, "…and it leaves the live ops strip")
+  assert.equal(projected[0]!.tools[1]!.status, "pending", "an op nobody retired is untouched")
+  assert.equal(projected[0]!.tools[1]!.backgroundState, "background")
+})
+
+test("the retirement projection is a no-op when nothing was retired, and never touches a settled call", () => {
+  const messages = [{
+    role: "assistant" as const, at: "2026-07-30T17:24:27.563Z", text: "",
+    // Already COMPLETED. Re-stamping this "cancelled" would rewrite history the transcript got right.
+    tools: [{ name: "Bash", detail: "node census.ts", status: "completed" as const, shellId: "toolu_sh" }],
+    parts: [],
+  }] as unknown as TranscriptMessage[]
+  assert.equal(projectRetiredBackgroundOps(messages, new Set())[0]!.tools[0]!.status, "completed")
+  assert.equal(projectRetiredBackgroundOps(messages, new Set(["toolu_sh"]))[0]!.tools[0]!.status, "completed")
 })

@@ -514,6 +514,16 @@ export interface TailState extends FoldState {
   codexSubAgents?: CodexSubAgentTracker
   // completed shells retained so an already-open output drawer can render the terminal tail.
   retiredShells: Map<string, RetiredShell>
+  // Dispatch tool_use ids the operator has RETIRED with the × — read from the registry at prime and
+  // added to on every dismiss. The fold consults it before it may mint a live op, which is the ONLY
+  // thing that keeps a killed shell dead: the kill leaves no record in the transcript and none on
+  // disk, so a re-primed fold would otherwise re-create the row off its dispatch record and keep it
+  // "running" forever (the maintainer's real 57-hour phantom, reproduced by one cold fold of their
+  // transcript). Empty for a session that has never had an × clicked, which is nearly all of them.
+  dismissedOps: Set<string>
+  // Ops the fold has just seen RESTART under a dismissed id (trackResumes), queued for the tick to
+  // clear from the registry. Absent until one happens, which is nearly always.
+  unretiredOps?: Set<string>
   // DESCENDANT agent id → the instant its last TERMINAL <task-notification> was folded, in epoch ms.
   // A descendant (a sub-agent's own sub-agent) is never in `subAgents`, so the notification that
   // retires it correlates to no live entry — but it IS in this thread's transcript, and it is the only
@@ -630,6 +640,7 @@ export function newTailState(
     queuedReports: new Map(),
     deliveredReports: new Set(),
     retiredShells: new Map(),
+    dismissedOps: new Set(),
     primed: false,
     turn: "in-flight",
     permPrompt: false,
@@ -819,6 +830,10 @@ function trackDispatches(state: TailState, rec: Record): void {
     if (b.type !== "tool_use") continue
     const id = typeof b.id === "string" ? b.id : undefined
     if (!id) continue
+    // The operator RETIRED this op. Its dispatch record is still here and always will be — a killed
+    // shell never gets a terminal record — so without this line every re-prime mints the row afresh
+    // and it reads "running" forever. See FoldState.dismissedOps.
+    if (state.dismissedOps.has(id)) continue
     const input = (b.input ?? {}) as { description?: unknown; run_in_background?: unknown; subagent_type?: unknown; command?: unknown; summary?: unknown }
     const startedAt = typeof rec.timestamp === "string" ? rec.timestamp : (state.lastActivityAt ?? "")
     const previous = state.subAgents.get(id)
@@ -1133,6 +1148,7 @@ function trackLaunchResults(state: TailState, rec: Record): void {
       const parked = state.pendingShells?.get(id)
       if (!parked) continue
       state.pendingShells?.delete(id)
+      if (state.dismissedOps.has(id)) continue // retired by the operator — see FoldState.dismissedOps
       if (b.is_error === true || !AUTO_BACKGROUND_ACK_RE.test(text)) continue
       entry = { kind: "shell", toolUseId: id, label: parked.label, startedAt: parked.startedAt, command: parked.command }
       state.subAgents.set(id, entry)
@@ -1258,6 +1274,15 @@ function trackResumes(state: TailState, rec: Record): void {
     if (Number.isFinite(highWater) && Number.isFinite(ackAt) && highWater - ackAt > RESUME_REPLAY_SLACK_MS) continue
     if (retired) state.retiredSubAgents.delete(retired.toolUseId)
     const toolUseId = retired?.toolUseId ?? id
+    // A restart SUPERSEDES the operator's retirement of the previous run. `SendMessage` revives a
+    // stopped child under the SAME tool_use id, so without this the dismissal would outlive the run it
+    // was aimed at: the row comes back here (correctly — it is live work again), and the next re-prime
+    // silently deletes it, hiding a child that is genuinely running. The replay guard directly above is
+    // what makes this safe to do unconditionally — only a GENUINE ack reaches this line.
+    // Queued rather than written here: this is a pure fold function with no storage handle. The tick
+    // drains `unretiredOps` (see the drain beside the prime), which keeps every registry write on the
+    // one side of the module that owns them.
+    if (state.dismissedOps.delete(toolUseId)) (state.unretiredOps ??= new Set()).add(toolUseId)
     state.subAgents.set(toolUseId, {
       kind: "agent",
       toolUseId,
@@ -2100,6 +2125,13 @@ export const UNRESTORED_TAIL_FIELDS: ReadonlySet<string> = new Set([
   // restart-crossing differential: 968/970/970 ms — the exact poll floor chaseRuntime exists to remove
   // — against 16/22/19 ms with these two fields dropped.
   "runtimeEventsSeen", "runtimeChase",
+  // The REGISTRY owns this, not the cache. Both are durable, so the collision is silent and total: the
+  // snapshot is written on a tick, an × clicked after that tick is not in it, and restoring the stale
+  // copy overwrote the set just read from `retired_op` with an EMPTY one — which then let the cached
+  // `subAgents` map, also from before the click, put the killed shell straight back on the board. The
+  // fold-side guard never even ran, because a cache hit means nothing is folded at all. Found by the
+  // restart test, after the fix looked correct and the row came back anyway.
+  "dismissedOps",
 ])
 
 export function createTailer(deps: TailerDeps): Tailer {
@@ -2918,6 +2950,13 @@ export function createTailer(deps: TailerDeps): Tailer {
   function dismissOp(slug: string, id: string): boolean {
     const state = states.get(slug)
     if (!state || !registeredStateIsCurrent(state)) return false
+    // DURABLE FIRST, and unconditionally — before the in-memory retirement and regardless of whether
+    // anything was live to retire. The in-memory maps do not survive a fray restart, and the op's
+    // dispatch record does; a dismissal that lived only in memory is exactly how a killed shell came
+    // back reading "57hr 18m" on the maintainer's board. Recording it for an id that is already gone
+    // is harmless (the fold simply never mints it again) and is the honest reading of the click.
+    state.dismissedOps.add(id)
+    deps.storage.retireOp(slug, state.sessionId, id)
     const entry = state.subAgents.get(id)
     if (entry) {
       retireLive(state, entry, new Date(now()).toISOString(), "killed")
@@ -3556,10 +3595,26 @@ export function createTailer(deps: TailerDeps): Tailer {
         // placeholder until discovery pins it).
         const path = backend.transcriptPath(nativeId) ?? join(logDir, `${nativeId}.jsonl`)
         state = newTailState(row.slug, row.session_id, path, false, nativeId, runtimeGeneration)
+        // BEFORE any fold. This is the durable memory of the operator's × (storage `retired_op`), and
+        // the fold consults it as it reads dispatch records — so it has to be populated while the state
+        // is still empty, not after. Without it a killed shell is re-minted from a dispatch record that
+        // will never get a terminal partner, and the row reads "running" for as long as the thread
+        // lives (the maintainer's 57-hour phantom).
+        state.dismissedOps = deps.storage.retiredOps(row.slug, row.session_id)
         // Resume the fold at the byte offset the last process reached, when the transcript can be
         // PROVEN to still carry the prefix that produced it. On a miss the state stays fresh and the
         // prime below folds from 0 — the historical path, unchanged.
         hydrateFromCache(state, row, nativeId)
+        // AND AGAIN, after the cache. There are TWO ways a retired op comes back and the durable set
+        // has to beat both: the fold re-reading its dispatch record (handled inside trackDispatches)
+        // and the tail CACHE, which serialises `subAgents` wholesale and restores it without folding
+        // anything. The cache is written on a tick, so an × clicked after the last one is simply not in
+        // it — the row returned on the next boot looking exactly as live as before the click. Caught by
+        // the restart test in tailer.test.ts, not by reasoning.
+        for (const id of state.dismissedOps) {
+          state.subAgents.delete(id)
+          state.pendingShells?.delete(id)
+        }
         states.set(row.slug, state)
       }
 
@@ -3584,6 +3639,12 @@ export function createTailer(deps: TailerDeps): Tailer {
         state.deliveryLedgerSeen = primedLedger.changed ? primedLedger.value : row.delivery_ledger ?? null
         if (primedLedger.changed) transcriptDirty.push(row.slug)
         persistCodexAutoTitle(row, state, runtimeGeneration)
+        // Drain the fold's un-retirements: an op the agent RESTARTED under an id the operator had
+        // dismissed is live work again, and its registry row has to go or the next prime would hide it.
+        if (state.unretiredOps?.size) {
+          for (const id of state.unretiredOps) deps.storage.unretireOp(row.slug, row.session_id, id)
+          state.unretiredOps.clear()
+        }
         if (state.offset !== primeOffset) transcriptDirty.push(row.slug)
         state.turn = turnFor(row, state, nowMs)
         const pane = sniffPane(

@@ -93,6 +93,7 @@ import type { SessionTelemetry } from "./tailer.ts"
 import { resolvePlanFile, deletePlanFile } from "./plan-files.ts"
 import { providerResumeCommand, tmuxAttachCommand } from "./external-terminal.ts"
 import { readBackgroundShellOutput } from "./background-shell-output.ts"
+import { projectRetiredBackgroundOps } from "./transcript.ts"
 
 const SlugInput = z.object({ slug: ThreadSlug }).strict()
 
@@ -561,6 +562,19 @@ export function createRouter(ctx: AppContext) {
     return `[fray] The operator stopped your background command ${JSON.stringify(label)} from the Fray dashboard. It is no longer running and will never report a result — do not wait on it or poll it again.`
   }
 
+  // Apply the operator's retirements to a transcript page. Two surfaces render a background op and BOTH
+  // have to hear about the ×: the board row (the tailer drops it on the click and remembers it durably)
+  // and the transcript, which is derived from a `tool_use` whose terminal partner never arrives. Miss
+  // this one and the ops strip simply redraws the row from the transcript side — with no × on it,
+  // because a transcript-only row has nothing to address a stop at.
+  function retireOpsInPage(slug: string, page: TranscriptPage): TranscriptPage {
+    const row = ctx.storage.getSession(slug)
+    if (!row) return page
+    const retired = ctx.storage.retiredOps(slug, row.session_id)
+    if (retired.size === 0) return page
+    return { ...page, messages: projectRetiredBackgroundOps(page.messages, retired) }
+  }
+
   function subAgentStoppable(slug: string, id: string): { sessionId: string; taskId: string; shell: boolean } | { sessionId: null; note: string | null } {
     const blocked = (note: string | null) => ({ sessionId: null, note })
     const info = ctx.tailer.subAgent(slug, id)
@@ -770,7 +784,7 @@ export function createRouter(ctx: AppContext) {
         // Registry row → its session's transcript; foreign slug (a session id) → resolved directly; else [].
         // backendFor routes a codex thread through the codex rollout reader (else it renders empty).
         const page = readLatestThreadTranscriptPage(ctx.project, ctx.storage, input.slug, ctx.backendFor)
-        return projectTranscriptPageAgentLifecycles(page, (id) => ctx.tailer.subAgent(input.slug, id))
+        return retireOpsInPage(input.slug, projectTranscriptPageAgentLifecycles(page, (id) => ctx.tailer.subAgent(input.slug, id)))
       },
     }),
 
@@ -781,7 +795,7 @@ export function createRouter(ctx: AppContext) {
       output: TranscriptPage,
       handler: async ({ input }) => {
         const page = readEarlierThreadTranscriptPage(ctx.project, ctx.storage, input.slug, input.cursor, ctx.backendFor)
-        return projectTranscriptPageAgentLifecycles(page, (id) => ctx.tailer.subAgent(input.slug, id))
+        return retireOpsInPage(input.slug, projectTranscriptPageAgentLifecycles(page, (id) => ctx.tailer.subAgent(input.slug, id)))
       },
     }),
 

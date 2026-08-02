@@ -429,6 +429,26 @@ export interface Storage {
   // Every tombstoned transcript id (session_id + any discovered transcript_id of a forgotten row). The
   // tailer's foreign-discovery consults this so a forgotten phantom's transcript stays excluded forever.
   forgottenIds(): Set<string>
+  // ---- RETIRED BACKGROUND OPS — the × the operator clicked, remembered across restarts ----
+  //
+  // The tailer folds a background op into existence from its DISPATCH record and retires it on a
+  // TERMINAL one. A killed shell never gets the terminal record — measured, twice: the provider writes
+  // nothing to the transcript when it stops one (backend/_live_shell_stop_notice.mts) and leaves no
+  // disk trace either (backend/_live_shell_stop_trace.mts, whose control shows a normally-finished
+  // shell keeps its output file exactly as a killed one does). So the fold has no way to learn the op
+  // ended, and any re-prime — a fray restart above all — re-creates it as LIVE off a tool_use that
+  // will never get a result.
+  //
+  // That is not hypothetical: the maintainer's own board carried a killed shell reading "57hr 18m",
+  // and one cold fold of their real transcript reproduced it exactly. This table is the missing
+  // memory, and it is the ONLY thing standing between a dismissed row and its own resurrection.
+  retireOp(slug: string, sessionId: string, opId: string): void
+  /** Every op id retired for this exact (slug, session) — consulted by the fold, so an id in here can
+   *  never become a live row again. Empty for a session that has never had an × clicked. */
+  retiredOps(slug: string, sessionId: string): Set<string>
+  /** Lift a retirement, because the op RESTARTED under the same id. The dismissal was aimed at the run
+   *  that ended; keeping it would silently hide the new one on the next prime. */
+  unretireOp(slug: string, sessionId: string, opId: string): void
   // Codex-support epic (Phase 2): pin the agent backend + its native session id on a row AFTER
   // dispatch. Kept OFF the shared upsert (whose named-param statement every claude caller + test
   // fixture feeds) so the codex path is purely additive — a claude dispatch never calls these, so its
@@ -553,6 +573,26 @@ export function createStorage(dbPath: string): Storage {
     );
     CREATE INDEX IF NOT EXISTS adoption_retired_attempt_slug_idx
       ON adoption_retired_attempt(slug);
+    -- A background op the operator RETIRED (the × on its row), by its dispatch tool_use id.
+    --
+    -- This has to be durable, and the reason is measured rather than defensive. Killing a background
+    -- shell writes NOTHING anywhere fray can re-read: not a tool_result in the session JSONL (verified
+    -- in backend/_live_shell_stop_notice.mts — the transcript gains not one record), and not on disk
+    -- (backend/_live_shell_stop_trace.mts — the output file survives the kill exactly as a normally
+    -- finished shell's does, so file-absence proves nothing). The tailer's retirement therefore lived
+    -- only in memory, and ANY re-prime re-created the row as live off a tool_use that will never get a
+    -- result — forever. Reproduced from the maintainer's own 57-hour phantom: one cold fold of their
+    -- real transcript brings the killed shell straight back.
+    --
+    -- Keyed by SESSION as well as slug: a re-dispatched slug is a different conversation whose ids
+    -- come from a different transcript, and it must not inherit this one's retirements.
+    CREATE TABLE IF NOT EXISTS retired_op (
+      slug       TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      op_id      TEXT NOT NULL,
+      retired_at TEXT NOT NULL,
+      PRIMARY KEY (slug, session_id, op_id)
+    );
   `)
   // Best-effort inline migration for older DBs. Session-first/profile columns are nullable ADDs
   // (except the existing boolean/backend defaults) — additive + idempotent, safe while another server
@@ -971,6 +1011,10 @@ export function createStorage(dbPath: string): Storage {
       AND runtime_generation = ? AND title_locked = 0
   `)
   const delSession = db.prepare("DELETE FROM session WHERE slug = ?")
+  const putRetiredOp = db.prepare("INSERT OR IGNORE INTO retired_op (slug, session_id, op_id, retired_at) VALUES (?, ?, ?, ?)")
+  const getRetiredOps = db.prepare<[string, string], { op_id: string }>("SELECT op_id FROM retired_op WHERE slug = ? AND session_id = ?")
+  const delRetiredOps = db.prepare("DELETE FROM retired_op WHERE slug = ?")
+  const delRetiredOp = db.prepare("DELETE FROM retired_op WHERE slug = ? AND session_id = ? AND op_id = ?")
   const putTomb = db.prepare("INSERT OR IGNORE INTO tombstone (transcript_id, slug, forgotten_at) VALUES (?, ?, ?)")
   const allTombs = db.prepare<[], { transcript_id: string }>("SELECT transcript_id FROM tombstone")
   // Storage is constructed before the disabled app-server bridge, so this table may appear later in
@@ -1000,6 +1044,10 @@ export function createStorage(dbPath: string): Storage {
       retireAdoptionAttempt(claim)
       delFinalizedAdoptionClaim.run(existing.slug, existing.session_id)
     }
+    // Retirements are scoped to a session that no longer exists. Dropping them with the row keeps the
+    // table from growing forever across re-dispatches of a busy slug; the (slug, session_id) key means
+    // a replacement session could never have read them anyway.
+    delRetiredOps.run(existing.slug)
     delSession.run(existing.slug)
     return existing
   }
@@ -1420,6 +1468,9 @@ export function createStorage(dbPath: string): Storage {
       lifecycleListeners.add(listener)
       return () => lifecycleListeners.delete(listener)
     },
+    retireOp: (slug, sessionId, opId) => void putRetiredOp.run(slug, sessionId, opId, new Date().toISOString()),
+    retiredOps: (slug, sessionId) => new Set(getRetiredOps.all(slug, sessionId).map((r) => r.op_id)),
+    unretireOp: (slug, sessionId, opId) => void delRetiredOp.run(slug, sessionId, opId),
     // Profile fields are optional in SessionRow so pre-migration fixtures/callers still typecheck;
     // normalize them for better-sqlite3, whose named statement requires every referenced parameter.
     upsertSession: (row) => void upsertSession(row),

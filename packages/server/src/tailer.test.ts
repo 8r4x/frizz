@@ -3021,3 +3021,55 @@ test("tailer: a codex exec's launcher wrapper is stripped, and nothing else is",
   assert.equal(unwrapShellCommand("python -c 'print(1)'"), "python -c 'print(1)'")
   assert.equal(unwrapShellCommand(undefined), undefined)
 })
+
+// ── A DISMISSED OP STAYS DISMISSED ACROSS A RESTART ──────────────────────────────────────────────
+//
+// THE BUG, from the maintainer's own board: they killed a background shell, it left the board, and it
+// came back reading "57hr 18m". Reproduced by one cold fold of their real transcript — because the
+// kill leaves NO record anywhere the fold can read. Measured twice, and both negatives matter:
+//   · the provider writes nothing to the session JSONL when it stops a shell
+//     (backend/_live_shell_stop_notice.mts), so the tool_use never gets its terminal partner;
+//   · the output file SURVIVES the kill exactly as a normally-finished shell's does
+//     (backend/_live_shell_stop_trace.mts), so file-absence cannot stand in for one either.
+// The retirement therefore has to be durable, and this is the test that says so.
+test("tailer: a killed shell does NOT come back when the fold re-primes from scratch", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  const shellLine = JSON.stringify(bashBg("toolu_sh", "Restart the census sweep", "node census.ts"))
+  const ackLine = JSON.stringify(resultText("toolu_sh", "Command running in background with ID: bhq. Output is being written to: /tmp/tasks/bhq.output. You will be notified when it completes."))
+  // NOTE what is deliberately absent: any terminal record for toolu_sh. That is the real transcript's
+  // shape after a kill, and it is why the dispatch record alone must not be enough to mint the row.
+  fixture(h.logDir, "sid", [IN_FLIGHT, shellLine, ackLine])
+
+  const first = makeTailer(h, { mtimeMs: () => Date.parse("2026-07-01T00:00:02.000Z") })
+  h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
+  first.tick()
+  assert.equal(first.get("t")?.bgShells.length, 1, "the shell is live before the ×")
+  assert.equal(first.dismissOp?.("t", "toolu_sh"), true)
+  assert.deepEqual(first.get("t")?.bgShells, [], "and it leaves at once")
+
+  // THE RESTART. A brand-new tailer over the SAME registry and the SAME transcript — every byte of the
+  // dispatch and its launch ack still there, nothing terminal ever written. Before the retirement was
+  // durable this re-minted the row and it pulsed "running" for as long as the thread lived.
+  const second = makeTailer(h, { mtimeMs: () => Date.parse("2026-07-01T00:00:02.000Z") })
+  second.tick()
+  assert.deepEqual(second.get("t")?.bgShells, [], "a fray restart must not resurrect what the operator killed")
+  assert.deepEqual(second.get("t")?.subAgents, [], "…and it is gone from every live surface, not just the shell list")
+})
+
+test("tailer: dismissing scopes to the SESSION — a re-dispatched slug starts clean", () => {
+  // The durable key is (slug, session_id) on purpose. A replacement session is a different
+  // conversation whose tool_use ids come from a different transcript; inheriting the old one's
+  // retirements could hide live work under an id collision that means nothing.
+  const h = harness()
+  h.storage.upsertSession(row())
+  const shellLine = JSON.stringify(bashBg("toolu_sh", "Watch CI", "gh run watch"))
+  const ackLine = JSON.stringify(resultText("toolu_sh", "Command running in background with ID: b8p. Output is being written to: /tmp/tasks/b8p.output. You will be notified when it completes."))
+  fixture(h.logDir, "sid", [IN_FLIGHT, shellLine, ackLine])
+  const t = makeTailer(h, { mtimeMs: () => Date.parse("2026-07-01T00:00:02.000Z") })
+  h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
+  t.tick()
+  assert.equal(t.dismissOp?.("t", "toolu_sh"), true)
+  assert.deepEqual(h.storage.retiredOps("t", "sid"), new Set(["toolu_sh"]))
+  assert.deepEqual(h.storage.retiredOps("t", "a-different-session"), new Set(), "another session inherits nothing")
+})
