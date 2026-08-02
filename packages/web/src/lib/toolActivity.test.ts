@@ -118,6 +118,31 @@ test("the agent listing folds into the ordinary activity run", () => {
   assert.deepEqual(compact[0].message.tools.map((call) => call.name), ["Read", "Agents", "Grep", "Edit"])
 })
 
+test("a call whose result is a picture keeps its card and splits the run", () => {
+  // An image Read: the harness returns the picture as the WHOLE result, so there is no excerpt text —
+  // `outputImage` is the only signal that this Read is a screenshot rather than a source file.
+  const imageRead = tool("Read", { detail: "/tmp/shots/board.png", outputImage: "/tmp/fray-tool-images/ab.png", status: "completed" })
+  const shot = tool("mcp__chrome-devtools__take_screenshot", { outputImage: "/tmp/fray-tool-images/cd.png", status: "completed" })
+  const delivery = tool("SendUserFile", { sentImages: ["/tmp/fray-tool-images/ef.png"], caption: "before vs after", status: "completed" })
+  for (const call of [imageRead, shot, delivery]) assert.equal(isToolActivityException(call), true)
+
+  // A Read of ORDINARY source, and a delivery of non-image files, stay in the digest.
+  assert.equal(isToolActivityException(tool("Read", { detail: "src/a.ts", read: "export const x = 1" })), false)
+  assert.equal(isToolActivityException(tool("SendUserFile", { sentFiles: ["notes.pdf"] })), false)
+
+  const compact = coalesceToolActivityMessages([
+    toolMessage("one", [tool("Bash"), tool("Grep")]),
+    toolMessage("shot", [imageRead], "2026-07-30T12:00:01.000Z"),
+    toolMessage("two", [tool("Edit")], "2026-07-30T12:00:02.000Z"),
+  ])
+
+  assert.deepEqual(compact.map((entry) => entry.message.tools.map((call) => call.name)), [
+    ["Bash", "Grep"],
+    ["Read"],
+    ["Edit"],
+  ])
+})
+
 test("a prose tool tail absorbs ordinary calls, and a background launch is what ends it", () => {
   const first = tool("Bash", { desc: "Starting the focused build", status: "completed" })
   const lead: ChatMessage = {

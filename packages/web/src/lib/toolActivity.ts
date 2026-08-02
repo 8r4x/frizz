@@ -30,9 +30,10 @@ function normalizedToolName(name: string): string {
 /**
  * Calls that keep their dedicated card instead of entering the minimal activity disclosure.
  *
- * Two families qualify, and they qualify for the SAME reason: the call LAUNCHES something that outlives
- * it, so the card is not a record of work already done — it is the only handle the reader has on work
- * still running (or on a process that ran detached and finished while they were reading something else).
+ * Three families qualify. The first two qualify for the SAME reason: the call LAUNCHES something that
+ * outlives it, so the card is not a record of work already done — it is the only handle the reader has on
+ * work still running (or on a process that ran detached and finished while they were reading something
+ * else).
  *
  *   • A DISPATCH — it starts, addresses or blocks on a child agent.
  *   • A BACKGROUND op — `run_in_background` Bash and Monitor (`backgroundState: "background"`), plus the
@@ -41,22 +42,31 @@ function normalizedToolName(name: string): string {
  *     poller were all invisible behind `Ran 7 tool calls` — the one class of call whose whole point is
  *     that it is still going after the batch that started it (maintainer 2026-08-01: "eject background
  *     tasks from the tool call collapsing logic. It's important that those show up in the chat").
+ *   • A call whose RESULT IS A PICTURE — an image `Read`, a `take_screenshot`, a SendUserFile delivery
+ *     carrying images. The reason is different but no weaker: the whole content of the card is something
+ *     the human has to LOOK at, and a digest reduces it to the one thing a picture cannot survive being
+ *     reduced to — a word. A worker reading back its own screenshots produced exactly `2 tool calls ·
+ *     Click to expand` with both shots hidden behind it (maintainer 2026-08-02: "the screenshots should
+ *     just be rendered in the chat automatically").
  *
  * Deliberately NOT here: codex's `list_agents` ("Agents · list live agents"), which is a plain READ of
  * the roster — it starts nothing, addresses nobody, and its whole body is a one-line count, so a model
  * that polls it mid-burst was splitting one batch into `Ran 1 tool call` / a standalone Agents card /
  * `Ran 4 tool calls` (maintainer 2026-07-31: "The agent listing should not be specially handled here.
- * It's a tool call like any other").
+ * It's a tool call like any other"). Nor a SendUserFile carrying only NON-image files: that renders as a
+ * row of openable chips, which the digest's label already describes as well as the card would.
  */
 export function isToolActivityException(tool: Pick<
   TranscriptToolCall,
-  "name" | "prompt" | "agentId" | "sendTo" | "sendBody" | "backgroundState"
+  "name" | "prompt" | "agentId" | "sendTo" | "sendBody" | "backgroundState" | "outputImage" | "sentImages"
 >): boolean {
   return tool.prompt !== undefined
     || tool.agentId !== undefined
     || tool.sendTo !== undefined
     || tool.sendBody !== undefined
     || tool.backgroundState !== undefined
+    || tool.outputImage !== undefined
+    || (tool.sentImages !== undefined && tool.sentImages.length > 0)
     || SUB_AGENT_TOOL_NAMES.has(normalizedToolName(tool.name))
 }
 
