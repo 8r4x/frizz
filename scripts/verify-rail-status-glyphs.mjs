@@ -3,8 +3,11 @@
 // The rail is a checkbox family: every thread state is the SAME rounded-rect box (StatusBox, 15px) with
 // a different mark inside. Four such marks already shipped — the ellipsis, the check, the "?" and the
 // "!" — and 2026-08-01 added a fifth, the pulsing blue dot for "at rest, but work it launched is still
-// running" (a sixth, the stop hook's amber square-in-circle, joined 2026-08-02 — nothing had ever measured it, and it
-// was both the widest and half again the heaviest mark in the column). A dot is the one mark that can
+// running". (A sixth — a coloured mark for a standing/scheduled wake — shipped and was pulled the same
+// day, 2026-08-02: the rail is read for what a thread is DOING, and a thread that will be re-prompted the
+// moment it stops is simply WORKING. This script measured it while it existed and it was both the widest
+// and half again the heaviest mark in the column, which is worth remembering if the slot is ever refilled.)
+// A dot is the one mark that can
 // silently wreck that column: a SOLID disc is far heavier per unit of diameter than an outlined glyph, so
 // a dot sized to look right in isolation reads as the loudest thing in the rail.
 // `.md-task-in-progress` measured exactly this for the same box (0.4 of the
@@ -57,7 +60,7 @@ const UNDER_TEST = "background"
 // is 15px with a 1px border and border-box sizing, so its CONTENT is 13px — an ODD number. Centring an
 // EVEN-sized glyph in it leaves 1.5px a side, the glyph starts on a half pixel, and the rasteriser pushes
 // its ink half a pixel right and down. That is not noise: on a 15px mark it is the whole complaint the
-// maintainer raised ("the heartbeat icon is not optically centered", of the mark this one replaced), and no geometry reading shows it —
+// maintainer raised ("the heartbeat icon is not optically centered", of that since-removed mark), and no geometry reading shows it —
 // getBoundingClientRect on the SVG's paths reports a dead-centred mark either way. An odd size lands on
 // the grid and measures centred, which is why every mark here is 9 or 11 and none is 10.
 // EXEMPT: `done`/`archived` wear the Check at 10 and have shipped that way for months, carrying the same

@@ -440,16 +440,20 @@ function restingOnBackgroundShell(t: ThreadView): boolean {
 // an archived row at rest stays archived even if stale attention metadata lingers; a real human ask
 // stays a question after the worker exits; live work stays working; and a completed handoff stays a
 // check instead of being mislabelled as a crash merely because `needsYou` also puts it in the queue.
-export type SessionIndicatorKind = "archived" | "needs-input" | "working" | "background" | "done" | "stalled" | "held" | "stop-hook" | "rest"
+export type SessionIndicatorKind = "archived" | "needs-input" | "working" | "background" | "done" | "stalled" | "held" | "rest"
 
-/** Does this thread carry an ENABLED stop hook? Unlike the rest of this file's predicates this one
- * reads the toggle rather than mere presence: a disabled hook keeps its text so the operator does not
- * have to retype it, but it is not something fray is going to act on, and the rail's whole job in this
- * branch is to say that fray will. A disabled one is visible in the footer, where it can be turned
- * back on. */
-export function hasStopHook(t: ThreadView): boolean {
-  return t.stopHook?.enabled === true
-}
+// NO RAIL MARK FOR AN ARMED STOP HOOK, and the reason is worth keeping because one shipped briefly
+// (2026-08-02, removed the same day — maintainer: "the whole point of a stop hook is that it means the
+// agent never stops, so it should always just be loading").
+//
+// The rail's marks are mutually exclusive and `working` outranks everything below it, so a mark for
+// "this thread has a hook" could only ever render in the gap where the thread is at REST — and a live
+// hook has almost no such gap: the thread works, stops, and is bumped again within a tick. What it DID
+// render on was the one at-rest state that lasts, the thread whose agent answered ALLDONE — where the
+// mark said "fray will act on this" about a loop that had just closed itself. It was invisible when
+// true and wrong when visible.
+//
+// The footer's StopHookControl carries the state instead, where it is legible and editable.
 
 export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   const activelyRunning = isActivelyRunning(t)
@@ -481,14 +485,6 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   // deriveAwaitingBackground drops any fenced thread; the ordering states the intent rather than
   // resolving a live conflict.
   if (restingOnBackgroundShell(t)) return "background"
-  // BELOW background, keeping the precedence the maintainer set for the interval-based predecessor this
-  // replaced (2026-08-02: "this thread has a bunch of background bash scripts running. This should just
-  // be using a blue dot. Heartbeat should not take precedence over that"). The reasoning survives the
-  // rename intact: the rail is read for what a thread is DOING, a live shell is the thing happening
-  // right now, and an armed stop hook is only a standing arrangement about what happens NEXT. The
-  // thread's own footer (StopHookControl) carries it in full. So this mark is for a thread whose ONLY
-  // live fact is the armed hook.
-  if (hasStopHook(t)) return "stop-hook"
   // STALLED = this thread's PROCESS IS GONE with the work unfinished. That is exactly `canRetry`: an
   // OWNED (non-foreign) session row whose runtime is `exited`. It deliberately does NOT consult the
   // server's `crashed` bit (= exited AND turn-in-flight/live-background-work). `crashed` says only HOW

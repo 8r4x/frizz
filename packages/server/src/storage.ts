@@ -1,6 +1,7 @@
 import Database from "./sqlite.ts"
 import { ThreadSlug, slugify, tmuxSessionName } from "@fray-ui/shared"
 import { createInteractionStore, type InteractionStore } from "./interaction-store.ts"
+import { log } from "./logging.ts"
 
 // The UI-state store (never .fray/): session registry + settings. SQLite at
 // stateDir/ui.db, WAL for concurrent read while the watcher writes. Fray thread files stay
@@ -679,6 +680,47 @@ export function createStorage(dbPath: string): Storage {
     } catch {
       // column already exists
     }
+  }
+  // ---- ADOPT ANY SURVIVING HEARTBEAT AS A STOP HOOK ------------------------------------------------
+  // The worker-armed interval heartbeat was removed 2026-08-02 and the stop hook replaced it. Its four
+  // columns are gone from the list above, so a FRESH database never has them — but a database that
+  // predates the removal still does, still holds whatever was armed in it, and nothing reads those
+  // columns any more. Left alone, a live autonomous loop would simply have gone silent at the upgrade
+  // with no trace on any surface: the board no longer projects a heartbeat, so the operator would see a
+  // thread that used to keep moving and now does not, and nothing anywhere would say why.
+  //
+  // So the intent is carried over rather than dropped. What migrates is the PROMPT (the text the worker
+  // wrote for its future self, which is exactly what a stop hook delivers) and whether it was RUNNING —
+  // a paused heartbeat lands as a disabled stop hook, keeping its text without firing.
+  //
+  // WHAT DOES NOT SURVIVE, deliberately, because there is nowhere for it to go: THE INTERVAL. A stop
+  // hook fires when the thread STOPS, so a 15-minute heartbeat becomes "every time it comes to rest",
+  // which on a working thread is more often. That is the feature swap, not an accident of this
+  // migration — but it means an adopted hook can be livelier than the beat it replaces, and the
+  // operator can see the text and switch it off in the thread footer.
+  //
+  // One-shot and idempotent: it only fills rows that have no stop hook of their own, and it CLEARS the
+  // heartbeat columns as it goes, so a second boot finds nothing to do. Guarded on the old columns
+  // actually existing, since they do not on a fresh database.
+  try {
+    const legacy = db.prepare("PRAGMA table_info(session)").all() as Array<{ name: string }>
+    if (legacy.some((c) => c.name === "heartbeat_prompt")) {
+      const adopted = db.prepare(`
+        UPDATE session SET
+          stop_hook = heartbeat_prompt,
+          stop_hook_enabled = CASE WHEN heartbeat_paused = 1 THEN 0 ELSE 1 END,
+          stop_hook_armed_at = ?,
+          stop_hook_last_fired_at = NULL,
+          heartbeat_prompt = NULL, heartbeat_interval_ms = NULL,
+          heartbeat_armed_at = NULL, heartbeat_last_fired_at = NULL, heartbeat_paused = 0
+        WHERE heartbeat_prompt IS NOT NULL AND TRIM(heartbeat_prompt) <> ''
+          AND heartbeat_armed_at IS NOT NULL
+          AND (stop_hook IS NULL OR TRIM(stop_hook) = '')
+      `).run(new Date().toISOString())
+      if (adopted.changes) log.info("storage", `adopted  heartbeat(s) as stop hooks`)
+    }
+  } catch {
+    // A database without the legacy columns, or one mid-migration — nothing to adopt.
   }
   // One-time idempotent backfill: rows the user already archived under the boolean flag carry that
   // into the new lifecycle column. Only fills NULLs — an explicit later state write always wins.

@@ -200,39 +200,31 @@ test("sessionIndicatorKind: a shell-only rest holds the running band with the do
   assert.equal(sessionIndicatorKind(thread({ ...shellRest, runtime: "exited", needsYou: true })), "stalled")
 })
 
-// THE BLUE DOT OUTRANKS THE COLOURED MARK — maintainer 2026-08-02, reversing the order this rail slot
-// shipped with: "this thread has a bunch of background bash scripts running. This should just be using a
-// blue dot. Heartbeat should not take precedence over that." Said of the interval-based predecessor the
-// stop hook replaced, and the reasoning transfers whole: the rail says what a thread is DOING, a live
-// shell is happening now, and an armed hook is only a standing arrangement about what happens next (the
-// thread's own footer carries it in full). The coloured mark stays for a thread whose ONLY live fact is
-// the armed hook.
-test("sessionIndicatorKind: a background shell outranks an armed stop hook", () => {
+// A STOP HOOK IS NOT A RAIL FACT — maintainer 2026-08-02, killing a mark that had shipped hours
+// earlier: "the whole point of a stop hook is that it means the agent never stops, so it should always
+// just be loading."
+//
+// Exactly right, and the mark could only ever have contradicted it. `working` outranks everything below
+// it, so a hook mark renders only in the at-rest gap — and a LIVE hook barely has one (the thread is
+// bumped again within a tick of stopping). The at-rest state that does last is the thread whose agent
+// answered ALLDONE, i.e. the loop that just CLOSED. The mark was invisible while the hook was doing its
+// job and visible only once it had stopped doing it.
+//
+// So a hooked thread's rail row is whatever it would have been anyway: spinning while it works, at rest
+// when it is genuinely done. This test is the guard against reintroducing the mark.
+test("sessionIndicatorKind: an armed stop hook changes NO rail mark", () => {
   const hook = { prompt: "keep going", enabled: true, armedAt: "2026-07-10T00:00:00.000Z" }
-  const hooked = thread({ kind: "session", state: "open", needsYou: false, runtime: "turn-idle", stopHook: hook })
-  assert.equal(sessionIndicatorKind(hooked), "stop-hook", "nothing else live → the hook is the mark")
+  const base = { kind: "session" as const, state: "open" as const, needsYou: false, runtime: "turn-idle" as const }
 
-  const withShell = thread({ ...hooked, awaitingBackground: true, bgShells: liveShell })
-  assert.equal(sessionIndicatorKind(withShell), "background")
-  // Disabled makes no difference here, and on its own it is not a rail fact at all (see the next test).
-  assert.equal(sessionIndicatorKind(thread({ ...withShell, stopHook: { ...hook, enabled: false } })), "background")
-  // The shell going quiet hands the mark back — the dot was never a permanent demotion.
-  assert.equal(sessionIndicatorKind(thread({ ...withShell, awaitingBackground: false, bgShells: [] })), "stop-hook")
-  // Everything ABOVE both still wins: real motion, a human ask, a declared fence.
-  assert.equal(sessionIndicatorKind(thread({ ...hooked, subAgents: liveSub })), "working")
-  assert.equal(sessionIndicatorKind(thread({ ...withShell, needsYou: true, pendingQuestion: true })), "needs-input")
-})
-
-// A DISABLED hook is not a rail fact. The row's mark exists to say fray will act on this thread without
-// the operator doing anything, and a hook toggled off is precisely the case where it will not — the text
-// is kept only so re-enabling does not mean retyping it. Left on the rail it would be a standing claim
-// about a thread nothing is going to touch.
-test("sessionIndicatorKind: a DISABLED stop hook falls through to the at-rest mark", () => {
-  const parked = thread({
-    kind: "session", state: "open", needsYou: false, runtime: "turn-idle",
-    stopHook: { prompt: "keep going", enabled: false, armedAt: "2026-07-10T00:00:00.000Z" },
-  })
-  assert.equal(sessionIndicatorKind(parked), "rest")
+  // At rest with a hook armed: the ordinary at-rest ellipsis, exactly as without one.
+  assert.equal(sessionIndicatorKind(thread({ ...base, stopHook: hook })), "rest")
+  assert.equal(sessionIndicatorKind(thread({ ...base })), "rest")
+  // Disabled likewise.
+  assert.equal(sessionIndicatorKind(thread({ ...base, stopHook: { ...hook, enabled: false } })), "rest")
+  // And every other state keeps the mark it earned on its own terms.
+  assert.equal(sessionIndicatorKind(thread({ ...base, stopHook: hook, subAgents: liveSub })), "working")
+  assert.equal(sessionIndicatorKind(thread({ ...base, stopHook: hook, awaitingBackground: true, bgShells: liveShell })), "background")
+  assert.equal(sessionIndicatorKind(thread({ ...base, stopHook: hook, needsYou: true, pendingQuestion: true })), "needs-input")
 })
 
 // THE INVARIANT, stated once and checked over every shape the rail can produce (maintainer 2026-08-01:

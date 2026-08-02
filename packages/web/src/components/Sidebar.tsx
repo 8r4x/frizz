@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
-import { Check, ChevronRight, CircleDashed, CircleStop, Clock, Ellipsis, FileText, Github, Hourglass, Loader2, RotateCcw, Timer } from "lucide-react"
+import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, FileText, Github, Hourglass, Loader2, RotateCcw, Timer } from "lucide-react"
 import type { AwaitingHint, BoardSnapshot, PlanView, ThreadView } from "@fray-ui/shared"
 import { store, openThread, scrollToQueueCard, pushSubAgentDrawer, pushPlanDrawer, QUEUE_CARD_VIEWPORT_TOP, type ConnectionState } from "../store.ts"
 import { useBoard, asThreads } from "../hooks.ts"
@@ -621,34 +621,6 @@ function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string |
   // running — so the box stops tracing and the row simply stays alive in the running band. Same blue and
   // same pulse as the transcript's live-shell dot, sized to this box (styles.css .fray-rail-dot), so
   // both surfaces say "a shell is alive behind this" in one language.
-  // The ONE colored glyph on this rail, and deliberately so: an armed stop hook is the only mark here
-  // that says fray itself will act on this thread without the operator doing anything, so it reads as
-  // its own thing rather than another shade of "resting". Amber, matching the footer control it
-  // reports (StopHookControl) — one colour for one fact across both surfaces.
-  if (kind === "stop-hook") {
-    return {
-      node: (
-        <StatusBox>
-          {/* SIZE 9, not 10. That reasoning is about the BOX rather than the glyph, so it carried over
-              from this mark's predecessor unchanged: the box's CONTENT width is 13px, so a 10px glyph
-              centres onto a HALF pixel and the rasteriser pushes its ink 0.5px right and 0.5px down,
-              while 9 in 13 is a whole 2px each side (the shipped Check still has the 10px tell).
-              CircleStop is a different SHAPE from the heart it replaced, so its two family numbers were
-              re-measured rather than inherited — scripts/verify-rail-status-glyphs.mjs, 2026-08-02:
-              extent 0.55 of the box, exactly the ellipsis and the hourglass and well inside MAX_EXTENT
-              0.62, and it centres identically to the shipped dot, the hourglass and the spinner. At
-              11.89% coverage it IS the heaviest mark in the column, which is the point of the one
-              deliberately-coloured glyph and is a hair over the 11.3% the heart measured at this size. */}
-          <CircleStop
-            size={9}
-            className="text-amber-400"
-            data-running-indicator="thread-stop-hook"
-          />
-        </StatusBox>
-      ),
-      tip: "Stop hook armed — fray re-prompts this thread every time it stops",
-    }
-  }
   if (kind === "background") {
     return {
       node: <StatusBox><span aria-hidden className="fray-rail-dot" data-running-indicator="thread-background" /></StatusBox>,

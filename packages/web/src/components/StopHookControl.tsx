@@ -94,10 +94,12 @@ export function StopHookControl({ thread }: { thread: ThreadView }) {
             aria-label="Stop hook"
             className="flex items-center rounded-md px-0.5 py-0.5 outline-none"
           >
-            {/* The square-in-a-circle. Colored ONLY while it is actually bumping — the footer's left
-                cluster is a status strip first, so an idle control there has to read as quiet as the
-                slot it would otherwise leave empty. The same amber the rail's own mark uses, so one
-                colour carries this one fact across both surfaces. */}
+            {/* The square-in-a-circle, and the ONLY surface that says a stop hook exists (the rail
+                deliberately carries no mark for one — see groups.ts). GREY by default and coloured only
+                while the hook is actually armed and enabled: the footer's left cluster is a status strip
+                first, so a control with nothing to report has to read as quiet as the empty slot it
+                would otherwise leave. Amber, not the app's accent yellow, so it reads as a state rather
+                than as the focus motif. */}
             <CircleStop size={12} className={live ? "text-amber-400/90" : "text-muted/45 hover:text-muted"} />
           </button>
         </PopoverTrigger>
