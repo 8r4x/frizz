@@ -272,31 +272,32 @@ export const CHROME_DEVTOOLS_MCP = {
 //
 // ── BASH_DEFAULT_TIMEOUT_MS ────────────────────────────────────────────────────────────────────
 // How long a FOREGROUND Bash call runs before Claude Code moves it to the background. Claude Code's
-// default is 120_000 (2 min) with a ceiling of 600_000 (10 min); we take the ceiling, which the
-// maintainer chose on 2026-08-01 over leaving the default.
+// default is 120_000 (2 min) with a ceiling of 600_000 (10 min); we sit BELOW both at 60_000, which
+// the maintainer chose on 2026-08-01 — reversing the same-day call to take the ceiling.
 //
-// WHY: a worker's gates are the long commands. This repo's own `nub run test` takes ~5 min, so at the
-// 2-minute default EVERY full-suite run is bounced to the background and the worker spends a poll
-// cycle recovering a result it was going to block on anyway. The cost is real but bounded — the turn
-// is blocked for up to 10 minutes on a command the worker had nothing to do behind.
+// WHY: the earlier reasoning optimized for the long gate (`nub run test` is ~5 min) and paid for it
+// with a turn that can sit blocked for ten minutes on one call. A blocked turn is the worse failure:
+// the worker is doing nothing recoverable, the board shows a card that cannot be steered, and the
+// operator cannot tell a slow gate from a wedged one. Bouncing at a minute costs a poll cycle to
+// recover the result and keeps the turn moving in the meantime.
+//
+// The ceiling is untouched — BASH_MAX_TIMEOUT_MS defaults to max(600_000, this), so it stays
+// 600_000 and a worker that genuinely wants to block through a long gate still can by passing an
+// explicit `timeout`. The Bash tool's own description interpolates both (`` `timeout` is in
+// milliseconds: default ${...}, max ${...}``), so the worker is told this number, not a stale one.
 //
 // This does NOT relax the escaping-background-job rule that hooks/bash-background.mjs enforces. That
 // hook is about lifecycle identity (`cmd &` leaves a child fray and Claude cannot wake on); this is
 // only about how long a tracked foreground call is allowed to take before the harness backgrounds it
 // ITSELF, which keeps the task id and the wake. The two are independent.
 //
-// The Bash tool's own description interpolates this (`` `timeout` is in milliseconds: default
-// ${...}, max ${...}``), so the worker is told the raised number rather than a stale 120000. The
-// ceiling is left alone: BASH_MAX_TIMEOUT_MS defaults to max(600_000, this), so it stays 600_000.
-//
-// Verified on a real dispatched worker (promoted artifact): `sleep 150 && echo LONGRUN-OK`, no
-// explicit timeout, no run_in_background — output came back IN the turn. The control is a worker
-// spawned before this change, which the harness bounced at 120s. Note that neither the `claude -p`
-// nor the raw-SDK harness reproduces that bounce, so do not "verify" this one from a stand-in; see
-// the NOT ASSERTED note in _live_sdk_worker_env.mts.
+// Do not "verify" this value from a stand-in harness: neither `claude -p` nor a raw SDK session
+// reproduces the auto-background bounce that real dispatched workers get, so a behavioral check
+// there passes identically with and without the variable. See the NOT ASSERTED note in
+// _live_sdk_worker_env.mts.
 export const CLAUDE_WORKER_ENV = {
   CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "infinite",
-  BASH_DEFAULT_TIMEOUT_MS: "600000",
+  BASH_DEFAULT_TIMEOUT_MS: "60000",
 } as const
 
 // Tools a TMUX worker never gets — the argv turns this into `--disallowedTools=…`.
