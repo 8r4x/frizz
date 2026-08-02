@@ -3,7 +3,7 @@
 // The rail is a checkbox family: every thread state is the SAME rounded-rect box (StatusBox, 15px) with
 // a different mark inside. Four such marks already shipped — the ellipsis, the check, the "?" and the
 // "!" — and 2026-08-01 added a fifth, the pulsing blue dot for "at rest, but work it launched is still
-// running" (a sixth, the heartbeat's pink heart, joined 2026-08-02 — nothing had ever measured it, and it
+// running" (a sixth, the stop hook's amber square-in-circle, joined 2026-08-02 — nothing had ever measured it, and it
 // was both the widest and half again the heaviest mark in the column). A dot is the one mark that can
 // silently wreck that column: a SOLID disc is far heavier per unit of diameter than an outlined glyph, so
 // a dot sized to look right in isolation reads as the loudest thing in the rail.
@@ -53,11 +53,11 @@ const UNGATED = new Set(["working"])
 // entire spinner outline at 22.96%. It was the loudest thing in the rail. 0.31 with no halo puts it at
 // 9.00%, just under the hourglass.
 const UNDER_TEST = "background"
-// THE HALF-PIXEL TRAP, measured 2026-08-02 and the reason the heartbeat heart looked off-centre. StatusBox
+// THE HALF-PIXEL TRAP, measured 2026-08-02 and the reason the rail's coloured glyph looked off-centre. StatusBox
 // is 15px with a 1px border and border-box sizing, so its CONTENT is 13px — an ODD number. Centring an
 // EVEN-sized glyph in it leaves 1.5px a side, the glyph starts on a half pixel, and the rasteriser pushes
 // its ink half a pixel right and down. That is not noise: on a 15px mark it is the whole complaint the
-// maintainer raised ("the heartbeat icon is not optically centered"), and no geometry reading shows it —
+// maintainer raised ("the heartbeat icon is not optically centered", of the mark this one replaced), and no geometry reading shows it —
 // getBoundingClientRect on the SVG's paths reports a dead-centred mark either way. An odd size lands on
 // the grid and measures centred, which is why every mark here is 9 or 11 and none is 10.
 // EXEMPT: `done`/`archived` wear the Check at 10 and have shipped that way for months, carrying the same

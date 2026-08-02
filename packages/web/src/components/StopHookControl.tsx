@@ -1,25 +1,26 @@
 import { useEffect, useRef, useState } from "react"
 import { CircleStop } from "lucide-react"
-import { STANDING_PROMPT_MAX, STANDING_PROMPT_SENTINEL, type ThreadView } from "@fray-ui/shared"
+import { STOP_HOOK_MAX, STOP_HOOK_SENTINEL, type ThreadView } from "@fray-ui/shared"
 import { rpc } from "../api/rpc.ts"
 import { formatAgo } from "../lib/durationLabels.ts"
 import { showToast } from "../store.ts"
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 
-// The operator's half of a standing prompt (server: scheduler.ts SOURCE 5) — text fray re-sends every
+// The operator's half of a stop hook (server: scheduler.ts SOURCE 5) — text fray re-sends every
 // time this thread comes to REST, until the worker answers with the ALLDONE sentinel.
 //
-// It sits in the footer slot the HeartbeatControl uses, and it is the affordance that slot was missing:
-// the heartbeat can only ever be armed by the WORKER, from inside the session, so an operator watching
-// a thread stop short had no way to say "keep going" other than typing the same follow-up by hand every
-// time. Rest — not an interval — is the trigger, because rest is the event they actually mean; there is
-// no cadence to choose and nothing to get wrong.
+// It replaced an interval-based, WORKER-armed version of the same idea (removed 2026-08-02), and both
+// halves of that were wrong. The operator watching a thread stop short could not arm it at all — only
+// the worker could, from inside the session — so their only move was retyping the same follow-up by
+// hand every time. And the interval was a number nobody could pick: rest is the event they actually
+// mean, so rest is the trigger, and there is no cadence here to get wrong.
 //
-// Unlike the heartbeat this renders ALWAYS, muted when nothing is armed. A control that only appears
-// once its own feature is on cannot be used to turn the feature on.
-export function StandingPromptControl({ thread }: { thread: ThreadView }) {
-  const armed = thread.standingPrompt
+// It renders ALWAYS, muted when nothing is armed — a control that only appears once its own feature is
+// on cannot be used to turn the feature on. That makes it the one permanent child of the footer's
+// left cluster, where everything else is a reading that hides itself when it has nothing to say.
+export function StopHookControl({ thread }: { thread: ThreadView }) {
+  const armed = thread.stopHook
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   // The popover's own draft. Seeded from the server row each time it opens rather than tracked live, so
@@ -53,16 +54,16 @@ export function StandingPromptControl({ thread }: { thread: ThreadView }) {
     }
     setBusy(true)
     try {
-      await rpc.setThreadStandingPrompt({
+      await rpc.setThreadStopHook({
         slug: thread.id,
         sessionId: thread.sessionId ?? "",
         prompt,
         enabled: nextEnabled,
       })
       sent.current = { enabled: nextEnabled, prompt: prompt ?? "" }
-      showToast(prompt === null ? "Standing prompt cleared" : nextEnabled ? "Standing prompt on" : "Standing prompt off")
+      showToast(prompt === null ? "Stop hook cleared" : nextEnabled ? "Stop hook on" : "Stop hook off")
     } catch (error) {
-      showToast((error instanceof Error ? error.message : "Could not save the standing prompt").slice(0, 100))
+      showToast((error instanceof Error ? error.message : "Could not save the stop hook").slice(0, 100))
     } finally {
       setBusy(false)
     }
@@ -77,10 +78,10 @@ export function StandingPromptControl({ thread }: { thread: ThreadView }) {
 
   const live = !!armed?.enabled
   const label = live
-    ? `Standing prompt — re-sent at every rest\n${armed!.prompt.trim()}`
+    ? `Stop hook — re-sent at every rest\n${armed!.prompt.trim()}`
     : armed
-      ? `Standing prompt (off)\n${armed.prompt.trim()}`
-      : "Standing prompt — bump this thread at every rest"
+      ? `Stop hook (off)\n${armed.prompt.trim()}`
+      : "Stop hook — bump this thread at every rest"
 
   return (
     <Popover open={open} onOpenChange={(next) => { setOpen(next); if (!next) void persist(enabled, text) }}>
@@ -88,9 +89,9 @@ export function StandingPromptControl({ thread }: { thread: ThreadView }) {
         <PopoverTrigger asChild>
           <button
             type="button"
-            data-standing-prompt
-            data-standing-prompt-on={live ? "true" : "false"}
-            aria-label="Standing prompt"
+            data-stop-hook
+            data-stop-hook-on={live ? "true" : "false"}
+            aria-label="Stop hook"
             className="flex items-center rounded-md px-0.5 py-0.5 outline-none"
           >
             {/* The square-in-a-circle. Colored ONLY while it is actually bumping — the footer's left
@@ -115,17 +116,17 @@ export function StandingPromptControl({ thread }: { thread: ThreadView }) {
         }}
       >
         <div className="mb-2 flex items-center justify-between gap-3">
-          <span className="font-medium">Standing prompt</span>
+          <span className="font-medium">Stop hook</span>
           <OnOffToggle value={enabled} disabled={busy} onChange={toggle} />
         </div>
         {/* readOnly, not disabled, when off: the text is the operator's own writing and stays readable
             and selectable while parked. Only the ability to CHANGE it tracks the toggle. */}
         <textarea
           ref={textarea}
-          data-standing-prompt-text
+          data-stop-hook-text
           value={text}
           readOnly={!enabled}
-          maxLength={STANDING_PROMPT_MAX}
+          maxLength={STOP_HOOK_MAX}
           onChange={(e) => setText(e.target.value)}
           onBlur={() => void persist(enabled, text)}
           onKeyDown={(e) => {
@@ -144,7 +145,7 @@ export function StandingPromptControl({ thread }: { thread: ThreadView }) {
             explanation. Weight and family carry the "this is a literal string" job on their own. */}
         <p className="mt-2 text-muted/70">
           Sent every time the agent comes to rest. It stops when the agent replies{" "}
-          <code className="font-mono font-medium text-fg/85">{STANDING_PROMPT_SENTINEL}</code>.
+          <code className="font-mono font-medium text-fg/85">{STOP_HOOK_SENTINEL}</code>.
         </p>
         {armed?.lastFiredAt && (
           <p className="mt-1 text-muted/55">Last sent {formatAgo(armed.lastFiredAt)}</p>
@@ -160,14 +161,14 @@ export function StandingPromptControl({ thread }: { thread: ThreadView }) {
 // Sized down from the settings copy because it shares a row with an 11px heading, not a form label.
 function OnOffToggle({ value, disabled, onChange }: { value: boolean; disabled?: boolean; onChange: (v: boolean) => void }) {
   return (
-    <div className="inline-flex w-fit shrink-0 rounded-md border border-border bg-bg p-0.5" role="group" aria-label="Standing prompt enabled">
+    <div className="inline-flex w-fit shrink-0 rounded-md border border-border bg-bg p-0.5" role="group" aria-label="Stop hook enabled">
       {[{ v: false, label: "Off" }, { v: true, label: "On" }].map((o) => (
         <button
           key={o.label}
           type="button"
           disabled={disabled}
           aria-pressed={value === o.v}
-          data-standing-prompt-toggle={o.label.toLowerCase()}
+          data-stop-hook-toggle={o.label.toLowerCase()}
           onClick={() => onChange(o.v)}
           className={`rounded px-2 py-0.5 text-[11px] outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-45 ${
             value === o.v ? "bg-fg text-bg" : "text-muted hover:text-fg"

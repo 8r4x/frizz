@@ -541,10 +541,13 @@ export function claudeMcpConfig(mcp?: FrayMcp): ClaudeMcpConfig {
     // "node": Claude spawns the MCP-server process itself, and a worker's PATH varies by launch context
     // (a GUI-launched tmux, a login-shell difference) — if `node` isn't on it, the MCP server never
     // starts and the tool silently never appears in the worker. An absolute path removes that dependency.
-    // FRAY_THREAD_SLUG is what lets a tool act on the CALLING thread (`heartbeat` arms a wake for
-    // itself). The MCP server is spawned per worker, so its env is the only channel through which it
-    // can know which thread it belongs to — nothing in the MCP protocol carries a caller identity.
-    // A resume keeps the same slug, so this stays correct across the whole life of the thread.
+    // FRAY_THREAD_SLUG is the MCP server's CALLER IDENTITY — the channel through which a tool could act
+    // on its own thread. The MCP server is spawned per worker and nothing in the MCP protocol carries a
+    // caller identity, so its env is the only place this can come from; a resume keeps the same slug, so
+    // it stays correct for the whole life of the thread. No SHIPPED tool reads it today (the one that
+    // did, a worker-armed heartbeat, was removed 2026-08-02 in favour of the operator's stop hook, which
+    // the board arms directly). Kept because it costs one line and is the whole prerequisite for any
+    // future thread-scoped tool.
     const env: Record<string, string> = { FRAY_STATE_DIR: mcp.stateDir }
     if (mcp.slug) env.FRAY_THREAD_SLUG = mcp.slug
     mcpServers[FRAY_MCP.name] = { command: process.execPath, args: [mcp.scriptPath], env }

@@ -357,80 +357,54 @@ export const SNOOZE_PROMPT_MAX = 4000
 export const SnoozePrompt = z.string().trim().min(1).max(SNOOZE_PROMPT_MAX)
 export type SnoozePrompt = z.infer<typeof SnoozePrompt>
 
-// A worker's own RECURRING wake. Delivered like a snooze bump — verbatim, as an ordinary user turn —
-// so it shares that cap. The floor is one minute because a beat only ever lands at the thread's next
-// REST: anything faster cannot deliver faster, it just churns the outbox. The ceiling keeps a
-// forgotten heartbeat from looking like a dead one.
-export const HEARTBEAT_PROMPT_MAX = SNOOZE_PROMPT_MAX
-export const HEARTBEAT_MIN_INTERVAL_SECONDS = 60
-export const HEARTBEAT_MAX_INTERVAL_SECONDS = 24 * 60 * 60
-export const HeartbeatPrompt = z.string().trim().min(1).max(HEARTBEAT_PROMPT_MAX)
-export const HeartbeatIntervalSeconds = z
-  .number()
-  .int()
-  .min(HEARTBEAT_MIN_INTERVAL_SECONDS)
-  .max(HEARTBEAT_MAX_INTERVAL_SECONDS)
-
-// What the board renders for a thread carrying one. `paused` keeps the settings but stops the beat,
-// which is why the rail can offer play/pause rather than making the worker re-register.
-export const ThreadHeartbeat = z.object({
-  intervalSeconds: z.number().int().positive(),
-  prompt: z.string(),
-  paused: z.boolean(),
-  armedAt: z.string(),
-  lastFiredAt: z.string().optional(),
-}).strict()
-export type ThreadHeartbeat = z.infer<typeof ThreadHeartbeat>
-
-// ---- The operator's standing prompt (scheduler SOURCE 5) ----------------------------------------
-// The heartbeat's sibling, and the one an OPERATOR arms from the board: text that is re-delivered
-// every time the thread comes to REST, rather than every N seconds. The two differ in exactly the way
-// their triggers do — a heartbeat asks "has an interval elapsed?", a standing prompt asks "has this
-// agent stopped?" — which is why a standing prompt needs no interval at all.
+// ---- The operator's stop hook (scheduler SOURCE 5) -----------------------------------------------
+// Text an operator writes in the thread footer, re-delivered every time that thread STOPS. Named for
+// the hook it behaves like: fray catches the worker coming to rest and hands it this. There is no
+// interval and no cadence to choose — the trigger is the stop itself.
 //
 // It ends when the WORKER says it ends: a rest message carrying the sentinel below means "nothing here
 // is actionable", and fray stops re-sending until something new happens. That handshake is the whole
 // design — an operator instruction that loops forever with no way for the agent to close it out is a
 // denial of service with a nice popover.
-export const STANDING_PROMPT_MAX = SNOOZE_PROMPT_MAX
-export const StandingPrompt = z.string().trim().min(1).max(STANDING_PROMPT_MAX)
-export type StandingPrompt = z.infer<typeof StandingPrompt>
+export const STOP_HOOK_MAX = SNOOZE_PROMPT_MAX
+export const StopHookPrompt = z.string().trim().min(1).max(STOP_HOOK_MAX)
+export type StopHookPrompt = z.infer<typeof StopHookPrompt>
 
 /** The worker's "nothing actionable here" reply. Recognized only as its OWN line (see
  * `saysAllDone`), so a worker explaining the protocol in prose never accidentally closes the loop. */
-export const STANDING_PROMPT_SENTINEL = "ALLDONE"
+export const STOP_HOOK_SENTINEL = "ALLDONE"
 
-/** Does this assistant text close the standing-prompt loop? True iff some line, stripped of markdown
+/** Does this assistant text close the stop-hook loop? True iff some line, stripped of markdown
  * emphasis/backticks and trailing punctuation, IS the sentinel. Deliberately strict: the cost of a
- * false positive is a silent standing prompt, and the cost of a false negative is one more bump. */
+ * false positive is a silent stop hook, and the cost of a false negative is one more bump. */
 export function saysAllDone(text: string | undefined): boolean {
   if (typeof text !== "string") return false
   for (const line of text.split(/\r?\n/)) {
     const bare = line.trim().replace(/^[*_`>\s-]+/, "").replace(/[*_`.!\s]+$/, "")
-    if (bare === STANDING_PROMPT_SENTINEL) return true
+    if (bare === STOP_HOOK_SENTINEL) return true
   }
   return false
 }
 
-/** What fray actually delivers for a standing prompt: the operator's words VERBATIM first, then the
+/** What fray actually delivers for a stop hook: the operator's words VERBATIM first, then the
  * one paragraph that teaches the loop. The trailer is not optional decoration — the operator wrote an
  * instruction, not a protocol, so without this the worker has no way to learn that repeating itself is
  * expected or that it holds the off switch. Kept beside the sentinel so the text and the parser that
  * closes on it can never drift apart. */
-export function standingPromptMessage(prompt: string): string {
-  return `${prompt.trim()}\n\n(Standing prompt — fray re-sends this every time you come to rest. When nothing in it is actionable any more, put ${STANDING_PROMPT_SENTINEL} on its own line in your reply and fray will stop re-sending it.)`
+export function stopHookMessage(prompt: string): string {
+  return `${prompt.trim()}\n\n(Stop hook — fray re-sends this every time you come to rest. When nothing in it is actionable any more, put ${STOP_HOOK_SENTINEL} on its own line in your reply and fray will stop re-sending it.)`
 }
 
 // What the board renders for a thread carrying one. `enabled` is the operator's toggle: disabling
-// KEEPS the text (so re-enabling does not make them retype it) and stops the bumps, exactly as the
-// heartbeat's `paused` does.
-export const ThreadStandingPrompt = z.object({
+// KEEPS the text (so re-enabling does not make them retype it) and stops the bumps, which is what lets
+// the footer's toggle be non-destructive.
+export const ThreadStopHook = z.object({
   prompt: z.string(),
   enabled: z.boolean(),
   armedAt: z.string(),
   lastFiredAt: z.string().optional(),
 }).strict()
-export type ThreadStandingPrompt = z.infer<typeof ThreadStandingPrompt>
+export type ThreadStopHook = z.infer<typeof ThreadStopHook>
 
 // The signal fence on a thread's FINAL assistant message — the fence language IS the state, the
 // body is the message. `done` = checked success card in the queue until the human Archives it (the
@@ -587,12 +561,9 @@ export const ThreadView = z.object({
   // reload its plugin closure in place, so the board needs it to decide whether to offer that verb at
   // all rather than render a button that throws.
   claudeRuntime: z.enum(["tmux", "broker"]).optional(),
-  // The worker's own recurring wake, when it has armed one. Present ⇒ the rail shows the heartbeat
-  // indicator and its pause/play control; `paused` picks which of the two the control offers.
-  heartbeat: ThreadHeartbeat.optional(),
-  // The operator's own standing prompt, when they have written one. Present with `enabled` false ⇒ the
+  // The operator's own stop hook, when they have written one. Present with `enabled` false ⇒ the
   // text is kept but no bump fires, which is what lets the footer's toggle be non-destructive.
-  standingPrompt: ThreadStandingPrompt.optional(),
+  stopHook: ThreadStopHook.optional(),
   // The signal fence on the final assistant message, present only while the thread is excused by it.
   lastFence: ThreadFence.optional(),
   // SERVER-DERIVED queue membership: explicit questions, checked/done handoffs, plus the process-level
@@ -1007,41 +978,20 @@ export const SetThreadSnoozeInput = z.object({
 }).strict()
 export type SetThreadSnoozeInput = z.infer<typeof SetThreadSnoozeInput>
 
-// The worker arms/stops its own heartbeat through this (via `mcp__fray__heartbeat`, which POSTs the
-// same `/rpc/*` surface the board uses). `prompt: null` is the explicit stop; a prompt requires an
-// interval. Deliberately NOT session-guarded on the way in: the MCP server is spawned with its
-// thread's slug at dispatch and a resume keeps that slug, while the generation bumps under it — a
-// guard here would break exactly the long-lived thread this exists for.
-export const SetThreadHeartbeatInput = z.object({
-  slug: ThreadSlug,
-  prompt: HeartbeatPrompt.nullable(),
-  intervalSeconds: HeartbeatIntervalSeconds.optional(),
-}).strict()
-export type SetThreadHeartbeatInput = z.infer<typeof SetThreadHeartbeatInput>
-
-// The rail's pause/play. Session-guarded (unlike arming) because this one comes from a browser tab
-// that may be looking at a thread which has since been re-dispatched.
-export const SetThreadHeartbeatPausedInput = z.object({
-  slug: ThreadSlug,
-  sessionId: z.string().min(1),
-  paused: z.boolean(),
-}).strict()
-export type SetThreadHeartbeatPausedInput = z.infer<typeof SetThreadHeartbeatPausedInput>
-
-// The footer's standing-prompt popover, arming and disarming in ONE call — the toggle and the textarea
+// The footer's stop-hook popover, arming and disarming in ONE call — the toggle and the textarea
 // are two views of one row, and splitting them into two mutations would let a tab that has only one of
 // them clobber the other. Session-guarded like the pause above: it comes from a browser tab that may be
 // looking at a thread which has since been re-dispatched.
 //
 // `prompt: null` clears the row entirely (the popover's own "clear"); a prompt with `enabled: false`
 // keeps the text parked and silent.
-export const SetThreadStandingPromptInput = z.object({
+export const SetThreadStopHookInput = z.object({
   slug: ThreadSlug,
   sessionId: z.string().min(1),
-  prompt: StandingPrompt.nullable(),
+  prompt: StopHookPrompt.nullable(),
   enabled: z.boolean(),
 }).strict()
-export type SetThreadStandingPromptInput = z.infer<typeof SetThreadStandingPromptInput>
+export type SetThreadStopHookInput = z.infer<typeof SetThreadStopHookInput>
 
 // What an in-place plugin reload changed, as the board reports it. Counts answer "did my edit land?";
 // `mcpServers` carries NAMES because a reload that changes MCP tools is the one with a real cost — the

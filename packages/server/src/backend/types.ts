@@ -101,7 +101,7 @@ export interface NormalizedTail {
   lastUserText?: string // latest genuine human message (used to confirm wake-token delivery)
   lastFence?: FenceView // parsed by the shared fence grammar from the final message
   pendingQuestion: boolean
-  // The final message carries the ALLDONE sentinel — the worker's answer to a standing prompt when
+  // The final message carries the ALLDONE sentinel — the worker's answer to a stop hook when
   // nothing in it is actionable. Optional (absent ⇒ false) because it is an additive observation, not
   // a new required fact about a session; see scheduler.ts SOURCE 5.
   lastAssistantAllDone?: boolean
@@ -154,7 +154,7 @@ export interface FoldState {
   lastUserText?: string // exact text of that genuine human turn when the backend records it
   lastFence?: FenceView // done/awaiting excusal fence on the final message (cleared by any user turn)
   lastAssistantHasQuestion: boolean // the final message carries an unanswered ```question fence
-  // The final message answers a standing prompt with ALLDONE (scheduler.ts SOURCE 5). Folded and
+  // The final message answers a stop hook with ALLDONE (scheduler.ts SOURCE 5). Folded and
   // cleared on exactly the same lifecycle as the question flag above: set per assistant text, wiped by
   // any user record — so the next bump the operator sends re-opens the loop by itself.
   lastAssistantAllDone: boolean
@@ -219,10 +219,11 @@ export const FRAY_MCP = {
 export interface FrayMcp {
   scriptPath: string
   stateDir: string
-  // The thread this MCP server belongs to, passed through as FRAY_THREAD_SLUG so a tool can act on
-  // its OWN thread (`heartbeat`). Nothing in the MCP protocol identifies the caller, and the server is
-  // spawned per worker, so its env is the only channel for this. Optional because `spawn_thread` —
-  // the only tool that predates it — does not need to know who called it.
+  // The thread this MCP server belongs to, passed through as FRAY_THREAD_SLUG so a tool CAN act on its
+  // OWN thread. Nothing in the MCP protocol identifies the caller, and the server is spawned per worker,
+  // so its env is the only channel for this. Optional, and currently read by no shipped tool:
+  // `spawn_thread` does not need to know who called it, and the one that did — a worker-armed heartbeat
+  // — was removed 2026-08-02 in favour of the operator's stop hook. See dispatch.ts for why it stays.
   slug?: string
 }
 

@@ -288,10 +288,10 @@ with `wait` until it reports terminal completion (or terminate it deliberately).
 one, register a scratchpad `stop_hook` reminder to collect it; remove that field after the terminal
 result. The Stop hook makes forgetting visible without pretending the cell can wake a rested turn.
 
-Never implement a heartbeat as a shell `sleep` loop. Shell output cannot create a new Codex turn, so
-an unattended loop is not a wake mechanism. When a later wall-clock check genuinely belongs after a
+Never implement a recurring wake as a shell `sleep` loop. Shell output cannot create a new Codex turn,
+so an unattended loop is not a wake mechanism. When a later wall-clock check genuinely belongs after a
 rest, emit an `awaiting` fence with `timer: <ISO-8601 instant>`; Fray's durable scheduler starts the
-new turn at that instant. The timer is one-shot; do not turn it into a recurring heartbeat.
+new turn at that instant. The timer is one-shot; do not try to make it recur.
 
 ## Your model and reasoning effort
 

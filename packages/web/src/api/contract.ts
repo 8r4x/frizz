@@ -31,9 +31,7 @@ import type {
   ThreadProfileOptionsResult,
   SetThreadProfileInput,
   SetThreadProfileResult,
-  SetThreadHeartbeatInput,
-  SetThreadHeartbeatPausedInput,
-  SetThreadStandingPromptInput,
+  SetThreadStopHookInput,
   ThreadPluginReloadResult,
   SetThreadSnoozeInput,
   TranscriptMessage,
@@ -127,12 +125,9 @@ export interface Api {
   // than completing whatever now owns the slug.
   completeThread(input: { slug: string; sessionId: string; terminateLive?: boolean }): Promise<{ needsConfirmation: boolean; hold?: CompletionHold }>
   setThreadSnooze(input: SetThreadSnoozeInput): Promise<void>
-  // The worker arms these itself through `mcp__fray__heartbeat`; the board only pauses and resumes.
-  setThreadHeartbeat(input: SetThreadHeartbeatInput): Promise<void>
-  setThreadHeartbeatPaused(input: SetThreadHeartbeatPausedInput): Promise<void>
   // The OPERATOR's counterpart, armed entirely from the footer: text re-delivered at every rest until
   // the worker answers ALLDONE. Toggle and text travel together — they are one row.
-  setThreadStandingPrompt(input: SetThreadStandingPromptInput): Promise<void>
+  setThreadStopHook(input: SetThreadStopHookInput): Promise<void>
   // In-place plugin reload for a broker-backed Claude thread — the alternative to a hard restart.
   reloadThreadPlugins(input: { slug: string; sessionId: string }): Promise<ThreadPluginReloadResult>
   // Event-snooze the awaiting-background card: hide it until the thread's own background work returns
@@ -233,9 +228,7 @@ export const PROCEDURES = {
   setThreadState: "mutation",
   completeThread: "mutation",
   setThreadSnooze: "mutation",
-  setThreadHeartbeat: "mutation",
-  setThreadHeartbeatPaused: "mutation",
-  setThreadStandingPrompt: "mutation",
+  setThreadStopHook: "mutation",
   reloadThreadPlugins: "mutation",
   snoozeAwaitingBackground: "mutation",
   confirmAwaiting: "mutation",

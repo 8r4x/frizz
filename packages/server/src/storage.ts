@@ -58,30 +58,16 @@ export interface SessionRow {
   // came to a new rest because a sub-agent/shell returned. NULL = no event-snooze armed. Distinct from
   // snoozed_until (a wall-clock park owned by the scheduler); this one clears itself on the next rest.
   bg_snooze_rested_at?: string | null
-  // The worker's own recurring wake (scheduler.ts SOURCE 4), armed through `mcp__fray__heartbeat`.
-  // All five move together: a heartbeat is armed iff prompt AND interval AND armed_at are all set.
-  // `heartbeat_armed_at` is the GENERATION — re-arming mints a new one so a beat already in the outbox
-  // for the previous settings reads as superseded instead of delivering stale text.
-  heartbeat_prompt?: string | null
-  heartbeat_interval_ms?: number | null
-  // 1 = the human pressed pause on the rail. The row stays armed (so play resumes the same heartbeat
-  // with its settings intact) but no new beat is queued and any queued beat is dropped.
-  heartbeat_paused?: number
-  heartbeat_armed_at?: string | null
-  // When the last beat reached a terminal delivery. The next beat is due interval_ms after THIS, not
-  // after the beat was queued, so a thread that stayed busy for an hour gets one catch-up beat at its
-  // next rest rather than an hour's backlog.
-  heartbeat_last_fired_at?: string | null
-  // The OPERATOR's standing prompt (scheduler.ts SOURCE 5), armed from the thread footer. Same shape as
-  // the heartbeat above, minus the interval — its trigger is the thread coming to REST, not a clock.
-  // `standing_prompt_armed_at` is likewise the GENERATION, and `standing_prompt_enabled` is the
-  // popover's toggle: 0 keeps the text but fires nothing.
-  standing_prompt?: string | null
-  standing_prompt_enabled?: number
-  standing_prompt_armed_at?: string | null
+  // The OPERATOR's stop hook (scheduler.ts SOURCE 5), armed from the thread footer: text re-delivered
+  // every time this thread comes to REST. `stop_hook_armed_at` is the GENERATION — editing the text
+  // mints a new one so a bump already in the outbox for the old words reads as superseded — and
+  // `stop_hook_enabled` is the popover's toggle: 0 keeps the text but fires nothing.
+  stop_hook?: string | null
+  stop_hook_enabled?: number
+  stop_hook_armed_at?: string | null
   // When the last bump reached a terminal delivery. Read only as a rate FLOOR (see the scheduler's
-  // STANDING_MIN_GAP_MS): a worker that rests instantly on every bump must not spin the outbox.
-  standing_prompt_last_fired_at?: string | null
+  // STOP_HOOK_MIN_GAP_MS): a worker that rests instantly on every bump must not spin the outbox.
+  stop_hook_last_fired_at?: string | null
   // Operator confirmation for one exact final ```awaiting fence generation. The board/scheduler ignore a
   // transcript proposal unless these match its current fence identity.
   awaiting_fence_id?: string | null
@@ -406,21 +392,12 @@ export interface Storage {
   // Arm/clear the awaiting-background event-snooze. Session-guarded like the park above. `restedAt` is
   // the rest instant the card is snoozed FOR; the board re-surfaces it once rested_at moves past this.
   setBgSnoozeRestedAtIfCurrent(slug: string, sessionId: string, generation: number, restedAt: string | null): boolean
-  // Arm (or, with a null prompt, disarm) the worker's recurring wake. Arming always stamps a FRESH
-  // `armed_at` generation and clears the paused bit and the last-fired stamp, so re-arming is a clean
-  // restart rather than an edit that could inherit a stale beat's schedule.
-  setHeartbeat(slug: string, prompt: string | null, intervalMs: number | null, armedAt: string | null): void
-  // The rail's pause/play. Session-guarded so a stale tab cannot pause whatever now owns the slug.
-  setHeartbeatPausedIfCurrent(slug: string, sessionId: string, generation: number, paused: boolean): boolean
-  // Stamp a delivered beat, guarded on the generation so a beat that settles after the worker re-armed
-  // (or stopped) cannot write a schedule onto settings it no longer describes.
-  stampHeartbeatFired(slug: string, armedAt: string, firedAt: string): boolean
-  // Arm/edit/clear the OPERATOR's standing prompt in one write, because the popover's toggle and its
+  // Arm/edit/clear the OPERATOR's stop hook in one write, because the popover's toggle and its
   // textarea are two views of one row. A null prompt clears the row; a new prompt TEXT mints a fresh
   // `armed_at` generation (superseding any bump already queued for the old words) while a pure toggle
   // flip keeps it, so enabling does not re-run a bump the operator just watched land. Session-guarded:
   // this comes from a browser tab that may be looking at a thread which has since been re-dispatched.
-  setStandingPromptIfCurrent(
+  setStopHookIfCurrent(
     slug: string,
     sessionId: string,
     generation: number,
@@ -428,8 +405,9 @@ export interface Storage {
     enabled: boolean,
     armedAt: string,
   ): boolean
-  // Stamp a delivered bump, guarded on the generation for the same reason as the heartbeat's stamp.
-  stampStandingPromptFired(slug: string, armedAt: string, firedAt: string): boolean
+  // Stamp a delivered bump, guarded on the generation so a bump that settles after the operator
+  // edited the text cannot write onto words it no longer describes.
+  stampStopHookFired(slug: string, armedAt: string, firedAt: string): boolean
   // Operator confirmation of ONE exact awaiting fence; fails closed if the session/generation moved.
   confirmAwaitingWait(
     slug: string,
@@ -688,25 +666,13 @@ export function createStorage(dbPath: string): Storage {
     // Claude transport discriminator: NULL/'tmux' = the interactive-TUI path in a tmux pane; 'broker'
     // = a session-broker-owned Agent SDK session (input via the bridge, liveness from it, not a pane).
     "claude_runtime TEXT",
-    // A worker's own RECURRING wake (scheduler.ts SOURCE 4). Armed by the worker through
-    // `mcp__fray__heartbeat`; `heartbeat_prompt` is delivered verbatim every `heartbeat_interval_ms`
-    // at the thread's next rest. Exists because Claude Code's in-session cron CANNOT fire in the
-    // headless/broker runtime fray spawns: its scheduler is gated on an internal "loading" flag that
-    // stays set for as long as ANY background task is outstanding, so precisely the thread that needs
-    // a nudge is the one that never gets one (measured 2026-08-01: 3 fires with no background work,
-    // 0 with a background shell alive). Riding fray's own outbox is immune to all of that.
-    "heartbeat_prompt TEXT",
-    "heartbeat_interval_ms INTEGER",
-    "heartbeat_paused INTEGER NOT NULL DEFAULT 0",
-    "heartbeat_armed_at TEXT",
-    "heartbeat_last_fired_at TEXT",
-    // The OPERATOR's counterpart to the heartbeat (scheduler.ts SOURCE 5). Armed from the thread
+    // The OPERATOR's stop hook (scheduler.ts SOURCE 5). Armed from the thread
     // footer's popover; delivered every time the thread comes to REST until the worker replies with
     // the ALLDONE sentinel. No interval column — "rest" is the trigger.
-    "standing_prompt TEXT",
-    "standing_prompt_enabled INTEGER NOT NULL DEFAULT 0",
-    "standing_prompt_armed_at TEXT",
-    "standing_prompt_last_fired_at TEXT",
+    "stop_hook TEXT",
+    "stop_hook_enabled INTEGER NOT NULL DEFAULT 0",
+    "stop_hook_armed_at TEXT",
+    "stop_hook_last_fired_at TEXT",
   ]) {
     try {
       db.exec(`ALTER TABLE session ADD COLUMN ${col}`)
@@ -1040,44 +1006,28 @@ export function createStorage(dbPath: string): Storage {
     UPDATE session SET bg_snooze_rested_at = ?
     WHERE slug = ? AND session_id = ? AND runtime_generation = ?
   `)
-  // Arming resets the whole heartbeat: new generation, unpaused, no last-fired. Disarming (NULL
-  // prompt) clears all five so `armedHeartbeat` reads it as absent.
-  const heartbeatStmt = db.prepare(`
-    UPDATE session SET
-      heartbeat_prompt = ?, heartbeat_interval_ms = ?, heartbeat_armed_at = ?,
-      heartbeat_paused = 0, heartbeat_last_fired_at = NULL
-    WHERE slug = ?
-  `)
-  const heartbeatPausedIfCurrentStmt = db.prepare(`
-    UPDATE session SET heartbeat_paused = ?
-    WHERE slug = ? AND session_id = ? AND runtime_generation = ? AND heartbeat_armed_at IS NOT NULL
-  `)
-  const heartbeatFiredStmt = db.prepare(`
-    UPDATE session SET heartbeat_last_fired_at = ?
-    WHERE slug = ? AND heartbeat_armed_at = ?
-  `)
   // Every SET expression here reads the ORIGINAL row (SQLite evaluates the whole SET list against the
   // pre-update values), which is what lets one statement decide whether this write is a new arming or
   // an edit of the existing one. The generation — and with it the last-fired stamp — is preserved
   // exactly when the TEXT is unchanged, so toggling off and on again does not supersede a bump already
   // in flight for those same words, while editing the text does.
-  const standingPromptStmt = db.prepare(`
+  const stopHookStmt = db.prepare(`
     UPDATE session SET
-      standing_prompt = ?,
-      standing_prompt_enabled = ?,
-      standing_prompt_armed_at = CASE
+      stop_hook = ?,
+      stop_hook_enabled = ?,
+      stop_hook_armed_at = CASE
         WHEN ? IS NULL THEN NULL
-        WHEN standing_prompt_armed_at IS NOT NULL AND standing_prompt IS ? THEN standing_prompt_armed_at
+        WHEN stop_hook_armed_at IS NOT NULL AND stop_hook IS ? THEN stop_hook_armed_at
         ELSE ? END,
-      standing_prompt_last_fired_at = CASE
+      stop_hook_last_fired_at = CASE
         WHEN ? IS NULL THEN NULL
-        WHEN standing_prompt_armed_at IS NOT NULL AND standing_prompt IS ? THEN standing_prompt_last_fired_at
+        WHEN stop_hook_armed_at IS NOT NULL AND stop_hook IS ? THEN stop_hook_last_fired_at
         ELSE NULL END
     WHERE slug = ? AND session_id = ? AND runtime_generation = ?
   `)
-  const standingPromptFiredStmt = db.prepare(`
-    UPDATE session SET standing_prompt_last_fired_at = ?
-    WHERE slug = ? AND standing_prompt_armed_at = ?
+  const stopHookFiredStmt = db.prepare(`
+    UPDATE session SET stop_hook_last_fired_at = ?
+    WHERE slug = ? AND stop_hook_armed_at = ?
   `)
   const confirmAwaitingWaitStmt = db.prepare(`
     UPDATE session
@@ -1706,24 +1656,16 @@ export function createStorage(dbPath: string): Storage {
       snoozedUntilIfCurrentStmt.run(until, slug, sessionId, generation).changes === 1,
     setBgSnoozeRestedAtIfCurrent: (slug, sessionId, generation, restedAt) =>
       bgSnoozeRestedAtIfCurrentStmt.run(restedAt, slug, sessionId, generation).changes === 1,
-    // Prompt/interval/generation are ONE fact, like the snooze pair above: a heartbeat without all
-    // three is not armed, so disarming passes nulls for all of them rather than clearing one.
-    setHeartbeat: (slug, prompt, intervalMs, armedAt) =>
-      void heartbeatStmt.run(prompt, prompt === null ? null : intervalMs, prompt === null ? null : armedAt, slug),
-    setHeartbeatPausedIfCurrent: (slug, sessionId, generation, paused) =>
-      heartbeatPausedIfCurrentStmt.run(paused ? 1 : 0, slug, sessionId, generation).changes === 1,
-    stampHeartbeatFired: (slug, armedAt, firedAt) =>
-      heartbeatFiredStmt.run(firedAt, slug, armedAt).changes === 1,
-    setStandingPromptIfCurrent: (slug, sessionId, generation, prompt, enabled, armedAt) =>
-      standingPromptStmt.run(
+    setStopHookIfCurrent: (slug, sessionId, generation, prompt, enabled, armedAt) =>
+      stopHookStmt.run(
         prompt,
         prompt === null ? 0 : enabled ? 1 : 0,
         prompt, prompt, armedAt,
         prompt, prompt,
         slug, sessionId, generation,
       ).changes === 1,
-    stampStandingPromptFired: (slug, armedAt, firedAt) =>
-      standingPromptFiredStmt.run(firedAt, slug, armedAt).changes === 1,
+    stampStopHookFired: (slug, armedAt, firedAt) =>
+      stopHookFiredStmt.run(firedAt, slug, armedAt).changes === 1,
     confirmAwaitingWait: (slug, sessionId, generation, fenceId, confirmedAt, snoozedUntil) =>
       confirmAwaitingWaitStmt.run(fenceId, confirmedAt, snoozedUntil, slug, sessionId, generation).changes === 1,
     clearAwaitingWaitIfSession: (slug, sessionId, generation) =>

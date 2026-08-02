@@ -1,8 +1,8 @@
-// LIVE END-TO-END: an operator's standing prompt bumps a REAL resting agent at every rest, and the
+// LIVE END-TO-END: an operator's stop hook bumps a REAL resting agent at every rest, and the
 // agent's own ALLDONE stops it.
-//   nub packages/server/src/backend/_live_standing_prompt.mts
+//   nub packages/server/src/backend/_live_stop_hook.mts
 //
-// This is the proof for the feature, and the THIRD assertion is the one that matters. A standing prompt
+// This is the proof for the feature, and the THIRD assertion is the one that matters. A stop hook
 // with no terminating condition is an infinite bump generator, so what has to be shown is not "fray can
 // re-send text" but the whole handshake: bump at rest → agent works → bump again at the NEXT rest →
 // agent says there is nothing left → fray goes quiet and STAYS quiet.
@@ -11,8 +11,8 @@
 // is where the sentinel is recognized) → real scheduler pass → real broker followUp → real agent turn.
 //
 // WHAT IS SIMULATED, AND WHY THAT IS THE RIGHT LINE. The prompt is armed by writing the session row
-// directly (storage.setStandingPromptIfCurrent) rather than by clicking the footer popover. The click →
-// RPC half is a typed router mutation checked by the rpc-contract drift gate and by standing-prompt
+// directly (storage.setStopHookIfCurrent) rather than by clicking the footer popover. The click →
+// RPC half is a typed router mutation checked by the rpc-contract drift gate and by stop-hook
 // tests; what only a live run can prove is the half below — that a real agent receives the bump at rest,
 // acts on it, receives another at its next rest, and that its own sentinel closes the loop.
 //
@@ -34,8 +34,8 @@ import { cwdSlug, type Project } from "../project.ts"
 import type { AgentBackend } from "./types.ts"
 
 const claudeBin = execFileSync("which", ["claude"], { encoding: "utf8" }).trim()
-const stateDir = mkdtempSync(join(tmpdir(), "standing-state-"))
-const cwd = realpathSync(mkdtempSync(join(tmpdir(), "standing-repo-")))
+const stateDir = mkdtempSync(join(tmpdir(), "stophook-state-"))
+const cwd = realpathSync(mkdtempSync(join(tmpdir(), "stophook-repo-")))
 execFileSync("git", ["init", "-q", cwd])
 const sessionId = randomUUID()
 const workFile = join(cwd, "work.txt")
@@ -73,7 +73,7 @@ tailer = createTailer({
   runtimeTasks: (sid) => ingest.tasks(sid),
 })
 
-const slug = "standing-live"
+const slug = "stophook-live"
 const delivered: string[] = []
 const scheduler = createScheduler({
   storage, tailer,
@@ -84,17 +84,17 @@ const scheduler = createScheduler({
   log: (m) => console.log(`    ${m}`),
 })
 
-// A standing instruction with a REAL exhaustion point, so the sentinel is the agent's own judgement
+// A stop-hook instruction with a REAL exhaustion point, so the sentinel is the agent's own judgement
 // rather than something the probe told it to print on a schedule. Three items, one per bump.
-const STANDING = [
+const STOP_HOOK_TEXT = [
   `There is a checklist at ${join(cwd, "todo.txt")}.`,
   `Do the FIRST unfinished item on it: append that item's line to ${workFile}, then mark it done in the checklist by prefixing its line with DONE.`,
   "Do exactly one item, then stop. If every item is already marked DONE, do nothing at all.",
 ].join(" ")
 
-/** Arm (or re-arm) the standing prompt as of NOW, which also drops the rate-floor stamp. */
+/** Arm (or re-arm) the stop hook as of NOW, which also drops the rate-floor stamp. */
 const arm = (): void => {
-  storage.setStandingPromptIfCurrent(slug, sessionId, 0, STANDING, true, new Date().toISOString())
+  storage.setStopHookIfCurrent(slug, sessionId, 0, STOP_HOOK_TEXT, true, new Date().toISOString())
 }
 /** Drive the real scheduler until it has delivered `want` bumps, or the window closes. */
 const pump = async (want: number, windowMs: number): Promise<void> => {
@@ -190,7 +190,7 @@ try {
   ok("the agent answered ALLDONE once the checklist was exhausted", closed,
     `lastAssistant=${JSON.stringify(tailer.get(slug)?.lastAssistant?.slice(0, 80) ?? "")}`)
 
-  // Re-arm (fresh generation, no rate floor) and pump hard: a standing prompt that keeps firing past
+  // Re-arm (fresh generation, no rate floor) and pump hard: a stop hook that keeps firing past
   // the sentinel is the failure this whole design exists to prevent.
   arm()
   const quietBy = Date.now() + 45_000

@@ -48,7 +48,7 @@ const STATES: { kind: string; t: ThreadView }[] = [
   { kind: "background", t: { ...base, id: "background", runtime: "turn-idle", needsYou: false, awaitingBackground: true, bgShells: [{ label: "nub run dev", startedAt: "2026-08-01T09:02:00.000Z", state: "running" }] } as unknown as ThreadView },
   // No background shell on this one, deliberately: the blue dot outranks the heart since 2026-08-02, so
   // a thread carrying both resolves to `background` and the heart would never render here to be measured.
-  { kind: "heartbeat", t: { ...base, id: "heartbeat", runtime: "turn-idle", needsYou: false, heartbeat: { prompt: "keep going", intervalSeconds: 900, paused: false, armedAt: "2026-08-01T09:01:00.000Z" } } as unknown as ThreadView },
+  { kind: "stop-hook", t: { ...base, id: "stop-hook", runtime: "turn-idle", needsYou: false, stopHook: { prompt: "keep going", enabled: true, armedAt: "2026-08-01T09:01:00.000Z" } } as unknown as ThreadView },
   { kind: "rest", t: { ...base, id: "rest", runtime: "turn-idle", needsYou: true } as unknown as ThreadView },
   { kind: "needs-input", t: { ...base, id: "needs-input", runtime: "turn-idle", needsYou: true, pendingQuestion: true } as unknown as ThreadView },
   { kind: "stalled", t: { ...base, id: "stalled", runtime: "exited", needsYou: true, sessionId: "s" } as unknown as ThreadView },

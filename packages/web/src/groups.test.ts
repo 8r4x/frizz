@@ -200,25 +200,39 @@ test("sessionIndicatorKind: a shell-only rest holds the running band with the do
   assert.equal(sessionIndicatorKind(thread({ ...shellRest, runtime: "exited", needsYou: true })), "stalled")
 })
 
-// THE BLUE DOT OUTRANKS THE PINK HEART — maintainer 2026-08-02, reversing the order the heartbeat mark
+// THE BLUE DOT OUTRANKS THE COLOURED MARK — maintainer 2026-08-02, reversing the order this rail slot
 // shipped with: "this thread has a bunch of background bash scripts running. This should just be using a
-// blue dot. Heartbeat should not take precedence over that." The rail says what a thread is DOING, and a
-// live shell is happening now while a heartbeat is only a schedule (the thread's own footer carries that
-// in full). The heart stays the mark for a thread whose ONLY live fact is the armed beat.
-test("sessionIndicatorKind: a background shell outranks an armed heartbeat", () => {
-  const beat = { intervalSeconds: 900, prompt: "keep going", paused: false, armedAt: "2026-07-10T00:00:00.000Z" }
-  const beating = thread({ kind: "session", state: "open", needsYou: false, runtime: "turn-idle", heartbeat: beat })
-  assert.equal(sessionIndicatorKind(beating), "heartbeat", "nothing else live → the heart is the mark")
+// blue dot. Heartbeat should not take precedence over that." Said of the interval-based predecessor the
+// stop hook replaced, and the reasoning transfers whole: the rail says what a thread is DOING, a live
+// shell is happening now, and an armed hook is only a standing arrangement about what happens next (the
+// thread's own footer carries it in full). The coloured mark stays for a thread whose ONLY live fact is
+// the armed hook.
+test("sessionIndicatorKind: a background shell outranks an armed stop hook", () => {
+  const hook = { prompt: "keep going", enabled: true, armedAt: "2026-07-10T00:00:00.000Z" }
+  const hooked = thread({ kind: "session", state: "open", needsYou: false, runtime: "turn-idle", stopHook: hook })
+  assert.equal(sessionIndicatorKind(hooked), "stop-hook", "nothing else live → the hook is the mark")
 
-  const withShell = thread({ ...beating, awaitingBackground: true, bgShells: liveShell })
+  const withShell = thread({ ...hooked, awaitingBackground: true, bgShells: liveShell })
   assert.equal(sessionIndicatorKind(withShell), "background")
-  // Paused makes no difference: a schedule that is not even armed to fire is weaker still.
-  assert.equal(sessionIndicatorKind(thread({ ...withShell, heartbeat: { ...beat, paused: true } })), "background")
-  // The shell going quiet hands the heart back — the dot was never a permanent demotion.
-  assert.equal(sessionIndicatorKind(thread({ ...withShell, awaitingBackground: false, bgShells: [] })), "heartbeat")
+  // Disabled makes no difference here, and on its own it is not a rail fact at all (see the next test).
+  assert.equal(sessionIndicatorKind(thread({ ...withShell, stopHook: { ...hook, enabled: false } })), "background")
+  // The shell going quiet hands the mark back — the dot was never a permanent demotion.
+  assert.equal(sessionIndicatorKind(thread({ ...withShell, awaitingBackground: false, bgShells: [] })), "stop-hook")
   // Everything ABOVE both still wins: real motion, a human ask, a declared fence.
-  assert.equal(sessionIndicatorKind(thread({ ...beating, subAgents: liveSub })), "working")
+  assert.equal(sessionIndicatorKind(thread({ ...hooked, subAgents: liveSub })), "working")
   assert.equal(sessionIndicatorKind(thread({ ...withShell, needsYou: true, pendingQuestion: true })), "needs-input")
+})
+
+// A DISABLED hook is not a rail fact. The row's mark exists to say fray will act on this thread without
+// the operator doing anything, and a hook toggled off is precisely the case where it will not — the text
+// is kept only so re-enabling does not mean retyping it. Left on the rail it would be a standing claim
+// about a thread nothing is going to touch.
+test("sessionIndicatorKind: a DISABLED stop hook falls through to the at-rest mark", () => {
+  const parked = thread({
+    kind: "session", state: "open", needsYou: false, runtime: "turn-idle",
+    stopHook: { prompt: "keep going", enabled: false, armedAt: "2026-07-10T00:00:00.000Z" },
+  })
+  assert.equal(sessionIndicatorKind(parked), "rest")
 })
 
 // THE INVARIANT, stated once and checked over every shape the rail can produce (maintainer 2026-08-01:

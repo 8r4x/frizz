@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
-import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, FileText, Github, HeartPulse, Hourglass, Loader2, RotateCcw, Timer } from "lucide-react"
+import { Check, ChevronRight, CircleDashed, CircleStop, Clock, Ellipsis, FileText, Github, Hourglass, Loader2, RotateCcw, Timer } from "lucide-react"
 import type { AwaitingHint, BoardSnapshot, PlanView, ThreadView } from "@fray-ui/shared"
 import { store, openThread, scrollToQueueCard, pushSubAgentDrawer, pushPlanDrawer, QUEUE_CARD_VIEWPORT_TOP, type ConnectionState } from "../store.ts"
 import { useBoard, asThreads } from "../hooks.ts"
@@ -18,7 +18,6 @@ import { ProviderMark } from "./ProviderMark.tsx"
 import { STATUS_CHIP } from "../lib/status.ts"
 import { retrySession } from "../lib/retrySession.ts"
 import { formatSnoozedUntil, formatSnoozeWake, formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
-import { formatHeartbeatInterval } from "../lib/heartbeat.ts"
 import { useOptimisticallySteered } from "../lib/steering.ts"
 import { activeSidebarSection, queueNavigationSettled, railRevealDelta, type SidebarSectionGeometry } from "../lib/sidebarScrollspy.ts"
 import type { ReactElement, ReactNode } from "react"
@@ -622,35 +621,29 @@ function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string |
   // running — so the box stops tracing and the row simply stays alive in the running band. Same blue and
   // same pulse as the transcript's live-shell dot, sized to this box (styles.css .fray-rail-dot), so
   // both surfaces say "a shell is alive behind this" in one language.
-  // The ONE colored glyph on this rail, and deliberately so: a heartbeat is the only mark here that
-  // says fray itself will act on this thread without the operator doing anything, so it reads as its
-  // own thing rather than another shade of "resting". Pink, per the maintainer. Paused drops the
-  // pulse and dims to muted — the row still shows WHAT is armed, just not as something live.
-  if (kind === "heartbeat") {
-    const beat = t.heartbeat
-    const paused = beat?.paused === true
-    const every = beat ? formatHeartbeatInterval(beat.intervalSeconds) : ""
+  // The ONE colored glyph on this rail, and deliberately so: an armed stop hook is the only mark here
+  // that says fray itself will act on this thread without the operator doing anything, so it reads as
+  // its own thing rather than another shade of "resting". Amber, matching the footer control it
+  // reports (StopHookControl) — one colour for one fact across both surfaces.
+  if (kind === "stop-hook") {
     return {
       node: (
         <StatusBox>
-          {/* SIZE 9, not 10 (maintainer 2026-08-02: "the heartbeat icon is not optically centered"). Two
-              MEASURED faults, both cured by the odd size — scripts/verify-rail-status-glyphs.mjs now
-              carries the readings. (1) The box's CONTENT width is 13px, so a 10px glyph centres onto a
-              HALF pixel and the rasteriser pushed its ink 0.5px right and 0.5px down; 9 in 13 is a whole
-              2px each side, and the ink lands dead centre (the shipped Check has the same 10px tell).
-              (2) At 10 the heart filled 0.617 of the box — the widest mark in the rail, hard against
-              MAX_EXTENT 0.62 — and covered 14.5% against a family ceiling of 9.42%. It read as a blob
-              jammed in a box rather than a mark standing in one. At 9 it is 0.55, exactly the ellipsis
-              and the hourglass. It stays the heaviest outline here (11.3%), which is the point of the
-              one deliberately-coloured glyph, but it no longer crowds its walls. */}
-          <HeartPulse
+          {/* SIZE 9, not 10, and that half of the reasoning is about the BOX rather than the glyph, so it
+              survived this mark's predecessor unchanged: the box's CONTENT width is 13px, so a 10px glyph
+              centres onto a HALF pixel and the rasteriser pushes its ink 0.5px right and 0.5px down,
+              while 9 in 13 is a whole 2px each side and lands dead centre (the shipped Check has the same
+              10px tell). scripts/verify-rail-status-glyphs.mjs carries the readings and re-measures this
+              glyph's extent and coverage against the rail family — CircleStop is a different shape from
+              the heart it replaced, so those two numbers were re-measured rather than inherited. */}
+          <CircleStop
             size={9}
-            className={paused ? "text-muted/70" : "fray-rail-heartbeat text-pink-400"}
-            data-running-indicator={paused ? "thread-heartbeat-paused" : "thread-heartbeat"}
+            className="text-amber-400"
+            data-running-indicator="thread-stop-hook"
           />
         </StatusBox>
       ),
-      tip: paused ? `Heartbeat paused — every ${every} when resumed` : `Heartbeat — fray wakes this thread every ${every}`,
+      tip: "Stop hook armed — fray re-prompts this thread every time it stops",
     }
   }
   if (kind === "background") {

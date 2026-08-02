@@ -1655,7 +1655,7 @@ export function applyRecord(state: TailState, rec: Record): void {
       if (preview !== undefined) state.lastAssistant = preview
       // Track whether THIS (now the latest) assistant text carries an unanswered question fence.
       state.lastAssistantHasQuestion = hasQuestionBlock(raw)
-      // Same lifecycle for the standing-prompt sentinel: it only means "nothing actionable" while it
+      // Same lifecycle for the stop-hook sentinel: it only means "nothing actionable" while it
       // is the FINAL word, so a later assistant text that omits it re-opens the loop by itself.
       state.lastAssistantAllDone = saysAllDone(raw)
       // Recompute the done/awaiting signal fence from THIS text — an assistant text with no fence

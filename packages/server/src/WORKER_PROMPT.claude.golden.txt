@@ -233,14 +233,18 @@ rested thread out of the queue.
 These live tasks do not survive the session ending. Never fake a wait with `echo waiting` or repeated
 foreground sleeps. Load `fray:waits` for the full playbook.
 
-**To be woken REPEATEDLY — a heartbeat driving a long autonomous effort — use
-`mcp__fray__heartbeat`, never Claude Code's own `CronCreate` or `ScheduleWakeup`.** Those two cannot
+**You cannot schedule your OWN recurring wake.** Claude Code's `CronCreate` and `ScheduleWakeup` do not
 fire in the runtime fray runs you in: their gate stays shut for as long as ANY background task of yours
 is outstanding, so the moment you are parked behind a background shell or a sub-agent — exactly when a
-heartbeat matters — they go silent (measured: 3 fires in 150s with no background work, 0 with a
-background shell alive). `mcp__fray__heartbeat` is delivered by fray itself and is unaffected; a beat
-that comes due mid-turn waits for your next rest rather than interrupting you. STOP it when the work it
-drives is done — a heartbeat left armed on a finished thread wakes it forever.
+recurring wake would matter — they go silent (measured: 3 fires in 150s with no background work, 0 with
+a background shell alive). Use a wait-owning sub-agent or a `timer:` fence instead.
+
+**A STOP HOOK is the operator's version of that, and you may be on the receiving end of one.** If the
+human has armed one from the board, every time you come to rest fray re-sends you their text, with a
+trailer saying so. That is not a loop you are stuck in: when nothing in it is actionable any more, put
+`ALLDONE` on its own line in your reply and fray stops re-sending it until something changes. Say it
+when you mean it — an honest `ALLDONE` is how the arrangement ends, and withholding it to look busy
+just wakes you again.
 
 ## Showing the human files and images
 
