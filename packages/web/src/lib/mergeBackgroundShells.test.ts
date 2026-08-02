@@ -51,3 +51,32 @@ test("a transcript row whose launch id is unknown to the board is not swallowed 
   ])
   assert.equal(merged.length, 2)
 })
+
+// ── CODEX: one process, two sources that share no identifier ────────────────────────────────────
+//
+// A codex shell reaches the strip twice over, from sources with nothing in common. The BOARD row is
+// folded from the app-server's item stream (its id is the `processId`, its label is the command); the
+// TRANSCRIPT row is projected from the rollout (no launch id at all — the processId never reaches the
+// rollout — and its label is the model's description of the step). Before the `cmd:` key they drew as
+// two rows for one process, and only one of them carried the ×.
+
+test("a codex shell reported by both sources collapses on its COMMAND", () => {
+  const merged = mergeBackgroundShells(
+    [{ id: "24573", label: "sleep 900", command: "sleep 900", startedAt: "2026-08-01T19:00:00.000Z", state: "running", stoppable: true }],
+    [{ label: "Designing async exec command flow", command: "sleep 900", startedAt: "2026-08-01T19:00:04.000Z", state: "running" }],
+  )
+  assert.equal(merged.length, 1, "the labels differ and the instants differ; the command is the identity")
+  assert.equal(merged[0]!.stoppable, true, "and the surviving row is the one that can actually be stopped")
+})
+
+test("the command key never fires off a bare label — two same-named shells stay two rows", () => {
+  // The guard on the clause above. `command` is set ONLY where fray really knows it (a codex row);
+  // falling back to the label would make two shells the model described identically collide, which is
+  // the exact regression the id-is-the-identity test above exists to prevent.
+  const merged = mergeBackgroundShells(
+    [{ id: "toolu_a", label: "Watching CI", startedAt: "2026-08-01T19:00:00.000Z", state: "running" },
+     { id: "toolu_b", label: "Watching CI", startedAt: "2026-08-01T19:10:00.000Z", state: "running" }],
+    [],
+  )
+  assert.equal(merged.length, 2)
+})

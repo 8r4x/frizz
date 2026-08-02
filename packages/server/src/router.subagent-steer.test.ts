@@ -34,12 +34,15 @@ function harness(subAgent: (slug: string, id: string) => SubAgentInfo, opts: {
   // rather than swallowed under a "stopped" the operator would read as "the work ended".
   stopFailsFor?: readonly string[]
   // The board's live shells, so a shell stop can read its own label for the kill notice.
-  bgShells?: readonly { id: string; label: string }[]
+  bgShells?: readonly { id: string; label: string; state?: string }[]
   // The broker's answer to "is this session's daemon still up" — the gate on the kill notice. Default
   // true; false pins that fray reports the worker was NOT told rather than cold-starting a process.
   daemonAlive?: boolean
   // Make the notice delivery FAIL, to pin that a dead notice never turns a real kill into an error.
   followUpThrows?: Error
+  // The codex app-server bridge, for the CODEX shell route. Absent ⇒ no bridge, which is itself a case
+  // worth pinning (the route must not fire and the Claude path must be reached unchanged).
+  codexTerminate?: (input: { threadSlug: string; sessionId: string; processId: string; notice?: string }) => { terminated: boolean; noticeFailed: string | null }
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "fray-subagent-steer-"))
   const project: Project = { dir, id: "steer", name: "test", label: "test", stateDir: dir, cwdSlug: "test" }
@@ -55,7 +58,7 @@ function harness(subAgent: (slug: string, id: string) => SubAgentInfo, opts: {
   }
   const dismissals: { slug: string; id: string }[] = []
   const tailer: Tailer = {
-    get: opts.bgShells ? (() => ({ bgShells: opts.bgShells }) as unknown as ReturnType<Tailer["get"]>) : () => undefined,
+    get: opts.bgShells ? (() => ({ bgShells: opts.bgShells!.map((entry) => ({ state: "running", ...entry })) }) as unknown as ReturnType<Tailer["get"]>) : () => undefined,
     foreignIds: () => [],
     subAgent,
     forget: () => {},
@@ -74,11 +77,20 @@ function harness(subAgent: (slug: string, id: string) => SubAgentInfo, opts: {
   // Every message fray delivered into the worker's own conversation. For these tests that is only ever
   // the shell-kill notice — the one thing the provider does not tell a worker itself.
   const notices: { threadSlug: string; sessionId: string; text: string }[] = []
+  const codexTerminations: { threadSlug: string; sessionId: string; processId: string; notice?: string }[] = []
   const ctx = {
     project,
     storage,
     board,
     tailer,
+    ...(opts.codexTerminate ? {
+      codexAppServer: {
+        terminateBackgroundExec: async (input: { threadSlug: string; sessionId: string; processId: string; notice?: string }) => {
+          codexTerminations.push(input)
+          return opts.codexTerminate!(input)
+        },
+      },
+    } : {}),
     getSettings: () => ({ permissionMode: "auto" }) as unknown as Settings,
     claudeBroker: {
       steerSubAgent: async (input: { threadSlug: string; sessionId: string; subAgentId: string; text: string }) => {
@@ -96,7 +108,7 @@ function harness(subAgent: (slug: string, id: string) => SubAgentInfo, opts: {
       },
     },
   } as unknown as AppContext
-  return { dir, ctx, storage, router: createRouter(ctx), steers, stops, dismissals, notices }
+  return { dir, ctx, storage, router: createRouter(ctx), steers, stops, dismissals, notices, codexTerminations }
 }
 
 function row(slug: string, over: Partial<SessionRow> = {}): SessionRow {
@@ -124,10 +136,11 @@ function row(slug: string, over: Partial<SessionRow> = {}): SessionRow {
 
 // upsertSession does not carry `backend` / `claude_runtime` (they are set by their own writers), so a
 // row's runtime identity is stamped after insert — exactly as dispatch does it.
-function seed(storage: ReturnType<typeof createStorage>, slug: string, runtime: { backend?: string; claudeRuntime?: string | null } = {}) {
+function seed(storage: ReturnType<typeof createStorage>, slug: string, runtime: { backend?: string; claudeRuntime?: string | null; codexRuntime?: string } = {}) {
   storage.upsertSession(row(slug))
   storage.setBackend(slug, runtime.backend ?? "claude")
-  if (runtime.claudeRuntime !== null) storage.setClaudeRuntime(slug, runtime.claudeRuntime ?? "broker")
+  if (runtime.backend === "codex") storage.setCodexRuntime(slug, runtime.codexRuntime ?? "app-server")
+  else if (runtime.claudeRuntime !== null) storage.setClaudeRuntime(slug, runtime.claudeRuntime ?? "broker")
 }
 
 const RUNNING_DIRECT: SubAgentInfo = { outputFile: "/tmp/child.jsonl", state: "running", direct: true, taskId: "agent-runtime-child" }
@@ -555,5 +568,83 @@ test("subAgentTranscript reports steerability + the reason the drawer shows in p
     assert.deepEqual(missing, { messages: [], state: "gone", steerable: false, steerNote: null, stoppable: false, stopNote: null })
   } finally {
     rmSync(gone.dir, { recursive: true, force: true })
+  }
+})
+
+// ── STOPPING A CODEX BACKGROUND EXEC ─────────────────────────────────────────────────────────────
+//
+// Codex reaches the same × by a completely different road, and the router keeps them apart rather than
+// branching inside the Claude path: a codex shell never enters the fold's op map (neither
+// `tailer.subAgent` nor `tailer.backgroundShell` can see one), its handle is a `processId` off the
+// app-server item stream, and its kill is `thread/backgroundTerminals/terminate`.
+//
+// Both halves are measured, not assumed (backend/_live_codex_bgterm.mts + _live_codex_shell_stop.mts):
+// terminate really kills the OS process, and codex — like Claude — tells its agent NOTHING, because
+// completion there is polled rather than pushed. `thread/inject_items` is what closes that, and the
+// live probe's worker then said "the background command has been stopped … because fray explicitly
+// told me the operator stopped it."
+
+test("the × on a CODEX shell terminates it by processId and injects the notice", async () => {
+  const h = harness(() => undefined, {
+    bgShells: [{ id: "24573", label: "gh run watch" }],
+    codexTerminate: () => ({ terminated: true, noticeFailed: null }),
+  })
+  try {
+    seed(h.storage, "t", { backend: "codex" })
+    const result = await h.router.stopBackgroundOp.handler({ input: { slug: "t", id: "24573" } })
+    assert.deepEqual(result, { stopped: true, dismissed: true, note: null, descendantsStopped: 0 })
+    assert.equal(h.codexTerminations.length, 1)
+    const call = h.codexTerminations[0]!
+    assert.equal(call.processId, "24573", "the row's id IS the processId — codex has exactly one handle")
+    assert.match(call.notice ?? "", /^\[fray\] /, "machine plumbing, hidden from the human's chat")
+    assert.match(call.notice ?? "", /gh run watch/, "the worker has to know WHICH command died")
+    assert.match(call.notice ?? "", /do not wait on it or poll it again/, "codex completion is POLLED — saying 'do not wait' alone would leave it polling")
+    assert.deepEqual(h.stops, [], "the Claude control was never touched")
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true })
+  }
+})
+
+test("a codex exec the app-server says was already gone is not reported as a kill", async () => {
+  // `terminated:false` means the PTY had already exited. The row still clears — that is the ×'s other
+  // honest job — but nothing may claim work was ended that had already ended.
+  const h = harness(() => undefined, {
+    bgShells: [{ id: "24573", label: "gh run watch" }],
+    codexTerminate: () => ({ terminated: false, noticeFailed: null }),
+  })
+  try {
+    seed(h.storage, "t", { backend: "codex" })
+    const result = await h.router.stopBackgroundOp.handler({ input: { slug: "t", id: "24573" } })
+    assert.equal(result.stopped, false)
+    assert.equal(result.dismissed, true, "the phantom still clears")
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true })
+  }
+})
+
+test("a codex kill whose notice failed still counts as a kill, and says the worker was not told", async () => {
+  const h = harness(() => undefined, {
+    bgShells: [{ id: "24573", label: "gh run watch" }],
+    codexTerminate: () => ({ terminated: true, noticeFailed: "The worker could not be told: connection closed" }),
+  })
+  try {
+    seed(h.storage, "t", { backend: "codex" })
+    const result = await h.router.stopBackgroundOp.handler({ input: { slug: "t", id: "24573" } })
+    assert.equal(result.stopped, true, "the process is dead by then; a delivery problem must not read as a failed stop")
+    assert.match(result.note ?? "", /could not be told/)
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true })
+  }
+})
+
+test("with no codex bridge the codex route never fires — the row just clears", async () => {
+  const h = harness(() => undefined, { bgShells: [{ id: "24573", label: "gh run watch" }] })
+  try {
+    seed(h.storage, "t", { backend: "codex" })
+    const result = await h.router.stopBackgroundOp.handler({ input: { slug: "t", id: "24573" } })
+    assert.equal(result.stopped, false)
+    assert.deepEqual(h.codexTerminations, [])
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true })
   }
 })

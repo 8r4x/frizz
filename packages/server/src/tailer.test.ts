@@ -7,7 +7,7 @@ import { createStorage, type Storage, type SessionRow } from "./storage.ts"
 import { Bus } from "./bus.ts"
 import type { ServerEvent } from "@fray-ui/shared"
 import { permMarkerPath, type Project } from "./project.ts"
-import { parseLine, applyRecord, applyEvent, computeTurn, newTailState, createTailer, matchesPermPrompt, detectClaudeBootModal, hasQuestionBlock, isClaudeAuthErrorText, isRealUserMessage, parseSignalFence, markerDecision, FOREIGN_FRESH_MS } from "./tailer.ts"
+import { parseLine, applyRecord, applyEvent, computeTurn, newTailState, createTailer, matchesPermPrompt, detectClaudeBootModal, hasQuestionBlock, isClaudeAuthErrorText, isRealUserMessage, parseSignalFence, markerDecision, unwrapShellCommand, FOREIGN_FRESH_MS } from "./tailer.ts"
 import type { AgentBackend, NormalizedEvent } from "./backend/types.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
 import { createCodexBackend } from "./backend/codex.ts"
@@ -3003,4 +3003,21 @@ test("isClaudeAuthErrorText: narrow conjunction", () => {
   assert.equal(isClaudeAuthErrorText("fix the 401 handling in api.ts"), false)
   assert.equal(isClaudeAuthErrorText("API Error: 529 Overloaded"), false)
   assert.equal(isClaudeAuthErrorText("HTTP 4010 items"), false)
+})
+
+// The app-server reports a model-run command as the ARGV it spawned, while codex's own
+// `backgroundTerminals/list`, the rollout, and fray's transcript-projected row all say the bare
+// command. Stripping the wrapper is what lets the board row and the transcript row reconcile at all
+// (lib/childOps.ts keys on it) — and it is what the operator reads.
+test("tailer: a codex exec's launcher wrapper is stripped, and nothing else is", () => {
+  assert.equal(unwrapShellCommand("/bin/zsh -lc 'sleep 900'"), "sleep 900")
+  assert.equal(unwrapShellCommand("/bin/bash -c \"npm run dev\""), "npm run dev")
+  assert.equal(unwrapShellCommand("bash -lc 'gh run watch && echo done'"), "gh run watch && echo done")
+  // NOT unwrapped: the quoting does not span the whole remainder, so a naive strip would silently drop
+  // the trailing redirect and show the operator a command that is not the one running.
+  assert.equal(unwrapShellCommand("/bin/zsh -lc 'sleep 900' > /tmp/out"), "/bin/zsh -lc 'sleep 900' > /tmp/out")
+  // NOT a shell invocation at all — returned untouched rather than half-parsed.
+  assert.equal(unwrapShellCommand("sleep 900"), "sleep 900")
+  assert.equal(unwrapShellCommand("python -c 'print(1)'"), "python -c 'print(1)'")
+  assert.equal(unwrapShellCommand(undefined), undefined)
 })

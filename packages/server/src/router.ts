@@ -535,6 +535,32 @@ export function createRouter(ctx: AppContext) {
   //
   // Only two things differ between the two kinds, and both are handled below rather than by forking
   // the function: the LIVENESS reading, and the noun in every refusal.
+  // A CODEX background exec, resolved by the id its row carries — which for codex IS the `processId`
+  // the kill needs (see tailer.ts codexBgShellViews: there is exactly one handle and no correlation
+  // step). Undefined for every other kind of row, so the Claude path below is reached unchanged.
+  //
+  // It reads the BOARD's live shell list rather than the fold, because that list IS the app-server's
+  // item stream — a codex exec's processId never reaches the rollout fray folds (measured in
+  // backend/_live_codex_bgterm_match.mts, where the rollout-projected row carried no handle at all).
+  function codexShellTarget(slug: string, id: string): { sessionId: string; processId: string; label: string } | undefined {
+    if (!ctx.codexAppServer) return undefined
+    const row = ctx.storage.getSession(slug)
+    if (!row || row.backend !== "codex" || row.codex_runtime !== "app-server") return undefined
+    const shell = ctx.tailer.get(slug)?.bgShells?.find((entry) => entry.id === id && entry.state === "running")
+    if (!shell) return undefined
+    return { sessionId: row.session_id, processId: id, label: shell.label }
+  }
+
+  // What the codex worker is told when fray kills one of its background commands. Same sentence as the
+  // Claude one and for the same measured reason — neither provider tells its agent. Codex's silence is
+  // structural: completion there is POLLED, never pushed, so a killed exec's next `wait` reads
+  // "Script completed / output:''", which is indistinguishable from a clean finish (verified in
+  // backend/_live_codex_bgterm.mts). Delivered through `thread/inject_items`, the one channel that
+  // appends to the model's visible history without starting a turn.
+  function shellStopNotice(label: string): string {
+    return `[fray] The operator stopped your background command ${JSON.stringify(label)} from the Fray dashboard. It is no longer running and will never report a result — do not wait on it or poll it again.`
+  }
+
   function subAgentStoppable(slug: string, id: string): { sessionId: string; taskId: string; shell: boolean } | { sessionId: null; note: string | null } {
     const blocked = (note: string | null) => ({ sessionId: null, note })
     const info = ctx.tailer.subAgent(slug, id)
@@ -591,7 +617,7 @@ export function createRouter(ctx: AppContext) {
         threadSlug: slug,
         sessionId: row.session_id,
         cwd: ctx.project.dir,
-        text: `[fray] The operator stopped your background shell ${JSON.stringify(label)} from the Fray dashboard. It is no longer running and will never report a result — do not wait on it. Whatever it wrote before the kill is still readable in its output file.`,
+        text: `${shellStopNotice(label)} Whatever it wrote before the kill is still readable in its output file.`,
         permissionMode: (row.permission_mode as ClaudePermissionMode | null) ?? undefined,
         model: row.model ?? undefined,
         effort: row.effort ?? undefined,
@@ -975,6 +1001,24 @@ export function createRouter(ctx: AppContext) {
       input: z.object({ slug: ThreadSlug, id: z.string() }).strict(),
       output: z.object({ stopped: z.boolean(), dismissed: z.boolean(), note: z.string().nullable(), descendantsStopped: z.number() }),
       handler: async ({ input }) => {
+        // CODEX takes its own route, not a branch inside the Claude one: its shells never enter the
+        // fold's op map, so neither `tailer.subAgent` nor `tailer.backgroundShell` can see them, and
+        // its kill is a different protocol call against a different bridge. It shares the SHAPE — stop
+        // first, then let the row go — and the row leaves without `dismissOp` because the bridge drops
+        // it from the live level the board reads.
+        const codex = codexShellTarget(input.slug, input.id)
+        if (codex) {
+          const result = await ctx.codexAppServer!.terminateBackgroundExec({
+            threadSlug: input.slug,
+            sessionId: codex.sessionId,
+            processId: codex.processId,
+            notice: shellStopNotice(codex.label),
+          })
+          ctx.board.refresh()
+          // `terminated:false` is the app-server saying the PTY was already gone. Nothing was killed and
+          // nothing may claim it was — but the phantom row does clear, which is the ×'s other honest job.
+          return { stopped: result.terminated, dismissed: true, note: result.noticeFailed, descendantsStopped: 0 }
+        }
         const target = subAgentStoppable(input.slug, input.id)
         let stopped = false
         let note: string | null = null

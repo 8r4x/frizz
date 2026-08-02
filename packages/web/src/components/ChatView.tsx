@@ -135,6 +135,10 @@ export function transcriptBackgroundShells(messages: readonly ChatMessage[]): (B
         startedAt: message.at,
         state: "running",
         ...(tool.shellId ? { launchId: tool.shellId } : {}),
+        // The reconciliation key for a CODEX shell, whose board row and transcript row share nothing
+        // else (see mergeBackgroundShells). Carried separately from `label`, which for a codex row is
+        // the model's description of the step rather than the command it ran.
+        ...(tool.command ? { command: tool.command } : {}),
       })
     }
   }
@@ -3830,7 +3834,11 @@ export function BackgroundOpsStrip({
           state={s.state}
           density="sheet"
           startedAt={s.startedAt}
-          onOpen={s.id ? () => pushBackgroundShellDrawer(slug, s.id!, { label: s.label, startedAt: s.startedAt }) : undefined}
+          // A codex shell has an id (its `processId`, which is what its × addresses) but no readable
+          // output — codex keeps that inside its own session. So the two affordances part company
+          // here: the row still stops, and it renders non-interactive rather than opening a drawer
+          // that could only report "unavailable".
+          onOpen={s.id && !s.outputUnavailable ? () => pushBackgroundShellDrawer(slug, s.id!, { label: s.label, startedAt: s.startedAt }) : undefined}
           onDismiss={childOpDismisser(slug, s, "SHELL")}
         />
       ))}

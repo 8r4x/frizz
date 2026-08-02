@@ -719,6 +719,10 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     // is the only path to the footer readout's denominator for a Claude row (codex names its own on
     // every token_count and needs nothing here).
     runtimeContextWindow: claudeRuntimeIngest ? (sessionId) => claudeRuntimeIngest.contextWindow(sessionId) : undefined,
+    // Codex's live background execs, off the app-server item stream. The counterpart of runtimeTasks
+    // for the other provider — and the only source there is, since a codex exec's `processId` (the id
+    // its × addresses) never reaches the rollout the tailer folds.
+    codexBackgroundExecs: codexAppServer ? (slug, sessionId) => codexAppServer.backgroundExecs(slug, sessionId) : undefined,
   })
   resources.tailer = tailer
   opts.startup?.afterPhase?.("tailer")

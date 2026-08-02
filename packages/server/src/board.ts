@@ -203,12 +203,18 @@ function stampStoppable(agents: ThreadView["subAgents"], row: SessionRow): Threa
 }
 
 // The same question for a background SHELL, and it is deliberately the other way round: the tailer has
-// already said whether fray holds a provider task handle for each shell (BgShellView.stoppable), so all
-// this adds is the TRANSPORT half — and on a thread with no control channel it must REVOKE the tailer's
-// half rather than merely decline to add one. A shell on a tmux or codex thread carries a task id in
-// its launch ack just the same; nothing can be done with it from here.
+// already said whether fray holds a handle for each shell (BgShellView.stoppable), so all this adds is
+// the TRANSPORT half — and on a thread with no control channel it must REVOKE the tailer's half rather
+// than merely decline to add one. A shell on a TMUX thread carries a task id in its launch ack just the
+// same; nothing can be done with it from outside that pane.
+//
+// BOTH headless runtimes have a per-shell channel, reached differently and verified separately:
+//   claude broker    → `Query.stopTask(taskId)`                     (backend/_live_shell_stop.mts)
+//   codex app-server → `thread/backgroundTerminals/terminate`       (backend/_live_codex_bgterm.mts)
+// so the predicate is "headless", not "broker Claude" — and a codex row's shells, which only exist at
+// all because the app-server stream reported them, are never stripped here.
 function stampStoppableShells(shells: ThreadView["bgShells"], row: SessionRow): ThreadView["bgShells"] {
-  if (isBrokerClaudeRow(row)) return shells
+  if (isHeadlessRow(row)) return shells
   return shells.map((shell) => (shell.stoppable ? { ...shell, stoppable: false } : shell))
 }
 

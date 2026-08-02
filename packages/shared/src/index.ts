@@ -215,6 +215,20 @@ export const BgShellView = z.object({
   // `Query.stopTask` ends it (verified end-to-end in backend/_live_shell_stop.mts: the OS process is
   // gone inside a second).
   stoppable: z.boolean().optional(),
+  // Fray cannot read this shell's output, so the row must NOT offer a drill-in. True only for a CODEX
+  // background exec: codex keeps a yielded command's output inside its own session and hands it back
+  // only when the model polls, so there is no file for fray to tail — unlike a Claude shell, whose
+  // output file fray reads directly. Absent ⇒ readable, which is every row that predates codex shells.
+  //
+  // A positive flag for the EXCEPTION rather than a `readable` that every existing row would have to
+  // start setting: an old snapshot then keeps its drill-in instead of silently losing it.
+  outputUnavailable: z.boolean().optional(),
+  // The command this shell runs, when fray knows it independently of the label. Set only on a CODEX
+  // row, where it is the ONE thing the board's copy of the shell and the transcript's copy share — see
+  // lib/childOps.ts mergeBackgroundShells, which reconciles the two on it. A Claude row leaves it
+  // absent: its two copies already reconcile on the launch tool_use id, and a `command` that merely
+  // repeated the label would make two identically-described shells collide into one row.
+  command: z.string().optional(),
   // ISO8601 of the shell output file's last write — "last active 6 min ago" for a quiet-but-live
   // watcher. Optional (see SubAgentView.lastActivityAt).
   lastActivityAt: z.string().optional(),

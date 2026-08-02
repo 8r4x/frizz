@@ -386,6 +386,32 @@ const FileChangeItem = z.object({
   changes: z.array(FileUpdateChange).max(128),
   status: z.enum(["inProgress", "completed", "failed", "declined"]),
 }).strict()
+// A model-run shell command, as the app-server reports it on the item stream. Deliberately NOT
+// `.strict()`: this is a large, evolving item type and fray reads three fields off it — adding
+// `deny_unknown_fields` semantics here would make every codex release that grows the item silently
+// stop reporting background execs.
+//
+// `processId` is the whole reason this schema exists. It is codex's LOGICAL PTY handle (verified live
+// in backend/_live_codex_bgterm.mts: `osPid` came back null every time and the value never equalled a
+// real OS pid), and it is the only thing `thread/backgroundTerminals/terminate` accepts. It appears
+// ONLY on an exec that yielded — the deliberate background handoff — which is exactly the set fray
+// wants, and it is absent from the rollout fray folds, so this stream is the only place to get it
+// (`_live_codex_bgterm_match.mts`: the projected background row carried no handle at all).
+const CommandExecutionItem = z.object({
+  type: z.literal("commandExecution"),
+  id: Opaque,
+  command: z.string().max(8_192).optional(),
+  processId: z.union([z.string().max(128), z.number()]).nullish(),
+  status: z.string().max(64).optional(),
+  exitCode: z.number().nullish(),
+})
+/** One live codex background exec — what the ops-strip row is built from, and what its × addresses. */
+export interface LiveBackgroundExec {
+  /** Codex's logical PTY handle. The ONLY id `thread/backgroundTerminals/terminate` accepts. */
+  processId: string
+  command?: string
+  startedAtMs: number
+}
 const ItemStartedNotification = z.object({
   item: z.unknown(),
   threadId: Opaque,
@@ -1658,6 +1684,16 @@ export class CodexAppServerBridge {
   /** One-shot `thread/settings/updated` listeners, keyed by codex thread id. See setSandbox(). */
   private readonly settingsWaiters = new Map<string, Set<(observed: ObservedThreadSettings | undefined) => void>>()
   private readonly correlatedFileItems = new Map<string, CorrelatedFileItem>()
+  // Codex's LIVE background execs, keyed codexThreadId → processId. Folded off the item stream because
+  // nothing else can supply it: the rollout fray reads records the exec but not its `processId`, so the
+  // ops-strip row it projects has no handle to address a kill with. This map is what gives a codex
+  // shell row an id, and the id it gives is exactly what `backgroundTerminals/terminate` accepts.
+  //
+  // A LEVEL, not an edge log: `item/started` adds, any terminal `item/*` removes, and the whole
+  // per-thread entry is dropped when the session is released or the process goes away. Nothing here is
+  // durable, and it must not be — a processId belongs to one app-server process, so a stale one
+  // surviving a restart would offer an × that addresses a PTY that no longer exists.
+  private readonly liveExecs = new Map<string, Map<string, LiveBackgroundExec>>()
   private activeOperations = 0
   private readonly operationWaiters = new Set<() => void>()
   private shutdownPromise: Promise<void> | null = null
@@ -2876,6 +2912,88 @@ export class CodexAppServerBridge {
    * produces no notification; the binding's `sandbox` cache (written only from authoritative reads)
    * tells the two apart, and an unknown cache falls to the strict "wait for the notification" branch.
    */
+  /**
+   * The live background execs fray is tracking for one thread — the source of its background-shell
+   * rows. Empty for a thread with none, for a session this bridge does not own, and for the whole
+   * lifetime of a codex older than the experimental API (nothing ever emits a `processId`).
+   *
+   * Cheap and synchronous by design: the board asks this on every build, so it reads the folded level
+   * rather than making a `backgroundTerminals/list` round trip per thread per tick.
+   */
+  backgroundExecs(threadSlug: string, sessionId: string): readonly LiveBackgroundExec[] {
+    if (this.closed || this.dbClosed) return []
+    const binding = this.bindingForScope(threadSlug, sessionId)
+    if (!binding) return []
+    const byProcess = this.liveExecs.get(binding.codex_thread_id)
+    return byProcess ? [...byProcess.values()] : []
+  }
+
+  /**
+   * KILL ONE background exec, and tell the worker fray did.
+   *
+   * `thread/backgroundTerminals/terminate` is gated on `capabilities.experimentalApi`, which fray has
+   * always sent (CLIENT_CAPABILITIES) — so no handshake change was needed to reach it. Verified live
+   * against codex-cli 0.146.0 (backend/_live_codex_bgterm.mts): the call answers `{terminated:true}`,
+   * the exec flips to `status:"failed" exitCode:-1`, and the real OS process — a descendant of the
+   * app-server fray spawned — is gone.
+   *
+   * The NOTICE is not optional politeness. The same probe measured codex's silence: after a terminate,
+   * the model's own account was that the command "was running when I returned control … no exit code",
+   * because completion in codex is POLLED, never pushed — the `exitCode:-1` goes to the CLIENT and
+   * never enters model context. `thread/inject_items` ("Raw Responses API items to append to the
+   * thread's model-visible history") is the channel that fixes it, and with the notice injected the
+   * model instead said the command "is stopped and will never report a result, because the Fray
+   * operator explicitly terminated it from the dashboard".
+   *
+   * A notice that fails to land is REPORTED, never thrown: the process is already dead by then, and
+   * turning a delivery problem into a failed stop would leave the row on the board over a message.
+   */
+  async terminateBackgroundExec(input: {
+    threadSlug: string
+    sessionId: string
+    processId: string
+    /** What to tell the worker. Absent ⇒ kill silently (nothing in fray asks for that today). */
+    notice?: string
+  }): Promise<{ terminated: boolean; noticeFailed: string | null }> {
+    const releaseOperation = this.beginOperation()
+    try {
+      const connection = await this.ensureConnected()
+      let binding = this.bindingForScope(input.threadSlug, input.sessionId)
+      if (!binding) throw new Error("Stopping a background command requires a bridge-owned Codex session")
+      if (binding.state !== "active" || binding.connection_epoch !== this.connectionEpoch) {
+        // Same reason setSandbox resumes first: a detached thread has to be back on this connection
+        // before the server will accept anything addressed at it.
+        await this.resumeOwnedSession(input.threadSlug, input.sessionId)
+        binding = this.bindingForScope(input.threadSlug, input.sessionId)
+        if (!binding) throw new Error("Codex app-server session disappeared while stopping a background command")
+      }
+      const threadId = binding.codex_thread_id
+      const raw = await connection.request("thread/backgroundTerminals/terminate", { threadId, processId: input.processId })
+      const terminated = (raw as { terminated?: unknown } | null)?.terminated === true
+      if (!terminated) {
+        // The app-server answering "no" means the PTY was already gone — nothing was killed, and the
+        // caller must not report one. It still drops from the level so the phantom row clears.
+        this.liveExecs.get(threadId)?.delete(input.processId)
+        return { terminated: false, noticeFailed: null }
+      }
+      this.liveExecs.get(threadId)?.delete(input.processId)
+      let noticeFailed: string | null = null
+      if (input.notice) {
+        try {
+          await connection.request("thread/inject_items", {
+            threadId,
+            items: [{ type: "message", role: "user", content: [{ type: "input_text", text: input.notice }] }],
+          })
+        } catch (error) {
+          noticeFailed = `The worker could not be told: ${error instanceof Error ? error.message : String(error)}`
+        }
+      }
+      return { terminated: true, noticeFailed }
+    } finally {
+      releaseOperation()
+    }
+  }
+
   async setSandbox(input: {
     threadSlug: string
     sessionId: string
@@ -3029,11 +3147,20 @@ export class CodexAppServerBridge {
     return item
   }
 
+  // The live background-exec level rides the same lifecycle as the correlated file items — a released
+  // session and a lost process both invalidate it — but for a different reason. A `processId` names a
+  // PTY inside ONE app-server process, so a surviving entry after that process goes away would put an ×
+  // on the board that addresses a handle nothing can honour. The next connection's item stream
+  // repopulates it, exactly as the SDK's `background_tasks_changed` level does on the Claude side.
   private forgetCorrelatedFileItems(threadId?: string, turnId?: string): void {
     if (threadId === undefined) {
       this.correlatedFileItems.clear()
+      this.liveExecs.clear()
       return
     }
+    // Only on a whole-thread forget: a per-TURN invalidation (a patch that changed) says nothing about
+    // a background exec, which by definition outlives the turn that launched it.
+    if (turnId === undefined) this.liveExecs.delete(threadId)
     for (const [key, item] of this.correlatedFileItems) {
       if (item.threadId === threadId && (turnId === undefined || item.turnId === turnId)) {
         this.correlatedFileItems.delete(key)
@@ -3353,10 +3480,45 @@ export class CodexAppServerBridge {
     await this.flushDelivery(created.delivery, connection)
   }
 
+  // Fold one `item/*` notification into the live background-exec level. Called from the three item
+  // methods BEFORE their file-change handling, because those all `return` early on a non-fileChange
+  // item and a commandExecution is exactly that.
+  //
+  // Only an exec carrying a `processId` is tracked at all: the app-server sets it on the yielded/PTY
+  // execs and leaves it off ordinary foreground commands, which is the same distinction fray's own
+  // `codexExplicitBackground()` draws in the rollout. So this level lands on the background set
+  // without fray having to classify anything itself.
+  private foldExecItem(threadId: string, rawItem: unknown, startedAtMs?: number): void {
+    const parsed = CommandExecutionItem.safeParse(rawItem)
+    if (!parsed.success) return
+    const item = parsed.data
+    const processId = item.processId == null ? undefined : String(item.processId)
+    if (!processId) return
+    // Anything but "still going" retires it. Read as a NEGATIVE test so an unfamiliar status from a
+    // newer codex leaves the row up rather than silently clearing live work: a phantom row the operator
+    // can dismiss beats a live shell that vanished from the board.
+    const live = item.status === "inProgress" && item.exitCode == null
+    let byProcess = this.liveExecs.get(threadId)
+    if (!live) {
+      byProcess?.delete(processId)
+      if (byProcess && byProcess.size === 0) this.liveExecs.delete(threadId)
+      return
+    }
+    if (!byProcess) { byProcess = new Map(); this.liveExecs.set(threadId, byProcess) }
+    const existing = byProcess.get(processId)
+    byProcess.set(processId, {
+      processId,
+      command: item.command ?? existing?.command,
+      // The FIRST sighting's instant, so the row's "running for 4h" does not reset on every update.
+      startedAtMs: existing?.startedAtMs ?? startedAtMs ?? this.now().getTime(),
+    })
+  }
+
   private async handleNotification(connection: JsonlRpcConnection, method: string, rawParams: unknown): Promise<void> {
     if (method === "item/started") {
       const envelope = ItemStartedNotification.safeParse(rawParams)
       if (!envelope.success) return
+      this.foldExecItem(envelope.data.threadId, envelope.data.item, envelope.data.startedAtMs)
       const item = FileChangeItem.safeParse(envelope.data.item)
       if (!item.success || item.data.status !== "inProgress") return
       const key = correlatedFileItemKey(envelope.data.threadId, envelope.data.turnId, item.data.id)
@@ -3397,6 +3559,7 @@ export class CodexAppServerBridge {
     if (method === "item/completed") {
       const envelope = ItemCompletedNotification.safeParse(rawParams)
       if (!envelope.success) return
+      this.foldExecItem(envelope.data.threadId, envelope.data.item)
       const item = FileChangeItem.safeParse(envelope.data.item)
       if (!item.success) return
       const key = correlatedFileItemKey(envelope.data.threadId, envelope.data.turnId, item.data.id)

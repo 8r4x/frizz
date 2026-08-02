@@ -984,6 +984,22 @@ function launchOutputFile(state: TailState, text: string): string | undefined {
 // notification) references. One per corpus-verified ack shape: the Bash background ack, the Monitor
 // ack, and the mailbox Agent ack (whose agentId doubles as its TaskStop handle). Undefined for the
 // path-only older Agent ack, which has no manual-stop handle and clears on its notification anyway.
+// The app-server reports a model-run command as the ARGV it actually spawned —
+// `/bin/zsh -lc 'sleep 900'` — while codex's own `backgroundTerminals/list`, the rollout, and therefore
+// fray's transcript-projected row all say `sleep 900`. Two things ride on stripping the wrapper: the
+// operator reads the command they asked for rather than the launcher's plumbing, and the board row and
+// the transcript row become reconcilable at all (lib/childOps.ts mergeBackgroundShells keys on it —
+// without this they render as two rows for one process).
+//
+// Deliberately narrow: only the exact `<shell> -lc '<cmd>'` / `-c "<cmd>"` shape, only when the quoting
+// spans the whole remainder. Anything else is returned untouched — a half-parsed command line is worse
+// than a verbose one.
+export function unwrapShellCommand(command: string | undefined): string | undefined {
+  if (!command) return command
+  const match = command.match(/^\S*(?:sh|bash|zsh|fish|dash|ksh)\s+-[a-z]*c\s+(['"])([\s\S]*)\1$/)
+  return match ? match[2] : command
+}
+
 function launchTaskId(text: string): string | undefined {
   return (
     text.match(/Command running in background with ID:\s*(\S+)/)?.[1]?.replace(/\.$/, "") ??
@@ -1964,6 +1980,15 @@ export interface TailerDeps {
   // terminal — and may never invent an entry the fold does not know about. Absent (tmux threads, codex
   // rows, tests, bridge-less server) ⇒ the prose fold decides alone, byte-identical to before.
   runtimeTasks?: (sessionId: string) => readonly ClaudeRuntimeTask[]
+  // CODEX's live background execs, off the app-server item stream (backend/codex-app-server.ts
+  // `backgroundExecs`). The exact counterpart of `runtimeTasks` for the other provider, and the ONLY
+  // source there is: a codex background exec's `processId` — the id its × has to address — is on that
+  // stream and NOT in the rollout this module folds (measured in backend/_live_codex_bgterm_match.mts,
+  // where the rollout-projected row carried no handle at all). Unlike `runtimeTasks` this may CREATE
+  // rows the fold knows nothing about, because for codex there is nothing to enrich: the fold has never
+  // produced a shell entry for a codex thread. Absent (claude rows, tests, a bridge-less server) ⇒ no
+  // codex shell rows, exactly as before.
+  codexBackgroundExecs?: (threadSlug: string, sessionId: string) => readonly { processId: string; command?: string; startedAtMs: number }[]
   // The model's context SIZE for a broker Claude session, as the SDK reported it on that session's
   // `result` message (backend/claude-runtime-ingest.ts). It is the only place Claude names the number:
   // the JSONL carries per-request usage (the numerator) and nothing at all about the window. Absent
@@ -2482,6 +2507,35 @@ export function createTailer(deps: TailerDeps): Tailer {
     return out
   }
 
+  // CODEX's background shells, which come from the app-server's item stream rather than from the fold.
+  // They are a separate function and not a branch inside `bgShellViews` because they share nothing with
+  // it: no `subAgents` entry, no output file to stat, no launch ack to parse. What they DO share is the
+  // row: same shape, same ×, same `stoppable` contract — so the client cannot tell the two apart, which
+  // is the point.
+  //
+  // The row's `id` is the `processId` itself. Unlike a Claude shell (whose id is the launch tool_use id
+  // and whose task id is looked up separately), codex has exactly one handle and it is the one the kill
+  // needs, so there is nothing to correlate and no window where the row exists without it.
+  function codexBgShellViews(state: TailState): BgShellView[] {
+    if (!deps.codexBackgroundExecs || state.foreign || state.paneDead) return []
+    const execs = deps.codexBackgroundExecs(state.slug, state.sessionId)
+    return execs.map((exec) => ({
+      label: unwrapShellCommand(exec.command) ?? "Background command",
+      // Carried SEPARATELY from the label even though they are the same string here: it is the client's
+      // reconciliation key against the transcript's own copy of this shell, and the label is free to
+      // become something friendlier later without silently breaking that.
+      ...(unwrapShellCommand(exec.command) ? { command: unwrapShellCommand(exec.command)! } : {}),
+      startedAt: new Date(exec.startedAtMs).toISOString(),
+      state: "running" as const,
+      id: exec.processId,
+      stoppable: true,
+      // Codex hands a yielded command's output back only when the MODEL polls it — there is no file
+      // for fray to tail, so the row carries its × and no drill-in rather than opening a drawer that
+      // could only say "unavailable".
+      outputUnavailable: true,
+    }))
+  }
+
   // A compact change-key over ALL derived background state — sub-agents + shells + the pending ask —
   // so the tick marks the board dirty on any add/removal, a sub-agent running→stale flip (purely
   // time-based, no new record), or an ask appearing/clearing. Without it those changes would linger to
@@ -2497,7 +2551,10 @@ export function createTailer(deps: TailerDeps): Tailer {
   // event without the rendered line changing meaningfully, and pushing a board delta for that is churn.
   function derivedSignature(state: TailState, nowMs: number): string {
     const agents = subAgentViews(state, nowMs).map((v) => `A:${v.label}|${v.state}|${v.startedAt}|${activityMinute(v.lastActivityAt)}|${v.activity ?? ""}|${v.activityDetail ?? ""}|${v.toolUses ?? ""}|${v.summary ?? ""}`).join("")
-    const shells = bgShellViews(state).map((v) => `S:${v.label}|${v.state}|${v.startedAt}|${activityMinute(v.lastActivityAt)}`).join("")
+    // Codex's shells join the key on the same terms: they come off a live stream rather than the fold,
+    // so an exec starting or ending changes NOTHING on disk and would otherwise wait for the next
+    // reconcile to reach the board.
+    const shells = [...bgShellViews(state), ...codexBgShellViews(state)].map((v) => `S:${v.label}|${v.state}|${v.startedAt}|${activityMinute(v.lastActivityAt)}`).join("")
     const ask = state.pendingAsk ? `Q:${state.pendingAsk.id}:${state.pendingAsk.questions.length}` : ""
     return `${agents}\n${shells}\n${ask}`
   }
@@ -3950,7 +4007,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // an unanswered ```question fence (a user reply clears the flag and flips the turn in-flight).
       const pendingQuestion = s.turn === "idle" && s.lastAssistantHasQuestion
       const nowMs = now()
-      return { turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: bgShellViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow }
+      return { turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], pendingAsk: s.pendingAsk, pendingQuestion, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.

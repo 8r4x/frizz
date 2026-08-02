@@ -196,16 +196,28 @@ export function visibleChildOps<T extends ChildOpRecord>(ops: readonly T[], surf
 // So the LAUNCH ID is the key: `shellId` off the transcript card is by construction the same tool_use id
 // the tailer tracks the shell under. Label+startedAt survives only as the fallback for a transcript from
 // a pre-restart server that ships no `shellId` — matching there is better than the duplicate.
-export type ShellRecord = { readonly id?: string; readonly label: string; readonly startedAt?: string }
+export type ShellRecord = { readonly id?: string; readonly label: string; readonly startedAt?: string; readonly command?: string }
 
 // Deliberately NOT folded into `id`: `id` is the drill-in handle, and a transcript row is drawn only
 // because the board did NOT track that shell — so there is nothing for a drawer to open. The launch id
 // identifies the row; it does not make it clickable.
 export type TranscriptShellRecord = ShellRecord & { readonly launchId?: string }
 
+// A CODEX shell is the case where neither key above can work, so it brings a third. Its board row comes
+// off the app-server ITEM STREAM and its transcript row off the rollout, and those two sources share NO
+// identifier: the stream's `processId` never reaches the rollout (measured in
+// server/backend/_live_codex_bgterm_match.mts — the projected row carried no handle at all), and the
+// transcript row's label is the model's description of the STEP ("Designing async exec command flow")
+// while the board row's is the command. What they DO share is the COMMAND — `sleep 900` on both sides,
+// once the launcher's `/bin/zsh -lc '…'` wrapper is stripped server-side (tailer.ts unwrapShellCommand).
+//
+// A codex BOARD row carries its `command` explicitly for exactly this reason. The key is emitted ONLY
+// when a record really has one — never falling back to the label, which would turn two distinct shells
+// the model happened to describe identically into one row (mergeBackgroundShells.test.ts guards it).
+// A Claude row has no `command`, so it keys exactly as it always did.
 const shellKeys = (shell: TranscriptShellRecord): string[] => {
   const launch = shell.launchId ?? shell.id
-  return [...(launch ? [`id:${launch}`] : []), `launch:${shell.label}\u0000${shell.startedAt ?? ""}`]
+  return [...(launch ? [`id:${launch}`] : []), ...(shell.command ? [`cmd:${shell.command}`] : []), `launch:${shell.label}\u0000${shell.startedAt ?? ""}`]
 }
 
 export function mergeBackgroundShells<T extends ShellRecord>(board: readonly T[], transcript: readonly (T & TranscriptShellRecord)[]): T[] {
