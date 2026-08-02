@@ -31,6 +31,8 @@ import type {
   ThreadProfileOptionsResult,
   SetThreadProfileInput,
   SetThreadProfileResult,
+  SetThreadHeartbeatInput,
+  SetThreadHeartbeatPausedInput,
   SetThreadSnoozeInput,
   TranscriptMessage,
   TranscriptPage,
@@ -119,6 +121,9 @@ export interface Api {
   // than completing whatever now owns the slug.
   completeThread(input: { slug: string; sessionId: string; terminateLive?: boolean }): Promise<{ needsConfirmation: boolean; hold?: CompletionHold }>
   setThreadSnooze(input: SetThreadSnoozeInput): Promise<void>
+  // The worker arms these itself through `mcp__fray__heartbeat`; the board only pauses and resumes.
+  setThreadHeartbeat(input: SetThreadHeartbeatInput): Promise<void>
+  setThreadHeartbeatPaused(input: SetThreadHeartbeatPausedInput): Promise<void>
   // Event-snooze the awaiting-background card: hide it until the thread's own background work returns
   // (the parent comes to a NEW rest). No deadline and no scheduler — the board re-surfaces it the moment
   // rested_at advances. `sessionId` binds the click to the session the tab was looking at.
@@ -216,6 +221,8 @@ export const PROCEDURES = {
   setThreadState: "mutation",
   completeThread: "mutation",
   setThreadSnooze: "mutation",
+  setThreadHeartbeat: "mutation",
+  setThreadHeartbeatPaused: "mutation",
   snoozeAwaitingBackground: "mutation",
   confirmAwaiting: "mutation",
   forgetThread: "mutation",

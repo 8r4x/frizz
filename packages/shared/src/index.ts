@@ -357,6 +357,31 @@ export const SNOOZE_PROMPT_MAX = 4000
 export const SnoozePrompt = z.string().trim().min(1).max(SNOOZE_PROMPT_MAX)
 export type SnoozePrompt = z.infer<typeof SnoozePrompt>
 
+// A worker's own RECURRING wake. Delivered like a snooze bump — verbatim, as an ordinary user turn —
+// so it shares that cap. The floor is one minute because a beat only ever lands at the thread's next
+// REST: anything faster cannot deliver faster, it just churns the outbox. The ceiling keeps a
+// forgotten heartbeat from looking like a dead one.
+export const HEARTBEAT_PROMPT_MAX = SNOOZE_PROMPT_MAX
+export const HEARTBEAT_MIN_INTERVAL_SECONDS = 60
+export const HEARTBEAT_MAX_INTERVAL_SECONDS = 24 * 60 * 60
+export const HeartbeatPrompt = z.string().trim().min(1).max(HEARTBEAT_PROMPT_MAX)
+export const HeartbeatIntervalSeconds = z
+  .number()
+  .int()
+  .min(HEARTBEAT_MIN_INTERVAL_SECONDS)
+  .max(HEARTBEAT_MAX_INTERVAL_SECONDS)
+
+// What the board renders for a thread carrying one. `paused` keeps the settings but stops the beat,
+// which is why the rail can offer play/pause rather than making the worker re-register.
+export const ThreadHeartbeat = z.object({
+  intervalSeconds: z.number().int().positive(),
+  prompt: z.string(),
+  paused: z.boolean(),
+  armedAt: z.string(),
+  lastFiredAt: z.string().optional(),
+}).strict()
+export type ThreadHeartbeat = z.infer<typeof ThreadHeartbeat>
+
 // The signal fence on a thread's FINAL assistant message — the fence language IS the state, the
 // body is the message. `done` = checked success card in the queue until the human Archives it (the
 // fence itself MUTATES NOTHING — maintainer-settled); `awaiting` = a parked human/timer wait.
@@ -507,6 +532,9 @@ export const ThreadView = z.object({
   // AUTO-bump (the scheduler resumes the agent with exactly this text) rather than a reminder, which is
   // the distinction the held row's tooltip renders. Absent ⇒ the card merely re-surfaces.
   snoozePrompt: z.string().optional(),
+  // The worker's own recurring wake, when it has armed one. Present ⇒ the rail shows the heartbeat
+  // indicator and its pause/play control; `paused` picks which of the two the control offers.
+  heartbeat: ThreadHeartbeat.optional(),
   // The signal fence on the final assistant message, present only while the thread is excused by it.
   lastFence: ThreadFence.optional(),
   // SERVER-DERIVED queue membership: explicit questions, checked/done handoffs, plus the process-level
@@ -905,6 +933,27 @@ export const SetThreadSnoozeInput = z.object({
   prompt: SnoozePrompt.nullable().optional(),
 }).strict()
 export type SetThreadSnoozeInput = z.infer<typeof SetThreadSnoozeInput>
+
+// The worker arms/stops its own heartbeat through this (via `mcp__fray__heartbeat`, which POSTs the
+// same `/rpc/*` surface the board uses). `prompt: null` is the explicit stop; a prompt requires an
+// interval. Deliberately NOT session-guarded on the way in: the MCP server is spawned with its
+// thread's slug at dispatch and a resume keeps that slug, while the generation bumps under it — a
+// guard here would break exactly the long-lived thread this exists for.
+export const SetThreadHeartbeatInput = z.object({
+  slug: ThreadSlug,
+  prompt: HeartbeatPrompt.nullable(),
+  intervalSeconds: HeartbeatIntervalSeconds.optional(),
+}).strict()
+export type SetThreadHeartbeatInput = z.infer<typeof SetThreadHeartbeatInput>
+
+// The rail's pause/play. Session-guarded (unlike arming) because this one comes from a browser tab
+// that may be looking at a thread which has since been re-dispatched.
+export const SetThreadHeartbeatPausedInput = z.object({
+  slug: ThreadSlug,
+  sessionId: z.string().min(1),
+  paused: z.boolean(),
+}).strict()
+export type SetThreadHeartbeatPausedInput = z.infer<typeof SetThreadHeartbeatPausedInput>
 
 // An ```awaiting fence is a PROPOSAL. Confirming binds ONE exact final-message generation — identified
 // by the fence instant plus the hint it proposed — to durable state, so a later fence or an edited hint

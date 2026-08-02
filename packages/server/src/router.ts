@@ -10,6 +10,8 @@ import {
   FollowUpInput,
   UnqueueFollowUpInput,
   UnqueueFollowUpResult,
+  SetThreadHeartbeatInput,
+  SetThreadHeartbeatPausedInput,
   SetThreadSnoozeInput,
   ConfirmAwaitingInput,
   canonicalSnoozeInstant,
@@ -1532,6 +1534,47 @@ export function createRouter(ctx: AppContext) {
         // would leave the row still holding an operator confirmation it no longer wants.
         if (input.until === null) {
           ctx.storage.clearAwaitingWaitIfSession(input.slug, row.session_id, row.runtime_generation ?? 0)
+        }
+        ctx.board.refresh()
+      },
+    }),
+
+    // The worker's own recurring wake (scheduler.ts SOURCE 4), armed from `mcp__fray__heartbeat`.
+    // Exists because Claude Code's in-session cron cannot fire in the headless runtime fray spawns —
+    // its scheduler is gated behind a flag that stays set while ANY background task is outstanding, so
+    // the thread parked behind a sub-agent is precisely the one it never wakes.
+    //
+    // Arming is idempotent-ish rather than additive: a thread has AT MOST ONE heartbeat, so a second
+    // call replaces the first (and mints a new generation, superseding any beat already queued under
+    // the old text). That keeps a worker that re-registers on resume from accumulating beats.
+    setThreadHeartbeat: mutation({
+      input: SetThreadHeartbeatInput,
+      handler: async ({ input }) => {
+        const row = ctx.storage.getSession(input.slug)
+        if (!row) throw new Error(`thread ${input.slug} is not registered`)
+        if (input.prompt === null) {
+          ctx.storage.setHeartbeat(input.slug, null, null, null)
+          ctx.board.refresh()
+          return
+        }
+        if (row.state === "archived" || row.archived === 1) throw new Error("Reopen this thread before arming a heartbeat")
+        // Required alongside a prompt rather than defaulted: a heartbeat the worker did not choose the
+        // cadence for is one it will not reason about stopping.
+        if (input.intervalSeconds === undefined) throw new Error("`intervalSeconds` is required when arming a heartbeat")
+        ctx.storage.setHeartbeat(input.slug, input.prompt, input.intervalSeconds * 1000, new Date().toISOString())
+        ctx.board.refresh()
+      },
+    }),
+
+    // Pause/play from the rail. Pause keeps the settings (so play resumes the same heartbeat) but stops
+    // new beats AND drops any beat already queued — see deliveryContext, where a paused row reads as
+    // supersession. Without that drop, un-pausing would deliver a beat the human had silenced.
+    setThreadHeartbeatPaused: mutation({
+      input: SetThreadHeartbeatPausedInput,
+      handler: async ({ input }) => {
+        const row = currentOwnedSession(input.slug, input.sessionId)
+        if (!ctx.storage.setHeartbeatPausedIfCurrent(input.slug, row.session_id, row.runtime_generation ?? 0, input.paused)) {
+          throw new Error("This thread has no heartbeat to pause")
         }
         ctx.board.refresh()
       },

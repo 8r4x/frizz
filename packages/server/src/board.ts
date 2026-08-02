@@ -666,6 +666,18 @@ function sessionThreadView(
     // Only meaningful while the snooze is still pending — a prompt without a live deadline is an
     // already-delivered (or superseded) bump the row has not been swept clean of yet.
     snoozePrompt: snoozedUntil ? row.snooze_prompt ?? undefined : undefined,
+    // A heartbeat is armed iff all three of prompt/interval/generation are set (storage writes and
+    // clears them together). Projected even while PAUSED — that is the state the rail's play button
+    // exists to leave.
+    heartbeat: row.heartbeat_prompt && row.heartbeat_interval_ms && row.heartbeat_armed_at
+      ? {
+          intervalSeconds: Math.round(row.heartbeat_interval_ms / 1000),
+          prompt: row.heartbeat_prompt,
+          paused: row.heartbeat_paused === 1,
+          armedAt: row.heartbeat_armed_at,
+          lastFiredAt: row.heartbeat_last_fired_at ?? undefined,
+        }
+      : undefined,
     needsYou,
     awaitingBackground,
     crashed,
