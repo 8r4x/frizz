@@ -338,6 +338,71 @@ function armedSnooze(row: Pick<SessionRow, "snoozed_until" | "snooze_prompt">): 
   return { until, untilMs, prompt, fenceId: snoozeFenceId(until, prompt) }
 }
 
+// ---- SOURCE 4: THE WORKER'S OWN HEARTBEAT -------------------------------------------------------
+// A RECURRING self-registered wake: the worker calls `mcp__fray__heartbeat` and fray thereafter
+// delivers its prompt every `interval` at the thread's next rest, until it stops it (or the human
+// pauses it on the rail).
+//
+// It exists because the obvious tool for this — Claude Code's own in-session `CronCreate` — cannot
+// work under the runtime fray actually spawns. Fray's claude workers run headless
+// (`--input-format stream-json`), and in that mode the run does not end when the turn ends: it spins
+// a 100ms drain loop for as long as ANY background task is outstanding, and the busy flag the cron
+// scheduler gates on is only cleared after that loop exits. Measured 2026-08-01 on one session,
+// everything else constant: 3 fires in 150s with no background work, 0 with a background shell alive.
+// So the thread most in need of a nudge — one parked behind a sub-agent that will never report — is
+// exactly the one whose heartbeat is dead. There is no flag for it: the gate is hardcoded, and the
+// REPL's `assistantMode` bypass is not even passed on the headless path. The same gate kills
+// `/loop`'s ScheduleWakeup, which writes to the same in-session store.
+//
+// Riding this outbox sidesteps all of it, because fray's delivery does not consult Claude Code's idea
+// of idle at all — it is the same path the operator's own messages take, which demonstrably reach a
+// worker whose cron is gated.
+//
+// Its record of intent is the session row (SOURCE 3's shape), with `heartbeat_armed_at` as the
+// GENERATION: re-arming mints a new one, so a beat still in the outbox under the old settings reads
+// as superseded rather than delivering text the worker has since replaced.
+//
+// The beat is delivered VERBATIM, with no preamble — the worker wrote the words it wants to receive.
+const HEARTBEAT_FENCE_PREFIX = "heartbeat"
+const HEARTBEAT_HINT_PREFIX = "heartbeat:"
+
+// The generation is (armed_at, beat index). The index advances only once the previous beat is
+// TERMINAL, so a thread that stays busy accumulates exactly one pending beat rather than one per
+// interval — an agent nagged by an hour of backlog the moment it rests is its own denial of service.
+function heartbeatFenceId(armedAt: string, beat: number): string {
+  return `${HEARTBEAT_FENCE_PREFIX}:${armedAt}:${beat}`
+}
+function isHeartbeatFenceId(fenceId: string): boolean {
+  return fenceId.startsWith(`${HEARTBEAT_FENCE_PREFIX}:`)
+}
+
+interface ArmedHeartbeat {
+  prompt: string
+  intervalMs: number
+  armedAt: string
+  /** When the next beat becomes due: interval after the last delivered beat, else after arming. */
+  dueAtMs: number
+}
+
+type HeartbeatRow = Pick<
+  SessionRow,
+  "heartbeat_prompt" | "heartbeat_interval_ms" | "heartbeat_paused" | "heartbeat_armed_at" | "heartbeat_last_fired_at"
+>
+
+// A row's CURRENT heartbeat, if it has a live one. A paused heartbeat deliberately reads as ABSENT
+// here — pause must stop new beats and drop queued ones — while the row keeps its settings so play
+// resumes the same heartbeat instead of making the worker re-register it.
+function armedHeartbeat(row: HeartbeatRow): ArmedHeartbeat | undefined {
+  const prompt = row.heartbeat_prompt?.trim()
+  const intervalMs = row.heartbeat_interval_ms
+  const armedAt = row.heartbeat_armed_at
+  if (!prompt || !intervalMs || intervalMs <= 0 || !armedAt) return undefined
+  if (row.heartbeat_paused === 1) return undefined
+  const anchor = Date.parse(row.heartbeat_last_fired_at ?? armedAt)
+  if (!Number.isFinite(anchor)) return undefined
+  return { prompt, intervalMs, armedAt, dueAtMs: anchor + intervalMs }
+}
+
 // A single hint's verdict this tick: met? + the steer to send when it fires. `undefined` = indeterminate
 // (a PR fetch we couldn't complete) → neither arm nor fire; try again next poll.
 interface Verdict {
@@ -696,6 +761,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // (router.followUp), so a thread the operator adds context to still gets the bump it was promised.
     if (isSnoozeFenceId(item.fenceId)) {
       if (armedSnooze(row)?.fenceId !== item.fenceId) return "superseded"
+      return tele.turn === "idle" ? "current-idle" : "current-busy"
+    }
+    // A beat is bound to the exact heartbeat GENERATION that queued it. Stopping the heartbeat, the
+    // worker re-arming it with different settings, and the human pressing pause all read as
+    // supersession here — each one means the queued text no longer describes what the thread wants.
+    // Pause therefore drops a beat that is already waiting, rather than delivering it on resume.
+    if (isHeartbeatFenceId(item.fenceId)) {
+      const armed = armedHeartbeat(row)
+      if (!armed || !item.fenceId.startsWith(`${HEARTBEAT_FENCE_PREFIX}:${armed.armedAt}:`)) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
     // A report repair is bound to a report that is STILL missing from the model's context. If the
@@ -1161,6 +1235,79 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   }
 
+  // ---- The worker-heartbeat pass -------------------------------------------------------------------
+  // Like the snooze pass, this does NOT filter on `turn === "idle"`: a beat that comes due mid-turn is
+  // queued and the delivery gate holds it until the thread rests. That hold IS the feature — the whole
+  // point is to reach a thread the moment it goes quiet, which is precisely when Claude Code's own cron
+  // cannot (see SOURCE 4 above).
+  //
+  // At most ONE beat is ever outstanding per thread: a new one is queued only when the previous has
+  // reached a terminal state, and the beat clock runs from the last DELIVERED beat. A thread busy for
+  // an hour therefore gets one catch-up beat at its next rest, not sixty.
+  function evalHeartbeats(nowMs: number): void {
+    for (const row of deps.storage.allSessions()) {
+      if (row.state === "archived" || row.archived === 1) continue
+      const armed = armedHeartbeat(row)
+      if (!armed || armed.dueAtMs > nowMs) continue
+      // One beat in flight at a time. Any open delivery for this thread's heartbeat — whatever its
+      // generation — means the previous beat has not landed yet, so this interval is skipped rather
+      // than stacked behind it.
+      if (openHeartbeat(row.slug, row.session_id)) continue
+      const beat = beatIndex(row.heartbeat_last_fired_at ?? null, armed)
+      const fenceId = heartbeatFenceId(armed.armedAt, beat)
+      const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
+      if (outbox.get(deliveryId)) continue
+      const item = outbox.enqueue({
+        id: deliveryId,
+        slug: row.slug,
+        sessionId: row.session_id,
+        fenceId,
+        hintKey: `${HEARTBEAT_HINT_PREFIX}${armed.intervalMs}`,
+        message: armed.prompt,
+        reason: `heartbeat every ${Math.round(armed.intervalMs / 1000)}s`,
+      }, nowMs).delivery
+      log(`waker: queued ${row.slug} — ${item.reason}`)
+      checkpoint("after-enqueue", item)
+    }
+  }
+
+  // Is a beat for this thread still open (pending/leased)? Scanning the open set is cheap — the outbox
+  // holds only live work — and it is the one check that makes "at most one beat outstanding" true
+  // across restarts, since it reads the durable rows rather than in-memory arming.
+  function openHeartbeat(slug: string, sessionId: string): boolean {
+    return outbox.listOpen().some(
+      (item) => item.slug === slug && item.sessionId === sessionId && isHeartbeatFenceId(item.fenceId),
+    )
+  }
+
+  // A monotonic-enough beat number so consecutive beats get distinct delivery ids. Derived from elapsed
+  // intervals rather than a stored counter: the row already carries everything needed, and a delivery
+  // id only has to be unique per (session, generation), not meaningful.
+  function beatIndex(lastFiredAt: string | null, armed: ArmedHeartbeat): number {
+    const armedMs = Date.parse(armed.armedAt)
+    const lastMs = Date.parse(lastFiredAt ?? armed.armedAt)
+    if (!Number.isFinite(armedMs) || !Number.isFinite(lastMs)) return 0
+    return Math.max(0, Math.round((lastMs - armedMs) / armed.intervalMs)) + 1
+  }
+
+  // Stamp the beat clock once a beat has genuinely REACHED the worker, so the next one is due an
+  // interval after it actually landed. Called only from the three settle points that mean delivery
+  // happened (acknowledged, or confirmed by the wake token in the transcript) — deliberately NOT from
+  // the superseded/exhausted/abandoned ones the snooze settles on. A beat dropped because the human
+  // pressed pause, or one that exhausted its attempts, never fired, and advancing the clock for it
+  // would silently swallow the next interval.
+  //
+  // Guarded on the generation for the same reason as the snooze: a beat that settles after the worker
+  // re-armed or stopped its heartbeat must not write a schedule onto settings it no longer describes.
+  function settleHeartbeat(item: WakeDelivery): void {
+    if (!isHeartbeatFenceId(item.fenceId)) return
+    const row = deps.storage.getSession(item.slug)
+    if (!row || row.session_id !== item.sessionId) return
+    const armedAt = row.heartbeat_armed_at
+    if (!armedAt || !item.fenceId.startsWith(`${HEARTBEAT_FENCE_PREFIX}:${armedAt}:`)) return
+    deps.storage.stampHeartbeatFired(item.slug, armedAt, new Date().toISOString())
+  }
+
   // Disarm the row a snooze wake came from, once that wake is terminal. Guarded on the fence id still
   // matching so a human who re-snoozed (or snoozed again) between enqueue and settlement keeps their
   // NEW deadline — the stale delivery must never erase state it no longer describes.
@@ -1178,6 +1325,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (context === "confirmed") {
         outbox.confirm(item.id, nowMs)
         settleSnooze(item)
+        settleHeartbeat(item)
         continue
       }
       if (context === "superseded") {
@@ -1218,6 +1366,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (context === "confirmed") {
         outbox.confirm(item.id, now())
         settleSnooze(item)
+        settleHeartbeat(item)
         continue
       }
       if (context === "superseded") {
@@ -1280,6 +1429,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         continue
       }
       settleSnooze(item)
+      settleHeartbeat(item)
       const acknowledged = outbox.get(item.id)
       if (acknowledged) checkpoint("after-ack", acknowledged)
     }
@@ -1332,6 +1482,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
       log(`waker: snooze-bump pass failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    try {
+      evalHeartbeats(now())
+    } catch (err) {
+      if (err instanceof InjectedSchedulerCrash) throw err
+      log(`waker: heartbeat pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     try {
       repairDroppedReports(now())
