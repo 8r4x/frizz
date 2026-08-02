@@ -72,6 +72,16 @@ export interface SessionRow {
   // after the beat was queued, so a thread that stayed busy for an hour gets one catch-up beat at its
   // next rest rather than an hour's backlog.
   heartbeat_last_fired_at?: string | null
+  // The OPERATOR's standing prompt (scheduler.ts SOURCE 5), armed from the thread footer. Same shape as
+  // the heartbeat above, minus the interval — its trigger is the thread coming to REST, not a clock.
+  // `standing_prompt_armed_at` is likewise the GENERATION, and `standing_prompt_enabled` is the
+  // popover's toggle: 0 keeps the text but fires nothing.
+  standing_prompt?: string | null
+  standing_prompt_enabled?: number
+  standing_prompt_armed_at?: string | null
+  // When the last bump reached a terminal delivery. Read only as a rate FLOOR (see the scheduler's
+  // STANDING_MIN_GAP_MS): a worker that rests instantly on every bump must not spin the outbox.
+  standing_prompt_last_fired_at?: string | null
   // Operator confirmation for one exact final ```awaiting fence generation. The board/scheduler ignore a
   // transcript proposal unless these match its current fence identity.
   awaiting_fence_id?: string | null
@@ -405,6 +415,21 @@ export interface Storage {
   // Stamp a delivered beat, guarded on the generation so a beat that settles after the worker re-armed
   // (or stopped) cannot write a schedule onto settings it no longer describes.
   stampHeartbeatFired(slug: string, armedAt: string, firedAt: string): boolean
+  // Arm/edit/clear the OPERATOR's standing prompt in one write, because the popover's toggle and its
+  // textarea are two views of one row. A null prompt clears the row; a new prompt TEXT mints a fresh
+  // `armed_at` generation (superseding any bump already queued for the old words) while a pure toggle
+  // flip keeps it, so enabling does not re-run a bump the operator just watched land. Session-guarded:
+  // this comes from a browser tab that may be looking at a thread which has since been re-dispatched.
+  setStandingPromptIfCurrent(
+    slug: string,
+    sessionId: string,
+    generation: number,
+    prompt: string | null,
+    enabled: boolean,
+    armedAt: string,
+  ): boolean
+  // Stamp a delivered bump, guarded on the generation for the same reason as the heartbeat's stamp.
+  stampStandingPromptFired(slug: string, armedAt: string, firedAt: string): boolean
   // Operator confirmation of ONE exact awaiting fence; fails closed if the session/generation moved.
   confirmAwaitingWait(
     slug: string,
@@ -675,6 +700,13 @@ export function createStorage(dbPath: string): Storage {
     "heartbeat_paused INTEGER NOT NULL DEFAULT 0",
     "heartbeat_armed_at TEXT",
     "heartbeat_last_fired_at TEXT",
+    // The OPERATOR's counterpart to the heartbeat (scheduler.ts SOURCE 5). Armed from the thread
+    // footer's popover; delivered every time the thread comes to REST until the worker replies with
+    // the ALLDONE sentinel. No interval column — "rest" is the trigger.
+    "standing_prompt TEXT",
+    "standing_prompt_enabled INTEGER NOT NULL DEFAULT 0",
+    "standing_prompt_armed_at TEXT",
+    "standing_prompt_last_fired_at TEXT",
   ]) {
     try {
       db.exec(`ALTER TABLE session ADD COLUMN ${col}`)
@@ -1023,6 +1055,29 @@ export function createStorage(dbPath: string): Storage {
   const heartbeatFiredStmt = db.prepare(`
     UPDATE session SET heartbeat_last_fired_at = ?
     WHERE slug = ? AND heartbeat_armed_at = ?
+  `)
+  // Every SET expression here reads the ORIGINAL row (SQLite evaluates the whole SET list against the
+  // pre-update values), which is what lets one statement decide whether this write is a new arming or
+  // an edit of the existing one. The generation — and with it the last-fired stamp — is preserved
+  // exactly when the TEXT is unchanged, so toggling off and on again does not supersede a bump already
+  // in flight for those same words, while editing the text does.
+  const standingPromptStmt = db.prepare(`
+    UPDATE session SET
+      standing_prompt = ?,
+      standing_prompt_enabled = ?,
+      standing_prompt_armed_at = CASE
+        WHEN ? IS NULL THEN NULL
+        WHEN standing_prompt_armed_at IS NOT NULL AND standing_prompt IS ? THEN standing_prompt_armed_at
+        ELSE ? END,
+      standing_prompt_last_fired_at = CASE
+        WHEN ? IS NULL THEN NULL
+        WHEN standing_prompt_armed_at IS NOT NULL AND standing_prompt IS ? THEN standing_prompt_last_fired_at
+        ELSE NULL END
+    WHERE slug = ? AND session_id = ? AND runtime_generation = ?
+  `)
+  const standingPromptFiredStmt = db.prepare(`
+    UPDATE session SET standing_prompt_last_fired_at = ?
+    WHERE slug = ? AND standing_prompt_armed_at = ?
   `)
   const confirmAwaitingWaitStmt = db.prepare(`
     UPDATE session
@@ -1659,6 +1714,16 @@ export function createStorage(dbPath: string): Storage {
       heartbeatPausedIfCurrentStmt.run(paused ? 1 : 0, slug, sessionId, generation).changes === 1,
     stampHeartbeatFired: (slug, armedAt, firedAt) =>
       heartbeatFiredStmt.run(firedAt, slug, armedAt).changes === 1,
+    setStandingPromptIfCurrent: (slug, sessionId, generation, prompt, enabled, armedAt) =>
+      standingPromptStmt.run(
+        prompt,
+        prompt === null ? 0 : enabled ? 1 : 0,
+        prompt, prompt, armedAt,
+        prompt, prompt,
+        slug, sessionId, generation,
+      ).changes === 1,
+    stampStandingPromptFired: (slug, armedAt, firedAt) =>
+      standingPromptFiredStmt.run(firedAt, slug, armedAt).changes === 1,
     confirmAwaitingWait: (slug, sessionId, generation, fenceId, confirmedAt, snoozedUntil) =>
       confirmAwaitingWaitStmt.run(fenceId, confirmedAt, snoozedUntil, slug, sessionId, generation).changes === 1,
     clearAwaitingWaitIfSession: (slug, sessionId, generation) =>

@@ -679,6 +679,16 @@ function sessionThreadView(
           lastFiredAt: row.heartbeat_last_fired_at ?? undefined,
         }
       : undefined,
+    // The operator's standing prompt. Projected even while DISABLED — that is the state the footer's
+    // toggle exists to leave, and the text has to survive it or the popover would open empty.
+    standingPrompt: row.standing_prompt && row.standing_prompt_armed_at
+      ? {
+          prompt: row.standing_prompt,
+          enabled: row.standing_prompt_enabled === 1,
+          armedAt: row.standing_prompt_armed_at,
+          lastFiredAt: row.standing_prompt_last_fired_at ?? undefined,
+        }
+      : undefined,
     needsYou,
     awaitingBackground,
     crashed,

@@ -1,7 +1,7 @@
 import { statSync, openSync, readSync, closeSync, readdirSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs"
 import { join } from "node:path"
 import { homedir, tmpdir } from "node:os"
-import { insideFence, PermissionMode } from "@fray-ui/shared"
+import { insideFence, PermissionMode, saysAllDone } from "@fray-ui/shared"
 import type { Bus } from "./bus.ts"
 import { permMarkerPath, type Project } from "./project.ts"
 import { isBrokerClaudeRow, isHeadlessRow } from "./storage.ts"
@@ -636,6 +636,7 @@ export function newTailState(
     partial: "",
     sawRecords: false,
     lastAssistantHasQuestion: false,
+    lastAssistantAllDone: false,
     subAgents: new Map(),
     retiredSubAgents: new Map(),
     queuedReports: new Map(),
@@ -1654,6 +1655,9 @@ export function applyRecord(state: TailState, rec: Record): void {
       if (preview !== undefined) state.lastAssistant = preview
       // Track whether THIS (now the latest) assistant text carries an unanswered question fence.
       state.lastAssistantHasQuestion = hasQuestionBlock(raw)
+      // Same lifecycle for the standing-prompt sentinel: it only means "nothing actionable" while it
+      // is the FINAL word, so a later assistant text that omits it re-opens the loop by itself.
+      state.lastAssistantAllDone = saysAllDone(raw)
       // Recompute the done/awaiting signal fence from THIS text — an assistant text with no fence
       // clears it (the fence only signals while it is the final message). Same lifecycle as the
       // question flag: set per assistant text, cleared by any user record below.
@@ -1671,6 +1675,7 @@ export function applyRecord(state: TailState, rec: Record): void {
     // A newer user record supersedes any pending chat question / excusal fence (they only signal as the
     // FINAL message); the NEXT assistant record recomputes them.
     state.lastAssistantHasQuestion = false
+    state.lastAssistantAllDone = false
     state.lastFence = undefined
     // Any user record supersedes a usage-limit pause: the conversation has moved past the point where
     // it was cut off, whether by the human or by the "continue" the wake scheduler delivered. This is
@@ -1720,6 +1725,7 @@ function applyFinalText(state: FoldState, text: string): void {
   const preview = previewText(text)
   if (preview !== undefined) state.lastAssistant = preview
   state.lastAssistantHasQuestion = hasQuestionBlock(text)
+  state.lastAssistantAllDone = saysAllDone(text)
   state.lastFence = parseSignalFence(text)
 }
 
@@ -1773,6 +1779,7 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
       state.sawRecords = true
       state.turn = "in-flight"
       state.lastAssistantHasQuestion = false
+      state.lastAssistantAllDone = false
       state.lastFence = undefined
       if (!ev.synthetic) {
         if (typeof ev.at === "string") state.lastUserAt = ev.at
@@ -4143,7 +4150,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // an unanswered ```question fence (a user reply clears the flag and flips the turn in-flight).
       const pendingQuestion = s.turn === "idle" && s.lastAssistantHasQuestion
       const nowMs = now()
-      return { turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], pendingAsk: s.pendingAsk, pendingQuestion, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow }
+      return { turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.

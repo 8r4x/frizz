@@ -12,6 +12,7 @@ import {
   UnqueueFollowUpResult,
   SetThreadHeartbeatInput,
   SetThreadHeartbeatPausedInput,
+  SetThreadStandingPromptInput,
   ThreadPluginReloadResult,
   SetThreadSnoozeInput,
   ConfirmAwaitingInput,
@@ -1655,6 +1656,34 @@ export function createRouter(ctx: AppContext) {
         const row = currentOwnedSession(input.slug, input.sessionId)
         if (!ctx.storage.setHeartbeatPausedIfCurrent(input.slug, row.session_id, row.runtime_generation ?? 0, input.paused)) {
           throw new Error("This thread has no heartbeat to pause")
+        }
+        ctx.board.refresh()
+      },
+    }),
+
+    // The OPERATOR's standing prompt (scheduler.ts SOURCE 5), armed from the thread footer's popover.
+    // One mutation for both the toggle and the text, because they are two views of one row: split in
+    // two, a tab holding only one of them would clobber the other on save.
+    //
+    // Storage decides whether this is a fresh arming or an edit (it keeps the generation when the text
+    // is unchanged), so flipping the toggle off and on again cannot supersede a bump already in flight
+    // for those same words, while editing the words does exactly that.
+    setThreadStandingPrompt: mutation({
+      input: SetThreadStandingPromptInput,
+      handler: async ({ input }) => {
+        const row = currentOwnedSession(input.slug, input.sessionId)
+        if (input.prompt !== null && input.enabled && (row.state === "archived" || row.archived === 1)) {
+          throw new Error("Reopen this thread before arming a standing prompt")
+        }
+        if (!ctx.storage.setStandingPromptIfCurrent(
+          input.slug,
+          row.session_id,
+          row.runtime_generation ?? 0,
+          input.prompt,
+          input.enabled,
+          new Date().toISOString(),
+        )) {
+          throw new Error("This thread moved on; reopen it and try again")
         }
         ctx.board.refresh()
       },

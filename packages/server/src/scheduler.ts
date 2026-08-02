@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { formatGithubWakeSteer, isValidAwaitingTimer, wakeDeliveryToken, type QuotaSnapshot } from "@fray-ui/shared"
+import { formatGithubWakeSteer, isValidAwaitingTimer, standingPromptMessage, wakeDeliveryToken, type QuotaSnapshot } from "@fray-ui/shared"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { FenceView } from "./tailer.ts"
@@ -403,6 +403,63 @@ function armedHeartbeat(row: HeartbeatRow): ArmedHeartbeat | undefined {
   return { prompt, intervalMs, armedAt, dueAtMs: anchor + intervalMs }
 }
 
+// ---- SOURCE 5: THE OPERATOR'S STANDING PROMPT ---------------------------------------------------
+// The heartbeat's sibling, armed from the thread footer instead of from the worker. Same delivery
+// machinery, different TRIGGER: a heartbeat asks "has an interval elapsed?", this asks "has this agent
+// STOPPED?" — so it fires at every rest, with no interval anywhere in it.
+//
+// That is the shape the interval version kept failing at. An operator who wants "keep going until X"
+// has no idea what number to put in the box: too short and the beat lands mid-turn and queues behind
+// itself, too long and the thread sits finished for twenty minutes. Rest is the event they actually
+// meant.
+//
+// The loop's OFF SWITCH belongs to the worker, and it is the one part of this that is not optional. A
+// standing prompt with no terminating condition is an infinite bump generator, so the delivered text
+// carries a trailer (shared `standingPromptMessage`) teaching the worker to answer ALLDONE when nothing
+// in it is actionable. The tailer folds that sentinel onto the final message (`lastAssistantAllDone`)
+// and this pass simply declines to fire while it stands — no state to write, and it re-opens by itself
+// the moment the thread produces any other final message.
+//
+// Its record of intent is the session row, with `standing_prompt_armed_at` as the GENERATION exactly as
+// SOURCE 4 uses `heartbeat_armed_at`: editing the text mints a new one, so a bump already queued under
+// the old words reads as superseded rather than delivering text the operator has since replaced.
+const STANDING_FENCE_PREFIX = "standing"
+const STANDING_HINT_KEY = "standing:rest"
+
+// The floor between two bumps. The natural rate limiter is the worker's own turn, which normally runs
+// for minutes — but a worker that dies on arrival rests instantly, and without a floor that pair would
+// spin the outbox as fast as the tick allows. Thirty seconds is far below any real turn and far above
+// any crash loop.
+const STANDING_MIN_GAP_MS = 30_000
+
+// The rest a bump is bound to. `lastActivityAt` is the thread's own high-water mark, so a NEW rest
+// necessarily carries a new one — which is what makes "at most one bump per rest" fall out of delivery
+// id uniqueness rather than needing a counter. A thread with no activity clock yet has never rested.
+function standingFenceId(armedAt: string, restedAt: string): string {
+  return `${STANDING_FENCE_PREFIX}:${armedAt}:${restedAt}`
+}
+function isStandingFenceId(fenceId: string): boolean {
+  return fenceId.startsWith(`${STANDING_FENCE_PREFIX}:`)
+}
+
+interface ArmedStandingPrompt {
+  prompt: string
+  armedAt: string
+}
+
+type StandingRow = Pick<SessionRow, "standing_prompt" | "standing_prompt_enabled" | "standing_prompt_armed_at">
+
+// A row's CURRENT standing prompt, if it has a live one. Disabled reads as ABSENT here — the toggle
+// must stop new bumps and drop queued ones — while the row keeps the text so re-enabling does not make
+// the operator retype it.
+function armedStandingPrompt(row: StandingRow): ArmedStandingPrompt | undefined {
+  const prompt = row.standing_prompt?.trim()
+  const armedAt = row.standing_prompt_armed_at
+  if (!prompt || !armedAt) return undefined
+  if (row.standing_prompt_enabled !== 1) return undefined
+  return { prompt, armedAt }
+}
+
 // A single hint's verdict this tick: met? + the steer to send when it fires. `undefined` = indeterminate
 // (a PR fetch we couldn't complete) → neither arm nor fire; try again next poll.
 interface Verdict {
@@ -770,6 +827,17 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (isHeartbeatFenceId(item.fenceId)) {
       const armed = armedHeartbeat(row)
       if (!armed || !item.fenceId.startsWith(`${HEARTBEAT_FENCE_PREFIX}:${armed.armedAt}:`)) return "superseded"
+      return tele.turn === "idle" ? "current-idle" : "current-busy"
+    }
+    // A bump is bound to the exact standing-prompt GENERATION that queued it AND to the exact REST it
+    // was queued for. Disabling the toggle, editing the text, and the thread moving on to a new rest
+    // all read as supersession here — and so does an ALLDONE that landed between enqueue and delivery,
+    // which is the case that matters: a worker that closed the loop while a bump sat in the outbox must
+    // not be handed it anyway.
+    if (isStandingFenceId(item.fenceId)) {
+      const armed = armedStandingPrompt(row)
+      if (!armed || item.fenceId !== standingFenceId(armed.armedAt, tele.lastActivityAt ?? "")) return "superseded"
+      if (tele.lastAssistantAllDone) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
     // A report repair is bound to a report that is STILL missing from the model's context. If the
@@ -1308,6 +1376,55 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     deps.storage.stampHeartbeatFired(item.slug, armedAt, new Date().toISOString())
   }
 
+  // ---- The operator-standing-prompt pass ------------------------------------------------------------
+  // Unlike every other pass here this one DOES filter on `turn === "idle"`, because rest is not a
+  // deadline it can queue against — it IS the trigger. Queueing a bump for a busy thread would bind it
+  // to an activity stamp that is still moving, and the delivery gate would then supersede it on the
+  // very next line the worker wrote.
+  function evalStandingPrompts(nowMs: number): void {
+    for (const row of deps.storage.allSessions()) {
+      if (row.state === "archived" || row.archived === 1) continue
+      const armed = armedStandingPrompt(row)
+      if (!armed) continue
+      const tele = deps.tailer.get(row.slug)
+      if (!tele || tele.turn !== "idle" || !tele.lastActivityAt) continue
+      // The worker has said there is nothing actionable left. Nothing to write and nothing to clear —
+      // the flag is folded off the final message, so the next message that omits it re-opens the loop.
+      if (tele.lastAssistantAllDone) continue
+      const lastFired = row.standing_prompt_last_fired_at ? Date.parse(row.standing_prompt_last_fired_at) : NaN
+      if (Number.isFinite(lastFired) && nowMs - lastFired < STANDING_MIN_GAP_MS) continue
+      const fenceId = standingFenceId(armed.armedAt, tele.lastActivityAt)
+      const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
+      // Terminal rows stay in the store, so this alone is what makes a rest bump EXACTLY once: the same
+      // rest yields the same delivery id, whatever happened to the first attempt.
+      if (outbox.get(deliveryId)) continue
+      const item = outbox.enqueue({
+        id: deliveryId,
+        slug: row.slug,
+        sessionId: row.session_id,
+        fenceId,
+        hintKey: STANDING_HINT_KEY,
+        message: standingPromptMessage(armed.prompt),
+        reason: "standing prompt at rest",
+      }, nowMs).delivery
+      log(`waker: queued ${row.slug} — ${item.reason}`)
+      checkpoint("after-enqueue", item)
+    }
+  }
+
+  // Stamp the bump clock once a bump has genuinely REACHED the worker — the rate floor's input, and
+  // like the heartbeat's stamp it is called only from the settle points that mean delivery happened.
+  // Guarded on the generation so a bump settling after the operator edited the text cannot write onto
+  // words it no longer describes.
+  function settleStandingPrompt(item: WakeDelivery): void {
+    if (!isStandingFenceId(item.fenceId)) return
+    const row = deps.storage.getSession(item.slug)
+    if (!row || row.session_id !== item.sessionId) return
+    const armedAt = row.standing_prompt_armed_at
+    if (!armedAt || !item.fenceId.startsWith(`${STANDING_FENCE_PREFIX}:${armedAt}:`)) return
+    deps.storage.stampStandingPromptFired(item.slug, armedAt, new Date().toISOString())
+  }
+
   // Disarm the row a snooze wake came from, once that wake is terminal. Guarded on the fence id still
   // matching so a human who re-snoozed (or snoozed again) between enqueue and settlement keeps their
   // NEW deadline — the stale delivery must never erase state it no longer describes.
@@ -1326,6 +1443,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         outbox.confirm(item.id, nowMs)
         settleSnooze(item)
         settleHeartbeat(item)
+        settleStandingPrompt(item)
         continue
       }
       if (context === "superseded") {
@@ -1367,6 +1485,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         outbox.confirm(item.id, now())
         settleSnooze(item)
         settleHeartbeat(item)
+        settleStandingPrompt(item)
         continue
       }
       if (context === "superseded") {
@@ -1430,6 +1549,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       }
       settleSnooze(item)
       settleHeartbeat(item)
+      settleStandingPrompt(item)
       const acknowledged = outbox.get(item.id)
       if (acknowledged) checkpoint("after-ack", acknowledged)
     }
@@ -1488,6 +1608,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
       log(`waker: heartbeat pass failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    try {
+      evalStandingPrompts(now())
+    } catch (err) {
+      if (err instanceof InjectedSchedulerCrash) throw err
+      log(`waker: standing-prompt pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     try {
       repairDroppedReports(now())
