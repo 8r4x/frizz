@@ -96,8 +96,8 @@ export function StopHookControl({ thread }: { thread: ThreadView }) {
           >
             {/* The square-in-a-circle. Colored ONLY while it is actually bumping — the footer's left
                 cluster is a status strip first, so an idle control there has to read as quiet as the
-                slot it would otherwise leave empty. Amber, not the heartbeat's pink: two marks that can
-                sit side by side in the same cluster must not claim the same state. */}
+                slot it would otherwise leave empty. The same amber the rail's own mark uses, so one
+                colour carries this one fact across both surfaces. */}
             <CircleStop size={12} className={live ? "text-amber-400/90" : "text-muted/45 hover:text-muted"} />
           </button>
         </PopoverTrigger>

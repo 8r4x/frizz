@@ -433,9 +433,9 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       ...(deps.interactions && deps.projectId ? { FRAY_NATIVE_ASK: "1" } : {}),
     }
     // deps.workerEnv.mcpServers is computed ONCE per project, so the fray MCP server it describes has
-    // no idea which thread it will serve. A tool that acts on its OWN thread (`heartbeat`) needs that,
-    // and nothing in the MCP protocol carries a caller identity — so the slug is stamped into that
-    // server's env HERE, where it is finally known. Deliberately not left to FRAY_UI_THREAD
+    // no idea which thread it will serve. A tool that acts on its OWN thread would need that, and
+    // nothing in the MCP protocol carries a caller identity — so the slug is stamped into that
+    // server's env HERE, where it is finally known. No shipped tool reads it today (see dispatch.ts). Deliberately not left to FRAY_UI_THREAD
     // inheritance: whether Claude Code passes its own env down to an MCP subprocess is its business,
     // not a contract fray should depend on.
     const mcpServers = withFrayThreadSlug(we?.mcpServers, slug)
