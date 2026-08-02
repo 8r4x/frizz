@@ -79,6 +79,9 @@ function deriveRuntime(
   turn: "in-flight" | "idle" | undefined,
   permPrompt: boolean,
   appServerStalled = false,
+  // BROKER-ONLY: the daemon is gone AND this thread still tracks live sub-agents. Distinct from
+  // appServerStalled, which is a MID-TURN predicate — see the headless branch below.
+  headlessLostWork = false,
 ): RuntimeState {
   if (!row) return "none"
   // App-server codex sessions have NO tmux pane. A persisted bridge thread is always resumable, so
@@ -86,6 +89,15 @@ function deriveRuntime(
   // would mark every headless thread "exited" (and, mid-turn, trip the crash-net). Never do that.
   if (isHeadlessRow(row)) {
     if (permPrompt) return "perm-prompt"
+    // Checked BEFORE the idle branch, which is the whole point. A worker that came to rest holding live
+    // sub-agents and whose daemon then died is NOT at rest: an Agent child runs IN-PROCESS inside that
+    // `claude` (orphan-reaper.ts: "a worker's only OS-level agent process is its session root — Agent
+    // sub-agents are in-process"), so those children died with it, and the worker is parked forever on a
+    // wake that can never arrive. Reading `turn === "idle"` first made this thread `turn-idle`, which
+    // satisfied deriveNeedsYou's `runtime !== "exited"` guard while the phantom child kept hasLiveOwnWork
+    // true — so it was EXCUSED from the queue and, needing "exited", never carded as crashed either.
+    // Neither queued nor carded: invisible. The sub-agent twin of the shell phantom fixed in a24d5ec.
+    if (headlessLostWork) return "exited"
     if (turn === "idle") return "turn-idle"
     // Mid-turn with nobody driving it: the process that owned this turn is gone. Reuse "exited" so the
     // pair (exited + in-flight) trips the SAME crash-net a dead pane does — the thread cards as
@@ -600,8 +612,14 @@ function sessionThreadView(
   // `the-landlock-people-i-m-interested`: the tailer logged the boot failure at 60s, the board threw the
   // flag away here, and the thread spun `running` for 29 minutes on an agent that never received its
   // opening prompt — until a human archived it by hand.
+  // A REST that is not one: the daemon is gone and this thread still tracks a live sub-agent, which an
+  // in-process child of that dead process cannot be. Deliberately BROKER-ONLY. The codex arm of
+  // `headlessStalled` is `appServerTurnStalled`, a mid-turn predicate — a rested rollout stops advancing
+  // by definition, so reusing it here would card every quiet codex thread as crashed. The broker arm is a
+  // direct pid probe, which means exactly what it says at rest as well as mid-turn.
+  const headlessLostWork = isBrokerClaudeRow(row) && headlessStalled && hasLiveBackgroundWork(tele)
   const runtime = degradeIfNoTranscript(
-    deriveRuntime(row.slug, row, storage, tele?.turn, tele?.permPrompt ?? false, headlessStalled),
+    deriveRuntime(row.slug, row, storage, tele?.turn, tele?.permPrompt ?? false, headlessStalled, headlessLostWork),
     isHeadlessRow(row) && !isBrokerClaudeRow(row) ? false : tele?.noTranscript,
   )
   const state = effectiveSessionState(row, registeredLegacyTerminal)

@@ -140,14 +140,18 @@ export function makeTranscriptReader(
   storage: Storage,
   backendFor?: (kind?: string) => AgentBackend,
   lifecycleFor?: (slug: string, id: string) => AgentLifecycleProjection | undefined,
+  // "The process that owned this thread's background ops is gone." Absent (tests / a bridge-less
+  // server) ⇒ never gone, so nothing is retired that the × did not retire — the pre-existing behaviour.
+  ownerGone?: (slug: string) => boolean,
 ): (slug: string) => TranscriptMessage[] {
   return (slug: string) => {
     const messages = readThreadTranscript(project, storage, slug, backendFor)
     const projected = lifecycleFor ? projectTranscriptAgentLifecycles(messages, (id) => lifecycleFor(slug, id)) : messages
     // The operator's × has to reach THIS producer too, and it is the one that matters most: the live UI
     // renders from the /ws push, so projecting only the RPC left the killed shell's card reading
-    // "RUNNING · 1 MIN 34 SEC" on screen while the RPC returned "cancelled".
-    return projectRetiredBackgroundOps(projected, retiredOpsFor(storage, slug))
+    // "RUNNING · 1 MIN 34 SEC" on screen while the RPC returned "cancelled". A dead OWNER retires the
+    // same cards for a stronger reason and reaches the same two producers.
+    return projectRetiredBackgroundOps(projected, retiredOpsFor(storage, slug), ownerGone?.(slug) ?? false)
   }
 }
 

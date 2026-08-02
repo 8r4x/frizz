@@ -16,6 +16,7 @@ import {
 import { createApp, type AppOptions } from "./app.ts"
 import { createTerminalServer, resolveThreadAttach } from "./terminal.ts"
 import { createAppSocketServer, makeTranscriptReader } from "./app-socket.ts"
+import { isBrokerClaudeRow } from "./storage.ts"
 import {
   createRetryableCleanup,
   createShutdownBarrier,
@@ -601,6 +602,13 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
           ctx!.storage,
           ctx!.backendFor,
           (slug, id) => ctx!.tailer.subAgent(slug, id),
+          // The /ws producer is the one the live UI actually renders, so a dead owner has to reach it
+          // too — projecting only the RPC is the exact half-fix the × already had to correct once.
+          (slug) => {
+            const row = ctx!.storage.getSession(slug)
+            if (!row || !isBrokerClaudeRow(row) || !ctx!.claudeBroker) return false
+            return !ctx!.claudeBroker.isDaemonAlive(row.session_id)
+          },
         ),
       }),
       (value) => { appSocket = value },

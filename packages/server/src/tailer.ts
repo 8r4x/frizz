@@ -2510,6 +2510,21 @@ export function createTailer(deps: TailerDeps): Tailer {
   // A tracked child is "stale" once we've resolved its transcript path and that file has gone
   // SUBAGENT_STALE_MS without an append (or no longer stats) — a liveness fallback for a completion we
   // missed. Before the path resolves (fresh dispatch) it stays "running" — it's just starting up.
+  //
+  // KNOWN HOLE, deliberately left as-is (audited 2026-08-02). `outputFile` is parsed out of the launch
+  // ack's PROSE (launchOutputFile), so a harness wording change silently un-resolves it — and with no
+  // path this returns false on EVERY clock, so such an entry can never go stale at all. That is
+  // unbounded, and a child reading "running" forever also excuses its thread from the queue forever
+  // (board.ts hasLiveOwnWork). Measured across this machine's whole corpus: 61 of 4068 kept-alive
+  // dispatches (1.50%) resolved no output file, every one a `Spawned successfully … agent_id:
+  // <name>@<session>` mailbox ack whose key is snake_case where this parser reads `agentId:` — and all
+  // 61 sit in six session files last written 2026-07-08..13, so the shape is not in current use.
+  // Timing out on the DISPATCH instant instead was tried and reverted: it regresses
+  // tailer.descendants.test.ts, whose fixtures encode the case this would break — a direct child with no
+  // ack-named path whose own `subagents/agent-<id>.jsonl` IS being appended to, and which is therefore
+  // genuinely running. The right fix resolves the path from the SIDECAR INDEX (which already maps
+  // toolUseId → transcript for exactly these rows) rather than putting a clock on the dispatch; that is
+  // a liveness-resolution change worth doing on its own, with a live case to validate against.
   function entryStale(e: SubAgentEntry, nowMs: number): boolean {
     if (!e.outputFile) return false
     const m = mtimeMs(e.outputFile)

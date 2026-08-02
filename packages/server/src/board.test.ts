@@ -862,6 +862,75 @@ test("degradeIfNoTranscript: only a live-pane spinner (running) downgrades to th
 // trips on a DEAD daemon — so a thread with a LIVE, idle daemon and no transcript spun `running`
 // forever. Live on 2026-07-31 that was 29 minutes on `the-landlock-people-i-m-interested` before a human
 // archived it by hand.
+// A worker that RESTED holding live sub-agents, whose broker daemon then died. An Agent sub-agent is an
+// IN-PROCESS child of the `claude` process (orphan-reaper.ts states this outright: "a worker's only
+// OS-level agent process is its session root — Agent sub-agents are in-process"), so a dead daemon means
+// those children are categorically gone. Yet the thread was invisible:
+//   deriveRuntime's headless branch returns "turn-idle" for a rested row BEFORE consulting the daemon —
+//   the stall probe only ever fired mid-turn. "turn-idle" then satisfied deriveNeedsYou's
+//   `runtime !== "exited"` guard, hasLiveOwnWork saw the phantom child still reading "running", and the
+//   thread was EXCUSED from the queue. `crashed` needs runtime === "exited", so it did not fire either.
+// Neither queued nor carded: a worker whose children can never return, waiting forever for a wake that
+// cannot come. This is the sub-agent twin of the background-shell phantom fixed in a24d5ec, and it is
+// the worse of the two — a shell does not excuse a rest on its own, a sub-agent does.
+test("a rested broker thread whose daemon died holding live sub-agents surfaces instead of vanishing", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fray-board-deaddaemon-"))
+  const project: Project = { dir, id: "project-dd", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
+  const storage = createStorage(join(dir, "ui.db"))
+  storage.upsertSession(row({ slug: "orphaned", session_id: "sess-orphaned", tmux_name: "fray-orphaned", rested_at: T0 }))
+  storage.setBackend("orphaned", "claude")
+  storage.setClaudeRuntime("orphaned", "broker")
+
+  // The worker's own turn ENDED cleanly (turn idle, no fence) with one child still tracked as running.
+  const tailer = {
+    get: () =>
+      tele({
+        turn: "idle",
+        subAgents: [{ label: "Watch CI", startedAt: T0, state: "running", id: "toolu_a" }],
+      }),
+    foreignIds: () => [], subAgent: () => undefined, forget: () => {},
+    start: () => {}, stop: () => {}, tick: () => {},
+  } satisfies Tailer
+
+  const live = createBoard(project, storage, new Bus(), tailer, "dd-live", { claudeBrokerDaemonAlive: () => true })
+  const healthy = live.refresh().threads.find((t) => t.id === "orphaned")!
+  assert.equal(healthy.runtime, "turn-idle", "control: a LIVE daemon keeps the rested row idle")
+  assert.equal(healthy.needsYou, false, "control: and its running child rightly excuses it from the queue")
+
+  const dead = createBoard(project, storage, new Bus(), tailer, "dd-dead", { claudeBrokerDaemonAlive: () => false })
+  const orphaned = dead.refresh().threads.find((t) => t.id === "orphaned")!
+  assert.equal(orphaned.runtime, "exited", "a dead daemon holding work is a stall, not an idle rest")
+  assert.equal(orphaned.needsYou, true, "so the thread reaches the human instead of being excused forever")
+  assert.equal(orphaned.crashed, true, "and it cards as stalled — its children died with the process")
+
+  rmSync(dir, { recursive: true, force: true })
+})
+
+// A dead daemon with NOTHING outstanding is the ordinary resting state of every broker thread: the
+// daemon exits (idle-timeout, or fray stopping it) and the next prompt forks a successor. That must stay
+// a clean `turn-idle` rest, or the fix above would card the entire board as crashed.
+test("a rested broker thread whose daemon died with NO outstanding work stays an ordinary rest", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fray-board-quietdaemon-"))
+  const project: Project = { dir, id: "project-qd", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
+  const storage = createStorage(join(dir, "ui.db"))
+  storage.upsertSession(row({ slug: "quiet", session_id: "sess-quiet", tmux_name: "fray-quiet", rested_at: T0 }))
+  storage.setBackend("quiet", "claude")
+  storage.setClaudeRuntime("quiet", "broker")
+
+  const tailer = {
+    get: () => tele({ turn: "idle" }),
+    foreignIds: () => [], subAgent: () => undefined, forget: () => {},
+    start: () => {}, stop: () => {}, tick: () => {},
+  } satisfies Tailer
+  const board = createBoard(project, storage, new Bus(), tailer, "qd", { claudeBrokerDaemonAlive: () => false })
+  const quiet = board.refresh().threads.find((t) => t.id === "quiet")!
+
+  assert.equal(quiet.runtime, "turn-idle", "a finished thread whose daemon idled out is NOT a crash")
+  assert.equal(quiet.crashed, false, "nothing was lost, so nothing to card")
+
+  rmSync(dir, { recursive: true, force: true })
+})
+
 test("a broker claude thread with no transcript reads as stalled, while a codex app-server thread does not", () => {
   const dir = mkdtempSync(join(tmpdir(), "fray-board-notranscript-"))
   const project: Project = { dir, id: "project-nt", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }

@@ -3707,12 +3707,26 @@ const EMPTY_RETIRED_OPS: ReadonlySet<string> = new Set()
 export function projectRetiredBackgroundOps(
   messages: readonly TranscriptMessage[],
   retired: ReadonlySet<string>,
+  // The thread's OWNING PROCESS is gone. A second, thread-wide retirement cause with exactly the same
+  // consequence as the ×, and for a stronger reason: a background Bash/Monitor is a CHILD of the agent
+  // process, so when that process dies every still-pending background card is terminal — no id needed,
+  // because none of them can be running.
+  //
+  // Without this the ops strip resurrected precisely what the board had retired. The strip is
+  // `mergeBackgroundShells(board.bgShells, transcriptBackgroundShells(messages))`, a UNION whose
+  // transcript side reads liveness as nothing more than `status === "pending"`. So emptying the board's
+  // list (what a dead owner does) did not remove the row — it moved it to the transcript side, where it
+  // kept rendering "running". Measured on the real JSONL of thread invoices-just-went-out-for-august:
+  // projected at the last record written before the successor daemon resumed it, the backfill shell's
+  // card was STILL `pending` seven hours after the process owning it had died.
+  ownerGone = false,
 ): TranscriptMessage[] {
-  if (retired.size === 0) return messages as TranscriptMessage[]
+  if (retired.size === 0 && !ownerGone) return messages as TranscriptMessage[]
   // Keyed on `shellId` — the launch tool_use id, which is exactly what the × was addressed at. A call
-  // with no shellId was never a tracked background op and is left alone.
+  // with no shellId was never a tracked background op and is left alone (that guard holds for the
+  // owner-gone arm too: it retires TRACKED background ops, not every pending tool call).
   const isRetired = (tool: TranscriptToolCall): boolean =>
-    tool.shellId !== undefined && retired.has(tool.shellId) && tool.status === "pending"
+    tool.shellId !== undefined && (ownerGone || retired.has(tool.shellId)) && tool.status === "pending"
   // `backgroundState` SURVIVES the retirement. It briefly did not, and erasing it is what put a shell
   // killed two days earlier into the live shimmer: that field is the marker the client's
   // `isToolActivityException` reads to keep a background op OUT of the coalesced tool run, so a

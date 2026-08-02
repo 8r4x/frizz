@@ -2000,6 +2000,54 @@ test("a retired op's pinned projection leaves the transcript instead of being re
   assert.equal(live[1]!.tools[0]!.status, "pending")
 })
 
+// The OWNER-GONE arm. A background Bash is a child of the agent process, so when that process dies every
+// still-pending background card on the thread is terminal — no id to key on, because none of them can be
+// running. Retiring the board's row alone was not enough: the ops strip is a UNION of the board's shells
+// and the transcript's (mergeBackgroundShells), and the transcript side reads liveness as nothing more
+// than `status === "pending"`. So emptying the board list MOVED the phantom rather than removing it.
+// Measured on the real JSONL of thread invoices-just-went-out-for-august: projected at the last record
+// written before its successor daemon resumed it, the backfill shell's card was still `pending` seven
+// hours after the process owning it had died.
+test("a dead OWNER retires every pending background card, with no id to key on", () => {
+  const messages = [{
+    role: "assistant" as const, at: "2026-07-30T17:24:27.563Z", text: "",
+    tools: [
+      { name: "Bash", detail: "node census.ts", status: "pending" as const, backgroundState: "background" as const, shellId: "toolu_sh" },
+      { name: "Bash", detail: "gh run watch", status: "pending" as const, backgroundState: "background" as const, shellId: "toolu_other" },
+      // No shellId ⇒ never a TRACKED background op. The owner-gone arm retires background ops, not every
+      // pending tool call, so this one must survive untouched.
+      { name: "Read", detail: "src/index.ts", status: "pending" as const },
+    ],
+    parts: [],
+  }] as unknown as TranscriptMessage[]
+
+  const alive = projectRetiredBackgroundOps(messages, new Set(), false)
+  assert.equal(alive[0]!.tools[0]!.status, "pending", "control: a live owner retires nothing")
+  assert.equal(alive[0]!.tools[1]!.status, "pending")
+
+  const gone = projectRetiredBackgroundOps(messages, new Set(), true)
+  assert.equal(gone[0]!.tools[0]!.status, "cancelled", "both tracked shells died with the process")
+  assert.equal(gone[0]!.tools[1]!.status, "cancelled")
+  assert.equal(gone[0]!.tools[0]!.backgroundState, "background", "and each is still recognisably a background op")
+  assert.equal(gone[0]!.tools[2]!.status, "pending", "a call that was never a tracked background op is left alone")
+})
+
+test("owner-gone retires a pinned projection the same way the × does", () => {
+  const launch = {
+    sourceId: "claude:sess:44897395",
+    role: "assistant" as const, at: "2026-07-30T17:24:25.496Z", text: "",
+    tools: [{ name: "Bash", detail: "node census.ts", desc: "Restart the census sweep", status: "pending" as const, backgroundState: "background" as const, shellId: "toolu_sh" }],
+    parts: [],
+  }
+  const messages = [
+    { sourceId: "claude:sess:1", role: "assistant" as const, at: "2026-08-02T06:19:51.615Z", text: "landed", tools: [], parts: [] },
+    { ...launch, sourceId: "pinned-bg:abc", pinnedFromSourceId: launch.sourceId },
+  ] as unknown as TranscriptMessage[]
+
+  assert.equal(projectRetiredBackgroundOps(messages, new Set(), true).length, 1, "the re-minted tail copy goes too")
+  assert.equal(projectRetiredBackgroundOps(messages, new Set(), false).length, 2, "control: a live owner keeps its pin")
+})
+
 test("the retirement projection is a no-op when nothing was retired, and never touches a settled call", () => {
   const messages = [{
     role: "assistant" as const, at: "2026-07-30T17:24:27.563Z", text: "",
