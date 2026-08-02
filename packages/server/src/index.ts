@@ -16,7 +16,6 @@ import {
 import { createApp, type AppOptions } from "./app.ts"
 import { createTerminalServer, resolveThreadAttach } from "./terminal.ts"
 import { createAppSocketServer, makeTranscriptReader } from "./app-socket.ts"
-import { isBrokerClaudeRow } from "./storage.ts"
 import {
   createRetryableCleanup,
   createShutdownBarrier,
@@ -577,11 +576,10 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     terminal = await phase(
       "terminal transport",
       () => runtime.createTerminal({
+        resolveLogin: (slug) => ctx!.loginUtility.attach(slug),
         resolveAttach: (slug) => {
-          // A live login-utility attempt (slug-shaped opaque id, no registry row) attaches to its
-          // restricted `claude auth login` session; everything else requires a registered thread.
-          const util = ctx!.loginUtility.attachArgs(slug)
-          if (util) return util
+          // Sign-in attempts are handled by resolveLogin above; everything here requires a
+          // registered thread.
           const row = ctx!.storage.getSession(slug)
           if (!row) return null
           return resolveThreadAttach(ctx!.storage, row)
@@ -604,11 +602,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
           (slug, id) => ctx!.tailer.subAgent(slug, id),
           // The /ws producer is the one the live UI actually renders, so a dead owner has to reach it
           // too — projecting only the RPC is the exact half-fix the × already had to correct once.
-          (slug) => {
-            const row = ctx!.storage.getSession(slug)
-            if (!row || !isBrokerClaudeRow(row) || !ctx!.claudeBroker) return false
-            return !ctx!.claudeBroker.isDaemonAlive(row.session_id)
-          },
+          (slug) => ctx!.tailer.ownerGone?.(slug) ?? false,
         ),
       }),
       (value) => { appSocket = value },

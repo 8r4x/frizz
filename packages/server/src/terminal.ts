@@ -8,6 +8,7 @@ import { exactSessionTarget, expectedAdoptionAttachArgs, socketName } from "./tm
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import { isTrustedLocalWebSocketRequest, rejectWebSocketUpgrade } from "./local-origin.ts"
+import type { LoginAttachment } from "./login-utility.ts"
 
 // One PTY per viewing client: each ws connection on /term/<slug> spawns its OWN
 // `tmux -L <socket> attach-session -t fray-<slug>` through node-pty (tmux multiplexes the shared
@@ -107,6 +108,9 @@ export interface TerminalServer {
 
 export interface TerminalServerDeps {
   spawnPty?: typeof pty.spawn
+  // A provider sign-in attempt, whose pty the login utility owns and shares across viewers. Resolved
+  // BEFORE resolveAttach; returning non-null bypasses tmux entirely.
+  resolveLogin?: (slug: string) => LoginAttachment | null
   socketName?: () => string
   maxOutputBufferBytes?: number
   maxViewers?: number
@@ -120,7 +124,7 @@ export interface TerminalServerDeps {
   terminateSocket?: (ws: WebSocket) => void
   refreshDelaysMs?: readonly number[]
   refreshAfterClearMs?: number
-  refreshClient?: (socket: string, term: ReturnType<typeof pty.spawn>) => void
+  refreshClient?: (socket: string, term: TerminalSource) => void
   // Production uses this to enforce a finalized adoption's exact token+pane generation before a
   // slug-targeted tmux attach. Default true preserves the isolated transport-test seam.
   canAttach?: (slug: string) => boolean
@@ -136,7 +140,49 @@ export interface TerminalServerDeps {
 // sends the populated screen, then a late clear plus cursor-only diff can leave the browser's buffer
 // blank even though capture-pane is correct. Refreshing this one attach replays the authoritative
 // tmux grid without disturbing the worker or other viewers.
-function refreshTmuxClient(socket: string, term: ReturnType<typeof pty.spawn>): void {
+// The four members this transport actually uses on its source. A tmux-attach pty satisfies it
+// natively; a login attempt's shared pty is adapted onto it below, so everything downstream of the
+// spawn site — rate limits, viewer bounds, close paths — is identical for both.
+export interface TerminalSource {
+  onData(listener: (chunk: string) => void): { dispose(): void }
+  onExit(listener: (event: { exitCode: number }) => void): { dispose(): void }
+  resize(cols: number, rows: number): void
+  write(data: string): void
+  /**
+   * Release THIS viewer's hold. For a tmux attach that kills the per-viewer attach pty (detaching
+   * one client, never the worker). For a login attempt there is no per-viewer process at all, so it
+   * is a no-op — the shared pty belongs to the login utility and another tab may still be watching.
+   */
+  kill(): void
+}
+
+// Present a login attempt's SHARED pty as a per-viewer source. Detaching disposes only this viewer's
+// listeners — never the pty, which another tab may still be watching and which the login utility owns.
+// The replay is delivered as the first data event so a tab opened after the OAuth URL was printed
+// still sees it, without this transport needing its own scrollback.
+function adaptLoginSource(attachment: LoginAttachment): TerminalSource {
+  return {
+    onData(listener) {
+      const unsubscribe = attachment.onData(listener)
+      const replay = attachment.replay()
+      if (replay) queueMicrotask(() => listener(replay))
+      return { dispose: unsubscribe }
+    },
+    onExit(listener) {
+      // The utility reports "the CLI finished" without a code; 0 keeps the close reason well-formed
+      // (the caller re-reads credential state for the real verdict, never this number).
+      const unsubscribe = attachment.onExit(() => listener({ exitCode: 0 }))
+      return { dispose: unsubscribe }
+    },
+    resize: (cols, rows) => attachment.resize(cols, rows),
+    write: (data) => attachment.write(data),
+    // Deliberately does NOT kill the login pty: closing one tab must not abandon an OAuth flow another
+    // tab is still driving, and the utility owns that lifecycle (cancel / success / timeout / stop).
+    kill: () => attachment.close(),
+  }
+}
+
+function refreshTmuxClient(socket: string, term: TerminalSource): void {
   const client = (term as unknown as { _pty?: unknown })._pty
   if (typeof client !== "string" || !client.startsWith("/dev/")) return
   try {
@@ -237,7 +283,7 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
   wss.on("error", () => {})
 
   const acceptViewer = (ws: WebSocket, slug: string, reservation: Reservation): void => {
-    let term: ReturnType<typeof pty.spawn> | undefined
+      let term: TerminalSource | undefined
     let tmuxSocket = ""
     let cleaned = false
     let closeStarted = false
@@ -342,14 +388,21 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
     }
 
     let attachArgs: string[] | null
+    let loginAttachment: LoginAttachment | null = null
     try {
       if (deps.canAttach && !deps.canAttach(slug)) {
         beginClose(1008, "terminal attach denied")
         return
       }
-      attachArgs = deps.resolveAttach?.(slug) ?? (deps.resolveAttach
-        ? null
-        : ["attach-session", "-t", exactSessionTarget(slug)])
+      // A provider sign-in attempt is resolved FIRST and never touches tmux: its pty is owned by the
+      // login utility. Everything else is still a tmux attach for now — that path goes away with the
+      // rest of the tmux transport.
+      loginAttachment = deps.resolveLogin?.(slug) ?? null
+      attachArgs = loginAttachment
+        ? []
+        : deps.resolveAttach?.(slug) ?? (deps.resolveAttach
+          ? null
+          : ["attach-session", "-t", exactSessionTarget(slug)])
     } catch {
       beginClose(1011, "terminal unavailable")
       return
@@ -360,13 +413,23 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
     }
 
     try {
-      tmuxSocket = activeSocketName()
-      term = spawnPty("tmux", ["-L", tmuxSocket, ...attachArgs], {
-        name: "xterm-256color",
-        cols: 220,
-        rows: 50,
-        env: { ...process.env, TERM: "xterm-256color" },
-      })
+      if (loginAttachment) {
+        // A login attempt's pty is owned by the login utility, not spawned per viewer: two tabs on the
+        // sign-in modal must watch the SAME OAuth flow rather than racing two of them against one
+        // credential store. tmux gave that multiplexing for free; this is the replacement, and it is
+        // why the source is ADAPTED here instead of spawned. `tmuxSocket` stays empty, which makes
+        // refreshAuthoritativeGrid's tmux `refresh-client` a no-op for it (see refreshTmuxClient's
+        // `_pty` duck-check) — there is no tmux client to refresh.
+        term = adaptLoginSource(loginAttachment)
+      } else {
+        tmuxSocket = activeSocketName()
+        term = spawnPty("tmux", ["-L", tmuxSocket, ...attachArgs], {
+          name: "xterm-256color",
+          cols: 220,
+          rows: 50,
+          env: { ...process.env, TERM: "xterm-256color" },
+        })
+      }
     } catch {
       beginClose(1011, "terminal unavailable")
       return
