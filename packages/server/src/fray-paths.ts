@@ -20,12 +20,36 @@ import { join } from "node:path"
 // and launch bookkeeping. On a legacy install all three collapse to `~/.fray` and every historical
 // path stays byte-identical.
 //
-// There is deliberately NO `runtime` root. `$XDG_RUNTIME_DIR` would be the right home for sockets and
-// locks, but it is unset on macOS and its only portable stand-in is `$TMPDIR`, which on Linux is
-// SHARED BETWEEN USERS — a machine-global launch lock or port reservation there could collide with
-// another account's. Those live in `state`, which is per-user by construction. Sockets already solve
-// this for themselves: `claude-broker-host.ts` hashes them into `$TMPDIR` under a name unique per
-// state directory, because a unix socket path cannot exceed 104 bytes on macOS.
+// There is deliberately NO `runtime` root, and the reason is worth stating because XDG says there
+// should be one.
+//
+// `$XDG_RUNTIME_DIR` (`/run/user/<uid>`, mode 0700, wiped at logout) is exactly right for locks and
+// sockets. But it exists only on Linux, and only when a session manager set it. macOS has no
+// equivalent, so a portable rule has to fall back to `$TMPDIR` — and that is where the platforms
+// stop agreeing:
+//
+//   · macOS  `$TMPDIR` is `/var/folders/…/T`, PRIVATE to one user (drwx------).
+//   · Linux  `$TMPDIR` is normally unset, so it means `/tmp`: world-writable, SHARED by every account.
+//
+// One rule, two security properties. Fray's launch lock and port reservations are machine-global
+// mutexes, and putting them in a shared `/tmp` breaks them in a way that does not self-heal, because
+// of how staleness is decided: `pidIsAlive` (project-identity.ts) probes `process.kill(pid, 0)` and
+// treats EPERM as ALIVE — correct within one account, where EPERM means "running, just not signalable
+// by me". Across accounts EPERM is also what you get for someone else's process, so another user's
+// abandoned lock reads as permanently held. Nobody can reclaim it, and every launch on that machine
+// blocks on a PID it has no business waiting for. A 0700 `/tmp/fray` from whoever got there first
+// fails even earlier, with EACCES.
+//
+// So locks live in `state`, which is under the user's own home (or their `$XDG_STATE_HOME`) and is
+// therefore per-user by construction — the one property the runtime dir was wanted for. The only
+// thing given up is the OS wiping them at reboot, which Fray does not need: it already ages locks out
+// itself, by PID plus process-start generation.
+//
+// Sockets, the other thing a runtime root would serve, already solve this for themselves.
+// `claude-broker-host.ts` hashes them into `$TMPDIR` as `fray-claude-<16 hex of sha256(stateDir,
+// sessionId)>.sock` — unique per state directory, so two accounts cannot collide even in a shared
+// `/tmp`, and short, which is mandatory: a unix socket path cannot exceed ~104 bytes on macOS, and a
+// nested XDG path plus a session UUID would blow straight through that.
 
 export interface FrayPaths {
   /** Threads, attachments, project identity. Losing this loses the product. */
