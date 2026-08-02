@@ -110,6 +110,30 @@ html[data-font="sans"] .font-mono-keep {
   font-family: var(--font-mono);
 }
 
+/* The prompt box frames its composer with 12px on all four sides. When the ⤷ running-ops column is
+   present the last thing above that bottom 12px is a line of TEXT rather than the composer's hard
+   border, so the box measure and the optical one stop agreeing: the row's baseline parks above its own
+   box bottom by the line box's half-leading, and the frame reads as that much MORE air. Left
+   uncorrected the column sat ~16px off the footer — and it used to add another 8px of its own on top,
+   which is the 20px the maintainer read as "too much padding at the bottom" (2026-08-01).
+
+   Hand the leading back, so the last row's BASELINE lands 12px off the box's edge — the same air the
+   hairline above gives the composer's border. FONT-DEPENDENT for the same reason --icon-label-nudge
+   below is, and measured the same way (a zero-size inline probe inside the row's own label span, on
+   the real app via scripts/seed-queue-ops-column.mjs): an 11.5px/17.25px row leaves 4.25px under its
+   baseline in the sans stack and 6.25px in mono. One shared value would leave the other mode ~2px out.
+   Applied by ThreadComposerBox (and SubAgentSheet's steer footer) to a wrapper around the column,
+   which stays `empty:hidden` — with no live ops the composer's own 12px must survive intact. */
+:root {
+  --ops-column-optical-inset: -6.25px;
+}
+html[data-font="sans"] {
+  --ops-column-optical-inset: -4.25px;
+}
+.ops-column-optical-inset {
+  margin-bottom: var(--ops-column-optical-inset);
+}
+
 /* Optical centring for a small lucide icon beside a short label — see lib/iconAlign.ts for the
    measurements and why `items-center` alone leaves the icon reading low. The amount is FONT-DEPENDENT,
    which is why it lives here beside the font switch rather than as a Tailwind constant: the mono stack

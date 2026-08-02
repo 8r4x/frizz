@@ -113,7 +113,11 @@ export function ThreadComposerBox({
         footer={controls.footer}
       />
       {controls.status}
-      {ops}
+      {/* The ops column's OPTICAL bottom inset, in ONE place for every surface that renders one — the
+          amount and the reasoning live beside the font switch in styles.css, because it is
+          font-dependent. `empty:hidden` is load-bearing: with no live ops React renders nothing here,
+          and a bare negative margin would then eat into the composer's own 12px inset. */}
+      <div className="ops-column-optical-inset empty:hidden">{ops}</div>
       {signInFor && <SignInModal backend={signInFor} onClose={() => setSignInFor(null)} onAuthed={() => setSignInFor(null)} />}
       {logoutFor && <LogoutConfirmModal backend={logoutFor} onClose={() => setLogoutFor(null)} />}
     </div>

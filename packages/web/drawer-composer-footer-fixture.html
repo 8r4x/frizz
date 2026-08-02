@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="data:," />
     <title>Thread drawer composer footer fixture</title>
+    <!-- This page measures the footer's VERTICAL RHYTHM, and half of that rhythm is where a row's
+         baseline sits inside its line box — which is a property of the FONT. index.html sets
+         data-font from settings (defaulting to sans); without it this fixture fell back to the mono
+         stack, whose baseline sits 2px higher, and every gap measured here was 2px off what ships.
+         Pin the shipping default so the numbers taken here are the numbers the app draws. -->
+    <script>
+      document.documentElement.dataset.font = "sans"
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -1312,24 +1312,20 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
         submitOverride={sendMessage}
         ops={
           <>
-            {/* ONE column, three positional paddings, whichever of the two lists happen to be present:
-                6px hanging off the prompt box, 2px between rows, 8px of air before the lifecycle
-                footer. The bottom 8px rides the LAST list — the shell strip when there is one (it
-                carries its own pb-2 below), these lines when there is not. Without that, a card whose
-                only children were sub-agents sat 8px tighter to the footer than one that also had a
-                shell: the same "spacing differs for sub-agents versus background shells" reading, one
-                card over. `bgShells` is the strip's own render condition (it filters nothing at sheet
-                density and this call site excludes agents), so the two agree by construction. */}
-            <QueueSubAgentLines
-              slug={thread.id}
-              subAgents={thread.subAgents ?? []}
-              className={(thread.bgShells ?? []).length > 0 ? "px-1 pt-1.5" : "px-1 pb-2 pt-1.5"}
-            />
+            {/* ONE column, two positional paddings, whichever of the two lists happen to be present:
+                6px hanging off the prompt box, 2px between rows. NEITHER list carries a bottom pad —
+                the gap to the lifecycle footer is the composer box's own `pb-3` and nothing else
+                (maintainer 2026-08-01: the space under the last row read as too much). It used to be
+                that pb-3 PLUS an 8px `pb-2` on whichever list came last, which put 20px under a
+                column that hangs off the prompt at 6px. With the extra pad gone the bottom inset is
+                12px — exactly the drawer footer's inset above and beside its composer — and the
+                "which list is last" conditional this className used to carry goes with it. */}
+            <QueueSubAgentLines slug={thread.id} subAgents={thread.subAgents ?? []} className="px-1 pt-1.5" />
             {/* Background shells / Monitors remain a runtime strip below the reply area. Live sub-agents are
                 intentionally excluded here because their compact ⤷ child lines sit directly above it.
                 It HANGS off the composer at the same pt-1.5 as those child lines — the prompt box's own
                 bottom padding already supplies the optical air, so a larger gap here reads as a break —
-                and carries its own pb so the last row still breathes before the lifecycle footer.
+                and carries NO pb of its own: the box's pb-3 is the whole gap to the lifecycle footer.
 
                 UNLESS the sub-agent lines are already there. Then this strip is not hanging off the
                 composer at all, it is CONTINUING the column those lines opened, so it takes the rows'
@@ -1342,7 +1338,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
             <BackgroundOpsStrip
               slug={thread.id}
               includeAgents={false}
-              className={`px-1 pb-2 ${hasQueueSubAgentLines(thread.subAgents ?? []) ? "pt-0.5" : "pt-1.5"}`}
+              className={`px-1 ${hasQueueSubAgentLines(thread.subAgents ?? []) ? "pt-0.5" : "pt-1.5"}`}
             />
           </>
         }

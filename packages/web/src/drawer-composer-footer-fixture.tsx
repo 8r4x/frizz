@@ -100,9 +100,12 @@ function Fixture() {
                 </div>
               )}
             />
-            {/* Mirrors ThreadActionBar's `ops` slot: the strip lives INSIDE the padded box so the rows
-                hang off the prompt and the box's pb (plus this pb-2) is their gap to the footer. */}
-            <BackgroundOpsStrip slug={thread.id} className="px-1 pb-2 pt-1.5" />
+            {/* Mirrors ThreadActionBar's `ops` slot, wrapper included: the strip lives INSIDE the padded
+                box so the rows hang off the prompt, and the box's OWN pb — less the row's leading, which
+                `ops-column-optical-inset` hands back — is their gap to the footer. */}
+            <div className="ops-column-optical-inset empty:hidden">
+              <BackgroundOpsStrip slug={thread.id} className="px-1 pt-1.5" />
+            </div>
           </div>
         </footer>
         <ThreadLifecycleFooter thread={thread} safeArea />

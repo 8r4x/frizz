@@ -277,14 +277,17 @@ function SubAgentSteerFooter({
     // Nothing to steer, nothing to stop, nothing to explain — the strip is the whole footer, so it
     // carries the panel's chrome. It still renders NOTHING when no work hangs off this child, so a
     // settled drawer keeps its bare bottom edge rather than gaining an empty bordered band.
-    if (!unavailableNote) return <>{ops?.("w-full shrink-0 border-t border-border bg-panel px-4 py-3")}</>
+    if (!unavailableNote) return <>{ops?.("w-full shrink-0 border-t border-border bg-panel px-4 pb-2 pt-3")}</>
     return (
       <div data-subagent-steer-note className="w-full shrink-0 border-t border-border bg-panel px-3 py-3">
         <div className="px-1 pb-2 text-[11.5px] text-muted/70">{unavailableNote}</div>
         <div className="pl-1.5">
           <SubAgentProfileReadout subagentType={subagentType} />
         </div>
-        {ops?.("px-1 pb-2 pt-1.5")}
+        {/* Same optical bottom inset ThreadComposerBox gives the thread-level prompt box (styles.css).
+            No `empty:hidden` wrapper needed — the strip itself renders nothing when it has no rows, so
+            the class comes and goes with them. */}
+        {ops?.("px-1 pt-1.5 ops-column-optical-inset")}
       </div>
     )
   }
@@ -313,7 +316,10 @@ function SubAgentSteerFooter({
         {steerable && !stoppable && stopNote && (
           <div className="mt-2 px-1 text-[11.5px] text-muted/70">{stopNote}</div>
         )}
-        {ops?.("px-1 pb-2 pt-1.5")}
+        {/* Same optical bottom inset ThreadComposerBox gives the thread-level prompt box (styles.css).
+            No `empty:hidden` wrapper needed — the strip itself renders nothing when it has no rows, so
+            the class comes and goes with them. */}
+        {ops?.("px-1 pt-1.5 ops-column-optical-inset")}
       </div>
       {stoppable && (
         <footer
