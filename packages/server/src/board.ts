@@ -197,6 +197,23 @@ function hasLiveBackgroundWork(tele: SessionTelemetry | undefined): boolean {
   return Boolean(tele?.subAgents?.some((agent) => isDirectSubAgent(agent) && agent.state === "running"))
 }
 
+// The same question asked of a thread whose owning process is PROVABLY GONE, where `stale` stops being
+// ambiguous. Everywhere else `stale` means only "we lost this child's completion signal and its
+// transcript has been quiet past the 15-minute ceiling" — it could equally be a finished child whose
+// notification never landed, which is why hasLiveBackgroundWork deliberately counts `running` alone.
+// Against a dead daemon there is nothing left to be ambiguous about: an Agent child ran IN-PROCESS
+// inside that `claude`, so a still-unretired child of it was lost, full stop.
+//
+// This exists because the staleness clock quietly UNDID the stall. Measured on the real fold: a child
+// whose owner died reads `running` for 15 minutes and `stale` for ever after — so keying the stall on
+// `running` alone carded the thread correctly for 15 minutes and then let it settle into an ordinary
+// bare rest, telling the human nothing about the work that died with it. Sizing the widened predicate
+// against this machine's real board 2026-08-02: of 35 open broker rows, 14 had a dead daemon and ZERO
+// held an unretired dispatch — so it cards nothing extra today, and is here for when it does.
+function hasUnretiredOwnAgents(tele: SessionTelemetry | undefined): boolean {
+  return Boolean(tele?.subAgents?.some((agent) => isDirectSubAgent(agent) && (agent.state === "running" || agent.state === "stale")))
+}
+
 // Whether each live child can ACTUALLY be ended, answered here because this is the only place that
 // holds both the session row (which knows the transport) and the tailer's telemetry (which knows the
 // children). The client renders the stop × off this and never re-derives it — see SubAgentView.stoppable.
@@ -617,7 +634,7 @@ function sessionThreadView(
   // `headlessStalled` is `appServerTurnStalled`, a mid-turn predicate — a rested rollout stops advancing
   // by definition, so reusing it here would card every quiet codex thread as crashed. The broker arm is a
   // direct pid probe, which means exactly what it says at rest as well as mid-turn.
-  const headlessLostWork = isBrokerClaudeRow(row) && headlessStalled && hasLiveBackgroundWork(tele)
+  const headlessLostWork = isBrokerClaudeRow(row) && headlessStalled && hasUnretiredOwnAgents(tele)
   const runtime = degradeIfNoTranscript(
     deriveRuntime(row.slug, row, storage, tele?.turn, tele?.permPrompt ?? false, headlessStalled, headlessLostWork),
     isHeadlessRow(row) && !isBrokerClaudeRow(row) ? false : tele?.noTranscript,
@@ -632,7 +649,13 @@ function sessionThreadView(
   // handoff, so it cards as "stalled" not a bare "rest". Mirrors deriveNeedsYou's surfacing above.
   // hasLiveBackgroundWork keys on sub-agents only (a background shell is never treated as live work);
   // it flips back to bare rest once the child's transcript goes stale.
-  const crashed = runtime === "exited" && (tele?.turn === "in-flight" || hasLiveBackgroundWork(tele))
+  // `headlessLostWork` joins the two classic signals rather than relying on them. It is already the
+  // thing that made `runtime` "exited" here, and on its own neither of the others fires: the turn ENDED
+  // cleanly (that is the whole case), and hasLiveBackgroundWork reads `running` only, so it goes false
+  // the moment the 15-minute staleness clock trips. Without this the thread would spend 15 minutes
+  // carded as a stall and then silently become an ordinary bare rest — same lost work, no longer
+  // mentioned. See hasUnretiredOwnAgents.
+  const crashed = runtime === "exited" && (tele?.turn === "in-flight" || hasLiveBackgroundWork(tele) || headlessLostWork)
   const snoozedUntil = futureSnooze(row, nowMs)
   const profile = resolveSessionProfile(row, tele)
   const permissionMode = resolveSessionPermission(row, tele)

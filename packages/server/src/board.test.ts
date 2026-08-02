@@ -903,6 +903,32 @@ test("a rested broker thread whose daemon died holding live sub-agents surfaces 
   assert.equal(orphaned.needsYou, true, "so the thread reaches the human instead of being excused forever")
   assert.equal(orphaned.crashed, true, "and it cards as stalled — its children died with the process")
 
+  // AND IT MUST NOT WEAR OFF. Measured against the real fold: a child whose owner died reads `running`
+  // for SUBAGENT_STALE_MS and `stale` for ever after. Keying the stall on `running` alone therefore
+  // carded this thread correctly for 15 minutes and then let it settle into an ordinary bare rest —
+  // same lost work, no longer mentioned. `stale` is ambiguous only while the worker is alive; against a
+  // dead daemon an unretired in-process child is simply lost.
+  const stale = {
+    get: () =>
+      tele({
+        turn: "idle",
+        subAgents: [{ label: "Watch CI", startedAt: T0, state: "stale", id: "toolu_a" }],
+      }),
+    foreignIds: () => [], subAgent: () => undefined, forget: () => {},
+    start: () => {}, stop: () => {}, tick: () => {},
+  } satisfies Tailer
+  const later = createBoard(project, storage, new Bus(), stale, "dd-stale", { claudeBrokerDaemonAlive: () => false })
+  const aged = later.refresh().threads.find((t) => t.id === "orphaned")!
+  assert.equal(aged.runtime, "exited", "15 minutes on, the work is no less lost")
+  assert.equal(aged.needsYou, true)
+  assert.equal(aged.crashed, true, "the stall does not expire into a clean handoff")
+
+  // The same stale child on a LIVE daemon stays ambiguous and must NOT card as a crash — that is the
+  // reading hasLiveBackgroundWork is deliberately narrow for.
+  const staleAlive = createBoard(project, storage, new Bus(), stale, "dd-stale-live", { claudeBrokerDaemonAlive: () => true })
+  const ambiguous = staleAlive.refresh().threads.find((t) => t.id === "orphaned")!
+  assert.equal(ambiguous.crashed, false, "a stale child of a LIVE worker is not evidence of a crash")
+
   rmSync(dir, { recursive: true, force: true })
 })
 
