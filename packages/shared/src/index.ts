@@ -900,6 +900,21 @@ export const FollowUpInput = z.object({
   // newer fray build in place (hooks are read once, at startup). Everything else that needs a fresh
   // process derives it server-side; see needsFreshProcessForLimit.
   freshProcess: z.boolean().optional(),
+  // PREEMPT the operation the worker is running right now, so this message is read at once instead of
+  // when that operation finishes. The operator's "Interrupt and send" verb, and opt-in for the same
+  // reason `freshProcess` is: it costs the in-flight tool call's result and the worker's in-memory
+  // sub-agents.
+  //
+  // It exists because delivery is ALREADY as fast as queueing can be. Measured over 14 days of this
+  // project's own transcripts, Claude Code drains its queue at the first sampling boundary that
+  // exists; the wait an operator feels is the remaining time of whatever was in flight (a long `Bash`,
+  // or one 73–133s reasoning+answer generation), which put mid-turn operator prose at p50 13.8s,
+  // p90 49s, p99 2.5m. Preempting is the only lever left.
+  //
+  // Broker-backed Claude only — that is every Claude thread dispatched since the broker cutover. On
+  // any other runtime the message is delivered normally and this is ignored, never refused: a send
+  // that arrives is always better than a send that errors.
+  interrupt: z.boolean().optional(),
 })
 export type FollowUpInput = z.infer<typeof FollowUpInput>
 

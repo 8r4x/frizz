@@ -66,7 +66,14 @@ export function ThreadComposerBox({
   const [signInFor, setSignInFor] = useState<Backend | null>(null)
   const [logoutFor, setLogoutFor] = useState<Backend | null>(null)
 
-  function send() {
+  // INTERRUPT AND SEND is offered only when there is something to interrupt AND a runtime that can be
+  // preempted. `runtime === "running"` is exactly "process alive, turn in flight"; codex is excluded
+  // because its app-server bridge owns the steer/turn decision itself and fray does not reach past it.
+  // A `submitOverride` surface (the queue card's staged answers) is excluded too — that controller
+  // sends a whole answer set, and preemption is not part of its contract.
+  const canInterrupt = !submitOverride && thread?.runtime === "running" && thread.backend !== "codex"
+
+  function send(interrupt = false) {
     const text = message.trim()
     if (!text) return
     // `/login` / `/logout` are fray-owned account actions for THIS thread's backend — invoked
@@ -86,7 +93,7 @@ export function ThreadComposerBox({
       onRollback: () => { if (!draftStore.get(key)) setMessage(message) },
     }
     if (submitOverride) submitOverride(text, callbacks)
-    else followUp.submit(text, callbacks)
+    else followUp.submit(text, { ...callbacks, interrupt })
   }
 
   return (
@@ -102,7 +109,8 @@ export function ThreadComposerBox({
         surface={surface}
         value={message}
         onChange={setMessage}
-        onSubmit={send}
+        onSubmit={() => send()}
+        onInterruptSubmit={canInterrupt ? () => send(true) : undefined}
         placeholder={placeholder}
         // NOT `|| followUp.pending`. The send is already committed locally (draft cleared, bubble
         // appended, and in the queue the card has already begun dissolving), so gating the textarea on

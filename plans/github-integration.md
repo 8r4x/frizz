@@ -47,7 +47,7 @@ When the opened project is a GitHub repo:
 - Reusable UI: `packages/web/src/components/ui/Select.tsx` (the readout selects), `Menu.tsx`, `Dialog.tsx`; `packages/web/src/lib/options.ts` (`MODEL_OPTIONS`, `EFFORT_OPTIONS`, `PERMISSION_OPTIONS`, `PERMISSION_COLOR`).
 
 ### Worker prompt / skill injection points
-- `ui/WORKER_PROMPT.md` — the FIXED worker system prompt (loaded by `loadWorkerPrompt()` in dispatch.ts, stripped of its provenance header). Not user-editable.
+- `packages/server/src/workerPrompt.ts` — the FIXED worker system prompt (loaded by `loadWorkerPrompt()` in dispatch.ts, stripped of its provenance header). Not user-editable.
 - `cc-worker/skills/worker/SKILL.md` — the worker-contract skill (loadable as `fray:worker`). Sibling skill dir is `cc-worker/skills/`.
 - `cc-worker/hooks/session-seed.mjs` — **SessionStart hook**, runs on every start/resume/clear/compact, gated on `FRAY_UI_THREAD`. Injects the worker contract + scratchpad path via `hookSpecificOutput.additionalContext`. Runs `node`, zero deps, in the worker's env (so `gh` is on its PATH). **This is the correct auth-gated injection site** — it can shell `gh auth status` live at every session start and covers dispatch + resume + compact uniformly, with no server changes to the dispatch/resume argv.
 - `cc-worker/.claude-plugin/plugin.json` + `cc-worker/hooks/hooks.json` — plugin manifest + hook registration. `workerPluginDir()` in dispatch.ts resolves `cc-worker` and passes it via `--plugin-dir`, so its skills are loadable by workers.

@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { ArrowUp, FileText, Loader2, Paperclip, X } from "lucide-react"
+import { ArrowUp, FileText, Loader2, Paperclip, X, Zap } from "lucide-react"
 import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName } from "@fray-ui/shared"
 import { showToast } from "../store.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
-import { shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
+import { shouldInterruptSubmitComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { queueComposerHandlesOptionEnter } from "../lib/queueComposerKeyboard.ts"
 
 // The shared prompt composer (the pattern the user called "perfect"): ONE rounded bordered box
@@ -47,6 +47,7 @@ export function Composer({
   busy,
   footer,
   leftAction,
+  onInterruptSubmit,
 }: {
   value: string
   onChange: (v: string) => void
@@ -68,6 +69,15 @@ export function Composer({
   // A small action rendered just LEFT of the send button (the dispatch composer's GitHub-picker icon).
   // Only surfaces that pass it get it; reply/queue composers omit it.
   leftAction?: React.ReactNode
+  // INTERRUPT AND SEND. Set only while the thread's worker is mid-turn AND its runtime can be
+  // preempted; the caller owns that policy entirely. Given it, the box grows a ⚡ button in the same
+  // rail slot `leftAction` uses and binds ⌘/Ctrl-Enter to it.
+  //
+  // It shares the rail slot rather than adding a third button because the two callers are disjoint by
+  // construction: `leftAction` is the DISPATCH composer's GitHub picker (NewThreadModal), and there is
+  // no worker to interrupt before a thread exists. If a surface ever needs both, that is the moment to
+  // widen the rail — not to stack two absolutes on one offset.
+  onInterruptSubmit?: () => void
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -247,6 +257,26 @@ export function Composer({
   }, [busy])
 
   const hasContent = value.trim().length > 0
+  // ONE rail slot, filled by whichever of the two disjoint callers is in play. Reserving it must track
+  // what is actually rendered — the padding/offset classes below key off `railAction`, and a truthy
+  // element that renders null would carve out an empty hole (the bug GithubTrigger's `useGithubTriggerVisible`
+  // exists to prevent).
+  const railAction = leftAction ?? (onInterruptSubmit
+    ? (
+      <button
+        type="button"
+        // Same as Send: never blur the textarea on the click path.
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={onInterruptSubmit}
+        disabled={!hasContent || busy || uploading}
+        title="Interrupt and send (⌘⏎) — stops what the worker is doing now so it reads this immediately"
+        aria-label="Interrupt and send"
+        className="flex h-7 w-7 items-center justify-center rounded-lg text-muted outline-none transition-[color,background-color,box-shadow] enabled:hover:bg-panel-2/70 enabled:hover:text-fg enabled:focus-visible:bg-panel-2/70 enabled:focus-visible:ring-1 enabled:focus-visible:ring-muted/80 enabled:focus-visible:ring-offset-1 enabled:focus-visible:ring-offset-bg enabled:active:bg-elevated disabled:text-muted/35"
+      >
+        <Zap size={15} strokeWidth={2} />
+      </button>
+    )
+    : null)
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     const el = e.currentTarget
@@ -282,6 +312,15 @@ export function Composer({
       e.preventDefault()
       e.stopPropagation()
       onSubmit()
+      return
+    }
+    // ⌘/Ctrl-Enter — same send, but it preempts what the worker is doing so the message is read now
+    // instead of when the current command finishes. Ordered AFTER the plain-Enter branch (which it
+    // cannot match) and BEFORE the Option-Enter newline repair (which it also cannot match).
+    if (shouldInterruptSubmitComposerEnter(keyboardEvent, Boolean(onInterruptSubmit) && hasContent && !busy && !uploading)) {
+      e.preventDefault()
+      e.stopPropagation()
+      onInterruptSubmit!()
       return
     }
     if (shouldRestoreOptionEnterNewline(keyboardEvent)) {
@@ -361,14 +400,14 @@ export function Composer({
         // vertical band the floating buttons occupy, so the text runs FULL width (no right rail carved
         // out of every line). Without a footer the box is a single compact row and the right padding is
         // what keeps text from sliding under the floating paperclip/send buttons.
-        className={`block w-full resize-none bg-transparent px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${leftAction ? "pr-28" : "pr-20"}`} text-[13px] leading-relaxed text-fg outline-none placeholder:text-muted scrollbar-none disabled:opacity-60`}
+        className={`block w-full resize-none bg-transparent px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railAction ? "pr-28" : "pr-20"}`} text-[13px] leading-relaxed text-fg outline-none placeholder:text-muted scrollbar-none disabled:opacity-60`}
       />
       {/* Attachment chips along the bottom row — one square tile per attached file (image thumbnail or
           file-type icon), each removable. The paths still live in `value`; these tiles just render them
           instead of the raw absolute-path text. Reserve the right rail so tiles never slip under the
           paperclip/send buttons on the last row. */}
       {attachments.length > 0 && (
-        <div className={`flex flex-wrap gap-1.5 px-3 pb-2 ${leftAction ? "pr-28" : "pr-20"}`}>
+        <div className={`flex flex-wrap gap-1.5 px-3 pb-2 ${railAction ? "pr-28" : "pr-20"}`}>
           {attachments.map((a, i) => (
             <AttachmentChip
               key={`${a.path}-${i}`}
@@ -386,8 +425,8 @@ export function Composer({
           inside the box arc and read misaligned. */}
       {/* Reserve the right-side action rail. Without this, three shrinkable readouts can extend under
           the absolutely positioned GitHub/send buttons on narrow composers. */}
-      {footer && <div className={`flex min-w-0 flex-wrap items-center gap-1 pl-1.5 pb-1.5 ${leftAction ? "pr-28" : "pr-20"}`}>{footer}</div>}
-      {leftAction && <div className="absolute bottom-2 right-11 flex items-center">{leftAction}</div>}
+      {footer && <div className={`flex min-w-0 flex-wrap items-center gap-1 pl-1.5 pb-1.5 ${railAction ? "pr-28" : "pr-20"}`}>{footer}</div>}
+      {railAction && <div className="absolute bottom-2 right-11 flex items-center">{railAction}</div>}
       {/* Attach: a hidden file input driven by the paperclip. Sits in the right rail LEFT of the send
           button (and left of any leftAction), so it never overlaps the mode/model footer or the send
           affordance. Accept is the shared safe-tier allowlist; the /attach route re-validates. */}
@@ -408,7 +447,7 @@ export function Composer({
         disabled={busy || uploading}
         title="Attach files"
         aria-label="Attach files"
-        className={`absolute bottom-2 ${leftAction ? "right-[4.625rem]" : "right-11"} flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg disabled:opacity-50`}
+        className={`absolute bottom-2 ${railAction ? "right-[4.625rem]" : "right-11"} flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg disabled:opacity-50`}
       >
         {uploading ? <Loader2 size={15} strokeWidth={2} className="animate-spin" /> : <Paperclip size={15} strokeWidth={2} />}
       </button>

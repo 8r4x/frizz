@@ -169,6 +169,25 @@ export interface ClaudeAgentBrokerBridge {
    */
   cancelFollowUp(input: { threadSlug: string; sessionId: string; deliveryId: string }): Promise<boolean>
   /**
+   * PREEMPT the operation running right now, so a follow-up already handed to the CLI's queue is read
+   * at once instead of at the next sampling boundary.
+   *
+   * WHY THIS EXISTS. Claude Code is not slow to dequeue — measured across 14 days of this project's
+   * own transcripts, it drains the queue at the FIRST sampling boundary that exists. The wait an
+   * operator feels is the remaining time of whatever was already in flight: a long `Bash` (62–105s in
+   * the worst real cases) or a single reasoning+answer generation (73–133s). Mid-turn operator prose
+   * therefore waited p50 13.8s, p90 49s, p99 2.5m. Nothing but preempting that operation can beat it.
+   *
+   * ORDER IS THE CONTRACT: the caller must have delivered the message BEFORE calling this. The SDK's
+   * interrupt receipt reports `still_queued`, i.e. an interrupt aborts the turn WITHOUT discarding
+   * queued inputs — so a message queued first is what the next turn starts on, immediately.
+   *
+   * Returns false when there is no live daemon to interrupt. That is not an error: the follow-up has
+   * already been delivered by then and will be read the ordinary way. This never attaches and never
+   * cold-resumes — a turn only exists inside a running process.
+   */
+  interruptTurn(input: { threadSlug: string; sessionId: string }): boolean
+  /**
    * Reattach at boot to every broker daemon this project left running, without waiting for someone to
    * touch the thread.
    *
@@ -483,6 +502,17 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
         { resume: true, appendSystemPrompt: input.appendSystemPrompt, model: input.model, effort: input.effort },
       )
       session.client.sendInput(message)
+    },
+
+    interruptTurn(input) {
+      const held = current(input.threadSlug, input.sessionId)
+      if (!held || !holdsLiveDaemon(held)) return false
+      // Fire-and-forget by design, and it is why this needs no capability gate: the daemon's frame
+      // handler answers nothing, so there is nothing to wait for and nothing to time out on. A daemon
+      // too old to know the frame ignores it, and the follow-up — already delivered above — is simply
+      // read at the ordinary time. The degradation is "no faster", never "lost".
+      held.client.interrupt()
+      return true
     },
 
     async cancelFollowUp(input) {

@@ -43,6 +43,27 @@ export function shouldSubmitStagedEnter(event: ComposerKeyboardEvent): boolean {
 }
 
 /**
+ * INTERRUPT AND SEND — ⌘/Ctrl-Enter in a thread composer, offered only while the worker is mid-turn.
+ *
+ * The gesture is free to take: in this composer ⌘/Ctrl-Enter has always fallen through to the browser
+ * default, which in a textarea inserts nothing. It is also the gesture that already means "send" in
+ * the staged-answer box above, so the two agree rather than compete. Option-Enter and Shift-Enter keep
+ * their newline, and a plain Enter keeps the ordinary send.
+ *
+ * `canInterrupt` is the caller's whole policy — no worker running, no affordance, and then this is a
+ * no-op rather than a second way to send.
+ */
+export function shouldInterruptSubmitComposerEnter(event: ComposerKeyboardEvent, canInterrupt: boolean): boolean {
+  return canInterrupt
+    && event.key === "Enter"
+    && (event.metaKey || event.ctrlKey)
+    && !event.isComposing
+    && event.keyCode !== 229
+    && !event.altKey
+    && !event.shiftKey
+}
+
+/**
  * Chromium on macOS can report Option-Enter without applying textarea's usual line break. Let the
  * keydown default run first, then restore the newline only if the DOM value stayed unchanged.
  */

@@ -1242,6 +1242,15 @@ export function createRouter(ctx: AppContext) {
           // hand — the unqueue click asks the NEW daemon about a uuid it never heard of and answers
           // "Too late — that message has already left the queue", which is exactly backwards.
           if (input.freshProcess) retireOutstandingDeliveries(ctx.storage, input.slug)
+          // "Interrupt and send": preempt whatever the worker is doing so it reads this NOW. Strictly
+          // AFTER the delivery above, and that order is the whole mechanism — the SDK's interrupt
+          // aborts the turn without discarding queued inputs (its receipt reports `still_queued`), so
+          // a message queued first is what the next turn opens on. Interrupting first would abort into
+          // an empty queue and the message would merely start an ordinary new turn.
+          //
+          // Measured live (_live_broker_interrupt_send.mts) against a real 90s tool call in flight:
+          // 94.4s without it, seconds with it, and the session takes ordinary follow-ups afterwards.
+          if (input.interrupt) bridge.interruptTurn({ threadSlug: input.slug, sessionId: row.session_id })
           if (input.deliveryId) {
             appendDelivery(ctx.storage, input.slug, { id: input.deliveryId, text: input.message, state: "enqueued" })
           }
