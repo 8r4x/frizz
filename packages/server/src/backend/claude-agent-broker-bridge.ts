@@ -277,6 +277,32 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     pendingPerms.delete(change.interactionId)
   })
 
+  // Terminalize every interaction still pending for a session that can no longer answer one.
+  //
+  // A CARD NOTHING EVER TERMINALIZES IS A CARD THAT NEVER LEAVES THE QUEUE. Until 2026-08-02 the Claude
+  // side had no sweep at all: `cancelForSession` was reached only from storage.ts (session replaced or
+  // deleted) and from the codex bridge, which retires its own on `turn/completed` and on a rebind onto a
+  // dead turn. So a Claude interaction that outlived its answerability just stayed `pending` — forever.
+  // A live one: a `claude`/`agent-question` row journaled 2026-08-02T02:23:52Z on
+  // `https-varlock-dev-integrations-overview-can`, still pending a day later, rendering an answerable
+  // question card at the tail of a thread whose turn had long since moved past it.
+  //
+  // It renders as FULLY LIVE, which is the part that makes this worse than untidy. Codex requests carry a
+  // provider delivery row, so `interactionForRead` can fail them closed as `reconnect-required`; these are
+  // journaled with a plain `store.create`, carry no delivery row, and therefore get no effect at all. The
+  // operator sees working buttons, and answering routes through `interactionResolve`'s non-provider branch
+  // — the journal flips to resolved and no daemon is ever told, because `pendingPerms` is process memory
+  // that did not survive the restart.
+  const retirePendingFor = (slug: string, sessionId: string, reason: "turn-ended" | "provider-cancelled"): void => {
+    if (!deps.interactions) return
+    let cancelled: ReturnType<InteractionStore["cancelForSession"]> = []
+    // Never let a sweep fail a turn ending, a boot, or a daemon teardown — it is hygiene, not the work.
+    try { cancelled = deps.interactions.cancelForSession(slug, sessionId, reason) } catch { return }
+    // The subscriber above already denied and dropped every entry that was still live in this process.
+    // Sweep the map anyway: an interaction journaled by a PREVIOUS fray has no entry to fire against.
+    for (const record of cancelled) pendingPerms.delete(record.id)
+  }
+
   // The daemon deaths already reported through onDiagnostic, keyed by session id + the dead daemon's
   // generation. A death is a one-time fact; re-announcing it on every later follow-up would turn an
   // attribution into noise.
@@ -295,7 +321,17 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
   // (`attach`) and the boot reattach (`warmUp`), which must NEVER fork.
   const bind = (slug: string, sessionId: string, cwd: string, record: BrokerRecord): ActiveSession => {
     const client = connectClaudeBroker(record.socketPath, {
-      onEvent: (event) => deps.onEvent?.(slug, sessionId, event),
+      onEvent: (event) => {
+        // A `result` ENDS the turn, so nothing the turn was blocked on can be answered after it. A
+        // permission escalation holds the turn open by construction — `canUseTool` blocks the tool call,
+        // which blocks the turn — so a `result` arriving while one is still pending proves that request
+        // was abandoned rather than awaited: an interrupt unwound it, or it was denied out of band (the
+        // cc-worker PreToolUse hook and the AskUserQuestion refusal both answer the daemon directly,
+        // leaving any card already journaled for it with nothing left to resolve it). Codex retires its
+        // own on `turn/completed` for exactly this reason; this is the Claude counterpart.
+        if (event.kind === "result") retirePendingFor(slug, sessionId, "turn-ended")
+        deps.onEvent?.(slug, sessionId, event)
+      },
       onDiagnostic: (diagnostic) => deps.onDiagnostic?.(slug, sessionId, diagnostic),
       onPermissionRequest: (requestId, request) => {
         // Dashboard routing when the store is wired; else the decision hook / auto-allow (tests).
@@ -507,10 +543,18 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       // a project accumulates hundreds of rows and runs a handful of daemons.
       let live: Map<string, BrokerRecord>
       try { live = new Map(liveBrokerRecords(deps.stateDir).map((record) => [record.sessionId, record])) } catch { return }
-      if (live.size === 0) return
       for (const target of owned) {
         const record = live.get(target.sessionId)
-        if (!record) continue // no daemon to adopt; a follow-up cold-resumes and attributes the death
+        if (!record) {
+          // No daemon to adopt; a follow-up cold-resumes and attributes the death. Whatever that dead
+          // daemon left pending dies WITH it, and this boot is the only thing that will ever notice: the
+          // canUseTool promise lived in that process, `pendingPerms` is memory this fray never had, and a
+          // cold resume re-asks inside a NEW turn under a new request id. Leaving the row pending is what
+          // pinned an unanswerable card to a transcript tail for a day. `provider-cancelled`, not
+          // `turn-ended` — the turn's fate is unknown here; the PROVIDER is what is provably gone.
+          retirePendingFor(target.threadSlug, target.sessionId, "provider-cancelled")
+          continue
+        }
         if (current(target.threadSlug, target.sessionId)) continue // already held (a re-entrant warmUp)
         // `bind`, not `attach`: adopting must never be able to FORK. Between the enumeration above and
         // here the daemon could have exited, and adoptOrForkBroker would then cold-start a `{kind:"new"}`
