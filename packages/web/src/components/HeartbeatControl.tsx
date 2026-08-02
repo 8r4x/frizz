@@ -49,17 +49,21 @@ export function HeartbeatControl({ thread }: { thread: ThreadView }) {
         disabled={busy}
         onClick={() => void toggle()}
         aria-label={`${verb} heartbeat`}
-        className={`flex items-center gap-1 rounded-md px-1 py-0.5 disabled:opacity-50 ${
-          paused ? "text-muted/60 hover:text-fg/80" : "text-pink-400/90 hover:text-pink-300"
-        }`}
+        className="group flex items-center gap-0.5 rounded-md px-1 py-0.5 disabled:opacity-50"
       >
-        {/* Same HeartPulse the rail row wears, so the two surfaces name the thread's state in one
-            vocabulary; the pause/play glyph beside it is the VERB, not a second state. Both nudged
-            down a hair — see the em offsets below. */}
-        <HeartPulse size={12} style={{ transform: "translateY(0.02em)" }} />
+        {/* Same HeartPulse the rail row wears, so both surfaces name the thread's state in one
+            vocabulary — pink while it beats, muted when the human has silenced it.
+            NO translateY on either glyph. Measured in the running app: the verb's ink centre sits
+            0.12px off the heart's, which is under the device grid — the skill's rule is to leave a
+            sub-pixel offset alone, and an em nudge there would be a guess dressed as precision. */}
+        <HeartPulse size={12} className={paused ? "text-muted/60" : "text-pink-400/90"} />
+        {/* The VERB, deliberately NOT pink. Filled bars/triangle are visually much denser than the
+            heart's 1.5px stroke, so at equal color the control shouted louder than the state it
+            describes — measured ink 5×6.7 solid against 10×9 outline. Muting it puts the one colored
+            mark on the STATE and lets the verb read as the affordance it is; hover brings it up. */}
         {paused
-          ? <Play size={10} fill="currentColor" style={{ transform: "translateY(0.01em)" }} />
-          : <Pause size={10} fill="currentColor" style={{ transform: "translateY(0.01em)" }} />}
+          ? <Play size={9} fill="currentColor" className="text-muted/55 group-hover:text-fg/80" />
+          : <Pause size={9} fill="currentColor" className="text-muted/55 group-hover:text-fg/80" />}
       </button>
     </Tooltip>
   )

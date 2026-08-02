@@ -1484,6 +1484,47 @@ test("a plain follow-up still reaches a worker whose sub-agents are running", as
   h.storage.close()
 })
 
+// ── Interrupt and send ──────────────────────────────────────────────────────────────────────────
+// The operator's "this can't wait" verb. Claude Code already dequeues at the first sampling boundary
+// that exists, so the wait is the remaining time of whatever was in flight — measured over 14 days of
+// this repo's transcripts, mid-turn operator prose waited p50 13.8s / p90 49s / p99 2.5m. Preempting
+// is the only lever, and ORDER is the entire mechanism: the SDK's interrupt aborts the turn WITHOUT
+// discarding queued inputs, so the message must already be queued when the interrupt lands. Reversed,
+// the interrupt would abort into an empty queue and the message would merely open an ordinary turn —
+// i.e. exactly the latency this verb exists to remove, with the in-flight work destroyed for nothing.
+function interruptHarness() {
+  const tailer = { ...noopTailer, get: () => ({ turn: "in-flight", subAgents: [] }) as never }
+  const h = harness(tailer)
+  const slug = "interrupt-me"
+  h.storage.upsertSession(row(slug))
+  h.storage.setBackend(slug, "claude")
+  h.storage.setClaudeRuntime(slug, "broker")
+  const order: string[] = []
+  ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = {
+    followUp: async () => void order.push("followUp"),
+    interruptTurn: () => { order.push("interruptTurn"); return true },
+  }
+  return { h, slug, order }
+}
+
+test("interrupt and send preempts the turn, and only AFTER the message is queued", async () => {
+  const { h, slug, order } = interruptHarness()
+  await h.router.followUp.handler({
+    input: { slug, sessionId: `sid-${slug}`, message: "stop, read this", deliveryId: "d-int", interrupt: true },
+  })
+  assert.deepEqual(order, ["followUp", "interruptTurn"], "queued first, preempted second")
+  const after = parseDeliveryLedger(h.storage.getSession(slug)!.delivery_ledger)
+  assert.ok(after.some((i) => i.id === "d-int" && i.state === "enqueued"), "and it is ledgered like any other send")
+  h.storage.close()
+})
+
+test("an ordinary follow-up never preempts the turn", async () => {
+  const { h, slug, order } = interruptHarness()
+  await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "whenever you get to it" } })
+  assert.deepEqual(order, ["followUp"], "the running command is left alone unless the operator asked")
+  h.storage.close()
+})
+
 // ── Reopening an archived thread by messaging it (every runtime) ─────────────────────────────────
 // There is no Reopen verb in fray: an archived thread's footer states "Done" and the composer under it
 // IS the reopen affordance ("Marked done — send a message to reopen it"). The un-archive that backs that

@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter, shouldSubmitStagedEnter, type ComposerKeyboardEvent } from "./composerKeyboard.ts"
+import { shouldInterruptSubmitComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter, shouldSubmitStagedEnter, type ComposerKeyboardEvent } from "./composerKeyboard.ts"
 
 function key(overrides: Partial<ComposerKeyboardEvent> = {}): ComposerKeyboardEvent {
   return {
@@ -41,6 +41,33 @@ test("Option-Enter fallback is eligible only without Ctrl or Command", () => {
   assert.equal(shouldRestoreOptionEnterNewline(key({ altKey: true, ctrlKey: true })), false)
   assert.equal(shouldRestoreOptionEnterNewline(key({ altKey: true, metaKey: true })), false)
   assert.equal(shouldRestoreOptionEnterNewline(key({ altKey: true, isComposing: true })), false)
+})
+
+// ---- shouldInterruptSubmitComposerEnter — ⌘/Ctrl-Enter, "this can't wait" ----
+// The gesture had to be one the composer was not already using, and one that could not steal a
+// newline: ⌘/Ctrl-Enter previously fell through to the browser default, which in a textarea inserts
+// nothing at all. These pin that it stays disjoint from BOTH the plain-Enter send and the
+// Option/Shift-Enter newline, so adding it cannot change what any existing keystroke does.
+
+test("interrupt-send fires on Command- or Ctrl-Enter, and only when it is offered", () => {
+  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true }), true), true)
+  assert.equal(shouldInterruptSubmitComposerEnter(key({ ctrlKey: true }), true), true)
+  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true }), false), false,
+    "no running worker, no affordance — and then no second way to send either")
+})
+
+test("interrupt-send never takes a keystroke the composer already owns", () => {
+  assert.equal(shouldInterruptSubmitComposerEnter(key(), true), false, "a plain Enter is the ordinary send")
+  assert.equal(shouldInterruptSubmitComposerEnter(key({ altKey: true }), true), false, "Option-Enter stays a newline")
+  assert.equal(shouldInterruptSubmitComposerEnter(key({ shiftKey: true }), true), false, "Shift-Enter stays a newline")
+  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true, altKey: true }), true), false)
+  assert.equal(shouldInterruptSubmitComposerEnter(key({ key: "a", metaKey: true }), true), false)
+})
+
+test("interrupt-send never fires on an IME confirmation", () => {
+  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true, isComposing: true }), true), false)
+  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true, keyCode: 229 }), true), false)
+  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true, keyCode: 13 }), true), true)
 })
 
 // ---- shouldSubmitStagedEnter — the ```question card's free-text box ----
