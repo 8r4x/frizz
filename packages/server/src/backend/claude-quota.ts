@@ -1,4 +1,5 @@
 import { join } from "node:path"
+import { frayRoots } from "../fray-paths.ts"
 import { homedir, platform } from "node:os"
 import { createHash } from "node:crypto"
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
@@ -441,7 +442,7 @@ export async function claudeQuotaRefreshSettled(): Promise<void> {
 export async function refreshClaudeQuotaInBackground(claudeBin = "claude", deps: ClaudeQuotaDeps = {}): Promise<void> {
   const now = (deps.now ?? Date.now)()
   const configDir = claudeConfigDir()
-  const cacheDir = deps.cacheDir ?? join(homedir(), ".fray", "quota-cache")
+  const cacheDir = deps.cacheDir ?? join(frayRoots().cache, "quota-cache")
   try {
     await mkdir(cacheDir, { recursive: true, mode: 0o700 })
   } catch {
@@ -466,7 +467,7 @@ export async function readClaudeQuota(
 ): Promise<ProviderQuota> {
   const now = (deps.now ?? Date.now)()
   const configDir = claudeConfigDir()
-  const cacheDir = deps.cacheDir ?? join(homedir(), ".fray", "quota-cache")
+  const cacheDir = deps.cacheDir ?? join(frayRoots().cache, "quota-cache")
   const paths = cachePaths(cacheDir, configDir)
   try {
     await mkdir(cacheDir, { recursive: true, mode: 0o700 })

@@ -1,6 +1,7 @@
 import { cpSync, lstatSync, mkdirSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join, resolve } from "node:path"
+import { frayPaths } from "./fray-paths.ts"
 
 // THE STABLE WORKER PLUGIN PATH — the one thing that makes a live plugin reload useful.
 //
@@ -24,12 +25,12 @@ import { dirname, isAbsolute, join, resolve } from "node:path"
 
 /** `~/.fray/plugins` — one subdirectory per staged version, siblings of `builds/`. */
 export function defaultPluginStageRoot(home = homedir()): string {
-  return join(home, ".fray", "plugins")
+  return join(frayPaths({ home }).cache, "plugins")
 }
 
 /** `~/.fray/current` — where the stable, repointable links live. */
 export function defaultStablePluginRoot(home = homedir()): string {
-  return join(home, ".fray", "current")
+  return join(frayPaths({ home }).cache, "current")
 }
 
 export type SymlinkOutcome = "created" | "repointed" | "unchanged"

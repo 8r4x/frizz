@@ -8,6 +8,7 @@ import {
   type GitProjectIdentityScope,
 } from "./project-identity.ts"
 import type { ProjectLaunchTarget } from "./project-launch.ts"
+import { projectStateDir } from "./fray-paths.ts"
 import { resolveProjectTmuxSocketSelection } from "./tmux-socket.ts"
 
 // Workspace resolution + on-disk locations. Everything here is derived once at boot and
@@ -149,7 +150,7 @@ export function resolveProject(cwd = process.cwd(), home = homedir(), env: NodeJ
   const identity = resolveProjectIdentity(resolveProjectDir(cwd), home)
   const dir = identity.root
   const id = identity.id
-  const stateDir = join(home, ".fray", "projects", id)
+  const stateDir = projectStateDir(id, home)
   mkdirSync(stateDir, { recursive: true })
   const name = basename(dir) || dir
   const target = {

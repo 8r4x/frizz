@@ -15,6 +15,7 @@ import {
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
+import { frayPaths } from "./fray-paths.ts"
 import {
   currentProcessGeneration,
   defaultProcessPlatformAdapter,
@@ -88,11 +89,11 @@ function canonicalHome(home: string): string {
 }
 
 export function globalLaunchLockPath(home = homedir()): string {
-  return join(canonicalHome(home), ".fray", GLOBAL_LOCK_NAME)
+  return join(frayPaths({ home: canonicalHome(home) }).state, GLOBAL_LOCK_NAME)
 }
 
 function namedLaunchLockPath(home: string, name: string): string {
-  return join(canonicalHome(home), ".fray", name)
+  return join(frayPaths({ home: canonicalHome(home) }).state, name)
 }
 
 export function pidIsAlive(pid: unknown): pid is number {
@@ -263,7 +264,7 @@ function tryAcquireGlobalLaunchLock(home: string, adapter: ProcessPlatformAdapte
 }
 
 export function portReservationPath(port: number, home = homedir()): string {
-  return join(canonicalHome(home), ".fray", PORT_LOCK_DIR, `${port}.lock`)
+  return join(frayPaths({ home: canonicalHome(home) }).state, PORT_LOCK_DIR, `${port}.lock`)
 }
 
 /**

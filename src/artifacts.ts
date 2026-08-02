@@ -25,6 +25,7 @@ import {
   DETACHED_DAEMON_ENTRIES,
   detachedDaemonOutputName,
 } from "@fray-ui/server/detached-daemons";
+import { frayPaths } from "@fray-ui/server/fray-paths";
 
 export interface FrayArtifactManifest {
   version: 1 | 2;
@@ -142,8 +143,9 @@ interface SourceArtifactIdentity {
   fingerprint: string;
 }
 
+/** CACHE: every artifact here is rebuildable from source, and this is the biggest thing Fray stores. */
 export function defaultArtifactRoot(home = homedir()): string {
-  return join(home, ".fray", "builds");
+  return join(frayPaths({ home }).cache, "builds");
 }
 
 function digestFile(path: string): string {

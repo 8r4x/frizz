@@ -30,6 +30,7 @@ import {
   normalizeBindHost,
 } from "@fray-ui/server/local-origin";
 import { readBootProgress } from "@fray-ui/server/boot-progress";
+import { frayPaths, projectStateDir } from "@fray-ui/server/fray-paths";
 import { defaultLogRoot, latestLogPath } from "@fray-ui/server/logging";
 import { DEFAULT_PORT } from "@fray-ui/shared";
 
@@ -373,7 +374,7 @@ export function resolveWorkspace(
   const identity = resolveGitProjectIdentity(realpathSync(gitRoot), home);
   const root = identity.root;
   const id = identity.id;
-  const stateDir = join(home, ".fray", "projects", id);
+  const stateDir = projectStateDir(id, home);
   mkdirSync(stateDir, { recursive: true });
   const target = {
     projectId: id,

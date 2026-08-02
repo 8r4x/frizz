@@ -38,6 +38,7 @@ import {
   type ProcessPlatformAdapter,
   type ProjectLaunchTarget,
 } from "../packages/server/src/project-launch.ts";
+import { frayPaths, projectStateDir } from "@fray-ui/server/fray-paths";
 import {
   acquireGlobalLaunchLock,
   allocatePort,
@@ -376,7 +377,7 @@ function assertOneIdentity(
   assert.deepEqual([...new Set(results.map(({ id }) => id))], [first.id]);
   assert.deepEqual(
     [...new Set(results.map(({ stateDir }) => stateDir))],
-    [join(home, ".fray", "projects", first.id)]
+    [projectStateDir(first.id, home)]
   );
   assert.deepEqual(
     [...new Set(results.map(({ socket }) => socket))],
@@ -395,7 +396,7 @@ function assertOneIdentity(
       .split(/\r?\n/u),
     [first.id]
   );
-  assert.deepEqual(readdirSync(join(home, ".fray", "projects")).sort(), [
+  assert.deepEqual(readdirSync(join(frayPaths({ home }).data, "projects")).sort(), [
     first.id,
   ]);
   assert.equal(existsSync(join(repo, ".fray", "fray.id")), false);
@@ -602,9 +603,9 @@ test("main and linked worktrees concurrently resolve to three stable isolated Fr
       cwd: main,
     });
     symlinkSync(linkedOne, linkedAlias);
-    mkdirSync(join(home, ".fray", "projects", legacyId), { recursive: true });
+    mkdirSync(projectStateDir(legacyId, home), { recursive: true });
     writeFileSync(
-      join(home, ".fray", "projects", legacyId, "legacy-state"),
+      join(projectStateDir(legacyId, home), "legacy-state"),
       "preserved"
     );
 
@@ -667,7 +668,7 @@ test("main and linked worktrees concurrently resolve to three stable isolated Fr
     assert.equal(mainResult.identityScope, "repository");
     assert.equal(
       mainResult.stateDir,
-      join(home, ".fray", "projects", legacyId)
+      projectStateDir(legacyId, home)
     );
     assert.equal(
       mainResult.socket,
@@ -832,7 +833,7 @@ test("invalid or duplicated git-local project ids fail closed before state paths
       () => resolveProject(repo, home),
       /expected exactly one UUID/
     );
-    assert.equal(existsSync(join(home, ".fray", "projects")), false);
+    assert.equal(existsSync(join(frayPaths({ home }).data, "projects")), false);
 
     execFileSync("git", ["config", "--local", "--unset-all", "fray.id"], {
       cwd: repo,
@@ -956,7 +957,7 @@ test("linked-worktree identity config fails closed and recovers from an interrup
       () => resolveWorkspace(linked, home),
       /unable to persist linked-worktree/
     );
-    assert.equal(existsSync(join(home, ".fray", "projects")), false);
+    assert.equal(existsSync(join(frayPaths({ home }).data, "projects")), false);
     rmSync(`${config}.lock`);
 
     const recovered = resolveWorkspace(linked, home);
@@ -990,12 +991,12 @@ test("an interrupted Git config write fails without inventing an id and recovers
         stdio: "ignore",
       })
     );
-    assert.equal(existsSync(join(home, ".fray", "projects")), false);
+    assert.equal(existsSync(join(frayPaths({ home }).data, "projects")), false);
 
     rmSync(configLock);
     const recovered = resolveWorkspace(repo, home);
     assert.match(recovered.id, /^[0-9a-f-]{36}$/u);
-    assert.deepEqual(readdirSync(join(home, ".fray", "projects")), [
+    assert.deepEqual(readdirSync(join(frayPaths({ home }).data, "projects")), [
       recovered.id,
     ]);
   } finally {
@@ -1019,7 +1020,7 @@ test("a malformed repository config never degrades direct startup into a random 
       () => resolveProject(repo, home),
       /unable to resolve Git repository root/
     );
-    assert.equal(existsSync(join(home, ".fray", "projects")), false);
+    assert.equal(existsSync(join(frayPaths({ home }).data, "projects")), false);
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
@@ -1761,7 +1762,7 @@ test("a port reservation is exclusive while its owner lives and reclaimed once i
 
     // A launcher killed mid-boot leaves its claim on disk; the next allocation must reclaim it
     // rather than skipping that port forever.
-    mkdirSync(join(home, ".fray", "ports"), { recursive: true });
+    mkdirSync(join(frayPaths({ home }).state, "ports"), { recursive: true });
     writeFileSync(
       portReservationPath(4919, home),
       JSON.stringify({ pid: 999_999_999 })

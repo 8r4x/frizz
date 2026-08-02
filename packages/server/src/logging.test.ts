@@ -13,16 +13,35 @@ import {
   pruneRunLogs,
   runLogPath,
 } from "./logging.ts"
+import { frayPaths } from "./fray-paths.ts"
 
 function scratch(): string {
   return mkdtempSync(join(tmpdir(), "fray-logging-"))
 }
 
-test("the run log lives beside the project's other state, not under an imported convention", () => {
+test("the run log lives beside the project's own state, wherever that project's state lives", () => {
   const stateDir = "/home/someone/.fray/projects/abcd"
   assert.equal(defaultLogRoot(stateDir), join(stateDir, "logs"))
-  // No project yet (a failure before the workspace resolves) falls back to the machine-level dir.
-  assert.equal(defaultLogRoot(undefined, "/home/someone"), "/home/someone/.fray/logs")
+
+  // No project yet — a failure before the workspace resolves — falls back to the machine-level STATE
+  // root. This test used to assert `<home>/.fray/logs` unconditionally, under a rule that fray keeps
+  // one dotdir on every platform; the root is now resolved by fray-paths.ts, so an install that HAS
+  // `~/.fray` still gets exactly that path and a new machine gets the platform's own.
+  const legacyHome = mkdtempSync(join(tmpdir(), "fray-logroot-legacy-"))
+  try {
+    mkdirSync(join(legacyHome, ".fray"))
+    assert.equal(defaultLogRoot(undefined, legacyHome), join(legacyHome, ".fray", "logs"))
+  } finally {
+    rmSync(legacyHome, { recursive: true, force: true })
+  }
+
+  const freshHome = mkdtempSync(join(tmpdir(), "fray-logroot-fresh-"))
+  try {
+    assert.equal(defaultLogRoot(undefined, freshHome), join(frayPaths({ home: freshHome }).state, "logs"))
+    assert.notEqual(defaultLogRoot(undefined, freshHome), join(freshHome, ".fray", "logs"))
+  } finally {
+    rmSync(freshHome, { recursive: true, force: true })
+  }
 })
 
 test("a run log is named for its instant and pid so a crash points at one exact file", () => {

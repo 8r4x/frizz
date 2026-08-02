@@ -11,6 +11,7 @@ import {
 } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
+import { frayPaths } from "./fray-paths.ts"
 
 // ── Structured logging, shared by every Fray process ───────────────────────────────────────────────
 // Fray's readout used to be whatever each subsystem happened to console.log, printed straight to a TTY
@@ -53,13 +54,14 @@ const MAX_LOG_BYTES = 32 * 1024 * 1024
 
 export function defaultLogRoot(stateDir?: string, home = homedir()): string {
   // Per PROJECT, because Fray serves one board per repository and a merged machine-wide log would
-  // interleave unrelated boards. `~/.fray` is already this tool's state root (artifacts, per-project
-  // directories, the global launch lock), so logs live beside them rather than under a second
-  // convention imported for this one subsystem.
+  // interleave unrelated boards. Logs live beside the rest of a project's bookkeeping rather than
+  // under a second convention imported for this one subsystem.
   //
-  // Deliberately NOT `env-paths`/XDG/`~/Library/Logs`: fray keeps one dotdir on every platform, and
-  // splitting one subsystem out of it would make the crash message platform-conditional for no gain.
-  return stateDir ? join(stateDir, "logs") : join(home, ".fray", "logs")
+  // The fallback root is the STATE root (`fray-paths.ts`), which is `~/.fray` on every install that
+  // has one and the platform's own location on a new machine. This comment used to say fray keeps one
+  // dotdir on every platform and deliberately ignores XDG; that is no longer true, and the resolver
+  // is now the single place that decides.
+  return stateDir ? join(stateDir, "logs") : join(frayPaths({ home }).state, "logs")
 }
 
 function runStamp(at: Date): string {
