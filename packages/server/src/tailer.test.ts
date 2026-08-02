@@ -7,7 +7,8 @@ import { createStorage, type Storage, type SessionRow } from "./storage.ts"
 import { Bus } from "./bus.ts"
 import type { ServerEvent } from "@fray-ui/shared"
 import { permMarkerPath, type Project } from "./project.ts"
-import { parseLine, applyRecord, applyEvent, computeTurn, newTailState, createTailer, matchesPermPrompt, detectClaudeBootModal, hasQuestionBlock, isClaudeAuthErrorText, isRealUserMessage, parseSignalFence, markerDecision, unwrapShellCommand, FOREIGN_FRESH_MS } from "./tailer.ts"
+import { parseLine, applyRecord, applyEvent, computeTurn, newTailState, createTailer, defaultBrokerDaemonAlive, matchesPermPrompt, detectClaudeBootModal, hasQuestionBlock, isClaudeAuthErrorText, isRealUserMessage, parseSignalFence, markerDecision, unwrapShellCommand, FOREIGN_FRESH_MS } from "./tailer.ts"
+import { claudeBrokerRecordPath } from "./backend/claude-broker-host.ts"
 import type { AgentBackend, NormalizedEvent } from "./backend/types.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
 import { createCodexBackend } from "./backend/codex.ts"
@@ -1213,6 +1214,173 @@ test("tailer: stopping a BROKER thread clears its live background shells (the he
   t.tick()
   assert.deepEqual(t.get("t")?.bgShells, [], "a stopped headless session owns no live background shells")
   assert.ok(h.changes.n > before, "the shell vanishing marks the board dirty")
+})
+
+// The seven-hour phantom (thread invoices-just-went-out-for-august, 2026-08-02). A broker daemon that
+// dies WITHOUT fray stopping it — SIGKILL, OOM, its own 6h idle-timeout — never gets `exited` stamped,
+// because that column records only a deliberate stop. paneDeadForRow read `exited` alone, so the row
+// stayed "alive" and every background shell the dead process owned kept shimmering on the board. The
+// operator came back after seven hours to a background shell still rendering as running; its owning
+// process had been gone for most of that, and its script had never completed at all. Nothing cleared it
+// until the next prompt spawned a successor daemon, whose resume-time reconciliation finally emitted the
+// terminal notification the fold had been waiting on. The daemon's own discovery record is the reading
+// that was available the whole time.
+test("tailer: a broker daemon that dies UNSTOPPED clears its shells — `exited` is not the only death", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  h.storage.setBackend("t", "claude")
+  h.storage.setClaudeRuntime("t", "broker")
+  const shellLine = JSON.stringify(bashBg("toolu_sh", "Watch CI on PR 604", "nub scripts/ci-watch.ts --pr 604"))
+  const ackLine = JSON.stringify(resultText("toolu_sh", "Command running in background with ID: b63. Output is being written to: /tmp/tasks/b63.output. You will be notified when it completes."))
+  fixture(h.logDir, "sid", [IN_FLIGHT, shellLine, ackLine])
+  const shellMtime = Date.parse("2026-07-01T00:00:02.000Z")
+  const daemon = { alive: true }
+  const t = createTailer({
+    project: { cwdSlug: "x" } as Project,
+    storage: h.storage,
+    bus: h.bus,
+    onChange: () => h.changes.n++,
+    now: () => h.clock.ms,
+    paneDead: () => false,
+    capturePane: () => h.pane.text,
+    sessionLogDir: h.logDir,
+    mtimeMs: () => shellMtime,
+    brokerDaemonAlive: () => daemon.alive,
+  })
+
+  h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
+  t.tick()
+  assert.equal(t.get("t")?.bgShells.length, 1, "live while the daemon is running")
+
+  daemon.alive = false // killed outright: no exit record, no terminal notification, `exited` still 0
+  const before = h.changes.n
+  t.tick()
+  assert.equal(h.storage.getSession("t")?.exited ?? 0, 0, "the row was never deliberately stopped")
+  assert.deepEqual(t.get("t")?.bgShells, [], "a dead daemon owns no live background shells")
+  assert.ok(h.changes.n > before, "the shell vanishing marks the board dirty")
+})
+
+// Nothing injected: a real stateDir, a real record file naming a real (dead) pid, the real default probe,
+// through the real read→fold→view. The two tests above each prove one half — that paneDeadForRow consumes
+// the answer, and that the answer is right — and they meet at a single line. This is the whole path.
+test("tailer: end-to-end, a real broker record naming a dead pid clears the shell (nothing stubbed)", () => {
+  const h = harness()
+  const stateDir = mkdtempSync(join(tmpdir(), "brokere2e-"))
+  mkdirSync(join(stateDir, "claude-broker"), { recursive: true })
+  h.storage.upsertSession(row())
+  h.storage.setBackend("t", "claude")
+  h.storage.setClaudeRuntime("t", "broker")
+  const shellLine = JSON.stringify(bashBg("toolu_sh", "Watch CI on PR 604", "nub scripts/ci-watch.ts --pr 604"))
+  const ackLine = JSON.stringify(resultText("toolu_sh", "Command running in background with ID: b63. Output is being written to: /tmp/tasks/b63.output. You will be notified when it completes."))
+  fixture(h.logDir, "sid", [IN_FLIGHT, shellLine, ackLine])
+  const recordPath = claudeBrokerRecordPath(stateDir, "sid")
+  writeFileSync(recordPath, JSON.stringify({ daemonPid: process.pid, sessionId: "sid" }))
+  const t = createTailer({
+    project: { cwdSlug: "x", stateDir } as Project,
+    storage: h.storage,
+    bus: h.bus,
+    onChange: () => h.changes.n++,
+    now: () => h.clock.ms,
+    paneDead: () => false,
+    capturePane: () => h.pane.text,
+    sessionLogDir: h.logDir,
+    mtimeMs: () => Date.parse("2026-07-01T00:00:02.000Z"),
+  })
+
+  h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
+  t.tick()
+  assert.equal(t.get("t")?.bgShells.length, 1, "a record naming a running pid keeps the shell live")
+
+  // The daemon dies outright: its record survives (nothing wrote an exit, nothing pruned it) and naming
+  // a pid that no longer exists is the only trace left. This is the seven-hour phantom's exact on-disk
+  // shape — measured on the maintainer's machine 2026-08-02 as 9 such records across 19.
+  writeFileSync(recordPath, JSON.stringify({ daemonPid: 2 ** 30, sessionId: "sid" }))
+  h.clock.ms += 60_000 // past BROKER_LIVENESS_TTL_MS, so the tick re-probes
+  t.tick()
+  assert.deepEqual(t.get("t")?.bgShells, [], "the shell clears without fray ever stopping the session")
+  assert.equal(h.storage.getSession("t")?.exited ?? 0, 0, "and without inventing a deliberate stop")
+
+  rmSync(stateDir, { recursive: true, force: true })
+})
+
+// The SEAM the two tests around this one stub out: the real record read and the real pid probe. Injecting
+// `brokerDaemonAlive` proves paneDeadForRow consumes the answer; only this proves the answer is right.
+// Every case runs against a real file on disk and a real pid.
+test("defaultBrokerDaemonAlive: reads a real record and probes a real pid, failing safe to ALIVE", () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "brokerlive-"))
+  mkdirSync(join(stateDir, "claude-broker"), { recursive: true })
+  const project = { cwdSlug: "x", stateDir } as Project
+  // A fresh probe per case: the real one memoises for BROKER_LIVENESS_TTL_MS, which would otherwise
+  // serve case N-1's answer to case N.
+  const probe = () => defaultBrokerDaemonAlive(project, () => Date.now())
+  const write = (sessionId: string, body: string) =>
+    writeFileSync(claudeBrokerRecordPath(stateDir, sessionId), body)
+
+  write("live", JSON.stringify({ daemonPid: process.pid }))
+  assert.equal(probe()("live"), true, "our own pid is alive")
+
+  // A pid that cannot exist: kill(0) gives ESRCH, the one error that means "gone".
+  write("dead", JSON.stringify({ daemonPid: 2 ** 30 }))
+  assert.equal(probe()("dead"), false, "a record naming a vanished pid is a death fray can prove")
+
+  assert.equal(probe()("never-ran"), false, "no record at all ⇒ no daemon to discover")
+
+  write("corrupt", "{ not json")
+  assert.equal(probe()("corrupt"), true, "an unreadable record must NEVER be read as a death")
+
+  write("pidless", JSON.stringify({ generation: "g" }))
+  assert.equal(probe()("pidless"), true, "a record with no pid names nothing to probe — fail safe")
+
+  // No stateDir is the narrow-fixture case, and the one that must reproduce the old behavior exactly.
+  assert.equal(defaultBrokerDaemonAlive({ cwdSlug: "x" } as Project, () => Date.now())("live"), true)
+
+  rmSync(stateDir, { recursive: true, force: true })
+})
+
+test("defaultBrokerDaemonAlive: memoises within the TTL and re-probes after it", () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "brokerttl-"))
+  mkdirSync(join(stateDir, "claude-broker"), { recursive: true })
+  const path = claudeBrokerRecordPath(stateDir, "s")
+  writeFileSync(path, JSON.stringify({ daemonPid: process.pid }))
+  let ms = 1_000_000
+  const alive = defaultBrokerDaemonAlive({ cwdSlug: "x", stateDir } as Project, () => ms)
+
+  assert.equal(alive("s"), true)
+  rmSync(path) // the record is gone, but the cached answer must still stand
+  assert.equal(alive("s"), true, "within the TTL the tick pays no read and sees no change")
+  ms += 5_001
+  assert.equal(alive("s"), false, "past the TTL it re-probes and sees the daemon is gone")
+
+  rmSync(stateDir, { recursive: true, force: true })
+})
+
+// The guard on the fix above. A tmux row has no broker record to read, and a probe that answered "dead"
+// for one would empty its shells wholesale — the exact shape of the 2026-07-29 regression this file
+// already pins from the other direction (a pane sniff wrongly applied to a headless row).
+test("tailer: broker-daemon liveness is never consulted for a non-broker row", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  const shellLine = JSON.stringify(bashBg("toolu_sh", "Watch CI on PR 604", "nub scripts/ci-watch.ts --pr 604"))
+  const ackLine = JSON.stringify(resultText("toolu_sh", "Command running in background with ID: b63. Output is being written to: /tmp/tasks/b63.output. You will be notified when it completes."))
+  fixture(h.logDir, "sid", [IN_FLIGHT, shellLine, ackLine])
+  let asked = 0
+  const t = createTailer({
+    project: { cwdSlug: "x" } as Project,
+    storage: h.storage,
+    bus: h.bus,
+    onChange: () => h.changes.n++,
+    now: () => h.clock.ms,
+    paneDead: () => false,
+    capturePane: () => h.pane.text,
+    sessionLogDir: h.logDir,
+    mtimeMs: () => Date.parse("2026-07-01T00:00:02.000Z"),
+    brokerDaemonAlive: () => { asked++; return false },
+  })
+
+  h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
+  t.tick()
+  assert.equal(asked, 0, "a tmux row never asks about a broker daemon")
+  assert.equal(t.get("t")?.bgShells.length, 1, "and its live shell is untouched")
 })
 
 test("tailer: a manual TaskStop clears a live background shell from the board view (real read→fold→view)", () => {

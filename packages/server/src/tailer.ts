@@ -1,4 +1,4 @@
-import { statSync, openSync, readSync, closeSync, readdirSync, mkdirSync, writeFileSync, readFileSync } from "node:fs"
+import { statSync, openSync, readSync, closeSync, readdirSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs"
 import { join } from "node:path"
 import { homedir, tmpdir } from "node:os"
 import { insideFence, PermissionMode } from "@fray-ui/shared"
@@ -15,6 +15,7 @@ import { normalizeObservedThreadModel, validateThreadProfile } from "./backend/t
 import { resolveRuntimeTurn, type ClaudeRuntimeTask } from "./backend/claude-runtime-ingest.ts"
 import { classifyLimitRecord } from "./backend/usage-limit.ts"
 import { claudeBrokerDiagnosticLogPath } from "./backend/claude-broker-diagnostics.ts"
+import { claudeBrokerRecordPath, readBrokerRecord } from "./backend/claude-broker-host.ts"
 import { parseDeliveryLedger, correlateDeliveryRecord, ageDeliveries, serializeDeliveryLedger, type DeliveryLedgerItem } from "./delivery-ledger.ts"
 import { createCodexSubAgentTracker, type CodexSubAgentTracker } from "./codex-subagents.ts"
 import {
@@ -1957,6 +1958,10 @@ export interface TailerDeps {
   onTranscriptChange?: (slugs: string[]) => void
   now?: () => number // injectable clock (tests)
   paneDead?: (slug: string) => boolean // injectable liveness (tests)
+  // Injectable broker-daemon liveness (tests); defaults to defaultBrokerDaemonAlive, which reads the
+  // session's discovery record and probes its pid. A fixture that omits it gets `() => true` when the
+  // project has no stateDir, i.e. the pre-existing `exited`-only behavior.
+  brokerDaemonAlive?: (sessionId: string) => boolean
   capturePane?: (slug: string) => string // injectable pane text (tests); defaults to tmux
   // ASYNC batched pane text for the off-loop per-tick prefetch; defaults to tmux.capturePanesAsync. A
   // fixture that injects only `capturePane` gets no async prefetch (see createTailer) so existing
@@ -2101,6 +2106,64 @@ function defaultReadPermMarker(project: Project): (slug: string) => PermMarker |
   }
 }
 
+// "Is this broker session's daemon still running?" — the honest liveness a broker row has instead of a
+// tmux pane, read from the same discovery record the bridge connects through (a `{daemonPid}` JSON under
+// <stateDir>/claude-broker) plus a signal-0 probe of that pid.
+//
+// This exists because `exited` alone is NOT that answer. `exited` is stamped only when fray DELIBERATELY
+// stops a session, so a daemon that dies any other way — SIGKILL, OOM, an idle-timeout, a crash — leaves
+// the row reading alive forever. Measured over this machine's whole broker corpus 2026-08-02: 276 daemon
+// starts against 223 recorded exits, so ~19% of daemons vanish leaving no breadcrumb at all. That is the
+// transcript-side half of a background shell that renders as "running" for seven hours after the process
+// owning it is gone (thread invoices-just-went-out-for-august: daemon 71731 killed outright, its bg shell
+// still shimmering on the board until the operator's next prompt spawned a successor).
+//
+// Two rules make this safe to consult from the 1s tick:
+//   • FAIL-SAFE IS "ALIVE". No stateDir, an unreadable/absent/corrupt record, a pid we may not signal —
+//     every one answers ALIVE, so the worst case is exactly today's behavior. The opposite default is the
+//     documented catastrophe here (see paneDeadForRow: a latched dead reading emptied bgShellViews for
+//     EVERY broker thread at once), so this never guesses toward death.
+//   • Never `liveBrokerRecord`, which UNLINKS a record it judges stale. The tailer only observes; pruning
+//     discovery state from a read path would race the bridge that owns it.
+// Memoised per session on a short TTL: the answer changes at most once per daemon lifetime, and a board
+// of broker rows must not pay a read + syscall per row per second to learn nothing.
+const BROKER_LIVENESS_TTL_MS = 5_000
+
+export function defaultBrokerDaemonAlive(project: Project, now: () => number): (sessionId: string) => boolean {
+  if (!project.stateDir) return () => true
+  const cache = new Map<string, { at: number; alive: boolean }>()
+  return (sessionId) => {
+    const cached = cache.get(sessionId)
+    const at = now()
+    if (cached && at - cached.at < BROKER_LIVENESS_TTL_MS) return cached.alive
+    let alive = true
+    try {
+      const path = claudeBrokerRecordPath(project.stateDir!, sessionId)
+      const record = readBrokerRecord(path)
+      // `readBrokerRecord` collapses "absent" and "unparseable" into the same null, and those two must
+      // NOT get the same answer: an absent record is a positive absence (no daemon to discover ⇒ dead),
+      // while an unparseable one is a failure to read (⇒ alive). Only the absence may answer dead. A
+      // daemon mid-write leaves exactly the unparseable shape, so conflating them would let a routine
+      // torn read clear a LIVE thread's background shells — and a test writing `{ not json` caught this
+      // implementation doing precisely that.
+      if (!record) alive = existsSync(path)
+      else if (typeof record.daemonPid !== "number") alive = true
+      else {
+        try {
+          process.kill(record.daemonPid, 0)
+        } catch (error) {
+          // EPERM ⇒ the pid exists and is not ours to signal. Only ESRCH is "gone".
+          alive = (error as NodeJS.ErrnoException).code === "EPERM"
+        }
+      }
+    } catch {
+      alive = true // unreadable state ⇒ never claim a death we cannot see
+    }
+    cache.set(sessionId, { at, alive })
+    return alive
+  }
+}
+
 // The slice of AgentBackend the tailer drives: locate a session's transcript, fold a raw line into
 // the accumulator, and (registered sessions only) sniff the pane for a permission prompt.
 type TailBackend = Pick<AgentBackend, "transcriptPath" | "foldLine" | "matchesPermPrompt" | "detectNativeInput" | "detectBootModal">
@@ -2139,6 +2202,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   // Cached (batched list-panes): the 1s tick asks per session row — uncached that was one
   // subprocess per row per second, a standing event-loop tax that grew with thread count.
   const paneDead = deps.paneDead ?? tmux.paneDeadCached
+  const brokerDaemonAlive = deps.brokerDaemonAlive ?? defaultBrokerDaemonAlive(deps.project, now)
   const capturePane = deps.capturePane ?? tmux.capturePane
   // ASYNC batched sibling of capturePane, for the off-loop per-tick prefetch below. Absent (narrow test
   // fixtures that inject only a synchronous `capturePane`) ⇒ no async prefetch, and every sniff falls
@@ -2300,9 +2364,18 @@ export function createTailer(deps: TailerDeps): Tailer {
   // !isHeadlessRow. That latched paneDead=true on every broker thread at first sighting and never
   // revisited it, so bgShellViews returned [] for all of them: a live CI watcher, correctly tracked by
   // the fold, rendered nowhere (measured 2026-07-29 — 13 threads holding live shell entries, the only
-  // one with paneDead=false a legacy tmux row). `exited` is the honest headless equivalent: for those
-  // rows nothing sniffs tmux to set it, so it is stamped only when fray genuinely stops the session.
+  // one with paneDead=false a legacy tmux row). `exited` is the headless stand-in: for those rows nothing
+  // sniffs tmux to set it, so it is stamped only when fray genuinely stops the session.
+  //
+  // Which makes `exited` a FLOOR, not the whole answer — it knows the deliberate stop and no other death.
+  // A BROKER claude row can do better, because its daemon publishes a discovery record naming its pid; an
+  // app-server codex row still has only the stamp. See the first branch below.
   function paneDeadForRow(row: SessionRow): boolean {
+    // A BROKER claude row has a second, honest reading available: its daemon's own discovery record.
+    // `exited` covers only the deliberate stop, which is why a daemon killed outright used to leave this
+    // false forever — and with it every background shell the dead process owned, rendering as live. See
+    // defaultBrokerDaemonAlive; it fails safe to ALIVE, so this can only ever ADD deaths fray can prove.
+    if (isBrokerClaudeRow(row)) return row.exited === 1 || !brokerDaemonAlive(row.session_id)
     if (isHeadlessRow(row)) return row.exited === 1
     const binding = adoptionBinding(row)
     if (binding.kind === "unbound") return paneDead(row.slug)
@@ -2515,8 +2588,10 @@ export function createTailer(deps: TailerDeps): Tailer {
   // still clears via its terminal notification.
   //
   // `paneDead` is that death, and it is NOT a tmux fact: a headless row (broker claude / app-server
-  // codex) has no pane at all and answers from its exit stamp instead — see paneDeadForRow, where
-  // asking tmux about a paneless row silently emptied this list for every broker thread.
+  // codex) has no pane at all and answers from its exit stamp — plus, for a broker row, a probe of its
+  // daemon's own pid — instead. See paneDeadForRow, where asking tmux about a paneless row silently
+  // emptied this list for every broker thread, and where the stamp ALONE later kept a dead process's
+  // shells breathing here for seven hours (2026-08-02).
   //
   // A tracked, pane-alive shell is simply "running" — there is no age-based staleness. `run_in_background`
   // cannot tell a CI watcher (ends soon) from a vite dev server (runs forever), so NO clock is a correct
