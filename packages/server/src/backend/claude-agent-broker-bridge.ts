@@ -23,8 +23,7 @@ import {
   parseClaudeAskUserQuestion,
   type ClaudeAskSpec,
 } from "./claude-permission-interactions.ts"
-import { claudeWorkerEnv, FRAY_MCP } from "./types.ts"
-import type { ContextWindow } from "@fray-ui/shared"
+import { CLAUDE_WORKER_ENV, FRAY_MCP } from "./types.ts"
 
 type BrokerMcpServers = NonNullable<ClaudeBrokerConfig["mcpServers"]>
 
@@ -80,10 +79,6 @@ export interface ClaudeBrokerBridgeDeps {
   /** Decide a tool-permission request when NOT routing to the dashboard (tests / interactions absent).
    *  Defaults to auto-allow, honoring the thread's permission mode — matching today's tmux `auto`. */
   decidePermission?: (slug: string, sessionId: string, request: ClaudePermissionRequest) => Promise<ClaudePermissionDecision>
-  /** The operator's configured auto-compact window (Settings → "Context window"), read LIVE at every
-   *  fork rather than captured in `workerEnv` above: that record is computed once per project, while
-   *  this is a setting the human can change between dispatches. Absent ⇒ claudeWorkerEnv's default. */
-  contextWindow?: () => ContextWindow | undefined
   /** Observe the session/transcript event stream (board liveness / telemetry). Optional. */
   onEvent?: (slug: string, sessionId: string, event: ClaudeQueryEvent) => void
   /** Observe daemon lifecycle/stderr diagnostics from a LIVE socket. The durable copy is written by
@@ -426,11 +421,10 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     const we = deps.workerEnv
     const workerEnv: Record<string, string> = {
       FRAY_UI_THREAD: slug,
-      // Tell the worker its token budget rather than leaving it to guess, and cap how full its context
-      // gets before it auto-summarizes — see CLAUDE_WORKER_ENV. The tmux path gets these through
-      // claudeWorkerEnvironment(); the broker filters ambient env through ENV_ALLOWLIST, so they have
-      // to ride workerEnv to arrive.
-      ...claudeWorkerEnv(deps.contextWindow?.()),
+      // Tell the worker its token budget rather than leaving it to guess — see
+      // CLAUDE_WORKER_ENV. The tmux path gets this through claudeWorkerEnvironment(); the
+      // broker filters ambient env through ENV_ALLOWLIST, so it has to ride workerEnv to arrive.
+      ...CLAUDE_WORKER_ENV,
       ...(we?.permDir ? { FRAY_PERM_DIR: we.permDir } : {}),
       // The cc-worker plugin's PreToolUse hook DENIES AskUserQuestion, because on the tmux path a
       // blocking question freezes a headless worker where nobody can answer it. On the broker path

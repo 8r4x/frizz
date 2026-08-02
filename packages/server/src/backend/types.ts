@@ -1,4 +1,4 @@
-import { CONTEXT_WINDOW_MAX, CONTEXT_WINDOW_MIN, type ContextWindow, type LimitWindow, type PermissionMode } from "@fray-ui/shared"
+import type { LimitWindow, PermissionMode } from "@fray-ui/shared"
 import type { FenceView, SubAgentView, BgShellView, PendingAskData, TurnState } from "../tailer.ts"
 
 // A turn cut off by an exhausted SUBSCRIPTION window, as a backend's fold observed it. Carries only
@@ -101,6 +101,10 @@ export interface NormalizedTail {
   lastUserText?: string // latest genuine human message (used to confirm wake-token delivery)
   lastFence?: FenceView // parsed by the shared fence grammar from the final message
   pendingQuestion: boolean
+  // The final message carries the ALLDONE sentinel — the worker's answer to a standing prompt when
+  // nothing in it is actionable. Optional (absent ⇒ false) because it is an additive observation, not
+  // a new required fact about a session; see scheduler.ts SOURCE 5.
+  lastAssistantAllDone?: boolean
   // Live sub-agents. Claude fills these from its Agent dispatches (the tailer's trackDispatches); codex
   // from its `spawn_agent` children (codex-subagents.ts). Both land in the same TailState maps.
   subAgents: SubAgentView[]
@@ -150,6 +154,10 @@ export interface FoldState {
   lastUserText?: string // exact text of that genuine human turn when the backend records it
   lastFence?: FenceView // done/awaiting excusal fence on the final message (cleared by any user turn)
   lastAssistantHasQuestion: boolean // the final message carries an unanswered ```question fence
+  // The final message answers a standing prompt with ALLDONE (scheduler.ts SOURCE 5). Folded and
+  // cleared on exactly the same lifecycle as the question flag above: set per assistant text, wiped by
+  // any user record — so the next bump the operator sends re-opens the loop by itself.
+  lastAssistantAllDone: boolean
   // Runtime provider-auth rejection (claude-auth plan, Slice A). Set when the backend records a
   // SYNTHETIC auth-error response (Claude: isApiErrorMessage + 401/login text) — never from user or
   // ordinary assistant content — and cleared by the next real assistant text (a genuine response
@@ -295,81 +303,10 @@ export const CHROME_DEVTOOLS_MCP = {
 // reproduces the auto-background bounce that real dispatched workers get, so a behavioral check
 // there passes identically with and without the variable. See the NOT ASSERTED note in
 // _live_sdk_worker_env.mts.
-//
-// ── CLAUDE_CODE_AUTO_COMPACT_WINDOW ────────────────────────────────────────────────────────────
-// How full a worker's context gets before Claude Code auto-summarizes it. Operator-configurable
-// (Settings → "Context window"); this is only the default the record carries when nothing is wired.
-//
-// Claude Code resolves the window as env var → `autoCompactWindow` in settings.json → its own
-// per-model default, then takes min(model window, configured). So this can only ever LOWER the
-// window, never raise it past what the model actually has.
-//
-// WHY 600k RATHER THAN THE MODEL'S 1M: a fray worker is a long autonomous effort that compacts and
-// keeps going, so the window is not a budget it must finish inside — it is the size of the haystack
-// every turn re-reads. Compacting at 600k trades one extra summarization for turns that carry less
-// stale context, and it caps what a single runaway turn can spend before the harness intervenes.
-//
-// NOT `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, which reads like the obvious knob and is a trap: cli 2.1.220
-// honors it only when `DISABLE_COMPACT` is ALSO set, or when the model id does not start with
-// `claude-` (a 3P gateway model). On a first-party model with compaction on it is silently ignored.
-//
-// Verified on cli 2.1.220 by driving the real TUI: with the variable at 600000 `/context` reports
-// "33.6k/600k tokens" and "Auto-compact window: 600k tokens"; the same pane without it reports
-// "33.5k/1m". Claude Code parses the value against a 100_000…1_000_000 range and treats anything
-// outside it as invalid, falling back to the model default SILENTLY — hence CONTEXT_WINDOW_MIN/MAX
-// in shared, so an out-of-range value is refused at the settings edge instead of quietly doing
-// nothing. Note the dashboard's own context dial reads `result.modelUsage[].contextWindow`, which
-// stays at the model's 1M regardless — the meter's denominator is the model window, not this.
-export const WORKER_CONTEXT_WINDOW = 600_000
-
 export const CLAUDE_WORKER_ENV = {
   CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "infinite",
   BASH_DEFAULT_TIMEOUT_MS: "60000",
-  CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(WORKER_CONTEXT_WINDOW),
 } as const
-
-/** CLAUDE_WORKER_ENV with the operator's configured context window applied — the ONE way either spawn
- *  path should build a Claude worker's environment. `"auto"` DELETES the variable rather than picking a
- *  number, so Claude Code falls through to its own per-model default; `undefined` (nothing wired, e.g. a
- *  test harness) keeps the record's shipped default. An out-of-range number is dropped rather than
- *  passed on, because Claude Code would silently ignore it and report the model default instead.
- *
- *  "auto" is an EMPTY STRING rather than an omitted key, and the emptiness is load-bearing on both
- *  paths: tmux spawns into a tmux server whose environment may predate this fray process, so only an
- *  explicit empty entry masks a stale inherited value, and the broker forwards "" through the SDK
- *  allowlist verbatim. Claude Code's resolver guards on `if (process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW)`,
- *  so "" is falsy there and it falls through to the model default — same outcome as never setting it.
- *
- *  AN OPERATOR-SET VARIABLE IS NEVER CLOBBERED. If `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is already set in
- *  fray's own process environment, that value passes through untouched and the setting stands down —
- *  the same "a cap is operator policy" rule workerCap() applies to the sibling caps in
- *  claudeWorkerEnvironment(). A malformed override is the one exception: Claude Code's parser would
- *  reject it and silently drop to the model default, so fray substitutes its own configured value
- *  rather than forwarding a number that cannot take effect.
- *
- *  Note this is only about fray's OWN process env. A `.claude/settings.json` `"env"` block in the
- *  dispatched repo outranks everything here — claude applies its settings env OVER the inherited
- *  process environment (measured on cli 2.1.220: settings 500000 + inherited 700000 ⇒ /context reports
- *  500k), so a project that pins its own window always wins over fray's default. Claude does NOT read
- *  `.env` files at all (measured: a `.env` holding the variable left the window at the model's 1M). */
-export function claudeWorkerEnv(contextWindow?: ContextWindow, env: NodeJS.ProcessEnv = process.env): Record<string, string> {
-  const operator = env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
-  if (operator !== undefined && inContextWindowRange(Number(operator)) && /^[1-9][0-9]*$/.test(operator)) {
-    return { ...CLAUDE_WORKER_ENV, CLAUDE_CODE_AUTO_COMPACT_WINDOW: operator }
-  }
-  return {
-    ...CLAUDE_WORKER_ENV,
-    ...(contextWindow === undefined
-      ? {}
-      : { CLAUDE_CODE_AUTO_COMPACT_WINDOW: typeof contextWindow === "number" && inContextWindowRange(contextWindow) ? String(contextWindow) : "" }),
-  }
-}
-
-/** A window Claude Code's own resolver would accept: an integer inside the range it parses against.
- *  Anything else it treats as invalid and replaces with the model default, without saying so. */
-function inContextWindowRange(value: number): boolean {
-  return Number.isInteger(value) && value >= CONTEXT_WINDOW_MIN && value <= CONTEXT_WINDOW_MAX
-}
 
 // Tools a TMUX worker never gets — the argv turns this into `--disallowedTools=…`.
 //

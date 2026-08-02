@@ -226,7 +226,7 @@ function spawnPinnedSession(
           workerPrompt: loadWorkerPrompt("claude", runtimeGate),
           frayMcp,
         }),
-        env: claudeWorkerEnvironment(deps.getSettings().contextWindow),
+        env: claudeWorkerEnvironment(),
         prewrite: [],
       }
   for (const f of built.prewrite) writeFileSync(f.path, f.contents)

@@ -37,20 +37,7 @@ export const SETTINGS_HELP = {
   notifications: "Shows a desktop notification when work needs attention while this window is hidden.",
   runtimeGate: "When on, dispatched workers drive a real browser before finishing the changes where that is what settles the question — a new surface, anything judged by eye, behaviour they can't predict from the code — and screenshot the result into their handoff. Small, certain fixes are expected to skip it and say what they verified instead. Turn off to drop the browser step from the worker prompt entirely.",
   autoResumeOnLimit: "When a usage limit interrupts running threads, fray remembers every one it cut off and sends each a “continue” once the window resets. Those threads stay out of your queue while they wait. Turn off to leave them parked for you to restart by hand.",
-  contextWindow: "How full a Claude worker’s context gets before it summarizes itself and carries on. Lower compacts sooner, so each turn re-reads less stale context and one runaway turn costs less; higher lets it hold more at once. Auto uses the model’s own default (1M on current models). This is only a cap — it can never exceed what the model actually has. Takes effect on the next thread you dispatch; a thread already running keeps the window it launched with. Codex threads are unaffected.",
 } as const
-
-// Auto plus a 200k ladder up to the current models' 1M ceiling. Values are Claude Code's own
-// CLAUDE_CODE_AUTO_COMPACT_WINDOW range (100k–1M); a number outside it is rejected there and falls
-// back to the model default, so the picker never offers one.
-const CONTEXT_WINDOW_OPTIONS = [
-  { value: "auto", label: "Auto (model default)" },
-  { value: "200000", label: "200k tokens" },
-  { value: "400000", label: "400k tokens" },
-  { value: "600000", label: "600k tokens" },
-  { value: "800000", label: "800k tokens" },
-  { value: "1000000", label: "1M tokens" },
-]
 function currentPerm(): NotifPerm {
   if (typeof Notification === "undefined") return "unsupported"
   return Notification.permission as NotifPerm
@@ -197,21 +184,6 @@ export function SettingsDrawer() {
               {draft.permissionMode === "bypassPermissions" && <BypassHint />}
             </SettingsField>
 
-            {/* Claude-only: rides CLAUDE_CODE_AUTO_COMPACT_WINDOW in the worker environment, which is
-                baked when the worker's process starts — hence "next thread you dispatch" in the help.
-                A stored value the picker doesn't list (an older build, or a hand-edited DB) renders as
-                the shipped 600k default rather than blanking the select. */}
-            <SettingsField label="Context window" help={SETTINGS_HELP.contextWindow}>
-              <Select
-                variant="bordered"
-                value={contextWindowValue(draft.contextWindow)}
-                onValueChange={(v) => setTrackedDraft({ ...draft, contextWindow: v === "auto" ? "auto" : Number(v) })}
-                options={CONTEXT_WINDOW_OPTIONS}
-                indicatorPosition="right"
-                ariaLabel="Claude context window"
-              />
-            </SettingsField>
-
             <SettingsField label="Font" help={SETTINGS_HELP.font}>
               <FontToggle value={draft.font ?? "mono"} onChange={(font) => setTrackedDraft({ ...draft, font })} />
             </SettingsField>
@@ -302,14 +274,6 @@ function LabelWithHelp({ label, help }: { label: string; help: string }) {
       </Tooltip>
     </span>
   )
-}
-
-/** The select's string value for a stored setting. Anything the picker doesn't offer — absent (an old
- *  settings blob) or an off-ladder number — shows the shipped 600k default, which is what the server
- *  merges to anyway, so the control never renders blank or claims a value that isn't selectable. */
-function contextWindowValue(stored: Settings["contextWindow"]): string {
-  const asString = stored === undefined ? "" : String(stored)
-  return CONTEXT_WINDOW_OPTIONS.some((o) => o.value === asString) ? asString : "600000"
 }
 
 function SettingsField({ label, help, children }: { label: string; help: string; children: ReactNode }) {

@@ -562,11 +562,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // consistent; the CodexBackend uses $CODEX_HOME (default ~/.codex). `backendFor` maps a row's `backend`
   // column to the right one, DEFAULTING to claude for any unset/unknown kind — so a session is codex ONLY
   // when it was dispatched codex, and every claude path is byte-identical to before.
-  const claudeBackend = createClaudeBackend({
-    logDir: defaultLogDir(project),
-    claudeBin: opts.claudeBin,
-    contextWindow: () => getSettings(storage).contextWindow,
-  })
+  const claudeBackend = createClaudeBackend({ logDir: defaultLogDir(project), claudeBin: opts.claudeBin })
   const codexBackend = createCodexBackend({})
   const backendFor = (kind?: string): AgentBackend => (kind === "codex" ? codexBackend : claudeBackend)
   const codexAppServer = codexAppServerBridgeEnabled()
@@ -648,9 +644,6 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         // InteractionStore; the same store + web cards codex approvals use).
         interactions: storage.interactions,
         projectId: project.id,
-        // Read live per fork so a Settings change reaches the next dispatch (and any cold-start resume)
-        // without a server restart. A daemon already running keeps the window it forked with.
-        contextWindow: () => getSettings(storage).contextWindow,
         // The fray worker environment — the SDK equivalent of the tmux path's --plugin-dir / --mcp-config.
         // Computed ONCE here (constant per project) and applied on every broker fork so a broker worker
         // gets the fray sub-agent profiles, the fray + chrome-devtools MCP, and the cc-worker hooks.
