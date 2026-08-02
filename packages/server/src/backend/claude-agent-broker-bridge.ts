@@ -15,8 +15,13 @@ import type { InteractionSessionScope, InteractionStore } from "../interaction-s
 import {
   CLAUDE_ASK_DENY_MESSAGE,
   CLAUDE_ASK_USER_QUESTION_TOOL,
+  CLAUDE_ASK_WITHDRAWN_MESSAGE,
   buildClaudePermissionInteraction,
+  buildClaudeQuestionInteraction,
   claudePermissionDecisionFor,
+  claudeQuestionDecisionFor,
+  parseClaudeAskUserQuestion,
+  type ClaudeAskSpec,
 } from "./claude-permission-interactions.ts"
 import { CLAUDE_WORKER_ENV, FRAY_MCP } from "./types.ts"
 
@@ -260,32 +265,41 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
   // Pending tool-permission escalations awaiting a human dashboard decision, keyed by interaction id.
   // The daemon holds the actual canUseTool promise (and re-delivers it on reconnect), so this only needs
   // the live client + the daemon's requestId to answer against once the human resolves the interaction.
-  const pendingPerms = new Map<string, { client: ClaudeBrokerClient; requestId: string; scope: InteractionSessionScope }>()
+  // `ask` is present for an AskUserQuestion card: the parsed question spec, needed to turn the operator's
+  // field values back into the tool's `{questions, answers}` updatedInput. It is re-derived from the
+  // re-delivered request on reconnect, so it survives a fray restart with the question still open.
+  const pendingPerms = new Map<string, { client: ClaudeBrokerClient; requestId: string; scope: InteractionSessionScope; ask?: ClaudeAskSpec }>()
 
   // Route a Claude tool-permission escalation to the dashboard: reuse the still-pending journal entry on
   // a reconnect re-delivery, else journal a fresh approval interaction. Failure to represent/journal fails
   // CLOSED (deny) — a permission we can't put in front of a human must not silently run.
   //
-  // AskUserQuestion never gets that far. WORKER_DISALLOWED_TOOLS takes the tool away at query start, so a
-  // worker cannot call it; this is the belt-and-braces for a session that somehow reaches it anyway (an
-  // adopted daemon forked before the flag existed, a sub-agent config we don't own). It is DENIED with the
-  // redirect to the ```question fence rather than journaled as a card — see WORKER_DISALLOWED_TOOLS for
-  // why the card, which fray can render perfectly well, is still the wrong answer.
+  // AskUserQuestion forks here. It rides the same canUseTool channel but is not an authorization request:
+  // it is the agent asking the operator to CHOOSE, and the SDK expects the chosen labels back inside the
+  // decision. So it becomes an `agent-question` interaction — the exact payload kind codex's
+  // item/tool/requestUserInput already produces, so one web card renders both providers — rather than an
+  // "Approve AskUserQuestion?" card over raw JSON, whose bare allow the model reads as "not answered".
   const routePermissionToDashboard = (slug: string, sessionId: string, cwd: string, requestId: string, request: ClaudePermissionRequest, client: ClaudeBrokerClient): void => {
     const store = deps.interactions!, projectId = deps.projectId!
     const scope: InteractionSessionScope = { projectId, threadSlug: slug, sessionId }
     const owner = { projectId, threadSlug: slug, sessionId, cwd }
-    if (request.toolName === CLAUDE_ASK_USER_QUESTION_TOOL) {
+    const ask = request.toolName === CLAUDE_ASK_USER_QUESTION_TOOL ? parseClaudeAskUserQuestion(request.input) : null
+    const existing = store.listPending(scope).find((r) => r.providerRequestId === requestId)
+    if (existing) { pendingPerms.set(existing.id, { client, requestId, scope, ...(ask ? { ask } : {}) }); return }
+    // A question we cannot represent EXACTLY is denied with a redirect rather than downgraded to an
+    // approval card: an approximate answer (a clipped label, a dropped question) reads to the model as
+    // freeform prose or as no answer at all, and it would ask again — the loop this whole path removes.
+    if (request.toolName === CLAUDE_ASK_USER_QUESTION_TOOL && !ask) {
       client.answerPermission(requestId, { behavior: "deny", message: CLAUDE_ASK_DENY_MESSAGE })
       return
     }
-    const existing = store.listPending(scope).find((r) => r.providerRequestId === requestId)
-    if (existing) { pendingPerms.set(existing.id, { client, requestId, scope }); return }
-    const req = buildClaudePermissionInteraction(request, owner)
+    const req = ask
+      ? buildClaudeQuestionInteraction(ask, request, owner)
+      : buildClaudePermissionInteraction(request, owner)
     if (!req) { client.answerPermission(requestId, { behavior: "deny", message: "This tool call could not be represented for approval." }); return }
     let id: string
     try { id = store.create(req).interaction.id } catch { client.answerPermission(requestId, { behavior: "deny", message: "The approval request could not be recorded." }); return }
-    pendingPerms.set(id, { client, requestId, scope })
+    pendingPerms.set(id, { client, requestId, scope, ...(ask ? { ask } : {}) })
   }
 
   // A resolved/cancelled/expired interaction → the decision the daemon applies. The daemon is the durable
@@ -300,9 +314,13 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     const pending = pendingPerms.get(change.interactionId)
     if (!pending || change.lifecycle === "pending") return
     const record = deps.interactions!.get(pending.scope, change.interactionId)
-    const decision = change.lifecycle === "resolved"
-      ? claudePermissionDecisionFor(record?.resolution?.decisionId)
-      : { behavior: "deny" as const, message: "This approval was withdrawn." }
+    const decision = pending.ask
+      ? (change.lifecycle === "resolved"
+        ? claudeQuestionDecisionFor(pending.ask, record?.resolution?.decisionId, record?.resolution?.values)
+        : { behavior: "deny" as const, message: CLAUDE_ASK_WITHDRAWN_MESSAGE })
+      : (change.lifecycle === "resolved"
+        ? claudePermissionDecisionFor(record?.resolution?.decisionId)
+        : { behavior: "deny" as const, message: "This approval was withdrawn." })
     pending.client.answerPermission(pending.requestId, decision)
     pendingPerms.delete(change.interactionId)
   })
@@ -323,7 +341,16 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
   // operator sees working buttons, and answering routes through `interactionResolve`'s non-provider branch
   // — the journal flips to resolved and no daemon is ever told, because `pendingPerms` is process memory
   // that did not survive the restart.
-  const retirePendingFor = (slug: string, sessionId: string, reason: "turn-ended" | "provider-cancelled"): void => {
+  //
+  // `user-cancelled` is the THIRD caller, and the one that makes a native question safe to ship at all.
+  // An AskUserQuestion PARKS the turn inside canUseTool, so an operator who types a follow-up instead of
+  // answering the card gets nothing: `sendInput` writes the frame, the parked turn never reaches the
+  // point of consuming it, and the message sits queued and unread. That is exactly how
+  // `https-varlock-dev-integrations-overview-can` stranded two operator messages for 90 minutes. Retiring
+  // the card on the way past denies the still-blocked daemon, the tool call unwinds, the turn resumes and
+  // eats the queued input — so a follow-up steers a question-blocked thread the same way it steers any
+  // other one, which is the property a ```question fence has for free.
+  const retirePendingFor = (slug: string, sessionId: string, reason: "turn-ended" | "provider-cancelled" | "user-cancelled"): void => {
     if (!deps.interactions) return
     let cancelled: ReturnType<InteractionStore["cancelForSession"]> = []
     // Never let a sweep fail a turn ending, a boot, or a daemon teardown — it is hygiene, not the work.
@@ -392,6 +419,11 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       // broker filters ambient env through ENV_ALLOWLIST, so it has to ride workerEnv to arrive.
       ...CLAUDE_WORKER_ENV,
       ...(we?.permDir ? { FRAY_PERM_DIR: we.permDir } : {}),
+      // The cc-worker plugin's PreToolUse hook DENIES AskUserQuestion, because on the tmux path a
+      // blocking question freezes a headless worker where nobody can answer it. On the broker path
+      // fray CAN answer it — the call becomes a dashboard question card — so the hook is told to stand
+      // down, but only when a store is actually wired to render and resolve the card.
+      ...(deps.interactions && deps.projectId ? { FRAY_NATIVE_ASK: "1" } : {}),
     }
     // deps.workerEnv.mcpServers is computed ONCE per project, so the fray MCP server it describes has
     // no idea which thread it will serve. A tool that acts on its OWN thread (`heartbeat`) needs that,
@@ -501,6 +533,12 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
         input.threadSlug, input.sessionId, input.cwd, input.permissionMode ?? "default",
         { resume: true, appendSystemPrompt: input.appendSystemPrompt, model: input.model, effort: input.effort },
       )
+      // A message the operator sends INSTEAD of answering an open card supersedes it. Retire before the
+      // input frame, not after: while the card is pending the turn is parked inside canUseTool and will
+      // never consume what we send, so the deny has to be in flight first for the frame to land on a turn
+      // that can actually read it. Ordering aside, this is also the answer to "they typed instead of
+      // clicking" — see retirePendingFor.
+      retirePendingFor(input.threadSlug, input.sessionId, "user-cancelled")
       session.client.sendInput(message)
     },
 

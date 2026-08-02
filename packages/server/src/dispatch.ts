@@ -581,9 +581,10 @@ export function claudeMcpFlags(mcp?: FrayMcp): string[] {
 // somehow reaches the tool anyway). EQUALS form for the same reason as --allowedTools: the flag is
 // variadic and a space-separated value would swallow the positional prompt behind it.
 //
-// The list itself is WORKER_DISALLOWED_TOOLS (backend/types.ts) so the broker transport removes exactly
-// the same tools through the SDK's own `disallowedTools`, rather than the two paths drifting apart —
-// which is precisely what happened between 2026-07-27 and 2026-08-02.
+// This is the TMUX path only. The broker deliberately does NOT drop the same tool — it can put the
+// question in front of the operator as a card — so the list lives in WORKER_DISALLOWED_TOOLS
+// (backend/types.ts) where that asymmetry is written down rather than being inferable only from a
+// missing call site.
 export function workerDisallowedToolFlags(): string[] {
   return [`--disallowedTools=${WORKER_DISALLOWED_TOOLS.join(",")}`]
 }

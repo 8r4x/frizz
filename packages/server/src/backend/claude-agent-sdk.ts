@@ -88,6 +88,12 @@ const EXPLICIT_CLAUDE_ENV_KEYS = new Set<string>([
   // dir — that make the broker's loaded plugin behave like the tmux worker's.
   "FRAY_UI_THREAD",
   "FRAY_PERM_DIR",
+  // Set by the broker bridge only when a dashboard InteractionStore is wired, i.e. only when fray can
+  // actually RENDER and answer an AskUserQuestion as a question card. It tells the plugin's deny-ask
+  // hook to stand down; without it in this allowlist the daemon dies at startup ("environment key is
+  // not allowlisted") before it publishes its record, and every dispatch times out "did not become
+  // ready" — which is exactly how this was found, on a live session rather than in a unit test.
+  "FRAY_NATIVE_ASK",
   "CLAUDE_PROJECT_DIR",
   // The worker's token-budget block — see CLAUDE_WORKER_ENV in types.ts for why a fray worker
   // must be told it has one. It arrives as a broker `workerEnv` override rather than by inheritance,
@@ -134,8 +140,9 @@ export interface ClaudeQueryStartOptions {
   mcpServers?: Record<string, { type?: "stdio"; command: string; args?: string[]; env?: Record<string, string> }>
   allowedTools?: string[]
   // Tools taken away from the session outright — the SDK equivalent of the tmux path's
-  // `--disallowedTools=`. A worker transport passes WORKER_DISALLOWED_TOOLS here; see that constant
-  // (backend/types.ts) for why AskUserQuestion is on it.
+  // `--disallowedTools=`. NOTHING passes it today: the broker deliberately keeps AskUserQuestion (it can
+  // render the question as a dashboard card), which is the only tool the tmux argv drops. Kept as the
+  // plumbed seam so a future prohibition does not have to be argued for AND wired in the same change.
   disallowedTools?: readonly string[]
   // Which of Claude Code's own settings layers the session loads — and, critically, whether it reads
   // the PROJECT's `CLAUDE.md` / `AGENTS.md` and `.claude/skills` at all.

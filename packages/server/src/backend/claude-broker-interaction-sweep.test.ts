@@ -65,17 +65,19 @@ function seedOrphan(
 }
 
 // A `result` ENDS the turn. A permission escalation holds the turn open by construction, so a card
-// still pending when the result lands is a card the turn abandoned — the AskUserQuestion refusal and
-// the cc-worker PreToolUse hook both answer the daemon directly, leaving anything already journaled
-// for that escalation with nothing left to resolve it.
+// still pending when the result lands is a card the turn abandoned — the cc-worker PreToolUse hook and
+// an unrepresentable-question refusal both answer the daemon directly, leaving anything already
+// journaled for that escalation with nothing left to resolve it.
 //
-// The `ask` scenario is the real shape of the reported bug: the daemon raises AskUserQuestion, the
-// bridge denies it on the socket (never journaling a card of its own), and the fake then emits its
-// `result`. The seeded row stands in for the card a PREVIOUS fray journaled for that same turn, which
-// is exactly what the live thread was carrying.
+// The seeded row stands in for the card a PREVIOUS fray journaled for a turn this one knows nothing
+// about, which is exactly what the live thread was carrying. A plain turn (the `basic` scenario, which
+// reaches `result` unaided) is deliberate: this test is about the SWEEP, and driving it through a
+// scenario that has to be un-blocked first only couples it to whatever that block currently is. It was
+// written against `ask` while AskUserQuestion was refused on the socket; the moment the refusal became
+// a real card again the fake stopped emitting `result` at all and this hung for its full timeout.
 test("a turn's result retires the interactions it left pending", { timeout: 30_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "cbrk-sweep-turn-"))
-  const exe = fakeExe(dir, "ask")
+  const exe = fakeExe(dir, "basic")
   const env = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" }
   const sessionId = randomUUID()
   const slug = "sweep-turn"
@@ -214,6 +216,60 @@ test("warmUp leaves the interactions of a session whose daemon is still alive al
     second?.releaseSession(slug, sessionId, "session-deleted")
     second?.close()
     first.close()
+    try { const r = readBrokerRecord(claudeBrokerRecordPath(dir, sessionId)); if (r) process.kill(r.daemonPid, "SIGKILL") } catch {}
+    await rmEventually(dir)
+  }
+})
+
+// THE THIRD SWEEP, and the one a native AskUserQuestion depends on to be shippable at all.
+//
+// An ask PARKS the turn inside canUseTool. So an operator who reads the card and then types a follow-up
+// instead of clicking an option — "actually forget that, do X" — used to get nothing at all: `sendInput`
+// wrote the frame, the parked turn never reached the point of consuming it, and the message sat queued
+// and unread. That is precisely how `https-varlock-dev-integrations-overview-can` stranded two operator
+// messages for 90 minutes, and it is the ONE property a ```question fence has for free that a native ask
+// does not — a fence ends the turn, so the next message is just the next message.
+//
+// The `ask` scenario is the right driver here (unlike the turn-ended test above): the whole point is a
+// card that is genuinely holding a live turn open, which is the only state this sweep exists for.
+test("a follow-up sent instead of an answer retires the open card and UNBLOCKS the turn", { timeout: 30_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cbrk-sweep-steer-"))
+  const exe = fakeExe(dir, "ask")
+  const env = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" }
+  const sessionId = randomUUID()
+  const slug = "sweep-steer"
+  const projectId = "proj-sweep-steer"
+  const scope = { projectId, threadSlug: slug, sessionId }
+  const store = createInteractionStore(new Database(":memory:"))
+  let results = 0
+  const bridge = createClaudeAgentBrokerBridge({
+    stateDir: dir, executablePath: exe, env, interactions: store, projectId,
+    onEvent: (_slug, _sid, ev) => { if (ev.kind === "result") results++ },
+  })
+  try {
+    await bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd: dir, prompt: "ask me something", permissionMode: "default" })
+    // The daemon raises AskUserQuestion and the bridge journals it as a real, answerable question card.
+    await waitFor(() => store.listPending(scope).length > 0)
+    const [card] = store.listPending(scope)
+    assert.equal(card.payload.kind, "agent-question", "the ask is a question card, not an approval")
+    // THE PRECONDITION, and the whole reason this sweep exists: the turn is parked. Assert it rather
+    // than assume it, or the test below passes just as well against a turn that was never blocked.
+    assert.equal(results, 0, "the turn is parked on the open question")
+
+    // The operator types instead of clicking.
+    await bridge.followUp({ threadSlug: slug, sessionId, cwd: dir, text: "forget the question, just pick one" })
+
+    await waitFor(() => store.listPending(scope).length === 0)
+    const retired = store.get(scope, card.id)
+    assert.equal(retired?.lifecycle, "cancelled", "the superseded card is terminal, not left answerable")
+    assert.equal(retired?.cancellationReason, "user-cancelled")
+    // Retiring the journal row is only half of it. The deny has to reach the DAEMON so the tool call
+    // unwinds — otherwise the card is gone from the queue and the turn is still parked behind it, which
+    // is strictly worse than the bug. A `result` is the observable proof the turn moved again.
+    await waitFor(() => results > 0)
+  } finally {
+    bridge.releaseSession(slug, sessionId, "session-deleted")
+    bridge.close()
     try { const r = readBrokerRecord(claudeBrokerRecordPath(dir, sessionId)); if (r) process.kill(r.daemonPid, "SIGKILL") } catch {}
     await rmEventually(dir)
   }

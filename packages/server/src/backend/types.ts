@@ -299,16 +299,17 @@ export const CLAUDE_WORKER_ENV = {
   BASH_DEFAULT_TIMEOUT_MS: "600000",
 } as const
 
-// Tools a fray worker never gets, on EITHER Claude transport — the tmux argv turns this into
-// `--disallowedTools=…`, the broker passes it straight to the SDK query.
+// Tools a TMUX worker never gets — the argv turns this into `--disallowedTools=…`.
 //
-// AskUserQuestion BLOCKS the turn. That is the whole objection, and it is not about whether fray can
-// render the question: fray CAN (2026-07-27, f5134b4 — a real `agent-question` card whose answer reaches
-// the model). It is that a blocked turn cannot be steered. The operator's follow-ups pile up as queued
-// sends the parked turn will never consume, the row reads `running` for as long as the card goes
-// unanswered, and the only exit is answering that one card. A ```question fence ENDS the turn instead:
-// the answer arrives as an ordinary next user message, and any other message steers the thread just as
-// well. Measured on a live thread 2026-08-02 — 90 minutes parked, two operator messages stranded.
+// TMUX ONLY, and the asymmetry is deliberate. There AskUserQuestion opens a native TUI dialog in a pane
+// nobody is watching, so the question has literally nowhere to go and the session freezes invisibly. The
+// BROKER path does NOT pass this: it intercepts the same call at canUseTool and renders a real dashboard
+// question card whose answer reaches the model (claude-agent-broker.ts says so at the query site).
+//
+// The other hazard — a parked turn swallowing a follow-up the operator typed instead of answering —
+// argued for blocking it on both paths for a few hours on 2026-08-02. It is handled where it actually
+// lives instead: the bridge retires an open card when a follow-up arrives, which unwinds the tool call
+// and lets the turn read the message. See `retirePendingFor`.
 export const WORKER_DISALLOWED_TOOLS = ["AskUserQuestion"] as const
 
 export interface SpawnOpts {

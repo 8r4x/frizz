@@ -23,7 +23,6 @@ import { readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { createClaudeQueryFactory } from "./claude-agent-sdk.ts"
-import { WORKER_DISALLOWED_TOOLS } from "./types.ts"
 import { createClaudeBrokerDiagnosticWriter, createClaudeBrokerExitWriter, type ClaudeBrokerExitReason } from "./claude-broker-diagnostics.ts"
 import { CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER } from "./claude-agent-sdk-protocol.ts"
 import type {
@@ -134,9 +133,12 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     pluginDir: config.pluginDir,
     mcpServers: config.mcpServers,
     allowedTools: config.allowedTools,
-    // Every broker daemon IS a fray worker, so the worker prohibitions are unconditional here rather
-    // than a config knob a caller could forget — the tmux path spells the same list into argv.
-    disallowedTools: WORKER_DISALLOWED_TOOLS,
+    // NO `disallowedTools` here, and the asymmetry with the tmux path (WORKER_DISALLOWED_TOOLS →
+    // `--disallowedTools=AskUserQuestion`) is DELIBERATE. That flag exists because a tmux worker's
+    // question has nowhere to go: it opens a TUI dialog in a pane nobody is looking at. On this path it
+    // has somewhere to go — canUseTool routes it to a real dashboard question card, the operator answers
+    // it, and the chosen labels reach the model. A follow-up sent instead of an answer retires the card
+    // and unwinds the tool call (see retirePendingFor in the bridge), so a parked turn is still steerable.
     canUseTool: async (request, context) => {
       const requestId = `perm-${++permSeq}`
       return await new Promise<ClaudePermissionDecision>((resolve) => {
