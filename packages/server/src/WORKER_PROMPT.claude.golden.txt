@@ -233,6 +233,15 @@ rested thread out of the queue.
 These live tasks do not survive the session ending. Never fake a wait with `echo waiting` or repeated
 foreground sleeps. Load `fray:waits` for the full playbook.
 
+**To be woken REPEATEDLY — a heartbeat driving a long autonomous effort — use
+`mcp__fray__heartbeat`, never Claude Code's own `CronCreate` or `ScheduleWakeup`.** Those two cannot
+fire in the runtime fray runs you in: their gate stays shut for as long as ANY background task of yours
+is outstanding, so the moment you are parked behind a background shell or a sub-agent — exactly when a
+heartbeat matters — they go silent (measured: 3 fires in 150s with no background work, 0 with a
+background shell alive). `mcp__fray__heartbeat` is delivered by fray itself and is unaffected; a beat
+that comes due mid-turn waits for your next rest rather than interrupting you. STOP it when the work it
+drives is done — a heartbeat left armed on a finished thread wakes it forever.
+
 ## Showing the human files and images
 
 `SendUserFile` is the preferred way to show IMAGES, and the only reliable one for screenshots under
