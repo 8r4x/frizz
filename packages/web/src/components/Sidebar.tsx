@@ -633,8 +633,18 @@ function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string |
     return {
       node: (
         <StatusBox>
+          {/* SIZE 9, not 10 (maintainer 2026-08-02: "the heartbeat icon is not optically centered"). Two
+              MEASURED faults, both cured by the odd size — scripts/verify-rail-status-glyphs.mjs now
+              carries the readings. (1) The box's CONTENT width is 13px, so a 10px glyph centres onto a
+              HALF pixel and the rasteriser pushed its ink 0.5px right and 0.5px down; 9 in 13 is a whole
+              2px each side, and the ink lands dead centre (the shipped Check has the same 10px tell).
+              (2) At 10 the heart filled 0.617 of the box — the widest mark in the rail, hard against
+              MAX_EXTENT 0.62 — and covered 14.5% against a family ceiling of 9.42%. It read as a blob
+              jammed in a box rather than a mark standing in one. At 9 it is 0.55, exactly the ellipsis
+              and the hourglass. It stays the heaviest outline here (11.3%), which is the point of the
+              one deliberately-coloured glyph, but it no longer crowds its walls. */}
           <HeartPulse
-            size={10}
+            size={9}
             className={paused ? "text-muted/70" : "fray-rail-heartbeat text-pink-400"}
             data-running-indicator={paused ? "thread-heartbeat-paused" : "thread-heartbeat"}
           />

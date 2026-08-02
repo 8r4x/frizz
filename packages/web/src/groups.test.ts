@@ -200,6 +200,27 @@ test("sessionIndicatorKind: a shell-only rest holds the running band with the do
   assert.equal(sessionIndicatorKind(thread({ ...shellRest, runtime: "exited", needsYou: true })), "stalled")
 })
 
+// THE BLUE DOT OUTRANKS THE PINK HEART — maintainer 2026-08-02, reversing the order the heartbeat mark
+// shipped with: "this thread has a bunch of background bash scripts running. This should just be using a
+// blue dot. Heartbeat should not take precedence over that." The rail says what a thread is DOING, and a
+// live shell is happening now while a heartbeat is only a schedule (the thread's own footer carries that
+// in full). The heart stays the mark for a thread whose ONLY live fact is the armed beat.
+test("sessionIndicatorKind: a background shell outranks an armed heartbeat", () => {
+  const beat = { intervalSeconds: 900, prompt: "keep going", paused: false, armedAt: "2026-07-10T00:00:00.000Z" }
+  const beating = thread({ kind: "session", state: "open", needsYou: false, runtime: "turn-idle", heartbeat: beat })
+  assert.equal(sessionIndicatorKind(beating), "heartbeat", "nothing else live → the heart is the mark")
+
+  const withShell = thread({ ...beating, awaitingBackground: true, bgShells: liveShell })
+  assert.equal(sessionIndicatorKind(withShell), "background")
+  // Paused makes no difference: a schedule that is not even armed to fire is weaker still.
+  assert.equal(sessionIndicatorKind(thread({ ...withShell, heartbeat: { ...beat, paused: true } })), "background")
+  // The shell going quiet hands the heart back — the dot was never a permanent demotion.
+  assert.equal(sessionIndicatorKind(thread({ ...withShell, awaitingBackground: false, bgShells: [] })), "heartbeat")
+  // Everything ABOVE both still wins: real motion, a human ask, a declared fence.
+  assert.equal(sessionIndicatorKind(thread({ ...beating, subAgents: liveSub })), "working")
+  assert.equal(sessionIndicatorKind(thread({ ...withShell, needsYou: true, pendingQuestion: true })), "needs-input")
+})
+
 // THE INVARIANT, stated once and checked over every shape the rail can produce (maintainer 2026-08-01:
 // "if something is listed as currently running, then it should never show up in the queue"). It holds by
 // CONSTRUCTION — inActiveRunningBand is `isActivelyRunning && !needsYou`, and `queued` is `needsYou` —

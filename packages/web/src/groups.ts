@@ -477,12 +477,15 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   // launched is still going". In practice neither can collide with this at all, since
   // deriveAwaitingBackground drops any fenced thread; the ordering states the intent rather than
   // resolving a live conflict.
-  // ABOVE background on purpose. The case this whole feature exists for is a thread resting behind
-  // background work that may never report — and there the heartbeat is the more useful fact of the two,
-  // because it is the thing that will actually move the thread. A blue "a shell is alive" dot on a
-  // thread fray is about to nudge tells the operator the less important half of the story.
-  if (hasHeartbeat(t)) return "heartbeat"
   if (restingOnBackgroundShell(t)) return "background"
+  // BELOW background, reversing the order the heartbeat mark shipped with (maintainer 2026-08-02: "this
+  // thread has a bunch of background bash scripts running. This should just be using a blue dot.
+  // Heartbeat should not take precedence over that"). The earlier reasoning was that the beat is what
+  // will actually MOVE the thread, so it is the more useful fact — but the rail is read for what a
+  // thread is DOING, and a live shell is the thing happening right now. A heartbeat is a schedule, and
+  // the thread's own footer (HeartbeatControl) already carries it in full — armed or paused, interval
+  // and prompt. So the pink heart is the mark for a thread whose ONLY live fact is the armed beat.
+  if (hasHeartbeat(t)) return "heartbeat"
   // STALLED = this thread's PROCESS IS GONE with the work unfinished. That is exactly `canRetry`: an
   // OWNED (non-foreign) session row whose runtime is `exited`. It deliberately does NOT consult the
   // server's `crashed` bit (= exited AND turn-in-flight/live-background-work). `crashed` says only HOW
