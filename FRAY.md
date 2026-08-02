@@ -70,8 +70,16 @@ card.")
 
 ## Verify end-to-end — test the whole, not the parts
 
-Every change you land needs REAL end-to-end verification: exercise the actual behavior in the actual
-runtime, the way it will really run, and observe the real outcome. This is non-negotiable.
+Every change you land needs to be VERIFIED, and the verification has to be proportionate to the change.
+The question is always the same one: what would actually make me confident this works? Answer it
+honestly, do that thing, and say in the handoff what you did.
+
+**Scale it.** A feature, a new surface, a seam between processes, anything whose runtime behavior you
+cannot predict from the code — exercise the real thing in the real runtime and observe the real outcome;
+nothing else counts. A small, well-understood fix in code you have read, pinned by a test at the level
+the bug actually lives at, is DONE when that test is green and you have re-read the diff. Do not spend a
+maintainer's hour booting a stack to re-confirm something you already know; do not skip the stack because
+booting it is tedious. The failure mode runs in both directions and only judgment tells them apart.
 
 - **Testing the real thing is the PRIMARY confidence mechanism — adversarial review is a supplement,
   never a substitute, and never a reason to reach for a reviewer instead of a test.** If a change CAN
@@ -81,13 +89,15 @@ runtime, the way it will really run, and observe the real outcome. This is non-n
   adversarial review of something you could instead just run, STOP and run it. Reserve review for what
   you genuinely cannot execute yet (e.g. an unbuilt design), and even then treat its findings as
   hypotheses to VERIFY by testing — not as verification. A reviewed plan is not a tested change.
-- Testing the pieces in isolation is NOT end-to-end. A passing unit test, a mock, a typecheck, or a
-  hand-driven PROXY (e.g. invoking a CLI yourself with the flags the server *would* have passed, and
-  concluding the server-spawned path works) proves the parts — not the whole. The seam between the
-  parts is exactly where the bug lives. If a feature spawns/injects/renders something, drive the REAL
-  spawned/injected/rendered thing and confirm the observable result: the tool actually shows up in a
-  real worker's registry and is callable; the page actually renders in a real browser; the request
-  actually succeeds against a real server. "I verified the components" is how a broken feature ships.
+- Testing the pieces in isolation is NOT end-to-end, and when the change SPANS pieces that distinction
+  is the whole ballgame. A passing unit test, a mock, a typecheck, or a hand-driven PROXY (e.g. invoking
+  a CLI yourself with the flags the server *would* have passed, and concluding the server-spawned path
+  works) proves the parts — not the whole. The seam between the parts is exactly where the bug lives. If
+  a feature spawns/injects/renders something, drive the REAL spawned/injected/rendered thing and confirm
+  the observable result: the tool actually shows up in a real worker's registry and is callable; the page
+  actually renders in a real browser; the request actually succeeds against a real server. "I verified
+  the components" is how a broken feature ships. (A fix that lives INSIDE one piece — a projection, a
+  parser, a predicate — is a different case: a test at that level is the right level, not a stand-in.)
 - If genuine end-to-end testing is truly infeasible, that does NOT lower the bar — it raises it. Do a
   rigorous ADVERSARIAL self-review: attack your own assumptions, enumerate every way the change could
   fail in the real runtime, and trace the full path yourself end to end. Then dispatch a fresh-context

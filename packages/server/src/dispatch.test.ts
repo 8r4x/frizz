@@ -415,10 +415,20 @@ test("runtime release gate: every worker surface carries the generalized, any-re
   // session-seed/skill copies.
   for (const raw of [loadWorkerPrompt("claude"), loadWorkerPrompt("codex")]) {
     const c = raw.replace(/\s+/g, " ")
-    assert.match(c, /INCOMPLETE/)
-    assert.match(c, /whatever repo you are working in/i)
-    assert.match(c, /driven it end-to-end in a real browser/i)
-    assert.match(c, /rendered screenshot of the final UI in your handoff/i)
+    // PROPORTIONATE, not reflexive (maintainer 2026-08-01: "disable the browser gate except for large or
+    // complicated changes … for little things you should be able to just have confidence in your fix").
+    // Both halves have to be stated: which changes earn the browser, and that the small ones skip it —
+    // a gate that only says "drive it" is the absolutism this replaced.
+    assert.match(c, /NOT as a reflex on every diff/i)
+    assert.match(c, /DRIVE IT[\s\S]{0,200}screenshot in your handoff/i)
+    assert.match(c, /new or restructured UI surface/i)
+    assert.match(c, /judge OPTICALLY/i)
+    assert.match(c, /large, cross-cutting, or that you are simply unsure/i)
+    assert.match(c, /SKIP IT for the small and the certain/i)
+    assert.match(c, /a test pins at the right level/i)
+    // …and the guard that keeps the permission from becoming a shrug.
+    assert.match(c, /Confidence has to be EARNED, not asserted/i)
+    assert.match(c, /never describe something as driven, exercised or verified when it was not/i)
     // Standard tools only, in priority order — never a bespoke one.
     assert.match(c, /Chrome DevTools MCP/)
     assert.match(c, /agent-browser/)
@@ -436,10 +446,10 @@ test("runtime release gate: every worker surface carries the generalized, any-re
     assert.match(c, /desktop[\s\S]{0,80}narrow[\s\S]{0,80}screenshots/i)
     assert.match(c, /console[\s\S]{0,80}network/i)
     assert.match(c, /correctness[\s\S]{0,60}(?:and|\+)[\s\S]{0,60}aesthetics/i)
-    assert.match(c, /implementer self-review/i)
+    assert.match(c, /self-review your diff/i)
     assert.match(c, /independent fresh-context adversarial review/i)
-    assert.match(c, /(?:unit|integration)[\s\S]{0,120}(?:cannot|not)[\s\S]{0,60}(?:justify|alone)/i)
-    assert.match(c, /trivial non-runtime docs[\s\S]{0,100}provably mechanical/i)
+    assert.match(c, /green unit test over a stubbed seam is not either/i)
+    assert.match(c, /docs, comments, types and provably mechanical edits/i)
   }
 })
 
@@ -449,7 +459,7 @@ test("runtime release gate: the settings toggle includes or excises the whole mo
   // ON keeps the section (markers stripped); OFF excises it entirely.
   assert.match(on, /Runtime release gate/)
   assert.doesNotMatch(off, /Runtime release gate/)
-  assert.doesNotMatch(off, /driven it end-to-end in a real browser/i)
+  assert.doesNotMatch(off, /SKIP IT for the small and the certain/i)
   // Markers never survive in either mode.
   assert.doesNotMatch(on, /FRAY:GATE/)
   assert.doesNotMatch(off, /FRAY:GATE/)

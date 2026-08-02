@@ -49,12 +49,24 @@ from disk too. It is wired through `core.hooksPath`, which is LOCAL config, so i
 git config core.hooksPath scripts/githooks
 ```
 
-# Web UI completion rule
+# Web UI completion rule — proportionate, not reflexive
 
-For any user-visible web UI change, work is not complete until end-to-end Chrome or Chromium QA has
-exercised the affected workflow. Unit, typecheck, and build tests do not substitute for it. The handoff
-must carry the inspected screenshots, console/page-error evidence, the optical-review result, and
-explicit browser-cleanup confirmation. This does not apply to purely non-UI changes.
+Browser QA is for the changes where a browser is what actually settles the question, not for every diff
+that happens to touch a `.tsx` file. Judge the change in front of you.
+
+**Drive it in Chrome, and carry the evidence in your handoff** (inspected screenshots, console/page-error
+check, the optical-review result, explicit browser-cleanup confirmation) when the change is: a new or
+restructured surface, layout or interaction flow; anything judged OPTICALLY — spacing, alignment, colour,
+truncation, a glyph beside text; behaviour you cannot predict from the code alone (live state, timing,
+streaming, restart/recovery, a seam between processes); a fix no test pins where the bug actually lives;
+or anything large, cross-cutting, or that you are unsure of.
+
+**Skip it for the small and the certain** — a targeted fix in code you have read, pinned by a test at the
+right level, with a blast radius you can name; docs, comments, types, provably mechanical edits; and
+anything with no browser surface at all (prove that in its own real runtime). Then say plainly in the
+handoff what you verified and how, so the maintainer can weigh the call. Confidence is earned, never
+asserted: "it should work" is not confidence, a green unit test over a stubbed seam is not either, and
+you never describe something as driven or verified when it was not.
 
 **Load the `adhoc-cdp` skill for how** — the isolated disposable stack, the headless screenshot paths
 (Chrome DevTools MCP preferred, `scripts/shot.mjs` as the reliable background fallback), which states

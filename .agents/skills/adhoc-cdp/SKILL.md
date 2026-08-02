@@ -1,6 +1,6 @@
 ---
 name: adhoc-cdp
-description: Ad hoc runtime verification for fray-ui — boot a fully-ISOLATED disposable stack and drive the REAL app (screenshots, console, network) headless in the background, plus focused real-subsystem harnesses for backend behavior the browser can't reach. Load this whenever your effort changes fray-ui server/UI/control-plane code and you need to SEE it work before claiming done (the worker RUNTIME RELEASE GATE requires exactly this). Do it OFTEN and EAGERLY — a change is unverified until you have driven the running app, not just typechecked it.
+description: Ad hoc runtime verification for fray-ui — boot a fully-ISOLATED disposable stack and drive the REAL app (screenshots, console, network) headless in the background, plus focused real-subsystem harnesses for backend behavior the browser can't reach. Load this when your fray-ui change is one you need to SEE work before claiming done — a new or restructured surface, anything judged by eye, behavior you can't predict from the code alone, or anything large or uncertain (the worker RUNTIME RELEASE GATE calls for exactly this). A small, certain fix pinned by a test at the right level does not need a stack boot.
 version: 0.1.0
 metadata:
   internal: true
@@ -8,11 +8,16 @@ metadata:
 
 # fray:adhoc-cdp — drive the real app, don't guess
 
-A fray-ui change is **not done until you have watched it work in the running app**. Typecheck and unit
-tests prove shapes, not behavior. This skill is the fast, repeatable loop for that: a throwaway stack that
-touches nothing real, driven headless so you can screenshot and inspect it in the background while you keep
-working. Reach for it **often and eagerly** — every server/UI/control-plane change, every bug fix you want
-to prove, every "does this actually render" question.
+When a change is one you need to SEE, this is the fast, repeatable loop for it: a throwaway stack that
+touches nothing real, driven headless so you can screenshot and inspect it in the background while you
+keep working. Reach for it whenever a browser is what would actually settle the question — a new or
+restructured surface, anything you have to judge by eye, live/timing/restart behavior you cannot predict
+from the code, a bug whose fix no test pins where it lives, or anything large or cross-cutting. Booting
+it is cheap; being wrong in front of the maintainer is not.
+
+**It is not a tax on every diff.** A targeted fix in code you have read, pinned by a test at the right
+level and with a blast radius you can name, is verified without a stack — say what you verified and how,
+and move on. Judge which one you have; both directions are real failures.
 
 Two layers, use both as the change demands:
 1. **The isolated stack + browser** — for anything with a UI or HTTP surface.

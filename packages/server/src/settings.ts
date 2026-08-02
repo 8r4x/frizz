@@ -16,7 +16,10 @@ export const defaultSettings = (): Settings => ({
   font: "sans",
   localFileOpener: "system",
   // Runtime release gate ON by default (opt-out) — the browser-QA + screenshot-in-handoff loop is
-  // fray's differentiator. A project that doesn't want it flips this off in Settings.
+  // fray's differentiator. The gate is PROPORTIONATE, not reflexive (see RUNTIME_GATE in
+  // workerPrompt.ts): on means a worker drives the browser for the changes a browser actually settles
+  // and skips it for the small and certain, not that every diff pays for a stack boot. A project that
+  // doesn't want the browser step at all flips this off in Settings.
   runtimeGate: true,
   // Auto-resume limit-paused threads ON by default (opt-out): a fleet cut off mid-work by an
   // exhausted subscription window should pick itself back up when the window rolls, not sit idle

@@ -35,7 +35,7 @@ export const SETTINGS_HELP = {
   stickyUserMessage: "Keeps your most recent message stuck to the top of a thread while the reply scrolls underneath. It stays collapsed to a small card (hover to expand it) so a long message never blocks much of the view. Applies immediately in this browser.",
   queueOrder: "Orders the Needs-you queue and the sidebar's rested threads by when each was last active. Oldest first (FIFO, default) surfaces the longest-waiting item first so you cycle through everything; Newest first (LIFO) keeps the most recently active on top. Applies immediately in this browser.",
   notifications: "Shows a desktop notification when work needs attention while this window is hidden.",
-  runtimeGate: "When on, dispatched workers must verify UI/runtime changes in a real browser, screenshot the result into their handoff, and get an independent review before finishing. Turn off to drop that requirement from the worker prompt.",
+  runtimeGate: "When on, dispatched workers drive a real browser before finishing the changes where that is what settles the question — a new surface, anything judged by eye, behaviour they can't predict from the code — and screenshot the result into their handoff. Small, certain fixes are expected to skip it and say what they verified instead. Turn off to drop the browser step from the worker prompt entirely.",
   autoResumeOnLimit: "When a usage limit interrupts running threads, fray remembers every one it cut off and sends each a “continue” once the window resets. Those threads stay out of your queue while they wait. Turn off to leave them parked for you to restart by hand.",
 } as const
 function currentPerm(): NotifPerm {
