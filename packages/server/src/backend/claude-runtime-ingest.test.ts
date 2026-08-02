@@ -352,3 +352,70 @@ test("tasks: the per-session table is bounded, evicting FINISHED tasks first", a
   assert.ok(all.some((entry) => entry.taskId === "keep-me"), "the still-running task survived the eviction")
   ingest.close()
 })
+
+// ---- the context meter's denominator -------------------------------------------------------------
+// Claude names the model's context window in exactly one place — `result.modelUsage` — and an
+// orchestrator session bills its sub-agents' models on the SAME result, so picking this thread's row
+// needs the alias `init` announced. There was no coverage here at all, which is how the reattach
+// regression below survived: the alias arrived once per DAEMON lifetime, and a broker daemon outlives
+// the fray server, so every thread reattached after a restart lost its readout for good.
+
+const initAs = (model: string): ClaudeQueryEvent => ({ ...ev.init, model })
+const resultBilling = (windows: Record<string, number>): ClaudeQueryEvent =>
+  ({ ...ev.result, modelContextWindows: windows })
+
+test("context window: the init alias picks THIS thread's row out of a multi-model result", async () => {
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  ingest.onEvent("t", sessionId, initAs("claude-opus-5"))
+  ingest.onEvent("t", sessionId, resultBilling({ "claude-opus-5": 1_000_000, "claude-haiku-4-5-20251001": 200_000 }))
+  await ingest.drain()
+  assert.equal(ingest.contextWindow(sessionId), 1_000_000, "the parent's window, not the sub-agent's")
+  ingest.close()
+})
+
+test("context window: no alias + more than one billed model reports NOTHING", async () => {
+  // A wrong denominator is worse than none: the dial would silently read against a sub-agent's window.
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  ingest.onEvent("t", sessionId, resultBilling({ "claude-opus-5": 1_000_000, "claude-haiku-4-5-20251001": 200_000 }))
+  await ingest.drain()
+  assert.equal(ingest.contextWindow(sessionId), undefined)
+  // A single-row table is unambiguous, so that one still reads.
+  ingest.onEvent("t", sessionId, resultBilling({ "claude-opus-5": 1_000_000 }))
+  await ingest.drain()
+  assert.equal(ingest.contextWindow(sessionId), 1_000_000)
+  ingest.close()
+})
+
+// THE REATTACH REGRESSION. fray restarts; the broker daemon does not. The first events this ingest ever
+// sees for a surviving session are mid-session, and the alias has to arrive on the NEXT turn's re-init
+// — which the SDK wrapper used to swallow (claude-agent-sdk.ts). Without it, this session's very next
+// multi-model result names no window and the thread's context dial never comes back, however long it
+// keeps working. Measured on the maintainer's board before the fix: 42 of 323 claude threads had a
+// reading, split exactly on which fray process had forked the daemon.
+test("context window: a session joined mid-flight relearns its alias from the next turn's re-init", async () => {
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  // Turn N ends first — we attached after its init, so there is no alias yet and nothing is guessed.
+  ingest.onEvent("t", sessionId, resultBilling({ "claude-opus-5": 1_000_000, "claude-sonnet-5": 1_000_000 }))
+  await ingest.drain()
+  assert.equal(ingest.contextWindow(sessionId), undefined)
+  // Turn N+1 opens with the provider's per-turn re-init, which names the model.
+  ingest.onEvent("t", sessionId, initAs("claude-opus-5"))
+  ingest.onEvent("t", sessionId, resultBilling({ "claude-opus-5": 1_000_000, "claude-haiku-4-5-20251001": 200_000 }))
+  await ingest.drain()
+  assert.equal(ingest.contextWindow(sessionId), 1_000_000)
+  ingest.close()
+})
+
+test("context window: latched — a later result that omits the row does not blank the readout", async () => {
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  ingest.onEvent("t", sessionId, initAs("claude-opus-5"))
+  ingest.onEvent("t", sessionId, resultBilling({ "claude-opus-5": 1_000_000 }))
+  await ingest.drain()
+  ingest.onEvent("t", sessionId, ev.result) // no modelUsage at all
+  ingest.onEvent("t", sessionId, resultBilling({ "claude-haiku-4-5-20251001": 200_000, "claude-sonnet-5": 1_000_000 }))
+  await ingest.drain()
+  assert.equal(ingest.contextWindow(sessionId), 1_000_000, "the window of a running session does not change")
+  ingest.release(sessionId)
+  assert.equal(ingest.contextWindow(sessionId), undefined, "…but it goes with the session it described")
+  ingest.close()
+})

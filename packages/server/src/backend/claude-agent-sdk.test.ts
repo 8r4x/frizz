@@ -201,14 +201,22 @@ test("initialization capabilities remain hidden when the provider never establis
   await assert.rejects(initialization)
 })
 
-test("a same-session re-init is tolerated (real claude re-emits init every turn) and the stream continues", { timeout: 10_000 }, async () => {
+test("a same-session re-init is RELAYED (real claude re-emits init every turn) and the stream continues", { timeout: 10_000 }, async () => {
   const harness = startHarness("duplicate-init")
   try {
     await harness.handle.ready()
     const init = await harness.handle.next()
     assert.equal(init.value?.kind, "init")
-    // The provider re-emits init for the SAME session at each turn; it is swallowed (not surfaced, not
-    // fatal), and the next genuine event — the result — is delivered normally.
+    // The provider re-emits init for the SAME session at each turn, and each one is SURFACED: it is the
+    // only frame that names the session's resolved model, and that alias is what picks this thread's row
+    // out of `result.modelUsage` — the sole source of the context meter's denominator. It used to be
+    // swallowed here, which announced the alias once per DAEMON lifetime; a broker daemon outlives the
+    // fray server, so every reattached thread lost its context readout permanently.
+    const reinit = await harness.handle.next()
+    assert.equal(reinit.value?.kind, "init")
+    assert.equal(reinit.value?.kind === "init" && reinit.value.model, "claude-sonnet-test")
+    // …and it stays a control marker rather than a new session: the pre-init ownership guard is NOT
+    // re-armed, so the substantive event after it is delivered instead of rejected.
     const next = await harness.handle.next()
     assert.equal(next.value?.kind, "result")
   } finally {
