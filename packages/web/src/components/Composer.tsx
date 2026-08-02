@@ -400,14 +400,14 @@ export function Composer({
         // vertical band the floating buttons occupy, so the text runs FULL width (no right rail carved
         // out of every line). Without a footer the box is a single compact row and the right padding is
         // what keeps text from sliding under the floating paperclip/send buttons.
-        className={`block w-full resize-none bg-transparent px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railAction ? "pr-28" : "pr-20"}`} text-[13px] leading-relaxed text-fg outline-none placeholder:text-muted scrollbar-none disabled:opacity-60`}
+        className={`block w-full resize-none bg-transparent px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railAction ? "pr-[7.25rem]" : "pr-20"}`} text-[13px] leading-relaxed text-fg outline-none placeholder:text-muted scrollbar-none disabled:opacity-60`}
       />
       {/* Attachment chips along the bottom row — one square tile per attached file (image thumbnail or
           file-type icon), each removable. The paths still live in `value`; these tiles just render them
           instead of the raw absolute-path text. Reserve the right rail so tiles never slip under the
           paperclip/send buttons on the last row. */}
       {attachments.length > 0 && (
-        <div className={`flex flex-wrap gap-1.5 px-3 pb-2 ${railAction ? "pr-28" : "pr-20"}`}>
+        <div className={`flex flex-wrap gap-1.5 px-3 pb-2 ${railAction ? "pr-[7.25rem]" : "pr-20"}`}>
           {attachments.map((a, i) => (
             <AttachmentChip
               key={`${a.path}-${i}`}
@@ -425,10 +425,17 @@ export function Composer({
           inside the box arc and read misaligned. */}
       {/* Reserve the right-side action rail. Without this, three shrinkable readouts can extend under
           the absolutely positioned GitHub/send buttons on narrow composers. */}
-      {footer && <div className={`flex min-w-0 flex-wrap items-center gap-1 pl-1.5 pb-1.5 ${railAction ? "pr-28" : "pr-20"}`}>{footer}</div>}
+      {footer && <div className={`flex min-w-0 flex-wrap items-center gap-1 pl-1.5 pb-1.5 ${railAction ? "pr-[7.25rem]" : "pr-20"}`}>{footer}</div>}
+      {/* THE RIGHT RAIL, right to left: send at 8px, then one 28px button every 36px (28 + an 8px gap).
+          So send 8, railAction 44 (right-11), paperclip 80 (right-20) — and the text/footer/chip rows
+          reserve 108 + 8 = 116px (pr-[7.25rem]) so prose keeps the same 8px clearance off the leftmost
+          button that it has with no rail action (pr-20 against a paperclip ending at 72).
+          The paperclip's offset was `right-[4.625rem]` (74px) until 2026-08-01, which left a 2px gap
+          beside the rail button and 8px on the other side — measured, not eyeballed, the first time a
+          rail action appeared in the THREAD composer beside the send arrow. */}
       {railAction && <div className="absolute bottom-2 right-11 flex items-center">{railAction}</div>}
       {/* Attach: a hidden file input driven by the paperclip. Sits in the right rail LEFT of the send
-          button (and left of any leftAction), so it never overlaps the mode/model footer or the send
+          button (and left of any railAction), so it never overlaps the mode/model footer or the send
           affordance. Accept is the shared safe-tier allowlist; the /attach route re-validates. */}
       <input
         ref={fileRef}
@@ -447,7 +454,7 @@ export function Composer({
         disabled={busy || uploading}
         title="Attach files"
         aria-label="Attach files"
-        className={`absolute bottom-2 ${railAction ? "right-[4.625rem]" : "right-11"} flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg disabled:opacity-50`}
+        className={`absolute bottom-2 ${railAction ? "right-20" : "right-11"} flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg disabled:opacity-50`}
       >
         {uploading ? <Loader2 size={15} strokeWidth={2} className="animate-spin" /> : <Paperclip size={15} strokeWidth={2} />}
       </button>
