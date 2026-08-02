@@ -93,7 +93,7 @@ import type { SessionTelemetry } from "./tailer.ts"
 import { resolvePlanFile, deletePlanFile } from "./plan-files.ts"
 import { providerResumeCommand, tmuxAttachCommand } from "./external-terminal.ts"
 import { readBackgroundShellOutput } from "./background-shell-output.ts"
-import { projectRetiredBackgroundOps } from "./transcript.ts"
+import { projectRetiredBackgroundOps, retiredOpsFor } from "./transcript.ts"
 
 const SlugInput = z.object({ slug: ThreadSlug }).strict()
 
@@ -568,9 +568,7 @@ export function createRouter(ctx: AppContext) {
   // this one and the ops strip simply redraws the row from the transcript side — with no × on it,
   // because a transcript-only row has nothing to address a stop at.
   function retireOpsInPage(slug: string, page: TranscriptPage): TranscriptPage {
-    const row = ctx.storage.getSession(slug)
-    if (!row) return page
-    const retired = ctx.storage.retiredOps(slug, row.session_id)
+    const retired = retiredOpsFor(ctx.storage, slug)
     if (retired.size === 0) return page
     return { ...page, messages: projectRetiredBackgroundOps(page.messages, retired) }
   }

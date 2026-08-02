@@ -9,7 +9,7 @@ import type { Emitter } from "./bus.ts"
 import type { Project } from "./project.ts"
 import type { Storage } from "./storage.ts"
 import type { AgentBackend } from "./backend/types.ts"
-import { projectTranscriptAgentLifecycles, readThreadTranscript, type AgentLifecycleProjection } from "./transcript.ts"
+import { projectRetiredBackgroundOps, retiredOpsFor, projectTranscriptAgentLifecycles, readThreadTranscript, type AgentLifecycleProjection } from "./transcript.ts"
 import { isTrustedLocalWebSocketRequest, rejectWebSocketUpgrade } from "./local-origin.ts"
 
 // Stage-2 multiplex: a SECOND noServer WebSocket at /ws (beside the terminal WS) carrying the board
@@ -143,7 +143,11 @@ export function makeTranscriptReader(
 ): (slug: string) => TranscriptMessage[] {
   return (slug: string) => {
     const messages = readThreadTranscript(project, storage, slug, backendFor)
-    return lifecycleFor ? projectTranscriptAgentLifecycles(messages, (id) => lifecycleFor(slug, id)) : messages
+    const projected = lifecycleFor ? projectTranscriptAgentLifecycles(messages, (id) => lifecycleFor(slug, id)) : messages
+    // The operator's × has to reach THIS producer too, and it is the one that matters most: the live UI
+    // renders from the /ws push, so projecting only the RPC left the killed shell's card reading
+    // "RUNNING · 1 MIN 34 SEC" on screen while the RPC returned "cancelled".
+    return projectRetiredBackgroundOps(projected, retiredOpsFor(storage, slug))
   }
 }
 

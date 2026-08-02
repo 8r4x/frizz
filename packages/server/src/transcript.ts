@@ -3693,6 +3693,17 @@ export function projectTranscriptAgentLifecycles(
 // the transcript card went on reading "RUNNING · 3433 MIN". That is the maintainer's screenshot.
 //
 // `cancelled` rather than `completed`: the operator ended it, and the card should say so.
+// The retired-op set for one thread, resolved the same way by BOTH transcript producers. It exists as
+// its own export because there are two of them — the `threadTranscript` RPC and the /ws push
+// (app-socket.ts makeTranscriptReader) — and the live UI reads the SECOND one. Applying the projection
+// to only the RPC left the killed shell's card reading "RUNNING" in the browser while the RPC returned
+// "cancelled", which is precisely how this was found.
+export function retiredOpsFor(storage: Pick<Storage, "getSession" | "retiredOps">, slug: string): ReadonlySet<string> {
+  const row = storage.getSession(slug)
+  return row ? storage.retiredOps(slug, row.session_id) : EMPTY_RETIRED_OPS
+}
+const EMPTY_RETIRED_OPS: ReadonlySet<string> = new Set()
+
 export function projectRetiredBackgroundOps(
   messages: readonly TranscriptMessage[],
   retired: ReadonlySet<string>,
