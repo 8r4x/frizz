@@ -88,12 +88,6 @@ const EXPLICIT_CLAUDE_ENV_KEYS = new Set<string>([
   // dir — that make the broker's loaded plugin behave like the tmux worker's.
   "FRAY_UI_THREAD",
   "FRAY_PERM_DIR",
-  // Set by the broker bridge only when a dashboard InteractionStore is wired, i.e. only when fray can
-  // actually RENDER and answer an AskUserQuestion as a question card. It tells the plugin's deny-ask
-  // hook to stand down; without it in this allowlist the daemon dies at startup ("environment key is
-  // not allowlisted") before it publishes its record, and every dispatch times out "did not become
-  // ready" — which is exactly how this was found, on a live session rather than in a unit test.
-  "FRAY_NATIVE_ASK",
   "CLAUDE_PROJECT_DIR",
   // The worker's token-budget block — see CLAUDE_WORKER_ENV in types.ts for why a fray worker
   // must be told it has one. It arrives as a broker `workerEnv` override rather than by inheritance,
@@ -139,6 +133,10 @@ export interface ClaudeQueryStartOptions {
   pluginDir?: string
   mcpServers?: Record<string, { type?: "stdio"; command: string; args?: string[]; env?: Record<string, string> }>
   allowedTools?: string[]
+  // Tools taken away from the session outright — the SDK equivalent of the tmux path's
+  // `--disallowedTools=`. A worker transport passes WORKER_DISALLOWED_TOOLS here; see that constant
+  // (backend/types.ts) for why AskUserQuestion is on it.
+  disallowedTools?: readonly string[]
   // Which of Claude Code's own settings layers the session loads — and, critically, whether it reads
   // the PROJECT's `CLAUDE.md` / `AGENTS.md` and `.claude/skills` at all.
   //
@@ -593,7 +591,22 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
         // unattributed event is rejected.
         if (event.kind === "init") {
           if (event.sessionId !== this.sessionId) throw new ClaudeAgentSdkProtocolError("Claude session ownership mismatch")
-          if (this.initialized) continue // per-turn re-init of the SAME session — a control marker, not a new session
+          // A per-turn re-init of the SAME session is a control marker, not a new session: it must not
+          // re-resolve `ready` or re-arm the pre-init guard below. It IS still relayed, because it is the
+          // only place the session's resolved model is named — and that alias is what picks this thread's
+          // row out of `result.modelUsage`, the sole source of the context meter's denominator
+          // (claude-runtime-ingest.ts pickWindow). Swallowing it announced the alias exactly ONCE per
+          // DAEMON lifetime, to whichever fray process happened to be attached at the time; since a broker
+          // daemon OUTLIVES the fray server, every thread fray reattached after a restart could never
+          // relearn it, and a turn that bills more than one model (any sub-agent on another model) then has
+          // no denominator that pickWindow is willing to name. Measured on the maintainer's own board:
+          // 42 of 323 claude threads carried a reading, and the split was exactly which fray process had
+          // forked the daemon. `sessionModel` is a plain overwrite of an unchanged value, so relaying it
+          // every turn costs one map write per turn.
+          if (this.initialized) {
+            this.output.push(event)
+            continue
+          }
           this.initialized = true
           this.resolveReady(event)
           this.output.push(event)
@@ -809,6 +822,7 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       ...(options.pluginDir ? { plugins: [{ type: "local" as const, path: options.pluginDir }] } : {}),
       ...(options.mcpServers ? { mcpServers: options.mcpServers } : {}),
       ...(options.allowedTools ? { allowedTools: options.allowedTools } : {}),
+      ...(options.disallowedTools?.length ? { disallowedTools: [...options.disallowedTools] } : {}),
       persistSession: options.persistSession ?? false,
       // Keep Claude's default (preset) system prompt and APPEND the fray worker contract, the SDK
       // equivalent of the tmux path's --append-system-prompt-file.

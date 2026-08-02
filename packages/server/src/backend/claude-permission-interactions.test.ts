@@ -1,247 +1,72 @@
-// CI tests for the AskUserQuestion → agent-question mapping and, above all, for the ANSWER CONTRACT:
-// the answers object is keyed by the FULL QUESTION TEXT and its value is exactly an advertised option
-// label. Claude's own result mapper looks answers up by that key; an index-keyed or paraphrased answer
-// parses fine and then silently reads to the model as "the user did not answer the questions", which
-// is the bug this path exists to remove. These assertions therefore pin bytes, not shapes.
+// CI tests for the two things the canUseTool channel does with a Claude tool call: journal it as an
+// approval card, or — for AskUserQuestion alone — refuse it.
 //
-// The live proof that the real binary agrees is _live_broker_ask.mts (a real session, a real card, and
-// the model repeating the chosen label back). These tests pin the mapping so it cannot drift after.
+// The refusal is the one worth pinning. Between 2026-07-27 and 2026-08-02 this file instead pinned an
+// AskUserQuestion → agent-question mapping, byte for byte, and every one of those assertions passed
+// while a live thread sat parked for 90 minutes behind the card they described. The card was correct;
+// the mechanics were not. So what is asserted here is that a worker cannot reach the tool at all
+// (WORKER_DISALLOWED_TOOLS, on BOTH Claude transports) and that a call arriving anyway is denied with a
+// redirect the model can act on — never downgraded to an approval card, whose bare allow claude's own
+// result mapper reads back to the model as "the user did not answer the questions".
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import {
+  CLAUDE_ASK_DENY_MESSAGE,
   CLAUDE_ASK_USER_QUESTION_TOOL,
-  buildClaudeQuestionInteraction,
-  claudeQuestionDecisionFor,
-  parseClaudeAskUserQuestion,
+  buildClaudePermissionInteraction,
+  claudePermissionDecisionFor,
 } from "./claude-permission-interactions.ts"
+import { WORKER_DISALLOWED_TOOLS } from "./types.ts"
+import { workerDisallowedToolFlags } from "../dispatch.ts"
 import type { ClaudePermissionRequest } from "./claude-agent-sdk-protocol.ts"
 
 const OWNER = { projectId: "p1", threadSlug: "ask-thread", sessionId: "s1", cwd: "/tmp/repo" }
 
-function requestFor(input: unknown): ClaudePermissionRequest {
+function requestFor(toolName: string, input: unknown): ClaudePermissionRequest {
   return {
     requestId: "perm-1",
-    toolUseId: "toolu_ask_1",
-    toolName: CLAUDE_ASK_USER_QUESTION_TOOL,
+    toolUseId: "toolu_1",
+    toolName,
     input: input as ClaudePermissionRequest["input"],
     suggestions: [],
   }
 }
 
-const CHANNEL_INPUT = {
-  questions: [{
-    question: "Which release channel should we ship on?",
-    header: "Channel",
-    options: [
-      { label: "Stable", description: "Battle tested" },
-      { label: "Beta", description: "Ships weekly" },
-    ],
-    multiSelect: false,
-  }],
-}
-
-test("a well-formed AskUserQuestion input parses with its provider text VERBATIM", () => {
-  const spec = parseClaudeAskUserQuestion(CHANNEL_INPUT)
-  assert.ok(spec)
-  assert.equal(spec.questions.length, 1)
-  assert.equal(spec.questions[0].question, "Which release channel should we ship on?")
-  assert.equal(spec.questions[0].header, "Channel")
-  assert.deepEqual(spec.questions[0].options.map((o) => o.label), ["Stable", "Beta"])
-  assert.equal(spec.questions[0].multiSelect, false)
+test("AskUserQuestion is taken away from a worker on BOTH Claude transports", () => {
+  assert.ok(WORKER_DISALLOWED_TOOLS.includes(CLAUDE_ASK_USER_QUESTION_TOOL))
+  // The tmux argv and the broker's SDK option read the SAME list, which is the drift this constant
+  // exists to prevent: the broker path silently kept the tool for a week after the tmux path dropped it.
+  assert.deepEqual(workerDisallowedToolFlags(), [`--disallowedTools=${WORKER_DISALLOWED_TOOLS.join(",")}`])
 })
 
-test("the card is an agent-question with one select field per question, valued by the exact labels", () => {
-  const spec = parseClaudeAskUserQuestion(CHANNEL_INPUT)!
-  const request = buildClaudeQuestionInteraction(spec, requestFor(CHANNEL_INPUT), OWNER)
-  assert.ok(request)
-  assert.equal(request.payload.kind, "agent-question")
-  assert.equal(request.provider.kind, "claude")
-  // "agent", the same source kind codex's request-user-input uses, so one web card renders both.
-  assert.equal(request.source.kind, "agent")
-  assert.deepEqual(request.allowedDecisions.map((d) => [d.id, d.semantic]), [["answer", "answer"], ["decline", "decline"]])
-  assert.equal(request.payload.kind === "agent-question" && request.payload.title, "Channel")
-  const fields = request.payload.kind === "agent-question" ? request.payload.fields : []
-  // Two fields per question: the options, and the free-text half the shared card's box writes into.
-  assert.deepEqual(fields.map((f) => [f.id, f.input]), [["q0", "select"], ["q0_notes", "multiline"]])
-  // Neither half is `required`: picking an option OR typing is a complete answer, exactly as on a
-  // ```question fence. "at least one of the two" is enforced where the decision is built.
-  assert.equal(fields[0].required, false)
-  assert.equal(fields[0].description, "Which release channel should we ship on?")
-  // The VALUE is the provider's exact label (that is what the answer must echo); the option's
-  // description is folded into the display label because the card renders only `option.label`.
-  const options = fields[0].input === "select" ? fields[0].options : []
-  assert.deepEqual(options.map((o) => o.value), ["Stable", "Beta"])
-  assert.deepEqual(options.map((o) => o.label), ["Stable — Battle tested", "Beta — Ships weekly"])
+test("the deny message sends the model to a ```question fence and tells it to END THE TURN", () => {
+  // The redirect has to name the replacement, not just refuse: a worker told only "no" asks again.
+  assert.match(CLAUDE_ASK_DENY_MESSAGE, /```question/)
+  assert.match(CLAUDE_ASK_DENY_MESSAGE, /FINAL MESSAGE/)
+  assert.match(CLAUDE_ASK_DENY_MESSAGE, /END YOUR TURN/)
+  // And it has to say WHY, because the reason is the part a model can generalize from. "Nobody is at
+  // the keyboard" was the old reason and it is false — fray can render the card. The true reason is
+  // that the turn parks and the operator's follow-ups queue up behind it unread.
+  assert.match(CLAUDE_ASK_DENY_MESSAGE, /parks|queue/)
 })
 
-test("ANSWER CONTRACT: the answers object is keyed by the full question text, not an index", () => {
-  const spec = parseClaudeAskUserQuestion(CHANNEL_INPUT)!
-  const decision = claudeQuestionDecisionFor(spec, "answer", { q0: "Beta" })
-  assert.equal(decision.behavior, "allow")
-  assert.deepEqual(decision.behavior === "allow" ? decision.updatedInput : undefined, {
-    questions: CHANNEL_INPUT.questions,
-    answers: { "Which release channel should we ship on?": "Beta" },
-  })
+test("an ordinary tool escalation still becomes a permission-approval card", () => {
+  const request = requestFor("Bash", { command: "rm -rf build", description: "Clearing the build dir" })
+  const built = buildClaudePermissionInteraction(request, OWNER)
+  assert.ok(built)
+  assert.equal(built.payload.kind, "permission-approval")
+  assert.equal(built.provider.kind, "claude")
+  assert.equal(built.source.kind, "tool")
+  assert.deepEqual(built.allowedDecisions.map((d) => [d.id, d.semantic]), [["grant-turn", "approve"], ["deny", "deny"]])
+  // The command leads the card — the operator reads a shell line, not a JSON blob or a tool name.
+  assert.equal(built.payload.kind === "permission-approval" && built.payload.title, "Run a command?")
+  assert.match(built.payload.kind === "permission-approval" ? built.payload.preview ?? "" : "", /^rm -rf build/)
 })
 
-test("the questions array is echoed VERBATIM when it fits, not silently rebuilt", () => {
-  // Distinguishes the normal path from the minimal-rebuild fallback at the bottom of this file: a
-  // field the rebuild drops (`preview`) must survive whenever echoing the provider's own array fits.
-  const input = {
-    questions: [{
-      question: "Which layout?",
-      header: "Layout",
-      options: [{ label: "Grid", description: "Cards", preview: "<div>grid</div>" }, { label: "List", description: "Rows" }],
-      multiSelect: false,
-    }],
+test("only an explicit approve allows; every other decision id fails closed", () => {
+  assert.equal(claudePermissionDecisionFor("grant-turn").behavior, "allow")
+  assert.equal(claudePermissionDecisionFor("grant-session").behavior, "allow")
+  for (const id of ["deny", "cancel", "answer", undefined, ""]) {
+    assert.equal(claudePermissionDecisionFor(id).behavior, "deny", String(id))
   }
-  const decision = claudeQuestionDecisionFor(parseClaudeAskUserQuestion(input)!, "answer", { q0: "Grid" })
-  assert.deepEqual(decision.behavior === "allow" ? decision.updatedInput?.questions : undefined, input.questions)
-})
-
-test("a multiSelect question maps to a multi-select field and a \", \"-joined answer", () => {
-  const input = {
-    questions: [{
-      question: "Which extras should we enable?",
-      header: "Extras",
-      options: [{ label: "Metrics", description: "Emit metrics" }, { label: "Tracing", description: "Emit traces" }],
-      multiSelect: true,
-    }],
-  }
-  const spec = parseClaudeAskUserQuestion(input)!
-  const request = buildClaudeQuestionInteraction(spec, requestFor(input), OWNER)!
-  const fields = request.payload.kind === "agent-question" ? request.payload.fields : []
-  assert.equal(fields[0].input, "multi-select")
-  const decision = claudeQuestionDecisionFor(spec, "answer", { q0: ["Metrics", "Tracing"] })
-  // claude 2.1.220's own schema: "multi-select answers are comma-separated", and its result mapper
-  // splits on exactly ", " before checking each part against the advertised labels.
-  assert.deepEqual(decision.behavior === "allow" ? decision.updatedInput?.answers : undefined, {
-    "Which extras should we enable?": "Metrics, Tracing",
-  })
-})
-
-test("several questions each get their own field and their own answer key", () => {
-  const input = {
-    questions: [
-      { question: "Which channel?", header: "Channel", options: [{ label: "Stable", description: "" }, { label: "Beta", description: "" }], multiSelect: false },
-      { question: "Tag a release now?", header: "Release", options: [{ label: "Yes", description: "" }, { label: "No", description: "" }], multiSelect: false },
-    ],
-  }
-  const spec = parseClaudeAskUserQuestion(input)!
-  const request = buildClaudeQuestionInteraction(spec, requestFor(input), OWNER)!
-  assert.equal(request.payload.kind === "agent-question" && request.payload.title, "Claude questions")
-  const fields = request.payload.kind === "agent-question" ? request.payload.fields : []
-  assert.deepEqual(fields.map((f) => f.id), ["q0", "q0_notes", "q1", "q1_notes"])
-  const decision = claudeQuestionDecisionFor(spec, "answer", { q0: "Beta", q1: "No" })
-  assert.deepEqual(decision.behavior === "allow" ? decision.updatedInput?.answers : undefined, {
-    "Which channel?": "Beta",
-    "Tag a release now?": "No",
-  })
-})
-
-test("FREE TEXT rides the SDK's own annotations, with claude's notes-only sentinel in answers", () => {
-  // The fence card's free-text box is not a fray convention bolted onto a tool call: claude's own
-  // AskUserQuestion input schema carries `annotations[questionText].notes`, and its result mapper
-  // special-cases the literal "(notes only)" answer. Picking an option AND typing sends both.
-  const spec = parseClaudeAskUserQuestion(CHANNEL_INPUT)!
-  const withPick = claudeQuestionDecisionFor(spec, "answer", { q0: "Beta", q0_notes: "but check the changelog first" })
-  assert.deepEqual(withPick.behavior === "allow" ? withPick.updatedInput?.answers : undefined, {
-    "Which release channel should we ship on?": "Beta",
-  })
-  assert.deepEqual(withPick.behavior === "allow" ? withPick.updatedInput?.annotations : undefined, {
-    "Which release channel should we ship on?": { notes: "but check the changelog first" },
-  })
-  // Typing INSTEAD of picking is a complete answer too — the fence card's single-select semantics,
-  // where free text overrides the chip.
-  const notesOnly = claudeQuestionDecisionFor(spec, "answer", { q0_notes: "neither — ship nothing yet" })
-  assert.deepEqual(notesOnly.behavior === "allow" ? notesOnly.updatedInput?.answers : undefined, {
-    "Which release channel should we ship on?": "(notes only)",
-  })
-  assert.deepEqual(notesOnly.behavior === "allow" ? notesOnly.updatedInput?.annotations : undefined, {
-    "Which release channel should we ship on?": { notes: "neither — ship nothing yet" },
-  })
-  // No notes at all → no annotations key, so a clean pick stays a clean pick.
-  const clean = claudeQuestionDecisionFor(spec, "answer", { q0: "Stable" })
-  assert.equal(clean.behavior === "allow" ? "annotations" in (clean.updatedInput ?? {}) : true, false)
-})
-
-test("declining, cancelling, and an empty answer set all DENY with a reason the model can act on", () => {
-  const spec = parseClaudeAskUserQuestion(CHANNEL_INPUT)!
-  for (const [decisionId, values] of [["decline", undefined], ["cancel", undefined], ["answer", {}], ["answer", { q0: "" }]] as const) {
-    const decision = claudeQuestionDecisionFor(spec, decisionId, values)
-    assert.equal(decision.behavior, "deny", `${decisionId} ${JSON.stringify(values)}`)
-    assert.match(decision.behavior === "deny" ? decision.message : "", /did not answer/)
-  }
-})
-
-test("inputs that cannot be represented EXACTLY are rejected rather than approximated", () => {
-  // Each of these would produce an answer key or an answer value that does not match the provider's
-  // bytes, which claude reads as a freeform answer or as no answer at all.
-  const bad: Array<[string, unknown]> = [
-    ["no questions array", { questions: "nope" }],
-    ["empty questions array", { questions: [] }],
-    ["a question with no options", { questions: [{ question: "Q?", header: "H", options: [], multiSelect: false }] }],
-    ["a duplicate question text (ambiguous answer key)", {
-      questions: [
-        { question: "Same?", header: "A", options: [{ label: "x", description: "" }], multiSelect: false },
-        { question: "Same?", header: "B", options: [{ label: "y", description: "" }], multiSelect: false },
-      ],
-    }],
-    ["a duplicate option label", { questions: [{ question: "Q?", header: "H", options: [{ label: "x", description: "" }, { label: "x", description: "" }], multiSelect: false }] }],
-    ["a question longer than the 256-byte object-key bound", { questions: [{ question: `${"q".repeat(300)}?`, header: "H", options: [{ label: "x", description: "" }], multiSelect: false }] }],
-    ["a control character in the question (rejected, never rewritten)", { questions: [{ question: "Whichchannel?", header: "H", options: [{ label: "x", description: "" }], multiSelect: false }] }],
-    ["a control character in an option label", { questions: [{ question: "Q?", header: "H", options: [{ label: "Stable", description: "" }], multiSelect: false }] }],
-    ["a bidi override in an option label", { questions: [{ question: "Q?", header: "H", options: [{ label: "Sta‮le", description: "" }], multiSelect: false }] }],
-    ["a newline in an option label (not a single-line option value)", { questions: [{ question: "Q?", header: "H", options: [{ label: "St\nable", description: "" }], multiSelect: false }] }],
-    ["a reserved question text", { questions: [{ question: "__proto__", header: "H", options: [{ label: "x", description: "" }], multiSelect: false }] }],
-  ]
-  for (const [label, input] of bad) assert.equal(parseClaudeAskUserQuestion(input), null, label)
-})
-
-test("hostile display text is scrubbed for the CARD while the answer keeps the provider's bytes", () => {
-  const input = {
-    questions: [{
-      // Unsafe text in the DESCRIPTION is display-only, so it is scrubbed rather than rejected — the
-      // description never becomes an answer key or an answer value.
-      question: "Which channel?",
-      header: "Channel",
-      options: [{ label: "Stable", description: "safe --token=hunter2 desc" }, { label: "Beta", description: "" }],
-      multiSelect: false,
-    }],
-  }
-  const spec = parseClaudeAskUserQuestion(input)!
-  const request = buildClaudeQuestionInteraction(spec, requestFor(input), OWNER)
-  assert.ok(request, "a scrubbable description must not sink the card")
-  const fields = request.payload.kind === "agent-question" ? request.payload.fields : []
-  const options = fields[0].input === "select" ? fields[0].options : []
-  assert.ok(!options[0].label.includes(""), "control bytes never reach the card")
-  assert.equal(options[0].value, "Stable", "the answer value stays the provider's exact label")
-  const decision = claudeQuestionDecisionFor(spec, "answer", { q0: "Stable" })
-  assert.deepEqual(decision.behavior === "allow" ? decision.updatedInput?.answers : undefined, { "Which channel?": "Stable" })
-})
-
-test("an oversized option preview degrades to a minimal echo instead of failing the decision", () => {
-  // `preview` carries HTML mockups and the protocol's per-string cap is 16 KB. Echoing the original
-  // would throw at the far end and fail the permission callback, taking the turn with it; the answer
-  // still has to land, so the questions array is rebuilt minimally and the preview is dropped.
-  const input = {
-    questions: [{
-      question: "Which layout?",
-      header: "Layout",
-      options: [
-        { label: "Grid", description: "Cards", preview: "x".repeat(20_000) },
-        { label: "List", description: "Rows" },
-      ],
-      multiSelect: false,
-    }],
-  }
-  const spec = parseClaudeAskUserQuestion(input)!
-  const decision = claudeQuestionDecisionFor(spec, "answer", { q0: "Grid" })
-  assert.equal(decision.behavior, "allow")
-  const updated = decision.behavior === "allow" ? decision.updatedInput : undefined
-  assert.deepEqual(updated?.answers, { "Which layout?": "Grid" })
-  const questions = updated?.questions as Array<Record<string, unknown>>
-  assert.equal(questions.length, 1)
-  assert.deepEqual(questions[0].options, [{ label: "Grid", description: "Cards" }, { label: "List", description: "Rows" }])
-  assert.equal(JSON.stringify(updated).includes("x".repeat(100)), false, "the oversized preview is gone")
 })

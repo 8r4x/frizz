@@ -18,7 +18,7 @@ import { PERM_DIR_ENV, permRequestDir, type Project } from "./project.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { BoardManager } from "./board.ts"
 import type { AgentBackend, BackendKind, BuiltCommand, FrayMcp } from "./backend/types.ts"
-import { CHROME_DEVTOOLS_MCP, CLAUDE_WORKER_ENV, FRAY_MCP } from "./backend/types.ts"
+import { CHROME_DEVTOOLS_MCP, CLAUDE_WORKER_ENV, FRAY_MCP, WORKER_DISALLOWED_TOOLS } from "./backend/types.ts"
 import { buildWorkerPrompt } from "./workerPrompt.ts"
 import { codexSandbox, CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS } from "./backend/codex.ts"
 import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
@@ -573,8 +573,12 @@ export function claudeMcpFlags(mcp?: FrayMcp): string[] {
 // one, and it makes the other two unnecessary (the hook stays as belt-and-braces for a session that
 // somehow reaches the tool anyway). EQUALS form for the same reason as --allowedTools: the flag is
 // variadic and a space-separated value would swallow the positional prompt behind it.
+//
+// The list itself is WORKER_DISALLOWED_TOOLS (backend/types.ts) so the broker transport removes exactly
+// the same tools through the SDK's own `disallowedTools`, rather than the two paths drifting apart —
+// which is precisely what happened between 2026-07-27 and 2026-08-02.
 export function workerDisallowedToolFlags(): string[] {
-  return ["--disallowedTools=AskUserQuestion"]
+  return [`--disallowedTools=${WORKER_DISALLOWED_TOOLS.join(",")}`]
 }
 
 // The `claude` argv for a fresh dispatch. session-id is PINNED so we can resume the exact

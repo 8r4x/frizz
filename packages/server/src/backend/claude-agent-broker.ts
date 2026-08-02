@@ -23,6 +23,7 @@ import { readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { createClaudeQueryFactory } from "./claude-agent-sdk.ts"
+import { WORKER_DISALLOWED_TOOLS } from "./types.ts"
 import { createClaudeBrokerDiagnosticWriter, createClaudeBrokerExitWriter, type ClaudeBrokerExitReason } from "./claude-broker-diagnostics.ts"
 import { CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER } from "./claude-agent-sdk-protocol.ts"
 import type {
@@ -133,6 +134,9 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     pluginDir: config.pluginDir,
     mcpServers: config.mcpServers,
     allowedTools: config.allowedTools,
+    // Every broker daemon IS a fray worker, so the worker prohibitions are unconditional here rather
+    // than a config knob a caller could forget — the tmux path spells the same list into argv.
+    disallowedTools: WORKER_DISALLOWED_TOOLS,
     canUseTool: async (request, context) => {
       const requestId = `perm-${++permSeq}`
       return await new Promise<ClaudePermissionDecision>((resolve) => {

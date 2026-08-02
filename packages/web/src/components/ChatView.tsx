@@ -563,7 +563,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
         <ThreadActionBar
           slug={slug}
           onTerminal={copyTerminalCommand}
-          ops={<BackgroundOpsStrip slug={slug} transcriptShells={liveTranscriptShells} className="px-1 pb-2 pt-1.5" />}
+          ops={<BackgroundOpsStrip slug={slug} transcriptShells={liveTranscriptShells} className="px-1 pt-1.5" />}
         />
       </div>
     </RadixTabs.Content>
@@ -595,6 +595,10 @@ const DEBUG_SCROLL = (() => {
 
 type TranscriptTransportFallback = ReturnType<typeof useTranscript>["transportFallback"]
 type VirtualThreadRow =
+  // A zero-height sentinel that is ALWAYS row 0, so `getItemKey(0)` is a constant for the list's whole
+  // life. That is load-bearing, not decoration — see the head-trim realignment below, which is only
+  // correct while TanStack's own `anchorTo:"end"` preservation stays dormant. It renders nothing.
+  | { key: "head-anchor"; kind: "head-anchor" }
   | { key: "interactions"; kind: "interactions" }
   | { key: "transport-fallback"; kind: "transport-fallback" }
   | { key: string; kind: "earlier-history" }
@@ -691,12 +695,18 @@ function VirtualizedThreadTranscript({
     return workingWins ? workingIndicatorGap(activityMessages.map((entry) => entry.message)) : STEP
   }, [activityMessages, nativeInputRequired, showWorking, thread])
   const rows = useMemo<VirtualThreadRow[]>(() => {
-    const next: VirtualThreadRow[] = [{ key: "interactions", kind: "interactions" }]
+    const next: VirtualThreadRow[] = [{ key: "head-anchor", kind: "head-anchor" }]
     if (transportFallback) next.push({ key: "transport-fallback", kind: "transport-fallback" })
     if (hasEarlier || loadingEarlier || earlierError) {
       next.push({ key: `earlier-history:${beforeCursor ?? "complete"}`, kind: "earlier-history" })
     }
     next.push(...messageRows.map((row) => ({ ...row, kind: "message" as const })))
+    // THE ASK GOES AT THE TAIL. It was row 0 until 2026-08-02, which put an answerable card ABOVE the
+    // operator's own first message — a transcript scrolled to its end (this list anchors there) left it
+    // 5,000px up and unmounted by the virtualizer, so a thread blocked on a question rendered as nothing
+    // but a tool call that never finished. It belongs where the block actually happened: after the last
+    // message, above the runtime status and the queued sends that are stuck behind it.
+    next.push({ key: "interactions", kind: "interactions" })
     if (hasRuntimeStatus) next.push({ key: "runtime-status", kind: "runtime-status" })
     let queuedGap = hasRuntimeStatus || messageRows.length > 0 ? STEP : 0
     messages.forEach((message, messageIndex) => {
@@ -723,7 +733,7 @@ function VirtualizedThreadTranscript({
     estimateSize: (index) => {
       const row = rows[index]
       if (!row) return 80
-      if (row.kind === "interactions") return 1
+      if (row.kind === "head-anchor" || row.kind === "interactions") return 1
       if (row.kind === "earlier-history") return 42
       if (row.kind === "transport-fallback") return 76
       if (row.kind === "runtime-status") return 54
@@ -933,10 +943,16 @@ function VirtualizedThreadTranscript({
   //
   // TanStack cannot compensate it. Its `anchorTo: "end"` preservation is gated on `didEdgeKeysChange` —
   // `count changed || getItemKey(0) changed || getItemKey(count - 1) changed` — and on THIS list row 0 is
-  // always the interactions row, the last row is always the runtime-status row, and `count` is pinned by
-  // the cap. A trim is therefore entirely interior to the key list, so the library sees nothing, rebuilds
-  // no measurements and adjusts no offset. Every other surface that changes the rows above the reader (a
-  // prepend, a pin move) already restores the reader explicitly; this one simply never was.
+  // always the fixed-key `head-anchor` row, the last row is always the runtime-status row, and `count` is
+  // pinned by the cap. A trim is therefore entirely interior to the key list, so the library sees nothing,
+  // rebuilds no measurements and adjusts no offset. Every other surface that changes the rows above the
+  // reader (a prepend, a pin move) already restores the reader explicitly; this one simply never was.
+  //
+  // That head sentinel exists FOR this invariant. Row 0 used to be the interactions row, which happened to
+  // be a constant key; when the ask moved to the tail (2026-08-02) row 0 would otherwise have become
+  // `earlier-history:${beforeCursor}` — a key that CHANGES on exactly this trim — waking TanStack's
+  // correction to fire alongside the one below, the same double-correction hazard `[overflow-anchor:none]`
+  // exists to prevent. So the sentinel keeps row 0's key constant and renders nothing.
   //
   // The trim has already landed by the time this runs, so realign synchronously — then again across the
   // next frames, because the rows below the removed ones re-measure on later ResizeObserver passes.
@@ -1166,7 +1182,8 @@ function VirtualizedThreadTranscript({
             className="absolute left-0 top-0 w-full"
             style={{ transform: `translateY(${virtualRow.start}px)` }}
           >
-            {row.kind === "interactions" ? (
+            {row.kind === "head-anchor" ? null
+            : row.kind === "interactions" ? (
               <InteractionStack thread={thread} className="px-6 pt-5" autoFocusFirst />
             ) : row.kind === "transport-fallback" ? (
               transportFallback ? <div className="px-6 pt-3"><div
