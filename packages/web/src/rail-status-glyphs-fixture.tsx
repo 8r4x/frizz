@@ -43,8 +43,9 @@ const liveChild = [{ id: "a1", label: "c", startedAt: "2026-08-01T09:05:00.000Z"
 // One thread per state the rail can resolve, named by the kind sessionIndicatorKind returns for it.
 const STATES: { kind: string; t: ThreadView }[] = [
   { kind: "working", t: { ...base, id: "working", runtime: "turn-idle", needsYou: false, subAgents: liveChild } as unknown as ThreadView },
-  // Shell-only, deliberately: a live sub-agent resolves to `working`, not to this mark.
-  { kind: "background", t: { ...base, id: "background", runtime: "turn-idle", needsYou: true, awaitingBackground: true, bgShells: [{ label: "nub run dev", startedAt: "2026-08-01T09:02:00.000Z", state: "running" }] } as unknown as ThreadView },
+  // Shell-only, deliberately: a live sub-agent resolves to `working`, not to this mark. `needsYou: false`
+  // because the server excuses a rest on live own work from the queue outright.
+  { kind: "background", t: { ...base, id: "background", runtime: "turn-idle", needsYou: false, awaitingBackground: true, bgShells: [{ label: "nub run dev", startedAt: "2026-08-01T09:02:00.000Z", state: "running" }] } as unknown as ThreadView },
   { kind: "rest", t: { ...base, id: "rest", runtime: "turn-idle", needsYou: true } as unknown as ThreadView },
   { kind: "needs-input", t: { ...base, id: "needs-input", runtime: "turn-idle", needsYou: true, pendingQuestion: true } as unknown as ThreadView },
   { kind: "stalled", t: { ...base, id: "stalled", runtime: "exited", needsYou: true, sessionId: "s" } as unknown as ThreadView },

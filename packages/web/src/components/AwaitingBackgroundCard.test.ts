@@ -60,3 +60,26 @@ test("the card carries the snooze ONLY when a surface passes one", () => {
   assert.match(bare, /has come to rest/)
   assert.match(bare, /data-awaiting-background/)
 })
+
+// THE SENTENCE HAS TO AGREE WITH THE RAIL. Since 2026-08-01 the rail draws two different marks for the
+// two kinds of live own work — a dispatched sub-agent spins (it will return and re-invoke the parent), a
+// background shell pulses (it never returns anything) — and this card is the WORDS for the same state,
+// now its only worded surface. "Awaiting the results from a dev server" describes a wait that is not
+// happening, so a shell-only rest gets its own verb.
+test("the card's verb matches what is actually running: results are AWAITED, a shell is merely LEFT running", () => {
+  const render = (t: Parameters<typeof AwaitingBackgroundCard>[0]["thread"]) =>
+    renderToStaticMarkup(createElement(AwaitingBackgroundCard, { thread: t })).replace(/<[^>]+>/g, "").replace(/&#x27;|&rsquo;/g, "’")
+
+  const agentsOnly = render(thread([agent("running")], []))
+  assert.match(agentsOnly, /awaiting the results from 1 sub-agent it dispatched/)
+  assert.match(agentsOnly, /when the work comes back/)
+
+  const shellsOnly = render(thread([], [shell("running"), shell("running")]))
+  assert.match(shellsOnly, /it left 2 background tasks running/)
+  assert.match(shellsOnly, /when the work finishes/)
+  assert.doesNotMatch(shellsOnly, /awaiting the results/, "a launched shell returns nothing to await")
+
+  // BOTH live → there IS something to await, so the dispatch sentence wins and still names the shells.
+  const both = render(thread([agent("running")], [shell("running")]))
+  assert.match(both, /awaiting the results from 1 sub-agent and 1 background task it dispatched/)
+})

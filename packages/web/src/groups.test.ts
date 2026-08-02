@@ -176,27 +176,58 @@ test("sessionIndicatorKind: a rested QUEUED thread is at rest even with live sub
 // than merged: a dispatched CHILD will come back and re-invoke the parent (real motion → spinner), a
 // detached SHELL will not (alive but still → dot). A shell-only rest is never excused from the queue,
 // so it is the one row that holds a running-band place while keeping its card.
-test("sessionIndicatorKind: a queued shell-only rest holds the running band with the dot, card and all", () => {
-  const shellRest = thread({ kind: "session", state: "open", needsYou: true, runtime: "turn-idle", awaitingBackground: true, bgShells: liveShell })
+test("sessionIndicatorKind: a shell-only rest holds the running band with the dot, and carries NO queue card", () => {
+  // needsYou FALSE is server truth for this state, not an assumption: board.deriveNeedsYou excuses a
+  // rest on live own work outright (maintainer 2026-08-01, "if something is listed as currently running,
+  // then it should never show up in the queue").
+  const shellRest = thread({ kind: "session", state: "open", needsYou: false, runtime: "turn-idle", awaitingBackground: true, bgShells: liveShell })
   assert.equal(sessionIndicatorKind(shellRest), "background")
   assert.deepEqual(partitionActive([shellRest]).running.map((t) => t.id), ["t"])
-  // The queue is untouched — only the rail band moved.
-  assert.equal(queued(shellRest), true)
-  // Event-snoozed out of the queue, it is the SAME state and the same dot: leaving the queue must not
-  // change how the row reads, or the rail churns on every snooze.
-  assert.equal(sessionIndicatorKind(thread({ ...shellRest, needsYou: false })), "background")
+  assert.equal(queued(shellRest), false, "a row in the running band must never also be a queue card")
 
   // A LIVE SUB-AGENT OUTRANKS THE SHELL — the dot must not show up for it, however the shell reads.
-  const withChild = thread({ ...shellRest, needsYou: false, subAgents: liveSub })
+  const withChild = thread({ ...shellRest, subAgents: liveSub })
   assert.equal(sessionIndicatorKind(withChild), "working", "a dispatched child is real motion — it spins")
   assert.equal(sessionIndicatorKind(thread({ ...withChild, needsYou: true })), "rest", "…and queued, it is the 2026-07-27 ellipsis, still never the dot")
 
-  // The shell going quiet drops it back to an ordinary queued rest, in the queue-ordered band.
-  const settled = thread({ ...shellRest, awaitingBackground: false, bgShells: [] })
+  // The shell going quiet re-queues it as an ordinary rest, in the queue-ordered band. This is the whole
+  // safety argument for excusing a shell that has no staleness clock: the excusal clears itself.
+  const settled = thread({ ...shellRest, needsYou: true, awaitingBackground: false, bgShells: [] })
   assert.equal(sessionIndicatorKind(settled), "rest")
+  assert.equal(queued(settled), true)
   assert.deepEqual(partitionActive([settled]).rested.map((t) => t.id), ["t"])
   // An EXITED worker whose shell still reads live is a stall, not a quietly-alive row.
-  assert.equal(sessionIndicatorKind(thread({ ...shellRest, runtime: "exited" })), "stalled")
+  assert.equal(sessionIndicatorKind(thread({ ...shellRest, runtime: "exited", needsYou: true })), "stalled")
+})
+
+// THE INVARIANT, stated once and checked over every shape the rail can produce (maintainer 2026-08-01:
+// "if something is listed as currently running, then it should never show up in the queue"). It holds by
+// CONSTRUCTION — inActiveRunningBand is `isActivelyRunning && !needsYou`, and `queued` is `needsYou` —
+// so this test is really guarding the construction: any future clause that bands a row on something
+// OTHER than the absence of a queue card breaks it here.
+test("partitionActive: NOTHING in the running band has a queue card, and every card has a rested-band row", () => {
+  const at = "2026-07-09T00:00:00.000Z"
+  const base = { kind: "session" as const, state: "open" as const, lastUserAt: at }
+  const shapes = [
+    thread({ ...base, id: "own-turn", runtime: "running", needsYou: false }),
+    thread({ ...base, id: "spawning", runtime: "spawning", needsYou: false }),
+    thread({ ...base, id: "rested-on-child", runtime: "turn-idle", needsYou: false, awaitingBackground: true, subAgents: liveSub }),
+    thread({ ...base, id: "rested-on-shell", runtime: "turn-idle", needsYou: false, awaitingBackground: true, bgShells: liveShell }),
+    thread({ ...base, id: "bare-rest", runtime: "turn-idle", needsYou: true }),
+    thread({ ...base, id: "asking", runtime: "turn-idle", needsYou: true, pendingQuestion: true }),
+    thread({ ...base, id: "stalled", runtime: "exited", needsYou: true }),
+    thread({ ...base, id: "done-fenced", runtime: "turn-idle", needsYou: true, lastFence: { kind: "done", body: "shipped", hints: [] } }),
+    // The rare spinning-yet-queued shape: its own turn is in flight AND the server queued it.
+    thread({ ...base, id: "spin-ask", runtime: "running", needsYou: true }),
+  ]
+  const { running, rested } = partitionActive(shapes)
+  assert.equal(running.length + rested.length, shapes.length, "every thread lands in exactly one band")
+  for (const t of running) assert.equal(queued(t), false, `${t.id} is in the running band but carries a queue card`)
+  for (const t of shapes.filter(queued)) {
+    assert.ok(rested.some((r) => r.id === t.id), `${t.id} has a queue card but no rested-band row to map it to`)
+  }
+  // …and the two rested-with-live-work rows are exactly the ones that made this worth pinning.
+  assert.deepEqual(running.map((t) => t.id), ["own-turn", "spawning", "rested-on-child", "rested-on-shell"])
 })
 
 // ── THE STALLED/RETRY CONTRACT ────────────────────────────────────────────────────────────────────
@@ -425,22 +456,19 @@ test("partitionActive: splits an ordered Active list into running/rested; queued
   assert.deepEqual(rested.map((t) => t.id), ["rest-old", "spin-ask", "rest-new"])
 })
 
-// LIVE OWN WORK KEEPS THE ROW IN THE RUNNING BAND, snoozed or not (maintainer 2026-08-01: "keep it in
-// the actively running rail"). Queue membership no longer decides the band for a shell-only rest: an
-// event-snoozed thread has left the queue and an unsnoozed one has NOT (a never-ending dev server must
-// keep its card), and the two must not look like different states on the rail — that churn is the whole
-// complaint. What keeps the never-ending dev server honest is the GLYPH: it stops spinning.
-test("partitionActive: a thread cooking on its own background work stays in the running band, snoozed or queued", () => {
-  const shellOnly = thread({ id: "snoozed-shell", kind: "session", state: "open", runtime: "turn-idle", needsYou: false, awaitingBackground: true, subAgents: [], lastUserAt: "2026-07-09T00:00:00.000Z" })
-  const withChild = thread({ id: "snoozed-child", kind: "session", state: "open", runtime: "turn-idle", needsYou: false, awaitingBackground: true, subAgents: [{ id: "a1", label: "c", startedAt: "2026-07-09T00:00:00.000Z", state: "running" }], lastUserAt: "2026-07-09T00:00:00.000Z" })
-  const queuedShell = thread({ id: "queued-shell", kind: "session", state: "open", runtime: "turn-idle", needsYou: true, awaitingBackground: true, subAgents: [], lastUserAt: "2026-07-09T00:00:00.000Z" })
-  const { running, rested } = partitionActive([shellOnly, withChild, queuedShell])
-  assert.deepEqual(running.map((t) => t.id), ["snoozed-shell", "snoozed-child", "queued-shell"])
+// LIVE OWN WORK KEEPS THE ROW IN THE RUNNING BAND (maintainer 2026-08-01: "keep it in the actively
+// running rail"), and the server is what puts it there — by excusing it from the queue, which is the
+// same thing. Sub-agent and shell reach the band identically; they differ only in what the row READS as.
+test("partitionActive: a thread cooking on its own background work stays in the running band", () => {
+  const at = "2026-07-09T00:00:00.000Z"
+  const shellOnly = thread({ id: "shell-only", kind: "session", state: "open", runtime: "turn-idle", needsYou: false, awaitingBackground: true, subAgents: [], bgShells: liveShell, lastUserAt: at })
+  const withChild = thread({ id: "with-child", kind: "session", state: "open", runtime: "turn-idle", needsYou: false, awaitingBackground: true, subAgents: [{ id: "a1", label: "c", startedAt: at, state: "running" }], lastUserAt: at })
+  const { running, rested } = partitionActive([shellOnly, withChild])
+  assert.deepEqual(running.map((t) => t.id), ["shell-only", "with-child"])
   assert.deepEqual(rested.map((t) => t.id), [])
-  // Same band, two different readings — and that split is deliberate: the shells are alive-but-still,
-  // the dispatched child is motion that will come back.
+  // Same band, two different readings — and that split is deliberate: the shell is alive-but-still, the
+  // dispatched child is motion that will come back.
   assert.equal(sessionIndicatorKind(shellOnly), "background")
-  assert.equal(sessionIndicatorKind(queuedShell), "background")
   assert.equal(sessionIndicatorKind(withChild), "working")
 })
 

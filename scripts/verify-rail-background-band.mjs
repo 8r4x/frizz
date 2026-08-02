@@ -164,9 +164,10 @@ try {
     if (thread.runtime !== "turn-idle") failures.push(`the worker did not read as rested (runtime=${thread.runtime})`)
     if (!shells.some((s) => s.state === "running")) failures.push("the tailer tracked no running background shell")
     if (thread.awaitingBackground !== true) failures.push("the server did not derive awaitingBackground for a rested thread with a live shell")
-    // The shell-only rest is DELIBERATELY still queued — an eternal dev server must not bury its
-    // thread. The rail change moves the ROW, never the card, so this must stay true.
-    if (thread.needsYou !== true) failures.push("a shell-only rest must stay in the queue (needsYou) — only its rail band moved")
+    // EXCUSED FROM THE QUEUE (maintainer 2026-08-01: "if something is listed as currently running, then
+    // it should never show up in the queue"). The row goes in the running band, so the card must be gone
+    // — the two surfaces are mutually exclusive, and the server is the single place that decides it.
+    if (thread.needsYou !== false) failures.push("a thread resting on a live shell must be excused from the queue (needsYou false)")
   }
 
   const control = board.threads.find((t) => t.id === CTRL_SLUG)
@@ -206,6 +207,17 @@ try {
     if (ctrl.glyph !== "working") failures.push(`the control resolved "${ctrl.glyph}", not "working" — a dispatched child is real motion and must keep the spinner`)
     if (!ctrl.hasSpinner) failures.push("the control lost its spinner")
 
+    // THE REPORT THIS CLOSES (maintainer 2026-08-01): "even though the thread remains in the active
+    // running rail, its card shows up in the queue". Assert the ABSENCE on the real queue surface, not
+    // just the `needsYou` bit that feeds it — the bit and the render are two things, and it was the
+    // render the maintainer saw.
+    const cards = await page.evaluate((slug) => ({
+      mine: !!document.querySelector(`[data-queue-card="${slug}"]`),
+      total: document.querySelectorAll("[data-queue-card]").length,
+    }), SLUG)
+    console.log(`      queue: card for this thread=${cards.mine}  cards on the board=${cards.total}`)
+    if (cards.mine) failures.push("the thread is in the running band AND has a queue card — the exact pair that must not happen")
+
     const seen = await page.evaluate((slug) => {
       const row = document.querySelector(`[data-sidebar-item="${slug}"]`)
       const mark = row?.querySelector("[data-rail-glyph]")
@@ -228,8 +240,23 @@ try {
     if (!seen.inRunningBand) failures.push("the row dropped below the band rule into the rested band")
 
     mkdirSync(shots, { recursive: true })
+    await page.screenshot({ path: join(shots, "rail-e2e-full-board.png") })
     const rail = await page.$("[data-sidebar-rail]")
     await rail.screenshot({ path: join(shots, "rail-e2e-real-board.png") })
+
+    // THE OTHER HALF of removing the queue card: with no card, the awaiting-background banner on the
+    // thread page is the ONLY place this state is stated in words. If it were missing too, opening the
+    // row would show a transcript that simply ends at rest — the "reads as if the agent died" failure of
+    // 2026-07-29, which is precisely what that card exists to prevent. So assert it is still there.
+    await page.goto(`${url}thread/${SLUG}`, { waitUntil: "networkidle2", timeout: 30_000 })
+    await new Promise((r) => setTimeout(r, 2000))
+    const banner = await page.evaluate(() => {
+      const el = document.querySelector("[data-awaiting-background]")
+      return { present: !!el, text: (el?.innerText ?? "").replace(/\s+/g, " ").trim().slice(0, 120) }
+    })
+    console.log(`      thread page: awaiting-background card=${banner.present}  "${banner.text}"`)
+    if (!banner.present) failures.push("the awaiting-background card is gone from the thread page too — with no queue card either, this state is now stated NOWHERE")
+    await page.screenshot({ path: join(shots, "thread-page-awaiting-bg.png") })
     console.log(`      shot → ${join(shots, "rail-e2e-real-board.png")}`)
     if (pageErrors.length) failures.push(`console/page errors: ${pageErrors.join(" | ")}`)
   } finally {

@@ -3,12 +3,17 @@
 // not waiting on the human: it is waiting on results it kicked off. Server-derived
 // (board.deriveAwaitingBackground); this module only renders it.
 //
-// It renders on EVERY surface that shows the thread — the queue card, the drawer, and the full-screen
-// page — because the rest is a fact about the thread, not a queue-only annotation. What differs is the
-// AFFORDANCE: the queue card passes the event-Snooze as `actions` (parking a card is a queue verb, and
-// the queue is where a card you don't want to look at costs you something), while the drawer and the
-// standalone page pass none — you opened the thread deliberately, so there is nothing to dismiss
+// It renders on the DRAWER and the FULL-SCREEN page, because the rest is a fact about the thread. It
+// used to render on the queue card too, with the event-Snooze passed as `actions` (parking a card is a
+// queue verb, and the queue is where a card you don't want to look at costs you something) — the drawer
+// and standalone page passed none, since you opened the thread deliberately and have nothing to dismiss
 // (maintainer 2026-07-25: "in the drawer or in the full screen view, it should not").
+//
+// SINCE 2026-08-01 there is no queue surface at all: a thread resting on live own work is excused from
+// the queue outright, so the running rail and the queue can never both claim it. The `actions` prop and
+// the Snooze it carries are therefore vestigial — no caller passes one — and these two surfaces are the
+// ONLY place this state is stated in words. That raises the stakes on the card rather than lowering
+// them: without it, opening such a row shows a transcript that simply ends at rest.
 //
 // Without it those two surfaces showed NOTHING at rest: the shimmer stops and the transcript just ends,
 // which reads as "the agent died" for exactly the threads that are healthiest. (The shimmer coming back
@@ -38,9 +43,18 @@ export function awaitingBackgroundSubject(thread: Pick<ThreadView, "subAgents" |
   return agents > 0 ? agentPart : shellPart
 }
 
+// Whether the thread is genuinely WAITING or merely still has something running — the distinction the
+// rail now draws with two different marks (groups.sessionIndicatorKind: a live sub-agent spins, a
+// shell-only rest pulses), and the card has to agree with it. A dispatched sub-agent returns and
+// re-invokes its parent, so "awaiting the results" is exactly right. A launched dev server never returns
+// anything; saying the thread awaits its results describes a wait that is not happening.
+function awaitsResults(thread: Pick<ThreadView, "subAgents">): boolean {
+  return (thread.subAgents ?? []).some((a) => isDirectSubAgent(a) && a.state === "running")
+}
+
 export function AwaitingBackgroundCard({ thread, actions }: {
   thread: Pick<ThreadView, "subAgents" | "bgShells">
-  // The queue card's event-Snooze. Omitted on the drawer and the full-screen page.
+  // The queue card's event-Snooze — vestigial since the queue surface went away; no caller passes one.
   actions?: ReactNode
 }) {
   return (
@@ -52,8 +66,17 @@ export function AwaitingBackgroundCard({ thread, actions }: {
           thread, not a caption for the button, so it reads as prose rather than as a label the Snooze
           control drags around with it — and it therefore stays on the surfaces that have no button. */}
       <p className={CARD_BODY}>
-        This agent has come to rest, but it’s awaiting the results from {awaitingBackgroundSubject(thread)} it
-        dispatched. It returns to the queue on its own when the work comes back.
+        {awaitsResults(thread) ? (
+          <>
+            This agent has come to rest, but it’s awaiting the results from {awaitingBackgroundSubject(thread)} it
+            dispatched. It returns to the queue on its own when the work comes back.
+          </>
+        ) : (
+          <>
+            This agent has come to rest, but it left {awaitingBackgroundSubject(thread)} running. It returns to the
+            queue on its own when the work finishes.
+          </>
+        )}
       </p>
       {actions ? <CardActions>{actions}</CardActions> : null}
     </TranscriptCard>

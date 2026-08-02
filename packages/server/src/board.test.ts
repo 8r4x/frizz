@@ -490,7 +490,7 @@ test("deriveNeedsYou: a parked human/timestamp awaiting fence stays out of the o
   assert.equal(deriveNeedsYou(row({ seen_at: LATER }), both, "turn-idle"), true)
 })
 
-test("deriveNeedsYou: every owned bare rest queues, but a live SUB-AGENT excuses it (the shell does not)", () => {
+test("deriveNeedsYou: every owned bare rest queues, but live own work — sub-agent OR shell — excuses it", () => {
   assert.equal(deriveNeedsYou(row({ seen_at: null, last_read_at: null }), tele({ lastActivityAt: LATER }), "turn-idle"), true)
   assert.equal(deriveNeedsYou(row({ seen_at: T0 }), tele({ lastActivityAt: LATER }), "turn-idle"), true, "viewing cannot clear rest")
   assert.equal(deriveNeedsYou(row({ seen_at: null }), tele({ turn: "idle", lastActivityAt: LATER }), "exited"), true)
@@ -501,9 +501,18 @@ test("deriveNeedsYou: every owned bare rest queues, but a live SUB-AGENT excuses
   // The excusal is bounded by the tailer's staleness ceiling: only "running" holds, so a child whose
   // completion signal was lost stops excusing its parent rather than burying it.
   assert.equal(deriveNeedsYou(row({ seen_at: null, rested_at: T0 }), tele({ subAgents: [{ label: "c", startedAt: T0, state: "stale", id: "a1" }], lastActivityAt: LATER }), "turn-idle"), true, "a stale child no longer excuses")
-  // A live background SHELL is deliberately NOT excused — it has no staleness clock, so excusing an
-  // eternal dev server would bury its thread forever. It stays a visible, snoozable queue handoff.
-  assert.equal(deriveNeedsYou(row({ rested_at: T0 }), tele({ bgShells: [{ label: "watch", startedAt: T0, state: "running" }] }), "turn-idle"), true)
+  // A live background SHELL is excused on the same terms (maintainer 2026-08-01: "if something is listed
+  // as currently running, then it should never show up in the queue"). It was kept queued from
+  // 2026-07-22 because a shell has no staleness clock and an eternal dev server would bury its thread —
+  // but the rail now reads such a row as the quiet pulsing dot rather than a spinner, so it sits
+  // truthfully at the top of the rail instead of claiming motion, and the thread re-queues the instant
+  // the shell exits or its pane dies.
+  assert.equal(deriveNeedsYou(row({ rested_at: T0 }), tele({ bgShells: [{ label: "watch", startedAt: T0, state: "running" }] }), "turn-idle"), false)
+  // …and the moment nothing is live behind it, it is an ordinary bare rest again — this is what makes the
+  // excusal self-clearing rather than a one-way door. A finished shell does not linger in a terminal
+  // state here: tailer.bgShellViews drops it from the list entirely (and empties the list outright on
+  // pane death), so "the shell ended" IS the empty list.
+  assert.equal(deriveNeedsYou(row({ rested_at: T0 }), tele({ bgShells: [] }), "turn-idle"), true)
 })
 
 test("deriveNeedsYou: a live sub-agent excuses the rest only while the worker declared NO fence", () => {
@@ -519,16 +528,27 @@ test("deriveNeedsYou: a live sub-agent excuses the rest only while the worker de
   assert.equal(deriveNeedsYou(row({ rested_at: T0 }), tele({ subAgents: child, lastFence: parked, lastActivityAt: LATER }), "turn-idle"), false)
 })
 
-test("deriveNeedsYou: the awaiting-background event-snooze hides the SHELL card until the parent re-rests", () => {
-  // Sub-agents are excused from the queue outright now, so the event-snooze governs the one case that
-  // still cards: a rest on a live background SHELL.
+// THE EVENT-SNOOZE IS NOW VESTIGIAL, and this test says so rather than pretending otherwise. It existed
+// to hide the awaiting-background QUEUE CARD until the parent re-rested — and since 2026-08-01 a rest on
+// live own work has no queue card at all, so there is nothing to hide and no surface left to arm it from
+// (the Snooze button ships only on the queue card; AwaitingBackgroundCard omits it on the drawer and the
+// full-screen page). The RPC, the column and the branch below are all still wired; only the reachable
+// path is gone. Left in place deliberately — removing an RPC and a DB column is a bigger, separate
+// change than the queue rule that stranded them.
+test("deriveNeedsYou: live own work is excused whether or not an event-snooze was armed", () => {
   const shell = tele({ bgShells: [{ label: "watch", startedAt: T0, state: "running" }], lastActivityAt: LATER })
-  // Snooze captures the CURRENT rest instant. While rested_at still equals it, the card is hidden.
+  // Armed or not, the answer is the same now: excused, because the row is in the running band.
   assert.equal(deriveNeedsYou(row({ rested_at: T0, bg_snooze_rested_at: T0 }), shell, "turn-idle"), false, "snoozed for this rest")
-  // The parent came to a NEW rest (the work returned) → rested_at advanced past the snooze → re-surfaces.
-  assert.equal(deriveNeedsYou(row({ rested_at: LATER, bg_snooze_rested_at: T0 }), shell, "turn-idle"), true, "re-rest clears the snooze")
-  // A snooze from a prior rest never applies to a different rest instant.
-  assert.equal(deriveNeedsYou(row({ rested_at: null, bg_snooze_rested_at: T0 }), shell, "turn-idle"), true)
+  assert.equal(deriveNeedsYou(row({ rested_at: LATER, bg_snooze_rested_at: T0 }), shell, "turn-idle"), false, "…and a re-rest no longer re-surfaces it — the excusal outranks the snooze")
+  assert.equal(deriveNeedsYou(row({ rested_at: null, bg_snooze_rested_at: T0 }), shell, "turn-idle"), false)
+
+  // The ONE branch bgSnoozeArmed still governs: a non-done FENCE with live work. A fenced thread is not
+  // in the running band (deriveAwaitingBackground drops any fence), so it keeps its card — and an armed
+  // snooze still parks that card for the current rest.
+  const prWatch = { kind: "awaiting" as const, body: "", hints: [{ kind: "pr-watch" as const, value: "acme/app#1" }] }
+  const fenced = tele({ bgShells: [{ label: "watch", startedAt: T0, state: "running" }], lastFence: prWatch, lastActivityAt: LATER })
+  assert.equal(deriveNeedsYou(row({ rested_at: T0 }), fenced, "turn-idle"), true, "a pr-watch handoff stays visible")
+  assert.equal(deriveNeedsYou(row({ rested_at: T0, bg_snooze_rested_at: T0 }), fenced, "turn-idle"), false, "…unless snoozed for this exact rest")
 })
 
 test("deriveAwaitingBackground: true only when own-work rest is the SOLE reason for the card", () => {

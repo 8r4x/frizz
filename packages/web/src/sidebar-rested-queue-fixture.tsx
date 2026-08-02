@@ -13,19 +13,23 @@ import "./styles.css"
 // the REAL <Sidebar/> — the same ThreadRow + indented SubAgentRows the app draws — over a fixed
 // five-thread board that pins the one changed case against the four that must NOT change:
 //
-//   RUNNING BAND (live work that isn't waiting on you)
+//   RUNNING BAND (live work that isn't waiting on you — and NOTHING here has a queue card)
 //     B  own turn in flight + a live child        → [/] spinner   (unchanged)
-//     C  at rest, live child, NOT queued          → [/] spinner   (unchanged — the child comes back)
-//     E  at rest, QUEUED, background SHELL only   → [•] blue dot  (THE CHANGE; was […], one band down)
-//   RESTED BAND (the queue order)
+//     C  at rest, live child, not queued          → [/] spinner   (unchanged — the child comes back)
+//     E  at rest, background SHELL only           → [•] blue dot  (THE CHANGE; was […], one band down)
+//   RESTED BAND (the queue order — every row here HAS a card)
 //     A  at rest, QUEUED, live children           → […] ellipsis  (unchanged — 2026-07-27)
 //     D  at rest, queued, nothing out             → […] ellipsis  (unchanged baseline)
 //
 // E is the row that MOVED, and the pair C/E is the whole point of the split: a dispatched CHILD will
 // return and re-invoke its parent, so that row is genuinely in motion and spins; a detached SHELL will
-// not, so its row is alive but still, and pulses instead. E keeps its queue card either way — a dev
-// server that never exits must not bury its thread — it just stops being punished for that with a
-// rested-band row. The CHILD rows keep their own spinners throughout: they really are still going.
+// not, so its row is alive but still, and pulses instead.
+//
+// E's `needsYou: false` is SERVER TRUTH, not fixture convenience: board.deriveNeedsYou excuses a rest on
+// live own work from the queue entirely (maintainer 2026-08-01: "if something is listed as currently
+// running, then it should never show up in the queue"). The band split IS the queue split — a row above
+// the rule never has a card, a row below it always does. The CHILD rows keep their own spinners
+// throughout: they really are still going.
 
 const base = {
   kind: "session",
@@ -114,15 +118,15 @@ const bareRestedQueued = {
   lastUserAt: "2026-07-27T08:55:00.000Z",
 } as unknown as ThreadView
 
-// E — THE CASE UNDER TEST: rested and queued with a background SHELL and NO sub-agents at all. A shell
-// is never excused from the queue (an eternal dev server must not bury its thread), so this row is the
-// one that carries a queue card while sitting in the running band.
+// E — THE CASE UNDER TEST: rested with a background SHELL and NO sub-agents at all. Excused from the
+// queue like any other running row, so it sits in the running band with no card behind it; the
+// awaiting-background card still states the fact in the drawer and on the full-screen page.
 const shellOnlyRested = {
   ...base,
   id: "wire-up-the-preview-server",
   title: "Wire up the preview server",
   runtime: "turn-idle",
-  needsYou: true,
+  needsYou: false,
   awaitingBackground: true,
   sessionId: "aaaaaaaa-bbbb-cccc-dddd-000000000005",
   subAgents: [],

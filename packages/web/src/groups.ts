@@ -310,14 +310,16 @@ function hasLiveSubAgents(t: ThreadView): boolean {
 //
 // `awaitingBackground` is the ONE exception, and it is not `bgShells` by another name: it is SERVER
 // truth (board.deriveAwaitingBackground) meaning "at rest, its own dispatched work is still live, and
-// nothing harder outranks that". Reading it here keeps the bands honest for a thread with no queue card
-// behind it — one the human EVENT-SNOOZED, or (since 2026-07-30) one the server excused from the queue
-// outright because its own SUB-AGENTS are still running. Either way the thread is still cooking, and
-// with a live sub-agent hasLiveSubAgents already kept it in the running band with a spinner; a
-// shell-only thread had no such signal, so it fell into the RESTED band — the queue-ordered band — with
-// no queue card behind it (found 2026-07-29: "showing up as a rested thread in my sidebar, yet there's
-// no card for it"). It does NOT re-spin finished threads: an unsnoozed SHELL-ONLY thread still has
-// needsYou true, so inActiveRunningBand keeps it in the rested band exactly as before.
+// nothing harder outranks that". Reading it here is what keeps the bands honest for a thread with no
+// queue card behind it — since 2026-08-01 the server excuses EVERY such thread from the queue outright
+// (sub-agents since 2026-07-30, shells now), so without this a live-but-cardless row would fall into the
+// RESTED band, which is the queue-ordered band, with nothing behind it: the exact 2026-07-29 report,
+// "showing up as a rested thread in my sidebar, yet there's no card for it".
+//
+// It does NOT re-spin finished threads. What the row reads as is a separate decision made downstream in
+// sessionIndicatorKind, and a shell-only rest gets the quiet pulsing dot there, never the spinner — the
+// 2026-07-22 worry (a dev server spinning its thread forever) is answered by the GLYPH, not by keeping
+// the thread queued.
 function hasLiveOps(t: ThreadView): boolean {
   return hasLiveSubAgents(t) || t.awaitingBackground === true
 }
@@ -555,24 +557,19 @@ export function orderActive(threads: readonly ThreadView[], direction: QueueDire
   return [...orderByInteraction(running), ...orderQueue(rested, direction)]
 }
 
-// The running band is live work: the thread's own turn in flight while it isn't waiting on the human,
-// PLUS a thread resting on background work it launched. A queued row otherwise belongs to the rested
-// band, so its queue card maps to a rested-band row and the scroll marker walks straight down the rail.
+// The running band is strictly live work that ISN'T waiting on the human, and that conjunction is the
+// load-bearing part: a queued thread ALWAYS belongs to the rested band, so its queue card maps to a
+// rested-band row and the scroll marker walks straight down the rail.
 //
-// The background clause is the exception the maintainer asked for twice — 2026-07-30 for sub-agents
-// ("too much layout shift as things jump between those two sections"), then 2026-08-01 for background
-// shells: "if a thread has rested but it still has background work going, like background shells, we
-// should keep it in the actively running rail". The sub-agent half is already handled upstream (the
-// server excuses those from the queue, so `needsYou` is false and the first clause takes them); a
-// shell-only rest is never excused (an eternal dev server must not bury its thread), so it is the one
-// row that sits in the running band WITH a queue card behind it. That is the accepted cost: the
-// alternative is the row dropping to the rested band the moment the turn ends and bouncing back up when
-// the shell reports, which is exactly the churn being complained about. Its glyph never claims motion it
-// doesn't have — sessionIndicatorKind gives it the at-rest pulsing dot, so band and glyph still tell the
-// operator one story.
+// THE INVARIANT, both directions (maintainer 2026-08-01: "if something is listed as currently running,
+// then it should never show up in the queue"): nothing in this band has a card, and every card has a
+// row below the rule. It holds BY CONSTRUCTION here — `needsYou` is the queue — so the only way to put
+// a rested-with-live-work thread in this band is for the SERVER to excuse it from the queue, which is
+// exactly what board.deriveNeedsYou does for a live sub-agent (2026-07-30) and now for a live background
+// shell too. A brief attempt to band a shell-only rest here regardless of `needsYou` is what produced
+// the card-and-running-row pair the maintainer then reported; the fix belonged upstream, not here.
 function inActiveRunningBand(t: ThreadView): boolean {
-  if (isActivelyRunning(t) && t.needsYou !== true) return true
-  return sessionIndicatorKind(t) === "background"
+  return isActivelyRunning(t) && t.needsYou !== true
 }
 
 // Split an ALREADY-ordered Active list (see orderActive) into its running/rested bands WITHOUT
