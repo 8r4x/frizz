@@ -101,7 +101,19 @@ export function StandingPromptControl({ thread }: { thread: ThreadView }) {
           </button>
         </PopoverTrigger>
       </Tooltip>
-      <PopoverContent side="top" align="start" className="w-[min(21rem,calc(100vw-1.5rem))] p-3 text-[11px] leading-relaxed text-fg">
+      <PopoverContent
+        side="top"
+        align="start"
+        className="w-[min(21rem,calc(100vw-1.5rem))] p-3 text-[11px] leading-relaxed text-fg"
+        // Radix otherwise autofocuses the first focusable child, which is the Off segment — and a
+        // focus ring sitting on "Off" reads as the toggle being SET to off by the act of opening the
+        // panel. Send the caret to the textarea when there is something to write in, and nowhere at
+        // all when there is not.
+        onOpenAutoFocus={(e) => {
+          e.preventDefault()
+          if (enabled) textarea.current?.focus()
+        }}
+      >
         <div className="mb-2 flex items-center justify-between gap-3">
           <span className="font-medium">Standing prompt</span>
           <OnOffToggle value={enabled} disabled={busy} onChange={toggle} />
@@ -127,9 +139,12 @@ export function StandingPromptControl({ thread }: { thread: ThreadView }) {
           placeholder={enabled ? "What should this thread keep doing every time it stops?" : "Turn it on to write one"}
           className={`w-full resize-none rounded-md border border-border bg-bg px-2 py-1.5 text-[12px] leading-snug outline-none placeholder:text-muted/50 focus:border-border-strong ${enabled ? "text-fg" : "cursor-default text-muted/60"}`}
         />
+        {/* The sentinel is set in mono with NO horizontal padding: a padded chip put a visible gap
+            between the word and the full stop that follows it, which reads as a typo in a one-line
+            explanation. Weight and family carry the "this is a literal string" job on their own. */}
         <p className="mt-2 text-muted/70">
           Sent every time the agent comes to rest. It stops when the agent replies{" "}
-          <code className="rounded bg-panel-2 px-1 text-[10px] text-fg/80">{STANDING_PROMPT_SENTINEL}</code>.
+          <code className="font-mono font-medium text-fg/85">{STANDING_PROMPT_SENTINEL}</code>.
         </p>
         {armed?.lastFiredAt && (
           <p className="mt-1 text-muted/55">Last sent {formatAgo(armed.lastFiredAt)}</p>
@@ -154,7 +169,7 @@ function OnOffToggle({ value, disabled, onChange }: { value: boolean; disabled?:
           aria-pressed={value === o.v}
           data-standing-prompt-toggle={o.label.toLowerCase()}
           onClick={() => onChange(o.v)}
-          className={`rounded px-2 py-0.5 text-[11px] transition-colors disabled:opacity-45 ${
+          className={`rounded px-2 py-0.5 text-[11px] outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-45 ${
             value === o.v ? "bg-fg text-bg" : "text-muted hover:text-fg"
           }`}
         >
