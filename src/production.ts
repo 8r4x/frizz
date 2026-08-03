@@ -21,6 +21,7 @@ import {
   acquireGlobalLaunchLock,
   allocatePort,
   EXPOSED_WARNING,
+  PUBLIC_ORIGIN_WARNING,
   expectedOwnerHealth,
   liveWorkspaceOwner,
   networkUrls,
@@ -107,16 +108,22 @@ Options:
   --port <port>          request a fixed port for a new workspace server
   --host [address]       serve on a network address instead of loopback (bare --host means 0.0.0.0)
   --allowed-host <name>  with --host, also accept this DNS name as the board's address (repeatable)
+  --public-origin <url>  serve behind a proxy/tunnel reachable at this exact origin
   --debug                stream the full event feed to the terminal instead of the compact readout
   -h, --help             show this help
 
 Environment:
   FRAY_HOST              same as --host
   FRAY_ALLOWED_HOSTS     same as --allowed-host, comma separated
+  FRAY_PUBLIC_ORIGIN     same as --public-origin
 
 --host puts a board that can run shell commands as you on the network, and Fray has no login: anyone
 who reaches the port controls it. Only do this on a network you trust. An IP address works as-is; to
-reach the board by DNS name you must list that name with --allowed-host ("*" allows any).`,
+reach the board by DNS name you must list that name with --allowed-host ("*" allows any).
+
+--public-origin serves the board through a tunnel or reverse proxy without putting it on the LAN
+at all — Fray stays on loopback and the tunnel dials it. Fray still has no login, so require
+authentication at the proxy: with Cloudflare Access, that is the whole of your access control.`,
   );
   process.exit(0);
 }
@@ -210,13 +217,19 @@ async function openOrPrint(port: number, reused: boolean): Promise<void> {
   } else {
     readout?.settle("browser", "done", url);
   }
-  // A reuse did not choose this server's bind address, so it must not claim to have exposed it.
+  // A reuse did not choose this server's bind address or its proxy origin, so it must not claim either.
   const network = reused ? [] : networkUrls(port, bind.host);
+  const publicOrigin = reused ? undefined : bind.publicOrigin;
+  const warnings = [
+    ...(network.length > 0 ? [EXPOSED_WARNING] : []),
+    ...(publicOrigin ? [PUBLIC_ORIGIN_WARNING] : []),
+  ];
   if (!readout) {
     console.log(`${reused ? "reusing" : "started"} Fray ${PACKAGE_VERSION} for ${workspace.root}`);
     console.log(url);
     for (const address of network) console.log(address);
-    if (network.length > 0) console.log(EXPOSED_WARNING);
+    if (publicOrigin) console.log(publicOrigin);
+    for (const warning of warnings) console.log(warning);
     return;
   }
   const home = homedir();
@@ -224,6 +237,7 @@ async function openOrPrint(port: number, reused: boolean): Promise<void> {
     [
       { label: "Local", value: `${url}/`, accent: true },
       ...network.map((address) => ({ label: "Network", value: `${address}/`, accent: true })),
+      ...(publicOrigin ? [{ label: "Public", value: `${publicOrigin}/`, accent: true }] : []),
       { label: "Project", value: `${workspace.name} — ${tildePath(workspace.root, home)}` },
       ...(logger.file ? [{ label: "Logs", value: tildePath(logger.file, home) }] : []),
     ],
@@ -235,7 +249,7 @@ async function openOrPrint(port: number, reused: boolean): Promise<void> {
         : "press ctrl-c to stop · run with --debug for the full event feed",
     {
       ...(reused ? { status: `already running on port ${port}` } : {}),
-      ...(network.length > 0 ? { warning: EXPOSED_WARNING } : {}),
+      ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
     },
   );
 }
@@ -291,6 +305,7 @@ async function runSupervisor(port: number, token: string): Promise<never> {
     port,
     host: bind.host,
     allowedHosts: bind.allowedHosts,
+      ...(bind.publicOrigin ? { publicOrigin: bind.publicOrigin } : {}),
     cwd: workspace.root,
     stateDir: workspace.stateDir,
     launchTarget: target,

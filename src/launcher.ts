@@ -27,6 +27,7 @@ import {
   LOOPBACK_BIND_HOST,
   normalizeAllowedHosts,
   normalizeBindHost,
+  normalizePublicOrigin,
 } from "@fray-ui/server/local-origin";
 import { readBootProgress } from "@fray-ui/server/boot-progress";
 import { frayPaths, projectStateDir } from "@fray-ui/server/fray-paths";
@@ -66,6 +67,8 @@ export interface CliOptions {
   host?: string;
   /** `--allowed-host` values: DNS names a browser may use once the port is off loopback. */
   allowedHosts: string[];
+  /** `--public-origin`: the serialized origin of a reverse proxy or tunnel fronting this board. */
+  publicOrigin?: string;
   /** Optional Git repository to serve. Defaults to the caller's current directory. */
   repoPath?: string;
 }
@@ -139,6 +142,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   const args = new Set(argv);
   let rawPort: string | undefined;
   let rawHost: string | undefined;
+  let rawPublicOrigin: string | undefined;
   const rawAllowedHosts: string[] = [];
   let repoPath: string | undefined;
   const consumed = new Set<number>();
@@ -181,6 +185,18 @@ export function parseCliArgs(argv: string[]): CliOptions {
       rawAllowedHosts.push(arg.slice("--allowed-host=".length));
       continue;
     }
+    if (arg === "--public-origin") {
+      const value = argv[++index];
+      if (value === undefined || value.startsWith("-"))
+        throw new Error("--public-origin requires a value");
+      consumed.add(index);
+      rawPublicOrigin = value;
+      continue;
+    }
+    if (arg.startsWith("--public-origin=")) {
+      rawPublicOrigin = arg.slice("--public-origin=".length);
+      continue;
+    }
     if (arg.startsWith("-")) continue;
     if (repoPath !== undefined)
       throw new Error("provide at most one repository path");
@@ -207,6 +223,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     "--port",
     "--host",
     "--allowed-host",
+    "--public-origin",
     "--debug",
   ]);
   for (let index = 0; index < argv.length; index++) {
@@ -216,7 +233,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
       index++;
       continue;
     }
-    if (arg.startsWith("--port=") || arg.startsWith("--host=") || arg.startsWith("--allowed-host=")) continue;
+    if (arg.startsWith("--port=") || arg.startsWith("--host=") || arg.startsWith("--allowed-host=") || arg.startsWith("--public-origin=")) continue;
     if (!arg.startsWith("-") && arg === repoPath) continue;
     if (!known.has(arg)) throw new Error(`unknown option: ${arg}`);
   }
@@ -237,6 +254,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     port,
     host,
     allowedHosts: normalizeAllowedHosts(rawAllowedHosts),
+    ...(rawPublicOrigin === undefined ? {} : { publicOrigin: normalizePublicOrigin(rawPublicOrigin) }),
     repoPath,
   };
 }
@@ -250,6 +268,16 @@ export function parseCliArgs(argv: string[]): CliOptions {
 export const EXPOSED_WARNING =
   "Anyone who can reach this address can run commands on this machine as you. Fray has no login — only do this on a network you trust.";
 
+/**
+ * Printed whenever `--public-origin` puts the board behind a proxy the operator named.
+ *
+ * A tunnel usually terminates on the public internet, which is a different and much larger blast
+ * radius than a LAN. Fray still has no login of its own, so the authenticator in front is not an
+ * optional hardening step — it is the entire access control, and saying so is the point of this line.
+ */
+export const PUBLIC_ORIGIN_WARNING =
+  "Fray has no login of its own, so whatever sits in front of this origin IS the access control. Require authentication there (Cloudflare Access, Tailscale) — an unauthenticated tunnel lets anyone with the URL run commands on this machine as you.";
+
 export interface BindSelection {
   /** Address the public port binds. Always a literal address `listen()` accepts. */
   host: string;
@@ -257,6 +285,8 @@ export interface BindSelection {
   exposed: boolean;
   /** DNS names accepted as this server's browser authority while exposed. */
   allowedHosts: string[];
+  /** Serialized origin of a proxy/tunnel fronting the board, or undefined when none was declared. */
+  publicOrigin?: string;
 }
 
 /**
@@ -267,7 +297,7 @@ export interface BindSelection {
  * the awkward part.
  */
 export function resolveBindSelection(
-  options: Pick<CliOptions, "host" | "allowedHosts">,
+  options: Pick<CliOptions, "host" | "allowedHosts" | "publicOrigin">,
   env: NodeJS.ProcessEnv = process.env
 ): BindSelection {
   const fromEnv = env.FRAY_HOST?.trim();
@@ -276,7 +306,11 @@ export function resolveBindSelection(
     ...options.allowedHosts,
     ...(env.FRAY_ALLOWED_HOSTS ? [env.FRAY_ALLOWED_HOSTS] : []),
   ]);
-  return { host, exposed: bindHostIsExposed(host), allowedHosts };
+  // Deliberately independent of `host`: a tunnel runs on this machine and dials the loopback port, so
+  // the whole point of naming one is reaching the board from anywhere WITHOUT also putting it on the LAN.
+  const publicOriginRaw = options.publicOrigin ?? env.FRAY_PUBLIC_ORIGIN?.trim();
+  const publicOrigin = publicOriginRaw ? normalizePublicOrigin(publicOriginRaw) : undefined;
+  return { host, exposed: bindHostIsExposed(host), allowedHosts, ...(publicOrigin ? { publicOrigin } : {}) };
 }
 
 /**
@@ -329,6 +363,7 @@ Options:
   --port <port>          request a fixed port for a new workspace server
   --host [address]       serve on a network address instead of loopback (bare --host means 0.0.0.0)
   --allowed-host <name>  with --host, also accept this DNS name as the board's address (repeatable)
+  --public-origin <url>  serve behind a proxy/tunnel reachable at this exact origin
   --debug                stream the full event feed to the terminal instead of the compact readout
   --status               report this workspace's stable server and artifact
   --stop                 stop this workspace's UI supervisor (agents keep running)
@@ -337,6 +372,7 @@ Options:
 Environment:
   FRAY_HOST              same as --host
   FRAY_ALLOWED_HOSTS     same as --allowed-host, comma separated
+  FRAY_PUBLIC_ORIGIN     same as --public-origin
 
 Commands:
   build                  build a new immutable candidate from the configured Fray source checkout
@@ -346,6 +382,10 @@ Commands:
 --host puts a board that can run shell commands as you on the network, and Fray has no login: anyone
 who reaches the port controls it. Only do this on a network you trust. An IP address works as-is; to
 reach the board by DNS name you must list that name with --allowed-host ("*" allows any).
+
+--public-origin serves the board through a tunnel or reverse proxy without putting it on the LAN
+at all — Fray stays on loopback and the tunnel dials it. Fray still has no login, so require
+authentication at the proxy: with Cloudflare Access, that is the whole of your access control.
 
 An immutable artifact is the default. --dev is the only explicit unsafe source watcher/HMR mode.
 `;

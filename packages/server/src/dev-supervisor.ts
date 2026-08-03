@@ -83,6 +83,8 @@ export interface DevSupervisorOptions {
   host?: string
   /** DNS names a browser may use as this server's authority once `host` is not loopback. */
   allowedHosts?: readonly string[]
+  /** Serialized origin of a proxy/tunnel fronting the public port (`--public-origin`). */
+  publicOrigin?: string
   launchTarget: ProjectLaunchTarget
   launchOwnerToken: string
   cwd?: string
@@ -475,6 +477,7 @@ class Supervisor implements DevSupervisor {
       port: opts.port,
       host: opts.host,
       allowedHosts: opts.allowedHosts,
+      publicOrigin: opts.publicOrigin,
       childPort: () => this.childPort,
       restart: () => this.restartFromBrowser(),
       updateRestart: this.updateRestart ? () => this.updateFromBrowser() : undefined,

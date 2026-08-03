@@ -28,6 +28,7 @@ import {
   acquireGlobalLaunchLock,
   allocatePort,
   EXPOSED_WARNING,
+  PUBLIC_ORIGIN_WARNING,
   expectedOwnerHealth,
   FIRST_ARTIFACT_LAUNCH_LOCK_TIMEOUT_MS,
   helpText,
@@ -372,6 +373,7 @@ async function runSupervisor(
       port,
       host: bind.host,
       allowedHosts: bind.allowedHosts,
+      ...(bind.publicOrigin ? { publicOrigin: bind.publicOrigin } : {}),
       cwd: workspace.root,
       env: supervisorEnv,
       stateDir: workspace.stateDir,
@@ -557,21 +559,28 @@ async function openOrPrint(port: number, reused: boolean): Promise<void> {
     readout?.settle("browser", "done", url);
   }
 
-  // A reuse did not choose this server's bind address, so it must not claim to have exposed it.
+  // A reuse did not choose this server's bind address or its proxy origin, so it must not claim either.
   const network = reused ? [] : networkUrls(port, bind.host);
+  const publicOrigin = reused ? undefined : bind.publicOrigin;
+  const warnings = [
+    ...(network.length > 0 ? [EXPOSED_WARNING] : []),
+    ...(publicOrigin ? [PUBLIC_ORIGIN_WARNING] : []),
+  ];
   if (!readout) {
     // `--status`, internal launches and pipes keep the plain, parseable records.
     console.log(`${reused ? "reusing" : "started"} Fray for ${workspace.root}`);
     console.log(`source: ${sourceLabel()}`);
     console.log(url);
     for (const address of network) console.log(address);
-    if (network.length > 0) console.log(EXPOSED_WARNING);
+    if (publicOrigin) console.log(publicOrigin);
+    for (const warning of warnings) console.log(warning);
     return;
   }
   readout.ready(
     [
       { label: "Local", value: `${url}/`, accent: true },
       ...network.map((address) => ({ label: "Network", value: `${address}/`, accent: true })),
+      ...(publicOrigin ? [{ label: "Public", value: `${publicOrigin}/`, accent: true }] : []),
       { label: "Project", value: `${workspace.name} — ${tildePath(workspace.root, home)}` },
       { label: "Source", value: tildePath(sourceLabel(), home) },
       ...(logger.file ? [{ label: "Logs", value: tildePath(logger.file, home) }] : []),
@@ -585,7 +594,7 @@ async function openOrPrint(port: number, reused: boolean): Promise<void> {
         : `press ctrl-c to stop · run with --debug for the full event feed`,
     {
       ...(reused ? { status: `already running on port ${port}` } : {}),
-      ...(network.length > 0 ? { warning: EXPOSED_WARNING } : {}),
+      ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
     }
   );
 }

@@ -7,6 +7,7 @@ import {
   allowedLocalCorsOrigin,
   authoritySendsFetchMetadata,
   bindHostIsExposed,
+  FORWARDED_HEADERS,
   isTrustedLocalHttpRequest,
   LOOPBACK_BIND_HOST,
   parseLocalHost,
@@ -36,6 +37,8 @@ export interface RestartSupervisorProxyOptions {
   host?: string
   /** DNS names a browser may use as this server's authority once `host` is not loopback. */
   allowedHosts?: readonly string[]
+  /** Serialized origin of a reverse proxy fronting this port (`--public-origin`), if the operator named one. */
+  publicOrigin?: string
   /** The current disposable child. Undefined means it is starting, stopped, or failed. */
   childPort: () => number | undefined
   /** Must coalesce work itself or return the same in-flight promise for repeat requests. */
@@ -89,6 +92,10 @@ function proxyHeaders(
   // private child authority; no external proxy authority is ever trusted.
   headers.host = `127.0.0.1:${childPort}`
   if (typeof headers.origin === "string") headers.origin = `http://127.0.0.1:${childPort}`
+  // Whatever a fronting proxy claimed about the caller has already been judged here, and the child
+  // refuses these outright — it has no --public-origin policy of its own and must not grow one, since
+  // the rewrite above means it can no longer see who really called. Forwarding them 403s every request.
+  for (const name of FORWARDED_HEADERS) delete headers[name]
   // The browser could not stamp this one (see RestartSupervisorProxy.vouchesSameOrigin), and the
   // proxy has already checked what the stamp would have proved. Supply it so the child's own
   // missing-Origin rules keep working instead of refusing the app's every read.
@@ -127,7 +134,11 @@ export class RestartSupervisorProxy {
   constructor(options: RestartSupervisorProxyOptions) {
     this.options = options
     this.host = options.host ?? LOOPBACK_BIND_HOST
-    this.policy = { exposed: bindHostIsExposed(this.host), allowedHosts: options.allowedHosts ?? [] }
+    this.policy = {
+      exposed: bindHostIsExposed(this.host),
+      allowedHosts: options.allowedHosts ?? [],
+      ...(options.publicOrigin ? { publicOrigin: options.publicOrigin } : {}),
+    }
   }
 
   async listen(): Promise<void> {
@@ -168,13 +179,17 @@ export class RestartSupervisorProxy {
    * must be no Origin at all (a present one still has to match, and is rejected above if it does not),
    * and loopback traffic is never touched, so the default posture keeps the real Sec-Fetch signal.
    *
+   * The condition is `authoritySendsFetchMetadata`, not "is the bind address exposed", because those
+   * two came apart with `--public-origin`: a tunnelled board stays on loopback yet is reached at a
+   * name. An https proxy origin is potentially trustworthy, so the real signal survives and this
+   * never fires for it; a plain-http one is in the same boat as a LAN address and needs the vouch.
+   *
    * What this gives up, stated plainly: on an exposed board a cross-site GET carries no Origin and no
    * Fetch Metadata, so it is indistinguishable from the app's own read and is allowed. The response is
    * still opaque to the caller (no CORS), Fray's GET procedures are reads, and every mutation is a POST
    * — which a browser always stamps with an Origin, and which is therefore still refused.
    */
   private vouchesSameOrigin(req: IncomingMessage): boolean {
-    if (!this.policy.exposed) return false
     if (req.headers.origin !== undefined || req.headers["sec-fetch-site"] !== undefined) return false
     const host = parseLocalHost(req.headers.host, this.options.port, this.policy)
     return !!host && !authoritySendsFetchMetadata(host)

@@ -113,16 +113,22 @@ Options:
   --port <port>          request a fixed port for a new workspace server
   --host [address]       serve on a network address instead of loopback (bare --host means 0.0.0.0)
   --allowed-host <name>  with --host, also accept this DNS name as the board's address (repeatable)
+  --public-origin <url>  serve behind a proxy/tunnel reachable at this exact origin
   --debug                stream the full event feed to the terminal instead of the compact readout
   -h, --help             show this help
 
 Environment:
   FRAY_HOST              same as --host
   FRAY_ALLOWED_HOSTS     same as --allowed-host, comma separated
+  FRAY_PUBLIC_ORIGIN     same as --public-origin
 
 --host puts a board that can run shell commands as you on the network, and Fray has no login: anyone
 who reaches the port controls it. Only do this on a network you trust. An IP address works as-is; to
 reach the board by DNS name you must list that name with --allowed-host ("*" allows any).
+
+--public-origin serves the board through a tunnel or reverse proxy without putting it on the LAN
+at all — Fray stays on loopback and the tunnel dials it. Fray still has no login, so require
+authentication at the proxy: with Cloudflare Access, that is the whole of your access control.
 ```
 
 <h2 align="center">FAQ</h2>
@@ -163,6 +169,21 @@ npx frayui --host 192.168.1.5  # one interface
 Fray prints the addresses to use and warns you as it starts. Reaching it by IP works as-is; reach it by name and you have to say so — `--host --allowed-host fray.local` — because an unlisted name is how DNS rebinding gets a browser to treat an attacker's page as same-origin with your board. `FRAY_HOST` and `FRAY_ALLOWED_HOSTS` do the same thing when the launch command lives in an image or a unit file.
 
 Understand what you're turning on. Fray has no login: reaching the port *is* the authorization, and the board runs shell commands as you. Only do this on a network you trust, and prefer a tunnel (`ssh -L 4922:127.0.0.1:4922 you@box`, using the port Fray printed, the same on both ends) if you just want your own board from your own laptop — that needs no flag at all.
+
+**Can I reach it from anywhere, not just my LAN?**
+
+Yes — put it behind a tunnel and tell Fray the address the tunnel answers on, with `--public-origin`:
+
+```sh
+npx frayui --public-origin https://fray.example.com
+cloudflared tunnel --url http://127.0.0.1:4922   # the port Fray printed
+```
+
+Fray stays bound to `127.0.0.1` — `--public-origin` is not `--host` and does not put anything on your LAN. The tunnel runs on the same machine and dials the loopback port, so the only way in is through the tunnel. That is also what makes this the *good* remote option rather than merely a working one: the tunnel terminates TLS, so the board is a real `https://` origin and therefore a secure context, which plain `--host` over a LAN IP is not. Copy buttons and desktop notifications work again, and it works on a phone.
+
+The address you pass must be the exact origin your browser shows — scheme and host, no path. Fray accepts that one origin, and accepts `X-Forwarded-*` only on requests that actually arrived as it.
+
+**This is the part that matters: Fray has no login, so whatever you put in front of the tunnel *is* your access control.** A bare tunnel publishes a shell-capable board to the open internet for anyone who has the URL. Require authentication at the proxy — with Cloudflare, that means a [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) application over the hostname, with a policy allowing only your own email, created *before* the hostname resolves. Tailscale Serve is the same idea with device identity instead of SSO. Fray prints this warning on every launch that names a public origin, and it is not boilerplate.
 
 **What platforms does it run on?**
 

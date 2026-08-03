@@ -7,7 +7,8 @@ import type { Duplex } from "node:stream"
 // equivalent trust identities. Browser Origin serialization is canonical, so requiring the exact
 // serialized origin also rejects paths, credentials, trailing dots, and numeric-IP tricks.
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"])
-const FORWARDED_HEADERS = [
+/** Every header by which some upstream hop can assert a request's authority. Never trusted as one. */
+export const FORWARDED_HEADERS = [
   "forwarded",
   "x-forwarded-for",
   "x-forwarded-host",
@@ -32,6 +33,8 @@ export interface ParsedLocalAuthority {
   hostname: string
   port: number
   authority: string
+  /** The scheme a browser reached this authority over. `https` only via `--public-origin`. */
+  scheme: "http" | "https"
 }
 
 /**
@@ -53,6 +56,34 @@ export interface LocalAuthorityPolicy {
   exposed?: boolean
   /** DNS names accepted as this server's authority. `*` accepts any name (opt-in, never a default). */
   allowedHosts?: readonly string[]
+  /**
+   * The exact serialized origin a reverse proxy fronts this server with (`--public-origin`).
+   *
+   * This is the ONE thing that admits an `https` authority and a port that is not this server's own,
+   * because a proxy terminates TLS on 443 and forwards to a loopback port the browser never sees. It
+   * is also the only thing that tolerates `X-Forwarded-*`: those headers are somebody else's claim
+   * about who called, and Fray refuses them until the operator names the somebody.
+   */
+  publicOrigin?: string
+}
+
+/** The authority `policy.publicOrigin` describes, or null when the operator declared none. */
+function publicAuthority(policy: LocalAuthorityPolicy | undefined): ParsedLocalAuthority | null {
+  const raw = policy?.publicOrigin
+  if (!raw) return null
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return null
+  }
+  if (url.origin !== raw) return null
+  return {
+    hostname: normalizedHostname(url.hostname),
+    port: explicitPort(url),
+    authority: url.host.toLowerCase(),
+    scheme: url.protocol === "https:" ? "https" : "http",
+  }
 }
 
 /**
@@ -66,7 +97,8 @@ export interface LocalAuthorityPolicy {
  * `origin` nor a `sec-fetch-site` header, while the identical page on loopback carried both.
  */
 export function authoritySendsFetchMetadata(authority: ParsedLocalAuthority): boolean {
-  return LOCAL_HOSTNAMES.has(authority.hostname)
+  // A proxy that terminates TLS hands the browser a genuinely secure origin, so the signal comes back.
+  return LOCAL_HOSTNAMES.has(authority.hostname) || authority.scheme === "https"
 }
 
 function acceptsHostname(hostname: string, policy: LocalAuthorityPolicy | undefined): boolean {
@@ -104,6 +136,11 @@ export function parseLocalHttpOrigin(
 ): ParsedLocalAuthority | null {
   const raw = oneHeader(value)
   if (!raw || !validExpectedPort(expectedPort) || raw !== raw.trim()) return null
+  // The declared proxy origin is matched whole, against the string the operator configured. That
+  // exact comparison is the entire check: it is already a serialized origin, so nothing about its
+  // scheme, port, or spelling is inferred here.
+  const declared = publicAuthority(policy)
+  if (declared && raw === policy?.publicOrigin) return declared
   let url: URL
   try {
     url = new URL(raw)
@@ -115,7 +152,7 @@ export function parseLocalHttpOrigin(
   if (url.protocol !== "http:" || url.origin !== raw) return null
   const hostname = normalizedHostname(url.hostname)
   if (!acceptsHostname(hostname, policy) || explicitPort(url) !== expectedPort) return null
-  return { hostname, port: expectedPort, authority: url.host }
+  return { hostname, port: expectedPort, authority: url.host, scheme: "http" }
 }
 
 /** Parse an HTTP Host authority independently of Origin; forwarded headers are never authority here. */
@@ -137,12 +174,38 @@ export function parseLocalHost(
   if (url.username || url.password || url.pathname !== "/" || url.search || url.hash) return null
   if (url.host.toLowerCase() !== raw.toLowerCase()) return null
   const hostname = normalizedHostname(url.hostname)
+  // A proxied request names the PROXY's authority, not this server's. `expectedPort` is meaningless
+  // for it — the browser reached 443 and cloudflared forwards the original Host verbatim, so the
+  // port is either absent (the scheme default) or the proxy's own. Never this server's loopback port.
+  const declared = publicAuthority(policy)
+  if (declared && hostname === declared.hostname) {
+    return url.port === "" || Number(url.port) === declared.port ? declared : null
+  }
   if (!acceptsHostname(hostname, policy) || explicitPort(url) !== expectedPort) return null
-  return { hostname, port: expectedPort, authority: url.host.toLowerCase() }
+  return { hostname, port: expectedPort, authority: url.host.toLowerCase(), scheme: "http" }
 }
 
 function hasForwardedAuthority(headers: LocalRequestHeaders): boolean {
   return FORWARDED_HEADERS.some((name) => headers[name] !== undefined)
+}
+
+/**
+ * May this request carry `X-Forwarded-*` at all?
+ *
+ * Those headers are someone else's assertion about who called, and Fray's default answer is no —
+ * it does not run behind a trusted proxy, so their presence is a laundering attempt. `--public-origin`
+ * changes the answer for exactly the requests that ARRIVED as that origin. A caller who reaches the
+ * loopback port directly and merely *claims* the proxy's authority still fails the Host check above,
+ * so naming a proxy never lets an unproxied request forge one.
+ */
+function forwardedAuthorityAllowed(
+  headers: LocalRequestHeaders,
+  host: ParsedLocalAuthority,
+  policy: LocalAuthorityPolicy | undefined,
+): boolean {
+  if (!hasForwardedAuthority(headers)) return true
+  const declared = publicAuthority(policy)
+  return !!declared && declared.hostname === host.hostname
 }
 
 /**
@@ -159,9 +222,9 @@ export function isTrustedLocalHttpRequest(
   allowMissingOrigin = false,
   policy?: LocalAuthorityPolicy,
 ): boolean {
-  if (hasForwardedAuthority(headers)) return false
   const host = parseLocalHost(headers.host, expectedPort, policy)
   if (!host) return false
+  if (!forwardedAuthorityAllowed(headers, host, policy)) return false
   if (headers.origin === undefined) return allowMissingOrigin
   const origin = parseLocalHttpOrigin(headers.origin, expectedPort, policy)
   return !!origin && host.hostname === origin.hostname && host.port === origin.port
@@ -189,10 +252,10 @@ export function isTrustedLocalWebSocketRequest(
 ): boolean {
   if (!validExpectedPort(expectedPort)) return false
   const headers = req.headers as LocalRequestHeaders
-  if (hasForwardedAuthority(headers)) return false
   const host = parseLocalHost(headers.host, expectedPort, policy)
+  if (!host || !forwardedAuthorityAllowed(headers, host, policy)) return false
   const origin = parseLocalHttpOrigin(headers.origin, expectedPort, policy)
-  return !!host && !!origin && host.hostname === origin.hostname && host.port === origin.port
+  return !!origin && host.hostname === origin.hostname && host.port === origin.port
 }
 
 /** Fray's default bind address. Nothing off this machine can reach a port bound here. */
@@ -226,6 +289,30 @@ export function normalizeBindHost(value: string): string {
 /** Does binding here put Fray on a network any other machine can reach? */
 export function bindHostIsExposed(host: string): boolean {
   return !LOOPBACK_BIND_HOSTS.has(host.trim().toLowerCase())
+}
+
+/**
+ * Validate an operator-supplied `--public-origin` / `FRAY_PUBLIC_ORIGIN` value and canonicalize it.
+ *
+ * Deliberately an ORIGIN and not a URL. A path, a query, or a trailing slash means the operator has
+ * pasted something the browser will never send as `Origin`, and the failure that produces is a blanket
+ * 403 with no explanation — far better to reject it at launch, where the message can say why.
+ */
+export function normalizePublicOrigin(value: string): string {
+  const trimmed = value.trim()
+  const invalid = (why: string) => new Error(`invalid --public-origin: ${value} (${why})`)
+  if (!trimmed) throw new Error("--public-origin requires a URL")
+  let url: URL
+  try {
+    url = new URL(trimmed)
+  } catch {
+    throw invalid("use a full URL such as https://fray.example.com")
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw invalid("only http and https are supported")
+  if (url.username || url.password) throw invalid("an origin carries no credentials")
+  if (url.pathname !== "/" || url.search || url.hash) throw invalid("an origin is a scheme and host only, with no path")
+  if (!url.hostname) throw invalid("no hostname")
+  return url.origin
 }
 
 /** Parse `--allowed-host a --allowed-host b` / `FRAY_ALLOWED_HOSTS=a,b` into a deduped lowercase list. */

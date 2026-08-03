@@ -517,3 +517,56 @@ async function eventually<T>(probe: () => T | undefined, description: string, ti
   }
   throw new Error(`timed out waiting for ${description}`)
 }
+
+test("--public-origin: a tunnelled request is accepted and reaches the child with no forwarded claims", async () => {
+  // The child keeps the strict loopback policy and refuses `x-forwarded-*` outright — it has to, since
+  // proxyHeaders has already erased who really called. So the proxy must not just ACCEPT the tunnel's
+  // request, it must strip the tunnel's headers on the way through, or every request 403s at the child.
+  const seen: Array<Record<string, string | string[] | undefined>> = []
+  const current = await listen((req, res) => {
+    seen.push(req.headers)
+    res.writeHead(200, { "content-type": "text/plain" })
+    res.end("child")
+  })
+  const port = await freePort()
+  const proxy = new RestartSupervisorProxy({
+    port,
+    publicOrigin: "https://fray.example.com",
+    childPort: () => current.port,
+    restart: async () => ({ state: "ready" }),
+  })
+  try {
+    await proxy.listen()
+    // Exactly what cloudflared sends: the browser's Host and Origin verbatim, plus its own forwarding.
+    const tunnelled = {
+      host: "fray.example.com",
+      origin: "https://fray.example.com",
+      "x-forwarded-for": "203.0.113.7",
+      "x-forwarded-proto": "https",
+      "sec-fetch-site": "same-origin",
+    }
+    assert.equal((await proxied(port, "/rpc/x", tunnelled, "POST")).status, 200)
+    const forwarded = seen.at(-1)!
+    assert.equal(forwarded.host, `127.0.0.1:${current.port}`)
+    assert.equal(forwarded.origin, `http://127.0.0.1:${current.port}`)
+    for (const name of ["x-forwarded-for", "x-forwarded-proto", "x-forwarded-host", "x-forwarded-port", "forwarded"]) {
+      assert.equal(forwarded[name], undefined, name)
+    }
+    // The board's own socket comes through the same gate.
+    assert.equal(await upgrade(port, tunnelled), "forwarded")
+
+    // The widening is exactly one origin wide. A neighbouring name, a scheme downgrade, and the
+    // loopback caller trying to borrow the tunnel's forwarding licence are all still refused.
+    assert.equal((await proxied(port, "/rpc/x", { ...tunnelled, host: "fray.example.com.evil", origin: "https://fray.example.com.evil" }, "POST")).status, 403)
+    assert.equal((await proxied(port, "/rpc/x", { ...tunnelled, origin: "http://fray.example.com" }, "POST")).status, 403)
+    assert.equal(
+      (await proxied(port, "/rpc/x", { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}`, "x-forwarded-for": "203.0.113.7" }, "POST")).status,
+      403,
+    )
+    // The operator's own tab on the box keeps working while a tunnel is declared.
+    assert.equal((await proxied(port, "/rpc/x", { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` }, "POST")).status, 200)
+  } finally {
+    await proxy.close().catch(() => undefined)
+    await current.close().catch(() => undefined)
+  }
+})
