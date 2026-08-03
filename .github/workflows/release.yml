@@ -54,8 +54,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # A release must not be the first time the tree is compiled. The full suite is deliberately NOT
-      # a gate here: it drives tmux and real provider CLIs and has never run on a CI box, so making it
-      # block publishing would break releases for reasons unrelated to the release.
+      # a gate here: it drives real provider CLIs and has never run on a CI box, so making it block
+      # publishing would break releases for reasons unrelated to the release. (It used to drive tmux
+      # too; that transport is gone.)
       - name: Typecheck
         run: pnpm run typecheck
 
