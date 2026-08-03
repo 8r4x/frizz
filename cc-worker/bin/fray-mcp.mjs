@@ -102,11 +102,15 @@ const STOP_HOOK = {
     "It fires on REST, not on a clock, so there is no interval to choose: you are re-prompted whenever " +
     "you stop, and never mid-turn. The text arrives as an ordinary user turn, VERBATIM, so write it as " +
     "an instruction to your future self.\n\n" +
-    "TWO WAYS IT ENDS, and you own both. Reply with ALLDONE on its own line and fray stops re-sending " +
-    "while that stands — the light-touch pause, which re-opens by itself the moment you say anything " +
-    "else. Or call this tool with `action: \"stop\"` to disarm it for good. A thread has AT MOST ONE " +
-    "stop hook: calling this again REPLACES it. The human sees it in the thread footer and can edit or " +
-    "switch it off there.\n\n" +
+    "TWO EXITS, AND THEY ARE DIFFERENT — this is the part to get right.\n" +
+    "  • AWAITING on its own line in a rest message SKIPS THAT ONE REST. Use it when you are parked on " +
+    "something that will come back by itself — a background shell, a sub-agent — and there is nothing to " +
+    "do until it does. The hook STAYS ARMED and your next rest is prompted as normal. It does NOT turn " +
+    "the stop hook off.\n" +
+    "  • `action: \"stop\"` on this tool DISARMS it for good. That is the one to use when the effort is " +
+    "actually finished.\n\n" +
+    "A thread has AT MOST ONE stop hook: calling this again REPLACES it. The human sees it in the thread " +
+    "footer and can edit or switch it off there.\n\n" +
     "You can only ever arm your OWN thread — there is no parameter for anyone else's.",
   inputSchema: {
     type: "object",
@@ -277,7 +281,7 @@ async function stopHook(args) {
 
   if (action === "stop") {
     await callRpc("setOwnThreadStopHook", { slug, prompt: null, enabled: false })
-    return "Stop hook disarmed. You will not be re-prompted when you come to rest."
+    return "Stop hook disarmed and cleared. You will not be re-prompted when you come to rest, and the text is gone from the thread footer."
   }
 
   const prompt = typeof args.prompt === "string" ? args.prompt.trim() : ""
@@ -289,9 +293,10 @@ async function stopHook(args) {
   return (
     "Stop hook armed — fray will send you this prompt every time you come to rest, and never mid-turn. " +
     "It replaces any stop hook this thread had before.\n\n" +
-    "To end it: reply with ALLDONE on its own line (fray goes quiet while that stands, and resumes if " +
-    "you later say anything else), or call this tool with `action: \"stop\"` to disarm it for good. The " +
-    "human can also edit or switch it off in the thread footer."
+    "To DEFER a single bump — you are waiting on a shell or a sub-agent — reply with AWAITING on its own " +
+    "line. That skips only that one rest; the hook stays armed and your next rest is prompted normally.\n" +
+    "To END it, call this tool with `action: \"stop\"`. The human can also edit or switch it off in the " +
+    "thread footer."
   )
 }
 

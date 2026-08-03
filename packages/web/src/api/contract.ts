@@ -127,7 +127,7 @@ export interface Api {
   completeThread(input: { slug: string; sessionId: string; terminateLive?: boolean }): Promise<{ needsConfirmation: boolean; hold?: CompletionHold }>
   setThreadSnooze(input: SetThreadSnoozeInput): Promise<void>
   // The OPERATOR's counterpart, armed entirely from the footer: text re-delivered at every rest until
-  // the worker answers ALLDONE. Toggle and text travel together — they are one row.
+  // the worker answers AWAITING. Toggle and text travel together — they are one row.
   setThreadStopHook(input: SetThreadStopHookInput): Promise<void>
   // The WORKER-facing counterpart, called by `mcp__fray__stop_hook` rather than by this client. Declared
   // here because rpc-contract.ts proves the two procedure NAME SETS are equal — an RPC the client cannot

@@ -1,5 +1,5 @@
 // LIVE END-TO-END: an operator's stop hook bumps a REAL resting agent at every rest, and the
-// agent's own ALLDONE stops it.
+// agent's own AWAITING stops it.
 //   nub packages/server/src/backend/_live_stop_hook.mts
 //
 // This is the proof for the feature, and the THIRD assertion is the one that matters. A stop hook
@@ -141,8 +141,8 @@ try {
   ok("the scheduler delivered a bump the moment the thread was at rest",
     delivered.length === 1 && delivered[0].includes("checklist"),
     `${delivered.length} delivered`)
-  ok("…carrying the operator's words first and the ALLDONE trailer after",
-    delivered[0]?.startsWith("There is a checklist") && delivered[0]?.includes("ALLDONE"),
+  ok("…carrying the operator's words first and the AWAITING trailer after",
+    delivered[0]?.startsWith("There is a checklist") && delivered[0]?.includes("AWAITING"),
     JSON.stringify(delivered[0]?.slice(0, 60) ?? ""))
 
   ok("the AGENT acted on it", await (async () => {
@@ -170,8 +170,8 @@ try {
     return false
   })(), `work file: ${JSON.stringify(lines())}`)
 
-  // ---- 3. THE ASSERTION THAT MATTERS: the agent's own ALLDONE stops the loop ----------------------
-  // Nothing is left on the checklist, so the next bump must draw an ALLDONE — and once the fold sees
+  // ---- 3. THE ASSERTION THAT MATTERS: the agent's own AWAITING stops the loop ----------------------
+  // Nothing is left on the checklist, so the next bump must draw an AWAITING — and once the fold sees
   // it, further ticks must deliver NOTHING even though the row is still armed and enabled.
   ok("the thread came to rest again", await restBy(120_000))
   arm()
@@ -183,11 +183,11 @@ try {
     while (Date.now() < by) {
       await sleep(3_000)
       tailer.tick()
-      if (tailer.get(slug)?.lastAssistantAllDone) return true
+      if (tailer.get(slug)?.lastAssistantAwaiting) return true
     }
     return false
   })()
-  ok("the agent answered ALLDONE once the checklist was exhausted", closed,
+  ok("the agent answered AWAITING once the checklist was exhausted", closed,
     `lastAssistant=${JSON.stringify(tailer.get(slug)?.lastAssistant?.slice(0, 80) ?? "")}`)
 
   // Re-arm (fresh generation, no rate floor) and pump hard: a stop hook that keeps firing past
@@ -199,7 +199,7 @@ try {
     await scheduler.tick()
     await sleep(2_000)
   }
-  ok("…and fray delivered NOTHING further while that ALLDONE stood",
+  ok("…and fray delivered NOTHING further while that AWAITING stood",
     delivered.length === beforeQuiet,
     `${delivered.length - beforeQuiet} bump(s) after the sentinel`)
   ok("the work file holds exactly one line per bump acted on — no runaway",

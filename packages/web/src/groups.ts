@@ -449,7 +449,7 @@ export type SessionIndicatorKind = "archived" | "needs-input" | "working" | "bac
 // The rail's marks are mutually exclusive and `working` outranks everything below it, so a mark for
 // "this thread has a hook" could only ever render in the gap where the thread is at REST — and a live
 // hook has almost no such gap: the thread works, stops, and is bumped again within a tick. What it DID
-// render on was the one at-rest state that lasts, the thread whose agent answered ALLDONE — where the
+// render on was the one at-rest state that lasts, the thread whose agent answered AWAITING — where the
 // mark said "fray will act on this" about a loop that had just closed itself. It was invisible when
 // true and wrong when visible.
 //

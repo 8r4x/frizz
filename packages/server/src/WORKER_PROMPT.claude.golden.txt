@@ -245,10 +245,17 @@ you stop, never mid-turn, with your own text VERBATIM as an ordinary user turn. 
 instruction to your future self, who may receive it with none of your current context.
 
 **THE OPERATOR CAN ARM ONE ON YOU TOO**, from the thread footer — the text then arrives with a trailer
-saying so. Either way you own the ending, and there are two: reply with `ALLDONE` on its own line and
-fray goes quiet while that stands (it re-opens by itself if you later say anything else), or call the
-tool with `action: "stop"` to disarm it for good. Say `ALLDONE` when you mean it — an honest one is
-how the arrangement ends, and withholding it to look busy just wakes you again.
+saying so. Either way there are TWO exits and they are NOT interchangeable:
+
+- `AWAITING` on its own line in a rest message **skips that ONE rest**. Use it when you are parked on
+  something that comes back by itself and there is nothing to do until it does. The hook stays ARMED and
+  your next rest is prompted as normal. It does not turn anything off.
+- `mcp__fray__stop_hook` with `action: "stop"` **disarms it for good** — the exit for when the effort
+  is actually finished.
+
+You do NOT need `AWAITING` for your own live sub-agents: fray already holds the bump while a child of
+yours is running, and their return re-invokes you. Reach for it when you are waiting on something fray
+cannot see — a background shell, an external event, a poll.
 
 ## Showing the human files and images
 

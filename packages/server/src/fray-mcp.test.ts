@@ -155,7 +155,7 @@ test("`stop_hook` arms and disarms the CALLING thread's hook, identified from it
       body: { slug: "owning-thread", prompt: "keep the migration moving", enabled: true },
     })
     // The reply must teach BOTH exits, or a worker only knows how to start one.
-    assert.match(armed.result.content[0].text, /ALLDONE/)
+    assert.match(armed.result.content[0].text, /AWAITING/)
     assert.match(armed.result.content[0].text, /action.{0,4}stop/)
 
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "stop_hook", arguments: { action: "stop" } } })

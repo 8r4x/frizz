@@ -1,13 +1,13 @@
 // The stop hook's two SERVER-side invariants (scheduler.ts SOURCE 5), each of which is a way the
 // feature could silently loop forever or silently stop:
 //
-//   1. the fold's sentinel lifecycle — ALLDONE only means "nothing actionable" while it is the FINAL
+//   1. the fold's sentinel lifecycle — AWAITING only means "nothing actionable" while it is the FINAL
 //      word, so a later message that omits it must re-open the loop by itself;
 //   2. the row's GENERATION — editing the text supersedes a bump already queued for the old words,
 //      while merely toggling off and on must NOT (that would re-send a bump the operator watched land).
 //
 // The end-to-end proof that a real agent is bumped at rest, bumped again at its NEXT rest, and left
-// alone once it answers ALLDONE lives in backend/_live_stop_hook.mts — a live probe, not a unit
+// alone once it answers AWAITING lives in backend/_live_stop_hook.mts — a live probe, not a unit
 // test, because the only thing worth asserting there is what a real worker does.
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -16,7 +16,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { createStorage, type SessionRow } from "./storage.ts"
-import { applyEvent, applyRecord, newTailState } from "./tailer.ts"
+import { applyEvent, applyRecord, newTailState, type SessionTelemetry, type Tailer } from "./tailer.ts"
+import { createScheduler } from "./scheduler.ts"
 
 const assistant = (text: string, at = "2026-08-02T00:00:01.000Z") => ({
   type: "assistant",
@@ -24,36 +25,36 @@ const assistant = (text: string, at = "2026-08-02T00:00:01.000Z") => ({
   message: { stop_reason: "end_turn", content: [{ type: "text", text }] },
 })
 
-test("fold: ALLDONE on the final assistant message sets the flag; the next message without it clears it", () => {
+test("fold: AWAITING on the final assistant message sets the flag; the next message without it clears it", () => {
   const s = newTailState("t", "sid", "/x")
-  applyRecord(s, assistant("Checked the queue — nothing to pick up.\n\nALLDONE"))
-  assert.equal(s.lastAssistantAllDone, true)
+  applyRecord(s, assistant("Checked the queue — nothing to pick up.\n\nAWAITING"))
+  assert.equal(s.lastAssistantAwaiting, true)
   // The loop re-opens purely from the fold: a later rest message that does not carry the sentinel is
   // an agent that has something to say again, and nothing had to be stored or cleared to notice.
   applyRecord(s, assistant("Actually the build just broke — looking at it.", "2026-08-02T00:00:02.000Z"))
-  assert.equal(s.lastAssistantAllDone, false)
+  assert.equal(s.lastAssistantAwaiting, false)
 })
 
-test("fold: any user record supersedes a standing ALLDONE — the operator's next word re-opens the loop", () => {
+test("fold: any user record supersedes a standing AWAITING — the operator's next word re-opens the loop", () => {
   const s = newTailState("t", "sid", "/x")
-  applyRecord(s, assistant("ALLDONE"))
-  assert.equal(s.lastAssistantAllDone, true)
+  applyRecord(s, assistant("AWAITING"))
+  assert.equal(s.lastAssistantAwaiting, true)
   applyRecord(s, {
     type: "user",
     timestamp: "2026-08-02T00:00:03.000Z",
     message: { content: [{ type: "text", text: "one more thing" }] },
   })
-  assert.equal(s.lastAssistantAllDone, false)
+  assert.equal(s.lastAssistantAwaiting, false)
 })
 
 // The normalized (codex) path folds the same fact off its own event union, so a codex thread must not
 // be a thread whose stop hook can never be closed.
-test("fold: the normalized event path derives ALLDONE from the final text too", () => {
+test("fold: the normalized event path derives AWAITING from the final text too", () => {
   const s = newTailState("t", "sid", "/x")
-  applyEvent(s, { kind: "turn-end", at: "2026-08-02T00:00:01.000Z", finalText: "Nothing to do here.\nALLDONE" })
-  assert.equal(s.lastAssistantAllDone, true)
+  applyEvent(s, { kind: "turn-end", at: "2026-08-02T00:00:01.000Z", finalText: "Nothing to do here.\nAWAITING" })
+  assert.equal(s.lastAssistantAwaiting, true)
   applyEvent(s, { kind: "user-message", at: "2026-08-02T00:00:02.000Z", text: "go on", synthetic: false })
-  assert.equal(s.lastAssistantAllDone, false)
+  assert.equal(s.lastAssistantAwaiting, false)
 })
 
 function fixture() {
@@ -301,4 +302,95 @@ test("storage: the worker path keeps the generation on a re-arm with the SAME te
   } finally {
     f.close()
   }
+})
+
+// ---- What HOLDS a bump ---------------------------------------------------------------------------
+// Two things stop a bump without disarming anything, and both are easy to get wrong in opposite
+// directions: hold too little and fray interrupts a wait the worker deliberately entered; hold too much
+// and an armed hook goes silent forever with nothing on any surface to say why. These drive the REAL
+// scheduler pass over a REAL storage, with only the tailer stubbed (it is the input being varied).
+function scheduler(tele: Partial<SessionTelemetry>) {
+  const dir = mkdtempSync(join(tmpdir(), "fray-hold-"))
+  const storage = createStorage(join(dir, "ui.db"))
+  const slug = "hooked"
+  storage.upsertSession({
+    slug, session_id: "sid", tmux_name: `fray-${slug}`, spawned_at: new Date().toISOString(),
+    last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
+    title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+  } as SessionRow)
+  storage.setStopHookBySlug(slug, "keep going", true, new Date().toISOString())
+  const delivered: string[] = []
+  const s = createScheduler({
+    storage,
+    tailer: {
+      get: () => ({
+        turn: "idle", lastActivityAt: "2026-08-02T00:00:00.000Z",
+        subAgents: [], bgShells: [], pendingQuestion: false, permPrompt: false,
+        ...tele,
+      }),
+    } as unknown as Tailer,
+    resume: async (_slug, message) => { delivered.push(message) },
+    log: () => {},
+  })
+  return { s, delivered, close: () => { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) } }
+}
+
+const child = (state: "running" | "stale" | "rested") =>
+  ({ label: "worker", startedAt: "2026-08-02T00:00:00.000Z", state, id: `t-${state}` })
+
+test("scheduler: a thread resting on its OWN running sub-agent is NOT bumped", async () => {
+  const h = scheduler({ subAgents: [child("running")] as SessionTelemetry["subAgents"] })
+  try {
+    await h.s.tick()
+    assert.deepEqual(h.delivered, [], "the child's return will re-invoke it; the bump would interrupt a deliberate wait")
+  } finally { h.close() }
+})
+
+test("scheduler: a `rested` child still holds the bump — its own fan-out is still out there", async () => {
+  const h = scheduler({ subAgents: [child("rested")] as SessionTelemetry["subAgents"] })
+  try {
+    await h.s.tick()
+    assert.deepEqual(h.delivered, [])
+  } finally { h.close() }
+})
+
+// The one that keeps the hook from becoming a silent no-op. `stale` is the tailer's documented fallback
+// for "we missed the completion — the child died, or the session ended before the notification landed",
+// so the parent is parked behind something that is probably never coming back. That is exactly the
+// thread a stop hook exists to rescue.
+test("scheduler: a STALE child does NOT hold the bump — that is the thread most in need of one", async () => {
+  const h = scheduler({ subAgents: [child("stale")] as SessionTelemetry["subAgents"] })
+  try {
+    await h.s.tick()
+    assert.equal(h.delivered.length, 1, "a probably-dead child must not silence the hook forever")
+    assert.match(h.delivered[0], /keep going/)
+  } finally { h.close() }
+})
+
+// A background shell can run for hours and the worker may have moved on from it, so it is deliberately
+// not a hold — a forgotten `tail -f` must not mute an armed hook. AWAITING is the worker's tool there.
+test("scheduler: a live background SHELL does not hold the bump", async () => {
+  const h = scheduler({
+    bgShells: [{ label: "vite dev", startedAt: "2026-08-02T00:00:00.000Z", state: "running", id: "s1" }] as SessionTelemetry["bgShells"],
+  })
+  try {
+    await h.s.tick()
+    assert.equal(h.delivered.length, 1)
+  } finally { h.close() }
+})
+
+test("scheduler: AWAITING on the final message holds the bump, and nothing else does", async () => {
+  const held = scheduler({ lastAssistantAwaiting: true })
+  try {
+    await held.s.tick()
+    assert.deepEqual(held.delivered, [])
+  } finally { held.close() }
+
+  // The SAME thread, one rest later, having said something else: bumped as normal. This is the whole
+  // per-rest claim — nothing was stored when it deferred, so nothing has to be cleared to resume.
+  const resumed = scheduler({ lastAssistantAwaiting: false })
+  try {
+    await resumed.s.tick()
+    assert.equal(resumed.delivered.length, 1)
+  } finally { resumed.close() }
 })

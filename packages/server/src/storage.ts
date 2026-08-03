@@ -675,7 +675,7 @@ export function createStorage(dbPath: string): Storage {
     "claude_runtime TEXT",
     // The OPERATOR's stop hook (scheduler.ts SOURCE 5). Armed from the thread
     // footer's popover; delivered every time the thread comes to REST until the worker replies with
-    // the ALLDONE sentinel. No interval column — "rest" is the trigger.
+    // the AWAITING sentinel. No interval column — "rest" is the trigger.
     "stop_hook TEXT",
     "stop_hook_enabled INTEGER NOT NULL DEFAULT 0",
     "stop_hook_armed_at TEXT",

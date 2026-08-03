@@ -362,22 +362,36 @@ export type SnoozePrompt = z.infer<typeof SnoozePrompt>
 // the hook it behaves like: fray catches the worker coming to rest and hands it this. There is no
 // interval and no cadence to choose — the trigger is the stop itself.
 //
-// It ends when the WORKER says it ends: a rest message carrying the sentinel below means "nothing here
-// is actionable", and fray stops re-sending until something new happens. That handshake is the whole
-// design — an operator instruction that loops forever with no way for the agent to close it out is a
-// denial of service with a nice popover.
+// THERE ARE TWO WAYS OUT, and they are NOT the same, which is the single most important thing this
+// file has to make unmistakable:
+//
+//   1. `AWAITING` on a rest message SKIPS THAT ONE REST. It is what a worker says when it is parked on
+//      something that will come back on its own — a background shell, a sub-agent — and there is
+//      nothing to do until it does. The hook stays armed. The very next rest is bumped normally.
+//   2. `mcp__fray__stop_hook` with `action: "stop"`, or the operator's toggle, DISARMS it for good.
+//
+// The sentinel used to be called ALLDONE, and that name taught the wrong one: it reads as "this effort
+// is finished", so a worker waiting twenty minutes on a test run would say it to mean "nothing to do
+// right now" and could just as easily believe it had switched the whole arrangement off. AWAITING says
+// what it actually does — I am waiting, skip me this time (maintainer 2026-08-02).
+//
+// The per-rest scope is not enforced by any stored state, which is why it cannot drift: the flag is
+// folded off the FINAL assistant message, so it lasts exactly as long as that message is the final one.
 export const STOP_HOOK_MAX = SNOOZE_PROMPT_MAX
 export const StopHookPrompt = z.string().trim().min(1).max(STOP_HOOK_MAX)
 export type StopHookPrompt = z.infer<typeof StopHookPrompt>
 
-/** The worker's "nothing actionable here" reply. Recognized only as its OWN line (see
- * `saysAllDone`), so a worker explaining the protocol in prose never accidentally closes the loop. */
-export const STOP_HOOK_SENTINEL = "ALLDONE"
+/** The worker's "I am parked on something, skip this rest" reply. Recognized only as its OWN line (see
+ * `saysAwaiting`), so a worker explaining the protocol in prose never accidentally suppresses a bump. */
+export const STOP_HOOK_SENTINEL = "AWAITING"
 
-/** Does this assistant text close the stop-hook loop? True iff some line, stripped of markdown
- * emphasis/backticks and trailing punctuation, IS the sentinel. Deliberately strict: the cost of a
- * false positive is a silent stop hook, and the cost of a false negative is one more bump. */
-export function saysAllDone(text: string | undefined): boolean {
+/** Does this assistant text defer its stop-hook bump? True iff some line, stripped of markdown
+ * emphasis/backticks and trailing punctuation, IS the sentinel.
+ *
+ * CASE-SENSITIVE, which is load-bearing now that the word is `AWAITING`: fray's own signal-fence
+ * grammar opens with ```awaiting, and a worker parking on a fence writes that token constantly. Lowered
+ * case would make every ```awaiting fence silently suppress a bump as well. */
+export function saysAwaiting(text: string | undefined): boolean {
   if (typeof text !== "string") return false
   for (const line of text.split(/\r?\n/)) {
     const bare = line.trim().replace(/^[*_`>\s-]+/, "").replace(/[*_`.!\s]+$/, "")
@@ -386,13 +400,24 @@ export function saysAllDone(text: string | undefined): boolean {
   return false
 }
 
-/** What fray actually delivers for a stop hook: the operator's words VERBATIM first, then the
- * one paragraph that teaches the loop. The trailer is not optional decoration — the operator wrote an
- * instruction, not a protocol, so without this the worker has no way to learn that repeating itself is
- * expected or that it holds the off switch. Kept beside the sentinel so the text and the parser that
- * closes on it can never drift apart. */
+/** What fray actually delivers for a stop hook: the operator's words VERBATIM first, then the one
+ * paragraph that teaches the protocol. The trailer is not optional decoration — the operator wrote an
+ * instruction, not a protocol, so without this the worker has no way to learn that being re-prompted is
+ * expected, or which of the two exits it wants. Kept beside the sentinel so the text and the parser that
+ * reads it can never drift apart.
+ *
+ * It names BOTH exits and marks the difference, because naming only the sentinel is what made a worker
+ * treat "skip this rest" and "we are finished here" as the same act. */
 export function stopHookMessage(prompt: string): string {
-  return `${prompt.trim()}\n\n(Stop hook — fray re-sends this every time you come to rest. When nothing in it is actionable any more, put ${STOP_HOOK_SENTINEL} on its own line in your reply and fray will stop re-sending it.)`
+  return [
+    prompt.trim(),
+    "",
+    `(Stop hook — fray re-sends this every time you come to rest. To skip just THIS rest, because you are`,
+    `waiting on something that will come back on its own (a background shell, a sub-agent) and there is`,
+    `nothing to do until it does, put ${STOP_HOOK_SENTINEL} on its own line. That defers ONE bump — the hook stays`,
+    `armed and your next rest is prompted as normal. To end it for good instead, call`,
+    `\`mcp__fray__stop_hook\` with \`action: "stop"\`.)`,
+  ].join("\n")
 }
 
 // What the board renders for a thread carrying one. `enabled` is the operator's toggle: disabling
@@ -1004,7 +1029,7 @@ export type SetThreadStopHookInput = z.infer<typeof SetThreadStopHookInput>
 // that server's env by fray, not supplied by the model.
 //
 // `prompt: null` is the explicit stop, which is how a worker ends its own loop deliberately rather than
-// by falling back on the ALLDONE sentinel.
+// by falling back on the AWAITING sentinel.
 export const SetOwnThreadStopHookInput = z.object({
   slug: ThreadSlug,
   prompt: StopHookPrompt.nullable(),

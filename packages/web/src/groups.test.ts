@@ -207,7 +207,7 @@ test("sessionIndicatorKind: a shell-only rest holds the running band with the do
 // Exactly right, and the mark could only ever have contradicted it. `working` outranks everything below
 // it, so a hook mark renders only in the at-rest gap — and a LIVE hook barely has one (the thread is
 // bumped again within a tick of stopping). The at-rest state that does last is the thread whose agent
-// answered ALLDONE, i.e. the loop that just CLOSED. The mark was invisible while the hook was doing its
+// answered AWAITING, i.e. the loop that just CLOSED. The mark was invisible while the hook was doing its
 // job and visible only once it had stopped doing it.
 //
 // So a hooked thread's rail row is whatever it would have been anyway: spinning while it works, at rest

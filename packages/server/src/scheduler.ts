@@ -352,8 +352,8 @@ function armedSnooze(row: Pick<SessionRow, "snoozed_until" | "snooze_prompt">): 
 //
 // The loop's OFF SWITCH belongs to the worker, and it is the one part of this that is not optional. A
 // stop hook with no terminating condition is an infinite bump generator, so the delivered text carries
-// a trailer (shared `stopHookMessage`) teaching the worker to answer ALLDONE when nothing in it is
-// actionable. The tailer folds that sentinel onto the final message (`lastAssistantAllDone`) and this
+// a trailer (shared `stopHookMessage`) teaching the worker to answer AWAITING when nothing in it is
+// actionable. The tailer folds that sentinel onto the final message (`lastAssistantAwaiting`) and this
 // pass simply declines to fire while it stands — no state to write, and it re-opens by itself the
 // moment the thread produces any other final message.
 //
@@ -759,13 +759,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
     // A bump is bound to the exact stop-hook GENERATION that queued it AND to the exact REST it
     // was queued for. Disabling the toggle, editing the text, and the thread moving on to a new rest
-    // all read as supersession here — and so does an ALLDONE that landed between enqueue and delivery,
+    // all read as supersession here — and so does an AWAITING that landed between enqueue and delivery,
     // which is the case that matters: a worker that closed the loop while a bump sat in the outbox must
     // not be handed it anyway.
     if (isStopHookFenceId(item.fenceId)) {
       const armed = armedStopHook(row)
       if (!armed || item.fenceId !== stopHookFenceId(armed.armedAt, tele.lastActivityAt ?? "")) return "superseded"
-      if (tele.lastAssistantAllDone) return "superseded"
+      if (tele.lastAssistantAwaiting) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
     // A report repair is bound to a report that is STILL missing from the model's context. If the
@@ -1243,9 +1243,29 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (!armed) continue
       const tele = deps.tailer.get(row.slug)
       if (!tele || tele.turn !== "idle" || !tele.lastActivityAt) continue
-      // The worker has said there is nothing actionable left. Nothing to write and nothing to clear —
-      // the flag is folded off the final message, so the next message that omits it re-opens the loop.
-      if (tele.lastAssistantAllDone) continue
+      // A thread resting on its OWN live sub-agents is not idle in any sense the operator means. `turn`
+      // only brackets THIS session's turn, so a parent that dispatched children and came to rest reads
+      // "idle" while real work is still out there — bumping it there interrupts a wait it deliberately
+      // entered, and the child's return will re-invoke it anyway (maintainer 2026-08-02: "if there are
+      // sub-agents going, then we should skip the stop hook").
+      //
+      // `stale` children are deliberately EXCLUDED from that hold, and the distinction is the whole
+      // reason this reads states rather than counting rows. A view goes `stale` after 15 minutes with no
+      // transcript append, which the tailer documents as "a liveness fallback for a completion record we
+      // somehow missed (the child died, or the worker session ended before the <task-notification>
+      // landed)" — i.e. the parent is parked behind something that is probably never coming back. That
+      // is precisely the thread a stop hook exists to rescue, so a stale child must not be able to
+      // silence it forever.
+      //
+      // Background SHELLS are not consulted at all. A shell can legitimately run for hours (a dev
+      // server, a log tail) and the worker may have moved on from it entirely, so treating one as a hold
+      // would let a forgotten `tail -f` mute a hook permanently. A worker genuinely waiting on a shell
+      // says AWAITING, which is exactly what that sentinel is for.
+      if (tele.subAgents.some((child) => child.state === "running" || child.state === "rested")) continue
+      // The worker itself asked to skip THIS rest — it is parked on something and has nothing to do
+      // until that returns. Per-rest only: the flag is folded off the FINAL assistant message, so the
+      // next rest that omits it is bumped as normal. Nothing is written and nothing has to be cleared.
+      if (tele.lastAssistantAwaiting) continue
       const lastFired = row.stop_hook_last_fired_at ? Date.parse(row.stop_hook_last_fired_at) : NaN
       if (Number.isFinite(lastFired) && nowMs - lastFired < STOP_HOOK_MIN_GAP_MS) continue
       const fenceId = stopHookFenceId(armed.armedAt, tele.lastActivityAt)

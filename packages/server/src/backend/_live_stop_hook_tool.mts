@@ -5,7 +5,7 @@
 // The other two halves of this feature are already proven elsewhere and are NOT re-proven here:
 // fray-mcp.test.ts drives the real MCP server over real stdio and asserts the exact RPC body it emits,
 // and _live_stop_hook.mts drives a real Claude worker being bumped at rest and closing the loop with
-// ALLDONE. What neither covers is the SEAM between them — the tool's HTTP call reaching fray's real
+// AWAITING. What neither covers is the SEAM between them — the tool's HTTP call reaching fray's real
 // router and actually landing on the row — which is exactly where a wrong guard or a mistyped procedure
 // name would hide, and would look to the worker like success.
 //

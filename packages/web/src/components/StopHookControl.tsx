@@ -7,7 +7,7 @@ import { showToast } from "../store.ts"
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
 
 // The operator's half of a stop hook (server: scheduler.ts SOURCE 5) — text fray re-sends every
-// time this thread comes to REST, until the worker answers with the ALLDONE sentinel.
+// time this thread comes to REST, until the worker answers with the AWAITING sentinel.
 //
 // It replaced an interval-based, WORKER-armed version of the same idea (removed 2026-08-02), and both
 // halves of that were wrong. The operator watching a thread stop short could not arm it at all — only
@@ -161,12 +161,19 @@ export function StopHookControl({ thread }: { thread: ThreadView }) {
           // this app runs in.
           className={`field-sizing-content max-h-[42vh] min-h-[4.5rem] w-full resize-none overflow-y-auto rounded-md border border-border bg-bg px-2 py-1.5 text-[12px] leading-snug outline-none placeholder:text-muted/50 focus:border-border-strong ${enabled ? "text-fg" : "cursor-default text-muted/60"}`}
         />
-        {/* The sentinel is set in mono with NO horizontal padding: a padded chip put a visible gap
-            between the word and the full stop that follows it, which reads as a typo in a one-line
-            explanation. Weight and family carry the "this is a literal string" job on their own. */}
+        {/* What the operator needs from this line is WHEN IT WILL NOT FIRE, because that is what looks
+            broken from the outside: a hook they armed, a thread sitting still, and no bump. Both holds
+            are self-clearing and neither turns the hook off, so the line says that rather than leaving
+            them to wonder whether it is working.
+
+            The sentinel is set in mono with NO horizontal padding: a padded chip put a visible gap
+            between the word and the punctuation after it, which reads as a typo. Weight and family
+            carry the "this is a literal string" job on their own. */}
         <p className="mt-2 text-muted/70">
-          Sent every time the agent comes to rest. It stops when the agent replies{" "}
-          <code className="font-mono font-medium text-fg/85">{STOP_HOOK_SENTINEL}</code>.
+          Sent every time the agent comes to rest — but held while its sub-agents are still running, or
+          for a single rest when it replies{" "}
+          <code className="font-mono font-medium text-fg/85">{STOP_HOOK_SENTINEL}</code> to wait on
+          something. Neither turns it off; only this switch does.
         </p>
       </PopoverContent>
     </Popover>
