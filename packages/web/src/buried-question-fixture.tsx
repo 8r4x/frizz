@@ -10,7 +10,7 @@ import "./styles.css"
 
 // Browser QA for the open-tail change: a ```question the agent BURIED (it kept working after asking,
 // with no human turn in between) must stay answerable in the drawer thread view — interactive chips on
-// an ask that is NOT the last message. Renders the real Message + useLiveAnswering(multiMessage) path.
+// an ask that is NOT the last message. Renders the real Message + useLiveAnswering path.
 
 const slug = "buried-question-thread"
 const thread: ThreadView = {
@@ -22,7 +22,7 @@ const thread: ThreadView = {
 store.board = { projectDir: "/fixture/fray", threads: [thread] } as BoardSnapshot
 
 // A buried single-block ask: user request → the ask (sourceId "ask-db") → a LATER assistant work turn
-// (no human turn between) that makes the ask non-live. Under multiMessage the ask stays answerable.
+// (no human turn between) that makes the ask non-live. The ask stays answerable regardless.
 const asMsg = (m: Partial<ChatMessage> & { role: string; text: string }): ChatMessage => ({
   tools: [], parts: [{ kind: "text", text: m.text }], ...m,
 } as ChatMessage)
@@ -60,7 +60,7 @@ window.fetch = async (input, init) => {
 function Fixture() {
   // Per-message answering: each buried/open ask renders its OWN bottom Send button (Message's
   // showSendButton), scoped to just that message's blocks — no thread-level Send anymore.
-  const { answeringForMessage } = useLiveAnswering(slug, messages, undefined, { multiMessage: true })
+  const { answeringForMessage } = useLiveAnswering(slug, messages)
   const [width, setWidth] = useState(720)
   return (
     <main className="mx-auto min-h-screen w-full px-4 py-8">

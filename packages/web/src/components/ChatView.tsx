@@ -259,11 +259,11 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
   const lastUserIdx = useMemo(() => lastAskIndex(messages), [messages])
   // Client view pref: how (or whether) to pin the current ask to the pane top. `off` → no pin.
   const { stickyUserMessage } = useSnapshot(prefs)
-  // Question-block interactivity in the thread view. `multiMessage`: unlike the queue card (live ask
-  // only), the drawer keeps EVERY still-open ask answerable — scroll back to a question a sub-agent
-  // return / the agent's own continuation buried and answer it in place. answeringForMessage wires each
-  // open message's chips AND its own bottom Send button (scoped to just that message's blocks).
-  const { answeringForMessage } = useLiveAnswering(slug, messages, undefined, { multiMessage: true })
+  // Question-block interactivity in the thread view: EVERY ask stays answerable, wherever it sits —
+  // scroll back to a question a sub-agent return / the agent's own continuation buried and answer it in
+  // place. answeringForMessage wires each ask's chips AND its own bottom Send button (scoped to just
+  // that message's blocks). The queue card runs the identical scope through the same controller.
+  const { answeringForMessage } = useLiveAnswering(slug, messages)
 
   // (The SSE-mode lastActivityAt refetch effect that lived here moved into transcript-live.ts: the
   // manager applies the same activity-edge pull to EVERY observed transcript that the push channel

@@ -85,6 +85,15 @@ export function splitQuestionBlocks(text: string): MessageSegment[] {
   return segments
 }
 
+// Does this message text carry at least one live ```question block? The cheap membership test behind
+// "never collapse an ask out of view" — the queue card's intermediate-summary hides ordinary middle
+// messages, but a question is a decision the human owes, not disposable chatter, so a middle message
+// that carries one keeps its row. Goes through the real splitter so a QUOTED fence (one inside an outer
+// code block) is correctly NOT a question here either.
+export function hasQuestionBlock(text: string): boolean {
+  return text.includes("```question") && splitQuestionBlocks(text).some((s) => s.kind === "question")
+}
+
 // The parsed innards of one ```question block: the context prose (options + trailing recommendation
 // removed), the detected answer options as clickable choices, and which option (if any) is recommended.
 export interface ParsedQuestion {

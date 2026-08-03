@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { selectOpenAsks, composeAnswerWire, type AskMsgLike } from "./answering.ts"
+import { selectOpenAsks, tailAskIdx, composeAnswerWire, type AskMsgLike } from "./answering.ts"
 
 // A single ```question block message, tagged with a sourceId for identity.
 const ask = (id: string, body = "Pick one\n- A. Left\n- B. Right"): AskMsgLike => ({
@@ -13,62 +13,47 @@ const user = (text: string): AskMsgLike => ({ role: "user", text })
 const event = (text: string): AskMsgLike => ({ role: "assistant", kind: "event", text })
 const reasoning = (text: string): AskMsgLike => ({ role: "assistant", kind: "reasoning", text })
 
-test("live-only: the trailing ask is answerable", () => {
-  const open = selectOpenAsks([user("do it"), ask("q1")], false)
+test("the trailing ask is answerable", () => {
+  const open = selectOpenAsks([user("do it"), ask("q1")])
   assert.equal(open.length, 1)
   assert.equal(open[0].identity, "q1")
   assert.equal(open[0].isLive, true)
 })
 
-test("live-only: an ask the agent BURIED by continuing to work stays answerable (queue card)", () => {
+test("an ask the agent BURIED by continuing to work stays answerable", () => {
   // The agent asked, then kept working (a background wake) with no human turn between — so a no-question
-  // assistant turn now trails the ask. The ask is only BURIED, not answered, so the live-only walk scans
-  // back past the no-question turn and surfaces it. Its isLive is false (a later substantive turn exists).
-  const open = selectOpenAsks([ask("q1"), prose("meanwhile I did other work")], false)
+  // assistant turn now trails the ask. Its isLive is false (a later substantive turn exists).
+  const open = selectOpenAsks([ask("q1"), prose("meanwhile I did other work")])
   assert.equal(open.length, 1)
   assert.equal(open[0].identity, "q1")
   assert.equal(open[0].isLive, false)
 })
 
-test("live-only: with NO ask trailing the last human turn, nothing is answerable", () => {
-  // Only genuine 'no open ask' (a plain agent turn, never a question) yields empty — not a buried ask.
-  const open = selectOpenAsks([user("do it"), prose("did the work, no question")], false)
-  assert.equal(open.length, 0)
+test("a transcript with no question at all yields nothing answerable", () => {
+  assert.equal(selectOpenAsks([user("do it"), prose("did the work, no question")]).length, 0)
 })
 
-test("multiMessage: an ask buried by a later prose turn stays answerable", () => {
-  const open = selectOpenAsks([ask("q1"), prose("meanwhile I did other work")], true)
-  assert.equal(open.length, 1)
-  assert.equal(open[0].identity, "q1")
-  assert.equal(open[0].isLive, false) // buried — a later substantive assistant message exists
-})
-
-test("multiMessage: two asks with no human turn between are BOTH open; only the last is live", () => {
-  const open = selectOpenAsks([ask("q1"), prose("note"), ask("q2")], true)
+test("two asks with no human turn between are BOTH open; only the last is live", () => {
+  const open = selectOpenAsks([ask("q1"), prose("note"), ask("q2")])
   assert.deepEqual(open.map((a) => a.identity), ["q1", "q2"]) // transcript order
   assert.deepEqual(open.map((a) => a.isLive), [false, true])
 })
 
-test("live-only: a human turn AFTER the ask makes nothing answerable (queue card unchanged)", () => {
-  // The queue card (multiMessage=false) keeps the historic behavior: a later human turn = already answered.
-  assert.equal(selectOpenAsks([ask("q1"), user("actually do something else")], false).length, 0)
-})
-
-test("multiMessage TRACKS NOTHING: a question stays answerable even after a human turn (best-effort)", () => {
+test("TRACKS NOTHING: a question stays answerable even after a human turn (best-effort)", () => {
   // No 'closing' — every question in the transcript is answerable regardless of intervening human turns.
-  const open = selectOpenAsks([ask("q1"), user("actually do something else")], true)
+  const open = selectOpenAsks([ask("q1"), user("actually do something else")])
   assert.deepEqual(open.map((a) => a.identity), ["q1"])
 })
 
-test("multiMessage: ALL question-bearing messages are answerable, across human turns", () => {
-  const open = selectOpenAsks([ask("q0"), user("go"), ask("q1"), prose("work"), ask("q2")], true)
+test("ALL question-bearing messages are answerable, across human turns", () => {
+  const open = selectOpenAsks([ask("q0"), user("go"), ask("q1"), prose("work"), ask("q2")])
   assert.deepEqual(open.map((a) => a.identity), ["q0", "q1", "q2"]) // q0 (pre-human-turn) is answerable too
   assert.deepEqual(open.map((a) => a.isLive), [false, false, true]) // only the last substantive assistant
 })
 
 test("event (sub-agent completion) punctuation after an ask is skipped, not treated as a turn", () => {
   // A completion event landing after the ask must not shadow it (the same skip discipline as pairing).
-  const open = selectOpenAsks([ask("q1"), event('Agent "x" finished — 2m')], false)
+  const open = selectOpenAsks([ask("q1"), event('Agent "x" finished — 2m')])
   assert.equal(open.length, 1)
   assert.equal(open[0].isLive, true)
 })
@@ -76,23 +61,54 @@ test("event (sub-agent completion) punctuation after an ask is skipped, not trea
 test("codex 'reasoning' punctuation is skipped like an event — never the live/substantive turn", () => {
   // Codex emits a reasoning summary FIRST in a turn (role assistant, non-empty text), so it must NOT
   // become the live anchor and shadow a trailing ask. Both a leading and a trailing reasoning block skip.
-  const open = selectOpenAsks([reasoning("**Thinking about it**"), ask("q1"), reasoning("**More thought**")], false)
+  const open = selectOpenAsks([reasoning("**Thinking about it**"), ask("q1"), reasoning("**More thought**")])
   assert.equal(open.length, 1)
   assert.equal(open[0].identity, "q1")
   assert.equal(open[0].isLive, true)
 })
 
 test("tool-only / empty assistant turns are stepped over", () => {
-  const open = selectOpenAsks([ask("q1"), { role: "assistant", text: "   " }], true)
+  const open = selectOpenAsks([ask("q1"), { role: "assistant", text: "   " }])
   assert.equal(open.length, 1)
   assert.equal(open[0].identity, "q1")
 })
 
 test("legacy line without sourceId gets a deterministic content identity", () => {
-  const a = selectOpenAsks([{ role: "assistant", text: "```question\nGo?\n```" }], false)
-  const b = selectOpenAsks([{ role: "assistant", text: "```question\nGo?\n```" }], false)
+  const a = selectOpenAsks([{ role: "assistant", text: "```question\nGo?\n```" }])
+  const b = selectOpenAsks([{ role: "assistant", text: "```question\nGo?\n```" }])
   assert.equal(a[0].identity, b[0].identity)
   assert.match(a[0].identity, /^legacy-/)
+})
+
+// ---- tailAskIdx: the queue card's CHROME signal, not an answerability gate ----
+
+test("tailAskIdx: the trailing ask stands at the tail", () => {
+  assert.equal(tailAskIdx([user("do it"), ask("q1")]), 1)
+})
+
+test("tailAskIdx: an ask BURIED by the agent's own continuation still stands at the tail", () => {
+  // Buried, not answered — the agent is still waiting on the human, so the card keeps its Send action.
+  assert.equal(tailAskIdx([ask("q1"), prose("meanwhile I did other work")]), 0)
+})
+
+test("tailAskIdx: a human turn after the ask closes the tail", () => {
+  // The question REMAINS answerable (selectOpenAsks still returns it) — only the card's "waiting on you
+  // right now" chrome stands down.
+  assert.equal(tailAskIdx([ask("q1"), user("actually do something else")]), -1)
+  assert.deepEqual(selectOpenAsks([ask("q1"), user("actually do something else")]).map((a) => a.identity), ["q1"])
+})
+
+test("tailAskIdx: with no ask after the last human turn, nothing stands at the tail", () => {
+  assert.equal(tailAskIdx([user("do it"), prose("did the work, no question")]), -1)
+})
+
+test("tailAskIdx: the MOST RECENT of two stacked asks is the tail one", () => {
+  assert.equal(tailAskIdx([ask("q1"), prose("note"), ask("q2")]), 2)
+})
+
+test("tailAskIdx: punctuation after an ask is skipped, not treated as a turn", () => {
+  assert.equal(tailAskIdx([ask("q1"), event('Agent "x" finished — 2m')]), 0)
+  assert.equal(tailAskIdx([ask("q1"), reasoning("**More thought**")]), 0)
 })
 
 // ---- composeAnswerWire ----
@@ -157,12 +173,12 @@ test("buried empty-question label falls back to a non-empty string (never a bare
 
 test("two identical-text asks with no sourceId get DISTINCT identities (no state bleed)", () => {
   const dup = (): AskMsgLike => ({ role: "assistant", text: "```question\nGo?\n- A. Yes\n- B. No\n```" })
-  const open = selectOpenAsks([dup(), prose("interstitial"), dup()], true)
+  const open = selectOpenAsks([dup(), prose("interstitial"), dup()])
   assert.equal(open.length, 2)
   assert.notEqual(open[0].identity, open[1].identity) // suffixed apart, so answer keys never collide
 })
 
 test("unique-identity asks are NOT perturbed by the collision guard", () => {
-  const open = selectOpenAsks([ask("q1"), prose("x"), ask("q2")], true)
+  const open = selectOpenAsks([ask("q1"), prose("x"), ask("q2")])
   assert.deepEqual(open.map((a) => a.identity), ["q1", "q2"]) // no '#idx' suffix on distinct identities
 })

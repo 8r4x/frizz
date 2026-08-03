@@ -34,6 +34,16 @@ import "./styles.css"
 //   ?variant=dispatches  two sub-agent dispatches inside the collapsed span, one still running (tracked in
 //                      thread.subAgents) and one resolved. Same rule as background tasks: real Agent cards
 //                      under the divider, pulsing accent dot on the live one, nothing on the resolved one.
+//   ?variant=buriedask  a ```question in the MIDDLE of the run, with tool work and a closing summary after
+//                      it. Two guards at once: the ask is lifted OUT of the collapse (a decision the human
+//                      owes is not disposable chatter), and its chips are LIVE even though a newer ask is
+//                      not what the card is anchored on. Pre-fix the card offered "Send answers" with the
+//                      question nowhere on screen.
+//   ?variant=twoasks   two ```question messages stacked with work between them, neither answered. BOTH
+//                      carry live chips — the queue card used to make only the most recent one answerable.
+//   ?variant=humanpast an ask the human already replied PAST (a later user turn), then more agent work.
+//                      Under "Load earlier messages" the old ask must still take chips; the card's own
+//                      "Send answers" action stands down until one is filled (nothing stands at the tail).
 const params = new URLSearchParams(location.search)
 const variant = params.get("variant") ?? "heavy"
 
@@ -215,6 +225,55 @@ const dispatches: TranscriptMessage[] = [
   withId(asst("**Fixed** — every background lifecycle now keeps its own card.")),
 ]
 
+// A second, differently-worded ask so the stacked-question variants are readable apart at a glance.
+const engineQuestion = [
+  "```question",
+  "Before I go further — which engine should the layer target?",
+  "",
+  "- A. Postgres — matches prod (recommended).",
+  "- B. SQLite — zero setup, but no parity with prod.",
+  "```",
+].join("\n")
+
+// The ask sits in the MIDDLE of the run: the agent asked and then kept working (a background wake). The
+// collapse must lift it out (it is a decision the human owes) and its chips must be live.
+const buriedask: TranscriptMessage[] = [
+  { sourceId: "u-cur", role: "user", text: "Set up the database layer end to end.", tools: [], parts: [] },
+  withId(asst("Reading the current schema and migration setup first.", [
+    tool("Read", { detail: "packages/server/src/storage.ts", read: "…980 lines…" }),
+    tool("Grep", { detail: "migrate|schema" }),
+  ])),
+  withId(asst(engineQuestion)),
+  withId(asst("Meanwhile I wired the migrations runner so either answer lands cleanly.", [
+    tool("Edit", { detail: "packages/server/src/storage.ts" }),
+    tool("Bash", { detail: "nub --test", desc: "Running the server suite" }),
+  ])),
+  withId(asst("Runner and a connection-pool stub are in — waiting on the engine call above before I go further.")),
+]
+
+// Two unanswered asks stacked with work between them. Both must take chips.
+const twoasks: TranscriptMessage[] = [
+  { sourceId: "u-cur", role: "user", text: "Set up the database layer end to end.", tools: [], parts: [] },
+  withId(asst("Reading the current schema first.", [tool("Read", { detail: "packages/server/src/storage.ts" })])),
+  withId(asst(engineQuestion)),
+  withId(asst("Sketching the collapse label while I wait.", [tool("Edit", { detail: "components/TodosView.tsx" })])),
+  withId(asst(finalQuestion)),
+]
+
+// The human already replied PAST the ask. Nothing stands at the tail, so the card's Send action is down —
+// but the ask itself stays answerable once "Load earlier messages" brings it back on screen.
+const humanpast: TranscriptMessage[] = [
+  { sourceId: "u-old", role: "user", text: "Set up the database layer end to end.", tools: [], parts: [] },
+  withId(asst("Reading the current schema first.", [tool("Read", { detail: "packages/server/src/storage.ts" })])),
+  withId(asst(engineQuestion)),
+  { sourceId: "u-cur", role: "user", text: "Park the engine question — do the migrations runner first.", tools: [], parts: [] },
+  withId(asst("On it — runner first.", [
+    tool("Edit", { detail: "packages/server/src/storage.ts" }),
+    tool("Bash", { detail: "nub --test", desc: "Running the server suite" }),
+  ])),
+  withId(asst("Migrations runner is in and green.")),
+]
+
 const messages =
   variant === "single" ? single
   : variant === "bgshells" ? bgshells
@@ -223,6 +282,9 @@ const messages =
   : variant === "batchedends" ? batchedends
   : variant === "questionthentool" ? questionthentool
   : variant === "trailingevent" ? trailingevent
+  : variant === "buriedask" ? buriedask
+  : variant === "twoasks" ? twoasks
+  : variant === "humanpast" ? humanpast
   : heavy
 
 const thread: ThreadViewModel = {

@@ -8,6 +8,7 @@ import { rpc } from "../api/rpc.ts"
 import { useBoard, asThreads, useTranscript } from "../hooks.ts"
 import { orderQueue, queued, displayTitle, lastActiveLabelAt } from "../groups.ts"
 import { useLiveAnswering } from "../lib/answering.ts"
+import { hasQuestionBlock } from "../lib/questionBlocks.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
 import { Message, NativeInputRequiredCard, PermPolicyNote, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText } from "./ChatView.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_TOP, CARD_PRIMARY_ACTION } from "./TranscriptCard.tsx"
@@ -808,6 +809,9 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
       if (
         g > firstRenderedIdx &&
         g < lastRenderedIdx &&
+        // A middle message carrying a ```question keeps its row (see the render loop) — counting it as a
+        // hidden step would promise the expansion a message it already shows.
+        !hasQuestionBlock(m.text) &&
         (messageHasRenderableText(m) || ordinaryTools.length > 0 || completion !== undefined || m.kind !== undefined)
       ) steps++
     }
@@ -1003,14 +1007,21 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // surface, ThreadDrawer. This also mooted a review finding about the adopt path clearing the
   // typed message on failure.)
 
-  // The SHARED answering controller (identical logic to the thread view). Queue sends deliberately
-  // suppress the generic chat bottom-pin: it fights card exit/reorder. Both keyboard and button submits
-  // run this same onSent, which dissolves the card in place — TodosView's unmount effect then
-  // auto-scrolls the next card to the viewport top (like every user-initiated dismissal).
+  // The SHARED answering controller — the SAME scope as the thread view, so every question the card
+  // renders is answerable in place, not just the one still standing at the tail (maintainer 2026-08-03).
+  // `answerable` is now only the chrome signal ("the agent is waiting on you right now"), which is why
+  // the Send button below also shows on `anyAnswered`: staging an answer on an older question must have
+  // something to click. Queue sends deliberately suppress the generic chat bottom-pin: it fights card
+  // exit/reorder. Both keyboard and button submits run this same onSent, which dissolves the card in
+  // place — TodosView's unmount effect then auto-scrolls the next card to the viewport top (like every
+  // user-initiated dismissal).
   const { answeringForMessage, answerable, anyAnswered, sendAnswers, sendMessage } = useLiveAnswering(thread.id, messages, () => {
     ;(document.activeElement as HTMLElement | null)?.blur()
     onResolve(thread.id)
   }, { scrollToBottom: false })
+  // The card-level "Send answers" action shows for the standing ask (the common case) OR the moment the
+  // human touches an OLDER question's chips — an answer you can stage but not send would be a dead end.
+  const showSendAnswers = answerable || anyAnswered
 
   // Dismiss THIS card through the same user-initiated auto-scroll exit the footer/header/answer paths
   // use, exposed to the in-transcript fence buttons (done Mark-as-done, awaiting park) via context so
@@ -1107,7 +1118,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
           question stack it answers, so it has to hang CLOSE off the last question block and leave the
           bigger gap for the prompt box under it. At the standard pb-5 the button floated midway and read
           as an appendage of the prompt box instead. */}
-      <div className={`px-5 pt-5 ${answerable ? "pb-2" : "pb-5"}`}>
+      <div className={`px-5 pt-5 ${showSendAnswers ? "pb-2" : "pb-5"}`}>
         <InteractionStack
           thread={thread}
           className="mb-4"
@@ -1176,8 +1187,14 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                 if (collapseIntermediate && globalIdx >= firstRenderedIdx && globalIdx <= lastRenderedIdx) {
                   const isFirst = globalIdx === firstRenderedIdx
                   const isLast = globalIdx === lastRenderedIdx
-                  // Fully-hidden middle message.
-                  if (!isFirst && !isLast) return
+                  // Fully-hidden middle message — UNLESS it carries a ```question. An ask the agent then
+                  // kept working past is a decision the human still owes; collapsing it behind the summary
+                  // left the card offering "Send answers" with no question in sight, and the same ask
+                  // answerable one click away in the drawer. Same rule as background tasks and sub-agent
+                  // dispatches below: lifecycle content is lifted OUT of the collapsed span, chatter is not.
+                  // It renders textOnly like the first/last anchors, so its batched tool calls stay counted
+                  // in the summary rather than doubling up as a visible band.
+                  if (!isFirst && !isLast && !hasQuestionBlock(m.text)) return
                   // The divider sits between the first message's prose and the last message's prose — emit it
                   // once, just before the last message (firstRenderedIdx !== lastRenderedIdx here, so the
                   // two are distinct rows and the divider always lands after any first-message text).
@@ -1284,7 +1301,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
           is the same prompt box in every state. Its spacing is deliberately ASYMMETRIC — 8px up to the
           last question block, 16px down to the prompt box — so it reads as hanging off the questions
           rather than hovering over the box. */}
-      {answerable && (
+      {showSendAnswers && (
         <div className="shrink-0 px-5 pt-0">
           <div className="mb-4 flex items-center justify-start gap-2">
             <button

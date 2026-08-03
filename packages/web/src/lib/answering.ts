@@ -15,10 +15,12 @@ export interface LiveAnswering {
   liveMsg: ChatMessage | undefined // the LAST substantive assistant message (its blocks get chips)
   answering: MessageAnswering | undefined // undefined when there's nothing answerable (bound to liveMsg)
   // Per-message answering view — the open-tail generalization. Returns the interactive controller for
-  // ANY message that still carries unanswered question blocks (in `multiMessage` mode, that's every ask
-  // in the tail after the last human turn, not just the live one), or undefined for a closed/ordinary
-  // message. undefined is a stable primitive, so a memoized Message bails out unchanged for closed rows.
+  // ANY question-bearing assistant message, wherever it sits in the transcript, or undefined for an
+  // ordinary message. undefined is a stable primitive, so a memoized Message bails out unchanged for
+  // the (many) rows that carry no question.
   answeringForMessage: (m: ChatMessage) => MessageAnswering | undefined
+  // Does an ask still stand at the TAIL (nothing from the human since)? The queue card's chrome signal,
+  // NOT a gate on answerability — every question stays answerable regardless. See tailAskIdx.
   answerable: boolean
   anyAnswered: boolean
   sending: boolean
@@ -56,76 +58,84 @@ function messageIdentityOf(m: AskMsgLike): string {
   return m.sourceId ?? `legacy-${stableTextIdentity(m.text)}`
 }
 
-// The answerable asks, in transcript order — the pure core of the controller. Two DELIBERATELY different
-// scopes, and NEITHER tracks whether a question was answered:
-//   · multiMessage (thread): EVERY question-bearing assistant message is answerable, wherever it sits.
-//     This is the whole "answer a buried question by scrolling back" feature — best-effort by design.
-//     There is no "closing": an already-answered question stays clickable (its AnswersCard renders below
-//     it, so nobody re-answers by accident), and Send only gathers the blocks the human actually filled,
-//     so untouched questions contribute nothing. No answered/unanswered bookkeeping anywhere.
-//   · live-only (queue card, multiMessage=false): the MOST-RECENT ask in the tail after the last human
-//     turn — its blocks are the only answerable ones. A later human turn closes the tail (nothing
-//     answerable), but a no-question agent turn does NOT: an agent that asked and then kept working (a
-//     background wake) has merely BURIED its open ask, so the walk scans back past no-question agent
-//     turns to reach it. Only when NO ask trails the last human turn is nothing answerable.
-// `isLive` marks the last substantive assistant message so composeAnswerWire can keep the historic wire
-// format for the trailing ask and switch to the self-describing (question-quoting) form for an earlier
-// one — a purely POSITIONAL check, not answered-tracking.
-export function selectOpenAsks(messages: readonly AskMsgLike[], multiMessage: boolean): OpenAsk[] {
-  // Last substantive assistant message (skipping event punctuation) — the positional `isLive` anchor.
-  let lastSubstantiveAssistant = -1
+// Last substantive assistant message (skipping event/reasoning punctuation) — the positional `isLive`
+// anchor shared by both walks below. -1 when the transcript has no assistant prose yet.
+function lastSubstantiveAssistantIdx(messages: readonly AskMsgLike[]): number {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]
     if (m.kind === "event" || m.kind === "reasoning") continue // punctuation (completion / codex reasoning)
-    if (m.role === "assistant" && m.text.trim()) { lastSubstantiveAssistant = i; break }
+    if (m.role === "assistant" && m.text.trim()) return i
   }
+  return -1
+}
 
-  const parseBlocks = (text: string): ParsedQuestion[] =>
-    splitQuestionBlocks(text)
-      .filter((s) => s.kind === "question")
-      .map((s) => (s.kind === "question" ? parseQuestionBlock(s.text, s.questionKind, s.danger) : parseQuestionBlock("", "question")))
+const parseAskBlocks = (text: string): ParsedQuestion[] =>
+  splitQuestionBlocks(text)
+    .filter((s) => s.kind === "question")
+    .map((s) => (s.kind === "question" ? parseQuestionBlock(s.text, s.questionKind, s.danger) : parseQuestionBlock("", "question")))
 
-  // Two identical-text asks with NO sourceId (legacy transcripts only) hash to the same identity; suffix
-  // the collided one with its index so their answer state / draft keys never bleed together. Unique
-  // identities (the norm — sourceId is populated post-upgrade) are untouched.
+// Two identical-text asks with NO sourceId (legacy transcripts only) hash to the same identity; suffix
+// the collided one with its index so their answer state / draft keys never bleed together. Unique
+// identities (the norm — sourceId is populated post-upgrade) are untouched. The dedupe walks FORWARD
+// over the whole transcript so an identity never depends on where a caller started reading.
+function identityAssigner(): (m: AskMsgLike, i: number) => string {
   const seen = new Set<string>()
-  const identityOf = (m: AskMsgLike, i: number): string => {
+  return (m, i) => {
     let id = messageIdentityOf(m)
     if (seen.has(id)) id = `${id}#${i}`
     seen.add(id)
     return id
   }
+}
 
-  if (!multiMessage) {
-    // live-only (queue card): the most-recent ask in the tail AFTER the last human turn. A later human
-    // turn (text-bearing user message) still closes the tail → nothing answerable. But an agent that
-    // asked and then KEPT WORKING (a background wake re-invoked it, so a no-question assistant turn now
-    // trails the ask) has only BURIED its own open ask, not answered it — so scan back past no-question
-    // agent turns until a question OR a human turn, instead of stopping dead at the first agent turn.
-    // Without this the buried ask renders read-only in the queue (its chips vanish) even though the same
-    // ask stays answerable in the drawer (multiMessage) — the exact "red approval can't be answered" gap.
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i]
-      if (m.kind === "event" || m.kind === "reasoning") continue // punctuation (completion / codex reasoning)
-      if (m.role === "user" && m.text.trim()) break
-      if (m.role !== "assistant" || !m.text.trim()) continue
-      const blocks = parseBlocks(m.text)
-      if (blocks.length > 0) return [{ idx: i, identity: identityOf(m, i), blocks, isLive: i === lastSubstantiveAssistant }]
-      // a no-question agent turn doesn't close the tail — keep scanning back for the buried ask
-    }
-    return []
-  }
-
-  // multiMessage (thread): collect EVERY question-bearing assistant message, in transcript order. No
-  // human-turn break, no tail restriction — nothing closes, nothing is tracked.
+// EVERY answerable ask, in transcript order — the pure core of the controller, and the SAME scope on
+// both surfaces (queue card and thread view). A question is answerable wherever it sits: an ask the
+// agent buried under its own later work, an ask a newer ask stacked on top of, an ask a human turn
+// already replied past. This is the whole "answer a question that is no longer the last thing said"
+// feature, and it is best-effort by design — there is no "closing" and NOTHING tracks whether a
+// question was answered. An already-answered question stays clickable (its AnswersCard renders right
+// below it, so nobody re-answers by accident), and Send only gathers the blocks the human actually
+// filled, so untouched questions contribute nothing.
+// `isLive` marks the last substantive assistant message so composeAnswerWire can keep the historic wire
+// format for the trailing ask and switch to the self-describing (question-quoting) form for an earlier
+// one — a purely POSITIONAL check, not answered-tracking.
+export function selectOpenAsks(messages: readonly AskMsgLike[]): OpenAsk[] {
+  const lastSubstantiveAssistant = lastSubstantiveAssistantIdx(messages)
+  const identityOf = identityAssigner()
   const found: OpenAsk[] = []
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i]
     if (m.kind === "event" || m.kind === "reasoning" || m.role !== "assistant" || !m.text.trim()) continue
-    const blocks = parseBlocks(m.text)
+    // Cheap membership test before the real splitter: this walk now covers the WHOLE transcript on
+    // every surface, and the vast majority of assistant turns carry no fence at all.
+    if (!m.text.includes("```question")) continue
+    const blocks = parseAskBlocks(m.text)
     if (blocks.length > 0) found.push({ idx: i, identity: identityOf(m, i), blocks, isLive: i === lastSubstantiveAssistant })
   }
   return found
+}
+
+// The transcript index of the ask standing at the TAIL — the most-recent one after the last human turn,
+// or -1 when the human has already replied past every ask. Deliberately NARROWER than selectOpenAsks,
+// and it decides no answerability at all: it drives only the queue card's CHROME (the card-level "Send
+// answers" button, its tightened spacing, and the "Or skip the questions and reply…" placeholder), all
+// of which say "the agent is waiting on you RIGHT NOW". Widening that to every open ask would leave a
+// card whose questions were answered turns ago wearing a permanently disabled Send button.
+// A no-question agent turn does NOT close the tail: an agent that asked and then kept working (a
+// background wake) has merely BURIED its open ask, so the walk scans back past no-question agent turns
+// to reach it. A text-bearing user turn does close it.
+// An INDEX, not an OpenAsk: identities are deduped by a FORWARD walk (identityAssigner), which a
+// backward scan cannot reproduce, so handing one back from here could disagree with selectOpenAsks.
+export function tailAskIdx(messages: readonly AskMsgLike[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.kind === "event" || m.kind === "reasoning") continue // punctuation (completion / codex reasoning)
+    if (m.role === "user" && m.text.trim()) break
+    if (m.role !== "assistant" || !m.text.trim()) continue
+    if (parseAskBlocks(m.text).length > 0) return i
+    // a no-question agent turn doesn't close the tail — keep scanning back for the buried ask
+  }
+  return -1
 }
 
 // Choose the wire form for a batch of answers. When every answer belongs to the LIVE ask, emit the
@@ -146,12 +156,13 @@ export function composeAnswerWire(input: {
 }
 
 // The ONE controller for answering ```question blocks — shared by the queue card and the thread chat
-// view so their behavior can never drift. By default (`multiMessage` off — the queue card) it targets
-// the most-recent ask in the tail after the last human turn (an agent that kept working past its own
-// ask still leaves it answerable — see selectOpenAsks). In `multiMessage` mode (the drawer thread view)
-// EVERY question in the transcript stays answerable, wherever it sits — so a question buried by a
-// sub-agent return / the agent's own continuation can be answered in place by scrolling back to it. This is
-// deliberately best-effort and TRACKS NOTHING: no answered/unanswered bookkeeping, no "closing" of asks.
+// view so their behavior can never drift. EVERY question in the transcript stays answerable, wherever
+// it sits: a question buried by a sub-agent return or the agent's own continuation, one a newer ask
+// stacked on top of, one a human turn already replied past. That scope is the SAME on both surfaces
+// (maintainer 2026-08-03: "question fences should be answerable, even if there's been a more recent
+// message… possible in the full view, but not in the queue card view") — the queue card used to narrow
+// it to the tail ask, which is now only its chrome signal (see tailAskIdx / `answerable`).
+// Deliberately best-effort, TRACKING NOTHING: no answered/unanswered bookkeeping, no "closing" of asks.
 // An already-answered question stays clickable (its AnswersCard renders right below it), and Send only
 // gathers the blocks the human actually filled, so untouched questions contribute nothing. `onSent` runs
 // the caller's tail after a send (queue: optimistic exit + park focus; thread: nothing).
@@ -159,14 +170,13 @@ export function useLiveAnswering(
   slug: string,
   messages: ChatMessage[],
   onSent?: () => void,
-  opts: { scrollToBottom?: boolean; multiMessage?: boolean } = {},
+  opts: { scrollToBottom?: boolean } = {},
 ): LiveAnswering {
-  const multiMessage = opts.multiMessage === true
   const followUp = useEagerFollowUp(slug)
   const [answers, setAnswers] = useState<Record<string, BlockAnswer>>({})
 
   // The OPEN asks, in transcript order (pure walk extracted to selectOpenAsks for unit tests).
-  const openAsks = useMemo(() => selectOpenAsks(messages, multiMessage), [messages, multiMessage])
+  const openAsks = useMemo(() => selectOpenAsks(messages), [messages])
 
   const liveMsg = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -176,7 +186,9 @@ export function useLiveAnswering(
     return undefined
   }, [messages])
 
-  const answerable = openAsks.length > 0
+  // NOT "is anything answerable" (everything is, now) — "is the agent waiting on you right now", i.e.
+  // does an ask still stand at the tail. Only the queue card reads it, for its chrome. See tailAskIdx.
+  const answerable = useMemo(() => tailAskIdx(messages) !== -1, [messages])
   const projectDir = useProjectDir()
   const sessionId = useThreadSessionId(slug)
   const keyFor = useCallback(

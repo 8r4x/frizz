@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { splitQuestionBlocks, parseQuestionBlock, composeBlockAnswer, optionId, recommendedIndex } from "./questionBlocks.ts"
+import { splitQuestionBlocks, hasQuestionBlock, parseQuestionBlock, composeBlockAnswer, optionId, recommendedIndex } from "./questionBlocks.ts"
 
 // ---- splitQuestionBlocks ----
 
@@ -497,4 +497,16 @@ test("inline marker with no space before the paren, preserving the label's own b
   const p = parseQuestionBlock("Flag?\n\n- A. Use `--strict`(recommended)\n- B. Use `--safe`", "question")
   assert.deepEqual(p.options, ["A. Use `--strict`", "B. Use `--safe`"])
   assert.equal(p.recommendedIdx, 0)
+})
+
+// ---- hasQuestionBlock ----
+
+test("hasQuestionBlock: true only for a real fence, and never for a QUOTED one", () => {
+  assert.equal(hasQuestionBlock("Some prose with no fence at all."), false)
+  assert.equal(hasQuestionBlock("Lead-in.\n\n```question\nGo?\n- A. Yes\n- B. No\n```"), true)
+  // A worker DOCUMENTING the protocol wraps its sample in an outer fence — that is a code block, not an
+  // ask, and the queue card must not lift it out of the collapse as if a decision were owed.
+  assert.equal(hasQuestionBlock("Here is the shape:\n\n````\n```question\nGo?\n```\n````"), false)
+  // An unterminated opener never parses, so it stays prose.
+  assert.equal(hasQuestionBlock("```question\nGo?"), false)
 })
