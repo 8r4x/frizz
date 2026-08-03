@@ -319,15 +319,14 @@ export function deliverClaudeBrokerWake(deps: {
   bridge: Pick<ClaudeAgentBrokerBridge, "followUp">
   slug: string
   cwd: string
-  runtimeGate: boolean
   row: { session_id: string; plan_path?: string | null; model?: string | null; effort?: string | null; permission_mode?: string | null }
   deliveryMessage: string
   /** Retire the live daemon first — see the bridge's followUp contract and needsFreshProcessForLimit. */
   freshProcess?: boolean
 }): Promise<void> {
-  const { bridge, slug, cwd, runtimeGate, row, deliveryMessage, freshProcess } = deps
+  const { bridge, slug, cwd, row, deliveryMessage, freshProcess } = deps
   const appendSystemPrompt = [
-    loadWorkerPrompt("claude", runtimeGate),
+    loadWorkerPrompt("claude"),
     scratchpadOrientation(row.session_id, row.plan_path, "claude"),
     frayConfigBlock(cwd),
   ].filter(Boolean).join("\n\n")
@@ -729,7 +728,6 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     // once that window rolls, over this same delivery path. The quota reader supplies the fallback
     // instant for a weekly limit, whose message text carries a clock but no date; readQuota memoizes,
     // so consulting it per tick costs a live request only every few minutes.
-    autoResumeOnLimit: () => getSettings(storage).autoResumeOnLimit !== false,
     readQuota,
     resume: (slug, message, deliveryId) => {
       const deliveryMessage = `${message}\n\n${wakeDeliveryToken(deliveryId)}`
@@ -757,7 +755,6 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
           bridge: claudeBroker,
           slug,
           cwd: project.dir,
-          runtimeGate: getSettings(storage).runtimeGate !== false,
           row,
           deliveryMessage,
           // Recomputed here rather than carried on the delivery: the outbox stores a message, not a

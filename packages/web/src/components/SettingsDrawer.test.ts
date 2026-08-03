@@ -8,15 +8,28 @@ const tooltipSource = readFileSync(new URL("./Tooltip.tsx", import.meta.url), "u
 test("settings maps each contextual explanation to a help control", () => {
   // `subagentInstructions` is gone: the settings preamble was retired in favour of FRAY.md, so there
   // is exactly one operator-authored surface for project conventions.
-  for (const key of ["model", "effort", "permissionMode", "font", "compact", "notifications", "runtimeGate"]) {
+  for (const key of ["permissionMode", "font", "compact", "notifications"]) {
     assert.match(source, new RegExp(`\\b${key}:`), `missing settings help mapping: ${key}`)
   }
-  assert.match(source, /<SettingsField label="Model" help=\{SETTINGS_HELP\.model\}/)
   assert.match(source, /label="Claude permissions" help=\{SETTINGS_HELP\.permissionMode\}/)
   assert.match(source, /label="Compact mode" help=\{SETTINGS_HELP\.compact\}/)
   assert.match(source, /label="Desktop notifications" help=\{SETTINGS_HELP\.notifications\}/)
   // The redundant "GitHub picker prompts" group label is gone; each field carries its own label.
   assert.doesNotMatch(source, /label="GitHub picker prompts"/)
+})
+
+test("the drawer no longer duplicates the composer's controls or offers vestigial toggles", () => {
+  // Model and effort are chosen per-dispatch in the prompt box (DispatchPreferences), so a second,
+  // divergent copy of them here was only ever a way to confuse which one applied.
+  assert.doesNotMatch(source, /label="Model"/)
+  assert.doesNotMatch(source, /label="Effort"/)
+  // The Runtime QA gate setting is gone entirely — browser-QA policy is a project's own FRAY.md
+  // concern, not a global Fray switch.
+  assert.doesNotMatch(source, /Runtime QA gate/)
+  assert.doesNotMatch(source, /runtimeGate/)
+  // Auto-resume after a usage limit is unconditional now: nothing to turn off.
+  assert.doesNotMatch(source, /autoResumeOnLimit/)
+  assert.doesNotMatch(source, /Auto-resume after usage limits/)
 })
 
 test("the Claude permission control offers only the two headless-safe modes and warns while bypassing", () => {

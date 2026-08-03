@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { formatGithubWakeSteer, heartbeatMessage, isValidAwaitingTimer, stopHookMessage, wakeDeliveryToken, type QuotaSnapshot } from "@fray-ui/shared"
+import { formatGithubWakeSteer, isValidAwaitingTimer, restPromptMessage, schedulePromptMessage, wakeDeliveryToken, type QuotaSnapshot } from "@fray-ui/shared"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { FenceView } from "./tailer.ts"
@@ -338,16 +338,21 @@ function armedSnooze(row: Pick<SessionRow, "snoozed_until" | "snooze_prompt">): 
   return { until, untilMs, prompt, fenceId: snoozeFenceId(until, prompt) }
 }
 
-// ---- SOURCE 4: THE HEARTBEAT ---------------------------------------------------------------------
-// The DUMB source: a prompt on a chosen clock. It consults nothing about the thread — not rest, not
-// `--awaiting`, not sub-agents, not shells. If the interval has elapsed, a beat is queued, and it is
-// DELIVERED when it comes due whether or not the thread is mid-turn (`isDeliverableNow`, which carries
-// the transport detail). It is the only source that does not wait for rest, and that is the feature.
+// ---- SOURCE 4: THE RECURRING PROMPT, ON SCHEDULE --------------------------------------------------
+// SOURCES 4 and 5 are two TRIGGERS on ONE stored prompt (`recurring_*`), not two features. They stayed
+// two scheduler passes through the merge because they genuinely do not fold together: this one keys its
+// delivery id on (generation, beat index) and must NOT filter on rest, while SOURCE 5 keys on
+// (generation, rest instant) and must. One pass with a mode flag would be both of them wearing an if.
 //
-// It is the sibling of SOURCE 5, not a rival: a stop hook asks "you stopped — is there more?" and only
-// a thread that stops ever hears it; a heartbeat asks "it has been an hour" and a thread hears it an
+// THE DUMB TRIGGER: a prompt on a chosen clock. It consults nothing about the thread — not rest, not
+// `--awaiting`, not sub-agents, not shells. If the interval has elapsed, a delivery is queued, and it
+// GOES OUT whether or not the thread is mid-turn (`isDeliverableNow`, which carries the transport
+// detail). It is the only source that does not wait for rest, and that is the feature.
+//
+// It is the sibling of SOURCE 5, not a rival: the rest trigger asks "you stopped — is there more?" and
+// only a thread that stops ever hears it; this one asks "it has been an hour" and a thread hears it an
 // hour later, working or not. An operator who needs a thread revisited on a schedule regardless of what
-// the agent is doing needs the second one.
+// the agent is doing needs this one.
 //
 // It also remains the only recurring wake a worker CAN have. Claude Code's own `CronCreate` /
 // `ScheduleWakeup` cannot fire in the runtime fray spawns: their gate stays shut while ANY background
@@ -355,22 +360,23 @@ function armedSnooze(row: Pick<SessionRow, "snoozed_until" | "snooze_prompt">): 
 // never report — is exactly the one whose cron is dead (measured 2026-08-01: 3 fires in 150s with no
 // background work, 0 with a background shell alive). Riding fray's outbox sidesteps that entirely.
 //
-// Its record of intent is the session row, with `heartbeat_armed_at` as the GENERATION: re-arming mints
-// a new one, so a beat still in the outbox under the old settings reads as superseded.
-//
-// The beat is delivered VERBATIM, with no preamble — unlike a stop hook, which carries a trailer
-// teaching the `--awaiting` protocol. There is no protocol here: it fires, full stop.
+// Its record of intent is the session row, with `recurring_armed_at` as the GENERATION: re-arming mints
+// a new one, so a delivery still in the outbox under the old settings reads as superseded.
 //
 // It never ABORTS the turn it lands in. Both transports accept a mid-turn message as an ordinary
-// queued/steered input, so the running work finishes and the beat is read at the next sampling
+// queued/steered input, so the running work finishes and the prompt is read at the next sampling
 // boundary — which is what "fires on its cadence" means, and is also the only reading compatible with
 // fray's completion invariant.
+//
+// THE FENCE PREFIXES ARE THE PRE-MERGE ONES, on purpose. They are internal delivery-id namespaces that
+// nothing outside this file reads, and renaming them would reclassify every delivery already sitting in
+// a live outbox as an unknown fence across the upgrade — real churn to buy a nicer string.
 const HEARTBEAT_FENCE_PREFIX = "heartbeat"
 const HEARTBEAT_HINT_PREFIX = "heartbeat:"
 
-// The generation is (armed_at, beat index). The index advances only once the previous beat is
-// TERMINAL, so a thread that stays busy accumulates exactly one pending beat rather than one per
-// interval — an agent nagged by an hour of backlog the moment it rests is its own denial of service.
+// The generation is (armed_at, beat index). The index advances only once the previous delivery is
+// TERMINAL, so a thread accumulates exactly one pending scheduled prompt rather than one per interval —
+// an agent handed an hour of backlog at once is its own denial of service.
 function heartbeatFenceId(armedAt: string, beat: number): string {
   return `${HEARTBEAT_FENCE_PREFIX}:${armedAt}:${beat}`
 }
@@ -378,61 +384,59 @@ function isHeartbeatFenceId(fenceId: string): boolean {
   return fenceId.startsWith(`${HEARTBEAT_FENCE_PREFIX}:`)
 }
 
-interface ArmedHeartbeat {
+interface ArmedSchedule {
   prompt: string
   intervalMs: number
   armedAt: string
-  /** When the next beat becomes due: interval after the last delivered beat, else after arming. */
+  /** When the next one becomes due: an interval after the last delivered one, else after arming. */
   dueAtMs: number
 }
 
-type HeartbeatRow = Pick<
+type RecurringRow = Pick<
   SessionRow,
-  "heartbeat_prompt" | "heartbeat_interval_ms" | "heartbeat_enabled" | "heartbeat_armed_at" | "heartbeat_last_fired_at"
+  | "recurring_prompt" | "recurring_on_rest" | "recurring_on_schedule"
+  | "recurring_interval_ms" | "recurring_armed_at"
+  | "recurring_rest_fired_at" | "recurring_schedule_fired_at"
 >
 
-// A row's CURRENT heartbeat, if it has a live one. A paused heartbeat deliberately reads as ABSENT
-// here — pause must stop new beats and drop queued ones — while the row keeps its settings so play
-// resumes the same heartbeat instead of making the worker re-register it.
-function armedHeartbeat(row: HeartbeatRow): ArmedHeartbeat | undefined {
-  const prompt = row.heartbeat_prompt?.trim()
-  const intervalMs = row.heartbeat_interval_ms
-  const armedAt = row.heartbeat_armed_at
+// A row's live ON SCHEDULE trigger, if it has one. A switched-off trigger deliberately reads as ABSENT
+// here — off must stop new deliveries AND drop queued ones — while the row keeps the text and the
+// cadence so switching it back on resumes the same schedule rather than making anyone re-enter it.
+function armedSchedule(row: RecurringRow): ArmedSchedule | undefined {
+  const prompt = row.recurring_prompt?.trim()
+  const intervalMs = row.recurring_interval_ms
+  const armedAt = row.recurring_armed_at
   if (!prompt || !intervalMs || intervalMs <= 0 || !armedAt) return undefined
-  if (row.heartbeat_enabled !== 1) return undefined
-  const anchor = Date.parse(row.heartbeat_last_fired_at ?? armedAt)
+  if (row.recurring_on_schedule !== 1) return undefined
+  const anchor = Date.parse(row.recurring_schedule_fired_at ?? armedAt)
   if (!Number.isFinite(anchor)) return undefined
   return { prompt, intervalMs, armedAt, dueAtMs: anchor + intervalMs }
 }
 
-// ---- SOURCE 5: THE OPERATOR'S STOP HOOK ----------------------------------------------------------
-// Text the operator writes in the thread footer, re-delivered every time that thread STOPS — which is
-// the event they actually mean when they want one to keep going. It is named for the hook it behaves
-// like: fray catches the worker coming to rest and hands it this.
+// ---- SOURCE 5: THE RECURRING PROMPT, ON REST -----------------------------------------------------
+// The SAME stored text as SOURCE 4, delivered every time the thread STOPS — which is the event an
+// operator actually means when they want one to keep going.
 //
-// It replaced an INTERVAL-based version of the same idea (a worker-armed "heartbeat", removed
-// 2026-08-02), and the interval is exactly what was wrong with it. An operator who wants "keep going
-// until X" has no idea what number to put in the box: too short and the beat lands mid-turn and queues
-// behind itself, too long and the thread sits finished for twenty minutes. There is no cadence to
-// choose here and nothing to get wrong — a thread that stops gets the text, and one that never stops
-// never needed it.
+// There is no cadence here and nothing to get wrong. An earlier interval-based version of this idea was
+// removed 2026-08-02 for exactly that reason: an operator who wants "keep going until X" has no idea
+// what number to put in a box. A thread that stops gets the text, and one that never stops never needed
+// it — that thread is SOURCE 4's job.
 //
 // The loop's OFF SWITCH belongs to the worker, and it is the one part of this that is not optional. A
-// stop hook with no terminating condition is an infinite bump generator, so the delivered text carries
-// a trailer (shared `stopHookMessage`) teaching the worker to answer AWAITING when nothing in it is
-// actionable. The tailer folds that sentinel onto the final message (`lastAssistantAllDone`) and this
-// pass simply declines to fire while it stands — no state to write, and it re-opens by itself the
+// rest trigger with no terminating condition is an infinite bump generator, so the delivered text
+// carries a trailer (shared `restPromptMessage`) teaching the worker to answer ALLDONE when nothing in
+// it is actionable. The tailer folds that sentinel onto the final message (`lastAssistantAllDone`) and
+// this pass simply declines to fire while it stands — no state to write, and it re-opens by itself the
 // moment the thread produces any other final message.
 //
-// Its record of intent is the session row, with `stop_hook_armed_at` as the GENERATION (SOURCE 3's
-// shape): editing the text mints a new one, so a bump already queued under the old words reads as
-// superseded rather than delivering text the operator has since replaced.
+// Same generation as SOURCE 4 (`recurring_armed_at`), because it is the same prompt: editing the text
+// supersedes a delivery queued for the old words on BOTH triggers at once.
 const STOP_HOOK_FENCE_PREFIX = "stophook"
 const STOP_HOOK_HINT_KEY = "stophook:rest"
 
-// The rest a bump is bound to. `lastActivityAt` is the thread's own high-water mark, so a NEW rest
-// necessarily carries a new one — which is what makes "at most one bump per rest" fall out of delivery
-// id uniqueness rather than needing a counter. A thread with no activity clock yet has never rested.
+// The rest a delivery is bound to. `lastActivityAt` is the thread's own high-water mark, so a NEW rest
+// necessarily carries a new one — which is what makes "at most one per rest" fall out of delivery id
+// uniqueness rather than needing a counter. A thread with no activity clock yet has never rested.
 function stopHookFenceId(armedAt: string, restedAt: string): string {
   return `${STOP_HOOK_FENCE_PREFIX}:${armedAt}:${restedAt}`
 }
@@ -440,21 +444,18 @@ function isStopHookFenceId(fenceId: string): boolean {
   return fenceId.startsWith(`${STOP_HOOK_FENCE_PREFIX}:`)
 }
 
-interface ArmedStopHook {
+interface ArmedRest {
   prompt: string
   armedAt: string
 }
 
-type StopHookRow = Pick<SessionRow, "stop_hook" | "stop_hook_enabled" | "stop_hook_armed_at">
-
-// A row's CURRENT stop hook, if it has a live one. Disabled reads as ABSENT here — the toggle
-// must stop new bumps and drop queued ones — while the row keeps the text so re-enabling does not make
-// the operator retype it.
-function armedStopHook(row: StopHookRow): ArmedStopHook | undefined {
-  const prompt = row.stop_hook?.trim()
-  const armedAt = row.stop_hook_armed_at
+// A row's live ON REST trigger, if it has one. Switched off reads as ABSENT, exactly as for the
+// schedule, and for the same reason.
+function armedRest(row: RecurringRow): ArmedRest | undefined {
+  const prompt = row.recurring_prompt?.trim()
+  const armedAt = row.recurring_armed_at
   if (!prompt || !armedAt) return undefined
-  if (row.stop_hook_enabled !== 1) return undefined
+  if (row.recurring_on_rest !== 1) return undefined
   return { prompt, armedAt }
 }
 
@@ -615,9 +616,6 @@ export interface SchedulerDeps {
   // recovery can prove a crash-window delivery before retrying (the production composition does both).
   resume: (slug: string, message: string, deliveryId: string) => void | Promise<void>
   now?: () => number
-  // Whether the limit auto-resume source is armed at all (Settings.autoResumeOnLimit). Read per tick
-  // so flipping it off in the UI takes effect immediately, without a restart. Absent ⇒ on.
-  autoResumeOnLimit?: () => boolean
   // The provider quota snapshot, used ONLY to decide whether an exhausted window has rolled when the
   // limit message's own text can't say (every weekly limit, since its clock carries no date). Absent
   // in tests that exercise the text path; a read that throws is treated as indeterminate.
@@ -649,7 +647,6 @@ export interface Scheduler {
 
 export function createScheduler(deps: SchedulerDeps): Scheduler {
   const now = deps.now ?? Date.now
-  const autoResumeOnLimit = deps.autoResumeOnLimit ?? (() => true)
   const fetchPr = deps.fetchPr ?? defaultFetchPr
   const fetchGithubReview = deps.fetchGithubReview ?? createGithubReviewFetcher({ now })
   const log = deps.log ?? ((m: string) => frayLog.info("scheduler", m))
@@ -819,22 +816,22 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (armedSnooze(row)?.fenceId !== item.fenceId) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
-    // A beat is bound to the exact heartbeat GENERATION that queued it. Stopping the heartbeat, re-arming it
+    // A scheduled delivery is bound to the exact GENERATION that queued it. Switching the trigger off, re-arming it
     // with different settings, and either side switching it off all read as
     // supersession here — each one means the queued text no longer describes what the thread wants.
     // Disabling therefore drops a beat already waiting, rather than delivering it on re-enable.
     if (isHeartbeatFenceId(item.fenceId)) {
-      const armed = armedHeartbeat(row)
+      const armed = armedSchedule(row)
       if (!armed || !item.fenceId.startsWith(`${HEARTBEAT_FENCE_PREFIX}:${armed.armedAt}:`)) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
-    // A bump is bound to the exact stop-hook GENERATION that queued it AND to the exact REST it
+    // A rest delivery is bound to the exact GENERATION that queued it AND to the exact REST it
     // was queued for. Disabling the toggle, editing the text, and the thread moving on to a new rest
     // all read as supersession here — and so does an AWAITING that landed between enqueue and delivery,
     // which is the case that matters: a worker that closed the loop while a bump sat in the outbox must
     // not be handed it anyway.
     if (isStopHookFenceId(item.fenceId)) {
-      const armed = armedStopHook(row)
+      const armed = armedRest(row)
       if (!armed || item.fenceId !== stopHookFenceId(armed.armedAt, tele.lastActivityAt ?? "")) return "superseded"
       if (tele.lastAssistantAllDone) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
@@ -863,7 +860,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // THE HEARTBEAT IS THE EXCEPTION, and it is the whole point of the feature: it fires on its cadence
   // regardless of what the thread is doing (maintainer 2026-08-03 — "my intention was for the heartbeat
   // to fire on its regular cadence, regardless of whether the agent is currently running or not"). It
-  // used to be held here like everything else, which quietly made it a second stop hook: a beat due at
+  // used to be held here like everything else, which quietly made it a second rest trigger: one due at
   // 14:00 on a thread that stayed busy until 14:50 arrived at 14:50, so the cadence the operator set
   // described nothing.
   //
@@ -874,7 +871,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // the correct reading of "fires on its cadence" — the beat is delivered, the in-flight work is not
   // cut off, and fray's completion invariant stays intact.
   //
-  // `unknown` still defers on every source, heartbeat included: telemetry we cannot read is not a thread
+  // `unknown` still defers on every source, this one included: telemetry we cannot read is not a thread
   // we can safely address.
   function isDeliverableNow(item: WakeDelivery, context: DeliveryContext): boolean {
     if (context === "current-idle") return true
@@ -1232,10 +1229,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
 
   async function evalLimits(nowMs: number): Promise<void> {
-    if (!autoResumeOnLimit()) return
     const candidates = limitCandidates(nowMs)
     if (candidates.length === 0) return
-    // Read the heartbeat-warmed usage snapshot. The account-availability trigger needs it for EVERY
+    // Read the quota-warmed usage snapshot. The account-availability trigger needs it for EVERY
     // candidate — a session limit included, now that a fresh sign-in or raised cap can free it before
     // its own clock — and the weekly window-roll check needs it too. This is a cached read (the server
     // keeps it warm on its own cadence), so a fleet parked on a limit doesn't hammer the endpoint.
@@ -1328,7 +1324,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   }
 
-  // ---- The heartbeat pass -------------------------------------------------------------------
+  // ---- The ON SCHEDULE pass -----------------------------------------------------------------
   // Like the snooze pass, this does NOT filter on `turn === "idle"`. Unlike the snooze pass, the
   // delivery gate does not hold the result either: a beat due mid-turn goes out mid-turn
   // (`isDeliverableNow`). Being able to reach a thread that is NOT going quiet is the whole point —
@@ -1338,10 +1334,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // reached a terminal state, and the beat clock runs from the last DELIVERED beat. So an interval that
   // elapses while an undelivered beat is still open is skipped rather than stacked — a thread cannot
   // accumulate a backlog and then be handed all of it at once.
-  function evalHeartbeats(nowMs: number): void {
+  function evalSchedulePrompts(nowMs: number): void {
     for (const row of deps.storage.allSessions()) {
       if (row.state === "archived" || row.archived === 1) continue
-      const armed = armedHeartbeat(row)
+      const armed = armedSchedule(row)
       if (!armed || armed.dueAtMs > nowMs) continue
       // The ONE thing that silences a beat. Everything else about this source is unconditional — rest,
       // sub-agents, shells, all irrelevant — but a worker that has said there is no further work has
@@ -1350,11 +1346,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // so anything the thread says or receives afterwards reopens it.
       const beatTele = deps.tailer.get(row.slug)
       if (beatTele?.lastAssistantAllDone) continue
-      // One beat in flight at a time. Any open delivery for this thread's heartbeat — whatever its
+      // One in flight at a time. Any open scheduled delivery for this thread — whatever its
       // generation — means the previous beat has not landed yet, so this interval is skipped rather
       // than stacked behind it.
-      if (openHeartbeat(row.slug, row.session_id)) continue
-      const beat = beatIndex(row.heartbeat_last_fired_at ?? null, armed)
+      if (openSchedulePrompt(row.slug, row.session_id)) continue
+      const beat = beatIndex(row.recurring_schedule_fired_at ?? null, armed)
       const fenceId = heartbeatFenceId(armed.armedAt, beat)
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
       if (outbox.get(deliveryId)) continue
@@ -1364,8 +1360,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         sessionId: row.session_id,
         fenceId,
         hintKey: `${HEARTBEAT_HINT_PREFIX}${armed.intervalMs}`,
-        message: heartbeatMessage(armed.prompt, Math.round(armed.intervalMs / 1000)),
-        reason: `heartbeat every ${Math.round(armed.intervalMs / 1000)}s`,
+        message: schedulePromptMessage(armed.prompt, Math.round(armed.intervalMs / 1000)),
+        reason: `recurring prompt every ${Math.round(armed.intervalMs / 1000)}s`,
       }, nowMs).delivery
       log(`waker: queued ${row.slug} — ${item.reason}`)
       checkpoint("after-enqueue", item)
@@ -1375,7 +1371,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // Is a beat for this thread still open (pending/leased)? Scanning the open set is cheap — the outbox
   // holds only live work — and it is the one check that makes "at most one beat outstanding" true
   // across restarts, since it reads the durable rows rather than in-memory arming.
-  function openHeartbeat(slug: string, sessionId: string): boolean {
+  function openSchedulePrompt(slug: string, sessionId: string): boolean {
     return outbox.listOpen().some(
       (item) => item.slug === slug && item.sessionId === sessionId && isHeartbeatFenceId(item.fenceId),
     )
@@ -1384,7 +1380,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // A monotonic-enough beat number so consecutive beats get distinct delivery ids. Derived from elapsed
   // intervals rather than a stored counter: the row already carries everything needed, and a delivery
   // id only has to be unique per (session, generation), not meaningful.
-  function beatIndex(lastFiredAt: string | null, armed: ArmedHeartbeat): number {
+  function beatIndex(lastFiredAt: string | null, armed: ArmedSchedule): number {
     const armedMs = Date.parse(armed.armedAt)
     const lastMs = Date.parse(lastFiredAt ?? armed.armedAt)
     if (!Number.isFinite(armedMs) || !Number.isFinite(lastMs)) return 0
@@ -1399,31 +1395,31 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // would silently swallow the next interval.
   //
   // Guarded on the generation for the same reason as the snooze: a beat that settles after the worker
-  // re-armed or stopped its heartbeat must not write a schedule onto settings it no longer describes.
-  function settleHeartbeat(item: WakeDelivery): void {
+  // re-armed or switched off the trigger must not write a schedule onto settings it no longer describes.
+  function settleSchedulePrompt(item: WakeDelivery): void {
     if (!isHeartbeatFenceId(item.fenceId)) return
     const row = deps.storage.getSession(item.slug)
     if (!row || row.session_id !== item.sessionId) return
-    const armedAt = row.heartbeat_armed_at
+    const armedAt = row.recurring_armed_at
     if (!armedAt || !item.fenceId.startsWith(`${HEARTBEAT_FENCE_PREFIX}:${armedAt}:`)) return
-    deps.storage.stampHeartbeatFired(item.slug, armedAt, new Date().toISOString())
+    deps.storage.stampRecurringScheduleFired(item.slug, armedAt, new Date().toISOString())
   }
 
-  // ---- The operator-stop-hook pass ------------------------------------------------------------
+  // ---- The ON REST pass -----------------------------------------------------------------------
   // Unlike every other pass here this one DOES filter on `turn === "idle"`, because rest is not a
   // deadline it can queue against — it IS the trigger. Queueing a bump for a busy thread would bind it
   // to an activity stamp that is still moving, and the delivery gate would then supersede it on the
   // very next line the worker wrote.
-  function evalStopHooks(nowMs: number): void {
+  function evalRestPrompts(nowMs: number): void {
     for (const row of deps.storage.allSessions()) {
       if (row.state === "archived" || row.archived === 1) continue
-      const armed = armedStopHook(row)
+      const armed = armedRest(row)
       if (!armed) continue
       const tele = deps.tailer.get(row.slug)
       if (!tele || tele.turn !== "idle" || !tele.lastActivityAt) continue
       // WHAT THIS DELIBERATELY DOES NOT CONSULT: live sub-agents and background shells. A hold on them
       // shipped briefly and was removed the same day (maintainer 2026-08-02: "the status of any
-      // sub-agents or background shells is irrelevant"). The heartbeat is the whole rate story — a
+      // sub-agents or background shells is irrelevant"). The SCHEDULE trigger is the whole rate story — a
       // thread parked behind children is bumped on the same schedule as any other, which is also what
       // makes this able to rescue one parked behind a child that will never report. A worker that
       // genuinely has nothing to do until something returns says AWAITING.
@@ -1442,8 +1438,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         sessionId: row.session_id,
         fenceId,
         hintKey: STOP_HOOK_HINT_KEY,
-        message: stopHookMessage(armed.prompt),
-        reason: "stop hook at rest",
+        message: restPromptMessage(armed.prompt),
+        reason: "recurring prompt at rest",
       }, nowMs).delivery
       log(`waker: queued ${row.slug} — ${item.reason}`)
       checkpoint("after-enqueue", item)
@@ -1454,13 +1450,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // called only from the settle points that mean delivery genuinely happened.
   // Guarded on the generation so a bump settling after the operator edited the text cannot write onto
   // words it no longer describes.
-  function settleStopHook(item: WakeDelivery): void {
+  function settleRestPrompt(item: WakeDelivery): void {
     if (!isStopHookFenceId(item.fenceId)) return
     const row = deps.storage.getSession(item.slug)
     if (!row || row.session_id !== item.sessionId) return
-    const armedAt = row.stop_hook_armed_at
+    const armedAt = row.recurring_armed_at
     if (!armedAt || !item.fenceId.startsWith(`${STOP_HOOK_FENCE_PREFIX}:${armedAt}:`)) return
-    deps.storage.stampStopHookFired(item.slug, armedAt, new Date().toISOString())
+    deps.storage.stampRecurringRestFired(item.slug, armedAt, new Date().toISOString())
   }
 
   // Disarm the row a snooze wake came from, once that wake is terminal. Guarded on the fence id still
@@ -1480,8 +1476,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (context === "confirmed") {
         outbox.confirm(item.id, nowMs)
         settleSnooze(item)
-        settleHeartbeat(item)
-        settleStopHook(item)
+        settleSchedulePrompt(item)
+        settleRestPrompt(item)
         continue
       }
       if (context === "superseded") {
@@ -1494,7 +1490,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // generation is still idly awaiting the exact fence. Busy or not-yet-loaded telemetry is held:
       // retrying there could duplicate an input that crossed the transport just before process death.
       //
-      // DELIBERATELY NOT `isDeliverableNow`: a heartbeat may be SENT to a busy thread, but it may not be
+      // DELIBERATELY NOT `isDeliverableNow`: a scheduled prompt may be SENT to a busy thread, but not
       // RE-sent to one on a guess. This branch runs precisely when we do not know whether the previous
       // attempt landed, and the transcript check that would tell us (`confirmed`, above) cannot see a
       // message still sitting in the CLI's queue. A beat that arrives one rest late is the old
@@ -1528,8 +1524,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (context === "confirmed") {
         outbox.confirm(item.id, now())
         settleSnooze(item)
-        settleHeartbeat(item)
-        settleStopHook(item)
+        settleSchedulePrompt(item)
+        settleRestPrompt(item)
         continue
       }
       if (context === "superseded") {
@@ -1592,8 +1588,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         continue
       }
       settleSnooze(item)
-      settleHeartbeat(item)
-      settleStopHook(item)
+      settleSchedulePrompt(item)
+      settleRestPrompt(item)
       const acknowledged = outbox.get(item.id)
       if (acknowledged) checkpoint("after-ack", acknowledged)
     }
@@ -1648,16 +1644,16 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       log(`waker: snooze-bump pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     try {
-      evalHeartbeats(now())
+      evalSchedulePrompts(now())
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
-      log(`waker: heartbeat pass failed: ${err instanceof Error ? err.message : String(err)}`)
+      log(`waker: recurring-prompt schedule pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     try {
-      evalStopHooks(now())
+      evalRestPrompts(now())
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
-      log(`waker: stop-hook pass failed: ${err instanceof Error ? err.message : String(err)}`)
+      log(`waker: recurring-prompt rest pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     try {
       repairDroppedReports(now())

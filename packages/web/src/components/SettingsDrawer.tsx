@@ -14,21 +14,10 @@ import { Select } from "./ui/Select.tsx"
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { draftKey, useDraft, useProjectDir } from "../lib/drafts.ts"
-import {
-  modelGroups,
-  CLAUDE_DISPATCH_PERMISSION_OPTIONS,
-  claudeEffortForModel,
-  claudeEffortOptions,
-  codexEffortOptions,
-  codexModelFor,
-  backendForModel,
-  codexEffortForModel,
-} from "../lib/options.ts"
+import { CLAUDE_DISPATCH_PERMISSION_OPTIONS } from "../lib/options.ts"
 
 type NotifPerm = "default" | "granted" | "denied" | "unsupported"
 export const SETTINGS_HELP = {
-  model: "Choose the default model used when you create or dispatch work from this project.",
-  effort: "Controls the default reasoning effort for new work. Available options depend on the selected model.",
   permissionMode: "The permission mode new Claude Code threads launch with. Auto runs safe actions and asks you to approve the risky ones in the thread. Bypass launches the worker with --dangerously-skip-permissions: it never asks, so nothing waits on you and nothing is checked either. Takes effect on the next thread you dispatch — a thread already running keeps the mode it launched with. Codex threads always run with full workspace access and are unaffected.",
   font: "Changes the interface reading font for this browser.",
   localFileOpener: "Chooses how vetted local artifact links open. Image clicks always use the OS default viewer.",
@@ -36,8 +25,6 @@ export const SETTINGS_HELP = {
   stickyUserMessage: "Keeps your most recent message stuck to the top of a thread while the reply scrolls underneath. It stays collapsed to a small card (hover to expand it) so a long message never blocks much of the view. Applies immediately in this browser.",
   queueOrder: "Orders the Needs-you queue and the sidebar's rested threads by when each was last active. Oldest first (FIFO, default) surfaces the longest-waiting item first so you cycle through everything; Newest first (LIFO) keeps the most recently active on top. Applies immediately in this browser.",
   notifications: "Shows a desktop notification when work needs attention while this window is hidden.",
-  runtimeGate: "When on, dispatched workers drive a real browser before finishing the changes where that is what settles the question — a new surface, anything judged by eye, behaviour they can't predict from the code — and screenshot the result into their handoff. Small, certain fixes are expected to skip it and say what they verified instead. Turn off to drop the browser step from the worker prompt entirely.",
-  autoResumeOnLimit: "When a usage limit interrupts running threads, fray remembers every one it cut off and sends each a “continue” once the window resets. Those threads stay out of your queue while they wait. Turn off to leave them parked for you to restart by hand.",
 } as const
 function currentPerm(): NotifPerm {
   if (typeof Notification === "undefined") return "unsupported"
@@ -46,10 +33,6 @@ function currentPerm(): NotifPerm {
 
 export function SettingsDrawer() {
   const settings = useQuery({ queryKey: ["settingsGet"], queryFn: () => rpc.settingsGet() })
-  // Codex model catalogue + per-model effort options from the authoritative ~/.codex cache (never a
-  // hand-maintained list). [] until it loads; the option builders fall back to a compiled-in mirror.
-  const codexModels = useQuery({ queryKey: ["codexModels"], queryFn: () => rpc.codexModels() })
-  const codexList = codexModels.data ?? []
   const projectDir = useProjectDir()
   const [issueDraft, setIssueDraft, clearIssueDraft] = useDraft(draftKey.settings(projectDir, "githubIssuePrompt"))
   const [prDraft, setPrDraft, clearPrDraft] = useDraft(draftKey.settings(projectDir, "githubPrPrompt"))
@@ -118,13 +101,6 @@ export function SettingsDrawer() {
 
   const dirty = !!(draft && settings.data && JSON.stringify(draft) !== JSON.stringify(settings.data))
 
-  // The backend the current model selection implies — drives which effort axis the dependent
-  // controls present. Derived from the model (the single source of truth) rather than the
-  // persisted `backend`, so the controls react the instant the model changes.
-  const backend = backendForModel(draft?.model, codexList)
-  // The selected codex model (when this is one) — gates the effort dropdown to exactly its cache efforts.
-  const codexModel = codexModelFor(draft?.model, codexList)
-
   return (
     <div
       className={`${SHEET_SCRIM_CLASS} z-50 flex justify-end ${shown ? "opacity-100" : "opacity-0"}`}
@@ -143,31 +119,6 @@ export function SettingsDrawer() {
           <div className="p-4 text-[13px] text-muted">Loading…</div>
         ) : (
           <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-6">
-            {/* Model is the FIRST control: it drives the backend, and the effort control below
-                presents the chosen backend's option set. Picking a model stamps the derived backend
-                into the draft. */}
-            <SettingsField label="Model" help={SETTINGS_HELP.model}>
-              <Select
-                variant="bordered"
-                value={draft.model ?? ""}
-                onValueChange={(v) => setTrackedDraft({ ...draft, model: v || undefined, backend: backendForModel(v || undefined, codexList) })}
-                groups={modelGroups(codexList, { withDefault: true })}
-                indicatorPosition="right"
-                ariaLabel="Model"
-              />
-            </SettingsField>
-
-            <SettingsField label="Effort" help={SETTINGS_HELP.effort}>
-              <Select
-                variant="bordered"
-                value={backend === "codex" ? codexEffortForModel(codexModel, draft.effort ?? "") : claudeEffortForModel(draft.model, draft.effort ?? "")}
-                onValueChange={(v) => setTrackedDraft({ ...draft, effort: (v || undefined) as Settings["effort"] })}
-                options={backend === "codex" ? codexEffortOptions(codexModel, { withDefault: true }) : claudeEffortOptions(draft.model, { withDefault: true })}
-                indicatorPosition="right"
-                ariaLabel="Effort"
-              />
-            </SettingsField>
-
             {/* The launch permission mode for NEW Claude workers. Only the two modes a headless worker
                 can actually run in are offered (see CLAUDE_DISPATCH_PERMISSION_OPTIONS); the server's
                 workerDispatchPermission enforces the same floor, so a restrictive value left in an old
@@ -228,18 +179,6 @@ export function SettingsDrawer() {
               <OnOffToggle value={draft.notifications} onChange={toggleNotifications} />
               {draft.notifications && <PermHint perm={perm} />}
             </SettingsField>
-
-            {/* Server setting (part of the dispatched worker's system prompt) — saved on Save, not live.
-                Absent ⇒ on, so a checkbox always reflects the effective state. */}
-            <SettingsField label="Runtime QA gate" help={SETTINGS_HELP.runtimeGate}>
-              <OnOffToggle value={draft.runtimeGate !== false} onChange={(on) => setTrackedDraft({ ...draft, runtimeGate: on })} />
-            </SettingsField>
-
-            {/* Server setting (the wake scheduler's limit source). Absent ⇒ on, same as above. */}
-            <SettingsField label="Auto-resume after usage limits" help={SETTINGS_HELP.autoResumeOnLimit}>
-              <OnOffToggle value={draft.autoResumeOnLimit !== false} onChange={(on) => setTrackedDraft({ ...draft, autoResumeOnLimit: on })} />
-            </SettingsField>
-
 
             <PromptsSection draft={draft} setDraft={setTrackedDraft} />
           </div>

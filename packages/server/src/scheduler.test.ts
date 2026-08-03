@@ -1365,18 +1365,6 @@ test("limit: a pause from LAST NIGHT is still picked up (the grace is deliberate
   h.storage.close()
 })
 
-test("limit: the setting gates the whole source", async () => {
-  const h = limitHarness()
-  h.storage.upsertSession(row("a"))
-  h.tele.set("a", limitTele(sessionFault()))
-  const s = h.make({ autoResumeOnLimit: () => false })
-  await s.tick()
-  h.clock.ms = SESSION_RESET_MS + 61_000
-  await s.tick()
-  assert.deepEqual(h.resumes, [])
-  h.storage.close()
-})
-
 test("limit: a WEEKLY pause waits for the usage endpoint, and never guesses from its dateless clock", async () => {
   const h = limitHarness()
   const day = 24 * 3_600_000

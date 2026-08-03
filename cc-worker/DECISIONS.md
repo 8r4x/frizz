@@ -671,8 +671,10 @@ codex**, so a codex worker has only prompt-level scratchpad discipline — the l
 
 Maintainer's call: the mechanism is opinionated, so it should be chosen rather than inherited. New
 `scratchpadReinforcement` setting, **OFF by default** — the inverse of `runtimeGate` /
-`autoResumeOnLimit`, which are opt-OUT. Toggle sits in the Settings drawer under "Auto-resume after
-usage limits". `scratchpad.mjs` inverted its kill switch into an opt-in gate: absence means off.
+`autoResumeOnLimit`, which are opt-OUT. (Both of those settings were deleted on 2026-08-03 — see the
+last entry in this file — so this comparison is historical.) Toggle sits in the Settings drawer under
+"Auto-resume after usage limits". `scratchpad.mjs` inverted its kill switch into an opt-in gate:
+absence means off.
 
 **The two backends cannot be gated in the same place**, which is the whole design constraint here:
 
@@ -994,3 +996,15 @@ Two incidental findings worth keeping, since both cost a debugging cycle:
 - Stop-hook feedback reaches the model but never the human: fray drops `isMeta` user records
   (`packages/server/src/transcript.ts`), so a blocked rest shows the worker's original message
   followed by whatever it sends next, with no visible trace of the hook.
+
+## 2026-08-03: the Runtime QA gate is DELETED, and the settings drawer stops duplicating the composer
+
+Maintainer's call, verbatim: *"This is obviously something that should not be a global setting inside of fray. This is extremely overfit to our specific requirements inside of this repo. Wipe it entirely."*
+
+Three removals, one theme — Fray's shipped worker contract states fray MECHANICS, and everything else belongs to the repo or to the dispatch that starts the thread.
+
+- **`runtimeGate` (setting) + `RUNTIME_GATE` (prompt module) — gone.** The browser-QA loop (drive it in Chrome, screenshot into the handoff, escalate to an adversarial reviewer) was fray-ui's own engineering norm shipped to every worker Fray dispatches anywhere. That is what `FRAY.md` / `CLAUDE.md` are for: `frayConfigBlock` already injects a repo's own conventions into every spawn/adopt/resume, and this repo keeps its full browser-QA section there. What remains in the shipped contract is the repo-agnostic line that was already in the Quality bar — *"Verify behavior end-to-end before calling anything done."* `VISUAL_EVIDENCE` **stays**: it documents Fray's guarded local-image proxy, a platform capability, not a QA policy. `chrome-devtools` also stays always-mounted — giving a worker a browser is a capability, not an opinion about when to use it.
+- **Model + Effort — removed from the settings drawer.** They are chosen per dispatch in the prompt box (`DispatchPreferences`, one profile per runtime); a second global copy only made it ambiguous which one applied. `Settings.model` / `Settings.effort` survive on the wire: `dispatch-preferences.ts` still seeds the composer's first-run profile from them and `dispatch.ts` still falls back to them for GitHub batch dispatch.
+- **`autoResumeOnLimit` — gone; auto-resume is unconditional.** A thread cut off mid-turn by an exhausted subscription window always gets its own "continue" when the window rolls. `ThreadView.limitPause.autoResume` survives on the wire but is now purely a STALENESS verdict (`resolveLimitPause`): a fault old enough that the wake will never arrive stops promising one.
+
+Both settings keys are simply absent from the `Settings` zod object now. The object is non-strict and `getSettings` re-parses `{...defaults, ...stored}`, so an old DB carrying either key has it stripped on read — no migration.

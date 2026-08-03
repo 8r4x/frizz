@@ -49,7 +49,7 @@ function serverTable(command: string, args: readonly string[], env?: Record<stri
 /**
  * The `-c` overrides that mount fray's MCP servers into a codex app-server.
  *
- * chrome-devtools is ALWAYS mounted (the runtime release gate needs a browser out of the box on any
+ * chrome-devtools is ALWAYS mounted (a worker gets a browser out of the box on any
  * machine — the same CHROME_DEVTOOLS_MCP spec claude uses, which is what keeps the two backends in
  * lockstep). The unified `fray` server rides along when its descriptor resolved; absent ⇒ the worker
  * simply lacks those tools, exactly as on the claude side.

@@ -396,7 +396,7 @@ test("end-state contract: bare rest queues, done checks, awaiting parks human/ti
 test("session-seed is a SLIM runtime pointer, not a fourth full contract copy", () => {
   // The full contract lives ONCE in the system prompt (loadWorkerPrompt) — the on-demand fray:worker
   // skill copy was deleted. The SessionStart hook only re-grounds: it points at the system prompt, carries the runtime
-  // scratchpad path + a signal-at-rest anchor, and must NOT re-duplicate the gate / re-entry drill /
+  // scratchpad path + a signal-at-rest anchor, and must NOT re-duplicate the re-entry drill or any
   // browser-QA checklist (that duplication is exactly what drifted and what this slim removes).
   assert.match(SESSION_SEED, /lives in your SYSTEM PROMPT/i)
   // The worker-skill copy is GONE — the seed must not tell workers to load a skill that no longer exists.
@@ -408,64 +408,24 @@ test("session-seed is a SLIM runtime pointer, not a fourth full contract copy", 
   assert.doesNotMatch(SESSION_SEED, /back to awaiting/)
 })
 
-test("runtime release gate: every worker surface carries the generalized, any-repo gate contract", () => {
-  // The gate is REPO-AGNOSTIC now (not fray-ui's own stack) and settings-toggled; when present it must
-  // read the same across all four delivery surfaces. loadWorkerPrompt defaults runtimeGate=on. Whitespace
-  // is normalized so a phrase wrapped across a newline in WORKER_PROMPT.md still matches the single-line
-  // session-seed/skill copies.
+test("runtime release gate: WIPED — no worker surface carries browser-QA opinionation", () => {
+  // The settings-toggled Runtime-release-gate module was deleted (maintainer 2026-08-03: "extremely
+  // overfit to our specific requirements inside of this repo. Wipe it entirely."). Browser-QA policy
+  // now belongs to a project's own FRAY.md/CLAUDE.md, which frayConfigBlock injects per repo — never to
+  // every worker Fray dispatches anywhere.
   for (const raw of [loadWorkerPrompt("claude"), loadWorkerPrompt("codex")]) {
     const c = raw.replace(/\s+/g, " ")
-    // PROPORTIONATE, not reflexive (maintainer 2026-08-01: "disable the browser gate except for large or
-    // complicated changes … for little things you should be able to just have confidence in your fix").
-    // Both halves have to be stated: which changes earn the browser, and that the small ones skip it —
-    // a gate that only says "drive it" is the absolutism this replaced.
-    assert.match(c, /NOT as a reflex on every diff/i)
-    assert.match(c, /DRIVE IT[\s\S]{0,200}screenshot in your handoff/i)
-    assert.match(c, /new or restructured UI surface/i)
-    assert.match(c, /judge OPTICALLY/i)
-    assert.match(c, /large, cross-cutting, or that you are simply unsure/i)
-    assert.match(c, /SKIP IT for the small and the certain/i)
-    assert.match(c, /a test pins at the right level/i)
-    // …and the guard that keeps the permission from becoming a shrug.
-    assert.match(c, /Confidence has to be EARNED, not asserted/i)
-    assert.match(c, /never describe something as driven, exercised or verified when it was not/i)
-    // Standard tools only, in priority order — never a bespoke one.
-    assert.match(c, /Chrome DevTools MCP/)
-    assert.match(c, /agent-browser/)
-    assert.match(c, /puppeteer/i)
-    assert.match(c, /never build a bespoke screenshot tool/i)
-    // Discover-in-repo, else ask the human (auto-install + persist-as-skill), same for launching.
-    assert.match(c, /existing capability[\s\S]{0,60}in the repo/i)
-    assert.match(c, /spin up the dev server yourself/i)
-    assert.match(c, /ask the human/i)
-    assert.match(c, /auto-install/i)
-    assert.match(c, /permanent skill/i)
-    assert.match(c, /disposable[\s\S]{0,120}never touch real data/i)
-    // Retained rigor.
-    assert.match(c, /active[\s\S]{0,80}idle[\s\S]{0,80}error[\s\S]{0,100}(?:restart|recovery)/i)
-    assert.match(c, /desktop[\s\S]{0,80}narrow[\s\S]{0,80}screenshots/i)
-    assert.match(c, /console[\s\S]{0,80}network/i)
-    assert.match(c, /correctness[\s\S]{0,60}(?:and|\+)[\s\S]{0,60}aesthetics/i)
-    assert.match(c, /self-review your diff/i)
-    assert.match(c, /independent fresh-context adversarial review/i)
-    assert.match(c, /green unit test over a stubbed seam is not either/i)
-    assert.match(c, /docs, comments, types and provably mechanical edits/i)
+    assert.doesNotMatch(c, /Runtime release gate/i)
+    assert.doesNotMatch(c, /SKIP IT for the small and the certain/i)
+    assert.doesNotMatch(c, /never build a bespoke screenshot tool/i)
+    assert.doesNotMatch(c, /Chrome DevTools MCP/i)
+    assert.doesNotMatch(c, /agent-browser/i)
+    // The generic, repo-agnostic verification rule stays — it names no browser.
+    assert.match(c, /Verify behavior end-to-end before calling anything done/i)
+    // …as does the handoff-rendering guidance for screenshots a worker DOES produce.
+    assert.match(c, /Visual evidence in handoffs/)
+    assert.match(c, /End-of-turn signals/)
   }
-})
-
-test("runtime release gate: the settings toggle includes or excises the whole module", () => {
-  const on = loadWorkerPrompt("claude")
-  const off = loadWorkerPrompt("claude", false)
-  // ON keeps the section (markers stripped); OFF excises it entirely.
-  assert.match(on, /Runtime release gate/)
-  assert.doesNotMatch(off, /Runtime release gate/)
-  assert.doesNotMatch(off, /SKIP IT for the small and the certain/i)
-  // Markers never survive in either mode.
-  assert.doesNotMatch(on, /FRAY:GATE/)
-  assert.doesNotMatch(off, /FRAY:GATE/)
-  // The rest of the contract is untouched when the gate is off (signals, visual-evidence guidance).
-  assert.match(off, /Visual evidence in handoffs/)
-  assert.match(off, /End-of-turn signals/)
 })
 
 test("visual-evidence handoffs: provider contracts keep embeds safe, useful, and interpretable", () => {
@@ -475,7 +435,7 @@ test("visual-evidence handoffs: provider contracts keep embeds safe, useful, and
     assert.match(c, /eligible workspace[\s\S]{0,80}allowlisted image files/i)
     assert.match(c, /outside that safe boundary[\s\S]{0,80}non-navigable/i)
     assert.match(c, /(?:Do not[\s\S]{0,60}bulk-embed|screenshot bulk[\s\S]{0,30}forbidden)/i)
-    assert.match(c, /concise textual finding[\s\S]{0,100}(?:cleanup|browser\/process)/i)
+    assert.match(c, /concise textual finding[\s\S]{0,100}when images are unavailable/i)
   }
 })
 

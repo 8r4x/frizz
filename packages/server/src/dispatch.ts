@@ -287,11 +287,10 @@ export function writeScratchpad(projectDir: string, sessionId: string, title: st
 }
 
 // The FIXED worker system prompt for `kind`, compiled in via workerPrompt.ts (single source of truth).
-// The runtimeGate flag toggles the settings-gated Runtime-release-gate section. Not user-modifiable —
-// project-specific conventions ride FRAY.md (frayConfigBlock), appended separately. Thin adapter kept
-// so existing callers (spawn/adopt/resume builders + tests) are untouched.
-export function loadWorkerPrompt(kind: BackendKind = "claude", runtimeGate = true): string {
-  return buildWorkerPrompt(kind, { runtimeGate })
+// Not user-modifiable — project-specific conventions ride FRAY.md (frayConfigBlock), appended
+// separately. Thin adapter kept so existing callers (spawn/adopt/resume builders + tests) are untouched.
+export function loadWorkerPrompt(kind: BackendKind = "claude"): string {
+  return buildWorkerPrompt(kind)
 }
 
 // ---- scratchpad reinforcement (always on) ----
@@ -399,10 +398,10 @@ export function scratchpadOrientation(sessionId: string, planPath?: string | nul
 
 // A project can ship a repo-committed `FRAY.md` at its root to steer fray workers with its OWN
 // engineering-PROCESS norms — gates, review depth, commit/PR conventions — which OVERRIDE fray's
-// built-in PROCESS defaults (NOT the fray-mechanical contract: signal fences, scratchpad, the browser
-// runtime gate stay in force — the injected header says so, matching the "Defer" section of the worker
-// contract). When present, its contents are injected into every worker's SYSTEM prompt (dispatch,
-// adopt, AND resume; both backends) under that header, so both backends see it without relying on the
+// built-in PROCESS defaults (NOT the fray-mechanical contract: signal fences, scratchpad, sub-agent
+// dispatch and the question handback stay in force — the injected header says so, matching the "Defer"
+// section of the worker contract). When present, its contents are injected into every worker's SYSTEM
+// prompt (dispatch, adopt, AND resume; both backends) under that header, so both see it without relying on the
 // agent choosing to open the file. Read fresh on every spawn/resume, so an edit takes effect on the
 // next launch.
 //
@@ -426,7 +425,7 @@ export function frayConfigBlock(projectDir: string): string {
   }
   if (!body) return ""
   const clipped = body.length > FRAY_MD_MAX_CHARS ? `${body.slice(0, FRAY_MD_MAX_CHARS)}\n\n[FRAY.md truncated]` : body
-  return `PROJECT FRAY CONFIG (from this repo's FRAY.md) — the project's own conventions for fray workers. They OVERRIDE the fray worker PROCESS defaults above (review depth, gates, git/PR conventions, the quality bar) wherever they conflict; follow them. They do NOT relax the fray-mechanical contract — the signal fences, scratchpad, and browser runtime gate still bind:\n\n${clipped}`
+  return `PROJECT FRAY CONFIG (from this repo's FRAY.md) — the project's own conventions for fray workers. They OVERRIDE the fray worker PROCESS defaults above (review depth, gates, git/PR conventions, the quality bar) wherever they conflict; follow them. They do NOT relax the fray-mechanical contract — the signal fences, the scratchpad, sub-agent dispatch and the question handback still bind:\n\n${clipped}`
 }
 
 // A DispatchInput.planPath is honored only when it is a well-formed .fray/plans/*.md path AND the file
@@ -522,7 +521,7 @@ export function resolveFrayMcp(
 // Claude flags that mount the fray-injected MCP servers via ONE inline `--mcp-config` JSON and
 // PRE-APPROVE their tools (`--allowedTools`) so a headless worker never blocks on a permission prompt
 // it has nobody to answer. execvp runs the argv with NO shell (tmux.ts), so the JSON travels literally.
-// chrome-devtools is ALWAYS mounted (the runtime release gate needs a browser out of the box on any
+// chrome-devtools is ALWAYS mounted (a worker gets a browser out of the box on any
 // machine — parity with the codex backend's `-c` injection, same CHROME_DEVTOOLS_MCP spec); the
 // server-level `mcp__chrome-devtools` rule pre-approves every tool it exposes. The unified `fray`
 // server rides along when its descriptor resolved, pre-approved the same server-level way.
@@ -562,7 +561,7 @@ export function claudeMcpConfig(mcp?: FrayMcp): ClaudeMcpConfig {
 // Claude flags that mount the fray-injected MCP servers via ONE inline `--mcp-config` JSON and
 // PRE-APPROVE their tools (`--allowedTools`) so a headless worker never blocks on a permission prompt
 // it has nobody to answer. execvp runs the argv with NO shell (tmux.ts), so the JSON travels literally.
-// chrome-devtools is ALWAYS mounted (the runtime release gate needs a browser out of the box on any
+// chrome-devtools is ALWAYS mounted (a worker gets a browser out of the box on any
 // machine — parity with the codex backend's `-c` injection, same CHROME_DEVTOOLS_MCP spec); the
 // server-level `mcp__chrome-devtools` rule pre-approves every tool it exposes. The unified `fray`
 // server rides along when its descriptor resolved, pre-approved the same server-level way.
@@ -889,7 +888,6 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       const scratchRel = writeScratchpad(deps.project.dir, sessionId, title, kind)
 
       const prompt = composePrompt(sessionId, input.prompt, kind)
-      const runtimeGate = settings.runtimeGate !== false
 
       // Codex app-server transport: a PERSISTED JSON-RPC session + the prompt as its first turn. No
       // tmux pane and no rollout discovery — the bridge returns the codex session id, which the tailer
@@ -914,7 +912,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             model,
             effort,
             sandbox: codexSandbox(permissionMode) as "read-only" | "workspace-write" | "danger-full-access",
-            baseInstructions: [loadWorkerPrompt("codex", runtimeGate), extraSystemPrompt].filter(Boolean).join("\n\n"),
+            baseInstructions: [loadWorkerPrompt("codex"), extraSystemPrompt].filter(Boolean).join("\n\n"),
             developerInstructions: CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS,
             config: { model_reasoning_summary: "detailed", ...codexScratchpadHookConfig(scratchpadHookScript(), sessionId) },
           })
@@ -975,7 +973,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           throw new Error("Claude session broker is unavailable; cannot start this thread.")
         }
         const appendSystemPrompt = [
-          loadWorkerPrompt("claude", runtimeGate),
+          loadWorkerPrompt("claude"),
           scratchpadOrientation(sessionId, planPath, kind),
           frayConfigBlock(deps.project.dir),
         ].filter(Boolean).join("\n\n")
@@ -1139,7 +1137,6 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       }
       const prompt = composePrompt(sessionId, task)
       const permissionMode = workerDispatchPermission("claude", settings)
-      const runtimeGate = settings.runtimeGate !== false
 
       // Adoption spawns through the broker, exactly like a fresh dispatch. It used to claim a tmux
       // pane under a leased attempt token and rebind the pane identity across slow post-create setup —
@@ -1166,7 +1163,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           prompt,
           permissionMode,
           appendSystemPrompt: [
-            loadWorkerPrompt("claude", runtimeGate),
+            loadWorkerPrompt("claude"),
             scratchpadOrientation(sessionId),
             frayConfigBlock(deps.project.dir),
             adoption,

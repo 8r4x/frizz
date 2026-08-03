@@ -357,72 +357,79 @@ export const SNOOZE_PROMPT_MAX = 4000
 export const SnoozePrompt = z.string().trim().min(1).max(SNOOZE_PROMPT_MAX)
 export type SnoozePrompt = z.infer<typeof SnoozePrompt>
 
-// ---- The heartbeat (scheduler SOURCE 4) ----------------------------------------------------------
-// The DUMB one, and deliberately so: it fires on a clock and nothing turns it off but disarming it.
-// No rest trigger, no sentinel, no regard for what the thread is doing — if the interval has elapsed,
-// the beat goes out, MID-TURN INCLUDED. That last part is the feature and not an implementation
-// detail: a beat held until the thread happened to stop would make the cadence describe nothing, and
-// would make this a second stop hook wearing a clock.
+// ---- THE RECURRING PROMPT (scheduler SOURCES 4 and 5) --------------------------------------------
+// ONE piece of text, and up to two independent reasons to send it:
 //
-// It exists as the sibling of the stop hook because the two answer different questions. A stop hook
-// asks "you stopped — is there more?", which is what you want while driving an effort forward. A
-// heartbeat asks "it has been ten minutes", which is what you want when a thread must be revisited on a
-// schedule no matter what it happens to be doing. Collapsing them into one left neither working: an
-// interval-only version cannot react to a stop, and a rest-only version cannot keep a schedule.
+//   ON REST      (SOURCE 5) — every time the thread comes to a stop. No clock and nothing to tune: if
+//                it stopped, it is prompted. This is what drives an effort forward.
+//   ON SCHEDULE  (SOURCE 4) — every N minutes on a clock the operator sets, consulting nothing about
+//                what the thread is doing and DELIVERED MID-TURN. This is what reaches a thread that
+//                never stops.
 //
-// The interval is CHOSEN, unlike the stop hook's fixed heartbeat floor — an operator asking for "every
-// hour" is naming a real schedule, not guessing at a rate limit.
-export const HEARTBEAT_PROMPT_MAX = SNOOZE_PROMPT_MAX
-// One minute floor: a beat is read at the agent's next sampling boundary, so a sub-minute cadence buys
-// no promptness — it only churns the outbox and talks over the work. One day ceiling keeps a forgotten
-// heartbeat from being indistinguishable from a dead one.
-export const HEARTBEAT_MIN_INTERVAL_SECONDS = 60
-export const HEARTBEAT_MAX_INTERVAL_SECONDS = 24 * 60 * 60
-export const HeartbeatPrompt = z.string().trim().min(1).max(HEARTBEAT_PROMPT_MAX)
-export const HeartbeatIntervalSeconds = z
+// Either, both, or neither. NEITHER IS THE OFF STATE — there is deliberately no separate enable switch,
+// because with both triggers off nothing can fire and a third toggle would only be a way to disagree
+// with the other two (maintainer 2026-08-03: "we can delete the top-level toggle since you can now
+// achieve that by just disabling both of the other two toggles").
+//
+// WHY ONE PROMPT AND NOT TWO FEATURES. These shipped as separate features with separate prompts, and
+// the argument for keeping them apart rested on something that is no longer true. While a beat was held
+// until the thread rested, a schedule could only ever deliver AT a rest — and the rest trigger fires at
+// every rest — so with one shared text the schedule's deliveries were a strict subset of the rest
+// trigger's: same words, same instants, nothing added. Mid-turn delivery is what pulled the two apart,
+// and once they genuinely diverge, "nudge this thread whenever it stops, and at least every N minutes
+// even if it doesn't" is ONE intent that used to cost two prompts and two toggles to express.
+//
+// What that costs, stated plainly: you can no longer run two DIFFERENT texts on the two triggers.
+// Weighed and accepted — the shared-intent case is the common one.
+export const RECURRING_PROMPT_MAX = SNOOZE_PROMPT_MAX
+// One minute floor: a delivery is read at the agent's next sampling boundary, so a sub-minute cadence
+// buys no promptness — it only churns the outbox and talks over the work. One day ceiling keeps a
+// forgotten schedule from being indistinguishable from a dead one.
+export const RECURRING_MIN_INTERVAL_SECONDS = 60
+export const RECURRING_MAX_INTERVAL_SECONDS = 24 * 60 * 60
+export const RecurringPromptText = z.string().trim().min(1).max(RECURRING_PROMPT_MAX)
+export const RecurringIntervalSeconds = z
   .number()
   .int()
-  .min(HEARTBEAT_MIN_INTERVAL_SECONDS)
-  .max(HEARTBEAT_MAX_INTERVAL_SECONDS)
+  .min(RECURRING_MIN_INTERVAL_SECONDS)
+  .max(RECURRING_MAX_INTERVAL_SECONDS)
 
-// What the board renders for a thread carrying one. `enabled` mirrors the stop hook's toggle: it keeps
-// the text and the schedule while stopping the beat, so switching it back on costs no retyping.
-export const ThreadHeartbeat = z.object({
-  intervalSeconds: z.number().int().positive(),
+// What the board renders for a thread carrying one. The two triggers are independent booleans rather
+// than one `enabled` flag, and the text survives both being switched off so re-arming costs no retyping.
+// `intervalSeconds` is present whenever a schedule has ever been set, INCLUDING while `onSchedule` is
+// false — otherwise flipping the schedule back on would lose the cadence the operator chose.
+export const ThreadRecurringPrompt = z.object({
   prompt: z.string(),
-  enabled: z.boolean(),
+  onRest: z.boolean(),
+  onSchedule: z.boolean(),
+  intervalSeconds: z.number().int().positive().optional(),
   armedAt: z.string(),
-  lastFiredAt: z.string().optional(),
+  /** Last delivery of the ON REST trigger; the two are stamped separately so each reads its own clock. */
+  lastRestFiredAt: z.string().optional(),
+  lastScheduleFiredAt: z.string().optional(),
 }).strict()
-export type ThreadHeartbeat = z.infer<typeof ThreadHeartbeat>
+export type ThreadRecurringPrompt = z.infer<typeof ThreadRecurringPrompt>
 
-// ---- The operator's stop hook (scheduler SOURCE 5) -----------------------------------------------
-// Text an operator writes in the thread footer, re-delivered every time that thread STOPS. Named for
-// the hook it behaves like: fray catches the worker coming to rest and hands it this. There is no
-// interval and no cadence to choose — the trigger is the stop itself.
-//
-// THE OPT-OUT, shared by both recurring sources and deliberately hard to reach for.
+// ---- The opt-out ---------------------------------------------------------------------------------
+// THE OPT-OUT, shared by both triggers and deliberately hard to reach for.
 //
 // A worker that replies ALLDONE is saying "there is no further work here", and fray stops prompting it
-// — the stop hook AND the heartbeat, because a run that keeps being woken has not stalled and the whole
-// point of the word is that it has. It is not a "skip this one" — it is the end of the arrangement, and
-// nothing but new activity on the thread reopens it. Both delivered messages therefore OFFER it in one
-// de-emphasized line and warn against it in the same breath: the failure it guards is a worker that
-// says it to look tidy and silently parks an effort nobody is watching.
+// — BOTH triggers, because a run that keeps being woken has not stalled and the whole point of the word
+// is that it has. It is not a "skip this one" — it is the end of the arrangement, and nothing but new
+// activity on the thread reopens it. Both delivered messages therefore OFFER it in one de-emphasized
+// line and warn against it in the same breath: the failure it guards is a worker that says it to look
+// tidy and silently parks an effort nobody is watching.
 //
 // Mechanically it needs no stored state at all, which is what makes it honest: the flag is folded off
 // the FINAL assistant message, so it holds for exactly as long as that message is the thread's last
 // word. Anything the thread says or receives afterwards reopens the loop by itself.
-export const STOP_HOOK_MAX = SNOOZE_PROMPT_MAX
-export const StopHookPrompt = z.string().trim().min(1).max(STOP_HOOK_MAX)
-export type StopHookPrompt = z.infer<typeof StopHookPrompt>
 
-/** The worker's "there is no further work here" reply, which stops BOTH recurring sources. Recognized
- * only as its OWN line (see `saysAllDone`), so a worker discussing the protocol — which the delivered
- * trailers invite by naming it — never ends its own run by talking about it. */
+/** The worker's "there is no further work here" reply, which stops BOTH triggers. Recognized only as
+ * its OWN line (see `saysAllDone`), so a worker discussing the protocol — which the delivered trailers
+ * invite by naming it — never ends its own run by talking about it. */
 export const ALLDONE_SENTINEL = "ALLDONE"
 
-/** Does this assistant text defer its stop-hook bump? True iff some line, stripped of markdown
+/** Does this assistant text defer its recurring prompt? True iff some line, stripped of markdown
  * emphasis/backticks and trailing punctuation, IS the sentinel.
  *
  * CASE-SENSITIVE, which is load-bearing now that the word is `AWAITING`: fray's own signal-fence
@@ -451,25 +458,25 @@ const OPT_OUT_NOTE =
   `If there is genuinely no further work, reply ${ALLDONE_SENTINEL} on its own line to stop these prompts` +
   " — but be sure, because it permanently stalls this run."
 
-/** What fray delivers for a STOP HOOK: the operator's words VERBATIM, then the trailer. Kept beside the
- * parser so the wording sent and the wording recognized can never drift apart. */
-export function stopHookMessage(prompt: string): string {
-  return `${prompt.trim()}\n\n(Stop hook — sent each time you come to rest. ${OPT_OUT_NOTE})`
+/** What fray delivers when the ON REST trigger fires: the operator's words VERBATIM, then the trailer.
+ * Kept beside the parser so the wording sent and the wording recognized can never drift apart. */
+export function restPromptMessage(prompt: string): string {
+  return `${prompt.trim()}\n\n(Recurring prompt — sent each time you come to rest. ${OPT_OUT_NOTE})`
 }
 
-/** What fray delivers for a HEARTBEAT. Same shape, and it names the cadence so a worker can tell a beat
- * from a stop hook without guessing — they read identically otherwise, and the two mean different
- * things about why it is being spoken to. A beat in particular may arrive MID-TURN, so a worker reading
- * one has not necessarily stopped.
+/** What fray delivers when the ON SCHEDULE trigger fires. Same text, same shape, and it names the
+ * cadence — which is the ONE thing that distinguishes the two deliveries now that the prompt is shared.
+ * A worker needs that distinction: a scheduled delivery may arrive MID-TURN, so reading one does not
+ * mean it has stopped.
  *
  * The trailer's exact wording is pinned by `parseRecurringPrompt` below and by the prompt goldens —
  * change one and you must change all three. */
-export function heartbeatMessage(prompt: string, intervalSeconds: number): string {
-  return `${prompt.trim()}\n\n(Heartbeat — sent every ${formatIntervalLabel(intervalSeconds)}. ${OPT_OUT_NOTE})`
+export function schedulePromptMessage(prompt: string, intervalSeconds: number): string {
+  return `${prompt.trim()}\n\n(Recurring prompt — sent every ${formatIntervalLabel(intervalSeconds)}. ${OPT_OUT_NOTE})`
 }
 
 /** "10 min" / "2 hr" / "90s" — whole units only, because a cadence printed to the second promises a
- * precision the delivery does not have (a beat lands at the thread's next rest). */
+ * precision the delivery does not have (it is read at the agent's next sampling boundary). */
 export function formatIntervalLabel(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return "—"
   if (seconds < 60) return `${Math.round(seconds)}s`
@@ -481,20 +488,25 @@ export function formatIntervalLabel(seconds: number): string {
 
 /** What a delivered recurring prompt looks like once it is back out of the transcript.
  *
- * The chat needs to tell a bump from a human message and a stop hook from a beat, and the transcript
- * carries no structure — a delivery is an ordinary user turn. So this parses the trailer the two
- * composers above emit, exactly as `parseGithubWakeSteer` parses the steer its own formatter writes.
+ * The chat needs to tell a delivery from a human message, and to say WHICH TRIGGER fired, and the
+ * transcript carries no structure — a delivery is an ordinary user turn. So this parses the trailer the
+ * two composers above emit, exactly as `parseGithubWakeSteer` parses the steer its own formatter writes.
  * That is not a text GUESS: the format is fray's, it is defined ten lines up, and both directions live
  * in this file so they cannot drift. Anything that does not match returns undefined and renders as it
  * did before — text is never lost to a parse. */
 export interface RecurringPrompt {
-  kind: "stop-hook" | "heartbeat"
-  /** The heartbeat's cadence as the trailer stated it ("10 min"); absent for a stop hook. */
+  kind: "rest" | "schedule"
+  /** The cadence as the trailer stated it ("10 min"); absent for a rest delivery. */
   every?: string
   /** The operator's own words, with the trailer removed. */
   prompt: string
 }
-const RECURRING_TRAILER = /\n\n\((Stop hook — sent each time you come to rest|Heartbeat — sent every ([^.)]+))\. [^)]*\)$/
+// The LEGACY alternates matter: transcripts written before the two features merged carry
+// "Stop hook — …" / "Heartbeat — sent every …", and those messages are still sitting in every open
+// thread on disk. Dropping them from the pattern would not lose the text (a non-match falls through to
+// plain rendering) but it would silently demote a whole thread's history from wake dividers to prose.
+const RECURRING_TRAILER =
+  /\n\n\((?:Recurring prompt|Stop hook|Heartbeat) — sent (?:(each time you come to rest)|every ([^.)]+))\. [^)]*\)$/
 export function parseRecurringPrompt(text: string | undefined): RecurringPrompt | undefined {
   if (typeof text !== "string") return undefined
   const m = RECURRING_TRAILER.exec(text.trimEnd())
@@ -502,20 +514,9 @@ export function parseRecurringPrompt(text: string | undefined): RecurringPrompt 
   const prompt = text.trimEnd().slice(0, m.index).trim()
   if (!prompt) return undefined
   return m[2]
-    ? { kind: "heartbeat", every: m[2].trim(), prompt }
-    : { kind: "stop-hook", prompt }
+    ? { kind: "schedule", every: m[2].trim(), prompt }
+    : { kind: "rest", prompt }
 }
-
-// What the board renders for a thread carrying one. `enabled` is the operator's toggle: disabling
-// KEEPS the text (so re-enabling does not make them retype it) and stops the bumps, which is what lets
-// the footer's toggle be non-destructive.
-export const ThreadStopHook = z.object({
-  prompt: z.string(),
-  enabled: z.boolean(),
-  armedAt: z.string(),
-  lastFiredAt: z.string().optional(),
-}).strict()
-export type ThreadStopHook = z.infer<typeof ThreadStopHook>
 
 // The signal fence on a thread's FINAL assistant message — the fence language IS the state, the
 // body is the message. `done` = checked success card in the queue until the human Archives it (the
@@ -672,12 +673,10 @@ export const ThreadView = z.object({
   // reload its plugin closure in place, so the board needs it to decide whether to offer that verb at
   // all rather than render a button that throws.
   claudeRuntime: z.enum(["tmux", "broker"]).optional(),
-  // The thread's heartbeat, when one is armed. Present with `enabled` false ⇒ schedule and text kept,
-  // no beat fired.
-  heartbeat: ThreadHeartbeat.optional(),
-  // The operator's own stop hook, when they have written one. Present with `enabled` false ⇒ the
-  // text is kept but no bump fires, which is what lets the footer's toggle be non-destructive.
-  stopHook: ThreadStopHook.optional(),
+  // The thread's recurring prompt, when one has been written. Present with BOTH triggers false ⇒ the
+  // text and the cadence are kept but nothing fires — that pair of falses IS the off state, which is
+  // why there is no separate enable flag here to disagree with them.
+  recurringPrompt: ThreadRecurringPrompt.optional(),
   // The signal fence on the final assistant message, present only while the thread is excused by it.
   lastFence: ThreadFence.optional(),
   // SERVER-DERIVED queue membership: explicit questions, checked/done handoffs, plus the process-level
@@ -931,17 +930,6 @@ export const Settings = z.object({
   // Default action for a vetted non-image local path in agent markdown. Image clicks always use the
   // OS default viewer so screenshots retain their expected behavior.
   localFileOpener: LocalFileOpener.optional(),
-  // Whether dispatched workers receive the RUNTIME RELEASE GATE block in their system prompt — the
-  // instruction to drive UI/runtime changes in a real browser, screenshot the result into the handoff,
-  // and run an independent review before claiming done. ON by default (fray's screenshot-in-the-UI loop
-  // is the differentiator); a project that doesn't want that opinionation flips it off in one click.
-  // Optional so an old settings blob parses; absent ⇒ on (defaultSettings pins true).
-  runtimeGate: z.boolean().optional(),
-  // When a subscription window runs dry mid-turn, remember every thread it cut off and deliver a
-  // "continue" to each one once the window rolls. ON by default — an interrupted agent that never
-  // gets picked back up is the whole cost of a limit. Flip it off to leave the paused threads in the
-  // queue for a human to restart. Optional so an old settings blob parses; absent ⇒ on.
-  autoResumeOnLimit: z.boolean().optional(),
   // GitHub batch-dispatch prompt templates (the picker's per-item worker prompt). Optional: when
   // unset OR blank the server falls back to its exported DEFAULT_ISSUE_PROMPT / DEFAULT_PR_PROMPT.
   // Substitution tokens the server fills: {repo} {n} {title} {url} {labels} {body}. The leading
@@ -1098,63 +1086,50 @@ export const SetThreadSnoozeInput = z.object({
 }).strict()
 export type SetThreadSnoozeInput = z.infer<typeof SetThreadSnoozeInput>
 
-// The heartbeat's operator half — the footer popover. Session-guarded like every other browser write:
-// a tab looking at a thread that has since been re-dispatched fails closed rather than arming whatever
-// now owns the slug. `prompt: null` clears the row; an interval is required alongside a prompt, because
-// a schedule nobody chose is the thing this feature exists to make explicit.
-export const SetThreadHeartbeatInput = z.object({
-  slug: ThreadSlug,
-  sessionId: z.string().min(1),
-  prompt: HeartbeatPrompt.nullable(),
-  intervalSeconds: HeartbeatIntervalSeconds.optional(),
-  enabled: z.boolean(),
-}).strict()
-export type SetThreadHeartbeatInput = z.infer<typeof SetThreadHeartbeatInput>
-
-// The heartbeat's WORKER half, from `mcp__fray__heartbeat`. Slug-only and unguarded for exactly the
-// reason the stop hook's worker input is (see SetOwnThreadStopHookInput): the MCP server keeps its
-// thread's slug across resumes while the session id bumps underneath it.
-export const SetOwnThreadHeartbeatInput = z.object({
-  slug: ThreadSlug,
-  prompt: HeartbeatPrompt.nullable(),
-  intervalSeconds: HeartbeatIntervalSeconds.optional(),
-  enabled: z.boolean(),
-}).strict()
-export type SetOwnThreadHeartbeatInput = z.infer<typeof SetOwnThreadHeartbeatInput>
-
-// The footer's stop-hook popover, arming and disarming in ONE call — the toggle and the textarea
-// are two views of one row, and splitting them into two mutations would let a tab that has only one of
-// them clobber the other. Session-guarded like the pause above: it comes from a browser tab that may be
-// looking at a thread which has since been re-dispatched.
+// The recurring prompt's OPERATOR half — the footer popover, arming and disarming in ONE call. The
+// text, the two triggers and the cadence are all views of one row, and splitting them into separate
+// mutations would let a tab holding only some of them clobber the rest on save.
 //
-// `prompt: null` clears the row entirely (the popover's own "clear"); a prompt with `enabled: false`
-// keeps the text parked and silent.
-export const SetThreadStopHookInput = z.object({
+// Session-guarded like every other browser write: a tab looking at a thread that has since been
+// re-dispatched fails closed rather than arming whatever now owns the slug.
+//
+// `prompt: null` clears the row entirely. A prompt with both triggers false keeps the text and the
+// cadence parked and silent — that IS the off state, and it is why there is no `enabled` field.
+// `intervalSeconds` is required when `onSchedule` is true, because a schedule nobody chose is exactly
+// the ambiguity the minutes field exists to remove.
+export const SetThreadRecurringPromptInput = z.object({
   slug: ThreadSlug,
   sessionId: z.string().min(1),
-  prompt: StopHookPrompt.nullable(),
-  enabled: z.boolean(),
+  prompt: RecurringPromptText.nullable(),
+  onRest: z.boolean(),
+  onSchedule: z.boolean(),
+  intervalSeconds: RecurringIntervalSeconds.optional(),
 }).strict()
-export type SetThreadStopHookInput = z.infer<typeof SetThreadStopHookInput>
+export type SetThreadRecurringPromptInput = z.infer<typeof SetThreadRecurringPromptInput>
 
-// The WORKER arming its OWN stop hook, through `mcp__fray__stop_hook` (which POSTs the same `/rpc/*`
-// surface the board uses). A worker has no other way to keep a long effort moving — Claude Code's own
-// in-session schedulers cannot fire in the runtime fray spawns — so this is the counterpart to the
-// operator's control above, writing the same row.
+// The WORKER half, through `mcp__fray__recurring_prompt` (which POSTs the same `/rpc/*` surface the
+// board uses). A worker has no other way to keep a long effort moving — Claude Code's own in-session
+// schedulers cannot fire in the runtime fray spawns — so this is the counterpart to the operator's
+// control above, writing the same row.
 //
 // Deliberately NOT session-guarded, unlike the operator's input: the MCP server is spawned with its
 // thread's slug and keeps it across a resume, while the session id and generation bump underneath it.
 // A guard here would fail on exactly the long-lived thread this exists for. The slug is stamped into
 // that server's env by fray, not supplied by the model.
 //
+// There is deliberately no thread parameter a model could aim elsewhere: a worker may only ever arm its
+// OWN thread. One agent making a DIFFERENT thread loop forever is not a capability fray hands out.
+//
 // `prompt: null` is the explicit stop, which is how a worker ends its own loop deliberately rather than
-// by falling back on the AWAITING sentinel.
-export const SetOwnThreadStopHookInput = z.object({
+// by falling back on the ALLDONE sentinel.
+export const SetOwnThreadRecurringPromptInput = z.object({
   slug: ThreadSlug,
-  prompt: StopHookPrompt.nullable(),
-  enabled: z.boolean(),
+  prompt: RecurringPromptText.nullable(),
+  onRest: z.boolean(),
+  onSchedule: z.boolean(),
+  intervalSeconds: RecurringIntervalSeconds.optional(),
 }).strict()
-export type SetOwnThreadStopHookInput = z.infer<typeof SetOwnThreadStopHookInput>
+export type SetOwnThreadRecurringPromptInput = z.infer<typeof SetOwnThreadRecurringPromptInput>
 
 // What an in-place plugin reload changed, as the board reports it. Counts answer "did my edit land?";
 // `mcpServers` carries NAMES because a reload that changes MCP tools is the one with a real cost — the

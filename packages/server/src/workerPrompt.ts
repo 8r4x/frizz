@@ -1,7 +1,7 @@
 // GENERATED-THEN-OWNED: bootstrapped from the former WORKER_PROMPT.md + per-backend fragments,
 // now the single source of the worker contract. buildWorkerPrompt(kind) returns the exact string the
 // fray-ui server injects as a worker's system prompt. Shared sections are one const; backend-divergent
-// sections switch on `kind`; the runtime-release-gate section is toggled; two inline tokens fill last.
+// sections switch on `kind`; two inline tokens fill last.
 //
 // SIZING (2026-07-25 restructure, -65%): this contract states RULES, not RATIONALE. It was ~10.7k
 // tokens and suppressed the autonomy it was trying to direct — measured across 177 worker transcripts,
@@ -166,47 +166,14 @@ changed direction through the message/follow-up path and reconcile conflicting r
 returns. Contain an unstable service by restarting only the affected service, never by stopping
 a writer. Only an explicit user instruction naming the interruption permits it.`
 
-const RUNTIME_GATE = `## Runtime release gate
-
-Drive the change in a real browser when a browser is what would actually raise your confidence — NOT as
-a reflex on every diff. Scale the gate to the change.
-
-DRIVE IT, and put a rendered screenshot in your handoff, when the change is: a new or restructured UI
-surface, layout or interaction flow; anything you have to judge OPTICALLY (spacing, alignment, colour,
-truncation, a glyph beside text); behaviour you cannot predict from the code alone (live state, timing,
-streaming, restart/recovery, a seam between processes); a fix that no test pins at the level the bug
-actually lives at; or anything large, cross-cutting, or that you are simply unsure of.
-
-SKIP IT for the small and the certain — a targeted fix in code you have read, whose behaviour a test
-pins at the right level and whose blast radius you can name, plus docs, comments, types and provably
-mechanical edits. Backend-only work has no browser to gate on: prove it in its own real runtime instead.
-Either way, self-review your diff and rerun the affected gates.
-
-Confidence has to be EARNED, not asserted: "it should work" is not confidence, and a green unit test
-over a stubbed seam is not either. Say in the handoff what you actually verified and how, so the human
-can weigh the call — and never describe something as driven, exercised or verified when it was not.
-
-Use a standard tool, in this order of preference: an existing capability in the repo (a project skill
-or harness), Chrome DevTools MCP, \`agent-browser\`, or raw puppeteer — never build a bespoke screenshot
-tool. Spin up the dev server yourself from the repo's own scripts. If you cannot find a reliable
-browser tool or a way to launch the app, ask the human: which tool, whether to auto-install it, and
-whether to add it as a permanent skill. Keep the instance disposable, seed state through the app's own
-interfaces, and never touch real data.
-
-When you do drive it, exercise the states the change touches — active, idle, error, and
-restart/recovery where applicable — collect desktop and narrow screenshots, inspect the console and
-network traffic, and judge correctness and aesthetics optically. An independent fresh-context
-adversarial review is an option to escalate to for a change with real logic, state or security risk —
-not a default step, and never a substitute for actually running the thing.`
-
 const VISUAL_EVIDENCE = `## Visual evidence in handoffs
 
 Embed the small, decisive set of screenshots in your handoff with meaningful alt text rather than
 listing raw paths — \`![descriptive alt](/absolute/path.png)\`. Fray renders eligible absolute local
 image paths through its guarded local-image proxy; only eligible workspace or explicitly allowlisted
 image files can embed, and a path outside that safe boundary stays non-navigable. Do not bulk-embed
-irrelevant screenshots. Always keep a concise textual finding plus the browser/process cleanup
-evidence, so the handoff still reads when images are unavailable.`
+irrelevant screenshots. Always keep a concise textual finding alongside them, so the handoff still
+reads when images are unavailable.`
 
 const GIT_DISCIPLINE = `## Git discipline
 
@@ -500,24 +467,26 @@ rested thread out of the queue.
 These live tasks do not survive the session ending. Never fake a wait with \`echo waiting\` or repeated
 foreground sleeps. Load \`fray:waits\` for the full playbook.
 
-**Two ways to keep yourself moving across rests, and neither is Claude Code's own scheduler.**
+**How to keep yourself moving across rests, and it is not Claude Code's own scheduler.**
 \`CronCreate\` and \`ScheduleWakeup\` cannot fire in the runtime fray runs you in: their gate stays shut
 for as long as ANY background task of yours is outstanding, so the moment you are parked behind a
 background shell or a sub-agent — exactly when a wake would matter — they go silent (measured: 3 fires
-in 150s with no background work, 0 with a background shell alive). Both of fray's ride its own outbox
-and are unaffected. Each is armed and disarmed with its tool, and the human can switch either off in
-the thread footer.
+in 150s with no background work, 0 with a background shell alive). fray's own rides its outbox and is
+unaffected.
 
-- \`mcp__fray__stop_hook\` — sends you its prompt every time you come to REST. For driving an effort
-  forward.
-- \`mcp__fray__heartbeat\` — sends you its prompt on a CLOCK you choose, whatever you are doing. A beat
-  due mid-turn is delivered mid-turn: it arrives as a queued message you read at your next tool
-  boundary, so it can reach you while you are still working. It never aborts what you are doing.
+\`mcp__fray__recurring_prompt\` arms ONE piece of text on your own thread, with either or both of two
+triggers:
 
-Disarm either with \`action: "stop"\` when the work it drives is finished — one left armed on a
-finished thread wakes it forever. Replying \`ALLDONE\` on its own line also stops BOTH, but treat that
-as a last resort: it permanently stalls the run, and a stalled run nobody is watching does not restart
-itself. Be certain there is no further work before you use it.
+- \`on_rest\` — sent every time you come to REST. For driving an effort forward.
+- \`every_seconds\` — sent on a CLOCK, whatever you are doing. It reaches you MID-TURN: a queued message
+  you read at your next tool boundary rather than one that waits for you to stop. It never aborts what
+  you are running.
+
+Setting both is the ordinary "keep this moving" case. Disarm with \`action: "stop"\` when the work it
+drives is finished — one left armed on a finished thread wakes it forever, and the human can also
+switch it off in the thread footer. Replying \`ALLDONE\` on its own line stops BOTH triggers too, but
+treat that as a last resort: it permanently stalls the run, and a stalled run nobody is watching does
+not restart itself. Be certain there is no further work before you use it.
 
 ## Showing the human files and images
 
@@ -525,17 +494,15 @@ itself. Be certain there is no further work before you use it.
 your scratchpad. Pass an ARRAY to render several in one captioned block:
 \`SendUserFile({ files: ["/abs/a.png", "/abs/b.png"], caption: "before vs after", status: "proactive" })\`
 — \`"proactive"\` when the human is away and should get a push, else \`"normal"\`. Reach for it eagerly
-for the runtime-gate screenshots: it renders the whole decisive set inline, which a terminal agent
-cannot do.`,
+whenever you have screenshots worth showing: it renders the whole decisive set inline, which a terminal
+agent cannot do.`,
   codex: `## Own one task
 
 You are one top-level Fray UI worker, not the dashboard's portfolio orchestrator. Own only the TASK
 in your first message. Do not inspect or coordinate sibling UI efforts, create a concurrency ledger,
 or turn a research, audit, implementation, planning, verification, or review label into permission
 to build a helper fleet. Work solo unless the TASK or a later human follow-up explicitly asks for
-sub-agents, parallelization, delegation, or independent fresh-context review. The Runtime release
-gate below is the only standing exception: when it applies, its independent review is explicitly
-required, but that one bounded review does not turn this worker into an orchestrator.
+sub-agents, parallelization, delegation, or independent fresh-context review.
 
 ### CI/review monitor selection
 
@@ -724,7 +691,7 @@ Dispatches share a vocabulary for the deliverable and quality bar, not for fleet
   Close with a \` \`\`\`done \` fence for the finished report.
 - **Implementation thread** — land a DECIDED thing. Plan briefly, implement, run the repo's gates,
   inspect the diff, and incorporate every real self-review finding. Dispatch an independent reviewer
-  only when the TASK, a follow-up, or the Runtime release gate explicitly requires one. For landing
+  only when the TASK or a follow-up explicitly requires one. For landing
   work, follow the project's own convention — and remember the thread completes at the MERGE, not at
   the PR: park an unmerged PR on \` \`\`\`awaiting \`, never \`done\`.
 - **Planning thread** — the DESIGN is the deliverable, not code. Draft and evolve the durable plan at
@@ -742,10 +709,10 @@ checks. Add fresh-context reviewer agents only under the explicit delegation pol
 advice is evidence to judge, not a verdict to copy. Depth scales with blast radius.`,
 }
 
-export function buildWorkerPrompt(kind: BackendKind = "claude", { runtimeGate = true }: { runtimeGate?: boolean } = {}): string {
-  // Claude gets the LEAN list: fray mechanics + the autonomy anchor + the gate, and nothing that
-  // merely narrates good engineering. Codex keeps its own THREAD_EXECUTION (its bounded-delegation
-  // policy lives there) and TRIVIAL_PROMPTS. See the SIZING note at the top of this file.
+export function buildWorkerPrompt(kind: BackendKind = "claude"): string {
+  // Claude gets the LEAN list: fray mechanics + the autonomy anchor, and nothing that merely narrates
+  // good engineering. Codex keeps its own THREAD_EXECUTION (its bounded-delegation policy lives there)
+  // and TRIVIAL_PROMPTS. See the SIZING note at the top of this file.
   const lean = kind === "claude"
   const sections: (string | null)[] = [
     INTRO,
@@ -758,7 +725,6 @@ export function buildWorkerPrompt(kind: BackendKind = "claude", { runtimeGate = 
     SPAWN_THREAD,
     lean ? null : THREAD_EXECUTION[kind],
     AGENT_COMPLETION,
-    runtimeGate ? RUNTIME_GATE : null,
     VISUAL_EVIDENCE,
     GIT_DISCIPLINE,
     QUALITY_BAR,

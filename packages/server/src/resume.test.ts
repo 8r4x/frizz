@@ -214,8 +214,6 @@ test("resumeThread blocks every durable permission handoff before live injection
   }
 })
 
-// The runtimeGate setting must survive respawn: an opted-out project must NOT get the RUNTIME RELEASE
-// GATE forced back into the resumed worker's prompt or env (the resume-path toggle-consistency bug).
 // ── replay safety ────────────────────────────────────────────────────────────────────────────────
 // A follow-up refused by a contention gate is REPLAYABLE, and the client relies on that verdict to
 // retry instead of handing the operator's message back. The licence is delivery safety, so what these

@@ -94,7 +94,7 @@ const waitForStartups = async (n, ms = 10_000) => {
 }
 const recordOf = () => readBrokerRecord(claudeBrokerRecordPath(root, SESSION))
 const wake = (freshProcess) => deliverClaudeBrokerWake({
-  bridge, slug: SLUG, cwd: root, runtimeGate: false,
+  bridge, slug: SLUG, cwd: root,
   row: { session_id: SESSION, model: "opus", effort: "xhigh", permission_mode: "auto" },
   deliveryMessage: "⏳ The session usage limit that interrupted you has reset. Continue exactly where you left off.",
   freshProcess,

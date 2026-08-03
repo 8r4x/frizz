@@ -546,10 +546,12 @@ export function resolvePendingPermission(row: Pick<SessionRow, "permission_pendi
 // own reset clock resolves it (a weekly clock never does — see textResetInstant); its ABSENCE does not
 // cancel the auto-resume promise, because the scheduler can still resolve a weekly instant from the
 // usage endpoint. The card then says "when the window resets" rather than naming a time known nowhere.
+//
+// Auto-resume is ALWAYS armed — there is no setting to turn it off. `autoResume` is therefore purely a
+// staleness verdict: a fault whose window is long past no longer promises a wake it will never deliver.
 export function resolveLimitPause(
   row: Pick<SessionRow, "backend">,
   tele: Pick<SessionTelemetry, "limitFault"> | undefined,
-  autoResumeEnabled: boolean,
   nowMs: number,
 ): ThreadView["limitPause"] {
   const fault = tele?.limitFault
@@ -567,7 +569,7 @@ export function resolveLimitPause(
     window: fault.window,
     at: fault.at,
     ...(resumesAtMs !== undefined ? { resumesAt: Math.round(resumesAtMs / 1000) } : {}),
-    autoResume: autoResumeEnabled && !stale,
+    autoResume: !stale,
   }
 }
 
@@ -599,7 +601,6 @@ function sessionThreadView(
   registeredLegacyTerminal: boolean,
   interactionPresence: { pending: boolean; needsUser: boolean },
   nowMs: number,
-  autoResumeOnLimit: boolean,
   codexTurnLiveness: CodexTurnLivenessReader,
   claudeBrokerDaemonAlive: ClaudeBrokerLivenessReader,
 ): ThreadView {
@@ -637,7 +638,7 @@ function sessionThreadView(
   )
   const state = effectiveSessionState(row, registeredLegacyTerminal)
   const archived = state === "archived"
-  const limitPause = resolveLimitPause(row, tele, autoResumeOnLimit, nowMs)
+  const limitPause = resolveLimitPause(row, tele, nowMs)
   const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause)
   const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause)
   // A pane that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
@@ -704,25 +705,20 @@ function sessionThreadView(
     // already-delivered (or superseded) bump the row has not been swept clean of yet.
     snoozePrompt: snoozedUntil ? row.snooze_prompt ?? undefined : undefined,
     claudeRuntime: row.claude_runtime === "broker" ? "broker" as const : row.claude_runtime === "tmux" ? "tmux" as const : undefined,
-    // The heartbeat. Armed iff prompt + interval + generation are all set (storage writes and clears
-    // them together). Projected even while DISABLED — that is the state the footer's toggle leaves.
-    heartbeat: row.heartbeat_prompt && row.heartbeat_interval_ms && row.heartbeat_armed_at
+    // The recurring prompt. Present iff the text and its generation are both set (storage writes and
+    // clears them together). Projected even with BOTH TRIGGERS OFF — that is the state switching them
+    // off leaves, and the text and the cadence have to survive it or the panel would open empty.
+    recurringPrompt: row.recurring_prompt && row.recurring_armed_at
       ? {
-          intervalSeconds: Math.round(row.heartbeat_interval_ms / 1000),
-          prompt: row.heartbeat_prompt,
-          enabled: row.heartbeat_enabled === 1,
-          armedAt: row.heartbeat_armed_at,
-          lastFiredAt: row.heartbeat_last_fired_at ?? undefined,
-        }
-      : undefined,
-    // The operator's stop hook. Projected even while DISABLED — that is the state the footer's
-    // toggle exists to leave, and the text has to survive it or the popover would open empty.
-    stopHook: row.stop_hook && row.stop_hook_armed_at
-      ? {
-          prompt: row.stop_hook,
-          enabled: row.stop_hook_enabled === 1,
-          armedAt: row.stop_hook_armed_at,
-          lastFiredAt: row.stop_hook_last_fired_at ?? undefined,
+          prompt: row.recurring_prompt,
+          onRest: row.recurring_on_rest === 1,
+          onSchedule: row.recurring_on_schedule === 1,
+          // Carried whenever a cadence has ever been chosen, INCLUDING while the schedule trigger is
+          // off — the minutes field has to read back what switching it on again would use.
+          intervalSeconds: row.recurring_interval_ms ? Math.round(row.recurring_interval_ms / 1000) : undefined,
+          armedAt: row.recurring_armed_at,
+          lastRestFiredAt: row.recurring_rest_fired_at ?? undefined,
+          lastScheduleFiredAt: row.recurring_schedule_fired_at ?? undefined,
         }
       : undefined,
     needsYou,
@@ -886,9 +882,6 @@ export function createBoard(
     // Old/corrupt databases predate the canonical storage guard. Keep such rows inert instead of
     // emitting an invalid board id or allowing it to reach tailer/tmux consumers.
     const rows = storage.allSessions().filter((row) => ThreadSlug.safeParse(row.slug).success)
-    // Read once per snapshot, not once per row: the setting is board-global and every row's limit
-    // pause resolves against the same value.
-    const autoResumeOnLimit = getSettings(storage).autoResumeOnLimit !== false
     const currentInteractionKeys = new Set<string>()
     const out: ThreadView[] = []
     for (const row of rows) {
@@ -925,7 +918,6 @@ export function createBoard(
         legacyTerminalCache.has(row.slug),
         interactionPresence,
         nowMs,
-        autoResumeOnLimit,
         codexTurnLiveness,
         claudeBrokerDaemonAlive,
       ))

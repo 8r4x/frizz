@@ -10,10 +10,8 @@ import {
   FollowUpInput,
   UnqueueFollowUpInput,
   UnqueueFollowUpResult,
-  SetThreadStopHookInput,
-  SetThreadHeartbeatInput,
-  SetOwnThreadHeartbeatInput,
-  SetOwnThreadStopHookInput,
+  SetThreadRecurringPromptInput,
+  SetOwnThreadRecurringPromptInput,
   ThreadPluginReloadResult,
   SetThreadSnoozeInput,
   ConfirmAwaitingInput,
@@ -473,6 +471,38 @@ export function createRouter(ctx: AppContext) {
       throw new Error("This thread was replaced; refresh before acting on its current session")
     }
     return row
+  }
+
+  // The two checks both recurring-prompt writers owe, shared so the operator's path and the worker's
+  // can never disagree about what a valid arming is.
+  //
+  // A cadence is required when — and only when — the SCHEDULE trigger is on: a schedule nobody chose is
+  // exactly the ambiguity the minutes field exists to remove, while a prompt that only fires on rest has
+  // no cadence to name. Arming an ARCHIVED thread is refused, but only when a trigger is actually on;
+  // clearing one, or parking the text with both triggers off, stays allowed on a shelved thread.
+  interface RecurringPromptWrite {
+    prompt: string | null
+    onRest: boolean
+    onSchedule: boolean
+    intervalSeconds?: number
+  }
+  function assertRecurringPromptArmable(
+    input: RecurringPromptWrite,
+    row: Pick<SessionRow, "state" | "archived">,
+  ): void {
+    if (input.prompt === null) return
+    if (input.onSchedule && input.intervalSeconds === undefined) {
+      throw new Error("`intervalSeconds` is required when the schedule trigger is on")
+    }
+    if ((input.onRest || input.onSchedule) && (row.state === "archived" || row.archived === 1)) {
+      throw new Error("Reopen this thread before arming a recurring prompt")
+    }
+  }
+  // The stored cadence. Dropped when the prompt is cleared, and KEPT when only the schedule trigger is
+  // off — the panel has to read back the interval that switching it on again would use.
+  function recurringIntervalMs(input: RecurringPromptWrite): number | null {
+    if (input.prompt === null || input.intervalSeconds === undefined) return null
+    return input.intervalSeconds * 1000
   }
 
   // Can this exact sub-agent be steered RIGHT NOW? Returns the session to address, or null. Every
@@ -1237,9 +1267,8 @@ export function createRouter(ctx: AppContext) {
           // SDK rejects an id that is still outstanding, so a replay would surface as an error on the
           // operator's send instead of the no-op it should be.
           if (input.deliveryId && hasDelivery(ctx.storage, input.slug, input.deliveryId)) return
-          const settings = ctx.getSettings()
           const appendSystemPrompt = [
-            loadWorkerPrompt("claude", settings.runtimeGate !== false),
+            loadWorkerPrompt("claude"),
             scratchpadOrientation(row.session_id, row.plan_path, "claude"),
             frayConfigBlock(ctx.project.dir),
           ].filter(Boolean).join("\n\n")
@@ -1615,81 +1644,26 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // The HEARTBEAT (scheduler.ts SOURCE 4), from the footer popover. Its interval is CHOSEN, which is
-    // why it is required alongside a prompt rather than defaulted: a schedule nobody picked is exactly
-    // the ambiguity this feature exists to remove.
-    setThreadHeartbeat: mutation({
-      input: SetThreadHeartbeatInput,
-      handler: async ({ input }) => {
-        const row = currentOwnedSession(input.slug, input.sessionId)
-        if (input.prompt !== null) {
-          if (input.intervalSeconds === undefined) throw new Error("`intervalSeconds` is required when arming a heartbeat")
-          if (input.enabled && (row.state === "archived" || row.archived === 1)) {
-            throw new Error("Reopen this thread before arming a heartbeat")
-          }
-        }
-        if (!ctx.storage.setHeartbeatIfCurrent(
-          input.slug,
-          row.session_id,
-          row.runtime_generation ?? 0,
-          input.prompt,
-          input.prompt === null || input.intervalSeconds === undefined ? null : input.intervalSeconds * 1000,
-          input.enabled,
-          new Date().toISOString(),
-        )) {
-          throw new Error("This thread moved on; reopen it and try again")
-        }
-        ctx.board.refresh()
-      },
-    }),
-
-    // The WORKER's own heartbeat, from `mcp__fray__heartbeat`. Slug-only and unguarded for the same
-    // reason as setOwnThreadStopHook, and likewise exposing no thread parameter a model could aim
-    // elsewhere — the MCP server supplies the slug from its env.
-    setOwnThreadHeartbeat: mutation({
-      input: SetOwnThreadHeartbeatInput,
-      handler: async ({ input }) => {
-        const row = ctx.storage.getSession(input.slug)
-        if (!row) throw new Error(`thread ${input.slug} is not registered`)
-        if (input.prompt !== null) {
-          if (input.intervalSeconds === undefined) throw new Error("`intervalSeconds` is required when arming a heartbeat")
-          if (input.enabled && (row.state === "archived" || row.archived === 1)) {
-            throw new Error("Reopen this thread before arming a heartbeat")
-          }
-        }
-        if (!ctx.storage.setHeartbeatBySlug(
-          input.slug,
-          input.prompt,
-          input.prompt === null || input.intervalSeconds === undefined ? null : input.intervalSeconds * 1000,
-          input.enabled,
-          new Date().toISOString(),
-        )) {
-          throw new Error(`thread ${input.slug} could not be updated`)
-        }
-        ctx.board.refresh()
-      },
-    }),
-
-    // The OPERATOR's stop hook (scheduler.ts SOURCE 5), armed from the thread footer's popover.
-    // One mutation for both the toggle and the text, because they are two views of one row: split in
-    // two, a tab holding only one of them would clobber the other on save.
+    // THE RECURRING PROMPT (scheduler.ts SOURCES 4 and 5), from the footer panel. One mutation for the
+    // text, both triggers and the cadence, because they are all views of one row: split apart, a tab
+    // holding a stale copy of one field would clobber the rest on save.
     //
     // Storage decides whether this is a fresh arming or an edit (it keeps the generation when the text
-    // is unchanged), so flipping the toggle off and on again cannot supersede a bump already in flight
-    // for those same words, while editing the words does exactly that.
-    setThreadStopHook: mutation({
-      input: SetThreadStopHookInput,
+    // and the interval are both unchanged), so flipping a trigger off and on cannot supersede a delivery
+    // already in flight for those same words, while editing the words does exactly that.
+    setThreadRecurringPrompt: mutation({
+      input: SetThreadRecurringPromptInput,
       handler: async ({ input }) => {
         const row = currentOwnedSession(input.slug, input.sessionId)
-        if (input.prompt !== null && input.enabled && (row.state === "archived" || row.archived === 1)) {
-          throw new Error("Reopen this thread before arming a stop hook")
-        }
-        if (!ctx.storage.setStopHookIfCurrent(
+        assertRecurringPromptArmable(input, row)
+        if (!ctx.storage.setRecurringPromptIfCurrent(
           input.slug,
           row.session_id,
           row.runtime_generation ?? 0,
           input.prompt,
-          input.enabled,
+          input.onRest,
+          input.onSchedule,
+          recurringIntervalMs(input),
           new Date().toISOString(),
         )) {
           throw new Error("This thread moved on; reopen it and try again")
@@ -1698,26 +1672,28 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // The WORKER arming its own stop hook (scheduler.ts SOURCE 5), from `mcp__fray__stop_hook`. Same
-    // row the footer popover writes; different caller, and therefore a different guard.
+    // The WORKER arming its own, from `mcp__fray__recurring_prompt`. Same row the footer panel writes;
+    // different caller, and therefore a different guard.
     //
-    // Unguarded on session/generation ON PURPOSE — see SetOwnThreadStopHookInput. The MCP server knows
-    // only its slug, which fray stamped into its env at spawn and which survives every resume, while
-    // the session id underneath it does not. It is not attacker-supplied: a model can choose the TEXT
-    // but never the thread.
-    //
-    // A worker may only ever arm its OWN thread, so there is deliberately no slug parameter a model
-    // could point somewhere else — the MCP server supplies it from its env, and this handler takes it
-    // as given. One agent making a DIFFERENT thread loop forever is not a capability fray hands out.
-    setOwnThreadStopHook: mutation({
-      input: SetOwnThreadStopHookInput,
+    // Unguarded on session/generation ON PURPOSE — see SetOwnThreadRecurringPromptInput. The MCP server
+    // knows only its slug, which fray stamped into its env at spawn and which survives every resume,
+    // while the session id underneath it does not. It is not attacker-supplied: a model can choose the
+    // TEXT but never the thread, so there is deliberately no slug parameter it could aim elsewhere. One
+    // agent making a DIFFERENT thread loop forever is not a capability fray hands out.
+    setOwnThreadRecurringPrompt: mutation({
+      input: SetOwnThreadRecurringPromptInput,
       handler: async ({ input }) => {
         const row = ctx.storage.getSession(input.slug)
         if (!row) throw new Error(`thread ${input.slug} is not registered`)
-        if (input.prompt !== null && input.enabled && (row.state === "archived" || row.archived === 1)) {
-          throw new Error("Reopen this thread before arming a stop hook")
-        }
-        if (!ctx.storage.setStopHookBySlug(input.slug, input.prompt, input.enabled, new Date().toISOString())) {
+        assertRecurringPromptArmable(input, row)
+        if (!ctx.storage.setRecurringPromptBySlug(
+          input.slug,
+          input.prompt,
+          input.onRest,
+          input.onSchedule,
+          recurringIntervalMs(input),
+          new Date().toISOString(),
+        )) {
           throw new Error(`thread ${input.slug} could not be updated`)
         }
         ctx.board.refresh()
