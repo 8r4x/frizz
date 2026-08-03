@@ -33,7 +33,7 @@ nub run fray-dev:install     # one-time: ~/.local/bin/fray-dev -> this checkout'
 Then from any Git repo: `fray-dev` (foreground; Ctrl-C stops only that workspace's server).
 `fray-dev /path/to/repo` selects a repository, `--no-app` prints the URL instead of opening a browser,
 `--app` opts into the legacy dedicated window, `--status` reports workspace/port/supervisor PID, and
-`--stop` stops the UI server while agent tmux sessions survive. `fray-dev:check` verifies the shim
+`--stop` stops the UI server while agent processes survive. `fray-dev:check` verifies the shim
 without changing it; `fray-dev:uninstall` removes only that owned shim. Use
 `FRAY_BIN_DIR=/another/bin` to install elsewhere.
 
@@ -56,7 +56,7 @@ once — the launcher sets `FRAY_DEBUG` in the child environment, since the chil
 command line. Ctrl-C and a failed boot both print the log path.
 
 Gates: `pnpm run typecheck` and `pnpm test`. CI (`.github/workflows/ci.yml`) runs only the checks that
-need no install, tmux, or provider CLI; the full suite is local-only by design.
+need no install or provider CLI; the full suite is local-only by design.
 
 ## Invariants
 
@@ -70,18 +70,20 @@ need no install, tmux, or provider CLI; the full suite is local-only by design.
 - **Session JSONL (`~/.claude/projects/<slug>/<session-id>.jsonl`) is telemetry only** —
   liveness, previews. Parse defensively; on schema surprise degrade to "unknown", never crash,
   never let correctness depend on it.
-- **Agents are top-level interactive `claude` processes in detached tmux sessions** on the
-  private socket `tmux -L fray`, session name `fray-<slug>`, spawned with a pinned
-  `--session-id <uuid>`. The web terminal attaches via node-pty (`tmux -L fray attach -t ...`),
-  one attach per viewing client, killed on disconnect (kills the attach client, not the session).
+- **Agents are headless processes fray owns over a pipe**, spawned with a pinned
+  `--session-id <uuid>`: a Claude thread runs in the session BROKER (a detached daemon holding one
+  Agent SDK session, reached over a unix socket or, on Windows, a named pipe), and a Codex thread in
+  the app-server. There is no multiplexer and no pane — `/term/:slug` now serves exactly one thing,
+  a provider sign-in attempt, whose pty the login utility owns and shares across every viewing tab.
 - **Full-snapshot SSE.** The single `/events` SSE channel pushes `{type:"board", board}` full
   snapshots (see `@fray-ui/shared` `ServerEvent`). No diff protocol.
-- **Permission prompts are pane-sniffed, not derived from JSONL.** Even under `--permission-mode
-  auto`, claude can pause on an interactive permission prompt with NO transcript signal (the last
-  record stays assistant + `stop_reason:"tool_use"`). The tailer detects it by capturing the tmux
-  pane text (only for a still-in-flight turn that's been quiet ≥4s, to avoid per-tick tmux calls)
-  and matching the modal markers; the `perm-prompt` runtime rides the board snapshot with no notify
-  and no unread — the sidebar's attention sort surfaces it. See `tailer.ts` `matchesPermPrompt`.
+- **Permission prompts come from a MARKER, not from JSONL.** Even under `--permission-mode auto` a
+  worker can pause on a permission request with NO transcript signal (the last record stays assistant
+  + `stop_reason:"tool_use"`), so the cc-worker hook writes a marker into `FRAY_PERM_DIR` naming what
+  is waiting and the tailer reads that. (It used to fall back to capturing the tmux pane and matching
+  the TUI's modal chrome by regex; there are no panes, and a broker thread's approvals arrive as typed
+  permission requests over the control channel.) The `perm-prompt` runtime rides the board snapshot
+  with no notify and no unread — the sidebar's attention sort surfaces it.
 - **Human questions are ```question fenced blocks in the worker's final pre-rest message** — the
   message is the medium; there is deliberately NO question tool, sidecar file, or RPC (two earlier
   designs — a blocking MCP tool and a fray-ask CLI + .questions/ sidecars — were built and
@@ -101,7 +103,7 @@ need no install, tmux, or provider CLI; the full suite is local-only by design.
 - `server` — Hono app on 127.0.0.1 (default port in shared): rpc mounts at `/rpc`, SSE at
   `/events`, terminal WebSocket at `/term/:slug` (`ws` package), static web assets in prod, Vite
   middleware in dev (`src/dev.ts`). Subsystems: `bus.ts` (EventEmitter → SSE), `board.ts`
-  (.fray watcher + read model), `tmux.ts`, `sessions.ts` (SQLite registry via better-sqlite3),
+  (.fray watcher + read model), `sessions.ts` (SQLite registry via better-sqlite3),
   `tailer.ts` (JSONL), `dispatch.ts` (thread file create + prompt compose + spawn),
   `settings.ts`.
 - `web` — React 19 + Vite 8 + Tailwind v4 + valtio + TanStack Query + xterm.js.
@@ -128,8 +130,8 @@ Two entry points, deliberately distinct:
 
 State is keyed by a stable checkout UUID: an ordinary worktree keeps it in `git config --local fray.id`,
 each linked worktree in its private Git admin dir, so siblings stay isolated. Canonical real paths make
-a checkout opened through a symlink reuse the same instance. Managed repos use
-`tmux -L fray-repo-<UUID>`; `FRAY_TMUX_SOCKET` is an unmanaged escape hatch used verbatim.
+a checkout opened through a symlink reuse the same instance. (That UUID also keyed a per-project tmux
+socket once; there is no multiplexer any more, so the project id and state dir are the whole identity.)
 
 ### Browser launch modes
 
@@ -179,7 +181,7 @@ plugin directory. The published package does this for you.
 - UI state (unread, lastReadAt, session registry, settings) lives in
   `~/.fray/projects/<projectId>/ui.db` (SQLite). An ordinary/main worktree's UUID remains the repo's
   `.git/config` key `fray.id`; a linked worktree stores its own UUID at
-  `<worktree-gitdir>/fray.config`, preserving ordinary state while isolating sibling DB/lock/tmux
+  `<worktree-gitdir>/fray.config`, preserving ordinary state while isolating sibling DB and lock
   namespaces. NEVER store UI state in the checkout's `.fray/`.
 - **Sidebar design philosophy (2026-07-09, maintainer-directed — don't regress it).** A FLOATING
   left column: NO background, NO border, NO clipping on the column itself (the New-thread pill's
@@ -204,7 +206,7 @@ plugin directory. The published package does this for you.
 ## Experimental Codex app-server bridge foundation
 
 - Disabled by default. `FRAY_CODEX_APP_SERVER_BRIDGE=1` constructs a lazy internal bridge; it does
-  not change dispatch defaults, `backendFor`, or tmux/TUI control. The generic scoped interaction
+  not change dispatch defaults or `backendFor`. The generic scoped interaction
   cards can reflect bridge-owned journal rows, but no default user flow creates those rows.
 - The bridge can start new sessions and resume only native thread ids in its own SQLite ownership
   table. Existing/default/TUI Codex sessions are never imported or migrated.

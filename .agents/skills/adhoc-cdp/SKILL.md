@@ -21,18 +21,18 @@ and move on. Judge which one you have; both directions are real failures.
 
 Two layers, use both as the change demands:
 1. **The isolated stack + browser** — for anything with a UI or HTTP surface.
-2. **A focused real-subsystem harness** — for backend behavior the browser can't reach (tmux, SQLite,
-   scheduler, resume/wake paths). Spin the REAL resource, assert the REAL function.
+2. **A focused real-subsystem harness** — for backend behavior the browser can't reach (the broker
+   socket, SQLite, scheduler, resume/wake paths, node-pty). Spin the REAL resource, assert the REAL
+   function.
 
 ---
 
 ## 1. The isolated disposable stack
 
 `scripts/adhoc-stack.mjs` boots a complete fray-ui instance sandboxed on every axis so it can never
-touch the maintainer's live instance, real `~/.fray` SQLite, or real worker tmux:
+touch the maintainer's live instance or real `~/.fray` SQLite:
 
 - `HOME` → a fresh temp dir (the SQLite DB + `server.lock` live in an empty `~/.fray` there)
-- `FRAY_TMUX_SOCKET` → a unique socket (spawned worker tmux never collides with real sockets)
 - `PORT` → a unique high port (never fights the dev server on 5175)
 - `FRAY_WAKERS_OFF=1` → scheduler OFF by default; pass `--wakers` to arm it when testing wake delivery
 
@@ -156,8 +156,8 @@ the temp HOME (copying the blob, symlinking `~/Library/Keychains`) is blocked by
 **When you need a real broker worker, keep the real HOME and isolate the PROJECT instead:**
 `--home=$HOME --project=/tmp/<throwaway-git-repo>`. HOME stays real (keychain works, so `dispatch`
 succeeds and a genuine broker session streams SDK events), while the throwaway project dir gets its own
-project id, its own `~/.fray/projects/<id>/` state, its own tmux socket and its own port — so it never
-touches a board you care about. `--home` implies `--keep`, so clean up after yourself: kill the stack by
+project id, its own `~/.fray/projects/<id>/` state and its own port — so it never touches a board you
+care about. `--home` implies `--keep`, so clean up after yourself: kill the stack by
 exact PID, kill the leftover `claude` broker processes (find them by their `FRAY_STATE_DIR=<that project
 id>` in `ps`), then `rm -rf ~/.fray/projects/<id> <throwaway-repo> ~/.claude/projects/<cwd-slug>`.
 Verified 2026-07-30 driving a real background-dispatch-then-rest worker end to end this way. Do NOT
@@ -168,9 +168,11 @@ the tailer only needs three things, all inside the sandbox:
 1. a JSONL at `<tempHome>/.claude/projects/<cwd-slug>/<sessionId>.jsonl` you append records to
    (copy real record shapes: `user` / `assistant` (+`stop_reason`) / `queue-operation` / `queued_command`
    attachment — `transcript.ts` + `tailer.ts` document what each field drives);
-2. a live dummy pane on the sandbox socket: `tmux -L <stack-socket> new-session -d -s fray-<slug> "sleep 7200"`;
-3. one `session` row in the sandbox DB (`sqlite3 <tempHome>/.fray/projects/*/ui.db "INSERT INTO session
-   (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode) VALUES (…)"`).
+2. one `session` row in the sandbox DB (`sqlite3 <tempHome>/.fray/projects/*/ui.db "INSERT INTO session
+   (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode) VALUES (…)"`)
+   — `tmux_name` is a legacy COLUMN name holding the thread identity string `fray-<slug>`, not a pane.
+   There is no pane to create: liveness comes from the row's runtime, so a simulated worker needs no
+   process at all.
    This is the sanctioned exception to "never hand-write rows": the row is the fixture, and appending
    records then exercises the REAL tailer → board → push → render pipeline end-to-end (turn state flips
    on the records exactly as with a live worker).
@@ -179,15 +181,17 @@ the tailer only needs three things, all inside the sandbox:
 
 ## 3. Focused real-subsystem harnesses (backend behavior)
 
-Browser QA can't reach tmux sockets, the resume/wake path, SQLite migrations, or the scheduler. For those,
-write a small `Nub` harness that spins the **real** resource and asserts the **real** function — mocks prove
-nothing about tmux. Pattern (`scripts/verify-legacy-wake.mjs` is a worked example for the legacy-socket
-wake fix):
+Browser QA can't reach the broker socket, a real pty, the resume/wake path, SQLite migrations, or the
+scheduler. For those, write a small `Nub` harness that spins the **real** resource and asserts the
+**real** function — a mock proves only that your mock matches your belief. Worked examples:
+`scripts/verify-login-pty.mjs` (a real node-pty behind the login transport, with a negative control)
+and `scripts/win-claude-resolve-probe.mjs` (the real binary resolver, with a differential control that
+proves the tool under test is actually installed):
 
 ```
 import { execFileSync } from "node:child_process"
 import { theFixedFunction } from "../packages/server/src/<module>.ts"
-// 1. create the real precondition (a real tmux pane on a real socket, a real sqlite db, …)
+// 1. create the real precondition (a real pty, a real socket, a real sqlite db, …)
 // 2. call the real function
 // 3. PASS/FAIL each assertion to stdout; process.exit(1) on any failure
 // 4. tear the real resource down in finally

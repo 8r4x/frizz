@@ -1,6 +1,6 @@
 {
   "name": "frayui",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": false,
   "description": "A local web UI for running many coding agents at once",
   "keywords": ["fray", "agents", "claude-code", "codex", "orchestration", "dashboard", "ai"],

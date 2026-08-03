@@ -105,7 +105,7 @@ thread, the same rule applies.
 **"Fray" is a proper noun — always capitalize it in prose.** The product is Fray; write "Fray
 dispatches a worker", never "fray dispatches a worker". Lowercase survives only in literal
 identifiers, where it is part of the name: `npx frayui`, `FRAY.md`, `.fray/`, `~/.fray/`,
-`tmux -L fray`, the `fray`/`fray-update` CLIs, and the `fray:*` skill and sub-agent profile names.
+`fray-<slug>` session names, the `fray`/`fray-update` CLIs, and the `fray:*` skill and sub-agent profile names.
 
 # "Shipped" means merged into the primary branch
 
