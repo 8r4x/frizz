@@ -241,3 +241,64 @@ test("migration: a fresh database has no legacy columns at all, and boots clean"
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+// ---- The worker's own path to the same row ------------------------------------------------------
+// `mcp__fray__stop_hook` writes by SLUG ALONE, with no session/generation guard, because the MCP server
+// cannot satisfy one: it is spawned with its thread's slug and keeps it across every resume while the
+// session id bumps underneath. These pin that the unguarded path behaves identically to the operator's
+// on everything EXCEPT the guard — same generation semantics, same clear.
+test("storage: the worker path writes by slug alone, across a session change the operator path rejects", () => {
+  const f = fixture()
+  try {
+    // A resume: the row now belongs to a new session and generation, exactly as after a restart.
+    f.storage.upsertSession({
+      slug: f.slug, session_id: "sid-2", tmux_name: `fray-${f.slug}`, spawned_at: new Date().toISOString(),
+      last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
+      title: f.slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+    } as SessionRow)
+
+    // The operator path, holding the OLD session id, correctly fails closed.
+    assert.equal(
+      f.storage.setStopHookIfCurrent(f.slug, "sid", 0, "stale tab", true, "2026-08-02T00:00:00.000Z"),
+      false,
+      "a browser tab that has fallen behind must not write",
+    )
+    // The worker path, which only ever knew the slug, still reaches its own row.
+    assert.equal(
+      f.storage.setStopHookBySlug(f.slug, "keep going", true, "2026-08-02T00:01:00.000Z"),
+      true,
+      "the tool must survive the resume it was armed before",
+    )
+    assert.equal(f.row().stop_hook, "keep going")
+    assert.equal(f.row().stop_hook_enabled, 1)
+  } finally {
+    f.close()
+  }
+})
+
+test("storage: the worker path keeps the generation on a re-arm with the SAME text, and clears on null", () => {
+  const f = fixture()
+  try {
+    f.storage.setStopHookBySlug(f.slug, "keep going", true, "2026-08-02T00:00:00.000Z")
+    const armedAt = f.row().stop_hook_armed_at
+    f.storage.stampStopHookFired(f.slug, armedAt!, "2026-08-02T00:05:00.000Z")
+
+    // A worker that re-registers on resume must not supersede a bump already queued for those words.
+    f.storage.setStopHookBySlug(f.slug, "keep going", true, "2026-08-02T00:10:00.000Z")
+    assert.equal(f.row().stop_hook_armed_at, armedAt, "same text ⇒ same generation")
+    assert.equal(f.row().stop_hook_last_fired_at, "2026-08-02T00:05:00.000Z", "and the rate floor survives")
+
+    // New words ARE a new generation, same as the operator path.
+    f.storage.setStopHookBySlug(f.slug, "do something else", true, "2026-08-02T00:11:00.000Z")
+    assert.equal(f.row().stop_hook_armed_at, "2026-08-02T00:11:00.000Z")
+    assert.equal(f.row().stop_hook_last_fired_at, null)
+
+    // `action: "stop"` — the worker ending its own loop deliberately.
+    f.storage.setStopHookBySlug(f.slug, null, false, "2026-08-02T00:12:00.000Z")
+    assert.equal(f.row().stop_hook, null)
+    assert.equal(f.row().stop_hook_armed_at, null)
+    assert.equal(f.row().stop_hook_enabled, 0)
+  } finally {
+    f.close()
+  }
+})

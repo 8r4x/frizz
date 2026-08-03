@@ -32,6 +32,7 @@ import type {
   SetThreadProfileInput,
   SetThreadProfileResult,
   SetThreadStopHookInput,
+  SetOwnThreadStopHookInput,
   ThreadPluginReloadResult,
   SetThreadSnoozeInput,
   TranscriptMessage,
@@ -128,6 +129,10 @@ export interface Api {
   // The OPERATOR's counterpart, armed entirely from the footer: text re-delivered at every rest until
   // the worker answers ALLDONE. Toggle and text travel together — they are one row.
   setThreadStopHook(input: SetThreadStopHookInput): Promise<void>
+  // The WORKER-facing counterpart, called by `mcp__fray__stop_hook` rather than by this client. Declared
+  // here because rpc-contract.ts proves the two procedure NAME SETS are equal — an RPC the client cannot
+  // name is one nothing checks the shape of. No browser call site uses it.
+  setOwnThreadStopHook(input: SetOwnThreadStopHookInput): Promise<void>
   // In-place plugin reload for a broker-backed Claude thread — the alternative to a hard restart.
   reloadThreadPlugins(input: { slug: string; sessionId: string }): Promise<ThreadPluginReloadResult>
   // Event-snooze the awaiting-background card: hide it until the thread's own background work returns
@@ -229,6 +234,7 @@ export const PROCEDURES = {
   completeThread: "mutation",
   setThreadSnooze: "mutation",
   setThreadStopHook: "mutation",
+  setOwnThreadStopHook: "mutation",
   reloadThreadPlugins: "mutation",
   snoozeAwaitingBackground: "mutation",
   confirmAwaiting: "mutation",

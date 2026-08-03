@@ -406,6 +406,12 @@ export interface Storage {
     enabled: boolean,
     armedAt: string,
   ): boolean
+  // The WORKER's own path to the same row, from `mcp__fray__stop_hook`. Deliberately keyed on the slug
+  // ALONE, with no session/generation guard, because the MCP server cannot satisfy one: it is spawned
+  // with its thread's slug and keeps it across a resume, while the session id and generation bump
+  // underneath it — so a guard here would fail exactly on the long-lived thread this exists for. The
+  // slug is stamped into that server's env by fray itself and is not attacker-controlled.
+  setStopHookBySlug(slug: string, prompt: string | null, enabled: boolean, armedAt: string): boolean
   // Stamp a delivered bump, guarded on the generation so a bump that settles after the operator
   // edited the text cannot write onto words it no longer describes.
   stampStopHookFired(slug: string, armedAt: string, firedAt: string): boolean
@@ -1065,6 +1071,21 @@ export function createStorage(dbPath: string): Storage {
         ELSE NULL END
     WHERE slug = ? AND session_id = ? AND runtime_generation = ?
   `)
+  // Same SET list, keyed on the slug alone — the worker-tool path (see setStopHookBySlug).
+  const stopHookBySlugStmt = db.prepare(`
+    UPDATE session SET
+      stop_hook = ?,
+      stop_hook_enabled = ?,
+      stop_hook_armed_at = CASE
+        WHEN ? IS NULL THEN NULL
+        WHEN stop_hook_armed_at IS NOT NULL AND stop_hook IS ? THEN stop_hook_armed_at
+        ELSE ? END,
+      stop_hook_last_fired_at = CASE
+        WHEN ? IS NULL THEN NULL
+        WHEN stop_hook_armed_at IS NOT NULL AND stop_hook IS ? THEN stop_hook_last_fired_at
+        ELSE NULL END
+    WHERE slug = ?
+  `)
   const stopHookFiredStmt = db.prepare(`
     UPDATE session SET stop_hook_last_fired_at = ?
     WHERE slug = ? AND stop_hook_armed_at = ?
@@ -1702,6 +1723,14 @@ export function createStorage(dbPath: string): Storage {
         prompt, prompt, armedAt,
         prompt, prompt,
         slug, sessionId, generation,
+      ).changes === 1,
+    setStopHookBySlug: (slug, prompt, enabled, armedAt) =>
+      stopHookBySlugStmt.run(
+        prompt,
+        prompt === null ? 0 : enabled ? 1 : 0,
+        prompt, prompt, armedAt,
+        prompt, prompt,
+        slug,
       ).changes === 1,
     stampStopHookFired: (slug, armedAt, firedAt) =>
       stopHookFiredStmt.run(firedAt, slug, armedAt).changes === 1,

@@ -993,6 +993,25 @@ export const SetThreadStopHookInput = z.object({
 }).strict()
 export type SetThreadStopHookInput = z.infer<typeof SetThreadStopHookInput>
 
+// The WORKER arming its OWN stop hook, through `mcp__fray__stop_hook` (which POSTs the same `/rpc/*`
+// surface the board uses). A worker has no other way to keep a long effort moving — Claude Code's own
+// in-session schedulers cannot fire in the runtime fray spawns — so this is the counterpart to the
+// operator's control above, writing the same row.
+//
+// Deliberately NOT session-guarded, unlike the operator's input: the MCP server is spawned with its
+// thread's slug and keeps it across a resume, while the session id and generation bump underneath it.
+// A guard here would fail on exactly the long-lived thread this exists for. The slug is stamped into
+// that server's env by fray, not supplied by the model.
+//
+// `prompt: null` is the explicit stop, which is how a worker ends its own loop deliberately rather than
+// by falling back on the ALLDONE sentinel.
+export const SetOwnThreadStopHookInput = z.object({
+  slug: ThreadSlug,
+  prompt: StopHookPrompt.nullable(),
+  enabled: z.boolean(),
+}).strict()
+export type SetOwnThreadStopHookInput = z.infer<typeof SetOwnThreadStopHookInput>
+
 // What an in-place plugin reload changed, as the board reports it. Counts answer "did my edit land?";
 // `mcpServers` carries NAMES because a reload that changes MCP tools is the one with a real cost — the
 // provider re-reads the whole conversation instead of using its prompt cache.

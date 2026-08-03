@@ -88,15 +88,56 @@ const SPAWN_THREAD = {
   },
 }
 
+const STOP_HOOK = {
+  name: "stop_hook",
+  description:
+    "Arm a STOP HOOK on YOUR OWN thread: fray re-sends you `prompt` every time you come to rest, until " +
+    "you end it. Use it to keep a long autonomous effort moving without the human driving every step, " +
+    "and to rescue yourself from a wait that may never resolve.\n\n" +
+    "USE THIS RATHER THAN `CronCreate` or `ScheduleWakeup`. Those are Claude Code's own in-session " +
+    "schedulers and they CANNOT fire in the runtime fray runs you in: their gate stays shut for as long " +
+    "as ANY background task of yours is outstanding, so the moment you are parked behind a background " +
+    "shell or a sub-agent — exactly when you most need waking — they go silent. This one is delivered by " +
+    "fray itself and is unaffected.\n\n" +
+    "It fires on REST, not on a clock, so there is no interval to choose: you are re-prompted whenever " +
+    "you stop, and never mid-turn. The text arrives as an ordinary user turn, VERBATIM, so write it as " +
+    "an instruction to your future self.\n\n" +
+    "TWO WAYS IT ENDS, and you own both. Reply with ALLDONE on its own line and fray stops re-sending " +
+    "while that stands — the light-touch pause, which re-opens by itself the moment you say anything " +
+    "else. Or call this tool with `action: \"stop\"` to disarm it for good. A thread has AT MOST ONE " +
+    "stop hook: calling this again REPLACES it. The human sees it in the thread footer and can edit or " +
+    "switch it off there.\n\n" +
+    "You can only ever arm your OWN thread — there is no parameter for anyone else's.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      action: {
+        type: "string",
+        enum: ["start", "stop"],
+        description: "`start` arms (or replaces) this thread's stop hook; `stop` disarms it.",
+      },
+      prompt: {
+        type: "string",
+        description:
+          "Required for `start`. The text delivered to you every time you come to rest, verbatim, as a " +
+          "user turn. Make it self-contained and ACTIONABLE — say what to do and what would make it " +
+          "right to stop — because you may receive it with none of the context you have right now.",
+      },
+    },
+    required: ["action"],
+  },
+}
+
 // The unified server's tool registry: `tools/list` returns these and `tools/call` routes by name.
 // Adding a worker-facing fray tool = one entry here + one handler in `HANDLERS` — never a second
 // MCP server, so every fray tool stays under the same `mcp__fray__*` namespace and the same
 // server-level pre-approval the dispatch layer already grants.
-const TOOLS = [SPAWN_THREAD]
+const TOOLS = [SPAWN_THREAD, STOP_HOOK]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
   [SPAWN_THREAD.name]: spawnThread,
+  [STOP_HOOK.name]: stopHook,
 }
 
 /** @param {unknown} obj */
@@ -207,6 +248,51 @@ async function callRpc(procedure, body) {
     throw new Error(`${procedure} returned HTTP ${res.status}${detail ? `: ${detail.slice(0, 500)}` : ""}`)
   }
   return await res.json().catch(() => null)
+}
+
+/** Which thread this MCP server belongs to. Stamped into our env at spawn (dispatch.ts for the tmux
+ * path, the broker bridge for the SDK path) because the MCP protocol carries no caller identity.
+ * FRAY_UI_THREAD is the fallback: every fray worker process is tagged with it, so it is right
+ * whenever the env is inherited — but it is not relied upon, hence the explicit var first.
+ *
+ * This is also the reason a model can never point `stop_hook` at someone else's thread: the slug is
+ * read from HERE, never from the tool arguments. */
+function threadSlug() {
+  const slug = process.env.FRAY_THREAD_SLUG || process.env.FRAY_UI_THREAD
+  if (!slug) {
+    throw new Error(
+      "this fray MCP server was not told which thread it belongs to (no FRAY_THREAD_SLUG), so it cannot " +
+      "arm a stop hook for it. This is a fray bug — report it rather than working around it.",
+    )
+  }
+  return slug
+}
+
+/** The `stop_hook` handler: arm or disarm this thread's rest-triggered re-prompt.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function stopHook(args) {
+  const slug = threadSlug()
+  const action = typeof args.action === "string" ? args.action.trim() : ""
+  if (action !== "start" && action !== "stop") throw new Error("`action` must be either \"start\" or \"stop\"")
+
+  if (action === "stop") {
+    await callRpc("setOwnThreadStopHook", { slug, prompt: null, enabled: false })
+    return "Stop hook disarmed. You will not be re-prompted when you come to rest."
+  }
+
+  const prompt = typeof args.prompt === "string" ? args.prompt.trim() : ""
+  if (!prompt) {
+    throw new Error("`prompt` is required to start a stop hook — it is the text you will be sent every time you come to rest")
+  }
+
+  await callRpc("setOwnThreadStopHook", { slug, prompt, enabled: true })
+  return (
+    "Stop hook armed — fray will send you this prompt every time you come to rest, and never mid-turn. " +
+    "It replaces any stop hook this thread had before.\n\n" +
+    "To end it: reply with ALLDONE on its own line (fray goes quiet while that stands, and resumes if " +
+    "you later say anything else), or call this tool with `action: \"stop\"` to disarm it for good. The " +
+    "human can also edit or switch it off in the thread footer."
+  )
 }
 
 /** @param {any} msg */

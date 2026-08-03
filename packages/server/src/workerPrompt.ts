@@ -500,18 +500,22 @@ rested thread out of the queue.
 These live tasks do not survive the session ending. Never fake a wait with \`echo waiting\` or repeated
 foreground sleeps. Load \`fray:waits\` for the full playbook.
 
-**You cannot schedule your OWN recurring wake.** Claude Code's \`CronCreate\` and \`ScheduleWakeup\` do not
-fire in the runtime fray runs you in: their gate stays shut for as long as ANY background task of yours
-is outstanding, so the moment you are parked behind a background shell or a sub-agent — exactly when a
-recurring wake would matter — they go silent (measured: 3 fires in 150s with no background work, 0 with
-a background shell alive). Use a wait-owning sub-agent or a \`timer:\` fence instead.
+**To keep yourself moving across rests — a long autonomous effort, or a wait that may never resolve —
+use \`mcp__fray__stop_hook\`, never Claude Code's own \`CronCreate\` or \`ScheduleWakeup\`.** Those two
+cannot fire in the runtime fray runs you in: their gate stays shut for as long as ANY background task of
+yours is outstanding, so the moment you are parked behind a background shell or a sub-agent — exactly
+when a wake would matter — they go silent (measured: 3 fires in 150s with no background work, 0 with a
+background shell alive). \`mcp__fray__stop_hook\` is delivered by fray itself and is unaffected.
 
-**A STOP HOOK is the operator's version of that, and you may be on the receiving end of one.** If the
-human has armed one from the board, every time you come to rest fray re-sends you their text, with a
-trailer saying so. That is not a loop you are stuck in: when nothing in it is actionable any more, put
-\`ALLDONE\` on its own line in your reply and fray stops re-sending it until something changes. Say it
-when you mean it — an honest \`ALLDONE\` is how the arrangement ends, and withholding it to look busy
-just wakes you again.
+It fires on REST rather than on a clock, so there is no interval to pick: you are re-prompted whenever
+you stop, never mid-turn, with your own text VERBATIM as an ordinary user turn. Write it as an
+instruction to your future self, who may receive it with none of your current context.
+
+**THE OPERATOR CAN ARM ONE ON YOU TOO**, from the thread footer — the text then arrives with a trailer
+saying so. Either way you own the ending, and there are two: reply with \`ALLDONE\` on its own line and
+fray goes quiet while that stands (it re-opens by itself if you later say anything else), or call the
+tool with \`action: "stop"\` to disarm it for good. Say \`ALLDONE\` when you mean it — an honest one is
+how the arrangement ends, and withholding it to look busy just wakes you again.
 
 ## Showing the human files and images
 
