@@ -41,9 +41,6 @@ const waitFor = async (cond: () => boolean, ms = 120_000, label = "condition") =
 // broker.close() only DETACHES its sockets, exactly what a real fray process exit does. The daemon lives on.
 async function teardown(ctx: Awaited<ReturnType<typeof createContext>>) {
   ctx.tailer.stop()
-  ctx.permissionController.stop()
-  ctx.deliveryConfirmer?.stop()
-  ctx.profileController?.stop()
   ctx.stopSubscriptions()
   await ctx.scheduler.stop()
   await ctx.board.stop()

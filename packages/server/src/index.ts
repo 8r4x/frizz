@@ -5,7 +5,7 @@ import { readFileSync, existsSync } from "node:fs"
 import { join, resolve, extname, normalize } from "node:path"
 import { DEFAULT_PORT } from "@fray-ui/shared"
 import {
-  ContextStartupError,
+ContextStartupError,
   createContext,
   initGithub,
   type AppContext,
@@ -395,12 +395,9 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   const cleanupAppSocket = createRetryableCleanup(async () => { await appSocket?.close() })
   const cleanupTailer = createRetryableCleanup(() => ctx?.tailer.stop())
   const cleanupLoginUtility = createRetryableCleanup(() => ctx?.loginUtility?.stop())
-  const cleanupPermission = createRetryableCleanup(() => ctx?.permissionController.stop())
   // `?.` on the RESOURCE too, like loginUtility/profileController beside it. Every shutdown phase is
   // requiredForStorage by default, so a TypeError here does not just log — it fails the whole barrier
   // with "could not safely close storage", turning a recoverable startup failure into a wedged one.
-  const cleanupDeliveryConfirm = createRetryableCleanup(() => ctx?.deliveryConfirmer?.stop())
-  const cleanupProfile = createRetryableCleanup(() => ctx?.profileController?.stop())
   const cleanupSubscriptions = createRetryableCleanup(() => ctx?.stopSubscriptions())
   const cleanupScheduler = createRetryableCleanup(async () => { await ctx?.scheduler.stop() })
   const cleanupBoard = createRetryableCleanup(async () => { await ctx?.board.stop() })
@@ -433,9 +430,6 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       { name: "tailer producer", run: cleanupTailer },
       // Kill any live login-attempt pane so OAuth bytes never outlive the server.
       { name: "login utility", run: cleanupLoginUtility },
-      { name: "permission producer", run: cleanupPermission },
-      { name: "delivery confirmer", run: cleanupDeliveryConfirm },
-      { name: "profile producer", run: cleanupProfile },
       { name: "context subscriptions", run: cleanupSubscriptions },
       { name: "wake scheduler", run: cleanupScheduler },
       { name: "board producer and watcher", run: cleanupBoard },
@@ -614,9 +608,6 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     await phase("tailer producer", () => ctx!.tailer.start((done, total) => {
       bootProgress(`tailer producer ${done}/${total}`)
     }))
-    await phase("permission producer", () => ctx!.permissionController.start())
-    await phase("delivery confirmer", () => ctx!.deliveryConfirmer.start())
-    await phase("profile producer", () => ctx!.profileController?.start())
     if (process.env.FRAY_WAKERS_OFF !== "1") {
       await phase("wake scheduler", () => ctx!.scheduler.start())
     } else {

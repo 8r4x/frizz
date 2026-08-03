@@ -9,7 +9,6 @@ import type { Storage, SessionRow } from "./storage.ts"
 import { discoverTranscriptId, DISCOVERY_GRACE_MS } from "./discover.ts"
 import type { AgentBackend, FoldState, NativeInputRequiredData, NormalizedEvent, NormalizedTail } from "./backend/types.ts"
 import * as tmux from "./tmux.ts"
-import { detectClaudePermissionMode } from "./permission-controller.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { normalizeObservedThreadModel, validateThreadProfile } from "./backend/thread-profiles.ts"
 import { resolveRuntimeTurn, type ClaudeRuntimeTask } from "./backend/claude-runtime-ingest.ts"
@@ -272,10 +271,7 @@ export interface SessionTelemetry extends NormalizedTail {
 const PERM_YES_OPTION = /(^|\n)\s*(❯\s*)?1\.\s+Yes\b/
 const PERM_QUESTION = /\b(?:Do you want|Would you like)\b/
 const PERM_FOOTER = /\bEsc to (cancel|reject)\b/
-// The four mode-footer spellings, plus plan mode and the ctrl+o transcript view. permission-controller's
-// detectClaudePermissionMode() reads the same footer for a DIFFERENT purpose (which mode is active, from
-// a narrower anchor), so the two intentionally do not share a regex — but a TUI wording change must be
-// applied to both. NOTE: that one has no `plan` branch and returns undefined on a plan-mode pane.
+// The four mode-footer spellings, plus plan mode and the ctrl+o transcript view.
 const PERM_COMPOSER_FOOTER = /\bbypass permissions on\b|\baccept edits(?: mode)? on\b|\b(?:auto|manual|plan) mode on\b|\bShowing detailed transcript\b/i
 // Rows of the modal's own tail that must contain the signals. Deepest `1. Yes` row observed is
 // ExitPlanMode's at 6 rows from the end (Bash 4, trust 3); this keeps real margin over that.
@@ -570,8 +566,6 @@ export interface TailState extends FoldState {
   // Claude permission sidecars are untimestamped. Hold an incremental observation until the live
   // footer redraw proves which generation emitted it; do not lose a genuine record that arrived a
   // tick before the footer became visible.
-  unconfirmedPermissionMode?: PermissionMode
-  unconfirmedPermissionPolls?: number
 }
 
 // A single parsed JSONL record — only the fields the derivation needs are typed; the rest are
@@ -2196,7 +2190,7 @@ export const UNRESTORED_TAIL_FIELDS: ReadonlySet<string> = new Set([
   "slug", "sessionId", "nativeSessionId", "runtimeGeneration", "path", "foreign",
   "primed", "permPrompt", "nativeInputRequired", "paneDead", "subAgentsSig",
   "noTranscript", "nextDiscoverMs", "stallLogged",
-  "deliveryLedgerSeen", "unconfirmedPermissionMode", "unconfirmedPermissionPolls",
+  "deliveryLedgerSeen",
   // The chase bookkeeping is compared against an IN-MEMORY, per-process counter — the ingest's `live`
   // map is rebuilt empty on every boot (backend/claude-runtime-ingest.ts). A hydrated high-water mark
   // from the PREVIOUS process is therefore measured against a counter that restarted at zero, so
@@ -3934,37 +3928,6 @@ export function createTailer(deps: TailerDeps): Tailer {
           if (row.codex_runtime !== "app-server" || !PermissionMode.safeParse(row.permission_mode).success) {
             deps.storage.setObservedPermissionIfCurrent(row.slug, row.session_id, runtimeGeneration, state.permissionMode)
           }
-        } else if (!isHeadlessRow(row)) {
-          // TUI claude confirms a pane-scraped mode; a headless broker claude gets its mode from the
-          // bridge, so it never enters the unconfirmed-poll dance.
-          state.unconfirmedPermissionMode = state.permissionMode
-          state.unconfirmedPermissionPolls = 0
-        }
-      }
-      if (row.backend !== "codex" && state.unconfirmedPermissionMode) {
-        const candidateMode = state.unconfirmedPermissionMode
-        const confirmationPoll = (state.unconfirmedPermissionPolls ?? 0) + 1
-        state.unconfirmedPermissionPolls = confirmationPoll
-        const saved = PermissionMode.safeParse(row.permission_mode)
-        const paneMode = detectClaudePermissionMode(capturePaneForRow(row))
-        if (paneMode) {
-          // A footer can redraw one or more polls after its sidecar. Keep a mismatched candidate:
-          // the still-visible old footer remains authoritative for this tick, but must not consume
-          // the revision edge that makes us retry once the matching footer appears.
-          state.permissionMode = paneMode
-          if (!saved.success || saved.data !== paneMode) {
-            deps.storage.setObservedPermissionIfCurrent(row.slug, row.session_id, runtimeGeneration, paneMode)
-          }
-          if (paneMode === candidateMode || confirmationPoll >= CLAUDE_PERMISSION_CONFIRM_POLLS) {
-            state.unconfirmedPermissionMode = undefined
-            state.unconfirmedPermissionPolls = undefined
-          }
-        } else {
-          if (saved.success) state.permissionMode = saved.data
-          if (confirmationPoll >= CLAUDE_PERMISSION_CONFIRM_POLLS) {
-            state.unconfirmedPermissionMode = undefined
-            state.unconfirmedPermissionPolls = undefined
-          }
         }
       }
       if (state.model !== prevModel || state.effort !== prevEffort || state.permissionMode !== prevPermissionMode) dirty = true
@@ -4194,8 +4157,6 @@ export function createTailer(deps: TailerDeps): Tailer {
       const state = states.get(slug)
       if (state) {
         state.permissionMode = permissionMode
-        state.unconfirmedPermissionMode = undefined
-        state.unconfirmedPermissionPolls = undefined
       }
     },
     start(onPrimeProgress) {

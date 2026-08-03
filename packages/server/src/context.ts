@@ -12,10 +12,7 @@ import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
 import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frayConfigBlock, claudeMcpConfig, resolveFrayMcp, workerPluginDir, type Dispatcher } from "./dispatch.ts"
 import { createScheduler, type Scheduler } from "./scheduler.ts"
 import {
-  reattachThreadWithPermission,
-  reattachThreadWithProfile,
-  recoverThreadProfileHandoff,
-  resumeThread,
+resumeThread,
 } from "./resume.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
 import { createCodexBackend, codexSandbox } from "./backend/codex.ts"
@@ -25,9 +22,6 @@ import type { AgentBackend, LimitFault } from "./backend/types.ts"
 import { limitResumeNeedsFreshProcess } from "./backend/usage-limit.ts"
 import { detectGithub, type GithubDetection } from "./github.ts"
 import * as tmux from "./tmux.ts"
-import { createPermissionController, type PermissionController } from "./permission-controller.ts"
-import { createDeliveryConfirmer, type DeliveryConfirmer } from "./delivery-confirm.ts"
-import { createProfileController, type ProfileController } from "./profile-controller.ts"
 import type { InteractionStore } from "./interaction-store.ts"
 import {
   codexAppServerBridgeEnabled,
@@ -144,11 +138,7 @@ export interface AppContext {
   scheduler: Scheduler
   // Per-thread permission changes. Idle standalone TUIs are reopened on the same persisted
   // conversation with backend-native launch flags; busy/ambiguous states fail explicitly.
-  permissionController: PermissionController
-  profileController?: ProfileController
   // Proves an injected Claude follow-up was actually SUBMITTED, and re-presses Enter when the TUI
-  // swallowed it and fray's own text is provably still sitting in the composer (delivery-confirm.ts).
-  deliveryConfirmer: DeliveryConfirmer
   // Detach storage-owned observers before board/storage teardown. Idempotent and synchronous so a
   // deferred interaction notification cannot enqueue fresh board work during the shutdown drain.
   stopSubscriptions(): void
@@ -238,16 +228,10 @@ interface PartialContextResources {
   board?: BoardManager
   tailer?: Tailer
   scheduler?: Scheduler
-  permissionController?: PermissionController
-  profileController?: ProfileController
-  deliveryConfirmer?: DeliveryConfirmer
 }
 
 interface PartialContextCleanup {
   tailer(): Promise<void>
-  permissionController(): Promise<void>
-  deliveryConfirmer(): Promise<void>
-  profileController(): Promise<void>
   subscriptions(): Promise<void>
   scheduler(): Promise<void>
   board(): Promise<void>
@@ -259,9 +243,6 @@ interface PartialContextCleanup {
 function partialContextCleanup(resources: PartialContextResources): PartialContextCleanup {
   return {
     tailer: createRetryableCleanup(() => resources.tailer?.stop()),
-    permissionController: createRetryableCleanup(() => resources.permissionController?.stop()),
-    deliveryConfirmer: createRetryableCleanup(() => resources.deliveryConfirmer?.stop()),
-    profileController: createRetryableCleanup(() => resources.profileController?.stop()),
     subscriptions: createRetryableCleanup(() => resources.stopSubscriptions?.()),
     scheduler: createRetryableCleanup(async () => { await resources.scheduler?.stop() }),
     board: createRetryableCleanup(async () => { await resources.board?.stop() }),
@@ -284,9 +265,6 @@ function contextCleanupBarrier(
     deadline: opts.startup?.cleanupDeadline,
     phases: [
       { name: "context tailer", run: cleanup.tailer },
-      { name: "context permission producer", run: cleanup.permissionController },
-      { name: "context delivery confirmer", run: cleanup.deliveryConfirmer },
-      { name: "context profile producer", run: cleanup.profileController },
       { name: "context subscriptions", run: cleanup.subscriptions },
       { name: "context wake scheduler", run: cleanup.scheduler },
       { name: "context board watcher", run: cleanup.board },
@@ -737,45 +715,6 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   })
   resources.board = board
   opts.startup?.afterPhase?.("board watcher")
-  const permissionController = createPermissionController({
-    storage,
-    tailer,
-    board,
-    reattach: (slug, current, requested, onGeneration) =>
-      reattachThreadWithPermission(
-        { project, storage, board, getSettings: () => getSettings(storage), backendFor },
-        slug,
-        current,
-        requested,
-        onGeneration,
-      ),
-  })
-  resources.permissionController = permissionController
-  opts.startup?.afterPhase?.("permission producer")
-  const deliveryConfirmer = createDeliveryConfirmer({ storage, board })
-  resources.deliveryConfirmer = deliveryConfirmer
-  const profileController = createProfileController({
-    storage,
-    tailer,
-    board,
-    reattach: (slug, current, requested, onGeneration, onCheckpoint) =>
-      reattachThreadWithProfile(
-        { project, storage, board, getSettings: () => getSettings(storage), backendFor },
-        slug,
-        current,
-        requested,
-        onGeneration,
-        onCheckpoint,
-      ),
-    recover: (row, journal, observation) => recoverThreadProfileHandoff(
-      { project, storage, board, getSettings: () => getSettings(storage), backendFor },
-      row,
-      journal,
-      observation,
-    ),
-  })
-  resources.profileController = profileController
-  opts.startup?.afterPhase?.("profile producer")
   const dispatcher = createDispatcher({
     project,
     storage,
@@ -878,9 +817,6 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     tailer,
     dispatcher,
     scheduler,
-    permissionController,
-    profileController,
-    deliveryConfirmer,
     stopSubscriptions,
     backendFor,
     getSettings: () => getSettings(storage),

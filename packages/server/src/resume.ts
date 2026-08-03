@@ -16,8 +16,8 @@ import {
   type Storage,
 } from "./storage.ts"
 import type { BoardManager } from "./board.ts"
+import type { SessionTelemetry } from "./tailer.ts"
 import type { AgentBackend } from "./backend/types.ts"
-import { inspectClaudeComposer } from "./permission-controller.ts"
 import { encodeDeliveryMarker } from "./delivery-marker.ts"
 import {
   buildClaudeResumeCommand,
@@ -37,7 +37,6 @@ import {
   adoptionRuntimeBinding,
   type AdoptionRecoveryRuntime,
 } from "./adoption-recovery.ts"
-import type { ProfileRecoveryObservation, ProfileRecoveryResult } from "./profile-controller.ts"
 
 /**
  * A follow-up/wake that cannot be delivered AND must not be retried. Raised when a live worker owns
@@ -400,6 +399,62 @@ function commitPermissionRuntime(
     throw new PermissionHandoffAbortedError("Permission change canceled because this thread or process generation was deleted or replaced during startup")
   }
 }
+
+// Lifted here from the deleted permission-controller when the pane-control apparatus went with
+// tmux: this is now its ONLY consumer, and it dies with the reattach machinery below.
+const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g
+const stripAnsi = (text: string) => text.replace(ANSI_RE, "")
+const normalizedInput = (value: string) => value.replace(/\s+/g, " ").trim()
+
+type ClaudeComposerState =
+  | { kind: "empty" }
+  | { kind: "typed"; text: string }
+  | { kind: "unavailable" }
+
+// Claude's idle composer is the last `❯` row immediately above its footer divider. A trust prompt,
+// selector, or other modal may also use `❯`, but always carries text and therefore fails closed as a
+// nonempty input. This check exists only to protect unsent drafts before a controlled idle reattach;
+// it never drives menu navigation or submits terminal input.
+function inspectClaudeComposer(pane: string): ClaudeComposerState {
+  const lines = stripAnsi(pane).split("\n")
+  let prompt = -1
+  let first = ""
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const match = lines[i].match(/^❯(?:\u00a0|\s)?(.*)$/u)
+    if (!match) continue
+    prompt = i
+    first = match[1]
+    break
+  }
+  if (prompt === -1) return { kind: "unavailable" }
+
+  const divider = lines.findIndex((line, i) => i > prompt && /^\s*[─━]{8,}/u.test(line))
+  if (divider === -1) return { kind: "unavailable" }
+  // A draft can begin with a blank first line and continue below the `❯` row. Everything up to the
+  // real footer divider belongs to the composer; never inspect only the marker row.
+  const text = normalizedInput([first, ...lines.slice(prompt + 1, divider)].join(" "))
+  if (text) return { kind: "typed", text }
+
+  // Fail closed if the empty prompt is stale above later modal/output content. Real idle footer rows
+  // are blank, the project/status line (`·`), the mode line (`⏵⏵`), or the standard shortcut/context
+  // hint. Unknown content below the divider means this is not a provably current idle composer.
+  const footer = lines.slice(divider + 1).map((line) => line.trim()).filter(Boolean)
+  const idleFooter = (line: string) =>
+    line.includes(" · ") || /^[⏵⏸?]/u.test(line) || /(?:for shortcuts|context left|tokens left|shift\+tab)/i.test(line)
+  return footer.every(idleFooter) ? { kind: "empty" } : { kind: "unavailable" }
+}
+
+// Lifted from the deleted profile-controller: `recoverThreadProfileHandoff` below is now the only
+// consumer, and both die with the pane reattach machinery they describe.
+interface ProfileRecoveryObservation {
+  telemetry?: SessionTelemetry
+  currentTargetObservation: boolean
+}
+
+type ProfileRecoveryResult =
+  | { outcome: "target-ready" }
+  | { outcome: "rollback-ready"; error: string }
+  | { outcome: "blocked"; error: string }
 
 // Change a live standalone TUI's launch-time permission profile without fabricating a user turn.
 // Callers must first prove the conversation is idle, has no running children, and has an empty native

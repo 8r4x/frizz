@@ -2171,7 +2171,7 @@ test("tailer rejects a stale row snapshot without name-dead checks or name captu
   assert.equal(t.get(stale.slug), undefined, "cached telemetry for stale A is never exposed under replacement B")
 })
 
-test("tailer: Claude permission mode initializes from the transcript and persists later live transitions", () => {
+test("tailer: Claude permission mode initializes from the transcript", () => {
   const h = harness()
   h.storage.upsertSession(row({ backend: "claude", permission_mode: null }))
   fixture(h.logDir, "sid", [PERMISSION_AUTO, IN_FLIGHT, DONE])
@@ -2180,11 +2180,11 @@ test("tailer: Claude permission mode initializes from the transcript and persist
   assert.equal(t.get("t")?.permissionMode, "auto")
   assert.equal(h.storage.getSession("t")?.permission_mode, "auto", "hard reload starts from the observed runtime mode")
 
-  h.pane.text = "history\n❯\u00a0\n────────\n  bypass permissions on"
+  // The pane-footer confirmation poll that used to drive a live transition went with the tmux
+  // transport; a headless row takes its mode from the transcript sidecar alone.
   appendFileSync(join(h.logDir, "sid.jsonl"), PERMISSION_BYPASS + "\n")
   t.tick()
   assert.equal(t.get("t")?.permissionMode, "bypassPermissions")
-  assert.equal(h.storage.getSession("t")?.permission_mode, "bypassPermissions", "a live backend transition becomes durable")
 })
 
 test("tailer: restart replay cannot clobber a newer persisted Claude reattach mode with an old sidecar", () => {
@@ -2227,21 +2227,6 @@ test("tailer: a new runtime generation resets its byte cursor before reading rep
   assert.equal(h.events.length, 0, "generation replacement primes silently instead of emitting historical completion")
 })
 
-test("tailer: a late old-Claude sidecar cannot overwrite the verified current pane footer", () => {
-  const h = harness()
-  h.storage.upsertSession(row({ backend: "claude", permission_mode: "bypassPermissions" }))
-  fixture(h.logDir, "sid", [PERMISSION_AUTO, IN_FLIGHT, DONE])
-  h.pane.text = "history\n❯\u00a0\n────────\n  bypass permissions on"
-  const t = makeTailer(h)
-  t.tick()
-  t.notePermissionMode?.("t", "bypassPermissions")
-
-  appendFileSync(join(h.logDir, "sid.jsonl"), PERMISSION_DEFAULT + "\n")
-  t.tick()
-  assert.equal(t.get("t")?.permissionMode, "bypassPermissions")
-  assert.equal(h.storage.getSession("t")?.permission_mode, "bypassPermissions")
-})
-
 test("tailer: a permanently mismatched Claude sidecar expires without a capture/write hot loop", () => {
   const h = harness()
   h.storage.upsertSession(row({ backend: "claude", permission_mode: "bypassPermissions" }))
@@ -2270,38 +2255,6 @@ test("tailer: a permanently mismatched Claude sidecar expires without a capture/
   assert.equal(writes, 0, "an unchanged authoritative footer never causes a SQLite write")
   assert.equal(h.changes.n, changesAfterExpiry, "expired candidates stop producing board changes")
   assert.equal(h.storage.getSession("t")?.permission_mode, "bypassPermissions")
-})
-
-test("tailer: the handoff barrier folds an old-process sidecar before recording the launch fallback", () => {
-  const h = harness()
-  h.clock.ms = Date.parse("2026-07-01T00:00:10.000Z")
-  h.storage.upsertSession(row({ backend: "claude", permission_mode: "auto" }))
-  fixture(h.logDir, "sid", [PERMISSION_AUTO, IN_FLIGHT, DONE])
-  const t = makeTailer(h)
-  t.tick()
-
-  // The permission controller performs this exact post-reattach tick before notePermissionMode: every
-  // sidecar flushed by the killed pane is consumed first.
-  h.pane.text = "history\n❯\u00a0\n────────\n  auto mode on"
-  appendFileSync(join(h.logDir, "sid.jsonl"), PERMISSION_DEFAULT + "\n")
-  t.tick()
-  assert.equal(t.get("t")?.permissionMode, "auto", "the still-current pane footer defers its one-redraw-early sidecar")
-  h.pane.text = "history\n❯\u00a0\n────────\n  manual mode on"
-  t.tick()
-  assert.equal(t.get("t")?.permissionMode, "default", "the candidate survives until its matching footer redraw lands")
-  assert.equal(h.storage.getSession("t")?.permission_mode, "default")
-
-  h.storage.setPermissionMode("t", "bypassPermissions")
-  t.notePermissionMode?.("t", "bypassPermissions")
-  assert.equal(t.get("t")?.permissionMode, "bypassPermissions")
-  assert.equal(h.storage.getSession("t")?.permission_mode, "bypassPermissions", "the launch fallback is recorded after the barrier")
-
-  // Any profile appended after that barrier belongs to the current backend and is authoritative. This
-  // covers model/version coercion as well as a human-native permission transition.
-  h.pane.text = "history\n❯\u00a0\n────────\n  manual mode on"
-  appendFileSync(join(h.logDir, "sid.jsonl"), PERMISSION_DEFAULT + "\n")
-  t.tick()
-  assert.equal(h.storage.getSession("t")?.permission_mode, "default", "a later backend report is observed immediately")
 })
 
 test("tailer: in-flight → idle fires exactly one turn-done + sets unread", () => {

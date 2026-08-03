@@ -53,7 +53,7 @@ try {
     ok("worker sees the fray MCP tool", /fray[^\n]*yes|yes[^\n]*fray|spawn_thread[^\n]*yes/.test(report) || report.includes("mcp__fray"), report.slice(0, 160).replace(/\n/g, " | "))
   }
 
-  await ctx.tailer.stop(); ctx.permissionController.stop(); ctx.deliveryConfirmer?.stop(); ctx.profileController?.stop()
+  await ctx.tailer.stop()
   ctx.stopSubscriptions(); await ctx.scheduler.stop(); await ctx.board.stop(); ctx.claudeBroker?.releaseSession(slug, sessionId, "session-deleted"); ctx.storage.close()
 } catch (err) {
   failures++; console.log(`\nERROR: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`)

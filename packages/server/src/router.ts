@@ -64,7 +64,6 @@ import { runThreadUpdate } from "./fray.ts"
 import { repairThreadFile } from "./repair.ts"
 import { reopenArchivedThreadForFollowUp, resumeThread } from "./resume.ts"
 import { appendDelivery, cancelDelivery, deliveryItem, hasDelivery, retireOutstandingDeliveries } from "./delivery-ledger.ts"
-import { flushStuckComposer } from "./delivery-confirm.ts"
 import {
   readEarlierThreadTranscriptPage,
   readLatestThreadTranscriptPage,
@@ -1320,11 +1319,6 @@ export function createRouter(ctx: AppContext) {
             hasDelivery(ctx.storage, input.slug, input.deliveryId)) {
           return
         }
-        // Submit a PREVIOUS follow-up still stranded in the composer before pasting this one on top of
-        // it. Claude Code's TUI can swallow the Enter that follows a paste; when it does, the next
-        // paste lands directly after the stranded text and ONE message carrying both is what the agent
-        // reads. Free on the normal path — a row with no outstanding ledger item captures nothing.
-        await flushStuckComposer({ storage: ctx.storage, board: ctx.board }, input.slug)
         // The deliveryId rides along so the composer paths can stamp the send with its invisible marker
         // (delivery-marker.ts) — that is what lets the tailer confirm delivery by IDENTITY instead of by
         // comparing prose the tmux+TUI paste channel is free to rewrite. Codex never takes this path.
@@ -1451,16 +1445,21 @@ export function createRouter(ctx: AppContext) {
           }
           return { effect: "next-resume" as const }
         }
-        // A broker Claude row has no tmux pane for the permission controller to inspect. The broker
-        // auto-allows tool use today (dashboard-approval routing is a later slice), so a live permission-
-        // mode change has no runtime effect yet; persist the operator's intent so a future cold-resume
-        // fork carries it, and report next-resume. Live set-mode over the broker socket is a follow-up.
-        if (permRow && isBrokerClaudeRow(permRow)) {
-          ctx.storage.setPermissionMode(input.slug, input.permissionMode)
-          ctx.board.refresh()
-          return { effect: "next-resume" as const }
-        }
-        return ctx.permissionController.request(input.slug, input.permissionMode)
+        // Claude: persist the operator's intent and carry it on the next cold-resume fork.
+        //
+        // This used to branch — a broker row persisted and reported next-resume, while a PANE row went
+        // through the permission controller, which inspected the live TUI's composer to protect an
+        // unsent draft and then relaunched the conversation with a different launch flag. There are no
+        // pane rows any more, so that whole apparatus (permission-controller.ts, 421 lines of pane
+        // scraping) went with the tmux transport and this is the only path left.
+        //
+        // Deliberately still `next-resume` rather than `applied`: the broker's `set-mode` frame is
+        // fire-and-forget with no acknowledgement, and this codebase does not call an unconfirmed write
+        // "applied" — that is the same rule cancel-input and stop-task are built on. Confirming it would
+        // need a response frame on set-mode, which is its own change.
+        ctx.storage.setPermissionMode(input.slug, input.permissionMode)
+        ctx.board.refresh()
+        return { effect: "next-resume" as const }
       },
     }),
 
@@ -1489,17 +1488,14 @@ export function createRouter(ctx: AppContext) {
           ctx.board.refresh()
           return { effect: "next-resume" as const }
         }
-        // A broker Claude row's model/effort are fixed at fork time (the SDK takes them at query start);
-        // a live daemon can't retune mid-session, so persist the intent and let the next cold-resume fork
-        // carry it. No tmux pane exists for the profile controller to reattach.
-        if (profRow && isBrokerClaudeRow(profRow)) {
-          validateThreadProfile("claude", input.model, input.effort)
-          ctx.storage.setProfile(input.slug, input.model, input.effort)
-          ctx.board.refresh()
-          return { effect: "next-resume" as const }
-        }
-        if (!ctx.profileController) throw new Error("Runtime profile controls are unavailable; restart Fray and retry")
-        return ctx.profileController.request(input.slug, { model: input.model, effort: input.effort })
+        // Claude: model/effort are fixed at fork time (the SDK takes them at query start), so a live
+        // daemon cannot retune mid-session. Persist the intent and let the next cold-resume fork carry
+        // it. The pane branch that used to follow — profile-controller relaunching the conversation
+        // under new flags after inspecting the composer for an unsent draft — went with tmux.
+        validateThreadProfile("claude", input.model, input.effort)
+        ctx.storage.setProfile(input.slug, input.model, input.effort)
+        ctx.board.refresh()
+        return { effect: "next-resume" as const }
       },
     }),
 

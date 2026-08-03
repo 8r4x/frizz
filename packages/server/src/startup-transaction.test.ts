@@ -49,10 +49,6 @@ interface ContextState {
   boardStopped: number
   tailerStarted: number
   tailerStopped: number
-  permissionStarted: number
-  permissionStopped: number
-  deliveryConfirmerStarted: number
-  deliveryConfirmerStopped: number
   schedulerStarted: number
   schedulerStopped: number
 }
@@ -111,10 +107,6 @@ function fixture(t: TestContext, controls: FixtureControls = {}) {
         boardStopped: 0,
         tailerStarted: 0,
         tailerStopped: 0,
-        permissionStarted: 0,
-        permissionStopped: 0,
-        deliveryConfirmerStarted: 0,
-        deliveryConfirmerStopped: 0,
         schedulerStarted: 0,
         schedulerStopped: 0,
       }
@@ -123,8 +115,6 @@ function fixture(t: TestContext, controls: FixtureControls = {}) {
       let subscriptionsStopped = false
       let boardStopped: Promise<void> | undefined
       let tailerStopped = false
-      let permissionStopped = false
-      let deliveryConfirmerStopped = false
       const ctx = {
         bootId: randomUUID(),
         project,
@@ -158,25 +148,6 @@ function fixture(t: TestContext, controls: FixtureControls = {}) {
             if (tailerStopped) return
             tailerStopped = true
             state.tailerStopped++
-          },
-        },
-        permissionController: {
-          start() { state.permissionStarted++ },
-          stop() {
-            if (permissionStopped) return
-            permissionStopped = true
-            state.permissionStopped++
-          },
-        },
-        // Real contexts always construct this (context.ts), and startServer starts it as its own
-        // rollback phase. Omitting it here made every unwind test fail on a TypeError rather than on
-        // the failure it meant to inject.
-        deliveryConfirmer: {
-          start() { state.deliveryConfirmerStarted++ },
-          stop() {
-            if (deliveryConfirmerStopped) return
-            deliveryConfirmerStopped = true
-            state.deliveryConfirmerStopped++
           },
         },
         scheduler: {
@@ -271,7 +242,6 @@ function fixture(t: TestContext, controls: FixtureControls = {}) {
       assert.equal(state.subscriptionsStopped, 1, "created subscriptions stop exactly once")
       assert.equal(state.boardStopped, 1, "created board/watcher stops exactly once")
       assert.equal(state.tailerStopped, 1, "created tailer stops exactly once")
-      assert.equal(state.permissionStopped, 1, "created permission timer stops exactly once")
       assert.ok(state.schedulerStopped >= 1, "created scheduler receives a stop")
     }
     for (const server of httpServers) assert.equal(server.listening, false, "no fake listener remains live")
@@ -289,8 +259,6 @@ const allPhases: ServerStartupPhase[] = [
   "application socket",
   "board producer",
   "tailer producer",
-  "permission producer",
-  "profile producer",
   "wake scheduler",
   "Vite",
   "HTTP server",

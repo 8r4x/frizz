@@ -31,7 +31,6 @@ import type { AdoptionPaneLookup, PaneIdentity, PaneSnapshot } from "./tmux.ts"
 import type { AppContext } from "./context.ts"
 import type { Project } from "./project.ts"
 import type { Tailer } from "./tailer.ts"
-import { createPermissionController } from "./permission-controller.ts"
 import { writeScratchpad } from "./dispatch.ts"
 import { providerResumeCommand, shellQuote, tmuxAttachCommand } from "./external-terminal.ts"
 import * as tmuxModule from "./tmux.ts"
@@ -166,15 +165,6 @@ function harness(tailer: Tailer = noopTailer) {
   }
   const backend = createClaudeBackend({ logDir: join(dir, "logs") })
   const settings = { permissionMode: "auto" } as unknown as Settings
-  const permissionController = createPermissionController({
-    storage,
-    tailer,
-    board,
-    terminal: {
-      isLive: () => false,
-      capturePane: () => "",
-    },
-  })
   let adoptCalls = 0
   // createRouter is lazy: unrelated procedures do not read the omitted context fields. Keep this
   // focused on the permission route's real storage/board/backend dependencies.
@@ -185,7 +175,6 @@ function harness(tailer: Tailer = noopTailer) {
     tailer,
     backendFor: () => backend,
     getSettings: () => settings,
-    permissionController,
     dispatcher: {
       dispatch: async () => ({ slug: "dispatched", sessionId: "sid-dispatched" }),
       adopt: async (slug: string) => {
@@ -492,17 +481,12 @@ test("setThreadPermission RPC: validates input and persists an exited thread ove
 // parse the pane with inspectClaudeComposer). A LEGACY codex row — dispatched before the app-server
 // cutover, so codex_runtime is still NULL — must therefore persist like any other codex row instead of
 // being handed to them, which is what gating on `codex_runtime === "app-server"` used to do.
-test("setThreadPermission/setThreadProfile RPC: a legacy codex row persists and never reaches the tmux controllers", async () => {
+test("setThreadPermission/setThreadProfile RPC: every row persists intent and reports next-resume", async () => {
   const h = harness()
   const slug = "legacy-codex-row"
   h.storage.upsertSession(row(slug))
   h.storage.setBackend(slug, "codex") // codex_runtime deliberately left NULL
   h.addExitedThread(slug)
-
-  let controllerCalls = 0
-  const spy = { request: async () => { controllerCalls++; return { effect: "applied" as const } } }
-  ;(h.ctx as { permissionController?: unknown }).permissionController = { ...spy, tick: () => {}, start: () => {}, stop: () => {} }
-  ;(h.ctx as { profileController?: unknown }).profileController = spy
 
   assert.deepEqual(
     await h.router.setThreadPermission.handler({ input: { slug, permissionMode: "bypassPermissions" } }),
@@ -512,12 +496,11 @@ test("setThreadPermission/setThreadProfile RPC: a legacy codex row persists and 
     await h.router.setThreadProfile.handler({ input: { slug, model: "gpt-5.6-sol", effort: "high" } }),
     { effect: "next-resume" },
   )
-  assert.equal(controllerCalls, 0, "a codex row never reaches the Claude-only permission/profile controllers")
   const saved = h.storage.getSession(slug)!
   assert.equal(saved.permission_mode, "bypassPermissions")
   assert.equal(saved.model, "gpt-5.6-sol")
   assert.equal(saved.effort, "high")
-  assert.equal(saved.runtime_control ?? null, null, "no durable tmux runtime control was armed")
+  assert.equal(saved.runtime_control ?? null, null, "no durable runtime control was armed")
   h.storage.close()
 })
 

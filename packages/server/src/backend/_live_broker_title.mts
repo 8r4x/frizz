@@ -62,7 +62,7 @@ try {
   ok("the tailer surfaces it as the board's aiTitle", !!aiTitle, aiTitle ?? "still undefined")
   ok("the title is NOT a truncation of the dispatch prompt", !!aiTitle && !aiTitle.startsWith("Add rate limiting to the public search endpoint. Reply"), aiTitle ?? "")
 
-  await ctx.tailer.stop(); ctx.permissionController.stop(); ctx.deliveryConfirmer?.stop(); ctx.profileController?.stop()
+  await ctx.tailer.stop()
   ctx.stopSubscriptions(); await ctx.scheduler.stop(); await ctx.board.stop(); ctx.claudeBroker?.releaseSession(slug, sessionId, "session-deleted"); ctx.storage.close()
 } catch (err) {
   failures++; console.log(`\nERROR: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`)
