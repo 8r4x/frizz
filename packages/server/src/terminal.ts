@@ -1,32 +1,21 @@
 import type { IncomingMessage } from "node:http"
 import type { Duplex } from "node:stream"
-import { execFile } from "node:child_process"
 import { WebSocket, WebSocketServer, type RawData } from "ws"
 import pty from "node-pty"
 import { ThreadSlug, type TermClientMsg } from "@fray-ui/shared"
-import { exactSessionTarget, expectedAdoptionAttachArgs, socketName } from "./tmux.ts"
-import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
-import type { SessionRow, Storage } from "./storage.ts"
 import { isTrustedLocalWebSocketRequest, rejectWebSocketUpgrade } from "./local-origin.ts"
 import type { LoginAttachment } from "./login-utility.ts"
 
-// One PTY per viewing client: each ws connection on /term/<slug> spawns its OWN
-// `tmux -L <socket> attach-session -t fray-<slug>` through node-pty (tmux multiplexes the shared
-// session across attaches). Killing the pty on ws close detaches THIS client only — the tmux
-// session (and the agent) keeps running. Mirrors the M0 spike exactly. The socket is PER-PROJECT
-// (tmux.socketName(), set at server init) so the attach hits the SAME server spawn() used.
+// The /term/<slug> transport. It serves exactly ONE thing: a provider sign-in attempt, whose pty the
+// login utility owns and shares across every viewing tab.
+//
+// It used to attach each viewer to a `tmux -L <socket> attach-session -t fray-<slug>` so an operator
+// could watch an agent's TUI. Agents no longer run in panes — the broker drives them over pipes — so
+// there is nothing to attach to, and the whole tmux half of this file (socket resolution, per-viewer
+// attach ptys, and the refresh-client dance that worked around tmux's resize replay) went with it.
 
 const TERM_PATH = /^\/term\/([^/?]+)$/
 
-export function resolveThreadAttach(
-  storage: Pick<Storage, "getAdoptionClaim" | "getAdoptionRuntimeSnapshot" | "getSession">,
-  row: Pick<SessionRow, "slug" | "session_id" | "runtime_generation">,
-): string[] | null {
-  const binding = adoptionRuntimeBinding(storage, row)
-  if (binding.kind === "conflict") return null
-  if (binding.kind === "bound") return expectedAdoptionAttachArgs(binding.claim)
-  return ["attach-session", "-t", exactSessionTarget(row.slug)]
-}
 
 // Keep the raw websocket bounded before JSON parsing, and independently validate the decoded input.
 // A terminal paste may reasonably be large, but accepting ws's 100 MiB default would let one local
@@ -44,11 +33,6 @@ export const TERMINAL_MAX_INPUT_FRAMES_PER_WINDOW = 120
 export const TERMINAL_MAX_INPUT_BYTES_PER_WINDOW = 2 * TERMINAL_MAX_MESSAGE_BYTES
 export const TERMINAL_CLOSE_GRACE_MS = 250
 export const TERMINAL_SHUTDOWN_GRACE_MS = 500
-export const TERMINAL_REFRESH_AFTER_RESIZE_MS = 180
-export const TERMINAL_SETTLED_REFRESH_AFTER_RESIZE_MS = 700
-export const TERMINAL_REFRESH_AFTER_CLEAR_MS = 180
-const TERMINAL_REFRESH_OUTPUT_SUPPRESS_MS = 120
-const ERASE_DISPLAY = /\x1b\[[0-3]?J/
 
 export function parseTermClientMsg(raw: string): TermClientMsg | null {
   let value: unknown
@@ -107,11 +91,8 @@ export interface TerminalServer {
 }
 
 export interface TerminalServerDeps {
-  spawnPty?: typeof pty.spawn
-  // A provider sign-in attempt, whose pty the login utility owns and shares across viewers. Resolved
-  // BEFORE resolveAttach; returning non-null bypasses tmux entirely.
+  // Resolve a live provider sign-in attempt. Null ⇒ this slug is not attachable.
   resolveLogin?: (slug: string) => LoginAttachment | null
-  socketName?: () => string
   maxOutputBufferBytes?: number
   maxViewers?: number
   maxViewersPerSlug?: number
@@ -122,36 +103,17 @@ export interface TerminalServerDeps {
   shutdownGraceMs?: number
   now?: () => number
   terminateSocket?: (ws: WebSocket) => void
-  refreshDelaysMs?: readonly number[]
-  refreshAfterClearMs?: number
-  refreshClient?: (socket: string, term: TerminalSource) => void
-  // Production uses this to enforce a finalized adoption's exact token+pane generation before a
-  // slug-targeted tmux attach. Default true preserves the isolated transport-test seam.
-  canAttach?: (slug: string) => boolean
-  // Production resolver. A finalized adoption returns one tmux `if-shell` argv whose ownership
-  // predicate and exact-pane attach execute together; null rejects before a PTY exists. Kept
-  // separate from canAttach so older transport doubles remain small.
-  resolveAttach?: (slug: string) => string[] | null
 }
 
-// node-pty does not expose the Unix slave path in IPty's public typings, but its UnixTerminal
-// implementation keeps it in `_pty`; tmux uses that path as the client name. A full client refresh
-// after SIGWINCH is required because a full-screen app can race tmux's own resize replay: tmux first
-// sends the populated screen, then a late clear plus cursor-only diff can leave the browser's buffer
-// blank even though capture-pane is correct. Refreshing this one attach replays the authoritative
-// tmux grid without disturbing the worker or other viewers.
-// The four members this transport actually uses on its source. A tmux-attach pty satisfies it
-// natively; a login attempt's shared pty is adapted onto it below, so everything downstream of the
-// spawn site — rate limits, viewer bounds, close paths — is identical for both.
+// The members this transport uses on its source; a login attempt's shared pty is adapted onto it.
 export interface TerminalSource {
   onData(listener: (chunk: string) => void): { dispose(): void }
   onExit(listener: (event: { exitCode: number }) => void): { dispose(): void }
   resize(cols: number, rows: number): void
   write(data: string): void
   /**
-   * Release THIS viewer's hold. For a tmux attach that kills the per-viewer attach pty (detaching
-   * one client, never the worker). For a login attempt there is no per-viewer process at all, so it
-   * is a no-op — the shared pty belongs to the login utility and another tab may still be watching.
+   * Release THIS viewer's hold. A no-op for a login attempt: there is no per-viewer process, and the
+   * shared pty belongs to the login utility while another tab may still be watching.
    */
   kill(): void
 }
@@ -182,16 +144,6 @@ function adaptLoginSource(attachment: LoginAttachment): TerminalSource {
   }
 }
 
-function refreshTmuxClient(socket: string, term: TerminalSource): void {
-  const client = (term as unknown as { _pty?: unknown })._pty
-  if (typeof client !== "string" || !client.startsWith("/dev/")) return
-  try {
-    const child = execFile("tmux", ["-L", socket, "refresh-client", "-t", client], () => {})
-    child.unref()
-  } catch {
-    // A detach can race the timer. The WebSocket remains usable and a reconnect still replays tmux.
-  }
-}
 
 // noServer mode: index.ts owns the single http server and routes upgrades here. Returns true
 // iff the request was a /term/<slug> upgrade we claimed.
@@ -199,8 +151,6 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
   const wss = new WebSocketServer({ noServer: true, maxPayload: TERMINAL_MAX_MESSAGE_BYTES })
   let closing = false
   let closePromise: Promise<void> | null = null
-  const spawnPty = deps.spawnPty ?? pty.spawn
-  const activeSocketName = deps.socketName ?? socketName
   const configuredInteger = (value: number | undefined, fallback: number, minimum = 0) =>
     value !== undefined && Number.isSafeInteger(value) && value >= minimum ? value : fallback
   const maxOutputBufferBytes = configuredInteger(
@@ -232,9 +182,6 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
   )
   const now = deps.now ?? Date.now
   const terminateSocket = deps.terminateSocket ?? ((ws: WebSocket) => ws.terminate())
-  const refreshDelaysMs = deps.refreshDelaysMs ?? [TERMINAL_REFRESH_AFTER_RESIZE_MS, TERMINAL_SETTLED_REFRESH_AFTER_RESIZE_MS]
-  const refreshAfterClearMs = deps.refreshAfterClearMs ?? TERMINAL_REFRESH_AFTER_CLEAR_MS
-  const refreshClient = deps.refreshClient ?? refreshTmuxClient
   let viewerCount = 0
   const viewersPerSlug = new Map<string, number>()
 
@@ -284,31 +231,19 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
 
   const acceptViewer = (ws: WebSocket, slug: string, reservation: Reservation): void => {
       let term: TerminalSource | undefined
-    let tmuxSocket = ""
     let cleaned = false
     let closeStarted = false
     let terminated = false
     let forceCloseTimer: ReturnType<typeof setTimeout> | undefined
     let dataSubscription: { dispose(): void } | undefined
     let exitSubscription: { dispose(): void } | undefined
-    let refreshTimers: ReturnType<typeof setTimeout>[] = []
-    let clearRefreshTimer: ReturnType<typeof setTimeout> | undefined
-    let outputControlTail = ""
-    let suppressOutputRefreshUntil = 0
     const inputWindow: Array<{ at: number; bytes: number }> = []
     let inputWindowBytes = 0
 
-    const clearRefreshTimers = () => {
-      for (const timer of refreshTimers) clearTimeout(timer)
-      refreshTimers = []
-      clearTimeout(clearRefreshTimer)
-      clearRefreshTimer = undefined
-    }
 
     const cleanup = () => {
       if (cleaned) return
       cleaned = true
-      clearRefreshTimers()
       reservation.release()
       const ownedDataSubscription = dataSubscription
       dataSubscription = undefined
@@ -387,66 +322,30 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
       return
     }
 
-    let attachArgs: string[] | null
+    // /term serves exactly ONE thing now: a provider sign-in attempt, whose pty the login utility
+    // owns and shares across viewers. Agent threads have no pane to attach to — they run in the
+    // broker over pipes — so a slug that is not a live login attempt is simply not attachable.
     let loginAttachment: LoginAttachment | null = null
     try {
-      if (deps.canAttach && !deps.canAttach(slug)) {
-        beginClose(1008, "terminal attach denied")
-        return
-      }
-      // A provider sign-in attempt is resolved FIRST and never touches tmux: its pty is owned by the
-      // login utility. Everything else is still a tmux attach for now — that path goes away with the
-      // rest of the tmux transport.
       loginAttachment = deps.resolveLogin?.(slug) ?? null
-      attachArgs = loginAttachment
-        ? []
-        : deps.resolveAttach?.(slug) ?? (deps.resolveAttach
-          ? null
-          : ["attach-session", "-t", exactSessionTarget(slug)])
     } catch {
       beginClose(1011, "terminal unavailable")
       return
     }
-    if (!attachArgs) {
+    if (!loginAttachment) {
       beginClose(1008, "terminal attach denied")
       return
     }
 
     try {
-      if (loginAttachment) {
-        // A login attempt's pty is owned by the login utility, not spawned per viewer: two tabs on the
-        // sign-in modal must watch the SAME OAuth flow rather than racing two of them against one
-        // credential store. tmux gave that multiplexing for free; this is the replacement, and it is
-        // why the source is ADAPTED here instead of spawned. `tmuxSocket` stays empty, which makes
-        // refreshAuthoritativeGrid's tmux `refresh-client` a no-op for it (see refreshTmuxClient's
-        // `_pty` duck-check) — there is no tmux client to refresh.
-        term = adaptLoginSource(loginAttachment)
-      } else {
-        tmuxSocket = activeSocketName()
-        term = spawnPty("tmux", ["-L", tmuxSocket, ...attachArgs], {
-          name: "xterm-256color",
-          cols: 220,
-          rows: 50,
-          env: { ...process.env, TERM: "xterm-256color" },
-        })
-      }
+      // The login utility owns the pty, not this transport: two tabs on the sign-in modal must watch
+      // the SAME OAuth flow rather than racing two of them against one credential store.
+      term = adaptLoginSource(loginAttachment)
     } catch {
       beginClose(1011, "terminal unavailable")
       return
     }
 
-    const refreshAuthoritativeGrid = () => {
-      const activeTerm = term
-      if (cleaned || !activeTerm || ws.readyState !== WebSocket.OPEN) return
-      // `refresh-client` output can itself contain an erase-display while clearing rows below the
-      // replayed grid. Suppress that immediate echo so a repair never schedules itself forever.
-      suppressOutputRefreshUntil = Date.now() + TERMINAL_REFRESH_OUTPUT_SUPPRESS_MS
-      try {
-        refreshClient(tmuxSocket, activeTerm)
-      } catch {
-        // A test/custom refresher or a detach may fail synchronously; keep this viewer alive.
-      }
-    }
 
     const acceptInputSample = (bytes: number): boolean => {
       const at = now()
@@ -473,15 +372,6 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
           // peer receive 1013; a wedged peer is forcibly terminated without retaining resources.
           beginClose(1013, "terminal viewer overloaded")
           return
-        }
-        const controlWindow = outputControlTail + d
-        outputControlTail = controlWindow.slice(-8)
-        if (Date.now() >= suppressOutputRefreshUntil && ERASE_DISPLAY.test(controlWindow)) {
-          // Full-screen TUIs can leave tmux's authoritative pane correct while sending this attach a
-          // late clear plus cursor-only diff. Debounce until the app's final clear, then replay only
-          // this viewer. Plain/slow terminal output never pays for a full-grid refresh.
-          clearTimeout(clearRefreshTimer)
-          clearRefreshTimer = setTimeout(refreshAuthoritativeGrid, refreshAfterClearMs)
         }
         try {
           ws.send(d, (error) => {
@@ -521,14 +411,6 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
         if (msg.t === "input") activeTerm.write(msg.d)
         else {
           activeTerm.resize(msg.cols, msg.rows)
-          clearRefreshTimers()
-          // The early replay repairs an ordinary SIGWINCH redraw race. Server replacement can also
-          // cause the booting page to attach, reload on boot-id change, and attach again; Codex may
-          // emit its final clear after the first replay in that sequence, so replay once more after
-          // the client settles. Both refresh only this viewer and use tmux's authoritative grid.
-          refreshTimers = refreshDelaysMs.map((delayMs) =>
-            setTimeout(refreshAuthoritativeGrid, delayMs),
-          )
         }
       } catch {
         // A valid message can still race a dead/detached PTY. Contain that failure to this viewer;

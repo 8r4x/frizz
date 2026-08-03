@@ -14,7 +14,7 @@ ContextStartupError,
   type ContextStartupPhase,
 } from "./context.ts"
 import { createApp, type AppOptions } from "./app.ts"
-import { createTerminalServer, resolveThreadAttach } from "./terminal.ts"
+import { createTerminalServer } from "./terminal.ts"
 import { createAppSocketServer, makeTranscriptReader } from "./app-socket.ts"
 import {
   createRetryableCleanup,
@@ -571,13 +571,6 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       "terminal transport",
       () => runtime.createTerminal({
         resolveLogin: (slug) => ctx!.loginUtility.attach(slug),
-        resolveAttach: (slug) => {
-          // Sign-in attempts are handled by resolveLogin above; everything here requires a
-          // registered thread.
-          const row = ctx!.storage.getSession(slug)
-          if (!row) return null
-          return resolveThreadAttach(ctx!.storage, row)
-        },
       }),
       (value) => { terminal = value },
     )

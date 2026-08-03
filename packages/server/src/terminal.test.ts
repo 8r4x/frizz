@@ -9,7 +9,6 @@ import {
   createTerminalServer,
   parseTermClientMsg,
   parseTermSlug,
-  resolveThreadAttach,
   TERMINAL_MAX_COLS,
   TERMINAL_MAX_INPUT_BYTES,
   TERMINAL_MAX_INPUT_BYTES_PER_WINDOW,
@@ -21,6 +20,7 @@ import {
   TERMINAL_MAX_VIEWERS_PER_SLUG,
   type TerminalServerDeps,
 } from "./terminal.ts"
+import type { LoginAttachment } from "./login-utility.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
 
 function terminalRow(slug: string, sessionId: string): SessionRow {
@@ -44,17 +44,6 @@ test("parseTermSlug uses the same bounded canonical identity as RPC and tmux", (
   ]) {
     assert.equal(parseTermSlug(url), null, url)
   }
-})
-
-test("terminal attach resolver rejects a stale replaced row instead of name-attaching its successor", () => {
-  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "fray-terminal-aba-")), "ui.db"))
-  const stale = terminalRow("terminal-aba", "owner-a")
-  storage.upsertSession(stale)
-  // `=…:` is tmux's exact-name target: a bare `fray-terminal-aba` would prefix-match — and attach to —
-  // a `fray-terminal-aba-2` neighbour once this session is gone (see exactSessionTarget).
-  assert.deepEqual(resolveThreadAttach(storage, stale), ["attach-session", "-t", "=fray-terminal-aba:"])
-  storage.upsertSession(terminalRow(stale.slug, "owner-b"))
-  assert.equal(resolveThreadAttach(storage, stale), null)
 })
 
 const invalidMessages = [
@@ -101,6 +90,24 @@ test("parseTermClientMsg: rejects malformed, unknown, oversized, and unsafe term
     rows: TERMINAL_MAX_ROWS,
   })
 })
+
+// The transport now serves ONLY provider sign-in attempts, so its source arrives as a LoginAttachment
+// rather than a per-viewer pty it spawned. FakePty already has the four members the transport uses;
+// this just presents it through the attachment shape.
+//
+// `close()` maps to kill() HERE so the existing "the transport releases its source on detach"
+// assertions keep their meaning. In production a login attachment's close() is deliberately a no-op —
+// the pty is shared and the login utility owns it (see login-utility.ts).
+function attachmentFor(fake: FakePty): LoginAttachment {
+  return {
+    replay: () => "",
+    onData: (listener) => { const sub = fake.onData(listener); return () => sub.dispose() },
+    onExit: (listener) => { const sub = fake.onExit(() => listener()); return () => sub.dispose() },
+    write: (data) => fake.write(data),
+    resize: (cols, rows) => fake.resize(cols, rows),
+    close: () => { fake.kill() },
+  }
+}
 
 class FakePty {
   writes: string[] = []
@@ -228,11 +235,11 @@ async function closeHttp(server: Server): Promise<void> {
 test("terminal websocket: only an exact same-origin loopback browser can create a PTY", async () => {
   const ptys: FakePty[] = []
   const terminal = createTerminalServer({
-    spawnPty: (() => {
+    resolveLogin: () => {
       const fake = new FakePty()
       ptys.push(fake)
-      return fake
-    }) as unknown as NonNullable<TerminalServerDeps["spawnPty"]>,
+      return attachmentFor(fake)
+    },
   })
   const http = createServer()
   http.on("upgrade", (req, socket, head) => {
@@ -275,12 +282,12 @@ test("terminal websocket: only an exact same-origin loopback browser can create 
 
 test("terminal websocket: malformed and extra-key messages close only their viewer; recovery stays healthy", async () => {
   const ptys: FakePty[] = []
-  const spawnPty = (() => {
+  const resolveLogin = (() => {
     const fake = new FakePty()
     ptys.push(fake)
-    return fake
-  }) as unknown as NonNullable<TerminalServerDeps["spawnPty"]>
-  const terminal = createTerminalServer({ spawnPty, socketName: () => "test-socket" })
+    return attachmentFor(fake)
+  })
+  const terminal = createTerminalServer({ resolveLogin })
   const http = createServer((_req, res) => res.end("healthy"))
   http.on("upgrade", (req, socket, head) => {
     if (!terminal.handleUpgrade(req, socket, head)) socket.destroy()
@@ -331,10 +338,10 @@ test("terminal websocket: malformed and extra-key messages close only their view
 test("terminal websocket: non-canonical 201-character and encoded-control slugs never create a PTY", async () => {
   let spawns = 0
   const terminal = createTerminalServer({
-    spawnPty: (() => {
+    resolveLogin: () => {
       spawns++
-      return new FakePty()
-    }) as unknown as NonNullable<TerminalServerDeps["spawnPty"]>,
+      return attachmentFor(new FakePty())
+    },
   })
   const http = createServer()
   http.on("upgrade", (req, socket, head) => {
@@ -357,11 +364,11 @@ test("terminal websocket: non-canonical 201-character and encoded-control slugs 
 test("terminal websocket: binary JSON is rejected before PTY input and a text reconnect works", async () => {
   const ptys: FakePty[] = []
   const terminal = createTerminalServer({
-    spawnPty: (() => {
+    resolveLogin: () => {
       const fake = new FakePty()
       ptys.push(fake)
-      return fake
-    }) as unknown as NonNullable<TerminalServerDeps["spawnPty"]>,
+      return attachmentFor(fake)
+    },
   })
   const http = createServer()
   http.on("upgrade", (req, socket, head) => {
@@ -389,11 +396,11 @@ test("terminal websocket: binary JSON is rejected before PTY input and a text re
 test("terminal websocket: fragmented text is aggregated once and aggregate maxPayload closes with 1009", async () => {
   const ptys: FakePty[] = []
   const terminal = createTerminalServer({
-    spawnPty: (() => {
+    resolveLogin: () => {
       const fake = new FakePty()
       ptys.push(fake)
-      return fake
-    }) as unknown as NonNullable<TerminalServerDeps["spawnPty"]>,
+      return attachmentFor(fake)
+    },
     maxInputFramesPerWindow: 1,
   })
   const http = createServer()
@@ -430,11 +437,11 @@ test("terminal websocket: fragmented text is aggregated once and aggregate maxPa
 test("terminal websocket: concurrent upgrades obey per-slug and global caps with immediate fair recovery", async () => {
   const ptys: FakePty[] = []
   const terminal = createTerminalServer({
-    spawnPty: (() => {
+    resolveLogin: () => {
       const fake = new FakePty()
       ptys.push(fake)
-      return fake
-    }) as unknown as NonNullable<TerminalServerDeps["spawnPty"]>,
+      return attachmentFor(fake)
+    },
     maxViewers: 3,
     maxViewersPerSlug: 2,
   })
@@ -495,11 +502,11 @@ test("terminal websocket: sliding frame and byte limits are inclusive at their e
   let clock = 0
   const sample = JSON.stringify({ t: "input", d: "x" })
   const terminal = createTerminalServer({
-    spawnPty: (() => {
+    resolveLogin: () => {
       const fake = new FakePty()
       ptys.push(fake)
-      return fake
-    }) as unknown as NonNullable<TerminalServerDeps["spawnPty"]>,
+      return attachmentFor(fake)
+    },
     now: () => clock,
     inputRateWindowMs: 1_000,
     maxInputFramesPerWindow: 2,
@@ -547,11 +554,11 @@ test("terminal websocket: an exact 1 MiB paste is accepted once and a same-windo
   const oneMiB = "z".repeat(TERMINAL_MAX_INPUT_BYTES)
   const payload = JSON.stringify({ t: "input", d: oneMiB })
   const terminal = createTerminalServer({
-    spawnPty: (() => {
+    resolveLogin: () => {
       const fake = new FakePty()
       ptys.push(fake)
-      return fake
-    }) as unknown as NonNullable<TerminalServerDeps["spawnPty"]>,
+      return attachmentFor(fake)
+    },
     now: () => 0,
     maxInputFramesPerWindow: 10,
     maxInputBytesPerWindow: Buffer.byteLength(payload),
@@ -581,72 +588,15 @@ test("terminal websocket: an exact 1 MiB paste is accepted once and a same-windo
   }
 })
 
-test("terminal websocket: an exact-runtime ownership veto closes before any tmux attach", async () => {
-  let spawns = 0
-  const terminal = createTerminalServer({
-    canAttach: () => false,
-    spawnPty: (() => {
-      spawns++
-      return new FakePty()
-    }) as unknown as NonNullable<TerminalServerDeps["spawnPty"]>,
-  })
-  const http = createServer()
-  http.on("upgrade", (req, socket, head) => {
-    if (!terminal.handleUpgrade(req, socket, head)) socket.destroy()
-  })
-  const port = await listen(http)
-  try {
-    const ws = await openSocket(port)
-    const code = await new Promise<number>((resolve) => ws.once("close", resolve))
-    assert.equal(code, 1008)
-    assert.equal(spawns, 0)
-  } finally {
-    await terminal.close()
-    await closeHttp(http)
-  }
-})
-
-test("terminal websocket: exact attach authorization and pane attach share one tmux command", async () => {
-  const exactArgs = [
-    "if-shell", "-t", "%77", "-F", "#{exact-owner}",
-    "attach-session -t %77",
-    "",
-  ]
-  const launches: { file: string; args: string[] }[] = []
-  const terminal = createTerminalServer({
-    socketName: () => "exact-test-socket",
-    resolveAttach: () => exactArgs,
-    spawnPty: ((file: string, args: string[]) => {
-      launches.push({ file, args })
-      return new FakePty()
-    }) as unknown as NonNullable<TerminalServerDeps["spawnPty"]>,
-  })
-  const http = createServer()
-  http.on("upgrade", (req, socket, head) => {
-    if (!terminal.handleUpgrade(req, socket, head)) socket.destroy()
-  })
-  const port = await listen(http)
-  try {
-    const ws = await openSocket(port)
-    await waitFor(() => launches.length === 1)
-    assert.deepEqual(launches, [{ file: "tmux", args: ["-L", "exact-test-socket", ...exactArgs] }])
-    assert.equal(launches[0].args.includes("fray-thread"), false, "there is no later reusable-name attach")
-    ws.close()
-  } finally {
-    await terminal.close()
-    await closeHttp(http)
-  }
-})
-
 test("terminal websocket: a dead PTY exception closes only its viewer and a new attach still works", async () => {
   const ptys: FakePty[] = []
-  const spawnPty = (() => {
+  const resolveLogin = (() => {
     const fake = new FakePty()
     if (ptys.length === 0) fake.throwOnResize = true
     ptys.push(fake)
-    return fake
-  }) as unknown as NonNullable<TerminalServerDeps["spawnPty"]>
-  const terminal = createTerminalServer({ spawnPty })
+    return attachmentFor(fake)
+  })
+  const terminal = createTerminalServer({ resolveLogin })
   const http = createServer()
   http.on("upgrade", (req, socket, head) => {
     if (!terminal.handleUpgrade(req, socket, head)) socket.destroy()
@@ -671,76 +621,14 @@ test("terminal websocket: a dead PTY exception closes only its viewer and a new 
   }
 })
 
-test("terminal websocket: resize schedules an authoritative tmux client refresh", async () => {
-  const fake = new FakePty()
-  const refreshed: Array<{ socket: string; term: unknown }> = []
-  const terminal = createTerminalServer({
-    spawnPty: (() => fake) as unknown as NonNullable<TerminalServerDeps["spawnPty"]>,
-    socketName: () => "resize-socket",
-    refreshDelaysMs: [0],
-    refreshClient: (socket, term) => refreshed.push({ socket, term }),
-  })
-  const http = createServer()
-  http.on("upgrade", (req, socket, head) => {
-    if (!terminal.handleUpgrade(req, socket, head)) socket.destroy()
-  })
-  const port = await listen(http)
-
-  try {
-    const ws = await openSocket(port)
-    ws.send(JSON.stringify({ t: "resize", cols: 41, rows: 49 }))
-    await waitFor(() => refreshed.length === 1)
-    assert.deepEqual(fake.resizes, [[41, 49]])
-    assert.equal(refreshed[0]?.socket, "resize-socket")
-    assert.equal(refreshed[0]?.term, fake)
-    ws.close()
-  } finally {
-    await terminal.close()
-    await closeHttp(http)
-  }
-})
-
-test("terminal websocket: a full-screen clear schedules one non-recursive authoritative refresh", async () => {
-  const fake = new FakePty()
-  let refreshes = 0
-  const terminal = createTerminalServer({
-    spawnPty: (() => fake) as unknown as NonNullable<TerminalServerDeps["spawnPty"]>,
-    refreshAfterClearMs: 0,
-    refreshClient: () => {
-      refreshes++
-      // A real tmux replay may contain its own erase-display. It must not arm another refresh.
-      fake.emitData("\x1b[H\x1b[Jreplayed authoritative grid")
-    },
-  })
-  const http = createServer()
-  http.on("upgrade", (req, socket, head) => {
-    if (!terminal.handleUpgrade(req, socket, head)) socket.destroy()
-  })
-  const port = await listen(http)
-
-  try {
-    const ws = await openSocket(port)
-    fake.emitData("late clear \x1b[")
-    fake.emitData("J with cursor-only diff")
-    await waitFor(() => refreshes === 1)
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    assert.equal(refreshes, 1)
-    assert.equal(ws.readyState, WebSocket.OPEN)
-    ws.close()
-  } finally {
-    await terminal.close()
-    await closeHttp(http)
-  }
-})
-
 test("terminal websocket: a slow consumer releases its PTY and capacity before bounded forced close", async () => {
   const ptys: FakePty[] = []
   const terminal = createTerminalServer({
-    spawnPty: (() => {
+    resolveLogin: () => {
       const fake = new FakePty()
       ptys.push(fake)
-      return fake
-    }) as unknown as NonNullable<TerminalServerDeps["spawnPty"]>,
+      return attachmentFor(fake)
+    },
     maxOutputBufferBytes: 0,
     maxViewers: 1,
     maxViewersPerSlug: 1,
@@ -779,11 +667,11 @@ test("terminal websocket: a slow consumer releases its PTY and capacity before b
 test("terminal websocket: abrupt socket close and repeated PTY exit callbacks reclaim each attach once", async () => {
   const ptys: FakePty[] = []
   const terminal = createTerminalServer({
-    spawnPty: (() => {
+    resolveLogin: () => {
       const fake = new FakePty()
       ptys.push(fake)
-      return fake
-    }) as unknown as NonNullable<TerminalServerDeps["spawnPty"]>,
+      return attachmentFor(fake)
+    },
     maxViewers: 1,
   })
   const http = createServer()
@@ -820,11 +708,11 @@ test("terminal websocket: shutdown is bounded when close never fires and races s
   const ptys: FakePty[] = []
   let terminateCalls = 0
   const terminal = createTerminalServer({
-    spawnPty: (() => {
+    resolveLogin: () => {
       const fake = new FakePty()
       ptys.push(fake)
-      return fake
-    }) as unknown as NonNullable<TerminalServerDeps["spawnPty"]>,
+      return attachmentFor(fake)
+    },
     shutdownGraceMs: 20,
     terminateSocket: () => {
       terminateCalls++
@@ -864,11 +752,11 @@ test("terminal websocket: shutdown is bounded when close never fires and races s
 test("terminal websocket: close rejects new upgrades and drains every viewer PTY exactly once", async () => {
   const ptys: FakePty[] = []
   const terminal = createTerminalServer({
-    spawnPty: (() => {
+    resolveLogin: () => {
       const fake = new FakePty()
       ptys.push(fake)
-      return fake
-    }) as unknown as NonNullable<TerminalServerDeps["spawnPty"]>,
+      return attachmentFor(fake)
+    },
   })
   const http = createServer()
   http.on("upgrade", (req, socket, head) => {
@@ -901,11 +789,11 @@ test("terminal websocket: control-plane boot replacement reclaims the old attach
   const firstBootPtys: FakePty[] = []
   const secondBootPtys: FakePty[] = []
   const makeTerminal = (owned: FakePty[]) => createTerminalServer({
-    spawnPty: (() => {
+    resolveLogin: () => {
       const fake = new FakePty()
       owned.push(fake)
-      return fake
-    }) as unknown as NonNullable<TerminalServerDeps["spawnPty"]>,
+      return attachmentFor(fake)
+    },
   })
   const firstBoot = makeTerminal(firstBootPtys)
   let activeTerminal = firstBoot
