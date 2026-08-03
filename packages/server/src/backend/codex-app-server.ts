@@ -1633,6 +1633,14 @@ function correlatedFileItemKey(threadId: string, turnId: string, itemId: string)
   return `${threadId}\u0000${turnId}\u0000${itemId}`
 }
 
+// A cwd is absolute on POSIX when it starts with "/" and on Windows when it carries a drive letter
+// (`C:\\…` or `C:/…`) — the same test `fray-paths.ts` applies to an XDG variable. Checking only for a
+// leading slash rejected EVERY Windows path, which failed 41 tests on a real Windows Server 2022 host.
+function isAbsoluteBoundedPath(value: string): boolean {
+  if (value.length === 0 || value.length > 8_192) return false
+  return value.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(value)
+}
+
 export class CodexAppServerBridge {
   private readonly db: Database
   private readonly now: () => Date
@@ -1822,7 +1830,7 @@ export class CodexAppServerBridge {
   async startDisposableSession(input: StartCodexAppServerSessionInput): Promise<CodexAppServerSessionBinding> {
     if (!ThreadSlug.safeParse(input.threadSlug).success) throw new Error("invalid Fray thread slug")
     if (!input.sessionId || input.sessionId.length > 256) throw new Error("invalid Fray session id")
-    if (!input.cwd.startsWith("/") || input.cwd.length > 8_192) throw new Error("Codex app-server cwd must be an absolute bounded path")
+    if (!isAbsoluteBoundedPath(input.cwd)) throw new Error("Codex app-server cwd must be an absolute bounded path")
     if (input.permissions && input.sandbox) throw new Error("Codex app-server permissions and sandbox are mutually exclusive")
     const startKeys = [`slug:${input.threadSlug}`, `session:${input.sessionId}`]
     if (startKeys.some((key) => this.startingSessions.has(key))) {
@@ -1927,7 +1935,7 @@ export class CodexAppServerBridge {
     if (!ThreadSlug.safeParse(input.threadSlug).success) throw new Error("invalid Fray thread slug")
     if (!input.sessionId || input.sessionId.length > 256) throw new Error("invalid Fray session id")
     if (!input.codexThreadId || input.codexThreadId.length > 256) throw new Error("invalid Codex rollout id")
-    if (!input.cwd.startsWith("/") || input.cwd.length > 8_192) throw new Error("Codex app-server cwd must be an absolute bounded path")
+    if (!isAbsoluteBoundedPath(input.cwd)) throw new Error("Codex app-server cwd must be an absolute bounded path")
     const releaseOperation = this.beginOperation()
     try {
       const existing = this.bindingForScope(input.threadSlug, input.sessionId)
