@@ -113,12 +113,14 @@ test("tailAskIdx: punctuation after an ask is skipped, not treated as a turn", (
 
 // ---- composeAnswerWire ----
 
-test("all-live single block → bare answer (historic format, byte-identical)", () => {
+test("all-live SINGLE block is numbered too → the answers card, never a flat bubble", () => {
+  // It used to send the bare answer text, which carried no marker for parseAnswersMessage and so
+  // rendered as a run-on user bubble while every other answer shape got the structured card.
   const wire = composeAnswerWire({
     answered: [{ isLive: true, question: "Pick one", answer: "B. Right" }],
-    live: { blockCount: 1, numbered: [{ n: 1, a: "B. Right" }] },
+    live: { numbered: [{ n: 1, a: "B. Right" }] },
   })
-  assert.equal(wire, "B. Right")
+  assert.equal(wire, "Answers:\n1. B. Right")
 })
 
 test("all-live multi block → Answers: numbered by original position", () => {
@@ -127,7 +129,7 @@ test("all-live multi block → Answers: numbered by original position", () => {
       { isLive: true, question: "Q1", answer: "yes" },
       { isLive: true, question: "Q2", answer: "no" },
     ],
-    live: { blockCount: 2, numbered: [{ n: 1, a: "yes" }, { n: 2, a: "no" }] },
+    live: { numbered: [{ n: 1, a: "yes" }, { n: 2, a: "no" }] },
   })
   assert.equal(wire, "Answers:\n1. yes\n2. no")
 })
@@ -136,7 +138,7 @@ test("all-live multi block, PARTIAL answer → keeps original block numbers", ()
   // Only block 2 answered against a 3-block ask: number stays 2 so pairAnswersMessage maps it faithfully.
   const wire = composeAnswerWire({
     answered: [{ isLive: true, question: "Q2", answer: "just this" }],
-    live: { blockCount: 3, numbered: [{ n: 2, a: "just this" }] },
+    live: { numbered: [{ n: 2, a: "just this" }] },
   })
   assert.equal(wire, "Answers:\n2. just this")
 })
@@ -157,7 +159,7 @@ test("mixed live + buried answers → self-describing form for the whole batch",
       { isLive: false, question: "Old Q", answer: "A" },
       { isLive: true, question: "New Q", answer: "B" },
     ],
-    live: { blockCount: 1, numbered: [{ n: 1, a: "B" }] },
+    live: { numbered: [{ n: 1, a: "B" }] },
   })
   assert.equal(wire, 'Answers to earlier questions:\n1. “Old Q” → A\n2. “New Q” → B')
 })

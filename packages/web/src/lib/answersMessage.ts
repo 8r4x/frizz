@@ -1,4 +1,4 @@
-import { splitQuestionBlocks, parseQuestionBlock } from "./questionBlocks.ts"
+import { splitQuestionBlocks, parseQuestionBlock, type MessageSegment } from "./questionBlocks.ts"
 
 // Detect + parse OUR OWN composed-answer format, so a user message that is a multi-block answer renders
 // as a structured card (echoing the question component) instead of a flat run-on bubble. The format is
@@ -9,10 +9,10 @@ import { splitQuestionBlocks, parseQuestionBlock } from "./questionBlocks.ts"
 //   2. <answer two>
 //   …
 //
-// (A single-block answer is sent as the bare answer text with NO "Answers:" header — it stays a plain
-// bubble, which is correct.) Detection is deliberately strict: the FIRST non-empty line must be exactly
-// "Answers:", and the body must be numbered "N. …" lines. Anything else returns null and the caller
-// falls back to the plain bubble — degrade safely, never lose text.
+// — for EVERY live-ask send, a one-block ask included (see composeAnswerWire). Detection is deliberately
+// strict: the FIRST non-empty line must be exactly "Answers:", and the body must be numbered "N. …"
+// lines. Anything else returns null and the caller falls back to the plain bubble — degrade safely,
+// never lose text.
 //
 // composeAnswerWire has a SECOND form for a batch that answers a BURIED ask (see parseBuriedAnswersMessage):
 //
@@ -127,21 +127,55 @@ export interface MsgLike {
   text: string
 }
 
+// The ```question blocks of the NEAREST EARLIER ask, looking backward from `index` with the same skip
+// discipline as useLiveAnswering: kind:"event"/"reasoning" punctuation and text-less (tool-only) turns
+// are scanned past, and so is a prose-only assistant message WITHOUT blocks (a worker often follows its
+// ask with a note before the human answers). Null when a text-bearing USER message intervenes (an
+// earlier human turn claims anything before it — those questions were already answered) or the list
+// starts. The `includes` guard keeps the walk cheap: it now runs for every user message, not just the
+// ones already known to carry an "Answers:" header.
+function nearestAskBlocks(messages: readonly MsgLike[], index: number): MessageSegment[] | null {
+  for (let i = index - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.kind === "event" || m.kind === "reasoning") continue // punctuation, not a conversation turn
+    if (!m.text.trim()) continue // tool-only turn — no narrative to pair with
+    if (m.role === "user") return null // an earlier human turn — don't pair across it
+    if (!m.text.includes("```question")) continue // interstitial assistant prose — keep looking for the ask
+    const blocks = splitQuestionBlocks(m.text).filter((s) => s.kind === "question")
+    if (blocks.length > 0) return blocks
+  }
+  return null
+}
+
+const questionOf = (b: MessageSegment): string =>
+  b.kind === "question" ? parseQuestionBlock(b.text, b.questionKind, b.danger).contextMd.trim() : ""
+
+// LEGACY single-answer bubbles. Before composeAnswerWire numbered every live send, a ONE-block ask's
+// answer went out as bare text with no header at all — so those messages carry no marker to parse and
+// there are transcripts full of them. Recover exactly the unambiguous ones: a single-block ask whose
+// bare reply is BYTE-IDENTICAL to one of its own option labels, i.e. the human clicked that chip. A
+// freeform reply (the "Or skip the questions and reply…" path, or a typed override) matches no option
+// and correctly keeps its plain bubble — this must never box an ordinary steer into an Answers card.
+function pairBareChipAnswer(text: string, blocks: MessageSegment[]): PairedAnswer[] | null {
+  if (blocks.length !== 1) return null // a multi-block ask always numbered its answers — nothing to recover
+  const answer = text.trim()
+  if (!answer) return null
+  const b = blocks[0]
+  if (b.kind !== "question") return null
+  const parsed = parseQuestionBlock(b.text, b.questionKind, b.danger)
+  if (!parsed.options.some((o) => o.trim() === answer)) return null
+  const question = parsed.contextMd.trim()
+  return [question ? { n: 1, answer, question } : { n: 1, answer }]
+}
+
 // Pair an answers-message with the questions it answers. The composed reply targets the ```question
-// blocks of the NEAREST EARLIER question-bearing assistant message (usually the immediately-preceding
-// one), so: look backward from `index`, skipping kind:"event" punctuation and text-less (tool-only)
-// turns — the same skip discipline as useLiveAnswering — until either
-//   · an assistant message CARRYING question blocks → pair each answer by ITS OWN NUMBER: answer `n`
-//     ↔ block n (sendAnswers numbers by ORIGINAL block position and filters unanswered blocks, so a
-//     PARTIAL answer set — "Answers:\n1. A" against a five-block ask — still maps faithfully). An
-//     out-of-range or non-increasing number means the correlation is unreliable → unpaired rows
-//     (never mislabel an answer with the wrong question);
-//   · a text-bearing USER message → stop unpaired (an earlier human turn claims anything before it —
-//     those questions were already answered);
-//   · the list start → unpaired.
-// A prose-only assistant message WITHOUT blocks is scanned PAST (a worker often follows its ask with a
-// note before the human answers). Returns null when messages[index] isn't an answers-message at all —
-// callers fall back to the plain bubble. Unpaired rows keep question undefined → the numbered fallback.
+// blocks of the nearest earlier ask (see nearestAskBlocks), so each answer pairs by ITS OWN NUMBER:
+// answer `n` ↔ block n (sendAnswers numbers by ORIGINAL block position and filters unanswered blocks,
+// so a PARTIAL answer set — "Answers:\n1. A" against a five-block ask — still maps faithfully). An
+// out-of-range or non-increasing number means the correlation is unreliable → unpaired rows (never
+// mislabel an answer with the wrong question). Returns null when messages[index] isn't an
+// answers-message at all — callers fall back to the plain bubble. Unpaired rows keep question undefined
+// → the numbered fallback.
 export function pairAnswersMessage(messages: readonly MsgLike[], index: number): PairedAnswer[] | null {
   const msg = messages[index]
   if (!msg || msg.role !== "user" || msg.kind === "event") return null
@@ -150,26 +184,17 @@ export function pairAnswersMessage(messages: readonly MsgLike[], index: number):
   const buried = parseBuriedAnswersMessage(msg.text)
   if (buried) return buried
   const answers = parseAnswersMessage(msg.text)
-  if (!answers) return null
-
-  for (let i = index - 1; i >= 0; i--) {
-    const m = messages[i]
-    if (m.kind === "event" || m.kind === "reasoning") continue // punctuation, not a conversation turn
-    if (!m.text.trim()) continue // tool-only turn — no narrative to pair with
-    if (m.role === "user") break // an earlier human turn — don't pair across it
-    const blocks = splitQuestionBlocks(m.text).filter((s) => s.kind === "question")
-    if (blocks.length === 0) continue // interstitial assistant prose — keep looking for the ask
-    // Sanity: numbers must be strictly increasing and within the block range (sendAnswers guarantees
-    // both; hand-typed text that violates them gets the safe numbered fallback).
-    const sane = answers.every((a, j) => Number.isInteger(a.n) && a.n >= 1 && a.n <= blocks.length && (j === 0 || a.n > answers[j - 1].n))
-    if (!sane) break
-    return answers.map((a) => {
-      const b = blocks[a.n - 1]
-      const q = b.kind === "question" ? parseQuestionBlock(b.text, b.questionKind, b.danger).contextMd.trim() : ""
-      return q ? { ...a, question: q } : { ...a }
-    })
-  }
-  return answers
+  const blocks = nearestAskBlocks(messages, index)
+  if (!answers) return blocks ? pairBareChipAnswer(msg.text, blocks) : null
+  if (!blocks) return answers
+  // Sanity: numbers must be strictly increasing and within the block range (sendAnswers guarantees
+  // both; hand-typed text that violates them gets the safe numbered fallback).
+  const sane = answers.every((a, j) => Number.isInteger(a.n) && a.n >= 1 && a.n <= blocks.length && (j === 0 || a.n > answers[j - 1].n))
+  if (!sane) return answers
+  return answers.map((a) => {
+    const q = questionOf(blocks[a.n - 1])
+    return q ? { ...a, question: q } : { ...a }
+  })
 }
 
 // Convenience for the list-map call sites: the pairing for EVERY index in one pass, null at non-answers

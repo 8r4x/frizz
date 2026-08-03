@@ -92,7 +92,7 @@ need no install or provider CLI; the full suite is local-only by design.
   into choice chips (web/src/lib/questionBlocks.ts). A go/no-go is just a two-option question — the
   old ` ```question approval ` gate (one Approve button that sent on click) was dropped 2026-07-26;
   its token now degrades to a plain question so legacy transcripts still render.
-  Answers compose into one follow-up numbered by ORIGINAL block position ("Answers:\n2. …"). The
+  Answers compose into one follow-up numbered by ORIGINAL block position ("Answers:\n2. …"), a ONE-block ask included — the numbering is what the renderer keys on to card the reply up instead of dropping it into a flat bubble. The
   contract lives in packages/server/src/workerPrompt.ts + cc-worker's SKILL/deny-ask hook — keep all three aligned.
 
 ## Packages

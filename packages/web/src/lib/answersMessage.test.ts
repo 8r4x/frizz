@@ -170,6 +170,41 @@ test("a non-answers message returns null (the caller renders the plain bubble)",
   assert.equal(pairAnswersMessage([qmsg("Q?"), asst("Answers:\n1. A")], 1), null) // wrong role
 })
 
+test("a one-block ask's answer pairs and cards up (the numbered form composeAnswerWire now always sends)", () => {
+  const msgs = [qmsg("Delete the orphaned binaries?\n- A. Yes, delete them\n- B. Leave them"), user("Answers:\n1. A. Yes, delete them")]
+  const paired = pairAnswersMessage(msgs, 1)
+  assert.equal(paired?.length, 1)
+  assert.equal(paired?.[0].question, "Delete the orphaned binaries?")
+  assert.equal(paired?.[0].answer, "A. Yes, delete them")
+})
+
+// ---- legacy bare single answers (pre-numbering transcripts) ----
+
+test("a LEGACY bare answer matching a one-block ask's option still cards up", () => {
+  const msgs = [qmsg("Delete the orphaned binaries?\n- A. Yes, delete them\n- B. Leave them"), user("A. Yes, delete them")]
+  const paired = pairAnswersMessage(msgs, 1)
+  assert.deepEqual(paired, [{ n: 1, answer: "A. Yes, delete them", question: "Delete the orphaned binaries?" }])
+})
+
+test("a bare reply that matches NO option keeps its plain bubble (never box an ordinary steer)", () => {
+  const msgs = [qmsg("Delete them?\n- A. Yes\n- B. No"), user("Neither — check whether anything still links them first.")]
+  assert.equal(pairAnswersMessage(msgs, 1), null)
+})
+
+test("a bare option match against a MULTI-block ask is not recovered (that form was always numbered)", () => {
+  const msgs = [qmsg("First?\n- A. x\n- B. y", "Second?\n- A. p\n- B. q"), user("A. x")]
+  assert.equal(pairAnswersMessage(msgs, 1), null)
+})
+
+test("a bare option match does not reach across an intervening human turn", () => {
+  const msgs = [qmsg("Pick?\n- A. x\n- B. y"), user("hold on"), user("A. x")]
+  assert.equal(pairAnswersMessage(msgs, 2), null)
+})
+
+test("a bare answer with no preceding ask at all stays a plain bubble", () => {
+  assert.equal(pairAnswersMessage([user("A. x")], 0), null)
+})
+
 test("a CR-separated answers message still pairs (normalization happens inside)", () => {
   const msgs = [qmsg("Pick?\n- A. x", "Also?\n- B. y"), user("Answers:\r1. A. x\r2. B. y")]
   const paired = pairAnswersMessage(msgs, 1)

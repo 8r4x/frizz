@@ -3178,7 +3178,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
 // answering questions 9–11 of an earlier ask rendered "1" against a question that reads "9. …".
 function AnswersCard({ answers, queued, sourceId }: { answers: PairedAnswer[]; queued?: boolean; sourceId?: string }) {
   return (
-    <div data-fray-msg={sourceId} className={`self-end flex w-full max-w-[85%] flex-col items-end ${queued ? "opacity-50" : ""}`}>
+    <div data-fray-msg={sourceId} data-answers-card className={`self-end flex w-full max-w-[85%] flex-col items-end ${queued ? "opacity-50" : ""}`}>
       <div className={`w-full min-w-0 ${BLOCK_RADIUS} rounded-br-sm border border-border-strong bg-elevated p-4`}>
         <CardHead icon={ListChecks} label="Answers" />
         <CardContent>

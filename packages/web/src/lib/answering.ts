@@ -139,18 +139,21 @@ export function tailAskIdx(messages: readonly AskMsgLike[]): number {
 }
 
 // Choose the wire form for a batch of answers. When every answer belongs to the LIVE ask, emit the
-// historic format verbatim (a single-block ask → the bare answer; a multi-block ask → "Answers:\n1. …"
-// numbered by ORIGINAL block position) so the queue card, the answer-pairing card, and the worker-side
-// mapping are all unchanged. If ANY answer targets a BURIED ask, the bare/numbered form is ambiguous
-// (which turn's question?), so emit a self-describing form that quotes each question — readable to both
-// the human and the resuming worker, whose recent context is no longer the ask.
+// numbered form ("Answers:\n1. …", numbered by ORIGINAL block position) — INCLUDING a one-block ask,
+// which used to send its answer as bare text. The bare form had no marker for the renderer to key on,
+// so a single answer landed as a flat run-on bubble while every other shape of the same action got the
+// structured Answers card (maintainer 2026-08-03: "always render using the answers component"). One
+// header line is the whole cost, and the resuming worker reads "Answers:\n1. B. Yes" as plainly as it
+// read the bare line. If ANY answer targets a BURIED ask, the numbered form is ambiguous (which turn's
+// question?), so emit a self-describing form that quotes each question — readable to both the human and
+// the resuming worker, whose recent context is no longer the ask.
 export function composeAnswerWire(input: {
   answered: readonly { isLive: boolean; question: string; answer: string }[] // all answered, transcript order
-  live?: { blockCount: number; numbered: readonly { n: number; a: string }[] } // the live ask's answered blocks
+  live?: { numbered: readonly { n: number; a: string }[] } // the live ask's answered blocks, by original position
 }): string {
   const { answered, live } = input
   if (answered.length > 0 && answered.every((x) => x.isLive) && live) {
-    return live.blockCount === 1 ? live.numbered[0].a : `Answers:\n${live.numbered.map(({ n, a }) => `${n}. ${a}`).join("\n")}`
+    return `Answers:\n${live.numbered.map(({ n, a }) => `${n}. ${a}`).join("\n")}`
   }
   return `Answers to earlier questions:\n${answered.map((x, k) => `${k + 1}. “${x.question}” → ${x.answer}`).join("\n")}`
 }
@@ -292,12 +295,11 @@ export function useLiveAnswering(
     if (answered.length === 0) return
 
     // The live ask's answered blocks, numbered by ORIGINAL block position (composeAnswerWire picks the
-    // historic bare/"Answers:" form when every answer is live, else a self-describing quoted form).
+    // "Answers:" form when every answer is live, else a self-describing quoted form).
     const live = scopedAsks.find((a) => a.isLive)
     const composed = composeAnswerWire({
       answered: answered.map((x) => ({ isLive: x.ask.isLive, question: x.question, answer: x.answer })),
       live: live && {
-        blockCount: live.blocks.length,
         numbered: live.blocks
           .map((_blk, i) => ({ n: i + 1, a: answerAt(live, i) }))
           .filter(({ a }) => a !== ""),
