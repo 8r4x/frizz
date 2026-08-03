@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { formatGithubWakeSteer, isValidAwaitingTimer, stopHookMessage, wakeDeliveryToken, type QuotaSnapshot } from "@fray-ui/shared"
+import { formatGithubWakeSteer, heartbeatMessage, isValidAwaitingTimer, stopHookMessage, wakeDeliveryToken, type QuotaSnapshot } from "@fray-ui/shared"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { FenceView } from "./tailer.ts"
@@ -338,6 +338,67 @@ function armedSnooze(row: Pick<SessionRow, "snoozed_until" | "snooze_prompt">): 
   return { until, untilMs, prompt, fenceId: snoozeFenceId(until, prompt) }
 }
 
+// ---- SOURCE 4: THE HEARTBEAT ---------------------------------------------------------------------
+// The DUMB source: a prompt on a chosen clock. It consults nothing about the thread — not rest, not
+// `--awaiting`, not sub-agents, not shells. If the interval has elapsed, a beat is queued. (It still
+// LANDS at the next rest, because fray cannot inject a turn into a running one; "unconditional" here
+// means nothing suppresses the FIRING.)
+//
+// It is the sibling of SOURCE 5, not a rival: a stop hook asks "you stopped — is there more?" and the
+// worker can defer it; a heartbeat asks "it has been an hour" and the worker cannot. An operator who
+// needs a thread revisited on a schedule regardless of what the agent believes needs the second one.
+//
+// It also remains the only recurring wake a worker CAN have. Claude Code's own `CronCreate` /
+// `ScheduleWakeup` cannot fire in the runtime fray spawns: their gate stays shut while ANY background
+// task is outstanding, so the thread most in need of a nudge — one parked behind a sub-agent that will
+// never report — is exactly the one whose cron is dead (measured 2026-08-01: 3 fires in 150s with no
+// background work, 0 with a background shell alive). Riding fray's outbox sidesteps that entirely.
+//
+// Its record of intent is the session row, with `heartbeat_armed_at` as the GENERATION: re-arming mints
+// a new one, so a beat still in the outbox under the old settings reads as superseded.
+//
+// The beat is delivered VERBATIM, with no preamble — unlike a stop hook, which carries a trailer
+// teaching the `--awaiting` protocol. There is no protocol here: it fires, full stop.
+const HEARTBEAT_FENCE_PREFIX = "heartbeat"
+const HEARTBEAT_HINT_PREFIX = "heartbeat:"
+
+// The generation is (armed_at, beat index). The index advances only once the previous beat is
+// TERMINAL, so a thread that stays busy accumulates exactly one pending beat rather than one per
+// interval — an agent nagged by an hour of backlog the moment it rests is its own denial of service.
+function heartbeatFenceId(armedAt: string, beat: number): string {
+  return `${HEARTBEAT_FENCE_PREFIX}:${armedAt}:${beat}`
+}
+function isHeartbeatFenceId(fenceId: string): boolean {
+  return fenceId.startsWith(`${HEARTBEAT_FENCE_PREFIX}:`)
+}
+
+interface ArmedHeartbeat {
+  prompt: string
+  intervalMs: number
+  armedAt: string
+  /** When the next beat becomes due: interval after the last delivered beat, else after arming. */
+  dueAtMs: number
+}
+
+type HeartbeatRow = Pick<
+  SessionRow,
+  "heartbeat_prompt" | "heartbeat_interval_ms" | "heartbeat_enabled" | "heartbeat_armed_at" | "heartbeat_last_fired_at"
+>
+
+// A row's CURRENT heartbeat, if it has a live one. A paused heartbeat deliberately reads as ABSENT
+// here — pause must stop new beats and drop queued ones — while the row keeps its settings so play
+// resumes the same heartbeat instead of making the worker re-register it.
+function armedHeartbeat(row: HeartbeatRow): ArmedHeartbeat | undefined {
+  const prompt = row.heartbeat_prompt?.trim()
+  const intervalMs = row.heartbeat_interval_ms
+  const armedAt = row.heartbeat_armed_at
+  if (!prompt || !intervalMs || intervalMs <= 0 || !armedAt) return undefined
+  if (row.heartbeat_enabled !== 1) return undefined
+  const anchor = Date.parse(row.heartbeat_last_fired_at ?? armedAt)
+  if (!Number.isFinite(anchor)) return undefined
+  return { prompt, intervalMs, armedAt, dueAtMs: anchor + intervalMs }
+}
+
 // ---- SOURCE 5: THE OPERATOR'S STOP HOOK ----------------------------------------------------------
 // Text the operator writes in the thread footer, re-delivered every time that thread STOPS — which is
 // the event they actually mean when they want one to keep going. It is named for the hook it behaves
@@ -353,7 +414,7 @@ function armedSnooze(row: Pick<SessionRow, "snoozed_until" | "snooze_prompt">): 
 // The loop's OFF SWITCH belongs to the worker, and it is the one part of this that is not optional. A
 // stop hook with no terminating condition is an infinite bump generator, so the delivered text carries
 // a trailer (shared `stopHookMessage`) teaching the worker to answer AWAITING when nothing in it is
-// actionable. The tailer folds that sentinel onto the final message (`lastAssistantAwaiting`) and this
+// actionable. The tailer folds that sentinel onto the final message (`lastAssistantAllDone`) and this
 // pass simply declines to fire while it stands — no state to write, and it re-opens by itself the
 // moment the thread produces any other final message.
 //
@@ -362,24 +423,6 @@ function armedSnooze(row: Pick<SessionRow, "snoozed_until" | "snooze_prompt">): 
 // superseded rather than delivering text the operator has since replaced.
 const STOP_HOOK_FENCE_PREFIX = "stophook"
 const STOP_HOOK_HINT_KEY = "stophook:rest"
-
-// THE HEARTBEAT: the fixed minimum between two bumps, and the only clock in this source.
-//
-// The rule, stated once because every other comment here defers to it: a bump fires as soon as the
-// thread comes to REST, and firing starts this timer; no further bump fires until it completes. So the
-// first rest after arming is bumped immediately, and thereafter the thread is prompted at most once per
-// interval however often it stops. A turn that runs LONGER than the interval is bumped the moment it
-// rests (the timer expired while it worked); a turn that ends in seconds waits out the remainder at
-// rest and is bumped when the timer completes.
-//
-// FIXED, not operator-chosen, and that is the point. An interval-per-thread is exactly what the
-// removed heartbeat feature got wrong — an operator wanting "keep going" has no idea what number to
-// type, and the number they pick is wrong the moment the work changes shape. One known schedule is
-// something you can reason about without configuring anything (maintainer 2026-08-02: "the heartbeat is
-// fixed with a known schedule, like 10 minutes or an hour"). Ten minutes is long enough that a bumped
-// thread is never hammered and short enough that a stuck one is rescued while the operator still cares.
-// Changing the cadence is changing THIS constant.
-const STOP_HOOK_HEARTBEAT_MS = 10 * 60_000
 
 // The rest a bump is bound to. `lastActivityAt` is the thread's own high-water mark, so a NEW rest
 // necessarily carries a new one — which is what makes "at most one bump per rest" fall out of delivery
@@ -769,6 +812,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (armedSnooze(row)?.fenceId !== item.fenceId) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
+    // A beat is bound to the exact heartbeat GENERATION that queued it. Stopping the heartbeat, re-arming it
+    // with different settings, and either side switching it off all read as
+    // supersession here — each one means the queued text no longer describes what the thread wants.
+    // Disabling therefore drops a beat already waiting, rather than delivering it on re-enable.
+    if (isHeartbeatFenceId(item.fenceId)) {
+      const armed = armedHeartbeat(row)
+      if (!armed || !item.fenceId.startsWith(`${HEARTBEAT_FENCE_PREFIX}:${armed.armedAt}:`)) return "superseded"
+      return tele.turn === "idle" ? "current-idle" : "current-busy"
+    }
     // A bump is bound to the exact stop-hook GENERATION that queued it AND to the exact REST it
     // was queued for. Disabling the toggle, editing the text, and the thread moving on to a new rest
     // all read as supersession here — and so does an AWAITING that landed between enqueue and delivery,
@@ -777,7 +829,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (isStopHookFenceId(item.fenceId)) {
       const armed = armedStopHook(row)
       if (!armed || item.fenceId !== stopHookFenceId(armed.armedAt, tele.lastActivityAt ?? "")) return "superseded"
-      if (tele.lastAssistantAwaiting) return "superseded"
+      if (tele.lastAssistantAllDone) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
     // A report repair is bound to a report that is STILL missing from the model's context. If the
@@ -1243,6 +1295,86 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   }
 
+  // ---- The heartbeat pass -------------------------------------------------------------------
+  // Like the snooze pass, this does NOT filter on `turn === "idle"`: a beat that comes due mid-turn is
+  // queued and the delivery gate holds it until the thread rests. That hold IS the feature — the whole
+  // point is to reach a thread the moment it goes quiet, which is precisely when Claude Code's own cron
+  // cannot (see SOURCE 4 above).
+  //
+  // At most ONE beat is ever outstanding per thread: a new one is queued only when the previous has
+  // reached a terminal state, and the beat clock runs from the last DELIVERED beat. A thread busy for
+  // an hour therefore gets one catch-up beat at its next rest, not sixty.
+  function evalHeartbeats(nowMs: number): void {
+    for (const row of deps.storage.allSessions()) {
+      if (row.state === "archived" || row.archived === 1) continue
+      const armed = armedHeartbeat(row)
+      if (!armed || armed.dueAtMs > nowMs) continue
+      // The ONE thing that silences a beat. Everything else about this source is unconditional — rest,
+      // sub-agents, shells, all irrelevant — but a worker that has said there is no further work has
+      // ended the arrangement, and a "permanently stalled" run that keeps being woken every interval is
+      // not stalled at all. Needs no stored state: the flag is folded off the FINAL assistant message,
+      // so anything the thread says or receives afterwards reopens it.
+      const beatTele = deps.tailer.get(row.slug)
+      if (beatTele?.lastAssistantAllDone) continue
+      // One beat in flight at a time. Any open delivery for this thread's heartbeat — whatever its
+      // generation — means the previous beat has not landed yet, so this interval is skipped rather
+      // than stacked behind it.
+      if (openHeartbeat(row.slug, row.session_id)) continue
+      const beat = beatIndex(row.heartbeat_last_fired_at ?? null, armed)
+      const fenceId = heartbeatFenceId(armed.armedAt, beat)
+      const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
+      if (outbox.get(deliveryId)) continue
+      const item = outbox.enqueue({
+        id: deliveryId,
+        slug: row.slug,
+        sessionId: row.session_id,
+        fenceId,
+        hintKey: `${HEARTBEAT_HINT_PREFIX}${armed.intervalMs}`,
+        message: heartbeatMessage(armed.prompt, Math.round(armed.intervalMs / 1000)),
+        reason: `heartbeat every ${Math.round(armed.intervalMs / 1000)}s`,
+      }, nowMs).delivery
+      log(`waker: queued ${row.slug} — ${item.reason}`)
+      checkpoint("after-enqueue", item)
+    }
+  }
+
+  // Is a beat for this thread still open (pending/leased)? Scanning the open set is cheap — the outbox
+  // holds only live work — and it is the one check that makes "at most one beat outstanding" true
+  // across restarts, since it reads the durable rows rather than in-memory arming.
+  function openHeartbeat(slug: string, sessionId: string): boolean {
+    return outbox.listOpen().some(
+      (item) => item.slug === slug && item.sessionId === sessionId && isHeartbeatFenceId(item.fenceId),
+    )
+  }
+
+  // A monotonic-enough beat number so consecutive beats get distinct delivery ids. Derived from elapsed
+  // intervals rather than a stored counter: the row already carries everything needed, and a delivery
+  // id only has to be unique per (session, generation), not meaningful.
+  function beatIndex(lastFiredAt: string | null, armed: ArmedHeartbeat): number {
+    const armedMs = Date.parse(armed.armedAt)
+    const lastMs = Date.parse(lastFiredAt ?? armed.armedAt)
+    if (!Number.isFinite(armedMs) || !Number.isFinite(lastMs)) return 0
+    return Math.max(0, Math.round((lastMs - armedMs) / armed.intervalMs)) + 1
+  }
+
+  // Stamp the beat clock once a beat has genuinely REACHED the worker, so the next one is due an
+  // interval after it actually landed. Called only from the three settle points that mean delivery
+  // happened (acknowledged, or confirmed by the wake token in the transcript) — deliberately NOT from
+  // the superseded/exhausted/abandoned ones the snooze settles on. A beat dropped because the human
+  // pressed pause, or one that exhausted its attempts, never fired, and advancing the clock for it
+  // would silently swallow the next interval.
+  //
+  // Guarded on the generation for the same reason as the snooze: a beat that settles after the worker
+  // re-armed or stopped its heartbeat must not write a schedule onto settings it no longer describes.
+  function settleHeartbeat(item: WakeDelivery): void {
+    if (!isHeartbeatFenceId(item.fenceId)) return
+    const row = deps.storage.getSession(item.slug)
+    if (!row || row.session_id !== item.sessionId) return
+    const armedAt = row.heartbeat_armed_at
+    if (!armedAt || !item.fenceId.startsWith(`${HEARTBEAT_FENCE_PREFIX}:${armedAt}:`)) return
+    deps.storage.stampHeartbeatFired(item.slug, armedAt, new Date().toISOString())
+  }
+
   // ---- The operator-stop-hook pass ------------------------------------------------------------
   // Unlike every other pass here this one DOES filter on `turn === "idle"`, because rest is not a
   // deadline it can queue against — it IS the trigger. Queueing a bump for a busy thread would bind it
@@ -1264,11 +1396,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // The worker itself asked to skip THIS rest — it is parked on something and has nothing to do
       // until that returns. Per-rest only: the flag is folded off the FINAL assistant message, so the
       // next rest that omits it is bumped as normal. Nothing is written and nothing has to be cleared.
-      if (tele.lastAssistantAwaiting) continue
-      // The heartbeat, measured from the last DELIVERED bump — not from this rest, so time the worker
-      // spent WORKING counts toward the interval and a long turn is bumped the instant it stops.
-      const lastFired = row.stop_hook_last_fired_at ? Date.parse(row.stop_hook_last_fired_at) : NaN
-      if (Number.isFinite(lastFired) && nowMs - lastFired < STOP_HOOK_HEARTBEAT_MS) continue
+      if (tele.lastAssistantAllDone) continue
       const fenceId = stopHookFenceId(armed.armedAt, tele.lastActivityAt)
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
       // Terminal rows stay in the store, so this alone is what makes a rest bump EXACTLY once: the same
@@ -1318,6 +1446,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (context === "confirmed") {
         outbox.confirm(item.id, nowMs)
         settleSnooze(item)
+        settleHeartbeat(item)
         settleStopHook(item)
         continue
       }
@@ -1359,6 +1488,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (context === "confirmed") {
         outbox.confirm(item.id, now())
         settleSnooze(item)
+        settleHeartbeat(item)
         settleStopHook(item)
         continue
       }
@@ -1422,6 +1552,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         continue
       }
       settleSnooze(item)
+      settleHeartbeat(item)
       settleStopHook(item)
       const acknowledged = outbox.get(item.id)
       if (acknowledged) checkpoint("after-ack", acknowledged)
@@ -1475,6 +1606,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
       log(`waker: snooze-bump pass failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    try {
+      evalHeartbeats(now())
+    } catch (err) {
+      if (err instanceof InjectedSchedulerCrash) throw err
+      log(`waker: heartbeat pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     try {
       evalStopHooks(now())

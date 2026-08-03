@@ -60,15 +60,18 @@ test("the fray MCP server identifies as `fray` and exposes its worker tools", as
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "stop_hook"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "stop_hook", "heartbeat"])
     for (const required of ["prompt", "model", "effort"]) {
       assert.ok(list.result.tools[0].inputSchema.required.includes(required))
     }
-    // `stop_hook` requires only `action` — `prompt` is required for `start` alone, enforced in the
-    // handler so a lenient client cannot skip it either (asserted below). And it exposes NO thread
-    // parameter at all: the slug comes from the server env, never from the model.
+    // Both recurring tools require only `action` — `prompt` (and the heartbeat's `interval_seconds`)
+    // are required for `start` alone, enforced in the handlers so a lenient client cannot skip them
+    // either (asserted below). Neither exposes a THREAD parameter: the slug comes from the server's env,
+    // never from the model, which is what stops one thread arming a loop on another.
     assert.deepEqual(list.result.tools[1].inputSchema.required, ["action"])
     assert.deepEqual(Object.keys(list.result.tools[1].inputSchema.properties).sort(), ["action", "prompt"])
+    assert.deepEqual(list.result.tools[2].inputSchema.required, ["action"])
+    assert.deepEqual(Object.keys(list.result.tools[2].inputSchema.properties).sort(), ["action", "interval_seconds", "prompt"])
     // An unregistered name is a protocol error, not a crash — the registry routes by name now.
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "spawn_fray_thread", arguments: {} } })
     const gone = await rpc.next(3)
@@ -154,9 +157,11 @@ test("`stop_hook` arms and disarms the CALLING thread's hook, identified from it
       url: "/rpc/setOwnThreadStopHook",
       body: { slug: "owning-thread", prompt: "keep the migration moving", enabled: true },
     })
-    // The reply must teach BOTH exits, or a worker only knows how to start one.
-    assert.match(armed.result.content[0].text, /AWAITING/)
+    // The reply must teach how it ENDS, or a worker only knows how to start one — and it must warn
+    // about the sentinel rather than merely offering it, since that exit is permanent.
     assert.match(armed.result.content[0].text, /action.{0,4}stop/)
+    assert.match(armed.result.content[0].text, /ALLDONE/)
+    assert.match(armed.result.content[0].text, /permanently stalls/)
 
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "stop_hook", arguments: { action: "stop" } } })
     const stopped = await rpc.next(3)
@@ -235,5 +240,69 @@ test("`stop_hook` refuses to act when its thread identity was never stamped into
     assert.match(failed.result.content[0].text, /not told which thread it belongs to/)
   } finally {
     rpc.kill()
+  }
+})
+
+// The heartbeat tool's own env-identity + validation contract, mirroring `stop_hook`'s above. Its extra
+// obligation is the INTERVAL: a schedule nobody chose is what the operator asked to make explicit, so
+// the handler must refuse a `start` without one rather than defaulting.
+test("`heartbeat` arms the CALLING thread on a chosen schedule, and refuses an unchosen one", async () => {
+  const seen: Array<{ url: string; body: any }> = []
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      seen.push({ url: req.url ?? "", body: JSON.parse(body || "{}") })
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: null }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "fray-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRAY_STATE_DIR: stateDir, FRAY_THREAD_SLUG: "owning-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+
+    rpc.send({
+      jsonrpc: "2.0", id: 2, method: "tools/call",
+      params: { name: "heartbeat", arguments: { action: "start", prompt: "check the deploy", interval_seconds: 600 } },
+    })
+    const armed = await rpc.next(2)
+    assert.equal(armed.result.isError, undefined)
+    assert.deepEqual(seen.at(-1), {
+      url: "/rpc/setOwnThreadHeartbeat",
+      body: { slug: "owning-thread", prompt: "check the deploy", intervalSeconds: 600, enabled: true },
+    })
+    assert.match(armed.result.content[0].text, /every 10 min/)
+    assert.match(armed.result.content[0].text, /permanently stalls/)
+
+    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "heartbeat", arguments: { action: "stop" } } })
+    await rpc.next(3)
+    assert.deepEqual(seen.at(-1), {
+      url: "/rpc/setOwnThreadHeartbeat",
+      body: { slug: "owning-thread", prompt: null, enabled: false },
+    })
+
+    // A `start` with no interval, and one out of range, are both refused in the HANDLER — nothing sent.
+    const before = seen.length
+    rpc.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "heartbeat", arguments: { action: "start", prompt: "x" } } })
+    const noInterval = await rpc.next(4)
+    assert.equal(noInterval.result.isError, true)
+    assert.match(noInterval.result.content[0].text, /`interval_seconds` is required/)
+
+    rpc.send({
+      jsonrpc: "2.0", id: 5, method: "tools/call",
+      params: { name: "heartbeat", arguments: { action: "start", prompt: "x", interval_seconds: 5 } },
+    })
+    const tooFast = await rpc.next(5)
+    assert.equal(tooFast.result.isError, true)
+    assert.match(tooFast.result.content[0].text, /must be between 60 and 86400/)
+    assert.equal(seen.length, before, "and neither reached the server")
+  } finally {
+    rpc.kill()
+    http.close()
   }
 })

@@ -357,33 +357,69 @@ export const SNOOZE_PROMPT_MAX = 4000
 export const SnoozePrompt = z.string().trim().min(1).max(SNOOZE_PROMPT_MAX)
 export type SnoozePrompt = z.infer<typeof SnoozePrompt>
 
+// ---- The heartbeat (scheduler SOURCE 4) ----------------------------------------------------------
+// The DUMB one, and deliberately so: it fires on a clock and nothing turns it off but disarming it.
+// No rest trigger, no sentinel, no regard for what the thread is doing — if the interval has elapsed,
+// a beat is queued. (It still LANDS at the thread's next rest, because fray cannot inject a turn into
+// a running one; what "unconditional" means here is that nothing suppresses the firing.)
+//
+// It exists as the sibling of the stop hook because the two answer different questions. A stop hook
+// asks "you stopped — is there more?", which is what you want while driving an effort forward. A
+// heartbeat asks "it has been ten minutes", which is what you want when a thread must be revisited on a
+// schedule no matter what it happens to be doing. Collapsing them into one left neither working: an
+// interval-only version cannot react to a stop, and a rest-only version cannot keep a schedule.
+//
+// The interval is CHOSEN, unlike the stop hook's fixed heartbeat floor — an operator asking for "every
+// hour" is naming a real schedule, not guessing at a rate limit.
+export const HEARTBEAT_PROMPT_MAX = SNOOZE_PROMPT_MAX
+// One minute floor: a beat lands at the next rest, so anything faster cannot deliver faster — it only
+// churns the outbox. One day ceiling keeps a forgotten heartbeat from being indistinguishable from a
+// dead one.
+export const HEARTBEAT_MIN_INTERVAL_SECONDS = 60
+export const HEARTBEAT_MAX_INTERVAL_SECONDS = 24 * 60 * 60
+export const HeartbeatPrompt = z.string().trim().min(1).max(HEARTBEAT_PROMPT_MAX)
+export const HeartbeatIntervalSeconds = z
+  .number()
+  .int()
+  .min(HEARTBEAT_MIN_INTERVAL_SECONDS)
+  .max(HEARTBEAT_MAX_INTERVAL_SECONDS)
+
+// What the board renders for a thread carrying one. `enabled` mirrors the stop hook's toggle: it keeps
+// the text and the schedule while stopping the beat, so switching it back on costs no retyping.
+export const ThreadHeartbeat = z.object({
+  intervalSeconds: z.number().int().positive(),
+  prompt: z.string(),
+  enabled: z.boolean(),
+  armedAt: z.string(),
+  lastFiredAt: z.string().optional(),
+}).strict()
+export type ThreadHeartbeat = z.infer<typeof ThreadHeartbeat>
+
 // ---- The operator's stop hook (scheduler SOURCE 5) -----------------------------------------------
 // Text an operator writes in the thread footer, re-delivered every time that thread STOPS. Named for
 // the hook it behaves like: fray catches the worker coming to rest and hands it this. There is no
 // interval and no cadence to choose — the trigger is the stop itself.
 //
-// THERE ARE TWO WAYS OUT, and they are NOT the same, which is the single most important thing this
-// file has to make unmistakable:
+// THE OPT-OUT, shared by both recurring sources and deliberately hard to reach for.
 //
-//   1. `AWAITING` on a rest message SKIPS THAT ONE REST. It is what a worker says when it is parked on
-//      something that will come back on its own — a background shell, a sub-agent — and there is
-//      nothing to do until it does. The hook stays armed. The very next rest is bumped normally.
-//   2. `mcp__fray__stop_hook` with `action: "stop"`, or the operator's toggle, DISARMS it for good.
+// A worker that replies ALLDONE is saying "there is no further work here", and fray stops prompting it
+// — the stop hook AND the heartbeat, because a run that keeps being woken has not stalled and the whole
+// point of the word is that it has. It is not a "skip this one" — it is the end of the arrangement, and
+// nothing but new activity on the thread reopens it. Both delivered messages therefore OFFER it in one
+// de-emphasized line and warn against it in the same breath: the failure it guards is a worker that
+// says it to look tidy and silently parks an effort nobody is watching.
 //
-// The sentinel used to be called ALLDONE, and that name taught the wrong one: it reads as "this effort
-// is finished", so a worker waiting twenty minutes on a test run would say it to mean "nothing to do
-// right now" and could just as easily believe it had switched the whole arrangement off. AWAITING says
-// what it actually does — I am waiting, skip me this time (maintainer 2026-08-02).
-//
-// The per-rest scope is not enforced by any stored state, which is why it cannot drift: the flag is
-// folded off the FINAL assistant message, so it lasts exactly as long as that message is the final one.
+// Mechanically it needs no stored state at all, which is what makes it honest: the flag is folded off
+// the FINAL assistant message, so it holds for exactly as long as that message is the thread's last
+// word. Anything the thread says or receives afterwards reopens the loop by itself.
 export const STOP_HOOK_MAX = SNOOZE_PROMPT_MAX
 export const StopHookPrompt = z.string().trim().min(1).max(STOP_HOOK_MAX)
 export type StopHookPrompt = z.infer<typeof StopHookPrompt>
 
-/** The worker's "I am parked on something, skip this rest" reply. Recognized only as its OWN line (see
- * `saysAwaiting`), so a worker explaining the protocol in prose never accidentally suppresses a bump. */
-export const STOP_HOOK_SENTINEL = "AWAITING"
+/** The worker's "there is no further work here" reply, which stops BOTH recurring sources. Recognized
+ * only as its OWN line (see `saysAllDone`), so a worker discussing the protocol — which the delivered
+ * trailers invite by naming it — never ends its own run by talking about it. */
+export const ALLDONE_SENTINEL = "ALLDONE"
 
 /** Does this assistant text defer its stop-hook bump? True iff some line, stripped of markdown
  * emphasis/backticks and trailing punctuation, IS the sentinel.
@@ -391,33 +427,78 @@ export const STOP_HOOK_SENTINEL = "AWAITING"
  * CASE-SENSITIVE, which is load-bearing now that the word is `AWAITING`: fray's own signal-fence
  * grammar opens with ```awaiting, and a worker parking on a fence writes that token constantly. Lowered
  * case would make every ```awaiting fence silently suppress a bump as well. */
-export function saysAwaiting(text: string | undefined): boolean {
+export function saysAllDone(text: string | undefined): boolean {
   if (typeof text !== "string") return false
   for (const line of text.split(/\r?\n/)) {
+    // Tolerate the ways a model dresses a line: a list bullet, bold/italic, code ticks, a quote marker,
+    // and trailing punctuation. The comparison itself is EXACT and case-sensitive — "all done" is prose,
+    // and only the shouted token is the opt-out.
     const bare = line.trim().replace(/^[*_`>\s-]+/, "").replace(/[*_`.!\s]+$/, "")
-    if (bare === STOP_HOOK_SENTINEL) return true
+    if (bare === ALLDONE_SENTINEL) return true
   }
   return false
 }
 
-/** What fray actually delivers for a stop hook: the operator's words VERBATIM first, then the one
- * paragraph that teaches the protocol. The trailer is not optional decoration — the operator wrote an
- * instruction, not a protocol, so without this the worker has no way to learn that being re-prompted is
- * expected, or which of the two exits it wants. Kept beside the sentinel so the text and the parser that
- * reads it can never drift apart.
- *
- * It names BOTH exits and marks the difference, because naming only the sentinel is what made a worker
- * treat "skip this rest" and "we are finished here" as the same act. */
+// THE TRAILER, in one de-emphasized line, on both sources.
+//
+// It has two jobs pulling against each other: a worker being re-prompted needs to know the opt-out
+// exists at all, and it must not reach for it. So the line OFFERS and WARNS in the same breath, and
+// stays parenthetical — the operator's own words are the message; this is a footnote about the
+// machinery. Expanding it is how a worker starts treating "am I allowed to stop?" as the question,
+// instead of the work it was actually sent.
+const OPT_OUT_NOTE =
+  `If there is genuinely no further work, reply ${ALLDONE_SENTINEL} on its own line to stop these prompts` +
+  " — but be sure, because it permanently stalls this run."
+
+/** What fray delivers for a STOP HOOK: the operator's words VERBATIM, then the trailer. Kept beside the
+ * parser so the wording sent and the wording recognized can never drift apart. */
 export function stopHookMessage(prompt: string): string {
-  return [
-    prompt.trim(),
-    "",
-    `(Stop hook — fray re-sends this every time you come to rest. To skip just THIS rest, because you are`,
-    `waiting on something that will come back on its own (a background shell, a sub-agent) and there is`,
-    `nothing to do until it does, put ${STOP_HOOK_SENTINEL} on its own line. That defers ONE bump — the hook stays`,
-    `armed and your next rest is prompted as normal. To end it for good instead, call`,
-    `\`mcp__fray__stop_hook\` with \`action: "stop"\`.)`,
-  ].join("\n")
+  return `${prompt.trim()}\n\n(Stop hook — sent each time you come to rest. ${OPT_OUT_NOTE})`
+}
+
+/** What fray delivers for a HEARTBEAT. Same shape, and it names the cadence so a worker can tell a beat
+ * from a stop hook without guessing — they read identically otherwise, and the two mean different
+ * things about why it is being spoken to. */
+export function heartbeatMessage(prompt: string, intervalSeconds: number): string {
+  return `${prompt.trim()}\n\n(Heartbeat — sent every ${formatIntervalLabel(intervalSeconds)}. ${OPT_OUT_NOTE})`
+}
+
+/** "10 min" / "2 hr" / "90s" — whole units only, because a cadence printed to the second promises a
+ * precision the delivery does not have (a beat lands at the thread's next rest). */
+export function formatIntervalLabel(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "—"
+  if (seconds < 60) return `${Math.round(seconds)}s`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes} min`
+  const hours = minutes / 60
+  return `${Number.isInteger(hours) ? hours : hours.toFixed(1)} hr`
+}
+
+/** What a delivered recurring prompt looks like once it is back out of the transcript.
+ *
+ * The chat needs to tell a bump from a human message and a stop hook from a beat, and the transcript
+ * carries no structure — a delivery is an ordinary user turn. So this parses the trailer the two
+ * composers above emit, exactly as `parseGithubWakeSteer` parses the steer its own formatter writes.
+ * That is not a text GUESS: the format is fray's, it is defined ten lines up, and both directions live
+ * in this file so they cannot drift. Anything that does not match returns undefined and renders as it
+ * did before — text is never lost to a parse. */
+export interface RecurringPrompt {
+  kind: "stop-hook" | "heartbeat"
+  /** The heartbeat's cadence as the trailer stated it ("10 min"); absent for a stop hook. */
+  every?: string
+  /** The operator's own words, with the trailer removed. */
+  prompt: string
+}
+const RECURRING_TRAILER = /\n\n\((Stop hook — sent each time you come to rest|Heartbeat — sent every ([^.)]+))\. [^)]*\)$/
+export function parseRecurringPrompt(text: string | undefined): RecurringPrompt | undefined {
+  if (typeof text !== "string") return undefined
+  const m = RECURRING_TRAILER.exec(text.trimEnd())
+  if (!m) return undefined
+  const prompt = text.trimEnd().slice(0, m.index).trim()
+  if (!prompt) return undefined
+  return m[2]
+    ? { kind: "heartbeat", every: m[2].trim(), prompt }
+    : { kind: "stop-hook", prompt }
 }
 
 // What the board renders for a thread carrying one. `enabled` is the operator's toggle: disabling
@@ -586,6 +667,9 @@ export const ThreadView = z.object({
   // reload its plugin closure in place, so the board needs it to decide whether to offer that verb at
   // all rather than render a button that throws.
   claudeRuntime: z.enum(["tmux", "broker"]).optional(),
+  // The thread's heartbeat, when one is armed. Present with `enabled` false ⇒ schedule and text kept,
+  // no beat fired.
+  heartbeat: ThreadHeartbeat.optional(),
   // The operator's own stop hook, when they have written one. Present with `enabled` false ⇒ the
   // text is kept but no bump fires, which is what lets the footer's toggle be non-destructive.
   stopHook: ThreadStopHook.optional(),
@@ -1002,6 +1086,30 @@ export const SetThreadSnoozeInput = z.object({
   prompt: SnoozePrompt.nullable().optional(),
 }).strict()
 export type SetThreadSnoozeInput = z.infer<typeof SetThreadSnoozeInput>
+
+// The heartbeat's operator half — the footer popover. Session-guarded like every other browser write:
+// a tab looking at a thread that has since been re-dispatched fails closed rather than arming whatever
+// now owns the slug. `prompt: null` clears the row; an interval is required alongside a prompt, because
+// a schedule nobody chose is the thing this feature exists to make explicit.
+export const SetThreadHeartbeatInput = z.object({
+  slug: ThreadSlug,
+  sessionId: z.string().min(1),
+  prompt: HeartbeatPrompt.nullable(),
+  intervalSeconds: HeartbeatIntervalSeconds.optional(),
+  enabled: z.boolean(),
+}).strict()
+export type SetThreadHeartbeatInput = z.infer<typeof SetThreadHeartbeatInput>
+
+// The heartbeat's WORKER half, from `mcp__fray__heartbeat`. Slug-only and unguarded for exactly the
+// reason the stop hook's worker input is (see SetOwnThreadStopHookInput): the MCP server keeps its
+// thread's slug across resumes while the session id bumps underneath it.
+export const SetOwnThreadHeartbeatInput = z.object({
+  slug: ThreadSlug,
+  prompt: HeartbeatPrompt.nullable(),
+  intervalSeconds: HeartbeatIntervalSeconds.optional(),
+  enabled: z.boolean(),
+}).strict()
+export type SetOwnThreadHeartbeatInput = z.infer<typeof SetOwnThreadHeartbeatInput>
 
 // The footer's stop-hook popover, arming and disarming in ONE call — the toggle and the textarea
 // are two views of one row, and splitting them into two mutations would let a tab that has only one of

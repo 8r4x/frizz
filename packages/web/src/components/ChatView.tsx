@@ -5,6 +5,7 @@ import * as RadixTabs from "@radix-ui/react-tabs"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, ShieldCheck, Sparkles, TerminalSquare, X, type LucideIcon } from "lucide-react"
+import { parseRecurringPrompt } from "@fray-ui/shared"
 import type { AwaitingHint, BgShellView, NativeInputRequired as NativeInputRequiredData, PendingAsk, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@fray-ui/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBackgroundShellLines, useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
@@ -18,6 +19,7 @@ import { splitQuestionBlocks, parseQuestionBlock, type QuestionKind, type BlockA
 import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
 import { parseAnswersCard, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
 import { GithubWakeCard } from "./GithubWakeCard.tsx"
+import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
 import { sendEagerFollowUp } from "../lib/eagerComposerSubmission.ts"
@@ -3015,6 +3017,13 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     // A scheduler wake is recorded as a user turn because it is pasted into the worker's composer —
     // but FRAY wrote it, not the human, so it must not wear the human's off-white right-justified
     // bubble. `m.wake` is the server's own tell (the delivery token it stripped), never a text guess.
+    // A recurring prompt (stop hook / heartbeat) is a wake too, but it REPEATS by design — the same
+    // paragraph every few minutes on a thread being driven by one — so it collapses to a single line
+    // rather than restating itself in full down the transcript. Parsed from fray's own trailer, defined
+    // beside the composer that writes it; a non-match falls through to the divider below, so no wake
+    // can lose its text to this.
+    const recurring = m.wake ? parseRecurringPrompt(text) : undefined
+    if (recurring) return <RecurringPromptLine bump={recurring} sourceId={m.sourceId} />
     if (m.wake) return <GithubWakeCard steer={m.wakeSteer} text={text} sourceId={m.sourceId} wrap={dense} />
     // …and the same correction for the OTHER writer of a user turn the human didn't type: a background
     // sub-agent pushing a report up to its parent through `SendMessage({to:"main"})`. `m.peerFrom` is the

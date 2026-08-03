@@ -61,6 +61,19 @@ export interface SessionRow {
   // came to a new rest because a sub-agent/shell returned. NULL = no event-snooze armed. Distinct from
   // snoozed_until (a wall-clock park owned by the scheduler); this one clears itself on the next rest.
   bg_snooze_rested_at?: string | null
+  // The thread's HEARTBEAT (scheduler.ts SOURCE 4): a prompt on a chosen clock. All of prompt/interval/
+  // armed_at move together — a heartbeat is armed iff all three are set — and `heartbeat_armed_at` is
+  // the GENERATION, so re-arming supersedes a beat already queued under the old settings.
+  heartbeat_prompt?: string | null
+  heartbeat_interval_ms?: number | null
+  // 0 = armed but silent: the schedule and text are kept so re-enabling costs no retyping. (The old
+  // heartbeat spelled this `paused` and inverted; `enabled` matches the stop hook's toggle.)
+  heartbeat_enabled?: number
+  heartbeat_armed_at?: string | null
+  // When the last beat reached a terminal delivery. The next beat is due an interval after THIS, not
+  // after the previous was queued, so a thread that stayed busy gets one catch-up beat rather than a
+  // backlog.
+  heartbeat_last_fired_at?: string | null
   // The OPERATOR's stop hook (scheduler.ts SOURCE 5), armed from the thread footer: text re-delivered
   // every time this thread comes to REST. `stop_hook_armed_at` is the GENERATION — editing the text
   // mints a new one so a bump already in the outbox for the old words reads as superseded — and
@@ -409,6 +422,25 @@ export interface Storage {
     enabled: boolean,
     armedAt: string,
   ): boolean
+  // Arm / edit / clear the thread's HEARTBEAT (scheduler.ts SOURCE 4). Same generation discipline as the
+  // stop hook: a change to the TEXT OR THE INTERVAL mints a fresh `armed_at` (superseding a beat queued
+  // under the old settings and restarting the clock), while a bare toggle flip preserves both. A null
+  // prompt clears the row. Session-guarded — this is the browser's path.
+  setHeartbeatIfCurrent(
+    slug: string,
+    sessionId: string,
+    generation: number,
+    prompt: string | null,
+    intervalMs: number | null,
+    enabled: boolean,
+    armedAt: string,
+  ): boolean
+  // The WORKER's path to the same row, from `mcp__fray__heartbeat`. Slug-only and unguarded, for the
+  // reason spelled out on setStopHookBySlug.
+  setHeartbeatBySlug(slug: string, prompt: string | null, intervalMs: number | null, enabled: boolean, armedAt: string): boolean
+  // Stamp a delivered beat, guarded on the generation so a beat settling after a re-arm cannot write a
+  // schedule onto settings it no longer describes.
+  stampHeartbeatFired(slug: string, armedAt: string, firedAt: string): boolean
   // The WORKER's own path to the same row, from `mcp__fray__stop_hook`. Deliberately keyed on the slug
   // ALONE, with no session/generation guard, because the MCP server cannot satisfy one: it is spawned
   // with its thread's slug and keeps it across a resume, while the session id and generation bump
@@ -676,6 +708,15 @@ export function createStorage(dbPath: string): Storage {
     // Claude transport discriminator: NULL/'tmux' = the interactive-TUI path in a tmux pane; 'broker'
     // = a session-broker-owned Agent SDK session (input via the bridge, liveness from it, not a pane).
     "claude_runtime TEXT",
+    // The thread's HEARTBEAT (scheduler.ts SOURCE 4) — a prompt on a chosen clock, fired regardless of
+    // what the thread is doing. Re-added 2026-08-02 after a same-day removal: the stop hook replaced its
+    // MECHANISM but not its job, and an operator who wants a thread revisited hourly needs a clock, not
+    // a rest trigger the agent can defer.
+    "heartbeat_prompt TEXT",
+    "heartbeat_interval_ms INTEGER",
+    "heartbeat_enabled INTEGER NOT NULL DEFAULT 0",
+    "heartbeat_armed_at TEXT",
+    "heartbeat_last_fired_at TEXT",
     // The OPERATOR's stop hook (scheduler.ts SOURCE 5). Armed from the thread
     // footer's popover; delivered every time the thread comes to REST until the worker replies with
     // the AWAITING sentinel. No interval column — "rest" is the trigger.
@@ -690,47 +731,11 @@ export function createStorage(dbPath: string): Storage {
       // column already exists
     }
   }
-  // ---- ADOPT ANY SURVIVING HEARTBEAT AS A STOP HOOK ------------------------------------------------
-  // The worker-armed interval heartbeat was removed 2026-08-02 and the stop hook replaced it. Its four
-  // columns are gone from the list above, so a FRESH database never has them — but a database that
-  // predates the removal still does, still holds whatever was armed in it, and nothing reads those
-  // columns any more. Left alone, a live autonomous loop would simply have gone silent at the upgrade
-  // with no trace on any surface: the board no longer projects a heartbeat, so the operator would see a
-  // thread that used to keep moving and now does not, and nothing anywhere would say why.
-  //
-  // So the intent is carried over rather than dropped. What migrates is the PROMPT (the text the worker
-  // wrote for its future self, which is exactly what a stop hook delivers) and whether it was RUNNING —
-  // a paused heartbeat lands as a disabled stop hook, keeping its text without firing.
-  //
-  // WHAT DOES NOT SURVIVE, deliberately, because there is nowhere for it to go: THE INTERVAL. A stop
-  // hook fires when the thread STOPS, so a 15-minute heartbeat becomes "every time it comes to rest",
-  // which on a working thread is more often. That is the feature swap, not an accident of this
-  // migration — but it means an adopted hook can be livelier than the beat it replaces, and the
-  // operator can see the text and switch it off in the thread footer.
-  //
-  // One-shot and idempotent: it only fills rows that have no stop hook of their own, and it CLEARS the
-  // heartbeat columns as it goes, so a second boot finds nothing to do. Guarded on the old columns
-  // actually existing, since they do not on a fresh database.
-  try {
-    const legacy = db.prepare("PRAGMA table_info(session)").all() as Array<{ name: string }>
-    if (legacy.some((c) => c.name === "heartbeat_prompt")) {
-      const adopted = db.prepare(`
-        UPDATE session SET
-          stop_hook = heartbeat_prompt,
-          stop_hook_enabled = CASE WHEN heartbeat_paused = 1 THEN 0 ELSE 1 END,
-          stop_hook_armed_at = ?,
-          stop_hook_last_fired_at = NULL,
-          heartbeat_prompt = NULL, heartbeat_interval_ms = NULL,
-          heartbeat_armed_at = NULL, heartbeat_last_fired_at = NULL, heartbeat_paused = 0
-        WHERE heartbeat_prompt IS NOT NULL AND TRIM(heartbeat_prompt) <> ''
-          AND heartbeat_armed_at IS NOT NULL
-          AND (stop_hook IS NULL OR TRIM(stop_hook) = '')
-      `).run(new Date().toISOString())
-      if (adopted.changes) log.info("storage", `adopted  heartbeat(s) as stop hooks`)
-    }
-  } catch {
-    // A database without the legacy columns, or one mid-migration — nothing to adopt.
-  }
+  // (A one-shot migration that ADOPTED a pre-removal heartbeat as a stop hook lived here for a few
+  // hours on 2026-08-02, between the heartbeat's removal and its reinstatement below. It is gone
+  // because keeping it would now be actively destructive: with heartbeats armed again it would eat
+  // every newly-armed one into the stop-hook row on the next boot. Threads it already converted keep
+  // their stop hook; a heartbeat is re-armed from the footer or the tool.)
   // One-time idempotent backfill: rows the user already archived under the boolean flag carry that
   // into the new lifecycle column. Only fills NULLs — an explicit later state write always wins.
   try {
@@ -1073,6 +1078,41 @@ export function createStorage(dbPath: string): Storage {
         WHEN stop_hook_armed_at IS NOT NULL AND stop_hook IS ? THEN stop_hook_last_fired_at
         ELSE NULL END
     WHERE slug = ? AND session_id = ? AND runtime_generation = ?
+  `)
+  // The 11 bound values HEARTBEAT_SET consumes, in order. Factored out because the two statements above
+  // share the SET list verbatim and only differ in their WHERE — writing the argument list twice is how
+  // the two paths silently drift apart.
+  const heartbeatArgs = (prompt: string | null, intervalMs: number | null, enabled: boolean, armedAt: string) => {
+    const ms = prompt === null ? null : intervalMs
+    return [
+      prompt,
+      ms, ms,
+      prompt === null ? 0 : enabled ? 1 : 0,
+      prompt, prompt, ms, armedAt,
+      prompt, prompt, ms,
+    ] as const
+  }
+  // The heartbeat's SET list. Like the stop hook's, every expression reads the ORIGINAL row, so one
+  // statement decides whether this write is a fresh arming or an edit: the generation (and with it the
+  // beat clock) is preserved exactly when BOTH the text and the interval are unchanged.
+  const HEARTBEAT_SET = `
+      heartbeat_prompt = ?,
+      heartbeat_interval_ms = CASE WHEN ? IS NULL THEN NULL ELSE ? END,
+      heartbeat_enabled = ?,
+      heartbeat_armed_at = CASE
+        WHEN ? IS NULL THEN NULL
+        WHEN heartbeat_armed_at IS NOT NULL AND heartbeat_prompt IS ? AND heartbeat_interval_ms IS ? THEN heartbeat_armed_at
+        ELSE ? END,
+      heartbeat_last_fired_at = CASE
+        WHEN ? IS NULL THEN NULL
+        WHEN heartbeat_armed_at IS NOT NULL AND heartbeat_prompt IS ? AND heartbeat_interval_ms IS ? THEN heartbeat_last_fired_at
+        ELSE NULL END`
+  const heartbeatStmt = db.prepare(`UPDATE session SET ${HEARTBEAT_SET}
+    WHERE slug = ? AND session_id = ? AND runtime_generation = ?`)
+  const heartbeatBySlugStmt = db.prepare(`UPDATE session SET ${HEARTBEAT_SET} WHERE slug = ?`)
+  const heartbeatFiredStmt = db.prepare(`
+    UPDATE session SET heartbeat_last_fired_at = ?
+    WHERE slug = ? AND heartbeat_armed_at = ?
   `)
   // Same SET list, keyed on the slug alone — the worker-tool path (see setStopHookBySlug).
   const stopHookBySlugStmt = db.prepare(`
@@ -1727,6 +1767,12 @@ export function createStorage(dbPath: string): Storage {
         prompt, prompt,
         slug, sessionId, generation,
       ).changes === 1,
+    setHeartbeatIfCurrent: (slug, sessionId, generation, prompt, intervalMs, enabled, armedAt) =>
+      heartbeatStmt.run(...heartbeatArgs(prompt, intervalMs, enabled, armedAt), slug, sessionId, generation).changes === 1,
+    setHeartbeatBySlug: (slug, prompt, intervalMs, enabled, armedAt) =>
+      heartbeatBySlugStmt.run(...heartbeatArgs(prompt, intervalMs, enabled, armedAt), slug).changes === 1,
+    stampHeartbeatFired: (slug, armedAt, firedAt) =>
+      heartbeatFiredStmt.run(firedAt, slug, armedAt).changes === 1,
     setStopHookBySlug: (slug, prompt, enabled, armedAt) =>
       stopHookBySlugStmt.run(
         prompt,

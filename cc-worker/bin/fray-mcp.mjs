@@ -102,13 +102,11 @@ const STOP_HOOK = {
     "It fires on REST, not on a clock, so there is no interval to choose: you are re-prompted whenever " +
     "you stop, and never mid-turn. The text arrives as an ordinary user turn, VERBATIM, so write it as " +
     "an instruction to your future self.\n\n" +
-    "TWO EXITS, AND THEY ARE DIFFERENT — this is the part to get right.\n" +
-    "  • AWAITING on its own line in a rest message SKIPS THAT ONE REST. Use it when you are parked on " +
-    "something that will come back by itself — a background shell, a sub-agent — and there is nothing to " +
-    "do until it does. The hook STAYS ARMED and your next rest is prompted as normal. It does NOT turn " +
-    "the stop hook off.\n" +
-    "  • `action: \"stop\"` on this tool DISARMS it for good. That is the one to use when the effort is " +
-    "actually finished.\n\n" +
+    "IT KEEPS GOING UNTIL SOMETHING STOPS IT, and there are only two things that do: `action: \"stop\"` " +
+    "on this tool, or the human switching it off in the thread footer. There is also an opt-out you " +
+    "should be slow to use — replying ALLDONE on its own line tells fray there is no further work and " +
+    "stops these prompts entirely. Be sure before you do: it permanently stalls the run, and a run " +
+    "nobody is watching does not restart itself.\n\n" +
     "A thread has AT MOST ONE stop hook: calling this again REPLACES it. The human sees it in the thread " +
     "footer and can edit or switch it off there.\n\n" +
     "You can only ever arm your OWN thread — there is no parameter for anyone else's.",
@@ -132,16 +130,66 @@ const STOP_HOOK = {
   },
 }
 
+const HEARTBEAT = {
+  name: "heartbeat",
+  description:
+    "Arm a HEARTBEAT on YOUR OWN thread: fray sends you `prompt` every `interval_seconds`, on the clock, " +
+    "for as long as it is armed.\n\n" +
+    "THE DUMB ONE, and that is the point. It consults nothing about what you are doing — not whether you " +
+    "are resting, not your sub-agents or background shells. If the interval has elapsed, a beat is " +
+    "queued. (It still LANDS when you next come to rest, because fray cannot interrupt a running turn.) " +
+    "Use it when something must be revisited on a schedule no matter what you happen to believe at the " +
+    "time; use `stop_hook` when the question is \"I stopped, is there more to do?\".\n\n" +
+    "USE THIS RATHER THAN `CronCreate` or `ScheduleWakeup`. Those are Claude Code's own in-session " +
+    "schedulers and they CANNOT fire in the runtime fray runs you in: their gate stays shut for as long " +
+    "as ANY background task of yours is outstanding, so the moment you are parked behind a background " +
+    "shell or a sub-agent — exactly when you most need waking — they go silent. This one is delivered by " +
+    "fray itself and is unaffected.\n\n" +
+    "The beat arrives VERBATIM as an ordinary user turn, so write it as an instruction to your future " +
+    "self. A thread has AT MOST ONE heartbeat: calling this again REPLACES it. At most one beat is ever " +
+    "outstanding and the clock runs from the last DELIVERED beat, so a long busy stretch yields one " +
+    "catch-up beat rather than a backlog.\n\n" +
+    "STOP IT when the work it drives is done (`action: \"stop\"`) — a heartbeat left armed on a finished " +
+    "thread wakes it forever. The human sees it in the thread footer and can switch it off there. " +
+    "Replying ALLDONE on its own line also stops it, along with any stop hook, but be sure before you " +
+    "do: it permanently stalls the run. You can only ever arm your OWN thread.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      action: {
+        type: "string",
+        enum: ["start", "stop"],
+        description: "`start` arms (or replaces) this thread's heartbeat; `stop` disarms it.",
+      },
+      prompt: {
+        type: "string",
+        description:
+          "Required for `start`. The text delivered to you on every beat, verbatim, as a user turn. Make " +
+          "it self-contained and ACTIONABLE — say what to do and what would make it right to stop — " +
+          "because you may receive it with none of the context you have right now.",
+      },
+      interval_seconds: {
+        type: "integer",
+        description:
+          "Required for `start`. Seconds between beats (minimum 60, maximum 86400). A beat only lands " +
+          "when you are at rest, so a very short interval does not deliver faster than you actually stop.",
+      },
+    },
+    required: ["action"],
+  },
+}
+
 // The unified server's tool registry: `tools/list` returns these and `tools/call` routes by name.
 // Adding a worker-facing fray tool = one entry here + one handler in `HANDLERS` — never a second
 // MCP server, so every fray tool stays under the same `mcp__fray__*` namespace and the same
 // server-level pre-approval the dispatch layer already grants.
-const TOOLS = [SPAWN_THREAD, STOP_HOOK]
+const TOOLS = [SPAWN_THREAD, STOP_HOOK, HEARTBEAT]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
   [SPAWN_THREAD.name]: spawnThread,
   [STOP_HOOK.name]: stopHook,
+  [HEARTBEAT.name]: heartbeat,
 }
 
 /** @param {unknown} obj */
@@ -293,10 +341,44 @@ async function stopHook(args) {
   return (
     "Stop hook armed — fray will send you this prompt every time you come to rest, and never mid-turn. " +
     "It replaces any stop hook this thread had before.\n\n" +
-    "To DEFER a single bump — you are waiting on a shell or a sub-agent — reply with AWAITING on its own " +
-    "line. That skips only that one rest; the hook stays armed and your next rest is prompted normally.\n" +
-    "To END it, call this tool with `action: \"stop\"`. The human can also edit or switch it off in the " +
-    "thread footer."
+    "To END it, call this tool with `action: \"stop\"`. The human can also switch it off in the thread " +
+    "footer. Replying ALLDONE stops it too, but only use that when there is genuinely nothing left — it " +
+    "permanently stalls the run."
+  )
+}
+
+const HEARTBEAT_MIN_INTERVAL_SECONDS = 60
+const HEARTBEAT_MAX_INTERVAL_SECONDS = 24 * 60 * 60
+
+/** The `heartbeat` handler: arm or disarm this thread's clock-driven wake.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function heartbeat(args) {
+  const slug = threadSlug()
+  const action = typeof args.action === "string" ? args.action.trim() : ""
+  if (action !== "start" && action !== "stop") throw new Error("`action` must be either \"start\" or \"stop\"")
+
+  if (action === "stop") {
+    await callRpc("setOwnThreadHeartbeat", { slug, prompt: null, enabled: false })
+    return "Heartbeat disarmed and cleared. You will no longer be woken on a schedule."
+  }
+
+  const prompt = typeof args.prompt === "string" ? args.prompt.trim() : ""
+  if (!prompt) throw new Error("`prompt` is required to start a heartbeat — it is the text you will be sent on every beat")
+  const interval = typeof args.interval_seconds === "number" ? Math.round(args.interval_seconds) : NaN
+  if (!Number.isFinite(interval)) throw new Error("`interval_seconds` is required to start a heartbeat")
+  if (interval < HEARTBEAT_MIN_INTERVAL_SECONDS || interval > HEARTBEAT_MAX_INTERVAL_SECONDS) {
+    throw new Error(`\`interval_seconds\` must be between ${HEARTBEAT_MIN_INTERVAL_SECONDS} and ${HEARTBEAT_MAX_INTERVAL_SECONDS}`)
+  }
+
+  await callRpc("setOwnThreadHeartbeat", { slug, prompt, intervalSeconds: interval, enabled: true })
+  const every = interval % 60 === 0 ? `${interval / 60} min` : `${interval}s`
+  return (
+    `Heartbeat armed — fray will send you this prompt every ${every}, delivered when you come to rest ` +
+    "(a beat that comes due mid-turn waits for your next rest rather than interrupting you). It replaces " +
+    "any heartbeat this thread had before. Nothing about what you are doing suppresses a beat — only " +
+    "disarming it, the human switching it off, or an ALLDONE reply, which permanently stalls the run.\n\n" +
+    "Call this tool again with `action: \"stop\"` once the work it drives is finished. The human can also " +
+    "edit or switch it off in the thread footer."
   )
 }
 

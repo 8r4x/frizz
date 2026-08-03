@@ -183,7 +183,7 @@ try {
     while (Date.now() < by) {
       await sleep(3_000)
       tailer.tick()
-      if (tailer.get(slug)?.lastAssistantAwaiting) return true
+      if (tailer.get(slug)?.lastAssistantAllDone) return true
     }
     return false
   })()

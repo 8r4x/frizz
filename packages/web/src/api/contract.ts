@@ -32,6 +32,8 @@ import type {
   SetThreadProfileInput,
   SetThreadProfileResult,
   SetThreadStopHookInput,
+  SetThreadHeartbeatInput,
+  SetOwnThreadHeartbeatInput,
   SetOwnThreadStopHookInput,
   ThreadPluginReloadResult,
   SetThreadSnoozeInput,
@@ -129,6 +131,9 @@ export interface Api {
   // The OPERATOR's counterpart, armed entirely from the footer: text re-delivered at every rest until
   // the worker answers AWAITING. Toggle and text travel together — they are one row.
   setThreadStopHook(input: SetThreadStopHookInput): Promise<void>
+  // The heartbeat's two halves: the footer popover, and the worker tool (declared for the drift gate).
+  setThreadHeartbeat(input: SetThreadHeartbeatInput): Promise<void>
+  setOwnThreadHeartbeat(input: SetOwnThreadHeartbeatInput): Promise<void>
   // The WORKER-facing counterpart, called by `mcp__fray__stop_hook` rather than by this client. Declared
   // here because rpc-contract.ts proves the two procedure NAME SETS are equal — an RPC the client cannot
   // name is one nothing checks the shape of. No browser call site uses it.
@@ -234,6 +239,8 @@ export const PROCEDURES = {
   completeThread: "mutation",
   setThreadSnooze: "mutation",
   setThreadStopHook: "mutation",
+  setThreadHeartbeat: "mutation",
+  setOwnThreadHeartbeat: "mutation",
   setOwnThreadStopHook: "mutation",
   reloadThreadPlugins: "mutation",
   snoozeAwaitingBackground: "mutation",

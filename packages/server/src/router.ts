@@ -11,6 +11,8 @@ import {
   UnqueueFollowUpInput,
   UnqueueFollowUpResult,
   SetThreadStopHookInput,
+  SetThreadHeartbeatInput,
+  SetOwnThreadHeartbeatInput,
   SetOwnThreadStopHookInput,
   ThreadPluginReloadResult,
   SetThreadSnoozeInput,
@@ -1611,6 +1613,61 @@ export function createRouter(ctx: AppContext) {
         if (!bridge) throw new Error("Claude session broker is unavailable; cannot reload this thread's plugins")
         const reloaded = await bridge.reloadPlugins({ threadSlug: input.slug, sessionId: row.session_id })
         return reloaded
+      },
+    }),
+
+    // The HEARTBEAT (scheduler.ts SOURCE 4), from the footer popover. Its interval is CHOSEN, which is
+    // why it is required alongside a prompt rather than defaulted: a schedule nobody picked is exactly
+    // the ambiguity this feature exists to remove.
+    setThreadHeartbeat: mutation({
+      input: SetThreadHeartbeatInput,
+      handler: async ({ input }) => {
+        const row = currentOwnedSession(input.slug, input.sessionId)
+        if (input.prompt !== null) {
+          if (input.intervalSeconds === undefined) throw new Error("`intervalSeconds` is required when arming a heartbeat")
+          if (input.enabled && (row.state === "archived" || row.archived === 1)) {
+            throw new Error("Reopen this thread before arming a heartbeat")
+          }
+        }
+        if (!ctx.storage.setHeartbeatIfCurrent(
+          input.slug,
+          row.session_id,
+          row.runtime_generation ?? 0,
+          input.prompt,
+          input.prompt === null || input.intervalSeconds === undefined ? null : input.intervalSeconds * 1000,
+          input.enabled,
+          new Date().toISOString(),
+        )) {
+          throw new Error("This thread moved on; reopen it and try again")
+        }
+        ctx.board.refresh()
+      },
+    }),
+
+    // The WORKER's own heartbeat, from `mcp__fray__heartbeat`. Slug-only and unguarded for the same
+    // reason as setOwnThreadStopHook, and likewise exposing no thread parameter a model could aim
+    // elsewhere — the MCP server supplies the slug from its env.
+    setOwnThreadHeartbeat: mutation({
+      input: SetOwnThreadHeartbeatInput,
+      handler: async ({ input }) => {
+        const row = ctx.storage.getSession(input.slug)
+        if (!row) throw new Error(`thread ${input.slug} is not registered`)
+        if (input.prompt !== null) {
+          if (input.intervalSeconds === undefined) throw new Error("`intervalSeconds` is required when arming a heartbeat")
+          if (input.enabled && (row.state === "archived" || row.archived === 1)) {
+            throw new Error("Reopen this thread before arming a heartbeat")
+          }
+        }
+        if (!ctx.storage.setHeartbeatBySlug(
+          input.slug,
+          input.prompt,
+          input.prompt === null || input.intervalSeconds === undefined ? null : input.intervalSeconds * 1000,
+          input.enabled,
+          new Date().toISOString(),
+        )) {
+          throw new Error(`thread ${input.slug} could not be updated`)
+        }
+        ctx.board.refresh()
       },
     }),
 

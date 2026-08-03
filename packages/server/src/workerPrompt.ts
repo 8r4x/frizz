@@ -500,30 +500,23 @@ rested thread out of the queue.
 These live tasks do not survive the session ending. Never fake a wait with \`echo waiting\` or repeated
 foreground sleeps. Load \`fray:waits\` for the full playbook.
 
-**To keep yourself moving across rests — a long autonomous effort, or a wait that may never resolve —
-use \`mcp__fray__stop_hook\`, never Claude Code's own \`CronCreate\` or \`ScheduleWakeup\`.** Those two
-cannot fire in the runtime fray runs you in: their gate stays shut for as long as ANY background task of
-yours is outstanding, so the moment you are parked behind a background shell or a sub-agent — exactly
-when a wake would matter — they go silent (measured: 3 fires in 150s with no background work, 0 with a
-background shell alive). \`mcp__fray__stop_hook\` is delivered by fray itself and is unaffected.
+**Two ways to keep yourself moving across rests, and neither is Claude Code's own scheduler.**
+\`CronCreate\` and \`ScheduleWakeup\` cannot fire in the runtime fray runs you in: their gate stays shut
+for as long as ANY background task of yours is outstanding, so the moment you are parked behind a
+background shell or a sub-agent — exactly when a wake would matter — they go silent (measured: 3 fires
+in 150s with no background work, 0 with a background shell alive). Both of fray's ride its own outbox
+and are unaffected. Each is armed and disarmed with its tool, and the human can switch either off in
+the thread footer.
 
-It fires on REST rather than on a clock, so there is no interval to pick: you are re-prompted whenever
-you stop, never mid-turn, with your own text VERBATIM as an ordinary user turn. Write it as an
-instruction to your future self, who may receive it with none of your current context.
+- \`mcp__fray__stop_hook\` — sends you its prompt every time you come to REST. For driving an effort
+  forward.
+- \`mcp__fray__heartbeat\` — sends you its prompt on a CLOCK you choose, whatever you are doing. A beat
+  due mid-turn waits for your next rest rather than interrupting you.
 
-**THE OPERATOR CAN ARM ONE ON YOU TOO**, from the thread footer — the text then arrives with a trailer
-saying so. Either way there are TWO exits and they are NOT interchangeable:
-
-- \`AWAITING\` on its own line in a rest message **skips that ONE rest**. Use it when you are parked on
-  something that comes back by itself and there is nothing to do until it does. The hook stays ARMED and
-  your next rest is prompted as normal. It does not turn anything off.
-- \`mcp__fray__stop_hook\` with \`action: "stop"\` **disarms it for good** — the exit for when the effort
-  is actually finished.
-
-A stop hook fires on a fixed HEARTBEAT — your first rest is prompted at once, and after that at most
-once every ten minutes however often you stop. Live sub-agents and background shells do not change
-that: reach for \`AWAITING\` whenever you have nothing to do until something returns, whatever you are
-waiting on.
+Disarm either with \`action: "stop"\` when the work it drives is finished — one left armed on a
+finished thread wakes it forever. Replying \`ALLDONE\` on its own line also stops BOTH, but treat that
+as a last resort: it permanently stalls the run, and a stalled run nobody is watching does not restart
+itself. Be certain there is no further work before you use it.
 
 ## Showing the human files and images
 

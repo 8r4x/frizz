@@ -104,7 +104,7 @@ export interface NormalizedTail {
   // The final message carries the AWAITING sentinel — the worker's answer to a stop hook when
   // nothing in it is actionable. Optional (absent ⇒ false) because it is an additive observation, not
   // a new required fact about a session; see scheduler.ts SOURCE 5.
-  lastAssistantAwaiting?: boolean
+  lastAssistantAllDone?: boolean
   // Live sub-agents. Claude fills these from its Agent dispatches (the tailer's trackDispatches); codex
   // from its `spawn_agent` children (codex-subagents.ts). Both land in the same TailState maps.
   subAgents: SubAgentView[]
@@ -157,7 +157,7 @@ export interface FoldState {
   // The final message answers a stop hook with AWAITING (scheduler.ts SOURCE 5). Folded and
   // cleared on exactly the same lifecycle as the question flag above: set per assistant text, wiped by
   // any user record — so the next bump the operator sends re-opens the loop by itself.
-  lastAssistantAwaiting: boolean
+  lastAssistantAllDone: boolean
   // Runtime provider-auth rejection (claude-auth plan, Slice A). Set when the backend records a
   // SYNTHETIC auth-error response (Claude: isApiErrorMessage + 401/login text) — never from user or
   // ordinary assistant content — and cleared by the next real assistant text (a genuine response

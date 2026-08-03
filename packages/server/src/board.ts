@@ -704,6 +704,17 @@ function sessionThreadView(
     // already-delivered (or superseded) bump the row has not been swept clean of yet.
     snoozePrompt: snoozedUntil ? row.snooze_prompt ?? undefined : undefined,
     claudeRuntime: row.claude_runtime === "broker" ? "broker" as const : row.claude_runtime === "tmux" ? "tmux" as const : undefined,
+    // The heartbeat. Armed iff prompt + interval + generation are all set (storage writes and clears
+    // them together). Projected even while DISABLED — that is the state the footer's toggle leaves.
+    heartbeat: row.heartbeat_prompt && row.heartbeat_interval_ms && row.heartbeat_armed_at
+      ? {
+          intervalSeconds: Math.round(row.heartbeat_interval_ms / 1000),
+          prompt: row.heartbeat_prompt,
+          enabled: row.heartbeat_enabled === 1,
+          armedAt: row.heartbeat_armed_at,
+          lastFiredAt: row.heartbeat_last_fired_at ?? undefined,
+        }
+      : undefined,
     // The operator's stop hook. Projected even while DISABLED — that is the state the footer's
     // toggle exists to leave, and the text has to survive it or the popover would open empty.
     stopHook: row.stop_hook && row.stop_hook_armed_at
