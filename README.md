@@ -48,9 +48,9 @@ A browser tab opens on that address — a dedicated workspace for this repo. **O
   <img src="assets/board.png" alt="Fray running in a browser tab at 127.0.0.1:4921: a sidebar of threads on the left, and on the right a card where an agent is asking an answerable question with lettered options, above Snooze and Mark as done." width="100%">
 </p>
 
-## Designed for parallelization
+## A queue, not a sidebar
 
-Instead of a sidebar full of tabs — one per session, each one something you have to remember to go check — you get a **unified queue**.
+A sidebar of sessions makes every agent something you have to remember to go check. Fray gives you one queue instead.
 
 When an agent comes to rest needing you, a card is added to it. You can quickly evaluate what it has done since your last message and decide to answer its questions, steer it, snooze the card, or mark the session complete. You're continuously presented with a set of action items in one place, instead of constantly switching back and forth between sessions.
 
