@@ -21,7 +21,7 @@
 
 ## Getting started
 
-Fray runs on macOS, Linux, and Windows. Three requirements, and you probably have two already.
+Fray runs on macOS, Linux, and Windows. Four requirements, and you probably have three already.
 
 **1. Node 22.13 or newer.** On the Node 23 line it must be 23.4+ — Fray's database is Node's built-in `node:sqlite`, which older releases don't ship.
 
@@ -52,7 +52,7 @@ npx frayui
 ```
 
 ```
-  FRAY v0.1.5  ready in 4.0s
+  FRAY v0.1.6  ready in 4.0s
 
   ➜  Local:    http://127.0.0.1:4922/
   ➜  Project:  taskly — ~/taskly
