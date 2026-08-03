@@ -136,8 +136,9 @@ const HEARTBEAT = {
     "Arm a HEARTBEAT on YOUR OWN thread: fray sends you `prompt` every `interval_seconds`, on the clock, " +
     "for as long as it is armed.\n\n" +
     "THE DUMB ONE, and that is the point. It consults nothing about what you are doing — not whether you " +
-    "are resting, not your sub-agents or background shells. If the interval has elapsed, a beat is " +
-    "queued. (It still LANDS when you next come to rest, because fray cannot interrupt a running turn.) " +
+    "are resting, not your sub-agents or background shells. If the interval has elapsed, the beat goes " +
+    "out, and it reaches you MID-TURN: it arrives as a queued message you read at your next tool " +
+    "boundary rather than waiting for you to stop. It never aborts what you are running. " +
     "Use it when something must be revisited on a schedule no matter what you happen to believe at the " +
     "time; use `stop_hook` when the question is \"I stopped, is there more to do?\".\n\n" +
     "USE THIS RATHER THAN `CronCreate` or `ScheduleWakeup`. Those are Claude Code's own in-session " +
@@ -147,8 +148,8 @@ const HEARTBEAT = {
     "fray itself and is unaffected.\n\n" +
     "The beat arrives VERBATIM as an ordinary user turn, so write it as an instruction to your future " +
     "self. A thread has AT MOST ONE heartbeat: calling this again REPLACES it. At most one beat is ever " +
-    "outstanding and the clock runs from the last DELIVERED beat, so a long busy stretch yields one " +
-    "catch-up beat rather than a backlog.\n\n" +
+    "outstanding and the clock runs from the last DELIVERED beat, so you can never be handed a backlog " +
+    "of them at once.\n\n" +
     "STOP IT when the work it drives is done (`action: \"stop\"`) — a heartbeat left armed on a finished " +
     "thread wakes it forever. The human sees it in the thread footer and can switch it off there. " +
     "Replying ALLDONE on its own line also stops it, along with any stop hook, but be sure before you " +
@@ -171,8 +172,8 @@ const HEARTBEAT = {
       interval_seconds: {
         type: "integer",
         description:
-          "Required for `start`. Seconds between beats (minimum 60, maximum 86400). A beat only lands " +
-          "when you are at rest, so a very short interval does not deliver faster than you actually stop.",
+          "Required for `start`. Seconds between beats (minimum 60, maximum 86400). A beat is read at " +
+          "your next tool boundary, so a sub-minute interval buys no promptness and only talks over you.",
       },
     },
     required: ["action"],

@@ -290,7 +290,10 @@ test("ALLDONE holds the bump for that rest only, and nothing is stored to undo",
 // ---- The HEARTBEAT (scheduler SOURCE 4) ----------------------------------------------------------
 // The dumb sibling. Everything the stop hook consults, this ignores — that is its entire contract, and
 // these are the tests that would catch it quietly growing a condition.
-function heartbeatScheduler(tele: Partial<SessionTelemetry>, opts: { intervalMs?: number; armedAt?: string; lastFiredAt?: string; now?: () => number } = {}) {
+function heartbeatScheduler(
+  tele: Partial<SessionTelemetry>,
+  opts: { intervalMs?: number; armedAt?: string; lastFiredAt?: string; now?: () => number; tailerMiss?: boolean } = {},
+) {
   const dir = mkdtempSync(join(tmpdir(), "fray-beat-"))
   const storage = createStorage(join(dir, "ui.db"))
   const slug = "beating"
@@ -306,7 +309,7 @@ function heartbeatScheduler(tele: Partial<SessionTelemetry>, opts: { intervalMs?
     storage,
     ...(opts.now ? { now: opts.now } : {}),
     tailer: {
-      get: () => ({
+      get: () => opts.tailerMiss ? undefined : ({
         turn: "idle", lastActivityAt: "2026-08-02T00:00:00.000Z",
         subAgents: [], bgShells: [], pendingQuestion: false, permPrompt: false,
         ...tele,
@@ -355,6 +358,61 @@ test("heartbeat: live sub-agents and background shells do not suppress a beat ei
     await h.s.tick()
     assert.equal(h.delivered.length, 1)
     assert.ok(h.delivered[0].startsWith("check the deploy"))
+  } finally { h.close() }
+})
+
+// THE POINT OF THE FEATURE (maintainer 2026-08-03: "my intention was for the heartbeat to fire on its
+// regular cadence, regardless of whether the agent is currently running or not"). Every other wake
+// source is held by the delivery gate until the thread rests; this one is not, because a beat that
+// waits for a rest is a stop hook wearing a clock — and a thread that never stops never hears it.
+test("heartbeat: a beat due MID-TURN is delivered mid-turn, not held until rest", async () => {
+  const h = heartbeatScheduler({ turn: "in-flight" }, { now: at("2026-08-02T01:00:00.000Z") })
+  try {
+    await h.s.tick()
+    assert.equal(h.delivered.length, 1, "a busy thread must not hold the beat back")
+    assert.ok(h.delivered[0].startsWith("check the deploy"))
+  } finally { h.close() }
+})
+
+// And the cadence is REAL after a mid-turn delivery: the clock stamps from the beat that landed, so the
+// next one is due an interval later. Before this, a thread busy across several intervals collected one
+// stale catch-up beat at its next rest and the operator's schedule described nothing.
+test("heartbeat: a mid-turn beat advances the clock, so the schedule keeps running through a long turn", async () => {
+  const h = heartbeatScheduler({ turn: "in-flight" }, { now: at("2026-08-02T01:00:00.000Z") })
+  try {
+    await h.s.tick()
+    assert.equal(h.delivered.length, 1)
+    assert.equal(
+      h.storage.getSession(h.slug)!.heartbeat_last_fired_at !== null,
+      true,
+      "the beat that landed mid-turn is what the next interval is measured from",
+    )
+    // Still inside the same turn, still inside the same interval: no second beat.
+    await h.s.tick()
+    assert.equal(h.delivered.length, 1, "the interval still governs — mid-turn is not a free-for-all")
+  } finally { h.close() }
+})
+
+// The exception is scoped to the heartbeat's fence, not widened into "deliver to busy threads". A
+// SNOOZE also queues without consulting rest (its pass deliberately does not filter on idle), and it
+// must still be held: a human's scheduled bump is about a thread that stopped.
+test("the mid-turn exception is the HEARTBEAT's alone — a due snooze is still held while busy", async () => {
+  const h = heartbeatScheduler({ turn: "in-flight" }, { now: at("2026-08-02T01:00:00.000Z") })
+  try {
+    h.storage.setHeartbeatBySlug(h.slug, null, null, false, "2026-08-02T00:00:00.000Z")
+    h.storage.setSnoozedUntil(h.slug, "2026-08-02T00:30:00.000Z", "back to it")
+    await h.s.tick()
+    assert.deepEqual(h.delivered, [], "a snooze waits for the thread to come to rest, as it always did")
+  } finally { h.close() }
+})
+
+// `unknown` telemetry is not a thread we can safely address, heartbeat or not — the exception is for a
+// thread we can SEE is busy, never for one we cannot read at all.
+test("heartbeat: a beat is still held when the thread's telemetry cannot be read", async () => {
+  const h = heartbeatScheduler({}, { now: at("2026-08-02T01:00:00.000Z"), tailerMiss: true })
+  try {
+    await h.s.tick()
+    assert.deepEqual(h.delivered, [], "no telemetry, no delivery")
   } finally { h.close() }
 })
 

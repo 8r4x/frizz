@@ -17,8 +17,9 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
 //
 //   STOP HOOK (scheduler SOURCE 5) — "you stopped; is there more?" Fires every time the thread comes to
 //     REST. No clock and no cadence: if it stopped, it is prompted.
-//   HEARTBEAT (scheduler SOURCE 4) — "it has been ten minutes." Fires on a CHOSEN clock and consults
-//     nothing about what the thread is doing.
+//   HEARTBEAT (scheduler SOURCE 4) — "it has been ten minutes." Fires on a CHOSEN clock, consults
+//     nothing about what the thread is doing, and DELIVERS mid-turn rather than waiting for a rest that
+//     a busy thread may never take.
 //
 // The stop hook is the one you want for driving an effort forward; the heartbeat is the one you want
 // when a thread must be revisited on a schedule regardless of what it is up to. Both stop only two
@@ -106,8 +107,9 @@ export function StopHookControl({ thread }: { thread: ThreadView }) {
           })}
           explainer={
             <>
-              Sent on the clock, whatever the agent is doing — a beat due mid-turn is delivered at its
-              next rest rather than interrupting it. Same two ways out: this switch, or{" "}
+              Sent on the clock, whatever the agent is doing — a beat due mid-turn is delivered
+              mid-turn, so it reaches a thread that never stops. It won't cut off work in progress.
+              Same two ways out: this switch, or{" "}
               <code className="font-mono font-medium text-fg/85">{ALLDONE_SENTINEL}</code>.
             </>
           }

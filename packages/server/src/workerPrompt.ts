@@ -511,7 +511,8 @@ the thread footer.
 - \`mcp__fray__stop_hook\` — sends you its prompt every time you come to REST. For driving an effort
   forward.
 - \`mcp__fray__heartbeat\` — sends you its prompt on a CLOCK you choose, whatever you are doing. A beat
-  due mid-turn waits for your next rest rather than interrupting you.
+  due mid-turn is delivered mid-turn: it arrives as a queued message you read at your next tool
+  boundary, so it can reach you while you are still working. It never aborts what you are doing.
 
 Disarm either with \`action: "stop"\` when the work it drives is finished — one left armed on a
 finished thread wakes it forever. Replying \`ALLDONE\` on its own line also stops BOTH, but treat that

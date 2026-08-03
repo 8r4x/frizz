@@ -360,8 +360,9 @@ export type SnoozePrompt = z.infer<typeof SnoozePrompt>
 // ---- The heartbeat (scheduler SOURCE 4) ----------------------------------------------------------
 // The DUMB one, and deliberately so: it fires on a clock and nothing turns it off but disarming it.
 // No rest trigger, no sentinel, no regard for what the thread is doing — if the interval has elapsed,
-// a beat is queued. (It still LANDS at the thread's next rest, because fray cannot inject a turn into
-// a running one; what "unconditional" means here is that nothing suppresses the firing.)
+// the beat goes out, MID-TURN INCLUDED. That last part is the feature and not an implementation
+// detail: a beat held until the thread happened to stop would make the cadence describe nothing, and
+// would make this a second stop hook wearing a clock.
 //
 // It exists as the sibling of the stop hook because the two answer different questions. A stop hook
 // asks "you stopped — is there more?", which is what you want while driving an effort forward. A
@@ -372,9 +373,9 @@ export type SnoozePrompt = z.infer<typeof SnoozePrompt>
 // The interval is CHOSEN, unlike the stop hook's fixed heartbeat floor — an operator asking for "every
 // hour" is naming a real schedule, not guessing at a rate limit.
 export const HEARTBEAT_PROMPT_MAX = SNOOZE_PROMPT_MAX
-// One minute floor: a beat lands at the next rest, so anything faster cannot deliver faster — it only
-// churns the outbox. One day ceiling keeps a forgotten heartbeat from being indistinguishable from a
-// dead one.
+// One minute floor: a beat is read at the agent's next sampling boundary, so a sub-minute cadence buys
+// no promptness — it only churns the outbox and talks over the work. One day ceiling keeps a forgotten
+// heartbeat from being indistinguishable from a dead one.
 export const HEARTBEAT_MIN_INTERVAL_SECONDS = 60
 export const HEARTBEAT_MAX_INTERVAL_SECONDS = 24 * 60 * 60
 export const HeartbeatPrompt = z.string().trim().min(1).max(HEARTBEAT_PROMPT_MAX)
@@ -458,7 +459,11 @@ export function stopHookMessage(prompt: string): string {
 
 /** What fray delivers for a HEARTBEAT. Same shape, and it names the cadence so a worker can tell a beat
  * from a stop hook without guessing — they read identically otherwise, and the two mean different
- * things about why it is being spoken to. */
+ * things about why it is being spoken to. A beat in particular may arrive MID-TURN, so a worker reading
+ * one has not necessarily stopped.
+ *
+ * The trailer's exact wording is pinned by `parseRecurringPrompt` below and by the prompt goldens —
+ * change one and you must change all three. */
 export function heartbeatMessage(prompt: string, intervalSeconds: number): string {
   return `${prompt.trim()}\n\n(Heartbeat — sent every ${formatIntervalLabel(intervalSeconds)}. ${OPT_OUT_NOTE})`
 }

@@ -340,13 +340,14 @@ function armedSnooze(row: Pick<SessionRow, "snoozed_until" | "snooze_prompt">): 
 
 // ---- SOURCE 4: THE HEARTBEAT ---------------------------------------------------------------------
 // The DUMB source: a prompt on a chosen clock. It consults nothing about the thread — not rest, not
-// `--awaiting`, not sub-agents, not shells. If the interval has elapsed, a beat is queued. (It still
-// LANDS at the next rest, because fray cannot inject a turn into a running one; "unconditional" here
-// means nothing suppresses the FIRING.)
+// `--awaiting`, not sub-agents, not shells. If the interval has elapsed, a beat is queued, and it is
+// DELIVERED when it comes due whether or not the thread is mid-turn (`isDeliverableNow`, which carries
+// the transport detail). It is the only source that does not wait for rest, and that is the feature.
 //
-// It is the sibling of SOURCE 5, not a rival: a stop hook asks "you stopped — is there more?" and the
-// worker can defer it; a heartbeat asks "it has been an hour" and the worker cannot. An operator who
-// needs a thread revisited on a schedule regardless of what the agent believes needs the second one.
+// It is the sibling of SOURCE 5, not a rival: a stop hook asks "you stopped — is there more?" and only
+// a thread that stops ever hears it; a heartbeat asks "it has been an hour" and a thread hears it an
+// hour later, working or not. An operator who needs a thread revisited on a schedule regardless of what
+// the agent is doing needs the second one.
 //
 // It also remains the only recurring wake a worker CAN have. Claude Code's own `CronCreate` /
 // `ScheduleWakeup` cannot fire in the runtime fray spawns: their gate stays shut while ANY background
@@ -359,6 +360,11 @@ function armedSnooze(row: Pick<SessionRow, "snoozed_until" | "snooze_prompt">): 
 //
 // The beat is delivered VERBATIM, with no preamble — unlike a stop hook, which carries a trailer
 // teaching the `--awaiting` protocol. There is no protocol here: it fires, full stop.
+//
+// It never ABORTS the turn it lands in. Both transports accept a mid-turn message as an ordinary
+// queued/steered input, so the running work finishes and the beat is read at the next sampling
+// boundary — which is what "fires on its cadence" means, and is also the only reading compatible with
+// fray's completion invariant.
 const HEARTBEAT_FENCE_PREFIX = "heartbeat"
 const HEARTBEAT_HINT_PREFIX = "heartbeat:"
 
@@ -849,6 +855,32 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     return tele.turn === "idle" ? "current-idle" : "current-busy"
   }
 
+  // May this item go out RIGHT NOW? Every source but one waits for the thread to come to rest, because
+  // every other source is answering a question about a thread that has stopped — a fired timer, a PR
+  // review, a bump for a worker that just rested. Delivering those mid-turn would interrupt work the
+  // worker is already doing about the very thing that woke it.
+  //
+  // THE HEARTBEAT IS THE EXCEPTION, and it is the whole point of the feature: it fires on its cadence
+  // regardless of what the thread is doing (maintainer 2026-08-03 — "my intention was for the heartbeat
+  // to fire on its regular cadence, regardless of whether the agent is currently running or not"). It
+  // used to be held here like everything else, which quietly made it a second stop hook: a beat due at
+  // 14:00 on a thread that stayed busy until 14:50 arrived at 14:50, so the cadence the operator set
+  // described nothing.
+  //
+  // Both transports take a mid-turn message natively, so this is a gate change and not a new channel.
+  // Claude's broker queues it into the running CLI's command queue, which Claude Code drains at its
+  // first sampling boundary (see the bridge's `interruptTurn` contract for the measured latency); the
+  // codex app-server steers the live turn through `turn/steer`. Neither ABORTS what is running, which is
+  // the correct reading of "fires on its cadence" — the beat is delivered, the in-flight work is not
+  // cut off, and fray's completion invariant stays intact.
+  //
+  // `unknown` still defers on every source, heartbeat included: telemetry we cannot read is not a thread
+  // we can safely address.
+  function isDeliverableNow(item: WakeDelivery, context: DeliveryContext): boolean {
+    if (context === "current-idle") return true
+    return context === "current-busy" && isHeartbeatFenceId(item.fenceId)
+  }
+
   // Name the activity for the bump steer. A review carries a GitHub `state`, so an APPROVAL or a
   // CHANGES_REQUESTED is called out specifically (the two the worker most needs to act on); a plain
   // review or a conversation comment reads generically. Falls back to "activity" for an unknown state.
@@ -1297,14 +1329,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
 
   // ---- The heartbeat pass -------------------------------------------------------------------
-  // Like the snooze pass, this does NOT filter on `turn === "idle"`: a beat that comes due mid-turn is
-  // queued and the delivery gate holds it until the thread rests. That hold IS the feature — the whole
-  // point is to reach a thread the moment it goes quiet, which is precisely when Claude Code's own cron
-  // cannot (see SOURCE 4 above).
+  // Like the snooze pass, this does NOT filter on `turn === "idle"`. Unlike the snooze pass, the
+  // delivery gate does not hold the result either: a beat due mid-turn goes out mid-turn
+  // (`isDeliverableNow`). Being able to reach a thread that is NOT going quiet is the whole point —
+  // it is exactly what Claude Code's own cron cannot do (see SOURCE 4 above).
   //
   // At most ONE beat is ever outstanding per thread: a new one is queued only when the previous has
-  // reached a terminal state, and the beat clock runs from the last DELIVERED beat. A thread busy for
-  // an hour therefore gets one catch-up beat at its next rest, not sixty.
+  // reached a terminal state, and the beat clock runs from the last DELIVERED beat. So an interval that
+  // elapses while an undelivered beat is still open is skipped rather than stacked — a thread cannot
+  // accumulate a backlog and then be handed all of it at once.
   function evalHeartbeats(nowMs: number): void {
     for (const row of deps.storage.allSessions()) {
       if (row.state === "archived" || row.archived === 1) continue
@@ -1459,7 +1492,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (item.state !== "leased" || item.leaseUntil === null || item.leaseUntil > nowMs) continue
       // An expired lease is an interrupted/uncertain attempt. Re-open it only while the exact session
       // generation is still idly awaiting the exact fence. Busy or not-yet-loaded telemetry is held:
-      // retrying there could duplicate an input that crossed tmux just before process death.
+      // retrying there could duplicate an input that crossed the transport just before process death.
+      //
+      // DELIBERATELY NOT `isDeliverableNow`: a heartbeat may be SENT to a busy thread, but it may not be
+      // RE-sent to one on a guess. This branch runs precisely when we do not know whether the previous
+      // attempt landed, and the transcript check that would tell us (`confirmed`, above) cannot see a
+      // message still sitting in the CLI's queue. A beat that arrives one rest late is the old
+      // behaviour; a beat that arrives twice mid-turn is a new defect.
       if (context !== "current-idle") continue
       const recovered = outbox.recoverExpired(
         item.id,
@@ -1498,7 +1537,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         settleSnooze(item)
         continue
       }
-      if (context !== "current-idle") {
+      if (!isDeliverableNow(item, context)) {
         const deferredAt = now()
         outbox.deferFailure(
           item.id,
