@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ChatMessage } from "./hooks.ts"
 import { Message } from "./components/ChatView.tsx"
 import "./styles.css"
@@ -60,4 +61,13 @@ function Fixture() {
   )
 }
 
-createRoot(document.getElementById("root")!).render(<Fixture />)
+// `Message` reaches for react-query (the tool cards' lazy detail fetches), so the fixture has to supply
+// a client the way every other transcript fixture does — without it the whole page threw
+// "No QueryClient set" and rendered nothing at all.
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+
+createRoot(document.getElementById("root")!).render(
+  <QueryClientProvider client={queryClient}>
+    <Fixture />
+  </QueryClientProvider>,
+)
