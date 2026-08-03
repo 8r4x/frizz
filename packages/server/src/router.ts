@@ -87,7 +87,6 @@ import { liveThreadsForBackend, runProviderLogout } from "./backend/account-acti
 import { threadProfileOptions, validateThreadProfile } from "./backend/thread-profiles.ts"
 import * as tmux from "./tmux.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
-import { createClaudeRenameController } from "./rename-controller.ts"
 import { awaitingFenceIdentity, isActionableAwaitingHint } from "./awaiting.ts"
 import { getDispatchPreferences, setDispatchPreference } from "./dispatch-preferences.ts"
 import { isBrokerClaudeRow, type SessionRow, type Storage } from "./storage.ts"
@@ -456,7 +455,6 @@ export function createRouter(ctx: AppContext) {
   // Roots for the file-OPEN action + the inline-code path classifier (see openableFileRoots): shared so
   // a path the resolver blesses is exactly a path the open action will accept.
   const openRoots = openableFileRoots(ctx.project)
-  const claudeRename = createClaudeRenameController({ storage: ctx.storage, tailer: ctx.tailer, board: ctx.board })
 
   // An auto-titled registry row is session-first authority. A same-slug `.fray/<slug>.md` may have
   // been planted independently and is never a readable or writable extension of that session.
@@ -1948,16 +1946,38 @@ export function createRouter(ctx: AppContext) {
       input: RenameThreadInput,
       handler: async ({ input }) => {
         if (!ctx.storage.getSession(input.slug)) throw new Error(`thread ${input.slug} is not editable`)
-        if (claudeRename.isPending(input.slug)) throw new Error("AI rename is still in progress; wait for it to finish before setting a manual title")
         ctx.storage.setTitle(input.slug, input.title)
         ctx.board.refresh() // storage-only overlay; publishes an immediate board delta to every client
       },
     }),
 
+    // Ask the provider to name this thread — the "Rename with Claude" verb in the drawer header.
+    //
+    // This used to type `/rename` into the session's tmux pane and scrape the result back out. It now
+    // goes through the broker's typed control channel to the SDK's own `generateSessionTitle`, which is
+    // the same call the daemon already makes to seed a title on the first message. The pane path was
+    // not merely legacy: it threw on every broker-backed thread, i.e. on every thread dispatched since
+    // the broker cutover, so this verb was dead in the UI until now.
     aiRenameThread: mutation({
       input: AiRenameThreadInput,
       output: AiRenameThreadResult,
-      handler: ({ input }) => claudeRename.rename(input.slug),
+      handler: async ({ input }) => {
+        const row = ctx.storage.getSession(input.slug)
+        if (!row) throw new Error(`thread ${input.slug} is not editable`)
+        const bridge = ctx.claudeBroker
+        if (!bridge || row.claude_runtime !== "broker") {
+          throw new Error("Only a running broker-backed Claude thread can be renamed by the provider")
+        }
+        // What to name it FROM: the thread's own opening request, which is what the daemon seeds from.
+        // The live tail's last user text would name the session after whatever was said most recently,
+        // which for a long thread is a side conversation rather than the work.
+        const description = ctx.tailer.get(input.slug)?.lastAssistant?.trim() || row.title?.trim() || input.slug
+        const title = await bridge.renameSession({ threadSlug: input.slug, sessionId: row.session_id, description })
+        if (!title?.trim()) throw new Error("Claude did not return a title for this thread")
+        ctx.storage.setTitle(input.slug, title.trim())
+        ctx.board.refresh()
+        return { title: title.trim() }
+      },
     }),
 
     killAgent: mutation({

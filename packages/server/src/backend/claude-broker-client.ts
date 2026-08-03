@@ -43,6 +43,8 @@ export interface ClaudeBrokerClient {
    * is told what actually reloaded rather than that a frame was written.
    */
   reloadPlugins(): Promise<ClaudePluginReload>
+  /** Re-title the live session through the provider (the SDK's `generateSessionTitle`). */
+  renameSession(description: string): Promise<string | undefined>
   setPermissionMode(mode: string): void
   connected(): boolean
   /**
@@ -86,6 +88,7 @@ export function connectClaudeBroker(
   const pendingCancels = new Map<string, { settle: (cancelled: boolean) => void; fail: (error: Error) => void; timer: NodeJS.Timeout }>()
   const pendingStops = new Map<string, { settle: () => void; fail: (error: Error) => void; timer: NodeJS.Timeout }>()
   const pendingReloads = new Map<string, { settle: (r: ClaudePluginReload) => void; fail: (error: Error) => void; timer: NodeJS.Timeout }>()
+  const pendingRenames = new Map<string, { settle: (t: string | undefined) => void; fail: (error: Error) => void; timer: NodeJS.Timeout }>()
   let cancelSeq = 0
 
   // Buffering while DISCONNECTED is the feature — `connect` flushes `outbound` — but buffering while
@@ -131,6 +134,15 @@ export function connectClaudeBroker(
           clearTimeout(entry.timer)
           if (typeof frame.error === "string" && frame.error) entry.fail(new Error(frame.error))
           else entry.settle()
+          break
+        }
+        case "rename-result": {
+          const entry = pendingRenames.get(frame.requestId as string)
+          if (!entry) break
+          pendingRenames.delete(frame.requestId as string)
+          clearTimeout(entry.timer)
+          if (typeof frame.error === "string" && frame.error) entry.fail(new Error(frame.error))
+          else entry.settle(typeof frame.title === "string" ? frame.title : undefined)
           break
         }
         case "reload-result": {
@@ -206,6 +218,18 @@ export function connectClaudeBroker(
       pendingReloads.set(requestId, { settle: resolve, fail: reject, timer })
       send({ t: "reload-plugins", requestId })
     }),
+    // Shares the reload deadline: a re-title is a provider round trip, not local bookkeeping.
+    renameSession: (description: string) => new Promise<string | undefined>((resolve, reject) => {
+      if (closed) { reject(new Error("the broker connection is closed")); return }
+      const requestId = `rename-${++cancelSeq}`
+      const timer = setTimeout(() => {
+        pendingRenames.delete(requestId)
+        reject(new Error("the Claude session did not answer the rename request"))
+      }, reloadTimeoutMs)
+      if (timer.unref) timer.unref()
+      pendingRenames.set(requestId, { settle: resolve, fail: reject, timer })
+      send({ t: "rename", requestId, description })
+    }),
     setPermissionMode: (mode: string) => send({ t: "set-mode", mode }),
     connected: () => sock !== null && !sock.destroyed,
     isClosed: () => closed,
@@ -217,6 +241,8 @@ export function connectClaudeBroker(
       pendingStops.clear()
       for (const [, entry] of pendingReloads) { clearTimeout(entry.timer); entry.fail(new Error("the broker connection closed before the plugin reload was answered")) }
       pendingReloads.clear()
+      for (const [, entry] of pendingRenames) { clearTimeout(entry.timer); entry.fail(new Error("the broker connection closed before the rename was answered")) }
+      pendingRenames.clear()
       pendingStops.clear()
       sock?.destroy(); sock = null
     },

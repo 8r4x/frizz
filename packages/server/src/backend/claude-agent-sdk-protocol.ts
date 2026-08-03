@@ -98,6 +98,13 @@ export const CLAUDE_BROKER_CAPABILITY_STOP_TASK = "stop-task-v1"
 // unknown frame, so the bridge refuses up front rather than letting the UI claim a reload happened.
 export const CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS = "reload-plugins-v1"
 
+// On-demand re-title through the SDK's `generateSessionTitle`. It replaces typing `/rename` into a
+// pane — the last user-facing verb that still needed one — so the affordance survives the tmux
+// removal instead of being deleted with the transport that happened to implement it. Gated like the
+// others: an older surviving daemon ignores the frame, and the operator would be left watching a
+// rename that never happened.
+export const CLAUDE_BROKER_CAPABILITY_RENAME = "rename-v1"
+
 // What a reload actually changed, bounded for the wire. Counts rather than full lists because the
 // operator is answering "did my edit land?", not auditing the closure — and `mcpServers` carries names
 // because a reload that CHANGES MCP tools is the one case with a real cost (the provider re-reads the

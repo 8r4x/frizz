@@ -463,11 +463,14 @@ test("renameThread RPC: empty titles are rejected and rowless/foreign threads re
   h.storage.close()
 })
 
-test("aiRenameThread RPC: Codex sessions are manual-only", async () => {
+// Provider rename now goes through the Claude broker's typed control channel (the SDK's
+// `generateSessionTitle`) rather than typing `/rename` into a tmux pane, so the refusal a non-Claude
+// or non-broker thread gets names the transport rather than the backend.
+test("aiRenameThread RPC: only a running broker-backed Claude thread can be renamed by the provider", async () => {
   const h = harness()
   h.storage.upsertSession({ ...row("codex-title"), exited: 0 })
   h.storage.setBackend("codex-title", "codex")
-  await assert.rejects(h.router.aiRenameThread.handler({ input: { slug: "codex-title" } }), /Codex does not support AI rename/)
+  await assert.rejects(h.router.aiRenameThread.handler({ input: { slug: "codex-title" } }), /broker-backed Claude thread/)
   assert.equal(h.storage.getSession("codex-title")?.title, "codex-title")
   assert.equal(h.refreshes(), 0)
   h.storage.close()

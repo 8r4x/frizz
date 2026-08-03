@@ -9,7 +9,7 @@ import { adoptOrForkBroker, killBroker, liveBrokerRecord, liveBrokerRecords, cla
 import { connectClaudeBroker, type ClaudeBrokerClient } from "./claude-broker-client.ts"
 import { describeClaudeBrokerExit, readClaudeBrokerExit, type ClaudeBrokerExitRecord } from "./claude-broker-diagnostics.ts"
 import type { ClaudeDiagnostic, ClaudePermissionDecision, ClaudePermissionRequest, ClaudePluginReload, ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
-import { CLAUDE_AGENT_SDK_MAX_INPUT_BYTES, CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, validateInputMessage } from "./claude-agent-sdk-protocol.ts"
+import { CLAUDE_AGENT_SDK_MAX_INPUT_BYTES, CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_RENAME, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, validateInputMessage } from "./claude-agent-sdk-protocol.ts"
 import type { BrokerRecord, ClaudeBrokerConfig } from "./claude-agent-broker.ts"
 import type { InteractionSessionScope, InteractionStore } from "../interaction-store.ts"
 import {
@@ -165,6 +165,11 @@ export interface ClaudeAgentBrokerBridge {
    * to be started first is just a start.
    */
   reloadPlugins(input: { threadSlug: string; sessionId: string }): Promise<ClaudePluginReload>
+  /**
+   * Re-title the LIVE session through the provider — the replacement for typing `/rename` into a pane.
+   * Resolves with the provider's chosen title, or undefined when it declined to name the session.
+   */
+  renameSession(input: { threadSlug: string; sessionId: string; description: string }): Promise<string | undefined>
   /**
    * Take a follow-up BACK out of the session's command queue — the operator clicked their own queued
    * bubble to unqueue it. `deliveryId` is the id `followUp` handed the SDK, which is the uuid the CLI
@@ -626,6 +631,22 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
         throw new Error("This thread's Claude session predates sub-agent stopping — its next turn will restart on a session that supports it")
       }
       await held.client.stopTask(input.taskId)
+    },
+
+    // Ask the provider to re-title this session. Same live-daemon + capability discipline as the
+    // reload above: never cold-starts a process, because re-titling a session that has to be started
+    // first would title a fresh one.
+    async renameSession(input) {
+      const held = current(input.threadSlug, input.sessionId)
+      if (!held || !holdsLiveDaemon(held)) {
+        if (held) { held.client.close(); sessions.delete(input.threadSlug) }
+        throw new Error("This thread's Claude session is not running, so it cannot be renamed")
+      }
+      const record = liveBrokerRecord(claudeBrokerRecordPath(deps.stateDir, held.sessionId))
+      if (!record?.capabilities?.includes(CLAUDE_BROKER_CAPABILITY_RENAME)) {
+        throw new Error("This thread's Claude session predates in-place rename — its next turn will restart on a session that supports it")
+      }
+      return await held.client.renameSession(input.description)
     },
 
     // Re-read the worker plugin closure INTO the live session — the whole point being that the
