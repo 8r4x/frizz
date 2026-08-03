@@ -46,7 +46,7 @@ import {
   type ClaudeTaskEvent,
   type ClaudeTaskUsage,
 } from "./claude-agent-sdk-protocol.ts"
-import { CLAUDE_WORKER_ENV } from "./types.ts"
+import { inheritWorkerEnvironment } from "./worker-env.ts"
 import { redactCredentialSyntax } from "../credential-redaction.ts"
 
 export const CLAUDE_AGENT_SDK_FOUNDATION_FLAG = "FRAY_CLAUDE_AGENT_SDK_FOUNDATION"
@@ -60,47 +60,6 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 export const CLAUDE_SDK_CANCEL_METHOD = "cancelAsyncMessage"
 const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
 const SENSITIVE_ENV_KEY = /(?:API_KEY|AUTH|BASE_URL|BEARER|COOKIE|CREDENTIAL|OAUTH|PASSWORD|PRIVATE|SECRET|TOKEN)/i
-const INHERITED_RUNTIME_ENV_KEYS = [
-  "PATH",
-  "HOME",
-  "USER",
-  "LOGNAME",
-  "SHELL",
-  "TMPDIR",
-  "TMP",
-  "TEMP",
-  "LANG",
-  "LC_ALL",
-  "LC_CTYPE",
-  "TZ",
-  "SystemRoot",
-  "WINDIR",
-  "COMSPEC",
-  "PATHEXT",
-] as const
-const EXPLICIT_CLAUDE_ENV_KEYS = new Set<string>([
-  ...INHERITED_RUNTIME_ENV_KEYS,
-  "ANTHROPIC_API_KEY",
-  "ANTHROPIC_AUTH_TOKEN",
-  "ANTHROPIC_BASE_URL",
-  "CLAUDE_CODE_OAUTH_TOKEN",
-  // fray worker-environment vars: the cc-worker plugin hooks gate on these (deny-ask, perm-observe,
-  // agent-dispatch). Non-sensitive fray-internal values — the slug + the perm-marker dir + the project
-  // dir — that make the broker's loaded plugin behave like the tmux worker's.
-  "FRAY_UI_THREAD",
-  "FRAY_PERM_DIR",
-  // Set by the broker bridge only when a dashboard InteractionStore is wired, i.e. only when fray can
-  // actually RENDER and answer an AskUserQuestion as a question card. It tells the plugin's deny-ask
-  // hook to stand down; without it in this allowlist the daemon dies at startup ("environment key is
-  // not allowlisted") before it publishes its record, and every dispatch times out "did not become
-  // ready" — which is exactly how this was found, on a live session rather than in a unit test.
-  "FRAY_NATIVE_ASK",
-  "CLAUDE_PROJECT_DIR",
-  // The worker's token-budget block — see CLAUDE_WORKER_ENV in types.ts for why a fray worker
-  // must be told it has one. It arrives as a broker `workerEnv` override rather than by inheritance,
-  // so without it here the daemon dies at startup ("environment key is not allowlisted").
-  ...Object.keys(CLAUDE_WORKER_ENV),
-])
 const MAX_ENV_ENTRIES = 512
 const MAX_ENV_VALUE_BYTES = 128 * 1024
 const MAX_ENV_TOTAL_BYTES = 1024 * 1024
@@ -1590,19 +1549,29 @@ function mapControlInitialization(raw: SDKControlInitializeResponse): ClaudeCont
 }
 
 function buildEnvironment(overrides: Readonly<Record<string, string | undefined>> | undefined): Record<string, string | undefined> {
+  // Inherit fray's environment minus fray's own control plane — see worker-env.ts for why this is a
+  // denylist rather than the allowlist it replaced. The caps below DEGRADE (skip the offending entry)
+  // instead of throwing: this runs inside the broker daemon during startup, and a throw here kills it
+  // before it publishes its record, which the operator sees only as every dispatch timing out "did not
+  // become ready". A fat shell environment must not be able to do that.
   const env: Record<string, string | undefined> = {}
-  for (const key of INHERITED_RUNTIME_ENV_KEYS) {
-    const value = process.env[key]
-    if (value !== undefined) {
-      if (utf8Bytes(value) > MAX_ENV_VALUE_BYTES) throw new ClaudeAgentSdkProtocolError("Claude inherited environment value is too large")
-      env[key] = value
-    }
+  let budget = MAX_ENV_TOTAL_BYTES
+  for (const [key, value] of Object.entries(inheritWorkerEnvironment())) {
+    if (utf8Bytes(value) > MAX_ENV_VALUE_BYTES) continue
+    if (Object.keys(env).length >= MAX_ENV_ENTRIES) break
+    const cost = utf8Bytes(key) + utf8Bytes(value)
+    if (cost > budget) continue
+    budget -= cost
+    env[key] = value
   }
+  // Fray's OWN overrides are applied unconditionally and after the caps: they are a bounded handful
+  // (the plugin dir, this thread's slug, the perm dir) and a worker that silently lost one is broken in
+  // ways far harder to diagnose than a dropped ambient variable. A malformed KEY still throws — that is
+  // a fray bug, not operator input, and it should be loud.
   const overrideEntries = Object.entries(overrides ?? {})
   if (overrideEntries.length > MAX_ENV_ENTRIES) throw new ClaudeAgentSdkProtocolError("Claude environment has too many overrides")
   for (const [key, value] of overrideEntries) {
     if (!ENV_KEY_PATTERN.test(key)) throw new ClaudeAgentSdkProtocolError("Claude environment contains an invalid key")
-    if (!EXPLICIT_CLAUDE_ENV_KEYS.has(key)) throw new ClaudeAgentSdkProtocolError(`Claude environment key ${key} is not allowlisted`)
     if (value === undefined) delete env[key]
     else {
       if (typeof value !== "string") throw new ClaudeAgentSdkProtocolError("Claude environment value must be text")
@@ -1616,10 +1585,6 @@ function buildEnvironment(overrides: Readonly<Record<string, string | undefined>
     }
   }
   env.CLAUDE_AGENT_SDK_CLIENT_APP = CLAUDE_AGENT_SDK_CLIENT_APP
-  const entries = Object.entries(env)
-  if (entries.length > MAX_ENV_ENTRIES) throw new ClaudeAgentSdkProtocolError("Claude environment has too many entries")
-  const total = entries.reduce((sum, [key, value]) => sum + utf8Bytes(key) + utf8Bytes(value ?? ""), 0)
-  if (total > MAX_ENV_TOTAL_BYTES) throw new ClaudeAgentSdkProtocolError("Claude environment is too large")
   return env
 }
 

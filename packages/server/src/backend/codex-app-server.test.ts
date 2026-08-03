@@ -9,7 +9,6 @@ import Database from "../sqlite.ts"
 import { createInteractionStore, InteractionStoreError } from "../interaction-store.ts"
 import { createStorage, type SessionRow } from "../storage.ts"
 import {
-  CODEX_APP_SERVER_ENV_KEYS,
   CODEX_APP_SERVER_PROTOCOL_REVISION,
   CODEX_APP_SERVER_SUPPORTED_VERSION,
   CodexAppServerBridge,
@@ -363,7 +362,14 @@ test("bridge is the sole codex transport (always enabled) and negotiates exact i
   h.close()
 })
 
-test("child environment is an exact safe allowlist and drops unrelated host secrets", () => {
+// The app-server inherits the operator's environment and drops only fray's OWN control plane. This
+// REVERSES a prior ~35-key allowlist (see worker-env.ts for the full reasoning): the curated lists had
+// drifted between backends — this one carried HTTP_PROXY/SSL_CERT_FILE and the claude ones did not, so
+// the same task succeeded or failed depending on which backend the operator picked — and none of them
+// carried SSH_AUTH_SOCK or any toolchain variable, so a build inside a worker diverged from the same
+// build in the operator's shell. This is explicitly NOT a secrets boundary: a worker has a shell and
+// filesystem read, so anything worth stealing is already on disk.
+test("child environment inherits the operator's variables and withholds only fray's own control plane", () => {
   const source: NodeJS.ProcessEnv = {
     HOME: "/Users/tester",
     PATH: "/opt/codex/bin:/usr/bin",
@@ -371,34 +377,39 @@ test("child environment is an exact safe allowlist and drops unrelated host secr
     CODEX_HOME: "/Users/tester/.codex",
     OPENAI_API_KEY: "openai-secret",
     CODEX_ACCESS_TOKEN: "codex-secret",
-    OPENAI_ORGANIZATION: "org-test",
     HTTPS_PROXY: "http://proxy-secret@example.test",
-    FRAY_GITHUB_WEBHOOK_SECRET: "fray-secret",
-    GH_TOKEN: "github-secret",
-    GITHUB_TOKEN: "github-secret-two",
-    ANTHROPIC_API_KEY: "anthropic-secret",
-    AWS_SECRET_ACCESS_KEY: "aws-secret",
-    NODE_OPTIONS: "--require=/tmp/injected.js",
-    OPENAI_UNAUDITED_SECRET: "unknown-openai-secret",
-    CODEX_UNAUDITED_SECRET: "unknown-codex-secret",
+    SSH_AUTH_SOCK: "/tmp/ssh-agent.sock",
+    NVM_DIR: "/Users/tester/.nvm",
+    GITHUB_TOKEN: "github-secret",
+    FRAY_CLAUDE_BROKER: "fray-daemon-payload",
+    FRAY_LAUNCH_OWNER_TOKEN: "fray-owner-secret",
+    UNDEFINED_ENTRY: undefined,
   }
   const environment = codexAppServerEnvironment(source)
-  assert.notEqual(environment, source)
+  assert.notEqual(environment, source, "the child gets a point-in-time snapshot, not the live object")
+
+  // The two things that must never cross: fray's daemon payload and its launch identity. Asserted
+  // BEFORE the deepEqual below, whose `asserts actual is T` signature narrows `environment` to the
+  // literal and would make these lookups a type error.
+  assert.equal(environment.FRAY_CLAUDE_BROKER, undefined)
+  assert.equal(environment.FRAY_LAUNCH_OWNER_TOKEN, undefined)
+  assert.equal(JSON.stringify(environment).includes("fray-owner-secret"), false)
+  // An undefined value is dropped rather than forwarded as the string "undefined".
+  assert.equal("UNDEFINED_ENTRY" in environment, false)
+
+  // Everything that is not fray's own — including the variables the old allowlist silently dropped.
   assert.deepEqual(environment, {
     HOME: source.HOME,
-    CODEX_HOME: source.CODEX_HOME,
     PATH: source.PATH,
     LANG: source.LANG,
+    CODEX_HOME: source.CODEX_HOME,
     OPENAI_API_KEY: source.OPENAI_API_KEY,
     CODEX_ACCESS_TOKEN: source.CODEX_ACCESS_TOKEN,
-    OPENAI_ORGANIZATION: source.OPENAI_ORGANIZATION,
     HTTPS_PROXY: source.HTTPS_PROXY,
+    SSH_AUTH_SOCK: source.SSH_AUTH_SOCK,
+    NVM_DIR: source.NVM_DIR,
+    GITHUB_TOKEN: source.GITHUB_TOKEN,
   })
-  assert.deepEqual(Object.keys(environment).every((key) => CODEX_APP_SERVER_ENV_KEYS.includes(key as never)), true)
-  const serialized = JSON.stringify(environment)
-  for (const secret of ["fray-secret", "github-secret", "github-secret-two", "anthropic-secret", "aws-secret", "unknown-openai-secret", "unknown-codex-secret"]) {
-    assert.equal(serialized.includes(secret), false)
-  }
 })
 
 test("command response is written once and the journal resolves only after serverRequest/resolved", async () => {

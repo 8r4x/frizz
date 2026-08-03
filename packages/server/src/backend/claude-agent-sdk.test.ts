@@ -81,7 +81,17 @@ test("Agent SDK and its Zod 4 peer are pinned behind a runtime-only membrane whi
 })
 
 test("real SDK + fake executable: init owns the requested session, input streams, and trailing events follow result", { timeout: 10_000 }, async () => {
-  const harness = startHarness("basic", { ANTHROPIC_BASE_URL: "https://api.example.test" })
+  // The four *_Present flags below are now INHERITANCE-dependent (a worker gets the operator's
+  // environment — see worker-env.ts), so a developer whose shell exports GITHUB_TOKEN would otherwise
+  // flip this assertion. Clearing them through the override path keeps the baseline deterministic AND
+  // exercises buildEnvironment's delete branch.
+  const harness = startHarness("basic", {
+    ANTHROPIC_BASE_URL: "https://api.example.test",
+    GITHUB_TOKEN: undefined,
+    OPENAI_API_KEY: undefined,
+    AWS_SECRET_ACCESS_KEY: undefined,
+    ARBITRARY_SECRET: undefined,
+  })
   try {
     const control = await withTimeout(harness.handle.initializationResult(), "initialization result")
     assert.deepEqual(control.commands[0], {
@@ -923,29 +933,39 @@ test("a provider event flood trips the bounded output queue instead of retaining
   }
 })
 
-test("child environment drops ambient cross-provider and arbitrary secrets while accepting an explicit Anthropic credential", { timeout: 10_000 }, async () => {
-  const dangerous = {
-    GITHUB_TOKEN: "github-must-not-cross",
-    OPENAI_API_KEY: "openai-must-not-cross",
-    AWS_SECRET_ACCESS_KEY: "aws-must-not-cross",
+// A worker INHERITS the operator's environment and is denied only fray's own control plane. This
+// reverses the allowlist this test used to pin (it asserted GITHUB_TOKEN / OPENAI_API_KEY /
+// AWS_SECRET_ACCESS_KEY / an arbitrary secret were all withheld); worker-env.ts carries the full
+// reasoning, but the short version is that the allowlists had drifted apart between backends — proxy
+// and CA variables reached codex workers and not claude ones — while withholding a token from a
+// process that can read ~/.config/gh/hosts.yml was never a real boundary.
+//
+// What this test still guards is the part that IS load-bearing: FRAY_* never crosses, so a worker
+// dispatched to work on fray cannot read the broker's daemon payload or the launch identity, and the
+// cc-worker hooks cannot pick up the SERVER's thread identity instead of their own.
+test("child environment inherits ambient variables and withholds only fray's own control plane", { timeout: 10_000 }, async () => {
+  const ambient = {
+    GITHUB_TOKEN: "github-should-cross",
+    OPENAI_API_KEY: "openai-should-cross",
+    AWS_SECRET_ACCESS_KEY: "aws-should-cross",
+    ARBITRARY_SECRET: "arbitrary-should-cross",
     FRAY_SHOULD_NOT_LEAK: "fray-must-not-cross",
-    ARBITRARY_SECRET: "arbitrary-must-not-cross",
   } as const
-  const previous = Object.fromEntries(Object.keys(dangerous).map((key) => [key, process.env[key]]))
-  Object.assign(process.env, dangerous)
+  const previous = Object.fromEntries(Object.keys(ambient).map((key) => [key, process.env[key]]))
+  Object.assign(process.env, ambient)
   const harness = startHarness("basic", { ANTHROPIC_API_KEY: "explicit-anthropic-test-key" })
   try {
     await harness.handle.ready()
     const records = await waitForCapture(harness.capturePath, (rows) => rows.some((row) => row.kind === "startup"))
     const environment = records.find((row) => row.kind === "startup")?.environment as Record<string, unknown>
-    assert.equal(environment.anthropicApiKeyPresent, true)
-    assert.equal(environment.githubTokenPresent, false)
-    assert.equal(environment.openaiApiKeyPresent, false)
-    assert.equal(environment.awsSecretAccessKeyPresent, false)
-    assert.equal(environment.fraySecretPresent, false)
-    assert.equal(environment.arbitrarySecretPresent, false)
-    const capture = readFileSync(harness.capturePath, "utf8")
-    for (const secret of [...Object.values(dangerous), "explicit-anthropic-test-key"]) assert.equal(capture.includes(secret), false)
+    assert.equal(environment.anthropicApiKeyPresent, true, "an explicit override still lands")
+    // Inherited, because the operator's shell is the worker's shell.
+    assert.equal(environment.githubTokenPresent, true)
+    assert.equal(environment.openaiApiKeyPresent, true)
+    assert.equal(environment.awsSecretAccessKeyPresent, true)
+    assert.equal(environment.arbitrarySecretPresent, true)
+    // The one thing that must never cross.
+    assert.equal(environment.fraySecretPresent, false, "FRAY_* is fray's control plane, not the operator's environment")
   } finally {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key]
@@ -1038,11 +1058,10 @@ test("input, JSON, environment, and executable boundaries reject unsafe payloads
       session: { kind: "new", sessionId: SESSION_ID },
       env: { "INVALID=KEY": "value" },
     }), /invalid key/)
-    assert.throws(() => factory.start({
-      cwd: harness.dir,
-      session: { kind: "new", sessionId: SESSION_ID },
-      env: { GITHUB_TOKEN: "must-not-cross" },
-    }), /not allowlisted/)
+    // No "not allowlisted" case any more: overrides are fray's own, and the worker inherits the
+    // operator's environment by design (worker-env.ts). The remaining guards below are the ones that
+    // still catch a fray BUG rather than an operator's choice — a malformed key, and a sensitive value
+    // too short to redact safely.
     assert.throws(() => factory.start({
       cwd: harness.dir,
       session: { kind: "new", sessionId: SESSION_ID },

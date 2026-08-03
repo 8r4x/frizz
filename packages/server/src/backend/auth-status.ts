@@ -77,10 +77,11 @@ export async function readClaudeAuthState(configDir = claudeConfigDir()): Promis
 // present ⇒ authed. Missing file ⇒ signed-out; present-but-unreadable/unparseable ⇒ unknown (fail open).
 export function readCodexAuthState(codexHome = defaultCodexHome()): ProviderAuth {
   // Codex ALSO authenticates from the environment — fray forwards OPENAI_API_KEY / CODEX_API_KEY /
-  // CODEX_ACCESS_TOKEN into the spawned app-server (CODEX_APP_SERVER_ENV_KEYS in codex-app-server.ts).
-  // A user authed that way has NO auth.json, so checking the file alone would falsely block them with
-  // no way to recover (the "codex login" the modal suggests isn't how they authed). Honor those keys
-  // first, matching the exact set fray forwards.
+  // CODEX_ACCESS_TOKEN into the spawned app-server (a worker inherits fray's environment minus fray's
+  // own control plane; see worker-env.ts, which replaced the CODEX_APP_SERVER_ENV_KEYS allowlist this
+  // once had to stay in step with). A user authed that way has NO auth.json, so checking the file alone
+  // would falsely block them with no way to recover (the "codex login" the modal suggests isn't how
+  // they authed). Honor those keys first.
   if (process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY || process.env.CODEX_ACCESS_TOKEN) return "authed"
   let raw: string
   try {

@@ -25,6 +25,7 @@ import { readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { createClaudeQueryFactory } from "./claude-agent-sdk.ts"
+import { inheritWorkerEnvironment } from "./worker-env.ts"
 import { createClaudeBrokerDiagnosticWriter, createClaudeBrokerExitWriter, type ClaudeBrokerExitReason } from "./claude-broker-diagnostics.ts"
 import { CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_RENAME, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER } from "./claude-agent-sdk-protocol.ts"
 import type {
@@ -82,7 +83,6 @@ export interface BrokerRecord { daemonPid: number; socketPath: string; sessionId
 // took down the whole control plane on the artifact while dev source (separate files) stayed green.
 const BROKER_CAPABILITIES = [CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_RENAME]
 
-const ENV_ALLOWLIST = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"]
 const IDLE_EXIT_MS = 6 * 60 * 60 * 1000
 const REACHABILITY_CHECK_MS = 30_000
 const REACHABILITY_STRIKES = 2
@@ -125,9 +125,10 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     cwd: config.cwd,
     session: config.resume ? { kind: "resume", sessionId: config.sessionId } : { kind: "new", sessionId: config.sessionId },
     permissionMode: config.permissionMode ?? "default",
-    // Ambient env is allowlist-filtered; the fray worker vars (FRAY_UI_THREAD, FRAY_PERM_DIR) ride
-    // workerEnv and are merged on top so the loaded cc-worker hooks actually activate.
-    env: { ...Object.fromEntries(ENV_ALLOWLIST.filter((k) => config.env[k] != null).map((k) => [k, config.env[k]!])), ...(config.workerEnv ?? {}) },
+    // The worker inherits fray's environment minus fray's own control plane (see worker-env.ts). The
+    // fray worker vars it DOES need (FRAY_UI_THREAD, FRAY_PERM_DIR) ride workerEnv and are merged on
+    // top — which is also what gives them THIS thread's values instead of the server's.
+    env: { ...inheritWorkerEnvironment(config.env), ...(config.workerEnv ?? {}) },
     persistSession: true, // write the tailer-readable transcript JSONL
     appendSystemPrompt: config.appendSystemPrompt,
     model: config.model,

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { StringDecoder } from "node:string_decoder"
 import type { Readable, Writable } from "node:stream"
 import Database from "../sqlite.ts"
+import { inheritWorkerEnvironment } from "./worker-env.ts"
 import { z } from "zod"
 import {
   INTERACTION_PROTOCOL_VERSION,
@@ -259,32 +260,13 @@ const MAX_STDERR_BYTES = 16 * 1024
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000
 const BRIDGE_DB_SCHEMA_VERSION = 1
 
-// Deliberately do not forward process.env wholesale. The app-server is a trusted local Codex binary,
-// but its tool subprocesses inherit its environment; forwarding Fray/GitHub/Anthropic or arbitrary
-// host secrets would therefore broaden agent authority. This exact list preserves executable/runtime,
-// home, locale, transport, and the auth/provider variables read by the audited 0.144.1 source.
-export const CODEX_APP_SERVER_ENV_KEYS = Object.freeze([
-  "HOME", "USERPROFILE", "CODEX_HOME",
-  "PATH", "PATHEXT", "SystemRoot", "WINDIR", "ComSpec",
-  "SHELL", "USER", "USERNAME", "LOGNAME",
-  "TMPDIR", "TMP", "TEMP", "TZ",
-  "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE",
-  "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
-  "OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN",
-  "OPENAI_ORGANIZATION", "OPENAI_PROJECT",
-  "CODEX_AUTHAPI_BASE_URL", "CODEX_OSS_BASE_URL", "CODEX_OSS_PORT",
-  "CODEX_CA_CERTIFICATE", "SSL_CERT_FILE",
-  "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
-  "http_proxy", "https_proxy", "all_proxy", "no_proxy",
-] as const)
-
+// The app-server inherits fray's environment minus fray's own control plane — see worker-env.ts. This
+// was a ~35-key allowlist until 2026-08-02; it is a denylist now because the curated lists across the
+// codex and claude transports had drifted (this one carried HTTP_PROXY/SSL_CERT_FILE, the claude ones
+// did not, so the same task succeeded or failed by backend) and because neither carried SSH_AUTH_SOCK
+// or any toolchain variable, which made builds inside a worker diverge from the operator's own shell.
 export function codexAppServerEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = {}
-  for (const key of CODEX_APP_SERVER_ENV_KEYS) {
-    const value = source[key]
-    if (value !== undefined) environment[key] = value
-  }
-  return environment
+  return inheritWorkerEnvironment(source);
 }
 
 type RpcId = string | number

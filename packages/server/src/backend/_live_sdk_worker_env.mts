@@ -4,8 +4,9 @@
 //
 // WHY THIS IS THE HARNESS THAT MATTERS: fray dispatches on the broker path by default, and both
 // observed early-quit sessions ran on it (`entrypoint: "sdk-ts"`). It is also a DIFFERENT chain from
-// tmux, with two extra gates that can silently drop a variable — the bridge's `workerEnv` map, and
-// buildEnvironment()'s EXPLICIT_CLAUDE_ENV_KEYS allowlist, which THROWS on a key it does not know.
+// tmux, with one extra gate that can silently drop a variable — the bridge's `workerEnv` map.
+// (buildEnvironment's EXPLICIT_CLAUDE_ENV_KEYS allowlist was the second gate until 2026-08-02; a
+// worker now inherits fray's environment minus fray's own control plane — see worker-env.ts.)
 //
 // It asserts only what it can actually demonstrate — see the NOT ASSERTED note below for the
 // Bash-timeout half, which no harness on this machine reproduces.
@@ -74,8 +75,8 @@ const runTurn = async (env: Record<string, string>, prompt: string, ms = 300_000
 }
 
 try {
-  // No separate assertion for EXPLICIT_CLAUDE_ENV_KEYS: buildEnvironment THROWS on an unlisted key, so
-  // the `with` runs below cannot reach a result at all unless the allowlist accepted every key.
+  // No separate assertion for an override allowlist: there is none any more (worker-env.ts). What can
+  // still drop a variable here is the bridge's workerEnv map, which is what the cases below exercise.
 
   // ---- A. The token budget reaches the model ----------------------------------------------------
   // The reminder rides a tool-result batch, so the turn must force a tool call. Each control drops

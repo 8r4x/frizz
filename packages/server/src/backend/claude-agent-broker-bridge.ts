@@ -426,9 +426,9 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     const we = deps.workerEnv
     const workerEnv: Record<string, string> = {
       FRAY_UI_THREAD: slug,
-      // Tell the worker its token budget rather than leaving it to guess — see
-      // CLAUDE_WORKER_ENV. The tmux path gets this through claudeWorkerEnvironment(); the
-      // broker filters ambient env through ENV_ALLOWLIST, so it has to ride workerEnv to arrive.
+      // Tell the worker its token budget rather than leaving it to guess — see CLAUDE_WORKER_ENV. The
+      // tmux path gets this through claudeWorkerEnvironment(); on the broker path it rides workerEnv,
+      // which is also what gives these per-thread values priority over anything inherited.
       ...CLAUDE_WORKER_ENV,
       ...(we?.permDir ? { FRAY_PERM_DIR: we.permDir } : {}),
       // The cc-worker plugin's PreToolUse hook DENIES AskUserQuestion, because on the tmux path a
