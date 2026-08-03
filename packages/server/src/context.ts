@@ -196,16 +196,9 @@ export function reconcileSessions(storage: Storage) {
     // for the broker it would destroy the whole ownerless-reconnect premise. Its liveness is resolved live
     // on each board build (the bridge's turn state / the daemon record); leave the stored column alone.
     if (isHeadlessRow(row)) continue
-    const binding = adoptionRuntimeBinding(storage, row)
-    const live = binding.kind === "unbound"
-      ? tmux.isLiveCached(row.slug)
-      : binding.kind === "bound"
-        ? (() => {
-            const current = tmux.findExpectedAdoptionPane(binding.claim)
-            return current.kind === "found" && !current.pane.dead
-          })()
-        : false
-    if (!live && row.exited !== 1) {
+    // A non-headless row is PRE-CUTOVER: its transport was a tmux pane and there is none any more, so
+    // it cannot be alive. Mark it exited once at boot rather than probing a pane that cannot exist.
+    if (row.exited !== 1) {
       storage.setExitedIfCurrent(row.slug, row.session_id, row.runtime_generation ?? 0, true)
     }
   }

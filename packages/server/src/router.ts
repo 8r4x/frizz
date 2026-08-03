@@ -11,6 +11,7 @@ import {
   UnqueueFollowUpInput,
   UnqueueFollowUpResult,
   SetThreadStopHookInput,
+  SetOwnThreadStopHookInput,
   ThreadPluginReloadResult,
   SetThreadSnoozeInput,
   ConfirmAwaitingInput,
@@ -154,11 +155,13 @@ interface RegisteredRuntimeTerminator {
 // would orphan it. So live→fast, dead→verified. killSession invalidates the cache, so the post-kill
 // re-check reads fresh too — the "prove the runtime stopped before recording Done" invariant is preserved.
 // The adoption path (findExpectedAdoptionPane) is unchanged; only the standalone isLive check moves here.
+// A no-op terminator. Every live row is headless and answered by the codex/claude branches; a
+// pre-cutover row's pane is long gone, so there is nothing left for this to stop.
 const cachedLivenessTerminator: RegisteredRuntimeTerminator = {
-  findExpectedAdoptionPane: tmux.findExpectedAdoptionPane,
-  killExpectedAdoptionPane: tmux.killExpectedAdoptionPane,
-  killSession: tmux.killSession,
-  isLive: (slug) => tmux.isLiveCached(slug) || tmux.isLive(slug),
+  findExpectedAdoptionPane: () => ({ kind: "absent" }),
+  killExpectedAdoptionPane: () => true,
+  killSession: () => {},
+  isLive: () => false,
 }
 
 // The other terminator. An app-server Codex thread has NO tmux pane: its worker is a TURN running
@@ -216,7 +219,7 @@ export function appServerCodexTurnLive(
 export async function stopThreadRuntime(
   storage: Pick<Storage, "getAdoptionClaim"> & Partial<Pick<Storage, "getSession" | "getAdoptionRuntimeSnapshot">>,
   row: SessionRow,
-  runtime: RegisteredRuntimeTerminator = tmux,
+  runtime: RegisteredRuntimeTerminator = cachedLivenessTerminator,
   codex?: CodexTurnTerminator,
   claudeBroker?: ClaudeBrokerTerminator,
 ): Promise<"absent" | "stopped"> {
@@ -246,7 +249,7 @@ export async function stopThreadRuntime(
 export function stopRegisteredRuntime(
   storage: Pick<Storage, "getAdoptionClaim"> & Partial<Pick<Storage, "getSession" | "getAdoptionRuntimeSnapshot">>,
   row: Pick<SessionRow, "slug" | "session_id" | "runtime_generation">,
-  runtime: RegisteredRuntimeTerminator = tmux,
+  runtime: RegisteredRuntimeTerminator = cachedLivenessTerminator,
 ): "absent" | "stopped" {
   const binding = adoptionRuntimeBinding(storage, row)
   if (binding.kind === "conflict") {
@@ -260,7 +263,7 @@ export function stopRegisteredRuntime(
   const claim = binding.claim
   const current = runtime.findExpectedAdoptionPane(claim)
   if (current.kind === "absent") return "absent"
-  if (current.kind !== "found" || !tmux.isExpectedAdoptionPane(claim, current.pane)) {
+  if (current.kind !== "found") {
     throw new Error("The adopted worker's exact runtime identity is unavailable; nothing was stopped")
   }
   if (!runtime.killExpectedAdoptionPane(claim)) {
@@ -279,7 +282,7 @@ export function stopRegisteredRuntime(
 export async function stopRuntimeBySlug(
   storage: Pick<Storage, "getAdoptionClaim" | "getSession">,
   slug: string,
-  runtime: RegisteredRuntimeTerminator = tmux,
+  runtime: RegisteredRuntimeTerminator = cachedLivenessTerminator,
   codex?: CodexTurnTerminator,
   claudeBroker?: ClaudeBrokerTerminator,
 ): Promise<{ outcome: "absent" | "stopped"; row?: SessionRow }> {
@@ -364,7 +367,7 @@ export async function completeRegisteredThread(
   >,
   row: SessionRow,
   terminateLive: boolean,
-  runtime: RegisteredRuntimeTerminator = tmux,
+  runtime: RegisteredRuntimeTerminator = cachedLivenessTerminator,
   telemetry?: SessionTelemetry,
   codex?: CodexTurnTerminator,
   claudeBroker?: ClaudeBrokerTerminator,
@@ -383,19 +386,13 @@ export async function completeRegisteredThread(
   // A broker Claude row is "live" iff its ownerless daemon is running — never a tmux pane. Without this
   // Mark-as-done on a running broker thread would archive it silently (live=false → no confirmation, no
   // termination) and orphan the daemon, the exact codex bug this branch mirrors.
+  // A pre-cutover row has no transport left, so it can never be live; every current row is one of the
+  // two headless kinds above.
   const live = brokerClaude
     ? (claudeBroker?.isDaemonAlive(row.session_id) ?? false)
     : appServerCodex
     ? appServerCodexTurnLive(codex, row)
-    : binding.kind === "unbound"
-    ? runtime.isLive(row.slug)
-    : (() => {
-        const current = runtime.findExpectedAdoptionPane(binding.claim)
-        if (current.kind === "unknown") {
-          throw new Error("The session's runtime identity is unavailable; nothing was changed")
-        }
-        return current.kind === "found" && !current.pane.dead
-      })()
+    : false
 
   const hold = live && !terminateLive ? completionConfirmationHold(telemetry) : undefined
   if (hold) return { needsConfirmation: true, hold }
@@ -426,7 +423,7 @@ export async function stopAndForgetRegisteredRuntime(
     "getAdoptionClaim" | "getAdoptionRuntimeSnapshot" | "getSession" | "forgetSessionIfCurrent"
   >,
   row: SessionRow,
-  runtime: RegisteredRuntimeTerminator = tmux,
+  runtime: RegisteredRuntimeTerminator = cachedLivenessTerminator,
   codex?: CodexTurnTerminator,
   claudeBroker?: ClaudeBrokerTerminator,
 ): Promise<SessionRow> {
@@ -1646,6 +1643,32 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
+    // The WORKER arming its own stop hook (scheduler.ts SOURCE 5), from `mcp__fray__stop_hook`. Same
+    // row the footer popover writes; different caller, and therefore a different guard.
+    //
+    // Unguarded on session/generation ON PURPOSE — see SetOwnThreadStopHookInput. The MCP server knows
+    // only its slug, which fray stamped into its env at spawn and which survives every resume, while
+    // the session id underneath it does not. It is not attacker-supplied: a model can choose the TEXT
+    // but never the thread.
+    //
+    // A worker may only ever arm its OWN thread, so there is deliberately no slug parameter a model
+    // could point somewhere else — the MCP server supplies it from its env, and this handler takes it
+    // as given. One agent making a DIFFERENT thread loop forever is not a capability fray hands out.
+    setOwnThreadStopHook: mutation({
+      input: SetOwnThreadStopHookInput,
+      handler: async ({ input }) => {
+        const row = ctx.storage.getSession(input.slug)
+        if (!row) throw new Error(`thread ${input.slug} is not registered`)
+        if (input.prompt !== null && input.enabled && (row.state === "archived" || row.archived === 1)) {
+          throw new Error("Reopen this thread before arming a stop hook")
+        }
+        if (!ctx.storage.setStopHookBySlug(input.slug, input.prompt, input.enabled, new Date().toISOString())) {
+          throw new Error(`thread ${input.slug} could not be updated`)
+        }
+        ctx.board.refresh()
+      },
+    }),
+
     // Event-snooze the awaiting-background card: capture the CURRENT rest instant so the board hides the
     // card until rested_at advances — the exact moment the thread's own sub-agent/shell returns and the
     // worker comes to a new rest. No deadline, no scheduler, no reaper: the session stays alive (it is
@@ -1792,19 +1815,11 @@ export function createRouter(ctx: AppContext) {
         // cannot show live runtime state, and the state a human most often opens a terminal to deal
         // with is exactly that: a permission prompt the worker is parked on, which is never written to
         // the transcript at all. Handing back a resume there sends the human to a terminal that looks
-        // idle while the real worker stays wedged, and any work they do in it silently diverges from
-        // the process fray is still tracking. Attach while we own the pane; resume only once it is gone.
-        // UNCACHED liveness on purpose: this runs once per hover/click, not on a hot path, and a
-        // ≤1s-stale cache bit here would hand back the WRONG command — a resume for a pane that is
-        // still live, which is exactly the failure being fixed. One exec buys a correct answer.
-        if (row.exited !== 1 && tmux.isLive(input.slug)) {
-          return {
-            command: tmuxAttachCommand(tmux.socketName(), row.tmux_name),
-            mode: "attach" as const,
-            reason: null,
-          }
-        }
-        // No live pane: the session only exists as a transcript now, so a resume is the honest offer.
+        // Always a RESUME. There used to be an ATTACH branch for a live tmux pane — a genuinely
+        // different thing, since `<cli> resume` replays the transcript in a separate process and can
+        // show neither live runtime state nor a permission prompt the worker is parked on. Workers do
+        // not run in panes any more, so there is nothing to attach to and the resume is the only
+        // honest offer.
         // Gated only on a real provider-native id existing — no paternalistic "wait for it" block.
         const backend = row.backend
         if (backend === "claude" || backend === "codex") {

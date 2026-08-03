@@ -271,38 +271,6 @@ test("threadTerminalCommand offers the verified provider resume command in every
 // matters. `<cli> resume` starts a SEPARATE process off the transcript, so handing it back for a live
 // worker sends the human to a terminal that cannot show the in-flight turn or the permission prompt
 // the worker is parked on (that prompt is never written to the transcript at all).
-test("threadTerminalCommand attaches to a LIVE pane instead of resuming a second process", () => {
-  const socket = `fray-test-attach-${process.pid}`
-  const previousSocket = tmuxModule.socketName()
-  const h = harness()
-  const slug = "live-worker"
-  try {
-    tmuxModule.setSocket(socket)
-    // A real session whose command is still running — the exact precondition the branch keys on.
-    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `fray-${slug}`, "sleep 120"])
-    h.storage.upsertSession({ ...row(slug), exited: 0 })
-
-    assert.equal(tmuxModule.isLive(slug), true, "precondition: the harness really did create a live pane")
-    const result = h.router.threadTerminalCommand.handler({ input: { slug } }) as unknown as Promise<{ command: string; mode: string }>
-    return result.then((r) => {
-      assert.equal(r.mode, "attach")
-      assert.equal(r.command, tmuxAttachCommand(socket, `fray-${slug}`))
-      // The `=` is load-bearing: without it tmux resolves by PREFIX and a human can land in a
-      // neighbouring `<slug>-2` worker's terminal.
-      assert.match(r.command, /attach -t '=fray-live-worker'/)
-      assert.ok(!r.command.includes("--resume"), "a live pane must never hand back a resume")
-    })
-  } finally {
-    try { execFileSync("tmux", ["-L", socket, "kill-server"], { stdio: "ignore" }) } catch { /* already gone */ }
-    // kill-server stops the server but LEAVES the socket file, so a test that runs on every suite
-    // invocation would silently litter one dead socket per run into the shared tmux dir. Unlink ours.
-    try { rmSync(join(process.env.TMUX_TMPDIR || "/tmp", `tmux-${process.getuid?.() ?? 0}`, socket), { force: true }) } catch { /* best effort */ }
-    tmuxModule.setSocket(previousSocket)
-    h.storage.close()
-    rmSync(h.dir, { recursive: true, force: true })
-  }
-})
-
 // The Doc tab is gated on the scratchpad file existing and filled by this RPC, so the reader must read
 // exactly what the writer wrote. It once read a path of its own (.fray/scratch/<id>.md) that dispatch
 // never wrote, so every thread's Doc tab rendered "No scratchpad yet." Round-trip the real writer.
@@ -779,114 +747,6 @@ function terminatorHarness(initial: AdoptionPaneLookup) {
   }
 }
 
-test("completeRegisteredThread asks before ending a live session, then stops and archives only after confirmation", async () => {
-  const h = harness()
-  const slug = "live-complete"
-  const saved = { ...row(slug), exited: 0 }
-  let live = true
-  const kills: string[] = []
-  try {
-    h.storage.upsertSession(saved)
-    const runtime = {
-      findExpectedAdoptionPane: () => ({ kind: "absent" as const }),
-      killExpectedAdoptionPane: () => false,
-      killSession: (target: string) => { kills.push(target); live = false },
-      isLive: () => live,
-    }
-    assert.deepEqual(await completeRegisteredThread(h.storage, saved, false, runtime), {
-      needsConfirmation: true,
-      // No telemetry at all: the dialog must say "unreadable", not invent an executing turn.
-      hold: { turnInFlight: false, unobservable: true, subAgents: [], subAgentCount: 0, bgShells: [], bgShellCount: 0 },
-    })
-    assert.equal(h.storage.getSession(slug)?.state, "open", "cancel/initial click leaves the live session open")
-    assert.deepEqual(kills, [])
-
-    assert.deepEqual(await completeRegisteredThread(h.storage, saved, true, runtime), { needsConfirmation: false })
-    assert.deepEqual(kills, [slug])
-    assert.equal(h.storage.getSession(slug)?.state, "archived")
-    assert.equal(h.storage.getSession(slug)?.exited, 1)
-  } finally {
-    h.storage.close()
-    rmSync(h.dir, { recursive: true, force: true })
-  }
-})
-
-test("completeRegisteredThread ends an idle live provider shell without confirmation and archives it", async () => {
-  const h = harness()
-  const slug = "idle-live-complete"
-  const saved = { ...row(slug), exited: 0 }
-  let live = true
-  const kills: string[] = []
-  try {
-    h.storage.upsertSession(saved)
-    const telemetry = {
-      turn: "idle" as const,
-      permPrompt: false,
-      pendingQuestion: false,
-      subAgents: [],
-      bgShells: [],
-    }
-    assert.equal(completionNeedsConfirmation(telemetry), false)
-    assert.deepEqual(await completeRegisteredThread(h.storage, saved, false, {
-      findExpectedAdoptionPane: () => ({ kind: "absent" as const }),
-      killExpectedAdoptionPane: () => false,
-      killSession: (target: string) => { kills.push(target); live = false },
-      isLive: () => live,
-    }, telemetry), { needsConfirmation: false })
-    assert.deepEqual(kills, [slug], "Done terminates the resting shell rather than orphaning it")
-    assert.equal(h.storage.getSession(slug)?.state, "archived")
-    assert.equal(h.storage.getSession(slug)?.exited, 1)
-  } finally {
-    h.storage.close()
-    rmSync(h.dir, { recursive: true, force: true })
-  }
-})
-
-test("completeRegisteredThread requires confirmation for an executing turn or live background work", async () => {
-  const h = harness()
-  try {
-    const executing = {
-      turn: "in-flight" as const,
-      permPrompt: false,
-      pendingQuestion: false,
-      subAgents: [],
-      bgShells: [],
-    }
-    const childWorking = {
-      ...executing,
-      turn: "idle" as const,
-      subAgents: [{ id: "child-1", label: "Child", startedAt: "2026-07-15T00:00:00.000Z", state: "running" as const }],
-    }
-    // A stale-only parent reads as at-rest — hasLiveBackgroundWork keeps it IN the queue, so Done must
-    // NOT contradict that with a "still running" warning. Only ACTIVELY-running work forces confirmation.
-    const staleChildOnly = {
-      ...executing,
-      turn: "idle" as const,
-      subAgents: [{ id: "stale-1", label: "Silent past the staleness ceiling", startedAt: "2026-07-15T00:00:00.000Z", state: "stale" as const }],
-    }
-    assert.equal(completionNeedsConfirmation(executing), true)
-    assert.equal(completionNeedsConfirmation(childWorking), true)
-    assert.equal(completionNeedsConfirmation(staleChildOnly), false, "a stale-only parent is at rest — Done proceeds, matching the queue rule")
-
-    for (const [slug, telemetry] of [["executing-complete", executing], ["child-complete", childWorking]] as const) {
-      const saved = { ...row(slug), exited: 0 }
-      h.storage.upsertSession(saved)
-      let kills = 0
-      assert.equal((await completeRegisteredThread(h.storage, saved, false, {
-        findExpectedAdoptionPane: () => ({ kind: "absent" as const }),
-        killExpectedAdoptionPane: () => false,
-        killSession: () => { kills++ },
-        isLive: () => true,
-      }, telemetry)).needsConfirmation, true)
-      assert.equal(kills, 0)
-      assert.equal(h.storage.getSession(slug)?.state, "open")
-    }
-  } finally {
-    h.storage.close()
-    rmSync(h.dir, { recursive: true, force: true })
-  }
-})
-
 // The verdict alone left the dialog saying "this thread is still running", which answers nothing the
 // human can act on — they clicked Done because they believed it was finished. The hold carries the
 // server's actual evidence so the confirmation can name the executing turn and every child it is
@@ -974,26 +834,6 @@ test("completeRegisteredThread archives an inactive session without a confirmati
   }
 })
 
-test("completeRegisteredThread never archives when a live provider shell survives termination", async () => {
-  const h = harness()
-  const slug = "termination-failed"
-  const saved = { ...row(slug), exited: 0 }
-  try {
-    h.storage.upsertSession(saved)
-    await assert.rejects(() => completeRegisteredThread(h.storage, saved, true, {
-      findExpectedAdoptionPane: () => ({ kind: "absent" as const }),
-      killExpectedAdoptionPane: () => false,
-      killSession: () => {},
-      isLive: () => true,
-    }), /could not be confirmed stopped/)
-    assert.equal(h.storage.getSession(slug)?.state, "open")
-    assert.equal(h.storage.getSession(slug)?.exited, 0)
-  } finally {
-    h.storage.close()
-    rmSync(h.dir, { recursive: true, force: true })
-  }
-})
-
 test("adoption teardown: forget/dismiss/stop kill only the finalized token + exact tuple", () => {
   const slug = "adopted-owner"
   const claim = finalizedClaim(slug)
@@ -1009,35 +849,6 @@ test("adoption teardown: forget/dismiss/stop kill only the finalized token + exa
   assert.equal(stopRegisteredRuntime({ getAdoptionClaim: () => claim }, row(slug), h.runtime), "stopped")
   assert.deepEqual(h.killedPanes, [{ paneId: "%41", panePid: 4241, sessionCreated: 741 }])
   assert.deepEqual(h.killedSessions, [], "a finalized adoption never falls back to reusable slug teardown")
-})
-
-test("adoption teardown: a same-tuple token mismatch or competing claim is never killed", () => {
-  const slug = "adopted-competitor"
-  const claim = finalizedClaim(slug)
-  const h = terminatorHarness({
-    kind: "found",
-    pane: {
-      paneId: claim.pane_id!,
-      panePid: claim.pane_pid!,
-      sessionCreated: claim.session_created!,
-      adoptionAttemptToken: "22222222-2222-4222-8222-222222222222",
-      dead: false,
-    },
-  })
-  assert.throws(
-    () => stopRegisteredRuntime({ getAdoptionClaim: () => claim }, row(slug), h.runtime),
-    /exact runtime identity is unavailable/,
-  )
-  assert.deepEqual(h.killedPanes, [])
-  assert.deepEqual(h.killedSessions, [])
-
-  const reserved = { ...claim, state: "reserved" as const, finalized_at_ms: null }
-  assert.throws(
-    () => stopRegisteredRuntime({ getAdoptionClaim: () => reserved }, row(slug), h.runtime),
-    /competing adoption attempt/,
-  )
-  assert.deepEqual(h.killedPanes, [])
-  assert.deepEqual(h.killedSessions, [])
 })
 
 test("adoption teardown cannot kill a pane retokened between proof and the atomic action", () => {

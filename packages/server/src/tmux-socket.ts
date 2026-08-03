@@ -504,66 +504,14 @@ export function resolveProjectTmuxSocket(
   if (!UUID_RE.test(target.projectId) || !isAbsolute(target.projectDir) || !isAbsolute(target.stateDir)) {
     throw new Error("invalid project identity for tmux socket selection")
   }
-  // Explicit operator choices are never migrated, inspected, or marked by Fray. This escape hatch
-  // has identical semantics for ordinary and linked worktrees (the live Nub instance deliberately
-  // uses `FRAY_TMUX_SOCKET=fray`). An explicitly empty value is invalid rather than silently managed.
   if (options.repositoryOverride !== undefined) return validateTmuxSocketName(options.repositoryOverride)
   if (target.identityScope === "worktree") return deriveWorktreeSocket(target.projectId)
-
-  const legacySocket = deriveLegacySocket(target.projectId)
-  const fullSocket = deriveSocket(target.projectId)
-  const runtime = options.runtime ?? productionTmuxSocketRuntime
-  const release = acquireGuard(target.stateDir)
-  try {
-    const owner = liveOwnerForProject(target)
-    if (owner?.tmuxSocket) {
-      const pinned = validateTmuxSocketName(owner.tmuxSocket)
-      if (pinned === fullSocket) validateFullSocket(runtime, fullSocket, target)
-      return pinned
-    }
-    const oldOwnerPinsLegacy = Boolean(owner)
-    const record = readTmuxSocketMigration(target.stateDir)
-    if (!record && existsSync(tmuxSocketMigrationPath(target.stateDir))) {
-      throw new Error("Fray's persisted tmux migration record is invalid; no sessions were contacted")
-    }
-    if (record) {
-      if (
-        record.projectId !== target.projectId || record.legacySocket !== legacySocket ||
-        record.fullSocket !== fullSocket
-      ) throw new Error("Fray's persisted tmux migration does not match this project")
-      if (record.phase === "full") {
-        validateFullSocket(runtime, fullSocket, target)
-        if (record.projectDir !== target.projectDir) writeMigration(target, legacySocket, fullSocket, "full")
-        return fullSocket
-      }
-      return chooseLegacy(
-        runtime,
-        runtime.inspect(legacySocket),
-        target,
-        legacySocket,
-        fullSocket,
-        oldOwnerPinsLegacy,
-        record.phase === "claiming",
-      )
-    }
-
-    // A state directory without SQLite predates no workers, so a colliding legacy prefix belongs to
-    // somebody else and is irrelevant. New repositories go straight to the injective namespace.
-    if (!existsSync(join(target.stateDir, "ui.db")) && !oldOwnerPinsLegacy) {
-      validateFullSocket(runtime, fullSocket, target)
-      return writeMigration(target, legacySocket, fullSocket, "full").selectedSocket
-    }
-    return chooseLegacy(
-      runtime,
-      runtime.inspect(legacySocket),
-      target,
-      legacySocket,
-      fullSocket,
-      oldOwnerPinsLegacy,
-    )
-  } finally {
-    release()
-  }
+  // Pure derivation. This used to EXEC `tmux -L <socket> list-panes` to decide whether a project's
+  // live workers sat on the legacy socket or the full one, and threw `tmuxUnavailableError` when tmux
+  // could not run — the SECOND hard tmux gate at launch, and the reason removing the preflight entry
+  // alone would only have traded a clear error for a murkier one. No worker has lived in a pane since
+  // the broker cutover, so there is nothing to inspect and nothing to migrate.
+  return deriveSocket(target.projectId)
 }
 
 export function resolveProjectTmuxSocketSelection(

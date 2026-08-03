@@ -104,15 +104,12 @@ function deriveRuntime(
     // "Stalled" and enters the queue instead of spinning forever.
     return appServerStalled ? "exited" : "running"
   }
-  const adoption = adoptionRuntimeBinding(storage, row)
-  if (adoption.kind === "conflict") return "exited"
-  if (adoption.kind === "bound") {
-    if (!tmux.isExpectedAdoptionPaneLiveAnywhereCached(adoption.claim)) return "exited"
-  } else if (!tmux.isLiveCached(slug)) return "exited"
-  // Cached (batched list-panes) — this runs per-thread on EVERY overlay refresh; the uncached
-  // two-subprocess isLive here starved the event loop whenever an agent was streaming.
-  if (permPrompt) return "perm-prompt"
-  return turn === "idle" ? "turn-idle" : "running"
+  // Every live row is headless and returned above. Anything reaching here is a PRE-CUTOVER row whose
+  // transport was a tmux pane — there is none any more, so its process cannot be alive. Reporting
+  // "exited" is what puts it in front of the operator (stalled card + Retry) instead of leaving it
+  // spinning against a liveness probe that can never succeed.
+  void slug; void permPrompt; void turn
+  return "exited"
 }
 
 // A worker whose transcript never materialized (a boot failure the tailer flagged noTranscript) would

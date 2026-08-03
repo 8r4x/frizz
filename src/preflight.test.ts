@@ -34,7 +34,7 @@ function ptyInstall(mode: number, platform: NodeJS.Platform = "darwin") {
   };
 }
 
-test("core launch preflight accepts a supported Node host with git and tmux", () => {
+test("core launch preflight accepts a supported Node host with git", () => {
   assert.doesNotThrow(() =>
     assertLaunchPrerequisites({ nodeVersion: "22.13.0", command: () => true })
   );
@@ -69,13 +69,13 @@ test("core launch preflight rejects an old 22.x minor below the floor", () => {
 
 test("core launch preflight gives an actionable error for a missing executable", () => {
   assert.throws(
-    () => assertLaunchPrerequisites({ nodeVersion: "22.13.0", command: (name) => name !== "tmux" }),
-    /required executable `tmux` is not available on PATH; Fray uses tmux for its terminal panes and interactive provider logins\. Install tmux \(`brew install tmux` on macOS, `apt install tmux` on Debian\/Ubuntu\) and relaunch Fray/
+    () => assertLaunchPrerequisites({ nodeVersion: "22.13.0", command: (name) => name !== "git" }),
+    /required executable `git` is not available on PATH; Fray identifies a project by its Git repository\. Install git \(`brew install git` on macOS, `apt install git` on Debian\/Ubuntu\) and relaunch Fray/
   );
 });
 
 // The launchers probe for these BEFORE resolving a workspace, which is what makes the diagnosis
-// eager: resolving one execs `git` and then reads the project's tmux socket, and each of those used
+// eager: resolving one execs `git`, which used
 // to report the absence in its own unrelated vocabulary.
 test("the eager executable probe names each missing tool and why Fray wants it", () => {
   assert.throws(
@@ -83,8 +83,8 @@ test("the eager executable probe names each missing tool and why Fray wants it",
     /required executable `git` is not available on PATH; Fray identifies a project by its Git repository\./
   );
   assert.throws(
-    () => assertRequiredExecutables((name) => name !== "tmux"),
-    /required executable `tmux` is not available on PATH; Fray uses tmux/
+    () => assertRequiredExecutables((name) => name !== "git"),
+    /required executable `git` is not available on PATH; Fray identifies a project/
   );
   assert.doesNotThrow(() => assertRequiredExecutables(() => true));
 });
@@ -195,7 +195,7 @@ test("provider readiness disables only the unavailable backend and never require
   assert.doesNotThrow(() =>
     assertLaunchPrerequisites({
       nodeVersion: "22.13.0",
-      command: (name) => name === "git" || name === "tmux",
+      command: (name) => name === "git",
     })
   );
 });

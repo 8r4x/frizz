@@ -81,16 +81,18 @@ export interface ProviderReadiness {
 }
 
 /**
- * The executables every Fray launch shells out to, with the reason each one is needed. Both are
- * reached before any prerequisite check used to run — `resolveWorkspace` execs `git rev-parse` and
- * then resolves the project's tmux socket — so a machine missing either was diagnosed by whichever
- * caller happened to fail first, in that caller's vocabulary. A missing `git` reported "fray-dev
- * must be run inside a Git repository"; a missing `tmux` reported the project's own `fray.id` as
- * duplicate or corrupt. Say what is actually wrong, and say it before the work starts.
+ * The executables every Fray launch shells out to, with the reason each one is needed. `git` is
+ * reached before any prerequisite check used to run (`resolveWorkspace` execs `git rev-parse`), so a
+ * machine missing it was diagnosed by whichever caller happened to fail first, in that caller's
+ * vocabulary — "fray-dev must be run inside a Git repository". Say what is actually wrong, and say it
+ * before the work starts.
+ *
+ * `tmux` was here too, for "terminal panes and interactive provider logins". Neither is true any more:
+ * agents run in the broker/app-server over pipes, and sign-in runs on node-pty. Requiring it kept Fray
+ * off Windows, where tmux has no native build, for a dependency nothing used.
  */
 const REQUIRED_EXECUTABLES = [
   { name: "git", need: "Fray identifies a project by its Git repository" },
-  { name: "tmux", need: "Fray uses tmux for its terminal panes and interactive provider logins" },
 ] as const;
 
 export function assertRequiredExecutables(command: CommandProbe = commandIsAvailable): void {
@@ -105,9 +107,8 @@ export function assertRequiredExecutables(command: CommandProbe = commandIsAvail
 }
 
 export function commandIsAvailable(command: string): boolean {
-  // `tmux --version` is not portable (macOS tmux accepts `-V` instead), so keep the probe
-  // executable-specific while avoiding a shell and any persistent side effects.
-  const versionArg = command === "tmux" ? "-V" : "--version";
+  // Avoid a shell and any persistent side effects.
+  const versionArg = "--version";
   const result = spawnSync(command, [versionArg], {
     stdio: "ignore",
     windowsHide: true,

@@ -2422,7 +2422,6 @@ export function createTailer(deps: TailerDeps): Tailer {
       // A command list ABORTS at its first bad target, so only ask for panes tmux actually knows. The
       // liveness map is already cached, so this filter is free. A dead-but-present pane is kept —
       // remain-on-exit panes still hold the boot-failure/frozen-modal text the sniff and captureStall read.
-      if (!tmux.paneSnapshotCached(row.slug)) continue
       slugs.push(row.slug)
     }
     return slugs
