@@ -2054,18 +2054,6 @@ test("tailer: a codex row never consults the Claude marker", () => {
   assert.equal(reads, 0, "codex owns native input detection; the Claude marker is skipped")
 })
 
-test("tailer: no marker falls back to the pane-sniff regex exactly as before", () => {
-  const h = harness()
-  h.storage.upsertSession(row())
-  fixture(h.logDir, "sid", [IN_FLIGHT, TOOL])
-  h.pane.text = PANE_PERM_BASH
-  h.clock.ms = Date.parse("2026-07-01T00:00:10.000Z") // >4s quiet → fallback capture runs
-  const t = makeTailer(h, { readPermMarker: () => undefined })
-  t.tick()
-  assert.ok(h.pane.reads > 0, "with no marker the fallback still captures the pane")
-  assert.equal(t.get("t")?.permPrompt, true, "the regex fallback still detects a real modal")
-})
-
 // A marker written BEFORE this generation's spawn is stale — a worker killed while blocked, then
 // resumed, must not flash Needs-you off the prior block's marker while the resume boots.
 test("tailer: a marker predating the current spawn is stale (resume of a killed-while-blocked thread)", () => {
@@ -2100,42 +2088,6 @@ test("tailer: the default reader round-trips a real on-disk marker (blocked → 
   writeFileSync(join(h.logDir, "sid.jsonl"), [IN_FLIGHT, TOOL, resolved].map((l) => l + "\n").join(""))
   t.tick()
   assert.equal(t.get("t")?.permPrompt, false, "a transcript record after the marker supersedes it")
-})
-
-test("tailer: finalized adoption capture is atomic and never falls through to a same-name pane", () => {
-  const h = harness()
-  const token = "11111111-1111-4111-8111-111111111111"
-  assert.equal(h.storage.reserveAdoptionClaim({ slug: "t", attemptToken: token, sessionId: "sid", reservedAtMs: 1, leaseExpiresAtMs: 2 }), true)
-  assert.equal(h.storage.recordAdoptionPane("t", token, { paneId: "%15", panePid: 1500, sessionCreated: 15000 }, 2), true)
-  assert.equal(h.storage.finalizeAdoptionClaim("t", token, row(), 2), true)
-  fixture(h.logDir, "sid", [IN_FLIGHT])
-  h.clock.ms = Date.parse("2026-07-01T00:00:03.000Z")
-  let slugCaptures = 0
-  let exactCaptures = 0
-  const t = createTailer({
-    project: { cwdSlug: "x" } as Project,
-    storage: h.storage,
-    bus: h.bus,
-    onChange: () => {},
-    now: () => h.clock.ms,
-    paneDead: () => false,
-    capturePane: () => { slugCaptures++; return "COMPETITOR APPROVAL SCREEN" },
-    findExpectedAdoptionPane: () => ({
-      kind: "found",
-      pane: { paneId: "%15", panePid: 1500, sessionCreated: 15000, dead: false, adoptionAttemptToken: token },
-    }),
-    captureExpectedAdoptionPane: () => {
-      exactCaptures++
-      return { kind: "unavailable" } // owner replaced inside the one conditional capture
-    },
-    sessionLogDir: h.logDir,
-  })
-  t.tick()
-  h.clock.ms += 2_000
-  t.tick()
-  assert.ok(exactCaptures > 0)
-  assert.equal(slugCaptures, 0, "a failed exact capture never reads the reusable-name competitor")
-  assert.equal(t.get("t")?.permPrompt, false)
 })
 
 test("tailer rejects a stale row snapshot without name-dead checks or name capture", () => {
@@ -2335,40 +2287,6 @@ test("tailer: incremental read handles a trailing partial line across ticks", ()
   appendFileSync(path, "\n") // complete the line
   t.tick()
   assert.equal(t.get("t")?.turn, "idle")
-})
-
-test("tailer: sniffs perm-prompt only when an in-flight turn goes quiet; clears on resume", () => {
-  const h = harness()
-  h.storage.upsertSession(row())
-  fixture(h.logDir, "sid", [IN_FLIGHT, TOOL]) // in-flight; last activity ts = 00:00:01
-  h.pane.text = PANE_PERM_BASH
-  const t = makeTailer(h)
-
-  // clock only 2s past the tool_use record: below PERM_SNIFF_MS, so no sniff yet
-  h.clock.ms = Date.parse("2026-07-01T00:00:03.000Z")
-  t.tick() // prime
-  assert.equal(t.get("t")?.permPrompt, false, "not quiet long enough to sniff")
-  assert.equal(h.events.length, 0, "perm-prompt never notifies")
-  assert.equal(h.storage.getSession("t")?.unread, 0, "perm-prompt never sets unread")
-
-  // now 9s of silence on a still-in-flight turn + a matching pane → perm-prompt
-  h.clock.ms = Date.parse("2026-07-01T00:00:10.000Z")
-  t.tick()
-  assert.equal(t.get("t")?.permPrompt, true)
-  assert.equal(h.events.length, 0, "still no notify/unread for perm-prompt")
-  assert.equal(h.storage.getSession("t")?.unread, 0)
-
-  // the human answers → the pane stops matching → cleared even before jsonl moves
-  h.pane.text = PANE_STREAMING
-  t.tick()
-  assert.equal(t.get("t")?.permPrompt, false)
-
-  // and once the turn completes, an idle turn is never sniffed regardless of pane text
-  h.pane.text = PANE_PERM_BASH
-  appendFileSync(join(h.logDir, "sid.jsonl"), DONE + "\n")
-  t.tick()
-  assert.equal(t.get("t")?.turn, "idle")
-  assert.equal(t.get("t")?.permPrompt, false)
 })
 
 // ---- signal-fence grammar (done/awaiting excusal fences) ----
@@ -2661,62 +2579,6 @@ test("tailer: a transcript missing past the grace window → noTranscript degrad
 // The regression this fixes: a worker wedged on a startup modal has no transcript, so `turn` and
 // `lastActivityAt` never satisfy sniffPane's quiet gate — the pane was never captured and the row
 // carded as a bare "Stalled" while the reason sat unread in the stall log.
-test("tailer: a no-transcript stall parked on a boot modal reports WHAT it is blocked on", () => {
-  const slug = "boot-modal-thread"
-  const stallLog = join(tmpdir(), "fray-worker-logs", `${slug}.stall.log`)
-  try { rmSync(stallLog) } catch { /* not there */ }
-  const h = harness()
-  h.storage.upsertSession(row({ slug, tmux_name: `fray-${slug}` }))
-  h.pane.text = PANE_BOOT_APIKEY
-  const t = makeTailer(h)
-
-  h.clock.ms = Date.parse(SPAWN)
-  t.tick() // within grace: still spinning up, nothing claimed yet
-  assert.equal(t.get(slug)?.nativeInputRequired, undefined)
-  assert.equal(t.get(slug)?.permPrompt, false)
-
-  h.clock.ms = PAST_GRACE
-  t.tick()
-  assert.equal(t.get(slug)?.noTranscript, true)
-  assert.deepEqual(
-    t.get(slug)?.nativeInputRequired,
-    { kind: "confirmation", title: "Confirm the API key in your environment" },
-    "the card states the screen instead of an empty stall",
-  )
-  // permPrompt flips the row off the degraded "Stalled" affordance onto perm-prompt, which
-  // deriveNeedsYou queues identically — so naming the reason never costs the row its place in the queue.
-  assert.equal(t.get(slug)?.permPrompt, true)
-  try { rmSync(stallLog) } catch { /* cleanup */ }
-})
-
-test("tailer: an uncatalogued startup modal still gets the generic reason, and a blank pane gets none", () => {
-  const h = harness()
-  h.storage.upsertSession(row({ slug: "unknown-modal", tmux_name: "fray-unknown-modal" }))
-  h.pane.text = PANE_PERM_BASH // a real modal, but not a screen detectClaudeBootModal can name
-  const t = makeTailer(h)
-  h.clock.ms = PAST_GRACE
-  t.tick()
-  assert.deepEqual(t.get("unknown-modal")?.nativeInputRequired, {
-    kind: "confirmation",
-    title: "Blocked on a startup prompt",
-  })
-
-  // A stall with no modal on screen (claude's boot-failure text, the case the original test covers)
-  // must stay a plain degraded row — inventing an input prompt there would be worse than silence.
-  const h2 = harness()
-  h2.storage.upsertSession(row({ slug: "plain-stall", tmux_name: "fray-plain-stall" }))
-  h2.pane.text = "Error: Session ID sid is already in use."
-  const t2 = makeTailer(h2)
-  h2.clock.ms = PAST_GRACE
-  t2.tick()
-  assert.equal(t2.get("plain-stall")?.noTranscript, true)
-  assert.equal(t2.get("plain-stall")?.nativeInputRequired, undefined)
-  assert.equal(t2.get("plain-stall")?.permPrompt, false)
-  for (const slug of ["unknown-modal", "plain-stall"]) {
-    try { rmSync(join(tmpdir(), "fray-worker-logs", `${slug}.stall.log`)) } catch { /* cleanup */ }
-  }
-})
-
 test("tailer: a present-but-EMPTY (0-byte) transcript past grace is treated as MISSING → degraded (0-byte crash-net hole closed)", () => {
   const slug = "empty-thread"
   const stallLog = join(tmpdir(), "fray-worker-logs", `${slug}.stall.log`)
@@ -2905,59 +2767,6 @@ function pinCodexRow(h: Harness, codexId: string) {
   h.storage.setBackend("t", "codex")
   h.storage.setAgentSession("t", codexId)
 }
-
-test("tailer: a Codex tool approval is structured on prime/restart, then clears when the terminal modal disappears", () => {
-  const h = harness()
-  const codexHome = tmp("fray-codexhome-")
-  const codexId = "019f4e09-aaaa-bbbb-cccc-ddddeeeeffff"
-  writeCodexRollout(codexHome, codexId, [cxMeta(codexId, "/x"), cxTaskStarted])
-  pinCodexRow(h, codexId)
-  h.pane.text = PANE_CODEX_GITHUB_APPROVAL
-  h.clock.ms = Date.parse("2026-07-10T21:58:50.000Z") // >4s quiet after task_started
-
-  const first = codexTailer(h, codexHome)
-  first.tick() // first server instance primes while the modal is already present
-  assert.deepEqual(first.get("t")?.nativeInputRequired, {
-    kind: "tool-approval",
-    title: "GitHub tool approval required",
-  })
-  assert.doesNotMatch(JSON.stringify(first.get("t")?.nativeInputRequired), /repository-name|secret-payload/)
-  assert.equal(h.events.length, 0, "native modal telemetry never auto-notifies or marks a completed turn")
-  assert.equal(h.storage.getSession("t")?.unread, 0)
-
-  // A server reload has no in-memory modal state, but re-sniffs the still-live pane on its prime tick.
-  const restarted = codexTailer(h, codexHome)
-  restarted.tick()
-  assert.deepEqual(restarted.get("t")?.nativeInputRequired, first.get("t")?.nativeInputRequired)
-
-  // Escape/Cancel happens in Terminal (Fray never sends it). Once the chrome vanishes, telemetry clears
-  // immediately even before the rollout writes another record, unblocking the controller/queue path.
-  h.pane.text = "› Describe what you want changed\n\n  gpt-5.6 high · 97% left · esc to interrupt"
-  restarted.tick()
-  assert.equal(restarted.get("t")?.nativeInputRequired, undefined)
-})
-
-test("tailer: native permission and tool approvals remain visible even beside stale pending metadata", () => {
-  const h = harness()
-  const codexHome = tmp("fray-codexhome-")
-  const codexId = "019f4e09-1111-2222-3333-444455556666"
-  writeCodexRollout(codexHome, codexId, [cxMeta(codexId, "/x"), cxTaskStarted])
-  pinCodexRow(h, codexId)
-  h.storage.setPermissionPending("t", "bypassPermissions")
-  h.clock.ms = Date.parse("2026-07-10T21:58:50.000Z")
-  h.pane.text = PANE_CODEX_PERMISSION_MENU
-  const t = codexTailer(h, codexHome)
-  t.tick()
-  assert.deepEqual(t.get("t")?.nativeInputRequired, { kind: "permission", title: "Choose model permissions" })
-
-  // Stale control metadata must not mask an unrelated connector approval either.
-  h.pane.text = PANE_CODEX_GITHUB_APPROVAL
-  t.tick()
-  assert.deepEqual(t.get("t")?.nativeInputRequired, {
-    kind: "tool-approval",
-    title: "GitHub tool approval required",
-  })
-})
 
 test("tailer: a codex rollout primes to in-flight, then transitions to idle+fence THROUGH the tick", () => {
   const h = harness()

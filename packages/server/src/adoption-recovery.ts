@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto"
 import type { AdoptionClaimRow, SessionRow, Storage } from "./storage.ts"
-import * as tmux from "./tmux.ts"
 import { cleanupAdoptionSessionFiles } from "./session-files.ts"
 
 export const ADOPTION_ATTEMPT_LEASE_MS = 120_000
@@ -15,35 +14,55 @@ export type AdoptionReconcileOutcome =
   | "recovery-in-progress"
   | "identity-conflict"
 
+// An adoption claim used to bind a tmux PANE, and recovery's job was finding and killing the orphan
+// one a dead fray left behind. Adoption spawns through the broker now, so a claim never has a pane and
+// recovery is purely a record question: is this claim stale, and may it be abandoned. The seam stays so
+// callers and their tests keep their shape; every lookup is simply absent.
+export interface PaneIdentity {
+  paneId: string
+  panePid: number
+  sessionCreated: number
+  /** Retained so a stale claim written by a PRE-cutover fray still parses; never set on a new one. */
+  adoptionAttemptToken?: string | null
+  dead?: boolean
+}
+export type AdoptionPaneLookup = { kind: "absent" } | { kind: "unknown" } | { kind: "found"; pane: PaneIdentity }
+export interface ExpectedAdoptionPane {
+  attempt_token: string
+  pane_id: string | null
+  pane_pid: number | null
+  session_created: number | null
+}
+
 export interface AdoptionRecoveryRuntime {
-  lookupAdoptionPane(slug: string): tmux.AdoptionPaneLookup
-  findAdoptionPane(attemptToken: string): tmux.AdoptionPaneLookup
-  findAdoptionPanes?(attemptTokens: readonly string[]): Map<string, tmux.AdoptionPaneLookup>
-  findPaneIdentity(identity: tmux.PaneIdentity): tmux.AdoptionPaneLookup
-  killExpectedAdoptionPane(expected: tmux.ExpectedAdoptionPane): boolean
+  lookupAdoptionPane(slug: string): AdoptionPaneLookup
+  findAdoptionPane(attemptToken: string): AdoptionPaneLookup
+  findAdoptionPanes?(attemptTokens: readonly string[]): Map<string, AdoptionPaneLookup>
+  findPaneIdentity(identity: PaneIdentity): AdoptionPaneLookup
+  killExpectedAdoptionPane(expected: ExpectedAdoptionPane): boolean
 }
 
 const productionRuntime: AdoptionRecoveryRuntime = {
-  lookupAdoptionPane: tmux.lookupAdoptionPane,
-  findAdoptionPane: tmux.findAdoptionPane,
-  findAdoptionPanes: tmux.findAdoptionPanes,
-  findPaneIdentity: tmux.findPaneIdentity,
-  killExpectedAdoptionPane: tmux.killExpectedAdoptionPane,
+  lookupAdoptionPane: () => ({ kind: "absent" }),
+  findAdoptionPane: () => ({ kind: "absent" }),
+  findAdoptionPanes: (tokens) => new Map(tokens.map((t) => [t, { kind: "absent" as const }])),
+  findPaneIdentity: () => ({ kind: "absent" }),
+  killExpectedAdoptionPane: () => true,
 }
 
-function claimIdentity(claim: AdoptionClaimRow): tmux.PaneIdentity | null {
+function claimIdentity(claim: AdoptionClaimRow): PaneIdentity | null {
   if (claim.pane_id === null || claim.pane_pid === null || claim.session_created === null) return null
   return { paneId: claim.pane_id, panePid: claim.pane_pid, sessionCreated: claim.session_created }
 }
 
-function sameIdentity(a: tmux.PaneIdentity, b: tmux.PaneIdentity): boolean {
+function sameIdentity(a: PaneIdentity, b: PaneIdentity): boolean {
   return a.paneId === b.paneId && a.panePid === b.panePid && a.sessionCreated === b.sessionCreated
 }
 
 function findExpectedRuntime(
   claim: AdoptionClaimRow,
   runtime: AdoptionRecoveryRuntime,
-): tmux.AdoptionPaneLookup {
+): AdoptionPaneLookup {
   const byToken = runtime.findAdoptionPane(claim.attempt_token)
   const expected = claimIdentity(claim)
   if (!expected) return byToken.kind === "absent" ? { kind: "absent" } : { kind: "unknown" }
@@ -292,7 +311,7 @@ export function abandonAdoptionAttempt(options: {
   slug: string
   attemptToken: string
   sessionId: string
-  identity?: tmux.PaneIdentity
+  identity?: PaneIdentity
   runtime?: AdoptionRecoveryRuntime
   cleanupFiles?: boolean
 }): boolean {

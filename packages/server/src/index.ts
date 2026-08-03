@@ -36,7 +36,6 @@ import {
   type ProjectLaunchLease,
   type ProcessGeneration,
 } from "./project-launch.ts"
-import * as tmux from "./tmux.ts"
 import { createBootProgressPublisher } from "./boot-progress.ts"
 import { log as frayLog } from "./logging.ts"
 

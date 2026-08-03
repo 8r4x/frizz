@@ -8,7 +8,6 @@ import { isBrokerClaudeRow, isHeadlessRow } from "./storage.ts"
 import type { Storage, SessionRow } from "./storage.ts"
 import { discoverTranscriptId, DISCOVERY_GRACE_MS } from "./discover.ts"
 import type { AgentBackend, FoldState, NativeInputRequiredData, NormalizedEvent, NormalizedTail } from "./backend/types.ts"
-import * as tmux from "./tmux.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { normalizeObservedThreadModel, validateThreadProfile } from "./backend/thread-profiles.ts"
 import { resolveRuntimeTurn, type ClaudeRuntimeTask } from "./backend/claude-runtime-ingest.ts"
@@ -1972,13 +1971,10 @@ export interface TailerDeps {
   // session's discovery record and probes its pid. A fixture that omits it gets `() => true` when the
   // project has no stateDir, i.e. the pre-existing `exited`-only behavior.
   brokerDaemonAlive?: (sessionId: string) => boolean
-  capturePane?: (slug: string) => string // injectable pane text (tests); defaults to tmux
-  // ASYNC batched pane text for the off-loop per-tick prefetch; defaults to tmux.capturePanesAsync. A
-  // fixture that injects only `capturePane` gets no async prefetch (see createTailer) so existing
-  // per-slug fakes keep working synchronously.
+  // Retained as inert test seams: nothing captures a pane any more (there are none), but fixtures
+  // still pass them and a narrower type here would be churn for no behaviour.
+  capturePane?: (slug: string) => string
   capturePanesAsync?: (slugs: readonly string[]) => Promise<Map<string, string>>
-  findExpectedAdoptionPane?: (expected: tmux.ExpectedAdoptionPane) => tmux.AdoptionPaneLookup
-  captureExpectedAdoptionPane?: (expected: tmux.ExpectedAdoptionPane) => tmux.ExactPaneCapture
   sessionLogDir?: string // injectable transcript dir (tests); defaults to the Claude Code path
   codexHome?: string // injectable $CODEX_HOME (tests); where a codex sub-agent's child rollout is located
   mtimeMs?: (path: string) => number | undefined // injectable file mtime (tests); a sub-agent transcript's staleness clock
@@ -2209,17 +2205,12 @@ export const UNRESTORED_TAIL_FIELDS: ReadonlySet<string> = new Set([
 
 export function createTailer(deps: TailerDeps): Tailer {
   const now = deps.now ?? Date.now
-  // Cached (batched list-panes): the 1s tick asks per session row — uncached that was one
-  // subprocess per row per second, a standing event-loop tax that grew with thread count.
-  const paneDead = deps.paneDead ?? tmux.paneDeadCached
+  // No panes: a row's liveness comes from its runtime (broker daemon / app-server). A PRE-CUTOVER row
+  // has no transport left, so the default answers "dead" — the seam stays injectable for fixtures.
+  const paneDead = deps.paneDead ?? (() => true)
   const brokerDaemonAlive = deps.brokerDaemonAlive ?? defaultBrokerDaemonAlive(deps.project, now)
-  const capturePane = deps.capturePane ?? tmux.capturePane
-  // ASYNC batched sibling of capturePane, for the off-loop per-tick prefetch below. Absent (narrow test
-  // fixtures that inject only a synchronous `capturePane`) ⇒ no async prefetch, and every sniff falls
-  // back to the injected per-slug fake synchronously — byte-identical to the pre-batch test behavior.
-  const capturePanesAsync = deps.capturePanesAsync ?? (deps.capturePane ? undefined : tmux.capturePanesAsync)
-  const findExpectedAdoptionPane = deps.findExpectedAdoptionPane ?? tmux.findExpectedAdoptionPane
-  const captureExpectedAdoptionPane = deps.captureExpectedAdoptionPane ?? tmux.captureExpectedAdoptionPane
+  const capturePane = deps.capturePane ?? (() => "")
+  const capturePanesAsync = deps.capturePanesAsync
   const logDir = deps.sessionLogDir ?? defaultLogDir(deps.project)
   const mtimeMs = deps.mtimeMs ?? defaultMtimeMs
   const readPermMarker = deps.readPermMarker ?? defaultReadPermMarker(deps.project)
@@ -2388,10 +2379,8 @@ export function createTailer(deps: TailerDeps): Tailer {
     if (isBrokerClaudeRow(row)) return row.exited === 1 || !brokerDaemonAlive(row.session_id)
     if (isHeadlessRow(row)) return row.exited === 1
     const binding = adoptionBinding(row)
-    if (binding.kind === "unbound") return paneDead(row.slug)
     if (binding.kind === "conflict") return true
-    const current = findExpectedAdoptionPane(binding.claim)
-    return current.kind !== "found" || current.pane.dead
+    return paneDead(row.slug)
   }
 
   // ---- Off-loop pane-capture prefetch --------------------------------------------------------------
@@ -2455,8 +2444,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       return capturePane(row.slug)
     }
     if (binding.kind === "conflict") return ""
-    const captured = captureExpectedAdoptionPane(binding.claim)
-    return captured.kind === "captured" ? captured.text : ""
+    return ""
   }
 
   // Synchronous one-shot capture for the boot-failure stall log (captureStall fires once per stalled
@@ -2465,9 +2453,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   function capturePaneForRowSync(row: SessionRow): string {
     const binding = adoptionBinding(row)
     if (binding.kind === "unbound") return capturePane(row.slug)
-    if (binding.kind === "conflict") return ""
-    const captured = captureExpectedAdoptionPane(binding.claim)
-    return captured.kind === "captured" ? captured.text : ""
+    return ""
   }
   // Default backend = this file's own corpus-verified Claude fold (identical to the injected
   // ClaudeBackend, which reuses the same applyRecord/parseLine/matchesPermPrompt). Tests never inject
@@ -3153,38 +3139,17 @@ export function createTailer(deps: TailerDeps): Tailer {
     nowMs: number,
     backend: TailBackend,
   ): PaneSniff {
-    if (state.foreign) return { permPrompt: false } // structural: foreign threads never touch tmux
+    void nowMs; void backend
+    if (state.foreign) return { permPrompt: false }
+    // The MARKER path is all that is left, and it is the one that always worked headlessly: the
+    // cc-worker hook writes a marker into FRAY_PERM_DIR when a tool call is waiting on the operator.
+    // Below this there used to be a fallback that captured the tmux pane and matched the TUI's modal
+    // chrome by regex — the only way to see a prompt in a pane. There are no panes, and a broker
+    // thread's approvals arrive as typed permission requests over the control channel anyway.
     if (turn === "in-flight" && row.backend !== "codex" && permMarkerBlocks(state, row)) {
       return { permPrompt: true }
     }
-    // A worker wedged on a modal BEFORE its session exists writes no transcript, so `turn` and
-    // `lastActivityAt` — both transcript-derived — can never satisfy the quiet gate below and the pane
-    // was never even captured. That left the ONE case these matchers were built for invisible: the
-    // corpus behind matchesPermPrompt includes the pre-boot trust prompt, yet a boot wedge could only
-    // ever card as a bare "Stalled" while the reason sat unread in the stall log. noTranscript stands
-    // in for the quiet gate rather than bypassing it — resolveTranscript raises it only past
-    // DISCOVERY_GRACE_MS with nothing left to bind, which already IS a quiet period.
-    const bootWedge = state.noTranscript === true
-    if (!state.nativeInputRequired && !bootWedge) {
-      if (turn !== "in-flight" || !state.lastActivityAt) return { permPrompt: false }
-      const at = Date.parse(state.lastActivityAt)
-      if (!Number.isFinite(at) || nowMs - at < PERM_SNIFF_MS) return { permPrompt: false }
-    }
-
-    const pane = capturePaneForRow(row)
-    const perm = backend.matchesPermPrompt?.(pane) ?? false
-    if (bootWedge) {
-      // Name the screen where its chrome is known; otherwise anything that still trips the generic
-      // matcher says "startup prompt" rather than nothing. Either way permPrompt flips the row off the
-      // degraded "Stalled" affordance onto perm-prompt, which deriveNeedsYou queues just the same.
-      const boot = backend.detectBootModal?.(pane) ?? (perm ? GENERIC_BOOT_MODAL : undefined)
-      return { permPrompt: perm || boot !== undefined, nativeInputRequired: boot }
-    }
-    const detected = backend.detectNativeInput?.(pane)
-    return {
-      permPrompt: perm,
-      nativeInputRequired: detected,
-    }
+    return { permPrompt: false }
   }
   const states = new Map<string, TailState>()
   // FOREIGN thread tails, keyed by session id (separate map so a session-id key can never collide
