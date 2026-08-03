@@ -162,7 +162,7 @@ npx frayui --host 192.168.1.5  # one interface
 
 Fray prints the addresses to use and warns you as it starts. Reaching it by IP works as-is; reach it by name and you have to say so — `--host --allowed-host fray.local` — because an unlisted name is how DNS rebinding gets a browser to treat an attacker's page as same-origin with your board. `FRAY_HOST` and `FRAY_ALLOWED_HOSTS` do the same thing when the launch command lives in an image or a unit file.
 
-Understand what you're turning on. Fray has no login: reaching the port *is* the authorization, and the board runs shell commands as you. Only do this on a network you trust, and prefer a tunnel (`ssh -L 5173:127.0.0.1:5173 you@box`) if you just want your own board from your own laptop — that needs no flag at all.
+Understand what you're turning on. Fray has no login: reaching the port *is* the authorization, and the board runs shell commands as you. Only do this on a network you trust, and prefer a tunnel (`ssh -L 4922:127.0.0.1:4922 you@box`, using the port Fray printed, the same on both ends) if you just want your own board from your own laptop — that needs no flag at all.
 
 **What platforms does it run on?**
 
