@@ -1649,21 +1649,23 @@ export const TranscriptMessage = z.object({
   // and costs nothing to project. Optional: absent on non-reasoning messages and on any reasoning block
   // whose timing couldn't be derived.
   durationMs: z.number().nonnegative().optional(),
-  // A turn-BOUNDARY marker: this `kind:"event"` line was emitted at the position an EXTERNAL wake — a
-  // This event opened a fresh turn, so it renders as a centered divider rule carrying the cause label —
-  // without it, two consecutive assistant turns (each with its own trailing signal) paint as one
-  // seamless bubble. Additive + optional: an old client ignores it and shows the plain quiet event line
-  // (graceful degrade).
+  // A turn-BOUNDARY marker: this `kind:"event"` line was emitted at the position a turn opened or
+  // closed, so it renders as a centered divider rule carrying the cause label — without it, two
+  // consecutive assistant turns (each with its own trailing signal) paint as one seamless bubble.
+  // Additive + optional: an old client ignores it and shows the plain quiet event line (graceful
+  // degrade).
   //
-  // It names WHICH KIND of boundary, because two unrelated events earn the divider and the client has to
-  // tell them apart to put the right glyph on each:
+  // It names WHICH KIND of boundary, because several unrelated events earn the divider and the client
+  // has to tell them apart to put the right glyph on each:
   //   wake       — a background task/shell completion `<task-notification>` re-invoked the agent
   //   compaction — the provider rewrote the conversation and dropped everything above this point
+  //   rest       — the agent CAME TO REST: its turn ended and nothing further is in flight
   // It was a bare boolean until the dividers grew icons (a shell glyph on a compaction line is simply
   // wrong), and the kind has to come from the SERVER: the alternative is the client sniffing the label
   // text, which is the guess this codebase refuses everywhere else. A string stays truthy, so any
-  // surviving `if (boundary)` reads exactly as it did.
-  boundary: z.enum(["wake", "compaction"]).optional(),
+  // surviving `if (boundary)` reads exactly as it did — including on a client that predates `rest`,
+  // which draws it as an iconless divider rather than dropping it.
+  boundary: z.enum(["wake", "compaction", "rest"]).optional(),
   // Block-ordered content for an assistant turn (see TranscriptPart). Defaults to [] so a pre-restart
   // server (which ships only text/tools) parses; the client renders `parts` when non-empty and falls
   // back to the legacy tools-then-text layout when it's empty. `text`/`tools` stay populated for that

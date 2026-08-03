@@ -7,6 +7,7 @@ import { projectRetiredBackgroundOps } from "./transcript.ts"
 import type { TranscriptMessage } from "@fray-ui/shared"
 import { DISPATCH_TASK_BANNER_MARKER, formatGithubWakeSteer, GITHUB_DISPATCH_UI_BOUNDARY, wakeDeliveryToken, type GithubWakeSteer } from "@fray-ui/shared"
 import {
+  createTranscriptFold,
   frayDispatchDisplayText,
   githubDispatchDisplayText,
   latestTranscriptWindow,
@@ -407,6 +408,69 @@ test("boundary wake label reads 'finished' on a clean exit and 'stopped' when ki
   assert.equal(done.text, "Background task «sleep 1» finished") // desc falls back to the command summary
   const killed = parseTranscript([launch("s2"), taskNotification("s2", "killed", "2026-07-01T00:00:02.000Z")].join("\n"))[1]
   assert.match(killed.text, /» stopped$/)
+})
+
+// ---- the agent came to rest ----
+// `stop_reason: "end_turn"` is the record that ends a claude turn — the same signal backend/claude.ts
+// folds into `turn-end` for the board's idle state. The transcript closes the turn with a rest divider
+// so a reader can tell "finished, your move" from "still working, this is just the newest thing said".
+const restLine = (id: string, text: string, at: string, stop: string | null = "end_turn") =>
+  JSON.stringify({ type: "assistant", timestamp: at, message: { id, stop_reason: stop, content: [{ type: "text", text }] } })
+
+test("an end_turn record closes the turn with a rest divider", () => {
+  const msgs = parseTranscript([
+    JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:00.000Z", message: { content: "fix the thing" } }),
+    restLine("m1", "Working on it.", "2026-07-01T00:00:01.000Z", "tool_use"),
+    restLine("m1", "Fixed — landed on main.", "2026-07-01T00:00:02.000Z"),
+  ].join("\n"))
+  assert.equal(msgs.length, 3)
+  assert.equal(msgs[0].role, "user")
+  // Both assistant records share one message id, so they fold into ONE bubble…
+  assert.equal(msgs[1].text, "Working on it.\n\nFixed — landed on main.")
+  // …and the divider closes it, at the resting record's own timestamp.
+  assert.equal(msgs[2].kind, "event")
+  assert.equal(msgs[2].boundary, "rest")
+  assert.equal(msgs[2].text, "Agent rested")
+  assert.equal(msgs[2].at, "2026-07-01T00:00:02.000Z")
+})
+
+test("end_turn riding EVERY record of a split message yields ONE divider, under ONE bubble", () => {
+  // Real shape: a multi-block final message is written as several records that all carry the message's
+  // `stop_reason`. 9 such message ids across 12 of this machine's transcripts. Emitting per record would
+  // repeat the rule AND — because a divider at the tail is `kind:"event"`, which fails the merge check —
+  // strand the later blocks in a second bubble BELOW it.
+  const msgs = parseTranscript([
+    restLine("m1", "First block.", "2026-07-01T00:00:01.000Z"),
+    restLine("m1", "Second block.", "2026-07-01T00:00:02.000Z"),
+  ].join("\n"))
+  assert.equal(msgs.length, 2, "one bubble + one divider")
+  assert.equal(msgs[0].text, "First block.\n\nSecond block.")
+  assert.equal(msgs[1].boundary, "rest")
+})
+
+test("the CURRENT rest renders without waiting for a following record", () => {
+  // The rest that matters most is the trailing one — the agent has stopped and it is the reader's move.
+  // The incremental fold never calls finalize(), so this only works if the accessors surface the still-
+  // held divider rather than it being flushed on some later record that may never arrive.
+  const fold = createTranscriptFold()
+  fold.ingest(restLine("m1", "All done.", "2026-07-01T00:00:01.000Z") + "\n")
+  assert.equal(fold.messages().at(-1)?.boundary, "rest")
+  assert.equal(fold.allMessages().at(-1)?.boundary, "rest")
+  // …and it is not duplicated once the next turn's records land on top of it.
+  fold.ingest(JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:03.000Z", message: { content: "one more thing" } }) + "\n")
+  const msgs = fold.messages()
+  assert.equal(msgs.filter((m) => m.boundary === "rest").length, 1)
+  assert.equal(msgs.at(-1)?.role, "user", "the divider sits BETWEEN the turns, not after the follow-up")
+})
+
+test("a turn that stopped for any other reason gets no rest divider", () => {
+  // stop_sequence is the synthetic usage-limit stop (backend/usage-limit.ts) — the board reports that
+  // its own way; claiming the agent "rested" would name a handoff that never happened. And an end_turn
+  // record that rendered NOTHING has no bubble for a divider to close.
+  const limited = parseTranscript(restLine("m1", "Working.", "2026-07-01T00:00:01.000Z", "stop_sequence"))
+  assert.deepEqual(limited.map((m) => m.boundary), [undefined])
+  const empty = parseTranscript(restLine("m1", "", "2026-07-01T00:00:01.000Z"))
+  assert.equal(empty.length, 0)
 })
 
 test("a Monitor card stays pending through launch ack + progress event; the timeout record ends it", () => {

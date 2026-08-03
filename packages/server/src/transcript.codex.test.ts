@@ -25,7 +25,9 @@ const tuiApplyPatch = readFileSync(join(FIX, "tui-apply-patch.jsonl"), "utf8")
 
 test("codex fixture (tui-single-turn): user prompt + assistant turn with an exec Bash card carrying its output", () => {
   const msgs = parseCodexTranscript(tuiSingleTurn)
-  assert.equal(msgs.length, 2)
+  // The turn's task_complete bracket closes it with the rest divider — see the dedicated test below.
+  assert.equal(msgs.length, 3)
+  assert.equal(msgs[2].boundary, "rest")
 
   assert.equal(msgs[0].role, "user")
   assert.match(msgs[0].text, /Read hello\.txt with cat/)
@@ -61,11 +63,12 @@ test("Codex title transport is hidden from first commentary and every finalized 
     { type: "event_msg", payload: { type: "task_complete", last_agent_message: later } },
   ])
   const msgs = parseCodexTranscript(raw)
-  assert.deepEqual(msgs.map((m) => m.role), ["user", "assistant", "user", "assistant"])
+  // Each turn's task_complete closes it with the rest divider (an `event`, not a bubble).
+  assert.deepEqual(msgs.map((m) => m.boundary ?? m.role), ["user", "assistant", "rest", "user", "assistant", "rest"])
   assert.equal(msgs[1].text, "I’m checking the queue.\n\nFirst visible answer")
   assert.doesNotMatch(JSON.stringify(msgs[1]), /Fix queue focus/)
-  assert.equal(msgs[3].text, "Second visible answer")
-  assert.doesNotMatch(JSON.stringify(msgs[3]), /Quoted later marker/)
+  assert.equal(msgs[4].text, "Second visible answer")
+  assert.doesNotMatch(JSON.stringify(msgs[4]), /Quoted later marker/)
 })
 
 test("Codex commentary keeps an ordinary leading H1 while hiding only the new attribute transport", () => {
@@ -88,12 +91,41 @@ test("Codex task_complete-only fallback strips the first title marker from visib
   assert.doesNotMatch(JSON.stringify(msgs), /fray-title/)
 })
 
+test("a codex turn bracket closes the turn with a rest divider, and separates back-to-back turns", () => {
+  // task_complete/turn_aborted is codex's turn bracket — the same signal backend/codex.ts folds into
+  // `turn-end` for the board's idle state. Two consecutive turns with no human message between them
+  // used to paint as ONE bubble (only a user message closed `cur`); the divider closes it as well.
+  const msgs = parseCodexTranscript(rollout([
+    { type: "event_msg", payload: { type: "user_message", message: "go" } },
+    { type: "event_msg", payload: { type: "agent_message", phase: "final_answer", message: "First turn." } },
+    { type: "event_msg", payload: { type: "task_complete", last_agent_message: "First turn." } },
+    { type: "event_msg", payload: { type: "task_started" } },
+    { type: "event_msg", payload: { type: "agent_message", phase: "final_answer", message: "Second turn." } },
+    { type: "event_msg", payload: { type: "turn_aborted" } },
+  ]))
+  assert.deepEqual(msgs.map((m) => m.boundary ?? m.role), ["user", "assistant", "rest", "assistant", "rest"])
+  assert.equal(msgs[1].text, "First turn.")
+  assert.equal(msgs[2].text, "Agent rested")
+  assert.equal(msgs[3].text, "Second turn.", "the second turn is its own bubble, below the first turn's rule")
+})
+
+test("a second codex bracket for one turn does not stack a second rule", () => {
+  // turn_aborted can follow task_complete for the same turn. One rest, one rule.
+  const msgs = parseCodexTranscript(rollout([
+    { type: "event_msg", payload: { type: "user_message", message: "go" } },
+    { type: "event_msg", payload: { type: "agent_message", phase: "final_answer", message: "Done." } },
+    { type: "event_msg", payload: { type: "task_complete", last_agent_message: "Done." } },
+    { type: "event_msg", payload: { type: "turn_aborted" } },
+  ]))
+  assert.equal(msgs.filter((m) => m.boundary === "rest").length, 1)
+})
+
 test("codex fixture (exec-two-turn): two turns; multi-tool run; empty output dropped; commentary interleaves", () => {
   const msgs = parseCodexTranscript(execTwoTurn)
-  assert.equal(msgs.length, 4)
+  assert.equal(msgs.length, 6)
   assert.deepEqual(
-    msgs.map((m) => m.role),
-    ["user", "assistant", "user", "assistant"],
+    msgs.map((m) => m.boundary ?? m.role),
+    ["user", "assistant", "rest", "user", "assistant", "rest"],
   )
 
   // Turn 1: two exec calls in one run → one coalesced tools band, results back-filled by call_id.
@@ -108,7 +140,7 @@ test("codex fixture (exec-two-turn): two turns; multi-tool run; empty output dro
   assert.match(t1.text, /```done\nall-good\n```/)
 
   // Turn 2: commentary before each tool → text/tools/text/tools/text/tools/text interleave.
-  const t2 = msgs[3]
+  const t2 = msgs[4]
   assert.deepEqual(
     t2.tools.map((t) => t.command),
     ["date", "ls", "wc -l hello.txt"],
@@ -124,7 +156,7 @@ test("codex fixture (exec-two-turn): two turns; multi-tool run; empty output dro
 
 test("codex fixture (tui-apply-patch): the full tool surface — reads, a write, apply_patch EDITS, ls, git — all render", () => {
   const msgs = parseCodexTranscript(tuiApplyPatch)
-  assert.equal(msgs.length, 2)
+  assert.equal(msgs.length, 3) // …the third being the turn's rest divider
   const a = msgs[1]
   assert.equal(a.role, "assistant")
 
@@ -151,7 +183,7 @@ test("codex fixture (tui-apply-patch): the full tool surface — reads, a write,
 
 test("codex fixture (exec wrapper): common nested tools expose command, input, result, and failures", () => {
   const msgs = parseCodexTranscript(execWrapperCommonTools)
-  assert.deepEqual(msgs.map((m) => m.role), ["user", "assistant"])
+  assert.deepEqual(msgs.map((m) => m.boundary ?? m.role), ["user", "assistant", "rest"])
   const a = msgs[1]
   assert.equal(a.tools.length, 9)
   assert.deepEqual(a.tools.map((t) => t.name), ["Todos", "Bash", "Bash", "Bash", "Bash", "Bash", "Edit", "Edit", "Todos"])

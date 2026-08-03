@@ -71,6 +71,24 @@ function compactionMessage(sourceId: string, at: string | undefined, preTokens?:
   return { sourceId, role: "assistant", kind: "event", boundary: "compaction", text: compactionLabel(preTokens, postTokens), tools: [], parts: [], at }
 }
 
+// ---- the agent came to rest --------------------------------------------------------------------
+// The one boundary that CLOSES a turn rather than opening one. Every other divider marks something
+// arriving (a wake, a child returning, the provider dropping the context); this marks the agent
+// STOPPING — its turn ended, nothing is in flight, and whatever it said last is its handoff. Without
+// it a reader cannot tell "the agent finished and is waiting on you" from "the agent is still working
+// and this is just the newest thing it has said" — the transcript looks identical either way
+// (maintainer 2026-08-02).
+//
+// Both providers hand us an authoritative signal for it, which is why this is a server projection and
+// not the client sniffing the shape of the messages around it: claude writes `stop_reason:"end_turn"`
+// on the record that ends the turn, codex brackets the turn with task_complete/turn_aborted. Those are
+// the SAME two signals the tailer's turn model already runs on (backend/claude.ts, backend/codex.ts),
+// so the divider and the board's idle state can never disagree.
+const REST_LABEL = "Agent rested"
+function restMessage(sourceId: string, at: string | undefined): TranscriptMessage {
+  return { sourceId, role: "assistant", kind: "event", boundary: "rest", text: REST_LABEL, tools: [], parts: [], at }
+}
+
 // Normalize line endings to LF. A human follow-up injected through the agent's TERMINAL round-trips with
 // CARRIAGE-RETURN separators (the tty translates newlines to \r), so a multi-line message — notably the
 // composed "Answers:\r1. …\r2. …" — arrives CR-separated. The client renders user text in a
@@ -366,6 +384,21 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
   // A just-delivered queued message's text — so an immediately-following NORMAL user record carrying the
   // identical text (a belt-and-suspenders guard; unobserved in the evidence) doesn't double-render.
   let deliveredDedupe: string | null = null
+  // The rest divider (see restMessage) for a turn that has ended, held back until we know the resting
+  // message is really finished. It is DEFERRED rather than pushed on the spot because one assistant
+  // MESSAGE can be split across several records and `stop_reason:"end_turn"` rides EVERY one of them —
+  // 9 such message ids across 12 of this machine's transcripts. Pushing per record would both repeat the
+  // divider and break the split-record merge: a divider sitting at out's tail is `kind:"event"`, which
+  // fails the merge check below, so the message's remaining blocks would land in a SECOND bubble
+  // underneath it. Holding it until a record arrives that is not a continuation of `msgId` keeps one
+  // divider, in the right place, under one bubble.
+  let pendingRest: { sourceId: string; at?: string; msgId: string | null } | null = null
+  function flushRest(): void {
+    if (!pendingRest) return
+    out.push(restMessage(pendingRest.sourceId, pendingRest.at))
+    pendingRest = null
+    lastAssistantId = null // the divider breaks the assistant-record merge chain, like every other event
+  }
 
   // The still-gray keys, in FIFO order. `queuedPending` also retains entries the backstop below has
   // already un-grayed (so their own delivery can still resolve the SAME object rather than render a
@@ -430,6 +463,13 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
       rec = JSON.parse(line)
     } catch {
       return
+    }
+
+    // A held-back rest divider lands HERE — ahead of whatever record follows the turn that ended, so it
+    // sits between the two turns. The one record that must not flush it is another chunk of the SAME
+    // assistant message (see pendingRest): that is still the resting turn's own body.
+    if (pendingRest && !(rec.type === "assistant" && typeof rec.message?.id === "string" && rec.message.id === pendingRest.msgId)) {
+      flushRest()
     }
 
     // Sub-agent / background-shell completion notifications (any of the three carriers — see
@@ -793,6 +833,14 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
       // (the interleave "wall of text" — tool calls landing under an earlier turn, texts coalesced).
       if (target || rendered) lastAssistantId = id
       deliveredDedupe = null // the turn moved on; the delivered-message dedupe window only spans the very next record
+      // …and if THIS is the record that ended the turn, arm the rest divider. Only a turn that actually
+      // rendered gets one: a text-less end_turn (an aborted or empty final record) has no bubble for the
+      // divider to close, and a rule floating under the previous turn's tools would name a rest the
+      // reader can't see happening. `stop_sequence` and friends are deliberately NOT rest — they are the
+      // usage-limit/synthetic stops (see backend/usage-limit.ts), which the board reports its own way.
+      if (msg.stop_reason === "end_turn" && (target || rendered)) {
+        pendingRest = { sourceId: `${sourceId}#rest`, at: rec.timestamp, msgId: id }
+      }
       return
     }
 
@@ -863,11 +911,22 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
     buffer = ""
   }
 
+  // `out` plus a still-held rest divider. The trailing rest is surfaced HERE rather than flushed in
+  // `finalize()` because the incremental cache never calls finalize — and the trailing rest is the one
+  // that matters most, since it is the CURRENT one: the agent has stopped and it is the reader's move.
+  // Reading it through the accessor also keeps the incremental fold and a one-shot re-parse projecting
+  // the identical array, which is exactly what verifyIncrementalParse asserts.
+  function projected(): TranscriptMessage[] {
+    return pendingRest ? [...out, restMessage(pendingRest.sourceId, pendingRest.at)] : out
+  }
   return {
     ingest,
     finalize,
-    messages: () => (out.length > MAX_MESSAGES ? out.slice(-MAX_MESSAGES) : out),
-    allMessages: () => out,
+    messages: () => {
+      const all = projected()
+      return all.length > MAX_MESSAGES ? all.slice(-MAX_MESSAGES) : all
+    },
+    allMessages: projected,
     consumedBytes: () => offset + Buffer.byteLength(buffer),
   }
 }
@@ -2231,6 +2290,19 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
             pushTextPart(m, finalText!)
             m.text = m.text ? `${m.text}\n\n${finalText!}` : finalText!
             sawFinalAnswer = true
+          }
+          // The turn is bracketed — the agent came to rest. Codex needs no deferral the way the claude
+          // fold does: task_complete/turn_aborted is a single record arriving strictly AFTER the turn's
+          // content, so the divider goes in where it is seen. It also closes `cur`, so the next turn
+          // opens a fresh bubble BELOW the rule rather than appending above it — until now only a human
+          // message closed one, which is why two back-to-back codex turns painted as a single bubble.
+          //
+          // Guarded on there being something to close: an empty replay, or a second bracket for a turn
+          // already marked (turn_aborted can follow task_complete), must not stack rules on rules.
+          const prev = out.length > 0 ? out[out.length - 1] : undefined
+          if (prev && prev.boundary !== "rest") {
+            out.push(restMessage(`${sourceId}#rest`, ev.at))
+            cur = null
           }
           break
         }
