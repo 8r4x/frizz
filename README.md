@@ -21,30 +21,7 @@
 
 ## Getting started
 
-Fray runs on macOS, Linux, and Windows. Four requirements, and you probably have three already.
-
-**1. Node 22.13 or newer.** On the Node 23 line it must be 23.4+ — Fray's database is Node's built-in `node:sqlite`, which older releases don't ship.
-
-```sh
-node --version
-```
-
-**2. Git.** Fray identifies a project by its Git repository, and refuses to start without it.
-
-```sh
-brew install git          # macOS
-sudo apt install git      # Debian/Ubuntu
-sudo dnf install git      # Fedora
-```
-
-**3. An agent CLI, signed in.** Either is enough; install both to run them side by side.
-
-```sh
-npm i -g @anthropic-ai/claude-code && claude    # then /login
-npm i -g @openai/codex && codex login           # needs 0.146.0+
-```
-
-**4. Run it inside a repo.**
+Run it inside any Git repo.
 
 ```sh
 cd ~/taskly
@@ -62,6 +39,8 @@ npx frayui
 ```
 
 A browser tab opens on that address — a dedicated workspace for this repo. **One tab per repo!**
+
+Needs Node 22.13+ (or 23.4+ on the Node 23 line) and either the [Claude Code](https://claude.com/claude-code) or [Codex](https://developers.openai.com/codex) CLI signed in. Runs on macOS, Linux, and Windows.
 
 <p align="center">
   <img src="assets/board.png" alt="Fray running in a browser tab at 127.0.0.1:4921: a sidebar of threads on the left, and on the right a card where an agent is asking an answerable question with lettered options, above Snooze and Mark as done." width="100%">
@@ -84,6 +63,7 @@ Fray is a browser tab, a queue, and the agent CLIs you already pay for. It bring
 - 🔁 **Resumable and quittable.** Close the tab, quit the browser, ctrl-c the server, reboot. Your threads are all still there when you come back, and Fray reconnects to the ones still running rather than replaying them from disk.
 - 🤖 **Claude Code *and* Codex.** Pick the backend per thread and run both against the same repo at once. Fray drives the CLIs you already have installed and signed in.
 - 😴 **Snooze.** Not everything needs an answer now. Park a card for an hour, until tomorrow morning, or until a date you pick — optionally with a follow-up prompt attached, so the thread wakes up already working on what you told it to do next.
+- 🔄 **Heartbeat and stop hooks.** Give a thread a prompt that repeats — every time it comes to rest, or on a clock you set in minutes. Good for "keep going until CI is green" without you re-asking. Switch it off whenever, or let the agent say it's finished.
 - 🐙 **GitHub integration.** Browse your repo's issues and pull requests without leaving the composer, and turn a selection of them into threads. Workers can read issues, diffs, and CI on their own.
 - 👀 **Built-in CI and PR watchers.** A worker waiting on a build or a review doesn't hand the thread back to you to be told "keep going." It watches, and picks the work back up when the run goes green or a review lands.
 - 📝 **No magic.** A thread behaves like a Claude Code session you started yourself. Fray adds no worktrees, no branches, no dev server, no build integration, no workflow engine to fight with.
