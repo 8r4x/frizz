@@ -304,13 +304,14 @@ test("storage: the worker path keeps the generation on a re-arm with the SAME te
   }
 })
 
-// ---- What HOLDS a bump ---------------------------------------------------------------------------
-// Two things stop a bump without disarming anything, and both are easy to get wrong in opposite
-// directions: hold too little and fray interrupts a wait the worker deliberately entered; hold too much
-// and an armed hook goes silent forever with nothing on any surface to say why. These drive the REAL
-// scheduler pass over a REAL storage, with only the tailer stubbed (it is the input being varied).
-function scheduler(tele: Partial<SessionTelemetry>) {
-  const dir = mkdtempSync(join(tmpdir(), "fray-hold-"))
+// ---- The heartbeat, and what holds a bump ------------------------------------------------------
+// The firing rule in full: a bump fires as soon as the thread RESTS, and firing starts a fixed timer;
+// nothing fires again until it completes. These drive the REAL scheduler pass over REAL storage with
+// only the tailer stubbed (it is the input being varied), and `now` injected so the clock is exact.
+const HEARTBEAT_MS = 10 * 60_000
+
+function scheduler(tele: Partial<SessionTelemetry>, opts: { lastFiredAt?: string; now?: () => number } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "fray-hb-"))
   const storage = createStorage(join(dir, "ui.db"))
   const slug = "hooked"
   storage.upsertSession({
@@ -318,10 +319,12 @@ function scheduler(tele: Partial<SessionTelemetry>) {
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)
-  storage.setStopHookBySlug(slug, "keep going", true, new Date().toISOString())
+  storage.setStopHookBySlug(slug, "keep going", true, "2026-08-02T00:00:00.000Z")
+  if (opts.lastFiredAt) storage.stampStopHookFired(slug, storage.getSession(slug)!.stop_hook_armed_at!, opts.lastFiredAt)
   const delivered: string[] = []
   const s = createScheduler({
     storage,
+    ...(opts.now ? { now: opts.now } : {}),
     tailer: {
       get: () => ({
         turn: "idle", lastActivityAt: "2026-08-02T00:00:00.000Z",
@@ -335,60 +338,75 @@ function scheduler(tele: Partial<SessionTelemetry>) {
   return { s, delivered, close: () => { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) } }
 }
 
+const at = (iso: string) => () => Date.parse(iso)
 const child = (state: "running" | "stale" | "rested") =>
   ({ label: "worker", startedAt: "2026-08-02T00:00:00.000Z", state, id: `t-${state}` })
 
-test("scheduler: a thread resting on its OWN running sub-agent is NOT bumped", async () => {
-  const h = scheduler({ subAgents: [child("running")] as SessionTelemetry["subAgents"] })
+test("heartbeat: the FIRST rest after arming is bumped at once — nothing has fired yet", async () => {
+  const h = scheduler({}, { now: at("2026-08-02T00:00:05.000Z") })
   try {
     await h.s.tick()
-    assert.deepEqual(h.delivered, [], "the child's return will re-invoke it; the bump would interrupt a deliberate wait")
-  } finally { h.close() }
-})
-
-test("scheduler: a `rested` child still holds the bump — its own fan-out is still out there", async () => {
-  const h = scheduler({ subAgents: [child("rested")] as SessionTelemetry["subAgents"] })
-  try {
-    await h.s.tick()
-    assert.deepEqual(h.delivered, [])
-  } finally { h.close() }
-})
-
-// The one that keeps the hook from becoming a silent no-op. `stale` is the tailer's documented fallback
-// for "we missed the completion — the child died, or the session ended before the notification landed",
-// so the parent is parked behind something that is probably never coming back. That is exactly the
-// thread a stop hook exists to rescue.
-test("scheduler: a STALE child does NOT hold the bump — that is the thread most in need of one", async () => {
-  const h = scheduler({ subAgents: [child("stale")] as SessionTelemetry["subAgents"] })
-  try {
-    await h.s.tick()
-    assert.equal(h.delivered.length, 1, "a probably-dead child must not silence the hook forever")
+    assert.equal(h.delivered.length, 1)
     assert.match(h.delivered[0], /keep going/)
   } finally { h.close() }
 })
 
-// A background shell can run for hours and the worker may have moved on from it, so it is deliberately
-// not a hold — a forgotten `tail -f` must not mute an armed hook. AWAITING is the worker's tool there.
-test("scheduler: a live background SHELL does not hold the bump", async () => {
-  const h = scheduler({
-    bgShells: [{ label: "vite dev", startedAt: "2026-08-02T00:00:00.000Z", state: "running", id: "s1" }] as SessionTelemetry["bgShells"],
-  })
+test("heartbeat: a rest INSIDE the interval is not bumped, and the same rest is bumped once it completes", async () => {
+  // Fired at 00:00; the worker crashed straight back to rest. Nine minutes later: still inside.
+  const early = scheduler({}, { lastFiredAt: "2026-08-02T00:00:00.000Z", now: at("2026-08-02T00:09:00.000Z") })
+  try {
+    await early.s.tick()
+    assert.deepEqual(early.delivered, [], "a thread that rests instantly must not be hammered")
+  } finally { early.close() }
+
+  // The clock completing is enough on its own — no new activity is needed to release the bump.
+  const due = scheduler({}, { lastFiredAt: "2026-08-02T00:00:00.000Z", now: () => Date.parse("2026-08-02T00:00:00.000Z") + HEARTBEAT_MS })
+  try {
+    await due.s.tick()
+    assert.equal(due.delivered.length, 1, "once the timer completes the waiting rest is bumped")
+  } finally { due.close() }
+})
+
+// The interval is measured from the last FIRING, not from this rest, so time the worker spent WORKING
+// counts toward it. A turn that outlasts the interval is therefore bumped the instant it stops — which
+// is the behaviour that makes a long autonomous effort keep moving without a stutter after every turn.
+test("heartbeat: a turn LONGER than the interval is bumped the moment it rests", async () => {
+  const h = scheduler({}, { lastFiredAt: "2026-08-02T00:00:00.000Z", now: at("2026-08-02T00:40:00.000Z") })
   try {
     await h.s.tick()
     assert.equal(h.delivered.length, 1)
   } finally { h.close() }
 })
 
-test("scheduler: AWAITING on the final message holds the bump, and nothing else does", async () => {
-  const held = scheduler({ lastAssistantAwaiting: true })
+// Removed the same day it shipped (maintainer: "the status of any sub-agents or background shells is
+// irrelevant"). The heartbeat is the whole rate story, and consulting child liveness is also what would
+// stop this rescuing a thread parked behind a child that never reports.
+test("heartbeat: live sub-agents and background shells are IRRELEVANT to firing", async () => {
+  for (const state of ["running", "stale", "rested"] as const) {
+    const h = scheduler({ subAgents: [child(state)] as SessionTelemetry["subAgents"] }, { now: at("2026-08-02T00:00:05.000Z") })
+    try {
+      await h.s.tick()
+      assert.equal(h.delivered.length, 1, `a ${state} child must not hold the bump`)
+    } finally { h.close() }
+  }
+  const shell = scheduler({
+    bgShells: [{ label: "vite dev", startedAt: "2026-08-02T00:00:00.000Z", state: "running", id: "s1" }] as SessionTelemetry["bgShells"],
+  }, { now: at("2026-08-02T00:00:05.000Z") })
+  try {
+    await shell.s.tick()
+    assert.equal(shell.delivered.length, 1, "a live shell must not hold the bump either")
+  } finally { shell.close() }
+})
+
+test("AWAITING holds the bump for that rest only, and nothing is stored to undo", async () => {
+  const held = scheduler({ lastAssistantAwaiting: true }, { now: at("2026-08-02T00:00:05.000Z") })
   try {
     await held.s.tick()
     assert.deepEqual(held.delivered, [])
   } finally { held.close() }
 
-  // The SAME thread, one rest later, having said something else: bumped as normal. This is the whole
-  // per-rest claim — nothing was stored when it deferred, so nothing has to be cleared to resume.
-  const resumed = scheduler({ lastAssistantAwaiting: false })
+  // The same thread one rest later, having said something else: bumped as normal.
+  const resumed = scheduler({ lastAssistantAwaiting: false }, { now: at("2026-08-02T00:00:05.000Z") })
   try {
     await resumed.s.tick()
     assert.equal(resumed.delivered.length, 1)

@@ -170,10 +170,10 @@ export function StopHookControl({ thread }: { thread: ThreadView }) {
             between the word and the punctuation after it, which reads as a typo. Weight and family
             carry the "this is a literal string" job on their own. */}
         <p className="mt-2 text-muted/70">
-          Sent every time the agent comes to rest — but held while its sub-agents are still running, or
-          for a single rest when it replies{" "}
-          <code className="font-mono font-medium text-fg/85">{STOP_HOOK_SENTINEL}</code> to wait on
-          something. Neither turns it off; only this switch does.
+          Sent when the agent comes to rest, then at most once every 10 minutes however often it stops.
+          It can skip a single turn by replying{" "}
+          <code className="font-mono font-medium text-fg/85">{STOP_HOOK_SENTINEL}</code> while it waits
+          on something — that never turns it off; only this switch does.
         </p>
       </PopoverContent>
     </Popover>

@@ -363,11 +363,23 @@ function armedSnooze(row: Pick<SessionRow, "snoozed_until" | "snooze_prompt">): 
 const STOP_HOOK_FENCE_PREFIX = "stophook"
 const STOP_HOOK_HINT_KEY = "stophook:rest"
 
-// The floor between two bumps. The natural rate limiter is the worker's own turn, which normally runs
-// for minutes — but a worker that dies on arrival rests instantly, and without a floor that pair would
-// spin the outbox as fast as the tick allows. Thirty seconds is far below any real turn and far above
-// any crash loop.
-const STOP_HOOK_MIN_GAP_MS = 30_000
+// THE HEARTBEAT: the fixed minimum between two bumps, and the only clock in this source.
+//
+// The rule, stated once because every other comment here defers to it: a bump fires as soon as the
+// thread comes to REST, and firing starts this timer; no further bump fires until it completes. So the
+// first rest after arming is bumped immediately, and thereafter the thread is prompted at most once per
+// interval however often it stops. A turn that runs LONGER than the interval is bumped the moment it
+// rests (the timer expired while it worked); a turn that ends in seconds waits out the remainder at
+// rest and is bumped when the timer completes.
+//
+// FIXED, not operator-chosen, and that is the point. An interval-per-thread is exactly what the
+// removed heartbeat feature got wrong — an operator wanting "keep going" has no idea what number to
+// type, and the number they pick is wrong the moment the work changes shape. One known schedule is
+// something you can reason about without configuring anything (maintainer 2026-08-02: "the heartbeat is
+// fixed with a known schedule, like 10 minutes or an hour"). Ten minutes is long enough that a bumped
+// thread is never hammered and short enough that a stuck one is rescued while the operator still cares.
+// Changing the cadence is changing THIS constant.
+const STOP_HOOK_HEARTBEAT_MS = 10 * 60_000
 
 // The rest a bump is bound to. `lastActivityAt` is the thread's own high-water mark, so a NEW rest
 // necessarily carries a new one — which is what makes "at most one bump per rest" fall out of delivery
@@ -1243,31 +1255,20 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (!armed) continue
       const tele = deps.tailer.get(row.slug)
       if (!tele || tele.turn !== "idle" || !tele.lastActivityAt) continue
-      // A thread resting on its OWN live sub-agents is not idle in any sense the operator means. `turn`
-      // only brackets THIS session's turn, so a parent that dispatched children and came to rest reads
-      // "idle" while real work is still out there — bumping it there interrupts a wait it deliberately
-      // entered, and the child's return will re-invoke it anyway (maintainer 2026-08-02: "if there are
-      // sub-agents going, then we should skip the stop hook").
-      //
-      // `stale` children are deliberately EXCLUDED from that hold, and the distinction is the whole
-      // reason this reads states rather than counting rows. A view goes `stale` after 15 minutes with no
-      // transcript append, which the tailer documents as "a liveness fallback for a completion record we
-      // somehow missed (the child died, or the worker session ended before the <task-notification>
-      // landed)" — i.e. the parent is parked behind something that is probably never coming back. That
-      // is precisely the thread a stop hook exists to rescue, so a stale child must not be able to
-      // silence it forever.
-      //
-      // Background SHELLS are not consulted at all. A shell can legitimately run for hours (a dev
-      // server, a log tail) and the worker may have moved on from it entirely, so treating one as a hold
-      // would let a forgotten `tail -f` mute a hook permanently. A worker genuinely waiting on a shell
-      // says AWAITING, which is exactly what that sentinel is for.
-      if (tele.subAgents.some((child) => child.state === "running" || child.state === "rested")) continue
+      // WHAT THIS DELIBERATELY DOES NOT CONSULT: live sub-agents and background shells. A hold on them
+      // shipped briefly and was removed the same day (maintainer 2026-08-02: "the status of any
+      // sub-agents or background shells is irrelevant"). The heartbeat is the whole rate story — a
+      // thread parked behind children is bumped on the same schedule as any other, which is also what
+      // makes this able to rescue one parked behind a child that will never report. A worker that
+      // genuinely has nothing to do until something returns says AWAITING.
       // The worker itself asked to skip THIS rest — it is parked on something and has nothing to do
       // until that returns. Per-rest only: the flag is folded off the FINAL assistant message, so the
       // next rest that omits it is bumped as normal. Nothing is written and nothing has to be cleared.
       if (tele.lastAssistantAwaiting) continue
+      // The heartbeat, measured from the last DELIVERED bump — not from this rest, so time the worker
+      // spent WORKING counts toward the interval and a long turn is bumped the instant it stops.
       const lastFired = row.stop_hook_last_fired_at ? Date.parse(row.stop_hook_last_fired_at) : NaN
-      if (Number.isFinite(lastFired) && nowMs - lastFired < STOP_HOOK_MIN_GAP_MS) continue
+      if (Number.isFinite(lastFired) && nowMs - lastFired < STOP_HOOK_HEARTBEAT_MS) continue
       const fenceId = stopHookFenceId(armed.armedAt, tele.lastActivityAt)
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
       // Terminal rows stay in the store, so this alone is what makes a rest bump EXACTLY once: the same
@@ -1287,7 +1288,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   }
 
-  // Stamp the bump clock once a bump has genuinely REACHED the worker — the rate floor's input, and
+  // Stamp the bump clock once a bump has genuinely REACHED the worker — the HEARTBEAT's input, and
   // called only from the settle points that mean delivery genuinely happened.
   // Guarded on the generation so a bump settling after the operator edited the text cannot write onto
   // words it no longer describes.

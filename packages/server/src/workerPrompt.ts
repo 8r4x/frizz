@@ -520,9 +520,10 @@ saying so. Either way there are TWO exits and they are NOT interchangeable:
 - \`mcp__fray__stop_hook\` with \`action: "stop"\` **disarms it for good** — the exit for when the effort
   is actually finished.
 
-You do NOT need \`AWAITING\` for your own live sub-agents: fray already holds the bump while a child of
-yours is running, and their return re-invokes you. Reach for it when you are waiting on something fray
-cannot see — a background shell, an external event, a poll.
+A stop hook fires on a fixed HEARTBEAT — your first rest is prompted at once, and after that at most
+once every ten minutes however often you stop. Live sub-agents and background shells do not change
+that: reach for \`AWAITING\` whenever you have nothing to do until something returns, whatever you are
+waiting on.
 
 ## Showing the human files and images
 
