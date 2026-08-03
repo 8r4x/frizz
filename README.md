@@ -13,13 +13,13 @@
 <a href="https://github.com/colinhacks/fray" rel="nofollow"><img src="https://img.shields.io/github/stars/colinhacks/fray" alt="stars"></a>
 </p>
 
-## Fray is for you if you have any of these opinions
+<h2 align="center">Fray is for you if you have any of these opinions</h2>
 
 - **Terminal UIs are dated** and have fundamental limitations that are incompatible with good user experience.
 - **Orchestrator-style apps** feel overly complex.
 - **I'm tired of constantly switching between sessions** to check in on my agents' progress.
 
-## Getting started
+<h2 align="center">Getting started</h2>
 
 1. Node 22.13+, or 23.4+ on the Node 23 line
 2. Git
@@ -28,11 +28,9 @@
 Then run it inside any Git repo.
 
 ```sh
-cd ~/taskly
-npx frayui
-```
+$ cd ~/taskly
+$ npx frayui
 
-```
   FRAY v0.1.6  ready in 4.0s
 
   ➜  Local:    http://127.0.0.1:4922/
@@ -48,7 +46,7 @@ A browser tab opens on that address — a dedicated workspace for this repo. **O
   <img src="assets/board.png" alt="Fray running in a browser tab at 127.0.0.1:4921: a sidebar of threads on the left, and on the right a card where an agent is asking an answerable question with lettered options, above Snooze and Mark as done." width="100%">
 </p>
 
-## A queue, not a sidebar
+<h2 align="center">A queue, not a sidebar</h2>
 
 A sidebar of sessions makes every agent something you have to remember to go check. Fray gives you one queue instead.
 
@@ -56,7 +54,7 @@ When an agent comes to rest needing you, a card is added to it. You can quickly 
 
 The queue is strict about what earns a card, which is what keeps it a real todo list. A thread resting only because *its own* helpers are still working isn't waiting on you, so it stays quiet until they're back. Nothing shows up just to be dismissed.
 
-## Features
+<h2 align="center">Features</h2>
 
 Fray is a browser tab, a queue, and the agent CLIs you already pay for. It brings no model of its own, automates none of your workflow, and keeps every opinion it does have in a text file you can edit.
 
@@ -81,9 +79,25 @@ Browse the repo's issues and pull requests from the composer, select any number 
 
 Workers can also read issues, diffs, and CI on their own — but only read. A worker never comments, labels, closes, or merges unless you ask it to.
 
-## CLI
+### Snooze
 
-```
+Park a card for an hour, until tomorrow morning, or until a date you pick. Attach a follow-up prompt and the thread wakes up already working on it.
+
+<p align="center">
+  <img src="assets/snooze.png" alt="The snooze menu open on a queue card, offering 1 hour, tomorrow at 9am, 1 day, 3 days, 1 week, and a custom time and prompt." width="100%">
+</p>
+
+### Heartbeat and stop hooks
+
+Give a thread a prompt that repeats — every time it comes to rest, or on a clock you set in minutes.
+
+<p align="center">
+  <img src="assets/recurring.png" alt="The recurring prompts panel with both a stop hook and a heartbeat switched on: the stop hook says to keep going until the test suite is green, and the heartbeat checks the deploy every 30 minutes." width="100%">
+</p>
+
+<h2 align="center">CLI</h2>
+
+```sh
 $ npx frayui --help
 
 Fray production launcher
@@ -111,7 +125,7 @@ who reaches the port controls it. Only do this on a network you trust. An IP add
 reach the board by DNS name you must list that name with --allowed-host ("*" allows any).
 ```
 
-## FAQ
+<h2 align="center">FAQ</h2>
 
 **Does Fray run its own agent or model?**
 
@@ -158,7 +172,7 @@ macOS, Linux, and Windows. Windows support arrived in 0.1.6, once the last depen
 
 Those apps wrap your agents in their own workflow. Fray doesn't: it's a viewer and a queue over the CLIs you already run, with every piece of orchestration judgment sitting in editable text instead of inside the binary.
 
-## Glossary
+<h2 align="center">Glossary</h2>
 
 Fray has its own small vocabulary. Most of it names a feature, so this doubles as an index of the opinionated parts.
 
@@ -173,11 +187,11 @@ Fray has its own small vocabulary. Most of it names a feature, so this doubles a
 | **Scratchpad** | A thread's durable working memory, readable under its **Doc** tab. Where a worker keeps what a summary would otherwise lose: the approach, the alternatives it rejected, the decisions you made and reversed. |
 | **`FRAY.md`** | An optional file at your repo root whose contents are injected into every thread, for when you want agents to follow your repo's own norms. |
 
-## Docs
+<h2 align="center">Docs</h2>
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — the invariants, layout, and design decisions. Read it before changing anything.
 - [`FRAY.md`](FRAY.md) — this repo's own worker norms, as a worked example of the optional per-repo prompt.
 
-## License
+<h2 align="center">License</h2>
 
 MIT
