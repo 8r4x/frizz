@@ -19,8 +19,8 @@ import {
   ConfirmAwaitingInput,
   canonicalSnoozeInstant,
   GithubStatus,
-  GithubItem,
   GithubListInput,
+  GithubListResult,
   GithubBatchInput,
   GithubBatchResult,
   Settings,
@@ -2196,17 +2196,18 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // The repo's issues or PRs, gh-sorted (recency or reactions). Empty when this isn't a GitHub repo.
-    // resolveRepo warms/uses the cache with a live fallback (so a post-boot sign-in works). A gh error
-    // (rate limit / network) propagates → surfaced to the client as a failed query (risk 7), rather
-    // than silently reading as "no items".
+    // ONE PAGE of the repo's issues or PRs, search-sorted (recency or reactions), plus the totals the
+    // picker's pager renders. Empty when this isn't a GitHub repo. resolveRepo warms/uses the cache
+    // with a live fallback (so a post-boot sign-in works). A gh error (rate limit / network)
+    // propagates → surfaced to the client as a failed query (risk 7), rather than silently reading as
+    // "no items".
     githubList: query({
       input: GithubListInput,
-      output: z.object({ items: z.array(GithubItem) }),
+      output: GithubListResult,
       handler: async ({ input }) => {
         const repo = await resolveRepo()
-        if (!repo) return { items: [] }
-        return { items: await listItems(repo, input.kind, input.sort, input.limit) }
+        if (!repo) return { items: [], total: 0, page: 1, pageCount: 1 }
+        return await listItems(repo, input.kind, input.sort, input.page, input.perPage)
       },
     }),
 

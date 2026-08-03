@@ -7,12 +7,18 @@ import { store } from "./store.ts"
 import "./styles.css"
 
 // Drives the REAL GitHub picker against a stubbed /rpc seam (same idiom as
-// dispatch-composer-profile-fixture) so shift-click range selection can be exercised in a real
-// browser: real React state, real rows, real mouse events. 24 rows — more than the picker's
-// MAX_BATCH of 20 — so a single shift-click can also prove the per-batch cap truncates the range
-// instead of silently overshooting. Row numbers are deliberately NON-contiguous and descending, which
-// is what the list really looks like, and it catches any code that confuses a row's key with its index.
-const NUMBERS = [412, 409, 407, 400, 398, 395, 390, 388, 381, 377, 370, 366, 361, 359, 352, 348, 344, 340, 337, 333, 330, 328, 321, 318]
+// dispatch-composer-profile-fixture) so shift-click range selection and PAGING can be exercised in a
+// real browser: real React state, real rows, real mouse events, a real page boundary. Row numbers are
+// deliberately NON-contiguous and descending, which is what the list really looks like, and it catches
+// any code that confuses a row's key with its index.
+//
+// 74 rows at the picker's 30-per-page = three pages (30 / 30 / 14), so the e2e can prove that paging
+// forward keeps a selection made on page 1 and that the batch is no longer capped at 20. `?rows=N`
+// shortens the list, which is how the single-page case (no page controls at all) gets driven.
+const PAGE_SIZE = 30
+const HEAD = [412, 409, 407, 400, 398, 395, 390, 388, 381, 377, 370, 366, 361, 359, 352, 348, 344, 340, 337, 333, 330, 328, 321, 318]
+const ALL = [...HEAD, ...Array.from({ length: 50 }, (_, i) => 314 - i * 3)]
+const NUMBERS = ALL.slice(0, Number(new URLSearchParams(location.search).get("rows")) || ALL.length)
 
 const items: GithubItem[] = NUMBERS.map((number, i) => ({
   kind: "issue",
@@ -61,7 +67,15 @@ window.fetch = async (input, init) => {
   const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
   const url = new URL(requestUrl, window.location.origin)
   if (url.pathname === "/rpc/githubStatus") return json({ inRepo: true, authed: true, nameWithOwner: "fixture/repo" })
-  if (url.pathname === "/rpc/githubList") return json({ items })
+  if (url.pathname === "/rpc/githubList") {
+    // Serve a real PAGE, exactly as the server does: queries carry their input as ?input=<json>, and
+    // the response reports which page was served plus the totals the pager renders.
+    const input = JSON.parse(url.searchParams.get("input") ?? "{}") as { page?: number; perPage?: number }
+    const perPage = input.perPage ?? PAGE_SIZE
+    const pageCount = Math.max(1, Math.ceil(items.length / perPage))
+    const page = Math.min(Math.max(1, input.page ?? 1), pageCount)
+    return json({ items: items.slice((page - 1) * perPage, page * perPage), total: items.length, page, pageCount })
+  }
   if (url.pathname === "/rpc/codexModels") return json(codexModels)
   if (url.pathname === "/rpc/dispatchPreferencesGet") return json(preferences)
   if (url.pathname === "/rpc/githubDispatchBatch") {
@@ -84,7 +98,7 @@ const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false,
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={queryClient}>
     <GithubPickerModal onClose={() => {}} />
-    {/* Mounted so the cap's "N max per batch" toast is observable, exactly as it is in the app. */}
+    {/* Mounted so any toast the picker raises is observable, exactly as it is in the app. */}
     <Toaster />
   </QueryClientProvider>,
 )

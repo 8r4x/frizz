@@ -1,6 +1,6 @@
-import { useMemo, useState, type ComponentType } from "react"
-import { useMutation, useQuery } from "@tanstack/react-query"
-import { Check, CircleCheck, CircleDot, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Github, Inbox, Loader2, MessageSquare } from "lucide-react"
+import { useEffect, useMemo, useRef, useState, type ComponentType } from "react"
+import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query"
+import { Check, ChevronLeft, ChevronRight, CircleCheck, CircleDot, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Github, Inbox, Loader2, MessageSquare } from "lucide-react"
 import type { DispatchInput, DispatchProfileSnapshot, GithubBatchInput, GithubItem } from "@fray-ui/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
@@ -15,10 +15,9 @@ import { applyRowSelection } from "../lib/rowRangeSelection.ts"
 type Kind = "issues" | "prs"
 type Sort = "recent" | "reactions"
 
-// Mirrors GithubBatchInput.items `.max(20)` in shared/src/index.ts — the picker never lets the
-// selection exceed the server's per-batch cap, so a dispatch can't fail the schema with a cryptic
-// (client-sliced) Zod error and drop the whole batch.
-const MAX_BATCH = 20
+// Rows per page. The server takes this verbatim (`perPage`) and answers with the matching page plus
+// the totals the pager below renders; there is NO cap on how many pages a selection may span.
+const PAGE_SIZE = 30
 
 // THE GitHub picker: a wider anywhere-modal (reusing NewThreadModal's Overlay) that lists the repo's
 // Issues or PRs (tabs), sortable by recency or reactions, with multi-select checkboxes and the
@@ -38,16 +37,41 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
 
   const [kind, setKind] = useState<Kind>("issues")
   const [sort, setSort] = useState<Sort>("recent")
+  // 1-based page into the repo's issues/PRs. Switching tab or sort resets it — the ordering the page
+  // number indexes into is a property of {kind, sort}, so carrying it across would land the human at
+  // an arbitrary offset in a list they've never seen.
+  const [page, setPage] = useState(1)
   // Selection is a Set<number> scoped to the CURRENT tab — switching tabs CLEARS it (simplest, and it
   // dodges the issue#N-vs-pr#N number collision a shared set would hit). Documented choice per plan §6.
+  // It deliberately SURVIVES paging: batches are uncapped, so picking a dozen issues off page 1 and a
+  // dozen more off page 3 is the flow this UI exists for. The footer keeps that honest by counting
+  // everything checked, on-page or not, and offering a one-click clear.
   const [selected, setSelected] = useState<ReadonlySet<number>>(() => new Set())
   // The shift-click anchor: the last PLAINLY clicked row's number (see lib/rowRangeSelection.ts).
   const [anchor, setAnchor] = useState<number | null>(null)
 
-  // Server order is AUTHORITATIVE (the gh --search sort) — render items exactly as returned, never
-  // re-sort client-side. The query re-keys on {kind, sort}, so a tab/sort flip refetches.
-  const list = useQuery({ queryKey: ["githubList", kind, sort], queryFn: () => rpc.githubList({ kind, sort }) })
+  // Server order is AUTHORITATIVE (the search sort) — render items exactly as returned, never re-sort
+  // client-side. The query re-keys on {kind, sort, page}, so a tab/sort/page flip refetches;
+  // keepPreviousData holds the outgoing page on screen through the next one's fetch, so paging dims
+  // rather than collapsing the list to a skeleton and jumping the modal's height.
+  const list = useQuery({
+    queryKey: ["githubList", kind, sort, page],
+    queryFn: () => rpc.githubList({ kind, sort, page, perPage: PAGE_SIZE }),
+    placeholderData: keepPreviousData,
+  })
   const items = list.data?.items ?? []
+  // The server reports the page it ACTUALLY served (it clamps into GitHub's servable window), so the
+  // pager reads off that rather than local state — a page that no longer exists self-corrects.
+  const servedPage = list.data?.page ?? page
+  const pageCount = list.data?.pageCount ?? 1
+  const total = list.data?.total ?? 0
+
+  // A new page starts at the top; without this the list keeps the previous page's scroll offset and
+  // the first rows are already scrolled past.
+  const listRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (listRef.current) listRef.current.scrollTop = 0
+  }, [page, kind, sort])
 
   const dispatch = useMutation({
     mutationFn: (input: GithubBatchInput) => rpc.githubDispatchBatch(input),
@@ -64,22 +88,23 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
   function switchKind(k: Kind) {
     if (k === kind) return
     setKind(k)
+    setPage(1)
     setSelected(new Set())
     setAnchor(null)
   }
   function switchSort(s: Sort) {
     if (s === sort) return
     setSort(s)
-    // Clear on sort-switch, same as tab-switch: a selection made under one order can scroll out of the
-    // other's (limit-truncated) window and then dispatch INVISIBLY, with the count exceeding the
-    // visible checks. Clearing keeps "what's checked is what dispatches" honest.
+    setPage(1)
+    // Clear on sort-switch, same as tab-switch: the whole ordering changes underneath, so the pages a
+    // selection was made across no longer mean anything. (Paging WITHIN one order keeps it — same
+    // list, different window.)
     setSelected(new Set())
     setAnchor(null)
   }
   // One entry point for every row activation (click, Enter, Space). Shift paints the whole
-  // anchor→row range with the anchor's state; a plain click toggles and re-anchors. The cap is the
-  // server's per-batch max (MAX_BATCH), so a range that overruns it truncates VISIBLY with a toast
-  // rather than silently dropping rows the human watched themselves select.
+  // anchor→row range with the anchor's state; a plain click toggles and re-anchors. `keys` is this
+  // PAGE's rows — a range is a span of adjacent visible rows — while `selected` spans every page.
   function activate(n: number, shiftKey: boolean) {
     const result = applyRowSelection({
       keys: items.map((it) => it.number),
@@ -87,11 +112,13 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
       shiftKey,
       anchor,
       selected,
-      max: MAX_BATCH,
     })
     setSelected(result.selected)
     setAnchor(result.anchor)
-    if (result.capped) showToast(`${MAX_BATCH} max per batch — selection capped`)
+  }
+  function clearSelection() {
+    setSelected(new Set())
+    setAnchor(null)
   }
 
   const nameWithOwner = status.data?.nameWithOwner ?? "this repo"
@@ -167,7 +194,12 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* List */}
-        <div className="min-h-[240px] flex-1 overflow-y-auto rounded-lg border border-border/70 bg-bg/40">
+        <div
+          ref={listRef}
+          className={`min-h-[240px] flex-1 overflow-y-auto rounded-lg border border-border/70 bg-bg/40 transition-opacity ${
+            list.isPlaceholderData ? "opacity-40" : ""
+          }`}
+        >
           {list.isLoading ? (
             <ListSkeleton />
           ) : list.isError ? (
@@ -186,6 +218,57 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
             ))
           )}
         </div>
+
+        {/* Pager: the running selection on the left (it spans pages, so this is the only place the
+            full count is visible), the page controls on the right. The totals line is always worth
+            showing; the page controls appear only once there IS a second page, so a small repo
+            doesn't carry a dead "Page 1 of 1" and two disabled chevrons. */}
+        {!list.isLoading && !list.isError && (
+          // whitespace-nowrap throughout: left to wrap, this row folds into three lines at a narrow
+          // width and the totals collide with the prev-page button. The running-selection cluster and
+          // the page controls hold their size; only the repo total (the least actionable number here)
+          // truncates when the modal is squeezed.
+          <div className="mt-2.5 flex items-center justify-between gap-3 whitespace-nowrap text-[11.5px] text-muted/60">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate tabular-nums">
+                {total} open {kind === "issues" ? (total === 1 ? "issue" : "issues") : total === 1 ? "pull request" : "pull requests"}
+              </span>
+              {n > 0 && (
+                <span className="flex shrink-0 items-center gap-1.5">
+                  <span className="text-muted/30">·</span>
+                  <span className="tabular-nums text-fg/70">{n} selected</span>
+                  <button
+                    onClick={clearSelection}
+                    onMouseDown={(e) => e.preventDefault()}
+                    className="rounded py-0.5 text-muted/60 underline-offset-2 outline-none transition-colors hover:text-fg hover:underline"
+                  >
+                    Clear
+                  </button>
+                </span>
+              )}
+            </div>
+            {pageCount > 1 && (
+            <div className="flex shrink-0 items-center gap-1">
+              <PagerButton label="Previous page" disabled={servedPage <= 1} onClick={() => setPage(Math.max(1, servedPage - 1))}>
+                <ChevronLeft size={14} />
+              </PagerButton>
+              {/* The label reserves the width of its WIDEST form and paints the live one over it, so
+                  stepping 9 → 10 on a 198-page repo doesn't shove the chevrons sideways. tabular-nums
+                  makes every digit the same width, which is what lets `pageCount` stand in for the
+                  longest page number. */}
+              <span className="relative px-2 text-center tabular-nums">
+                <span aria-hidden className="invisible">Page {pageCount} of {pageCount}</span>
+                <span className="absolute inset-0">
+                  Page {servedPage} of {pageCount}
+                </span>
+              </span>
+              <PagerButton label="Next page" disabled={servedPage >= pageCount} onClick={() => setPage(Math.min(pageCount, servedPage + 1))}>
+                <ChevronRight size={14} />
+              </PagerButton>
+            </div>
+            )}
+          </div>
+        )}
 
         {/* Footer: the ordinary model/effort selector (bottom-left) + the batch-dispatch button. The
             selector is the SAME control the prompt box carries and writes the same durable
@@ -215,7 +298,6 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
             {profileError && <p className="mt-1 max-w-[430px] text-[10.5px] text-red-400">{profileError}</p>}
           </div>
           <div className="flex items-center gap-3">
-            {n >= MAX_BATCH && <span className="petite-caps text-[11px] text-muted/60">{MAX_BATCH} max per batch</span>}
             <button
               disabled={n === 0 || dispatch.isPending || !!dispatchBlocked}
               onClick={startDispatch}
@@ -223,12 +305,43 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
               className="flex items-center gap-2 rounded-md bg-fg px-3.5 py-1.5 text-[12.5px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:hover:opacity-30"
             >
               {dispatch.isPending && <Loader2 size={13} className="animate-spin" />}
-              {n === 1 ? "Start investigation" : "Start investigations"}
+              {/* The count is on the button because the batch is now unbounded and can span pages —
+                  "Start 47 investigations" is the last chance to notice it says 47, not 4. */}
+              {n <= 1 ? "Start investigation" : `Start ${n} investigations`}
             </button>
           </div>
         </div>
       </div>
     </Overlay>
+  )
+}
+
+// A prev/next step in the pager — a quiet bordered square that reads as an affordance only on hover,
+// so the page controls never compete with the dispatch button for the eye. `title`+`aria-label` carry
+// the meaning the chevron alone doesn't.
+function PagerButton({
+  label,
+  disabled,
+  onClick,
+  children,
+}: {
+  label: string
+  disabled: boolean
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={onClick}
+      onMouseDown={(e) => e.preventDefault()}
+      className="inline-flex h-[22px] w-[22px] items-center justify-center rounded-md border border-border/70 text-muted/70 outline-none transition-colors hover:border-border hover:bg-elevated hover:text-fg disabled:pointer-events-none disabled:opacity-30"
+    >
+      {children}
+    </button>
   )
 }
 

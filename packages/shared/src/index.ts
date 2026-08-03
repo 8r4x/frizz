@@ -1513,17 +1513,33 @@ export const GithubItem = z.object({
 })
 export type GithubItem = z.infer<typeof GithubItem>
 
+// One PAGE request. `page` is 1-based; the server clamps it into GitHub's servable window and
+// reports back which page it actually served.
 export const GithubListInput = z.object({
   kind: z.enum(["issues", "prs"]),
   sort: z.enum(["recent", "reactions"]),
-  limit: z.number().int().min(1).max(100).default(30),
+  page: z.number().int().min(1).default(1),
+  perPage: z.number().int().min(1).max(100).default(30),
 })
 export type GithubListInput = z.infer<typeof GithubListInput>
 
+// One page of rows plus what the pager needs to draw itself. `total` is every open item matching the
+// query (not just this page); `pageCount` is that clamped to the search API's 1000-result window, so
+// the pager never offers a page GitHub will refuse to serve.
+export const GithubListResult = z.object({
+  items: z.array(GithubItem),
+  total: z.number().int().nonnegative(),
+  page: z.number().int().positive(),
+  pageCount: z.number().int().positive(),
+})
+export type GithubListResult = z.infer<typeof GithubListResult>
+
 // Minimal batch payload — the server re-hydrates title/body/url fresh from gh at dispatch (always
-// current, small wire payload). Capped at 20 items (a burst of tmux spawns; see risk 5).
+// current, small wire payload). Deliberately UNCAPPED: the picker pages through the whole repo and a
+// human may well want every issue on a page (or several pages' worth) investigated at once. The
+// server dispatches them SEQUENTIALLY, so a large batch is a long request, never a spawn burst.
 export const GithubBatchInput = DispatchProfileSnapshot.extend({
-  items: z.array(z.object({ kind: z.enum(["issue", "pr"]), number: z.number().int().positive() })).min(1).max(20),
+  items: z.array(z.object({ kind: z.enum(["issue", "pr"]), number: z.number().int().positive() })).min(1),
 }).strict()
 export type GithubBatchInput = z.infer<typeof GithubBatchInput>
 

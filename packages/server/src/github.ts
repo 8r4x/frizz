@@ -83,26 +83,25 @@ export async function detectGithub(dir: string): Promise<GithubDetection> {
 export type GhKind = "issues" | "prs"
 export type GhSort = "recent" | "reactions"
 
-// gh's server-side sort — the list ORDER is authoritative (do NOT recompute client-side).
+// The search API's own sort field — the list ORDER is authoritative (do NOT recompute client-side).
 const SEARCH_SORT: Record<GhSort, string> = {
-  reactions: "sort:reactions-desc",
-  recent: "sort:updated-desc",
+  reactions: "reactions",
+  recent: "updated",
 }
 
-// Sum the reaction totals across reactionGroups: `[{ content, users: { totalCount } }]`. Pure +
-// defensive — a foreign JSON shape must never throw; unknown/missing counts contribute 0.
-export function sumReactions(groups: unknown): number {
-  if (!Array.isArray(groups)) return 0
-  let total = 0
-  for (const g of groups) {
-    const n = (g as { users?: { totalCount?: unknown } })?.users?.totalCount
-    if (typeof n === "number" && Number.isFinite(n)) total += n
-  }
-  return total
+// GitHub's search API refuses to serve results past the 1000th, whatever `total_count` says. The
+// pager must stop THERE rather than offering pages that come back empty.
+export const SEARCH_RESULT_WINDOW = 1000
+
+// A search row's reaction total: `reactions: { total_count, "+1": … }` — the same "all reactions"
+// number the `sort=reactions` ranking uses. Pure + defensive; a foreign shape yields 0, never throws.
+export function reactionCount(v: unknown): number {
+  const n = (v as { total_count?: unknown } | null)?.total_count
+  return typeof n === "number" && Number.isFinite(n) && n >= 0 ? n : 0
 }
 
-// `gh issue list --json comments` returns the full comment ARRAY (capped ~100 by gh), not a count —
-// so the badge count is its length. Tolerate a bare number too (defensive). Absent → undefined.
+// The search API returns `comments` as a plain COUNT. Tolerate the array shape too (the older
+// `gh issue list --json comments` returned the full comment array). Absent → undefined.
 export function commentCount(v: unknown): number | undefined {
   if (Array.isArray(v)) return v.length
   if (typeof v === "number" && Number.isFinite(v) && v >= 0) return v
@@ -121,17 +120,36 @@ export function parseLabels(v: unknown): { name: string; color: string }[] {
   return out
 }
 
-// Parse the raw `gh {issue,pr} list --json …` output into GithubItems. PURE + defensive (this is the
-// unit-tested seam — tests inject gh JSON here instead of shelling out): bad rows are skipped, missing
-// fields default, and `kind` stamps the item discriminant. Reactions summed; comments length-counted.
-export function parseListJson(raw: string, kind: GhKind): GithubItem[] {
-  let arr: unknown
+// One page of the picker's list, plus the numbers the pager needs to render "Page P of N".
+export interface GithubListPage {
+  items: GithubItem[]
+  /** Every open item matching the query, not just this page (search's `total_count`). */
+  total: number
+  /** The page actually served — the request's, clamped into the servable window. */
+  page: number
+  /** How many pages the pager may offer — `total` clamped to the search API's 1000-result window. */
+  pageCount: number
+}
+
+// Parse a `search/issues` response body into GithubItems. PURE + defensive (this is the unit-tested
+// seam — tests inject API JSON here instead of shelling out): bad rows are skipped, missing fields
+// default, and `kind` stamps the item discriminant.
+//
+// The REST search shape differs from the old `gh {issue,pr} list --json` one, so the remap is
+// explicit: `html_url`→url, `user.login`→author, `reactions.total_count`→reactions, `draft`→isDraft,
+// and `state` is UPPERCASED so rows keep the "OPEN"/"CLOSED" casing the picker has always seen.
+// `comments` is stamped for ISSUES only, matching what the list has always shown (search returns a
+// count for PRs too, but a PR comment badge is not part of this row's design).
+export function parseSearchJson(raw: string, kind: GhKind): { items: GithubItem[]; total: number } {
+  let parsed: unknown
   try {
-    arr = JSON.parse(raw)
+    parsed = JSON.parse(raw)
   } catch {
-    return []
+    return { items: [], total: 0 }
   }
-  if (!Array.isArray(arr)) return []
+  const body = parsed as { items?: unknown; total_count?: unknown } | null
+  const arr = body?.items
+  if (!Array.isArray(arr)) return { items: [], total: 0 }
   const itemKind = kind === "issues" ? "issue" : "pr"
   const out: GithubItem[] = []
   for (const row of arr) {
@@ -142,21 +160,32 @@ export function parseListJson(raw: string, kind: GhKind): GithubItem[] {
       kind: itemKind,
       number,
       title: typeof r?.title === "string" ? r.title : "",
-      url: typeof r?.url === "string" ? r.url : "",
-      reactions: sumReactions(r?.reactionGroups),
-      updatedAt: typeof r?.updatedAt === "string" ? r.updatedAt : "",
+      url: typeof r?.html_url === "string" ? r.html_url : "",
+      reactions: reactionCount(r?.reactions),
+      updatedAt: typeof r?.updated_at === "string" ? r.updated_at : "",
       labels: parseLabels(r?.labels),
     }
-    const c = commentCount(r?.comments)
-    if (c !== undefined) item.comments = c
-    if (typeof r?.createdAt === "string") item.createdAt = r.createdAt
-    const login = (r?.author as { login?: unknown } | null)?.login
+    if (kind === "issues") {
+      const c = commentCount(r?.comments)
+      if (c !== undefined) item.comments = c
+    }
+    if (typeof r?.created_at === "string") item.createdAt = r.created_at
+    const login = (r?.user as { login?: unknown } | null)?.login
     if (typeof login === "string") item.author = login
-    if (typeof r?.state === "string") item.state = r.state
-    if (typeof r?.isDraft === "boolean") item.isDraft = r.isDraft
+    if (typeof r?.state === "string") item.state = r.state.toUpperCase()
+    if (typeof r?.draft === "boolean") item.isDraft = r.draft
     out.push(item)
   }
-  return out
+  const rawTotal = body?.total_count
+  const total = typeof rawTotal === "number" && Number.isFinite(rawTotal) && rawTotal >= 0 ? Math.trunc(rawTotal) : out.length
+  return { items: out, total }
+}
+
+// How many pages the pager may offer for `total` results at `perPage` — always at least 1 (an empty
+// repo still renders "Page 1 of 1"), and never past the search API's 1000-result window.
+export function pageCountFor(total: number, perPage: number): number {
+  if (!Number.isFinite(total) || total <= 0 || perPage <= 0) return 1
+  return Math.max(1, Math.ceil(Math.min(total, SEARCH_RESULT_WINDOW) / perPage))
 }
 
 // --- Linked closing PRs (issues only) ---
@@ -258,25 +287,54 @@ export async function attachLinkedPrs(repo: string, items: GithubItem[]): Promis
   }
 }
 
-// Clamp the limit to gh's sane range (the schema already bounds 1..100; belt-and-suspenders).
-function clampLimit(limit: number): number {
-  if (!Number.isInteger(limit)) return 30
-  return Math.max(1, Math.min(100, limit))
+// The picker's page size — 30 rows, the width of one scroll through the list.
+export const GITHUB_PAGE_SIZE = 30
+
+// Clamp the page size to the search API's sane range (the schema already bounds 1..100;
+// belt-and-suspenders).
+function clampPerPage(perPage: number): number {
+  if (!Number.isInteger(perPage)) return GITHUB_PAGE_SIZE
+  return Math.max(1, Math.min(100, perPage))
 }
 
-// List a repo's issues or PRs, gh-sorted. Lets a gh error (rate limit / network) PROPAGATE to the
-// RPC caller (surfaced, not swallowed — risk 7). Only a malformed-but-successful JSON body degrades
-// to []. issues carry `comments`; PRs do not (no comment field requested).
-export async function listItems(repo: string, kind: GhKind, sort: GhSort, limit: number): Promise<GithubItem[]> {
-  const sub = kind === "issues" ? "issue" : "pr"
-  const fields =
-    kind === "issues"
-      ? "number,title,url,reactionGroups,updatedAt,comments,createdAt,author,labels,state"
-      : "number,title,url,reactionGroups,updatedAt,comments,createdAt,author,labels,state,isDraft"
-  const raw = await gh([sub, "list", "-R", repo, "--search", SEARCH_SORT[sort], "--json", fields, "--limit", String(clampLimit(limit))])
-  const items = parseListJson(raw, kind)
+// Clamp the requested page into the servable window, so a stale "next" click (the repo shrank under
+// an open picker) lands on the last REAL page instead of an empty one.
+function clampPage(page: number, perPage: number): number {
+  if (!Number.isInteger(page) || page < 1) return 1
+  return Math.max(1, Math.min(page, Math.ceil(SEARCH_RESULT_WINDOW / perPage)))
+}
+
+// One PAGE of a repo's open issues or PRs, search-sorted. Goes through `search/issues` rather than
+// `gh issue list` for exactly two reasons: the search API takes `page`/`per_page` (gh's own list
+// command has no offset, so paging it means re-fetching every earlier page and throwing it away), and
+// it returns `total_count`, which is what lets the pager say "Page 2 of 33". The data source is
+// unchanged — `gh issue list --search` was already querying this same API.
+//
+// Lets a gh error (rate limit / network) PROPAGATE to the RPC caller (surfaced, not swallowed —
+// risk 7). Only a malformed-but-successful JSON body degrades to an empty page.
+export async function listItems(repo: string, kind: GhKind, sort: GhSort, page: number, perPage: number): Promise<GithubListPage> {
+  const size = clampPerPage(perPage)
+  const wanted = clampPage(page, size)
+  const raw = await gh([
+    "api",
+    "-X",
+    "GET",
+    "search/issues",
+    "-f",
+    `q=repo:${repo} is:${kind === "issues" ? "issue" : "pr"} is:open`,
+    "-f",
+    `sort=${SEARCH_SORT[sort]}`,
+    "-f",
+    "order=desc",
+    "-f",
+    `per_page=${size}`,
+    "-f",
+    `page=${wanted}`,
+  ])
+  const { items, total } = parseSearchJson(raw, kind)
   if (kind === "issues") await attachLinkedPrs(repo, items)
-  return items
+  const pageCount = pageCountFor(total, size)
+  return { items, total, page: Math.min(wanted, pageCount), pageCount }
 }
 
 // --- Hydration (at dispatch, fresh full body) ---

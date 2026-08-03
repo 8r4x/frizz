@@ -41,7 +41,7 @@ import type {
   TranscriptPage,
   TranscriptEarlierInput,
   GithubStatus,
-  GithubItem,
+  GithubListResult,
   GithubBatchInput,
   GithubBatchResult,
   CodexModel,
@@ -201,7 +201,7 @@ export interface Api {
   // `authed` is re-checked live per call. githubList reads the repo's issues/PRs; githubDispatchBatch
   // hydrates each selected item fresh + spins up one thread per item (sequential, reuses dispatch).
   githubStatus(): Promise<GithubStatus>
-  githubList(input: { kind: "issues" | "prs"; sort: "recent" | "reactions"; limit?: number }): Promise<{ items: GithubItem[] }>
+  githubList(input: { kind: "issues" | "prs"; sort: "recent" | "reactions"; page?: number; perPage?: number }): Promise<GithubListResult>
   githubDispatchBatch(input: GithubBatchInput): Promise<GithubBatchResult>
 }
 

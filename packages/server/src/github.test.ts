@@ -2,9 +2,11 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { GITHUB_DISPATCH_UI_BOUNDARY } from "@fray-ui/shared"
 import {
-  sumReactions,
+  reactionCount,
   commentCount,
-  parseListJson,
+  parseSearchJson,
+  pageCountFor,
+  SEARCH_RESULT_WINDOW,
   summarizeLinkedPrs,
   linkedPrQuery,
   parseLinkedPrJson,
@@ -19,30 +21,48 @@ import {
 
 // All tests inject gh output (no real gh shell-out) — the parsing/scoring/templating fns are pure.
 
-// ---- sumReactions ----
+// ---- reactionCount ----
 
-test("sumReactions: sums totalCount across reaction groups", () => {
-  const groups = [
-    { content: "THUMBS_UP", users: { totalCount: 347 } },
-    { content: "HEART", users: { totalCount: 71 } },
-    { content: "ROCKET", users: { totalCount: 31 } },
-  ]
-  assert.equal(sumReactions(groups), 449)
+test("reactionCount: reads the search row's reactions.total_count", () => {
+  assert.equal(reactionCount({ url: "…", total_count: 449, "+1": 347, heart: 71, rocket: 31 }), 449)
+  assert.equal(reactionCount({ total_count: 0 }), 0)
 })
 
-test("sumReactions: empty / missing / malformed → 0, never throws", () => {
-  assert.equal(sumReactions([]), 0)
-  assert.equal(sumReactions(undefined), 0)
-  assert.equal(sumReactions(null), 0)
-  assert.equal(sumReactions("nope"), 0)
-  assert.equal(sumReactions([{ content: "X" }]), 0) // no users
-  assert.equal(sumReactions([{ users: {} }]), 0) // no totalCount
-  assert.equal(sumReactions([{ users: { totalCount: "3" } }]), 0) // non-numeric ignored
+test("reactionCount: empty / missing / malformed → 0, never throws", () => {
+  assert.equal(reactionCount(undefined), 0)
+  assert.equal(reactionCount(null), 0)
+  assert.equal(reactionCount("nope"), 0)
+  assert.equal(reactionCount({}), 0)
+  assert.equal(reactionCount({ total_count: "3" }), 0) // non-numeric ignored
+  assert.equal(reactionCount({ total_count: -2 }), 0)
+})
+
+// ---- pageCountFor ----
+
+test("pageCountFor: rounds up, and an empty list still has one page", () => {
+  assert.equal(pageCountFor(0, 30), 1)
+  assert.equal(pageCountFor(1, 30), 1)
+  assert.equal(pageCountFor(30, 30), 1)
+  assert.equal(pageCountFor(31, 30), 2)
+  assert.equal(pageCountFor(988, 30), 33)
+})
+
+test("pageCountFor: never offers a page past GitHub's servable search window", () => {
+  // The API refuses results beyond the 1000th however large total_count is, so the pager must stop
+  // where the data does rather than handing out pages that come back empty.
+  assert.equal(pageCountFor(50_000, 30), Math.ceil(SEARCH_RESULT_WINDOW / 30))
+  assert.equal(pageCountFor(50_000, 100), 10)
+})
+
+test("pageCountFor: a nonsense total or page size degrades to one page", () => {
+  assert.equal(pageCountFor(Number.NaN, 30), 1)
+  assert.equal(pageCountFor(-5, 30), 1)
+  assert.equal(pageCountFor(100, 0), 1)
 })
 
 // ---- commentCount ----
 
-test("commentCount: array length (gh returns the comment ARRAY, not a count)", () => {
+test("commentCount: array length (the older gh list returned the comment ARRAY, not a count)", () => {
   assert.equal(commentCount([{ body: "a" }, { body: "b" }, { body: "c" }]), 3)
   assert.equal(commentCount([]), 0)
 })
@@ -54,27 +74,32 @@ test("commentCount: tolerates a bare number; absent/garbage → undefined", () =
   assert.equal(commentCount("5"), undefined)
 })
 
-// ---- parseListJson ----
+// ---- parseSearchJson ----
+//
+// The fixtures below are verbatim-shaped `GET /search/issues` rows (snake_case, html_url,
+// reactions.total_count, user.login, draft) — the exact wire shape listItems now parses.
 
-test("parseListJson: issues — maps fields, sums reactions, counts comment array", () => {
-  const raw = JSON.stringify([
-    {
-      number: 326,
-      title: "Support multiple accounts",
-      url: "https://github.com/cli/cli/issues/326",
-      reactionGroups: [
-        { content: "THUMBS_UP", users: { totalCount: 347 } },
-        { content: "HEART", users: { totalCount: 71 } },
-      ],
-      updatedAt: "2026-07-01T00:00:00Z",
-      comments: [{ body: "x" }, { body: "y" }],
-      createdAt: "2026-06-01T00:00:00Z",
-      author: { login: "octocat", name: "The Octocat" },
-      labels: [{ name: "enhancement", color: "a2eeef", description: "…" }],
-      state: "OPEN",
-    },
-  ])
-  const items = parseListJson(raw, "issues")
+test("parseSearchJson: issues — remaps the search shape and carries total_count", () => {
+  const raw = JSON.stringify({
+    total_count: 988,
+    incomplete_results: false,
+    items: [
+      {
+        number: 326,
+        title: "Support multiple accounts",
+        html_url: "https://github.com/cli/cli/issues/326",
+        reactions: { url: "…", total_count: 418, "+1": 347, heart: 71 },
+        updated_at: "2026-07-01T00:00:00Z",
+        comments: 2,
+        created_at: "2026-06-01T00:00:00Z",
+        user: { login: "octocat", id: 583231 },
+        labels: [{ id: 1, name: "enhancement", color: "a2eeef", description: "…" }],
+        state: "open",
+      },
+    ],
+  })
+  const { items, total } = parseSearchJson(raw, "issues")
+  assert.equal(total, 988)
   assert.equal(items.length, 1)
   assert.deepEqual(items[0], {
     kind: "issue",
@@ -87,53 +112,68 @@ test("parseListJson: issues — maps fields, sums reactions, counts comment arra
     comments: 2,
     createdAt: "2026-06-01T00:00:00Z",
     author: "octocat",
+    // Uppercased, so rows keep the casing the picker's StateIcon has always been handed.
     state: "OPEN",
   })
 })
 
-test("parseListJson: prs — kind='pr', empty reactionGroups → 0, no comments field", () => {
-  const raw = JSON.stringify([
-    {
-      number: 13844,
-      title: "perf(status): O(1) map lookup",
-      url: "https://github.com/cli/cli/pull/13844",
-      reactionGroups: [],
-      updatedAt: "2026-07-10T15:01:40Z",
-    },
-  ])
-  const items = parseListJson(raw, "prs")
+test("parseSearchJson: prs — kind='pr', draft→isDraft, and NO comment badge", () => {
+  const raw = JSON.stringify({
+    total_count: 2,
+    items: [
+      {
+        number: 13844,
+        title: "perf(status): O(1) map lookup",
+        html_url: "https://github.com/cli/cli/pull/13844",
+        reactions: { total_count: 0 },
+        updated_at: "2026-07-10T15:01:40Z",
+        // The search API returns a comment count for PRs; the PR row deliberately doesn't show one.
+        comments: 7,
+        state: "open",
+        draft: true,
+        pull_request: { url: "…" },
+      },
+    ],
+  })
+  const { items } = parseSearchJson(raw, "prs")
   assert.equal(items.length, 1)
   assert.equal(items[0].kind, "pr")
   assert.equal(items[0].number, 13844)
   assert.equal(items[0].reactions, 0)
   assert.equal(items[0].comments, undefined)
+  assert.equal(items[0].isDraft, true)
 })
 
-test("parseListJson: skips rows with a bad/missing number; keeps valid ones", () => {
-  const raw = JSON.stringify([
-    { title: "no number" },
-    { number: 0, title: "zero" },
-    { number: -5, title: "negative" },
-    { number: 7, title: "good", url: "u", updatedAt: "t" },
-  ])
-  const items = parseListJson(raw, "issues")
+test("parseSearchJson: skips rows with a bad/missing number; keeps valid ones", () => {
+  const raw = JSON.stringify({
+    total_count: 4,
+    items: [
+      { title: "no number" },
+      { number: 0, title: "zero" },
+      { number: -5, title: "negative" },
+      { number: 7, title: "good", html_url: "u", updated_at: "t" },
+    ],
+  })
+  const { items } = parseSearchJson(raw, "issues")
   assert.equal(items.length, 1)
   assert.equal(items[0].number, 7)
 })
 
-test("parseListJson: unparseable / non-array → [] (never throws)", () => {
-  assert.deepEqual(parseListJson("not json", "issues"), [])
-  assert.deepEqual(parseListJson("{}", "issues"), [])
-  assert.deepEqual(parseListJson("42", "prs"), [])
+test("parseSearchJson: unparseable / wrong shape → empty page (never throws)", () => {
+  assert.deepEqual(parseSearchJson("not json", "issues"), { items: [], total: 0 })
+  assert.deepEqual(parseSearchJson("{}", "issues"), { items: [], total: 0 })
+  assert.deepEqual(parseSearchJson("42", "prs"), { items: [], total: 0 })
+  // A bare ARRAY is the OLD `gh issue list` shape — it must not be mistaken for a page of results.
+  assert.deepEqual(parseSearchJson("[{\"number\":1}]", "issues"), { items: [], total: 0 })
 })
 
-test("parseListJson: missing string fields default to ''", () => {
-  const raw = JSON.stringify([{ number: 3 }])
-  const [it] = parseListJson(raw, "issues")
-  assert.equal(it.title, "")
-  assert.equal(it.url, "")
-  assert.equal(it.updatedAt, "")
-  assert.equal(it.reactions, 0)
+test("parseSearchJson: missing string fields default to ''; a missing total falls back to the row count", () => {
+  const { items, total } = parseSearchJson(JSON.stringify({ items: [{ number: 3 }, { number: 4 }] }), "issues")
+  assert.equal(total, 2)
+  assert.equal(items[0].title, "")
+  assert.equal(items[0].url, "")
+  assert.equal(items[0].updatedAt, "")
+  assert.equal(items[0].reactions, 0)
 })
 
 // ---- truncateBody ----
