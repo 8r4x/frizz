@@ -3,7 +3,7 @@ import { useSnapshot } from "valtio"
 import { ChevronsUpDown, Hourglass, Inbox } from "lucide-react"
 import type { ThreadView, BoardSnapshot, TranscriptMessage, TranscriptToolCall } from "@fray-ui/shared"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { pushDrawer, queueCardTargetY, showToast } from "../store.ts"
+import { queueCardTargetY, showToast } from "../store.ts"
 import { rpc } from "../api/rpc.ts"
 import { useBoard, asThreads, useTranscript } from "../hooks.ts"
 import { orderQueue, queued, displayTitle, lastActiveLabelAt } from "../groups.ts"
@@ -26,6 +26,7 @@ import { QueueSubAgentLines, hasQueueSubAgentLines } from "./QueueSubAgentLines.
 import { WakeDivider } from "./WakeDivider.tsx"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { LastActive } from "./LastActive.tsx"
+import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { CopyTerminalCommandButton, useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
 import {
   captureTranscriptViewportAnchor,
@@ -1077,7 +1078,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
             </div>
           )}
         </div>
-        {/* SHARED navigation actions: collapse and open-in-drawer, plus Retry — which HeaderActions
+        {/* SHARED navigation actions: collapse and open-in-new-tab, plus Retry — which HeaderActions
             itself now gates on `offersRetry` (stalled OR usage-limit-held; groups.ts). Queue cards only
             ever exist for needsYou threads, and a usage-limit park is NOT needsYou, so the only
             offersRetry case that cards here is a STALL — its sidebar row wears the yellow [!]. Sharing
@@ -1086,8 +1087,10 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
             (maintainer 2026-07-23, twice). A card that stalled out is the one queue state with an obvious
             recovery verb, so it surfaces here rather than forcing you to open the thread; other lifecycle actions
             (Mark as done / Snooze) stay in the footer. (Rename lives by the title in the thread drawer,
-            not here — the queue is a triage surface.) Open-thread slides in the side drawer — an
-            overlay, NOT a nav switch, so the queue scroll/selection stays put. */}
+            not here — the queue is a triage surface.) The open arrow is a LINK to the
+            standalone thread page and opens it in a NEW TAB (maintainer 2026-08-03) — it used to slide
+            the side drawer over the card, re-painting the panel you were already reading. Either way
+            the queue's own scroll position is untouched. */}
         {/* Every Fray-owned card carries the copy-resume-command affordance: queue cards are at rest
             by default, so opening the same session in your own terminal is entirely safe (and both CLIs
             allow it live too). Foreign/legacy rows have no Fray-owned provider session to resume. */}
@@ -1096,7 +1099,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
           thread={thread}
           collapsed={collapsed}
           onCollapse={() => setCollapsed((c) => !c)}
-          onOpen={() => pushDrawer("thread", thread.id)}
+          openHref={standaloneThreadHref(thread.id)}
           onDone={() =>
             markComplete.mutate(undefined, {
               onSuccess: () => onResolve(thread.id),

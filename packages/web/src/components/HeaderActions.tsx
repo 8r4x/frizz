@@ -24,7 +24,7 @@ export { STALLED_RETRY_MESSAGE } from "../lib/retrySession.ts"
 //   • LEGACY (kind !== "session"): the vestigial Mark-as split button, exactly as before.
 export function HeaderActions({
   thread,
-  onOpen,
+  openHref,
   onDoc,
   onDone,
   onCollapse,
@@ -35,7 +35,7 @@ export function HeaderActions({
   onStatusFailed,
 }: {
   thread: ThreadView
-  onOpen?: () => void // present only on queue cards → shows the Open-thread (drawer) icon
+  openHref?: string // present only on queue cards → shows the Open-in-new-tab arrow (a real link)
   onDoc?: () => void // present only on the thread header → shows the fray-document icon
   onDone: () => void // legacy Mark-as "done" path (parent-owned mutation)
   onCollapse?: () => void // queue cards → collapse/expand the card body to just its header
@@ -60,7 +60,11 @@ export function HeaderActions({
         />
       )}
       {onDoc && <IconBtn label="Fray document" icon={FileText} size={14} onClick={onDoc} />}
-      {onOpen && <IconBtn label="Open thread" icon={ArrowUpRight} size={14} onClick={onOpen} />}
+      {/* The arrow is a REAL anchor to the standalone thread page, not a drawer trigger: a plain click
+          lands the thread in a new tab immediately (maintainer 2026-08-03), and ⌘/middle-click,
+          "copy link address" and the browser's own affordances all work because it is a link. The same
+          arrow in the thread header (ChatView) means the same thing. */}
+      {openHref && <IconLink label="Open in new tab" icon={ArrowUpRight} size={14} href={openHref} />}
       {isSession ? (
         // A STALLED session (process gone, work unfinished) or one HELD on an auto-resume usage limit
         // leads with recovery — Retry is the only exit/wait-state verb here; clearing a finished row is
@@ -111,6 +115,11 @@ function RetryButton({ slug }: { slug: string }) {
   )
 }
 
+// One class string for every control in this strip, so the link variant below can never drift from the
+// buttons it sits beside.
+const ICON_CONTROL_CLASS =
+  "flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:hover:bg-transparent disabled:hover:text-muted disabled:opacity-40"
+
 // A quiet icon button with an immediate dark tooltip. onMouseDown-preventDefault keeps DOM focus off the
 // button so a click never steals the keyboard from a card's composer. `busy` swaps in a spinner.
 function IconBtn({
@@ -126,10 +135,35 @@ function IconBtn({
         {...rest}
         aria-label={label}
         onMouseDown={(e) => e.preventDefault()}
-        className="flex h-7 w-7 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:hover:bg-transparent disabled:hover:text-muted disabled:opacity-40"
+        className={ICON_CONTROL_CLASS}
       >
         {busy ? <Loader2 size={size} strokeWidth={2} className="animate-spin" /> : <Icon size={size} strokeWidth={2} />}
       </button>
+    </Tooltip>
+  )
+}
+
+// The same control as an ANCHOR. It has to be a real `<a href target="_blank">` — a scripted
+// window.open() is what popup blockers eat, and only a link gives you ⌘-click, middle-click and
+// copy-link. Same focus-stealing guard as IconBtn: a card's composer keeps the keyboard.
+function IconLink({
+  label,
+  icon: Icon,
+  size,
+  href,
+}: { label: string; icon: ComponentType<{ size?: number; strokeWidth?: number }>; size: number; href: string }) {
+  return (
+    <Tooltip label={label}>
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener"
+        aria-label={label}
+        onMouseDown={(e) => e.preventDefault()}
+        className={ICON_CONTROL_CLASS}
+      >
+        <Icon size={size} strokeWidth={2} />
+      </a>
     </Tooltip>
   )
 }
