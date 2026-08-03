@@ -1,10 +1,9 @@
 // Disposable, fully-ISOLATED fray-ui stack for ad hoc CDP / manual verification.
 //
 // Why this exists: verifying a fray-ui change means driving the REAL app end-to-end, but you must never
-// touch the maintainer's live instance, real ~/.fray SQLite, or real worker tmux sockets. This boots a
+// touch the maintainer's live instance or real ~/.fray SQLite. This boots a
 // throwaway stack that is sandboxed on every axis:
 //   • HOME              → a fresh temp dir, so the SQLite DB + server.lock live in an empty ~/.fray
-//   • FRAY_TMUX_SOCKET  → a unique socket name, so any spawned worker tmux never collides with real ones
 //   • PORT              → a unique high port, so it never fights the dev server on 5175
 //   • FRAY_WAKERS_OFF=1 → scheduler OFF by default (no wake side effects); pass --wakers to arm it
 // The project defaults to the fray repo itself (a gh-authed repo, an empty board under the temp HOME).
@@ -40,7 +39,6 @@ const keep = flag("keep") || reuseHome !== undefined
 const home = reuseHome ?? mkdtempSync(join(tmpdir(), "fray-adhoc-home-"))
 mkdirSync(join(home, ".fray"), { recursive: true })
 process.env.HOME = home
-process.env.FRAY_TMUX_SOCKET = `fray-adhoc-${port}-${process.pid}`
 if (!flag("wakers")) process.env.FRAY_WAKERS_OFF = "1"
 // A disposable stack must never reap the real machine's leaked worker processes (the orphan reaper
 // enumerates ALL processes, not just this stack's). Off by default, exactly like the scheduler; pass
@@ -85,7 +83,7 @@ try {
   }
   console.log(JSON.stringify({
     url: `http://127.0.0.1:${port}/`,
-    port, home, socket: process.env.FRAY_TMUX_SOCKET, project: projectDir,
+    port, home, project: projectDir,
     wakers: flag("wakers"),
   }))
 } catch (error) {
