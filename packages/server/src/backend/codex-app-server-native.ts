@@ -61,9 +61,12 @@ export function nativeRecordPath(stateDir: string, projectId: string): string {
 }
 
 /** Unix sockets have a hard ~104-byte path limit on macOS/BSD, so hash the identity into a short name
- *  under the OS temp dir — the same trick `codexAppServerSocketPath` uses for the daemon. */
+ *  under the OS temp dir — the same trick `codexAppServerSocketPath` uses for the daemon. Windows has
+ *  no unix sockets and no /tmp, so it gets a named pipe, exactly as the claude broker and codex daemon
+ *  hosts do; this function was the only one of the three that had been left POSIX-only. */
 export function nativeListenSocketPath(stateDir: string, projectId: string): string {
   const key = createHash("sha256").update(stateDir).update("\0").update(projectId).digest("hex").slice(0, 16)
+  if (process.platform === "win32") return `\\\\.\\pipe\\fray-codex-native-${key}`
   return join(process.env.TMPDIR ?? "/tmp", `fray-codex-native-${key}.sock`)
 }
 
