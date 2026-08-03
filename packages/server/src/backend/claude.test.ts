@@ -3,7 +3,6 @@ import assert from "node:assert/strict"
 import { createClaudeBackend, parseClaudeLine } from "./claude.ts"
 import { newTailState, computeTurn } from "../tailer.ts"
 import { buildClaudeCommand, buildClaudeResumeCommand, claudeWorkerEnvironment, loadWorkerPrompt, WORKER_MAX_CONCURRENT_SUBAGENTS, WORKER_MAX_SUBAGENTS, WORKER_MAX_WEB_SEARCHES, workerPluginDir } from "../dispatch.ts"
-import { spawnWithRunner } from "../tmux.ts"
 import { CLAUDE_WORKER_ENV } from "./types.ts"
 
 // ---- parseClaudeLine: the normalized VIEW of a Claude JSONL line (codex-facing seam; NOT the
@@ -107,26 +106,21 @@ test("createClaudeBackend sanitizes both spawn and resume without replacing Clau
   }
 })
 
-test("Claude worker profile sanitization reaches the tmux launch environment", () => {
+test("Claude worker profile sanitization reaches the launch environment", () => {
   const backend = createClaudeBackend({ logDir: "/logs", claudeBin: "claude" })
-  const built = backend.buildSpawn({ sessionId: "profile-env-tmux", cwd: "/clean-home/project", prompt: "P", workerContract: "", permissionMode: "auto", model: "opus", effort: "high" })
-  const calls: string[][] = []
-  spawnWithRunner("profile-env-tmux", built.argv, "/clean-home/project", built.env, {}, (argv) => {
-    calls.push([...argv])
-    return calls.length === 1 ? "%1\t123\t456\n" : ""
-  })
-  const launch = calls[0] ?? []
-  // CLAUDE_WORKER_ENV rides the same tmux hop. Both entries are silent when dropped — the worker just
-  // quietly quits early, or has every long gate bounced to the background — so pin them here too.
+  const built = backend.buildSpawn({ sessionId: "profile-env", cwd: "/clean-home/project", prompt: "P", workerContract: "", permissionMode: "auto", model: "opus", effort: "high" })
+  // buildSpawn's `env` IS the launch environment now: the broker hands it straight to the SDK query.
+  // Every entry is silent when dropped — the worker just quietly quits early, or has every long gate
+  // bounced to the background — so pin them here.
   for (const [key, value] of Object.entries(CLAUDE_WORKER_ENV)) {
-    assert.ok(launch.includes(`${key}=${value}`), `${key} must reach the tmux launch environment`)
+    assert.equal(built.env[key], value, `${key} must reach the launch environment`)
   }
-  assert.ok(launch.includes("CLAUDE_CODE_SUBAGENT_MODEL="))
-  assert.ok(launch.includes("CLAUDE_CODE_EFFORT_LEVEL="))
-  assert.ok(launch.includes(`CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION=${WORKER_MAX_WEB_SEARCHES}`))
-  assert.ok(launch.includes(`CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION=${WORKER_MAX_SUBAGENTS}`))
-  assert.ok(launch.includes(`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=${WORKER_MAX_CONCURRENT_SUBAGENTS}`))
-  assert.equal(launch.some((entry) => entry.startsWith("CLAUDE_CONFIG_DIR=")), false)
+  assert.ok("CLAUDE_CODE_SUBAGENT_MODEL" in built.env)
+  assert.ok("CLAUDE_CODE_EFFORT_LEVEL" in built.env)
+  assert.equal(built.env.CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION, String(WORKER_MAX_WEB_SEARCHES))
+  assert.equal(built.env.CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION, String(WORKER_MAX_SUBAGENTS))
+  assert.equal(built.env.CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS, String(WORKER_MAX_CONCURRENT_SUBAGENTS))
+  assert.equal("CLAUDE_CONFIG_DIR" in built.env, false)
 })
 
 // The three QUIET caps a long-lived worker hits and a chat session does not. All three read

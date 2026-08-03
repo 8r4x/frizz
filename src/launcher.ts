@@ -21,7 +21,6 @@ import {
   type ProjectLaunchTarget,
   type ProcessPlatformAdapter,
 } from "@fray-ui/server/project-launch";
-import { resolveProjectTmuxSocketSelection } from "@fray-ui/server/tmux-socket";
 import {
   ALL_INTERFACES_BIND_HOST,
   bindHostIsExposed,
@@ -77,8 +76,6 @@ export interface Workspace {
   stateDir: string;
   name: string;
   identityScope: GitProjectIdentityScope;
-  tmuxSocket: string;
-  tmuxSocketManaged: boolean;
 }
 
 export interface LauncherStatus {
@@ -334,7 +331,7 @@ Options:
   --allowed-host <name>  with --host, also accept this DNS name as the board's address (repeatable)
   --debug                stream the full event feed to the terminal instead of the compact readout
   --status               report this workspace's stable server and artifact
-  --stop                 stop this workspace's UI supervisor (tmux agents keep running)
+  --stop                 stop this workspace's UI supervisor (agents keep running)
   -h, --help             show this help
 
 Environment:
@@ -384,17 +381,12 @@ export function resolveWorkspace(
       ? { identityScope: "worktree" as const }
       : {}),
   };
-  const selected = resolveProjectTmuxSocketSelection(target, {
-    repositoryOverride: env.FRAY_TMUX_SOCKET,
-  });
   return {
     root,
     id,
     stateDir,
     name: basename(root),
     identityScope: identity.scope,
-    tmuxSocket: selected.socket,
-    tmuxSocketManaged: selected.managed,
   };
 }
 
@@ -405,8 +397,6 @@ export function workspaceLaunchTarget(
     projectId: workspace.id,
     projectDir: workspace.root,
     stateDir: workspace.stateDir,
-    tmuxSocket: workspace.tmuxSocket,
-    tmuxSocketManaged: workspace.tmuxSocketManaged,
     ...(workspace.identityScope === "worktree"
       ? { identityScope: "worktree" as const }
       : {}),
@@ -425,11 +415,6 @@ export function workspaceFromLaunchTarget(
   }
   if (root !== target.projectDir)
     throw new Error("pinned Fray workspace path is not canonical");
-  const selected = target.tmuxSocket
-    ? { socket: target.tmuxSocket, managed: target.tmuxSocketManaged !== false }
-    : resolveProjectTmuxSocketSelection(target, {
-        repositoryOverride: env.FRAY_TMUX_SOCKET,
-      });
   return {
     root,
     id: target.projectId,
@@ -437,8 +422,6 @@ export function workspaceFromLaunchTarget(
     name: basename(root),
     identityScope:
       target.identityScope === "worktree" ? "worktree" : "repository",
-    tmuxSocket: selected.socket,
-    tmuxSocketManaged: selected.managed,
   };
 }
 

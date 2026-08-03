@@ -85,14 +85,13 @@ import { readQuota } from "./quota.ts"
 import { readAuthSnapshot } from "./backend/auth-status.ts"
 import { liveThreadsForBackend, runProviderLogout } from "./backend/account-actions.ts"
 import { threadProfileOptions, validateThreadProfile } from "./backend/thread-profiles.ts"
-import * as tmux from "./tmux.ts"
-import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
+import { adoptionRuntimeBinding, type AdoptionPaneLookup, type ExpectedAdoptionPane } from "./adoption-recovery.ts"
 import { awaitingFenceIdentity, isActionableAwaitingHint } from "./awaiting.ts"
 import { getDispatchPreferences, setDispatchPreference } from "./dispatch-preferences.ts"
 import { isBrokerClaudeRow, type SessionRow, type Storage } from "./storage.ts"
 import type { SessionTelemetry } from "./tailer.ts"
 import { resolvePlanFile, deletePlanFile } from "./plan-files.ts"
-import { providerResumeCommand, tmuxAttachCommand } from "./external-terminal.ts"
+import { providerResumeCommand } from "./external-terminal.ts"
 import { backgroundShellLineCount, readBackgroundShellOutput } from "./background-shell-output.ts"
 import { projectRetiredBackgroundOps, retiredOpsFor } from "./transcript.ts"
 
@@ -139,8 +138,8 @@ export function hasPendingPermissionChange(row: { permission_pending?: unknown }
 }
 
 interface RegisteredRuntimeTerminator {
-  findExpectedAdoptionPane(expected: tmux.ExpectedAdoptionPane): tmux.AdoptionPaneLookup
-  killExpectedAdoptionPane(expected: tmux.ExpectedAdoptionPane): boolean
+  findExpectedAdoptionPane(expected: ExpectedAdoptionPane): AdoptionPaneLookup
+  killExpectedAdoptionPane(expected: ExpectedAdoptionPane): boolean
   killSession(slug: string): void
   isLive(slug: string): boolean
 }
@@ -1750,7 +1749,7 @@ export function createRouter(ctx: AppContext) {
         if (t && t.runtime !== "exited") {
           throw new Error("only a stalled or exited session can be dismissed — archive a live one instead")
         }
-        await stopAndForgetRegisteredRuntime(ctx.storage, row, tmux, ctx.codexAppServer, ctx.claudeBroker)
+        await stopAndForgetRegisteredRuntime(ctx.storage, row, cachedLivenessTerminator, ctx.codexAppServer, ctx.claudeBroker)
         ctx.tailer.forget(input.slug)
         ctx.board.refresh() // storage-only change — the removed row fans out as a delete delta on SSE
       },
@@ -1909,7 +1908,7 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         assertLegacyMutationAllowed(input.slug)
         if (input.status === "dismissed") {
-          const stopped = await stopRuntimeBySlug(ctx.storage, input.slug, tmux, ctx.codexAppServer, ctx.claudeBroker)
+          const stopped = await stopRuntimeBySlug(ctx.storage, input.slug, cachedLivenessTerminator, ctx.codexAppServer, ctx.claudeBroker)
           if (stopped.row && !ctx.storage.setExitedIfCurrent(
             stopped.row.slug,
             stopped.row.session_id,
@@ -1998,7 +1997,7 @@ export function createRouter(ctx: AppContext) {
         // with turn/interrupt rather than a tmux kill-session for a pane that never existed. A stop that
         // could not be delivered throws out of here BEFORE setExitedIfCurrent, so the row is never
         // marked exited on the strength of a termination that did not happen.
-        const stopped = await stopRuntimeBySlug(ctx.storage, input.slug, tmux, ctx.codexAppServer, ctx.claudeBroker)
+        const stopped = await stopRuntimeBySlug(ctx.storage, input.slug, cachedLivenessTerminator, ctx.codexAppServer, ctx.claudeBroker)
         if (stopped.row && !ctx.storage.setExitedIfCurrent(
           stopped.row.slug,
           stopped.row.session_id,

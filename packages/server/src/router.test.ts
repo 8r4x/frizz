@@ -27,13 +27,12 @@ import {
 } from "./router.ts"
 import { projectTranscriptPageAgentLifecycles } from "./transcript.ts"
 import { createStorage, type AdoptionClaimRow, type SessionRow } from "./storage.ts"
-import type { AdoptionPaneLookup, PaneIdentity, PaneSnapshot } from "./tmux.ts"
+import type { AdoptionPaneLookup, PaneIdentity, PaneIdentity as PaneSnapshot } from "./adoption-recovery.ts"
 import type { AppContext } from "./context.ts"
 import type { Project } from "./project.ts"
 import type { Tailer } from "./tailer.ts"
 import { writeScratchpad } from "./dispatch.ts"
-import { providerResumeCommand, shellQuote, tmuxAttachCommand } from "./external-terminal.ts"
-import * as tmuxModule from "./tmux.ts"
+import { providerResumeCommand, shellQuote } from "./external-terminal.ts"
 
 test("provider resume command is shell-safe", () => {
   assert.equal(shellQuote("fray's socket"), "'fray'\"'\"'s socket'")

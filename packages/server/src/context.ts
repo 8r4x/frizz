@@ -21,7 +21,6 @@ import { createLoginUtility, type LoginUtility } from "./login-utility.ts"
 import type { AgentBackend, LimitFault } from "./backend/types.ts"
 import { limitResumeNeedsFreshProcess } from "./backend/usage-limit.ts"
 import { detectGithub, type GithubDetection } from "./github.ts"
-import * as tmux from "./tmux.ts"
 import type { InteractionStore } from "./interaction-store.ts"
 import {
   codexAppServerBridgeEnabled,
@@ -424,13 +423,6 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // The launcher/project resolver performs the crash-safe legacy migration exactly once and pins the
   // result through supervisor/child/reexec ownership. Never re-read FRAY_TMUX_SOCKET in a disposable
   // child: an environment drift must not move live workers to another server mid-run.
-  tmux.pinSocket(project.tmuxSocket ?? tmux.deriveProjectSocket(
-    project.id,
-    project.identityScope === "worktree",
-  ), {
-    projectId: project.id,
-    projectDir: project.dir,
-  }, project.tmuxSocketManaged !== false)
   const dbPath = join(project.stateDir, "ui.db")
   const storage = createStorage(dbPath)
   resources.storage = storage

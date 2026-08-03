@@ -42,7 +42,7 @@ export interface AdoptionRecoveryRuntime {
   killExpectedAdoptionPane(expected: ExpectedAdoptionPane): boolean
 }
 
-const productionRuntime: AdoptionRecoveryRuntime = {
+export const productionRuntime: AdoptionRecoveryRuntime = {
   lookupAdoptionPane: () => ({ kind: "absent" }),
   findAdoptionPane: () => ({ kind: "absent" }),
   findAdoptionPanes: (tokens) => new Map(tokens.map((t) => [t, { kind: "absent" as const }])),

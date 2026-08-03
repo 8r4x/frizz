@@ -23,7 +23,7 @@ import { createCodexBackend } from "./backend/codex.ts"
 import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
 import type { ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
 import type { AgentBackend } from "./backend/types.ts"
-import type { PaneIdentity, TmuxSpawnOptions } from "./tmux.ts"
+import type { PaneIdentity } from "./adoption-recovery.ts"
 
 function tmp(prefix: string) {
   return mkdtempSync(join(tmpdir(), prefix))

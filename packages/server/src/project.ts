@@ -9,7 +9,6 @@ import {
 } from "./project-identity.ts"
 import type { ProjectLaunchTarget } from "./project-launch.ts"
 import { projectStateDir } from "./fray-paths.ts"
-import { resolveProjectTmuxSocketSelection } from "./tmux-socket.ts"
 
 // Workspace resolution + on-disk locations. Everything here is derived once at boot and
 // threaded through the AppContext — no module reads cwd on its own.
@@ -21,8 +20,6 @@ export interface Project {
   label: string // "owner/repo" from the git origin remote, else name (repos with no remote)
   stateDir: string // ~/.fray/projects/<id>/ — SQLite + server.lock live here
   cwdSlug: string // ~/.claude/projects/<slug>/ session-log dir name
-  tmuxSocket?: string // production resolvers always pin this; optional only for narrow test fixtures
-  tmuxSocketManaged?: boolean // false only for an explicit FRAY_TMUX_SOCKET override
   // Present for linked worktrees; ordinary/main worktrees use the repository-scoped identity.
   identityScope?: Extract<GitProjectIdentityScope, "worktree">
 }
@@ -159,7 +156,6 @@ export function resolveProject(cwd = process.cwd(), home = homedir(), env: NodeJ
     stateDir,
     ...(identity.scope === "worktree" ? { identityScope: "worktree" as const } : {}),
   }
-  const selected = resolveProjectTmuxSocketSelection(target, { repositoryOverride: env.FRAY_TMUX_SOCKET })
   return {
     dir,
     id,
@@ -167,8 +163,6 @@ export function resolveProject(cwd = process.cwd(), home = homedir(), env: NodeJ
     label: resolveProjectLabel(dir) ?? name,
     stateDir,
     cwdSlug: cwdSlug(dir),
-    tmuxSocket: selected.socket,
-    tmuxSocketManaged: selected.managed,
     ...(identity.scope === "worktree" ? { identityScope: "worktree" as const } : {}),
   }
 }
@@ -193,8 +187,6 @@ export function projectLaunchTarget(project: Project): ProjectLaunchTarget {
     projectId: project.id,
     projectDir: project.dir,
     stateDir: project.stateDir,
-    tmuxSocket: project.tmuxSocket,
-    tmuxSocketManaged: project.tmuxSocketManaged,
     ...(project.identityScope === "worktree" ? { identityScope: "worktree" as const } : {}),
   }
 }
@@ -212,9 +204,6 @@ export function projectFromLaunchTarget(
   }
   if (dir !== target.projectDir) throw new Error("pinned Fray project directory is not canonical")
   const name = basename(dir) || dir
-  const selected = target.tmuxSocket
-    ? { socket: target.tmuxSocket, managed: target.tmuxSocketManaged !== false }
-    : resolveProjectTmuxSocketSelection(target, { repositoryOverride: env.FRAY_TMUX_SOCKET })
   return {
     dir,
     id: target.projectId,
@@ -222,8 +211,6 @@ export function projectFromLaunchTarget(
     label: resolveProjectLabel(dir) ?? name,
     stateDir: target.stateDir,
     cwdSlug: cwdSlug(dir),
-    tmuxSocket: selected.socket,
-    tmuxSocketManaged: selected.managed,
     ...(target.identityScope === "worktree" ? { identityScope: "worktree" as const } : {}),
   }
 }

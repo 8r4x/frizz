@@ -46,8 +46,6 @@ export interface ProjectLaunchTarget {
   projectDir: string
   stateDir: string
   identityScope?: "worktree"
-  tmuxSocket?: string
-  tmuxSocketManaged?: boolean
 }
 
 export type ProjectLaunchDelegateRole = "control-plane"
@@ -62,8 +60,6 @@ export interface ProjectLaunchOwnerRecord extends ProcessGeneration {
   token: string
   projectId: string
   projectDir: string
-  tmuxSocket?: string
-  tmuxSocketManaged?: boolean
   role: ProjectLaunchRole
   state: "active" | "draining"
   delegates: ProjectLaunchDelegateRecord[]
@@ -296,9 +292,6 @@ function parseOwner(path: string): ProjectLaunchOwnerRecord | null {
       !UUID_RE.test(value.projectId) ||
       !validText(value.projectDir) ||
       !isAbsolute(value.projectDir) ||
-      (value.tmuxSocket !== undefined && (!validText(value.tmuxSocket, 64) || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/u.test(value.tmuxSocket))) ||
-      (value.tmuxSocketManaged !== undefined && typeof value.tmuxSocketManaged !== "boolean") ||
-      ((value.tmuxSocket === undefined) !== (value.tmuxSocketManaged === undefined)) ||
       !validRole(value.role) ||
       !validText(value.acquiredAt, 128) ||
       !validText(value.updatedAt, 128)
@@ -311,9 +304,6 @@ function parseOwner(path: string): ProjectLaunchOwnerRecord | null {
       token: value.token,
       projectId: value.projectId,
       projectDir: value.projectDir,
-      ...(typeof value.tmuxSocket === "string"
-        ? { tmuxSocket: value.tmuxSocket, tmuxSocketManaged: value.tmuxSocketManaged as boolean }
-        : {}),
       role: value.role,
       state,
       delegates,
@@ -335,10 +325,7 @@ export function readProjectLaunchOwner(stateDir: string): ProjectLaunchOwnerReco
 }
 
 function sameTarget(record: ProjectLaunchOwnerRecord, target: ProjectLaunchTarget): boolean {
-  return record.projectId === target.projectId && record.projectDir === target.projectDir &&
-    (!record.tmuxSocket || !target.tmuxSocket || (
-      record.tmuxSocket === target.tmuxSocket && record.tmuxSocketManaged === target.tmuxSocketManaged
-    ))
+  return record.projectId === target.projectId && record.projectDir === target.projectDir
 }
 
 // The owner file itself is scoped by target.stateDir. A repository/worktree can be moved while a
@@ -441,9 +428,6 @@ function newOwnerRecord(
     token: randomUUID(),
     projectId: target.projectId,
     projectDir: target.projectDir,
-    ...(target.tmuxSocket
-      ? { tmuxSocket: target.tmuxSocket, tmuxSocketManaged: target.tmuxSocketManaged !== false }
-      : {}),
     role,
     state: "active",
     delegates: [],
@@ -572,9 +556,6 @@ export function adoptProjectLaunchOwner(
       ...generation,
       version: 2,
       role,
-      ...(target.tmuxSocket
-        ? { tmuxSocket: target.tmuxSocket, tmuxSocketManaged: target.tmuxSocketManaged !== false }
-        : {}),
       updatedAt: new Date(adapter.now()).toISOString(),
     }
     atomicJson(path, next)
@@ -710,10 +691,6 @@ export function projectLaunchEnvironment(
     [FRAY_LAUNCH_PROJECT_DIR]: target.projectDir,
     [FRAY_LAUNCH_STATE_DIR]: target.stateDir,
     [FRAY_LAUNCH_IDENTITY_SCOPE]: target.identityScope ?? "repository",
-    ...(target.tmuxSocket ? {
-      [FRAY_LAUNCH_TMUX_SOCKET]: target.tmuxSocket,
-      [FRAY_LAUNCH_TMUX_SOCKET_MANAGED]: target.tmuxSocketManaged === false ? "0" : "1",
-    } : {}),
   }
 }
 

@@ -15,7 +15,7 @@ import type { AgentBackend } from "./backend/types.ts"
 import type { Project } from "./project.ts"
 import type { Tailer } from "./tailer.ts"
 import type { Settings, ThreadView, BoardSnapshot } from "@fray-ui/shared"
-import type { PaneSnapshot } from "./tmux.ts"
+import type { PaneIdentity as PaneSnapshot } from "./adoption-recovery.ts"
 
 // bump-unarchives: BUMPING (followUp/resume) an ARCHIVED thread must UN-ARCHIVE it so it moves from the
 // sidebar's Inactive section back to Active. The move is server-driven: resumeThread flips the row's

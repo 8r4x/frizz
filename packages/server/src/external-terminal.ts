@@ -9,7 +9,6 @@ export function shellQuote(value: string): string {
 // lives only in the running process's memory — a pending permission prompt above all — is invisible
 // here, because the transcript does not contain it (verified 2026-07-25: a worker parked on a prompt
 // had NO record of it in its JSONL; the last durable line predated the prompt by 74s). Prefer
-// tmuxAttachCommand whenever fray still owns a live pane.
 //
 // It carries the provider's permission-bypass flag because a human driving a session by hand should
 // not be re-prompted for work the unattended worker was already trusted to do. claude:
@@ -32,6 +31,3 @@ export function providerResumeCommand(backend: "claude" | "codex", projectDir: s
 // `-t fray-set-up-a-canary-build-system` (no such session) silently PREFIX-MATCHED into the running
 // `…-2` pane, while the `=` form correctly refused. Attaching a human to the wrong agent's terminal
 // is exactly the class of bug the rest of tmux.ts already guards with this spelling.
-export function tmuxAttachCommand(socket: string, tmuxName: string): string {
-  return `tmux -L ${shellQuote(socket)} attach -t ${shellQuote(`=${tmuxName}`)}`
-}

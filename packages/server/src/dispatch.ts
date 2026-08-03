@@ -25,13 +25,13 @@ import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
 import { claudeBrokerBridgeEnabled, type ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
 import { ProviderAuthRequiredError } from "./backend/auth-status.ts"
 import { readBoard, type FrayBoard, type FrayThread } from "./fray.ts"
-import * as tmux from "./tmux.ts"
 import { SYSTEM_PROMPT_DIR, cleanupAdoptionSessionFiles, systemPromptPath } from "./session-files.ts"
 import {
   ADOPTION_ATTEMPT_LEASE_MS,
   abandonAdoptionAttempt,
   reconcileAdoptionClaims,
   type AdoptionRecoveryRuntime,
+  productionRuntime as productionAdoptionRuntime,
 } from "./adoption-recovery.ts"
 
 // Dispatch = provision the thread's scratchpad + compose the full prompt + spawn a detached `claude`
@@ -767,10 +767,10 @@ export interface DispatchDeps {
   readBoard?: typeof readBoard
   getSettings: () => Settings
   claudeBin?: string // injectable (tests / a stand-in command)
-  spawn?: typeof tmux.spawn // injectable so tests don't touch tmux; identity is mandatory for safe rollback
-  // Adoption rollback may stop only the exact pane identity returned by its own spawn. There is no
-  // name-targeted fallback: a competing/current owner of the slug must never be killed.
-  killExpectedAdoptionPane?: typeof tmux.killExpectedAdoptionPane
+  // Inert since the broker became the only transport: dispatch spawns through the bridge, and there
+  // is no pane to roll back. Both stay as accepted-and-ignored seams so existing fixtures still typecheck.
+  spawn?: unknown
+  killExpectedAdoptionPane?: unknown
   // Per-session agent-backend resolver that builds the spawn argv + injection (Codex-support epic).
   // Injected by the composition layer (context.ts); when absent (tests) dispatch falls back to the
   // local Claude argv builder, producing a byte-identical command. Selected by `opts.backend`.
@@ -804,15 +804,9 @@ export interface DispatchDeps {
 }
 
 export function createDispatcher(deps: DispatchDeps): Dispatcher {
-  const spawn = deps.spawn ?? tmux.spawn
   const readBoardSource = deps.readBoard ?? readBoard
   const frayDir = join(deps.project.dir, ".fray")
-  const adoptionRuntime: AdoptionRecoveryRuntime = deps.adoptionRuntime ?? {
-    lookupAdoptionPane: tmux.lookupAdoptionPane,
-    findAdoptionPane: tmux.findAdoptionPane,
-    findPaneIdentity: tmux.findPaneIdentity,
-    killExpectedAdoptionPane: deps.killExpectedAdoptionPane ?? tmux.killExpectedAdoptionPane,
-  }
+  const adoptionRuntime: AdoptionRecoveryRuntime = deps.adoptionRuntime ?? productionAdoptionRuntime
 
   // Build the detached-spawn command through the backend seam for the chosen `kind` (falling back to
   // the local Claude builder when no resolver is injected — identical argv). Returns argv + prewrites.

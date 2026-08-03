@@ -29,13 +29,12 @@ import {
   frayConfigBlock,
   loadWorkerPrompt,
 } from "./dispatch.ts"
-import * as tmux from "./tmux.ts"
-import type { PaneIdentity } from "./tmux.ts"
 import {
   ADOPTION_ATTEMPT_LEASE_MS,
   abandonAdoptionAttempt,
   adoptionRuntimeBinding,
   type AdoptionRecoveryRuntime,
+  type PaneIdentity,
 } from "./adoption-recovery.ts"
 
 /**
@@ -236,12 +235,6 @@ function commitPermissionRuntime(
 // composer. Neither backend exposes a supported control channel for mutating an arbitrary live TUI;
 // reopening the persisted conversation with its documented CLI flag is the truthful, deterministic
 // transition. A failed target launch immediately restores the prior mode.
-function profileBindingMatchesPane(binding: ProfileHandoffBinding, pane: tmux.PaneSnapshot): boolean {
-  return binding.paneId === pane.paneId && binding.panePid === pane.panePid &&
-    binding.sessionCreated === pane.sessionCreated &&
-    (!binding.handoffToken || pane.profileHandoffToken === binding.handoffToken) &&
-    (!binding.adoptionAttemptToken || pane.adoptionAttemptToken === binding.adoptionAttemptToken)
-}
 
 function profileExpectedFromRow(row: SessionRow): ProfileChangeExpectation {
   if (!row.profile_pending_model || !row.profile_pending_effort || !row.profile_handoff) {

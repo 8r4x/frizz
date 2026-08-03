@@ -28,7 +28,6 @@ import {
   resolveGitWorktree,
   tryReservePort,
 } from "../packages/server/src/project-identity.ts";
-import { deriveProjectSocket, deriveSocket } from "../packages/server/src/tmux.ts";
 import {
   acquireProjectLaunchOwner,
   defaultProcessPlatformAdapter,
@@ -76,7 +75,6 @@ interface IdentityResult {
   root: string;
   id: string;
   stateDir: string;
-  socket: string;
   identityScope: "repository" | "worktree";
 }
 
@@ -287,7 +285,6 @@ function spawnIdentityChild(
       id: value.id,
       stateDir: value.stateDir,
       identityScope,
-      socket: value.tmuxSocket,
     }))
   `;
   const child = spawnChild(
@@ -378,10 +375,6 @@ function assertOneIdentity(
   assert.deepEqual(
     [...new Set(results.map(({ stateDir }) => stateDir))],
     [projectStateDir(first.id, home)]
-  );
-  assert.deepEqual(
-    [...new Set(results.map(({ socket }) => socket))],
-    [deriveSocket(first.id)]
   );
   assert.deepEqual(
     [...new Set(results.map(({ identityScope }) => identityScope))],
@@ -639,7 +632,6 @@ test("main and linked worktrees concurrently resolve to three stable isolated Fr
       assert.equal(group.length, 2, `CLI and server agree for ${root}`);
       assert.equal(new Set(group.map(({ id }) => id)).size, 1);
       assert.equal(new Set(group.map(({ stateDir }) => stateDir)).size, 1);
-      assert.equal(new Set(group.map(({ socket }) => socket)).size, 1);
       assert.equal(
         new Set(group.map(({ identityScope }) => identityScope)).size,
         1
@@ -652,7 +644,6 @@ test("main and linked worktrees concurrently resolve to three stable isolated Fr
       new Set(representatives.map(({ stateDir }) => stateDir)).size,
       3
     );
-    assert.equal(new Set(representatives.map(({ socket }) => socket)).size, 3);
     assert.equal(
       new Set(representatives.map(({ stateDir }) => join(stateDir, "ui.db")))
         .size,
@@ -671,11 +662,6 @@ test("main and linked worktrees concurrently resolve to three stable isolated Fr
       projectStateDir(legacyId, home)
     );
     assert.equal(
-      mainResult.socket,
-      deriveSocket(legacyId),
-      "main worktree migrates to its full project socket"
-    );
-    assert.equal(
       readFileSync(join(mainResult.stateDir, "legacy-state"), "utf8"),
       "preserved"
     );
@@ -683,7 +669,6 @@ test("main and linked worktrees concurrently resolve to three stable isolated Fr
       const result = byRoot.get(realpathSync(linked))![0]!;
       assert.equal(result.identityScope, "worktree");
       assert.notEqual(result.id, legacyId);
-      assert.equal(result.socket, deriveProjectSocket(result.id, true));
       const config = resolveGitWorktree(linked).identityConfig;
       assert.ok(config);
       assert.equal(
@@ -1708,7 +1693,6 @@ test("two distinct repositories concurrently reserve different launch ports with
     assert.equal(reservations.length, 2);
     assert.equal(new Set(reservations.map(({ port }) => port)).size, 2);
     assert.equal(new Set(reservations.map(({ workspace }) => workspace.id)).size, 2);
-    assert.equal(new Set(reservations.map(({ workspace }) => workspace.tmuxSocket)).size, 2);
   } finally {
     await Promise.all(reservations.map(({ close }) => close()));
     rmSync(base, { recursive: true, force: true });

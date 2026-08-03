@@ -11,7 +11,7 @@ import { defaultSettings } from "./settings.ts"
 import { cwdSlug, type Project } from "./project.ts"
 import type { BoardManager } from "./board.ts"
 import type { ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
-import { ADOPTION_ATTEMPT_ENV, type PaneIdentity, type PaneSnapshot, type TmuxSpawnOptions } from "./tmux.ts"
+import { type PaneIdentity } from "./adoption-recovery.ts"
 import { readBoard, type FrayBoard, type FrayThread } from "./fray.ts"
 import {
   ADOPTION_ATTEMPT_LEASE_MS,
@@ -416,55 +416,6 @@ test("an unexpired durable adoption reservation blocks retry before tmux or file
   assert.equal(existsSync(join(h.dir, ".fray", "threads")), false)
 })
 
-test("a blocked retired-token orphan remains authoritative without a live row or claim", async () => {
-  const token = randomUUID()
-  let orphan: PaneSnapshot = {
-    paneId: "%77",
-    panePid: 7700,
-    sessionCreated: 77_000,
-    dead: false,
-    adoptionAttemptToken: token,
-  }
-  const h = harness({
-    adoptionRuntime: {
-      lookupAdoptionPane: () => ({ kind: "absent" }),
-      findAdoptionPane: (candidate) => candidate === token && orphan.adoptionAttemptToken === token
-        ? { kind: "found", pane: orphan }
-        : { kind: "absent" },
-      findAdoptionPanes: (tokens) => new Map(tokens.map((candidate) => [
-        candidate,
-        candidate === token && orphan.adoptionAttemptToken === token
-          ? { kind: "found", pane: orphan }
-          : { kind: "absent" },
-      ])),
-      findPaneIdentity: (identity) =>
-        identity.paneId === orphan.paneId &&
-        identity.panePid === orphan.panePid &&
-        identity.sessionCreated === orphan.sessionCreated
-          ? { kind: "found", pane: orphan }
-          : { kind: "absent" },
-      killExpectedAdoptionPane: () => {
-        orphan = { ...orphan, adoptionAttemptToken: null }
-        return false
-      },
-    },
-  })
-  h.addLegacyFile("retired-orphan")
-  assert.equal(h.storage.reserveAdoptionClaim({
-    slug: "retired-orphan",
-    attemptToken: token,
-    sessionId: randomUUID(),
-    reservedAtMs: 1,
-    leaseExpiresAtMs: 2,
-  }), true)
-  assert.equal(h.storage.abandonAdoptionClaim("retired-orphan", token), true)
-  assert.equal(h.storage.getAdoptionClaim("retired-orphan"), undefined)
-
-  await assert.rejects(h.dispatcher.adopt("retired-orphan"), /thread is not available for adoption/)
-  assert.equal(h.spawned.length, 0)
-  assert.equal(h.storage.getSession("retired-orphan"), undefined)
-  assert.equal(orphan.adoptionAttemptToken, null, "the renamed exact pane survived after losing its token")
-})
 
 test("a registered active worker owns its slug and adoption never touches tmux", async () => {
   const h = harness({ hasSession: () => true })

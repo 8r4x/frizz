@@ -10,7 +10,7 @@ import { cwdSlug, type Project } from "./project.ts"
 import type { BoardManager } from "./board.ts"
 import type { ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
 import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
-import type { PaneIdentity } from "./tmux.ts"
+import type { PaneIdentity } from "./adoption-recovery.ts"
 
 // TITLE PROVENANCE ACROSS EVERY TRANSPORT.
 //

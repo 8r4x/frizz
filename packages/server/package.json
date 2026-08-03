@@ -9,7 +9,6 @@
     "./detached-daemons": "./src/detached-daemons.ts",
     "./project-identity": "./src/project-identity.ts",
     "./project-launch": "./src/project-launch.ts",
-    "./tmux-socket": "./src/tmux-socket.ts",
     "./local-origin": "./src/local-origin.ts",
     "./dev-supervisor": "./src/dev-supervisor.ts",
     "./dev-child": "./src/dev-child.ts",
