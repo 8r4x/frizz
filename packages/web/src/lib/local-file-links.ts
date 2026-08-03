@@ -50,7 +50,10 @@ function imageFailureHandler(): (event: Event) => void {
     missing.textContent = path
     // The author's alt text is the only description of what the picture showed; keep it reachable.
     if (img.alt && img.alt !== path) missing.title = img.alt
-    img.replaceWith(missing)
+    // Take the FRAME with it when there is one (markdown.ts frames block images). Replacing only the
+    // `<img>` would leave a bordered, matted box standing around a line of muted path text — a frame
+    // advertising a picture that isn't there. BlockImage drops its frame on the same failure.
+    ;(img.closest(".md-image-frame") ?? img).replaceWith(missing)
   }
 }
 

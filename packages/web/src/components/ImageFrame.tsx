@@ -22,13 +22,21 @@ import type { ReactNode } from "react"
 // `fray-bash-header` sit inside this frame and render identically to a Bash / Read / Edit header.
 export function ImageFrame({ header, caption, children }: { header?: ReactNode; caption?: ReactNode; children: ReactNode }) {
   return (
-    <figure className="fray-bash max-w-full">
+    <figure className={IMAGE_FRAME}>
       {header}
-      <div className="flex justify-center bg-panel-2 p-1.5">{children}</div>
+      <div className={IMAGE_FRAME_MAT}>{children}</div>
       {caption}
     </figure>
   )
 }
+
+// The frame's two boxes as bare class strings, because the OTHER surface that has to draw this frame
+// cannot render a component: a Markdown `![](…)` is sanitized into an HTML STRING (lib/markdown.ts),
+// never into React. It mints the same two boxes around its `<img>` from these exact constants, so the
+// framed picture a worker writes as Markdown and the one it delivers as a bare path are the same object
+// rather than two lookalikes that drift apart on the next change here.
+export const IMAGE_FRAME = "fray-bash max-w-full"
+export const IMAGE_FRAME_MAT = "flex justify-center bg-panel-2 p-1.5"
 
 // The picture inside the frame: never wider than the mat, never taller than a screenful, always keeping
 // its intrinsic aspect. Shared so the frame's contents are as consistent as the frame itself.

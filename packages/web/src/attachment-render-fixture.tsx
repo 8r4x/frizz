@@ -12,7 +12,15 @@ import { installLocalFileLinkInterceptor } from "./lib/local-file-links.ts"
 // mapping ChatView performs. /local-image and /rpc/openLocalFile are stubbed so the fixture renders
 // and the chip's click wiring (data-local-path → openLocalFile) can be asserted without a live stack.
 
-// A 1x1 PNG so the <img> actually paints (the route is stubbed to return these bytes).
+// A 1x1 PNG for the /local-image route below.
+//
+// It does NOT make the pictures paint, and the comment here used to claim it did: an <img> load is not
+// a `fetch`, so the stub underneath never sees it. Under plain Vite the route 404s, both images fail,
+// and each falls back to its plain path — BlockImage through its own `broken` state, the Markdown one
+// through the delegated handler in lib/local-file-links.ts. That is worth having (this page is where
+// the two FALLBACKS are seen side by side, and it is how we know a broken Markdown image takes its
+// frame down with it instead of leaving an empty bordered box). But it means the FRAMES themselves
+// cannot be judged here — for that, drive a real stack, where /local-image serves real files.
 const PNG_1x1 = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0))
 
 const nativeFetch = window.fetch.bind(window)
@@ -33,11 +41,19 @@ window.fetch = async (input, init) => {
 
 // Covers: intro prose, an attached image (inline) + pdf + svg (chips), AND a fenced code block whose
 // body contains standalone absolute paths — those must stay INSIDE the code block, never become chips.
+//
+// It also puts the two ways a worker can show a picture beside each other: the bare PATH, which
+// ChatView renders as a <BlockImage>, and the MARKDOWN `![](…)`, which goes down the sanitizer's own
+// path instead (lib/markdown.ts) and builds the same frame out of ImageFrame's exported class strings.
+// A markdown image is NOT a standalone path, so splitProseAttachments leaves it in the prose. Here they
+// are seen as their two FALLBACKS (see the PNG note above); the frames themselves need a real stack.
 const message = [
   "Please review these attachments before we start.",
   "/tmp/fray-att/spec-notes.pdf",
   "/tmp/fray-att/diagram.png",
   "/tmp/fray-att/logo.svg",
+  "And the same picture again, written as Markdown rather than as a bare path:",
+  "![the same diagram, via markdown](/tmp/fray-att/diagram.png)",
   "Here is the file listing I ran:",
   "```",
   "/Users/foo/project/src/main.rs",

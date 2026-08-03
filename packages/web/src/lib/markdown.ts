@@ -2,6 +2,7 @@ import { Marked } from "marked"
 import type { Token, Tokens, TokenizerAndRendererExtension } from "marked"
 import { renderHighlightedCode } from "./syntaxHighlight.ts"
 import { localImageUrlForTarget, localMarkdownTarget } from "./markdownTargets.ts"
+import { FRAMED_IMAGE, IMAGE_FRAME, IMAGE_FRAME_MAT } from "../components/ImageFrame.tsx"
 
 // marked's GFM strikethrough opener is `~~?` — ONE tilde is enough. That misreads the tilde agents
 // actually type: `~` is the approximation sign ("takes ~2.7s", "around ~line 897") and the home
@@ -254,7 +255,7 @@ export function mdToHtml(md: string): string {
   if (!md.trim()) return ""
   // breaks: single newlines are HARD breaks (chat convention — Slack/GitHub-comment style);
   // CommonMark default silently glued "item ✅\nitem ✅" lists onto one line.
-  return sanitize(markdown.parse(md, { async: false }) as string)
+  return sanitize(markdown.parse(md, { async: false }) as string, { block: true })
 }
 
 // INLINE-only render: emphasis/strong/code/del/links but NO block wrapping (`<p>`, headings, lists).
@@ -269,7 +270,7 @@ export function mdToHtml(md: string): string {
 // still render; only the interactivity is stripped.
 export function mdInlineToHtml(md: string, opts?: { inertInteractive?: boolean }): string {
   if (!md.trim()) return ""
-  return sanitize(markdown.parseInline(md, { async: false }) as string, opts?.inertInteractive ?? false)
+  return sanitize(markdown.parseInline(md, { async: false }) as string, { inertInteractive: opts?.inertInteractive ?? false })
 }
 
 export function stripFrontmatter(md: string): string {
@@ -302,14 +303,18 @@ const DROP_WITH_CONTENT = new Set([
   "object", "embed", "applet", "noscript", "template", "svg", "math",
 ])
 
-function sanitize(dirty: string, inertInteractive = false): string {
+// `block` — this prose owns its own vertical space (mdToHtml), so a local image may be framed the way
+// every other rendered picture in the app is. FALSE on the inline path: that result is dropped into a
+// host that is one line tall (an answer chip, a caption), where a block frame would burst the row. The
+// picture still renders there, bare and inline, exactly as it did before frames existed.
+function sanitize(dirty: string, { inertInteractive = false, block = false } = {}): string {
   const tpl = document.createElement("template")
   tpl.innerHTML = dirty
-  walk(tpl.content, inertInteractive)
+  walk(tpl.content, inertInteractive, block)
   return tpl.innerHTML
 }
 
-function walk(node: ParentNode, inertInteractive: boolean) {
+function walk(node: ParentNode, inertInteractive: boolean, block: boolean) {
   for (const el of Array.from(node.children)) {
     const tag = el.tagName.toLowerCase()
     if (!ALLOWED_TAGS.has(tag)) {
@@ -318,7 +323,7 @@ function walk(node: ParentNode, inertInteractive: boolean) {
       // the rest of the block, so `el.remove()` silently deleted everything after it. Keeping the
       // children (what DOMPurify does) costs only the bracketed token itself.
       if (DROP_WITH_CONTENT.has(tag)) el.remove()
-      else unwrap(el, inertInteractive)
+      else unwrap(el, inertInteractive, block)
       continue
     }
     if (tag === "a" && inertInteractive) {
@@ -327,7 +332,7 @@ function walk(node: ParentNode, inertInteractive: boolean) {
       const span = document.createElement("span")
       while (el.firstChild) span.append(el.firstChild)
       el.replaceWith(span)
-      walk(span, inertInteractive)
+      walk(span, inertInteractive, block)
       continue
     }
     if (tag === "a") {
@@ -371,6 +376,9 @@ function walk(node: ParentNode, inertInteractive: boolean) {
       el.setAttribute("data-local-path", target.posixPath!)
       el.setAttribute("data-local-image", "true")
       if (!el.getAttribute("alt")) el.setAttribute("alt", target.display)
+      // Block prose only — see sanitize's `block`. The attribute loop below still runs on `el`, which
+      // is the image itself; the frame around it is ours and is deliberately never re-walked.
+      if (block) frameImage(el)
     }
     for (const attr of Array.from(el.attributes)) {
       const name = attr.name.toLowerCase()
@@ -395,15 +403,43 @@ function walk(node: ParentNode, inertInteractive: boolean) {
       el.setAttribute("target", "_blank")
       el.setAttribute("rel", "noopener noreferrer")
     }
-    walk(el, inertInteractive)
+    walk(el, inertInteractive, block)
   }
+}
+
+// Wrap a local Markdown image in the SAME frame every other rendered picture in the app sits in —
+// components/ImageFrame, whose two boxes arrive here as class strings because this path builds HTML,
+// not React. `![shot](/tmp/a.png)` used to render as a naked `<img>` while the identical screenshot
+// written as a bare path (BlockImage) got a border, a mat and a height cap; one picture, two treatments,
+// decided by which syntax the worker happened to use.
+//
+// SPANS, not the component's `<figure>`/`<div>`. marked renders an image as `<p><img></p>`, and this
+// HTML is re-parsed by the browser when a surface injects it — where `<figure>`, not being phrasing
+// content, makes the parser CLOSE the paragraph and split the prose around the picture. A span is
+// phrasing content and survives that round trip intact; `md-image-frame` supplies the `display: block`
+// the frame's own class does not carry.
+//
+// This runs AFTER the walk's allowlist decisions and mints its own elements, which is what keeps it
+// safe: `figure`/`div`/`span`-with-arbitrary-class cannot be hand-written into a frame by an author,
+// since those tags are not in ALLOWED_TAGS and this is the only code that builds one. Setting `class`
+// outright (rather than merging) also drops any class a raw-HTML `<img>` smuggled past ALLOWED_ATTRS.
+function frameImage(img: Element) {
+  const doc = img.ownerDocument
+  const frame = doc.createElement("span")
+  frame.className = `${IMAGE_FRAME} md-image-frame`
+  const mat = doc.createElement("span")
+  mat.className = IMAGE_FRAME_MAT
+  img.replaceWith(frame)
+  frame.append(mat)
+  mat.append(img)
+  img.setAttribute("class", FRAMED_IMAGE)
 }
 
 // Splice an element's children in where the element stood. They are sanitized BEFORE the splice: the
 // caller is iterating a snapshot of the parent's children and would never revisit them otherwise.
-function unwrap(el: Element, inertInteractive: boolean) {
+function unwrap(el: Element, inertInteractive: boolean, block: boolean) {
   const frag = el.ownerDocument.createDocumentFragment()
   while (el.firstChild) frag.append(el.firstChild)
-  walk(frag, inertInteractive)
+  walk(frag, inertInteractive, block)
   el.replaceWith(frag)
 }

@@ -777,6 +777,18 @@ a[href] {
   border: 0;
   background: transparent;
 }
+/* The frame lib/markdown.ts mints around a local Markdown image. Its LOOK is entirely
+   components/ImageFrame's — the same two class strings that component renders — so the only thing
+   stated here is the `display` those classes don't carry, and it is needed only because the frame is a
+   SPAN: a `<figure>` would make the browser split the paragraph marked wraps every image in (see
+   frameImage). The picture inside carries FRAMED_IMAGE, so it needs nothing from this file either. */
+.md-body .md-image-frame {
+  display: block;
+}
+/* The image itself, on BOTH paths — inside a frame, and bare on the inline path, which deliberately
+   does not frame (a block frame would burst a one-line answer chip or caption). Every declaration here
+   either matches what FRAMED_IMAGE already sets or, like the cursor, is wanted in both places, so the
+   framed picture is unaffected by it. */
 .md-body img[data-local-path] {
   display: block;
   max-width: 100%;
