@@ -5,7 +5,6 @@ import { rpc } from "../api/rpc.ts"
 import { formatAgo } from "../lib/durationLabels.ts"
 import { showToast } from "../store.ts"
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
-import { Tooltip } from "./Tooltip.tsx"
 
 // The operator's half of a stop hook (server: scheduler.ts SOURCE 5) — text fray re-sends every
 // time this thread comes to REST, until the worker answers with the ALLDONE sentinel.
@@ -77,37 +76,38 @@ export function StopHookControl({ thread }: { thread: ThreadView }) {
   }
 
   const live = !!armed?.enabled
-  const label = live
-    ? `Stop hook — re-sent at every rest\n${armed!.prompt.trim()}`
-    : armed
-      ? `Stop hook (off)\n${armed.prompt.trim()}`
-      : "Stop hook — bump this thread at every rest"
 
   return (
     <Popover open={open} onOpenChange={(next) => { setOpen(next); if (!next) void persist(enabled, text) }}>
-      <Tooltip label={label} side="top" multiline={!!armed}>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            data-stop-hook
-            data-stop-hook-on={live ? "true" : "false"}
-            aria-label="Stop hook"
-            className="flex items-center rounded-md px-0.5 py-0.5 outline-none"
-          >
-            {/* The square-in-a-circle, and the ONLY surface that says a stop hook exists (the rail
-                deliberately carries no mark for one — see groups.ts). GREY by default and coloured only
-                while the hook is actually armed and enabled: the footer's left cluster is a status strip
-                first, so a control with nothing to report has to read as quiet as the empty slot it
-                would otherwise leave. Amber, not the app's accent yellow, so it reads as a state rather
-                than as the focus motif. */}
-            <CircleStop size={12} className={live ? "text-amber-400/90" : "text-muted/45 hover:text-muted"} />
-          </button>
-        </PopoverTrigger>
-      </Tooltip>
+      {/* No tooltip. This trigger used to carry one that printed the WHOLE armed prompt on hover — a
+          second, uninvited panel covering the footer every time the pointer crossed a 12px glyph
+          (maintainer 2026-08-02: "the hover-based popover is silly"). The prompt has one home now, and
+          you get there by clicking. */}
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          data-stop-hook
+          data-stop-hook-on={live ? "true" : "false"}
+          aria-label={live ? "Stop hook (on)" : "Stop hook"}
+          className="flex items-center rounded-md px-0.5 py-0.5 outline-none"
+        >
+          {/* The square-in-a-circle, and the ONLY surface that says a stop hook exists (the rail
+              deliberately carries no mark for one — see groups.ts). GREY by default and coloured only
+              while the hook is actually armed and enabled: the footer's left cluster is a status strip
+              first, so a control with nothing to report has to read as quiet as the empty slot it
+              would otherwise leave. Amber, not the app's accent yellow, so it reads as a state rather
+              than as the focus motif. */}
+          <CircleStop size={12} className={live ? "text-amber-400/90" : "text-muted/45 hover:text-muted"} />
+        </button>
+      </PopoverTrigger>
       <PopoverContent
         side="top"
         align="start"
-        className="w-[min(21rem,calc(100vw-1.5rem))] p-3 text-[11px] leading-relaxed text-fg"
+        // WIDE, and it takes the whole viewport when the viewport is small. The old 21rem cap made this
+        // a narrow column for prose that can run to 4000 characters, and on a phone-width screen it was
+        // narrower than the space actually available. The panel is a writing surface, so it is sized
+        // like one: ~110 columns where there is room, everything-minus-a-margin where there is not.
+        className="w-[min(46rem,calc(100vw-1.5rem))] p-3 text-[11px] leading-relaxed text-fg"
         // Radix otherwise autofocuses the first focusable child, which is the Off segment — and a
         // focus ring sitting on "Off" reads as the toggle being SET to off by the act of opening the
         // panel. Send the caret to the textarea when there is something to write in, and nowhere at
@@ -117,9 +117,17 @@ export function StopHookControl({ thread }: { thread: ThreadView }) {
           if (enabled) textarea.current?.focus()
         }}
       >
-        <div className="mb-2 flex items-center justify-between gap-3">
+        {/* The switch sits BESIDE its label, not at the far end of the row. They were a `justify-between`
+            pair, which reads as one control while the panel is 21rem and as two unrelated things once it
+            is 46rem — 700px of gulf between a word and the switch it names. What earns the far end is the
+            reading that belongs there: when it last fired. That also retires the orphan line this used to
+            leave under the explanation. */}
+        <div className="mb-2 flex items-center gap-3">
           <span className="font-medium">Stop hook</span>
           <OnOffToggle value={enabled} disabled={busy} onChange={toggle} />
+          {armed?.lastFiredAt && (
+            <span className="ml-auto truncate text-muted/55">Last sent {formatAgo(armed.lastFiredAt)}</span>
+          )}
         </div>
         {/* readOnly, not disabled, when off: the text is the operator's own writing and stays readable
             and selectable while parked. Only the ability to CHANGE it tracks the toggle. */}
@@ -138,9 +146,20 @@ export function StopHookControl({ thread }: { thread: ThreadView }) {
               setOpen(false)
             }
           }}
-          rows={4}
           placeholder={enabled ? "What should this thread keep doing every time it stops?" : "Turn it on to write one"}
-          className={`w-full resize-none rounded-md border border-border bg-bg px-2 py-1.5 text-[12px] leading-snug outline-none placeholder:text-muted/50 focus:border-border-strong ${enabled ? "text-fg" : "cursor-default text-muted/60"}`}
+          // `field-sizing: content` — the browser sizes the box from what is in it. It replaced a flat
+          // `rows={4}`, which made a prompt that can run to STOP_HOOK_MAX (4000 chars) a four-line
+          // peephole you scrolled your own writing through. `min-h`/`max-h` are the only bounds it
+          // needs: a comfortable empty size, and a ceiling that keeps the explanation below on screen
+          // (past which it scrolls).
+          //
+          // Deliberately NOT a JS auto-grow (maintainer 2026-08-02: "this should be a browser-native
+          // style, you shouldn't need to write JavaScript auto-grow logic"). The measure-and-set version
+          // is also the one that broke: driven from an effect on this component it ran with a null ref,
+          // because the panel mounts behind a Radix portal a render later, and never ran again. There is
+          // no render timing to lose to when the browser owns the sizing. Chromium ≥123, which is what
+          // this app runs in.
+          className={`field-sizing-content max-h-[42vh] min-h-[4.5rem] w-full resize-none overflow-y-auto rounded-md border border-border bg-bg px-2 py-1.5 text-[12px] leading-snug outline-none placeholder:text-muted/50 focus:border-border-strong ${enabled ? "text-fg" : "cursor-default text-muted/60"}`}
         />
         {/* The sentinel is set in mono with NO horizontal padding: a padded chip put a visible gap
             between the word and the full stop that follows it, which reads as a typo in a one-line
@@ -149,9 +168,6 @@ export function StopHookControl({ thread }: { thread: ThreadView }) {
           Sent every time the agent comes to rest. It stops when the agent replies{" "}
           <code className="font-mono font-medium text-fg/85">{STOP_HOOK_SENTINEL}</code>.
         </p>
-        {armed?.lastFiredAt && (
-          <p className="mt-1 text-muted/55">Last sent {formatAgo(armed.lastFiredAt)}</p>
-        )}
       </PopoverContent>
     </Popover>
   )

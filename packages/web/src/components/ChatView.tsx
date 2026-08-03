@@ -4,7 +4,7 @@ import { useSnapshot } from "valtio"
 import * as RadixTabs from "@radix-ui/react-tabs"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Bot, Check, ChevronRight, Ellipsis, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, ShieldCheck, Sparkles, TerminalSquare, X, type LucideIcon } from "lucide-react"
+import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, ShieldCheck, Sparkles, TerminalSquare, X, type LucideIcon } from "lucide-react"
 import type { AwaitingHint, BgShellView, NativeInputRequired as NativeInputRequiredData, PendingAsk, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@fray-ui/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBackgroundShellLines, useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
@@ -4075,15 +4075,19 @@ function EventLine({ text, boundary, sourceId }: { text: string; boundary?: Tran
   //
   // The glyph is why the server names the KIND rather than sending a bare flag. A `wake` is a
   // background shell/task coming back, and it takes the terminal glyph the rest of the app already uses
-  // for a background shell (BackgroundShellSheet, ExternalTerminalCommand). A `rest` takes the rail's
-  // own at-rest glyph — the ellipsis inside `[…]` in Sidebar's sessionIndicatorFor — so the two
-  // surfaces say "this agent has stopped" in ONE language rather than two invented ones. A `compaction`
-  // is not a child returning at all — nothing ran, the provider just dropped the conversation above this
-  // line — so it takes NO glyph rather than borrowing one that would misname it.
+  // for a background shell (BackgroundShellSheet, ExternalTerminalCommand). A `compaction` is not a
+  // child returning at all — nothing ran, the provider just dropped the conversation above this line —
+  // so it takes NO glyph rather than borrowing one that would misname it. Nor does a `rest`: it is the
+  // most FREQUENT divider by far — one per turn — and a mark on every one of them is noise the quieter
+  // bare rule does not make (maintainer 2026-08-02, on the ellipsis this shipped with).
   if (boundary) {
-    const icon = boundary === "wake" ? TerminalSquare : boundary === "rest" ? Ellipsis : undefined
     return (
-      <WakeDivider icon={icon} sourceId={sourceId} marker={boundary === "rest" ? "rest" : "event"} ariaLabel={text}>
+      <WakeDivider
+        icon={boundary === "wake" ? TerminalSquare : undefined}
+        sourceId={sourceId}
+        marker={boundary === "rest" ? "rest" : "event"}
+        ariaLabel={text}
+      >
         {text}
       </WakeDivider>
     )
