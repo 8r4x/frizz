@@ -21,7 +21,11 @@
 
 ## Getting started
 
-Run it inside any Git repo.
+1. Node 22.13+, or 23.4+ on the Node 23 line
+2. Git
+3. The [Claude Code](https://claude.com/claude-code) or [Codex](https://developers.openai.com/codex) CLI, signed in
+
+Then run it inside any Git repo.
 
 ```sh
 cd ~/taskly
@@ -38,9 +42,7 @@ npx frayui
   press ctrl-c to stop · run with --debug for the full event feed
 ```
 
-A browser tab opens on that address — a dedicated workspace for this repo. **One tab per repo!**
-
-Needs Node 22.13+ (or 23.4+ on the Node 23 line) and either the [Claude Code](https://claude.com/claude-code) or [Codex](https://developers.openai.com/codex) CLI signed in. Runs on macOS, Linux, and Windows.
+A browser tab opens on that address — a dedicated workspace for this repo. **One tab per repo!** Runs on macOS, Linux, and Windows.
 
 <p align="center">
   <img src="assets/board.png" alt="Fray running in a browser tab at 127.0.0.1:4921: a sidebar of threads on the left, and on the right a card where an agent is asking an answerable question with lettered options, above Snooze and Mark as done." width="100%">
