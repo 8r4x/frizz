@@ -1,5 +1,5 @@
 import Database from "./sqlite.ts"
-import { ThreadSlug, slugify, tmuxSessionName } from "@fray-ui/shared"
+import { ThreadSlug, slugify, threadIdentityName } from "@fray-ui/shared"
 import { createInteractionStore, type InteractionStore } from "./interaction-store.ts"
 import { log } from "./logging.ts"
 
@@ -11,6 +11,8 @@ import { log } from "./logging.ts"
 export interface SessionRow {
   slug: string
   session_id: string
+  // Legacy column NAME, live column: the thread identity string (`fray-<slug>`). It is not renamed
+  // because every existing ui.db on disk carries it; see threadIdentityName.
   tmux_name: string
   spawned_at: string // ISO8601
   last_read_at: string | null // ISO8601
@@ -66,8 +68,9 @@ export interface SessionRow {
   stop_hook?: string | null
   stop_hook_enabled?: number
   stop_hook_armed_at?: string | null
-  // When the last bump reached a terminal delivery. Read only as a rate FLOOR (see the scheduler's
-  // STOP_HOOK_MIN_GAP_MS): a worker that rests instantly on every bump must not spin the outbox.
+  // When the last bump reached a terminal delivery — the HEARTBEAT's input (scheduler's
+  // STOP_HOOK_HEARTBEAT_MS). No bump fires until that interval has elapsed since this stamp, so a
+  // thread is prompted at most once per interval however often it stops.
   stop_hook_last_fired_at?: string | null
   // Operator confirmation for one exact final ```awaiting fence generation. The board/scheduler ignore a
   // transcript proposal unless these match its current fence identity.
@@ -1349,7 +1352,7 @@ export function createStorage(dbPath: string): Storage {
 
   const validateSessionIdentity = (row: SessionRow) => {
     const slug = ThreadSlug.parse(row.slug)
-    if (row.tmux_name !== tmuxSessionName(slug)) throw new Error("invalid session thread identity")
+    if (row.tmux_name !== threadIdentityName(slug)) throw new Error("invalid session thread identity")
   }
 
   const validateAdoptionReservation = (reservation: AdoptionReservation) => {

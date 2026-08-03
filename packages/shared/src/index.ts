@@ -1844,8 +1844,7 @@ export type SocketServerMsg =
   | { t: "hb" }
 
 export const DEFAULT_PORT = 4917
-// The tmux socket name is NOT a shared constant: it is derived PER-PROJECT at server init (see
-// server/tmux.ts deriveSocket/setSocket/socketName) so two fray-ui instances never share one tmux
-// server and collide on fray-<slug> session names. Route all `tmux -L <socket>` calls through
-// tmux.socketName(); never re-introduce a literal socket constant here.
-export const tmuxSessionName = (slug: string) => `fray-${ThreadSlug.parse(slug)}`
+// A thread's stable identity string, `fray-<slug>`. It named a tmux session once; fray has no tmux,
+// and this survives as the integrity check on the session row's `tmux_name` column — a row whose
+// stored name does not re-derive from its own slug has been tampered with or mis-keyed.
+export const threadIdentityName = (slug: string) => `fray-${ThreadSlug.parse(slug)}`

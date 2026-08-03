@@ -60,7 +60,12 @@ export function isSessionRoot(command: string): boolean {
   return /(?:^|\s)--session-id(?:\s|=)/.test(command)
 }
 
-/** tmux servers inherit the first thread's FRAY_UI_THREAD in env, but are shared infrastructure. */
+/**
+ * Fray no longer spawns tmux, but this guard OUTLIVES the strip on purpose: upgrading from a
+ * pre-cutover fray can leave a tmux server holding panes the operator may still be reading, and it
+ * inherits the first thread's FRAY_UI_THREAD in env — which is exactly what makes it look reapable.
+ * Killing it would take those panes with it.
+ */
 export function isTmuxServer(command: string): boolean {
   return firstTokenBasename(command) === "tmux"
 }

@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { AdoptThreadInput, DispatchInput, THREAD_SLUG_MAX_CHARS, ThreadSlug, tmuxSessionName } from "@fray-ui/shared"
+import { AdoptThreadInput, DispatchInput, THREAD_SLUG_MAX_CHARS, ThreadSlug, threadIdentityName } from "@fray-ui/shared"
 import { createDispatcher, resolveLegacyThreadFile, resolveSlug, slugify } from "./dispatch.ts"
 import { createStorage, type SessionRow, type Storage } from "./storage.ts"
 import { defaultSettings } from "./settings.ts"
@@ -192,13 +192,13 @@ test("one canonical thread slug contract rejects path, control, option, Unicode,
     assert.equal(ThreadSlug.safeParse(valid).success, true, valid)
     assert.equal(DispatchInput.safeParse({ prompt: "safe", slug: valid }).success, true, valid)
     assert.equal(AdoptThreadInput.safeParse({ slug: valid }).success, true, valid)
-    assert.equal(tmuxSessionName(valid), `fray-${valid}`)
+    assert.equal(threadIdentityName(valid), `fray-${valid}`)
   }
   for (const invalid of HOSTILE_SLUGS) {
     assert.equal(ThreadSlug.safeParse(invalid).success, false, JSON.stringify(invalid))
     assert.equal(DispatchInput.safeParse({ prompt: "safe", slug: invalid }).success, false, JSON.stringify(invalid))
     assert.equal(AdoptThreadInput.safeParse({ slug: invalid }).success, false, JSON.stringify(invalid))
-    assert.throws(() => tmuxSessionName(invalid))
+    assert.throws(() => threadIdentityName(invalid))
   }
   assert.equal(AdoptThreadInput.safeParse({ slug: "safe", extra: true }).success, false, "adoption input is strict")
   assert.equal(AdoptThreadInput.safeParse({ slug: "safe", message: "x".repeat(64 * 1024 + 1) }).success, false)

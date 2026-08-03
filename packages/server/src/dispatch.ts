@@ -9,7 +9,7 @@ import {
   THREAD_SLUG_MAX_CHARS,
   ThreadSlug,
   slugify,
-  tmuxSessionName,
+  threadIdentityName,
   type Settings,
   type PermissionMode,
   type ProviderAuth,
@@ -913,7 +913,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           deps.storage.upsertSession({
             slug,
             session_id: sessionId,
-            tmux_name: tmuxSessionName(slug),
+            tmux_name: threadIdentityName(slug),
             spawned_at: new Date().toISOString(),
             last_read_at: null,
             unread: 0,
@@ -985,7 +985,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           deps.storage.upsertSession({
             slug,
             session_id: sessionId,
-            tmux_name: tmuxSessionName(slug),
+            tmux_name: threadIdentityName(slug),
             spawned_at: new Date().toISOString(),
             last_read_at: null,
             unread: 0,
@@ -1175,7 +1175,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       const adopted = {
         slug,
         session_id: sessionId,
-        tmux_name: tmuxSessionName(slug),
+        tmux_name: threadIdentityName(slug),
         spawned_at: new Date(now()).toISOString(),
         last_read_at: null,
         unread: 0,
