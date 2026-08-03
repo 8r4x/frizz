@@ -10,6 +10,12 @@ import "./styles.css"
 // `awaiting timer:` thread. Before the fix these rendered on TWO lines in two divergent styles
 // ("SNOOZED · Tomorrow at 11:11 AM" vs "Snoozed until today at 11:09 PM"); after the fix both are a
 // SINGLE line and the wake detail lives only in the hourglass tooltip (hover the indicator).
+//
+// The ACTIVE band below carries the rows a snooze does NOT quiet — a running thread, and one still
+// waiting on a sub-agent. Those kept an inline "SNOOZED · …" / "BUMPS · …" subtitle until 2026-08-03
+// ("hide the SNOOZED label from the sidebar … the user should be able to see the snooze duration by
+// hovering over the icon"), so they are single-line too now and their park rides the SPINNER's tooltip
+// as a second line under "Working".
 
 // Wall-clock targets computed at load so the rows always sit in the future (Held requires it).
 const timerAt = (() => {
@@ -73,7 +79,51 @@ const limitThread = {
   limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", resumesAt: limitAt, autoResume: true },
 } as unknown as ThreadView
 
-store.board = { threads: [timerThread, snoozeThread, limitThread] } as BoardSnapshot
+// Row F — a `pr-watch:` thread the human parked with the "PR watcher armed" card's Snooze. A watch
+// never parks itself, so this (and a `human:` gate co-declared beside the watch) is how one reaches the
+// Held band — and until 2026-08-03 it sat here under the same hourglass as A and B, saying nothing
+// about the PR that is actually going to wake it. It now wears GitHub's mark, and its tooltip leads
+// with the ref: the snooze is only a safety timeout, and new PR activity clears it.
+const watchThread = {
+  ...base,
+  id: "watch-the-resolver-pr",
+  title: "Fix the cache collision in the resolver",
+  snoozedUntil: snoozeAt,
+  lastFence: { kind: "awaiting", body: "PR is open and CI is green. Watching for review.", hints: [{ kind: "pr-watch", value: "acme/app#391" }] },
+} as unknown as ThreadView
+
+// Row D — snoozed WHILE ITS OWN TURN RUNS. isHeld excuses a running thread, so the park has not taken
+// effect: the row keeps its spinner and stays in Active. It is the row that used to read "SNOOZED · …".
+const runningSnoozed = {
+  ...base,
+  id: "seed-the-buried-question-queue",
+  title: "Seed the buried-question queue",
+  runtime: "running",
+  snoozedUntil: snoozeAt,
+} as unknown as ThreadView
+
+// Row E — snoozed with a BUMP armed (a follow-up fray sends at the deadline), still waiting on a live
+// sub-agent. Same excusal, and it is the row that used to read "BUMPS · …".
+const bumpingSnoozed = {
+  ...base,
+  id: "watch-the-release-workflow",
+  title: "Watch the release workflow",
+  snoozedUntil: snoozeAt,
+  snoozePrompt: "Check whether the release job went green and cut the tag if so.",
+  subAgents: [{ id: "op-1", label: "verify:release", state: "running", startedAt: new Date().toISOString() }],
+} as unknown as ThreadView
+
+store.board = { threads: [timerThread, snoozeThread, watchThread, limitThread, runningSnoozed, bumpingSnoozed] } as BoardSnapshot
+
+function ActiveBand() {
+  return (
+    <section aria-label="Active">
+      <SectionHeader label="Active" count={2} />
+      <ThreadRow t={runningSnoozed} />
+      <ThreadRow t={bumpingSnoozed} />
+    </section>
+  )
+}
 
 function HeldBand() {
   // Mirrors the real Sidebar HELD section markup (hr + label + count) so the visual context matches;
@@ -81,9 +131,10 @@ function HeldBand() {
   return (
     <section aria-label="Held">
       <hr className="my-3 border-border/50" />
-      <SectionHeader label="Held" count={3} />
+      <SectionHeader label="Held" count={4} />
       <ThreadRow t={timerThread} />
       <ThreadRow t={snoozeThread} />
+      <ThreadRow t={watchThread} />
       <ThreadRow t={limitThread} />
     </section>
   )
@@ -98,6 +149,7 @@ createRoot(document.getElementById("root")!).render(
     <TooltipProvider>
       <main className="min-h-screen bg-bg px-10 py-10 text-fg">
         <div data-sidebar-rail className="w-[clamp(320px,34vw,680px)]">
+          <ActiveBand />
           <HeldBand />
         </div>
       </main>

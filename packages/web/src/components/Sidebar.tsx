@@ -17,7 +17,8 @@ import { Tooltip } from "./Tooltip.tsx"
 import { ProviderMark } from "./ProviderMark.tsx"
 import { STATUS_CHIP } from "../lib/status.ts"
 import { retrySession } from "../lib/retrySession.ts"
-import { formatSnoozedUntil, formatSnoozeWake, formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
+import { formatSnoozedUntil, formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
+import { prWatchRefs } from "../lib/awaitingPresentation.ts"
 import { useOptimisticallySteered } from "../lib/steering.ts"
 import { activeSidebarSection, queueNavigationSettled, railRevealDelta, type SidebarSectionGeometry } from "../lib/sidebarScrollspy.ts"
 import type { ReactElement, ReactNode } from "react"
@@ -345,19 +346,21 @@ export const ThreadRow = memo(function ThreadRow({
   // in-drawer "Continue now" than waiting for the window). The queue card and drawer header read the
   // SAME helper, so no surface can disagree with the rail about which threads offer Retry.
   const canRestart = !legacy && offersRetry(t)
-  // Held rows collapse to a SINGLE LINE — no subtitle. The "what it's held for" detail (snooze/timer
-  // wake time, human gate, review watch) lives ENTIRELY in the hourglass indicator's hover tooltip
-  // (see sessionIndicatorFor), so a snooze and a timer-park read identically instead of sprouting two
-  // divergent subtitle styles ("SNOOZED · …" vs "Snoozed until …") on two lines. Only NON-held rows
-  // gloss inline: a legacy pr/ci awaiting fence (stays Active) shows its "PR owner/repo#12" hint.
-  const snoozedUntil = !legacy ? futureSnoozedUntil(t) : undefined
-  const gloss = held
+  // A SNOOZE never spends a subtitle line, on any row. The wake time (and the follow-up a bump carries)
+  // lives ENTIRELY in the indicator's hover tooltip — see sessionIndicatorFor, which appends it to
+  // whatever the glyph already says on the rows a park does not quiet (a running one, or one whose
+  // sub-agent is still out). It used to gloss those as "SNOOZED · Today at 5:00 PM", which spent the
+  // rail's scarcest real estate restating a state the hourglass beside it already signals, and read as a
+  // second competing status next to the row's live one (maintainer 2026-08-03: "hide the SNOOZED label
+  // from the sidebar … the user should be able to see the snooze duration by hovering over the icon").
+  //
+  // Held rows collapse to a SINGLE LINE for the same reason. Only NON-held rows gloss inline: a legacy
+  // pr/ci awaiting fence (stays Active) shows its "PR owner/repo#12" hint.
+  const gloss = held || legacy
     ? null
-    : snoozedUntil
-      ? `${t.snoozePrompt ? "BUMPS" : "SNOOZED"} · ${formatSnoozeWake(snoozedUntil)}`
-      : !legacy && t.lastFence?.kind === "awaiting"
-        ? hintGloss(t.lastFence.hints)
-        : null
+    : t.lastFence?.kind === "awaiting"
+      ? hintGloss(t.lastFence.hints)
+      : null
   // Live sub-agents get their OWN indented ⤷ rows below this one (SubAgentRows), so they must not also
   // arm the subtitle: they used to, via a one-line "N sub-agents" summary that has since been replaced
   // by those rows. The summary went; the truthiness term stayed — so a thread with sub-agents but no
@@ -579,7 +582,9 @@ export function ThreadIndicator({ t, legacy }: { t: ThreadView; legacy?: boolean
   const mark = legacy ? undefined : sessionIndicatorKind(t)
   if (!tip) return mark ? <span data-rail-glyph={mark} className="flex items-center justify-center">{node}</span> : node
   return (
-    <Tooltip label={tip} side="left">
+    // A live row that is ALSO snoozed stacks its park under its state ("Working" / "Snoozed until …"),
+    // so the tooltip has to keep that newline rather than reflowing the two into one sentence.
+    <Tooltip label={tip} side="left" multiline={tip.includes("\n")}>
       <span data-rail-glyph={mark} className="flex items-center justify-center">{node}</span>
     </Tooltip>
   )
@@ -609,6 +614,22 @@ export function ThreadIndicator({ t, legacy }: { t: ThreadView; legacy?: boolean
 //                     dispatched sub-agents are still running (they spin on their own child rows)
 // Attention (needs-input / stalled) wears the accent; everything else is muted.
 function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string | null } {
+  const base = sessionStateIndicatorFor(t)
+  // The tooltip is now the ONLY place a snooze is legible on the rail (the subtitle no longer names it),
+  // so it has to say so on every parked row — not just the ones the park actually quiets. The hourglass
+  // arm below already tells that story for a Held row. These are the rows a snooze does NOT silence:
+  // one whose own turn is running, one still waiting on a sub-agent it dispatched, and one holding a
+  // concrete ask (which outranks the park in sessionIndicatorKind). Each keeps its live glyph — the park
+  // has not taken effect yet and the rail must not claim otherwise — and gains a second line saying when
+  // it will.
+  if (sessionIndicatorKind(t) === "held") return base
+  const snoozedUntil = futureSnoozedUntil(t)
+  const parked = snoozedUntil ? formatUserSnooze(snoozedUntil, t.snoozePrompt) : null
+  if (!parked) return base
+  return { node: base.node, tip: base.tip ? `${base.tip}\n${parked}` : parked }
+}
+
+function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: string | null } {
   const kind = sessionIndicatorKind(t)
   if (kind === "archived") return { node: <StatusBox><Check size={10} strokeWidth={3} className="text-muted/75" /></StatusBox>, tip: "Done" }
   if (kind === "needs-input") {
@@ -637,9 +658,24 @@ function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string |
   }
   if (kind === "held") {
     const hourglass = <StatusBox><Hourglass size={9} className="text-muted/70" /></StatusBox>
+    const github = <StatusBox><Github size={9} className="text-muted/70" /></StatusBox>
+    // A held row whose fence carries `pr-watch:` is held FOR A PR, and the rail says so with GitHub's
+    // mark instead of the hourglass. The hourglass means "parked on the clock", and for a watch the
+    // clock is only the backstop: the scheduler polls the PR and CLEARS the park the moment new
+    // activity lands (scheduler.ts, the clear-snooze-on-pr-watch-wake), so what actually wakes this row
+    // is GitHub. pr-watch never parks itself — parkedAwaitingHint excludes it so a watch stays a
+    // visible queue handoff — so the rows that reach here are the two that get parked ANYWAY: one the
+    // human snoozed off the "PR watcher armed" card, and one whose worker co-declared a `human:` gate
+    // beside the watch. Both were previously indistinguishable from a plain timer park.
+    const watched = t.lastFence?.kind === "awaiting" ? prWatchRefs(t.lastFence.hints) : []
+    const heldMark = watched.length > 0 ? github : hourglass
+    // The refs are what the watch is ABOUT and they live nowhere else on the row (hintGloss keeps
+    // pr-watch out of the subtitle), so they lead the tooltip; the park detail follows on its own line.
+    const withWatch = (tip: string) =>
+      watched.length > 0 ? `Watching ${watched.map((w) => w.ref).join(", ")} — new activity wakes it\n${tip}` : tip
     // A single-line held row carries its whole "what it's held for" story HERE, in the tooltip. The two
     // time-based holds are ONE concept — a snooze (park until a wall-clock instant) — sharing the same
-    // hourglass + single-line layout. They differ only in WHO resolves the park at the deadline, which
+    // heldMark + single-line layout. They differ only in WHO resolves the park at the deadline, which
     // the tooltip wording marks as an `auto` variant of the same word rather than a separate idea:
     //   • a user snooze re-surfaces the CARD for you  → "Snoozed until <wake>"       (you act next)
     //   • an ```awaiting timer:` park / blocked+timer status auto-resumes the agent → "Auto-snoozed until <wake>"
@@ -647,7 +683,7 @@ function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string |
     // so formatUserSnooze reads it as the auto variant and names the follow-up it will send.
     const snoozedUntil = futureSnoozedUntil(t)
     if (snoozedUntil) {
-      return { node: hourglass, tip: formatUserSnooze(snoozedUntil, t.snoozePrompt) ?? "Snoozed until a scheduled check" }
+      return { node: heldMark, tip: withWatch(formatUserSnooze(snoozedUntil, t.snoozePrompt) ?? "Snoozed until a scheduled check") }
     }
     // A usage-limit park is the third member of that same "held on the clock" family — fray resolves
     // this one too, so it reads as an auto-snooze, named by what actually stopped the work.
@@ -661,14 +697,16 @@ function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string |
       const timed = typeof t.revalidate === "string" ? formatAutoSnoozedUntil(t.revalidate) : null
       return { node: hourglass, tip: timed ?? "Auto-snoozed until a scheduled check" }
     }
-    // Reserve the hourglass for intentional park states: a specific external human gate, a durable
-    // GitHub human-review cursor, or a VALID scheduled instant. Legacy/malformed waits stay readable
-    // but do not claim that a working wake is armed.
+    // Reserve the park mark (hourglass, or GitHub when a watch is riding along) for intentional park
+    // states: a specific external human gate, a durable GitHub human-review cursor, or a VALID
+    // scheduled instant. Legacy/malformed waits stay readable but do not claim that a working wake is
+    // armed — which is why the legacy `pr` row below wears the SAME GitHub glyph with the opposite
+    // tooltip: both are PR-shaped waits, and the tooltip is what separates "watching" from "not armed".
     const parked = parkedAwaitingHint(t.lastFence.hints)
-    if (parked?.kind === "human") return { node: hourglass, tip: "Waiting on a human review or approval" }
-    if (parked?.kind === "timer") return { node: hourglass, tip: formatAutoSnoozedUntil(parked.value) ?? "Auto-snoozed until a scheduled check" }
+    if (parked?.kind === "human") return { node: heldMark, tip: withWatch("Waiting on a human review or approval") }
+    if (parked?.kind === "timer") return { node: heldMark, tip: withWatch(formatAutoSnoozedUntil(parked.value) ?? "Auto-snoozed until a scheduled check") }
     const hk = t.lastFence.hints[0]?.kind
-    if (hk === "pr") return { node: <StatusBox><Github size={9} className="text-muted/70" /></StatusBox>, tip: "Legacy PR wait — active monitoring is not armed" }
+    if (hk === "pr") return { node: github, tip: "Legacy PR wait — active monitoring is not armed" }
     if (hk === "ci") return { node: <StatusBox><Clock size={9} className="text-muted/70" /></StatusBox>, tip: "Legacy CI wait — active monitoring is not armed" }
     if (hk === "session") return { node: <StatusBox><CircleDashed size={10} className="text-muted/70" /></StatusBox>, tip: "Waiting on another session" }
     return { node: <StatusBox><Clock size={9} className="text-muted/70" /></StatusBox>, tip: "Waiting on a machine" }
