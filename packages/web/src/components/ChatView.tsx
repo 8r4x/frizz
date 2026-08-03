@@ -3017,7 +3017,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     // A scheduler wake is recorded as a user turn because it is pasted into the worker's composer —
     // but FRAY wrote it, not the human, so it must not wear the human's off-white right-justified
     // bubble. `m.wake` is the server's own tell (the delivery token it stripped), never a text guess.
-    // A recurring prompt (stop hook / heartbeat) is a wake too, but it REPEATS by design — the same
+    // A recurring prompt (either trigger) is a wake too, but it REPEATS by design — the same
     // paragraph every few minutes on a thread being driven by one — so it collapses to a single line
     // rather than restating itself in full down the transcript. Parsed from fray's own trailer, defined
     // beside the composer that writes it; a non-match falls through to the divider below, so no wake

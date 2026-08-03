@@ -1,4 +1,4 @@
-// Does a heartbeat beat actually reach a worker that is MID-TURN?
+// Does a SCHEDULED recurring prompt actually reach a worker that is MID-TURN?
 //
 // The scheduler unit tests pin the delivery GATE with a stubbed `resume`. They cannot answer the only
 // question that matters for this feature: whether the real broker will take a message addressed at a
@@ -7,13 +7,13 @@
 // gets driven for real here.
 //
 // Run against a stack booted with --wakers and a real HOME (the broker needs the keychain):
-//   nub scripts/adhoc-stack.mjs --port=4931 --home=$HOME --project=/tmp/hb-probe-repo --wakers &
-//   nub scripts/verify-heartbeat-midturn.mjs 4931
+//   nub scripts/adhoc-stack.mjs --port=4931 --home=$HOME --project=/tmp/rp-probe-repo --wakers &
+//   nub scripts/verify-recurring-prompt-midturn.mjs 4931
 //
 // PASS requires all of:
-//   1. a beat is DELIVERED while the thread's turn state is in-flight (not at a rest);
-//   2. the beat's text lands in the transcript BEFORE the turn that was running has ended;
-//   3. the cadence keeps running — a second beat arrives one interval after the first, still mid-turn.
+//   1. a delivery happens while the thread's turn is in flight, not at a rest;
+//   2. the worker READS it before the turn that was running has ended;
+//   3. the cadence keeps running — a second one arrives an interval later, still mid-turn.
 import { createRpcClient } from "./lib/rpc-client.mjs"
 import { readFileSync, existsSync, readdirSync } from "node:fs"
 import { join } from "node:path"
@@ -101,14 +101,14 @@ for (let i = 0; i < 120; i++) {
 }
 check("the probe worker reached a running turn with a live transcript", becameBusyAt !== null)
 if (!becameBusyAt) process.exit(1)
-log("worker is mid-turn and producing — arming the heartbeat now")
+log("worker is mid-turn and producing — arming the schedule trigger now")
 
 const thread = await threadOf(slug)
-await api.mutate("setThreadHeartbeat", {
+await api.mutate("setThreadRecurringPrompt", {
   slug, sessionId: thread.sessionId ?? sessionId,
-  prompt: BEAT_TEXT, enabled: true, intervalSeconds: INTERVAL_S,
+  prompt: BEAT_TEXT, onRest: false, onSchedule: true, intervalSeconds: INTERVAL_S,
 })
-log(`heartbeat armed: every ${INTERVAL_S}s`)
+log(`recurring prompt armed: SCHEDULE trigger only, every ${INTERVAL_S}s`)
 
 // WHAT COUNTS AS THE DELIVERY INSTANT. Not the `user` record — Claude Code materializes that when it
 // DEQUEUES the message, which for a mid-turn beat is later than the moment fray handed it over. The
@@ -185,8 +185,8 @@ check(
 // Leave the thread quiet.
 try {
   const t = await threadOf(slug)
-  await api.mutate("setThreadHeartbeat", { slug, sessionId: t?.sessionId ?? sessionId, prompt: null, enabled: false })
-  log("heartbeat disarmed")
+  await api.mutate("setThreadRecurringPrompt", { slug, sessionId: t?.sessionId ?? sessionId, prompt: null, onRest: false, onSchedule: false })
+  log("recurring prompt disarmed")
 } catch (e) { log(`could not disarm: ${e.message}`) }
 
 console.log(`\n${results.filter((r) => r.ok).length}/${results.length} checks passed`)

@@ -2,8 +2,8 @@ import { Repeat, Timer } from "lucide-react"
 import type { RecurringPrompt } from "@fray-ui/shared"
 import { WakeDivider } from "./WakeDivider.tsx"
 
-// A DELIVERED stop hook or heartbeat, in the transcript: a HAIRLINE NOTIFICATION, the same one every
-// other child event in this app wears.
+// A DELIVERED recurring prompt, in the transcript: a HAIRLINE NOTIFICATION, the same one every other
+// child event in this app wears.
 //
 // It arrives as an ordinary user turn (fray pastes it into the worker's composer), so left alone it
 // rendered as the human's own off-white bubble — claiming the operator had typed a paragraph the
@@ -27,25 +27,28 @@ import { WakeDivider } from "./WakeDivider.tsx"
 // on every delivery adds nothing a reader cannot already get, which is the failure both earlier
 // renderings shared.
 export function RecurringPromptLine({ bump, sourceId }: { bump: RecurringPrompt; sourceId?: string }) {
-  const heartbeat = bump.kind === "heartbeat"
-  // The cadence rides in the label because it is the one fact the panel cannot tell you about THIS
-  // delivery: which schedule was in force when it fired.
-  const label = heartbeat
-    ? `Heartbeat${bump.every ? ` · every ${bump.every}` : ""}`
-    : "Stop hook"
+  const scheduled = bump.kind === "schedule"
+  // WHICH TRIGGER FIRED is the whole label, because it is the one thing the footer panel cannot tell you
+  // about THIS delivery — the text is shared, so "the agent stopped" and "an hour elapsed" are otherwise
+  // indistinguishable in the transcript. The cadence rides along for the same reason: it names the
+  // schedule that was in force when this one fired, not the one armed now.
+  const label = scheduled
+    ? `Recurring prompt${bump.every ? ` · every ${bump.every}` : ""}`
+    : "Recurring prompt · at rest"
   return (
     <WakeDivider
-      // TWO glyphs here, one per feature, because a divider marks ONE delivery and the two deliveries
-      // answer different questions: a clock for the heartbeat, a loop for the stop hook (which has no
-      // clock — it fires because the thread stopped, again). The footer's trigger is deliberately a
-      // THIRD mark, a pulse, because it stands for both at once (see StopHookControl).
+      // TWO glyphs, one per TRIGGER, because a divider marks ONE delivery and the two triggers answer
+      // different questions: a clock for the scheduled one, a loop for the rest one (which has no clock
+      // — it fired because the thread stopped, again). They survived the merge of the two features into
+      // one prompt precisely because the trigger is what a reader still cannot infer. The footer's own
+      // glyph is deliberately a THIRD mark, a pulse, because it stands for both at once.
       //
-      // The stop hook's was `CircleStop`, and in a wake line that is backwards: this divider exists to
+      // The rest trigger's was `CircleStop`, and in a wake line that is backwards: this divider exists to
       // say the agent was RE-INVOKED, and a stop button in the transcript reads as the run ending here.
       // Same square-in-a-circle the footer shed on 2026-08-03, for a related reason.
-      icon={heartbeat ? Timer : Repeat}
+      icon={scheduled ? Timer : Repeat}
       sourceId={sourceId}
-      marker={heartbeat ? "heartbeat" : "stop-hook"}
+      marker={scheduled ? "schedule" : "rest"}
       ariaLabel={label}
     >
       {label}

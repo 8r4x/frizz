@@ -60,18 +60,19 @@ test("the fray MCP server identifies as `fray` and exposes its worker tools", as
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "stop_hook", "heartbeat"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "recurring_prompt"])
     for (const required of ["prompt", "model", "effort"]) {
       assert.ok(list.result.tools[0].inputSchema.required.includes(required))
     }
-    // Both recurring tools require only `action` — `prompt` (and the heartbeat's `interval_seconds`)
-    // are required for `start` alone, enforced in the handlers so a lenient client cannot skip them
-    // either (asserted below). Neither exposes a THREAD parameter: the slug comes from the server's env,
-    // never from the model, which is what stops one thread arming a loop on another.
+    // `recurring_prompt` requires only `action` — `prompt` and a valid `every_seconds` are required for
+    // `start` alone, enforced in the handler so a lenient client cannot skip them either (asserted
+    // below). It exposes NO THREAD parameter: the slug comes from the server's env, never from the
+    // model, which is what stops one thread arming a loop on another.
     assert.deepEqual(list.result.tools[1].inputSchema.required, ["action"])
-    assert.deepEqual(Object.keys(list.result.tools[1].inputSchema.properties).sort(), ["action", "prompt"])
-    assert.deepEqual(list.result.tools[2].inputSchema.required, ["action"])
-    assert.deepEqual(Object.keys(list.result.tools[2].inputSchema.properties).sort(), ["action", "interval_seconds", "prompt"])
+    assert.deepEqual(
+      Object.keys(list.result.tools[1].inputSchema.properties).sort(),
+      ["action", "every_seconds", "on_rest", "prompt"],
+    )
     // An unregistered name is a protocol error, not a crash — the registry routes by name now.
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "spawn_fray_thread", arguments: {} } })
     const gone = await rpc.next(3)
@@ -127,7 +128,7 @@ test("`spawn_thread` POSTs the real dispatch RPC and returns the thread's drawer
 // learn from its env — so what this pins is the slug actually reaching the RPC body, over the real
 // stdio transport against a real HTTP server. A tool that armed a hook on the wrong thread (or on none)
 // would look identical to the worker, and would make some OTHER thread loop forever.
-test("`stop_hook` arms and disarms the CALLING thread's hook, identified from its env", async () => {
+test("`recurring_prompt` arms and disarms the CALLING thread, identified from its env", async () => {
   const seen: Array<{ url: string; body: any }> = []
   const http = createServer((req, res) => {
     let body = ""
@@ -149,13 +150,16 @@ test("`stop_hook` arms and disarms the CALLING thread's hook, identified from it
 
     rpc.send({
       jsonrpc: "2.0", id: 2, method: "tools/call",
-      params: { name: "stop_hook", arguments: { action: "start", prompt: "keep the migration moving" } },
+      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "keep the migration moving" } },
     })
     const armed = await rpc.next(2)
     assert.equal(armed.result.isError, undefined)
+    // NAMING NO TRIGGER defaults to the rest one. A `start` with neither is a model asking to be
+    // re-prompted and leaving the mechanism to us; rest is the safe reading, because it cannot talk over
+    // a running turn and cannot fire on a thread that has stopped needing it.
     assert.deepEqual(seen.at(-1), {
-      url: "/rpc/setOwnThreadStopHook",
-      body: { slug: "owning-thread", prompt: "keep the migration moving", enabled: true },
+      url: "/rpc/setOwnThreadRecurringPrompt",
+      body: { slug: "owning-thread", prompt: "keep the migration moving", onRest: true, onSchedule: false },
     })
     // The reply must teach how it ENDS, or a worker only knows how to start one — and it must warn
     // about the sentinel rather than merely offering it, since that exit is permanent.
@@ -163,24 +167,47 @@ test("`stop_hook` arms and disarms the CALLING thread's hook, identified from it
     assert.match(armed.result.content[0].text, /ALLDONE/)
     assert.match(armed.result.content[0].text, /permanently stalls/)
 
-    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "stop_hook", arguments: { action: "stop" } } })
+    // BOTH triggers named on a schedule-only start, and the cadence carried through as seconds.
+    rpc.send({
+      jsonrpc: "2.0", id: 6, method: "tools/call",
+      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "check the deploy", every_seconds: 600 } },
+    })
+    const scheduled = await rpc.next(6)
+    assert.equal(scheduled.result.isError, undefined)
+    assert.deepEqual(seen.at(-1), {
+      url: "/rpc/setOwnThreadRecurringPrompt",
+      body: { slug: "owning-thread", prompt: "check the deploy", onRest: false, onSchedule: true, intervalSeconds: 600 },
+    }, "giving a cadence and nothing else means the schedule trigger alone")
+    assert.match(scheduled.result.content[0].text, /every 10 min/)
+
+    rpc.send({
+      jsonrpc: "2.0", id: 7, method: "tools/call",
+      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "keep going", on_rest: true, every_seconds: 900 } },
+    })
+    await rpc.next(7)
+    assert.deepEqual(seen.at(-1), {
+      url: "/rpc/setOwnThreadRecurringPrompt",
+      body: { slug: "owning-thread", prompt: "keep going", onRest: true, onSchedule: true, intervalSeconds: 900 },
+    }, "both triggers at once is the ordinary keep-this-moving case")
+
+    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "recurring_prompt", arguments: { action: "stop" } } })
     const stopped = await rpc.next(3)
     assert.equal(stopped.result.isError, undefined)
     assert.deepEqual(seen.at(-1), {
-      url: "/rpc/setOwnThreadStopHook",
-      body: { slug: "owning-thread", prompt: null, enabled: false },
+      url: "/rpc/setOwnThreadRecurringPrompt",
+      body: { slug: "owning-thread", prompt: null, onRest: false, onSchedule: false },
     })
 
     // A `start` with no prompt is refused in the HANDLER, not merely by the schema.
     const before = seen.length
-    rpc.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "stop_hook", arguments: { action: "start" } } })
+    rpc.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "recurring_prompt", arguments: { action: "start" } } })
     const bare = await rpc.next(4)
     assert.equal(bare.result.isError, true)
     assert.match(bare.result.content[0].text, /`prompt` is required/)
     assert.equal(seen.length, before, "and nothing was sent to the server")
 
     // A bogus action likewise never reaches the RPC.
-    rpc.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "stop_hook", arguments: { action: "pause" } } })
+    rpc.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "recurring_prompt", arguments: { action: "pause" } } })
     const bogus = await rpc.next(5)
     assert.equal(bogus.result.isError, true)
     assert.match(bogus.result.content[0].text, /`action` must be either/)
@@ -191,9 +218,9 @@ test("`stop_hook` arms and disarms the CALLING thread's hook, identified from it
   }
 })
 
-// A model can choose the TEXT of a stop hook but never the THREAD. The tool takes no thread parameter,
+// A model can choose the TEXT of a recurring prompt but never the THREAD. The tool takes no thread parameter,
 // so the only way it could act on someone else's is if a supplied argument leaked into the body.
-test("`stop_hook` ignores any thread the caller tries to name — the slug comes from the env alone", async () => {
+test("`recurring_prompt` ignores any thread the caller tries to name — the slug comes from the env alone", async () => {
   const seen: Array<{ url: string; body: any }> = []
   const http = createServer((req, res) => {
     let body = ""
@@ -214,7 +241,7 @@ test("`stop_hook` ignores any thread the caller tries to name — the slug comes
     await rpc.next(1)
     rpc.send({
       jsonrpc: "2.0", id: 2, method: "tools/call",
-      params: { name: "stop_hook", arguments: { action: "start", prompt: "p", slug: "someone-else", thread: "someone-else" } },
+      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "p", slug: "someone-else", thread: "someone-else" } },
     })
     await rpc.next(2)
     assert.equal(seen.at(-1)!.body.slug, "owning-thread", "an invented slug argument must not reach the server")
@@ -224,9 +251,9 @@ test("`stop_hook` ignores any thread the caller tries to name — the slug comes
   }
 })
 
-// Without a slug the tool must FAIL rather than guess — arming a hook on the wrong thread is worse than
+// Without a slug the tool must FAIL rather than guess — arming one on the wrong thread is worse than
 // not arming one, and a silent no-op would read to the worker as success.
-test("`stop_hook` refuses to act when its thread identity was never stamped into its env", async () => {
+test("`recurring_prompt` refuses to act when its thread identity was never stamped into its env", async () => {
   const stateDir = mkdtempSync(join(tmpdir(), "fray-mcp-"))
   writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port: 1 }))
   // FRAY_UI_THREAD is the documented fallback, so both vars have to be absent for this to hold.
@@ -234,7 +261,7 @@ test("`stop_hook` refuses to act when its thread identity was never stamped into
   try {
     rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
     await rpc.next(1)
-    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "stop_hook", arguments: { action: "stop" } } })
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "recurring_prompt", arguments: { action: "stop" } } })
     const failed = await rpc.next(2)
     assert.equal(failed.result.isError, true)
     assert.match(failed.result.content[0].text, /not told which thread it belongs to/)
@@ -243,10 +270,11 @@ test("`stop_hook` refuses to act when its thread identity was never stamped into
   }
 })
 
-// The heartbeat tool's own env-identity + validation contract, mirroring `stop_hook`'s above. Its extra
-// obligation is the INTERVAL: a schedule nobody chose is what the operator asked to make explicit, so
-// the handler must refuse a `start` without one rather than defaulting.
-test("`heartbeat` arms the CALLING thread on a chosen schedule, and refuses an unchosen one", async () => {
+// The CADENCE's own validation contract. The arm/disarm test above covers the trigger combinations;
+// this one covers the number, because a schedule out of range is the input a model is most likely to
+// invent — and it must be refused in the HANDLER, never merely by the schema, so a lenient client
+// cannot slip one past.
+test("`recurring_prompt` refuses a cadence out of range without contacting the server", async () => {
   const seen: Array<{ url: string; body: any }> = []
   const http = createServer((req, res) => {
     let body = ""
@@ -268,39 +296,31 @@ test("`heartbeat` arms the CALLING thread on a chosen schedule, and refuses an u
 
     rpc.send({
       jsonrpc: "2.0", id: 2, method: "tools/call",
-      params: { name: "heartbeat", arguments: { action: "start", prompt: "check the deploy", interval_seconds: 600 } },
+      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "x", every_seconds: 5 } },
     })
-    const armed = await rpc.next(2)
-    assert.equal(armed.result.isError, undefined)
-    assert.deepEqual(seen.at(-1), {
-      url: "/rpc/setOwnThreadHeartbeat",
-      body: { slug: "owning-thread", prompt: "check the deploy", intervalSeconds: 600, enabled: true },
-    })
-    assert.match(armed.result.content[0].text, /every 10 min/)
-    assert.match(armed.result.content[0].text, /permanently stalls/)
-
-    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "heartbeat", arguments: { action: "stop" } } })
-    await rpc.next(3)
-    assert.deepEqual(seen.at(-1), {
-      url: "/rpc/setOwnThreadHeartbeat",
-      body: { slug: "owning-thread", prompt: null, enabled: false },
-    })
-
-    // A `start` with no interval, and one out of range, are both refused in the HANDLER — nothing sent.
-    const before = seen.length
-    rpc.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "heartbeat", arguments: { action: "start", prompt: "x" } } })
-    const noInterval = await rpc.next(4)
-    assert.equal(noInterval.result.isError, true)
-    assert.match(noInterval.result.content[0].text, /`interval_seconds` is required/)
-
-    rpc.send({
-      jsonrpc: "2.0", id: 5, method: "tools/call",
-      params: { name: "heartbeat", arguments: { action: "start", prompt: "x", interval_seconds: 5 } },
-    })
-    const tooFast = await rpc.next(5)
+    const tooFast = await rpc.next(2)
     assert.equal(tooFast.result.isError, true)
     assert.match(tooFast.result.content[0].text, /must be between 60 and 86400/)
-    assert.equal(seen.length, before, "and neither reached the server")
+
+    rpc.send({
+      jsonrpc: "2.0", id: 3, method: "tools/call",
+      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "x", every_seconds: 99999 } },
+    })
+    const tooSlow = await rpc.next(3)
+    assert.equal(tooSlow.result.isError, true)
+    assert.match(tooSlow.result.content[0].text, /must be between 60 and 86400/)
+
+    // Explicitly switching BOTH triggers off on a `start` is not an arming at all — it is a request to
+    // be re-prompted by nothing. Refused, rather than silently writing a row that can never fire.
+    rpc.send({
+      jsonrpc: "2.0", id: 4, method: "tools/call",
+      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "x", on_rest: false } },
+    })
+    const noTrigger = await rpc.next(4)
+    assert.equal(noTrigger.result.isError, true)
+    assert.match(noTrigger.result.content[0].text, /at least one trigger is required/)
+
+    assert.equal(seen.length, 0, "none of the three reached the server")
   } finally {
     rpc.kill()
     http.close()

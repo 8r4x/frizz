@@ -31,10 +31,8 @@ import type {
   ThreadProfileOptionsResult,
   SetThreadProfileInput,
   SetThreadProfileResult,
-  SetThreadStopHookInput,
-  SetThreadHeartbeatInput,
-  SetOwnThreadHeartbeatInput,
-  SetOwnThreadStopHookInput,
+  SetThreadRecurringPromptInput,
+  SetOwnThreadRecurringPromptInput,
   ThreadPluginReloadResult,
   SetThreadSnoozeInput,
   TranscriptMessage,
@@ -128,16 +126,13 @@ export interface Api {
   // than completing whatever now owns the slug.
   completeThread(input: { slug: string; sessionId: string; terminateLive?: boolean }): Promise<{ needsConfirmation: boolean; hold?: CompletionHold }>
   setThreadSnooze(input: SetThreadSnoozeInput): Promise<void>
-  // The OPERATOR's counterpart, armed entirely from the footer: text re-delivered at every rest until
-  // the worker answers AWAITING. Toggle and text travel together — they are one row.
-  setThreadStopHook(input: SetThreadStopHookInput): Promise<void>
-  // The heartbeat's two halves: the footer popover, and the worker tool (declared for the drift gate).
-  setThreadHeartbeat(input: SetThreadHeartbeatInput): Promise<void>
-  setOwnThreadHeartbeat(input: SetOwnThreadHeartbeatInput): Promise<void>
-  // The WORKER-facing counterpart, called by `mcp__fray__stop_hook` rather than by this client. Declared
-  // here because rpc-contract.ts proves the two procedure NAME SETS are equal — an RPC the client cannot
-  // name is one nothing checks the shape of. No browser call site uses it.
-  setOwnThreadStopHook(input: SetOwnThreadStopHookInput): Promise<void>
+  // THE RECURRING PROMPT, armed entirely from the footer panel: one text, and up to two triggers
+  // (every rest, and/or every N minutes). Text, triggers and cadence travel together — they are one row.
+  setThreadRecurringPrompt(input: SetThreadRecurringPromptInput): Promise<void>
+  // The WORKER-facing counterpart, called by `mcp__fray__recurring_prompt` rather than by this client.
+  // Declared here because rpc-contract.ts proves the two procedure NAME SETS are equal — an RPC the
+  // client cannot name is one nothing checks the shape of. No browser call site uses it.
+  setOwnThreadRecurringPrompt(input: SetOwnThreadRecurringPromptInput): Promise<void>
   // In-place plugin reload for a broker-backed Claude thread — the alternative to a hard restart.
   reloadThreadPlugins(input: { slug: string; sessionId: string }): Promise<ThreadPluginReloadResult>
   // Event-snooze the awaiting-background card: hide it until the thread's own background work returns
@@ -238,10 +233,8 @@ export const PROCEDURES = {
   setThreadState: "mutation",
   completeThread: "mutation",
   setThreadSnooze: "mutation",
-  setThreadStopHook: "mutation",
-  setThreadHeartbeat: "mutation",
-  setOwnThreadHeartbeat: "mutation",
-  setOwnThreadStopHook: "mutation",
+  setThreadRecurringPrompt: "mutation",
+  setOwnThreadRecurringPrompt: "mutation",
   reloadThreadPlugins: "mutation",
   snoozeAwaitingBackground: "mutation",
   confirmAwaiting: "mutation",

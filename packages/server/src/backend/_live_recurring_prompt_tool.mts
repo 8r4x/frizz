@@ -1,4 +1,4 @@
-// LIVE: the REAL `mcp__fray__stop_hook` tool arming a REAL session row, through the whole chain a
+// LIVE: the REAL `mcp__fray__recurring_prompt` tool arming a REAL session row, through the whole chain a
 // worker actually uses.
 //   nub packages/server/src/backend/_live_stop_hook_tool.mts
 //
@@ -109,43 +109,43 @@ try {
   await worker.init()
 
   // ---- ARM, through the whole real chain --------------------------------------------------------
-  const armed = await worker.call(1, "stop_hook", { action: "start", prompt: "keep the migration moving" })
+  const armed = await worker.call(1, "recurring_prompt", { action: "start", prompt: "keep the migration moving" })
   ok("the tool call succeeded end to end", armed.result?.isError === undefined,
     armed.result?.content?.[0]?.text?.slice(0, 160) ?? JSON.stringify(armed).slice(0, 160))
   ok("the REAL row is armed and enabled",
-    row("mine").stop_hook === "keep the migration moving" && row("mine").stop_hook_enabled === 1,
-    `stop_hook=${JSON.stringify(row("mine").stop_hook)} enabled=${row("mine").stop_hook_enabled}`)
-  ok("…with a generation stamped, so the scheduler can bind a bump to it", !!row("mine").stop_hook_armed_at)
+    row("mine").recurring_prompt === "keep the migration moving" && row("mine").recurring_on_rest === 1,
+    `recurring_prompt=${JSON.stringify(row("mine").recurring_prompt)} enabled=${row("mine").recurring_on_rest}`)
+  ok("…with a generation stamped, so the scheduler can bind a bump to it", !!row("mine").recurring_armed_at)
   ok("the board was told to refresh", refreshes > 0, `${refreshes} refresh(es)`)
 
   // ---- RE-ARM with the same words keeps the generation (a worker re-registering on resume) -------
-  const gen = row("mine").stop_hook_armed_at
-  await worker.call(2, "stop_hook", { action: "start", prompt: "keep the migration moving" })
-  ok("re-arming with the SAME text does not mint a new generation", row("mine").stop_hook_armed_at === gen)
+  const gen = row("mine").recurring_armed_at
+  await worker.call(2, "recurring_prompt", { action: "start", prompt: "keep the migration moving" })
+  ok("re-arming with the SAME text does not mint a new generation", row("mine").recurring_armed_at === gen)
 
   // ---- THE ASSERTION THAT MATTERS: a worker cannot arm anyone else's thread ----------------------
-  const before = row("someone-else").stop_hook ?? null
-  await worker.call(3, "stop_hook", {
+  const before = row("someone-else").recurring_prompt ?? null
+  await worker.call(3, "recurring_prompt", {
     action: "start", prompt: "loop forever", slug: "someone-else", thread: "someone-else", threadSlug: "someone-else",
   })
   ok("an invented thread argument does NOT reach another thread's row",
-    (row("someone-else").stop_hook ?? null) === before,
-    `someone-else.stop_hook=${JSON.stringify(row("someone-else").stop_hook)}`)
-  ok("…and the caller's OWN row took the text instead", row("mine").stop_hook === "loop forever")
+    (row("someone-else").recurring_prompt ?? null) === before,
+    `someone-else.recurring_prompt=${JSON.stringify(row("someone-else").recurring_prompt)}`)
+  ok("…and the caller's OWN row took the text instead", row("mine").recurring_prompt === "loop forever")
 
   // ---- STOP, the worker ending its own loop deliberately ----------------------------------------
-  const stopped = await worker.call(4, "stop_hook", { action: "stop" })
+  const stopped = await worker.call(4, "recurring_prompt", { action: "stop" })
   ok("the disarm call succeeded", stopped.result?.isError === undefined)
   ok("the row is fully cleared",
-    row("mine").stop_hook === null && row("mine").stop_hook_armed_at === null && row("mine").stop_hook_enabled === 0,
-    `stop_hook=${JSON.stringify(row("mine").stop_hook)} enabled=${row("mine").stop_hook_enabled}`)
+    row("mine").recurring_prompt === null && row("mine").recurring_armed_at === null && row("mine").recurring_on_rest === 0,
+    `recurring_prompt=${JSON.stringify(row("mine").recurring_prompt)} enabled=${row("mine").recurring_on_rest}`)
 
   worker.kill()
 
   // ---- A server with no thread identity must FAIL, never guess ----------------------------------
   const anonymous = mcp({ FRAY_THREAD_SLUG: "", FRAY_UI_THREAD: "" })
   await anonymous.init()
-  const refused = await anonymous.call(1, "stop_hook", { action: "start", prompt: "x" })
+  const refused = await anonymous.call(1, "recurring_prompt", { action: "start", prompt: "x" })
   ok("an MCP server with no stamped thread refuses rather than guessing",
     refused.result?.isError === true && /not told which thread it belongs to/.test(refused.result?.content?.[0]?.text ?? ""),
     refused.result?.content?.[0]?.text?.slice(0, 120) ?? "")

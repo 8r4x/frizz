@@ -3,7 +3,7 @@
 // (a delivered stop hook, a delivered heartbeat) in one scroll.
 //
 // Follows the adhoc-cdp recipe: a session row + a JSONL the REAL tailer reads, with the delivered text
-// composed by the SAME shared formatters the scheduler uses (`stopHookMessage`/`heartbeatMessage`) plus
+// composed by the SAME shared formatters the scheduler uses (`restPromptMessage`/`schedulePromptMessage`) plus
 // the real wake-delivery token — so this exercises the production parse-and-render path rather than a
 // hand-written string that merely looks like one.
 //
@@ -11,7 +11,7 @@
 import { mkdirSync, writeFileSync, globSync } from "node:fs"
 import { execFileSync } from "node:child_process"
 import { join } from "node:path"
-import { heartbeatMessage, stopHookMessage, wakeDeliveryToken } from "../packages/shared/src/index.ts"
+import { restPromptMessage, schedulePromptMessage, wakeDeliveryToken } from "../packages/shared/src/index.ts"
 import { createRpcClient } from "./lib/rpc-client.mjs"
 
 const flags = Object.fromEntries(
@@ -78,7 +78,7 @@ for (const [n, c] of CASES.entries()) {
     // machine-facing token the outbox acks on (the projection strips the token and marks the turn a wake).
     records.push({
       parentUuid: null, isSidechain: false, type: "user",
-      message: { role: "user", content: `${stopHookMessage(c.hook)}\n\n${token(n + 1)}` },
+      message: { role: "user", content: `${restPromptMessage(c.hook)}\n\n${token(n + 1)}` },
       uuid: uuid(3), timestamp: ago(30), session_id: sessionId, cwd,
     })
     records.push({
@@ -92,7 +92,7 @@ for (const [n, c] of CASES.entries()) {
     })
     records.push({
       parentUuid: null, isSidechain: false, type: "user",
-      message: { role: "user", content: `${heartbeatMessage(c.beat.prompt, c.beat.seconds)}\n\n${token(n + 5)}` },
+      message: { role: "user", content: `${schedulePromptMessage(c.beat.prompt, c.beat.seconds)}\n\n${token(n + 5)}` },
       uuid: uuid(5), timestamp: ago(20), session_id: sessionId, cwd,
     })
     records.push({
@@ -119,9 +119,8 @@ for (const [n, c] of CASES.entries()) {
   if (c.hook) {
     const api = createRpcClient(`http://127.0.0.1:${port}/`)
     await api.waitForHealth()
-    await api.mutate("setThreadStopHook", { slug: c.slug, sessionId, prompt: c.hook, enabled: true })
-    await api.mutate("setThreadHeartbeat", {
-      slug: c.slug, sessionId, prompt: c.beat.prompt, enabled: true, intervalSeconds: c.beat.seconds,
+    await api.mutate("setThreadRecurringPrompt", {
+      slug: c.slug, sessionId, prompt: c.hook, onRest: true, onSchedule: true, intervalSeconds: c.beat.seconds,
     })
   }
   console.log(`seeded ${c.slug}`)

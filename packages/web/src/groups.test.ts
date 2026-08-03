@@ -200,31 +200,32 @@ test("sessionIndicatorKind: a shell-only rest holds the running band with the do
   assert.equal(sessionIndicatorKind(thread({ ...shellRest, runtime: "exited", needsYou: true })), "stalled")
 })
 
-// A STOP HOOK IS NOT A RAIL FACT — maintainer 2026-08-02, killing a mark that had shipped hours
+// A RECURRING PROMPT IS NOT A RAIL FACT — maintainer 2026-08-02, killing a mark that had shipped hours
 // earlier: "the whole point of a stop hook is that it means the agent never stops, so it should always
-// just be loading."
+// just be loading." (Said of the rest trigger, back when it was its own feature; it binds the merged
+// control the same way, and the schedule trigger only makes it truer.)
 //
 // Exactly right, and the mark could only ever have contradicted it. `working` outranks everything below
-// it, so a hook mark renders only in the at-rest gap — and a LIVE hook barely has one (the thread is
+// it, so the mark renders only in the at-rest gap — and a live prompt barely has one (the thread is
 // bumped again within a tick of stopping). The at-rest state that does last is the thread whose agent
-// answered AWAITING, i.e. the loop that just CLOSED. The mark was invisible while the hook was doing its
-// job and visible only once it had stopped doing it.
+// answered ALLDONE, i.e. the loop that just CLOSED. The mark was invisible while the prompt was doing
+// its job and visible only once it had stopped doing it.
 //
-// So a hooked thread's rail row is whatever it would have been anyway: spinning while it works, at rest
+// So an armed thread's rail row is whatever it would have been anyway: spinning while it works, at rest
 // when it is genuinely done. This test is the guard against reintroducing the mark.
-test("sessionIndicatorKind: an armed stop hook changes NO rail mark", () => {
-  const hook = { prompt: "keep going", enabled: true, armedAt: "2026-07-10T00:00:00.000Z" }
+test("sessionIndicatorKind: an armed recurring prompt changes NO rail mark", () => {
+  const hook = { prompt: "keep going", onRest: true, onSchedule: false, armedAt: "2026-07-10T00:00:00.000Z" }
   const base = { kind: "session" as const, state: "open" as const, needsYou: false, runtime: "turn-idle" as const }
 
   // At rest with a hook armed: the ordinary at-rest ellipsis, exactly as without one.
-  assert.equal(sessionIndicatorKind(thread({ ...base, stopHook: hook })), "rest")
+  assert.equal(sessionIndicatorKind(thread({ ...base, recurringPrompt: hook })), "rest")
   assert.equal(sessionIndicatorKind(thread({ ...base })), "rest")
   // Disabled likewise.
-  assert.equal(sessionIndicatorKind(thread({ ...base, stopHook: { ...hook, enabled: false } })), "rest")
+  assert.equal(sessionIndicatorKind(thread({ ...base, recurringPrompt: { ...hook, onRest: false } })), "rest")
   // And every other state keeps the mark it earned on its own terms.
-  assert.equal(sessionIndicatorKind(thread({ ...base, stopHook: hook, subAgents: liveSub })), "working")
-  assert.equal(sessionIndicatorKind(thread({ ...base, stopHook: hook, awaitingBackground: true, bgShells: liveShell })), "background")
-  assert.equal(sessionIndicatorKind(thread({ ...base, stopHook: hook, needsYou: true, pendingQuestion: true })), "needs-input")
+  assert.equal(sessionIndicatorKind(thread({ ...base, recurringPrompt: hook, subAgents: liveSub })), "working")
+  assert.equal(sessionIndicatorKind(thread({ ...base, recurringPrompt: hook, awaitingBackground: true, bgShells: liveShell })), "background")
+  assert.equal(sessionIndicatorKind(thread({ ...base, recurringPrompt: hook, needsYou: true, pendingQuestion: true })), "needs-input")
 })
 
 // THE INVARIANT, stated once and checked over every shape the rail can produce (maintainer 2026-08-01:

@@ -453,7 +453,7 @@ export type SessionIndicatorKind = "archived" | "needs-input" | "working" | "bac
 // mark said "fray will act on this" about a loop that had just closed itself. It was invisible when
 // true and wrong when visible.
 //
-// The footer's StopHookControl carries the state instead, where it is legible and editable.
+// The footer's RecurringPromptControl carries the state instead, where it is legible and editable.
 
 export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   const activelyRunning = isActivelyRunning(t)

@@ -86,15 +86,15 @@ const scheduler = createScheduler({
 
 // A stop-hook instruction with a REAL exhaustion point, so the sentinel is the agent's own judgement
 // rather than something the probe told it to print on a schedule. Three items, one per bump.
-const STOP_HOOK_TEXT = [
+const RECURRING_TEXT = [
   `There is a checklist at ${join(cwd, "todo.txt")}.`,
   `Do the FIRST unfinished item on it: append that item's line to ${workFile}, then mark it done in the checklist by prefixing its line with DONE.`,
   "Do exactly one item, then stop. If every item is already marked DONE, do nothing at all.",
 ].join(" ")
 
-/** Arm (or re-arm) the stop hook as of NOW, which also drops the rate-floor stamp. */
+/** Arm (or re-arm) the ON REST trigger as of NOW, which also drops its last-fired stamp. */
 const arm = (): void => {
-  storage.setStopHookIfCurrent(slug, sessionId, 0, STOP_HOOK_TEXT, true, new Date().toISOString())
+  storage.setRecurringPromptIfCurrent(slug, sessionId, 0, RECURRING_TEXT, true, false, null, new Date().toISOString())
 }
 /** Drive the real scheduler until it has delivered `want` bumps, or the window closes. */
 const pump = async (want: number, windowMs: number): Promise<void> => {

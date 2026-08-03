@@ -61,30 +61,24 @@ export interface SessionRow {
   // came to a new rest because a sub-agent/shell returned. NULL = no event-snooze armed. Distinct from
   // snoozed_until (a wall-clock park owned by the scheduler); this one clears itself on the next rest.
   bg_snooze_rested_at?: string | null
-  // The thread's HEARTBEAT (scheduler.ts SOURCE 4): a prompt on a chosen clock. All of prompt/interval/
-  // armed_at move together — a heartbeat is armed iff all three are set — and `heartbeat_armed_at` is
-  // the GENERATION, so re-arming supersedes a beat already queued under the old settings.
-  heartbeat_prompt?: string | null
-  heartbeat_interval_ms?: number | null
-  // 0 = armed but silent: the schedule and text are kept so re-enabling costs no retyping. (The old
-  // heartbeat spelled this `paused` and inverted; `enabled` matches the stop hook's toggle.)
-  heartbeat_enabled?: number
-  heartbeat_armed_at?: string | null
-  // When the last beat reached a terminal delivery. The next beat is due an interval after THIS, not
-  // after the previous was queued, so a thread that stayed busy gets one catch-up beat rather than a
-  // backlog.
-  heartbeat_last_fired_at?: string | null
-  // The OPERATOR's stop hook (scheduler.ts SOURCE 5), armed from the thread footer: text re-delivered
-  // every time this thread comes to REST. `stop_hook_armed_at` is the GENERATION — editing the text
-  // mints a new one so a bump already in the outbox for the old words reads as superseded — and
-  // `stop_hook_enabled` is the popover's toggle: 0 keeps the text but fires nothing.
-  stop_hook?: string | null
-  stop_hook_enabled?: number
-  stop_hook_armed_at?: string | null
-  // When the last bump reached a terminal delivery — the HEARTBEAT's input (scheduler's
-  // STOP_HOOK_HEARTBEAT_MS). No bump fires until that interval has elapsed since this stamp, so a
-  // thread is prompted at most once per interval however often it stops.
-  stop_hook_last_fired_at?: string | null
+  // The thread's RECURRING PROMPT — one piece of text with up to two independent triggers
+  // (scheduler.ts SOURCES 4 and 5). `recurring_armed_at` is the GENERATION: editing the text or the
+  // cadence mints a new one, so a delivery already queued under the old settings reads as superseded.
+  recurring_prompt?: string | null
+  // The two triggers. BOTH 0 is the off state — the text and the cadence are kept so re-arming costs no
+  // retyping, and there is deliberately no third `enabled` column that could disagree with these.
+  recurring_on_rest?: number
+  recurring_on_schedule?: number
+  // The ON SCHEDULE trigger's cadence. Kept even while that trigger is off, so switching it back on
+  // does not lose the interval the operator chose.
+  recurring_interval_ms?: number | null
+  recurring_armed_at?: string | null
+  // Terminal-delivery stamps, ONE PER TRIGGER. They are separate because they answer different
+  // questions: the schedule's is load-bearing (the next delivery is due an interval after THIS, so a
+  // thread cannot accumulate a backlog), while the rest trigger's is only the panel's "last sent"
+  // readout — it has no floor and fires on every rest.
+  recurring_rest_fired_at?: string | null
+  recurring_schedule_fired_at?: string | null
   // Operator confirmation for one exact final ```awaiting fence generation. The board/scheduler ignore a
   // transcript proposal unless these match its current fence identity.
   awaiting_fence_id?: string | null
@@ -409,47 +403,46 @@ export interface Storage {
   // Arm/clear the awaiting-background event-snooze. Session-guarded like the park above. `restedAt` is
   // the rest instant the card is snoozed FOR; the board re-surfaces it once rested_at moves past this.
   setBgSnoozeRestedAtIfCurrent(slug: string, sessionId: string, generation: number, restedAt: string | null): boolean
-  // Arm/edit/clear the OPERATOR's stop hook in one write, because the popover's toggle and its
-  // textarea are two views of one row. A null prompt clears the row; a new prompt TEXT mints a fresh
-  // `armed_at` generation (superseding any bump already queued for the old words) while a pure toggle
-  // flip keeps it, so enabling does not re-run a bump the operator just watched land. Session-guarded:
-  // this comes from a browser tab that may be looking at a thread which has since been re-dispatched.
-  setStopHookIfCurrent(
+  // Arm / edit / clear the thread's RECURRING PROMPT in ONE write, because the popover's textarea, its
+  // two trigger toggles and its minutes field are all views of one row — split into separate writes, a
+  // tab holding a stale copy of one of them would clobber the rest.
+  //
+  // GENERATION DISCIPLINE: a change to the TEXT or the INTERVAL mints a fresh `armed_at`, superseding
+  // any delivery already queued under the old settings; a bare trigger flip preserves it, so switching
+  // a trigger off and on cannot re-run a delivery the operator just watched land. A null prompt clears
+  // the row outright.
+  //
+  // Session-guarded: this comes from a browser tab that may be looking at a thread which has since been
+  // re-dispatched.
+  setRecurringPromptIfCurrent(
     slug: string,
     sessionId: string,
     generation: number,
     prompt: string | null,
-    enabled: boolean,
-    armedAt: string,
-  ): boolean
-  // Arm / edit / clear the thread's HEARTBEAT (scheduler.ts SOURCE 4). Same generation discipline as the
-  // stop hook: a change to the TEXT OR THE INTERVAL mints a fresh `armed_at` (superseding a beat queued
-  // under the old settings and restarting the clock), while a bare toggle flip preserves both. A null
-  // prompt clears the row. Session-guarded — this is the browser's path.
-  setHeartbeatIfCurrent(
-    slug: string,
-    sessionId: string,
-    generation: number,
-    prompt: string | null,
+    onRest: boolean,
+    onSchedule: boolean,
     intervalMs: number | null,
-    enabled: boolean,
     armedAt: string,
   ): boolean
-  // The WORKER's path to the same row, from `mcp__fray__heartbeat`. Slug-only and unguarded, for the
-  // reason spelled out on setStopHookBySlug.
-  setHeartbeatBySlug(slug: string, prompt: string | null, intervalMs: number | null, enabled: boolean, armedAt: string): boolean
-  // Stamp a delivered beat, guarded on the generation so a beat settling after a re-arm cannot write a
-  // schedule onto settings it no longer describes.
-  stampHeartbeatFired(slug: string, armedAt: string, firedAt: string): boolean
-  // The WORKER's own path to the same row, from `mcp__fray__stop_hook`. Deliberately keyed on the slug
-  // ALONE, with no session/generation guard, because the MCP server cannot satisfy one: it is spawned
-  // with its thread's slug and keeps it across a resume, while the session id and generation bump
-  // underneath it — so a guard here would fail exactly on the long-lived thread this exists for. The
-  // slug is stamped into that server's env by fray itself and is not attacker-controlled.
-  setStopHookBySlug(slug: string, prompt: string | null, enabled: boolean, armedAt: string): boolean
-  // Stamp a delivered bump, guarded on the generation so a bump that settles after the operator
-  // edited the text cannot write onto words it no longer describes.
-  stampStopHookFired(slug: string, armedAt: string, firedAt: string): boolean
+  // The WORKER's path to the same row, from `mcp__fray__recurring_prompt`. Deliberately keyed on the
+  // slug ALONE, with no session/generation guard, because the MCP server cannot satisfy one: it is
+  // spawned with its thread's slug and keeps it across a resume, while the session id and generation
+  // bump underneath it — so a guard here would fail exactly on the long-lived thread this exists for.
+  // The slug is stamped into that server's env by fray itself and is not attacker-controlled.
+  setRecurringPromptBySlug(
+    slug: string,
+    prompt: string | null,
+    onRest: boolean,
+    onSchedule: boolean,
+    intervalMs: number | null,
+    armedAt: string,
+  ): boolean
+  // Stamp a delivered ON REST prompt, guarded on the generation so one settling after an edit cannot
+  // write onto words it no longer describes.
+  stampRecurringRestFired(slug: string, armedAt: string, firedAt: string): boolean
+  // Stamp a delivered ON SCHEDULE prompt. Same guard, and load-bearing rather than cosmetic: the next
+  // one is due an interval after THIS stamp.
+  stampRecurringScheduleFired(slug: string, armedAt: string, firedAt: string): boolean
   // Operator confirmation of ONE exact awaiting fence; fails closed if the session/generation moved.
   confirmAwaitingWait(
     slug: string,
@@ -708,22 +701,30 @@ export function createStorage(dbPath: string): Storage {
     // Claude transport discriminator: NULL/'tmux' = the interactive-TUI path in a tmux pane; 'broker'
     // = a session-broker-owned Agent SDK session (input via the bridge, liveness from it, not a pane).
     "claude_runtime TEXT",
-    // The thread's HEARTBEAT (scheduler.ts SOURCE 4) — a prompt on a chosen clock, fired regardless of
-    // what the thread is doing. Re-added 2026-08-02 after a same-day removal: the stop hook replaced its
-    // MECHANISM but not its job, and an operator who wants a thread revisited hourly needs a clock, not
-    // a rest trigger the agent can defer.
+    // The legacy two-feature columns. Superseded 2026-08-03 by the `recurring_*` set below, which
+    // merged the stop hook and the heartbeat into ONE prompt with two triggers. They are still declared
+    // here (rather than dropped) for exactly one reason: the backfill further down reads them, and it
+    // must keep working on a database that has not booted since before the merge. Nothing WRITES them
+    // any more — if you find yourself adding a writer, you are re-forking the feature.
     "heartbeat_prompt TEXT",
     "heartbeat_interval_ms INTEGER",
     "heartbeat_enabled INTEGER NOT NULL DEFAULT 0",
     "heartbeat_armed_at TEXT",
     "heartbeat_last_fired_at TEXT",
-    // The OPERATOR's stop hook (scheduler.ts SOURCE 5). Armed from the thread
-    // footer's popover; delivered every time the thread comes to REST until the worker replies with
-    // the AWAITING sentinel. No interval column — "rest" is the trigger.
     "stop_hook TEXT",
     "stop_hook_enabled INTEGER NOT NULL DEFAULT 0",
     "stop_hook_armed_at TEXT",
     "stop_hook_last_fired_at TEXT",
+    // THE RECURRING PROMPT (scheduler.ts SOURCES 4 and 5): one text, two independent triggers — every
+    // time the thread rests, and/or every N ms on a clock. Both flags 0 = off; there is no separate
+    // enable column, because a third flag could only ever contradict the two that decide the behaviour.
+    "recurring_prompt TEXT",
+    "recurring_on_rest INTEGER NOT NULL DEFAULT 0",
+    "recurring_on_schedule INTEGER NOT NULL DEFAULT 0",
+    "recurring_interval_ms INTEGER",
+    "recurring_armed_at TEXT",
+    "recurring_rest_fired_at TEXT",
+    "recurring_schedule_fired_at TEXT",
   ]) {
     try {
       db.exec(`ALTER TABLE session ADD COLUMN ${col}`)
@@ -731,11 +732,42 @@ export function createStorage(dbPath: string): Storage {
       // column already exists
     }
   }
-  // (A one-shot migration that ADOPTED a pre-removal heartbeat as a stop hook lived here for a few
-  // hours on 2026-08-02, between the heartbeat's removal and its reinstatement below. It is gone
-  // because keeping it would now be actively destructive: with heartbeats armed again it would eat
-  // every newly-armed one into the stop-hook row on the next boot. Threads it already converted keep
-  // their stop hook; a heartbeat is re-armed from the footer or the tool.)
+  // ONE-SHOT ADOPTION of the pre-merge two-feature rows (2026-08-03). A thread that had a stop hook, a
+  // heartbeat, or both keeps working across the upgrade instead of silently going quiet.
+  //
+  // GUARDED ON `recurring_armed_at IS NULL`, which is what makes it safe to re-run on every boot: the
+  // moment a row has a recurring prompt of its own, this stops touching it. Without that guard it would
+  // resurrect a prompt the operator had since cleared, every single restart — the exact failure the
+  // 2026-08-02 adoption pass was deleted for.
+  //
+  // WHERE THE TEXT COMES FROM when both were armed with DIFFERENT words: the stop hook's wins. Merging
+  // is inherently lossy in that case (it is the one capability this merge removes), and the stop hook
+  // is the more likely to hold the real driving instruction — the heartbeat's tended to be a short
+  // "check X" reminder. The triggers and the cadence both carry over regardless, so the thread keeps
+  // firing on the same schedule it had.
+  try {
+    db.exec(`
+      UPDATE session SET
+        recurring_prompt = COALESCE(stop_hook, heartbeat_prompt),
+        recurring_on_rest = CASE WHEN stop_hook IS NOT NULL AND stop_hook_enabled = 1 THEN 1 ELSE 0 END,
+        recurring_on_schedule = CASE WHEN heartbeat_prompt IS NOT NULL AND heartbeat_enabled = 1 THEN 1 ELSE 0 END,
+        recurring_interval_ms = heartbeat_interval_ms,
+        -- The generation is the LATER of the two, so a delivery still in the outbox under either old
+        -- generation reads as superseded rather than landing against the merged row.
+        recurring_armed_at = CASE
+          WHEN stop_hook_armed_at IS NULL THEN heartbeat_armed_at
+          WHEN heartbeat_armed_at IS NULL THEN stop_hook_armed_at
+          WHEN stop_hook_armed_at > heartbeat_armed_at THEN stop_hook_armed_at
+          ELSE heartbeat_armed_at
+        END,
+        recurring_rest_fired_at = stop_hook_last_fired_at,
+        recurring_schedule_fired_at = heartbeat_last_fired_at
+      WHERE recurring_armed_at IS NULL
+        AND (stop_hook IS NOT NULL OR heartbeat_prompt IS NOT NULL)
+    `)
+  } catch {
+    // A database predating the legacy columns has nothing to adopt.
+  }
   // One-time idempotent backfill: rows the user already archived under the boolean flag carry that
   // into the new lifecycle column. Only fills NULLs — an explicit later state write always wins.
   try {
@@ -1065,73 +1097,66 @@ export function createStorage(dbPath: string): Storage {
   // an edit of the existing one. The generation — and with it the last-fired stamp — is preserved
   // exactly when the TEXT is unchanged, so toggling off and on again does not supersede a bump already
   // in flight for those same words, while editing the text does.
-  const stopHookStmt = db.prepare(`
-    UPDATE session SET
-      stop_hook = ?,
-      stop_hook_enabled = ?,
-      stop_hook_armed_at = CASE
+  // THE RECURRING PROMPT'S SET LIST, shared verbatim by the session-guarded and the by-slug statements
+  // so the operator's path and the worker's path can never drift in behaviour — only in their WHERE.
+  //
+  // Every expression on the right reads the ORIGINAL row, so ONE statement decides whether this write is
+  // a fresh arming or an edit: the generation survives exactly when the text AND the interval are both
+  // unchanged. That is what makes a bare trigger flip non-destructive.
+  //
+  // The two fired-stamps clear ASYMMETRICALLY, and deliberately. A prompt edit invalidates both (the
+  // words that fired are gone). An interval-only change invalidates only the SCHEDULE's clock — the rest
+  // trigger has no cadence for the interval to describe, so wiping its "last sent" readout would be a
+  // lie about when the operator's text last reached the worker.
+  const RECURRING_SET = `
+      recurring_prompt = ?,
+      recurring_interval_ms = CASE WHEN ? IS NULL THEN NULL ELSE ? END,
+      recurring_on_rest = ?,
+      recurring_on_schedule = ?,
+      recurring_armed_at = CASE
         WHEN ? IS NULL THEN NULL
-        WHEN stop_hook_armed_at IS NOT NULL AND stop_hook IS ? THEN stop_hook_armed_at
+        WHEN recurring_armed_at IS NOT NULL AND recurring_prompt IS ? AND recurring_interval_ms IS ? THEN recurring_armed_at
         ELSE ? END,
-      stop_hook_last_fired_at = CASE
+      recurring_rest_fired_at = CASE
         WHEN ? IS NULL THEN NULL
-        WHEN stop_hook_armed_at IS NOT NULL AND stop_hook IS ? THEN stop_hook_last_fired_at
-        ELSE NULL END
-    WHERE slug = ? AND session_id = ? AND runtime_generation = ?
-  `)
-  // The 11 bound values HEARTBEAT_SET consumes, in order. Factored out because the two statements above
-  // share the SET list verbatim and only differ in their WHERE — writing the argument list twice is how
-  // the two paths silently drift apart.
-  const heartbeatArgs = (prompt: string | null, intervalMs: number | null, enabled: boolean, armedAt: string) => {
+        WHEN recurring_armed_at IS NOT NULL AND recurring_prompt IS ? THEN recurring_rest_fired_at
+        ELSE NULL END,
+      recurring_schedule_fired_at = CASE
+        WHEN ? IS NULL THEN NULL
+        WHEN recurring_armed_at IS NOT NULL AND recurring_prompt IS ? AND recurring_interval_ms IS ? THEN recurring_schedule_fired_at
+        ELSE NULL END`
+  // The 14 bound values RECURRING_SET consumes, in order. Factored out for the same reason the SET list
+  // is: writing this argument list twice is how the two paths silently diverge.
+  const recurringArgs = (
+    prompt: string | null,
+    onRest: boolean,
+    onSchedule: boolean,
+    intervalMs: number | null,
+    armedAt: string,
+  ) => {
+    // A cleared row keeps nothing: no cadence, and both triggers off. Neither trigger can be left on
+    // over a null prompt, or the scheduler would hold an armed row with nothing to say.
     const ms = prompt === null ? null : intervalMs
     return [
       prompt,
       ms, ms,
-      prompt === null ? 0 : enabled ? 1 : 0,
+      prompt === null ? 0 : onRest ? 1 : 0,
+      prompt === null ? 0 : onSchedule ? 1 : 0,
       prompt, prompt, ms, armedAt,
+      prompt, prompt,
       prompt, prompt, ms,
     ] as const
   }
-  // The heartbeat's SET list. Like the stop hook's, every expression reads the ORIGINAL row, so one
-  // statement decides whether this write is a fresh arming or an edit: the generation (and with it the
-  // beat clock) is preserved exactly when BOTH the text and the interval are unchanged.
-  const HEARTBEAT_SET = `
-      heartbeat_prompt = ?,
-      heartbeat_interval_ms = CASE WHEN ? IS NULL THEN NULL ELSE ? END,
-      heartbeat_enabled = ?,
-      heartbeat_armed_at = CASE
-        WHEN ? IS NULL THEN NULL
-        WHEN heartbeat_armed_at IS NOT NULL AND heartbeat_prompt IS ? AND heartbeat_interval_ms IS ? THEN heartbeat_armed_at
-        ELSE ? END,
-      heartbeat_last_fired_at = CASE
-        WHEN ? IS NULL THEN NULL
-        WHEN heartbeat_armed_at IS NOT NULL AND heartbeat_prompt IS ? AND heartbeat_interval_ms IS ? THEN heartbeat_last_fired_at
-        ELSE NULL END`
-  const heartbeatStmt = db.prepare(`UPDATE session SET ${HEARTBEAT_SET}
+  const recurringStmt = db.prepare(`UPDATE session SET ${RECURRING_SET}
     WHERE slug = ? AND session_id = ? AND runtime_generation = ?`)
-  const heartbeatBySlugStmt = db.prepare(`UPDATE session SET ${HEARTBEAT_SET} WHERE slug = ?`)
-  const heartbeatFiredStmt = db.prepare(`
-    UPDATE session SET heartbeat_last_fired_at = ?
-    WHERE slug = ? AND heartbeat_armed_at = ?
+  const recurringBySlugStmt = db.prepare(`UPDATE session SET ${RECURRING_SET} WHERE slug = ?`)
+  const recurringRestFiredStmt = db.prepare(`
+    UPDATE session SET recurring_rest_fired_at = ?
+    WHERE slug = ? AND recurring_armed_at = ?
   `)
-  // Same SET list, keyed on the slug alone — the worker-tool path (see setStopHookBySlug).
-  const stopHookBySlugStmt = db.prepare(`
-    UPDATE session SET
-      stop_hook = ?,
-      stop_hook_enabled = ?,
-      stop_hook_armed_at = CASE
-        WHEN ? IS NULL THEN NULL
-        WHEN stop_hook_armed_at IS NOT NULL AND stop_hook IS ? THEN stop_hook_armed_at
-        ELSE ? END,
-      stop_hook_last_fired_at = CASE
-        WHEN ? IS NULL THEN NULL
-        WHEN stop_hook_armed_at IS NOT NULL AND stop_hook IS ? THEN stop_hook_last_fired_at
-        ELSE NULL END
-    WHERE slug = ?
-  `)
-  const stopHookFiredStmt = db.prepare(`
-    UPDATE session SET stop_hook_last_fired_at = ?
-    WHERE slug = ? AND stop_hook_armed_at = ?
+  const recurringScheduleFiredStmt = db.prepare(`
+    UPDATE session SET recurring_schedule_fired_at = ?
+    WHERE slug = ? AND recurring_armed_at = ?
   `)
   const confirmAwaitingWaitStmt = db.prepare(`
     UPDATE session
@@ -1759,30 +1784,17 @@ export function createStorage(dbPath: string): Storage {
       snoozedUntilIfCurrentStmt.run(until, slug, sessionId, generation).changes === 1,
     setBgSnoozeRestedAtIfCurrent: (slug, sessionId, generation, restedAt) =>
       bgSnoozeRestedAtIfCurrentStmt.run(restedAt, slug, sessionId, generation).changes === 1,
-    setStopHookIfCurrent: (slug, sessionId, generation, prompt, enabled, armedAt) =>
-      stopHookStmt.run(
-        prompt,
-        prompt === null ? 0 : enabled ? 1 : 0,
-        prompt, prompt, armedAt,
-        prompt, prompt,
+    setRecurringPromptIfCurrent: (slug, sessionId, generation, prompt, onRest, onSchedule, intervalMs, armedAt) =>
+      recurringStmt.run(
+        ...recurringArgs(prompt, onRest, onSchedule, intervalMs, armedAt),
         slug, sessionId, generation,
       ).changes === 1,
-    setHeartbeatIfCurrent: (slug, sessionId, generation, prompt, intervalMs, enabled, armedAt) =>
-      heartbeatStmt.run(...heartbeatArgs(prompt, intervalMs, enabled, armedAt), slug, sessionId, generation).changes === 1,
-    setHeartbeatBySlug: (slug, prompt, intervalMs, enabled, armedAt) =>
-      heartbeatBySlugStmt.run(...heartbeatArgs(prompt, intervalMs, enabled, armedAt), slug).changes === 1,
-    stampHeartbeatFired: (slug, armedAt, firedAt) =>
-      heartbeatFiredStmt.run(firedAt, slug, armedAt).changes === 1,
-    setStopHookBySlug: (slug, prompt, enabled, armedAt) =>
-      stopHookBySlugStmt.run(
-        prompt,
-        prompt === null ? 0 : enabled ? 1 : 0,
-        prompt, prompt, armedAt,
-        prompt, prompt,
-        slug,
-      ).changes === 1,
-    stampStopHookFired: (slug, armedAt, firedAt) =>
-      stopHookFiredStmt.run(firedAt, slug, armedAt).changes === 1,
+    setRecurringPromptBySlug: (slug, prompt, onRest, onSchedule, intervalMs, armedAt) =>
+      recurringBySlugStmt.run(...recurringArgs(prompt, onRest, onSchedule, intervalMs, armedAt), slug).changes === 1,
+    stampRecurringRestFired: (slug, armedAt, firedAt) =>
+      recurringRestFiredStmt.run(firedAt, slug, armedAt).changes === 1,
+    stampRecurringScheduleFired: (slug, armedAt, firedAt) =>
+      recurringScheduleFiredStmt.run(firedAt, slug, armedAt).changes === 1,
     confirmAwaitingWait: (slug, sessionId, generation, fenceId, confirmedAt, snoozedUntil) =>
       confirmAwaitingWaitStmt.run(fenceId, confirmedAt, snoozedUntil, slug, sessionId, generation).changes === 1,
     clearAwaitingWaitIfSession: (slug, sessionId, generation) =>

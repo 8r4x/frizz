@@ -1,9 +1,9 @@
-// The pure pieces both recurring sources share: the parser that reads a worker's opt-out, and the two
-// trailers that offer it. They are tested together because they are ONE contract — the wording
-// delivered and the wording recognized have to agree, and nothing else in the system checks that.
+// The pure pieces both TRIGGERS of the recurring prompt share: the parser that reads a worker's opt-out,
+// and the two trailers that offer it. They are tested together because they are ONE contract — the
+// wording delivered and the wording recognized have to agree, and nothing else in the system checks it.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { ALLDONE_SENTINEL, saysAllDone, stopHookMessage, heartbeatMessage, formatIntervalLabel, parseRecurringPrompt } from "./index.ts"
+import { ALLDONE_SENTINEL, saysAllDone, restPromptMessage, schedulePromptMessage, formatIntervalLabel, parseRecurringPrompt } from "./index.ts"
 
 test("saysAllDone: the sentinel opts out on its own line, however the worker dressed it", () => {
   assert.equal(saysAllDone("ALLDONE"), true)
@@ -32,8 +32,8 @@ test("saysAllDone: the sentinel embedded in prose does NOT opt out", () => {
 // parser reads, and WARN. Naming it without the warning is how a worker learns to end its own run for
 // tidiness; warning without naming it leaves the opt-out undiscoverable.
 for (const [label, message] of [
-  ["stopHookMessage", stopHookMessage("  keep fixing the failing tests  ")],
-  ["heartbeatMessage", heartbeatMessage("  keep fixing the failing tests  ", 600)],
+  ["restPromptMessage", restPromptMessage("  keep fixing the failing tests  ")],
+  ["schedulePromptMessage", schedulePromptMessage("  keep fixing the failing tests  ", 600)],
 ] as const) {
   test(`${label}: the operator's words come first, then an offer AND a warning`, () => {
     assert.ok(message.startsWith("keep fixing the failing tests"), "the operator's text leads, verbatim and trimmed")
@@ -49,9 +49,12 @@ for (const [label, message] of [
   })
 }
 
-test("the two trailers are distinguishable — a beat says why it arrived, and how often", () => {
-  assert.match(heartbeatMessage("check the deploy", 600), /Heartbeat — sent every 10 min/)
-  assert.match(stopHookMessage("check the deploy"), /Stop hook — sent each time you come to rest/)
+// The prompt is SHARED now, so the trailer is the only thing that says which trigger fired. That makes
+// this distinction load-bearing rather than cosmetic: a worker reading a scheduled delivery has NOT
+// necessarily stopped, and must not conclude it has.
+test("the two trailers are distinguishable — each says why it arrived, and the scheduled one how often", () => {
+  assert.match(schedulePromptMessage("check the deploy", 600), /Recurring prompt — sent every 10 min/)
+  assert.match(restPromptMessage("check the deploy"), /Recurring prompt — sent each time you come to rest/)
 })
 
 test("formatIntervalLabel renders whole units", () => {
@@ -66,14 +69,14 @@ test("formatIntervalLabel renders whole units", () => {
 // The round trip the chat depends on: what the composers emit, the parser reads back. They live in one
 // file precisely so this holds, and this is the test that proves it rather than assuming it.
 test("parseRecurringPrompt reads back exactly what the composers emit", () => {
-  const hook = parseRecurringPrompt(stopHookMessage("Keep working the checklist."))
-  assert.deepEqual(hook, { kind: "stop-hook", prompt: "Keep working the checklist." })
+  const rest = parseRecurringPrompt(restPromptMessage("Keep working the checklist."))
+  assert.deepEqual(rest, { kind: "rest", prompt: "Keep working the checklist." })
 
-  const beat = parseRecurringPrompt(heartbeatMessage("Check the deploy.", 600))
-  assert.deepEqual(beat, { kind: "heartbeat", every: "10 min", prompt: "Check the deploy." })
+  const scheduled = parseRecurringPrompt(schedulePromptMessage("Check the deploy.", 600))
+  assert.deepEqual(scheduled, { kind: "schedule", every: "10 min", prompt: "Check the deploy." })
 
   // A multi-line operator prompt keeps every line, and only the trailer is stripped.
-  const multi = parseRecurringPrompt(stopHookMessage("One.\nTwo.\n\nThree."))
+  const multi = parseRecurringPrompt(restPromptMessage("One.\nTwo.\n\nThree."))
   assert.equal(multi?.prompt, "One.\nTwo.\n\nThree.")
 })
 
@@ -82,7 +85,19 @@ test("parseRecurringPrompt declines anything that is not one — text is never l
   assert.equal(parseRecurringPrompt(undefined), undefined)
   assert.equal(parseRecurringPrompt(""), undefined)
   // A worker QUOTING the trailer mid-message is not a delivery: the trailer must end the text.
-  assert.equal(parseRecurringPrompt("(Stop hook — sent each time you come to rest. blah) and then more"), undefined)
-  // The trailer alone, with no operator words in front of it, is not a bump either.
-  assert.equal(parseRecurringPrompt(stopHookMessage("x").replace(/^x/, "")), undefined)
+  assert.equal(parseRecurringPrompt("(Recurring prompt — sent each time you come to rest. blah) and then more"), undefined)
+  // The trailer alone, with no operator words in front of it, is not a delivery either.
+  assert.equal(parseRecurringPrompt(restPromptMessage("x").replace(/^x/, "")), undefined)
+})
+
+// PRE-MERGE TRANSCRIPTS. Every thread open on disk when the stop hook and the heartbeat became one
+// feature carries the OLD trailers, and those messages are not rewritten. The parser keeps both
+// wordings so a whole thread's history does not silently demote from wake dividers to prose — a
+// non-match loses no text, but it does lose the rendering.
+test("parseRecurringPrompt still reads the PRE-MERGE trailers", () => {
+  const legacyRest = "Keep working the checklist.\n\n(Stop hook — sent each time you come to rest. If there is genuinely no further work, reply ALLDONE on its own line to stop these prompts — but be sure, because it permanently stalls this run.)"
+  assert.deepEqual(parseRecurringPrompt(legacyRest), { kind: "rest", prompt: "Keep working the checklist." })
+
+  const legacyBeat = "Check the deploy.\n\n(Heartbeat — sent every 10 min. If there is genuinely no further work, reply ALLDONE on its own line to stop these prompts — but be sure, because it permanently stalls this run.)"
+  assert.deepEqual(parseRecurringPrompt(legacyBeat), { kind: "schedule", every: "10 min", prompt: "Check the deploy." })
 })

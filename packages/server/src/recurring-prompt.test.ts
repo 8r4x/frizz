@@ -7,7 +7,7 @@
 //      while merely toggling off and on must NOT (that would re-send a bump the operator watched land).
 //
 // The end-to-end proof that a real agent is bumped at rest, bumped again at its NEXT rest, and left
-// alone once it answers ALLDONE lives in backend/_live_stop_hook.mts — a live probe, not a unit
+// alone once it answers ALLDONE lives in backend/_live_recurring_prompt.mts — a live probe, not a unit
 // test, because the only thing worth asserting there is what a real worker does.
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -75,19 +75,19 @@ function fixture() {
 test("storage: toggling off and on KEEPS the generation and the last-fired stamp", () => {
   const f = fixture()
   try {
-    assert.equal(f.storage.setStopHookIfCurrent(f.slug, "sid", 0, "keep going", true, "2026-08-02T00:00:00.000Z"), true)
-    const armedAt = f.row().stop_hook_armed_at
+    assert.equal(f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, "keep going", true, false, null, "2026-08-02T00:00:00.000Z"), true)
+    const armedAt = f.row().recurring_armed_at
     assert.equal(armedAt, "2026-08-02T00:00:00.000Z")
-    f.storage.stampStopHookFired(f.slug, armedAt!, "2026-08-02T00:05:00.000Z")
+    f.storage.stampRecurringRestFired(f.slug, armedAt!, "2026-08-02T00:05:00.000Z")
 
-    f.storage.setStopHookIfCurrent(f.slug, "sid", 0, "keep going", false, "2026-08-02T00:10:00.000Z")
-    assert.equal(f.row().stop_hook_enabled, 0)
-    assert.equal(f.row().stop_hook_armed_at, armedAt, "an off/on flip is not a re-arming")
-    f.storage.setStopHookIfCurrent(f.slug, "sid", 0, "keep going", true, "2026-08-02T00:11:00.000Z")
-    assert.equal(f.row().stop_hook_enabled, 1)
-    assert.equal(f.row().stop_hook_armed_at, armedAt)
+    f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, "keep going", false, false, null, "2026-08-02T00:10:00.000Z")
+    assert.equal(f.row().recurring_on_rest, 0)
+    assert.equal(f.row().recurring_armed_at, armedAt, "an off/on flip is not a re-arming")
+    f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, "keep going", true, false, null, "2026-08-02T00:11:00.000Z")
+    assert.equal(f.row().recurring_on_rest, 1)
+    assert.equal(f.row().recurring_armed_at, armedAt)
     // The rate floor survives the flip too — otherwise toggling would be a way to bypass it.
-    assert.equal(f.row().stop_hook_last_fired_at, "2026-08-02T00:05:00.000Z")
+    assert.equal(f.row().recurring_rest_fired_at, "2026-08-02T00:05:00.000Z")
   } finally {
     f.close()
   }
@@ -96,11 +96,11 @@ test("storage: toggling off and on KEEPS the generation and the last-fired stamp
 test("storage: EDITING the text mints a new generation and drops the last-fired stamp", () => {
   const f = fixture()
   try {
-    f.storage.setStopHookIfCurrent(f.slug, "sid", 0, "keep going", true, "2026-08-02T00:00:00.000Z")
-    f.storage.stampStopHookFired(f.slug, f.row().stop_hook_armed_at!, "2026-08-02T00:05:00.000Z")
-    f.storage.setStopHookIfCurrent(f.slug, "sid", 0, "do something else", true, "2026-08-02T00:10:00.000Z")
-    assert.equal(f.row().stop_hook_armed_at, "2026-08-02T00:10:00.000Z", "new words are a new generation")
-    assert.equal(f.row().stop_hook_last_fired_at, null, "and the new words have never fired")
+    f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, "keep going", true, false, null, "2026-08-02T00:00:00.000Z")
+    f.storage.stampRecurringRestFired(f.slug, f.row().recurring_armed_at!, "2026-08-02T00:05:00.000Z")
+    f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, "do something else", true, false, null, "2026-08-02T00:10:00.000Z")
+    assert.equal(f.row().recurring_armed_at, "2026-08-02T00:10:00.000Z", "new words are a new generation")
+    assert.equal(f.row().recurring_rest_fired_at, null, "and the new words have never fired")
   } finally {
     f.close()
   }
@@ -109,24 +109,24 @@ test("storage: EDITING the text mints a new generation and drops the last-fired 
 test("storage: a null prompt clears the whole row, and a stale session/generation writes nothing", () => {
   const f = fixture()
   try {
-    f.storage.setStopHookIfCurrent(f.slug, "sid", 0, "keep going", true, "2026-08-02T00:00:00.000Z")
+    f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, "keep going", true, false, null, "2026-08-02T00:00:00.000Z")
     assert.equal(
-      f.storage.setStopHookIfCurrent(f.slug, "other-sid", 0, "hijack", true, "2026-08-02T00:01:00.000Z"),
+      f.storage.setRecurringPromptIfCurrent(f.slug, "other-sid", 0, "hijack", true, false, null, "2026-08-02T00:01:00.000Z"),
       false,
       "a tab looking at a superseded session fails closed",
     )
-    assert.equal(f.row().stop_hook, "keep going")
-    f.storage.setStopHookIfCurrent(f.slug, "sid", 0, null, true, "2026-08-02T00:02:00.000Z")
-    assert.equal(f.row().stop_hook, null)
-    assert.equal(f.row().stop_hook_armed_at, null)
-    assert.equal(f.row().stop_hook_enabled, 0, "a cleared row can never read as enabled")
+    assert.equal(f.row().recurring_prompt, "keep going")
+    f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, null, true, false, null, "2026-08-02T00:02:00.000Z")
+    assert.equal(f.row().recurring_prompt, null)
+    assert.equal(f.row().recurring_armed_at, null)
+    assert.equal(f.row().recurring_on_rest, 0, "a cleared row can never read as enabled")
   } finally {
     f.close()
   }
 })
 
 // ---- The worker's own path to the same row ------------------------------------------------------
-// `mcp__fray__stop_hook` writes by SLUG ALONE, with no session/generation guard, because the MCP server
+// `mcp__fray__recurring_prompt` writes by SLUG ALONE, with no session/generation guard, because the MCP server
 // cannot satisfy one: it is spawned with its thread's slug and keeps it across every resume while the
 // session id bumps underneath. These pin that the unguarded path behaves identically to the operator's
 // on everything EXCEPT the guard — same generation semantics, same clear.
@@ -142,18 +142,18 @@ test("storage: the worker path writes by slug alone, across a session change the
 
     // The operator path, holding the OLD session id, correctly fails closed.
     assert.equal(
-      f.storage.setStopHookIfCurrent(f.slug, "sid", 0, "stale tab", true, "2026-08-02T00:00:00.000Z"),
+      f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, "stale tab", true, false, null, "2026-08-02T00:00:00.000Z"),
       false,
       "a browser tab that has fallen behind must not write",
     )
     // The worker path, which only ever knew the slug, still reaches its own row.
     assert.equal(
-      f.storage.setStopHookBySlug(f.slug, "keep going", true, "2026-08-02T00:01:00.000Z"),
+      f.storage.setRecurringPromptBySlug(f.slug, "keep going", true, false, null, "2026-08-02T00:01:00.000Z"),
       true,
       "the tool must survive the resume it was armed before",
     )
-    assert.equal(f.row().stop_hook, "keep going")
-    assert.equal(f.row().stop_hook_enabled, 1)
+    assert.equal(f.row().recurring_prompt, "keep going")
+    assert.equal(f.row().recurring_on_rest, 1)
   } finally {
     f.close()
   }
@@ -162,25 +162,25 @@ test("storage: the worker path writes by slug alone, across a session change the
 test("storage: the worker path keeps the generation on a re-arm with the SAME text, and clears on null", () => {
   const f = fixture()
   try {
-    f.storage.setStopHookBySlug(f.slug, "keep going", true, "2026-08-02T00:00:00.000Z")
-    const armedAt = f.row().stop_hook_armed_at
-    f.storage.stampStopHookFired(f.slug, armedAt!, "2026-08-02T00:05:00.000Z")
+    f.storage.setRecurringPromptBySlug(f.slug, "keep going", true, false, null, "2026-08-02T00:00:00.000Z")
+    const armedAt = f.row().recurring_armed_at
+    f.storage.stampRecurringRestFired(f.slug, armedAt!, "2026-08-02T00:05:00.000Z")
 
     // A worker that re-registers on resume must not supersede a bump already queued for those words.
-    f.storage.setStopHookBySlug(f.slug, "keep going", true, "2026-08-02T00:10:00.000Z")
-    assert.equal(f.row().stop_hook_armed_at, armedAt, "same text ⇒ same generation")
-    assert.equal(f.row().stop_hook_last_fired_at, "2026-08-02T00:05:00.000Z", "and the rate floor survives")
+    f.storage.setRecurringPromptBySlug(f.slug, "keep going", true, false, null, "2026-08-02T00:10:00.000Z")
+    assert.equal(f.row().recurring_armed_at, armedAt, "same text ⇒ same generation")
+    assert.equal(f.row().recurring_rest_fired_at, "2026-08-02T00:05:00.000Z", "and the rate floor survives")
 
     // New words ARE a new generation, same as the operator path.
-    f.storage.setStopHookBySlug(f.slug, "do something else", true, "2026-08-02T00:11:00.000Z")
-    assert.equal(f.row().stop_hook_armed_at, "2026-08-02T00:11:00.000Z")
-    assert.equal(f.row().stop_hook_last_fired_at, null)
+    f.storage.setRecurringPromptBySlug(f.slug, "do something else", true, false, null, "2026-08-02T00:11:00.000Z")
+    assert.equal(f.row().recurring_armed_at, "2026-08-02T00:11:00.000Z")
+    assert.equal(f.row().recurring_rest_fired_at, null)
 
     // `action: "stop"` — the worker ending its own loop deliberately.
-    f.storage.setStopHookBySlug(f.slug, null, false, "2026-08-02T00:12:00.000Z")
-    assert.equal(f.row().stop_hook, null)
-    assert.equal(f.row().stop_hook_armed_at, null)
-    assert.equal(f.row().stop_hook_enabled, 0)
+    f.storage.setRecurringPromptBySlug(f.slug, null, false, false, null, "2026-08-02T00:12:00.000Z")
+    assert.equal(f.row().recurring_prompt, null)
+    assert.equal(f.row().recurring_armed_at, null)
+    assert.equal(f.row().recurring_on_rest, 0)
   } finally {
     f.close()
   }
@@ -201,8 +201,8 @@ function scheduler(tele: Partial<SessionTelemetry>, opts: { lastFiredAt?: string
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)
-  storage.setStopHookBySlug(slug, "keep going", true, "2026-08-02T00:00:00.000Z")
-  if (opts.lastFiredAt) storage.stampStopHookFired(slug, storage.getSession(slug)!.stop_hook_armed_at!, opts.lastFiredAt)
+  storage.setRecurringPromptBySlug(slug, "keep going", true, false, null, "2026-08-02T00:00:00.000Z")
+  if (opts.lastFiredAt) storage.stampRecurringRestFired(slug, storage.getSession(slug)!.recurring_armed_at!, opts.lastFiredAt)
   const delivered: string[] = []
   const s = createScheduler({
     storage,
@@ -302,8 +302,8 @@ function heartbeatScheduler(
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)
-  storage.setHeartbeatBySlug(slug, "check the deploy", opts.intervalMs ?? 3_600_000, true, opts.armedAt ?? "2026-08-02T00:00:00.000Z")
-  if (opts.lastFiredAt) storage.stampHeartbeatFired(slug, storage.getSession(slug)!.heartbeat_armed_at!, opts.lastFiredAt)
+  storage.setRecurringPromptBySlug(slug, "check the deploy", false, true, opts.intervalMs ?? 3_600_000, opts.armedAt ?? "2026-08-02T00:00:00.000Z")
+  if (opts.lastFiredAt) storage.stampRecurringScheduleFired(slug, storage.getSession(slug)!.recurring_armed_at!, opts.lastFiredAt)
   const delivered: string[] = []
   const s = createScheduler({
     storage,
@@ -333,7 +333,7 @@ test("heartbeat: nothing before the interval elapses, then the beat with its tra
     await due.s.tick()
     assert.equal(due.delivered.length, 1)
     assert.ok(due.delivered[0].startsWith("check the deploy"), "the operator's text leads, verbatim")
-    assert.match(due.delivered[0], /Heartbeat — sent every 1 hr/, "and the trailer names the cadence")
+    assert.match(due.delivered[0], /Recurring prompt — sent every 1 hr/, "and the trailer names the cadence")
     assert.match(due.delivered[0], /permanently stalls/, "and warns about the opt-out it offers")
   } finally { due.close() }
 })
@@ -383,7 +383,7 @@ test("heartbeat: a mid-turn beat advances the clock, so the schedule keeps runni
     await h.s.tick()
     assert.equal(h.delivered.length, 1)
     assert.equal(
-      h.storage.getSession(h.slug)!.heartbeat_last_fired_at !== null,
+      h.storage.getSession(h.slug)!.recurring_schedule_fired_at !== null,
       true,
       "the beat that landed mid-turn is what the next interval is measured from",
     )
@@ -399,7 +399,7 @@ test("heartbeat: a mid-turn beat advances the clock, so the schedule keeps runni
 test("the mid-turn exception is the HEARTBEAT's alone — a due snooze is still held while busy", async () => {
   const h = heartbeatScheduler({ turn: "in-flight" }, { now: at("2026-08-02T01:00:00.000Z") })
   try {
-    h.storage.setHeartbeatBySlug(h.slug, null, null, false, "2026-08-02T00:00:00.000Z")
+    h.storage.setRecurringPromptBySlug(h.slug, null, false, false, null, "2026-08-02T00:00:00.000Z")
     h.storage.setSnoozedUntil(h.slug, "2026-08-02T00:30:00.000Z", "back to it")
     await h.s.tick()
     assert.deepEqual(h.delivered, [], "a snooze waits for the thread to come to rest, as it always did")
@@ -416,15 +416,39 @@ test("heartbeat: a beat is still held when the thread's telemetry cannot be read
   } finally { h.close() }
 })
 
+// SWITCHING A TRIGGER OFF MUST NOT DESTROY THE CADENCE. This shipped broken for an afternoon and was
+// caught by opening the panel in a browser, not by a test: the footer omitted `intervalSeconds` from the
+// write whenever the schedule trigger was off, storage cleared the column, and the panel came back
+// showing the 10-minute default — so an operator's 30 was silently discarded the moment they parked it.
+// Pinned at the storage level, which is where "off keeps the settings" actually has to be true.
+test("recurring prompt: switching the schedule trigger OFF keeps the cadence for switching it back on", async () => {
+  // The clock sits AFTER the re-arm plus one interval, so the last assertion is about the cadence
+  // surviving rather than about how far the fixed clock happens to have advanced.
+  const h = heartbeatScheduler({}, { now: at("2026-08-02T02:30:02.000Z") })
+  try {
+    h.storage.setRecurringPromptBySlug(h.slug, "check the deploy", false, false, 1_800_000, "2026-08-02T02:00:00.000Z")
+    const off = h.storage.getSession(h.slug)!
+    assert.equal(off.recurring_on_schedule, 0, "the trigger is off")
+    assert.equal(off.recurring_interval_ms, 1_800_000, "and the 30 minutes the operator chose is still there")
+    assert.equal(off.recurring_prompt, "check the deploy", "as is the text")
+
+    // Back on, at the SAME cadence, with no re-entry.
+    h.storage.setRecurringPromptBySlug(h.slug, "check the deploy", false, true, 1_800_000, "2026-08-02T02:00:01.000Z")
+    assert.equal(h.storage.getSession(h.slug)!.recurring_interval_ms, 1_800_000)
+    await h.s.tick()
+    assert.equal(h.delivered.length, 1, "and it fires again on that cadence")
+  } finally { h.close() }
+})
+
 test("heartbeat: a DISABLED heartbeat fires nothing but keeps its schedule and text", async () => {
   const h = heartbeatScheduler({}, { now: at("2026-08-02T01:00:00.000Z") })
   try {
-    h.storage.setHeartbeatBySlug(h.slug, "check the deploy", 3_600_000, false, "2026-08-02T00:00:00.000Z")
+    h.storage.setRecurringPromptBySlug(h.slug, "check the deploy", false, false, 3_600_000, "2026-08-02T00:00:00.000Z")
     await h.s.tick()
     assert.deepEqual(h.delivered, [])
     const row = h.storage.getSession(h.slug)!
-    assert.equal(row.heartbeat_prompt, "check the deploy", "the text survives the toggle")
-    assert.equal(row.heartbeat_interval_ms, 3_600_000, "and so does the schedule")
+    assert.equal(row.recurring_prompt, "check the deploy", "the text survives the toggle")
+    assert.equal(row.recurring_interval_ms, 3_600_000, "and so does the schedule")
   } finally { h.close() }
 })
 
@@ -433,24 +457,24 @@ test("heartbeat: a DISABLED heartbeat fires nothing but keeps its schedule and t
 test("heartbeat: the generation survives a bare toggle flip and is minted by a schedule change", async () => {
   const h = heartbeatScheduler({})
   try {
-    const gen = h.storage.getSession(h.slug)!.heartbeat_armed_at
-    h.storage.stampHeartbeatFired(h.slug, gen!, "2026-08-02T00:05:00.000Z")
+    const gen = h.storage.getSession(h.slug)!.recurring_armed_at
+    h.storage.stampRecurringScheduleFired(h.slug, gen!, "2026-08-02T00:05:00.000Z")
 
-    h.storage.setHeartbeatBySlug(h.slug, "check the deploy", 3_600_000, false, "2026-08-02T02:00:00.000Z")
-    h.storage.setHeartbeatBySlug(h.slug, "check the deploy", 3_600_000, true, "2026-08-02T02:00:01.000Z")
-    assert.equal(h.storage.getSession(h.slug)!.heartbeat_armed_at, gen, "off/on is not a re-arming")
-    assert.equal(h.storage.getSession(h.slug)!.heartbeat_last_fired_at, "2026-08-02T00:05:00.000Z", "so the clock is not reset either")
+    h.storage.setRecurringPromptBySlug(h.slug, "check the deploy", false, false, 3_600_000, "2026-08-02T02:00:00.000Z")
+    h.storage.setRecurringPromptBySlug(h.slug, "check the deploy", false, true, 3_600_000, "2026-08-02T02:00:01.000Z")
+    assert.equal(h.storage.getSession(h.slug)!.recurring_armed_at, gen, "off/on is not a re-arming")
+    assert.equal(h.storage.getSession(h.slug)!.recurring_schedule_fired_at, "2026-08-02T00:05:00.000Z", "so the clock is not reset either")
 
     // Same text, NEW schedule: a real change, so a new generation and a fresh clock.
-    h.storage.setHeartbeatBySlug(h.slug, "check the deploy", 900_000, true, "2026-08-02T03:00:00.000Z")
-    assert.equal(h.storage.getSession(h.slug)!.heartbeat_armed_at, "2026-08-02T03:00:00.000Z")
-    assert.equal(h.storage.getSession(h.slug)!.heartbeat_last_fired_at, null)
+    h.storage.setRecurringPromptBySlug(h.slug, "check the deploy", false, true, 900_000, "2026-08-02T03:00:00.000Z")
+    assert.equal(h.storage.getSession(h.slug)!.recurring_armed_at, "2026-08-02T03:00:00.000Z")
+    assert.equal(h.storage.getSession(h.slug)!.recurring_schedule_fired_at, null)
 
     // Clearing empties the row.
-    h.storage.setHeartbeatBySlug(h.slug, null, null, false, "2026-08-02T04:00:00.000Z")
+    h.storage.setRecurringPromptBySlug(h.slug, null, false, false, null, "2026-08-02T04:00:00.000Z")
     const cleared = h.storage.getSession(h.slug)!
-    assert.equal(cleared.heartbeat_prompt, null)
-    assert.equal(cleared.heartbeat_armed_at, null)
-    assert.equal(cleared.heartbeat_interval_ms, null)
+    assert.equal(cleared.recurring_prompt, null)
+    assert.equal(cleared.recurring_armed_at, null)
+    assert.equal(cleared.recurring_interval_ms, null)
   } finally { h.close() }
 })

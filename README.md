@@ -63,7 +63,7 @@ Fray is a browser tab, a queue, and the agent CLIs you already pay for. It bring
 - 🔁 **Resumable and quittable.** Close the tab, quit the browser, ctrl-c the server, reboot. Your threads are all still there when you come back, and Fray reconnects to the ones still running rather than replaying them from disk.
 - 🤖 **Claude Code *and* Codex.** Pick the backend per thread and run both against the same repo at once. Fray drives the CLIs you already have installed and signed in.
 - 😴 **Snooze.** Not everything needs an answer now. Park a card for an hour, until tomorrow morning, or until a date you pick — optionally with a follow-up prompt attached, so the thread wakes up already working on what you told it to do next.
-- 🔄 **Heartbeat and stop hooks.** Give a thread a prompt that repeats — every time it comes to rest, or on a clock you set in minutes. Good for "keep going until CI is green" without you re-asking. Switch it off whenever, or let the agent say it's finished.
+- 🔄 **Recurring prompts.** Give a thread a prompt that repeats — every time it comes to rest, on a clock you set in minutes, or both. Good for "keep going until CI is green" without you re-asking. A scheduled one reaches the agent even mid-turn, so it can nudge a thread that never stops. Switch it off whenever, or let the agent say it's finished.
 - 🐙 **GitHub integration.** Browse your repo's issues and pull requests without leaving the composer, and turn a selection of them into threads. Workers can read issues, diffs, and CI on their own.
 - 👀 **Built-in CI and PR watchers.** A worker waiting on a build or a review doesn't hand the thread back to you to be told "keep going." It watches, and picks the work back up when the run goes green or a review lands.
 - 📝 **No magic.** A thread behaves like a Claude Code session you started yourself. Fray adds no worktrees, no branches, no dev server, no build integration, no workflow engine to fight with.
@@ -87,12 +87,12 @@ Park a card for an hour, until tomorrow morning, or until a date you pick. Attac
   <img src="assets/snooze.png" alt="The snooze menu open on a queue card, offering 1 hour, tomorrow at 9am, 1 day, 3 days, 1 week, and a custom time and prompt." width="100%">
 </p>
 
-### Heartbeat and stop hooks
+### Recurring prompts
 
-Give a thread a prompt that repeats — every time it comes to rest, or on a clock you set in minutes.
+Give a thread a prompt that repeats. Send it every time the agent comes to rest, on a clock you set in minutes, or both — a scheduled send reaches the agent even mid-turn, without cutting off work in progress.
 
 <p align="center">
-  <img src="assets/recurring.png" alt="The recurring prompts panel with both a stop hook and a heartbeat switched on: the stop hook says to keep going until the test suite is green, and the heartbeat checks the deploy every 30 minutes." width="100%">
+  <img src="assets/recurring.png" alt="The recurring prompt panel: one prompt saying to keep going until the test suite is green, with both triggers switched on — every time it stops, and every 30 minutes." width="100%">
 </p>
 
 <h2 align="center">CLI</h2>
