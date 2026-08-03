@@ -21,7 +21,7 @@
 
 ## Getting started
 
-Fray runs on macOS and Linux. Four requirements, and you probably have three already.
+Fray runs on macOS, Linux, and Windows. Three requirements, and you probably have two already.
 
 **1. Node 22.13 or newer.** On the Node 23 line it must be 23.4+ — Fray's database is Node's built-in `node:sqlite`, which older releases don't ship.
 
@@ -29,12 +29,12 @@ Fray runs on macOS and Linux. Four requirements, and you probably have three alr
 node --version
 ```
 
-**2. Git and tmux.** Fray refuses to start without either.
+**2. Git.** Fray identifies a project by its Git repository, and refuses to start without it.
 
 ```sh
-brew install git tmux          # macOS
-sudo apt install git tmux      # Debian/Ubuntu
-sudo dnf install git tmux      # Fedora
+brew install git          # macOS
+sudo apt install git      # Debian/Ubuntu
+sudo dnf install git      # Fedora
 ```
 
 **3. An agent CLI, signed in.** Either is enough; install both to run them side by side.
@@ -170,7 +170,7 @@ Understand what you're turning on. Fray has no login: reaching the port *is* the
 
 **What platforms does it run on?**
 
-macOS and Linux. Windows isn't supported.
+macOS, Linux, and Windows. Windows support arrived in 0.1.6, once the last dependency that had no native Windows build was removed.
 
 **How is this different from the other orchestrator apps?**
 
