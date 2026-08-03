@@ -65,7 +65,7 @@ import { needsFreshProcessForLimit, type AppContext } from "./context.ts"
 import { appServerTurnStalled } from "./board.ts"
 import { runThreadUpdate } from "./fray.ts"
 import { repairThreadFile } from "./repair.ts"
-import { reopenArchivedThreadForFollowUp, resumeThread } from "./resume.ts"
+import { reopenArchivedThreadForFollowUp, resumeThread, wakeParkedThreadForFollowUp } from "./resume.ts"
 import { appendDelivery, cancelDelivery, deliveryItem, hasDelivery, retireOutstandingDeliveries } from "./delivery-ledger.ts"
 import {
   readEarlierThreadTranscriptPage,
@@ -1123,17 +1123,12 @@ export function createRouter(ctx: AppContext) {
         // persisted + capture-gated and submits through one atomic paste-and-key. Claude keeps its native
         // live injection, and any dead session resumes through the backend command.
         //
-        // A follow-up deliberately PRESERVES any snooze on this row. A park says when the operator wants
-        // the card back, not that the thread is untouchable: adding context to a thread you shelved until
-        // Friday should not drag it out of Held, and it must not silently disarm a bump the operator armed
-        // for a reason. Nothing is hidden by keeping it — isHeld() excuses a running thread from Held, so
-        // the turn you just sent renders live in Active and only re-parks once it rests. The opposite
-        // intent ("I'm re-engaging now") already has its own one-click affordance in Wake now.
+        // A follow-up DISABLES any snooze on this row — see wakeParkedThreadForFollowUp, which owns the
+        // rule and the reasoning. Short version: re-parking after the turn you just asked for would hide
+        // its own answer from the queue, so the later instruction ("now") wins over the earlier park.
         //
         // The row is bound to the CALLER's session id (origin/main's staleness guard): a stale tab must
-        // not deliver a follow-up into a thread that has since been re-dispatched. Note the guard is the
-        // ONLY thing adopted from origin's followUp — origin also CLEARED the wait here, which would
-        // silently disarm the scheduled bump this handler documents preserving.
+        // not deliver a follow-up into a thread that has since been re-dispatched.
         const row = currentOwnedSession(input.slug, input.sessionId)
         if (hasPendingPermissionChange(row)) {
           throw new Error("Wait for the current permission change to finish before sending a follow-up")
@@ -1166,6 +1161,10 @@ export function createRouter(ctx: AppContext) {
         // for every runtime. Raised 2026-07-31 against a live broker thread ("showing up as done… but it
         // is actually running actively").
         if (row) reopenArchivedThreadForFollowUp(ctx, row)
+        // Un-park HERE, above the runtime branches, for the same reason the reopen is here: a broker
+        // Claude row and an app-server Codex row both return from their own branch below, so anything
+        // that must hold for every runtime has to run before the split.
+        if (row) wakeParkedThreadForFollowUp(ctx, row)
         // Every Codex follow-up flows through the app-server bridge — no tmux composer, no queue, no
         // stale-draft class. The bridge owns the steer-vs-start decision atomically and dedups on
         // deliveryId. A LEGACY tmux Codex row (dispatched before the cutover) is migrated on its first
@@ -1562,9 +1561,9 @@ export function createRouter(ctx: AppContext) {
     }),
 
     // Durable manual snooze. The client sends one exact UTC instant derived from its local picker;
-    // Archive clears it, and Wake now (`until: null`) is the explicit un-park. A follow-up deliberately
-    // does NOT wake it — see followUp. The operator may deliberately park any queue reason—including an
-    // unresolved ask, permission prompt, or crash—until this deadline.
+    // Archive clears it, Wake now (`until: null`) is the explicit un-park, and a follow-up clears it too
+    // (see followUp) — Wake now is for un-parking WITHOUT sending a turn. The operator may deliberately
+    // park any queue reason—including an unresolved ask, permission prompt, or crash—until this deadline.
     //
     // An optional `prompt` upgrades the park into a SCHEDULED BUMP: at the deadline the wake scheduler
     // resumes this thread with that text over the same durable outbox a worker's `awaiting timer:` uses

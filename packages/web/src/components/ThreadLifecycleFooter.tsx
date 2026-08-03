@@ -119,13 +119,14 @@ function DoneReadout() {
   )
 }
 
-// The park is otherwise invisible from inside the thread, and that matters more now that a follow-up
-// no longer clears it: you could type into a thread, watch it answer, and never learn it was still
-// going to drop back out of your queue. So this is a PRESENCE marker only — a glyph, deliberately not
-// a sentence. The footer is a control strip, and spending a line of it restating a deadline the
-// SnoozeButton beside it already edits is not worth the real estate. Details (wake time, and the
-// follow-up text when one is armed) live entirely in the hover popover, exactly as the sidebar's
-// hourglass does. The left-alignment is the enclosing cluster's `mr-auto`, not this element's.
+// The park is otherwise invisible from inside the thread, so without this you could open a thread with a
+// bump armed for Friday and never learn it was going to resume itself. It also makes the un-park visible:
+// a follow-up disables the snooze (router.followUp), and this glyph disappearing is how you see that
+// happen. So it is a PRESENCE marker only — a glyph, deliberately not a sentence. The footer is a
+// control strip, and spending a line of it restating a deadline the SnoozeButton beside it already edits
+// is not worth the real estate. Details (wake time, and the follow-up text when one is armed) live
+// entirely in the hover popover, exactly as the sidebar's hourglass does. The left-alignment is the
+// enclosing cluster's `mr-auto`, not this element's.
 function PendingSnooze({ thread }: { thread: ThreadView }) {
   const until = futureSnoozedUntil(thread)
   if (!until) return null

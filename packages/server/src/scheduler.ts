@@ -804,10 +804,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (!fault || limitFenceId(fault) !== item.fenceId) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
-    // A snooze wake is bound to the exact (instant, prompt) the human armed. Wake-now (clears the row)
-    // and a re-snooze (a different fence id) therefore read as supersession here — the human replaced
-    // the promise we were holding. An ordinary follow-up does NOT: it leaves the park armed on purpose
-    // (router.followUp), so a thread the operator adds context to still gets the bump it was promised.
+    // A snooze wake is bound to the exact (instant, prompt) the human armed. Wake-now (clears the row),
+    // a re-snooze (a different fence id) and an ordinary follow-up (clears the row too — see
+    // resume.wakeParkedThreadForFollowUp) therefore all read as supersession here: each one is the human
+    // replacing the promise we were holding. Reprompting a thread means "now", which is precisely the
+    // instruction a bump scheduled for later no longer describes.
     if (isSnoozeFenceId(item.fenceId)) {
       if (armedSnooze(row)?.fenceId !== item.fenceId) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"

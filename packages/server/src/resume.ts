@@ -107,6 +107,44 @@ export function reopenArchivedThreadForFollowUp(
   deps.board.refresh()
 }
 
+/**
+ * A follow-up UN-PARKS the thread: reprompting IS re-engagement, so it disables whatever snooze the row
+ * was holding — the wall-clock park, any bump that park owed at its deadline, and an operator-confirmed
+ * `awaiting timer:` wait (which writes the same park column).
+ *
+ * This reverses the older rule that a follow-up preserved the park (maintainer 2026-08-03: "reprompting
+ * a thread that snoozed should disable the snooze"). That rule read a snooze as a standing display
+ * preference — shelve until Friday, and typing into the thread must not drag it out of Held. In practice
+ * it does the opposite of what the operator wants: the turn you just sent runs in Active, then re-parks
+ * the moment it rests, so the ANSWER to your own prompt drops back out of the queue unseen. A park says
+ * "not now"; a follow-up says "now", and the later instruction wins.
+ *
+ * Nothing is disarmed silently. The park is visible on the row (the sidebar's snoozed sentence) and in
+ * the thread (the footer hourglass), so a bump that goes away leaves the surface it lived on empty — and
+ * re-arming it is the same two clicks that armed it. `Wake now` remains the un-park verb for an operator
+ * who wants the card back WITHOUT sending a turn.
+ *
+ * Cleared through `setSnoozedUntil(slug, null, null)` + `clearAwaitingWaitIfSession`, the same pair Wake
+ * now uses: dropping only the instant would leave the row holding a confirmation and a bump it can no
+ * longer fire. Unlike the un-archive above, a CAS miss on the fence clear does NOT abort the delivery —
+ * the caller has already proved it owns this session, and refusing a steer over stale park bookkeeping
+ * would be worse than the stale row itself.
+ *
+ * Deliberately NOT reached by the wakers scheduler, which resumes through `resumeThread` directly: a
+ * snooze bump must not clear the very park it was fired from (the scheduler settles that itself, guarded
+ * on the fence id it armed — see scheduler.ts SOURCE 3).
+ */
+export function wakeParkedThreadForFollowUp(
+  deps: { storage: Pick<Storage, "setSnoozedUntil" | "clearAwaitingWaitIfSession">; board: Pick<BoardManager, "refresh"> },
+  row: Pick<SessionRow, "slug" | "session_id" | "runtime_generation" | "snoozed_until" | "snooze_prompt" | "awaiting_fence_id">,
+): void {
+  // Touch the row only when something is actually parked, so an ordinary steer emits no needless delta.
+  if (!row.snoozed_until && !row.snooze_prompt && !row.awaiting_fence_id) return
+  deps.storage.setSnoozedUntil(row.slug, null, null)
+  deps.storage.clearAwaitingWaitIfSession(row.slug, row.session_id, row.runtime_generation ?? 0)
+  deps.board.refresh()
+}
+
 // The ONE resume/steer path, shared by the followUp RPC (a human steer) and the wakers scheduler (a
 // fired machine-wait). Kept in its own module so the scheduler can reuse it without importing the RPC
 // router. Live session → inject into the running claude (paste-buffer for multiline so newlines

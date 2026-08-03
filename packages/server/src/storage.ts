@@ -1750,9 +1750,9 @@ export function createStorage(dbPath: string): Storage {
         sessionId,
         generation,
       ).changes === 1,
-    // The instant and its follow-up are ONE fact: clearing the snooze (wake-now, archive) always
-    // disarms the prompt, and a prompt can never be written without a deadline to fire it. A human
-    // follow-up is deliberately NOT one of those clears — see router.followUp.
+    // The instant and its follow-up are ONE fact: clearing the snooze (wake-now, archive, and a human
+    // follow-up — see resume.wakeParkedThreadForFollowUp) always disarms the prompt, and a prompt can
+    // never be written without a deadline to fire it.
     setSnoozedUntil: (slug, until, prompt = null) =>
       void snoozedUntilStmt.run(until, until === null ? null : prompt, slug),
     setSnoozedUntilIfCurrent: (slug, sessionId, generation, until) =>

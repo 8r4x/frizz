@@ -564,12 +564,11 @@ test("followUp yields to a live external writer but still answers a thread whose
   h.storage.close()
 })
 
-// A park says WHEN the operator wants the card back, not that the thread is untouchable. Adding context
-// to a thread you shelved until Friday must not drag it out of Held, and must not silently disarm a bump
-// it was promised — Wake now is the explicit un-park. Driven through the codex app-server branch because
-// it is the one followUp path that reaches a stubbable bridge instead of real tmux; the invariant is
-// branch-independent (the handler no longer writes the snooze row at all).
-test("followUp leaves a snooze — and its armed bump — intact", async () => {
+// Reprompting IS re-engagement, so it disables the park: without this the answer to the turn you just
+// sent re-parks the moment it rests and drops back out of your queue unseen. Driven through the codex
+// app-server branch because it is the one followUp path that reaches a stubbable bridge instead of real
+// tmux; the un-park runs above the runtime split, so the invariant is branch-independent.
+test("followUp wakes a snoozed thread and disarms the bump it owed", async () => {
   const h = harness()
   const slug = "snoozed-followup"
   const until = "2099-07-14T08:45:00.000Z"
@@ -590,8 +589,45 @@ test("followUp leaves a snooze — and its armed bump — intact", async () => {
   await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "also use a squash merge" } })
 
   assert.deepEqual(sent, ["also use a squash merge"], "the message still reaches the worker")
-  assert.equal(h.storage.getSession(slug)?.snoozed_until, until, "the park survives the follow-up")
-  assert.equal(h.storage.getSession(slug)?.snooze_prompt, bump, "and so does the bump it owes at that deadline")
+  assert.equal(h.storage.getSession(slug)?.snoozed_until, null, "the park is disabled by the follow-up")
+  assert.equal(h.storage.getSession(slug)?.snooze_prompt, null, "and so is the bump it owed at that deadline")
+  h.storage.close()
+})
+
+// The worker's own `awaiting timer:` park writes the SAME column through confirmAwaiting, plus a fence
+// confirmation. A follow-up has to clear both halves — leaving the confirmation behind would keep the row
+// holding an operator confirmation for a wait that is over.
+test("followUp clears a confirmed awaiting-timer park, confirmation and all", async () => {
+  const h = harness(awaitingTailer())
+  const slug = "aw-followup"
+  h.storage.upsertSession(row(slug))
+  h.storage.setState(slug, "open")
+  h.storage.setBackend(slug, "codex")
+  h.storage.setCodexRuntime(slug, "app-server")
+  await h.router.confirmAwaiting.handler({
+    input: {
+      slug,
+      sessionId: `sid-${slug}`,
+      fenceAt: "2026-07-23T19:30:00.000Z",
+      hint: { kind: "timer", value: "2099-07-14T08:45:00Z" },
+    },
+  })
+  assert.ok(h.storage.getSession(slug)?.snoozed_until, "the confirmed wait parked the row")
+
+  const sent: string[] = []
+  ;(h.ctx as { codexAppServer?: unknown }).codexAppServer = {
+    binding: () => ({ state: "active", currentTurnId: null }),
+    turnLiveness: () => undefined,
+    resumeOwnedSession: async () => {},
+    followUp: async ({ text }: { text: string }) => void sent.push(text),
+  }
+  await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "never mind the timer" } })
+
+  const saved = h.storage.getSession(slug)!
+  assert.deepEqual(sent, ["never mind the timer"], "the message still reaches the worker")
+  assert.equal(saved.snoozed_until, null, "the auto-snooze is disabled")
+  assert.equal(saved.awaiting_fence_id, null, "and the confirmation it was bound to goes with it")
+  assert.equal(saved.awaiting_confirmed_at, null)
   h.storage.close()
 })
 
