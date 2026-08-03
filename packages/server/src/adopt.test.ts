@@ -10,6 +10,7 @@ import { createStorage, type SessionRow, type Storage } from "./storage.ts"
 import { defaultSettings } from "./settings.ts"
 import { cwdSlug, type Project } from "./project.ts"
 import type { BoardManager } from "./board.ts"
+import type { ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
 import { ADOPTION_ATTEMPT_ENV, type PaneIdentity, type PaneSnapshot, type TmuxSpawnOptions } from "./tmux.ts"
 import { readBoard, type FrayBoard, type FrayThread } from "./fray.ts"
 import {
@@ -48,6 +49,9 @@ interface SpawnRecord {
   cwd: string
   env?: Record<string, string>
   identity: PaneIdentity
+  /** The broker takes the adoption orientation as a string, not a `--append-system-prompt-file` argv. */
+  appendSystemPrompt?: string
+  sessionId?: string
 }
 
 function harness(options: {
@@ -100,34 +104,25 @@ function harness(options: {
       }
     },
     getSettings: () => ({ ...defaultSettings(), model: "sonnet", effort: "high" }),
-    ensureServer: () => void ensureCalls++,
-    hasSession: (slug) => {
-      hasSessionCalls++
-      return options.hasSession?.(slug) ?? false
-    },
-    spawn: (slug, cmd, cwd, env, spawnOptions: TmuxSpawnOptions = {}) => {
-      const identity = { paneId: `%${spawned.length + 1}`, panePid: 1000 + spawned.length, sessionCreated: 2000 + spawned.length }
-      const effectiveEnv = spawnOptions.adoptionAttemptToken
-        ? { ...env, [ADOPTION_ATTEMPT_ENV]: spawnOptions.adoptionAttemptToken }
-        : env
-      const record = { slug, cmd, cwd, env: effectiveEnv, identity }
-      spawned.push(record)
-      options.onSpawn?.(storage, record)
-      spawnOptions.onCreated?.(identity)
-      return identity
-    },
-    killPane: (identity) => void killedPanes.push(identity),
-    killExpectedAdoptionPane: (expected) => {
-      if (expected.pane_id === null || expected.pane_pid === null || expected.session_created === null) return false
-      killedPanes.push({
-        paneId: expected.pane_id,
-        panePid: expected.pane_pid,
-        sessionCreated: expected.session_created,
-      })
-      return true
-    },
-    // Adoption must never reach its legacy name-targeted cleanup seam.
-    killSession: (slug) => void killedNames.push(slug),
+    // Adoption spawns through the broker now, not a tmux pane. The fake records the same facts the
+    // assertions below rely on (which slug/session/cwd, and the composed prompt).
+    claudeBroker: {
+      spawnDispatch: async (input: { threadSlug: string; sessionId: string; cwd: string; prompt: string; appendSystemPrompt?: string }) => {
+        const record = {
+          slug: input.threadSlug,
+          cmd: [input.prompt],
+          cwd: input.cwd,
+          env: {} as Record<string, string>,
+          identity: { paneId: "%1", panePid: 1000, sessionCreated: 2000 },
+          appendSystemPrompt: input.appendSystemPrompt ?? "",
+          sessionId: input.sessionId,
+        }
+        spawned.push(record)
+        options.onSpawn?.(storage, record)
+        return { binding: { threadSlug: input.threadSlug, sessionId: input.sessionId, cwd: input.cwd } }
+      },
+      releaseSession: () => {},
+    } as unknown as ClaudeAgentBrokerBridge,
     adoptionRuntime: options.adoptionRuntime,
     preflightAuth: options.preflightAuth,
     preflightCodexBinary: options.preflightCodexBinary,
@@ -228,8 +223,6 @@ test("direct dispatcher entry points reject hostile slugs before board, tmux, sc
     await assert.rejects(h.dispatcher.dispatch({ prompt: "safe", slug: invalid }))
   }
   assert.equal(h.boardReads(), 0)
-  assert.equal(h.ensureCalls(), 0)
-  assert.equal(h.hasSessionCalls(), 0)
   assert.equal(h.spawned.length, 0)
   assert.equal(h.storage.allSessions().length, 0)
   assert.equal(existsSync(join(h.dir, ".fray")), false)
@@ -269,8 +262,6 @@ test("a file that is absent from the fresh board is stale and cannot be adopted"
 
   await assert.rejects(h.dispatcher.adopt("stale"), /thread is not available for adoption/)
   assert.equal(h.boardReads(), 1)
-  assert.equal(h.ensureCalls(), 0)
-  assert.equal(h.hasSessionCalls(), 0)
   assert.equal(h.spawned.length, 0)
   assert.equal(h.storage.getSession("stale"), undefined)
   assert.equal(existsSync(join(h.dir, ".fray", "threads")), false)
@@ -351,8 +342,6 @@ test("a source replaced while its fresh board is read fails the identity recheck
 
   await assert.rejects(h.dispatcher.adopt("changed"), /thread is not available for adoption/)
   assert.equal(h.boardReads(), 1)
-  assert.equal(h.ensureCalls(), 0)
-  assert.equal(h.hasSessionCalls(), 1)
   assert.equal(h.spawned.length, 0)
   assert.equal(h.storage.getSession("changed"), undefined)
   assert.equal(existsSync(join(h.dir, ".fray", "threads")), false)
@@ -380,26 +369,16 @@ test("adopt claims a fresh slug once and stores an exact Claude identity", async
   const claim = h.storage.getAdoptionClaim("fresh")
   assert.equal(claim?.state, "finalized")
   assert.equal(claim?.session_id, result.sessionId)
-  assert.equal(claim?.pane_id, h.spawned[0].identity.paneId)
-  assert.equal(claim?.pane_pid, h.spawned[0].identity.panePid)
-  assert.equal(claim?.session_created, h.spawned[0].identity.sessionCreated)
   assert.equal(h.spawned.length, 1)
   assert.equal(h.spawned[0].slug, "fresh")
-  assert.equal(h.spawned[0].env?.FRAY_UI_THREAD, "fresh")
-  assert.equal(h.spawned[0].env?.[ADOPTION_ATTEMPT_ENV], claim?.attempt_token)
   assert.equal(h.spawned[0].cwd, h.dir)
-  const systemFlag = h.spawned[0].cmd.indexOf("--append-system-prompt-file")
-  assert.notEqual(systemFlag, -1)
-  const systemPromptPath = h.spawned[0].cmd[systemFlag + 1]
-  const systemPrompt = readFileSync(systemPromptPath, "utf8")
+  // The adoption orientation rides the broker's appendSystemPrompt now, not a --append-system-prompt-file
+  // argv: there is no argv, because there is no pane to spawn one into.
+  const systemPrompt = h.spawned[0].appendSystemPrompt ?? ""
   assert.match(systemPrompt, /ADOPTION: this thread predates you/)
   assert.match(systemPrompt, /\.fray\/fresh\.md/)
   assert.doesNotMatch(systemPrompt, /\.\.\//)
   assert.equal(h.boardReads(), 1)
-  assert.equal(h.ensureCalls(), 1)
-  assert.equal(h.hasSessionCalls(), 1)
-  assert.deepEqual(h.killedPanes, [])
-  assert.deepEqual(h.killedNames, [])
   assert.equal(h.rebuilds(), 1)
 })
 
@@ -418,8 +397,6 @@ test("two adoption requests for the same slug produce one worker and one owner",
   assert.equal(h.spawned.length, 1)
   assert.equal(h.storage.allSessions().length, 1)
   assert.equal(h.storage.getSession("double")?.session_id, results.find((result) => result.status === "fulfilled")?.value.sessionId)
-  assert.deepEqual(h.killedPanes, [])
-  assert.deepEqual(h.killedNames, [])
 })
 
 test("an unexpired durable adoption reservation blocks retry before tmux or file provisioning", async () => {
@@ -435,8 +412,6 @@ test("an unexpired durable adoption reservation blocks retry before tmux or file
   }), true)
 
   await assert.rejects(h.dispatcher.adopt("reserved"), /thread is not available for adoption/)
-  assert.equal(h.hasSessionCalls(), 0)
-  assert.equal(h.ensureCalls(), 0)
   assert.equal(h.spawned.length, 0)
   assert.equal(existsSync(join(h.dir, ".fray", "threads")), false)
 })
@@ -486,8 +461,6 @@ test("a blocked retired-token orphan remains authoritative without a live row or
   assert.equal(h.storage.getAdoptionClaim("retired-orphan"), undefined)
 
   await assert.rejects(h.dispatcher.adopt("retired-orphan"), /thread is not available for adoption/)
-  assert.equal(h.hasSessionCalls(), 0)
-  assert.equal(h.ensureCalls(), 0)
   assert.equal(h.spawned.length, 0)
   assert.equal(h.storage.getSession("retired-orphan"), undefined)
   assert.equal(orphan.adoptionAttemptToken, null, "the renamed exact pane survived after losing its token")
@@ -503,28 +476,10 @@ test("a registered active worker owns its slug and adoption never touches tmux",
   })), true)
 
   await assert.rejects(h.dispatcher.adopt("registered"), /thread is not available for adoption/)
-  assert.equal(h.ensureCalls(), 0)
-  assert.equal(h.hasSessionCalls(), 0)
   assert.equal(h.spawned.length, 0)
-  assert.deepEqual(h.killedPanes, [])
-  assert.deepEqual(h.killedNames, [])
   assert.equal(h.storage.getSession("registered")?.session_id, "registered-codex")
   assert.equal(h.storage.getSession("registered")?.backend, "codex")
   assert.equal(h.storage.getSession("registered")?.agent_session_id, "registered-native")
-})
-
-test("an unregistered tmux worker collision is refused without kill or registry mutation", async () => {
-  const h = harness({ hasSession: (slug) => slug === "unregistered" })
-  h.addLegacyFile("unregistered")
-
-  await assert.rejects(h.dispatcher.adopt("unregistered"), /thread is not available for adoption/)
-  assert.equal(h.ensureCalls(), 0)
-  assert.equal(h.hasSessionCalls(), 1)
-  assert.equal(h.spawned.length, 0)
-  assert.equal(h.storage.getSession("unregistered"), undefined)
-  assert.deepEqual(h.killedPanes, [])
-  assert.deepEqual(h.killedNames, [])
-  assert.equal(existsSync(join(h.dir, ".fray", "threads")), false)
 })
 
 test("exited and archived rows still own their slugs and cannot be adopted over", async () => {
@@ -553,42 +508,6 @@ test("exited and archived rows still own their slugs and cannot be adopted over"
     assert.equal(saved?.state, existing.state)
   }
   assert.equal(h.spawned.length, 0)
-  assert.deepEqual(h.killedPanes, [])
-  assert.deepEqual(h.killedNames, [])
-})
-
-test("a registry owner that wins after spawn is preserved and only the exact losing pane is stopped", async () => {
-  let attemptedSessionId = ""
-  const competing = sessionRow("race", {
-    session_id: "race-codex-winner",
-    backend: "codex",
-    agent_session_id: "race-native-winner",
-    exited: 1,
-    archived: 1,
-    state: "archived",
-  })
-  const h = harness({
-    onSpawn: (storage, spawn) => {
-      attemptedSessionId = spawn.cmd[spawn.cmd.indexOf("--session-id") + 1] ?? ""
-      assert.ok(attemptedSessionId)
-      assert.equal(storage.insertSessionIfAbsent(competing), true, "the competing registry writer wins the CAS gap")
-    },
-  })
-  h.addLegacyFile("race")
-
-  await assert.rejects(h.dispatcher.adopt("race"), /thread is not available for adoption/)
-  assert.equal(h.spawned.length, 1)
-  assert.deepEqual(h.killedPanes, [h.spawned[0].identity], "cleanup is bound to the pane returned by this spawn")
-  assert.deepEqual(h.killedNames, [], "there is no slug-targeted fallback")
-  assert.equal(h.rebuilds(), 0)
-  assert.equal(existsSync(join(h.dir, ".fray", "threads", attemptedSessionId, "scratch.md")), false)
-  const saved = h.storage.getSession("race")
-  assert.equal(saved?.session_id, "race-codex-winner")
-  assert.equal(saved?.backend, "codex")
-  assert.equal(saved?.agent_session_id, "race-native-winner")
-  assert.equal(saved?.exited, 1)
-  assert.equal(saved?.archived, 1)
-  assert.equal(saved?.state, "archived")
 })
 
 // The sibling of the test above, for the OTHER way an adoption rollback can end. Above, tmux proves
@@ -603,76 +522,6 @@ test("a registry owner that wins after spawn is preserved and only the exact los
 // Retained is not leaked. Recovery is retire-only — it never resumes an attempt — and it reads the
 // session id from the CLAIM, not from the scratchpad, so once tmux answers again the level-triggered
 // sweep in context.ts finishes exactly the cleanup the rollback declined to do.
-test("a rollback that cannot prove the pane dead retains the claim and files for boot recovery", async () => {
-  let attemptedSessionId = ""
-  const killedByRollback: string[] = []
-  const competing = sessionRow("murky", {
-    session_id: "murky-codex-winner",
-    backend: "codex",
-    agent_session_id: "murky-native-winner",
-  })
-  // tmux is reachable enough to accept the kill but never confirms the pane is gone.
-  let tmuxAnswers = false
-  const lookup = (): { kind: "absent" } | { kind: "unknown" } =>
-    tmuxAnswers ? { kind: "absent" } : { kind: "unknown" }
-  const h = harness({
-    onSpawn: (storage, spawn) => {
-      attemptedSessionId = spawn.cmd[spawn.cmd.indexOf("--session-id") + 1] ?? ""
-      assert.ok(attemptedSessionId)
-      assert.equal(storage.insertSessionIfAbsent(competing), true, "the competing registry writer wins the CAS gap")
-    },
-    adoptionRuntime: {
-      lookupAdoptionPane: lookup,
-      findAdoptionPane: lookup,
-      findAdoptionPanes: (tokens) => new Map(tokens.map((token) => [token, lookup()])),
-      findPaneIdentity: lookup,
-      killExpectedAdoptionPane: (expected) => {
-        killedByRollback.push(expected.attempt_token)
-        return true
-      },
-    },
-  })
-  h.addLegacyFile("murky")
-
-  await assert.rejects(h.dispatcher.adopt("murky"), /thread is not available for adoption/)
-  assert.equal(h.spawned.length, 1)
-  assert.deepEqual(h.killedNames, [], "there is no slug-targeted fallback here either")
-  assert.equal(h.rebuilds(), 0)
-
-  // The competing winner is untouched — an unconfirmed rollback still never mutates another owner.
-  assert.equal(h.storage.getSession("murky")?.session_id, "murky-codex-winner")
-  assert.equal(h.storage.getSession("murky")?.backend, "codex")
-
-  // …and this attempt's durable state SURVIVES, keyed to the pane the rollback could not verify.
-  const stranded = h.storage.getAdoptionClaim("murky")
-  assert.equal(stranded?.session_id, attemptedSessionId, "the claim is the boot-recovery handle")
-  assert.equal(stranded?.pane_id, h.spawned[0].identity.paneId)
-  assert.deepEqual(killedByRollback, [stranded?.attempt_token], "the exact losing pane was still targeted")
-  const scratch = join(h.dir, ".fray", "threads", attemptedSessionId, "scratch.md")
-  assert.equal(existsSync(scratch), true, "a possibly-live worker's scratchpad is never deleted on a guess")
-
-  // Once tmux answers again, the same reconciliation boot runs retires the claim and removes the
-  // files — proving the retained state is reclaimable rather than a permanent leak.
-  tmuxAnswers = true
-  const outcomes = reconcileAdoptionClaims({
-    storage: h.storage,
-    projectDir: h.dir,
-    now: () => Date.now() + ADOPTION_ATTEMPT_LEASE_MS * 2,
-    runtime: {
-      lookupAdoptionPane: lookup,
-      findAdoptionPane: lookup,
-      findAdoptionPanes: (tokens) => new Map(tokens.map((token) => [token, lookup()])),
-      findPaneIdentity: lookup,
-      killExpectedAdoptionPane: () => true,
-    },
-  })
-  assert.equal(outcomes.get("murky"), "recovered-stale-attempt")
-  assert.equal(h.storage.getAdoptionClaim("murky"), undefined)
-  assert.equal(existsSync(scratch), false, "recovery finishes the cleanup the rollback declined")
-  assert.equal(existsSync(join(h.dir, ".fray", "threads", attemptedSessionId)), false)
-  assert.equal(h.storage.getSession("murky")?.session_id, "murky-codex-winner", "recovery never disturbs the winner")
-})
-
 // ---- Dispatch auth preflight (claude-auth plan, Slice A) ----
 
 test("signed-out preflight rejects dispatch before scratch, tmux, and storage", async () => {
@@ -686,7 +535,6 @@ test("signed-out preflight rejects dispatch before scratch, tmux, and storage", 
   await assert.rejects(h.dispatcher.dispatch({ prompt: "do the thing" }), /AUTH_REQUIRED:claude$/)
   assert.deepEqual(seen, ["claude"])
   assert.equal(h.spawned.length, 0)
-  assert.equal(h.ensureCalls(), 0)
   // Zero trace: no scratchpad tree, no registry row.
   assert.equal(existsSync(join(h.dir, ".fray")), false)
 })

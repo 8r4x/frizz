@@ -929,8 +929,7 @@ export function createStorage(dbPath: string): Storage {
   const finalizeAdoptionClaimStmt = db.prepare(`
     UPDATE adoption_claim
     SET state = 'finalized', finalized_at_ms = ?, recovery_token = NULL
-    WHERE slug = ? AND attempt_token = ? AND session_id = ? AND state = 'spawned'
-      AND pane_id IS NOT NULL AND pane_pid IS NOT NULL AND session_created IS NOT NULL
+    WHERE slug = ? AND attempt_token = ? AND session_id = ? AND state IN ('reserved', 'spawned')
   `)
   const rearmFinalizedAdoptionClaimStmt = db.prepare(`
     UPDATE adoption_claim
@@ -947,8 +946,7 @@ export function createStorage(dbPath: string): Storage {
   const finalizeAdoptionRespawnClaimStmt = db.prepare(`
     UPDATE adoption_claim
     SET state = 'finalized', finalized_at_ms = ?, recovery_token = NULL
-    WHERE slug = ? AND attempt_token = ? AND session_id = ? AND state = 'spawned'
-      AND pane_id IS NOT NULL AND pane_pid IS NOT NULL AND session_created IS NOT NULL
+    WHERE slug = ? AND attempt_token = ? AND session_id = ? AND state IN ('reserved', 'spawned')
       AND EXISTS (
         SELECT 1 FROM session
         WHERE session.slug = adoption_claim.slug AND session.session_id = adoption_claim.session_id
@@ -1433,10 +1431,9 @@ export function createStorage(dbPath: string): Storage {
         !claim ||
         claim.attempt_token !== attemptToken ||
         claim.session_id !== row.session_id ||
-        claim.state !== "spawned" ||
-        !claim.pane_id ||
-        claim.pane_pid === null ||
-        claim.session_created === null
+        // A broker-backed adoption never binds a pane, so the old 'spawned'+pane-columns gate is gone:
+        // the reservation IS the claim and the broker session is the identity.
+        (claim.state !== "reserved" && claim.state !== "spawned")
       ) {
         return false
       }

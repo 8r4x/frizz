@@ -54,11 +54,6 @@ function harness() {
     storage,
     board,
     getSettings: () => ({ ...defaultSettings(), model: "sonnet", effort: "high" }),
-    ensureServer: () => {},
-    hasSession: () => false,
-    spawn: (): PaneIdentity => ({ paneId: "%1", panePid: 4242, sessionCreated: 1 }),
-    killPane: () => {},
-    killSession: () => {},
     claudeBroker,
     codexAppServer,
   })

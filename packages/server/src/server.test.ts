@@ -21,6 +21,7 @@ import {
 import { createClaudeBackend } from "./backend/claude.ts"
 import { createCodexBackend } from "./backend/codex.ts"
 import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
+import type { ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
 import type { AgentBackend } from "./backend/types.ts"
 import type { PaneIdentity, TmuxSpawnOptions } from "./tmux.ts"
 
@@ -71,14 +72,16 @@ function dispatcherHarness(settings = defaultSettings()) {
       errorItems: [],
     }),
     getSettings: () => settings,
-    spawn: (slug, cmd, cwd, env, options: TmuxSpawnOptions = {}) => {
-      spawned.push({ slug, cmd, cwd, env })
-      const identity = fakePaneIdentity(spawned.length)
-      options.onCreated?.(identity)
-      return identity
-    },
-    ensureServer: () => {},
-    hasSession: () => false,
+    // The broker is the only claude transport now, so what a dispatch "carries" lives in the
+    // spawnDispatch input rather than in a tmux argv. `cmd` keeps the prompt + system prompt so the
+    // assertions below still read the same facts.
+    claudeBroker: {
+      spawnDispatch: async (input: { threadSlug: string; sessionId: string; cwd: string; prompt: string; appendSystemPrompt?: string }) => {
+        spawned.push({ slug: input.threadSlug, cmd: [input.appendSystemPrompt ?? "", input.prompt], cwd: input.cwd, env: { FRAY_UI_THREAD: input.threadSlug } })
+        return { binding: { threadSlug: input.threadSlug, sessionId: input.sessionId, cwd: input.cwd } }
+      },
+      releaseSession: () => {},
+    } as unknown as ClaudeAgentBrokerBridge,
   })
   return { dir, storage, project, spawned, dispatcher }
 }
@@ -86,6 +89,9 @@ function dispatcherHarness(settings = defaultSettings()) {
 // The system prompt a spawn carries. It rides `--append-system-prompt-file <path>` (inline text
 // would blow tmux's command-length limit), so resolve the path and read the file. Falls back to a
 // legacy inline `--append-system-prompt <text>` if present. "" when neither is set.
+// Two shapes. `buildClaudeCommand` still produces a real argv (resume uses it), where the system
+// prompt rides `--append-system-prompt[-file]`. A DISPATCH has no argv at all — the broker takes the
+// system prompt as a string — so the harness records it first, mirroring where the argv put it.
 function systemPromptOf(cmd: string[]): string {
   const fi = cmd.indexOf("--append-system-prompt-file")
   if (fi !== -1) {
@@ -96,7 +102,8 @@ function systemPromptOf(cmd: string[]): string {
     }
   }
   const i = cmd.indexOf("--append-system-prompt")
-  return i === -1 ? "" : cmd[i + 1]
+  if (i !== -1) return cmd[i + 1]
+  return cmd[0] ?? ""
 }
 
 test("storage: session roundtrip + markRead + exited", () => {
@@ -506,9 +513,14 @@ function codexDispatcherHarness(codexAppServer?: Partial<CodexAppServerBridge>) 
     storage,
     board,
     getSettings: () => defaultSettings(),
-    spawn,
-    ensureServer: () => {},
     backendFor,
+    claudeBroker: {
+      spawnDispatch: async (input: { threadSlug: string; sessionId: string; cwd: string; prompt: string; appendSystemPrompt?: string }) => {
+        spawned.push({ slug: input.threadSlug, cmd: [input.appendSystemPrompt ?? "", input.prompt], cwd: input.cwd, env: {} })
+        return { binding: { threadSlug: input.threadSlug, sessionId: input.sessionId, cwd: input.cwd } }
+      },
+      releaseSession: () => {},
+    } as unknown as ClaudeAgentBrokerBridge,
     codexAppServer: codexAppServer as CodexAppServerBridge | undefined,
   })
   return { dir, codexHome, storage, project, spawned, dispatcher, CODEX_ID }
@@ -539,5 +551,5 @@ test("dispatch(claude) through the same resolver is UNCHANGED — no trust write
   const rowdb = h.storage.getSession(slug)!
   assert.equal(rowdb.backend, "claude", "backend stays the column default")
   assert.equal(rowdb.agent_session_id ?? null, null, "no codex rollout id pinned")
-  assert.equal(h.spawned[0].cmd[0], "claude", "the claude argv builder ran")
+  assert.match(h.spawned[0].cmd[1], /Business as usual/, "the claude dispatch reached the broker with its prompt")
 })

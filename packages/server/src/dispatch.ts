@@ -768,11 +768,8 @@ export interface DispatchDeps {
   getSettings: () => Settings
   claudeBin?: string // injectable (tests / a stand-in command)
   spawn?: typeof tmux.spawn // injectable so tests don't touch tmux; identity is mandatory for safe rollback
-  ensureServer?: typeof tmux.ensureServer
-  hasSession?: typeof tmux.hasSession
   // Adoption rollback may stop only the exact pane identity returned by its own spawn. There is no
   // name-targeted fallback: a competing/current owner of the slug must never be killed.
-  killPane?: typeof tmux.killPane
   killExpectedAdoptionPane?: typeof tmux.killExpectedAdoptionPane
   // Per-session agent-backend resolver that builds the spawn argv + injection (Codex-support epic).
   // Injected by the composition layer (context.ts); when absent (tests) dispatch falls back to the
@@ -787,7 +784,6 @@ export interface DispatchDeps {
   claudeBroker?: ClaudeAgentBrokerBridge
   // Failure cleanup targets only the exact freshly-spawned slug. Injectable so timeout tests can prove
   // no neighboring tmux session is touched.
-  killSession?: typeof tmux.killSession
   // Provider auth preflight (claude-auth plan, Slice A): resolves the target provider's credential
   // state BEFORE any thread state exists; a positive "signed-out" rejects the dispatch with
   // ProviderAuthRequiredError. Injected by the composition layer (context.ts: `claude auth status
@@ -809,10 +805,6 @@ export interface DispatchDeps {
 
 export function createDispatcher(deps: DispatchDeps): Dispatcher {
   const spawn = deps.spawn ?? tmux.spawn
-  const ensureServer = deps.ensureServer ?? tmux.ensureServer
-  const hasSession = deps.hasSession ?? tmux.hasSession
-  const killPane = deps.killPane ?? tmux.killPane
-  const killSession = deps.killSession ?? tmux.killSession
   const readBoardSource = deps.readBoard ?? readBoard
   const frayDir = join(deps.project.dir, ".fray")
   const adoptionRuntime: AdoptionRecoveryRuntime = deps.adoptionRuntime ?? {
@@ -824,55 +816,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
 
   // Build the detached-spawn command through the backend seam for the chosen `kind` (falling back to
   // the local Claude builder when no resolver is injected — identical argv). Returns argv + prewrites.
-  function buildSpawnCommand(o: {
-    sessionId: string
-    // The thread this worker will serve, so its fray MCP server can act on its own thread.
-    slug: string
-    permissionMode: PermissionMode
-    model?: string
-    effort?: string
-    prompt: string
-    extraSystemPrompt?: string
-    kind?: BackendKind
-    runtimeGate: boolean
-  }): BuiltCommand {
-    const frayMcp = resolveFrayMcp(deps.project.stateDir, undefined, undefined, o.slug)
-    const backend = deps.backendFor?.(o.kind)
-    if (backend) {
-      const built = backend.buildSpawn({
-        sessionId: o.sessionId,
-        cwd: deps.project.dir,
-        prompt: o.prompt,
-        workerContract: loadWorkerPrompt(o.kind, o.runtimeGate),
-        extraSystemPrompt: o.extraSystemPrompt,
-        permissionMode: o.permissionMode,
-        model: o.model,
-        effort: o.effort,
-        frayMcp,
-      })
-      return built
-    }
-    const argv = buildClaudeCommand({
-      sessionId: o.sessionId,
-      permissionMode: o.permissionMode,
-      model: o.model,
-      effort: o.effort,
-      prompt: o.prompt,
-      claudeBin: deps.claudeBin,
-      pluginDir: workerPluginDir(),
-      extraSystemPrompt: o.extraSystemPrompt,
-      workerPrompt: loadWorkerPrompt("claude", o.runtimeGate),
-      frayMcp,
-    })
-    return { argv, env: claudeWorkerEnvironment(), prewrite: [] }
-  }
 
-  function writePrewrites(built: BuiltCommand): void {
-    for (const file of built.prewrite) {
-      if (file.mode === undefined) writeFileSync(file.path, file.contents)
-      else writeFileSync(file.path, file.contents, { mode: file.mode })
-    }
-  }
 
   function cleanupPrewrites(built: BuiltCommand): void {
     for (const path of new Set(built.prewrite.map((file) => file.path))) {
@@ -1019,8 +963,15 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // to before. The worker contract + scratchpad orientation ride the appended system prompt, and
       // persistSession makes the daemon write the tailer-readable transcript JSONL — read exactly like
       // any tmux claude thread — so the board/tailer treat this row as headless via isHeadlessRow.
-      if (kind === "claude" && deps.claudeBroker && claudeBrokerBridgeEnabled()) {
+      // Claude session-broker transport, the SOLE claude transport — the tmux TUI path was retired,
+      // so a claude dispatch that can't reach the broker fails loudly rather than degrading. Exactly
+      // the shape the codex branch above already had.
+      if (kind === "claude") {
         const bridge = deps.claudeBroker
+        if (!bridge) {
+          cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
+          throw new Error("Claude session broker is unavailable; cannot start this thread.")
+        }
         const appendSystemPrompt = [
           loadWorkerPrompt("claude", runtimeGate),
           scratchpadOrientation(sessionId, planPath, kind),
@@ -1072,75 +1023,11 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         }
       }
 
-      const built = buildSpawnCommand({
-        sessionId,
-        slug,
-        permissionMode,
-        model,
-        effort,
-        prompt,
-        extraSystemPrompt: [scratchpadOrientation(sessionId, planPath, kind), frayConfigBlock(deps.project.dir)].filter(Boolean).join("\n\n"),
-        kind,
-        runtimeGate,
-      })
-
-      // Spawn BEFORE writing the registry row so a spawn failure never strands a contentless row on
-      // the board (C1). If the spawn throws, roll back the scratchpad we just provisioned too — a
-      // failed dispatch must leave NO trace (no orphan row, no litter) — then surface the concise error.
-      ensureServer()
-      try {
-        writePrewrites(built)
-        spawn(slug, built.argv, deps.project.dir, { ...built.env, FRAY_UI_THREAD: slug, [PERM_DIR_ENV]: permRequestDir(deps.project) })
-      } catch (err) {
-        if (err instanceof tmux.TmuxSpawnError && err.identity) {
-          try {
-            killPane(err.identity)
-          } catch {
-            // Exact generation only; never fall back to the reusable slug.
-          }
-        }
-        cleanupDispatchFiles(scratchRel, built, sessionId)
-        throw err
-      }
-
-      deps.storage.upsertSession({
-        slug,
-        session_id: sessionId,
-        tmux_name: tmuxSessionName(slug),
-        spawned_at: new Date().toISOString(),
-        last_read_at: null,
-        unread: 0,
-        exited: 0,
-        archived: 0,
-        // Backend telemetry becomes the display name either way. Without a caller title the stored
-        // text is a machine guess the UI must not present as a name (title_auto); WITH one it reads as
-        // a real name until the worker supplies a better one — never as a human's choice, so it stays
-        // unlocked. Claude retains its historical fallback.
-        rested_at: null,
-        title_auto: input.title?.trim() ? 0 : 1,
-        title_locked: 0,
-        title: registryTitle,
-        state: "open",
-        meta: null,
-        seen_at: null,
-        plan_path: planPath,
-        transcript_id: null,
-        model: model ?? null,
-        effort: effort ?? null,
-        permission_mode: permissionMode,
-      })
-
-      // Respond immediately — the client switches views on the slug; the rebuild fans out over the
-      // socket moments later.
-      //
-      // setImmediate, not a bare call: `rebuildOnce` is declared async but its body contains no
-      // await (expireDue → recomputeLegacyTerminalState → recomputePlans → assemble → publish are
-      // all synchronous, and the middle two stat the filesystem per registry row). So invoking it
-      // ran the WHOLE rebuild before the promise was returned, and `void` deferred nothing — the
-      // dispatch response sat behind a full board assembly over every session row. Handing it to the
-      // next tick is what the comment above always claimed the code did.
-      setImmediate(() => void deps.board.rebuild().catch(() => {}))
-      return { slug, sessionId }
+      // Both backends have exactly one transport now (codex → app-server, claude → broker) and each
+      // branch above either returns or throws. A `kind` outside that pair is a programming error, not
+      // a runtime state a dispatch should silently degrade on.
+      cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
+      throw new Error(`unsupported backend for dispatch: ${String(kind)}`)
     },
 
     async adopt(slug, message) {
@@ -1190,15 +1077,6 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         throw unavailable()
       }
 
-      // `hasSession` deliberately includes remain-on-exit panes. Even a dead name collision is safer to
-      // surface than to name-kill: another process may be concurrently registering/replacing it, and a
-      // slug-targeted cleanup could destroy the wrong worker. tmux's atomic new-session name claim is the
-      // second line of defense if a worker appears immediately after this check.
-      try {
-        if (hasSession(slug)) throw unavailable()
-      } catch {
-        throw unavailable()
-      }
       const recheckedSource = resolveLegacyThreadFile(deps.project.dir, slug)
       if (!recheckedSource || !sameFileStat(source, recheckedSource)) throw unavailable()
 
@@ -1222,9 +1100,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       }
 
       let scratchRel: string | undefined
-      let built: BuiltCommand | undefined
-      let spawnedIdentity: tmux.PaneIdentity | undefined
-      const rollback = (identity = spawnedIdentity): void => {
+      const rollback = (): void => {
         let abandoned = false
         try {
           abandoned = abandonAdoptionAttempt({
@@ -1233,14 +1109,13 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             slug,
             attemptToken,
             sessionId,
-            identity,
             runtime: adoptionRuntime,
           })
         } catch {
-          // Leave the durable claim for boot recovery if tmux/storage is temporarily unavailable.
+          // Leave the durable claim for boot recovery if storage is temporarily unavailable.
         }
         if (!abandoned) return
-        if (scratchRel && built) cleanupDispatchFiles(scratchRel, built, sessionId)
+        if (scratchRel) cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
         else cleanupAdoptionSessionFiles(deps.project.dir, sessionId)
       }
 
@@ -1263,91 +1138,42 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       const prompt = composePrompt(sessionId, task)
       const permissionMode = workerDispatchPermission("claude", settings)
       const runtimeGate = settings.runtimeGate !== false
-      try {
-        built = buildSpawnCommand({
-          sessionId,
-          slug,
-          permissionMode,
-          model: settings.model,
-          effort: settings.effort,
-          prompt,
-          extraSystemPrompt: [scratchpadOrientation(sessionId), frayConfigBlock(deps.project.dir), adoption].filter(Boolean).join("\n\n"),
-          runtimeGate,
-        })
-      } catch {
-        rollback()
-        throw unavailable()
-      }
 
-      // Keep the authorized file identity stable through local provisioning and server startup. If
-      // either step loses the source, remove only this UUID-keyed scratch/prewrite set and never spawn.
-      const beforeEnsure = resolveLegacyThreadFile(deps.project.dir, slug)
-      if (!beforeEnsure || !sameFileStat(source, beforeEnsure)) {
+      // Adoption spawns through the broker, exactly like a fresh dispatch. It used to claim a tmux
+      // pane under a leased attempt token and rebind the pane identity across slow post-create setup —
+      // a multi-process protocol whose entire purpose was making a PANE claim safe. There is no pane
+      // to claim now: the daemon record plus the session id is the identity, so the attempt token
+      // stays (it still fences two fray processes racing the same slug) and everything pane-shaped goes.
+      const bridge = deps.claudeBroker
+      if (!bridge) {
         rollback()
         throw unavailable()
       }
-      try {
-        ensureServer()
-      } catch {
-        rollback()
-        throw unavailable()
-      }
+      // Re-check the authorized file identity immediately before spawning: local provisioning above is
+      // the window in which the source could have been replaced under us.
       const beforeSpawn = resolveLegacyThreadFile(deps.project.dir, slug)
       if (!beforeSpawn || !sameFileStat(source, beforeSpawn)) {
         rollback()
         throw unavailable()
       }
-
-      // The durable reservation predates new-session. The attempt token is installed by new-session
-      // itself; its returned tuple is synchronously committed before either follow-up setup command.
-      // Thus every post-create failure is recoverable even if this process is killed at the boundary.
       try {
-        writePrewrites(built)
-        const fenced = deps.storage.withAdoptionSpawnFence(
-          slug,
-          attemptToken,
-          now() + ADOPTION_ATTEMPT_LEASE_MS,
-          (bindPane) => spawn(
-            slug,
-            built!.argv,
-            deps.project.dir,
-            { ...built!.env, FRAY_UI_THREAD: slug, [PERM_DIR_ENV]: permRequestDir(deps.project) },
-            {
-              adoptionAttemptToken: attemptToken,
-              onCreated: (identity) => {
-                spawnedIdentity = identity
-                const observedAt = now()
-                if (!bindPane(identity, observedAt + ADOPTION_ATTEMPT_LEASE_MS)) {
-                  throw new Error("adoption claim lost before pane binding")
-                }
-              },
-            },
-          ),
-        )
-        if (!fenced.acquired) throw new Error("adoption claim retired before spawn")
-        spawnedIdentity = fenced.value
-      } catch (error) {
-        const identity = spawnedIdentity ?? (error instanceof tmux.TmuxSpawnError ? error.identity : undefined)
-        rollback(identity)
-        throw unavailable()
-      }
-
-      // Revalidate the exact identity and renew the lease across unusually slow post-create setup.
-      // withAdoptionSpawnFence already rejects a spawn implementation that skipped onCreated.
-      let rebound = false
-      try {
-        const reboundAt = now()
-        rebound = deps.storage.recordAdoptionPane(
-          slug,
-          attemptToken,
-          spawnedIdentity,
-          reboundAt + ADOPTION_ATTEMPT_LEASE_MS,
-        )
+        await bridge.spawnDispatch({
+          threadSlug: slug,
+          sessionId,
+          cwd: deps.project.dir,
+          prompt,
+          permissionMode,
+          appendSystemPrompt: [
+            loadWorkerPrompt("claude", runtimeGate),
+            scratchpadOrientation(sessionId),
+            frayConfigBlock(deps.project.dir),
+            adoption,
+          ].filter(Boolean).join("\n\n"),
+          model: settings.model,
+          effort: settings.effort,
+        })
       } catch {
-        rollback()
-        throw unavailable()
-      }
-      if (!rebound) {
+        try { bridge.releaseSession(slug, sessionId, "session-deleted") } catch { /* best-effort */ }
         rollback()
         throw unavailable()
       }
@@ -1393,6 +1219,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         throw unavailable()
       }
 
+      deps.storage.setClaudeRuntime(slug, "broker")
       void deps.board.rebuild().catch(() => {})
       return { slug, sessionId }
     },
