@@ -14,11 +14,48 @@ import { claudeBrokerDiagnosticLogPath } from "./claude-broker-diagnostics.ts"
 // hands us a bare "claude" (the default when no --claude-bin is configured — the promoted-artifact case),
 // resolve it to an absolute path on PATH here, or the forked daemon dies on startup ("executablePath must
 // be absolute") before it can publish its record and every dispatch times out with "did not become ready".
+//
+// WINDOWS is a different problem, and the naive scan below got it wrong. `npm i -g` writes THREE files
+// into the bin dir — `claude` (a `#!/bin/sh` script), `claude.cmd`, and `claude.ps1` — because Windows
+// cannot symlink the way POSIX npm does. The bare-name scan therefore found the SH SCRIPT and returned
+// it: nothing on Windows can run that (spawning it is ENOENT, and `node` reads it as JavaScript and
+// dies on line 2). Measured on Windows Server 2022 with claude 2.1.220:
+//
+//   spawn(<bin>\claude)      -> ENOENT          node <bin>\claude   -> SyntaxError at line 2
+//   spawn(<bin>\claude.cmd)  -> EINVAL          (Node refuses .cmd/.bat without shell since CVE-2024-27980)
+//   spawn(<real claude.exe>) -> exit 0 "2.1.220 (Claude Code)"
+//
+// So `.cmd` is not the answer either. The real executable is a NATIVE claude.exe that ships inside the
+// package and is NOT itself on PATH — the `.cmd` shim is just a stub that calls it. Hence: prefer a
+// real `.exe` on PATH, else find the `.cmd` shim and follow it to the target it invokes.
+const WINDOWS_SHIM_TARGET = /^\s*"%dp0%\\(.+?)"/mu
+
+/** Read a `.cmd` shim and return the absolute path of the executable it actually invokes. */
+function windowsShimTarget(shimPath: string): string | undefined {
+  let body: string
+  try { body = readFileSync(shimPath, "utf8") } catch { return undefined }
+  const target = WINDOWS_SHIM_TARGET.exec(body)?.[1]
+  if (!target) return undefined
+  const full = join(dirname(shimPath), target)
+  try { accessSync(full, fsConstants.F_OK); return full } catch { return undefined }
+}
+
 export function resolveClaudeExecutableAbsolute(bin: string | undefined, env: NodeJS.ProcessEnv = process.env): string {
   const candidate = bin && bin.length > 0 ? bin : "claude"
   if (isAbsolute(candidate)) return candidate
+  const windows = process.platform === "win32"
   for (const dir of (env.PATH ?? "").split(delimiter)) {
     if (!dir) continue
+    if (windows) {
+      // A real executable wins outright (a standalone install, or a future npm layout that ships one).
+      const exe = join(dir, `${candidate}.exe`)
+      try { accessSync(exe, fsConstants.F_OK); return exe } catch { /* no .exe here */ }
+      // Otherwise follow the npm `.cmd` stub to the binary it calls. Deliberately NEVER return the
+      // extensionless sibling: on Windows that is a POSIX shell script and it is unusable.
+      const viaShim = windowsShimTarget(join(dir, `${candidate}.cmd`))
+      if (viaShim) return viaShim
+      continue
+    }
     const full = join(dir, candidate)
     try { accessSync(full, fsConstants.X_OK); return full } catch { /* try next PATH entry */ }
   }
