@@ -8,12 +8,11 @@ import type { SelectGroup, SelectOption } from "../components/ui/Select.tsx"
 import type { ProfileGridGroup } from "./profileGrid.ts"
 import {
   CLAUDE_MODELS,
-  EFFORT_OPTIONS,
+  claudeEfforts,
+  claudeEffortOptions,
   codexEffortOptions,
   modelGroups,
 } from "./options.ts"
-
-const CLAUDE_EFFORT_OPTIONS = EFFORT_OPTIONS.filter((option) => option.value !== "")
 
 export interface ResolvedDispatchPreferences {
   backend: Backend
@@ -57,7 +56,9 @@ export function dispatchProfileGroups(codexModels: readonly CodexModel[]): Profi
         model: option.value,
         label: option.label,
         defaultEffort: "high",
-        efforts: CLAUDE_EFFORT_OPTIONS.map((effort) => effort.value),
+        // Per-model, exactly like the codex rows below: the ultracode rung exists only on the
+        // xhigh-capable models, so Haiku's row leaves that grid cell empty.
+        efforts: claudeEfforts(option.value),
       })),
     },
     {
@@ -89,7 +90,7 @@ export function resolveDispatchPreferences(
   const defaultEffort = backend === "claude" ? "high" : codexModel?.defaultEffort ?? ""
   const effort = profile.effort ?? defaultEffort
   const baseEfforts = backend === "claude"
-    ? CLAUDE_EFFORT_OPTIONS
+    ? claudeEffortOptions(model, { withDefault: false })
     : codexEffortOptions(codexModel, { withDefault: false })
   const effortAvailable = baseEfforts.some((option) => option.value === effort)
   const effortOptions = effort && !effortAvailable

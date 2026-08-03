@@ -912,11 +912,17 @@ export const Settings = z.object({
   // (permission-mode vs sandbox, the effort set) know which axis to present. Optional so an old blob
   // parses; absent ⇒ "claude" (derivable from `model` too, via backendForModel in web/lib/options).
   backend: Backend.optional(),
-  // Reasoning effort. The ladder spans BOTH backends' universes: Claude's (low..max) and codex's
-  // (adds "ultra" — a 5.6-sol/terra level above max). Which subset is OFFERED is backend/model-gated
-  // in the UI (Claude models stop at max; a codex model exposes exactly its cache `efforts`), and the
-  // server passes the chosen value through per backend — so the wire enum is simply the union.
-  effort: z.enum(["low", "medium", "high", "xhigh", "max", "ultra"]).optional(),
+  // Reasoning effort. The ladder spans BOTH backends' universes: Claude's (low..max, plus "ultracode")
+  // and codex's (adds "ultra" — a 5.6-sol/terra level above max). Which subset is OFFERED is
+  // backend/model-gated in the UI (a codex model exposes exactly its cache `efforts`; "ultracode" is
+  // offered only on an xhigh-capable Claude model), and the server passes the chosen value through per
+  // backend — so the wire enum is simply the union.
+  //
+  // "ultracode" is a Claude rung with no `--effort` equivalent: Claude Code's effort flag stops at max,
+  // and ultracode is a separate session-scoped setting meaning "xhigh + standing dynamic-workflow
+  // orchestration". It travels the wire as an effort because that is how Claude Code's own `/effort`
+  // presents it; resolveClaudeEffort (server/backend/claude-effort.ts) translates it at the spawn edge.
+  effort: z.enum(["low", "medium", "high", "xhigh", "max", "ultra", "ultracode"]).optional(),
   notifications: z.boolean(),
   // UI type family. `mono` (default) is the mono-forward system; `sans` swaps prose/UI chrome to a
   // sans stack while code / tool lines / the terminal stay mono. Optional so an old settings blob

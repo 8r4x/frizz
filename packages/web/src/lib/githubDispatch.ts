@@ -3,7 +3,7 @@ import type {
   DispatchProfileSnapshot,
   GithubBatchInput,
 } from "@fray-ui/shared"
-import { CLAUDE_MODELS, EFFORTS } from "./options.ts"
+import { CLAUDE_MODELS, claudeEfforts } from "./options.ts"
 
 // Validate the picker's live model/effort pair immediately before the final mutation. A Codex cache
 // refresh can invalidate a model or effort while the picker is open; that must stop visibly (the
@@ -19,7 +19,9 @@ export function dispatchProfileError(
     if (!CLAUDE_MODELS.some((option) => option.value === profile.model)) {
       return `Claude model ${profile.model} is no longer available`
     }
-    if (!(EFFORTS as readonly string[]).includes(profile.effort)) {
+    // Per-model, so picking ultracode and then switching to a model that cannot honour it stops here
+    // rather than dispatching a level that would be silently ignored.
+    if (!claudeEfforts(profile.model).includes(profile.effort)) {
       return `Reasoning level ${profile.effort} is not available for ${profile.model}`
     }
     return undefined

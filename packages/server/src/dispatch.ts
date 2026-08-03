@@ -23,6 +23,7 @@ import { buildWorkerPrompt } from "./workerPrompt.ts"
 import { codexSandbox, CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS } from "./backend/codex.ts"
 import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
 import { claudeBrokerBridgeEnabled, type ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
+import { claudeUltracodeFlags, resolveClaudeEffort } from "./backend/claude-effort.ts"
 import { ProviderAuthRequiredError } from "./backend/auth-status.ts"
 import { readBoard, type FrayBoard, type FrayThread } from "./fray.ts"
 import { SYSTEM_PROMPT_DIR, cleanupAdoptionSessionFiles, systemPromptPath } from "./session-files.ts"
@@ -611,7 +612,11 @@ export function buildClaudeCommand(opts: {
 }): string[] {
   const argv = [opts.claudeBin ?? "claude", "--session-id", opts.sessionId, "--permission-mode", workerPermissionMode(opts.permissionMode)]
   if (opts.model) argv.push("--model", opts.model)
-  if (opts.effort) argv.push("--effort", opts.effort)
+  // "ultracode" is a settings flag, not an --effort value, and it only takes when the pinned effort is
+  // xhigh — see resolveClaudeEffort.
+  const effort = resolveClaudeEffort(opts.effort)
+  if (effort.effort) argv.push("--effort", effort.effort)
+  argv.push(...claudeUltracodeFlags(effort))
   if (opts.pluginDir) argv.push("--plugin-dir", opts.pluginDir)
   argv.push(...claudeMcpFlags(opts.frayMcp))
   argv.push(...workerDisallowedToolFlags())
@@ -731,7 +736,10 @@ export function buildClaudeResumeCommand(opts: {
 }): string[] {
   const argv = [opts.claudeBin ?? "claude", "--permission-mode", workerPermissionMode(opts.permissionMode)]
   if (opts.model) argv.push("--model", opts.model)
-  if (opts.effort) argv.push("--effort", opts.effort)
+  // Ultracode is session-scoped, so a resume must re-carry it exactly like the system prompt above.
+  const effort = resolveClaudeEffort(opts.effort)
+  if (effort.effort) argv.push("--effort", effort.effort)
+  argv.push(...claudeUltracodeFlags(effort))
   if (opts.pluginDir) argv.push("--plugin-dir", opts.pluginDir)
   argv.push(...claudeMcpFlags(opts.frayMcp))
   argv.push(...workerDisallowedToolFlags())

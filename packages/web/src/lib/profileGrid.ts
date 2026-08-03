@@ -34,7 +34,9 @@ export function profileGridTemplateColumns(effortCount: number): string {
 
 export type ProfileGridMoveKey = "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown" | "Home" | "End"
 
-const EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max", "ultra"]
+// Column order for the matrix. "ultracode" sorts last — the ladder's ceiling, and where Claude Code's
+// own /effort lists it. A model that cannot honour it simply renders an empty cell in that column.
+const EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max", "ultra", "ultracode"]
 
 export function profileGridEfforts(groups: readonly ProfileGridGroup[]): string[] {
   const efforts = new Set(groups.flatMap((group) => group.options.flatMap((option) => option.efforts)))

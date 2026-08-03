@@ -199,6 +199,22 @@ test("createClaudeBackend: reattach forwards model+effort without fabricating a 
   assert.ok(argv.includes("--effort") && argv.includes("xhigh"))
 })
 
+test("createClaudeBackend: an ultracode dispatch spawns as xhigh + the ultracode session setting", () => {
+  const backend = createClaudeBackend({ logDir: "/logs", claudeBin: "claude" })
+  for (const { label, argv } of [
+    { label: "spawn", argv: backend.buildSpawn({ sessionId: "sid", cwd: "/cwd", prompt: "go", workerContract: "", permissionMode: "bypassPermissions", model: "opus", effort: "ultracode" }).argv },
+    // Ultracode is SESSION-scoped, so a resume has to re-carry it exactly like the system prompt does.
+    { label: "resume", argv: backend.buildResume({ sessionId: "sid", cwd: "/cwd", workerContract: "", permissionMode: "bypassPermissions", model: "opus", effort: "ultracode" }).argv },
+  ]) {
+    assert.equal(argv.includes("ultracode"), false, `${label}: "ultracode" is not an --effort value; the CLI would warn and drop it`)
+    const effortIndex = argv.indexOf("--effort")
+    assert.equal(argv[effortIndex + 1], "xhigh", `${label}: ultracode must pin xhigh — any other effort silently discards the setting`)
+    const settingsIndex = argv.indexOf("--settings")
+    assert.ok(settingsIndex !== -1, `${label}: the ultracode setting must ride the spawn`)
+    assert.deepEqual(JSON.parse(argv[settingsIndex + 1]!), { ultracode: true })
+  }
+})
+
 test("createClaudeBackend: transcriptPath is <logDir>/<sessionId>.jsonl", () => {
   assert.equal(createClaudeBackend({ logDir: "/logs" }).transcriptPath("abc-123"), "/logs/abc-123.jsonl")
 })

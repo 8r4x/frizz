@@ -20,7 +20,8 @@ import { registerOpenSelect } from "../lib/selectOverlay.ts"
 import { OPAQUE_PORTAL_SURFACE_Z, OPAQUE_SURFACE_BASE } from "../lib/overlaySurface.ts"
 
 function effortLabel(effort: string): string {
-  return effort === "xhigh" ? "X-high" : effort.charAt(0).toUpperCase() + effort.slice(1)
+  if (effort === "xhigh") return "X-high"
+  return effort.charAt(0).toUpperCase() + effort.slice(1)
 }
 
 export function ProfileGridSelector({
@@ -202,7 +203,25 @@ export function ProfileGridSelector({
                       {option.label}
                     </span>
                     {efforts.map((effort) => {
-                      if (!option.efforts.includes(effort)) return <span key={effort} aria-hidden="true" className="cursor-default" />
+                      // An unsupported cell still has to HOLD ITS COLUMN. Each row is its own grid with
+                      // `auto` columns, so an empty placeholder collapses to the 2.75rem minimum and
+                      // the leftover width redistributes across that row — which slid every cell in a
+                      // short row out of line with the rows above it (measured 9px of drift once the
+                      // ultracode column existed, and already true of any codex row with fewer levels).
+                      // Ghosting the label keeps the column exactly as wide as it is everywhere else.
+                      if (!option.efforts.includes(effort)) {
+                        return (
+                          // Same box as a real cell (border + padding + type), just invisible — a
+                          // ghost that is 2px narrower still drags the column out of true.
+                          <span
+                            key={effort}
+                            aria-hidden="true"
+                            className={`invisible min-w-[2.75rem] cursor-default border border-transparent px-1 text-center ${typography}`}
+                          >
+                            {effortLabel(effort)}
+                          </span>
+                        )
+                      }
                       const selection = { provider: group.id, model: option.model, effort }
                       const key = profileGridSelectionKey(selection)
                       return (

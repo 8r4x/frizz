@@ -155,27 +155,49 @@ export function claudePermValue(mode: PermissionMode): PermissionMode {
 // come per-model from the cache (a codex model can go to max/ultra, another stops at xhigh).
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const
 
-// Labels span BOTH ladders: Claude's low..max plus codex's "ultra". An unlabeled effort (a future codex
-// level) falls back to a Title-cased slug in the option builders below.
-export const EFFORT_LABEL: Record<string, string> = { low: "Low", medium: "Medium", high: "High", xhigh: "X-high", max: "Max", ultra: "Ultra" }
+// "Ultracode" is the ladder's top rung on an xhigh-capable Claude model — where Claude Code's own
+// `/effort [low|…|max|ultracode|auto]` puts it. It is not an --effort value: the server translates it
+// into xhigh + the ultracode session setting (server/backend/claude-effort.ts), which is what gives it
+// standing dynamic-workflow orchestration on top of xhigh reasoning. Haiku is not xhigh-capable and
+// Claude ignores the setting there, so the rung is withheld rather than offered as a no-op.
+export const ULTRACODE = "ultracode"
+const ULTRACODE_MODELS = new Set(["fable", "opus", "sonnet"])
 
-// The full effort ordering, low→high — used to clamp a stored effort into a codex model's supported set.
-const EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max", "ultra"]
+/** The Claude effort ladder for one model alias — the mirror of the server's claudeEffortsFor. */
+export function claudeEfforts(model: string | undefined): string[] {
+  return model && ULTRACODE_MODELS.has(model) ? [...EFFORTS, ULTRACODE] : [...EFFORTS]
+}
+
+// Labels span BOTH ladders: Claude's low..max (plus ultracode) and codex's "ultra". An unlabeled effort
+// (a future codex level) falls back to a Title-cased slug in the option builders below.
+export const EFFORT_LABEL: Record<string, string> = { low: "Low", medium: "Medium", high: "High", xhigh: "X-high", max: "Max", ultra: "Ultra", ultracode: "Ultracode" }
+
+// The full effort ordering, low→high — used to clamp a stored effort into a codex model's supported set,
+// and to order the profile grid's columns. "ultracode" sorts last to match how Claude Code's own
+// /effort lists it; it RUNS at xhigh but carries orchestration on top, so it is the ladder's ceiling.
+const EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max", "ultra", "ultracode"]
 
 function effortLabel(e: string): string {
   return EFFORT_LABEL[e] ?? e.charAt(0).toUpperCase() + e.slice(1)
 }
 
-export const EFFORT_OPTIONS: SelectOption[] = [
-  { value: "", label: "Effort" },
-  ...EFFORTS.map((e) => ({ value: e, label: EFFORT_LABEL[e] })),
-]
+// The effort SelectOptions for a specific CLAUDE model — the mirror of codexEffortOptions below, so
+// both backends gate the dropdown on the SELECTED model rather than on a single flat ladder. Only the
+// ultracode rung actually varies per Claude model today (see claudeEfforts). `withDefault` prepends the
+// "Default" row used by Settings; the composer omits it and always shows a concrete level.
+export function claudeEffortOptions(model: string | undefined, opts: { withDefault: boolean }): SelectOption[] {
+  const optionList = claudeEfforts(model).map((e) => ({ value: e, label: effortLabel(e) }))
+  return opts.withDefault ? [{ value: "", label: "Default" }, ...optionList] : optionList
+}
 
-// Effort options for settings, where the empty value reads as "default" rather than a placeholder.
-export const EFFORT_OPTIONS_SETTINGS: SelectOption[] = [
-  { value: "", label: "Default" },
-  ...EFFORTS.map((e) => ({ value: e, label: EFFORT_LABEL[e] })),
-]
+// Coerce a stored Claude effort into what the SELECTED Claude model supports — the claude-side twin of
+// codexEffortForModel, so switching the model never leaves the select rendering a blank value. Only
+// ultracode can be unsupported, and it degrades to xhigh: the level it actually runs at, minus the
+// orchestration the smaller model cannot carry. "" (use the default) passes through untouched.
+export function claudeEffortForModel(model: string | undefined, effort: string): string {
+  if (!effort) return effort
+  return effort === ULTRACODE && !claudeEfforts(model).includes(ULTRACODE) ? "xhigh" : effort
+}
 
 // The effort SelectOptions for a specific codex model — exactly its cache `efforts` (so a 5.6 model shows
 // max/ultra and a 5.5 model stops at xhigh). `withDefault` prepends the "Default" row (settings), which

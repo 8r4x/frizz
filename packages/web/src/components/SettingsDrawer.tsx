@@ -17,7 +17,8 @@ import { draftKey, useDraft, useProjectDir } from "../lib/drafts.ts"
 import {
   modelGroups,
   CLAUDE_DISPATCH_PERMISSION_OPTIONS,
-  EFFORT_OPTIONS_SETTINGS,
+  claudeEffortForModel,
+  claudeEffortOptions,
   codexEffortOptions,
   codexModelFor,
   backendForModel,
@@ -159,9 +160,9 @@ export function SettingsDrawer() {
             <SettingsField label="Effort" help={SETTINGS_HELP.effort}>
               <Select
                 variant="bordered"
-                value={backend === "codex" ? codexEffortForModel(codexModel, draft.effort ?? "") : (draft.effort ?? "")}
+                value={backend === "codex" ? codexEffortForModel(codexModel, draft.effort ?? "") : claudeEffortForModel(draft.model, draft.effort ?? "")}
                 onValueChange={(v) => setTrackedDraft({ ...draft, effort: (v || undefined) as Settings["effort"] })}
-                options={backend === "codex" ? codexEffortOptions(codexModel, { withDefault: true }) : EFFORT_OPTIONS_SETTINGS}
+                options={backend === "codex" ? codexEffortOptions(codexModel, { withDefault: true }) : claudeEffortOptions(draft.model, { withDefault: true })}
                 indicatorPosition="right"
                 ariaLabel="Effort"
               />

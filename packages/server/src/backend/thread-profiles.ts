@@ -1,14 +1,27 @@
 import type { Backend, ThreadProfileOption } from "@fray-ui/shared"
 import { readCodexModels } from "./codex-models.ts"
+import { CLAUDE_ULTRACODE, claudeModelSupportsUltracode } from "./claude-effort.ts"
 
 // Claude Code 2.1.207 accepts model and effort together on both a new session and --resume. Keep the
 // native aliases here on the server: an existing-thread mutation must never depend on the browser's
 // model-name classifier (whose historical unknown=>Claude fallback is intentionally irrelevant).
+//
+// "ultracode" rides the ladder as its top rung, exactly where Claude Code's own `/effort` puts it, but
+// it is NOT an --effort value — claude-effort.ts translates it into (xhigh + the ultracode session
+// setting) at the spawn edge. It is offered only on the xhigh-capable models, because Claude ignores
+// the setting on Haiku rather than erroring (measured); see CLAUDE_ULTRACODE_MODELS.
+export const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const
+
+/** The Claude effort ladder for one model — the ultracode rung only where the model can honour it. */
+export function claudeEffortsFor(model: string): string[] {
+  return claudeModelSupportsUltracode(model) ? [...CLAUDE_EFFORTS, CLAUDE_ULTRACODE] : [...CLAUDE_EFFORTS]
+}
+
 export const CLAUDE_THREAD_PROFILES: readonly ThreadProfileOption[] = [
-  { model: "fable", label: "Fable", defaultEffort: "medium", efforts: ["low", "medium", "high", "xhigh", "max"] },
-  { model: "opus", label: "Opus", defaultEffort: "medium", efforts: ["low", "medium", "high", "xhigh", "max"] },
-  { model: "sonnet", label: "Sonnet", defaultEffort: "medium", efforts: ["low", "medium", "high", "xhigh", "max"] },
-  { model: "haiku", label: "Haiku", defaultEffort: "medium", efforts: ["low", "medium", "high", "xhigh", "max"] },
+  { model: "fable", label: "Fable", defaultEffort: "medium", efforts: claudeEffortsFor("fable") },
+  { model: "opus", label: "Opus", defaultEffort: "medium", efforts: claudeEffortsFor("opus") },
+  { model: "sonnet", label: "Sonnet", defaultEffort: "medium", efforts: claudeEffortsFor("sonnet") },
+  { model: "haiku", label: "Haiku", defaultEffort: "medium", efforts: claudeEffortsFor("haiku") },
 ]
 
 export function threadProfileOptions(backend: unknown): { backend: Backend; options: ThreadProfileOption[] } {

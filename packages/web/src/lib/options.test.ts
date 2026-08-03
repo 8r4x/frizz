@@ -8,6 +8,9 @@ import {
   codexPermValue,
   claudePermValue,
   permValueFor,
+  claudeEfforts,
+  claudeEffortForModel,
+  claudeEffortOptions,
   codexEffortForModel,
   codexEffortOptions,
   codexModelFor,
@@ -57,6 +60,30 @@ test("codexEffortForModel: keeps a supported effort, clamps an unsupported one d
   assert.equal(codexEffortForModel(g55, "ultra"), "xhigh")
   assert.equal(codexEffortForModel(g55, "high"), "high")
   assert.equal(codexEffortForModel(g55, ""), "") // "" = use model default (settings placeholder)
+})
+
+// The Claude ladder is per-model too, for exactly one rung: ultracode needs an xhigh-capable model.
+test("claudeEfforts: ultracode tops the ladder on xhigh-capable models and is withheld elsewhere", () => {
+  for (const model of ["fable", "opus", "sonnet"]) {
+    assert.deepEqual(claudeEfforts(model), ["low", "medium", "high", "xhigh", "max", "ultracode"])
+  }
+  // Claude ignores the ultracode setting on Haiku rather than erroring, so offering it would be a
+  // silent no-op — the rung is withheld instead.
+  assert.deepEqual(claudeEfforts("haiku"), ["low", "medium", "high", "xhigh", "max"])
+  assert.deepEqual(claudeEfforts(undefined), ["low", "medium", "high", "xhigh", "max"])
+  // Codex's "ultra" is a different level on a different backend and must never appear on a Claude row.
+  assert.equal(claudeEfforts("opus").includes("ultra"), false)
+  assert.equal(claudeEffortOptions("opus", { withDefault: false }).at(-1)!.label, "Ultracode")
+  assert.equal(claudeEffortOptions("opus", { withDefault: true })[0]!.value, "")
+})
+
+// The clamp keeps the select from rendering blank after a model switch strands a saved level.
+test("claudeEffortForModel: ultracode degrades to xhigh on a model that cannot honour it", () => {
+  assert.equal(claudeEffortForModel("opus", "ultracode"), "ultracode")
+  // xhigh is the level ultracode actually RUNS at, minus the orchestration Haiku cannot carry.
+  assert.equal(claudeEffortForModel("haiku", "ultracode"), "xhigh")
+  assert.equal(claudeEffortForModel("haiku", "max"), "max")
+  assert.equal(claudeEffortForModel("haiku", ""), "")
 })
 
 // The picker's Codex section is DRIVEN by the RPC list, ordered as delivered (server sorts by priority).

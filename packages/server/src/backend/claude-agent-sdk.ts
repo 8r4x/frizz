@@ -11,6 +11,7 @@ import {
   type SDKMessage,
   type SDKUserMessage,
 } from "@fray-ui/claude-agent-sdk-runtime"
+import { claudeUltracodeSettings, resolveClaudeEffort } from "./claude-effort.ts"
 import {
   CLAUDE_AGENT_SDK_MAX_DIAGNOSTIC_BYTES,
   CLAUDE_AGENT_SDK_MAX_EVENT_TEXT_BYTES,
@@ -799,6 +800,8 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
     }
     : undefined
 
+  const claudeEffort = resolveClaudeEffort(options.effort)
+
   const raw = query({
     prompt: input,
     options: {
@@ -829,7 +832,11 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       // equivalent of the tmux path's --append-system-prompt-file.
       ...(options.appendSystemPrompt ? { systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: options.appendSystemPrompt } } : {}),
       ...(options.model ? { model: options.model } : {}),
-      ...(options.effort ? { effort: options.effort as "low" | "medium" | "high" | "xhigh" | "max" } : {}),
+      // "ultracode" is not an `effort` value — it resolves to xhigh plus a session setting, and the two
+      // must travel TOGETHER or the setting is silently ignored (see resolveClaudeEffort). `settings` is
+      // an additional highest-precedence settings source, layered over `settingSources` above.
+      ...(claudeEffort.effort ? { effort: claudeEffort.effort as "low" | "medium" | "high" | "xhigh" | "max" } : {}),
+      ...(claudeEffort.ultracode ? { settings: claudeUltracodeSettings() } : {}),
       stderr(data) {
         const redacted = redact(data)
         diagnostic?.({ kind: "stderr", ...redacted })

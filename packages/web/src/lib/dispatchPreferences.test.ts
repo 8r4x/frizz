@@ -28,6 +28,8 @@ test("provider switching restores each runtime's exact model and effort profile"
       { value: "high", label: "High" },
       { value: "xhigh", label: "X-high" },
       { value: "max", label: "Max" },
+      // Sonnet is xhigh-capable, so it carries the ultracode rung (xhigh + workflow orchestration).
+      { value: "ultracode", label: "Ultracode" },
     ],
   })
   const codex = applyDispatchPreferenceUpdate(preferences, { field: "backend", value: "codex" })
@@ -61,9 +63,19 @@ test("dispatch profile groups keep provider catalogues and per-model effort sets
   assert.deepEqual(groups.map((group) => group.id), ["claude", "codex"])
   assert.deepEqual(
     groups[0]?.options.find((option) => option.model === "opus")?.efforts,
-    ["low", "medium", "high", "xhigh", "max"],
-    "the Claude selector must not offer Codex-only ultra",
+    ["low", "medium", "high", "xhigh", "max", "ultracode"],
+    "the Claude ladder tops out at ultracode — and must never offer Codex-only ultra",
   )
+  // Ultracode needs an xhigh-capable model; Claude ignores the setting on Haiku rather than failing,
+  // so that row must not offer a rung that would quietly do nothing.
+  assert.deepEqual(
+    groups[0]?.options.find((option) => option.model === "haiku")?.efforts,
+    ["low", "medium", "high", "xhigh", "max"],
+    "Haiku cannot honour ultracode, so its row stops at max",
+  )
+  for (const option of groups[0]?.options ?? []) {
+    assert.equal(option.efforts.includes("ultra"), false, "the Claude selector must not offer Codex-only ultra")
+  }
   assert.deepEqual(groups[1]?.options[0], {
     model: "gpt-5.6-sol",
     label: "GPT-5.6 Sol",
