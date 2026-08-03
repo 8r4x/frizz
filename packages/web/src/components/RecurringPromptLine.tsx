@@ -1,4 +1,4 @@
-import { CircleStop, Timer } from "lucide-react"
+import { Repeat, Timer } from "lucide-react"
 import type { RecurringPrompt } from "@fray-ui/shared"
 import { WakeDivider } from "./WakeDivider.tsx"
 
@@ -35,7 +35,15 @@ export function RecurringPromptLine({ bump, sourceId }: { bump: RecurringPrompt;
     : "Stop hook"
   return (
     <WakeDivider
-      icon={heartbeat ? Timer : CircleStop}
+      // TWO glyphs here, one per feature, because a divider marks ONE delivery and the two deliveries
+      // answer different questions: a clock for the heartbeat, a loop for the stop hook (which has no
+      // clock — it fires because the thread stopped, again). The footer's trigger is deliberately a
+      // THIRD mark, a pulse, because it stands for both at once (see StopHookControl).
+      //
+      // The stop hook's was `CircleStop`, and in a wake line that is backwards: this divider exists to
+      // say the agent was RE-INVOKED, and a stop button in the transcript reads as the run ending here.
+      // Same square-in-a-circle the footer shed on 2026-08-03, for a related reason.
+      icon={heartbeat ? Timer : Repeat}
       sourceId={sourceId}
       marker={heartbeat ? "heartbeat" : "stop-hook"}
       ariaLabel={label}
