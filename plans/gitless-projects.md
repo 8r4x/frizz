@@ -27,7 +27,9 @@ My read: **(2), with (1) folded in.** They are one change, and (3) comes along w
 | Use | Where | Hard? |
 | --- | --- | --- |
 | Project root = repo root | `src/launcher.ts:363`, `packages/server/src/project.ts:60` | **Hard** — the launcher throws `frizz-dev must be run inside a Git repository` |
-| Project identity (`frizz.id`) | `project-identity.ts:458` writes `git config --local --add frizz.id <uuid>` | **Hard** — the id keys `~/.frizz/projects/<id>/`, the SQLite DB, logs, scratchpads, and the tmux socket name |
+| Project identity (`frizz.id`) | `project-identity.ts` writes `git config --local --add frizz.id <uuid>` | **Hard** — the id keys `~/.frizz/projects/<id>/`, the SQLite DB, logs, and scratchpads |
+
+Since the rebrand a pre-existing checkout carries BOTH keys: `migrate-fray.ts` adopts `fray.id` → `frizz.id` and deliberately keeps the old one, because its survival is the only reason the boards were recoverable when the first cut of that migration forgot the key entirely and every board opened empty. Any future move of identity storage inherits that lesson — see §11.
 | Worktree scope | `project-identity.ts:382` (`--git-dir` vs `--git-common-dir`), private `frizz.config` at `:395` | Hard, but **moot** for a non-repo directory |
 | `owner/repo` label | `project.ts:135` (`git remote get-url origin`) | Soft — already `?? name` |
 | GitHub picker / PR watch | `github.ts:49` (`gh repo view`) | Soft — already returns `null`, never throws |
@@ -63,7 +65,7 @@ already tells them to add `.frizz/` to `.gitignore` themselves.
 
 It also wins the properties outright. §2's move-survival and alias-independence are **free**, because
 the id lives *inside* the thing being moved; a path-keyed lookup has to work to recover what a file
-gets by construction. Atomic creation reuses `tmux-socket.ts:239`'s `atomicJson` (open `wx` → fsync →
+gets by construction. Atomic creation reuses `project-launch.ts:148`'s `atomicJson` (open `wx` → fsync →
 rename → fsync dir) under `acquireNamedLaunchLockSync` (`project-identity.ts:323`), re-keyed from
 `commonGitDir` to a hash of the canonical path — the existing mechanism, so the
 concurrent-first-launch test keeps its guarantee.
@@ -71,9 +73,15 @@ concurrent-first-launch test keeps its guarantee.
 ### The one hazard, and the rule that removes it
 
 Unlike `git config --local`, a file in the tree **can be committed** — and then two clones of that
-repo *on one machine* resolve to the same project id at two different paths. That is exactly the
-duplicate-`frizz.id` condition `validateFullSocket` fails closed on (`tmux-socket.ts:399`): the second
-checkout would die with the "unknown or foreign ownership" error this whole thread started from.
+repo *on one machine* resolve to the same project id at two different paths.
+
+> **STALE, re-derive before building this (2026-08-04).** This paragraph used to name the exact
+> failure: `validateFullSocket` in `tmux-socket.ts:399` fails closed on a duplicate id with "unknown
+> or foreign ownership". That file went out with tmux and the function no longer exists, so the
+> consequence motivating the whole cross-check below is currently unverified — two checkouts sharing
+> an id might now collide on the launch lock, quietly interleave on one `ui.db`, or be benign.
+> Establish which BEFORE designing `identity.json` to prevent it; the right mitigation depends on the
+> actual failure. (`atomicJson` also moved — it is `project-launch.ts:148` now.)
 
 Don't rely on the user's `.gitignore` to prevent it — detect it, and self-heal:
 
@@ -337,6 +345,38 @@ Against:
 **Not a decision this document needs to make.** Gitless projects work identically either way, and the
 `.frizz/frizz.id` file (§3) is settled regardless. Recorded here so the layout question is answered
 with numbers next time it comes up, rather than re-litigated.
+
+## 11. Identity is a durable pointer, so moving it needs a migration — and one owner of the list
+
+Added 2026-08-04, after the fray→frizz rebrand shipped without carrying `git config fray.id`. The id
+was never lost; the *pointer* to it was. `resolveGitProjectIdentity` found no `frizz.id`, minted a
+fresh UUID, and opened an empty board beside the real one — on all four active projects at once.
+
+The instructive part is why it was missed. Identity is recorded in three places today, and the
+migration carried two:
+
+| location | carried by the first cut? |
+| --- | --- |
+| `~/.fray/projects/<id>/` — the state directory the id names | yes (global root rename) |
+| `<gitdir>/fray.config` — a linked worktree's private scope | no |
+| `git config --local fray.id` — the id itself | **no** |
+
+Nobody enumerated the set. Each site was migrated by whoever happened to think of it, which is a
+process that finds most of a list and never tells you which part it missed.
+
+So the rule this document should hold any identity work to:
+
+> **The identity provider owns an explicit, enumerable list of every location it may have written,
+> and a migration hook that walks that list.** Not a comment — a value in code the migration reads,
+> so that adding a storage location without adding it to the list is the thing that breaks a test.
+
+This raises the value of the §7 provider interface considerably, and for a reason independent of
+gitless: it is the only way the list has one owner. It also argues for keeping §9's two
+implementations rather than unifying on the file — a migration that can miss a site is a poor reason
+to hand the largest population a *new* storage location with a *new* hazard class.
+
+And keep the retired key. `fray.id` was left in place deliberately; it is the only reason four boards
+were recoverable at all. A migration that deletes its own source has no undo.
 
 ## Open questions for the human
 
