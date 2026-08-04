@@ -144,13 +144,24 @@ export function resolveProjectLabel(dir: string): string | null {
   }
 }
 
-export function resolveProject(cwd = process.cwd(), home = homedir(), env: NodeJS.ProcessEnv = process.env): Project {
-  // Opening a project is the moment a fray-era install gets adopted (migrate-fray.ts). The global
-  // roots go first and MUST precede projectStateDir below, which resolves — and then memoizes — them.
-  migrateFrayGlobalRoots({ env, home })
+export function resolveProject(
+  cwd = process.cwd(),
+  home = homedir(),
+  env: NodeJS.ProcessEnv = process.env,
+  // Adopting a fray-era install is something OPENING one does, and nothing else (migrate-fray.ts).
+  //
+  // Off by default because injecting `home` does NOT sandbox this: the project directory comes from
+  // `cwd`, so a caller that redirects HOME to a temp dir but still runs inside the checkout — every
+  // integration test does — would leave the global roots alone and then migrate the developer's REAL
+  // repository. That is not hypothetical; it is how this repo's own `.fray/` got moved mid-rebrand.
+  { migrate = false }: { migrate?: boolean } = {},
+): Project {
+  // The global roots go first and MUST precede projectStateDir below, which resolves — and then
+  // memoizes — them.
+  if (migrate) migrateFrayGlobalRoots({ env, home })
   const identity = resolveProjectIdentity(resolveProjectDir(cwd), home)
   const dir = identity.root
-  migrateFrayProjectDir(dir)
+  if (migrate) migrateFrayProjectDir(dir)
   const id = identity.id
   const stateDir = projectStateDir(id, home)
   mkdirSync(stateDir, { recursive: true })

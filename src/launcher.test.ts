@@ -2268,6 +2268,13 @@ test("only an open adopts a fray-era install; --stop and --status resolve withou
     assert.equal(existsSync(join(home, ".frizz")), false);
     assert.equal(existsSync(join(repo, ".fray")), true, "the project tree is untouched by a non-open");
 
+    // The server-side entry has the SAME default, and it is the one that actually bit: the project
+    // directory comes from `cwd`, so injecting `home` does not sandbox it. A caller that redirects
+    // HOME but still runs inside a checkout would otherwise migrate that real checkout.
+    resolveProject(repo, home);
+    assert.equal(existsSync(join(repo, ".fray")), true, "resolveProject does not migrate by default");
+    assert.equal(existsSync(join(home, ".frizz")), false);
+
     // What a launch does.
     resolveWorkspace(repo, home, process.env, { migrate: true });
     assert.equal(existsSync(join(home, ".frizz")), true, "an open adopts the global tree");
