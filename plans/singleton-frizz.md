@@ -9,7 +9,7 @@ Design review, 2026-08-04. Prompted by: *"switch frizz over to be a singleton, s
 - **One unified process.** Not a front door proxying to per-project servers. This is a big refactor and that is accepted.
 - **Frizz runs from real root repo directories only.** A worktree is not a project. Worktree management is something the *agent* does inside a project, with prompting; Frizz has no special handling and needs none.
 - **Registration is automatic and silent.** Running the CLI inside a directory registers that path as a project with no approval step.
-- **The port is `6767`.** Chosen for memorability over robustness, knowingly — see §5 for what it costs and the fallback that has to change because of it.
+- **The port is `9393`**, with `13729` as the fallback target. Four-digit ABAB for memorability; IANA-unassigned, which is the only axis that actually separates candidates. See §5 — no four-digit port is safe from Windows Hyper-V reservations, so the fallback carries all the robustness.
 
 ---
 
@@ -170,31 +170,38 @@ Maintainer preference, and it is the right call — a repeating two-digit pair i
 
 All nine are free on this machine. Every other ABAB in 1024-9999 is IANA-assigned, inside a reported Hyper-V block, or both — the whole `2020`-`4747` run is gone, and `9090` (Prometheus) and `8080` never made it.
 
-Those nine were the technically-cleanest set. `9797` was the recommendation — the only survivor above the highest Hyper-V block anyone has reported (~9783 in [WSL#5306](https://github.com/microsoft/WSL/issues/5306)), unassigned on TCP *and* UDP. It remains the natural **fallback** target (see below). `8484` should be avoided in any case — it is MapleStory's port.
+**That nine-port shortlist was wrong, and so was the ranking built on it.** See the correction immediately below.
 
 *On the "trojan" hits for these ports:* SEO port-lookup sites print "known security risks, trojans" boilerplate for essentially every port number. That is not signal. The genuine cases look different — `13337` is a documented default for Empire C2, CrackMapExec and gophish, and `23232` is Backdoor.Berbew — and none of the nine is one of those.
 
-### DECIDED: `6767`
+### Correction: the Hyper-V axis does not distinguish four-digit ports at all
 
-`http://localhost:6767`. Chosen for memorability, with its costs understood and accepted:
+Two earlier drafts of this section ranked candidates by Hyper-V exposure. **That ranking was false**, and it produced two bad recommendations in a row. It rested on reading only the first part of the WSL#5514 `netsh` dump, which appeared to stop at `6979`; the dump actually continues to `9892-9991`. Both issues' complete block lists were then re-extracted at source with `gh api` and merged.
 
-- IANA-registered to `bmc-perf-agent` (BMC Performance Agent, an enterprise monitoring product). Squatting a dead registration, not a live one.
-- Inside a Hyper-V exclusion block reported in WSL#5514.
+**The union of the two reported machines covers 7,944 of the 8,976 ports in 1024-9999 — 89%.** The surviving gaps are small and arbitrary: `1625-2163`, `3490-3698`, `2764-2863`, `5841-5939`, `8349-8380`, `8981-8983`, plus slivers. Of every four-digit ABAB port, exactly one (`5858`) escapes both machines — and that is an artifact of which two people happened to file issues, not a property of the port.
 
-Both are exactly the posture Vite (`5173`, inside `5014-5618`) and Next.js (`3000`, inside `2164-3363`) already ship with, and the exposure only materializes on a Windows box whose dynamic port range has been reset from its 49152 default. `6969` was the same trade (`acmsoda`, same block); `7777`/`8888`/`1337` are IANA `cbt`/`ddi-tcp-1`/`menandmice-dns`, and 8888 is Jupyter's.
+**So port choice cannot buy Windows robustness at four digits.** `9393`, `6767`, `9797`, `7373` and the rest are equivalent on this axis — every one of them is inside a block on at least one reported machine, as are Vite's `5173`, Next.js's `3000`, Postgres's `5432` and adb's `5037`. Robustness lives **entirely** in the fallback. Choose the primary on memorability and on the one axis that is deterministic: the IANA registry.
 
-### The fallback has to change, and this is not optional
+*On the "trojan" hits these ports attract:* SEO port-lookup sites print "known security risks, trojans" boilerplate for essentially every port number. Not signal. The genuine cases look different — `13337` is a documented default for Empire C2, CrackMapExec and gophish, `23232` is Backdoor.Berbew — and none of the shortlist is one of those. `8484` is MapleStory's, a real if harmless association.
 
-**A `+1` scan from 6767 does not work.** The reported Hyper-V reservations are 100-port blocks and they run contiguously. `6767` sits inside `6680-6779`, which is part of an unbroken reserved run of **`6380-6979`** — so escaping upward by increment takes **213 attempts**, more than the launcher's current 100-port scan (`PORT_SCAN_COUNT = 100`, `src/launcher.ts:112`). On a machine where 6767 is reserved, today's fallback would burn all 100 candidates *inside the same reservation* and then fail with "no free port" while thousands were free.
+### DECIDED: `9393`
 
-So the fallback must **jump out of the block, not walk through it**:
+`http://localhost:9393`. **Unassigned in the IANA registry on both TCP and UDP** — its neighbours `9390` (`otp`, OpenVAS Transfer Protocol) and `9396` (`fjinvmgr`) are registered; it is not. No dev-tool default in the ~60-tool survey, no malware association, free on this machine.
 
-1. Try `6767`.
-2. On `EADDRINUSE`/`EACCES`, jump straight to `9797` — above every reported block, and already vetted clean against IANA, both browser blocklists and the dev-tool survey.
-3. Only then scan incrementally from there.
+It is strictly better than the `6767` it replaces on the only axis that separates them: `6767` is IANA-registered to `bmc-perf-agent` (BMC Performance Agent), so it would have squatted a live-on-paper registration. On Hyper-V exposure the two are indistinguishable, per the correction above. `6969` was `acmsoda`; `7777`/`8888`/`1337` are `cbt`/`ddi-tcp-1`/`menandmice-dns`, and 8888 is Jupyter's.
+
+### The fallback carries all the robustness, and it must JUMP
+
+**A `+1` scan does not work.** Reservations come in contiguous 100-port blocks, and the merged union contains unbroken runs of 2,400 ports (`5940-8348`) and 1,800 (`4014-5840`). The launcher's `PORT_SCAN_COUNT = 100` (`src/launcher.ts:112`) would burn every candidate *inside the same reservation*, then fail with "no free port" while tens of thousands were free.
+
+The fallback has to land in a band the reservations do not reach:
+
+1. Try `9393`.
+2. On `EADDRINUSE`/`EACCES`, jump to **`13729`**. It sits in `10896-24265` — a 13,370-port gap clean on both reported machines, above the highest browser-blocked port (`10080`), and below Linux's ephemeral floor (`32768`). IANA-unassigned, and already vetted against the dev-tool survey and the malware lists when it was briefly the primary candidate.
+3. Only then scan incrementally.
 4. Print the URL actually bound, every time.
 
-Distinguish the two errors in the message: `EADDRINUSE` means something else is listening and the user can go find it; `EACCES`/WSAEACCES on Windows means an invisible reservation, where `netstat` will show the port free and the honest advice is `netsh int ipv4 show excludedportrange protocol=tcp`. Those need different text — a "port in use" message for a reserved port sends people hunting for a process that does not exist.
+Distinguish the two errors. `EADDRINUSE` means something is listening and the user can go find it. `EACCES`/WSAEACCES on Windows means an invisible reservation — `netstat` will show the port free — and the honest advice there is `netsh int ipv4 show excludedportrange protocol=tcp`. A "port in use" message for a reserved port sends people hunting a process that does not exist.
 
 **Rejected from the earlier draft:** `3729` (F-R-A-Y on a keypad, but inside `3699-3798` and IANA `fksp-audit`), `4917` (Frizz's current default, inside `4914-5013`, and unmemorable), `4242` (inside `4214-4313`; also Posit Package Manager and Orthanc), and the five-digit safe-band picks `13729`/`24729` — correct on every technical axis and rightly rejected as unmemorable, which was the whole brief.
 
@@ -229,6 +236,6 @@ The fix is the one already used correctly for the broker sockets — hash the st
 
 ## 7. No open questions
 
-Everything is decided: unified process, real root repos only (no worktrees), silent auto-registration, port `6767`, and — as a consequence of the unified process — schedulers stay on for every registered project while tailers and watchers activate on view (§4).
+Everything is decided: unified process, real root repos only (no worktrees), silent auto-registration, port `9393` with a `13729` fallback, and — as a consequence of the unified process — schedulers stay on for every registered project while tailers and watchers activate on view (§4).
 
 The one thing to settle with an experiment rather than a decision is **item 1 of §4**: whether N tailers genuinely saturate the event loop. That claim is read from the scheduling logic and its own over-budget warning, not measured, and it is the assumption the whole activation design rests on. Run it before writing the lifecycle code.
