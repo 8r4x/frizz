@@ -14,6 +14,8 @@ import {
   DeliverQueuedNowResult,
   SetThreadRecurringPromptInput,
   SetOwnThreadRecurringPromptInput,
+  SetOwnThreadStopHookInput,
+  SetOwnThreadHeartbeatInput,
   ThreadPluginReloadResult,
   SetThreadSnoozeInput,
   ConfirmAwaitingInput,
@@ -478,14 +480,14 @@ export function createRouter(ctx: AppContext) {
   // The two checks both recurring-prompt writers owe, shared so the operator's path and the worker's
   // can never disagree about what a valid arming is.
   //
-  // A cadence is required when — and only when — the SCHEDULE trigger is on: a schedule nobody chose is
+  // A cadence is required when — and only when — the HEARTBEAT is on: a schedule nobody chose is
   // exactly the ambiguity the minutes field exists to remove, while a prompt that only fires on rest has
-  // no cadence to name. Arming an ARCHIVED thread is refused, but only when a trigger is actually on;
-  // clearing one, or parking the text with both triggers off, stays allowed on a shelved thread.
+  // no cadence to name. Arming an ARCHIVED thread is refused, but only when a mechanism is actually on;
+  // clearing one, or parking the text with both mechanisms off, stays allowed on a shelved thread.
   interface RecurringPromptWrite {
     prompt: string | null
-    onRest: boolean
-    onSchedule: boolean
+    stopHook: boolean
+    heartbeat: boolean
     intervalSeconds?: number
   }
   function assertRecurringPromptArmable(
@@ -493,18 +495,66 @@ export function createRouter(ctx: AppContext) {
     row: Pick<SessionRow, "state" | "archived">,
   ): void {
     if (input.prompt === null) return
-    if (input.onSchedule && input.intervalSeconds === undefined) {
-      throw new Error("`intervalSeconds` is required when the schedule trigger is on")
+    if (input.heartbeat && input.intervalSeconds === undefined) {
+      throw new Error("`intervalSeconds` is required when the heartbeat is on")
     }
-    if ((input.onRest || input.onSchedule) && (row.state === "archived" || row.archived === 1)) {
+    if ((input.stopHook || input.heartbeat) && (row.state === "archived" || row.archived === 1)) {
       throw new Error("Reopen this thread before arming a recurring prompt")
     }
   }
-  // The stored cadence. Dropped when the prompt is cleared, and KEPT when only the schedule trigger is
-  // off — the panel has to read back the interval that switching it on again would use.
+  // The stored cadence. Dropped when the prompt is cleared, and KEPT when only the heartbeat is off —
+  // the panel has to read back the interval that switching it on again would use.
   function recurringIntervalMs(input: RecurringPromptWrite): number | null {
     if (input.prompt === null || input.intervalSeconds === undefined) return null
     return input.intervalSeconds * 1000
+  }
+
+  // Fold ONE superseded single-trigger worker write onto the merged recurring-prompt row, PRESERVING the
+  // trigger it does not own. The old stop hook and heartbeat were independent features, so a worker still
+  // driving the old tools has to be able to arm or stop either one without silently disarming the other —
+  // and it cannot see the merged row to know it is doing so. The single shared TEXT is the one thing the
+  // merge cannot preserve: whichever legacy call last supplied words wins. That is the documented cost of
+  // collapsing two texts into one, not a defect of this alias.
+  function applyLegacyWorkerTrigger(
+    slug: string,
+    trigger: "rest" | "schedule",
+    write: { prompt: string | null; enabled: boolean; intervalSeconds?: number },
+  ): void {
+    const row = ctx.storage.getSession(slug)
+    if (!row) throw new Error(`thread ${slug} is not registered`)
+
+    const otherOn = trigger === "rest" ? row.recurring_on_schedule === 1 : row.recurring_on_rest === 1
+    // The cadence the row already carries, in the seconds the shared validator speaks. Read back even
+    // while the HEARTBEAT is off, because arming the stop hook must not drop the interval the panel
+    // needs to switch the heartbeat back on.
+    const storedSeconds = row.recurring_interval_ms ? Math.round(row.recurring_interval_ms / 1000) : undefined
+    const on = write.enabled && write.prompt !== null
+
+    // Keep the parked text when this mechanism goes off but the other is still armed: clearing the row
+    // there would disarm a mechanism this call never mentioned.
+    const prompt = on ? write.prompt : otherOn ? row.recurring_prompt ?? null : null
+    const next: RecurringPromptWrite = prompt === null
+      // No text, no mechanisms — one armed over an empty prompt is a row the scheduler cannot fire.
+      ? { prompt: null, stopHook: false, heartbeat: false }
+      : {
+        prompt,
+        stopHook: trigger === "rest" ? on : otherOn,
+        heartbeat: trigger === "schedule" ? on : otherOn,
+        intervalSeconds: trigger === "schedule" && on ? write.intervalSeconds : storedSeconds,
+      }
+
+    assertRecurringPromptArmable(next, row)
+    if (!ctx.storage.setRecurringPromptBySlug(
+      slug,
+      next.prompt,
+      next.stopHook,
+      next.heartbeat,
+      recurringIntervalMs(next),
+      new Date().toISOString(),
+    )) {
+      throw new Error(`thread ${slug} could not be updated`)
+    }
+    ctx.board.refresh()
   }
 
   // Can this exact sub-agent be steered RIGHT NOW? Returns the session to address, or null. Every
@@ -1692,8 +1742,8 @@ export function createRouter(ctx: AppContext) {
           row.session_id,
           row.runtime_generation ?? 0,
           input.prompt,
-          input.onRest,
-          input.onSchedule,
+          input.stopHook,
+          input.heartbeat,
           recurringIntervalMs(input),
           new Date().toISOString(),
         )) {
@@ -1720,14 +1770,50 @@ export function createRouter(ctx: AppContext) {
         if (!ctx.storage.setRecurringPromptBySlug(
           input.slug,
           input.prompt,
-          input.onRest,
-          input.onSchedule,
+          input.stopHook,
+          input.heartbeat,
           recurringIntervalMs(input),
           new Date().toISOString(),
         )) {
           throw new Error(`thread ${input.slug} could not be updated`)
         }
         ctx.board.refresh()
+      },
+    }),
+
+    // The SUPERSEDED worker procedures, aliased onto the row above — see SetOwnThreadStopHookInput for
+    // why they cannot simply be deleted. A worker's MCP server outlives every server restart, so these
+    // three names are still arriving from sessions dispatched before the merge; without them those
+    // workers get a bare 404 from the one tool that keeps a long effort moving.
+    //
+    // `setOwnThreadStopHook` owned the ON-REST trigger.
+    setOwnThreadStopHook: mutation({
+      input: SetOwnThreadStopHookInput,
+      handler: async ({ input }) => {
+        applyLegacyWorkerTrigger(input.slug, "rest", { prompt: input.prompt, enabled: input.enabled })
+      },
+    }),
+
+    // `setOwnThreadHeartbeat` owned the ON-SCHEDULE trigger, and `setThreadHeartbeat` is the older build's
+    // name for the same call — it omitted `enabled` entirely, so a non-null prompt IS the arming.
+    setOwnThreadHeartbeat: mutation({
+      input: SetOwnThreadHeartbeatInput,
+      handler: async ({ input }) => {
+        applyLegacyWorkerTrigger(input.slug, "schedule", {
+          prompt: input.prompt,
+          enabled: input.enabled ?? input.prompt !== null,
+          intervalSeconds: input.intervalSeconds,
+        })
+      },
+    }),
+    setThreadHeartbeat: mutation({
+      input: SetOwnThreadHeartbeatInput,
+      handler: async ({ input }) => {
+        applyLegacyWorkerTrigger(input.slug, "schedule", {
+          prompt: input.prompt,
+          enabled: input.enabled ?? input.prompt !== null,
+          intervalSeconds: input.intervalSeconds,
+        })
       },
     }),
 

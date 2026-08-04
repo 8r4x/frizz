@@ -1478,3 +1478,124 @@ test("Restart worker is refused on a thread that is not a broker-backed Claude w
   )
   h.storage.close()
 })
+
+// ---- The superseded worker procedures ------------------------------------------------------------
+// A worker's `fray-mcp.mjs` is spawned once from the build its session was dispatched with and outlives
+// every server restart, so `/rpc` is a versioned contract between two independently-updated processes.
+// Merging the old `stop_hook` + `heartbeat` tools into `recurring_prompt` renamed the procedure and gave
+// every in-flight worker a bare 404 from the one tool that keeps a long effort moving. These pin that
+// each superseded name still lands on the merged row.
+
+test("superseded worker procedures still route, and each writes only the trigger it owns", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("legacy-thread"))
+
+    // The old ON-REST feature.
+    await h.router.setOwnThreadStopHook.handler({
+      input: { slug: "legacy-thread", prompt: "keep the migration moving", enabled: true },
+    })
+    let saved = h.storage.getSession("legacy-thread")!
+    assert.equal(saved.recurring_prompt, "keep the migration moving")
+    assert.equal(saved.recurring_on_rest, 1)
+    assert.equal(saved.recurring_on_schedule, 0)
+
+    // The old ON-SCHEDULE feature, arriving second. It must NOT disarm the rest trigger it never
+    // mentions — under the old server those were two independent features, and a worker driving the old
+    // tools cannot see the merged row to know it would be clobbering one with the other.
+    await h.router.setOwnThreadHeartbeat.handler({
+      input: { slug: "legacy-thread", prompt: "check the deploy", intervalSeconds: 600, enabled: true },
+    })
+    saved = h.storage.getSession("legacy-thread")!
+    assert.equal(saved.recurring_on_rest, 1, "arming the heartbeat leaves the stop hook armed")
+    assert.equal(saved.recurring_on_schedule, 1)
+    assert.equal(saved.recurring_interval_ms, 600_000)
+    // The single shared TEXT is the one thing the merge cannot preserve — last words supplied win.
+    assert.equal(saved.recurring_prompt, "check the deploy")
+
+    // Stopping ONE leaves the other running, still carrying the text it needs to fire.
+    await h.router.setOwnThreadHeartbeat.handler({
+      input: { slug: "legacy-thread", prompt: null, enabled: false },
+    })
+    saved = h.storage.getSession("legacy-thread")!
+    assert.equal(saved.recurring_on_schedule, 0)
+    assert.equal(saved.recurring_on_rest, 1, "stopping the heartbeat must not silently stop the stop hook")
+    assert.equal(saved.recurring_prompt, "check the deploy")
+    assert.equal(saved.recurring_interval_ms, 600_000, "the cadence is kept so the panel can switch it back on")
+
+    // Stopping the LAST one clears the row outright, exactly as the current tool's `stop` does.
+    await h.router.setOwnThreadStopHook.handler({
+      input: { slug: "legacy-thread", prompt: null, enabled: false },
+    })
+    saved = h.storage.getSession("legacy-thread")!
+    assert.equal(saved.recurring_prompt, null)
+    assert.equal(saved.recurring_on_rest, 0)
+    assert.equal(saved.recurring_on_schedule, 0)
+  } finally {
+    h.storage.close()
+  }
+})
+
+test("the OLDEST heartbeat shape arms without an `enabled` field — a non-null prompt is the arming", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("oldest-thread"))
+
+    // `setThreadHeartbeat` is the name the pre-merge builds POST, and it carried no `enabled` at all.
+    await h.router.setThreadHeartbeat.handler({
+      input: { slug: "oldest-thread", prompt: "poll the corpus", intervalSeconds: 900 },
+    })
+    let saved = h.storage.getSession("oldest-thread")!
+    assert.equal(saved.recurring_prompt, "poll the corpus")
+    assert.equal(saved.recurring_on_schedule, 1)
+    assert.equal(saved.recurring_interval_ms, 900_000)
+
+    // Its stop signalled with `prompt: null` alone.
+    await h.router.setThreadHeartbeat.handler({ input: { slug: "oldest-thread", prompt: null } })
+    saved = h.storage.getSession("oldest-thread")!
+    assert.equal(saved.recurring_prompt, null)
+    assert.equal(saved.recurring_on_schedule, 0)
+  } finally {
+    h.storage.close()
+  }
+})
+
+test("a superseded worker procedure refuses an unregistered thread rather than writing nothing quietly", async () => {
+  const h = harness()
+  try {
+    await assert.rejects(
+      h.router.setOwnThreadStopHook.handler({ input: { slug: "never-dispatched", prompt: "go", enabled: true } }),
+      /not registered/,
+    )
+  } finally {
+    h.storage.close()
+  }
+})
+
+test("an unknown RPC procedure answers 404 NAMING it, so the next version skew diagnoses itself", async () => {
+  const h = harness()
+  try {
+    const app = new Hono()
+    mountRouter(app, "/rpc", h.router)
+    const res = await app.request("/rpc/setOwnThreadPreviousName", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ slug: "legacy-thread" }),
+    })
+    assert.equal(res.status, 404)
+    const body = await res.json() as { error: string }
+    // A bare `404 Not Found` naming nothing is what cost a live worker three silent retries.
+    assert.match(body.error, /setOwnThreadPreviousName/)
+    assert.match(body.error, /different version of fray/)
+
+    // And the catch-all must not shadow a real procedure registered before it.
+    const real = await app.request("/rpc/setOwnThreadStopHook", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ slug: "never-dispatched", prompt: "go", enabled: true }),
+    })
+    assert.equal(real.status, 500, "a routed procedure reports ITS failure, not a routing miss")
+  } finally {
+    h.storage.close()
+  }
+})

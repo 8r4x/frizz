@@ -396,12 +396,14 @@ export const RecurringIntervalSeconds = z
 
 // What the board renders for a thread carrying one. The two triggers are independent booleans rather
 // than one `enabled` flag, and the text survives both being switched off so re-arming costs no retyping.
-// `intervalSeconds` is present whenever a schedule has ever been set, INCLUDING while `onSchedule` is
-// false — otherwise flipping the schedule back on would lose the cadence the operator chose.
+// `intervalSeconds` is present whenever a schedule has ever been set, INCLUDING while the heartbeat is
+// off — otherwise flipping the schedule back on would lose the cadence the operator chose.
 export const ThreadRecurringPrompt = z.object({
   prompt: z.string(),
-  onRest: z.boolean(),
-  onSchedule: z.boolean(),
+  /** The two mechanisms, named as the panel labels them. `stopHook` fires at every rest; `heartbeat`
+   *  fires on `intervalSeconds` and reaches the agent mid-turn. */
+  stopHook: z.boolean(),
+  heartbeat: z.boolean(),
   intervalSeconds: z.number().int().positive().optional(),
   armedAt: z.string(),
   /** Last delivery of the ON REST trigger; the two are stamped separately so each reads its own clock. */
@@ -1120,14 +1122,14 @@ export type SetThreadSnoozeInput = z.infer<typeof SetThreadSnoozeInput>
 //
 // `prompt: null` clears the row entirely. A prompt with both triggers false keeps the text and the
 // cadence parked and silent — that IS the off state, and it is why there is no `enabled` field.
-// `intervalSeconds` is required when `onSchedule` is true, because a schedule nobody chose is exactly
+// `intervalSeconds` is required when `heartbeat` is true, because a schedule nobody chose is exactly
 // the ambiguity the minutes field exists to remove.
 export const SetThreadRecurringPromptInput = z.object({
   slug: ThreadSlug,
   sessionId: z.string().min(1),
   prompt: RecurringPromptText.nullable(),
-  onRest: z.boolean(),
-  onSchedule: z.boolean(),
+  stopHook: z.boolean(),
+  heartbeat: z.boolean(),
   intervalSeconds: RecurringIntervalSeconds.optional(),
 }).strict()
 export type SetThreadRecurringPromptInput = z.infer<typeof SetThreadRecurringPromptInput>
@@ -1150,11 +1152,45 @@ export type SetThreadRecurringPromptInput = z.infer<typeof SetThreadRecurringPro
 export const SetOwnThreadRecurringPromptInput = z.object({
   slug: ThreadSlug,
   prompt: RecurringPromptText.nullable(),
-  onRest: z.boolean(),
-  onSchedule: z.boolean(),
+  stopHook: z.boolean(),
+  heartbeat: z.boolean(),
   intervalSeconds: RecurringIntervalSeconds.optional(),
 }).strict()
 export type SetOwnThreadRecurringPromptInput = z.infer<typeof SetOwnThreadRecurringPromptInput>
+
+// ---- The SUPERSEDED worker shapes, kept alive for MCP servers already in flight -----------------
+//
+// A worker's `fray-mcp.mjs` is spawned ONCE, out of the promoted build its session was dispatched with,
+// and it lives as long as that session — across every fray server restart. The server meanwhile gets
+// restarted from newer source whenever the operator promotes a build. So `/rpc` is a VERSIONED CONTRACT
+// between two processes that update INDEPENDENTLY, and renaming a procedure a worker's MCP server calls
+// strands every session already running.
+//
+// Not hypothetical: merging the old `stop_hook` and `heartbeat` tools into one `recurring_prompt` renamed
+// this procedure, and every worker holding an older MCP server started getting a bare HTTP 404 for its
+// only means of keeping a long effort moving. The two shapes below are what those builds actually send;
+// the router folds them onto the merged row above. Retire them only once no build that sends them can
+// still be running — the cost of keeping them is two thin aliases, the cost of dropping them early is a
+// live worker silently losing a capability mid-effort.
+//
+// The trigger each one owns is fixed: the stop hook was the ON-REST feature.
+export const SetOwnThreadStopHookInput = z.object({
+  slug: ThreadSlug,
+  prompt: RecurringPromptText.nullable(),
+  enabled: z.boolean(),
+}).strict()
+export type SetOwnThreadStopHookInput = z.infer<typeof SetOwnThreadStopHookInput>
+
+// The heartbeat was the ON-SCHEDULE feature. This covers BOTH of its generations: the older one (posted
+// as `setThreadHeartbeat`) carried no `enabled` field and signalled its stop with `prompt: null` alone,
+// which is why `enabled` is optional here rather than required.
+export const SetOwnThreadHeartbeatInput = z.object({
+  slug: ThreadSlug,
+  prompt: RecurringPromptText.nullable(),
+  intervalSeconds: RecurringIntervalSeconds.optional(),
+  enabled: z.boolean().optional(),
+}).strict()
+export type SetOwnThreadHeartbeatInput = z.infer<typeof SetOwnThreadHeartbeatInput>
 
 // What an in-place plugin reload changed, as the board reports it. Counts answer "did my edit land?";
 // `mcpServers` carries NAMES because a reload that changes MCP tools is the one with a real cost — the

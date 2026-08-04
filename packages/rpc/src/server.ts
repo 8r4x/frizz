@@ -178,4 +178,21 @@ export function mountRouter(app: Hono, prefix: string, router: Router) {
       })
     }
   }
+
+  // Registered LAST so every concrete procedure above wins the match: an unknown name under this prefix
+  // is almost always version SKEW rather than a routing accident, because a fray worker's MCP server is
+  // spawned once from the build its session was dispatched with and outlives every server restart — it
+  // keeps POSTing whatever procedure names THAT build knew. Hono's fall-through answers those with a bare
+  // `404 Not Found` naming nothing, which is exactly how a renamed procedure cost a live worker three
+  // silent retries and a debugging session. Name the procedure and say what a 404 here MEANS, in the
+  // readable-string `error` field both clients surface verbatim.
+  app.all(`${prefix}/:procedure`, (c) =>
+    c.json(
+      {
+        error:
+          `unknown RPC procedure \`${c.req.param("procedure")}\` — this server does not implement it. ` +
+          `A caller built against a different version of fray is the usual cause.`,
+      },
+      404,
+    ))
 }
