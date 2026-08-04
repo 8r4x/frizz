@@ -416,73 +416,53 @@ function labelsLine(labels: string[]): string {
 // envelope (`THREAD`, compact UI lead, presentation boundary) — renderGithubPrompt prepends that so a
 // user's custom template can never omit/mangle the thread binding or flood the first bubble. Edit
 // these to change the shipped defaults; a user override supersedes at dispatch time.
+//
+// SHAPE, and it is the point of the defaults: ONE concise instruction paragraph carrying NO tokens,
+// then a trailing metadata block that carries ALL SIX of them (including {body}, and the exact `gh`
+// commands, which are the only other place a token appears). Someone tuning the prompt in Settings
+// rewrites the paragraph in plain prose and leaves the block alone — they never have to know the
+// token vocabulary to make the edit they came for. Keep that split when editing: a token that creeps
+// back into the paragraph puts the tags right where the user is typing.
+//
+// Inlining {body} means the worker has the report text before its first tool call; truncateBody caps
+// it at 8 KiB with a `gh … view` pointer, so a giant body cannot blow the prompt's arg budget, and the
+// generated UI boundary keeps the visible first bubble compact regardless.
+//
+// The paragraph is ONE unwrapped line on purpose. It is edited in a fixed-width textarea (Settings →
+// Prompts), which soft-wraps: hard newlines at some source column would mix with that wrap and render
+// ragged in the box the user actually types in. The metadata block below it wraps naturally, one field
+// per line, so its newlines are structural.
 
-// The ISSUE default. Branches on report type: the worker first classifies bug-vs-feature, then a
-// BUG gets reproduce → trace → recommend, and a FEATURE gets clarify → impact → plan. Research only.
-// The body is deliberately NOT inlined ({body} is unused here) — the worker fetches it via
-// `gh issue view`, keeping prompt transport small. The UI boundary below independently keeps the first
-// bubble compact, including when a user's custom Settings template chooses to inline {body}.
-export const DEFAULT_ISSUE_PROMPT = `You are triaging a GitHub issue in {repo}. This is a RESEARCH thread: the deliverable is FINDINGS and
-a recommendation — not a landed fix.
+// The ISSUE default: classify bug-vs-feature, then reproduce → trace → recommend for a bug, or
+// clarify → impact → plan for a feature. Research only; the thread is headed for a fix, not a fix.
+export const DEFAULT_ISSUE_PROMPT = `Triage this GitHub issue and recommend what to do about it. This is a RESEARCH thread: the deliverable is FINDINGS and a recommendation, NOT a landed fix. Read the full thread first — body, labels, and the whole discussion — then classify the report as a BUG or a FEATURE request and say which it is and why. If it is a BUG: establish whether the reported behavior actually happens on the current tree (capture the exact steps, command and output if it reproduces; say what you saw instead if it does not), trace the cause to concrete code, and state the smallest correct fix — or the top 2 options with the tradeoff of each — plus the files it touches and the risk. If it is a FEATURE: restate the request precisely (the use-case behind it and any ambiguity a maintainer must resolve), map where it lands in the code and what public API / UX surface it changes, and sketch a concrete plan for the smallest viable version with its risks, open design questions and a rough size estimate. Cite exact file:line for every load-bearing claim — an uncited claim is a LEAD, so flag it. Do NOT implement anything unasked, and post NOTHING to GitHub (no comments, no labels, no close) unless the human explicitly asks — read-only. Put your findings and recommendation in your FINAL MESSAGE: this one is headed for a fix, so it is NOT \`\`\`done\`\`\` — close with a \`\`\`question\`\`\` when there's a fix to choose (recommendation marked, so one reply rolls into implementation), or bare-rest.
+
+---
 
 Issue #{n}: {title}
+Repository: {repo}
 URL: {url}
 Labels: {labels}
+Full thread: \`gh issue view {n} -R {repo} --comments\`
 
-Read the full issue FIRST — \`gh issue view {n} -R {repo} --comments\` (title, body, and the discussion).
-Then classify it as a BUG report or a FEATURE request from the body + labels + thread, state which it is
-and why, then branch:
-
-IF BUG:
-1. REPRODUCE. Establish whether the reported behavior actually happens on the current tree. If it
-   reproduces, capture the exact steps, command, and output. If it does NOT, say so and show what you
-   observed instead.
-2. INVESTIGATE. Trace the cause to concrete code — cite exact file:line for every load-bearing claim
-   (an uncited claim is a LEAD, flag it). Read linked issues/PRs and related history when useful.
-3. RECOMMEND. State the smallest correct fix (or the top 2 options with the tradeoff of each), the
-   files it touches, and the risk. Do NOT implement it unasked — stop at the recommendation and hand
-   off (below).
-
-IF FEATURE:
-1. CLARIFY. Restate the request precisely: what the user wants, the use-case behind it, and any
-   ambiguity a maintainer would have to resolve before building it.
-2. IMPACT. Map where it lands in the code — the files/modules a real implementation would touch, the
-   public API / UX surface it changes, and the migration / back-compat concerns. Cite file:line.
-3. PLAN. Sketch a concrete implementation plan (smallest viable version first), the risks and open
-   design questions, and a rough effort/size estimate. Do NOT implement it unasked — stop at the plan
-   and hand off (below).
-
-Post NOTHING to GitHub (no comments, no labels, no close) unless the human explicitly asks — read-only.
-
-Handback: put your findings + recommendation in your FINAL MESSAGE. This is headed for a fix, so it is
-NOT \`\`\`done\`\`\` — but the other fences are yours: close with a \`\`\`question\`\`\` when there's a fix to
-choose (recommendation marked, so one reply rolls into implementation), or bare-rest.`
+Body:
+{body}`
 
 // The PR default: an adversarial review/audit before recommending merge. Read-only.
-export const DEFAULT_PR_PROMPT = `You are reviewing an open pull request in {repo}. This is an AUDIT thread: adversarially verify the
-change is correct, safe, and complete before recommending merge.
+export const DEFAULT_PR_PROMPT = `Review this open pull request. This is an AUDIT thread: adversarially verify the change is correct, safe and complete before recommending merge. Read the PR description and discussion first, then read the full diff — the changed files in context, not just the hunks (pipe large output through toon). For each substantive change ask: is it correct? does it handle edges? does it break existing behavior or the public API? are there tests, and do they actually cover the change? Check CI too: pending automation is evidence to report, not a reason to park this audit; if later scope explicitly includes shepherding the PR, keep CI/bot/merge progression active with the backend wait primitive from the worker contract. Then recommend approve / request-changes / needs-discussion with a concise findings list — each concern citing exact file:line in the diff, blocking issues distinguished from nits. Post NOTHING to GitHub (no review, no comment, no approve/merge) unless the human explicitly asks — read-only. Put your review in your FINAL MESSAGE and close with a \`\`\`done\`\`\` fence listing the completed audit/evidence, or a two-option \`\`\`question\`\`\` if you want a go/no-go on posting the review to GitHub.
+
+---
 
 PR #{n}: {title}
+Repository: {repo}
 URL: {url}
 Labels: {labels}
+Description + discussion: \`gh pr view {n} -R {repo} --comments\`
+Diff: \`gh pr diff {n} -R {repo}\`
+CI: \`gh pr checks {n} -R {repo}\`
 
-Read the PR FIRST — \`gh pr view {n} -R {repo} --comments\` (description + discussion), then:
-1. READ THE DIFF. \`gh pr diff {n} -R {repo}\` (pipe large output through toon). Read the changed files
-   in context, not just the hunks.
-2. VERIFY. For each substantive change, ask: is it correct? does it handle edges? does it break
-   existing behavior or the public API? are there tests, and do they actually cover the change?
-   Check CI: \`gh pr checks {n} -R {repo}\`. Pending automation is evidence to report, not a reason
-   to park this audit; if later scope explicitly includes shepherding the PR, keep CI/bot/merge
-   progression active with the backend wait primitive from the worker contract.
-3. RECOMMEND. Approve / request-changes / needs-discussion, with a concise findings list — each
-   concern citing exact file:line in the diff. Distinguish blocking issues from nits.
-
-Post NOTHING to GitHub (no review, no comment, no approve/merge) unless the human explicitly asks —
-read-only; produce the review as your final message.
-
-Handback: put your review in your FINAL MESSAGE and close with a \`\`\`done\`\`\` fence listing the
-completed audit/evidence, or use a two-option \`\`\`question\`\`\` if you want a go/no-go on posting the
-review to GitHub.`
+Description:
+{body}`
 
 // --- Pure templater (unit-tested seam) ---
 
