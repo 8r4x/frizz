@@ -370,13 +370,36 @@ So the rule this document should hold any identity work to:
 > and a migration hook that walks that list.** Not a comment — a value in code the migration reads,
 > so that adding a storage location without adding it to the list is the thing that breaks a test.
 
-This raises the value of the §7 provider interface considerably, and for a reason independent of
-gitless: it is the only way the list has one owner. It also argues for keeping §9's two
-implementations rather than unifying on the file — a migration that can miss a site is a poor reason
-to hand the largest population a *new* storage location with a *new* hazard class.
+The first version of this section drew the wrong conclusion from that — it argued the lesson raises
+the value of a provider interface, and justifies keeping §9's two implementations. Backwards. **The
+strongest form of "the list has one owner" is a list with one entry.** Every abstraction that lets
+identity live in two stores is another pair of sites to keep in step, forever, for the benefit of a
+hazard §3 can eliminate outright (see below). One store needs no interface, no `detect`, and no
+migration hook — because there is nothing to enumerate.
 
 And keep the retired key. `fray.id` was left in place deliberately; it is the only reason four boards
-were recoverable at all. A migration that deletes its own source has no undo.
+were recoverable at all. A migration that deletes its own source has no undo — which is also the rule
+for a `git config frizz.id` → `.frizz/frizz.id` move: keep reading the config key as a fallback
+forever, and the one-store end state costs one careful migration rather than a permanent split.
+
+### The rejection in §3 does not survive contact with precedent
+
+§3 rejects a `.frizz/.gitignore` containing `*` — which it concedes is "strictly more reliable" and
+"needs no existing `.gitignore`" — on the principle that it is "Frizz deciding unilaterally what
+belongs in someone's repository." That principle is misapplied. Declaring that *your own scratch
+directory is not source* is not an opinion about the user's version control, and it is the ordinary
+convention: on this machine `.venv/.gitignore` (Python venv) and `.swc/.gitignore` (SWC) are both
+exactly `*`, written by the tool, unremarked.
+
+This matters far beyond tidiness, because the committed-id hazard is the *root* of the plan's
+complexity. Remove it and the tree collapses: no two implementations (§9), no `identity.json`
+cross-check as a mitigation, no `(dev, ino)` duplicate-vs-moved heuristic, no provider interface
+(§7). jj, hg, svn and no-VCS-at-all then need no per-VCS work at all — they are the same path.
+
+What remains is genuinely small: walk up for a root (§4, needed regardless for sub-directory
+equivalence), read/write `.frizz/frizz.id` atomically under the existing named lock, and one
+migration off `git config`. `identity.json` may still earn its place as the recovery path for a
+deleted `.frizz/` (§3) — but that is a separate, smaller job, and no longer load-bearing.
 
 ## Open questions for the human
 
