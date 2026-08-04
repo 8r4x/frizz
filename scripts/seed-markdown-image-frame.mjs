@@ -23,14 +23,14 @@ import { join } from "node:path"
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, shot, cwd = "/Users/colinmcd94/Documents/projects/fray" } = flags
+const { home, shot, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
 if (!home || !shot) {
   console.error("usage: nub scripts/seed-markdown-image-frame.mjs --home=/abs/temp-home --shot=/abs/real.png")
   process.exit(1)
 }
 
-const db = globSync(join(home, ".fray/projects/*/ui.db"))[0]
-if (!db) throw new Error(`no ui.db under ${home}/.fray/projects`)
+const db = globSync(join(home, ".frizz/projects/*/ui.db"))[0]
+if (!db) throw new Error(`no ui.db under ${home}/.frizz/projects`)
 const cwdSlug = cwd.replace(/[/.]/g, "-")
 const jsonlDir = join(home, ".claude", "projects", cwdSlug)
 mkdirSync(jsonlDir, { recursive: true })
@@ -43,7 +43,7 @@ const uuid = () => `0000000${(++uuidN).toString().padStart(4, "0")}-0000-4000-80
 // already-tailed JSONL in place leaves the projection stuck on the old content.
 const slug = flags.slug ?? "markdown-image-frame"
 const sessionId = `${slug}-0000-4000-8000-000000000000`.slice(0, 36)
-const MISSING = "/tmp/fray-frame-this-file-does-not-exist.png"
+const MISSING = "/tmp/frizz-frame-this-file-does-not-exist.png"
 
 const user = (text) => ({
   parentUuid: null, isSidechain: false, type: "user", uuid: uuid(), timestamp: now(), session_id: sessionId, cwd,
@@ -89,6 +89,6 @@ writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), records.map((r) => JSON.stri
 execFileSync("sqlite3", [
   db,
   `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, title_auto, backend, model, effort, permission_mode, state, unread, exited, archived, rested_at)
-   VALUES ('${slug}', '${sessionId}', 'fray-${slug}', '${now()}', 'Markdown image frames', 0, 'claude', 'opus', 'high', 'default', 'open', 1, 0, 0, '${now()}')`,
+   VALUES ('${slug}', '${sessionId}', 'frizz-${slug}', '${now()}', 'Markdown image frames', 0, 'claude', 'opus', 'high', 'default', 'open', 1, 0, 0, '${now()}')`,
 ])
 console.log(`seeded ${slug} → ${sessionId} (markdown + bare-path + inline + missing, shot=${shot})`)

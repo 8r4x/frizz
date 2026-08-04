@@ -11,12 +11,12 @@
 // runtime produces when it discards a report (measured 242 times on one production thread, and
 // raw-line audited — see report-delivery.ts), and appending to the JSONL is precisely how the runtime
 // itself publishes these records. It is simulated because the CAUSE lives upstream in Claude Code's
-// own queue, which fray neither owns nor can trigger on demand: three attempts to make a real fleet
+// own queue, which frizz neither owns nor can trigger on demand: three attempts to make a real fleet
 // drop on command failed for harness reasons (see _live_notify_delivery.mts). What is under test here
-// is everything fray owns — detect, enqueue, deliver, and whether the agent actually reads the file —
+// is everything frizz owns — detect, enqueue, deliver, and whether the agent actually reads the file —
 // and every one of those runs for real.
 //
-// The assertion that matters is the LAST one: not "fray sent a message" but "the agent went and read
+// The assertion that matters is the LAST one: not "frizz sent a message" but "the agent went and read
 // the report". A repair the agent ignores is not a fix.
 import { execFileSync } from "node:child_process"
 import { appendFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
@@ -128,7 +128,7 @@ try {
     prompt: "Reply with exactly READY and nothing else. Do not use any tools.",
   })
   storage.upsertSession({
-    slug, session_id: sessionId, tmux_name: `fray-${slug}`, spawned_at: new Date().toISOString(),
+    slug, session_id: sessionId, tmux_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   })

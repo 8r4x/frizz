@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-const baseUrl = process.env.FRAY_SUBAGENT_COMPLETION_E2E_URL
+const baseUrl = process.env.FRIZZ_SUBAGENT_COMPLETION_E2E_URL
 
 // Both of the maintainer's 2026-07-27 asks are RENDERING facts, so they are pinned in a real browser
 // against the real components (subagent-completion-fixture.html), not in string assertions:
@@ -15,7 +15,7 @@ const baseUrl = process.env.FRAY_SUBAGENT_COMPLETION_E2E_URL
 //
 // Run it against a plain vite over packages/web:
 //   npx vite --port 5211 --strictPort --host 127.0.0.1
-//   FRAY_SUBAGENT_COMPLETION_E2E_URL=http://127.0.0.1:5211 nub --test …
+//   FRIZZ_SUBAGENT_COMPLETION_E2E_URL=http://127.0.0.1:5211 nub --test …
 test("a finished sub-agent draws the shell's wake divider, and every sub-agent title opens the drawer", {
   skip: !baseUrl,
   timeout: 120_000,
@@ -78,13 +78,13 @@ test("a finished sub-agent draws the shell's wake divider, and every sub-agent t
     assert.deepEqual(followupLinks, [0], "an unresolvable codex target must not render a button")
 
     // The steer point must no longer draw a bordered tool card anywhere in the thread's chat.
-    const sendHeaders = await page.$$eval("[data-after] .fray-bash-label", (n) => n.map((e) => e.textContent))
+    const sendHeaders = await page.$$eval("[data-after] .frizz-bash-label", (n) => n.map((e) => e.textContent))
     assert.ok(!sendHeaders.includes("Steered"), "the thread chat draws no Steered card")
 
     // The completion point must no longer draw a bordered tool card. The after panel's ONLY Agent card
     // is the launch one; the before panel (the old rendering) keeps two, which is what made them
     // indistinguishable.
-    const agentCards = (label: string) => page.$$eval(`${label} .fray-bash-header`, (h) => h.filter((n) => n.textContent?.startsWith("Agent")).length)
+    const agentCards = (label: string) => page.$$eval(`${label} .frizz-bash-header`, (h) => h.filter((n) => n.textContent?.startsWith("Agent")).length)
     assert.equal(await agentCards("[data-after]"), 1, "after: the dispatch card only")
     assert.equal(await agentCards("[data-before]"), 2, "before: the duplicate card this change removed")
 
@@ -139,7 +139,7 @@ test("a finished sub-agent draws the shell's wake divider, and every sub-agent t
       "the drawer draws no steer divider — only the two in the thread panel",
     )
     const reported = await page.evaluate(() => {
-      const h = [...document.querySelectorAll<HTMLElement>(".fray-bash-header")].find((n) => n.textContent?.startsWith("Reported"))
+      const h = [...document.querySelectorAll<HTMLElement>(".frizz-bash-header")].find((n) => n.textContent?.startsWith("Reported"))
       if (!h) return null
       h.click()
       return h.parentElement!.innerText.replace(/\s+/g, " ").trim()
@@ -147,7 +147,7 @@ test("a finished sub-agent draws the shell's wake divider, and every sub-agent t
     await new Promise((r) => setTimeout(r, 400))
     assert.ok(reported, "the child's own upward SendMessage keeps its bordered card in the drawer")
     const openedBody = await page.evaluate(() => {
-      const h = [...document.querySelectorAll<HTMLElement>(".fray-bash-header")].find((n) => n.textContent?.startsWith("Reported"))
+      const h = [...document.querySelectorAll<HTMLElement>(".frizz-bash-header")].find((n) => n.textContent?.startsWith("Reported"))
       return h!.parentElement!.innerText.replace(/\s+/g, " ").trim()
     })
     assert.match(openedBody, /rounds half-away-from-zero, not half-even/, "…and its body is still readable there")

@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
-import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@fray-ui/shared"
+import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@frizz/shared"
 import { ThreadView } from "./components/ChatView.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { mergeOptimistic, preserveMessageIdentity } from "./lib/transcript-sync.ts"
@@ -87,7 +87,7 @@ const thread = {
   lastActivityAt: at(20),
 } as unknown as ThreadViewModel
 
-store.board = { projectDir: "/fixture/fray", threads: [thread] } as BoardSnapshot
+store.board = { projectDir: "/fixture/frizz", threads: [thread] } as BoardSnapshot
 // Socket mode: no 1.5s interval refetch racing the scripted pushes below.
 store.socketTranscripts = true
 
@@ -103,7 +103,7 @@ function push(messages: TranscriptMessage[]) {
 
 function setRunning(running: boolean) {
   store.board = {
-    projectDir: "/fixture/fray",
+    projectDir: "/fixture/frizz",
     threads: [{ ...thread, runtime: running ? "running" : "idle" } as ThreadViewModel],
   } as BoardSnapshot
 }

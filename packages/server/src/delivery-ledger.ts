@@ -1,9 +1,9 @@
-import type { TranscriptMessage } from "@fray-ui/shared"
+import type { TranscriptMessage } from "@frizz/shared"
 import type { Storage } from "./storage.ts"
 import { decodeDeliveryMarkers, deliveryTag, stripDeliveryMarkers } from "./delivery-marker.ts"
 
 // ── The Claude follow-up delivery ledger ───────────────────────────────────────────────────────────────
-// Fray's Claude steer path used to be fire-and-forget: tmux keys went into the pane and the ONLY record
+// Frizz's Claude steer path used to be fire-and-forget: tmux keys went into the pane and the ONLY record
 // that a follow-up existed was the CLIENT's optimistic gray bubble, reconciled by exact text match
 // against whatever later appeared in the JSONL. That made the queued/delivered rendering an inference —
 // a mangled injection (the multiline split), a slash command, or a plain reload made the message ghost
@@ -43,7 +43,7 @@ export const MAX_CANCELLED_ITEMS = 12
 // record the moment it accepts a follow-up, and transcript.ts renders that record as the gray queued
 // bubble. Cancelling removes the message from the CLI's queue but cannot unwrite that record.
 //
-// Nor does the CLI leave anything fray could attribute the cancellation TO. Measured live
+// Nor does the CLI leave anything frizz could attribute the cancellation TO. Measured live
 // (_live_sdk_cancel_queued.mts): the cancelled send got its `enqueue` and then nothing that names it —
 // no content-bearing `remove`, no `queued_command` attachment, no user record. (A contentless
 // `dequeue` was written around the same instant; contentless ops carry no send identity and both the
@@ -51,14 +51,14 @@ export const MAX_CANCELLED_ITEMS = 12
 //
 // Left alone the enqueue bubble therefore outlives the cancellation, and the FIFO backstop in transcript.ts eventually
 // UN-GRAYS it when a later message delivers — rendering a message the agent provably never read as a
-// message the human sent it. So fray has to remember the cancellation itself.
+// message the human sent it. So frizz has to remember the cancellation itself.
 export type DeliveryState = "pending" | "enqueued" | "unconfirmed" | "cancelled"
 
 export interface DeliveryLedgerItem {
   id: string
   text: string
   state: DeliveryState
-  at: string // ISO8601 — when fray accepted/injected the follow-up
+  at: string // ISO8601 — when frizz accepted/injected the follow-up
   updatedAt: string
   // How many times the submit-confirmer (delivery-confirm.ts) has re-sent a BARE Enter because this
   // item was still provably sitting in the pane's composer. Absent on every pre-existing row; capped by
@@ -68,11 +68,11 @@ export interface DeliveryLedgerItem {
 
 // The form every text comparison in this module runs in.
 //
-// The steer channel REWRITES fray's bytes before they reach the JSONL, so the text fray sent and the
+// The steer channel REWRITES frizz's bytes before they reach the JSONL, so the text frizz sent and the
 // text the transcript records are not equal and an exact compare strands the send as `unconfirmed`
-// forever. The channel is a COMPOSITION of two rewriters fray does not own — tmux `paste-buffer`
+// forever. The channel is a COMPOSITION of two rewriters frizz does not own — tmux `paste-buffer`
 // (LF→CR) and Claude Code's TUI paste handler (`/\r\n|\r/`→`\n`, `\t`→four spaces) — and measuring it
-// against a live claude 2.1.219 TUI, driven through fray's own paste sequence, showed:
+// against a live claude 2.1.219 TUI, driven through frizz's own paste sequence, showed:
 //
 //     sent          recorded          note
 //     \t            "    "            four spaces, not a tab stop
@@ -193,7 +193,7 @@ export function cancelDelivery(storage: Storage, slug: string, id: string, now?:
  * Retire every still-outstanding send on a session whose worker process has just been REPLACED, and
  * report how many went. Returns 0 when there was nothing to retire.
  *
- * A restart is positive evidence about exactly these items. `pending`/`enqueued` mean "fray handed
+ * A restart is positive evidence about exactly these items. `pending`/`enqueued` mean "frizz handed
  * this to a process and is still waiting for the transcript to show it"; `killBroker` then SIGTERMs
  * that process. Anything the agent actually read is already in the JSONL, where the tailer correlates
  * it and drops the row on its own — so what is left at this moment is provably unread, and its queued
@@ -204,7 +204,7 @@ export function cancelDelivery(storage: Storage, slug: string, id: string, now?:
  *
  * DROPPED, not tombstoned. A `cancelled` tombstone suppresses a matching JSONL enqueue bubble, so
  * using one here would hide a message that DID land in the sliver before the kill but that the tailer
- * had not yet correlated. Dropping only stops fray projecting its own synthetic bubble; if a real
+ * had not yet correlated. Dropping only stops frizz projecting its own synthetic bubble; if a real
  * record exists it renders on its own. Same reasoning, and the same words, as the age-out in
  * `ageDeliveries`: this only stops PROJECTING it; nothing about the real message is touched.
  */
@@ -288,7 +288,7 @@ function codexUserMessageText(r: Record<string, unknown>): string {
     .join("\n")
 }
 
-// The id fray itself supplied for this input, if the record is one the SDK minted FROM a fray input.
+// The id frizz itself supplied for this input, if the record is one the SDK minted FROM a frizz input.
 // Deliberately narrow — only the two record shapes measured to echo it — so nothing else in a
 // transcript can be mistaken for a delivery receipt. Returns null for every tmux record.
 export function echoedInputId(rec: Record<string, unknown>): string | null {
@@ -338,9 +338,9 @@ export function correlateDeliveryRecord(
 
   // DEQUEUE — Claude Code taking the message back OUT of its own queue and into the turn.
   //
-  // fray used to learn this only from the `queued_command` attachment that follows, and the gap is real:
+  // frizz used to learn this only from the `queued_command` attachment that follows, and the gap is real:
   // across 263 dequeues in this machine's transcripts the attachment lands 1 to 19 records later (p50 2,
-  // p95 6). For that whole window the send is already being worked on while fray still renders it as a
+  // p95 6). For that whole window the send is already being worked on while frizz still renders it as a
   // gray queued bubble — which the chat pins BELOW the working indicator, so the spinner appears above
   // the very message it is answering. Resolving on the dequeue closes the window.
   //
@@ -350,7 +350,7 @@ export function correlateDeliveryRecord(
   //
   // A content-bearing `remove` is also what a CANCELLATION looks like (the human ESC-ing a queued
   // message in the terminal). Dropping the item is right either way: the message is provably no longer
-  // queued, so continuing to render fray's own synthetic bubble for it would be a lie in both readings,
+  // queued, so continuing to render frizz's own synthetic bubble for it would be a lie in both readings,
   // and the transcript's own records go on telling the true story.
   if (r.type === "queue-operation" && r.operation === "remove" && typeof r.content === "string" && r.content.trim()) {
     const dequeued = accountFor(items, r.content, contemporaneous)
@@ -359,7 +359,7 @@ export function correlateDeliveryRecord(
   }
 
   // ── IDENTITY, the exact path (broker/SDK rows) ──────────────────────────────────────────────────
-  // fray hands the SDK a `uuid` with every input (claude-agent-broker-bridge → sendInput), and the SDK
+  // frizz hands the SDK a `uuid` with every input (claude-agent-broker-bridge → sendInput), and the SDK
   // ECHOES IT BACK on the record that materializes that input:
   //   • delivered straight away → the `user` record's own `uuid`
   //   • delivered out of the queue → the `queued_command` attachment's `source_uuid`
@@ -406,7 +406,7 @@ export function correlateDeliveryRecord(
 
 // Which ledger items one evidence record accounts for — BY IDENTITY first, by text only as the fallback.
 //
-// fray stamps every follow-up it pastes with an invisible marker carrying that send's deliveryId
+// frizz stamps every follow-up it pastes with an invisible marker carrying that send's deliveryId
 // (delivery-marker.ts), so the normal path is an exact lookup: no prose is compared at all and no
 // rewrite of the surrounding text — tab expansion, CRLF doubling, a re-wrap, a future mangling nobody
 // has met yet — can break it. A record that glues several sends together carries every constituent's
@@ -458,7 +458,7 @@ const COMPOSED_ANCHOR_MIN = 24
 // Which ledger items a single JSONL evidence record accounts for.
 //
 // The naive rule — whole-string equality — is what shipped, and it is wrong for the case the operator
-// actually hit. fray injects a follow-up by pasting into Claude Code's composer and sending Enter, and
+// actually hit. frizz injects a follow-up by pasting into Claude Code's composer and sending Enter, and
 // the TUI can SWALLOW that Enter while it is mid-render: the text stays in the composer, and the NEXT
 // follow-up's paste lands after it, so its Enter submits the ACCUMULATION as one message. Claude Code
 // then writes exactly one `queue-operation enqueue` and one `queued_command` attachment whose text is
@@ -549,7 +549,7 @@ export function ageDeliveries(items: DeliveryLedgerItem[], nowMs: number): Deliv
     // row — the "it still says queued long after the agent answered it" report. The reasoning for never
     // timing it out was sound (a mid-turn queue legitimately lasts as long as the turn) but it left no
     // escape hatch at all. Give it the same hour the unconfirmed items get: past that, a queue entry is
-    // not a live queue entry, and the transcript's own records are a better witness than fray's
+    // not a live queue entry, and the transcript's own records are a better witness than frizz's
     // synthetic bubble. This only stops PROJECTING it; nothing about the real message is touched.
     if (item.state === "enqueued" && Number.isFinite(born) && nowMs - born > UNCONFIRMED_DROP_MS) {
       changed = true // dropped
@@ -561,7 +561,7 @@ export function ageDeliveries(items: DeliveryLedgerItem[], nowMs: number): Deliv
 }
 
 // How far past the cancellation instant a rendered bubble may still be the cancelled send. Covers the
-// clock skew between fray's own timestamp and the CLI's record, and nothing more: the bound is what
+// clock skew between frizz's own timestamp and the CLI's record, and nothing more: the bound is what
 // keeps a LATER re-send of the same words — the likely next thing the operator does, since unqueueing
 // hands them the text back in the prompt box — from being eaten by its own tombstone.
 const CANCEL_MATCH_SLACK_MS = 5_000

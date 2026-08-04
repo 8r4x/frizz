@@ -85,7 +85,7 @@ try {
   // the one being driven. After a send the queue card dissolves (the optimistic dismissal), so fall
   // back to the viewport rather than crashing on the element that is correctly no longer there.
   const shootCard = async (name) => {
-    const path = `${shots}/fray-question-${slug}-${surface}-${name}.png`
+    const path = `${shots}/frizz-question-${slug}-${surface}-${name}.png`
     const el = await page.$(SEL)
     if (el) await el.screenshot({ path })
     else await page.screenshot({ path })

@@ -20,9 +20,9 @@ import { StatusListView } from "./components/StatusListView.tsx"
 import { ErrorBoundary } from "./components/ErrorBoundary.tsx"
 import { RestartOverlay } from "./components/RestartOverlay.tsx"
 import { Toaster } from "./components/Toaster.tsx"
-import { FRAY_SUPERVISOR_STATUS_WAKE_EVENT, getFraySupervisorStatus } from "./api/restart.ts"
+import { FRIZZ_SUPERVISOR_STATUS_WAKE_EVENT, getFrizzSupervisorStatus } from "./api/restart.ts"
 
-const RELOAD_AFTER_UPDATE_RESTART = "fray:reload-after-update-restart"
+const RELOAD_AFTER_UPDATE_RESTART = "frizz:reload-after-update-restart"
 
 // The not-signed-in hint fires at most once per page load. A module-scoped flag (not React state)
 // keeps it from re-firing across re-renders, effect re-runs, or a StrictMode double-invoke.
@@ -59,7 +59,7 @@ export function App() {
     const poll = async () => {
       if (polling) return
       polling = true
-      const status = await getFraySupervisorStatus()
+      const status = await getFrizzSupervisorStatus()
       if (!active) { polling = false; return }
       if (status) {
         // An optimistic, user-initiated restart raised the overlay before the supervisor confirmed the
@@ -93,7 +93,7 @@ export function App() {
             // viewport, four lines deep, saying the same thing the failure panel beside the reload
             // button was already showing properly. The panel owns the detail; this owns the attention.
             announcedFailure = status.message ?? "Update & Restart failed"
-            showToast("Update & Restart failed — Fray kept running the previous version", { duration: 7000 })
+            showToast("Update & Restart failed — Frizz kept running the previous version", { duration: 7000 })
           }
         }
       }
@@ -104,11 +104,11 @@ export function App() {
       if (timer) clearTimeout(timer)
       void poll()
     }
-    window.addEventListener(FRAY_SUPERVISOR_STATUS_WAKE_EVENT, wake)
+    window.addEventListener(FRIZZ_SUPERVISOR_STATUS_WAKE_EVENT, wake)
     void poll()
     return () => {
       active = false
-      window.removeEventListener(FRAY_SUPERVISOR_STATUS_WAKE_EVENT, wake)
+      window.removeEventListener(FRIZZ_SUPERVISOR_STATUS_WAKE_EVENT, wake)
       if (timer) clearTimeout(timer)
     }
   }, [])
@@ -158,7 +158,7 @@ export function App() {
 
   // THE KEYBOARD MODEL (post-machine): the sidebar is mouse-driven and text surfaces own their own
   // keys, so the app-level keyboard reduces to global chords + Esc unwinding:
-  //   ⌘K palette (its "New thread" item opens the modal) · ⌘I fray-doc drawer for the topmost thread
+  //   ⌘K palette (its "New thread" item opens the modal) · ⌘I frizz-doc drawer for the topmost thread
   //   NOTE: no ⌘N binding. ⌘N is the BROWSER's new-window shortcut — reserved, and ours to leave
   //   alone. Hijacking it either loses to the browser outright (a plain tab never delivers the event)
   //   or, in a standalone/PWA window, steals a system shortcut the user expects. New-thread keeps
@@ -173,7 +173,7 @@ export function App() {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       // The terminal is a native TUI surface. Its Escape/arrows/control keys and slash-menu input
-      // belong to xterm, never to Fray's drawer/global shortcut layer.
+      // belong to xterm, never to Frizz's drawer/global shortcut layer.
       if (e.target instanceof Element && e.target.closest(".xterm")) return
       if (!(e.metaKey || e.ctrlKey)) return
       const key = e.key.toLowerCase()
@@ -181,7 +181,7 @@ export function App() {
         e.preventDefault()
         store.showPalette = !store.showPalette
       } else if (key === "i") {
-        // ⌘I: fray document for the topmost open thread (stacks another layer / pops its own).
+        // ⌘I: frizz document for the topmost open thread (stacks another layer / pops its own).
         const top = topDrawer()
         const target = topThreadSlug()
         if (top?.kind === "doc") {
@@ -209,26 +209,26 @@ export function App() {
 
   sidebarPresence.current = nextSidebarPresence(sidebarPresence.current, board)
   const showSidebar = board !== null && sidebarPresence.current.hasBeenVisible
-  // A missing board is not evidence that this project is named "fray". Keep the header neutral until
+  // A missing board is not evidence that this project is named "frizz". Keep the header neutral until
   // a board keyframe supplies an actual owner/repo identity; reconnects retain their adopted board.
   const identity = projectIdentity(board)
 
   // Window title carries the project identity. In the INSTALLED APP window (display-mode:
-  // standalone) Chrome prefixes the title bar with the app name itself ("Fray - <title>"), so the
-  // page title must NOT repeat the wordmark — just the repo label ("Fray - nubjs/nub"). In an
-  // ordinary browser tab there's no prefix, so the title carries the wordmark ("fray · nubjs/nub").
+  // standalone) Chrome prefixes the title bar with the app name itself ("Frizz - <title>"), so the
+  // page title must NOT repeat the wordmark — just the repo label ("Frizz - nubjs/nub"). In an
+  // ordinary browser tab there's no prefix, so the title carries the wordmark ("frizz · nubjs/nub").
   const projectLabel = board?.projectLabel ?? board?.projectName
   useEffect(() => {
     const standalone = window.matchMedia?.("(display-mode: standalone)").matches
-    document.title = standalone ? (projectLabel ?? "fray") : projectLabel ? `fray · ${projectLabel}` : "fray"
+    document.title = standalone ? (projectLabel ?? "frizz") : projectLabel ? `frizz · ${projectLabel}` : "frizz"
   }, [projectLabel])
 
-  // NOTE: there is deliberately NO "this repo has no .fray/" branch here. Threads are session-first
-  // (the registry in ui.db IS the board); `.fray/` only holds scratchpads and plans, and dispatch
+  // NOTE: there is deliberately NO "this repo has no .frizz/" branch here. Threads are session-first
+  // (the registry in ui.db IS the board); `.frizz/` only holds scratchpads and plans, and dispatch
   // creates it on the way (writeScratchpad → ensureSafeDirectDirectory). Gating the shell on it
-  // inverted the fresh-repo experience: a repo with an EMPTY `.fray/` got the real first-run view,
+  // inverted the fresh-repo experience: a repo with an EMPTY `.frizz/` got the real first-run view,
   // while a repo without one got a dead end that said "dispatch a first thread" with no composer to
-  // do it in. A `.fray`-less repo is simply a board with zero threads — TodosView's `nothingAtAll`
+  // do it in. A `.frizz`-less repo is simply a board with zero threads — TodosView's `nothingAtAll`
   // branch already renders exactly the right thing for it (centered prompt box, sidebar hidden).
   return (
     <TooltipProvider>
@@ -264,7 +264,7 @@ export function App() {
               tuned 52px by ~1530px, where the pair has margins to spare. Wide layouts are unchanged. */}
       <div className="flex min-h-screen justify-center gap-[clamp(28px,3.4vw,52px)] px-5 max-[800px]:flex-col max-[800px]:justify-start max-[800px]:gap-0 max-[800px]:px-3">
         {/* A genuinely fresh project keeps its centered first-task view. Once this project has had a
-            Fray-owned thread or plan, the sidebar remains mounted through transient empty keyframes;
+            Frizz-owned thread or plan, the sidebar remains mounted through transient empty keyframes;
             navigation must not vanish while the live board stream reconnects or catches up. */}
         {/* Each of the three standing surfaces catches its OWN render errors (see ErrorBoundary.tsx):
             a bad row in the sidebar must not take the workpane with it, and vice versa. */}

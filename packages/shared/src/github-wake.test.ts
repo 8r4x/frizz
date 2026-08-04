@@ -51,7 +51,7 @@ test("github wake steer round-trips through its own parser", () => {
 //
 // The token used to make the parse FAIL, and that was asserted as the contract. It is not one worth
 // keeping: the only thing a refusal buys is that a missed strip degrades to the raw-text card WITH
-// `<!-- fray-wake:… -->` showing, which is the very bug the strip exists to prevent. A parser that
+// `<!-- frizz-wake:… -->` showing, which is the very bug the strip exists to prevent. A parser that
 // reads the steer either way is strictly better, and it falls out of dropping unrecognized lines.
 test("a delivered wake parses with or without its delivery token", () => {
   const delivered = `${formatGithubWakeSteer(burst)}\n\n${wakeDeliveryToken("a".repeat(64))}`

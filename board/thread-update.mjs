@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // @ts-check
-// Structured fray-thread updater. A superset of the single-op Edit tool: structured
+// Structured frizz-thread updater. A superset of the single-op Edit tool: structured
 // frontmatter inputs (--status/--status-text/--set) + a multi-patch body editor
-// (--patch, repeatable) + --append. Writes the project's .fray/<slug>.md atomically,
+// (--patch, repeatable) + --append. Writes the project's .frizz/<slug>.md atomically,
 // preserving every byte outside the keys/regions it touches.
 //
-// Exposed as the `fray-update` command (bin/fray-update is on the Bash PATH while the
+// Exposed as the `frizz-update` command (bin/frizz-update is on the Bash PATH while the
 // plugin is enabled). The project root is resolved from CLAUDE_PROJECT_DIR (exported to
-// bin/hook processes), matching how bin/fray + index.mjs find the project's .fray/.
+// bin/hook processes), matching how bin/frizz + index.mjs find the project's .frizz/.
 //
 // Enforced invariant: setting `status: blocked` on a HUMAN-blocked thread (no `blocking_threads`/
 // `depends_on` and no `revalidate_at`) REQUIRES a non-empty status_text (the decision write-up).
@@ -32,7 +32,7 @@ const PATCH_SEP = '===>>';
 const STATUS_TEXT_KEY = 'status_text';
 
 // The project root comes from the environment, NOT this script's own path: the tool
-// ships inside the fray PLUGIN, so a script-relative root would point at the PLUGIN,
+// ships inside the frizz PLUGIN, so a script-relative root would point at the PLUGIN,
 // never the project. CLAUDE_PROJECT_DIR is exported to bin/hook processes; when run by
 // hand from the repo root, process.cwd() is correct.
 const root = process.env.CLAUDE_PROJECT_DIR || process.cwd();
@@ -42,7 +42,7 @@ function die(msg) {
   process.exit(1);
 }
 
-const usage = `usage: fray-update <slug> [options]
+const usage = `usage: frizz-update <slug> [options]
   --status <s>              set status; one of: ${STATUSES.join(' · ')}
                             (legacy todo/plan/enqueued/needs-decision accepted → normalized to canonical)
                             (human-blocked — blocked with no blocking_threads/revalidate_at — REQUIRES a status_text)
@@ -149,7 +149,7 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.slug) { console.log(usage); process.exit(args.slug === undefined && process.argv.length <= 2 ? 0 : 1); }
 
-  const path = join(root, '.fray', `${args.slug}.md`);
+  const path = join(root, '.frizz', `${args.slug}.md`);
   if (!existsSync(path)) die(`no thread at ${path}`);
 
   const original = readFileSync(path, 'utf8');
@@ -256,7 +256,7 @@ function main() {
   // --- Report ---
   const finalStatus = fmGet(fm, 'status') ?? '(unset)';
   const finalStatusText = getStatusText(fm);
-  console.log(`updated .fray/${args.slug}.md`);
+  console.log(`updated .frizz/${args.slug}.md`);
   console.log(`  status: ${finalStatus}`);
   if (finalStatusText !== undefined) {
     const display = finalStatusText.replace(/^"(.*)"$/, '$1');
@@ -265,7 +265,7 @@ function main() {
   if (patchOps.length) console.log(`  patches applied: ${patchOps.length}`);
   if (args.appends.length) console.log(`  appended: ${args.appends.length} block(s)`);
 
-  // Always surface the FULL decisions queue after ANY thread edit — so every fray
+  // Always surface the FULL decisions queue after ANY thread edit — so every frizz
   // edit-tool call prints the current decision write-ups straight to the terminal,
   // not just a one-line summary of the thread that changed.
   const decisions = collectDecisions();

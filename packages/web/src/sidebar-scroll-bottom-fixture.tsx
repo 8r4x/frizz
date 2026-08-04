@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import { createRoot } from "react-dom/client"
-import type { ThreadView } from "@fray-ui/shared"
+import type { ThreadView } from "@frizz/shared"
 import { ThreadRow } from "./components/Sidebar.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { activeSidebarSection, type SidebarSectionGeometry } from "./lib/sidebarScrollspy.ts"

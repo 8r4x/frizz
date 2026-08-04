@@ -4,7 +4,7 @@
 //
 // This is the risk the batching introduces and the only one worth a harness: the tick's capture exists
 // to detect an interactive permission prompt, so if the framed/split text differed from the individual
-// capture by even a trailing newline, fray could silently stop surfacing "this thread needs you".
+// capture by even a trailing newline, frizz could silently stop surfacing "this thread needs you".
 // Real tmux, real panes painted with real modal captures, real functions — no fixtures.
 //
 // Also exercises the two failure modes the batch is built around:
@@ -58,7 +58,7 @@ const WORKING = [
 const paint = (slug, screen) => {
   const file = join(work, `${slug}.txt`)
   writeFileSync(file, `${screen}\n`)
-  tmux("new-session", "-d", "-s", `fray-${slug}`, "-x", "200", "-y", "50", "--", "sh", "-c", `cat ${file}; sleep 60`)
+  tmux("new-session", "-d", "-s", `frizz-${slug}`, "-x", "200", "-y", "50", "--", "sh", "-c", `cat ${file}; sleep 60`)
 }
 
 try {

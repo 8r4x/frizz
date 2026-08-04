@@ -1,4 +1,4 @@
-import type { ThreadView } from "@fray-ui/shared"
+import type { ThreadView } from "@frizz/shared"
 
 const ADOPTABLE_STATUSES = new Set<ThreadView["status"]>(["planning", "planned", "active", "needs-human", "blocked"])
 

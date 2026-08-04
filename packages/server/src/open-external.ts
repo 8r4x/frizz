@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process"
 
-// Validate a URL handed to us by the web client before we let the OS open it. The fray UI runs as a
+// Validate a URL handed to us by the web client before we let the OS open it. The frizz UI runs as a
 // chromeless Chrome --app window with a DEDICATED user-data-dir, so links clicked inside would open
 // in that anonymous-looking profile; we instead route them to the OS default browser. This endpoint
 // must NOT become a shell-injection or arbitrary-file-open vector, so we accept ONLY http/https URLs

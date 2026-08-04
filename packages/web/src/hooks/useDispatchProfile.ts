@@ -1,6 +1,6 @@
 import { useMemo } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import type { CodexModel, SetDispatchPreferenceInput } from "@fray-ui/shared"
+import type { CodexModel, SetDispatchPreferenceInput } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import {

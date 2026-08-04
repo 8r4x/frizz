@@ -10,7 +10,7 @@
 //   · backend !== "codex" — the row is a claude row.
 //
 // Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a JSONL the tailer reads.
-// Usage: node scripts/seed-queued-unqueueable.mjs --home=/abs/temp-home --socket=fray-adhoc-NNNN-PID --port=NNNN
+// Usage: node scripts/seed-queued-unqueueable.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID --port=NNNN
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -25,8 +25,8 @@ if (!home || !socket || !port) {
   process.exit(1)
 }
 
-const db = globSync(join(home, ".fray/projects/*/ui.db"))[0]
-if (!db) throw new Error(`no ui.db under ${home}/.fray/projects`)
+const db = globSync(join(home, ".frizz/projects/*/ui.db"))[0]
+if (!db) throw new Error(`no ui.db under ${home}/.frizz/projects`)
 const jsonlDir = join(home, ".claude", "projects", cwd.replace(/[/.]/g, "-"))
 mkdirSync(jsonlDir, { recursive: true })
 
@@ -58,7 +58,7 @@ const records = [
 ]
 writeFileSync(join(jsonlDir, `${SESSION_ID}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
 
-const tmuxName = `fray-${SLUG}`
+const tmuxName = `frizz-${SLUG}`
 try {
   execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"], { stdio: "ignore" })
 } catch { /* already up */ }

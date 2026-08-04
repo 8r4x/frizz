@@ -35,7 +35,7 @@ const exceptionMessage = callMessage("exceptions", [
     detail: "nub run dev",
     desc: "Run the disposable dev server",
     command: "nub run dev",
-    cwd: "/tmp/fray-fixture/worktree",
+    cwd: "/tmp/frizz-fixture/worktree",
     backgroundState: "background",
     status: "pending",
   },
@@ -51,7 +51,7 @@ const exceptionMessage = callMessage("exceptions", [
 
 // The board root the shimmer shortens absolute paths against — the fixture's stand-in for
 // BoardSnapshot.projectDir, which the real surfaces read through useProjectDir().
-const FIXTURE_PROJECT_DIR = "/Users/fixture/Documents/projects/fray"
+const FIXTURE_PROJECT_DIR = "/Users/fixture/Documents/projects/frizz"
 
 function Transcript({ messages, running = false }: { messages: ChatMessage[]; running?: boolean }) {
   const coalesced = useMemo(() => coalesceToolActivityMessages(messages), [messages])

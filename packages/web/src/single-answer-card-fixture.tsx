@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { useState } from "react"
 import { createRoot } from "react-dom/client"
-import type { BoardSnapshot, ThreadView } from "@fray-ui/shared"
+import type { BoardSnapshot, ThreadView } from "@frizz/shared"
 import { Message } from "./components/ChatView.tsx"
 import { useLiveAnswering } from "./lib/answering.ts"
 import { pairAllAnswers } from "./lib/answersMessage.ts"
@@ -26,7 +26,7 @@ const thread: ThreadView = {
   unread: false, archived: false, hasPlan: false, pendingQuestion: false, kind: "session", foreign: false,
   backend: "claude", permissionMode: "default", subAgents: [], bgShells: [],
 }
-store.board = { projectDir: "/fixture/fray", threads: [thread] } as BoardSnapshot
+store.board = { projectDir: "/fixture/frizz", threads: [thread] } as BoardSnapshot
 
 const asMsg = (m: Partial<ChatMessage> & { role: string; text: string }): ChatMessage => ({
   tools: [], parts: [{ kind: "text", text: m.text }], ...m,

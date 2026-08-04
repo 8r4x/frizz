@@ -116,7 +116,7 @@ export function BackgroundShellSheet({
                 <section>
                   <div className="mb-2 flex items-center gap-2">
                     <h2 className="petite-caps text-[10px] text-muted/65">Output</h2>
-                    {state === "running" && <span aria-hidden className="fray-live-dot fray-live-dot--shell" data-running-indicator="shell-drawer" />}
+                    {state === "running" && <span aria-hidden className="frizz-live-dot frizz-live-dot--shell" data-running-indicator="shell-drawer" />}
                     {query.data?.truncated && <span className="text-[10.5px] text-muted/50">Showing latest 512 KB</span>}
                   </div>
                   {output ? (
@@ -132,7 +132,7 @@ export function BackgroundShellSheet({
           </div>
 
           {/* The lifecycle footer, mirroring SubAgentSheet's exactly — same chrome, same danger-hover,
-              same disabled-while-in-flight. It renders only for a shell fray can really end; a RUNNING
+              same disabled-while-in-flight. It renders only for a shell frizz can really end; a RUNNING
               shell it cannot reach states why instead, because "no control and no explanation" is what
               sent the maintainer looking for this button in the first place. A finished shell carries
               neither (its state readout already says "finished") and keeps the bare bottom edge. */}

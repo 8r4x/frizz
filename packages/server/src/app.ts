@@ -4,8 +4,8 @@ import { streamSSE } from "hono/streaming"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
-import { mountRouter } from "@fray-ui/rpc/server"
-import { DEFAULT_PORT, ATTACHMENT_MAX_BASE64_CHARS, attachmentExtension, isAllowedAttachmentName, type ServerEvent } from "@fray-ui/shared"
+import { mountRouter } from "@frizz/rpc/server"
+import { DEFAULT_PORT, ATTACHMENT_MAX_BASE64_CHARS, attachmentExtension, isAllowedAttachmentName, type ServerEvent } from "@frizz/shared"
 import { createRouter } from "./router.ts"
 import type { AppContext } from "./context.ts"
 import { allowedLocalCorsOrigin, isTrustedLocalHttpRequest } from "./local-origin.ts"
@@ -31,7 +31,7 @@ export function createApp(ctx: AppContext, options: AppOptions = {}) {
 
   // The API is a local control plane, not a public CORS service. Validate Host and require every present
   // Origin to name that SAME canonical loopback hostname + actual port, so an unrelated service on another
-  // loopback family cannot borrow Fray's browser authority. Reject all forwarded authority (Fray does not
+  // loopback family cannot borrow Frizz's browser authority. Reject all forwarded authority (Frizz does not
   // run behind a trusted proxy) and every non-local/mismatched Origin. Missing Origin is allowed
   // only for the read-only CLI health probe or a browser-forbidden `Sec-Fetch-Site: same-origin` request
   // (same-origin GET/fetch requests may omit Origin). Browser WebSockets use the stricter mandatory
@@ -62,16 +62,16 @@ export function createApp(ctx: AppContext, options: AppOptions = {}) {
       origin: (origin) => allowedLocalCorsOrigin(origin, port),
       // Expose the boot-id header so the client can read it off /rpc responses. Today the web app is
       // same-origin to the API (Vite middleware in dev, static in prod) so this is moot — but if it is
-      // ever served cross-origin, without this the browser hides x-fray-boot and the RPC restart-detection
+      // ever served cross-origin, without this the browser hides x-frizz-boot and the RPC restart-detection
       // channel silently dies (SSE frames still carry the id, so detection degrades rather than breaks).
-      exposeHeaders: ["x-fray-boot"],
+      exposeHeaders: ["x-frizz-boot"],
     }),
   )
 
   // Stamp the server boot id on every /rpc response — a second, always-warm channel (besides the SSE
   // board frames) for the client to notice a restart even when the board is quiet but RPCs are flowing.
   app.use("/rpc/*", async (c, next) => {
-    c.header("x-fray-boot", ctx.bootId)
+    c.header("x-frizz-boot", ctx.bootId)
     await next()
   })
 
@@ -89,7 +89,7 @@ export function createApp(ctx: AppContext, options: AppOptions = {}) {
   // Cross-platform owner stop channel. The raw capability is never returned by /health; the CLI
   // reads it from the 0600 owner record and health proves only its project-bound SHA-256 digest.
   app.post("/control/stop", (c) => {
-    const supplied = c.req.header("x-fray-launch-token")
+    const supplied = c.req.header("x-frizz-launch-token")
     if (!options.controlToken || !supplied || supplied !== options.controlToken) return c.text("Forbidden", 403)
     if (!options.requestOwnerStop) return c.text("Owner control unavailable", 503)
     const stop = setTimeout(options.requestOwnerStop, 25)
@@ -116,7 +116,7 @@ export function createApp(ctx: AppContext, options: AppOptions = {}) {
   })
 
   // Attachment intake for drag-and-dropped / pasted / picked files (images AND the safe-tier document
-  // set — see @fray-ui/shared ATTACHMENT_EXTENSIONS): the file lands on DISK (outside the repo, under
+  // set — see @frizz/shared ATTACHMENT_EXTENSIONS): the file lands on DISK (outside the repo, under
   // the project's state dir) and the client inserts the returned absolute path into the message text.
   // Workers open it with their Read/file tool; the chat renders images via /local-image and non-image
   // files as an openable chip (both roots include the attachments dir). JSON base64 keeps the route

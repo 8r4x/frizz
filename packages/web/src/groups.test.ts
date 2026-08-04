@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import type { ThreadView } from "@fray-ui/shared"
+import type { ThreadView } from "@frizz/shared"
 import { needsAction, queued, orderQueue, partitionActive, sectionOf, sectionThreads, isHeld, sessionIndicatorKind, offersRetry, titleIsProvisional, displayTitle, lastActiveLabelAt, SPINNING_UP_TITLE, UNTITLED_THREAD_TITLE } from "./groups.ts"
 
 // Minimal ThreadView fixture — the same shape board-delta.test.ts uses, defaulting to a live/active
@@ -39,7 +39,7 @@ test("needsAction: needs-human AT REST cards — but only with a SESSION (humanB
 })
 
 test("needsAction: SESSION-LESS needs-human NEVER cards (the queue is agent work paused on the human)", () => {
-  // A thread worked outside fray-ui (fray classic / hand edits): no session, no transcript to card.
+  // A thread worked outside frizz (frizz classic / hand edits): no session, no transcript to card.
   // It surfaces in the SIDEBAR (yellow awaiting-you dot); its click-through composite (doc +
   // kick-off composer) is where it gets read and acted on.
   assert.equal(needsAction(thread({ status: "needs-human", humanBlocked: true, runtime: "none", spawnedAt: undefined })), false)
@@ -291,16 +291,16 @@ const RETRY_CONTRACT: { name: string; over: Partial<ThreadView>; kind: string; r
   { name: "exited after a done fence — finished, not stopped", over: { runtime: "exited", lastFence: { kind: "done", body: "shipped", hints: [] } }, kind: "done", retry: false },
   { name: "exited but snoozed — held, wakes on its own deadline", over: { runtime: "exited", snoozedUntil: "2999-01-01T00:00:00.000Z" }, kind: "held", retry: false },
   { name: "archived", over: { state: "archived", needsYou: true, crashed: true, runtime: "exited" }, kind: "archived", retry: false },
-  { name: "foreign (read-only — nothing fray can restart)", over: { foreign: true, crashed: true, needsYou: true, runtime: "exited" }, kind: "rest", retry: false },
+  { name: "foreign (read-only — nothing frizz can restart)", over: { foreign: true, crashed: true, needsYou: true, runtime: "exited" }, kind: "rest", retry: false },
   { name: "registry lost the row (runtime none — not reattachable)", over: { needsYou: true, crashed: true, runtime: "none" }, kind: "rest", retry: false },
-  // ── HELD by a usage limit fray will auto-resume: keeps the hourglass mark, but ALSO offers Retry ──
+  // ── HELD by a usage limit frizz will auto-resume: keeps the hourglass mark, but ALSO offers Retry ──
   // (maintainer 2026-07-23) — the one-click continue is a faster door to the in-drawer "Continue now".
   { name: "held on a session limit (auto-resume) — retry without the [!]", over: { runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "held", retry: true },
   { name: "held on a weekly limit (auto-resume) — same one-click continue", over: { runtime: "exited", limitPause: { backend: "codex", window: "weekly", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "held", retry: true },
-  // A limit pause fray will NOT auto-resume is not held — it fell through to the ordinary handoff, and
+  // A limit pause frizz will NOT auto-resume is not held — it fell through to the ordinary handoff, and
   // with its process exited it is a plain stall, already carrying Retry via the stalled branch.
   { name: "limit pause without auto-resume — plain stall, not a held park", over: { needsYou: true, runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: false } }, kind: "stalled", retry: true },
-  // A FOREIGN read-only session parked on a limit still reads as held, but is nothing fray can restart.
+  // A FOREIGN read-only session parked on a limit still reads as held, but is nothing frizz can restart.
   { name: "foreign held on a limit — read-only, no retry", over: { foreign: true, runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "held", retry: false },
 ]
 
@@ -329,7 +329,7 @@ test("every surface shares the ONE offersRetry derivation — the retry verb is 
       `${name}: Retry is offered on exactly the stalled and auto-resume-limit-held rows`,
     )
   }
-  // A held row parked by something OTHER than a limit fray will auto-resume (a user snooze, a timer
+  // A held row parked by something OTHER than a limit frizz will auto-resume (a user snooze, a timer
   // wait) must NEVER offer Retry — those are intentional parks with no stall to recover.
   assert.equal(offersRetry(thread({ kind: "session", runtime: "exited", snoozedUntil: "2999-01-01T00:00:00.000Z" })), false, "snooze-held: no retry")
   assert.equal(sessionIndicatorKind(thread({ kind: "session", runtime: "exited", snoozedUntil: "2999-01-01T00:00:00.000Z" })), "held", "snooze-held: still held")
@@ -682,7 +682,7 @@ test("displayTitle: a machine-generated session slug is never presented as a suc
   assert.equal(
     displayTitle(thread({ id: "internal-id", title: "internal-id", titleAuto: true, aiTitle: "conversation-summary-task" })),
     "Conversation summary task",
-    "a native backend slug is humanized (sentence case) even when it differs from the Fray thread id",
+    "a native backend slug is humanized (sentence case) even when it differs from the Frizz thread id",
   )
 })
 
@@ -707,7 +707,7 @@ test("titleIsProvisional / displayTitle: 'Spinning up' shows briefly, then falls
   // aiTitle landed → not provisional; the real name wins.
   assert.equal(titleIsProvisional(thread({ titleAuto: true, aiTitle: "Parser fix", spawnedAt: fresh })), false)
   assert.equal(displayTitle(thread({ titleAuto: true, aiTitle: "Parser fix", spawnedAt: fresh })), "Parser fix")
-  // STALE spawn, still no aiTitle (e.g. a compacted session whose transcript fray lost track of) → NOT
+  // STALE spawn, still no aiTitle (e.g. a compacted session whose transcript frizz lost track of) → NOT
   // provisional: fall back to the dispatch title, never stick on "Spinning up…" forever.
   assert.equal(titleIsProvisional(thread({ titleAuto: true, title: "fix the parser bug", spawnedAt: "2026-07-08T00:00:00.000Z" })), false)
   assert.equal(displayTitle(thread({ titleAuto: true, title: "fix the parser bug", spawnedAt: "2026-07-08T00:00:00.000Z" })), "fix the parser bug")

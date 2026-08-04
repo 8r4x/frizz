@@ -1,6 +1,6 @@
 name: release
 
-# Publishes `frayui` whenever package.json lands on main with a version that is not yet
+# Publishes `frizz` whenever package.json lands on main with a version that is not yet
 # on the registry. Bump the version, merge, and the release happens — there is no tag to push and no
 # separate release command, which suits a repo that lands work straight on main.
 #
@@ -20,7 +20,7 @@ on:
 # Two releases racing would fight over the same version; let an in-flight one finish rather than
 # cancelling it mid-publish.
 concurrency:
-  group: release-frayui
+  group: release-frizz
   cancel-in-progress: false
 
 jobs:
@@ -67,11 +67,11 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           # Ask the registry rather than diffing commits: idempotent, so a re-run, a revert-and-reland,
           # or a workflow_dispatch can never double-publish or fail on an already-released version.
-          if npm view "frayui@$VERSION" version > /dev/null 2>&1; then
-            echo "frayui@$VERSION is already published; nothing to do"
+          if npm view "frizz@$VERSION" version > /dev/null 2>&1; then
+            echo "frizz@$VERSION is already published; nothing to do"
             echo "publish=false" >> "$GITHUB_OUTPUT"
           else
-            echo "frayui@$VERSION is not on the registry; publishing"
+            echo "frizz@$VERSION is not on the registry; publishing"
             echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -88,7 +88,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "v$VERSION" -m "frayui v$VERSION"
+          git tag -a "v$VERSION" -m "frizz v$VERSION"
           git push origin "v$VERSION"
 
       - name: Create the GitHub release
@@ -98,6 +98,6 @@ jobs:
           VERSION: ${{ steps.decide.outputs.version }}
         run: |
           gh release create "v$VERSION" \
-            --title "frayui v$VERSION" \
-            --notes "Published to npm: https://www.npmjs.com/package/frayui/v/$VERSION" \
+            --title "frizz v$VERSION" \
+            --notes "Published to npm: https://www.npmjs.com/package/frizz/v/$VERSION" \
             --verify-tag

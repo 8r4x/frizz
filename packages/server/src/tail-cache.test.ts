@@ -35,14 +35,14 @@ interface Harness {
 }
 
 function harness(): Harness {
-  const dir = tmp("fray-tailcache-")
+  const dir = tmp("frizz-tailcache-")
   const storage = createStorage(join(dir, "ui.db"))
   return { dir, storage, bus: new Bus(), path: (id) => join(dir, `${id}.jsonl`) }
 }
 
 function row(over: Partial<SessionRow> = {}): SessionRow {
   return {
-    slug: "t", session_id: "sid", tmux_name: "fray-t", spawned_at: "2026-07-01T00:00:00.000Z",
+    slug: "t", session_id: "sid", tmux_name: "frizz-t", spawned_at: "2026-07-01T00:00:00.000Z",
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null,
     state: null, meta: null, seen_at: null, plan_path: null, transcript_id: null, ...over,
   }
@@ -106,7 +106,7 @@ test("tail-cache codec: garbage decodes to null rather than throwing", () => {
 // ---- the file fence ----
 
 test("tail-cache fence: an append still matches; a truncation and a same-size rewrite do not", () => {
-  const dir = tmp("fray-fence-")
+  const dir = tmp("frizz-fence-")
   const path = join(dir, "a.jsonl")
   writeFileSync(path, "aaaa\nbbbb\ncccc\n")
   const at = statSync(path).size
@@ -137,7 +137,7 @@ test("tail-cache fence: an append still matches; a truncation and a same-size re
 })
 
 test("tail-cache fence: an offset of 0 or a missing file has no fence", () => {
-  const dir = tmp("fray-fence-")
+  const dir = tmp("frizz-fence-")
   const path = join(dir, "a.jsonl")
   writeFileSync(path, "aaaa\n")
   assert.equal(measureFence(path, 0), null)
@@ -251,7 +251,7 @@ test("tail-cache: a row with an OPEN delivery ledger keeps its full replay", () 
 test("tail-cache: an entry for a slug the registry no longer has is pruned", () => {
   const h = harness()
   h.storage.upsertSession(row())
-  h.storage.upsertSession(row({ slug: "u", session_id: "sid2", tmux_name: "fray-u" }))
+  h.storage.upsertSession(row({ slug: "u", session_id: "sid2", tmux_name: "frizz-u" }))
   writeFileSync(h.path("sid"), [user(1, "go"), assistant(2, "a")].map((l) => l + "\n").join(""))
   writeFileSync(h.path("sid2"), [user(1, "go"), assistant(2, "b")].map((l) => l + "\n").join(""))
   boot(h)

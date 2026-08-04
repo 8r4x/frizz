@@ -1,7 +1,7 @@
-// Real-subsystem harness for the orphan reaper (fray:adhoc-cdp §3). Unit tests drive the pure logic
+// Real-subsystem harness for the orphan reaper (frizz:adhoc-cdp §3). Unit tests drive the pure logic
 // with a FAKE ps; this drives the REAL `ps -axo` + `ps -Eww` env read and a REAL SIGKILL against
 // REAL processes, with a NEGATIVE CONTROL (a live-slug root + its aux that MUST survive). Mocks
-// prove nothing about whether macOS ps actually surfaces FRAY_UI_THREAD from the environment.
+// prove nothing about whether macOS ps actually surfaces FRIZZ_THREAD from the environment.
 //
 //   run: nub scripts/verify-orphan-reaper.mjs   (from ui/)   → PASS/FAIL lines; exit 1 on any fail.
 //
@@ -48,7 +48,7 @@ symlinkSync(process.execPath, fakeClaude)
 
 const spawned = []
 const spawnTagged = (cmd, args, slug) => {
-  const child = spawn(cmd, args, { detached: true, stdio: "ignore", env: { ...process.env, FRAY_UI_THREAD: slug } })
+  const child = spawn(cmd, args, { detached: true, stdio: "ignore", env: { ...process.env, FRIZZ_THREAD: slug } })
   child.unref()
   spawned.push(child.pid)
   return child.pid
@@ -64,24 +64,24 @@ try {
   const rootPid = spawnTagged(fakeClaude, idleArgs, LIVE)
   const liveAuxPid = spawnTagged(process.execPath, idleArgs, LIVE)
   const orphanPid = spawnTagged(process.execPath, idleArgs, DEAD)
-  // CRITICAL regression: a root whose ARGV contains a literal FRAY_UI_THREAD=<other> (pasted task
+  // CRITICAL regression: a root whose ARGV contains a literal FRIZZ_THREAD=<other> (pasted task
   // text) but whose ENV owns SPOOF. Ownership must read from ENV, else SPOOF looks dead and spoofAux
   // gets reaped mid-run. (The positional `note:` token is not a --flag, so node keeps running.)
   const SPOOF = `reaper-harness-spoof-${uniq}`
-  const spoofRootPid = spawnTagged(fakeClaude, [...idleArgs, `note:FRAY_UI_THREAD=argv-decoy-${uniq}`], SPOOF)
+  const spoofRootPid = spawnTagged(fakeClaude, [...idleArgs, `note:FRIZZ_THREAD=argv-decoy-${uniq}`], SPOOF)
   const spoofAuxPid = spawnTagged(process.execPath, idleArgs, SPOOF)
   await wait(700) // let them register in the process table
 
   // 1) REAL enumeration: ps -axo joined with ps -Eww env read
   const rows = enumerateProcs()
   const find = (pid) => rows.find((r) => r.pid === pid)
-  ok(find(rootPid)?.slug === LIVE, "real ps -Eww surfaces FRAY_UI_THREAD env for the root")
+  ok(find(rootPid)?.slug === LIVE, "real ps -Eww surfaces FRIZZ_THREAD env for the root")
   ok(find(liveAuxPid)?.slug === LIVE, "real ps -Eww surfaces the live-aux slug")
   ok(find(orphanPid)?.slug === DEAD, "real ps -Eww surfaces the orphan slug")
   ok(!!find(rootPid) && isSessionRoot(find(rootPid).command), "a binary named `claude` classified a session root")
   ok(!!find(orphanPid) && !isSessionRoot(find(orphanPid).command), "plain node classified aux, not a session root")
   // CRITICAL: the spoof root's slug must read from ENV (SPOOF), NOT the argv decoy literal
-  ok(find(spoofRootPid)?.slug === SPOOF, "root slug read from ENV, argv `FRAY_UI_THREAD=` literal ignored")
+  ok(find(spoofRootPid)?.slug === SPOOF, "root slug read from ENV, argv `FRIZZ_THREAD=` literal ignored")
 
   const protectedPids = selfAndAncestors(rows, process.pid)
 

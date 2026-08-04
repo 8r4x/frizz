@@ -6,7 +6,7 @@
 // assertion is on what a woken worker's terminal ACTUALLY received, not on what the scheduler intended.
 //
 // Boot the stack with --wakers first, then:
-//   node scripts/verify-pr-watch-wake-e2e.mjs --home=/abs/temp-home --socket=fray-adhoc-NNNN-PID
+//   node scripts/verify-pr-watch-wake-e2e.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
 //
 // Prints the captured steer and exits nonzero on any failed assertion.
 import { execFileSync } from "node:child_process"
@@ -16,7 +16,7 @@ import { join } from "node:path"
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, socket, cwd = "/Users/colinmcd94/Documents/projects/fray" } = flags
+const { home, socket, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
 if (!home || !socket) {
   console.error("usage: node verify-pr-watch-wake-e2e.mjs --home=/abs/temp-home --socket=<tmux-socket>")
   process.exit(1)
@@ -24,13 +24,13 @@ if (!home || !socket) {
 
 const SLUG = "prwatch-587"
 const SESSION_ID = "prwatch587-0000-4000-8000-00000000".slice(0, 36).padEnd(36, "0")
-const TMUX_NAME = `fray-${SLUG}`
+const TMUX_NAME = `frizz-${SLUG}`
 const CAPTURE = join(home, "pane-capture.bin")
 // Before @colinhacks' 15:39 comment and @pullfrog's 15:46/15:47 reviews, so all three are post-fence.
 const FENCE_AT = "2026-07-29T12:00:00.000Z"
 
-const db = globSync(join(home, ".fray/projects/*/ui.db"))[0]
-if (!db) throw new Error(`no ui.db under ${home}/.fray/projects — is the stack booted?`)
+const db = globSync(join(home, ".frizz/projects/*/ui.db"))[0]
+if (!db) throw new Error(`no ui.db under ${home}/.frizz/projects — is the stack booted?`)
 
 let failures = 0
 const check = (label, ok, detail = "") => {
@@ -115,7 +115,7 @@ check("never names the stale 07:36 comment", payload.length > 0 && !payload.incl
 // ---- 4. render it: append what the worker received, so the chat shows the real steer ---------------
 // From the steer's leading icon THROUGH the wake-delivery token, because a real worker's transcript
 // records the delivered text WITH that token — it is how the outbox acks the delivery, and it is
-// also the server's only tell that fray (not the human) wrote the turn, which is what promotes it
+// also the server's only tell that frizz (not the human) wrote the turn, which is what promotes it
 // out of the human's bubble into the first-party card. Dropping it here would silently test the
 // wrong render path.
 const start = payload.search(/[\u{1F464}\u{1F916}]/u)

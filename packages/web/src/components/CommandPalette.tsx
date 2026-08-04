@@ -35,7 +35,7 @@ export function CommandPalette() {
   }
 
   function jump(slug: string) {
-    openThread(slug) // side drawer: chat, or the fray doc for a never-spawned thread
+    openThread(slug) // side drawer: chat, or the frizz doc for a never-spawned thread
   }
 
   return (

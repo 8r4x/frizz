@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-const baseUrl = process.env.FRAY_LOCAL_FILE_MARKDOWN_E2E_URL
+const baseUrl = process.env.FRIZZ_LOCAL_FILE_MARKDOWN_E2E_URL
 
 // A REAL 1x1 PNG. This used to be the 8-byte PNG signature alone, which is not a decodable image —
 // Chrome fired `error` on it, lib/local-file-links.ts's missing-image handler (correctly) swapped the

@@ -58,13 +58,13 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
     rpc.threadSeen({ slug }).catch(() => {})
   }, [atRest, slug, thread?.lastActivityAt])
 
-  // "<thread> · owner/repo | Fray". The thread title LEADS because a tab truncates from the end and
+  // "<thread> · owner/repo | Frizz". The thread title LEADS because a tab truncates from the end and
   // several of these are usually open on the same repo at once — the thread is what tells them apart.
-  // The workspace identity trails as "owner/repo | Fray", the same mark the installed app window uses.
+  // The workspace identity trails as "owner/repo | Frizz", the same mark the installed app window uses.
   useEffect(() => {
     const projectLabel = board?.projectLabel ?? board?.projectName
     const threadLabel = thread ? displayTitle(thread) : slug
-    document.title = projectLabel ? `${threadLabel} · ${projectLabel} | Fray` : `${threadLabel} · Fray`
+    document.title = projectLabel ? `${threadLabel} · ${projectLabel} | Frizz` : `${threadLabel} · Frizz`
   }, [board?.projectLabel, board?.projectName, slug, thread])
 
   return (
@@ -93,7 +93,7 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
           )}
         </main>
         {/* The SAME drawer stack the queue mounts. Without it every drill-in this page renders — a
-            sub-agent row, a background-shell row, the fray-doc button, a `[…](/thread/<slug>)` link —
+            sub-agent row, a background-shell row, the frizz-doc button, a `[…](/thread/<slug>)` link —
             pushed a layer onto the store that nothing displayed, so the click was simply dead. Mounted
             OUTSIDE <main> (which is overflow-hidden); the sheets are `fixed inset-0` and no ancestor
             here creates a containing block, so they cover the viewport exactly as they do in App. */}

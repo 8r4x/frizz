@@ -108,9 +108,9 @@ a { color: inherit; }
 </style>
 <script>
 (() => {
-  const notifyHeight = () => parent.postMessage({ type: "fray-inline-vis-height", height: Math.ceil(document.documentElement.scrollHeight) }, "*");
+  const notifyHeight = () => parent.postMessage({ type: "frizz-inline-vis-height", height: Math.ceil(document.documentElement.scrollHeight) }, "*");
   addEventListener("message", (event) => {
-    if (event.data?.type !== "fray-inline-vis-theme" || !event.data.vars) return;
+    if (event.data?.type !== "frizz-inline-vis-theme" || !event.data.vars) return;
     for (const [name, value] of Object.entries(event.data.vars)) {
       if (/^--[a-z0-9-]+$/.test(name) && typeof value === "string") document.documentElement.style.setProperty(name, value);
     }
@@ -118,7 +118,7 @@ a { color: inherit; }
     requestAnimationFrame(notifyHeight);
   });
   window.openai = Object.freeze({
-    sendFollowUpMessage: async () => { throw new Error("Follow-up actions are not supported in Fray visualizations yet"); }
+    sendFollowUpMessage: async () => { throw new Error("Follow-up actions are not supported in Frizz visualizations yet"); }
   });
   addEventListener("DOMContentLoaded", () => {
     new ResizeObserver(notifyHeight).observe(document.body);

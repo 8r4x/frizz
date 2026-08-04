@@ -4,7 +4,7 @@ import type {
   InteractionCommandAction,
   InteractionFileChangeDisplay,
   InteractionPayload,
-} from "@fray-ui/shared"
+} from "@frizz/shared"
 
 type ApprovalPayload = Extract<InteractionPayload, {
   kind: "command-approval" | "file-approval" | "permission-approval"

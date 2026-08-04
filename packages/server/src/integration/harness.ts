@@ -1,15 +1,15 @@
-// The in-process integration harness: a REAL fray server graph — storage, tailer, board, runtime
+// The in-process integration harness: a REAL frizz server graph — storage, tailer, board, runtime
 // ingest — booted against a temp project, driven by a scripted provider, with no LLM, no daemon, no
 // tmux and no browser.
 //
 // This is plans/t3code-adoption-spike.md item 4, and it exists because of the cost asymmetry the
-// briefing names: fray's only gate for orchestration logic today is "launch a promoted artifact,
+// briefing names: frizz's only gate for orchestration logic today is "launch a promoted artifact,
 // drive real Chrome, screenshot". That is exactly right for UI and ruinously expensive for the
 // question "when the SDK says the turn is over before the transcript says so, does the board queue
 // the thread with the right final message?" — which is a pure orchestration question, and which is
 // where this spike's risk actually lives.
 //
-// Determinism comes from the two primitives in @fray-ui/shared rather than from sleeping:
+// Determinism comes from the two primitives in @frizz/shared rather than from sleeping:
 //   * `ingest.drain()` — every event handed in has been folded and its nudge issued.
 //   * `receipts.waitFor(…, { since })` — the exact milestone, matched even if it landed before the
 //     await. Capture `receipts.cursor()` BEFORE playing a script.
@@ -17,12 +17,12 @@
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createReceiptBus, type ReceiptBus } from "@fray-ui/shared"
+import { createReceiptBus, type ReceiptBus } from "@frizz/shared"
 import { Bus } from "../bus.ts"
 import { cwdSlug, type Project } from "../project.ts"
 import { createStorage, type SessionRow, type Storage } from "../storage.ts"
 import { createBoard, type BoardManager } from "../board.ts"
-import type { ThreadView } from "@fray-ui/shared"
+import type { ThreadView } from "@frizz/shared"
 import { createTailer, type SessionTelemetry, type Tailer } from "../tailer.ts"
 import { createClaudeBackend } from "../backend/claude.ts"
 import { createCodexBackend } from "../backend/codex.ts"
@@ -63,10 +63,10 @@ export interface IntegrationHarness {
 }
 
 export function createIntegrationHarness(): IntegrationHarness {
-  const dir = mkdtempSync(join(tmpdir(), "fray-integration-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-integration-"))
   const logDir = join(dir, "claude-logs")
   mkdirSync(logDir, { recursive: true })
-  mkdirSync(join(dir, ".fray"), { recursive: true })
+  mkdirSync(join(dir, ".frizz"), { recursive: true })
   const storage = createStorage(join(dir, "ui.db"))
   const bus = new Bus()
   const project: Project = { dir, id: "integration", name: "integration", label: "o/integration", stateDir: dir, cwdSlug: cwdSlug(dir) }
@@ -120,7 +120,7 @@ export function createIntegrationHarness(): IntegrationHarness {
       const row: SessionRow = {
         slug,
         session_id: sessionId,
-        tmux_name: `fray-${slug}`,
+        tmux_name: `frizz-${slug}`,
         spawned_at: new Date(clock.ms).toISOString(),
         last_read_at: null,
         unread: 0,

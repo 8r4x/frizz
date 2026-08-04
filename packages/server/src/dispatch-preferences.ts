@@ -5,7 +5,7 @@ import {
   type PermissionMode,
   type SetDispatchPreferenceInput,
   type Settings,
-} from "@fray-ui/shared"
+} from "@frizz/shared"
 import type { Storage } from "./storage.ts"
 
 const KEY = "dispatch-preferences.v1"

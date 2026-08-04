@@ -27,8 +27,8 @@
 // short as 0.13s. This card is what makes that alternation legible.)
 import type { ReactNode } from "react"
 import { Hourglass, TerminalSquare } from "lucide-react"
-import type { ThreadView } from "@fray-ui/shared"
-import { isDirectSubAgent } from "@fray-ui/shared"
+import type { ThreadView } from "@frizz/shared"
+import { isDirectSubAgent } from "@frizz/shared"
 import { CARD_BODY, CardActions, TranscriptCard } from "./TranscriptCard.tsx"
 
 // Name what the thread is ACTUALLY waiting on. Three real cases, and the sentence has to be true in all

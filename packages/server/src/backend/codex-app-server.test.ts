@@ -127,7 +127,7 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
       this.send({
         id,
         result: {
-          userAgent: `fray/${this.version} (test; bridge)`,
+          userAgent: `frizz/${this.version} (test; bridge)`,
           codexHome: "/tmp/fake-codex-home",
           platformFamily: "unix",
           platformOs: "macos",
@@ -225,7 +225,7 @@ function harness(
   version = CODEX_APP_SERVER_SUPPORTED_VERSION,
   setupProcess?: (process: FakeAppServerProcess) => void,
 ) {
-  const dir = mkdtempSync(join(tmpdir(), "fray-codex-app-server-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-codex-app-server-"))
   const dbPath = join(dir, "ui.db")
   const db = new Database(dbPath)
   db.pragma("journal_mode = WAL")
@@ -301,7 +301,7 @@ function sessionRow(slug: string, sessionId: string, backend = "claude"): Sessio
   return {
     slug,
     session_id: sessionId,
-    tmux_name: `fray-${slug}`,
+    tmux_name: `frizz-${slug}`,
     spawned_at: "2026-07-13T12:00:00.000Z",
     last_read_at: null,
     unread: 0,
@@ -325,14 +325,14 @@ test("bridge is the sole codex transport (always enabled) and negotiates exact i
   const h = harness()
   const binding = await h.bridge.startDisposableSession({
     threadSlug: "bridge-thread",
-    sessionId: "fray-session-1",
+    sessionId: "frizz-session-1",
     cwd: h.dir,
   })
   assert.equal(binding.ephemeral, true)
   assert.equal(h.calls.length, 1)
   // `app-server <mcp -c overrides…> --stdio`. The overrides sit BETWEEN the subcommand and the
   // transport flag, and mounting them is why this is no longer a bare two-element argv: codex has no
-  // `--mcp-config`, so fray's MCP servers can only reach a worker as process-level `-c` config on the
+  // `--mcp-config`, so frizz's MCP servers can only reach a worker as process-level `-c` config on the
   // app-server itself (see codex-mcp.ts). Asserted structurally rather than byte-for-byte so adding a
   // server does not fail this test, while DROPPING the mounting still does.
   const args = h.calls[0]!.args
@@ -362,14 +362,14 @@ test("bridge is the sole codex transport (always enabled) and negotiates exact i
   h.close()
 })
 
-// The app-server inherits the operator's environment and drops only fray's OWN control plane. This
+// The app-server inherits the operator's environment and drops only frizz's OWN control plane. This
 // REVERSES a prior ~35-key allowlist (see worker-env.ts for the full reasoning): the curated lists had
 // drifted between backends — this one carried HTTP_PROXY/SSL_CERT_FILE and the claude ones did not, so
 // the same task succeeded or failed depending on which backend the operator picked — and none of them
 // carried SSH_AUTH_SOCK or any toolchain variable, so a build inside a worker diverged from the same
 // build in the operator's shell. This is explicitly NOT a secrets boundary: a worker has a shell and
 // filesystem read, so anything worth stealing is already on disk.
-test("child environment inherits the operator's variables and withholds only fray's own control plane", () => {
+test("child environment inherits the operator's variables and withholds only frizz's own control plane", () => {
   const source: NodeJS.ProcessEnv = {
     HOME: "/Users/tester",
     PATH: "/opt/codex/bin:/usr/bin",
@@ -381,23 +381,23 @@ test("child environment inherits the operator's variables and withholds only fra
     SSH_AUTH_SOCK: "/tmp/ssh-agent.sock",
     NVM_DIR: "/Users/tester/.nvm",
     GITHUB_TOKEN: "github-secret",
-    FRAY_CLAUDE_BROKER: "fray-daemon-payload",
-    FRAY_LAUNCH_OWNER_TOKEN: "fray-owner-secret",
+    FRIZZ_CLAUDE_BROKER: "frizz-daemon-payload",
+    FRIZZ_LAUNCH_OWNER_TOKEN: "frizz-owner-secret",
     UNDEFINED_ENTRY: undefined,
   }
   const environment = codexAppServerEnvironment(source)
   assert.notEqual(environment, source, "the child gets a point-in-time snapshot, not the live object")
 
-  // The two things that must never cross: fray's daemon payload and its launch identity. Asserted
+  // The two things that must never cross: frizz's daemon payload and its launch identity. Asserted
   // BEFORE the deepEqual below, whose `asserts actual is T` signature narrows `environment` to the
   // literal and would make these lookups a type error.
-  assert.equal(environment.FRAY_CLAUDE_BROKER, undefined)
-  assert.equal(environment.FRAY_LAUNCH_OWNER_TOKEN, undefined)
-  assert.equal(JSON.stringify(environment).includes("fray-owner-secret"), false)
+  assert.equal(environment.FRIZZ_CLAUDE_BROKER, undefined)
+  assert.equal(environment.FRIZZ_LAUNCH_OWNER_TOKEN, undefined)
+  assert.equal(JSON.stringify(environment).includes("frizz-owner-secret"), false)
   // An undefined value is dropped rather than forwarded as the string "undefined".
   assert.equal("UNDEFINED_ENTRY" in environment, false)
 
-  // Everything that is not fray's own — including the variables the old allowlist silently dropped.
+  // Everything that is not frizz's own — including the variables the old allowlist silently dropped.
   assert.deepEqual(environment, {
     HOME: source.HOME,
     PATH: source.PATH,
@@ -416,7 +416,7 @@ test("command response is written once and the journal resolves only after serve
   const h = harness()
   const binding = await h.bridge.startDisposableSession({
     threadSlug: "bridge-thread",
-    sessionId: "fray-session-1",
+    sessionId: "frizz-session-1",
     cwd: h.dir,
   })
   const { turnId } = await h.bridge.startTurn({
@@ -1019,7 +1019,7 @@ test("steerTurn injects into the active turn; interruptTurn cancels it and is a 
 
 // interruptTurn is the ONLY thing that stops an app-server Codex worker (there is no pane to kill),
 // and since the app-server moved into a detached daemon a turn it fails to stop has no backstop — it
-// keeps running with no fray-side owner. So it must never report a stop that did not happen, and the
+// keeps running with no frizz-side owner. So it must never report a stop that did not happen, and the
 // router marks the row exited/done strictly on its word.
 test("interruptTurn is honest: a turn that ended under it is 'nothing to stop', a rejection while it still runs is a failure", async () => {
   const h = harness()
@@ -1125,7 +1125,7 @@ test("a turn never survives its connection: rebinding clears the dead turn so fo
 })
 
 // A bridge constructed at server boot owns no connection, so no binding it INHERITS can still be
-// active. Without this, a SIGKILLed fray (close() never ran) left rows claiming `active` at the last
+// active. Without this, a SIGKILLed frizz (close() never ran) left rows claiming `active` at the last
 // epoch, and every ownership check — including the board's liveness read — took that at face value.
 test("a fresh bridge inherits no active bindings: boot detaches what a SIGKILLed process abandoned", async () => {
   const h = harness()
@@ -1335,7 +1335,7 @@ test("restart never blindly replays a sent response, and retires the card whose 
   const h = harness()
   const binding = await h.bridge.startDisposableSession({
     threadSlug: "persisted-thread",
-    sessionId: "fray-session-persisted",
+    sessionId: "frizz-session-persisted",
     cwd: h.dir,
     ephemeral: false,
   })
@@ -1642,7 +1642,7 @@ test("secret user-input capability is unavailable instead of rendering an unusab
 })
 
 test("an OLDER Codex fails negotiation before any thread is created", async () => {
-  // The floor. An older binary may genuinely lack params fray sends, and that is the direction where
+  // The floor. An older binary may genuinely lack params frizz sends, and that is the direction where
   // proceeding produces silent misbehaviour rather than a loud failure.
   const h = harness("0.143.0")
   await assert.rejects(
@@ -1667,7 +1667,7 @@ function aheadOfPin(): string {
 test("a NEWER Codex RUNS, and records that it is ahead of the audit", async () => {
   // This case used to be a hard refusal, and that made one `npm i -g @openai/codex` a total,
   // permanent Codex outage: no tmux fallback, every operation gated behind ensureConnected, recovery
-  // only by editing a source constant and rebuilding fray. codex ships a stable roughly every two
+  // only by editing a source constant and rebuilding frizz. codex ships a stable roughly every two
   // days, so the pin is behind a published stable almost immediately after every re-audit.
   // Derived from the pin rather than written as a literal: a re-pin used to silently turn this test's
   // hardcoded "newer" version into an OLDER one, testing the refusal path under the ahead path's name.
@@ -1719,7 +1719,7 @@ test("shutdown re-detaches a binding written by an operation already past its RP
 })
 
 test("registry replacement releases only its exact native binding, process requests, and delivery authority", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-codex-lifecycle-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-codex-lifecycle-"))
   const dbPath = join(dir, "ui.db")
   const storage = createStorage(dbPath)
   const processes: FakeAppServerProcess[] = []
@@ -1828,7 +1828,7 @@ test("bridge close detaches persisted bindings and makes pending delivery rows n
   assert.equal(h.processes[0]!.killed, true)
   assert.equal(h.bridge.ownsInteraction(scope, pending.id), false)
   const persisted = h.db.prepare<[string], { state: string; current_turn_id: string | null }>(`
-    SELECT state, current_turn_id FROM codex_app_server_session WHERE fray_session_id = ?
+    SELECT state, current_turn_id FROM codex_app_server_session WHERE frizz_session_id = ?
   `).get(binding.sessionId)
   assert.deepEqual(persisted, { state: "detached", current_turn_id: turnId })
   assert.equal(h.interactions.providerDelivery(scope, pending.id)?.state, "awaiting-user")
@@ -1836,7 +1836,7 @@ test("bridge close detaches persisted bindings and makes pending delivery rows n
 })
 
 test("bridge persistence refuses malformed or future authority schemas before spawning Codex", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-codex-app-server-corrupt-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-codex-app-server-corrupt-"))
   const dbPath = join(dir, "ui.db")
   const db = new Database(dbPath)
   const interactions = createInteractionStore(db)
@@ -1893,7 +1893,7 @@ test("bridge persistence refuses malformed or future authority schemas before sp
  *  `generation`, and how many lines the daemon had to drop while nobody was attached. Those three
  *  fields are the entire input to the bridge's "did my turns survive?" decision. */
 function scriptedHostHarness(script: () => { generation: string; reattached: boolean; droppedWhileDetached: number }) {
-  const dir = mkdtempSync(join(tmpdir(), "fray-codex-attachment-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-codex-attachment-"))
   const dbPath = join(dir, "ui.db")
   const db = new Database(dbPath)
   db.pragma("journal_mode = WAL")
@@ -1958,7 +1958,7 @@ test("a lossless reattach to the same app-server keeps the in-flight turn exactl
   })
   const { turnId } = await bridge.startTurn({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "Work" })
   await waitFor(() => bridge.binding(binding.threadSlug, binding.sessionId)?.currentTurnId === turnId, "turn active")
-  bridge.close() // the fray runtime is recycled; the daemon and the turn keep going
+  bridge.close() // the frizz runtime is recycled; the daemon and the turn keep going
 
   plan = { generation: "gen-A", reattached: true, droppedWhileDetached: 0 }
   const restarted = h.newBridge()
@@ -2063,7 +2063,7 @@ test("a reattach that lost events is not a rejoin: the thread resumes instead of
 })
 
 // ---- non-interactive by construction ------------------------------------------------------------
-// A fray worker runs with nobody watching its pane, so an approval request is not a safety gate — it is
+// A frizz worker runs with nobody watching its pane, so an approval request is not a safety gate — it is
 // a thread that stops working until a human opens the dashboard hours later. These pin the two wire
 // moments where that guarantee is made, because the live incident came from BOTH being wrong: the
 // thread was started `on-request`, and its cold resume sent no policy at all.
@@ -2090,7 +2090,7 @@ test("a cold resume with NO recorded intent still states full access + approvals
     sandbox: "danger-full-access",
   })
   // Exactly what a pre-migration row looks like: no intent recorded anywhere.
-  h.db.prepare("UPDATE codex_app_server_session SET intended_sandbox = NULL, sandbox = NULL WHERE fray_session_id = ?")
+  h.db.prepare("UPDATE codex_app_server_session SET intended_sandbox = NULL, sandbox = NULL WHERE frizz_session_id = ?")
     .run(binding.sessionId)
   h.processes[0]!.disconnect()
   h.bridge.close()
@@ -2120,7 +2120,7 @@ test("a same-process rejoin retires the approval orphaned on the connection it l
   h.processes[0]!.request("orphan-approval", "item/commandExecution/requestApproval", commandParams(binding.codexThreadId, turnId))
   await waitFor(() => h.interactions.listPending(scope).length === 1, "approval card raised")
   const orphaned = h.interactions.listPending(scope)[0]!
-  bridge.close() // fray restarts; the daemon and its blocked turn keep going
+  bridge.close() // frizz restarts; the daemon and its blocked turn keep going
 
   plan = { generation: "gen-A", reattached: true, droppedWhileDetached: 0 }
   const restarted = h.newBridge()
@@ -2169,7 +2169,7 @@ test("a cold-recovery nudge tells the model its sub-agents died and to re-spawn 
 })
 
 // Transport selection: native is the default everywhere it works (the app-server owns its socket and
-// truly outlives fray), the --stdio daemon stays the default only on win32 whose named-pipe path native
+// truly outlives frizz), the --stdio daemon stays the default only on win32 whose named-pipe path native
 // does not implement, an injected spawn is always the direct-child test transport, and the flag forces
 // either way. This is the flip that made a codex worker's app-server + sub-agents survive a daemon death.
 test("selectCodexHostKind: native is the default on macOS/Linux, daemon on Windows", () => {

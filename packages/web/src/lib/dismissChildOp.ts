@@ -1,4 +1,4 @@
-import { isDirectSubAgent } from "@fray-ui/shared"
+import { isDirectSubAgent } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 
@@ -24,7 +24,7 @@ export function dismissChildOp(slug: string, id: string, kind: "AGENT" | "SHELL"
       // The count belongs in the toast because the SUBTREE is the part the operator cannot see: the
       // row they clicked leaves the board either way, and until this stop covered the fan-out its
       // grandchildren kept running and reported back under an agent that was already gone. A
-      // descendant fray failed to stop rides in `note` and outranks the count — that is live work
+      // descendant frizz failed to stop rides in `note` and outranks the count — that is live work
       // still burning, and it gets the longer toast the error path uses. A shell's `note` carries the
       // other failure only it can have: the kill landed but the WORKER could not be told.
       if (note) return showToast(`${noun} stopped. ${note}`, { duration: 7000 })
@@ -49,14 +49,14 @@ export function dismissChildOp(slug: string, id: string, kind: "AGENT" | "SHELL"
 //     dispatch lives in an ANCESTOR's transcript — this thread never tracked it, so the call would be
 //     a silent no-op. (`stopTask` alone could reach a descendant, but the row would then not clear,
 //     which is the same lie in the other direction. The drawer's "Stop sub-agent" covers those.)
-//  2. RUNNING, BUT NOT STOPPABLE. The row is live work fray has no channel to end: any op on a
-//     tmux/codex thread, or one whose provider task handle fray never captured. `stoppable` is the
+//  2. RUNNING, BUT NOT STOPPABLE. The row is live work frizz has no channel to end: any op on a
+//     tmux/codex thread, or one whose provider task handle frizz never captured. `stoppable` is the
 //     SERVER's answer and is never re-derived here — the policy depends on the thread's TRANSPORT,
 //     which the browser has no honest way to know.
 //
 //     A background SHELL used to fall out of this clause BY CONSTRUCTION, because a BgShellView
 //     carried no `stoppable` field at all — the server refused every shell stop categorically, on the
-//     belief that fray held no handle on the process. That was measured wrong on 2026-08-01: a
+//     belief that frizz held no handle on the process. That was measured wrong on 2026-08-01: a
 //     background Bash is a task in the same registry `Query.stopTask` addresses, and killing it is as
 //     real as killing a sub-agent (server/backend/_live_shell_stop.mts). The field now exists on both
 //     views and this clause reads them identically, which is the point — the ×'s availability is a

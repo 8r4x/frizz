@@ -77,7 +77,7 @@ test("dev supervisor classifies runtime and launcher/config changes without touc
   assert.equal(isDevServerSource(join(workspace, "packages", "unrelated-tool", "src", "index.ts")), false)
   assert.equal(isDevServerSource(join(server, "..", "..", "web", "src", "main.tsx")), false)
 
-  const disposableRoot = join(tmpdir(), "fray-disposable-watch-root")
+  const disposableRoot = join(tmpdir(), "frizz-disposable-watch-root")
   assert.equal(
     classifyDevChange(join(disposableRoot, "packages", "claude-agent-sdk-runtime", "src", "index.ts"), [disposableRoot]),
     "child",
@@ -87,34 +87,34 @@ test("dev supervisor classifies runtime and launcher/config changes without touc
 
 test("dev child inherits the complete environment including the tmux socket", () => {
   const input: NodeJS.ProcessEnv = {
-    HOME: "/tmp/fray-home",
+    HOME: "/tmp/frizz-home",
     PATH: "/bin:/usr/bin",
-    FRAY_TMUX_SOCKET: "fray-legacy-nub",
+    FRIZZ_TMUX_SOCKET: "frizz-legacy-nub",
     CUSTOM_VALUE: "kept",
   }
   const output = devChildEnv(input, 51234)
   assert.deepEqual(output, {
     ...input,
-    FRAY_DEV_PORT: "51234",
-    FRAY_DEV_CHILD: "1",
+    FRIZZ_DEV_PORT: "51234",
+    FRIZZ_DEV_CHILD: "1",
   })
   assert.notEqual(output, input)
-  assert.equal(input.FRAY_DEV_PORT, undefined, "the caller's env object is not mutated")
+  assert.equal(input.FRIZZ_DEV_PORT, undefined, "the caller's env object is not mutated")
 })
 
 test("dev launcher re-exec preserves user environment and drops only child-private markers", () => {
   const output = devReexecEnv({
-    HOME: "/tmp/fray-home",
-    FRAY_TMUX_SOCKET: "fray-nub",
+    HOME: "/tmp/frizz-home",
+    FRIZZ_TMUX_SOCKET: "frizz-nub",
     CUSTOM_VALUE: "kept",
-    FRAY_DEV_CHILD: "1",
-    FRAY_DEV_PORT: "4917",
+    FRIZZ_DEV_CHILD: "1",
+    FRIZZ_DEV_PORT: "4917",
   })
   assert.deepEqual(output, {
-    HOME: "/tmp/fray-home",
-    FRAY_TMUX_SOCKET: "fray-nub",
+    HOME: "/tmp/frizz-home",
+    FRIZZ_TMUX_SOCKET: "frizz-nub",
     CUSTOM_VALUE: "kept",
-    FRAY_DEV_REEXEC: "1",
+    FRIZZ_DEV_REEXEC: "1",
   })
 })
 
@@ -194,7 +194,7 @@ test("a second supervisor signal escalates once instead of waiting out the drain
 })
 
 test("dev launcher syntax-checks package JSON and JSONC tsconfig before replacing a healthy child", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-dev-config-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-dev-config-"))
   try {
     const pkg = join(dir, "package.json")
     writeFileSync(pkg, '{"name":"ok"}\n')
@@ -215,7 +215,7 @@ test("dev launcher syntax-checks package JSON and JSONC tsconfig before replacin
 })
 
 test("exported supervisor API rejects an unowned caller before status or watcher initialization", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "fray-dev-supervisor-owner-gate-"))
+  const workspace = mkdtempSync(join(tmpdir(), "frizz-dev-supervisor-owner-gate-"))
   const stateDir = join(workspace, "state")
   mkdirSync(stateDir, { recursive: true })
   let watched = 0
@@ -238,7 +238,7 @@ test("exported supervisor API rejects an unowned caller before status or watcher
 })
 
 test("exported supervisor API rejects a valid owner token presented by the wrong process", { timeout: 10_000 }, async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "fray-dev-supervisor-wrong-process-"))
+  const workspace = mkdtempSync(join(tmpdir(), "frizz-dev-supervisor-wrong-process-"))
   const stateDir = join(workspace, "state")
   const launchTarget = { projectId: randomUUID(), projectDir: workspace, stateDir }
   mkdirSync(stateDir, { recursive: true })
@@ -280,16 +280,16 @@ test("exported supervisor API rejects a valid owner token presented by the wrong
 })
 
 test("supervisor rejects an unregistered child ready claim before accepting the generation", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "fray-dev-supervisor-child-gate-"))
+  const workspace = mkdtempSync(join(tmpdir(), "frizz-dev-supervisor-child-gate-"))
   const stateDir = join(workspace, "state")
   const childEntry = join(workspace, "unregistered-child.mjs")
   mkdirSync(stateDir, { recursive: true })
   writeFileSync(childEntry, `
     process.send?.({
-      type: "fray-ready",
+      type: "frizz-ready",
       pid: process.pid,
       processStart: "opaque:forged-unregistered-child",
-      port: Number(process.env.FRAY_DEV_PORT),
+      port: Number(process.env.FRIZZ_DEV_PORT),
       bootId: "forged-ready",
     })
     process.on("SIGTERM", () => process.exit(0))
@@ -324,7 +324,7 @@ test("supervisor rejects an unregistered child ready claim before accepting the 
 })
 
 test("supervisor rejects a forged ready PID even when the child registered its real generation", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "fray-dev-supervisor-forged-ready-pid-"))
+  const workspace = mkdtempSync(join(tmpdir(), "frizz-dev-supervisor-forged-ready-pid-"))
   const stateDir = join(workspace, "state")
   const childEntry = join(workspace, "forged-ready-child.mjs")
   mkdirSync(stateDir, { recursive: true })
@@ -339,10 +339,10 @@ test("supervisor rejects a forged ready PID even when the child registered its r
     if (!target || !token) process.exit(70)
     const lease = registerProjectLaunchDelegate(target, token)
     process.send?.({
-      type: "fray-ready",
+      type: "frizz-ready",
       pid: process.pid + 100000,
       processStart: lease.processStart,
-      port: Number(process.env.FRAY_DEV_PORT),
+      port: Number(process.env.FRIZZ_DEV_PORT),
       bootId: "forged-ready-pid",
     })
     const stop = () => { lease.release(); process.exit(0) }
@@ -451,7 +451,7 @@ async function exerciseDurableUpdateFailure(kind: DurableUpdateFailure): Promise
   observed: string
   status: SupervisorStatus
 }> {
-  const workspace = mkdtempSync(join(tmpdir(), `fray-durable-update-${kind}-`))
+  const workspace = mkdtempSync(join(tmpdir(), `frizz-durable-update-${kind}-`))
   const stateDir = join(workspace, ".state")
   const childEntry = join(workspace, "child.mjs")
   const observedPath = join(stateDir, "observed")
@@ -466,8 +466,8 @@ async function exerciseDurableUpdateFailure(kind: DurableUpdateFailure): Promise
     const target = projectLaunchTargetFromEnvironment(process.env)
     const token = projectLaunchOwnerTokenFromEnvironment(process.env)
     const delegate = registerProjectLaunchDelegate(target, token)
-    writeFileSync(process.env.OBSERVED, process.env.FRAY_STABLE_ARTIFACT)
-    process.send?.({ type: "fray-ready", pid: delegate.pid, processStart: delegate.processStart, port: Number(process.env.FRAY_DEV_PORT), bootId: "artifact-" + process.env.FRAY_STABLE_ARTIFACT + "-" + process.pid })
+    writeFileSync(process.env.OBSERVED, process.env.FRIZZ_STABLE_ARTIFACT)
+    process.send?.({ type: "frizz-ready", pid: delegate.pid, processStart: delegate.processStart, port: Number(process.env.FRIZZ_DEV_PORT), bootId: "artifact-" + process.env.FRIZZ_STABLE_ARTIFACT + "-" + process.pid })
     const stop = () => { delegate.release(); process.exit(0) }
     process.once("SIGTERM", stop); process.once("disconnect", stop); setInterval(() => {}, 1000)
   `)
@@ -484,7 +484,7 @@ async function exerciseDurableUpdateFailure(kind: DurableUpdateFailure): Promise
       launchTarget: target,
       launchOwnerToken: owner.token,
       watch: false,
-      childLaunchProvider: () => ({ entry: childEntry, environment: { FRAY_STABLE_ARTIFACT: readFileSync(pointer, "utf8"), OBSERVED: observedPath } }),
+      childLaunchProvider: () => ({ entry: childEntry, environment: { FRIZZ_STABLE_ARTIFACT: readFileSync(pointer, "utf8"), OBSERVED: observedPath } }),
       updateRestart: async () => {
         writeFileSync(pointer, newDigest)
         return { state: "ready" }
@@ -512,7 +512,7 @@ async function exerciseDurableUpdateFailure(kind: DurableUpdateFailure): Promise
         throw new Error("prepare fixture failed")
       }
     }
-    const response = await fetch(`http://127.0.0.1:${supervisor.port}/_fray/control/update-restart`, {
+    const response = await fetch(`http://127.0.0.1:${supervisor.port}/_frizz/control/update-restart`, {
       method: "POST", headers: { origin: `http://127.0.0.1:${supervisor.port}` },
     })
     assert.equal(response.status, 202)
@@ -571,7 +571,7 @@ test("Update & Restart keeps its supervisor recoverable when rollback fails", { 
 })
 
 test("Update & Restart hands the durable owner to a fresh supervisor without copying project state", { timeout: 20_000 }, async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "fray-durable-update-handoff-"))
+  const workspace = mkdtempSync(join(tmpdir(), "frizz-durable-update-handoff-"))
   const stateDir = join(workspace, ".state")
   const childEntry = join(workspace, "handoff-child.mjs")
   mkdirSync(stateDir, { recursive: true })
@@ -579,7 +579,7 @@ test("Update & Restart hands the durable owner to a fresh supervisor without cop
   // Codex input. The handoff must leave it in place rather than export/import a lossy snapshot.
   const storage = createStorage(join(stateDir, "ui.db"))
   storage.upsertSession({
-    slug: "kept", session_id: "fray-session", tmux_name: "fray-kept", spawned_at: new Date().toISOString(),
+    slug: "kept", session_id: "frizz-session", tmux_name: "frizz-kept", spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0,
     title: null, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
     backend: "codex", agent_session_id: "provider-rollout", control_error: "existing draft",
@@ -592,7 +592,7 @@ test("Update & Restart hands the durable owner to a fresh supervisor without cop
     const target = projectLaunchTargetFromEnvironment(process.env); const token = projectLaunchOwnerTokenFromEnvironment(process.env)
     const delegate = registerProjectLaunchDelegate(target, token)
     writeFileSync(process.env.OBSERVED, process.env.GENERATION)
-    process.send?.({ type: "fray-ready", pid: delegate.pid, processStart: delegate.processStart, port: Number(process.env.FRAY_DEV_PORT), bootId: process.env.GENERATION + "-" + process.pid })
+    process.send?.({ type: "frizz-ready", pid: delegate.pid, processStart: delegate.processStart, port: Number(process.env.FRIZZ_DEV_PORT), bootId: process.env.GENERATION + "-" + process.pid })
     const stop = () => { delegate.release(); process.exit(0) }
     process.on("SIGTERM", stop); process.on("disconnect", stop); setInterval(() => {}, 1000)
   `)
@@ -618,7 +618,7 @@ test("Update & Restart hands the durable owner to a fresh supervisor without cop
     })
     const first = await supervisor.firstBoot
     assert.equal(readFileSync(observed, "utf8"), "old-child")
-    const response = await fetch(`http://127.0.0.1:${port}/_fray/control/update-restart`, {
+    const response = await fetch(`http://127.0.0.1:${port}/_frizz/control/update-restart`, {
       method: "POST", headers: { origin: `http://127.0.0.1:${port}` },
     })
     // The durable owner now acknowledges before its async build/re-exec can drain the request-owning
@@ -632,7 +632,7 @@ test("Update & Restart hands the durable owner to a fresh supervisor without cop
     const kept = reopened.getSession("kept")
     reopened.close()
     assert.deepEqual({ session: kept?.session_id, provider: kept?.agent_session_id, error: kept?.control_error }, {
-      session: "fray-session", provider: "provider-rollout", error: "existing draft",
+      session: "frizz-session", provider: "provider-rollout", error: "existing draft",
     })
   } finally {
     await successor?.close()
@@ -643,7 +643,7 @@ test("Update & Restart hands the durable owner to a fresh supervisor without cop
 })
 
 test("authenticated restart takes one fresh artifact launch snapshot and fails closed when it cannot verify one", { timeout: 15_000 }, async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "fray-dev-supervisor-artifact-restart-"))
+  const workspace = mkdtempSync(join(tmpdir(), "frizz-dev-supervisor-artifact-restart-"))
   const stateDir = join(workspace, ".state")
   const observed = join(stateDir, "child-artifact.json")
   mkdirSync(stateDir, { recursive: true })
@@ -660,15 +660,15 @@ test("authenticated restart takes one fresh artifact launch snapshot and fails c
     if (!target || !token) process.exit(73)
     const delegate = registerProjectLaunchDelegate(target, token)
     writeFileSync(${JSON.stringify(observed)}, JSON.stringify({
-      artifact: process.env.FRAY_STABLE_ARTIFACT,
-      web: process.env.FRAY_STABLE_WEB_DIST,
+      artifact: process.env.FRIZZ_STABLE_ARTIFACT,
+      web: process.env.FRIZZ_STABLE_WEB_DIST,
       entry: import.meta.url,
     }))
     process.send?.({
-      type: "fray-ready",
+      type: "frizz-ready",
       pid: delegate.pid,
       processStart: delegate.processStart,
-      port: Number(process.env.FRAY_DEV_PORT),
+      port: Number(process.env.FRIZZ_DEV_PORT),
       bootId: \`artifact-\${process.pid}-\${Date.now()}\`,
     })
     const stop = () => { delegate.release(); process.exit(0) }
@@ -692,8 +692,8 @@ test("authenticated restart takes one fresh artifact launch snapshot and fails c
     return {
       entry: artifactEntry(promoted),
       environment: {
-        FRAY_STABLE_ARTIFACT: promoted,
-        FRAY_STABLE_WEB_DIST: `/immutable/${promoted}/web`,
+        FRIZZ_STABLE_ARTIFACT: promoted,
+        FRIZZ_STABLE_WEB_DIST: `/immutable/${promoted}/web`,
       },
     }
   }
@@ -717,8 +717,8 @@ test("authenticated restart takes one fresh artifact launch snapshot and fails c
     })
     assert.match(firstObserved.entry, new RegExp(`artifact-${firstDigest}\\.mjs$`))
 
-    writeFileSync(pointer, secondDigest) // equivalent to verified `fray-dev promote <digest>`
-    const response = await fetch(`http://127.0.0.1:${port}/_fray/control/restart`, {
+    writeFileSync(pointer, secondDigest) // equivalent to verified `frizz-dev promote <digest>`
+    const response = await fetch(`http://127.0.0.1:${port}/_frizz/control/restart`, {
       method: "POST",
       headers: { origin: `http://127.0.0.1:${port}` },
     })
@@ -735,7 +735,7 @@ test("authenticated restart takes one fresh artifact launch snapshot and fails c
     assert.equal(readSupervisorStatus(join(stateDir, "dev-supervisor.lock"))?.artifactDigest, secondDigest)
 
     writeFileSync(pointer, "broken")
-    const failed = await fetch(`http://127.0.0.1:${port}/_fray/control/restart`, {
+    const failed = await fetch(`http://127.0.0.1:${port}/_frizz/control/restart`, {
       method: "POST",
       headers: { origin: `http://127.0.0.1:${port}` },
     })
@@ -752,7 +752,7 @@ test("authenticated restart takes one fresh artifact launch snapshot and fails c
 })
 
 test("private SDK runtime changes recycle only disposable children and recover without touching workers", { timeout: 25_000 }, async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "fray-dev-supervisor-e2e-"))
+  const workspace = mkdtempSync(join(tmpdir(), "frizz-dev-supervisor-e2e-"))
   const stateDir = join(workspace, ".state")
   const sdkDir = join(workspace, "packages", "claude-agent-sdk-runtime")
   const sdkSrc = join(sdkDir, "src")
@@ -765,7 +765,7 @@ test("private SDK runtime changes recycle only disposable children and recover w
   mkdirSync(sdkSrc, { recursive: true })
   mkdirSync(stateDir, { recursive: true })
   writeFileSync(sdkIndex, "export const generation = 1\n")
-  writeFileSync(sdkPackage, '{"name":"@fray-ui/claude-agent-sdk-runtime","private":true,"type":"module"}\n')
+  writeFileSync(sdkPackage, '{"name":"@frizz/claude-agent-sdk-runtime","private":true,"type":"module"}\n')
   writeFileSync(workerIdentityPath, '{"slug":"kept-worker","sessionId":"session-stable"}\n')
   writeFileSync(childEntry, `
     import { readFileSync } from "node:fs"
@@ -785,10 +785,10 @@ test("private SDK runtime changes recycle only disposable children and recover w
     if (!target || !token) process.exit(73)
     const delegate = registerProjectLaunchDelegate(target, token)
     process.send?.({
-      type: "fray-ready",
+      type: "frizz-ready",
       pid: delegate.pid,
       processStart: delegate.processStart,
-      port: Number(process.env.FRAY_DEV_PORT),
+      port: Number(process.env.FRIZZ_DEV_PORT),
       bootId: \`fixture-\${process.pid}-\${Date.now()}\`,
     })
     const stop = () => { delegate.release(); process.exit(0) }
@@ -867,7 +867,7 @@ test("private SDK runtime changes recycle only disposable children and recover w
     boot = await recycle(boot, sdkExtra, "delete")
 
     // The private membrane's package metadata belongs to the child graph, not the stable launcher.
-    writeFileSync(sdkPackage, '{"name":"@fray-ui/claude-agent-sdk-runtime","private":true,"type":"module","version":"0.0.2"}\n')
+    writeFileSync(sdkPackage, '{"name":"@frizz/claude-agent-sdk-runtime","private":true,"type":"module","version":"0.0.2"}\n')
     boot = await recycle(boot, sdkPackage, "update")
 
     // A deleted/invalid config is rejected before the healthy generation is stopped. Re-creation is
@@ -880,7 +880,7 @@ test("private SDK runtime changes recycle only disposable children and recover w
     }, "deleted package metadata to enter failed state")
     assert.equal(supervisor.currentBoot()?.pid, boot.pid)
     assertWorkerPreserved()
-    writeFileSync(sdkPackage, '{"name":"@fray-ui/claude-agent-sdk-runtime","private":true,"type":"module"}\n')
+    writeFileSync(sdkPackage, '{"name":"@frizz/claude-agent-sdk-runtime","private":true,"type":"module"}\n')
     boot = await recycle(boot, sdkPackage, "create")
 
     // A child that cannot reach ready leaves the stable watcher alive in a precise failed state; the
@@ -930,7 +930,7 @@ test("a forced supervisor stop still exits when releasing launch ownership throw
   const stop = createSupervisorShutdownHandler({
     close: () => new Promise<void>(() => {}),
     force: () => {},
-    release: () => { throw new Error("timed out waiting for the Fray project ownership guard") },
+    release: () => { throw new Error("timed out waiting for the Frizz project ownership guard") },
     exit: (code) => { exits.push(code) },
     error: (line) => { errors.push(line) },
     now: () => clock,

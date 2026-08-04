@@ -1,5 +1,5 @@
 // Immutable web artifacts are deliberately tooling-owned. The stable control plane never watches
-// the Fray checkout; ordinary stopped-then-fresh launches select or build and promote one digest.
+// the Frizz checkout; ordinary stopped-then-fresh launches select or build and promote one digest.
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -24,10 +24,10 @@ import { createRequire } from "node:module";
 import {
   DETACHED_DAEMON_ENTRIES,
   detachedDaemonOutputName,
-} from "@fray-ui/server/detached-daemons";
-import { frayPaths } from "@fray-ui/server/fray-paths";
+} from "@frizz/server/detached-daemons";
+import { frizzPaths } from "@frizz/server/frizz-paths";
 
-export interface FrayArtifactManifest {
+export interface FrizzArtifactManifest {
   version: 1 | 2;
   digest: string;
   createdAt: string;
@@ -49,14 +49,14 @@ export interface FrayArtifactManifest {
   runtimeFiles: Record<string, string>;
 }
 
-export interface FrayArtifactHost {
+export interface FrizzArtifactHost {
   platform: string;
   arch: string;
   nodeMajor: number;
   nodeModules: string;
 }
 
-export function currentArtifactHost(): FrayArtifactHost {
+export function currentArtifactHost(): FrizzArtifactHost {
   return {
     platform: platform(),
     arch: arch(),
@@ -67,13 +67,13 @@ export function currentArtifactHost(): FrayArtifactHost {
 
 /** Reject a promoted closure before its server child can load incompatible native dependencies. */
 export function assertArtifactHostCompatible(
-  artifact: Pick<FrayArtifact, "digest" | "manifest">,
-  host: FrayArtifactHost = currentArtifactHost()
+  artifact: Pick<FrizzArtifact, "digest" | "manifest">,
+  host: FrizzArtifactHost = currentArtifactHost()
 ): void {
   const built = artifact.manifest.host;
   if (!built)
     throw new Error(
-      `Fray artifact ${artifact.digest} does not record host compatibility; stop Fray and rerun fray-dev on this machine to build a compatible immutable artifact`
+      `Frizz artifact ${artifact.digest} does not record host compatibility; stop Frizz and rerun frizz-dev on this machine to build a compatible immutable artifact`
     );
   const mismatches: string[] = [];
   if (built.platform !== host.platform) mismatches.push(`platform ${built.platform} != ${host.platform}`);
@@ -82,14 +82,14 @@ export function assertArtifactHostCompatible(
   if (built.nodeModules !== host.nodeModules) mismatches.push(`Node ABI ${built.nodeModules} != ${host.nodeModules}`);
   if (mismatches.length > 0)
     throw new Error(
-      `Fray artifact ${artifact.digest} is incompatible with this host (${mismatches.join(", ")}); stop Fray and rerun fray-dev on this machine to build a compatible immutable artifact`
+      `Frizz artifact ${artifact.digest} is incompatible with this host (${mismatches.join(", ")}); stop Frizz and rerun frizz-dev on this machine to build a compatible immutable artifact`
     );
 }
 
 function artifactHostMatches(
-  built: FrayArtifactManifest["host"],
-  host: FrayArtifactHost
-): built is FrayArtifactHost {
+  built: FrizzArtifactManifest["host"],
+  host: FrizzArtifactHost
+): built is FrizzArtifactHost {
   return !!built &&
     built.platform === host.platform &&
     built.arch === host.arch &&
@@ -97,12 +97,12 @@ function artifactHostMatches(
     built.nodeModules === host.nodeModules;
 }
 
-export interface FrayArtifact {
+export interface FrizzArtifact {
   digest: string;
   dir: string;
   webDir: string;
   runtimeDir: string;
-  manifest: FrayArtifactManifest;
+  manifest: FrizzArtifactManifest;
 }
 
 export interface StableArtifactPointer {
@@ -113,20 +113,20 @@ export interface StableArtifactPointer {
 }
 
 export interface EnsureStableArtifactOptions {
-  /** Injectable for the launcher regression tests; production uses buildFrayArtifact. */
-  build?: (sourceDir: string, root: string) => FrayArtifact;
+  /** Injectable for the launcher regression tests; production uses buildFrizzArtifact. */
+  build?: (sourceDir: string, root: string) => FrizzArtifact;
   /** Human-facing lifecycle updates; callers retain control of rendering. */
   onProgress?: (message: string) => void;
 }
 
-export interface BuildFrayArtifactOptions {
+export interface BuildFrizzArtifactOptions {
   /** Human-facing lifecycle updates; successful build-tool output stays deliberately quiet. */
   onProgress?: (message: string) => void;
   /** Injectable command boundary for artifact-order regression tests. */
   runCommand?: (args: string[], source: string) => void;
 }
 
-export interface FraySourceSnapshot {
+export interface FrizzSourceSnapshot {
   /** Temporary workspace root; remove this whole directory after the build. */
   dir: string;
   /** Snapshot-local ui workspace consumed by build tools. */
@@ -143,9 +143,9 @@ interface SourceArtifactIdentity {
   fingerprint: string;
 }
 
-/** CACHE: every artifact here is rebuildable from source, and this is the biggest thing Fray stores. */
+/** CACHE: every artifact here is rebuildable from source, and this is the biggest thing Frizz stores. */
 export function defaultArtifactRoot(home = homedir()): string {
-  return join(frayPaths({ home }).cache, "builds");
+  return join(frizzPaths({ home }).cache, "builds");
 }
 
 function digestFile(path: string): string {
@@ -178,7 +178,7 @@ function artifactDigestFromIdentity(identity: {
   sourceRevision: string;
   sourceFingerprint?: string;
   nodeVersion: string;
-  host?: FrayArtifactHost;
+  host?: FrizzArtifactHost;
   webFiles: Record<string, string>;
   runtimeFiles: Record<string, string>;
   dependencyCell?: string;
@@ -200,7 +200,7 @@ function artifactDigestFromIdentity(identity: {
 }
 
 /** Compatibility verifier for artifacts built before canonical source identity became part of the key. */
-function legacyArtifactDigest(manifest: FrayArtifactManifest): string {
+function legacyArtifactDigest(manifest: FrizzArtifactManifest): string {
   return createHash("sha256")
     .update(
       JSON.stringify({
@@ -233,7 +233,7 @@ function assertNoExternalArtifactSymlinks(
     const target = resolve(dirname(file), readlinkSync(file));
     if (!containedPath(root, target) && target !== allowedExternalTarget)
       throw new Error(
-        `Fray artifact contains a symlink outside its immutable closure: ${relative(root, file)}`
+        `Frizz artifact contains a symlink outside its immutable closure: ${relative(root, file)}`
       );
   }
 }
@@ -270,7 +270,7 @@ function workerPluginBoardClosureSourceDir(sourceDir: string): string {
 }
 
 /**
- * The fray source closure, as an explicit ALLOWLIST of repo-root entries.
+ * The frizz source closure, as an explicit ALLOWLIST of repo-root entries.
  *
  * The workspace used to live in a `ui/` subtree, so a snapshot could be "that one directory, plus a
  * reach-back to cc-worker and the board closure". The workspace is now the repo root itself, and the
@@ -279,8 +279,8 @@ function workerPluginBoardClosureSourceDir(sourceDir: string): string {
  * silently swallows every new root directory, which bloats the snapshot and — worse — makes the
  * fingerprint a moving target, so every capture would race "source changed during capture".
  */
-const FRAY_SOURCE_DIRECTORIES = ["src", "packages", "scripts", "board", "cc-worker"] as const;
-const FRAY_SOURCE_FILES = [
+const FRIZZ_SOURCE_DIRECTORIES = ["src", "packages", "scripts", "board", "cc-worker"] as const;
+const FRIZZ_SOURCE_FILES = [
   "package.json",
   "pnpm-lock.yaml",
   "pnpm-workspace.yaml",
@@ -290,8 +290,8 @@ const FRAY_SOURCE_FILES = [
 ] as const;
 
 /** The allowlisted source directories that actually exist, as snapshot trees rooted at `destination`. */
-function fraySourceTrees(source: string, destination: string): SnapshotTree[] {
-  return FRAY_SOURCE_DIRECTORIES.filter((name) => existsSync(join(source, name))).map((name) => ({
+function frizzSourceTrees(source: string, destination: string): SnapshotTree[] {
+  return FRIZZ_SOURCE_DIRECTORIES.filter((name) => existsSync(join(source, name))).map((name) => ({
     source: join(source, name),
     destination: join(destination, name),
   }));
@@ -301,8 +301,8 @@ const WORKER_PLUGIN_REQUIRED_FILES = [
   "cc-worker/.claude-plugin/plugin.json",
   "cc-worker/hooks/session-seed.mjs",
   "cc-worker/hooks/agent-bind.mjs",
-  "cc-worker/bin/fray",
-  "cc-worker/bin/fray-update",
+  "cc-worker/bin/frizz",
+  "cc-worker/bin/frizz-update",
   "board/config.mjs",
   "board/agent-bindings.mjs",
   "board/index.mjs",
@@ -316,7 +316,7 @@ const WORKER_PLUGIN_REQUIRED_FILES = [
 function assertWorkerPluginClosure(root: string): void {
   for (const file of WORKER_PLUGIN_REQUIRED_FILES) {
     if (!existsSync(join(root, file)))
-      throw new Error(`Fray worker plugin closure is missing ${file}`);
+      throw new Error(`Frizz worker plugin closure is missing ${file}`);
   }
 }
 
@@ -329,7 +329,7 @@ function assertDetachedDaemonClosure(runtimeSrc: string): void {
     const emitted = detachedDaemonOutputName(entry);
     if (!existsSync(join(runtimeSrc, emitted)))
       throw new Error(
-        `Fray runtime bundle is missing the detached daemon ${emitted} (built from ${entry}); it is spawned as its own node process and must exist beside index.js`
+        `Frizz runtime bundle is missing the detached daemon ${emitted} (built from ${entry}); it is spawned as its own node process and must exist beside index.js`
       );
   }
 }
@@ -340,7 +340,7 @@ function assertDetachedDaemonClosure(runtimeSrc: string): void {
 const SOURCE_FINGERPRINT_IGNORED_DIRECTORIES = new Set([
   ".git",
   ".cache",
-  ".fray",
+  ".frizz",
   ".parcel-cache",
   ".turbo",
   ".vite",
@@ -363,7 +363,7 @@ function ignoredFingerprintFile(name: string): boolean {
 export function relevantSourceFingerprint(sourceDir: string): string {
   const source = canonicalSourceDir(sourceDir);
   const hash = createHash("sha256");
-  hash.update("fray-native-cell-v2\0");
+  hash.update("frizz-native-cell-v2\0");
   const visit = (root: string, label: string, directory = root): void => {
     for (const name of readdirSync(directory).sort()) {
       if (ignoredFingerprintFile(name)) continue;
@@ -381,11 +381,11 @@ export function relevantSourceFingerprint(sourceDir: string): string {
       }
     }
   };
-  for (const name of FRAY_SOURCE_DIRECTORIES) {
+  for (const name of FRIZZ_SOURCE_DIRECTORIES) {
     const directory = join(source, name);
     if (existsSync(directory)) visit(directory, name);
   }
-  for (const name of FRAY_SOURCE_FILES) {
+  for (const name of FRIZZ_SOURCE_FILES) {
     const file = join(source, name);
     if (existsSync(file)) hash.update(`file\0${name}\0`).update(readFileSync(file));
   }
@@ -456,12 +456,12 @@ function cloneRelevantSourceTree(
     if (stat.isSymbolicLink()) {
       const target = readlinkSync(sourcePath);
       if (isAbsolute(target))
-        throw new Error(`Fray source snapshot cannot retain absolute symlink ${sourcePath}`);
+        throw new Error(`Frizz source snapshot cannot retain absolute symlink ${sourcePath}`);
       const resolvedTarget = resolve(dirname(sourcePath), target);
       const targetTree = trees.find((candidate) => containedPath(candidate.source, resolvedTarget));
       if (!targetTree)
         throw new Error(
-          `Fray source snapshot cannot retain symlink ${sourcePath} outside the captured source closure`
+          `Frizz source snapshot cannot retain symlink ${sourcePath} outside the captured source closure`
         );
       const snapshotTarget = join(
         targetTree.destination,
@@ -480,12 +480,12 @@ function cloneRelevantSourceTree(
  * read-only by convention, while recreating package-level link farms inside the snapshot so their
  * workspace links resolve to snapshot source. An install that mutates node_modules concurrently is
  * outside the source-snapshot guarantee; the lockfile remains part of the source fingerprint and a
- * dependency-changing install must complete before launching fray-dev.
+ * dependency-changing install must complete before launching frizz-dev.
  */
 function attachInstalledDependencyClosure(source: string, snapshot: string): void {
   const installed = join(source, "node_modules");
   if (!existsSync(installed))
-    throw new Error("Fray source dependencies are not installed; run the project install first");
+    throw new Error("Frizz source dependencies are not installed; run the project install first");
   symlinkSync(installed, join(snapshot, "node_modules"), "dir");
   const packages = join(source, "packages");
   if (!existsSync(packages)) return;
@@ -505,10 +505,10 @@ function attachInstalledDependencyClosure(source: string, snapshot: string): voi
 }
 
 /** Capture a coherent launch-owned source closure before any slow build command starts. */
-export function captureFraySourceSnapshot(
+export function captureFrizzSourceSnapshot(
   sourceDir: string,
   root = defaultArtifactRoot()
-): FraySourceSnapshot {
+): FrizzSourceSnapshot {
   const source = canonicalSourceDir(sourceDir);
   assertWorkerPluginClosure(source);
   mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -519,13 +519,13 @@ export function captureFraySourceSnapshot(
     // The snapshot mirrors the repo root itself, so cc-worker's `../../board` reach-back
     // and the workspace's own relative paths resolve inside it exactly as they do in the checkout.
     const snapshotSource = dir;
-    const trees = fraySourceTrees(source, dir);
+    const trees = frizzSourceTrees(source, dir);
     try {
       const beforeRevision = gitRevision(source);
       const beforeFingerprint = relevantSourceFingerprint(source);
       mkdirSync(dir, { recursive: true, mode: 0o700 });
       for (const tree of trees) cloneRelevantSourceTree(tree, trees);
-      for (const name of FRAY_SOURCE_FILES) {
+      for (const name of FRIZZ_SOURCE_FILES) {
         const file = join(source, name);
         if (existsSync(file))
           copyFileSync(file, join(dir, name), fsConstants.COPYFILE_FICLONE);
@@ -566,7 +566,7 @@ export function captureFraySourceSnapshot(
     }
   }
   throw new Error(
-    `Fray source did not remain stable long enough to capture after ${SOURCE_SNAPSHOT_MAX_ATTEMPTS} attempts: ${lastFailure}`
+    `Frizz source did not remain stable long enough to capture after ${SOURCE_SNAPSHOT_MAX_ATTEMPTS} attempts: ${lastFailure}`
   );
 }
 
@@ -584,8 +584,8 @@ function validArtifactRelativePath(path: unknown): path is string {
     path.length > 0 &&
     !path.includes("\0") &&
     !isAbsolute(path) &&
-    containedPath("/fray-artifact-root", resolve("/fray-artifact-root", path)) &&
-    resolve("/fray-artifact-root", path) !== "/fray-artifact-root"
+    containedPath("/frizz-artifact-root", resolve("/frizz-artifact-root", path)) &&
+    resolve("/frizz-artifact-root", path) !== "/frizz-artifact-root"
   );
 }
 
@@ -602,9 +602,9 @@ function validArtifactFileMap(value: unknown): value is Record<string, string> {
 function validArtifactManifest(
   manifest: unknown,
   digest: string
-): manifest is FrayArtifactManifest {
+): manifest is FrizzArtifactManifest {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) return false;
-  const value = manifest as Partial<FrayArtifactManifest>;
+  const value = manifest as Partial<FrizzArtifactManifest>;
   const host = value.host;
   return (
     (value.version === 1 || value.version === 2) &&
@@ -676,27 +676,27 @@ const HOST_NATIVE_PREBUILDS = new Set(
     : [`${platform()}-${arch()}`]
 );
 
-interface FrayDependencyCellManifest {
+interface FrizzDependencyCellManifest {
   version: 1;
   digest: string;
   createdAt: string;
-  host: FrayArtifactHost;
+  host: FrizzArtifactHost;
   inputs: string;
   files: Record<string, string>;
 }
 
-interface FrayDependencyCell {
+interface FrizzDependencyCell {
   digest: string;
   dir: string;
   modulesDir: string;
-  manifest: FrayDependencyCellManifest;
+  manifest: FrizzDependencyCellManifest;
 }
 
 function dependencyCellRoot(root: string): string {
   return join(root, "cells");
 }
 
-function dependencyCellInputs(source: string, host: FrayArtifactHost): string {
+function dependencyCellInputs(source: string, host: FrizzArtifactHost): string {
   const inputs = [
     "package.json",
     "pnpm-lock.yaml",
@@ -724,9 +724,9 @@ function dependencyCellDigest(inputs: string, files: Record<string, string>): st
 function validDependencyCellManifest(
   manifest: unknown,
   digest: string
-): manifest is FrayDependencyCellManifest {
+): manifest is FrizzDependencyCellManifest {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) return false;
-  const value = manifest as Partial<FrayDependencyCellManifest>;
+  const value = manifest as Partial<FrizzDependencyCellManifest>;
   return value.version === 1 && value.digest === digest &&
     typeof value.createdAt === "string" && !Number.isNaN(Date.parse(value.createdAt)) &&
     typeof value.inputs === "string" && /^[a-f0-9]{64}$/.test(value.inputs) &&
@@ -734,30 +734,30 @@ function validDependencyCellManifest(
     artifactHostMatches(value.host, currentArtifactHost());
 }
 
-function readFrayDependencyCell(digest: string, root: string): FrayDependencyCell {
-  if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error("invalid Fray dependency cell digest");
+function readFrizzDependencyCell(digest: string, root: string): FrizzDependencyCell {
+  if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error("invalid Frizz dependency cell digest");
   const dir = join(dependencyCellRoot(root), digest);
-  let manifest: FrayDependencyCellManifest;
+  let manifest: FrizzDependencyCellManifest;
   try {
     manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
   } catch {
-    throw new Error(`Fray dependency cell ${digest} is missing its manifest`);
+    throw new Error(`Frizz dependency cell ${digest} is missing its manifest`);
   }
   if (!validDependencyCellManifest(manifest, digest) ||
     dependencyCellDigest(manifest.inputs, manifest.files) !== digest ||
     !existsSync(join(dir, "node_modules")))
-    throw new Error(`Fray dependency cell ${digest} failed manifest validation`);
+    throw new Error(`Frizz dependency cell ${digest} failed manifest validation`);
   try {
     assertNoExternalArtifactSymlinks(join(dir, "node_modules"));
   } catch {
-    throw new Error(`Fray dependency cell ${digest} failed immutable closure validation`);
+    throw new Error(`Frizz dependency cell ${digest} failed immutable closure validation`);
   }
   for (const [file, expected] of Object.entries(manifest.files)) {
     const path = join(dir, file);
     const valid = expected.startsWith("link:")
       ? (() => { try { return lstatSync(path).isSymbolicLink() && `link:${readlinkSync(path)}` === expected; } catch { return false; } })()
       : existsSync(path) && digestFile(path) === expected;
-    if (!valid) throw new Error(`Fray dependency cell ${digest} has a changed or missing file: ${file}`);
+    if (!valid) throw new Error(`Frizz dependency cell ${digest} has a changed or missing file: ${file}`);
   }
   return { digest, dir, modulesDir: join(dir, "node_modules"), manifest };
 }
@@ -823,7 +823,7 @@ function copyResolvedPackageClosure(source: string, modules: string): void {
   for (const dependency of RUNTIME_NATIVE_EXTERNALS) copyPackage(dependency, serverRequire);
 }
 
-function ensureFrayDependencyCell(source: string, root: string): FrayDependencyCell {
+function ensureFrizzDependencyCell(source: string, root: string): FrizzDependencyCell {
   const host = currentArtifactHost();
   const inputs = dependencyCellInputs(source, host);
   const cells = dependencyCellRoot(root);
@@ -832,7 +832,7 @@ function ensureFrayDependencyCell(source: string, root: string): FrayDependencyC
   for (const entry of readdirSync(cells)) {
     if (!/^[a-f0-9]{64}$/.test(entry)) continue;
     try {
-      const cell = readFrayDependencyCell(entry, root);
+      const cell = readFrizzDependencyCell(entry, root);
       if (cell.manifest.inputs === inputs) return cell;
     } catch {}
   }
@@ -844,7 +844,7 @@ function ensureFrayDependencyCell(source: string, root: string): FrayDependencyC
     assertNoExternalArtifactSymlinks(modules);
     const files = collectFiles(staging);
     const digest = dependencyCellDigest(inputs, files);
-    const manifest: FrayDependencyCellManifest = {
+    const manifest: FrizzDependencyCellManifest = {
       version: 1, digest, createdAt: new Date().toISOString(), host, inputs, files,
     };
     writeFileSync(join(staging, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o400 });
@@ -855,7 +855,7 @@ function ensureFrayDependencyCell(source: string, root: string): FrayDependencyC
       if (code !== "EEXIST" && code !== "ENOTEMPTY") throw error;
       rmSync(staging, { recursive: true, force: true });
     }
-    return readFrayDependencyCell(digest, root);
+    return readFrizzDependencyCell(digest, root);
   } catch (error) {
     rmSync(staging, { recursive: true, force: true });
     throw error;
@@ -863,11 +863,11 @@ function ensureFrayDependencyCell(source: string, root: string): FrayDependencyC
 }
 
 /** Publish a completed staging directory; an identical concurrent publisher wins safely. */
-export function publishFrayArtifactStaging(
+export function publishFrizzArtifactStaging(
   staging: string,
   digest: string,
   root = defaultArtifactRoot()
-): FrayArtifact {
+): FrizzArtifact {
   const dir = join(root, digest);
   try {
     renameSync(staging, dir);
@@ -879,16 +879,16 @@ export function publishFrayArtifactStaging(
     if (code !== "EEXIST" && code !== "ENOTEMPTY") throw error;
     rmSync(staging, { recursive: true, force: true });
   }
-  return readFrayArtifact(digest, root);
+  return readFrizzArtifact(digest, root);
 }
 
-export function buildFrayArtifact(
+export function buildFrizzArtifact(
   sourceDir: string,
   root = defaultArtifactRoot(),
-  options: BuildFrayArtifactOptions = {}
-): FrayArtifact {
-  options.onProgress?.("Capturing current Fray source");
-  const snapshot = captureFraySourceSnapshot(sourceDir, root);
+  options: BuildFrizzArtifactOptions = {}
+): FrizzArtifact {
+  options.onProgress?.("Capturing current Frizz source");
+  const snapshot = captureFrizzSourceSnapshot(sourceDir, root);
   const source = snapshot.sourceDir;
   const workerPlugin = workerPluginSourceDir(source);
   const workerPluginBoardClosure = workerPluginBoardClosureSourceDir(source);
@@ -898,18 +898,18 @@ export function buildFrayArtifact(
     // Vite/Rolldown transpiles TypeScript but does not typecheck it. Validate the coherent captured
     // snapshot — not the mutable checkout before capture — so an intermediate edit with a missing
     // import can never become a valid immutable artifact and fail later as a browser global.
-    options.onProgress?.("Type-checking captured Fray source");
+    options.onProgress?.("Type-checking captured Frizz source");
     runCommand(["run", "typecheck"], source);
     options.onProgress?.("Building immutable artifact: web UI");
-    runCommand(["run", "--filter", "@fray-ui/web", "build"], source);
+    runCommand(["run", "--filter", "@frizz/web", "build"], source);
     const webSource = join(source, "packages", "web", "dist");
     if (!existsSync(webSource))
-      throw new Error("Fray web build did not produce packages/web/dist");
+      throw new Error("Frizz web build did not produce packages/web/dist");
     mkdirSync(staging, { mode: 0o700 });
-    // esbuild absorbs Fray's CLI, server and workspace code into one Node 26 ESM entry. Only the
+    // esbuild absorbs Frizz's CLI, server and workspace code into one Node 26 ESM entry. Only the
     // native loaders stay external; their complete host-specific closure lives in an immutable cell
     // below, never in the mutable source checkout or an enormous deploy tree. The detached daemons
-    // are the one exception: fray spawns them as their own node processes, so each is bundled as a
+    // are the one exception: frizz spawns them as their own node processes, so each is bundled as a
     // real file beside index.js and asserted below.
     options.onProgress?.("Building immutable artifact: bundled runtime");
     mkdirSync(join(staging, "runtime", "src"), { recursive: true, mode: 0o700 });
@@ -923,7 +923,7 @@ export function buildFrayArtifact(
     );
     assertDetachedDaemonClosure(join(staging, "runtime", "src"));
     options.onProgress?.("Finalizing immutable artifact");
-    const cell = ensureFrayDependencyCell(source, root);
+    const cell = ensureFrizzDependencyCell(source, root);
     symlinkSync(relative(join(staging, "runtime"), cell.modulesDir), join(staging, "runtime", "node_modules"), "dir");
     // dispatch.ts resolves four parents above the deployed server module, which lands at this
     // runtime root. Keep the plugin inside the verified runtime closure rather than pointing a
@@ -956,9 +956,9 @@ export function buildFrayArtifact(
     const dir = join(root, digest);
     if (existsSync(join(dir, "manifest.json"))) {
       rmSync(staging, { recursive: true, force: true });
-      return readFrayArtifact(digest, root);
+      return readFrizzArtifact(digest, root);
     }
-    const manifest: FrayArtifactManifest = {
+    const manifest: FrizzArtifactManifest = {
       version: 2,
       digest,
       createdAt: new Date().toISOString(),
@@ -976,7 +976,7 @@ export function buildFrayArtifact(
       `${JSON.stringify(manifest, null, 2)}\n`,
       { mode: 0o400 }
     );
-    return publishFrayArtifactStaging(staging, digest, root);
+    return publishFrizzArtifactStaging(staging, digest, root);
   } catch (error) {
     rmSync(staging, { recursive: true, force: true });
     throw error;
@@ -985,21 +985,21 @@ export function buildFrayArtifact(
   }
 }
 
-export function readFrayArtifact(
+export function readFrizzArtifact(
   digest: string,
   root = defaultArtifactRoot()
-): FrayArtifact {
+): FrizzArtifact {
   if (!/^[a-f0-9]{64}$/.test(digest))
-    throw new Error("invalid Fray artifact digest");
+    throw new Error("invalid Frizz artifact digest");
   const dir = join(root, digest);
   const manifestPath = join(dir, "manifest.json");
-  let manifest: FrayArtifactManifest;
+  let manifest: FrizzArtifactManifest;
   try {
     manifest = JSON.parse(
       readFileSync(manifestPath, "utf8")
-    ) as FrayArtifactManifest;
+    ) as FrizzArtifactManifest;
   } catch {
-    throw new Error(`Fray artifact ${digest} is missing its manifest`);
+    throw new Error(`Frizz artifact ${digest} is missing its manifest`);
   }
   if (!validArtifactManifest(manifest, digest) ||
     (manifest.version === 2 && !manifest.dependencyCell) ||
@@ -1007,17 +1007,17 @@ export function readFrayArtifact(
     !existsSync(join(dir, "web")) ||
     !existsSync(join(dir, "runtime", "src", "index.js"))
   ) {
-    throw new Error(`Fray artifact ${digest} failed manifest validation`);
+    throw new Error(`Frizz artifact ${digest} failed manifest validation`);
   }
   const calculated = artifactDigestFromIdentity(manifest);
   // Existing v1 artifacts used the checkout basename. They remain readable, but source matching
   // below still requires the canonical path, so a collision cannot be selected for a new checkout.
   if (calculated !== digest && legacyArtifactDigest(manifest) !== digest)
-    throw new Error(`Fray artifact ${digest} failed root digest validation (calculated ${calculated})`);
+    throw new Error(`Frizz artifact ${digest} failed root digest validation (calculated ${calculated})`);
   try {
     assertWorkerPluginClosure(join(dir, "runtime"));
     const cell = manifest.dependencyCell
-      ? readFrayDependencyCell(manifest.dependencyCell, root)
+      ? readFrizzDependencyCell(manifest.dependencyCell, root)
       : undefined;
     const modules = join(dir, "runtime", "node_modules");
     if (cell && (!lstatSync(modules).isSymbolicLink() ||
@@ -1026,7 +1026,7 @@ export function readFrayArtifact(
     assertNoExternalArtifactSymlinks(join(dir, "runtime"), join(dir, "runtime"), cell?.modulesDir);
     assertNoExternalArtifactSymlinks(join(dir, "web"));
   } catch {
-    throw new Error(`Fray artifact ${digest} failed immutable closure validation`);
+    throw new Error(`Frizz artifact ${digest} failed immutable closure validation`);
   }
   for (const [file, expected] of Object.entries(manifest.webFiles)) {
     const path = join(dir, "web", file);
@@ -1044,7 +1044,7 @@ export function readFrayArtifact(
       : existsSync(path) && digestFile(path) === expected;
     if (!valid)
       throw new Error(
-        `Fray artifact ${digest} has a changed or missing web file: ${file}`
+        `Frizz artifact ${digest} has a changed or missing web file: ${file}`
       );
   }
   for (const [file, expected] of Object.entries(manifest.runtimeFiles)) {
@@ -1063,7 +1063,7 @@ export function readFrayArtifact(
       : existsSync(path) && digestFile(path) === expected;
     if (!valid)
       throw new Error(
-        `Fray artifact ${digest} has a changed or missing runtime file: ${file}`
+        `Frizz artifact ${digest} has a changed or missing runtime file: ${file}`
       );
   }
   return {
@@ -1078,14 +1078,14 @@ export function readFrayArtifact(
 export function readStableArtifact(
   stateDir: string,
   root = defaultArtifactRoot()
-): FrayArtifact | null {
+): FrizzArtifact | null {
   try {
     const pointer = JSON.parse(
       readFileSync(join(stateDir, "stable.json"), "utf8")
     ) as StableArtifactPointer;
     if (pointer.version !== 1 || typeof pointer.current !== "string")
       return null;
-    return readFrayArtifact(pointer.current, root);
+    return readFrizzArtifact(pointer.current, root);
   } catch {
     return null;
   }
@@ -1101,7 +1101,7 @@ function currentSourceArtifactIdentity(sourceDir: string): SourceArtifactIdentit
 }
 
 function manifestMatchesSource(
-  manifest: Pick<FrayArtifactManifest, "sourceDir" | "sourceRevision" | "sourceFingerprint">,
+  manifest: Pick<FrizzArtifactManifest, "sourceDir" | "sourceRevision" | "sourceFingerprint">,
   source: SourceArtifactIdentity
 ): boolean {
   return (
@@ -1115,11 +1115,11 @@ function manifestMatchesSource(
 function readArtifactManifestCandidate(
   digest: string,
   root: string
-): FrayArtifactManifest | null {
+): FrizzArtifactManifest | null {
   try {
     const manifest = JSON.parse(
       readFileSync(join(root, digest, "manifest.json"), "utf8")
-    ) as FrayArtifactManifest;
+    ) as FrizzArtifactManifest;
     return validArtifactManifest(manifest, digest) ? manifest : null;
   } catch {
     return null;
@@ -1131,11 +1131,11 @@ function readArtifactManifestCandidate(
  * A project-local pointer is deliberately not required: artifacts are content-addressed globally,
  * while the pointer only records this project's selected, rollback-safe version.
  */
-export function findReusableFrayArtifact(
+export function findReusableFrizzArtifact(
   sourceDir: string,
   root = defaultArtifactRoot(),
   sourceIdentity?: SourceArtifactIdentity
-): FrayArtifact | null {
+): FrizzArtifact | null {
   if (!existsSync(root)) return null;
   const source = sourceIdentity ?? currentSourceArtifactIdentity(sourceDir);
   const candidates: Array<{ digest: string; createdAt: string }> = [];
@@ -1156,7 +1156,7 @@ export function findReusableFrayArtifact(
   );
   for (const candidate of candidates) {
     try {
-      const artifact = readFrayArtifact(candidate.digest, root);
+      const artifact = readFrizzArtifact(candidate.digest, root);
       if (
         manifestMatchesSource(artifact.manifest, source) &&
         artifactHostMatches(artifact.manifest.host, currentArtifactHost())
@@ -1171,11 +1171,11 @@ export function findReusableFrayArtifact(
 
 /**
  * A workspace pointer is a convenient rollback record, not permission to serve an old checkout.
- * Compare it to the source closure at each fresh supervisor launch so `fray-dev` can keep its
+ * Compare it to the source closure at each fresh supervisor launch so `frizz-dev` can keep its
  * no-HMR promise while still picking up edits after the user deliberately stops and relaunches.
  */
 export function artifactMatchesCurrentSource(
-  artifact: Pick<FrayArtifact, "manifest">,
+  artifact: Pick<FrizzArtifact, "manifest">,
   sourceDir: string
 ): boolean {
   return artifactHostMatches(artifact.manifest.host, currentArtifactHost()) && manifestMatchesSource(
@@ -1190,12 +1190,12 @@ export function artifactMatchesCurrentSource(
  * only a verified artifact made from the checkout's current source closure. It reuses a global
  * candidate when possible, otherwise builds and atomically promotes a complete candidate.
  */
-export function ensureStableFrayArtifact(
+export function ensureStableFrizzArtifact(
   stateDir: string,
   sourceDir: string,
   root = defaultArtifactRoot(),
   options: EnsureStableArtifactOptions = {}
-): FrayArtifact {
+): FrizzArtifact {
   options.onProgress?.("Checking current workspace artifact");
   const source = currentSourceArtifactIdentity(sourceDir);
   const selected = readStableArtifact(stateDir, root);
@@ -1208,7 +1208,7 @@ export function ensureStableFrayArtifact(
     return selected;
   }
   options.onProgress?.("Checking verified artifact cache");
-  const reusable = findReusableFrayArtifact(sourceDir, root, source);
+  const reusable = findReusableFrizzArtifact(sourceDir, root, source);
   const artifact = reusable
     ? (() => {
         options.onProgress?.("Reusing cached immutable artifact");
@@ -1218,10 +1218,10 @@ export function ensureStableFrayArtifact(
         options.onProgress?.("No matching artifact found; building immutable artifact");
         return options.build
           ? options.build(sourceDir, root)
-          : buildFrayArtifact(sourceDir, root, { onProgress: options.onProgress });
+          : buildFrizzArtifact(sourceDir, root, { onProgress: options.onProgress });
       })();
   options.onProgress?.("Promoting verified immutable artifact");
-  promoteFrayArtifact(stateDir, artifact.digest, root);
+  promoteFrizzArtifact(stateDir, artifact.digest, root);
   return artifact;
 }
 
@@ -1233,31 +1233,31 @@ export function ensureStableFrayArtifact(
  * precondition. One built before source tightened artifact validation — a new
  * WORKER_PLUGIN_REQUIRED_FILES entry, say — stops verifying while its child keeps serving perfectly
  * happily, and refusing to update THEN disables the one control that moves the instance past it.
- * promoteFrayArtifact takes the same position on a broken previous pointer.
+ * promoteFrizzArtifact takes the same position on a broken previous pointer.
  */
 export function promoteCurrentSourceArtifact(
   stateDir: string,
   sourceDir: string,
   root = defaultArtifactRoot(),
   options: EnsureStableArtifactOptions = {}
-): { candidate: FrayArtifact; previous: FrayArtifact | undefined } {
+): { candidate: FrizzArtifact; previous: FrizzArtifact | undefined } {
   const previous = readStableArtifact(stateDir, root) ?? undefined;
   options.onProgress?.("Building immutable artifact from current source");
   const candidate = options.build
     ? options.build(sourceDir, root)
-    : buildFrayArtifact(sourceDir, root, { onProgress: options.onProgress });
+    : buildFrizzArtifact(sourceDir, root, { onProgress: options.onProgress });
   options.onProgress?.("Promoting verified immutable artifact");
-  promoteFrayArtifact(stateDir, candidate.digest, root);
+  promoteFrizzArtifact(stateDir, candidate.digest, root);
   return { candidate, previous };
 }
 
 /** Atomically select a verified artifact. The old current digest remains the single rollback slot. */
-export function promoteFrayArtifact(
+export function promoteFrizzArtifact(
   stateDir: string,
   digest: string,
   root = defaultArtifactRoot()
 ): StableArtifactPointer {
-  readFrayArtifact(digest, root);
+  readFrizzArtifact(digest, root);
   let previous: string | undefined;
   try {
     const old = JSON.parse(
@@ -1265,7 +1265,7 @@ export function promoteFrayArtifact(
     ) as StableArtifactPointer;
     // Do not retain a broken pointer as the rollback target when repairing a damaged selection.
     if (typeof old.current === "string")
-      previous = readFrayArtifact(old.current, root).digest;
+      previous = readFrizzArtifact(old.current, root).digest;
   } catch {}
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const pointer: StableArtifactPointer = {

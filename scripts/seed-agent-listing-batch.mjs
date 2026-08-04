@@ -8,7 +8,7 @@
 // splitting (ChatView is not unit-renderable and `*-fixture.html` is not servable through the stack).
 //
 // Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a transcript the tailer reads.
-// Usage: node scripts/seed-agent-listing-batch.mjs --home=/abs/temp-home --socket=fray-adhoc-NNNN-PID
+// Usage: node scripts/seed-agent-listing-batch.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -22,8 +22,8 @@ if (!home || !socket) {
   process.exit(1)
 }
 
-const db = globSync(join(home, ".fray/projects/*/ui.db"))[0]
-if (!db) throw new Error(`no ui.db under ${home}/.fray/projects`)
+const db = globSync(join(home, ".frizz/projects/*/ui.db"))[0]
+if (!db) throw new Error(`no ui.db under ${home}/.frizz/projects`)
 
 const SLUG = "agent-listing-batch"
 const ROLLOUT_ID = "019842aa-0000-4000-9000-00000000a9e5"
@@ -67,7 +67,7 @@ const shard = join(home, ".codex", "sessions", "2026", "07", "31")
 mkdirSync(shard, { recursive: true })
 writeFileSync(join(shard, `rollout-2026-07-31T10-00-00-${ROLLOUT_ID}.jsonl`), lines.join("\n") + "\n")
 
-const tmuxName = `fray-${SLUG}`
+const tmuxName = `frizz-${SLUG}`
 try {
   execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"], { stdio: "ignore" })
 } catch { /* already up */ }

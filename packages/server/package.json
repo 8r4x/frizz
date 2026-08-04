@@ -1,5 +1,5 @@
 {
-  "name": "@fray-ui/server",
+  "name": "@frizz/server",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -13,16 +13,16 @@
     "./dev-supervisor": "./src/dev-supervisor.ts",
     "./dev-child": "./src/dev-child.ts",
     "./boot-progress": "./src/boot-progress.ts",
-    "./fray-paths": "./src/fray-paths.ts",
+    "./frizz-paths": "./src/frizz-paths.ts",
     "./logging": "./src/logging.ts"
   },
   "scripts": {
     "postinstall": "node -e \"try{require('node:fs').chmodSync(require.resolve('node-pty/package.json').replace('package.json','prebuilds/'+process.platform+'-'+process.arch+'/spawn-helper'),0o755)}catch{}\""
   },
   "dependencies": {
-    "@fray-ui/claude-agent-sdk-runtime": "workspace:*",
-    "@fray-ui/rpc": "workspace:*",
-    "@fray-ui/shared": "workspace:*",
+    "@frizz/claude-agent-sdk-runtime": "workspace:*",
+    "@frizz/rpc": "workspace:*",
+    "@frizz/shared": "workspace:*",
     "@hono/node-server": "^1.13",
     "@parcel/watcher": "^2.5",
     "hono": "^4.7",

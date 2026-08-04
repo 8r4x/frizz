@@ -2,7 +2,7 @@
 // one off as an answerable card WITHIN the message's narrative flow (prose stays in place). Pure
 // string logic, no DOM — unit-testable.
 
-import { insideFence } from "@fray-ui/shared"
+import { insideFence } from "@frizz/shared"
 
 // The two answer MODES a ```question block can carry (the info-string picks one):
 //   question — single-select (radio feel) OR freetext; the default.
@@ -124,7 +124,7 @@ export interface ParsedQuestion {
 }
 
 // An option line: an optional markdown list marker (workers write options as `- A. …`), then a single
-// uppercase letter or a number, then `.`/`)`, then a space. Matches the fray worker convention.
+// uppercase letter or a number, then `.`/`)`, then a space. Matches the frizz worker convention.
 const OPTION_RE = /^\s*(?:[-*+]\s+)?([A-Z]|\d+)[.)]\s+\S/
 const REC_RE = /^\s*recommendation\b/i
 

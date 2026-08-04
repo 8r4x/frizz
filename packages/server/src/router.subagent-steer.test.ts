@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { BoardSnapshot, Settings } from "@fray-ui/shared"
+import type { BoardSnapshot, Settings } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
 import { createRouter } from "./router.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
@@ -30,13 +30,13 @@ function harness(subAgent: (slug: string, id: string) => SubAgentInfo, opts: {
   stopThrows?: Error
   // The live subtree hanging off the stopped row, deepest-first — what the tailer reads off sidecars.
   descendantTasks?: string[]
-  // Task ids whose stop throws, to pin that a descendant fray cannot end is COUNTED and stated
+  // Task ids whose stop throws, to pin that a descendant frizz cannot end is COUNTED and stated
   // rather than swallowed under a "stopped" the operator would read as "the work ended".
   stopFailsFor?: readonly string[]
   // The board's live shells, so a shell stop can read its own label for the kill notice.
   bgShells?: readonly { id: string; label: string; state?: string }[]
   // The broker's answer to "is this session's daemon still up" — the gate on the kill notice. Default
-  // true; false pins that fray reports the worker was NOT told rather than cold-starting a process.
+  // true; false pins that frizz reports the worker was NOT told rather than cold-starting a process.
   daemonAlive?: boolean
   // Make the notice delivery FAIL, to pin that a dead notice never turns a real kill into an error.
   followUpThrows?: Error
@@ -44,7 +44,7 @@ function harness(subAgent: (slug: string, id: string) => SubAgentInfo, opts: {
   // worth pinning (the route must not fire and the Claude path must be reached unchanged).
   codexTerminate?: (input: { threadSlug: string; sessionId: string; processId: string; notice?: string }) => { terminated: boolean; noticeFailed: string | null }
 } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "fray-subagent-steer-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-subagent-steer-"))
   const project: Project = { dir, id: "steer", name: "test", label: "test", stateDir: dir, cwdSlug: "test" }
   const storage = createStorage(join(dir, "ui.db"))
   const snapshot: BoardSnapshot = { projectDir: dir, projectName: "test", projectLabel: "test", threads: [], errors: [], warnings: [] }
@@ -74,7 +74,7 @@ function harness(subAgent: (slug: string, id: string) => SubAgentInfo, opts: {
   }
   const steers: { threadSlug: string; sessionId: string; subAgentId: string; text: string }[] = []
   const stops: { threadSlug: string; sessionId: string; taskId: string }[] = []
-  // Every message fray delivered into the worker's own conversation. For these tests that is only ever
+  // Every message frizz delivered into the worker's own conversation. For these tests that is only ever
   // the shell-kill notice — the one thing the provider does not tell a worker itself.
   const notices: { threadSlug: string; sessionId: string; text: string }[] = []
   const codexTerminations: { threadSlug: string; sessionId: string; processId: string; notice?: string }[] = []
@@ -115,7 +115,7 @@ function row(slug: string, over: Partial<SessionRow> = {}): SessionRow {
   return {
     slug,
     session_id: `sid-${slug}`,
-    tmux_name: `fray-${slug}`,
+    tmux_name: `frizz-${slug}`,
     spawned_at: "2026-07-28T00:00:00.000Z",
     last_read_at: null,
     unread: 0,
@@ -260,7 +260,7 @@ test("the × stops the subtree too, and reports the count that the vanished row 
 
 test("a descendant that cannot be stopped is stated, not swallowed — and never blocks the rest", async () => {
   // The benign cause is a race (it settled between the sidecar read and the stop), but a real failure
-  // is live work fray did not end, and the row is about to leave the board. Counting it and saying so
+  // is live work frizz did not end, and the row is about to leave the board. Counting it and saying so
   // is the whole point; a silent success here is the original bug one level down.
   const h = harness(() => RUNNING_DIRECT, {
     descendantTasks: ["agent-grand-a", "agent-grand-b"],
@@ -327,7 +327,7 @@ test("subAgentStop refuses runtimes without a real provider stop path", async ()
 // and it's still running." These pin the three branches that make the control honest again — a real
 // stop where one exists, no silent retire when the stop failed, and a stated REASON when the runtime
 // has no stop at all. The reason matters as much as the kill: a row that vanishes while the work
-// keeps burning tokens is the bug, whether or not fray could have prevented it.
+// keeps burning tokens is the bug, whether or not frizz could have prevented it.
 
 test("the × STOPS a broker-backed child for real, then retires the row", async () => {
   const h = harness(() => RUNNING_DIRECT)
@@ -394,7 +394,7 @@ test("a runtime with no stop path still clears the row, but SAYS the work may su
 // ── STOPPING A BACKGROUND SHELL ──────────────────────────────────────────────────────────────────
 //
 // The × was withheld from every running shell until 2026-08-01, on a premise that turned out to be
-// false: fray DOES hold a handle on a background Bash — the provider's own task id, which it has been
+// false: frizz DOES hold a handle on a background Bash — the provider's own task id, which it has been
 // recording off the launch ack all along, and which `Query.stopTask` accepts (verified end-to-end in
 // backend/_live_shell_stop.mts: the OS process dies within a second). The maintainer's case was a
 // watcher wedged for 24 hours with no way to clear it.
@@ -402,7 +402,7 @@ test("a runtime with no stop path still clears the row, but SAYS the work may su
 // The NOTICE is the other half and is shell-only. Measured on a real session
 // (backend/_live_shell_stop_notice.mts): stopping a sub-agent injects a `<task-notification>` the model
 // reads and acts on; stopping a shell injects NOTHING, and the model goes on believing its shell is
-// "presumably still running". These pin that fray fills exactly that gap, and only it.
+// "presumably still running". These pin that frizz fills exactly that gap, and only it.
 
 const RUNNING_SHELL = () => ({ outputFile: "/tmp/sh.log", state: "running" as const, direct: false, taskId: "bshell1" })
 const SHELL_LOOKUP = () => ({ command: "npx vite --port 5231", outputFile: "/tmp/sh.log", state: "running" as const })
@@ -421,7 +421,7 @@ test("the × STOPS a background shell for real, retires the row, and TELLS the w
     assert.equal(h.notices.length, 1, "the worker is told exactly once")
     // The worker must be able to tell WHICH of its shells died, so the notice carries the label the
     // worker itself gave the launch — read off the live row BEFORE the kill retires it.
-    assert.match(h.notices[0]!.text, /^\[fray\] /, "machine plumbing, hidden from the human's chat")
+    assert.match(h.notices[0]!.text, /^\[frizz\] /, "machine plumbing, hidden from the human's chat")
     assert.match(h.notices[0]!.text, /Watching CI/)
     assert.match(h.notices[0]!.text, /do not wait on it/)
   } finally {
@@ -470,7 +470,7 @@ test("a shell kill whose NOTICE cannot land is still a kill — and says the wor
   }
 })
 
-test("stopping a SUB-AGENT sends no fray notice — the provider already injects its own", async () => {
+test("stopping a SUB-AGENT sends no frizz notice — the provider already injects its own", async () => {
   const h = harness(() => RUNNING_DIRECT)
   try {
     seed(h.storage, "t")
@@ -560,7 +560,7 @@ test("subAgentTranscript reports steerability + the reason the drawer shows in p
     rmSync(settled.dir, { recursive: true, force: true })
   }
 
-  // An id fray cannot place at all stays exactly as it was: "gone", empty, and no affordance.
+  // An id frizz cannot place at all stays exactly as it was: "gone", empty, and no affordance.
   const gone = harness(() => undefined)
   try {
     seed(gone.storage, "t")
@@ -581,7 +581,7 @@ test("subAgentTranscript reports steerability + the reason the drawer shows in p
 // Both halves are measured, not assumed (backend/_live_codex_bgterm.mts + _live_codex_shell_stop.mts):
 // terminate really kills the OS process, and codex — like Claude — tells its agent NOTHING, because
 // completion there is polled rather than pushed. `thread/inject_items` is what closes that, and the
-// live probe's worker then said "the background command has been stopped … because fray explicitly
+// live probe's worker then said "the background command has been stopped … because frizz explicitly
 // told me the operator stopped it."
 
 test("the × on a CODEX shell terminates it by processId and injects the notice", async () => {
@@ -596,7 +596,7 @@ test("the × on a CODEX shell terminates it by processId and injects the notice"
     assert.equal(h.codexTerminations.length, 1)
     const call = h.codexTerminations[0]!
     assert.equal(call.processId, "24573", "the row's id IS the processId — codex has exactly one handle")
-    assert.match(call.notice ?? "", /^\[fray\] /, "machine plumbing, hidden from the human's chat")
+    assert.match(call.notice ?? "", /^\[frizz\] /, "machine plumbing, hidden from the human's chat")
     assert.match(call.notice ?? "", /gh run watch/, "the worker has to know WHICH command died")
     assert.match(call.notice ?? "", /do not wait on it or poll it again/, "codex completion is POLLED — saying 'do not wait' alone would leave it polling")
     assert.deepEqual(h.stops, [], "the Claude control was never touched")

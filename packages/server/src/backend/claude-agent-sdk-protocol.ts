@@ -33,7 +33,7 @@ const DELIVERABLE_CONTROL_CODES = new Set([9, 10, 13])
  *
  * U+200D ZERO WIDTH JOINER is `\p{Cf}`, so every multi-part emoji (👩‍💻, 🏳️‍🌈, 👨‍👩‍👧) was refused, along
  * with a pasted BOM, a zero-width space and a soft hyphen. And because the daemon swallowed the
- * refusal (`claude-agent-broker.ts`) the message then VANISHED while fray's RPC answered success.
+ * refusal (`claude-agent-broker.ts`) the message then VANISHED while frizz's RPC answered success.
  * Measured live in `_live_broker_input_drop.mts`: one sentence delivered plain, and the same sentence
  * disappeared with a single emoji appended. The identical bytes pasted into a tmux-backed thread go
  * through untouched, so the broker path was silently stricter than its sibling for the same prompt.
@@ -62,7 +62,7 @@ export type ClaudePermissionMode = "default" | "acceptEdits" | "bypassPermission
 
 // A capability a broker DAEMON advertises in its on-disk record, so the bridge can tell a daemon this
 // build forked from one a PREVIOUS build left running (they are detached and idle for six hours, so a
-// fray upgrade routinely reattaches to an old one and no handshake would reveal the difference).
+// frizz upgrade routinely reattaches to an old one and no handshake would reveal the difference).
 //
 // This one covers input ADDRESSING. A pre-2026-07-28 daemon validates an input message with a
 // validator that drops `parentToolUseId`, so a sub-agent steer sent to it arrives unaddressed — and an
@@ -71,7 +71,7 @@ export type ClaudePermissionMode = "default" | "acceptEdits" | "bypassPermission
 //
 // It lives HERE, in the pure protocol module, and deliberately not in claude-agent-broker.ts: that
 // file is the detached daemon's process entry point and throws at module scope when loaded as one
-// without FRAY_CLAUDE_BROKER. In the promoted artifact everything is a single bundle, so importing a
+// without FRIZZ_CLAUDE_BROKER. In the promoted artifact everything is a single bundle, so importing a
 // VALUE from it initializes it inside the SERVER process, the entry-point check passes on the bundle's
 // own path, and the guard takes down the control plane at boot — green on dev source, dead on the
 // artifact.
@@ -92,7 +92,7 @@ export const CLAUDE_BROKER_CAPABILITY_STOP_TASK = "stop-task-v1"
 
 // This one covers reloading the worker plugin closure IN PLACE through the Agent SDK's
 // `Query.reloadPlugins()` — the same thing `/reload-plugins` drives interactively. It exists because
-// the only way fray could previously pick up an edited hook, skill, agent profile or MCP tool was to
+// the only way frizz could previously pick up an edited hook, skill, agent profile or MCP tool was to
 // restart the worker process, which throws away the conversation to apply a file change the running
 // session could have re-read. Same gate reasoning as stop-task: an older surviving daemon ignores the
 // unknown frame, so the bridge refuses up front rather than letting the UI claim a reload happened.
@@ -121,7 +121,7 @@ export interface ClaudeInputMessage {
   id: string
   text: string
   // ADDRESSING. Absent/undefined ⇒ the message is a top-level turn for the session's main thread —
-  // every follow-up fray has ever sent. SET to a live Agent-tool dispatch's `tool_use_id` ⇒ the CLI
+  // every follow-up frizz has ever sent. SET to a live Agent-tool dispatch's `tool_use_id` ⇒ the CLI
   // routes the message INTO that running sub-agent's own conversation instead, which is how a human
   // steers a child mid-flight. Verified live against claude 2.1.220 / SDK 0.3.207: a message carrying
   // the child's tool_use_id reached the child (it acted on it, and only the CHILD's subagent JSONL
@@ -252,7 +252,7 @@ export interface ClaudeTaskUsage {
  *
  * EVERY field except `kind`/`phase` is optional and informational, because the mapper is required to
  * DEGRADE rather than throw (see mapAssistant's incident note in claude-agent-sdk.ts): a task event
- * fray cannot fully represent must cost that event's detail, never the session.
+ * frizz cannot fully represent must cost that event's detail, never the session.
  */
 export interface ClaudeTaskEvent {
   kind: "task"

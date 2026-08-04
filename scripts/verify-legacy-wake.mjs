@@ -19,7 +19,7 @@ const projectId = randomUUID()
 const projectDir = process.cwd()
 const project = { id: projectId, dir: projectDir }
 // The active runtime socket must DIFFER from deriveSocket(project.id) to reproduce the strand — that is
-// exactly the override/worktree/cross-version case. The tmux.ts module socket defaults to "fray", which
+// exactly the override/worktree/cross-version case. The tmux.ts module socket defaults to "frizz", which
 // already differs from this random project's deriveSocket, so the stranded-on-full-socket path is live.
 const fullSocket = deriveSocket(projectId)
 
@@ -31,11 +31,11 @@ function tmux(socket, ...a) {
 }
 function killSocket(socket) { try { tmux(socket, "kill-server") } catch {} }
 
-// tmux session name mirrors tmuxSessionName(slug); the scans key off the session name = "fray-<slug>".
+// tmux session name mirrors tmuxSessionName(slug); the scans key off the session name = "frizz-<slug>".
 // `cmd` is passed as SEPARATE argv after `--`, exactly as production's spawnWorker does (tmux.ts) — a
 // single quoted-string command would wrap args in quotes and misrepresent #{pane_start_command}.
 function scenario(label, slug, cmd, nativeId, backend, expectFound) {
-  const name = `fray-${slug}`
+  const name = `frizz-${slug}`
   killSocket(fullSocket)
   // Spawn a live pane on the FULL project socket whose start command carries the native id exactly like
   // a real days-old worker. cwd is the project dir so the belongs()/name checks pass.

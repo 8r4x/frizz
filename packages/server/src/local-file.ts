@@ -2,7 +2,7 @@ import { spawn, type SpawnOptions } from "node:child_process"
 import { realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { isAbsolute, join, resolve, sep } from "node:path"
-import type { LocalFileOpener } from "@fray-ui/shared"
+import type { LocalFileOpener } from "@frizz/shared"
 
 export type LocalFileOpenResult = { action: "opened"; path: string } | { action: "copy"; path: string }
 
@@ -22,7 +22,7 @@ export function resolveLocalFile(rawPath: string, roots: readonly string[]): str
   if (!isAbsolute(rawPath)) throw new Error("Local path must be absolute")
   let real: string
   try { real = realpathSync(rawPath) } catch { throw new Error("Local file was not found") }
-  if (!roots.some((root) => isUnder(real, root))) throw new Error("Local file is outside Fray's trusted roots")
+  if (!roots.some((root) => isUnder(real, root))) throw new Error("Local file is outside Frizz's trusted roots")
   try {
     if (!statSync(real).isFile()) throw new Error("Local path is not a regular file")
   } catch (error) {

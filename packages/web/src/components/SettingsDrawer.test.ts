@@ -6,7 +6,7 @@ const source = readFileSync(new URL("./SettingsDrawer.tsx", import.meta.url), "u
 const tooltipSource = readFileSync(new URL("./Tooltip.tsx", import.meta.url), "utf8")
 
 test("settings maps each contextual explanation to a help control", () => {
-  // `subagentInstructions` is gone: the settings preamble was retired in favour of FRAY.md, so there
+  // `subagentInstructions` is gone: the settings preamble was retired in favour of FRIZZ.md, so there
   // is exactly one operator-authored surface for project conventions.
   for (const key of ["permissionMode", "font", "compact", "notifications"]) {
     assert.match(source, new RegExp(`\\b${key}:`), `missing settings help mapping: ${key}`)
@@ -23,8 +23,8 @@ test("the drawer no longer duplicates the composer's controls or offers vestigia
   // divergent copy of them here was only ever a way to confuse which one applied.
   assert.doesNotMatch(source, /label="Model"/)
   assert.doesNotMatch(source, /label="Effort"/)
-  // The Runtime QA gate setting is gone entirely — browser-QA policy is a project's own FRAY.md
-  // concern, not a global Fray switch.
+  // The Runtime QA gate setting is gone entirely — browser-QA policy is a project's own FRIZZ.md
+  // concern, not a global Frizz switch.
   assert.doesNotMatch(source, /Runtime QA gate/)
   assert.doesNotMatch(source, /runtimeGate/)
   // Auto-resume after a usage limit is unconditional now: nothing to turn off.

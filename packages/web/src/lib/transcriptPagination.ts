@@ -1,4 +1,4 @@
-import type { TranscriptMessage, TranscriptPage } from "@fray-ui/shared"
+import type { TranscriptMessage, TranscriptPage } from "@frizz/shared"
 
 export type PaginatedTranscriptData = TranscriptPage & { historyLoaded?: boolean }
 

@@ -15,7 +15,7 @@ import type {
   InteractionRecord,
   InteractionValues,
   ThreadView,
-} from "@fray-ui/shared"
+} from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import {
   failClosedAmbiguousInteraction,
@@ -57,7 +57,7 @@ function errorText(error: unknown): string {
 
 function newResponseId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID()
-  return `fray-response-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  return `frizz-response-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
 export function InteractionStack({
@@ -194,7 +194,7 @@ function InteractionQuestionCard({
       void qc.invalidateQueries({ queryKey: interactionRecordKey(record.owner.threadSlug, record.owner.sessionId, record.id) })
     },
     onError: (cause) => {
-      // Fail CLOSED on an ambiguous write, exactly as the typed card does: a response fray cannot
+      // Fail CLOSED on an ambiguous write, exactly as the typed card does: a response frizz cannot
       // prove landed must not look re-sendable.
       failClosedAmbiguousInteraction(qc, record)
       setError(errorText(cause))
@@ -352,10 +352,10 @@ function InteractionApprovalCard({
 
   const mutation = useMutation<MutationResult, unknown, MutationAction>({
     mutationFn: async ({ decision, values, responseId }) => {
-      // A Fray-owned request has no provider delivery to acknowledge; its advertised cancel is a
+      // A Frizz-owned request has no provider delivery to acknowledge; its advertised cancel is a
       // journal cancellation. Provider-backed cancel choices travel through resolve so the provider
       // receives the exact advertised decision.
-      if (decision.semantic === "cancel" && record.provider.kind === "fray") {
+      if (decision.semantic === "cancel" && record.provider.kind === "frizz") {
         const result = await rpc.interactionCancel({
           slug: record.owner.threadSlug,
           sessionId: record.owner.sessionId,
@@ -532,7 +532,7 @@ function InteractionApprovalCard({
               <KeyRound aria-hidden="true" size={14} className="mt-0.5 shrink-0" />
               <div>
                 <div className="font-medium">Secret input is unavailable in this page.</div>
-                <div className="mt-1 text-amber-100/70">Fray will not persist or send secret values through the current RPC.</div>
+                <div className="mt-1 text-amber-100/70">Frizz will not persist or send secret values through the current RPC.</div>
               </div>
             </div>
             <div className="mt-2 font-medium">Use the provider's trusted secret-input flow. The thread terminal cannot answer this typed request.</div>
@@ -542,7 +542,7 @@ function InteractionApprovalCard({
         {unavailableCount > 0 && (
           <div className="mt-3 flex items-start gap-2 rounded-md border border-amber-500/25 bg-amber-500/[0.05] px-3 py-2 text-[11px] leading-snug text-amber-100/75">
             <AlertTriangle aria-hidden="true" size={13} className="mt-0.5 shrink-0" />
-            <span>{unavailableCount === 1 ? "One advertised choice" : `${unavailableCount} advertised choices`} cannot be safely labeled or delivered in Fray and is not shown.</span>
+            <span>{unavailableCount === 1 ? "One advertised choice" : `${unavailableCount} advertised choices`} cannot be safely labeled or delivered in Frizz and is not shown.</span>
           </div>
         )}
 

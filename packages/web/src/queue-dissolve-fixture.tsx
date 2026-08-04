@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
-import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@fray-ui/shared"
+import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@frizz/shared"
 import { TodosView } from "./components/TodosView.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
@@ -61,7 +61,7 @@ function makeThread(id: string, title: string): ThreadViewModel {
 }
 
 const threads = CARDS.map((c) => makeThread(c.id, c.title))
-store.board = { projectDir: "/fixture/fray", threads } as BoardSnapshot
+store.board = { projectDir: "/fixture/frizz", threads } as BoardSnapshot
 
 function transcriptFor(slug: string, title: string): { messages: TranscriptMessage[]; transcriptKey: string; hasEarlier: boolean; historyLoaded: boolean } {
   const n = CARDS.findIndex((c) => c.id === slug) + 1

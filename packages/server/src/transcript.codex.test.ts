@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { GITHUB_DISPATCH_UI_BOUNDARY, wakeDeliveryToken } from "@fray-ui/shared"
+import { GITHUB_DISPATCH_UI_BOUNDARY, wakeDeliveryToken } from "@frizz/shared"
 import { pageProjectedTranscript, parseCodexTranscript, projectCodexTranscript } from "./transcript.ts"
 import { CODEX_FIRST_FINAL_TITLE_TRANSPORT, CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT } from "./backend/codex.ts"
 
@@ -50,8 +50,8 @@ test("codex fixture (tui-single-turn): user prompt + assistant turn with an exec
 })
 
 test("Codex title transport is hidden from first commentary and every finalized response while legacy H1 remains compatible", () => {
-  const opening = '<!-- fray title="Fix queue focus" -->\nI’m checking the queue.'
-  const first = '<!-- fray title="Fix queue focus" -->\nFirst visible answer'
+  const opening = '<!-- frizz title="Fix queue focus" -->\nI’m checking the queue.'
+  const first = '<!-- frizz title="Fix queue focus" -->\nFirst visible answer'
   const later = "# Quoted later marker\nSecond visible answer"
   const raw = rollout([
     { type: "event_msg", payload: { type: "user_message", message: "first task" } },
@@ -82,13 +82,13 @@ test("Codex commentary keeps an ordinary leading H1 while hiding only the new at
 })
 
 test("Codex task_complete-only fallback strips the first title marker from visible prose", () => {
-  const answer = "<!-- fray-title: Completion fallback -->\nVisible fallback"
+  const answer = "<!-- frizz-title: Completion fallback -->\nVisible fallback"
   const msgs = parseCodexTranscript(rollout([
     { type: "event_msg", payload: { type: "user_message", message: "task" } },
     { type: "event_msg", payload: { type: "task_complete", last_agent_message: answer } },
   ]))
   assert.equal(msgs[1].text, "Visible fallback")
-  assert.doesNotMatch(JSON.stringify(msgs), /fray-title/)
+  assert.doesNotMatch(JSON.stringify(msgs), /frizz-title/)
 })
 
 test("a codex turn bracket closes the turn with a rest divider, and separates back-to-back turns", () => {
@@ -210,7 +210,7 @@ test("codex fixture (exec wrapper): common nested tools expose command, input, r
     "printf 'alpha\\nbeta\\n'\nprintf 'alpha\\nbeta\\n' | wc -l",
     "printf 'expected failure\\n' >&2\nexit 7",
   ])
-  assert.equal(bash[0].output, "/tmp/fray-tool-sample")
+  assert.equal(bash[0].output, "/tmp/frizz-tool-sample")
   assert.equal(bash[2].output, "README.md:1:TOOL_RENDER_NEEDLE")
   assert.equal(bash[4].status, "failed")
   assert.equal(bash[4].exitCode, 7)
@@ -221,7 +221,7 @@ test("codex fixture (exec wrapper): common nested tools expose command, input, r
   assert.match(failedPatch.input ?? "", /Begin Patch/)
   assert.match(failedPatch.output ?? "", /verification failed/)
   assert.equal(successfulPatch.status, "completed")
-  assert.equal(successfulPatch.edit?.file, "/tmp/fray-tool-sample/src/greet.ts")
+  assert.equal(successfulPatch.edit?.file, "/tmp/frizz-tool-sample/src/greet.ts")
   assert.match(successfulPatch.edit?.new ?? "", /hello/)
 
   // The closing plan: everything done, so the card headlines nothing and its counter says 2/2. The
@@ -232,13 +232,13 @@ test("codex fixture (exec wrapper): common nested tools expose command, input, r
     { text: "Patch and verify", status: "completed" },
   ])
   assert.equal(a.tools[8].input, "Fixture complete.")
-  assert.match(a.text, /FRAY_TOOL_RENDER_FIXTURE_DONE/)
+  assert.match(a.text, /FRIZZ_TOOL_RENDER_FIXTURE_DONE/)
 })
 
 test("real 0.144.1 exec wrapper shapes preserve cwd, yielded session, poll target, duration, and plan progress", () => {
   const exec = `const r = await tools.exec_command({
   cmd: "printf 'tick-1\\n'\nsleep 0.5\nprintf 'tick-2\\n'",
-  workdir: "/tmp/fray-tool-render-real.zikelm",
+  workdir: "/tmp/frizz-tool-render-real.zikelm",
   yield_time_ms: 250,
   max_output_tokens: 2000
 });
@@ -283,7 +283,7 @@ text(r);
   ])
   const [bash, planned] = parseCodexTranscript(raw)[0].tools
   assert.equal(bash.name, "Bash")
-  assert.equal(bash.cwd, "/tmp/fray-tool-render-real.zikelm")
+  assert.equal(bash.cwd, "/tmp/frizz-tool-render-real.zikelm")
   assert.equal(bash.sessionId, 20444)
   assert.ok(Math.abs((bash.durationMs ?? 0) - 253.269375) < 0.001)
   assert.equal(bash.status, "completed")
@@ -371,7 +371,7 @@ test("real collaboration shapes show targets/summaries, never encrypted messages
   assert.equal(spawned.detail, "reviewer")
   assert.equal(spawned.status, "failed")
   // Model+effort ride the header's `subagentType` tag now (the codex analogue of Claude's
-  // `[fray:opus-high]`), so the dispatch cell reads at a glance instead of only inside the payload.
+  // `[frizz:opus-high]`), so the dispatch cell reads at a glance instead of only inside the payload.
   assert.equal(spawned.subagentType, "gpt-5.6-sol/high")
   assert.match(spawned.input ?? "", /fork_context/)
   // This spawn was REJECTED, so no child exists: the card must not offer a drill-in that can only ever
@@ -466,13 +466,13 @@ test("a REJECTED codex spawn can never be credited with a later child's report",
 
 test("tool payloads are bounded/redacted and call-only records remain visibly pending", () => {
   const raw = rollout([
-    { type: "response_item", payload: { type: "function_call", call_id: "secret", name: "exec_command", arguments: JSON.stringify({ cmd: "export FRAY_API_TOKEN=super-secret-value\nprintf ok" }) } },
-    { type: "response_item", payload: { type: "function_call_output", call_id: "secret", output: "FRAY_API_TOKEN=leaked-value" } },
+    { type: "response_item", payload: { type: "function_call", call_id: "secret", name: "exec_command", arguments: JSON.stringify({ cmd: "export FRIZZ_API_TOKEN=super-secret-value\nprintf ok" }) } },
+    { type: "response_item", payload: { type: "function_call_output", call_id: "secret", output: "FRIZZ_API_TOKEN=leaked-value" } },
     { type: "response_item", payload: { type: "function_call", call_id: "pending", name: "web_search", arguments: JSON.stringify({ query: "rollout schema" }) } },
   ])
   const [secret, pending] = parseCodexTranscript(raw)[0].tools
-  assert.equal(secret.command, "export FRAY_API_TOKEN=[redacted]\nprintf ok")
-  assert.equal(secret.output, "FRAY_API_TOKEN=[redacted]")
+  assert.equal(secret.command, "export FRIZZ_API_TOKEN=[redacted]\nprintf ok")
+  assert.equal(secret.output, "FRIZZ_API_TOKEN=[redacted]")
   assert.equal(secret.status, "completed")
   assert.equal(pending.status, "pending")
 })
@@ -541,7 +541,7 @@ test("JSON-quoted credentials, padded ciphertext, JWTs, and structured result er
         type: "function_call",
         call_id: "secret-json",
         name: "custom_tool",
-        arguments: JSON.stringify({ headers: { Authorization: "Bearer top-secret-value" }, FRAY_API_TOKEN: "json-secret-value", token: "bare-token-value", credential: "credential-value", encrypted, jwt }),
+        arguments: JSON.stringify({ headers: { Authorization: "Bearer top-secret-value" }, FRIZZ_API_TOKEN: "json-secret-value", token: "bare-token-value", credential: "credential-value", encrypted, jwt }),
       },
     },
     {
@@ -549,7 +549,7 @@ test("JSON-quoted credentials, padded ciphertext, JWTs, and structured result er
       payload: {
         type: "function_call_output",
         call_id: "secret-json",
-        output: JSON.stringify({ error: "FRAY_API_TOKEN=result-secret-value", Authorization: "Bearer result-token" }),
+        output: JSON.stringify({ error: "FRIZZ_API_TOKEN=result-secret-value", Authorization: "Bearer result-token" }),
       },
     },
   ])
@@ -632,7 +632,7 @@ const PNG_1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9
 const PNG_1x1_ALT = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
 function writeTempPng(name: string, b64 = PNG_1x1): string {
-  const path = join(mkdtempSync(join(tmpdir(), "fray-view-image-")), name)
+  const path = join(mkdtempSync(join(tmpdir(), "frizz-view-image-")), name)
   writeFileSync(path, Buffer.from(b64, "base64"))
   return path
 }
@@ -662,7 +662,7 @@ test("a direct view_image function_call renders the picture inline, never an '[i
   assert.equal(call.status, "completed")
   assert.equal(call.output, undefined, "the placeholder is suppressed — the picture is the content")
   assert.ok(call.outputImage, "outputImage is set")
-  assert.match(call.outputImage!, /fray-tool-images[/\\][0-9a-f]{32}\.png$/)
+  assert.match(call.outputImage!, /frizz-tool-images[/\\][0-9a-f]{32}\.png$/)
   // The cache copy holds the source bytes verbatim, so /local-image serves the real picture.
   assert.deepEqual(readFileSync(call.outputImage!), Buffer.from(PNG_1x1, "base64"))
 })
@@ -683,7 +683,7 @@ test("re-viewing an OVERWRITTEN path shows each view's own bytes, not the final 
 })
 
 test("a view_image of a path that no longer exists degrades to a header-only card", () => {
-  const call = viewImageTool("vi3", "/tmp/fray-does-not-exist-9137.png")
+  const call = viewImageTool("vi3", "/tmp/frizz-does-not-exist-9137.png")
   assert.equal(call.name, "View image")
   assert.equal(call.outputImage, undefined)
   assert.equal(call.output, undefined, "still no '[image output]' placeholder body")
@@ -706,7 +706,7 @@ test("the exec-wrapper view_image form also renders the picture", () => {
 })
 
 test("a view_image of a NON-image path is not served as a picture", () => {
-  const path = join(mkdtempSync(join(tmpdir(), "fray-view-image-")), "notes.txt")
+  const path = join(mkdtempSync(join(tmpdir(), "frizz-view-image-")), "notes.txt")
   writeFileSync(path, "not a picture")
   const call = viewImageTool("vi5", path)
   assert.equal(call.name, "View image")
@@ -851,26 +851,26 @@ test("codex unknown tool degrades to a generic card (name + a hint), never a thr
   assert.equal(call.edit, undefined)
 })
 
-test("codex first user message preserves the task while stripping only Fray dispatch scaffolding, title trailer, and sentinel", () => {
-  const composed = `WORKER CONTRACT stuff\n\nscratchpad orientation\n\nSome preamble\nTASK:\nActually do the thing\n\n${CODEX_FIRST_FINAL_TITLE_TRANSPORT}\n\n<!-- fray-session:01234567-89ab-cdef-0123-456789abcdef -->`
+test("codex first user message preserves the task while stripping only Frizz dispatch scaffolding, title trailer, and sentinel", () => {
+  const composed = `WORKER CONTRACT stuff\n\nscratchpad orientation\n\nSome preamble\nTASK:\nActually do the thing\n\n${CODEX_FIRST_FINAL_TITLE_TRANSPORT}\n\n<!-- frizz-session:01234567-89ab-cdef-0123-456789abcdef -->`
   const raw = rollout([{ type: "event_msg", payload: { type: "user_message", message: composed } }])
   const msgs = parseCodexTranscript(raw)
   // The dispatch scaffolding is a DISPLAY projection: the bubble is the task, the stored text keeps the
-  // machine-facing prompt. (The title trailer and sentinel are genuinely removed — they are Fray's own
+  // machine-facing prompt. (The title trailer and sentinel are genuinely removed — they are Frizz's own
   // transport, not something the worker was ever meant to read back.)
   assert.equal(msgs[0].displayText, "Actually do the thing")
   assert.match(msgs[0].text, /^WORKER CONTRACT stuff/)
-  assert.doesNotMatch(msgs[0].text, /FRAY TITLE TRANSPORT|fray-session:/)
+  assert.doesNotMatch(msgs[0].text, /FRIZZ TITLE TRANSPORT|frizz-session:/)
 })
 
 test("codex first user message strips the exact legacy H1 title trailer without rewriting old transcripts", () => {
   const task = "Keep this human task exactly as written."
-  const composed = `WORKER CONTRACT stuff\n\nTASK:\n${task}\n\n${CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT}\n\n<!-- fray-session:01234567-89ab-cdef-0123-456789abcdef -->`
+  const composed = `WORKER CONTRACT stuff\n\nTASK:\n${task}\n\n${CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT}\n\n<!-- frizz-session:01234567-89ab-cdef-0123-456789abcdef -->`
   const [message] = parseCodexTranscript(rollout([{ type: "event_msg", payload: { type: "user_message", message: composed } }]))
   assert.equal(message.displayText, task)
-  assert.doesNotMatch(message.text, /FRAY TITLE TRANSPORT|# Title/)
+  assert.doesNotMatch(message.text, /FRIZZ TITLE TRANSPORT|# Title/)
 
-  const almostGenerated = `${task}\n\n${CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT}\n\n<!-- fray-session:not-a-uuid -->`
+  const almostGenerated = `${task}\n\n${CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT}\n\n<!-- frizz-session:not-a-uuid -->`
   const [ordinary] = parseCodexTranscript(rollout([{ type: "event_msg", payload: { type: "user_message", message: `contract\nTASK:\n${almostGenerated}` } }]))
   // The general sentinel stripper still hides the discovery comment, but the invalid UUID must not
   // authorize removal of the adjacent title-looking human prose.
@@ -879,7 +879,7 @@ test("codex first user message strips the exact legacy H1 title trailer without 
 
 test("codex first user message retains ordinary title-transport-like prose", () => {
   const task = `${CODEX_FIRST_FINAL_TITLE_TRANSPORT}\n\nThis sentence is part of the human task.`
-  const raw = rollout([{ type: "event_msg", payload: { type: "user_message", message: `contract\nTASK:\n${task}\n\n<!-- fray-session:01234567-89ab-cdef-0123-456789abcdef -->` } }])
+  const raw = rollout([{ type: "event_msg", payload: { type: "user_message", message: `contract\nTASK:\n${task}\n\n<!-- frizz-session:01234567-89ab-cdef-0123-456789abcdef -->` } }])
   const [message] = parseCodexTranscript(raw)
   assert.equal(message.displayText, task)
 })
@@ -896,9 +896,9 @@ URL: https://github.com/cli/cli/pull/13844
 ${GITHUB_DISPATCH_UI_BOUNDARY}
 
 Adversarially audit the full diff, tests, and CI. This machine tail stays in the transcript.`
-  const composed = `worker contract\n\nTASK:\n${task}\n\n<!-- fray-session:abc-123 -->`
+  const composed = `worker contract\n\nTASK:\n${task}\n\n<!-- frizz-session:abc-123 -->`
   const [message] = parseCodexTranscript(rollout([{ type: "event_msg", payload: { type: "user_message", message: composed } }]))
-  // Both envelopes peel for display — fray's dispatch scaffolding, then the GitHub template.
+  // Both envelopes peel for display — frizz's dispatch scaffolding, then the GitHub template.
   assert.equal(
     message.displayText,
     "Investigate this issue and make recommendations\n\nPR #13844: perf(status): O(1) map lookup\nRepository: cli/cli\nURL: https://github.com/cli/cli/pull/13844",
@@ -912,7 +912,7 @@ test("codex wake delivery hides the wake token in the bubble while the stored te
   const steer = "⏳ The session usage limit that interrupted you has reset. Continue exactly where you left off."
   const delivered = `${steer}\n\n${wakeDeliveryToken("e9590807642cfee10b251fa5c230e3ba27f02f978475d883411a5c35e81d68c0")}`
   const raw = rollout([
-    { type: "event_msg", payload: { type: "user_message", message: "contract\nTASK:\nthe task\n\n<!-- fray-session:s1 -->" } },
+    { type: "event_msg", payload: { type: "user_message", message: "contract\nTASK:\nthe task\n\n<!-- frizz-session:s1 -->" } },
     { type: "event_msg", payload: { type: "agent_message", phase: "final_answer", message: "ok" } },
     { type: "event_msg", payload: { type: "user_message", message: delivered } },
   ])
@@ -925,7 +925,7 @@ test("codex wake delivery hides the wake token in the bubble while the stored te
 
 test("codex follow-up (resume) user message renders in full (no first-message strip, no sentinel)", () => {
   const raw = rollout([
-    { type: "event_msg", payload: { type: "user_message", message: "first\nTASK:\nthe task\n\n<!-- fray-session:s1 -->" } },
+    { type: "event_msg", payload: { type: "user_message", message: "first\nTASK:\nthe task\n\n<!-- frizz-session:s1 -->" } },
     { type: "event_msg", payload: { type: "agent_message", phase: "final_answer", message: "ok" } },
     { type: "event_msg", payload: { type: "user_message", message: "now also handle the edge case" } },
   ])
@@ -1065,7 +1065,7 @@ test("an MCP take_screenshot decodes its inline shot and drops the '[image outpu
   // fallback had picked the `format` arg, labelling every shot with its file extension.
   assert.equal(call.detail, "viewport")
   assert.ok(call.outputImage, "the shot is decoded to a servable path")
-  assert.match(call.outputImage!, /fray-tool-images[/\\][0-9a-f]{32}\.png$/)
+  assert.match(call.outputImage!, /frizz-tool-images[/\\][0-9a-f]{32}\.png$/)
   assert.deepEqual(readFileSync(call.outputImage!), Buffer.from(PNG_1x1, "base64"))
   // The wall-time envelope duplicates the card's own duration meta, and the stand-in captions a picture
   // the reader can now see. Only the real sentence survives — and the duration still parses out of it.

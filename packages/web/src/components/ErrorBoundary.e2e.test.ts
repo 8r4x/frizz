@@ -3,13 +3,13 @@ import test, { after } from "node:test"
 
 // Runtime coverage for the render-error boundaries. Skipped unless a Vite URL serving the fixtures is
 // provided (same pattern as the other *.e2e.test.ts here): start `vite` in packages/web and set
-// FRAY_ERROR_BOUNDARY_E2E_URL to its origin.
+// FRIZZ_ERROR_BOUNDARY_E2E_URL to its origin.
 //
 // The bug these exist for produced a BLANK WINDOW, so "the page is not blank" is the assertion that
 // matters and it can only be made in a real browser — a server-rendered string cannot show that React
 // tore the root down. error-boundary-fixture.tsx throws the real production shape (a free identifier
 // left by an artifact built from a torn tree → ReferenceError on first render).
-const baseUrl = process.env.FRAY_ERROR_BOUNDARY_E2E_URL
+const baseUrl = process.env.FRIZZ_ERROR_BOUNDARY_E2E_URL
 
 // ONE browser for the whole file, a fresh page per test. Launching Chrome four times cost more than
 // every assertion here put together and pushed individual tests past their timeout on a machine
@@ -97,11 +97,11 @@ test("a throwing workpane falls back to a panel in place, not a blank page", {
     const text = await page.evaluate(() => document.querySelector("[data-error-panel]")!.textContent ?? "")
     assert.match(text, /Something went wrong rendering the queue\./)
     assert.match(text, /ReferenceError/)
-    // Try again / Reload fray are the two ways out and both must be offered.
+    // Try again / Reload frizz are the two ways out and both must be offered.
     const labels = await page.evaluate(() =>
       [...document.querySelectorAll("[data-error-panel] button")].map((b) => b.textContent?.trim() ?? ""),
     )
-    assert.deepEqual(labels, ["Try again", "Reload fray"])
+    assert.deepEqual(labels, ["Try again", "Reload frizz"])
   } finally {
     await page.close()
   }
@@ -119,7 +119,7 @@ test("the root boundary is the last resort — a throw above every surface still
       text: document.querySelector("[data-error-panel]")!.textContent ?? "",
     }))
     assert.ok(state.rootChildren > 0)
-    assert.match(state.text, /Something went wrong rendering fray\./)
+    assert.match(state.text, /Something went wrong rendering frizz\./)
     assert.match(state.text, /ReferenceError/)
   } finally {
     await page.close()

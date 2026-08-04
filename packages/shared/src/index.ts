@@ -40,14 +40,14 @@ export function isAllowedAttachmentName(name: string): boolean {
 // The <input accept> value for the file picker: every allowed extension as `.ext`.
 export const ATTACHMENT_ACCEPT = ATTACHMENT_EXTENSIONS.map((e) => `.${e}`).join(",")
 
-// ---- Fray board vocabulary (mirrors board/config.mjs) ----
+// ---- Frizz board vocabulary (mirrors board/config.mjs) ----
 
-// Declaration order IS the lifecycle order (STATUS_ORDER = FrayStatus.options), consumed by the
+// Declaration order IS the lifecycle order (STATUS_ORDER = FrizzStatus.options), consumed by the
 // status pickers and the roadmap-count ordering. `needs-human` is a FIRST-CLASS status — the declared
 // "awaiting a human" state and THE queue definition — and sits at the human gate between `active`
 // (work in flight) and `blocked` (now narrowed to machine-waits only: blocking_threads / revalidate_at).
-export const FrayStatus = z.enum(["planning", "planned", "active", "needs-human", "blocked", "done", "dismissed"])
-export type FrayStatus = z.infer<typeof FrayStatus>
+export const FrizzStatus = z.enum(["planning", "planned", "active", "needs-human", "blocked", "done", "dismissed"])
+export type FrizzStatus = z.infer<typeof FrizzStatus>
 
 // How a blocked thread unblocks. `human` = the awaiting-you queue.
 export const BlockMechanism = z.enum(["human", "threads", "timer"])
@@ -76,7 +76,7 @@ export type Backend = z.infer<typeof Backend>
 // `gpt-5.6` that codex 400s, and a single hardcoded effort set that's wrong per-model). `slug` is the
 // `codex -m` id; `efforts` is exactly that model's supported reasoning levels (5.6 → …/max/ultra, 5.5 →
 // …/xhigh), so the effort dropdown offers only what the chosen model actually accepts. Ordered by the
-// cache's `priority` (index 0 = the codex default). See .fray/codex-model-cache.md.
+// cache's `priority` (index 0 = the codex default). See .frizz/codex-model-cache.md.
 export const CodexModel = z.object({
   slug: z.string(),
   displayName: z.string(),
@@ -104,10 +104,10 @@ export const ThreadAgent = z.object({
 })
 
 // A LIVE background sub-agent the thread's worker dispatched and is now resting against — derived by
-// the JSONL tailer from Agent-tool dispatches + their task-notifications, NOT the .fray file. This is
+// the JSONL tailer from Agent-tool dispatches + their task-notifications, NOT the .frizz file. This is
 // what makes a "dispatched a sub-agent, then came to rest" worker read as in-motion rather than idle.
 // `running` = the child's transcript is still being appended to; `stale` = no output for a while (a
-// completion record we likely missed). Distinct from `ThreadAgent`/`agents` (fray frontmatter).
+// completion record we likely missed). Distinct from `ThreadAgent`/`agents` (frizz frontmatter).
 export const SubAgentView = z.object({
   label: z.string(), // the dispatch's `description` (e.g. "Investigate nubjs/nub GitHub issue 376")
   startedAt: z.string(), // ISO8601 of the dispatch record
@@ -131,7 +131,7 @@ export const SubAgentView = z.object({
   // server that doesn't emit it yet → the drill-in drawer's entry point is simply not offered. Present
   // → the banner row / AgentBlock is clickable and resolves this exact child's transcript.
   id: z.string().optional(),
-  // Can fray actually END this child's work right now? Computed SERVER-side (board.ts, the one place
+  // Can frizz actually END this child's work right now? Computed SERVER-side (board.ts, the one place
   // holding both the session row and the tailer's telemetry) and never re-derived by a client — the
   // same discipline as `steerable`, and for the same reason: the policy depends on the thread's
   // TRANSPORT, which the browser has no honest way to know.
@@ -199,7 +199,7 @@ export const BgShellView = z.object({
   startedAt: z.string(), // ISO8601 of the launch record
   state: z.enum(["running", "stale"]),
   id: z.string().optional(),
-  // Can fray actually END this shell right now? The same contract as SubAgentView.stoppable — computed
+  // Can frizz actually END this shell right now? The same contract as SubAgentView.stoppable — computed
   // server-side, never re-derived by a client — but it takes TWO answers, because a shell's control
   // handle is not implied by the thread's transport alone:
   //   · the TAILER contributes "we hold a provider task handle for this shell" (its launch ack names
@@ -210,20 +210,20 @@ export const BgShellView = z.object({
   // the transport would render and then fail — "We shouldn't show the X if it doesn't fucking work".
   //
   // Until 2026-08-01 this field did not exist and no shell could be stopped: the server refused
-  // categorically, on the belief that fray "holds no handle on its process". That was measured wrong —
+  // categorically, on the belief that frizz "holds no handle on its process". That was measured wrong —
   // a background Bash is a TASK in the same session-wide registry a sub-agent lives in, so
   // `Query.stopTask` ends it (verified end-to-end in backend/_live_shell_stop.mts: the OS process is
   // gone inside a second).
   stoppable: z.boolean().optional(),
-  // Fray cannot read this shell's output, so the row must NOT offer a drill-in. True only for a CODEX
+  // Frizz cannot read this shell's output, so the row must NOT offer a drill-in. True only for a CODEX
   // background exec: codex keeps a yielded command's output inside its own session and hands it back
-  // only when the model polls, so there is no file for fray to tail — unlike a Claude shell, whose
-  // output file fray reads directly. Absent ⇒ readable, which is every row that predates codex shells.
+  // only when the model polls, so there is no file for frizz to tail — unlike a Claude shell, whose
+  // output file frizz reads directly. Absent ⇒ readable, which is every row that predates codex shells.
   //
   // A positive flag for the EXCEPTION rather than a `readable` that every existing row would have to
   // start setting: an old snapshot then keeps its drill-in instead of silently losing it.
   outputUnavailable: z.boolean().optional(),
-  // The command this shell runs, when fray knows it independently of the label. Set only on a CODEX
+  // The command this shell runs, when frizz knows it independently of the label. Set only on a CODEX
   // row, where it is the ONE thing the board's copy of the shell and the transcript's copy share — see
   // lib/childOps.ts mergeBackgroundShells, which reconciles the two on it. A Claude row leaves it
   // absent: its two copies already reconcile on the launch tool_use id, and a `command` that merely
@@ -281,7 +281,7 @@ export type PendingAsk = z.infer<typeof PendingAsk>
 
 // A backend-native terminal modal that has paused the session outside the transcript. Deliberately
 // carries no option values or tool payload: those may contain commands, repository data, or secrets;
-// Fray only needs a safe family/title to route the human to the terminal without auto-answering.
+// Frizz only needs a safe family/title to route the human to the terminal without auto-answering.
 export const NativeInputRequired = z.object({
   kind: z.enum(["tool-approval", "permission", "confirmation", "selection"]),
   title: z.string().max(120),
@@ -290,9 +290,9 @@ export type NativeInputRequired = z.infer<typeof NativeInputRequired>
 
 // ---- Session-first signal model (2026-07-09) ----
 // Threads ARE sessions now (the user-facing word stays THREAD — maintainer-settled): the primary
-// listing entity is a claude session discovered from the project's JSONL dir, registered (fray-
+// listing entity is a claude session discovered from the project's JSONL dir, registered (frizz-
 // spawned, tmux-attached) or FOREIGN (a maintainer terminal — no registry row, read-only, no tmux
-// verbs). Legacy .fray/<slug>.md rows survive read-only in a collapsed Legacy shelf. The queue
+// verbs). Legacy .frizz/<slug>.md rows survive read-only in a collapsed Legacy shelf. The queue
 // inversion: a thread at rest is awaiting the human UNLESS it excused itself with a signal fence.
 
 // A parked-wait hint parsed from `<kind>: <value>` lines in an ```awaiting fence body. `pr-watch`,
@@ -350,7 +350,7 @@ export const SnoozeUntil = z.string().regex(
 export type SnoozeUntil = z.infer<typeof SnoozeUntil>
 
 // The follow-up a snooze carries. Its presence is what turns a snooze from a passive reminder (the
-// card re-surfaces, you act) into a SCHEDULED BUMP (fray resumes the agent with this text at the
+// card re-surfaces, you act) into a SCHEDULED BUMP (frizz resumes the agent with this text at the
 // deadline). Trimmed at the boundary so whitespace can never arm a wake that delivers nothing, and
 // capped like a composer message because it is delivered as an ordinary user turn.
 export const SNOOZE_PROMPT_MAX = 4000
@@ -415,7 +415,7 @@ export type ThreadRecurringPrompt = z.infer<typeof ThreadRecurringPrompt>
 // ---- The opt-out ---------------------------------------------------------------------------------
 // THE OPT-OUT, shared by both triggers and deliberately hard to reach for.
 //
-// A worker that replies ALLDONE is saying "there is no further work here", and fray stops prompting it
+// A worker that replies ALLDONE is saying "there is no further work here", and frizz stops prompting it
 // — BOTH triggers, because a run that keeps being woken has not stalled and the whole point of the word
 // is that it has. It is not a "skip this one" — it is the end of the arrangement, and nothing but new
 // activity on the thread reopens it. Both delivered messages therefore OFFER it in one de-emphasized
@@ -434,7 +434,7 @@ export const ALLDONE_SENTINEL = "ALLDONE"
 /** Does this assistant text defer its recurring prompt? True iff some line, stripped of markdown
  * emphasis/backticks and trailing punctuation, IS the sentinel.
  *
- * CASE-SENSITIVE, which is load-bearing now that the word is `AWAITING`: fray's own signal-fence
+ * CASE-SENSITIVE, which is load-bearing now that the word is `AWAITING`: frizz's own signal-fence
  * grammar opens with ```awaiting, and a worker parking on a fence writes that token constantly. Lowered
  * case would make every ```awaiting fence silently suppress a bump as well. */
 export function saysAllDone(text: string | undefined): boolean {
@@ -460,13 +460,13 @@ const OPT_OUT_NOTE =
   `If there is genuinely no further work, reply ${ALLDONE_SENTINEL} on its own line to stop these prompts` +
   " — but be sure, because it permanently stalls this run."
 
-/** What fray delivers when the ON REST trigger fires: the operator's words VERBATIM, then the trailer.
+/** What frizz delivers when the ON REST trigger fires: the operator's words VERBATIM, then the trailer.
  * Kept beside the parser so the wording sent and the wording recognized can never drift apart. */
 export function restPromptMessage(prompt: string): string {
   return `${prompt.trim()}\n\n(Recurring prompt — sent each time you come to rest. ${OPT_OUT_NOTE})`
 }
 
-/** What fray delivers when the ON SCHEDULE trigger fires. Same text, same shape, and it names the
+/** What frizz delivers when the ON SCHEDULE trigger fires. Same text, same shape, and it names the
  * cadence — which is the ONE thing that distinguishes the two deliveries now that the prompt is shared.
  * A worker needs that distinction: a scheduled delivery may arrive MID-TURN, so reading one does not
  * mean it has stopped.
@@ -493,7 +493,7 @@ export function formatIntervalLabel(seconds: number): string {
  * The chat needs to tell a delivery from a human message, and to say WHICH TRIGGER fired, and the
  * transcript carries no structure — a delivery is an ordinary user turn. So this parses the trailer the
  * two composers above emit, exactly as `parseGithubWakeSteer` parses the steer its own formatter writes.
- * That is not a text GUESS: the format is fray's, it is defined ten lines up, and both directions live
+ * That is not a text GUESS: the format is frizz's, it is defined ten lines up, and both directions live
  * in this file so they cannot drift. Anything that does not match returns undefined and renders as it
  * did before — text is never lost to a parse. */
 export interface RecurringPrompt {
@@ -521,7 +521,7 @@ export function parseRecurringPrompt(text: string | undefined): RecurringPrompt 
 }
 
 // ---- ONE-OFF TIMERS (scheduler SOURCE 6) ---------------------------------------------------------
-// A worker's own alarm clock: text it asks fray to hand back at ONE instant, once. It is the recurring
+// A worker's own alarm clock: text it asks frizz to hand back at ONE instant, once. It is the recurring
 // prompt's ON SCHEDULE trigger with the repetition taken out — same durable outbox, same mid-turn
 // delivery — and a thread may hold ARBITRARILY MANY at a time, which is the whole reason they are rows
 // of their own rather than another set of `recurring_*` columns on the session (one row can hold one
@@ -545,7 +545,7 @@ export const TIMER_MAX_DELAY_SECONDS = 30 * 24 * 60 * 60
 export const TIMER_MAX_ARMED = 64
 export const TimerPromptText = z.string().trim().min(1).max(TIMER_PROMPT_MAX)
 
-/** What fray delivers when a one-off timer fires: the worker's own words VERBATIM, then a one-line
+/** What frizz delivers when a one-off timer fires: the worker's own words VERBATIM, then a one-line
  *  trailer naming the INSTANT — with several timers armed at once, the instant is the only thing that
  *  says WHICH one this is.
  *
@@ -580,10 +580,10 @@ export const ThreadFence = z.object({
 })
 export type ThreadFence = z.infer<typeof ThreadFence>
 
-// A plan artifact: .fray/plans/*.md — no schema, no validation; prompted into existence. A plan
+// A plan artifact: .frizz/plans/*.md — no schema, no validation; prompted into existence. A plan
 // with no live thread is backlog; a plan's threads are its history (associated via plan_path).
 export const PlanView = z.object({
-  path: z.string(), // project-relative, e.g. ".fray/plans/standalone-ui.md"
+  path: z.string(), // project-relative, e.g. ".frizz/plans/standalone-ui.md"
   title: z.string(), // first markdown heading, else the filename stem
   updatedAt: z.string().optional(), // ISO8601 file mtime
   threadIds: z.array(ThreadSlug).default([]), // threads dispatched from this plan
@@ -597,7 +597,7 @@ export type PlanView = z.infer<typeof PlanView>
 export const LimitWindow = z.enum(["session", "weekly", "unknown"])
 export type LimitWindow = z.infer<typeof LimitWindow>
 
-// A thread whose turn was cut off mid-work by an exhausted subscription window, plus what fray will
+// A thread whose turn was cut off mid-work by an exhausted subscription window, plus what frizz will
 // do about it. `resumesAt` is a unix-seconds instant resolved from the provider's own reset clock (or
 // its usage endpoint) — absent when neither source could supply one, in which case `autoResume` is
 // false and the thread stays a normal human handoff.
@@ -606,17 +606,17 @@ export const LimitPause = z.object({
   window: LimitWindow,
   at: z.string(), // ISO8601 of the limit record — "when the agent got cut off"
   resumesAt: z.number().optional(), // unix seconds the window rolls
-  // Whether fray intends to deliver its own "continue" once `resumesAt` passes. False when the
+  // Whether frizz intends to deliver its own "continue" once `resumesAt` passes. False when the
   // setting is off, the instant is unresolvable, or the pause is too old to safely resume.
   autoResume: z.boolean(),
 })
 export type LimitPause = z.infer<typeof LimitPause>
 
-// One sidebar row: fray board thread + runtime overlay.
+// One sidebar row: frizz board thread + runtime overlay.
 export const ThreadView = z.object({
   id: ThreadSlug, // slug; filename is <slug>.md
   title: z.string(),
-  status: FrayStatus,
+  status: FrizzStatus,
   statusText: z.string().optional(),
   // Form-constrained gerund label (≤100 chars, e.g. "Awaiting CI on PR #391") the worker maintains;
   // the listing row's at-a-glance gloss. Optional → absent on old threads renders nothing. Distinct
@@ -638,7 +638,7 @@ export const ThreadView = z.object({
   agents: z.array(ThreadAgent),
   errors: z.array(z.string()),
   warnings: z.array(z.string()),
-  // runtime overlay (from the UI server, not the .fray file)
+  // runtime overlay (from the UI server, not the .frizz file)
   runtime: RuntimeState,
   sessionId: z.string().optional(),
   tmuxName: z.string().optional(),
@@ -699,10 +699,10 @@ export const ThreadView = z.object({
   // travels, never the provider's own error text. Optional so old snapshots/servers parse.
   limitPause: LimitPause.optional(),
 
-  // ---- Session-first fields (ALL optional: absent ⇒ a legacy .fray-file row / pre-restart server;
+  // ---- Session-first fields (ALL optional: absent ⇒ a legacy .frizz-file row / pre-restart server;
   // the client treats such rows as Legacy-shelf material). Deliberately not zod-defaulted so server
   // constructors that predate the model still typecheck and old snapshots parse unchanged. ----
-  // "session" = a session-backed thread (the working rail's unit); "legacy" (or absent) = a .fray
+  // "session" = a session-backed thread (the working rail's unit); "legacy" (or absent) = a .frizz
   // file row, rendered read-only in the collapsed Legacy shelf.
   kind: z.enum(["session", "legacy"]).optional(),
   // No registry row (a maintainer terminal discovered from the JSONL dir): read-only transcript,
@@ -759,10 +759,10 @@ export const ThreadView = z.object({
   // ISO8601 read/seen telemetry (threadSeen RPC — recorded when the human opens the thread). Kept for
   // compatibility and analytics only; viewing never acknowledges or removes a queue handoff.
   seenAt: z.string().optional(),
-  // Project-relative scratchpad path (.fray/threads/<session-id>/scratch.md) once provisioned — the worker's
+  // Project-relative scratchpad path (.frizz/threads/<session-id>/scratch.md) once provisioned — the worker's
   // compaction-proof working memory, rendered as the thread's doc tab.
   scratchpadPath: z.string().optional(),
-  // Project-relative plan artifact this thread was dispatched from (.fray/plans/*.md), if any.
+  // Project-relative plan artifact this thread was dispatched from (.frizz/plans/*.md), if any.
   planPath: z.string().optional(),
   // Which agent backend runs this thread (Codex-support epic, Phase 3) — drives the subtle per-row
   // rail badge. Optional so a legacy/foreign/pre-restart row parses; absent OR "claude" ⇒ no badge
@@ -781,7 +781,7 @@ export const ThreadView = z.object({
   // The last decision the worker's permission POLICY made for this thread (cc-worker/hooks/
   // perm-policy.mjs), and how many times it has DENIED. A policy decision never blocks anyone, so it
   // has no other way of being noticed — an allow is not written to the transcript at all. Surfacing it
-  // is what keeps "fray silently approved something on your behalf" from being invisible.
+  // is what keeps "frizz silently approved something on your behalf" from being invisible.
   // Deferred requests are deliberately absent: those already show as a permission prompt / Needs you.
   permPolicy: z.object({
     decision: z.enum(["allow", "deny"]),
@@ -836,9 +836,9 @@ export const BoardSnapshot = z.object({
   projectDir: z.string(),
   projectName: z.string(),
   projectLabel: z.string(), // "owner/repo" from the git origin remote; falls back to projectName
-  // (No `.fray/ exists` bit here on purpose. Threads are session-first — the ui.db registry IS the
-  // board — so `.fray/` presence says nothing about whether this project has one. Its only consumer
-  // was a shell gate that dead-ended `.fray`-less repos; the server still probes the directory
+  // (No `.frizz/ exists` bit here on purpose. Threads are session-first — the ui.db registry IS the
+  // board — so `.frizz/` presence says nothing about whether this project has one. Its only consumer
+  // was a shell gate that dead-ended `.frizz`-less repos; the server still probes the directory
   // locally where it genuinely matters, for plan/scratchpad storage.)
   threads: z.array(ThreadView),
   errors: z.array(z.string()),
@@ -847,7 +847,7 @@ export const BoardSnapshot = z.object({
   // snapshot that omits it still parses; the client treats absent as "no structured errors" and
   // falls back to rendering the plain `errors` strings.
   errorItems: z.array(BoardErrorItem).optional(),
-  // Plan artifacts (.fray/plans/*.md) — the Plans rail section. Optional for the same pre-restart
+  // Plan artifacts (.frizz/plans/*.md) — the Plans rail section. Optional for the same pre-restart
   // back-compat reason (absent ⇒ old server ⇒ no Plans section data).
   plans: z.array(PlanView).optional(),
 })
@@ -984,7 +984,7 @@ export const Settings = z.object({
   // unset OR blank the server falls back to its exported DEFAULT_ISSUE_PROMPT / DEFAULT_PR_PROMPT.
   // Substitution tokens the server fills: {repo} {n} {title} {url} {labels} {body}. The leading
   // `THREAD: <slug>` tag is prepended by the server (not part of the editable template) so a custom
-  // prompt can never break the thread↔.fray-file binding. Optional so old settings blobs parse.
+  // prompt can never break the thread↔.frizz-file binding. Optional so old settings blobs parse.
   githubIssuePrompt: z.string().optional(),
   githubPrPrompt: z.string().optional(),
 })
@@ -1044,7 +1044,7 @@ export type SetDispatchPreferenceInput = z.infer<typeof SetDispatchPreferenceInp
 export const DispatchInput = z.object({
   // Optional: when omitted, dispatch derives a fallback title from the prompt (Claude later renames
   // the session via ai-title, which the UI prefers for display). The thread FILE always gets a
-  // concrete title regardless — fray requires one.
+  // concrete title regardless — frizz requires one.
   title: z.string().min(1).optional(),
   prompt: z.string().min(1),
   slug: ThreadSlug.optional(), // derived from title if omitted
@@ -1058,7 +1058,7 @@ export const DispatchInput = z.object({
   // `dispatch(input, { backend })`; the model picker sets it from the chosen model's family.
   backend: Backend.optional(),
   effort: Settings.shape.effort,
-  // Project-relative plan artifact this dispatch works from (.fray/plans/*.md): stored as the
+  // Project-relative plan artifact this dispatch works from (.frizz/plans/*.md): stored as the
   // thread's plan_path association and named to the worker in its system-prompt orientation.
   planPath: z.string().optional(),
 })
@@ -1084,7 +1084,7 @@ export const FollowUpInput = z.object({
   // Retire the worker's live process before delivering, so this message lands in a `claude` that has
   // just started. The operator's "Restart worker" verb — the ONLY caller that sets it — exists because
   // a worker inherits its plugin/hooks AND its system prompt at process start and can never pick up a
-  // newer fray build in place (hooks are read once, at startup). Everything else that needs a fresh
+  // newer frizz build in place (hooks are read once, at startup). Everything else that needs a fresh
   // process derives it server-side; see needsFreshProcessForLimit.
   freshProcess: z.boolean().optional(),
   // PREEMPT the operation the worker is running right now, so this message is read at once instead of
@@ -1182,18 +1182,18 @@ export const SetThreadRecurringPromptInput = z.object({
 }).strict()
 export type SetThreadRecurringPromptInput = z.infer<typeof SetThreadRecurringPromptInput>
 
-// The WORKER half, through `mcp__fray__recurring_prompt` (which POSTs the same `/rpc/*` surface the
+// The WORKER half, through `mcp__frizz__recurring_prompt` (which POSTs the same `/rpc/*` surface the
 // board uses). A worker has no other way to keep a long effort moving — Claude Code's own in-session
-// schedulers cannot fire in the runtime fray spawns — so this is the counterpart to the operator's
+// schedulers cannot fire in the runtime frizz spawns — so this is the counterpart to the operator's
 // control above, writing the same row.
 //
 // Deliberately NOT session-guarded, unlike the operator's input: the MCP server is spawned with its
 // thread's slug and keeps it across a resume, while the session id and generation bump underneath it.
 // A guard here would fail on exactly the long-lived thread this exists for. The slug is stamped into
-// that server's env by fray, not supplied by the model.
+// that server's env by frizz, not supplied by the model.
 //
 // There is deliberately no thread parameter a model could aim elsewhere: a worker may only ever arm its
-// OWN thread. One agent making a DIFFERENT thread loop forever is not a capability fray hands out.
+// OWN thread. One agent making a DIFFERENT thread loop forever is not a capability frizz hands out.
 //
 // `prompt: null` is the explicit stop, which is how a worker ends its own loop deliberately rather than
 // by falling back on the ALLDONE sentinel.
@@ -1254,8 +1254,8 @@ export type CancelOwnThreadTimerResult = z.infer<typeof CancelOwnThreadTimerResu
 
 // ---- The SUPERSEDED worker shapes, kept alive for MCP servers already in flight -----------------
 //
-// A worker's `fray-mcp.mjs` is spawned ONCE, out of the promoted build its session was dispatched with,
-// and it lives as long as that session — across every fray server restart. The server meanwhile gets
+// A worker's `frizz-mcp.mjs` is spawned ONCE, out of the promoted build its session was dispatched with,
+// and it lives as long as that session — across every frizz server restart. The server meanwhile gets
 // restarted from newer source whenever the operator promotes a build. So `/rpc` is a VERSIONED CONTRACT
 // between two processes that update INDEPENDENTLY, and renaming a procedure a worker's MCP server calls
 // strands every session already running.
@@ -1362,11 +1362,11 @@ export const SetThreadProfileResult = z.object({
 export type SetThreadProfileResult = z.infer<typeof SetThreadProfileResult>
 
 // ---- DISPATCH TASK BANNER (composer ↔ transcript) -------------------------------------------------
-// The loud fence fray puts between its own dispatch orientation and the human operator's prompt. It is
+// The loud fence frizz puts between its own dispatch orientation and the human operator's prompt. It is
 // BOTH the worker's system→human handoff cue and the transcript's display boundary, so it lives here,
 // next to the other exact presentation markers, rather than in either consumer.
 //
-// The rule the banner buys is: NOTHING of fray's sits below it. Everything the worker needs to be told
+// The rule the banner buys is: NOTHING of frizz's sits below it. Everything the worker needs to be told
 // about the framing goes ABOVE — below the banner is the operator's prompt, byte for byte, and the
 // first user bubble shows exactly that. (Until 2026-07-26 an explanation line and a bare `TASK:` marker
 // sat between the banner and the prompt; that marker was the display cut, which is why the retired
@@ -1386,7 +1386,7 @@ export const DISPATCH_TASK_BANNER_MARKER = `\n${DISPATCH_TASK_BANNER}\n\n`
 // Exact, versioned presentation boundary in a GitHub batch-dispatch prompt. The worker receives the
 // whole prompt; transcript normalization exposes only the generated lead above this line as
 // `displayText`. Namespacing + versioning make an ordinary HTML comment or markdown example inert.
-export const GITHUB_DISPATCH_UI_BOUNDARY = "<!-- fray-ui:github-dispatch-ui-boundary:v1 -->"
+export const GITHUB_DISPATCH_UI_BOUNDARY = "<!-- frizz:github-dispatch-ui-boundary:v1 -->"
 
 // ---- WAKE-DELIVERY TOKEN (scheduler ↔ transcript) ------------------------------------------------
 // The scheduler appends this to every wake it delivers so the worker's own next user record proves the
@@ -1395,26 +1395,26 @@ export const GITHUB_DISPATCH_UI_BOUNDARY = "<!-- fray-ui:github-dispatch-ui-boun
 //
 // PRODUCER AND STRIPPER LIVE TOGETHER ON PURPOSE. The delivered message is recorded as an ordinary user
 // turn, and the chat renders user text VERBATIM (a pre-wrap bubble, not markdown), so an unstripped
-// token is shown to the human as literal `<!-- fray-wake:… -->`. A format change on one side without the
+// token is shown to the human as literal `<!-- frizz-wake:… -->`. A format change on one side without the
 // other silently brings that back; keeping the pair adjacent is the guard.
 export function wakeDeliveryToken(id: string): string {
-  return `<!-- fray-wake:${id} -->`
+  return `<!-- frizz-wake:${id} -->`
 }
 
 // Anchored to end-of-text with its leading blank line, matching how context.ts appends it. Requiring
 // that trailing position (rather than matching anywhere) keeps prose that merely quotes the token —
 // this comment's own wording, a bug report pasting one — intact in the bubble.
-const WAKE_DELIVERY_TOKEN_TAIL = /\n*<!-- fray-wake:[A-Za-z0-9_-]+ -->\s*$/
+const WAKE_DELIVERY_TOKEN_TAIL = /\n*<!-- frizz-wake:[A-Za-z0-9_-]+ -->\s*$/
 
 // Display projection: the steer the human is meant to read, without the machine-facing token.
 export function stripWakeDeliveryToken(text: string): string {
   return text.replace(WAKE_DELIVERY_TOKEN_TAIL, "")
 }
 
-// Was this user turn WRITTEN BY FRAY rather than by the human? The token rides only on a scheduler
+// Was this user turn WRITTEN BY FRIZZ rather than by the human? The token rides only on a scheduler
 // delivery, so its presence is the one unambiguous tell — and it matters for presentation: a wake
 // rendered in the human's own off-white right-justified bubble claims the operator typed it, when in
-// fact fray is reporting something it noticed. The chat renders these as a first-party card instead.
+// fact frizz is reporting something it noticed. The chat renders these as a first-party card instead.
 export function isWakeDelivery(text: string): boolean {
   return WAKE_DELIVERY_TOKEN_TAIL.test(text)
 }
@@ -1526,7 +1526,7 @@ export function formatGithubWakeSteer({ ref, items, omitted }: GithubWakeSteer):
     return `${icon} New GitHub ${item.label} on ${ref} from @${item.actor}${item.at ? ` at ${item.at}` : ""}. Read that exact ${item.label} — ${WAKE_SCOPE} — and continue${url}${reviewTail}`
   }
   const more = omitted > 0 ? `\n- …and ${omitted} more not listed — check ${ref} for the rest` : ""
-  // The blank line separates the instruction from the items. Fray's transcript renders a delivered
+  // The blank line separates the instruction from the items. Frizz's transcript renders a delivered
   // wake as PLAIN TEXT with line breaks preserved, so this buys a paragraph break rather than an <li>,
   // and it keeps the two readable as distinct parts in a terminal composer too.
   // Each line carries its OWN 🤖/👤. A burst routinely mixes a maintainer's comment with a review
@@ -1756,7 +1756,7 @@ export type BoardEvent = Extract<ServerEvent, { type: "board" }>
 export type BoardDelta = Extract<ServerEvent, { type: "board-delta" }>
 
 // Pure delta engine + client apply/decision helpers (kept in a sibling module, re-exported here so
-// `@fray-ui/shared` stays the single entry point).
+// `@frizz/shared` stays the single entry point).
 export * from "./code-fences.ts"
 export * from "./delta.ts"
 export * from "./drainable-worker.ts"
@@ -1855,7 +1855,7 @@ export const TranscriptToolCall = z.object({
   // `subagentType` the model+effort cell, and expanding reveals the (capped) dispatch `prompt`. All
   // optional so a pre-restart server / older transcript falls back to the plain `Agent(detail)` line.
   prompt: z.string().optional(), // the capped dispatch prompt (the AgentBlock's expanded body)
-  subagentType: z.string().optional(), // the dispatch's subagent_type verbatim (e.g. "fray:fray-opus-high")
+  subagentType: z.string().optional(), // the dispatch's subagent_type verbatim (e.g. "frizz:frizz-opus-high")
   agentId: z.string().optional(), // the Agent tool_use id — the correlation key to the live tracked sub-agent
   // Terminal outcome of the dispatched sub-agent, back-filled when a matching completion
   // <task-notification> appears LATER in the transcript. Drives the AgentBlock header's finished state
@@ -1997,7 +1997,7 @@ export const TranscriptMessage = z.object({
   // and the terminal is the recovery surface. Delivered sends never carry this (the ledger drops them;
   // the real transcript record renders). Additive + optional.
   deliveryState: z.enum(["pending", "enqueued", "unconfirmed"]).optional(),
-  // FRAY wrote this user turn, not the human: it is a scheduler wake delivery (isWakeDelivery). The
+  // FRIZZ wrote this user turn, not the human: it is a scheduler wake delivery (isWakeDelivery). The
   // client renders it as a first-party card rather than the human's off-white right-justified bubble,
   // which was claiming the operator had typed a message the watcher composed. Additive + optional: an
   // old client ignores it and shows the plain bubble (the previous behavior), and an old server simply
@@ -2022,7 +2022,7 @@ export const TranscriptMessage = z.object({
   // off-white bubble with the XML showing — claiming the human typed what a child reported.
   //
   // `peerFrom` is the sender label the wrapper carries (today the child's `subagent_type`, e.g.
-  // `fray:opus-high`, because the worker dispatch hook strips `name`), and `displayText` carries the
+  // `frizz:opus-high`, because the worker dispatch hook strips `name`), and `displayText` carries the
   // unwrapped body.
   //
   // `peerDispatchId` is what makes the chat's report line CLICKABLE: it is the child's Agent DISPATCH
@@ -2109,7 +2109,7 @@ export type SocketServerMsg =
   | { t: "hb" }
 
 export const DEFAULT_PORT = 4917
-// A thread's stable identity string, `fray-<slug>`. It named a tmux session once; fray has no tmux,
+// A thread's stable identity string, `frizz-<slug>`. It named a tmux session once; frizz has no tmux,
 // and this survives as the integrity check on the session row's `tmux_name` column — a row whose
 // stored name does not re-derive from its own slug has been tampered with or mis-keyed.
-export const threadIdentityName = (slug: string) => `fray-${ThreadSlug.parse(slug)}`
+export const threadIdentityName = (slug: string) => `frizz-${ThreadSlug.parse(slug)}`

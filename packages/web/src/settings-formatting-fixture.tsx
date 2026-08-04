@@ -8,7 +8,7 @@ const settings = {
 }
 
 const rpcResult = (result: unknown) => new Response(JSON.stringify({ result }), {
-  headers: { "content-type": "application/json", "x-fray-boot": "settings-fixture" },
+  headers: { "content-type": "application/json", "x-frizz-boot": "settings-fixture" },
 })
 
 const nativeFetch = window.fetch.bind(window)

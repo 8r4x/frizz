@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createStorage, type Storage, type SessionRow } from "./storage.ts"
 import { Bus } from "./bus.ts"
-import type { ServerEvent } from "@fray-ui/shared"
+import type { ServerEvent } from "@frizz/shared"
 import { permMarkerPath, type Project } from "./project.ts"
 import { parseLine, applyRecord, applyEvent, computeTurn, newTailState, createTailer, defaultBrokerDaemonAlive, matchesPermPrompt, detectClaudeBootModal, hasQuestionBlock, isClaudeAuthErrorText, isRealUserMessage, parseSignalFence, markerDecision, unwrapShellCommand, FOREIGN_FRESH_MS } from "./tailer.ts"
 import { claudeBrokerRecordPath } from "./backend/claude-broker-host.ts"
@@ -351,7 +351,7 @@ test("applyRecord: Claude permission-mode sidecars update the observed mode with
 // run_in_background). Registers a live sub-agent keyed by the tool_use id. (Return type left to
 // inference so it stays structurally compatible with applyRecord's internal Record interface.)
 // `subagentType: null` omits the field entirely (undefined would trip the default-param rule).
-function dispatch(id: string, description: string, background = true, subagentType: string | null = "fray:fray-opus-high") {
+function dispatch(id: string, description: string, background = true, subagentType: string | null = "frizz:frizz-opus-high") {
   return {
     type: "assistant",
     timestamp: "2026-07-01T00:00:01.000Z",
@@ -420,7 +420,7 @@ function toolResult(id: string) {
 // Shapes copied from the real corpus (705 transcripts under ~/.claude/projects, 2026-07-28). The
 // launch ack states `agentId:` and `output_file:`; the restart ack is a JSON tool_result whose
 // `resumedAgentId` is that SAME agent id, and whose `message` restates the output path.
-function agentDispatch(id: string, description: string, at: string, subagentType = "fray:opus-high") {
+function agentDispatch(id: string, description: string, at: string, subagentType = "frizz:opus-high") {
   return {
     type: "assistant",
     timestamp: at,
@@ -483,7 +483,7 @@ test("applyRecord: a child that FAILED and was re-steered comes back live under 
   const e = s.subAgents.get("toolu_dispatch")
   assert.ok(e, "it keeps the ORIGINAL dispatch tool_use id, so an open drawer keeps resolving")
   assert.equal(e?.label, "Fix the node-shim abort", "and its original label, not the steer's recap")
-  assert.equal(e?.subagentType, "fray:opus-high", "and its worker-profile tag")
+  assert.equal(e?.subagentType, "frizz:opus-high", "and its worker-profile tag")
   assert.equal(e?.taskId, "a0b15ec8029fe3830", "keyed to the runtime id, which is stable across restarts")
   assert.equal(e?.startedAt, "2026-07-28T18:36:36.974Z", "elapsed measures THIS run, not the dead gap")
   assert.equal(s.retiredSubAgents.has("toolu_dispatch"), false, "and it is no longer in the retired ring")
@@ -502,7 +502,7 @@ test("applyRecord: an ordinary SendMessage to a LIVE child neither duplicates it
   applyRecord(s, queuedAck("toolu_send", "a0b15ec8029fe3830", "2026-07-28T18:20:00.100Z"))
   assert.equal(s.subAgents.size, 1, "the queued-delivery shape restarts nothing")
   assert.ok(s.subAgents.has("toolu_dispatch"))
-  // Even a RESTART ack for a child fray still holds live must not double the row.
+  // Even a RESTART ack for a child frizz still holds live must not double the row.
   applyRecord(s, resumeAck("toolu_send2", "a0b15ec8029fe3830", OUT, "2026-07-28T18:21:00.000Z"))
   assert.equal(s.subAgents.size, 1, "a restart ack for an already-live child is a no-op")
 })
@@ -914,7 +914,7 @@ test("applyRecord: a BACKGROUND Agent dispatch registers a live sub-agent; foreg
   const e = s.subAgents.get("toolu_bg")
   assert.equal(e?.label, "Investigate issue 376")
   assert.equal(e?.startedAt, "2026-07-01T00:00:01.000Z")
-  assert.equal(e?.subagentType, "fray:fray-opus-high") // captured verbatim from input.subagent_type
+  assert.equal(e?.subagentType, "frizz:frizz-opus-high") // captured verbatim from input.subagent_type
   assert.equal(e?.outputFile, undefined) // not yet enriched
 })
 
@@ -992,7 +992,7 @@ test("tailer: surfaces running vs stale sub-agents (via injected mtime) and clea
 
   h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z") // <15min since child mtime → running
   t.tick() // prime
-  assert.deepEqual(t.get("t")?.subAgents, [{ label: "child", startedAt: "2026-07-01T00:00:01.000Z", state: "running", subagentType: "fray:fray-opus-high", id: "toolu_bg", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
+  assert.deepEqual(t.get("t")?.subAgents, [{ label: "child", startedAt: "2026-07-01T00:00:01.000Z", state: "running", subagentType: "frizz:frizz-opus-high", id: "toolu_bg", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
 
   h.clock.ms = Date.parse("2026-07-01T00:20:00.000Z") // >15min since child mtime (SUBAGENT_STALE_MS) → stale
   const before = h.changes.n
@@ -1083,7 +1083,7 @@ test("tailer: dismissOp retires a live sub-agent AND a live shell by id, immedia
 })
 
 test("tailer: a shell whose task id has not arrived yet is NOT marked stoppable", () => {
-  // The window this closes: a shell's row is minted at its `tool_use` record, but the task id fray
+  // The window this closes: a shell's row is minted at its `tool_use` record, but the task id frizz
   // would stop it with only arrives at the LAUNCH ACK one record later. `stoppable` is what the client
   // renders the × off, so advertising it before the handle exists puts a control on the row that would
   // fail on click — "We shouldn't show the X if it doesn't fucking work" (maintainer 2026-07-30).
@@ -1107,7 +1107,7 @@ test("tailer: a shell whose task id has not arrived yet is NOT marked stoppable"
   const shell = t.get("t")?.bgShells[0]
   assert.equal(shell?.id, "toolu_sh", "the row still appears — live work is never hidden")
   assert.equal(shell?.state, "running")
-  assert.equal(shell?.stoppable, undefined, "…but it advertises no stop until fray holds the handle")
+  assert.equal(shell?.stoppable, undefined, "…but it advertises no stop until frizz holds the handle")
 })
 
 test("tailer: a dead pane clears its background shells — a shell cannot outlive the agent process", () => {
@@ -1209,7 +1209,7 @@ test("tailer: stopping a BROKER thread clears its live background shells (the he
   t.tick()
   assert.equal(t.get("t")?.bgShells.length, 1, "live before the session is stopped")
 
-  h.storage.setExited("t", true) // fray stopped the broker session — its children went with it
+  h.storage.setExited("t", true) // frizz stopped the broker session — its children went with it
   const before = h.changes.n
   t.tick()
   assert.deepEqual(t.get("t")?.bgShells, [], "a stopped headless session owns no live background shells")
@@ -1217,7 +1217,7 @@ test("tailer: stopping a BROKER thread clears its live background shells (the he
 })
 
 // The seven-hour phantom (thread invoices-just-went-out-for-august, 2026-08-02). A broker daemon that
-// dies WITHOUT fray stopping it — SIGKILL, OOM, its own 6h idle-timeout — never gets `exited` stamped,
+// dies WITHOUT frizz stopping it — SIGKILL, OOM, its own 6h idle-timeout — never gets `exited` stamped,
 // because that column records only a deliberate stop. paneDeadForRow read `exited` alone, so the row
 // stayed "alive" and every background shell the dead process owned kept shimmering on the board. The
 // operator came back after seven hours to a background shell still rendering as running; its owning
@@ -1297,7 +1297,7 @@ test("tailer: end-to-end, a real broker record naming a dead pid clears the shel
   writeFileSync(recordPath, JSON.stringify({ daemonPid: 2 ** 30, sessionId: "sid" }))
   h.clock.ms += 60_000 // past BROKER_LIVENESS_TTL_MS, so the tick re-probes
   t.tick()
-  assert.deepEqual(t.get("t")?.bgShells, [], "the shell clears without fray ever stopping the session")
+  assert.deepEqual(t.get("t")?.bgShells, [], "the shell clears without frizz ever stopping the session")
   assert.equal(h.storage.getSession("t")?.exited ?? 0, 0, "and without inventing a deliberate stop")
 
   rmSync(stateDir, { recursive: true, force: true })
@@ -1321,7 +1321,7 @@ test("defaultBrokerDaemonAlive: reads a real record and probes a real pid, faili
 
   // A pid that cannot exist: kill(0) gives ESRCH, the one error that means "gone".
   write("dead", JSON.stringify({ daemonPid: 2 ** 30 }))
-  assert.equal(probe()("dead"), false, "a record naming a vanished pid is a death fray can prove")
+  assert.equal(probe()("dead"), false, "a record naming a vanished pid is a death frizz can prove")
 
   assert.equal(probe()("never-ran"), false, "no record at all ⇒ no daemon to discover")
 
@@ -1383,7 +1383,7 @@ test("tailer: ownerGone answers for a tmux pane death, not just a dead broker da
   t.tick()
   assert.equal(t.ownerGone?.("t"), true, "a dead pane is a dead owner, exactly as a dead daemon is")
 
-  // A thread fray has never tailed cannot be declared dead — the fail-safe every caller relies on.
+  // A thread frizz has never tailed cannot be declared dead — the fail-safe every caller relies on.
   assert.equal(t.ownerGone?.("never-seen"), false, "an unknown slug is never reported gone")
 })
 
@@ -1854,7 +1854,7 @@ interface Harness {
 }
 
 function harness(): Harness {
-  const dir = tmp("fray-tail-")
+  const dir = tmp("frizz-tail-")
   const storage = createStorage(join(dir, "ui.db"))
   const bus = new Bus()
   const events: ServerEvent[] = []
@@ -1880,8 +1880,8 @@ function makeTailer(h: Harness, over: Partial<Parameters<typeof createTailer>[0]
 }
 
 function row(over: Partial<SessionRow> = {}): SessionRow {
-  const result = { slug: "t", session_id: "sid", tmux_name: "fray-t", spawned_at: "2026-07-01T00:00:00.000Z", last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null, state: null, meta: null, seen_at: null, plan_path: null, transcript_id: null, ...over }
-  if (over.slug !== undefined && over.tmux_name === undefined) result.tmux_name = `fray-${result.slug}`
+  const result = { slug: "t", session_id: "sid", tmux_name: "frizz-t", spawned_at: "2026-07-01T00:00:00.000Z", last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null, state: null, meta: null, seen_at: null, plan_path: null, transcript_id: null, ...over }
+  if (over.slug !== undefined && over.tmux_name === undefined) result.tmux_name = `frizz-${result.slug}`
   return result
 }
 
@@ -1961,7 +1961,7 @@ test("tailer: a decision-less marker (older plugin build) still blocks", () => {
 
 // An auto-approval is written NOWHERE else — Claude Code renders "Allowed by PermissionRequest hook"
 // in the pane and puts nothing in the transcript — so if the tailer does not retain it, the dashboard
-// can never say what fray approved on the human's behalf.
+// can never say what frizz approved on the human's behalf.
 test("tailer: an allow decision is retained for display (the only record an approval leaves)", () => {
   const h = harness()
   h.storage.upsertSession(row())
@@ -2070,7 +2070,7 @@ test("tailer: a marker predating the current spawn is stale (resume of a killed-
 // disk at the project stateDir — the exact production read path the hook writes to.
 test("tailer: the default reader round-trips a real on-disk marker (blocked → superseded)", () => {
   const h = harness()
-  const stateDir = tmp("fray-state-")
+  const stateDir = tmp("frizz-state-")
   mkdirSync(join(stateDir, "perm-requests"), { recursive: true })
   const project = { cwdSlug: "x", stateDir } as Project
   h.storage.upsertSession(row())
@@ -2535,7 +2535,7 @@ const PAST_GRACE = Date.parse("2026-07-01T00:01:01.000Z") // 61s after SPAWN (> 
 
 // A drifted transcript: lives at `fileId`.jsonl but carries `ownerId`'s scratchpad sentinel in content.
 function driftedFixture(dir: string, fileId: string, ownerId: string, tail: string[] = [DONE]) {
-  const sentinel = JSON.stringify({ type: "user", timestamp: SPAWN, message: { role: "user", content: `Your scratchpad is \`.fray/threads/${ownerId}/scratch.md\` — keep state here.` } })
+  const sentinel = JSON.stringify({ type: "user", timestamp: SPAWN, message: { role: "user", content: `Your scratchpad is \`.frizz/threads/${ownerId}/scratch.md\` — keep state here.` } })
   fixture(dir, fileId, [sentinel, ...tail])
 }
 
@@ -2554,10 +2554,10 @@ test("tailer: a PRESENT transcript binds directly — no discovery, transcript_i
 
 test("tailer: a transcript missing past the grace window → noTranscript degraded state (not an eternal spinner)", () => {
   const slug = "stall-thread"
-  const stallLog = join(tmpdir(), "fray-worker-logs", `${slug}.stall.log`)
+  const stallLog = join(tmpdir(), "frizz-worker-logs", `${slug}.stall.log`)
   try { rmSync(stallLog) } catch { /* not there */ }
   const h = harness()
-  h.storage.upsertSession(row({ slug, tmux_name: `fray-${slug}` }))
+  h.storage.upsertSession(row({ slug, tmux_name: `frizz-${slug}` }))
   h.pane.text = "Error: Session ID sid is already in use." // claude's own boot-failure text in the pane
   const t = makeTailer(h)
 
@@ -2581,10 +2581,10 @@ test("tailer: a transcript missing past the grace window → noTranscript degrad
 // carded as a bare "Stalled" while the reason sat unread in the stall log.
 test("tailer: a present-but-EMPTY (0-byte) transcript past grace is treated as MISSING → degraded (0-byte crash-net hole closed)", () => {
   const slug = "empty-thread"
-  const stallLog = join(tmpdir(), "fray-worker-logs", `${slug}.stall.log`)
+  const stallLog = join(tmpdir(), "frizz-worker-logs", `${slug}.stall.log`)
   try { rmSync(stallLog) } catch { /* not there */ }
   const h = harness()
-  h.storage.upsertSession(row({ slug, tmux_name: `fray-${slug}` }))
+  h.storage.upsertSession(row({ slug, tmux_name: `frizz-${slug}` }))
   fixture(h.logDir, "sid", []) // <sid>.jsonl EXISTS but is 0 bytes (worker created it then crashed)
   const t = makeTailer(h)
 
@@ -2761,16 +2761,16 @@ function codexTailer(h: Harness, codexHome: string) {
 }
 
 // Pin a codex row the way dispatch does: backend + the discovered rollout id land via the dedicated
-// setters (the shared upsert never writes them), leaving session_id as the fray-minted key.
+// setters (the shared upsert never writes them), leaving session_id as the frizz-minted key.
 function pinCodexRow(h: Harness, codexId: string) {
-  h.storage.upsertSession(row({ session_id: "fray-uuid" }))
+  h.storage.upsertSession(row({ session_id: "frizz-uuid" }))
   h.storage.setBackend("t", "codex")
   h.storage.setAgentSession("t", codexId)
 }
 
 test("tailer: a codex rollout primes to in-flight, then transitions to idle+fence THROUGH the tick", () => {
   const h = harness()
-  const codexHome = tmp("fray-codexhome-")
+  const codexHome = tmp("frizz-codexhome-")
   const codexId = "019f4e0a-42cb-7891-9cbf-325e93ae587c"
   const path = writeCodexRollout(codexHome, codexId, [cxMeta(codexId, "/x"), cxTaskStarted]) // turn open
   pinCodexRow(h, codexId)
@@ -2798,7 +2798,7 @@ test("tailer: a codex rollout primes to in-flight, then transitions to idle+fenc
 
 test("tailer: a codex rollout already at task_complete PRIMES straight to idle (not clobbered to in-flight)", () => {
   const h = harness()
-  const codexHome = tmp("fray-codexhome-")
+  const codexHome = tmp("frizz-codexhome-")
   const codexId = "019f4e0b-1111-2222-3333-444455556666"
   writeCodexRollout(codexHome, codexId, [cxMeta(codexId, "/x"), cxTaskStarted, cxAgentFinal(CX_DONE), cxTaskComplete(CX_DONE)])
   pinCodexRow(h, codexId)
@@ -2812,9 +2812,9 @@ test("tailer: a codex rollout already at task_complete PRIMES straight to idle (
 
 test("tailer: a real-shaped first Codex title comment persists its title and replay never restores the transport", () => {
   const h = harness()
-  const codexHome = tmp("fray-codexhome-")
+  const codexHome = tmp("frizz-codexhome-")
   const codexId = "019f4e0c-1111-2222-3333-444455556666"
-  const final = '<!-- fray title="Fix queue focus" -->\nVisible answer'
+  const final = '<!-- frizz title="Fix queue focus" -->\nVisible answer'
   writeCodexRollout(codexHome, codexId, [
     cxMeta(codexId, "/x"),
     cxTaskStarted,
@@ -2822,7 +2822,7 @@ test("tailer: a real-shaped first Codex title comment persists its title and rep
     cxTaskComplete(final),
   ])
   h.storage.upsertSession(row({
-    session_id: "fray-uuid",
+    session_id: "frizz-uuid",
     title: "raw initial prompt",
     title_auto: 1,
   }))
@@ -2845,7 +2845,7 @@ test("tailer: a real-shaped first Codex title comment persists its title and rep
 
 test("tailer: an omitted real-shaped Codex final retains the bounded dispatch fallback rather than an internal slug", () => {
   const h = harness()
-  const codexHome = tmp("fray-codexhome-")
+  const codexHome = tmp("frizz-codexhome-")
   const codexId = "019f4e0d-1111-2222-3333-444455556666"
   const final = "`hello.txt` says: tui file.\n\n```done\ntui-ok\n```"
   writeCodexRollout(codexHome, codexId, [
@@ -2854,7 +2854,7 @@ test("tailer: an omitted real-shaped Codex final retains the bounded dispatch fa
     cxAgentFinal(final),
     cxTaskComplete(final),
   ])
-  h.storage.upsertSession(row({ session_id: "fray-uuid", title: "Fix queue focus…", title_auto: 1 }))
+  h.storage.upsertSession(row({ session_id: "frizz-uuid", title: "Fix queue focus…", title_auto: 1 }))
   h.storage.setBackend("t", "codex")
   h.storage.setAgentSession("t", codexId)
 
@@ -2865,10 +2865,10 @@ test("tailer: an omitted real-shaped Codex final retains the bounded dispatch fa
 
 test("tailer: a later Codex marker cannot overwrite a manual title after an omitted-marker dispatch fallback", () => {
   const h = harness()
-  const codexHome = tmp("fray-codexhome-")
+  const codexHome = tmp("frizz-codexhome-")
   const codexId = "019f4e0e-1111-2222-3333-444455556666"
   const path = writeCodexRollout(codexHome, codexId, [cxMeta(codexId, "/x"), cxTaskStarted])
-  h.storage.upsertSession(row({ session_id: "fray-uuid", title: "Audit registry auth…", title_auto: 1 }))
+  h.storage.upsertSession(row({ session_id: "frizz-uuid", title: "Audit registry auth…", title_auto: 1 }))
   h.storage.setBackend("t", "codex")
   h.storage.setAgentSession("t", codexId)
   const t = codexTailer(h, codexHome)
@@ -2969,7 +2969,7 @@ test("isClaudeAuthErrorText: narrow conjunction", () => {
 })
 
 // The app-server reports a model-run command as the ARGV it spawned, while codex's own
-// `backgroundTerminals/list`, the rollout, and fray's transcript-projected row all say the bare
+// `backgroundTerminals/list`, the rollout, and frizz's transcript-projected row all say the bare
 // command. Stripping the wrapper is what lets the board row and the transcript row reconcile at all
 // (lib/childOps.ts keys on it) — and it is what the operator reads.
 test("tailer: a codex exec's launcher wrapper is stripped, and nothing else is", () => {
@@ -3016,7 +3016,7 @@ test("tailer: a killed shell does NOT come back when the fold re-primes from scr
   // durable this re-minted the row and it pulsed "running" for as long as the thread lived.
   const second = makeTailer(h, { mtimeMs: () => Date.parse("2026-07-01T00:00:02.000Z") })
   second.tick()
-  assert.deepEqual(second.get("t")?.bgShells, [], "a fray restart must not resurrect what the operator killed")
+  assert.deepEqual(second.get("t")?.bgShells, [], "a frizz restart must not resurrect what the operator killed")
   assert.deepEqual(second.get("t")?.subAgents, [], "…and it is gone from every live surface, not just the shell list")
 })
 

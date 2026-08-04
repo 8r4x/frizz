@@ -1,9 +1,9 @@
 import { useEffect, useRef } from "react"
 import { RefreshCw } from "lucide-react"
 
-// The default copy shown while the supervisor rebuilds and promotes a fresh Fray artifact. The
+// The default copy shown while the supervisor rebuilds and promotes a fresh Frizz artifact. The
 // supervisor may hand us a more specific `message`; when it does we show that as the sub-line.
-const RESTART_HEADING = "Updating and restarting Fray"
+const RESTART_HEADING = "Updating and restarting Frizz"
 const RESTART_BODY =
   "This may take a moment while the new build is being prepared. All of your threads will continue running normally."
 
@@ -14,9 +14,9 @@ const RESTART_BODY =
 //    This covers portaled surfaces (Radix dialogs/menus) that live outside the inert app subtree too.
 //  • Enter — a composer submit, belt-and-suspenders with the blur/focus move.
 //  • ⌘/Ctrl + K/I — the global palette/doc chords (App.tsx), which would otherwise open surfaces
-//    behind the scrim. NOT N: ⌘N is the browser's new-window shortcut and fray no longer binds it,
+//    behind the scrim. NOT N: ⌘N is the browser's new-window shortcut and frizz no longer binds it,
 //    so swallowing it here would hijack the browser for no gain.
-// The rpc-layer mutation gate remains as a final backstop; between these, the "Fray is restarting"
+// The rpc-layer mutation gate remains as a final backstop; between these, the "Frizz is restarting"
 // red error is unreachable through ordinary interaction.
 function swallowsInteractionKey(event: KeyboardEvent): boolean {
   if (event.key === "Tab" || event.key === "Enter") return true
@@ -32,7 +32,7 @@ function swallowsInteractionKey(event: KeyboardEvent): boolean {
  * Full-viewport blocking modal shown for the entire rebuild+reload window. Unlike the frosted
  * dialogs, this is a HARD block: it grays out the whole app, intercepts every pointer path through
  * its scrim, parks focus on itself and neutralizes the focus/activation keys — the user simply
- * cannot act until Fray is ready, at which point App reloads this exact route. Sits at z-[300], above
+ * cannot act until Frizz is ready, at which point App reloads this exact route. Sits at z-[300], above
  * ALL app chrome and every modal (the tallest of which — the shared Radix Dialog — is z-[200]).
  */
 export function RestartOverlay({ open, message }: { open: boolean; message?: string | null }) {

@@ -6,7 +6,7 @@
 // The delivered text is composed by the SAME shared formatter the scheduler uses, and carries the real
 // wake-delivery token, so these exercise the production render path rather than a hand-written string.
 //
-// Usage: node scripts/seed-wake-cards.mjs --home=/abs/temp-home --socket=fray-adhoc-NNNN-PID
+// Usage: node scripts/seed-wake-cards.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync, globSync } from "node:fs"
 import { join } from "node:path"
@@ -15,14 +15,14 @@ import { formatGithubWakeSteer, wakeDeliveryToken } from "../packages/shared/src
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, socket, cwd = "/Users/colinmcd94/Documents/projects/fray" } = flags
+const { home, socket, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
 if (!home || !socket) {
   console.error("usage: node seed-wake-cards.mjs --home=/abs/temp-home --socket=<tmux-socket>")
   process.exit(1)
 }
 
-const db = globSync(join(home, ".fray/projects/*/ui.db"))[0]
-if (!db) throw new Error(`no ui.db under ${home}/.fray/projects — is the stack booted?`)
+const db = globSync(join(home, ".frizz/projects/*/ui.db"))[0]
+if (!db) throw new Error(`no ui.db under ${home}/.frizz/projects — is the stack booted?`)
 const jsonlDir = join(home, ".claude", "projects", cwd.replace(/[/.]/g, "-"))
 mkdirSync(jsonlDir, { recursive: true })
 
@@ -86,7 +86,7 @@ const CASES = [
 
 CASES.forEach((c, n) => {
   const sessionId = `${c.slug}-0000-4000-8000-000000000000`.slice(0, 36)
-  const tmuxName = `fray-${c.slug}`
+  const tmuxName = `frizz-${c.slug}`
   const at = ago(3)
   const records = [
     {

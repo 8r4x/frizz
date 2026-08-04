@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import type { TranscriptToolCall } from "@fray-ui/shared"
+import type { TranscriptToolCall } from "@frizz/shared"
 import type { ChatMessage } from "../hooks.ts"
 import {
   coalesceToolActivityMessages,
@@ -121,9 +121,9 @@ test("the agent listing folds into the ordinary activity run", () => {
 test("a call whose result is a picture keeps its card and splits the run", () => {
   // An image Read: the harness returns the picture as the WHOLE result, so there is no excerpt text —
   // `outputImage` is the only signal that this Read is a screenshot rather than a source file.
-  const imageRead = tool("Read", { detail: "/tmp/shots/board.png", outputImage: "/tmp/fray-tool-images/ab.png", status: "completed" })
-  const shot = tool("mcp__chrome-devtools__take_screenshot", { outputImage: "/tmp/fray-tool-images/cd.png", status: "completed" })
-  const delivery = tool("SendUserFile", { sentImages: ["/tmp/fray-tool-images/ef.png"], caption: "before vs after", status: "completed" })
+  const imageRead = tool("Read", { detail: "/tmp/shots/board.png", outputImage: "/tmp/frizz-tool-images/ab.png", status: "completed" })
+  const shot = tool("mcp__chrome-devtools__take_screenshot", { outputImage: "/tmp/frizz-tool-images/cd.png", status: "completed" })
+  const delivery = tool("SendUserFile", { sentImages: ["/tmp/frizz-tool-images/ef.png"], caption: "before vs after", status: "completed" })
   for (const call of [imageRead, shot, delivery]) assert.equal(isToolActivityException(call), true)
 
   // A Read of ORDINARY source, and a delivery of non-image files, stay in the digest.
@@ -298,7 +298,7 @@ test("activity labels are gerunds with a clean fallback for arbitrary tools", ()
 })
 
 test("in-project absolute paths render project-relative in the live label", () => {
-  const root = "/Users/me/Documents/projects/fray"
+  const root = "/Users/me/Documents/projects/frizz"
   const edit = tool("Edit", { detail: `${root}/packages/web/src/lib/toolActivity.ts` })
   assert.equal(toolActivityLabel(edit, root), "Editing packages/web/src/lib/toolActivity.ts")
   // No root (a board snapshot that has not landed yet) leaves the label exactly as before.
@@ -325,8 +325,8 @@ test("in-project absolute paths render project-relative in the live label", () =
   // A sibling checkout that merely shares the prefix is NOT in the project, so it keeps its own path
   // (home-collapsed, not project-relative) — the trailing slash is part of the needle.
   assert.equal(
-    toolActivityLabel(tool("Read", { detail: "/Users/me/Documents/projects/fray-old/ui/a.ts" }), root),
-    "Reading ~/Documents/projects/fray-old/ui/a.ts",
+    toolActivityLabel(tool("Read", { detail: "/Users/me/Documents/projects/frizz-old/ui/a.ts" }), root),
+    "Reading ~/Documents/projects/frizz-old/ui/a.ts",
   )
   // Outside the project the home prefix still collapses, inferred from the project root's own.
   assert.equal(
@@ -334,7 +334,7 @@ test("in-project absolute paths render project-relative in the live label", () =
     "Reading ~/.claude/CLAUDE.md",
   )
   assert.equal(
-    toolActivityLabel(tool("Read", { detail: "/Users/me/.claude/CLAUDE.md" }), "/opt/checkouts/fray"),
+    toolActivityLabel(tool("Read", { detail: "/Users/me/.claude/CLAUDE.md" }), "/opt/checkouts/frizz"),
     "Reading /Users/me/.claude/CLAUDE.md",
   )
   // Anything with no home prefix stays absolute: there is no root that makes it shorter and honest.

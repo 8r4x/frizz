@@ -1,6 +1,6 @@
 import { useState, type ReactElement, type ReactNode } from "react"
 import { useSnapshot } from "valtio"
-import type { Backend } from "@fray-ui/shared"
+import type { Backend } from "@frizz/shared"
 import { store } from "../store.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { Composer } from "./Composer.tsx"
@@ -68,7 +68,7 @@ export function ThreadComposerBox({
 
   // INTERRUPT AND SEND is offered only when there is something to interrupt AND a runtime that can be
   // preempted. `runtime === "running"` is exactly "process alive, turn in flight"; codex is excluded
-  // because its app-server bridge owns the steer/turn decision itself and fray does not reach past it.
+  // because its app-server bridge owns the steer/turn decision itself and frizz does not reach past it.
   // A `submitOverride` surface (the queue card's staged answers) is excluded too — that controller
   // sends a whole answer set, and preemption is not part of its contract.
   const canInterrupt = !submitOverride && thread?.runtime === "running" && thread.backend !== "codex"
@@ -76,7 +76,7 @@ export function ThreadComposerBox({
   function send(interrupt = false) {
     const text = message.trim()
     if (!text) return
-    // `/login` / `/logout` are fray-owned account actions for THIS thread's backend — invoked
+    // `/login` / `/logout` are frizz-owned account actions for THIS thread's backend — invoked
     // locally, never delivered to the worker as a prompt (a leading slash is not a stable provider
     // command transport across the live-paste vs dead-resume lifecycles).
     const alias = parseAccountAlias(text)

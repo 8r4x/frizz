@@ -1,11 +1,11 @@
-// Build the published `frayui` runtime. A published package is installed UNDER node_modules, where
+// Build the published `frizz` runtime. A published package is installed UNDER node_modules, where
 // Node refuses to strip TypeScript types (ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING) — so unlike
-// `fray-dev` (which runs raw .ts straight from the source checkout) the registry package MUST ship
+// `frizz-dev` (which runs raw .ts straight from the source checkout) the registry package MUST ship
 // compiled JS. esbuild absorbs the CLI, server and every workspace/JS dependency into self-contained
 // ESM bundles; only the native loaders stay external and are installed as real dependencies.
 //
 // Real entry FILES are emitted because each is executed as its OWN `node <file>` process:
-//   - frayui.js                    the bin / production launcher (production.ts)
+//   - frizz.js                    the bin / production launcher (production.ts)
 //   - dev-child.js                 the server child the supervisor spawns (dev-supervisor childEntry)
 //   - one .js per DETACHED_DAEMON_ENTRIES — each a detached daemon spawned as its own process
 //     (codex-app-server-daemon.js, claude-agent-broker.js — the Claude session broker).
@@ -33,10 +33,10 @@ const shared = {
   // Some bundled deps (e.g. ws) keep CommonJS `require()` of Node built-ins; in an ESM bundle esbuild
   // otherwise installs a throwing require shim. Give it a real bundle-relative CJS resolver.
   banner: {
-    js: 'import { createRequire as __frayCreateRequire } from "node:module"; const require = __frayCreateRequire(import.meta.url);',
+    js: 'import { createRequire as __frizzCreateRequire } from "node:module"; const require = __frizzCreateRequire(import.meta.url);',
   },
   // Native loaders + the dev-only vite server stay external and are resolved from node_modules at
-  // runtime (better-sqlite3/node-pty/@parcel/watcher are frayui dependencies; vite is never reached
+  // runtime (better-sqlite3/node-pty/@parcel/watcher are frizz dependencies; vite is never reached
   // in production, which serves the prebuilt web-dist).
   external: ["better-sqlite3", "node-pty", "@parcel/watcher", "vite"],
   logLevel: "silent",
@@ -45,7 +45,7 @@ const shared = {
 rmSync(dist, { recursive: true, force: true })
 
 const entries = {
-  "frayui.js": "src/production.ts",
+  "frizz.js": "src/production.ts",
   "dev-child.js": "packages/server/src/dev-child.ts",
 }
 // Every detached daemon ships as its own real sibling .js — derived, never hand-listed.

@@ -21,7 +21,7 @@ import {
   type ProjectLaunchTarget,
 } from "./project-launch.ts"
 import { RestartSupervisorProxy, type RestartResult } from "./restart-supervisor.ts"
-import { log as frayLog } from "./logging.ts"
+import { log as frizzLog } from "./logging.ts"
 
 export const DEV_RESTART_DEBOUNCE_MS = 180
 export const DEV_CRASH_STABLE_MS = 5000
@@ -46,12 +46,12 @@ const GENERATED_DIRS = new Set([
 ])
 // The watch root is the repo root now that the workspace is hoisted there, and the repo root holds
 // far more than source: `.claude/worktrees` alone contains entire sibling checkouts that other
-// agents edit constantly. Those are never fray source, so keep the recursive watcher out of them
+// agents edit constantly. Those are never frizz source, so keep the recursive watcher out of them
 // rather than paying to walk them and filtering the events afterwards.
 const NON_SOURCE_ROOT_DIRS = new Set([
   ".claude",
   ".agents",
-  ".fray",
+  ".frizz",
   "artifacts",
   "attachments",
   "qa-evidence",
@@ -110,7 +110,7 @@ export interface DevSupervisorOptions {
   updateRestart?: () => Promise<RestartResult>
   /** Cheap CACHED "is a newer artifact actually available" read; see RestartSupervisorProxy. */
   updateAvailable?: () => boolean
-  /** Launched from a source checkout (fray-dev / `pnpm dev`)? See RestartSupervisorProxy. */
+  /** Launched from a source checkout (frizz-dev / `pnpm dev`)? See RestartSupervisorProxy. */
   dev?: boolean
   /** Restore the known-good artifact selection if its replacement cannot become ready. */
   rollbackUpdate?: () => Promise<void> | void
@@ -169,9 +169,9 @@ export const SUPERVISOR_ESCALATE_GRACE_MS = 500
  * launcher that ignores Ctrl-C. Escalation still releases the tokenized launch owner — a forced exit
  * must not strand the project — and reports a non-zero code because the drain did not complete.
  */
-/** Call sites still build "[fray-ui] …" strings; the logger owns that framing now. */
+/** Call sites still build "[frizz] …" strings; the logger owns that framing now. */
 function stripPrefix(line: string): string {
-  return line.startsWith("[fray-ui] ") ? line.slice("[fray-ui] ".length) : line
+  return line.startsWith("[frizz] ") ? line.slice("[frizz] ".length) : line
 }
 
 export function createSupervisorShutdownHandler(options: SupervisorShutdownHandlerOptions): () => void {
@@ -188,7 +188,7 @@ export function createSupervisorShutdownHandler(options: SupervisorShutdownHandl
     } catch (error) {
       // An abandoned drain can still hold the project's ownership guard. Releasing is best-effort;
       // a failure here must never replace the exit with an unhandled stack over the operator's prompt.
-      options.error?.(`[fray-ui] could not release launch ownership: ${error instanceof Error ? error.message : error}`)
+      options.error?.(`[frizz] could not release launch ownership: ${error instanceof Error ? error.message : error}`)
     }
     options.exit(code)
   }
@@ -196,11 +196,11 @@ export function createSupervisorShutdownHandler(options: SupervisorShutdownHandl
     if (stopping) {
       // Same stop, delivered twice (process group + a forwarding wrapper) — not an impatient operator.
       if (decided || now() - startedAt < escalateAfterMs) return
-      options.error?.("[fray-ui] second stop signal — abandoning the graceful drain")
+      options.error?.("[frizz] second stop signal — abandoning the graceful drain")
       try {
         options.force?.()
       } catch (error) {
-        options.error?.(`[fray-ui] forced supervisor stop failed: ${error instanceof Error ? error.message : error}`)
+        options.error?.(`[frizz] forced supervisor stop failed: ${error instanceof Error ? error.message : error}`)
       }
       decide(1)
       return
@@ -210,7 +210,7 @@ export function createSupervisorShutdownHandler(options: SupervisorShutdownHandl
     void options.close().then(
       () => decide(0),
       (error) => {
-        options.error?.(`[fray-ui] supervisor shutdown failed: ${error instanceof Error ? error.message : error}`)
+        options.error?.(`[frizz] supervisor shutdown failed: ${error instanceof Error ? error.message : error}`)
         decide(1)
       },
     )
@@ -327,7 +327,7 @@ export function devConfigSyntaxError(path: string): string | null {
 
 /** A child gets a copy of the caller's complete environment; only the private dev port marker is added. */
 export function devChildEnv(env: NodeJS.ProcessEnv, port: number): NodeJS.ProcessEnv {
-  return { ...env, FRAY_DEV_PORT: String(port), FRAY_DEV_CHILD: "1" }
+  return { ...env, FRIZZ_DEV_PORT: String(port), FRIZZ_DEV_CHILD: "1" }
 }
 
 /** Allocate a disposable control-plane port. The durable proxy keeps the public port throughout. */
@@ -346,7 +346,7 @@ async function allocatePrivateDevPort(publicPort: number): Promise<number> {
     const hmrPort = candidate + 39_000 <= 65_535 ? candidate + 39_000 : candidate - 1000
     if (candidate > 0 && candidate !== publicPort && await canBindPrivatePort(hmrPort)) return candidate
   }
-  throw new Error("could not allocate a private Fray control-plane port")
+  throw new Error("could not allocate a private Frizz control-plane port")
 }
 
 async function canBindPrivatePort(port: number): Promise<boolean> {
@@ -359,28 +359,28 @@ async function canBindPrivatePort(port: number): Promise<boolean> {
 
 export function devReexecEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   const next = Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
-  delete next.FRAY_DEV_CHILD
-  delete next.FRAY_DEV_PORT
-  next.FRAY_DEV_REEXEC = "1"
+  delete next.FRIZZ_DEV_CHILD
+  delete next.FRIZZ_DEV_PORT
+  next.FRIZZ_DEV_REEXEC = "1"
   return next
 }
 
-type ReadyMessage = { type: "fray-ready"; pid: number; processStart: string; port: number; bootId: string }
+type ReadyMessage = { type: "frizz-ready"; pid: number; processStart: string; port: number; bootId: string }
 function readyMessage(value: unknown): value is ReadyMessage {
   if (!value || typeof value !== "object") return false
   const msg = value as Partial<ReadyMessage>
-  return msg.type === "fray-ready"
+  return msg.type === "frizz-ready"
     && typeof msg.pid === "number"
     && typeof msg.processStart === "string"
     && typeof msg.port === "number"
     && typeof msg.bootId === "string"
 }
 
-type StopOwnerMessage = { type: "fray-stop-owner"; token: string }
+type StopOwnerMessage = { type: "frizz-stop-owner"; token: string }
 function stopOwnerMessage(value: unknown): value is StopOwnerMessage {
   if (!value || typeof value !== "object") return false
   const msg = value as Partial<StopOwnerMessage>
-  return msg.type === "fray-stop-owner" && typeof msg.token === "string"
+  return msg.type === "frizz-stop-owner" && typeof msg.token === "string"
 }
 
 class Supervisor implements DevSupervisor {
@@ -446,7 +446,7 @@ class Supervisor implements DevSupervisor {
     this.childEnvironment = opts.childEnvironment ?? (() => ({}))
     this.debounceMs = opts.debounceMs ?? DEV_RESTART_DEBOUNCE_MS
     // EXEMPT from the sibling-.ts ban (detached-daemons.test.ts allowlists this line). The dev
-    // supervisor is the SOURCE launcher: `fray-dev` always runs from a checkout, where this file is
+    // supervisor is the SOURCE launcher: `frizz-dev` always runs from a checkout, where this file is
     // really on disk. Emitting dev-bootstrap.js into artifacts to "fix" the dangling path made things
     // strictly worse — it woke a control-plane fork that had been failing fast in every artifact ever
     // built, and the woken path crashed on an unguarded IPC send (EPIPE) and left delegates
@@ -468,8 +468,8 @@ class Supervisor implements DevSupervisor {
     // Default to the run log, NOT the terminal. The launcher repaints a region there and cannot
     // clear writes it did not make; every supervisor record the operator actually needs is either
     // surfaced through the readout or streamed by `--debug`.
-    this.logLine = opts.log ?? ((line) => frayLog.info("supervisor", stripPrefix(line)))
-    this.errorLine = opts.error ?? ((line) => frayLog.error("supervisor", stripPrefix(line)))
+    this.logLine = opts.log ?? ((line) => frizzLog.info("supervisor", stripPrefix(line)))
+    this.errorLine = opts.error ?? ((line) => frizzLog.error("supervisor", stripPrefix(line)))
     this.updateRestart = opts.updateRestart
     this.rollbackUpdate = opts.rollbackUpdate
     this.durableReexec = opts.durableReexec
@@ -486,9 +486,9 @@ class Supervisor implements DevSupervisor {
       status: () => {
         if (this.browserRestart || this.restartRunning) return { state: "restarting" as const }
         const failed = this.child === null && this.boot === null
-        const artifactDigest = this.activeChildEnvironment.FRAY_STABLE_ARTIFACT
+        const artifactDigest = this.activeChildEnvironment.FRIZZ_STABLE_ARTIFACT
         return failed
-          ? { state: "failed" as const, message: "Fray application server is not ready", ...(artifactDigest ? { artifactDigest } : {}) }
+          ? { state: "failed" as const, message: "Frizz application server is not ready", ...(artifactDigest ? { artifactDigest } : {}) }
           : { state: "ready" as const, ...(artifactDigest ? { artifactDigest } : {}) }
       },
     })
@@ -520,9 +520,9 @@ class Supervisor implements DevSupervisor {
         )
         for (const result of settled) {
           if (result.status === "fulfilled") this.subscriptions.push(result.value)
-          else this.errorLine(`[fray-ui] dev watch failed: ${result.reason instanceof Error ? result.reason.message : result.reason}`)
+          else this.errorLine(`[frizz] dev watch failed: ${result.reason instanceof Error ? result.reason.message : result.reason}`)
         }
-        if (this.subscriptions.length === 0) throw new Error("no Fray server source tree could be watched")
+        if (this.subscriptions.length === 0) throw new Error("no Frizz server source tree could be watched")
       }
     } catch (err) {
       await this.publicProxy.close().catch(() => undefined)
@@ -535,7 +535,7 @@ class Supervisor implements DevSupervisor {
 
   private onWatch(err: Error | null, events: WatchEvent[]): void {
     if (err) {
-      this.errorLine(`[fray-ui] dev watch error: ${err.message}`)
+      this.errorLine(`[frizz] dev watch error: ${err.message}`)
       this.writeStatus("degraded", `watch error: ${err.message}`)
       return
     }
@@ -559,7 +559,7 @@ class Supervisor implements DevSupervisor {
         const syntaxError = devConfigSyntaxError(path)
         if (!syntaxError) continue
         const message = `dev config invalid: ${syntaxError}; watching for a corrective edit`
-        this.errorLine(`[fray-ui] dev ${message}`)
+        this.errorLine(`[frizz] dev ${message}`)
         this.writeStatus("failed", message)
         return
       }
@@ -580,8 +580,8 @@ class Supervisor implements DevSupervisor {
       // reads like something already went wrong. On the first boot there is nothing to restart.
       this.logLine(
         reason === INITIAL_BOOT_REASON
-          ? `[fray-ui] starting Fray`
-          : `[fray-ui] restarting ${scope} — ${reason}`,
+          ? `[frizz] starting Frizz`
+          : `[frizz] restarting ${scope} — ${reason}`,
       )
       this.writeStatus("restarting", reason)
       void this.restart()
@@ -622,7 +622,7 @@ class Supervisor implements DevSupervisor {
     const previousBoot = this.boot?.bootId
     const work = (async (): Promise<RestartResult> => {
       this.lastRestartFailure = undefined
-      this.requestRestart("Restart Fray requested from browser", true)
+      this.requestRestart("Restart Frizz requested from browser", true)
       const deadline = Date.now() + 30_000
       while (!this.closed && Date.now() < deadline) {
         const boot = this.boot
@@ -634,8 +634,8 @@ class Supervisor implements DevSupervisor {
         await new Promise((resolveWait) => setTimeout(resolveWait, 50))
       }
       const message = this.closed
-        ? "Fray supervisor stopped while restarting"
-        : "Fray application server did not become ready within 30 seconds"
+        ? "Frizz supervisor stopped while restarting"
+        : "Frizz application server did not become ready within 30 seconds"
       this.writeStatus("failed", message)
       return { state: "failed", message }
     })().finally(() => { this.browserRestart = null })
@@ -696,7 +696,7 @@ class Supervisor implements DevSupervisor {
     }
 
     const detail = failures.length > 0 ? `${message}; ${failures.join("; ")}` : message
-    this.errorLine(`[fray-ui] ${detail}`)
+    this.errorLine(`[frizz] ${detail}`)
     this.writeStatus("failed", detail, this.boot)
     return { state: "failed", message: detail }
   }
@@ -731,7 +731,7 @@ class Supervisor implements DevSupervisor {
     } catch (error) {
       const message = `child launch selection failed: ${error instanceof Error ? error.message : error}; watching for a corrective edit`
       this.lastRestartFailure = message
-      this.errorLine(`[fray-ui] ${message}`)
+      this.errorLine(`[frizz] ${message}`)
       this.writeStatus("failed", message, null)
       return false
     }
@@ -750,7 +750,7 @@ class Supervisor implements DevSupervisor {
       } catch (error) {
         const message = `child spawn failed: ${error instanceof Error ? error.message : error}; watching for a corrective edit`
         this.lastRestartFailure = message
-        this.errorLine(`[fray-ui] ${message}`)
+        this.errorLine(`[frizz] ${message}`)
         this.writeStatus("failed", message, null)
         settled(false)
         return
@@ -785,7 +785,7 @@ class Supervisor implements DevSupervisor {
         ) {
           const detail = "control plane reported ready without a registered owner-bound generation"
           ownershipRejected = true
-          this.errorLine(`[fray-ui] dev ${detail}`)
+          this.errorLine(`[frizz] dev ${detail}`)
           this.writeStatus("failed", detail)
           child.kill("SIGTERM")
           settleSpawn(false)
@@ -797,7 +797,7 @@ class Supervisor implements DevSupervisor {
         this.activeChildEnvironment = launch?.environment ?? this.childEnvironment()
         this.lastRestartFailure = undefined
         this.resolveFirstBoot(boot)
-        this.logLine(`[fray-ui] dev control plane ready (pid ${boot.pid}, boot ${boot.bootId.slice(0, 8)})`)
+        this.logLine(`[frizz] dev control plane ready (pid ${boot.pid}, boot ${boot.bootId.slice(0, 8)})`)
         this.writeStatus("ready", "control plane ready", boot)
         this.armCrashStability(child)
         settleSpawn(true)
@@ -805,7 +805,7 @@ class Supervisor implements DevSupervisor {
       child.once("error", (err) => {
         const message = `child spawn failed: ${err.message}; watching for a corrective edit`
         this.lastRestartFailure = message
-        this.errorLine(`[fray-ui] ${message}`)
+        this.errorLine(`[frizz] ${message}`)
         this.writeStatus("failed", message)
         settleSpawn(false)
       })
@@ -825,7 +825,7 @@ class Supervisor implements DevSupervisor {
             ? `control plane stopped (${why}); retry ${this.crashAttempts} in ${retryDelay}ms`
             : `control plane stopped (${why}) before ready; watching for a corrective edit`
           if (!started) this.lastRestartFailure = message
-          this.errorLine(`[fray-ui] dev ${message}`)
+          this.errorLine(`[frizz] dev ${message}`)
           this.writeStatus("failed", message)
           // A previously-ready control plane crash is transient until proved otherwise. Restart it;
           // pre-ready syntax/import failures stay quiet under the healthy old watcher until an edit.
@@ -852,11 +852,11 @@ class Supervisor implements DevSupervisor {
         state,
         message,
         updatedAt: new Date().toISOString(),
-        ...(this.activeChildEnvironment.FRAY_STABLE_ARTIFACT ? { artifactDigest: this.activeChildEnvironment.FRAY_STABLE_ARTIFACT } : {}),
+        ...(this.activeChildEnvironment.FRIZZ_STABLE_ARTIFACT ? { artifactDigest: this.activeChildEnvironment.FRIZZ_STABLE_ARTIFACT } : {}),
         ...(boot ? { childPid: boot.pid, bootId: boot.bootId } : {}),
       })
     } catch (err) {
-      this.errorLine(`[fray-ui] could not write dev status: ${err instanceof Error ? err.message : err}`)
+      this.errorLine(`[frizz] could not write dev status: ${err instanceof Error ? err.message : err}`)
     }
   }
 
@@ -886,12 +886,12 @@ class Supervisor implements DevSupervisor {
 
   private async reexecLauncher(): Promise<void> {
     if (!this.reexec) {
-      const message = "launcher source changed, but this Node runtime cannot re-exec; restart Fray once"
-      this.errorLine(`[fray-ui] ${message}`)
+      const message = "launcher source changed, but this Node runtime cannot re-exec; restart Frizz once"
+      this.errorLine(`[frizz] ${message}`)
       this.writeStatus("degraded", message)
       return
     }
-    this.logLine(`[fray-ui] dev launcher validated; reloading in place (pid ${process.pid})`)
+    this.logLine(`[frizz] dev launcher validated; reloading in place (pid ${process.pid})`)
     this.closed = true
     if (this.debounce) clearTimeout(this.debounce)
     this.debounce = null
@@ -904,12 +904,12 @@ class Supervisor implements DevSupervisor {
     try {
       this.reexec({ executable: process.execPath, argv: process.argv, env: devReexecEnv(this.parentEnv) })
     } catch (error) {
-      this.errorLine(`[fray-ui] dev launcher re-exec failed: ${error instanceof Error ? error.message : error}`)
+      this.errorLine(`[frizz] dev launcher re-exec failed: ${error instanceof Error ? error.message : error}`)
     }
     // execve never returns. A failed/injected return must release ownership through the caller's one
     // shutdown path; otherwise this live but watcherless PID would strand the project indefinitely.
     this.removeStatus()
-    this.errorLine("[fray-ui] dev launcher re-exec returned unexpectedly; restart Fray once")
+    this.errorLine("[frizz] dev launcher re-exec returned unexpectedly; restart Frizz once")
     this.resolveStopRequested()
   }
 
@@ -928,7 +928,7 @@ class Supervisor implements DevSupervisor {
       }
       child.once("exit", finish)
       const force = setTimeout(() => {
-        this.errorLine(`[fray-ui] dev child ${child.pid ?? "?"} did not close in ${CHILD_STOP_TIMEOUT_MS}ms; killing control plane only`)
+        this.errorLine(`[frizz] dev child ${child.pid ?? "?"} did not close in ${CHILD_STOP_TIMEOUT_MS}ms; killing control plane only`)
         child.kill("SIGKILL")
       }, CHILD_STOP_TIMEOUT_MS)
       force.unref()
@@ -944,14 +944,14 @@ class Supervisor implements DevSupervisor {
   /**
    * Second-Ctrl-C escalation. `stopChild` waits up to CHILD_STOP_TIMEOUT_MS for a clean drain; an
    * operator who signals again has withdrawn that patience, so take the control plane down now. The
-   * child owns only Fray's own handles — worker tmux sessions and the detached Codex app-server
+   * child owns only Frizz's own handles — worker tmux sessions and the detached Codex app-server
    * daemon are keyed project resources in their own process trees and deliberately survive this.
    */
   forceStop(): void {
     this.closed = true
     const child = this.child
     if (!child) return
-    this.errorLine(`[fray-ui] force-stopping control plane (pid ${child.pid ?? "?"})`)
+    this.errorLine(`[frizz] force-stopping control plane (pid ${child.pid ?? "?"})`)
     try {
       child.kill("SIGKILL")
     } catch {

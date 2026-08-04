@@ -1,10 +1,10 @@
 /**
  * Manifest surgery for `npm publish`.
  *
- * `frayui` is published straight out of a pnpm workspace, so its build-time dependencies on the
+ * `frizz` is published straight out of a pnpm workspace, so its build-time dependencies on the
  * sibling packages are declared with pnpm's `workspace:` protocol. pnpm rewrites those to real
  * versions when IT publishes; npm does not — it is not an npm workspace, so `npm publish` would ship
- * `"@fray-ui/server": "workspace:*"` verbatim to the registry, a specifier no registry consumer can
+ * `"@frizz/server": "workspace:*"` verbatim to the registry, a specifier no registry consumer can
  * ever resolve. The sibling packages are private and intentionally unpublished, and nothing in the
  * shipped bundle needs them at run time (esbuild absorbs them), so the published manifest simply
  * drops them.

@@ -1,4 +1,4 @@
-import type { TranscriptToolCall } from "@fray-ui/shared"
+import type { TranscriptToolCall } from "@frizz/shared"
 import { formatFixedDuration } from "./durationLabels.ts"
 
 // A SUB-AGENT COMPLETION is transcript PUNCTUATION, not a tool call.

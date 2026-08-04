@@ -17,7 +17,7 @@ test("open overlay is a full-viewport modal block above every modal", () => {
   assert.match(html, /fixed inset-0/)
   assert.match(html, /z-\[300\]/)
   assert.doesNotMatch(html, /z-\[200\]/)
-  assert.match(html, /Updating and restarting Fray/)
+  assert.match(html, /Updating and restarting Frizz/)
   assert.match(html, /animate-spin/)
   // The focusable card is what we park focus on so Tab cannot reach a background control.
   assert.match(html, /tabindex="-1"/)

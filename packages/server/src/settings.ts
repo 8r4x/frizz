@@ -1,4 +1,4 @@
-import { Settings } from "@fray-ui/shared"
+import { Settings } from "@frizz/shared"
 import type { Storage } from "./storage.ts"
 
 const SETTINGS_KEY = "settings"

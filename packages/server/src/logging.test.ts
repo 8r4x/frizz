@@ -13,32 +13,32 @@ import {
   pruneRunLogs,
   runLogPath,
 } from "./logging.ts"
-import { frayPaths } from "./fray-paths.ts"
+import { frizzPaths } from "./frizz-paths.ts"
 
 function scratch(): string {
-  return mkdtempSync(join(tmpdir(), "fray-logging-"))
+  return mkdtempSync(join(tmpdir(), "frizz-logging-"))
 }
 
 test("the run log lives beside the project's own state, wherever that project's state lives", () => {
-  const stateDir = "/home/someone/.fray/projects/abcd"
+  const stateDir = "/home/someone/.frizz/projects/abcd"
   assert.equal(defaultLogRoot(stateDir), join(stateDir, "logs"))
 
   // No project yet — a failure before the workspace resolves — falls back to the machine-level STATE
-  // root. This test used to assert `<home>/.fray/logs` unconditionally, under a rule that fray keeps
-  // one dotdir on every platform; the root is now resolved by fray-paths.ts, so an install that HAS
-  // `~/.fray` still gets exactly that path and a new machine gets the platform's own.
-  const legacyHome = mkdtempSync(join(tmpdir(), "fray-logroot-legacy-"))
+  // root. This test used to assert `<home>/.frizz/logs` unconditionally, under a rule that frizz keeps
+  // one dotdir on every platform; the root is now resolved by frizz-paths.ts, so an install that HAS
+  // `~/.frizz` still gets exactly that path and a new machine gets the platform's own.
+  const legacyHome = mkdtempSync(join(tmpdir(), "frizz-logroot-legacy-"))
   try {
-    mkdirSync(join(legacyHome, ".fray"))
-    assert.equal(defaultLogRoot(undefined, legacyHome), join(legacyHome, ".fray", "logs"))
+    mkdirSync(join(legacyHome, ".frizz"))
+    assert.equal(defaultLogRoot(undefined, legacyHome), join(legacyHome, ".frizz", "logs"))
   } finally {
     rmSync(legacyHome, { recursive: true, force: true })
   }
 
-  const freshHome = mkdtempSync(join(tmpdir(), "fray-logroot-fresh-"))
+  const freshHome = mkdtempSync(join(tmpdir(), "frizz-logroot-fresh-"))
   try {
-    assert.equal(defaultLogRoot(undefined, freshHome), join(frayPaths({ home: freshHome }).state, "logs"))
-    assert.notEqual(defaultLogRoot(undefined, freshHome), join(freshHome, ".fray", "logs"))
+    assert.equal(defaultLogRoot(undefined, freshHome), join(frizzPaths({ home: freshHome }).state, "logs"))
+    assert.notEqual(defaultLogRoot(undefined, freshHome), join(freshHome, ".frizz", "logs"))
   } finally {
     rmSync(freshHome, { recursive: true, force: true })
   }
@@ -46,17 +46,17 @@ test("the run log lives beside the project's own state, wherever that project's 
 
 test("a run log is named for its instant and pid so a crash points at one exact file", () => {
   const path = runLogPath("/state", new Date(2026, 6, 31, 16, 42, 11), 4242, "/home/x", {})
-  assert.equal(path, join("/state", "logs", "fray-2026-07-31T16-42-11-4242.log"))
+  assert.equal(path, join("/state", "logs", "frizz-2026-07-31T16-42-11-4242.log"))
 })
 
-test("FRAY_LOG_PATH accepts either a directory or an exact file", () => {
+test("FRIZZ_LOG_PATH accepts either a directory or an exact file", () => {
   const at = new Date(2026, 6, 31, 16, 42, 11)
   assert.equal(
-    runLogPath("/state", at, 7, "/home/x", { FRAY_LOG_PATH: "/tmp/logs" }),
-    join("/tmp/logs", "fray-2026-07-31T16-42-11-7.log"),
+    runLogPath("/state", at, 7, "/home/x", { FRIZZ_LOG_PATH: "/tmp/logs" }),
+    join("/tmp/logs", "frizz-2026-07-31T16-42-11-7.log"),
   )
   assert.equal(
-    runLogPath("/state", at, 7, "/home/x", { FRAY_LOG_PATH: "/tmp/exact.log" }),
+    runLogPath("/state", at, 7, "/home/x", { FRIZZ_LOG_PATH: "/tmp/exact.log" }),
     "/tmp/exact.log",
   )
 })
@@ -66,11 +66,11 @@ test("records land on disk in a human-readable, aligned form", () => {
   try {
     const file = join(dir, "run.log")
     const logger = createLogger({ file, now: () => Date.UTC(2026, 6, 31, 12, 0, 0) })
-    logger.info("launcher", "workspace fray")
+    logger.info("launcher", "workspace frizz")
     logger.error("supervisor", "child exited")
     const written = readFileSync(file, "utf8").split("\n").filter(Boolean)
     assert.equal(written.length, 2)
-    assert.match(written[0]!, /INFO {2}\s+launcher\s+workspace fray$/)
+    assert.match(written[0]!, /INFO {2}\s+launcher\s+workspace frizz$/)
     assert.match(written[1]!, /ERROR\s+supervisor\s+child exited$/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -103,13 +103,13 @@ test("an owner sweeps retention and repoints latest.log; an adopting child does 
     const logs = join(dir, "logs")
     mkdirSync(logs, { recursive: true })
     for (let index = 0; index < 25; index++) {
-      const path = join(logs, `fray-old-${index}.log`)
+      const path = join(logs, `frizz-old-${index}.log`)
       writeFileSync(path, "x")
       // Distinct mtimes so "newest N" is well defined.
       const when = new Date(2026, 0, 1 + index)
       utimesSync(path, when, when)
     }
-    const owner = createLogger({ file: join(logs, "fray-new.log") })
+    const owner = createLogger({ file: join(logs, "frizz-new.log") })
     owner.info("launcher", "hello")
     const remaining = readdirSync(logs).filter((name) => name !== "latest.log")
     assert.equal(remaining.length <= 21, true, `expected retention to sweep, saw ${remaining.length}`)
@@ -118,10 +118,10 @@ test("an owner sweeps retention and repoints latest.log; an adopting child does 
     assert.equal(readFileSync(latestLogPath(logs), "utf8").includes("hello"), true)
 
     const before = readdirSync(logs).length
-    const child = createLogger({ file: join(logs, "fray-new.log"), owner: false })
+    const child = createLogger({ file: join(logs, "frizz-new.log"), owner: false })
     child.info("dev-child", "adopted")
     assert.equal(readdirSync(logs).length, before, "an adopting child must not prune its parent's history")
-    assert.equal(readFileSync(join(logs, "fray-new.log"), "utf8").includes("adopted"), true)
+    assert.equal(readFileSync(join(logs, "frizz-new.log"), "utf8").includes("adopted"), true)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -130,8 +130,8 @@ test("an owner sweeps retention and repoints latest.log; an adopting child does 
 test("retention drops anything past the count OR older than the age bound", () => {
   const dir = scratch()
   try {
-    const fresh = join(dir, "fray-fresh.log")
-    const ancient = join(dir, "fray-ancient.log")
+    const fresh = join(dir, "frizz-fresh.log")
+    const ancient = join(dir, "frizz-ancient.log")
     writeFileSync(fresh, "x")
     writeFileSync(ancient, "x")
     const old = new Date(Date.now() - 40 * 24 * 60 * 60 * 1_000)
@@ -184,8 +184,8 @@ test("the child environment carries the parent's file so its records are never l
     const file = join(dir, "run.log")
     const logger = createLogger({ file })
     assert.deepEqual(logEnvironment(logger, "info"), {
-      FRAY_LOG_FILE: file,
-      FRAY_LOG_LEVEL: "info",
+      FRIZZ_LOG_FILE: file,
+      FRIZZ_LOG_LEVEL: "info",
     })
   } finally {
     rmSync(dir, { recursive: true, force: true })

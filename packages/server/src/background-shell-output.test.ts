@@ -6,7 +6,7 @@ import test from "node:test"
 import { backgroundShellLineCount, readBackgroundShellOutput, resetBackgroundShellLineCounts } from "./background-shell-output.ts"
 
 test("background shell output reads a bounded, presentation-safe tail", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-shell-output-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-shell-output-"))
   try {
     const path = join(dir, "task.output")
     writeFileSync(path, `discard-me\n12345\u001b[31mred\u001b[0m\rprogress`)
@@ -20,13 +20,13 @@ test("background shell output reads a bounded, presentation-safe tail", () => {
 })
 
 test("background shell output degrades safely when the task file is unavailable", () => {
-  assert.deepEqual(readBackgroundShellOutput("/definitely/missing/fray-shell-output"), { output: "", truncated: false })
+  assert.deepEqual(readBackgroundShellOutput("/definitely/missing/frizz-shell-output"), { output: "", truncated: false })
 })
 
 // ── THE LIVE COUNTER on a shell row ──────────────────────────────────────────────────────────────
 
 function withOutputFile(run: (path: string) => void): void {
-  const dir = mkdtempSync(join(tmpdir(), "fray-shell-lines-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-shell-lines-"))
   resetBackgroundShellLineCounts()
   try {
     run(join(dir, "task.output"))
@@ -105,5 +105,5 @@ test("the line counter re-counts when a LARGER file replaces the one at that pat
 })
 
 test("the line counter reports nothing — never zero — for a file it cannot read", () => {
-  assert.equal(backgroundShellLineCount("/definitely/missing/fray-shell-output"), undefined)
+  assert.equal(backgroundShellLineCount("/definitely/missing/frizz-shell-output"), undefined)
 })

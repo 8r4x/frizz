@@ -1,6 +1,6 @@
 // Dev entry: a durable source watcher supervising a disposable API + Vite control-plane child.
 // Run with `nub packages/server/src/dev.ts` from ui/. Worker tmux sessions remain independent.
-import { DEFAULT_PORT } from "@fray-ui/shared"
+import { DEFAULT_PORT } from "@frizz/shared"
 import { projectFromLaunchTarget, projectLaunchTarget, resolveProject } from "./project.ts"
 import {
   acquireProjectLaunchOwner,
@@ -11,7 +11,7 @@ import {
   verifyProjectLaunchDelegate,
 } from "./project-launch.ts"
 
-if (process.env.FRAY_DEV_CHILD === "1") {
+if (process.env.FRIZZ_DEV_CHILD === "1") {
   const childTarget = projectLaunchTargetFromEnvironment(process.env)
   const childToken = projectLaunchOwnerTokenFromEnvironment(process.env)
   if (!childTarget || !childToken) throw new Error("dev child is missing pinned project launch ownership")

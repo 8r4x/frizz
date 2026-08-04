@@ -15,14 +15,14 @@ export type AdoptionReconcileOutcome =
   | "identity-conflict"
 
 // An adoption claim used to bind a tmux PANE, and recovery's job was finding and killing the orphan
-// one a dead fray left behind. Adoption spawns through the broker now, so a claim never has a pane and
+// one a dead frizz left behind. Adoption spawns through the broker now, so a claim never has a pane and
 // recovery is purely a record question: is this claim stale, and may it be abandoned. The seam stays so
 // callers and their tests keep their shape; every lookup is simply absent.
 export interface PaneIdentity {
   paneId: string
   panePid: number
   sessionCreated: number
-  /** Retained so a stale claim written by a PRE-cutover fray still parses; never set on a new one. */
+  /** Retained so a stale claim written by a PRE-cutover frizz still parses; never set on a new one. */
   adoptionAttemptToken?: string | null
   dead?: boolean
 }

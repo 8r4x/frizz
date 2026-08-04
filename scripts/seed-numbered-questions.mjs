@@ -11,7 +11,7 @@
 //
 // Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer reads.
 //
-// Usage: node scripts/seed-numbered-questions.mjs --home=/abs/temp-home --socket=fray-adhoc-NNNN-PID
+// Usage: node scripts/seed-numbered-questions.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync, globSync } from "node:fs"
 import { join } from "node:path"
@@ -19,14 +19,14 @@ import { join } from "node:path"
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, socket, cwd = "/Users/colinmcd94/Documents/projects/fray" } = flags
+const { home, socket, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
 if (!home || !socket) {
   console.error("usage: node seed-numbered-questions.mjs --home=/abs/temp-home --socket=<tmux-socket>")
   process.exit(1)
 }
 
-const db = globSync(join(home, ".fray/projects/*/ui.db"))[0]
-if (!db) throw new Error(`no ui.db under ${home}/.fray/projects`)
+const db = globSync(join(home, ".frizz/projects/*/ui.db"))[0]
+if (!db) throw new Error(`no ui.db under ${home}/.frizz/projects`)
 const cwdSlug = cwd.replace(/[/.]/g, "-")
 const jsonlDir = join(home, ".claude", "projects", cwdSlug)
 mkdirSync(jsonlDir, { recursive: true })
@@ -145,17 +145,17 @@ const GROUPED_ASK = [
   "```question",
   "**Package name — brainstorm.** All of these are available on npm. Grouped by the metaphor:",
   "",
-  "Thread / loom family (fray = a frayed thread):",
-  "- A. **frayloom** — keeps the `fray` lineage + a loom weaves many threads into one board (recommended: brand continuity)",
+  "Thread / loom family (frizz = a frizzed thread):",
+  "- A. **frizzloom** — keeps the `frizz` lineage + a loom weaves many threads into one board (recommended: brand continuity)",
   "- B. **warp** — the taut lengthwise loom threads. ⚠️ collides with **Warp.dev**.",
-  "- C. **selvage** — the fabric edge that literally *doesn't fray*.",
+  "- C. **selvage** — the fabric edge that literally *doesn't frizz*.",
   "",
-  "Melee family (fray = a scrap/brawl of agents):",
-  "- D. **melee** — a direct synonym for \"fray\": the scrum of agents.",
-  "- E. **fracas** — a noisy, disorderly fray.",
-  "- F. **tussle** — a scrappy, informal fray.",
+  "Melee family (frizz = a scrap/brawl of agents):",
+  "- D. **melee** — a direct synonym for \"frizz\": the scrum of agents.",
+  "- E. **fracas** — a noisy, disorderly frizz.",
+  "- F. **tussle** — a scrappy, informal frizz.",
   "",
-  "Also still open from before: `frayui`, `frayhq`, `frayboard`.",
+  "Also still open from before: `frizz`, `frizzhq`, `frizzboard`.",
   "```",
 ].join("\n")
 
@@ -211,7 +211,7 @@ const THREADS = [
 
 for (const t of THREADS) {
   const sessionId = `${t.slug}-0000-4000-8000-000000000000`.slice(0, 36)
-  const tmuxName = `fray-${t.slug}`
+  const tmuxName = `frizz-${t.slug}`
   const records = t.records.map((r) => ({ ...r, session_id: sessionId }))
   writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
   try {

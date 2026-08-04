@@ -1,6 +1,6 @@
 import { join } from "node:path"
 import { readFileSync } from "node:fs"
-import type { CodexModel } from "@fray-ui/shared"
+import type { CodexModel } from "@frizz/shared"
 import { defaultCodexHome } from "./codex.ts"
 
 // Read the codex model catalogue + PER-MODEL reasoning-effort options from the AUTHORITATIVE local
@@ -13,7 +13,7 @@ import { defaultCodexHome } from "./codex.ts"
 // Schema (codex-cli 0.144.1): { fetched_at, etag, client_version, models: Model[] }. Each Model:
 //   slug (the `-m` id) · display_name · visibility ("list"|"hide" — offer only "list") · priority (int,
 //   sort ASC; 1 = default) · default_reasoning_level (e.g. "medium") · supported_reasoning_levels:
-//   [{effort, description}]. supported_in_api is IGNORED for selection: fray spawns the interactive TUI
+//   [{effort, description}]. supported_in_api is IGNORED for selection: frizz spawns the interactive TUI
 //   (not the Responses API), so an api=false-but-listed model like gpt-5.3-codex-spark is still selectable.
 
 function cachePath(codexHome: string): string {

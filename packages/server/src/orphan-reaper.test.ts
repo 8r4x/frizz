@@ -42,7 +42,7 @@ test("isSessionRoot: claude/codex binary or --session-id anywhere", () => {
 })
 
 test("isTmuxServer matches only the tmux binary", () => {
-  assert.ok(isTmuxServer("tmux -L fray-repo-x new-session -d"))
+  assert.ok(isTmuxServer("tmux -L frizz-repo-x new-session -d"))
   assert.ok(!isTmuxServer("node tmux-thing"))
 })
 
@@ -53,7 +53,7 @@ test("decideOrphans: reap aux whose slug has no live root; keep everything prote
     row({ pid: 200, command: "Google Chrome for Testing --remote-debugging-port=0", slug: "beta" }), // aux, dead beta → REAP
     row({ pid: 201, command: "node --watch server.js", slug: "beta" }), // aux, dead beta → REAP
     row({ pid: 300, command: "codex --cd /x", slug: "gamma" }), // a session root with no aux; dead-ish but NEVER reaped
-    row({ pid: 400, command: "tmux -L fray-repo-x new-session", slug: "delta" }), // tmux tagged, dead → keep
+    row({ pid: 400, command: "tmux -L frizz-repo-x new-session", slug: "delta" }), // tmux tagged, dead → keep
   ]
   const { reap, liveSlugs } = decideOrphans(rows, { minAgeMs: ORPHAN_GUARD, protectedPids: new Set() })
   assert.deepEqual([...reap].sort((a, b) => a - b), [200, 201])
@@ -140,13 +140,13 @@ test("enumerateProcs joins argv pass with env pass, slug from the ENV segment on
   const base = [
     "  100        1 10:00 claude --session-id A",
     "  200      100 09:00 Google Chrome for Testing --remote-debugging-port=0",
-    // tmux carries a FRAY_UI_THREAD literal in ARGV (the `-e` flag); its OWN env has a different one
-    "  400        1 20:00 tmux -L fray-repo-x new-session -d -e FRAY_UI_THREAD=argvslug",
+    // tmux carries a FRIZZ_THREAD literal in ARGV (the `-e` flag); its OWN env has a different one
+    "  400        1 20:00 tmux -L frizz-repo-x new-session -d -e FRIZZ_THREAD=argvslug",
   ].join("\n")
   const env = [
-    "100 claude --session-id A FRAY_UI_THREAD=alpha",
-    "200 Google Chrome for Testing --remote-debugging-port=0 FRAY_UI_THREAD=alpha",
-    "400 tmux -L fray-repo-x new-session -d -e FRAY_UI_THREAD=argvslug HOME=/x FRAY_UI_THREAD=envslug",
+    "100 claude --session-id A FRIZZ_THREAD=alpha",
+    "200 Google Chrome for Testing --remote-debugging-port=0 FRIZZ_THREAD=alpha",
+    "400 tmux -L frizz-repo-x new-session -d -e FRIZZ_THREAD=argvslug HOME=/x FRIZZ_THREAD=envslug",
   ].join("\n")
   const procs = enumerateProcs(fakePs(base, env))
   const byPid = new Map(procs.map((p) => [p.pid, p]))
@@ -154,15 +154,15 @@ test("enumerateProcs joins argv pass with env pass, slug from the ENV segment on
   assert.equal(byPid.get(200)!.slug, "alpha")
   assert.equal(byPid.get(400)!.ppid, 1)
   assert.equal(byPid.get(200)!.ageMs, 9 * 60_000)
-  // the ENV slug wins over the argv `-e FRAY_UI_THREAD=argvslug` literal
+  // the ENV slug wins over the argv `-e FRIZZ_THREAD=argvslug` literal
   assert.equal(byPid.get(400)!.slug, "envslug")
 })
 
-test("enumerateProcs: a FRAY_UI_THREAD literal in a ROOT's argv never overrides its real env slug", () => {
-  // Reproduces the critical mis-attribution: a worker whose task text pasted `FRAY_UI_THREAD=other`
+test("enumerateProcs: a FRIZZ_THREAD literal in a ROOT's argv never overrides its real env slug", () => {
+  // Reproduces the critical mis-attribution: a worker whose task text pasted `FRIZZ_THREAD=other`
   // into its argv. Ownership must come from ENV, or the root's real slug would be lost from `live`.
-  const base = ["  100 1 10:00 claude --session-id A pasted:FRAY_UI_THREAD=other-slug"].join("\n")
-  const env = ["100 claude --session-id A pasted:FRAY_UI_THREAD=other-slug FRAY_UI_THREAD=realroot"].join("\n")
+  const base = ["  100 1 10:00 claude --session-id A pasted:FRIZZ_THREAD=other-slug"].join("\n")
+  const env = ["100 claude --session-id A pasted:FRIZZ_THREAD=other-slug FRIZZ_THREAD=realroot"].join("\n")
   const procs = enumerateProcs(fakePs(base, env))
   assert.equal(procs[0]!.slug, "realroot")
 })
@@ -174,7 +174,7 @@ test("enumerateProcs: reads the slug across a multiline env value and re-merges 
   const env = [
     "100 node dev.js KEY=-----BEGIN-----",
     "500 not-a-real-record continues the KEY value",
-    "-----END----- FRAY_UI_THREAD=realslug",
+    "-----END----- FRIZZ_THREAD=realslug",
   ].join("\n")
   const procs = enumerateProcs(fakePs(base, env))
   assert.equal(procs[0]!.slug, "realslug")
@@ -182,7 +182,7 @@ test("enumerateProcs: reads the slug across a multiline env value and re-merges 
 
 test("enumerateProcs: a pid whose pass-2 argv does not match pass-1 (reuse) yields no slug (fail-safe)", () => {
   const base = ["  100 1 10:00 node real-argv"].join("\n")
-  const env = ["100 node DIFFERENT-argv FRAY_UI_THREAD=whatever"].join("\n") // marker mismatch
+  const env = ["100 node DIFFERENT-argv FRIZZ_THREAD=whatever"].join("\n") // marker mismatch
   const procs = enumerateProcs(fakePs(base, env))
   assert.equal(procs[0]!.slug, null)
 })
@@ -206,11 +206,11 @@ test("sweepOrphansOnce end-to-end with fakes: reaps dead-slug Chrome, spares liv
     "  999     1 10:00 node server.js", // the reaper's own process (self)
   ].join("\n")
   const env = [
-    "100 claude --session-id A FRAY_UI_THREAD=alpha",
-    "101 node chrome-devtools-mcp FRAY_UI_THREAD=alpha",
-    "200 Google Chrome for Testing --remote-debugging-port=0 FRAY_UI_THREAD=beta",
-    "201 Google Chrome Helper (Renderer) FRAY_UI_THREAD=beta",
-    "999 node server.js FRAY_UI_THREAD=beta", // even if tagged beta, it is self → protected
+    "100 claude --session-id A FRIZZ_THREAD=alpha",
+    "101 node chrome-devtools-mcp FRIZZ_THREAD=alpha",
+    "200 Google Chrome for Testing --remote-debugging-port=0 FRIZZ_THREAD=beta",
+    "201 Google Chrome Helper (Renderer) FRIZZ_THREAD=beta",
+    "999 node server.js FRIZZ_THREAD=beta", // even if tagged beta, it is self → protected
   ].join("\n")
   const killed: number[] = []
   const res = sweepOrphansOnce({
@@ -227,17 +227,17 @@ test("sweepOrphansOnce end-to-end with fakes: reaps dead-slug Chrome, spares liv
   assert.deepEqual(res.liveSlugs, ["alpha"])
 })
 
-test("sweepOrphansOnce: a live root whose argv holds a stray FRAY_UI_THREAD literal never gets its aux reaped", () => {
+test("sweepOrphansOnce: a live root whose argv holds a stray FRIZZ_THREAD literal never gets its aux reaped", () => {
   // The critical false-kill regression: root's REAL slug is `realthread` (env); its argv also contains
-  // a pasted `FRAY_UI_THREAD=spoofed`. If ownership were read from argv, `realthread` would look dead
+  // a pasted `FRIZZ_THREAD=spoofed`. If ownership were read from argv, `realthread` would look dead
   // and the live aux (101) would be reaped mid-verification. It must not be.
   const base = [
-    "  100 1 10:00 claude --session-id A note:FRAY_UI_THREAD=spoofed",
+    "  100 1 10:00 claude --session-id A note:FRIZZ_THREAD=spoofed",
     "  101 100 10:00 node chrome-devtools-mcp",
   ].join("\n")
   const env = [
-    "100 claude --session-id A note:FRAY_UI_THREAD=spoofed FRAY_UI_THREAD=realthread",
-    "101 node chrome-devtools-mcp FRAY_UI_THREAD=realthread",
+    "100 claude --session-id A note:FRIZZ_THREAD=spoofed FRIZZ_THREAD=realthread",
+    "101 node chrome-devtools-mcp FRIZZ_THREAD=realthread",
   ].join("\n")
   const killed: number[] = []
   const res = sweepOrphansOnce({ exec: fakePs(base, env), kill: (p) => killed.push(p), selfPid: 999, minAgeMs: 120_000 })

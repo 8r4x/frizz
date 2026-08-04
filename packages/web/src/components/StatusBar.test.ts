@@ -10,7 +10,7 @@ import { projectIdentity } from "./Sidebar.tsx"
 // Codex, left to right on one line. It used to be three separate pieces of chrome in three places
 // (identity top-left, settings/reload top-right, quota floating over the sidebar composer), so a
 // regression here is a silent return to that scatter rather than a visible break.
-function render(label = "colinhacks/fray"): string {
+function render(label = "colinhacks/frizz"): string {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return renderToStaticMarkup(
     createElement(

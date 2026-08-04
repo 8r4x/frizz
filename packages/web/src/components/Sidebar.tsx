@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 
 import { useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
 import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, FileText, Github, Hourglass, Loader2, RotateCcw, Timer } from "lucide-react"
-import type { AwaitingHint, BoardSnapshot, PlanView, ThreadView } from "@fray-ui/shared"
+import type { AwaitingHint, BoardSnapshot, PlanView, ThreadView } from "@frizz/shared"
 import { store, openThread, scrollToQueueCard, pushSubAgentDrawer, pushPlanDrawer, QUEUE_CARD_VIEWPORT_TOP, type ConnectionState } from "../store.ts"
 import { useBoard, asThreads } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
@@ -32,14 +32,14 @@ import type { ReactElement, ReactNode } from "react"
 //
 // ENTIRELY MOUSE-DRIVEN: no arrow-walk, no selection chevron. A session row CLICK opens the thread's
 // drawer (chat / doc via store.openThread); a plan row opens the plan drawer; a legacy row opens its
-// fray doc.
+// frizz doc.
 //
 // Sections: THREE bands top→bottom — Active, then a labeled DIMMED Held band (every declared
 // clock/hourglass/timed wait), then the collapsible
 // Done — each split by a bare <hr>. A thread merely awaiting its OWN sub-agents is INTERNAL work
 // and stays in Active undimmed; only external waiters drop into the dimmed band (see groups.ts
 // isHeld). Needs-you renders as the row INDICATOR + the queue; awaiting as the hint gloss.
-// Plans from board.plans; Done = explicitly completed. Legacy .fray rows and foreign terminal
+// Plans from board.plans; Done = explicitly completed. Legacy .frizz rows and foreign terminal
 // sessions do not render at all.
 
 
@@ -342,7 +342,7 @@ export const ThreadRow = memo(function ThreadRow({
   const dimLabel = !legacy && titleIsProvisional(t)
   // The rows with an obvious single next action carry that verb INLINE, instead of making you open the
   // thread to find it. offersRetry (groups.ts) picks them: a STALLED row (the [!] mark — process
-  // exited) AND a row HELD on a usage limit fray will auto-resume (the hourglass — a faster door to the
+  // exited) AND a row HELD on a usage limit frizz will auto-resume (the hourglass — a faster door to the
   // in-drawer "Continue now" than waiting for the window). The queue card and drawer header read the
   // SAME helper, so no surface can disagree with the rail about which threads offer Retry.
   const canRestart = !legacy && offersRetry(t)
@@ -423,7 +423,7 @@ export const ThreadRow = memo(function ThreadRow({
           )}
         </span>
       </button>
-      {/* The Mark-as verb survives ONLY on legacy rows (a .fray verb). Session lifecycle controls
+      {/* The Mark-as verb survives ONLY on legacy rows (a .frizz verb). Session lifecycle controls
           live in the thread footer. */}
       {legacy && (
         <div className="absolute right-1 top-1 hidden group-hover:flex items-stretch rounded-md bg-panel shadow-sm shadow-black/30">
@@ -446,8 +446,8 @@ export const ThreadRow = memo(function ThreadRow({
 // The stalled row's recovery verb: a SMALL GREY icon button that restarts the exited session in ONE
 // click, without opening the thread. Deliberately the SAME verb, icon, message and RPC path as the
 // thread header's Retry (lib/retrySession) — the row is just a faster door to it. Named "Retry", not
-// "Restart", because "restart" already means the fray control plane restarting itself
-// (RestartFrayButton) and the two must not blur.
+// "Restart", because "restart" already means the frizz control plane restarting itself
+// (RestartFrizzButton) and the two must not blur.
 function RowRetryButton({ slug }: { slug: string }) {
   const queryClient = useQueryClient()
   const [busy, setBusy] = useState(false)
@@ -640,11 +640,11 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
   if (kind === "working") return { node: <BoxSpinner />, tip: "Working" }
   // The thread has stopped and nothing is going to wake it — only a detached shell it launched is still
   // running — so the box stops tracing and the row simply stays alive in the running band. Same blue and
-  // same pulse as the transcript's live-shell dot, sized to this box (styles.css .fray-rail-dot), so
+  // same pulse as the transcript's live-shell dot, sized to this box (styles.css .frizz-rail-dot), so
   // both surfaces say "a shell is alive behind this" in one language.
   if (kind === "background") {
     return {
-      node: <StatusBox><span aria-hidden className="fray-rail-dot" data-running-indicator="thread-background" /></StatusBox>,
+      node: <StatusBox><span aria-hidden className="frizz-rail-dot" data-running-indicator="thread-background" /></StatusBox>,
       tip: "At rest — a background shell is still running",
     }
   }
@@ -679,13 +679,13 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     // the tooltip wording marks as an `auto` variant of the same word rather than a separate idea:
     //   • a user snooze re-surfaces the CARD for you  → "Snoozed until <wake>"       (you act next)
     //   • an ```awaiting timer:` park / blocked+timer status auto-resumes the agent → "Auto-snoozed until <wake>"
-    // A user snooze that carries a PROMPT crosses that line by design — fray resumes the agent with it —
+    // A user snooze that carries a PROMPT crosses that line by design — frizz resumes the agent with it —
     // so formatUserSnooze reads it as the auto variant and names the follow-up it will send.
     const snoozedUntil = futureSnoozedUntil(t)
     if (snoozedUntil) {
       return { node: heldMark, tip: withWatch(formatUserSnooze(snoozedUntil, t.snoozePrompt) ?? "Snoozed until a scheduled check") }
     }
-    // A usage-limit park is the third member of that same "held on the clock" family — fray resolves
+    // A usage-limit park is the third member of that same "held on the clock" family — frizz resolves
     // this one too, so it reads as an auto-snooze, named by what actually stopped the work.
     if (t.limitPause?.autoResume) {
       const which = t.limitPause.window === "weekly" ? "weekly limit" : "session limit"
@@ -744,7 +744,7 @@ function Glyph({ ch, muted }: { ch: string; muted?: boolean }) {
     </span>
   )
 }
-// The LEGACY (.fray status) row indicator — the vestigial status-keyed logic, kept only for the
+// The LEGACY (.frizz status) row indicator — the vestigial status-keyed logic, kept only for the
 // read-only Legacy shelf.
 function legacyIndicatorFor(t: ThreadView): { node: ReactElement; tip: string | null } {
   if (t.runtime === "running" || t.runtime === "spawning" || t.runtime === "perm-prompt") return { node: <Spinner />, tip: "Working" }

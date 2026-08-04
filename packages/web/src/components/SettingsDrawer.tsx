@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
 import { Check, Copy, HelpCircle } from "lucide-react"
-import { type Settings } from "@fray-ui/shared"
+import { type Settings } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { store } from "../store.ts"
 import { prefs } from "../lib/prefs.ts"

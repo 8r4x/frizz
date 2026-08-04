@@ -31,13 +31,13 @@ const POLL_MS = 25
 const DELEGATE_DRAIN_TIMEOUT_MS = 6_000
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu
 
-export const FRAY_LAUNCH_OWNER_TOKEN = "FRAY_LAUNCH_OWNER_TOKEN"
-export const FRAY_LAUNCH_PROJECT_ID = "FRAY_LAUNCH_PROJECT_ID"
-export const FRAY_LAUNCH_PROJECT_DIR = "FRAY_LAUNCH_PROJECT_DIR"
-export const FRAY_LAUNCH_STATE_DIR = "FRAY_LAUNCH_STATE_DIR"
-export const FRAY_LAUNCH_IDENTITY_SCOPE = "FRAY_LAUNCH_IDENTITY_SCOPE"
-export const FRAY_LAUNCH_TMUX_SOCKET = "FRAY_LAUNCH_TMUX_SOCKET"
-export const FRAY_LAUNCH_TMUX_SOCKET_MANAGED = "FRAY_LAUNCH_TMUX_SOCKET_MANAGED"
+export const FRIZZ_LAUNCH_OWNER_TOKEN = "FRIZZ_LAUNCH_OWNER_TOKEN"
+export const FRIZZ_LAUNCH_PROJECT_ID = "FRIZZ_LAUNCH_PROJECT_ID"
+export const FRIZZ_LAUNCH_PROJECT_DIR = "FRIZZ_LAUNCH_PROJECT_DIR"
+export const FRIZZ_LAUNCH_STATE_DIR = "FRIZZ_LAUNCH_STATE_DIR"
+export const FRIZZ_LAUNCH_IDENTITY_SCOPE = "FRIZZ_LAUNCH_IDENTITY_SCOPE"
+export const FRIZZ_LAUNCH_TMUX_SOCKET = "FRIZZ_LAUNCH_TMUX_SOCKET"
+export const FRIZZ_LAUNCH_TMUX_SOCKET_MANAGED = "FRIZZ_LAUNCH_TMUX_SOCKET_MANAGED"
 
 export type ProjectLaunchRole = "launcher" | "supervisor" | "server"
 
@@ -102,8 +102,8 @@ export class ProjectLaunchConflictError extends Error {
 
   constructor(owner: ProjectLaunchOwnerRecord | null) {
     super(owner
-      ? `Fray project launch is already owned by ${owner.role} pid ${owner.pid}; wait for it to become ready or stop that exact owner`
-      : "Fray project launch ownership is being published; retry shortly")
+      ? `Frizz project launch is already owned by ${owner.role} pid ${owner.pid}; wait for it to become ready or stop that exact owner`
+      : "Frizz project launch ownership is being published; retry shortly")
     this.name = "ProjectLaunchConflictError"
     this.owner = owner
   }
@@ -249,7 +249,7 @@ function acquireMutationGuard(
       ? processGenerationIsStale(current, adapter)
       : age !== undefined && (age >= PARTIAL_GRACE_MS || age < -PARTIAL_GRACE_MS)
     if (stale && quarantine(path, "stale")) continue
-    if (adapter.now() >= deadline) throw new Error("timed out waiting for the Fray project ownership guard")
+    if (adapter.now() >= deadline) throw new Error("timed out waiting for the Frizz project ownership guard")
     adapter.sleep(Math.min(POLL_MS, Math.max(1, deadline - adapter.now())))
   }
 }
@@ -336,9 +336,9 @@ function sameProjectIdentity(record: ProjectLaunchOwnerRecord, target: ProjectLa
 }
 
 export function projectLaunchTokenProof(target: ProjectLaunchTarget, token: string): string {
-  if (!UUID_RE.test(token)) throw new Error("invalid Fray project launch owner token")
+  if (!UUID_RE.test(token)) throw new Error("invalid Frizz project launch owner token")
   return createHash("sha256")
-    .update("fray-project-launch-v2\0")
+    .update("frizz-project-launch-v2\0")
     .update(target.projectId)
     .update("\0")
     .update(target.projectDir)
@@ -541,14 +541,14 @@ export function adoptProjectLaunchOwner(
   role: ProjectLaunchRole,
   protocol: ProjectLaunchProtocolOptions = {},
 ): ProjectLaunchLease {
-  if (!UUID_RE.test(token)) throw new Error("invalid Fray project launch owner token")
+  if (!UUID_RE.test(token)) throw new Error("invalid Frizz project launch owner token")
   const adapter = protocol.adapter ?? defaultProcessPlatformAdapter
   const unlock = acquireMutationGuard(target.stateDir, GUARD_TIMEOUT_MS, adapter)
   try {
     const path = projectLaunchOwnerPath(target.stateDir)
     const current = parseOwner(path)
     if (!current || !sameTarget(current, target) || current.token !== token || current.state !== "active") {
-      throw new Error("Fray project launch ownership handoff no longer matches this project")
+      throw new Error("Frizz project launch ownership handoff no longer matches this project")
     }
     const generation = currentProcessGeneration(adapter)
     const next: ProjectLaunchOwnerRecord = {
@@ -565,7 +565,7 @@ export function adoptProjectLaunchOwner(
       committed.token !== token ||
       committed.pid !== generation.pid ||
       committed.processStart !== generation.processStart
-    ) throw new Error("Fray project launch ownership handoff was not committed")
+    ) throw new Error("Frizz project launch ownership handoff was not committed")
     return makeLease(target, committed, adapter)
   } finally {
     unlock()
@@ -577,7 +577,7 @@ export function verifyProjectLaunchDelegate(
   token: string,
   protocol: ProjectLaunchProtocolOptions = {},
 ): ProjectLaunchOwnerRecord {
-  if (!UUID_RE.test(token)) throw new Error("invalid Fray project launch owner token")
+  if (!UUID_RE.test(token)) throw new Error("invalid Frizz project launch owner token")
   const adapter = protocol.adapter ?? defaultProcessPlatformAdapter
   const unlock = acquireMutationGuard(target.stateDir, GUARD_TIMEOUT_MS, adapter)
   try {
@@ -589,7 +589,7 @@ export function verifyProjectLaunchDelegate(
       current.state !== "active" ||
       processGenerationIsStale(current, adapter)
     ) {
-      throw new Error("Fray control-plane child has no live matching project launch owner")
+      throw new Error("Frizz control-plane child has no live matching project launch owner")
     }
     return current
   } finally {
@@ -603,7 +603,7 @@ export function registerProjectLaunchDelegate(
   role: ProjectLaunchDelegateRole = "control-plane",
   protocol: ProjectLaunchProtocolOptions = {},
 ): ProjectLaunchDelegateLease {
-  if (!UUID_RE.test(token)) throw new Error("invalid Fray project launch owner token")
+  if (!UUID_RE.test(token)) throw new Error("invalid Frizz project launch owner token")
   const adapter = protocol.adapter ?? defaultProcessPlatformAdapter
   const generation = currentProcessGeneration(adapter)
   const unlock = acquireMutationGuard(target.stateDir, GUARD_TIMEOUT_MS, adapter)
@@ -616,17 +616,17 @@ export function registerProjectLaunchDelegate(
       current.token !== token ||
       current.state !== "active" ||
       processGenerationIsStale(current, adapter)
-    ) throw new Error("Fray control-plane child has no live matching project launch owner")
+    ) throw new Error("Frizz control-plane child has no live matching project launch owner")
 
     const registeredAt = new Date(adapter.now()).toISOString()
     if (current.pid === generation.pid && current.processStart === generation.processStart) {
-      throw new Error("Fray launch owner cannot register itself as a delegated control plane")
+      throw new Error("Frizz launch owner cannot register itself as a delegated control plane")
     }
     const delegates = current.delegates.filter((delegate) => (
       !processGenerationIsStale(delegate, adapter)
       && (delegate.pid !== generation.pid || delegate.processStart !== generation.processStart)
     ))
-    if (delegates.length >= 64) throw new Error("Fray project has too many live delegated control planes")
+    if (delegates.length >= 64) throw new Error("Frizz project has too many live delegated control planes")
     delegates.push({ ...generation, role, registeredAt })
     const next: ProjectLaunchOwnerRecord = {
       ...current,
@@ -638,7 +638,7 @@ export function registerProjectLaunchDelegate(
     const committed = parseOwner(path)
     if (!committed || !committed.delegates.some((delegate) => (
       delegate.pid === generation.pid && delegate.processStart === generation.processStart && delegate.role === role
-    ))) throw new Error("Fray control-plane delegate registration was not committed")
+    ))) throw new Error("Frizz control-plane delegate registration was not committed")
 
     let released = false
     return {
@@ -686,21 +686,21 @@ export function projectLaunchEnvironment(
 ): NodeJS.ProcessEnv {
   return {
     ...env,
-    [FRAY_LAUNCH_OWNER_TOKEN]: token,
-    [FRAY_LAUNCH_PROJECT_ID]: target.projectId,
-    [FRAY_LAUNCH_PROJECT_DIR]: target.projectDir,
-    [FRAY_LAUNCH_STATE_DIR]: target.stateDir,
-    [FRAY_LAUNCH_IDENTITY_SCOPE]: target.identityScope ?? "repository",
+    [FRIZZ_LAUNCH_OWNER_TOKEN]: token,
+    [FRIZZ_LAUNCH_PROJECT_ID]: target.projectId,
+    [FRIZZ_LAUNCH_PROJECT_DIR]: target.projectDir,
+    [FRIZZ_LAUNCH_STATE_DIR]: target.stateDir,
+    [FRIZZ_LAUNCH_IDENTITY_SCOPE]: target.identityScope ?? "repository",
   }
 }
 
 export function projectLaunchTargetFromEnvironment(env: NodeJS.ProcessEnv): ProjectLaunchTarget | null {
-  const projectId = env[FRAY_LAUNCH_PROJECT_ID]
-  const projectDir = env[FRAY_LAUNCH_PROJECT_DIR]
-  const stateDir = env[FRAY_LAUNCH_STATE_DIR]
-  const scope = env[FRAY_LAUNCH_IDENTITY_SCOPE]
-  const tmuxSocket = env[FRAY_LAUNCH_TMUX_SOCKET]
-  const tmuxManaged = env[FRAY_LAUNCH_TMUX_SOCKET_MANAGED]
+  const projectId = env[FRIZZ_LAUNCH_PROJECT_ID]
+  const projectDir = env[FRIZZ_LAUNCH_PROJECT_DIR]
+  const stateDir = env[FRIZZ_LAUNCH_STATE_DIR]
+  const scope = env[FRIZZ_LAUNCH_IDENTITY_SCOPE]
+  const tmuxSocket = env[FRIZZ_LAUNCH_TMUX_SOCKET]
+  const tmuxManaged = env[FRIZZ_LAUNCH_TMUX_SOCKET_MANAGED]
   if (
     !projectId ||
     !UUID_RE.test(projectId) ||
@@ -723,7 +723,7 @@ export function projectLaunchTargetFromEnvironment(env: NodeJS.ProcessEnv): Proj
 }
 
 export function projectLaunchOwnerTokenFromEnvironment(env: NodeJS.ProcessEnv): string | null {
-  const token = env[FRAY_LAUNCH_OWNER_TOKEN]
+  const token = env[FRIZZ_LAUNCH_OWNER_TOKEN]
   return token && UUID_RE.test(token) ? token : null
 }
 

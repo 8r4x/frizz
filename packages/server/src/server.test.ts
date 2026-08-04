@@ -36,7 +36,7 @@ function fakePaneIdentity(n = 1): PaneIdentity {
 // A dispatcher wired to a tmp project + real storage + a stub board + injected tmux seams. No test in
 // this harness contacts the live project socket or starts a real worker.
 function dispatcherHarness(settings = defaultSettings()) {
-  const dir = tmp("fray-dispatch-")
+  const dir = tmp("frizz-dispatch-")
   const storage = createStorage(join(dir, "ui.db"))
   const project: Project = { dir, id: "id", name: "test", label: "o/test", stateDir: dir, cwdSlug: cwdSlug(dir) }
   const spawned: { slug: string; cmd: string[]; cwd: string; env?: Record<string, string>; promptText?: string; promptMode?: number }[] = []
@@ -54,8 +54,8 @@ function dispatcherHarness(settings = defaultSettings()) {
     board,
     readBoard: async () => ({
       config: {},
-      threads: existsSync(join(dir, ".fray"))
-        ? readdirSync(join(dir, ".fray"), { withFileTypes: true })
+      threads: existsSync(join(dir, ".frizz"))
+        ? readdirSync(join(dir, ".frizz"), { withFileTypes: true })
             .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
             .map((entry) => ({
               id: entry.name.slice(0, -3),
@@ -77,7 +77,7 @@ function dispatcherHarness(settings = defaultSettings()) {
     // assertions below still read the same facts.
     claudeBroker: {
       spawnDispatch: async (input: { threadSlug: string; sessionId: string; cwd: string; prompt: string; appendSystemPrompt?: string }) => {
-        spawned.push({ slug: input.threadSlug, cmd: [input.appendSystemPrompt ?? "", input.prompt], cwd: input.cwd, env: { FRAY_UI_THREAD: input.threadSlug } })
+        spawned.push({ slug: input.threadSlug, cmd: [input.appendSystemPrompt ?? "", input.prompt], cwd: input.cwd, env: { FRIZZ_THREAD: input.threadSlug } })
         return { binding: { threadSlug: input.threadSlug, sessionId: input.sessionId, cwd: input.cwd } }
       },
       releaseSession: () => {},
@@ -107,14 +107,14 @@ function systemPromptOf(cmd: string[]): string {
 }
 
 test("storage: session roundtrip + markRead + exited", () => {
-  const dir = tmp("fray-store-")
+  const dir = tmp("frizz-store-")
   const s = createStorage(join(dir, "ui.db"))
   assert.equal(s.getSession("t"), undefined)
 
   s.upsertSession({
     slug: "t",
     session_id: "sid-1",
-    tmux_name: "fray-t",
+    tmux_name: "frizz-t",
     spawned_at: "2026-07-01T00:00:00.000Z",
     last_read_at: null,
     unread: 1,
@@ -150,11 +150,11 @@ test("storage: session roundtrip + markRead + exited", () => {
 })
 
 test("storage: transcript_id cache round-trips, survives restart, resets on re-dispatch, preserves on resume", () => {
-  const dir = tmp("fray-store-tid-")
+  const dir = tmp("frizz-store-tid-")
   const dbPath = join(dir, "ui.db")
   const s = createStorage(dbPath)
   s.upsertSession({
-    slug: "t", session_id: "sid-1", tmux_name: "fray-t", spawned_at: "2026-07-01T00:00:00.000Z",
+    slug: "t", session_id: "sid-1", tmux_name: "frizz-t", spawned_at: "2026-07-01T00:00:00.000Z",
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null,
     state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   })
@@ -179,11 +179,11 @@ test("storage: transcript_id cache round-trips, survives restart, resets on re-d
 })
 
 test("settings: defaults, roundtrip, merge-over-defaults", () => {
-  const dir = tmp("fray-settings-")
+  const dir = tmp("frizz-settings-")
   const s = createStorage(join(dir, "ui.db"))
   const def = getSettings(s)
   assert.deepEqual(def, defaultSettings())
-  // Project-specific conventions live in FRAY.md, not in settings — there is no preamble field.
+  // Project-specific conventions live in FRIZZ.md, not in settings — there is no preamble field.
   // system prompt ships separately (packages/server/src/workerPrompt.ts via dispatch.ts) and is not a setting.
   assert.equal(def.permissionMode, "auto")
   assert.equal(def.notifications, true)
@@ -240,53 +240,53 @@ test("fallbackTitle: derived title slugifies to a valid board id", () => {
 })
 
 test("resolveSlug: appends -N on collision", () => {
-  const dir = tmp("fray-slug-")
-  const frayDir = join(dir, ".fray")
-  mkdirSync(frayDir, { recursive: true })
-  assert.equal(resolveSlug(frayDir, "foo"), "foo")
+  const dir = tmp("frizz-slug-")
+  const frizzDir = join(dir, ".frizz")
+  mkdirSync(frizzDir, { recursive: true })
+  assert.equal(resolveSlug(frizzDir, "foo"), "foo")
 
-  writeFileSync(join(frayDir, "foo.md"), "x")
-  assert.equal(resolveSlug(frayDir, "foo"), "foo-2")
+  writeFileSync(join(frizzDir, "foo.md"), "x")
+  assert.equal(resolveSlug(frizzDir, "foo"), "foo-2")
 
-  writeFileSync(join(frayDir, "foo-2.md"), "x")
-  assert.equal(resolveSlug(frayDir, "foo"), "foo-3")
+  writeFileSync(join(frizzDir, "foo-2.md"), "x")
+  assert.equal(resolveSlug(frizzDir, "foo"), "foo-3")
 
   // A taken REGISTRY slug (a fileless session dispatch) also bumps — uniqueness spans rows, not just files.
   const taken = new Set(["bar", "bar-2"])
-  assert.equal(resolveSlug(frayDir, "bar", (s) => taken.has(s)), "bar-3")
-  assert.equal(resolveSlug(frayDir, "baz", (s) => taken.has(s)), "baz")
+  assert.equal(resolveSlug(frizzDir, "bar", (s) => taken.has(s)), "bar-3")
+  assert.equal(resolveSlug(frizzDir, "baz", (s) => taken.has(s)), "baz")
 })
 
 test("composePrompt: scratchpad orientation + task, and NOT the operator's instructions", () => {
   const out = composePrompt("sid-123", "Do the thing.")
-  // Session-first: the visible first message points at the scratchpad, NOT a .fray file to own. The
+  // Session-first: the visible first message points at the scratchpad, NOT a .frizz file to own. The
   // fixed worker prompt still rides --append-system-prompt (buildClaudeCommand), not this message.
-  assert.ok(out.includes(".fray/threads/sid-123/scratch.md"))
+  assert.ok(out.includes(".frizz/threads/sid-123/scratch.md"))
   assert.ok(!out.includes("You are a dispatched worker agent"))
   assert.ok(!out.includes("You own")) // the old ownership contract is gone
   assert.ok(!out.includes("status: blocked"))
-  // There is no operator preamble anywhere any more — project conventions live in FRAY.md alone.
+  // There is no operator preamble anywhere any more — project conventions live in FRIZZ.md alone.
   assert.ok(!out.includes("PROJECT INSTRUCTIONS"))
   assert.ok(out.endsWith("\n\nDo the thing.")) // the task is the tail, directly below the banner
 })
 
 test("scratchpadOrientation: scratchpad line always; PLAN line only when a plan is associated", () => {
   const bare = scratchpadOrientation("sid-1")
-  assert.ok(bare.includes("SCRATCHPAD (optional): .fray/threads/sid-1/scratch.md"))
+  assert.ok(bare.includes("SCRATCHPAD (optional): .frizz/threads/sid-1/scratch.md"))
   assert.ok(!bare.includes("PLAN:"))
-  const withPlan = scratchpadOrientation("sid-1", ".fray/plans/p.md")
-  assert.ok(withPlan.includes("SCRATCHPAD (optional): .fray/threads/sid-1/scratch.md"))
-  assert.ok(withPlan.includes("PLAN: .fray/plans/p.md"))
+  const withPlan = scratchpadOrientation("sid-1", ".frizz/plans/p.md")
+  assert.ok(withPlan.includes("SCRATCHPAD (optional): .frizz/threads/sid-1/scratch.md"))
+  assert.ok(withPlan.includes("PLAN: .frizz/plans/p.md"))
 })
 
-test("validPlanPath: accepts an existing .fray/plans/*.md; rejects bad shape / missing file / undefined", () => {
-  const dir = tmp("fray-plan-")
-  mkdirSync(join(dir, ".fray", "plans"), { recursive: true })
-  writeFileSync(join(dir, ".fray", "plans", "ok.md"), "# ok")
-  assert.equal(validPlanPath(dir, ".fray/plans/ok.md"), ".fray/plans/ok.md")
-  assert.equal(validPlanPath(dir, ".fray/plans/missing.md"), null) // well-formed but no file
+test("validPlanPath: accepts an existing .frizz/plans/*.md; rejects bad shape / missing file / undefined", () => {
+  const dir = tmp("frizz-plan-")
+  mkdirSync(join(dir, ".frizz", "plans"), { recursive: true })
+  writeFileSync(join(dir, ".frizz", "plans", "ok.md"), "# ok")
+  assert.equal(validPlanPath(dir, ".frizz/plans/ok.md"), ".frizz/plans/ok.md")
+  assert.equal(validPlanPath(dir, ".frizz/plans/missing.md"), null) // well-formed but no file
   assert.equal(validPlanPath(dir, "../secrets.md"), null) // wrong shape
-  assert.equal(validPlanPath(dir, ".fray/plans/../../etc/passwd.md"), null) // traversal (has a '/')
+  assert.equal(validPlanPath(dir, ".frizz/plans/../../etc/passwd.md"), null) // traversal (has a '/')
   assert.equal(validPlanPath(dir, undefined), null)
 })
 
@@ -363,7 +363,7 @@ test("buildClaudeResumeCommand: -r <sessionId> with the follow-up + worker syste
 })
 
 test("build*Command: extraSystemPrompt is appended AFTER the worker norms in the system prompt", () => {
-  const scratch = "SCRATCHPAD: .fray/threads/u/scratch.md — memory"
+  const scratch = "SCRATCHPAD: .frizz/threads/u/scratch.md — memory"
   const disp = buildClaudeCommand({ sessionId: "u", permissionMode: "auto", prompt: "p", workerPrompt: "WORKER", extraSystemPrompt: scratch })
   const dSys = systemPromptOf(disp)
   assert.ok(dSys.startsWith("WORKER"))
@@ -379,11 +379,11 @@ test("dispatch: writes a scratchpad (not a thread file), argv carries the scratc
   const h = dispatcherHarness()
   const { slug, sessionId } = await h.dispatcher.dispatch({ prompt: "Do the thing.", model: "opus", effort: "high" })
 
-  // Session-first: NO .fray/<slug>.md thread file is written on dispatch.
-  assert.ok(!existsSync(join(h.dir, ".fray", `${slug}.md`)), "no thread file written")
+  // Session-first: NO .frizz/<slug>.md thread file is written on dispatch.
+  assert.ok(!existsSync(join(h.dir, ".frizz", `${slug}.md`)), "no thread file written")
 
   // The scratchpad is provisioned with the conventional skeleton.
-  const scratch = join(h.dir, ".fray", "threads", sessionId, "scratch.md")
+  const scratch = join(h.dir, ".frizz", "threads", sessionId, "scratch.md")
   assert.ok(existsSync(scratch), "scratchpad file created")
   const body = readFileSync(scratch, "utf8")
   assert.ok(body.startsWith("# Scratchpad — "))
@@ -398,12 +398,12 @@ test("dispatch: writes a scratchpad (not a thread file), argv carries the scratc
   // argv: the SCRATCHPAD orientation rides the system prompt; the user message carries the path + TASK
   // and NONE of the retired thread-ownership contract.
   const cmd = h.spawned[0].cmd
-  assert.ok(systemPromptOf(cmd).includes(`SCRATCHPAD (optional): .fray/threads/${sessionId}/scratch.md`))
+  assert.ok(systemPromptOf(cmd).includes(`SCRATCHPAD (optional): .frizz/threads/${sessionId}/scratch.md`))
   const userPrompt = cmd[cmd.length - 1]
-  assert.ok(userPrompt.includes(`.fray/threads/${sessionId}/scratch.md`))
+  assert.ok(userPrompt.includes(`.frizz/threads/${sessionId}/scratch.md`))
   assert.ok(userPrompt.endsWith("\n\nDo the thing.")) // the task is the tail, directly below the banner
   assert.ok(!userPrompt.includes("You own"))
-  assert.equal(h.spawned[0].env?.FRAY_UI_THREAD, slug)
+  assert.equal(h.spawned[0].env?.FRIZZ_THREAD, slug)
 
   // The row is stored open with no plan association by default.
   const row = h.storage.getSession(slug)
@@ -417,15 +417,15 @@ test("dispatch: writes a scratchpad (not a thread file), argv carries the scratc
 
 test("dispatch: a valid planPath is stored + named in the system prompt; invalid ones are ignored", async () => {
   const h = dispatcherHarness()
-  mkdirSync(join(h.dir, ".fray", "plans"), { recursive: true })
-  writeFileSync(join(h.dir, ".fray", "plans", "my-plan.md"), "# My Plan\n")
+  mkdirSync(join(h.dir, ".frizz", "plans"), { recursive: true })
+  writeFileSync(join(h.dir, ".frizz", "plans", "my-plan.md"), "# My Plan\n")
 
-  const ok = await h.dispatcher.dispatch({ prompt: "go", planPath: ".fray/plans/my-plan.md" })
-  assert.equal(h.storage.getSession(ok.slug)?.plan_path, ".fray/plans/my-plan.md")
-  assert.ok(systemPromptOf(h.spawned[0].cmd).includes("PLAN: .fray/plans/my-plan.md"))
+  const ok = await h.dispatcher.dispatch({ prompt: "go", planPath: ".frizz/plans/my-plan.md" })
+  assert.equal(h.storage.getSession(ok.slug)?.plan_path, ".frizz/plans/my-plan.md")
+  assert.ok(systemPromptOf(h.spawned[0].cmd).includes("PLAN: .frizz/plans/my-plan.md"))
 
   // Missing file → ignored (stored null); traversal shape → ignored.
-  const gone = await h.dispatcher.dispatch({ prompt: "go2", planPath: ".fray/plans/nope.md" })
+  const gone = await h.dispatcher.dispatch({ prompt: "go2", planPath: ".frizz/plans/nope.md" })
   assert.equal(h.storage.getSession(gone.slug)?.plan_path, null)
   const bad = await h.dispatcher.dispatch({ prompt: "go3", planPath: "../etc/passwd" })
   assert.equal(h.storage.getSession(bad.slug)?.plan_path, null)
@@ -436,17 +436,17 @@ test("adopt: requires the legacy file, provisions a scratchpad, orientation is c
   // No file → clean rejection.
   await assert.rejects(h.dispatcher.adopt("adopt-fixture"), /thread is not available for adoption/)
 
-  mkdirSync(join(h.dir, ".fray"), { recursive: true })
-  writeFileSync(join(h.dir, ".fray", "adopt-fixture.md"), "---\ntitle: x\nstatus: active\n---\n\n## Goal\n\ng\n")
+  mkdirSync(join(h.dir, ".frizz"), { recursive: true })
+  writeFileSync(join(h.dir, ".frizz", "adopt-fixture.md"), "---\ntitle: x\nstatus: active\n---\n\n## Goal\n\ng\n")
   const { slug, sessionId } = await h.dispatcher.adopt("adopt-fixture", "keep going")
   assert.equal(slug, "adopt-fixture")
 
   // Scratchpad provisioned even for an adopted thread.
-  assert.ok(existsSync(join(h.dir, ".fray", "threads", sessionId, "scratch.md")))
+  assert.ok(existsSync(join(h.dir, ".frizz", "threads", sessionId, "scratch.md")))
 
   // System prompt: scratchpad orientation + the adoption note framing the file as CONTEXT, not a contract.
   const sys = systemPromptOf(h.spawned[0].cmd)
-  assert.ok(sys.includes(`SCRATCHPAD (optional): .fray/threads/${sessionId}/scratch.md`))
+  assert.ok(sys.includes(`SCRATCHPAD (optional): .frizz/threads/${sessionId}/scratch.md`))
   assert.ok(sys.includes("CONTEXT, not a contract"))
   assert.ok(sys.includes("adopt-fixture.md"))
   const row = h.storage.getSession(slug)
@@ -456,18 +456,18 @@ test("adopt: requires the legacy file, provisions a scratchpad, orientation is c
 })
 
 test("cwdSlug: replaces / and . with - (Claude Code project-log convention)", () => {
-  assert.equal(cwdSlug("/Users/x/Documents/projects/fray"), "-Users-x-Documents-projects-fray")
+  assert.equal(cwdSlug("/Users/x/Documents/projects/frizz"), "-Users-x-Documents-projects-frizz")
   assert.equal(cwdSlug("/Users/x/.workshell/wt"), "-Users-x--workshell-wt")
 })
 
 // ---- Codex dispatch wiring (Codex-support epic, Phase 2): the COMPOSED spawn orchestration ----
 // createCodexBackend + createClaudeBackend behind a backendFor resolver (mirrors context.ts). A codex
 // dispatch must: pre-arm the cwd trust gate, spawn the codex argv (worker contract in the prompt), then
-// sentinel-discover the rollout id and PIN it on the row (session_id stays the fray key). A claude
+// sentinel-discover the rollout id and PIN it on the row (session_id stays the frizz key). A claude
 // dispatch through the SAME dispatcher is byte-identical — no trust write, backend stays 'claude'.
 function codexDispatcherHarness(codexAppServer?: Partial<CodexAppServerBridge>) {
-  const dir = tmp("fray-dispatch-codex-")
-  const codexHome = tmp("fray-codexhome-")
+  const dir = tmp("frizz-dispatch-codex-")
+  const codexHome = tmp("frizz-codexhome-")
   const storage = createStorage(join(dir, "ui.db"))
   const project: Project = { dir, id: "id", name: "test", label: "o/test", stateDir: dir, cwdSlug: cwdSlug(dir) }
   const spawned: {
@@ -482,13 +482,13 @@ function codexDispatcherHarness(codexAppServer?: Partial<CodexAppServerBridge>) 
   // A spawn that SIMULATES codex: extract the per-dispatch sentinel from the prompt (codex spawns via an
   // `sh -c` wrapper that reads the prompt from a temp FILE — the last argv element — so read it) and write
   // a fresh rollout carrying it (+ a session_meta id/cwd) so the dispatcher's sentinel discovery resolves
-  // it. A claude spawn (no `fray-session:` sentinel) writes nothing — the resolver stayed off codex.
+  // it. A claude spawn (no `frizz-session:` sentinel) writes nothing — the resolver stayed off codex.
   const spawn = (slug: string, cmd: string[], cwd: string, env?: Record<string, string>) => {
     const last = cmd[cmd.length - 1] ?? ""
     const promptText = cmd[0] === "sh" ? readFileSync(last, "utf8") : last
     const promptMode = cmd[0] === "sh" ? statSync(last).mode & 0o777 : undefined
     spawned.push({ slug, cmd, cwd, env, promptText, promptMode })
-    const sentinel = promptText.match(/fray-session:[0-9a-f-]+/)?.[0]
+    const sentinel = promptText.match(/frizz-session:[0-9a-f-]+/)?.[0]
     if (!sentinel) return fakePaneIdentity(spawned.length)
     const sdir = join(codexHome, "sessions", "2026", "07", "10")
     mkdirSync(sdir, { recursive: true })

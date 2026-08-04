@@ -8,7 +8,7 @@
 //
 // Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer reads.
 //
-// Usage: node scripts/seed-broken-image-question.mjs --home=/abs/temp-home --socket=fray-adhoc-NNNN-PID
+// Usage: node scripts/seed-broken-image-question.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -16,14 +16,14 @@ import { join } from "node:path"
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, socket, cwd = "/Users/colinmcd94/Documents/projects/fray" } = flags
+const { home, socket, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
 if (!home || !socket) {
   console.error("usage: node seed-broken-image-question.mjs --home=/abs/temp-home --socket=<tmux-socket>")
   process.exit(1)
 }
 
-const db = globSync(join(home, ".fray/projects/*/ui.db"))[0]
-if (!db) throw new Error(`no ui.db under ${home}/.fray/projects`)
+const db = globSync(join(home, ".frizz/projects/*/ui.db"))[0]
+if (!db) throw new Error(`no ui.db under ${home}/.frizz/projects`)
 const cwdSlug = cwd.replace(/[/.]/g, "-")
 const jsonlDir = join(home, ".claude", "projects", cwdSlug)
 mkdirSync(jsonlDir, { recursive: true })
@@ -36,14 +36,14 @@ const uuid = () => `0000000${(++uuidN).toString().padStart(4, "0")}-0000-4000-80
 // already-tailed JSONL in place leaves the projection stuck on the old content.
 const slug = flags.slug ?? "broken-image-flash"
 const sessionId = `${slug}-0000-4000-8000-000000000000`.slice(0, 36)
-const tmuxName = `fray-${slug}`
+const tmuxName = `frizz-${slug}`
 
 // The path is deliberately absent from disk: /local-image resolves it, fails realpath, and 404s.
-const MISSING = "/tmp/fray-does-not-exist-1785612974807.png"
+const MISSING = "/tmp/frizz-does-not-exist-1785612974807.png"
 // A screenshot that IS on disk — the control that proves a working image still paints.
-const PRESENT = "/tmp/fray-working-shot.png"
+const PRESENT = "/tmp/frizz-working-shot.png"
 // A bare path line: ChatView's splitProseAttachments turns this into a React BlockImage, not markdown.
-const MISSING_BLOCK = "/tmp/fray-block-image-does-not-exist.png"
+const MISSING_BLOCK = "/tmp/frizz-block-image-does-not-exist.png"
 
 const user = (text) => ({
   parentUuid: null,
@@ -88,7 +88,7 @@ for (let i = 0; i < 14; i++) {
 }
 
 records.push(assistant([
-  "**Fixed** — GitHub picker screenshot landed, `FRAY.md` demoted, `584a159` on `main`.",
+  "**Fixed** — GitHub picker screenshot landed, `FRIZZ.md` demoted, `584a159` on `main`.",
   "",
   `![The GitHub picker listing real zod issues with three selected](${MISSING})`,
   "",

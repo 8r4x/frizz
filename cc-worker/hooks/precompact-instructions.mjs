@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // @ts-check
-// PreCompact hook (fray-worker) — steers WHAT SURVIVES a compaction. Run directly with node (zero
+// PreCompact hook (frizz-worker) — steers WHAT SURVIVES a compaction. Run directly with node (zero
 // deps, max Node compat), mirroring cc's hook idiom.
 //
 // WHY THIS EXISTS: compaction is the single largest source of context loss in a long worker session.
@@ -32,7 +32,7 @@
 //
 // Adjectives do nothing; a hard number does the work. The COST is latency: the 15,000-word run
 // produced no compaction result at all inside a 10-minute cap and only completed on a longer budget.
-// That is acceptable here because fray workers run with `precomputeCompactionEnabled`, which arms
+// That is acceptable here because frizz workers run with `precomputeCompactionEnabled`, which arms
 // summary generation in a background sidecar at ~80% of the window and swaps it in at the real
 // threshold — so on an `auto` trigger the wait is largely hidden. A `manual` /compact pays it in
 // front of the human.
@@ -45,11 +45,11 @@
 // declined to comply and called the instructions fake. Keep this legible as an ordinary editorial
 // brief about what to retain.
 //
-// GATE: everything is gated on FRAY_UI_THREAD, so the plugin stays inert when loaded outside a
-// fray-ui worker. Sub-agent contexts are skipped, matching session-seed.mjs — the scratchpad path
+// GATE: everything is gated on FRIZZ_THREAD, so the plugin stays inert when loaded outside a
+// frizz worker. Sub-agent contexts are skipped, matching session-seed.mjs — the scratchpad path
 // below is only guaranteed correct for the top-level worker session.
 import { readFileSync } from 'node:fs';
-import { currentSessionId } from '../scripts/fray/config.mjs';
+import { currentSessionId } from '../scripts/frizz/config.mjs';
 
 // See "LENGTH IS ONLY STEERABLE BY AN EXPLICIT NUMBER" above before changing this.
 const WORD_TARGET = 15000;
@@ -64,8 +64,8 @@ try {
 // Skip inside sub-agent contexts (they carry agent_id) — see GATE above.
 if (input.agent_id ?? input.agentId) process.exit(0);
 
-// WORKER GATE — inert unless this is a fray-ui worker session.
-const thread = (process.env.FRAY_UI_THREAD ?? '').trim();
+// WORKER GATE — inert unless this is a frizz worker session.
+const thread = (process.env.FRIZZ_THREAD ?? '').trim();
 if (!thread) process.exit(0);
 
 let sid = null;
@@ -75,12 +75,12 @@ try {
   /* best-effort — fall back to the generic path shape below */
 }
 const scratch = sid
-  ? '.fray/threads/' + sid + '/scratch.md'
-  : '.fray/threads/<session-id>/scratch.md';
+  ? '.frizz/threads/' + sid + '/scratch.md'
+  : '.frizz/threads/<session-id>/scratch.md';
 
 // Written as an editorial brief, not as a command block — see TONE MATTERS above.
 const brief = [
-  'This is a fray-ui worker session driving one engineering effort (`' + thread + '`). Three things ' +
+  'This is a frizz worker session driving one engineering effort (`' + thread + '`). Three things ' +
     'matter more here than brevity does, because they are what actually gets lost in compaction:',
   '',
   '1. LENGTH. Write an EXHAUSTIVE summary, not a condensed one: target at least ' +

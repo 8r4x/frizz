@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Fray syntax highlighting fixture</title>
+    <title>Frizz syntax highlighting fixture</title>
     <script type="module" src="/src/styles.css"></script>
     <style>
       .fixture-shell { width: min(1320px, calc(100% - 32px)); margin: 24px auto 48px; }
@@ -61,7 +61,7 @@ const Button = ({ label }) => <button aria-label={label}>{label}</button>
 
 \`\`\`json
 {
-  "agent": "fray",
+  "agent": "frizz",
   "features": ["safe", "streaming"],
   "enabled": true
 }
@@ -69,7 +69,7 @@ const Button = ({ label }) => <button aria-label={label}>{label}</button>
 
 \`\`\`bash
 set -euo pipefail
-pnpm --filter @fray-ui/web build
+pnpm --filter @frizz/web build
 printf '%s\\n' "done"
 \`\`\`
 

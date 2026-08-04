@@ -20,8 +20,8 @@ import { basename, dirname, join } from "node:path"
 import {
   assertAlphaWithinSafeCircle,
   buildMaskableSvg,
-  discoverOwnedFrayShims,
-  inspectOwnedFrayShim,
+  discoverOwnedFrizzShims,
+  inspectOwnedFrizzShim,
   refreshInstalledAppIcons,
 } from "./generate-icons.mjs"
 
@@ -39,16 +39,16 @@ const copyBundleTree = (source, destination) => cpSync(source, destination, {
 })
 
 function makeFixture(t, count = 2) {
-  const root = mkdtempSync(join(tmpdir(), "fray-icon-test-"))
+  const root = mkdtempSync(join(tmpdir(), "frizz-icon-test-"))
   const appsPath = join(root, "Applications", "Chrome Apps.localized")
-  const projectsPath = join(root, ".fray", "projects")
+  const projectsPath = join(root, ".frizz", "projects")
   mkdirSync(appsPath, { recursive: true })
   mkdirSync(projectsPath, { recursive: true })
   const appsDir = realpathSync(appsPath)
   const projectsRoot = realpathSync(projectsPath)
   const apps = []
   for (let index = 0; index < count; index += 1) {
-    const bundleName = index === 0 ? "Fray" : `Fray ${index}`
+    const bundleName = index === 0 ? "Frizz" : `Frizz ${index}`
     const appPath = join(appsDir, `${bundleName}.app`)
     const contents = join(appPath, "Contents")
     const macos = join(contents, "MacOS")
@@ -111,19 +111,19 @@ function assertOriginals(fixture) {
     assert.deepEqual(readFileSync(app.plistPath), app.originalPlist)
     assert.deepEqual(readFileSync(app.iconPath), app.originalIcon)
   }
-  assert.deepEqual(readdirSync(fixture.appsDir).filter((name) => name.startsWith(".fray-icon-")), [])
+  assert.deepEqual(readdirSync(fixture.appsDir).filter((name) => name.startsWith(".frizz-icon-")), [])
 }
 
-test("owned shim identity accepts canonical Fray bundles and rejects forged metadata", (t) => {
+test("owned shim identity accepts canonical Frizz bundles and rejects forged metadata", (t) => {
   const fixture = makeFixture(t, 1)
   const [app] = fixture.apps
-  const owned = inspectOwnedFrayShim(app.appPath, {
+  const owned = inspectOwnedFrizzShim(app.appPath, {
     containerRoot: fixture.appsDir,
     projectsRoot: fixture.projectsRoot,
     parsePlist: parseJsonPlist,
   })
   assert.equal(owned.info.CrAppModeShortcutURL, app.info.CrAppModeShortcutURL)
-  assert.equal(discoverOwnedFrayShims({
+  assert.equal(discoverOwnedFrizzShims({
     appsDir: fixture.appsDir,
     projectsRoot: fixture.projectsRoot,
     parsePlist: parseJsonPlist,
@@ -136,7 +136,7 @@ test("owned shim identity accepts canonical Fray bundles and rejects forged meta
     { CrAppModeUserDataDir: join(dirname(dirname(app.info.CrAppModeUserDataDir)), "..", "escaped-profile") },
   ]) {
     writeFileSync(app.plistPath, JSON.stringify({ ...app.info, ...forged }))
-    assert.equal(inspectOwnedFrayShim(app.appPath, {
+    assert.equal(inspectOwnedFrizzShim(app.appPath, {
       containerRoot: fixture.appsDir,
       projectsRoot: fixture.projectsRoot,
       parsePlist: parseJsonPlist,
@@ -148,9 +148,9 @@ test("owned shim identity accepts canonical Fray bundles and rejects forged meta
 test("symlinked bundles and resources are rejected, including a staged no-follow attack", (t) => {
   const fixture = makeFixture(t, 1)
   const [app] = fixture.apps
-  const linkedBundle = join(fixture.appsDir, "Fray 1.app")
+  const linkedBundle = join(fixture.appsDir, "Frizz 1.app")
   symlinkSync(app.appPath, linkedBundle)
-  assert.throws(() => discoverOwnedFrayShims({
+  assert.throws(() => discoverOwnedFrizzShims({
     appsDir: fixture.appsDir,
     projectsRoot: fixture.projectsRoot,
     parsePlist: parseJsonPlist,
@@ -162,7 +162,7 @@ test("symlinked bundles and resources are rejected, including a staged no-follow
     const holding = join(fixture.root, `holding-${relativeDirectory.replaceAll("/", "-")}`)
     renameSync(directory, holding)
     symlinkSync(holding, directory)
-    assert.throws(() => inspectOwnedFrayShim(app.appPath, {
+    assert.throws(() => inspectOwnedFrizzShim(app.appPath, {
       containerRoot: fixture.appsDir,
       projectsRoot: fixture.projectsRoot,
       parsePlist: parseJsonPlist,
@@ -172,13 +172,13 @@ test("symlinked bundles and resources are rejected, including a staged no-follow
   }
 
   const nestedRoot = join(fixture.appsDir, "nested")
-  const nestedBundle = join(nestedRoot, "Fray 1.app")
+  const nestedBundle = join(nestedRoot, "Frizz 1.app")
   mkdirSync(nestedRoot)
   copyBundleTree(app.appPath, nestedBundle)
-  assert.throws(() => inspectOwnedFrayShim(nestedBundle, {
+  assert.throws(() => inspectOwnedFrizzShim(nestedBundle, {
     containerRoot: fixture.appsDir,
     projectsRoot: fixture.projectsRoot,
-    expectedBundleName: "Fray",
+    expectedBundleName: "Frizz",
     parsePlist: parseJsonPlist,
   }), /not a direct child/)
 
@@ -233,7 +233,7 @@ test("final signature verification failure rolls back every swapped shim", (t) =
   const fixture = makeFixture(t, 2)
   assert.throws(() => refreshInstalledAppIcons(options(fixture, {
     verifyBundle(path) {
-      if (dirname(path) === fixture.appsDir && basename(path) === "Fray 1.app") {
+      if (dirname(path) === fixture.appsDir && basename(path) === "Frizz 1.app") {
         throw new Error("signature invalid")
       }
     },
@@ -282,7 +282,7 @@ test("a post-commit backup cleanup failure keeps every installed shim updated", 
     assert.deepEqual(readFileSync(app.plistPath), app.originalPlist)
     assert.deepEqual(readFileSync(app.iconPath), fixture.candidate)
   }
-  const recoveryRoots = readdirSync(fixture.appsDir).filter((name) => name.startsWith(".fray-icon-transaction-"))
+  const recoveryRoots = readdirSync(fixture.appsDir).filter((name) => name.startsWith(".frizz-icon-transaction-"))
   assert.equal(recoveryRoots.length, 1)
   assert.ok(readdirSync(join(fixture.appsDir, recoveryRoots[0])).some((name) => name.endsWith("-backup.app")))
 })
@@ -306,7 +306,7 @@ test("successful transaction preserves plist bytes and modes while updating ever
     assert.deepEqual(readFileSync(app.iconPath), fixture.candidate)
     assert.equal(lstatSync(app.iconPath).mode & 0o777, 0o600)
   }
-  assert.deepEqual(readdirSync(fixture.appsDir).filter((name) => name.startsWith(".fray-icon-")), [])
+  assert.deepEqual(readdirSync(fixture.appsDir).filter((name) => name.startsWith(".frizz-icon-")), [])
 })
 
 test("maskable transforms are singular and safe-circle validation rejects overflow", () => {

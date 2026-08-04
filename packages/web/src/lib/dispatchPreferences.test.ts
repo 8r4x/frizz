@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import type { CodexModel, DispatchPreferences } from "@fray-ui/shared"
+import type { CodexModel, DispatchPreferences } from "@frizz/shared"
 import { applyDispatchPreferenceUpdate, dispatchModelGroups, dispatchProfileGroups, resolveDispatchPreferences } from "./dispatchPreferences.ts"
 
 const models: CodexModel[] = [

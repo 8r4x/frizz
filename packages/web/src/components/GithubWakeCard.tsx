@@ -1,4 +1,4 @@
-// A scheduler wake, rendered as FRAY speaking rather than as the human's own words.
+// A scheduler wake, rendered as FRIZZ speaking rather than as the human's own words.
 //
 // The wake is recorded as an ordinary user turn (it is pasted into the worker's composer), so the chat
 // rendered it in the off-white right-justified bubble the human's messages wear — which claimed the
@@ -17,7 +17,7 @@
 // shell has a body; and three marks on one row that all looked clickable (an underlined title, an
 // accent ref, the corner glyph) with no hierarchy between them.
 import { Bell, Bot, Github, User } from "lucide-react"
-import { parseGithubWakeSteer, type GithubWakeItem, type GithubWakeSteer } from "@fray-ui/shared"
+import { parseGithubWakeSteer, type GithubWakeItem, type GithubWakeSteer } from "@frizz/shared"
 import { CARD_BODY, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { WakeDivider, WAKE_DIVIDER_IDENT } from "./WakeDivider.tsx"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
@@ -83,8 +83,8 @@ export function GithubWakeCard({ steer: served, text, sourceId, wrap }: { steer?
   // most of what made a watcher notification read as something the operator sent.
   if (!steer) {
     return (
-      <div data-fray-msg={sourceId} data-fray-wake className="min-w-0 max-w-[85%]">
-        <TranscriptCard icon={Bell} label="Fray">
+      <div data-frizz-msg={sourceId} data-frizz-wake className="min-w-0 max-w-[85%]">
+        <TranscriptCard icon={Bell} label="Frizz">
           <div className={`${CARD_BODY} whitespace-pre-wrap [overflow-wrap:anywhere]${wrap ? ` ${QUEUE_WRAP}` : ""}`}>{text}</div>
         </TranscriptCard>
       </div>

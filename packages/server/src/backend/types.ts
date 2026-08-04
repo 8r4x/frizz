@@ -1,4 +1,4 @@
-import type { LimitWindow, PermissionMode } from "@fray-ui/shared"
+import type { LimitWindow, PermissionMode } from "@frizz/shared"
 import type { FenceView, SubAgentView, BgShellView, PendingAskData, TurnState } from "../tailer.ts"
 
 // A turn cut off by an exhausted SUBSCRIPTION window, as a backend's fold observed it. Carries only
@@ -146,10 +146,10 @@ export interface FoldState {
   // second title candidate.
   titleCandidateFinalText?: string
   // Provenance for Codex's auto title. A bounded dispatch fallback exists only so an omitted in-band
-  // signal never leaves the board on an internal slug; a later valid Fray signal may replace it.
+  // signal never leaves the board on an internal slug; a later valid Frizz signal may replace it.
   // A generated signal or provider-native title is final for automatic naming (manual titles are
   // guarded separately by storage's title_auto CAS).
-  autoTitleSource?: "fallback" | "fray" | "native"
+  autoTitleSource?: "fallback" | "frizz" | "native"
   lastUserAt?: string // ISO8601 of the newest GENUINE (non-synthetic) human turn — the listing sort key
   lastUserText?: string // exact text of that genuine human turn when the backend records it
   lastFence?: FenceView // done/awaiting excusal fence on the final message (cleared by any user turn)
@@ -202,24 +202,24 @@ export interface BuiltCommand {
   prewrite: PrewriteFile[]
 }
 
-// The ONE unified fray MCP server every worker gets: mounted under the name `fray`, so its tools are
-// addressed as `mcp__fray__<tool>` (`spawn_thread`, `recurring_prompt` and `timer` today — new
-// worker-facing fray capabilities join the same server's registry in cc-worker/bin/fray-mcp.mjs rather
-// than mounting a second server). The dispatch layer pre-approves it at SERVER level (`mcp__fray`), so a
+// The ONE unified frizz MCP server every worker gets: mounted under the name `frizz`, so its tools are
+// addressed as `mcp__frizz__<tool>` (`spawn_thread`, `recurring_prompt` and `timer` today — new
+// worker-facing frizz capabilities join the same server's registry in cc-worker/bin/frizz-mcp.mjs rather
+// than mounting a second server). The dispatch layer pre-approves it at SERVER level (`mcp__frizz`), so a
 // tool added there needs no allow-list change here.
-export const FRAY_MCP = {
-  name: "fray",
-  script: "fray-mcp.mjs", // resolved under <worker plugin dir>/bin/
+export const FRIZZ_MCP = {
+  name: "frizz",
+  script: "frizz-mcp.mjs", // resolved under <worker plugin dir>/bin/
 } as const
 
-// Present ⇒ mount FRAY_MCP for this worker. Carries the abs path to the stdio MCP server script and
+// Present ⇒ mount FRIZZ_MCP for this worker. Carries the abs path to the stdio MCP server script and
 // the project state dir it reads `server.lock` from. Computed by the dispatch layer
 // (resolveWorkerPluginDir + project.stateDir) and threaded through both backends; absent in tests /
 // when the plugin dir or script can't be resolved (→ no injection, worker simply lacks the tools).
-export interface FrayMcp {
+export interface FrizzMcp {
   scriptPath: string
   stateDir: string
-  // The thread this MCP server belongs to, passed through as FRAY_THREAD_SLUG so a tool CAN act on its
+  // The thread this MCP server belongs to, passed through as FRIZZ_THREAD_SLUG so a tool CAN act on its
   // OWN thread. Nothing in the MCP protocol identifies the caller, and the server is spawned per worker,
   // so its env is the only channel for this. Optional, and currently read by no shipped tool:
   // `spawn_thread` does not need to know who called it, and the one that did — a worker-armed heartbeat
@@ -244,7 +244,7 @@ export const CHROME_DEVTOOLS_MCP = {
   startupTimeoutSec: 120,
 } as const
 
-// The environment EVERY fray Claude worker gets, on BOTH spawn paths. Kept as one record with one
+// The environment EVERY frizz Claude worker gets, on BOTH spawn paths. Kept as one record with one
 // spread per call site (claudeWorkerEnvironment() for tmux, the bridge's `workerEnv` for the broker,
 // plus the SDK's key allowlist) so a new entry cannot reach one path and silently miss the other.
 // Spread it, never re-spell a key — a typo here is silent, and each failure mode below is quiet.
@@ -257,7 +257,7 @@ export const CHROME_DEVTOOLS_MCP = {
 // `<total_tokens>N tokens left</total_tokens>` block into the system prompt and after every
 // tool-result batch; `infinite` renders the literal `Infinite`. Default is `off` — no block at all.
 //
-// WHY A FRAY WORKER OVERRIDES THAT DEFAULT: with no block, the model has no signal about its budget
+// WHY A FRIZZ WORKER OVERRIDES THAT DEFAULT: with no block, the model has no signal about its budget
 // and it GUESSES — badly, and always downward. Claude Code injects nothing else about context: no
 // system-reminder in cli 2.1.220 mentions tokens, and the "Context is N% full" warning is `/context`
 // TUI text the model never sees. Measured on a real worker (nub session 5258ebe4, transcript line
@@ -272,7 +272,7 @@ export const CHROME_DEVTOOLS_MCP = {
 // `infinite` and not `countdown`: a live remaining-token count is still a shrinking number, which is
 // the exact input to the bad inference. Claude Code's own autocompact system prompt already tells the
 // model "your conversation with the user is not limited by the context window" — `Infinite` restates
-// that in the one place the model looks for a budget, and it is TRUE for a fray worker, whose session
+// that in the one place the model looks for a budget, and it is TRUE for a frizz worker, whose session
 // compacts and continues rather than ending.
 //
 // The env var is the highest-precedence source, ahead of `totalTokensReminder` in settings and the
@@ -296,7 +296,7 @@ export const CHROME_DEVTOOLS_MCP = {
 // milliseconds: default ${...}, max ${...}``), so the worker is told this number, not a stale one.
 //
 // This does NOT relax the escaping-background-job rule that hooks/bash-background.mjs enforces. That
-// hook is about lifecycle identity (`cmd &` leaves a child fray and Claude cannot wake on); this is
+// hook is about lifecycle identity (`cmd &` leaves a child frizz and Claude cannot wake on); this is
 // only about how long a tracked foreground call is allowed to take before the harness backgrounds it
 // ITSELF, which keeps the task id and the wake. The two are independent.
 //
@@ -331,10 +331,10 @@ export interface SpawnOpts {
   permissionMode: PermissionMode
   model?: string
   effort?: string
-  frayMcp?: FrayMcp
+  frizzMcp?: FrizzMcp
 }
 export interface ResumeOpts extends Omit<SpawnOpts, "prompt"> {
-  // Omitted when fray is only re-attaching an idle saved conversation to apply a per-thread
+  // Omitted when frizz is only re-attaching an idle saved conversation to apply a per-thread
   // permission change. Present for an ordinary dead-session follow-up.
   message?: string
 }

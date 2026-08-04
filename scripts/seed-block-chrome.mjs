@@ -19,8 +19,8 @@ if (!home || !socket || !projectDir) throw new Error("usage: seed-block-chrome.m
 const cwdSlug = projectDir.replace(/[/.]/g, "-")
 const transcriptDir = path.join(home, ".claude", "projects", cwdSlug)
 fs.mkdirSync(transcriptDir, { recursive: true })
-const dbDir = fs.readdirSync(path.join(home, ".fray", "projects"))[0]
-const db = path.join(home, ".fray", "projects", dbDir, "ui.db")
+const dbDir = fs.readdirSync(path.join(home, ".frizz", "projects"))[0]
+const db = path.join(home, ".frizz", "projects", dbDir, "ui.db")
 
 const SESSION = "b10cb10c-0000-4000-8000-00000000cafe"
 const T = (n) => new Date(Date.UTC(2026, 6, 31, 4, n, 0)).toISOString()
@@ -75,7 +75,7 @@ const records = [
     ],
   })]),
   user(9, [result("t_todo", "Todos have been modified successfully.")]),
-  asst(10, [call("t_agent", "Task", { subagent_type: "fray:opus-high", description: "Audit the block radii", prompt: "List every block-level container in the transcript and its corner radius." })]),
+  asst(10, [call("t_agent", "Task", { subagent_type: "frizz:opus-high", description: "Audit the block radii", prompt: "List every block-level container in the transcript and its corner radius." })]),
   user(11, [result("t_agent", "Nine containers, four distinct radii.")]),
   // A local image and a local non-image path render as their own block elements (BlockImage /
   // BlockFile), which nothing else in this thread exercises.
@@ -105,14 +105,14 @@ const barRecords = [
 function land(slug, sessionId, title, rows, restedAt) {
   fs.writeFileSync(path.join(transcriptDir, `${sessionId}.jsonl`), rows.map((r) => JSON.stringify(r)).join("\n") + "\n")
   try {
-    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `fray-${slug}`, "sleep 7200"], { stdio: "ignore" })
+    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${slug}`, "sleep 7200"], { stdio: "ignore" })
   } catch {
     /* already exists */
   }
   execFileSync("sqlite3", [
     db,
     `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, title_auto, backend, model, effort, permission_mode, state, unread, exited, archived, rested_at)
-     VALUES ('${slug}', '${sessionId}', 'fray-${slug}', '${T(0)}', '${title}', 0, 'claude', 'opus', 'high', 'auto', 'open', 0, 0, 0, '${restedAt}')`,
+     VALUES ('${slug}', '${sessionId}', 'frizz-${slug}', '${T(0)}', '${title}', 0, 'claude', 'opus', 'high', 'auto', 'open', 0, 0, 0, '${restedAt}')`,
   ])
   console.log(`seeded ${slug} (${sessionId})`)
 }

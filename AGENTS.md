@@ -10,8 +10,8 @@ isolated/messy work in a git worktree on a local branch (`git worktree add <dir>
 it's done and you're confident, merge it back yourself (`git switch main && git merge <slug>`) and
 remove the worktree. Getting the change onto local `main` is your job — never push a branch to stage a
 review and never hand back an unmerged branch. Reading GitHub (issues, PRs, CI) is fine; creating or
-pushing a PR is not. (`FRAY.md` states this in full; it is repeated here because Codex re-reads
-`AGENTS.md` fresh every session and sub-agents load it, whereas the fray worker contract can be frozen
+pushing a PR is not. (`FRIZZ.md` states this in full; it is repeated here because Codex re-reads
+`AGENTS.md` fresh every session and sub-agents load it, whereas the frizz worker contract can be frozen
 at session start.)
 
 Git hygiene does NOT matter here — the only thing that matters is getting your changes onto local
@@ -71,7 +71,7 @@ you never describe something as driven or verified when it was not.
 **Load the `adhoc-cdp` skill for how** — the isolated disposable stack, the headless screenshot paths
 (Chrome DevTools MCP preferred, `scripts/shot.mjs` as the reliable background fallback), which states
 and widths to capture, browser process hygiene (one owned instance per task; never a global close or a
-broad `pkill`), and how to embed evidence so fray renders it inline.
+broad `pkill`), and how to embed evidence so frizz renders it inline.
 
 # Visual alignment is the implementer's job, not a review someone else does
 
@@ -102,10 +102,10 @@ Every Word (write "Confirm snooze", "Mark as done", "Fix queue focus" — not "C
 Done", "Fix Queue Focus"). Acronyms (PR, CI, API) keep their established casing. When an agent titles a
 thread, the same rule applies.
 
-**"Fray" is a proper noun — always capitalize it in prose.** The product is Fray; write "Fray
-dispatches a worker", never "fray dispatches a worker". Lowercase survives only in literal
-identifiers, where it is part of the name: `npx frayui`, `FRAY.md`, `.fray/`, `~/.fray/`,
-`fray-<slug>` session names, the `fray`/`fray-update` CLIs, and the `fray:*` skill and sub-agent profile names.
+**"Frizz" is a proper noun — always capitalize it in prose.** The product is Frizz; write "Frizz
+dispatches a worker", never "frizz dispatches a worker". Lowercase survives only in literal
+identifiers, where it is part of the name: `npx frizz`, `FRIZZ.md`, `.frizz/`, `~/.frizz/`,
+`frizz-<slug>` session names, the `frizz`/`frizz-update` CLIs, and the `frizz:*` skill and sub-agent profile names.
 
 # "Shipped" means merged into the primary branch
 

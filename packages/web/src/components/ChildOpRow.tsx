@@ -140,11 +140,11 @@ export function ChildOpRow({
         // A running SHELL pulses blue, a running sub-AGENT pulses the accent-yellow.
         <span
           aria-hidden
-          className={`fray-live-dot ${kind === "SHELL" ? "fray-live-dot--shell" : "fray-live-dot--agent"}`}
+          className={`frizz-live-dot ${kind === "SHELL" ? "frizz-live-dot--shell" : "frizz-live-dot--agent"}`}
           data-running-indicator={density === "card" ? "queue-subagent" : "operation"}
         />
       ) : kind === "SHELL" ? (
-        <span aria-hidden className="fray-live-dot-quiet fray-live-dot-quiet--shell" data-running-indicator="operation-quiet" title={CHILD_QUIET_SHELL_TITLE} />
+        <span aria-hidden className="frizz-live-dot-quiet frizz-live-dot-quiet--shell" data-running-indicator="operation-quiet" title={CHILD_QUIET_SHELL_TITLE} />
       ) : (
         quiet
       )}

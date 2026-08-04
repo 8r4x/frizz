@@ -73,10 +73,10 @@ test("a child with a drill-in is a real button carrying the open title and label
 })
 
 test("the rail keeps its checkbox spinner, its indent and its tooltip override", () => {
-  const running = render({ density: "rail", onOpen: () => {}, parentSlug: "parent-thread", title: "[fray:opus-high] Audit the drawer ops strip" })
+  const running = render({ density: "rail", onOpen: () => {}, parentSlug: "parent-thread", title: "[frizz:opus-high] Audit the drawer ops strip" })
   assert.match(running, /<svg /, "a running rail row uses the BoxSpinner, never the pulsing dot")
   assert.match(running, /pl-\[26px\]/)
-  assert.match(running, /title="\[fray:opus-high\] Audit the drawer ops strip"/)
+  assert.match(running, /title="\[frizz:opus-high\] Audit the drawer ops strip"/)
   assert.match(running, /data-subagent-parent="parent-thread"/)
   // The rail is not an operations surface: no kind tag, no drill-in arrow.
   assert.doesNotMatch(running, /petite-caps/)
@@ -85,7 +85,7 @@ test("the rail keeps its checkbox spinner, its indent and its tooltip override",
 test("the card keeps the pulsing queue indicator and stays free of ops chrome", () => {
   const html = render({ density: "card", onOpen: () => {}, parentSlug: "parent-thread", startedAt: TWELVE_MIN_AGO })
   assert.match(html, /data-running-indicator="queue-subagent"/)
-  assert.match(html, /fray-live-dot--agent/)
+  assert.match(html, /frizz-live-dot--agent/)
   assert.match(html, /data-subagent-parent="parent-thread"/)
   assert.doesNotMatch(html, /petite-caps/, "a queue card names the work, it is not a second ops toolbar")
   assert.doesNotMatch(html, /<svg /, "the card must not borrow the rail's checkbox spinner")
@@ -168,7 +168,7 @@ test("a quiet SHELL breathes instead of going flat, on the ops row", () => {
   assert.match(html, /data-running-indicator="operation-quiet"/)
   assert.match(html, /title="running — no recent output"/)
   assert.doesNotMatch(html, new RegExp(CHILD_STALE_TITLE))
-  assert.match(render({ density: "sheet", kind: "SHELL", state: "running" }), /fray-live-dot--shell/)
+  assert.match(render({ density: "sheet", kind: "SHELL", state: "running" }), /frizz-live-dot--shell/)
 })
 
 test("the dismiss × exists only when onDismiss is supplied, and sits directly after the title", () => {

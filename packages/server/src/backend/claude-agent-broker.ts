@@ -1,15 +1,15 @@
 // The Claude session broker DAEMON: a detached process that owns one Claude Agent SDK session and
 // relays it over a local socket. This is the piece Claude Code doesn't ship (codex's app-server is
-// the same shape): the session OUTLIVES fray, so fray reconnects to the LIVE session after a restart
+// the same shape): the session OUTLIVES frizz, so frizz reconnects to the LIVE session after a restart
 // instead of cold resume-from-disk, while keeping structured TYPED control (no TUI scraping, no tmux,
-// no PTY — stream-json is pipes). The SDK stays as this daemon's implementation detail; fray speaks a
+// no PTY — stream-json is pipes). The SDK stays as this daemon's implementation detail; frizz speaks a
 // small typed socket protocol (claude-broker-client.ts), never the SDK directly.
 //
 // Wire protocol — newline-delimited JSON frames:
-//   fray -> broker:  {t:"input", message} | {t:"permission", requestId, decision} | {t:"interrupt"} | {t:"set-mode", mode}
+//   frizz -> broker:  {t:"input", message} | {t:"permission", requestId, decision} | {t:"interrupt"} | {t:"set-mode", mode}
 //                  | {t:"cancel-input", requestId, id} | {t:"stop-task", requestId, taskId}
 //                  | {t:"reload-plugins", requestId}
-//   broker -> fray:  {t:"hello", sessionId, generation} | {t:"event", event} | {t:"permission-request", requestId, request} | {t:"diagnostic", diagnostic}
+//   broker -> frizz:  {t:"hello", sessionId, generation} | {t:"event", event} | {t:"permission-request", requestId, request} | {t:"diagnostic", diagnostic}
 //                  | {t:"cancel-result", requestId, cancelled, error?} | {t:"stop-result", requestId, error?}
 //                  | {t:"reload-result", requestId, reloaded?, error?}
 //
@@ -45,18 +45,18 @@ export interface ClaudeBrokerConfig {
   permissionMode?: ClaudePermissionMode
   /** Allowlisted keys only — the SDK validates and rejects anything else. */
   env: Record<string, string>
-  /** Appended to Claude's default system prompt — carries the fray worker contract. */
+  /** Appended to Claude's default system prompt — carries the frizz worker contract. */
   appendSystemPrompt?: string
   model?: string
   effort?: string
   /** Resume the session from its on-disk transcript instead of starting a fresh one. Set when a
    *  follow-up cold-starts a daemon after the previous one died (the live-daemon reconnect never forks). */
   resume?: boolean
-  /** The fray WORKER ENVIRONMENT — the SDK equivalents of the tmux path's plugin/MCP injection. Without
-   *  these a broker worker is bare: no fray sub-agent profiles, no fray/chrome-devtools MCP, no cc-worker
+  /** The frizz WORKER ENVIRONMENT — the SDK equivalents of the tmux path's plugin/MCP injection. Without
+   *  these a broker worker is bare: no frizz sub-agent profiles, no frizz/chrome-devtools MCP, no cc-worker
    *  hooks. `pluginDir` loads the local cc-worker plugin; `mcpServers`/`allowedTools` mount + pre-approve
-   *  the MCP servers; `workerEnv` carries the per-thread fray vars the plugin hooks gate on (FRAY_UI_THREAD,
-   *  FRAY_PERM_DIR) — merged into the SDK env AFTER the ambient allowlist. */
+   *  the MCP servers; `workerEnv` carries the per-thread frizz vars the plugin hooks gate on (FRIZZ_THREAD,
+   *  FRIZZ_PERM_DIR) — merged into the SDK env AFTER the ambient allowlist. */
   pluginDir?: string
   mcpServers?: Record<string, { type?: "stdio"; command: string; args?: string[]; env?: Record<string, string> }>
   allowedTools?: string[]
@@ -64,11 +64,11 @@ export interface ClaudeBrokerConfig {
   /** When set, the daemon writes a discovery record here after its socket is listening. */
   recordPath?: string
   /** When set, the daemon appends its OWN lifecycle/stderr diagnostics here, synchronously. This is
-   *  how a crash survives: relaying to an attached client loses every death that happens while fray is
+   *  how a crash survives: relaying to an attached client loses every death that happens while frizz is
    *  detached (a restart), and an in-memory backlog dies with the process it is recording. */
   diagnosticLogPath?: string
-  /** Stable identity of THIS app-server process — unchanged across fray restarts, new only when the
-   *  session itself is re-forked. Lets fray tell whether in-flight work survived a reconnect. */
+  /** Stable identity of THIS app-server process — unchanged across frizz restarts, new only when the
+   *  session itself is re-forked. Lets frizz tell whether in-flight work survived a reconnect. */
   generation?: string
 }
 
@@ -77,7 +77,7 @@ export interface BrokerRecord { daemonPid: number; socketPath: string; sessionId
 // What THIS daemon build understands, stamped into its record so the bridge can tell an old surviving
 // daemon from a current one. The constant itself lives in the PROTOCOL module, not here: this file is
 // also the detached daemon's process entry point and throws at module scope when it is loaded as one
-// without FRAY_CLAUDE_BROKER. In the promoted artifact every module is one bundle, so a plain `import`
+// without FRIZZ_CLAUDE_BROKER. In the promoted artifact every module is one bundle, so a plain `import`
 // of a VALUE from here — rather than an `import type` — initializes this module inside the server
 // process, where the entry-point check is satisfied by the bundle's own path and the guard fires. That
 // took down the whole control plane on the artifact while dev source (separate files) stayed green.
@@ -125,8 +125,8 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     cwd: config.cwd,
     session: config.resume ? { kind: "resume", sessionId: config.sessionId } : { kind: "new", sessionId: config.sessionId },
     permissionMode: config.permissionMode ?? "default",
-    // The worker inherits fray's environment minus fray's own control plane (see worker-env.ts). The
-    // fray worker vars it DOES need (FRAY_UI_THREAD, FRAY_PERM_DIR) ride workerEnv and are merged on
+    // The worker inherits frizz's environment minus frizz's own control plane (see worker-env.ts). The
+    // frizz worker vars it DOES need (FRIZZ_THREAD, FRIZZ_PERM_DIR) ride workerEnv and are merged on
     // top — which is also what gives them THIS thread's values instead of the server's.
     env: { ...inheritWorkerEnvironment(config.env), ...(config.workerEnv ?? {}) },
     persistSession: true, // write the tailer-readable transcript JSONL
@@ -147,7 +147,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
       return await new Promise<ClaudePermissionDecision>((resolve) => {
         // Abort-aware: interrupting the turn (or the session ending) aborts the SDK's permission
         // callback, and a request left in `pendingPermissions` after that is not merely a leak — the
-        // reconnect handler REPLAYS every pending request to the next fray that attaches, which would
+        // reconnect handler REPLAYS every pending request to the next frizz that attaches, which would
         // put a card in front of the operator for a tool call that no longer exists. So an abort
         // settles the waiter with a deny and drops it, exactly like an answer would.
         let settled = false
@@ -165,7 +165,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     },
     onDiagnostic: (diagnostic: ClaudeDiagnostic) => {
       // Persist FIRST, then relay. A `crashed` diagnostic is emitted with the process seconds from
-      // gone, and relaying only reaches a fray that happens to be attached right now.
+      // gone, and relaying only reaches a frizz that happens to be attached right now.
       writeDiagnostic?.(diagnostic)
       if (client) write(client, { t: "diagnostic", diagnostic })
     },
@@ -174,14 +174,14 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   // ASK Claude to name the session, once, from the dispatch prompt.
   //
   // Claude Code normally titles a session by itself on the first user message and appends an
-  // `ai-title` record to the session JSONL — the record fray's tailer folds into the board's
+  // `ai-title` record to the session JSONL — the record frizz's tailer folds into the board's
   // `aiTitle`, and without which the board shows "Spinning up a thread…" for 60s and then falls back
   // to a truncation of the raw dispatch prompt forever. That automatic titling is SUPPRESSED on the
-  // Agent-SDK (headless) transport whenever a `SessionStart` hook is registered — and fray's broker
+  // Agent-SDK (headless) transport whenever a `SessionStart` hook is registered — and frizz's broker
   // always loads the cc-worker plugin, whose hooks.json registers SessionStart. Bisected live against
   // 2.1.220: a plugin carrying ONLY a no-op `SessionStart` hook yields NO ai-title and never even
   // dispatches the titler's API request, while the same plugin carrying only PreToolUse / PostToolUse
-  // / PermissionRequest hooks titles normally. It is provider behavior fray cannot switch off without
+  // / PermissionRequest hooks titles normally. It is provider behavior frizz cannot switch off without
   // giving up the worker seeding, so the broker asks explicitly instead: the SDK's
   // `generate_session_title` control request with `persist: true` runs the SAME titler and writes the
   // SAME `ai-title` record, so nothing downstream of the JSONL changes.
@@ -208,7 +208,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   // The session ending (claude exits) tears the daemon down — there is nothing left to hold.
   // The session ending (claude exits) tears the daemon down — there is nothing left to hold. But an
   // error out of the ITERATOR is a different thing entirely and used to be conflated with it: any
-  // failure mapping one event to fray's typed shape landed in this `.catch` and killed the daemon,
+  // failure mapping one event to frizz's typed shape landed in this `.catch` and killed the daemon,
   // the claude process, and every in-flight sub-agent. Live on 2026-07-27 a single control character
   // in a Bash command did exactly that to a multi-hour orchestrator thread.
   //
@@ -268,7 +268,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
           // investigation on 2026-07-31: a thread whose agent never produced a transcript left a
           // diagnostics file containing one `started` line and nothing else, with no way to tell whether
           // the opening prompt had ever crossed this socket. One line per input settles it forever.
-          // PERSISTED ONLY, never relayed to fray: this is forensics, not an event the operator needs,
+          // PERSISTED ONLY, never relayed to frizz: this is forensics, not an event the operator needs,
           // and the relay channel surfaces as worker stderr. Ids and sizes only — the message TEXT is
           // the operator's content and must never land in a diagnostics file.
           writeDiagnostic?.({
@@ -277,7 +277,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
             truncated: false,
           })
           // NEVER swallow this. The `input` frame carries no reply, so this catch was the only place a
-          // refused send existed at all — and it threw the evidence away. fray had already answered the
+          // refused send existed at all — and it threw the evidence away. frizz had already answered the
           // operator's RPC with success and opened an `enqueued` ledger item that by design never times
           // out, so the message rendered as delivered forever while the agent never saw a byte of it.
           // Measured live in _live_broker_input_drop.mts before the fix: zero diagnostics, zero errors,
@@ -288,7 +288,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
             const detail = error instanceof Error ? error.message : String(error)
             const diagnostic = { kind: "stderr" as const, message: `input dropped, the agent never received it: ${detail}`, truncated: false }
             // Persist FIRST, then relay — same order and reasoning as the SDK's onDiagnostic above: a
-            // drop is worth attributing even when no fray is attached to hear it right now.
+            // drop is worth attributing even when no frizz is attached to hear it right now.
             writeDiagnostic?.(diagnostic)
             if (client) write(client, { t: "diagnostic", diagnostic })
           })
@@ -338,7 +338,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
         else if (msg.t === "set-mode") void handle.setPermissionMode(msg.mode as never).catch(() => {})
       }
     })
-    sock.on("close", () => { if (client === sock) { client = null; armIdle() } }) // fray gone; the session stays alive
+    sock.on("close", () => { if (client === sock) { client = null; armIdle() } }) // frizz gone; the session stays alive
     sock.on("error", () => {})
   })
 
@@ -380,7 +380,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   if (reach.unref) reach.unref()
 
   // A bind failure used to be an UNHANDLED 'error' event: node prints a stack and exits, and the host
-  // spawns this daemon with stdio:"ignore" — so the stack goes nowhere, fray sees only a 30s "did not
+  // spawns this daemon with stdio:"ignore" — so the stack goes nowhere, frizz sees only a 30s "did not
   // become ready", and the operator gets "the thread went quiet". Note the `claude` child is already
   // running by this point, so this is also the moment it leaks. Record the cause, then shut down.
   // Reachable via a swept stateDir, EACCES, a >104-byte socket path on macOS, or an EADDRINUSE race.
@@ -399,7 +399,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     armIdle()
   })
 
-  return { close: async () => { await shutdown(0, "fray-requested") }, sessionId: handle.sessionId, generation }
+  return { close: async () => { await shutdown(0, "frizz-requested") }, sessionId: handle.sessionId, generation }
 }
 
 /** Was node pointed AT THIS FILE, rather than this module being imported by something else?
@@ -419,11 +419,11 @@ function startedAsProcessEntry(): boolean {
   }
 }
 
-// Standalone daemon entry: `nub claude-agent-broker.ts` with config in FRAY_CLAUDE_BROKER.
-if (process.env.FRAY_CLAUDE_BROKER) {
-  const config = JSON.parse(process.env.FRAY_CLAUDE_BROKER) as ClaudeBrokerConfig
+// Standalone daemon entry: `nub claude-agent-broker.ts` with config in FRIZZ_CLAUDE_BROKER.
+if (process.env.FRIZZ_CLAUDE_BROKER) {
+  const config = JSON.parse(process.env.FRIZZ_CLAUDE_BROKER) as ClaudeBrokerConfig
   // A signal exits IMMEDIATELY and deliberately — it must not wait on a teardown that can hang — so it
-  // never reaches shutdown()'s breadcrumb and used to leave no trace whatsoever. That covers fray's own
+  // never reaches shutdown()'s breadcrumb and used to leave no trace whatsoever. That covers frizz's own
   // killBroker (SIGTERM), an operator `kill`, and an OS shutdown: the three most common broker deaths
   // there are. Record the cause synchronously first; the handler is registered BEFORE the broker starts
   // (so a signal during startup is still attributed) and resolves the generation lazily.
@@ -446,7 +446,7 @@ if (process.env.FRAY_CLAUDE_BROKER) {
   // print a stack, exit 1 — writes that stack to a stdio the host set to "ignore". So the log simply
   // ended on `started`, which is byte-identical to what a SIGKILL leaves. Measured across this machine's
   // whole broker corpus 2026-08-02: 276 daemon starts against 223 recorded exits, so 53 deaths (~19%)
-  // had NO attribution at all, and no way to tell an external kill from fray's own unhandled throw.
+  // had NO attribution at all, and no way to tell an external kill from frizz's own unhandled throw.
   //
   // Deliberately preserves node's semantics rather than swallowing: record, then exit NON-ZERO, exactly
   // as an unhandled throw would have. Installing these handlers is what suppresses the default exit, so
@@ -465,10 +465,10 @@ if (process.env.FRAY_CLAUDE_BROKER) {
   // Node was pointed AT THIS FILE and there is no configuration to broker. Exiting 0 here reports
   // success for a session that never started — the silent-death shape the detached-daemon closure
   // test exists to catch, and the reason that test has been red. Codex's daemon already fails this
-  // way (readConfig throws when FRAY_CODEX_APP_SERVER_DAEMON is absent); match it.
+  // way (readConfig throws when FRIZZ_CODEX_APP_SERVER_DAEMON is absent); match it.
   //
   // Gated on being the process ENTRY POINT, not merely on the env being absent: claude-broker-host
   // spawns `node <this file>` so argv[1] is exactly this module, while a test that IMPORTS
   // runClaudeBroker runs under the test runner's argv[1] and must keep loading cleanly.
-  throw new Error("claude session broker started without FRAY_CLAUDE_BROKER")
+  throw new Error("claude session broker started without FRIZZ_CLAUDE_BROKER")
 }

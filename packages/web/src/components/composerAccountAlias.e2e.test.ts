@@ -1,19 +1,19 @@
 import assert from "node:assert/strict"
 import test, { after, before } from "node:test"
 
-// D7 REGRESSION. `/login` and `/logout` are fray-owned account actions, intercepted at the composer
+// D7 REGRESSION. `/login` and `/logout` are frizz-owned account actions, intercepted at the composer
 // submit boundary and never delivered to the worker as prompt text. That intercept used to live only in
 // the drawer's ThreadActionBar: the queue cue card had its own send path with NO alias check, so typing
 // `/login` into a card pasted the literal string into the running agent's stdin. Both surfaces now render
 // the SAME components/ThreadComposerBox, which owns the intercept — these tests pin that from BOTH.
 //
 // Skipped unless a Vite URL serving the fixtures is provided (same pattern as the other *.e2e.test.ts
-// here): start `vite` in packages/web and set FRAY_COMPOSER_ALIAS_E2E_URL to its origin.
+// here): start `vite` in packages/web and set FRIZZ_COMPOSER_ALIAS_E2E_URL to its origin.
 //
 // ONE headless Chrome is shared across the whole file (via before/after) — a fresh browser per test is
 // wasteful and, on a loaded machine, times out. Each test wipes sessionStorage + reloads so the draft
 // cache never bleeds between cases.
-const baseUrl = process.env.FRAY_COMPOSER_ALIAS_E2E_URL
+const baseUrl = process.env.FRIZZ_COMPOSER_ALIAS_E2E_URL
 
 const SLUG = "alias-thread"
 const QUEUE = 'textarea[data-surface="queueComposer"]'
@@ -103,7 +103,7 @@ for (const surface of ["queue", "drawer"] as const) {
     assert.match(modal, /Sign out of Claude\?/, "…and it must be the sign-out confirmation")
     assert.deepEqual(await sent(), [], "/logout must NEVER be delivered to the worker")
 
-    // "/login please" is NOT an alias — fray does not confiscate syntax it cannot prove is a command.
+    // "/login please" is NOT an alias — frizz does not confiscate syntax it cannot prove is a command.
     await dismissModal()
     await typeAndSend(box, "/login please")
     assert.deepEqual(await sent(), ["/login please"], "only the exact alias is intercepted")

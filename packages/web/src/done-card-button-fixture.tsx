@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client"
 import { useEffect, useState } from "react"
-import type { AwaitingHint, BoardSnapshot, ThreadView } from "@fray-ui/shared"
+import type { AwaitingHint, BoardSnapshot, ThreadView } from "@frizz/shared"
 import { FenceCard, ThreadSlugContext, Message } from "./components/ChatView.tsx"
 import { setBoard } from "./store.ts"
 import "./styles.css"
@@ -17,7 +17,7 @@ import "./styles.css"
 const mode = new URLSearchParams(window.location.search).get("mode") === "executing" ? "executing" : "resting"
 const nativeFetch = window.fetch.bind(window)
 const rpcResult = (result: unknown) => new Response(JSON.stringify({ result }), {
-  headers: { "content-type": "application/json", "x-fray-boot": "done-card-button-fixture" },
+  headers: { "content-type": "application/json", "x-frizz-boot": "done-card-button-fixture" },
 })
 
 window.fetch = async (input, init) => {
@@ -82,7 +82,7 @@ const queueCards: { slug: string; label: string; text: string }[] = [
 const agentSlug = "queue-agent"
 const agentId = "sub-live-1"
 const agentThread = baseThread(agentSlug, "agent · live sub-agent", [
-  { label: "Investigate the failing test", startedAt: new Date(Date.now() - 90_000).toISOString(), state: "running", subagentType: "fray:opus-high", id: agentId },
+  { label: "Investigate the failing test", startedAt: new Date(Date.now() - 90_000).toISOString(), state: "running", subagentType: "frizz:opus-high", id: agentId },
 ])
 
 const board: BoardSnapshot = {
@@ -136,7 +136,7 @@ function Fixture() {
               role: "assistant",
               text: "",
               tools: [],
-              parts: [{ kind: "tools", tools: [{ name: "Agent", detail: "Investigate the failing test", prompt: "Go investigate the failing test and report back.", subagentType: "fray:opus-high", agentId, status: "pending" }] }],
+              parts: [{ kind: "tools", tools: [{ name: "Agent", detail: "Investigate the failing test", prompt: "Go investigate the failing test and report back.", subagentType: "frizz:opus-high", agentId, status: "pending" }] }],
             }}
             dense
           />

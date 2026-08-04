@@ -1,4 +1,4 @@
-// The fray-side bridge for the Claude session broker — the Claude twin of CodexAppServerBridge, but
+// The frizz-side bridge for the Claude session broker — the Claude twin of CodexAppServerBridge, but
 // leaner because the broker DAEMON owns the session state (and the transcript lands on disk via
 // persistSession, read by the tailer like any Claude thread). The bridge forks/adopts a broker per
 // thread, connects a typed client, routes tool-permission requests to a decision hook (default:
@@ -23,26 +23,26 @@ import {
   parseClaudeAskUserQuestion,
   type ClaudeAskSpec,
 } from "./claude-permission-interactions.ts"
-import { CLAUDE_WORKER_ENV, FRAY_MCP } from "./types.ts"
+import { CLAUDE_WORKER_ENV, FRIZZ_MCP } from "./types.ts"
 
 type BrokerMcpServers = NonNullable<ClaudeBrokerConfig["mcpServers"]>
 
-// Stamp the calling thread's slug into the fray MCP server's env, leaving every other mounted server
-// (chrome-devtools) untouched. Returns the input unchanged when there is no fray mount, so a project
+// Stamp the calling thread's slug into the frizz MCP server's env, leaving every other mounted server
+// (chrome-devtools) untouched. Returns the input unchanged when there is no frizz mount, so a project
 // whose plugin dir did not resolve behaves exactly as before.
-function withFrayThreadSlug(servers: BrokerMcpServers | undefined, slug: string): BrokerMcpServers | undefined {
-  const fray = servers?.[FRAY_MCP.name]
-  if (!fray) return servers
-  return { ...servers, [FRAY_MCP.name]: { ...fray, env: { ...fray.env, FRAY_THREAD_SLUG: slug } } }
+function withFrizzThreadSlug(servers: BrokerMcpServers | undefined, slug: string): BrokerMcpServers | undefined {
+  const frizz = servers?.[FRIZZ_MCP.name]
+  if (!frizz) return servers
+  return { ...servers, [FRIZZ_MCP.name]: { ...frizz, env: { ...frizz.env, FRIZZ_THREAD_SLUG: slug } } }
 }
 
 /** Gate for routing Claude dispatch through the session broker instead of the tmux TUI. Default ON
- *  (opt out with FRAY_CLAUDE_BROKER_BRIDGE=0). Verified end-to-end on a real PROMOTED ARTIFACT (not just
+ *  (opt out with FRIZZ_CLAUDE_BROKER_BRIDGE=0). Verified end-to-end on a real PROMOTED ARTIFACT (not just
  *  the dev stack): a dispatched broker thread starts its daemon and the agent replies. The promoted-
  *  artifact regression was the SDK requiring an absolute claude executable (a bare "claude" crashed the
  *  daemon before it published its record) — fixed in resolveClaudeExecutableAbsolute. */
 export function claudeBrokerBridgeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.FRAY_CLAUDE_BROKER_BRIDGE !== "0"
+  return env.FRIZZ_CLAUDE_BROKER_BRIDGE !== "0"
 }
 
 export interface ClaudeBrokerBinding {
@@ -59,9 +59,9 @@ export interface ClaudeBrokerBridgeDeps {
   executablePath: string
   /** Base env; the broker forwards only the SDK-allowlisted subset to claude. */
   env: Record<string, string>
-  /** The fray WORKER ENVIRONMENT — constant per project, applied on every fork so a dispatch AND a
-   *  dead-daemon cold-resume both rebuild it. `pluginDir` loads the cc-worker plugin (fray sub-agent
-   *  profiles + hooks); `mcpServers`/`allowedTools` mount + pre-approve the fray + chrome-devtools MCP;
+  /** The frizz WORKER ENVIRONMENT — constant per project, applied on every fork so a dispatch AND a
+   *  dead-daemon cold-resume both rebuild it. `pluginDir` loads the cc-worker plugin (frizz sub-agent
+   *  profiles + hooks); `mcpServers`/`allowedTools` mount + pre-approve the frizz + chrome-devtools MCP;
    *  `permDir` is the per-project perm-marker dir the hooks write to (paired with the per-thread slug at
    *  attach time). Absent ⇒ a bare SDK worker (the pre-cutover behavior). */
   workerEnv?: {
@@ -82,7 +82,7 @@ export interface ClaudeBrokerBridgeDeps {
   /** Observe the session/transcript event stream (board liveness / telemetry). Optional. */
   onEvent?: (slug: string, sessionId: string, event: ClaudeQueryEvent) => void
   /** Observe daemon lifecycle/stderr diagnostics from a LIVE socket. The durable copy is written by
-   *  the daemon itself (claude-broker-diagnostics.ts) precisely because this relay only reaches a fray
+   *  the daemon itself (claude-broker-diagnostics.ts) precisely because this relay only reaches a frizz
    *  that is attached at the time — which a crash during a restart is not. Optional; for a live
    *  consumer, not for forensics.
    *
@@ -90,7 +90,7 @@ export interface ClaudeBrokerBridgeDeps {
    *  daemon that died while nobody was attached, carrying the dead daemon's own recorded exit reason —
    *  the one death this live relay structurally cannot observe on its own. */
   onDiagnostic?: (slug: string, sessionId: string, diagnostic: ClaudeDiagnostic) => void
-  /** The broker-backed threads this fray owns and may reattach at boot — supplied by context.ts from
+  /** The broker-backed threads this frizz owns and may reattach at boot — supplied by context.ts from
    *  the registry, already filtered to rows that are still OPEN and not archived (the same predicate
    *  codex's `shouldAutoResume` applies). Absent ⇒ `warmUp()` is a no-op, which is what every test and
    *  every registry-less harness wants. */
@@ -103,13 +103,13 @@ export interface ClaudeSpawnDispatchInput {
   cwd: string
   prompt: string
   permissionMode?: ClaudeBrokerConfig["permissionMode"]
-  /** Appended to Claude's default system prompt — the fray worker contract + scratchpad orientation. */
+  /** Appended to Claude's default system prompt — the frizz worker contract + scratchpad orientation. */
   appendSystemPrompt?: string
   model?: string
   effort?: string
 }
 
-// The uuid to hand the SDK for one input. fray's own deliveryId when it is UUID-shaped (the browser
+// The uuid to hand the SDK for one input. frizz's own deliveryId when it is UUID-shaped (the browser
 // mints one with crypto.randomUUID), because the SDK ECHOES this id back on the record that
 // materializes the input — as the delivered `user` record's `uuid`, or as the `queued_command`
 // attachment's `source_uuid` — which is what lets the delivery ledger correlate by IDENTITY instead of
@@ -208,14 +208,14 @@ export interface ClaudeAgentBrokerBridge {
    * Reattach at boot to every broker daemon this project left running, without waiting for someone to
    * touch the thread.
    *
-   * The codex bridge has done this since its daemon started outliving fray, and its doc comment names
+   * The codex bridge has done this since its daemon started outliving frizz, and its doc comment names
    * the bug: a turn still running inside a detached daemon has nobody observing it, so a perfectly
    * healthy surviving turn cards as stalled. The broker adopted LAZILY — only `spawnDispatch` and
-   * `followUp` ever called `attach` — so after a fray restart:
+   * `followUp` ever called `attach` — so after a frizz restart:
    *
    *  - the daemon's event backlog (queued, not dropped, while detached) sits unread, so the runtime
    *    ingest has no reading of the turn and never nudges the tailer;
-   *  - a tool-permission escalation raised while fray was down stays held in the daemon. It IS
+   *  - a tool-permission escalation raised while frizz was down stays held in the daemon. It IS
    *    re-delivered on reconnect, but nothing reconnects — so no approval card appears, the turn stays
    *    blocked on a promise nobody can answer, and the thread reads as hung until a human pokes it.
    *
@@ -228,7 +228,7 @@ export interface ClaudeAgentBrokerBridge {
   binding(threadSlug: string, sessionId: string): ClaudeBrokerBinding | undefined
   /** Whether an ownerless daemon for this session is running right now — the board's liveness/stall
    *  signal for a headless broker row (the parallel of codex's turnLiveness), independent of whether
-   *  THIS fray process currently holds a live socket to it. */
+   *  THIS frizz process currently holds a live socket to it. */
   isDaemonAlive(sessionId: string): boolean
   /** What the daemon for this session recorded on its way out, when one is not running now. The
    *  attribution behind a headless stall: `isDaemonAlive` says the thread is dead, this says why
@@ -245,7 +245,7 @@ export interface ClaudeAgentBrokerBridge {
  * The `input` frame has no reply, so the daemon is the only place a rejection can be noticed and it has
  * no channel to answer on — every send that reached it and failed was simply gone. Running the same pure
  * validator on this side turns that into a thrown RPC the composer can roll back and toast, which is the
- * whole difference between "fray refused my message" and "fray ate my message".
+ * whole difference between "frizz refused my message" and "frizz ate my message".
  *
  * The protocol error's own wording is a boundary label (`input.text contains unsafe text`) aimed at a
  * developer reading a stack trace. This is the string a human reads in a toast after pressing Enter, so
@@ -262,9 +262,9 @@ export function validatedInput(message: { id: string; text: string; parentToolUs
       throw new Error(`This message is too long to send (the limit is ${CLAUDE_AGENT_SDK_MAX_INPUT_BYTES / 1024}KB). Shorten it and resend.`)
     }
     if (/unsafe text/.test(detail)) {
-      throw new Error("This message holds a control or incomplete character fray can't send. Edit and resend.")
+      throw new Error("This message holds a control or incomplete character frizz can't send. Edit and resend.")
     }
-    throw new Error(`fray could not send this message: ${detail}`)
+    throw new Error(`frizz could not send this message: ${detail}`)
   }
 }
 
@@ -279,7 +279,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
   // the live client + the daemon's requestId to answer against once the human resolves the interaction.
   // `ask` is present for an AskUserQuestion card: the parsed question spec, needed to turn the operator's
   // field values back into the tool's `{questions, answers}` updatedInput. It is re-derived from the
-  // re-delivered request on reconnect, so it survives a fray restart with the question still open.
+  // re-delivered request on reconnect, so it survives a frizz restart with the question still open.
   const pendingPerms = new Map<string, { client: ClaudeBrokerClient; requestId: string; scope: InteractionSessionScope; ask?: ClaudeAskSpec }>()
 
   // Route a Claude tool-permission escalation to the dashboard: reuse the still-pending journal entry on
@@ -368,7 +368,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     // Never let a sweep fail a turn ending, a boot, or a daemon teardown — it is hygiene, not the work.
     try { cancelled = deps.interactions.cancelForSession(slug, sessionId, reason) } catch { return }
     // The subscriber above already denied and dropped every entry that was still live in this process.
-    // Sweep the map anyway: an interaction journaled by a PREVIOUS fray has no entry to fire against.
+    // Sweep the map anyway: an interaction journaled by a PREVIOUS frizz has no entry to fire against.
     for (const record of cancelled) pendingPerms.delete(record.id)
   }
 
@@ -421,35 +421,35 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
 
   const attach = async (slug: string, sessionId: string, cwd: string, permissionMode: ClaudeBrokerConfig["permissionMode"], fork: ForkOpts = {}): Promise<ActiveSession> => {
     // fork opts (system prompt / model / effort / resume) AND the worker environment apply only when this
-    // call FORKS a fresh daemon; when it adopts a live one (fray restart), the running session already
-    // carries them. FRAY_UI_THREAD is per-thread (the slug), so it's stamped here, not in deps.workerEnv.
+    // call FORKS a fresh daemon; when it adopts a live one (frizz restart), the running session already
+    // carries them. FRIZZ_THREAD is per-thread (the slug), so it's stamped here, not in deps.workerEnv.
     const we = deps.workerEnv
     const workerEnv: Record<string, string> = {
-      FRAY_UI_THREAD: slug,
+      FRIZZ_THREAD: slug,
       // Tell the worker its token budget rather than leaving it to guess — see CLAUDE_WORKER_ENV. The
       // tmux path gets this through claudeWorkerEnvironment(); on the broker path it rides workerEnv,
       // which is also what gives these per-thread values priority over anything inherited.
       ...CLAUDE_WORKER_ENV,
-      ...(we?.permDir ? { FRAY_PERM_DIR: we.permDir } : {}),
+      ...(we?.permDir ? { FRIZZ_PERM_DIR: we.permDir } : {}),
       // The cc-worker plugin's PreToolUse hook DENIES AskUserQuestion, because on the tmux path a
       // blocking question freezes a headless worker where nobody can answer it. On the broker path
-      // fray CAN answer it — the call becomes a dashboard question card — so the hook is told to stand
+      // frizz CAN answer it — the call becomes a dashboard question card — so the hook is told to stand
       // down, but only when a store is actually wired to render and resolve the card.
-      ...(deps.interactions && deps.projectId ? { FRAY_NATIVE_ASK: "1" } : {}),
+      ...(deps.interactions && deps.projectId ? { FRIZZ_NATIVE_ASK: "1" } : {}),
     }
-    // deps.workerEnv.mcpServers is computed ONCE per project, so the fray MCP server it describes has
+    // deps.workerEnv.mcpServers is computed ONCE per project, so the frizz MCP server it describes has
     // no idea which thread it will serve. A tool that acts on its OWN thread would need that, and
     // nothing in the MCP protocol carries a caller identity — so the slug is stamped into that
-    // server's env HERE, where it is finally known. No shipped tool reads it today (see dispatch.ts). Deliberately not left to FRAY_UI_THREAD
+    // server's env HERE, where it is finally known. No shipped tool reads it today (see dispatch.ts). Deliberately not left to FRIZZ_THREAD
     // inheritance: whether Claude Code passes its own env down to an MCP subprocess is its business,
-    // not a contract fray should depend on.
-    const mcpServers = withFrayThreadSlug(we?.mcpServers, slug)
+    // not a contract frizz should depend on.
+    const mcpServers = withFrizzThreadSlug(we?.mcpServers, slug)
     const { record, reattached } = await adoptOrForkBroker({
       stateDir: deps.stateDir, cwd, sessionId, executablePath, permissionMode, env: deps.env,
       pluginDir: we?.pluginDir, mcpServers, allowedTools: we?.allowedTools, workerEnv,
       ...fork,
     })
-    // A RESUME that had to cold-start is the moment fray discovers a daemon died while nobody was
+    // A RESUME that had to cold-start is the moment frizz discovers a daemon died while nobody was
     // watching — the one death the live diagnostic relay structurally cannot see. Attribute it from the
     // dead daemon's own exit record now, while the record is still on disk, rather than leaving the
     // operator with "the thread went quiet". A fresh dispatch (no resume) is not a death: there was
@@ -465,7 +465,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
 
   // Is the daemon behind a session we HOLD still the one we are holding?
   //
-  // The client reconnects forever by design (that is what carries fray across a daemon socket blip),
+  // The client reconnects forever by design (that is what carries frizz across a daemon socket blip),
   // so a held ActiveSession outlives the daemon it points at: `client.connected()` goes false, the
   // session stays in the map, and `sendInput` queues the message in `outbound` where it waits for a
   // socket that will never come back. A follow-up sent to a thread whose daemon died therefore
@@ -520,7 +520,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       // cold resume, and must certainly not cost the `freshProcess` daemon retirement below — killing the
       // operator's worker on the way to refusing their message is the worst possible order.
       const message = validatedInput({ id: inputIdFor(input.deliveryId), text: input.text })
-      // Reattach if we don't already hold this session live (fray restarted, or it was detached). The
+      // Reattach if we don't already hold this session live (frizz restarted, or it was detached). The
       // fork opts carry resume:true + the rebuilt system prompt so a DEAD daemon cold-resumes with the
       // worker contract re-applied; when the daemon is still alive they are ignored (socket reconnect).
       //
@@ -571,7 +571,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
         if (held) { held.client.close(); sessions.delete(input.threadSlug) }
         throw new Error("This thread's Claude session is no longer running, so nothing is queued to take back")
       }
-      // Same shape as the sub-agent-steer capability gate: a detached daemon outlives fray upgrades by
+      // Same shape as the sub-agent-steer capability gate: a detached daemon outlives frizz upgrades by
       // six hours, so the process on the other end may predate the `cancel-input` frame entirely. It
       // would answer NOTHING, and this call would hang to its deadline and then read as a wedged
       // session — when the truth is simply "this session is too old to unqueue from".
@@ -598,7 +598,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
         if (held) { held.client.close(); sessions.delete(input.threadSlug) }
         throw new Error("This sub-agent's session is no longer running, so it cannot be steered")
       }
-      // A DETACHED daemon outlives fray upgrades by design (six-hour idle timeout), so the process on
+      // A DETACHED daemon outlives frizz upgrades by design (six-hour idle timeout), so the process on
       // the other end of this socket may well have been forked by the previous build — whose input
       // validator drops the addressing field entirely. That would not fail; it would deliver the
       // operator's steer to the thread's MAIN turn, where the parent obeys it. Refuse instead, and say
@@ -683,7 +683,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
         if (!record) {
           // No daemon to adopt; a follow-up cold-resumes and attributes the death. Whatever that dead
           // daemon left pending dies WITH it, and this boot is the only thing that will ever notice: the
-          // canUseTool promise lived in that process, `pendingPerms` is memory this fray never had, and a
+          // canUseTool promise lived in that process, `pendingPerms` is memory this frizz never had, and a
           // cold resume re-asks inside a NEW turn under a new request id. Leaving the row pending is what
           // pinned an unanswerable card to a transcript tail for a day. `provider-cancelled`, not
           // `turn-ended` — the turn's fate is unknown here; the PROVIDER is what is provably gone.
@@ -715,7 +715,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
 
     releaseSession(threadSlug, sessionId) {
       // Kill the daemon UNCONDITIONALLY (by record), even when we don't currently hold it live — after a
-      // fray restart the ownerless daemon is still running but unattached, and a stop/complete must not
+      // frizz restart the ownerless daemon is still running but unattached, and a stop/complete must not
       // leak it. The return value reports only whether we held a live binding to tear down first.
       const s = current(threadSlug, sessionId)
       if (s) { s.client.close(); sessions.delete(threadSlug) }

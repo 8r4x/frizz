@@ -1,11 +1,11 @@
 import { Repeat, Timer } from "lucide-react"
-import type { RecurringPrompt } from "@fray-ui/shared"
+import type { RecurringPrompt } from "@frizz/shared"
 import { WakeDivider } from "./WakeDivider.tsx"
 
 // A DELIVERED recurring prompt, in the transcript: a HAIRLINE NOTIFICATION, the same one every other
 // child event in this app wears.
 //
-// It arrives as an ordinary user turn (fray pastes it into the worker's composer), so left alone it
+// It arrives as an ordinary user turn (frizz pastes it into the worker's composer), so left alone it
 // rendered as the human's own off-white bubble — claiming the operator had typed a paragraph the
 // scheduler composed, and repeating that paragraph in full every few minutes on any thread actually
 // being driven by one.

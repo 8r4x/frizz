@@ -70,7 +70,7 @@ test("a codex shell reported by both sources collapses on its COMMAND", () => {
 })
 
 test("the command key never fires off a bare label — two same-named shells stay two rows", () => {
-  // The guard on the clause above. `command` is set ONLY where fray really knows it (a codex row);
+  // The guard on the clause above. `command` is set ONLY where frizz really knows it (a codex row);
   // falling back to the label would make two shells the model described identically collide, which is
   // the exact regression the id-is-the-identity test above exists to prevent.
   const merged = mergeBackgroundShells(

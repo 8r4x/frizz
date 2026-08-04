@@ -55,7 +55,7 @@ async function copyResumeCommandAsync(slug: string): Promise<TerminalMode> {
     return (await resolved).mode
   }
   const { command, mode } = await resolved
-  if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable; copy the command from a secure Fray page")
+  if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable; copy the command from a secure Frizz page")
   await navigator.clipboard.writeText(command)
   return mode
 }
@@ -81,7 +81,7 @@ export function useCopyTerminalCommand(slug: string): (callbacks?: CopyCallbacks
   })
 }
 
-// Always clickable for a Fray-owned session — resuming the same session in another terminal is safe
+// Always clickable for a Frizz-owned session — resuming the same session in another terminal is safe
 // (both CLIs allow multiple attached views), so there is no live-ownership gate. The click always
 // attempts a copy; if the server genuinely has no resumable id (e.g. codex before its first turn),
 // the copy surfaces the reason as a toast rather than pre-disabling the affordance.

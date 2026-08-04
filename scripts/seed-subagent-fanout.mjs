@@ -23,7 +23,7 @@ const user = (text) => JSON.stringify({ type: "user", timestamp: at, message: { 
 // The project the adhoc stack registered — its cwdSlug names the session-log dir.
 const projectsRoot = join(home, ".claude", "projects")
 mkdirSync(projectsRoot, { recursive: true })
-const cwdSlug = readdirSync(projectsRoot)[0] ?? "-Users-colinmcd94-Documents-projects-fray"
+const cwdSlug = readdirSync(projectsRoot)[0] ?? "-Users-colinmcd94-Documents-projects-frizz"
 const logDir = join(projectsRoot, cwdSlug)
 const subagents = join(logDir, SESSION, "subagents")
 mkdirSync(subagents, { recursive: true })
@@ -34,7 +34,7 @@ writeFileSync(join(logDir, `${SESSION}.jsonl`), [
   user("Review the resolver change end to end."),
   assistant([
     { type: "text", text: "Now the existing action unit tests, and a behavioral spot-check of the resolver." },
-    { type: "tool_use", id: "toolu_child", name: "Agent", input: { description: "Fresh-context review of effort diff", subagent_type: "fray:opus-high", prompt: "Review the diff.", run_in_background: true } },
+    { type: "tool_use", id: "toolu_child", name: "Agent", input: { description: "Fresh-context review of effort diff", subagent_type: "frizz:opus-high", prompt: "Review the diff.", run_in_background: true } },
   ]),
   // The LAUNCH ACK. Without it the tailer never learns the child's agentId, so it resolves no output
   // file and the drawer opens on an empty transcript — which is what this fixture kept doing until the
@@ -47,12 +47,12 @@ const transcript = (agentId, lines) => writeFileSync(join(subagents, `agent-${ag
 
 // Depth 1 — the child the drawer opens on. It dispatched TWO of its own and left a background shell
 // running, which is exactly the state the drawer showed as empty before this fix.
-sidecar("aChild", { agentType: "fray:opus-high", description: "Fresh-context review of effort diff", toolUseId: "toolu_child", spawnDepth: 1 })
+sidecar("aChild", { agentType: "frizz:opus-high", description: "Fresh-context review of effort diff", toolUseId: "toolu_child", spawnDepth: 1 })
 transcript("aChild", [
   assistant([{ type: "text", text: "Splitting the review across the two risky subsystems." }]),
   assistant([
-    { type: "tool_use", id: "toolu_grand_a", name: "Agent", input: { description: "Audit the resolver cache keys", subagent_type: "fray:sonnet-medium", prompt: "…", run_in_background: true } },
-    { type: "tool_use", id: "toolu_grand_b", name: "Agent", input: { description: "Check the migration path", subagent_type: "fray:sonnet-medium", prompt: "…", run_in_background: true } },
+    { type: "tool_use", id: "toolu_grand_a", name: "Agent", input: { description: "Audit the resolver cache keys", subagent_type: "frizz:sonnet-medium", prompt: "…", run_in_background: true } },
+    { type: "tool_use", id: "toolu_grand_b", name: "Agent", input: { description: "Check the migration path", subagent_type: "frizz:sonnet-medium", prompt: "…", run_in_background: true } },
   ]),
   assistant([
     { type: "tool_use", id: "toolu_shell", name: "Bash", input: { command: "npm run test:watch -- resolver", description: "Watching the resolver suite", run_in_background: true } },
@@ -61,10 +61,10 @@ transcript("aChild", [
 
 // Depth 2 — one of the two grandchildren has fanned out again, so the drawer's strip has a real
 // third level to indent.
-sidecar("aGrandA", { agentType: "fray:sonnet-medium", description: "Audit the resolver cache keys", toolUseId: "toolu_grand_a", parentAgentId: "aChild", spawnDepth: 2 })
+sidecar("aGrandA", { agentType: "frizz:sonnet-medium", description: "Audit the resolver cache keys", toolUseId: "toolu_grand_a", parentAgentId: "aChild", spawnDepth: 2 })
 transcript("aGrandA", [assistant([{ type: "tool_use", id: "toolu_great", name: "Agent", input: { description: "Trace one cache collision", run_in_background: true } }])])
 
-sidecar("aGrandB", { agentType: "fray:sonnet-medium", description: "Check the migration path", toolUseId: "toolu_grand_b", parentAgentId: "aChild", spawnDepth: 2 })
+sidecar("aGrandB", { agentType: "frizz:sonnet-medium", description: "Check the migration path", toolUseId: "toolu_grand_b", parentAgentId: "aChild", spawnDepth: 2 })
 transcript("aGrandB", [assistant([{ type: "text", text: "Reading the migration." }])])
 
 // Depth 3 — a great-grandchild, to prove the indent keeps stepping.
@@ -72,11 +72,11 @@ sidecar("aGreat", { agentType: "general-purpose", description: "Trace one cache 
 transcript("aGreat", [assistant([{ type: "text", text: "Still tracing." }])])
 
 // A live dummy pane on the SANDBOX socket, so the tailer does not read the thread as dead.
-try { execFileSync("tmux", ["-L", socket, "kill-session", "-t", `fray-${slug}`], { stdio: "ignore" }) } catch {}
-execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `fray-${slug}`, "sleep 7200"])
+try { execFileSync("tmux", ["-L", socket, "kill-session", "-t", `frizz-${slug}`], { stdio: "ignore" }) } catch {}
+execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${slug}`, "sleep 7200"])
 
-const db = readdirSync(join(home, ".fray", "projects")).map((id) => join(home, ".fray", "projects", id, "ui.db"))[0]
+const db = readdirSync(join(home, ".frizz", "projects")).map((id) => join(home, ".frizz", "projects", id, "ui.db"))[0]
 execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, title_auto, backend, state, unread, exited, archived, claude_runtime)
-  VALUES ('${slug}', '${SESSION}', 'fray-${slug}', '${at}', 'Review the resolver change', 0, 'claude', 'open', 0, 0, 0, 'broker')`])
+  VALUES ('${slug}', '${SESSION}', 'frizz-${slug}', '${at}', 'Review the resolver change', 0, 'claude', 'open', 0, 0, 0, 'broker')`])
 
 console.log(JSON.stringify({ slug, session: SESSION, logDir, db }))

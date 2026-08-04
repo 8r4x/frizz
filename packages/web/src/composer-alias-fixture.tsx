@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
-import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@fray-ui/shared"
+import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@frizz/shared"
 import { BackgroundOpsStrip } from "./components/ChatView.tsx"
 import { ThreadActionBar } from "./components/ThreadActionBar.tsx"
 import { TodosView } from "./components/TodosView.tsx"
@@ -12,7 +12,7 @@ import "./styles.css"
 // cue card and the thread drawer render. Two things are proven here, both of which used to differ
 // between the surfaces:
 //
-//   D7 — `/login` and `/logout` are FRAY-OWNED aliases. They must open the sign-in / sign-out modal and
+//   D7 — `/login` and `/logout` are FRIZZ-OWNED aliases. They must open the sign-in / sign-out modal and
 //        must NEVER be delivered to the worker's stdin. Before the box was shared this only worked in
 //        the drawer; the queue card injected the literal "/login" string into the running agent.
 //   D8 — an ordinary follow-up still reaches the worker from BOTH surfaces (and, on the queue card,
@@ -67,7 +67,7 @@ const thread = {
   spawnedAt: new Date().toISOString(),
 } as unknown as ThreadViewModel
 
-store.board = { projectDir: "/fixture/fray", threads: [thread] } as BoardSnapshot
+store.board = { projectDir: "/fixture/frizz", threads: [thread] } as BoardSnapshot
 
 const ASK = [
   "I can rotate the key in place or stage a second key first.",

@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // @ts-check
 /**
- * fray — the board command, on the worker's Bash PATH while the fray-worker plugin is enabled.
- * A worker owns ONE thread but can still run `fray` (validate/read the board for its repo). This
+ * frizz — the board command, on the worker's Bash PATH while the frizz-worker plugin is enabled.
+ * A worker owns ONE thread but can still run `frizz` (validate/read the board for its repo). This
  * shim execs the repo board's bundled script directly (NOT a copy) — cc-worker never forks board logic.
  *
- * Resolving the board: this file is <plugin>/bin/fray, board/ is a sibling of the plugin root, so the
+ * Resolving the board: this file is <plugin>/bin/frizz, board/ is a sibling of the plugin root, so the
  * board is at ../../board/index.mjs relative to THIS file — cwd-independent. Imported
  * via a file:// URL so argv/process.env (incl. CLAUDE_PROJECT_DIR) flow straight through.
  */

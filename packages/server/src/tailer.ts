@@ -1,7 +1,7 @@
 import { statSync, openSync, readSync, closeSync, readdirSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs"
 import { join } from "node:path"
 import { homedir, tmpdir } from "node:os"
-import { insideFence, PermissionMode, saysAllDone } from "@fray-ui/shared"
+import { insideFence, PermissionMode, saysAllDone } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { permMarkerPath, type Project } from "./project.ts"
 import { isBrokerClaudeRow, isHeadlessRow } from "./storage.ts"
@@ -29,7 +29,7 @@ import {
   type TailCacheEntry,
   type TailStateCache,
 } from "./tail-cache.ts"
-import { log as frayLog } from "./logging.ts"
+import { log as frizzLog } from "./logging.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
 // (~/.claude/projects/<cwdSlug>/<session_id>.jsonl) to derive liveness telemetry — last activity
@@ -39,7 +39,7 @@ import { log as frayLog } from "./logging.ts"
 // on any schema surprise rather than crashing.
 //
 // ---- TURN-STATE HEURISTIC (chosen empirically) ----
-// Investigated the 15 real transcripts in ~/.claude/projects/-Users-colinmcd94-Documents-projects-fray/.
+// Investigated the 15 real transcripts in ~/.claude/projects/-Users-colinmcd94-Documents-projects-frizz/.
 // Record `type`s observed: assistant, user, attachment, queue-operation, last-prompt, ai-title,
 // permission-mode, mode, bridge-session, file-history-snapshot, system. Only `assistant`, `user`,
 // and `system` carry a `timestamp`; the rest are sidecar metadata (no timestamp).
@@ -129,11 +129,11 @@ const PRIME_PROGRESS_EVERY = 20
 const DISCOVER_RETRY_MS = 15_000
 // Per-session sink for a captured boot-failure pane, so a stall's root cause (claude's own error text,
 // frozen in the remain-on-exit pane) survives past the pane being killed. Best-effort; inert litter.
-const STALL_LOG_DIR = join(tmpdir(), "fray-worker-logs")
+const STALL_LOG_DIR = join(tmpdir(), "frizz-worker-logs")
 
 export type TurnState = "in-flight" | "idle"
 
-// A live background sub-agent as surfaced to the board (mirrors @fray-ui/shared SubAgentView; kept
+// A live background sub-agent as surfaced to the board (mirrors @frizz/shared SubAgentView; kept
 // as a local shape so the tailer's telemetry stays decoupled from the wire schema).
 export interface SubAgentView {
   label: string
@@ -141,7 +141,7 @@ export interface SubAgentView {
   // "rested" = a DIRECT child whose run ended (the harness reported completed/failed) while the fan-out
   // it dispatched is still running. See anchorRoots below for why `completed` is not "finished".
   state: "running" | "stale" | "rested"
-  subagentType?: string // the dispatch's input.subagent_type verbatim (e.g. "fray:fray-opus-high"); absent when unset
+  subagentType?: string // the dispatch's input.subagent_type verbatim (e.g. "frizz:frizz-opus-high"); absent when unset
   id: string // the dispatch tool_use id — the drill-in drawer's stable handle to this exact child
   lastActivityAt?: string // ISO8601 of the child transcript's last append (its output-file mtime)
   // ---- provider-reported progress (broker Claude rows only; see applyRuntimeTasks) ----
@@ -162,7 +162,7 @@ export interface SubAgentView {
   parentId?: string // the dispatch id of the sub-agent that dispatched this one; absent at depth 1
 }
 
-// A signal fence parsed from the FINAL assistant message (mirrors @fray-ui/shared ThreadFence; kept
+// A signal fence parsed from the FINAL assistant message (mirrors @frizz/shared ThreadFence; kept
 // as a local shape so the tailer's telemetry stays decoupled from the wire schema). The fence
 // language IS the state, the body is the message; `hints` are `<kind>: <value>` lines parsed from an
 // awaiting body. Only meaningful while it is the final message — any newer user record clears it.
@@ -178,7 +178,7 @@ export interface FenceView {
 export interface SessionTelemetry extends NormalizedTail {
   turn: TurnState
   permPrompt: boolean // paused on an interactive permission prompt (pane-sniffed; no jsonl signal)
-  // The last allow/deny fray's permission POLICY made for this thread, and how many denials it has
+  // The last allow/deny frizz's permission POLICY made for this thread, and how many denials it has
   // made this session. Purely informational — a policy decision never blocks anyone, which is exactly
   // why it needs surfacing: it is otherwise invisible.
   permPolicy?: PermPolicyView
@@ -375,14 +375,14 @@ interface SubAgentProgress {
   durationMs?: number
 }
 
-// A live background shell as surfaced to the board (mirrors @fray-ui/shared BgShellView).
+// A live background shell as surfaced to the board (mirrors @frizz/shared BgShellView).
 export interface BgShellView {
   label: string
   startedAt: string
   state: "running" | "stale"
   id?: string
   /**
-   * The tailer's HALF of "can fray end this shell": we hold a provider task handle for it. The board
+   * The tailer's HALF of "can frizz end this shell": we hold a provider task handle for it. The board
    * ANDs it with the thread's transport before an × is offered — see the full contract on the shared
    * schema, which has carried this field since the stop landed. This twin did not, so the tree did
    * not typecheck (`tailer.test.ts` reads it) and no artifact could be built.
@@ -391,7 +391,7 @@ export interface BgShellView {
   lastActivityAt?: string // ISO8601 of the shell output file's last write
 }
 
-// A pending native AskUserQuestion (structured, capped). Mirrors @fray-ui/shared PendingAsk; `id` is
+// A pending native AskUserQuestion (structured, capped). Mirrors @frizz/shared PendingAsk; `id` is
 // the tool_use id used to clear it when its tool_result lands.
 interface AskOptionData {
   label: string
@@ -473,7 +473,7 @@ export interface TailState extends FoldState {
   deliveryLedgerSeen?: string | null
   // A FOREIGN thread (a maintainer terminal discovered from the log dir, no registry row). Structural
   // guarantee that this state can NEVER shell out to tmux — no pane-sniff, no pane-death, no notify /
-  // storage write — since no `fray-<slug>` tmux session exists for it. Keyed by session id, not slug.
+  // storage write — since no `frizz-<slug>` tmux session exists for it. Keyed by session id, not slug.
   foreign: boolean
   offset: number
   partial: string
@@ -502,7 +502,7 @@ export interface TailState extends FoldState {
   // are NOT written in a fixed order: the queue-operation bookkeeping is FLUSHED and can land at a file
   // position AFTER the inline attachment that delivered it (the same reordering that made carrier (c)
   // load-bearing for background shells, tailer 2026-07-22). Without this set that late queue-op would
-  // re-park an already-delivered report and fray would "repair" a report the agent had read.
+  // re-park an already-delivered report and frizz would "repair" a report the agent had read.
   deliveredReports: Set<string>
   // CODEX rows only: the sub-agent tracker that fills the two maps above from `spawn_agent` /
   // sub_agent_activity / list_agents plus each child rollout's own turn brackets (codex-subagents.ts).
@@ -694,7 +694,7 @@ function previewText(raw: string): string | undefined {
 // registers as an ask here exactly as it still renders as a card in the web.
 // A QUOTED opener never counts: a worker documenting the protocol wraps its sample in an outer ````
 // fence, and flagging that as a live ask parks the thread in "awaiting you" over an example. The
-// fenced-interior scan is the one piece genuinely SHARED with the web (@fray-ui/shared) rather than
+// fenced-interior scan is the one piece genuinely SHARED with the web (@frizz/shared) rather than
 // mirrored — the renderer and this flag must agree on what an opener is. `parseSignalFence` needs no
 // such guard: its end-anchor already rejects any fence that isn't the final content of the message.
 const QUESTION_BLOCK_RE = /^```question(?:[ \t]+[A-Za-z][^\r\n]*?)?[ \t]*\r?\n[\s\S]*?\r?\n```[ \t]*$/gm
@@ -892,7 +892,7 @@ const LAUNCH_ACK_RE = /^\s*(Async agent launched successfully|Spawned successful
 //    Output is being written to: …/tasks/bhlfxzwg1.output. You will be notified when it completes."
 // From that instant it is an ordinary detached shell: it outlives the turn, it keeps the worker's own
 // work live across a rest, and it terminates with the same <task-notification> (carrying the ORIGINAL
-// tool_use id, so retirement correlates normally). fray used to see none of it — `trackDispatches`
+// tool_use id, so retirement correlates normally). frizz used to see none of it — `trackDispatches`
 // only registers `run_in_background: true` — so such a shell was invisible on every surface, could not
 // hold its thread Active, and its completion correlated to nothing. 881 of these acks sit in the local
 // transcript corpus; one thread hit it three times in an hour (2026-07-30, reported as "a background
@@ -996,7 +996,7 @@ function launchOutputFile(state: TailState, text: string): string | undefined {
 // path-only older Agent ack, which has no manual-stop handle and clears on its notification anyway.
 // The app-server reports a model-run command as the ARGV it actually spawned —
 // `/bin/zsh -lc 'sleep 900'` — while codex's own `backgroundTerminals/list`, the rollout, and therefore
-// fray's transcript-projected row all say `sleep 900`. Two things ride on stripping the wrapper: the
+// frizz's transcript-projected row all say `sleep 900`. Two things ride on stripping the wrapper: the
 // operator reads the command they asked for rather than the launcher's plumbing, and the board row and
 // the transcript row become reconcilable at all (lib/childOps.ts mergeBackgroundShells keys on it —
 // without this they render as two rows for one process).
@@ -1076,7 +1076,7 @@ const DESCENDANT_NOTIFY_GRACE_MS = 5_000
 // Read a session's descendant sidecars. DEGRADES at every level and never throws — a missing dir, an
 // unreadable file, half-written JSON, a body that is not an object are each skipped, because this runs
 // on the drawer's read path and a throw there is a dead drawer (and, historically in this subsystem, a
-// dead thread). A sidecar fray cannot parse simply does not resolve, which is the state it was in
+// dead thread). A sidecar frizz cannot parse simply does not resolve, which is the state it was in
 // before this existed.
 function readDescendantSidecars(sessionDir: string, mtimeMs: (path: string) => number | undefined): DescendantSidecar[] {
   let names: string[]
@@ -1202,7 +1202,7 @@ function parseResumeAck(text: string): ResumeAck | undefined {
   return { agentId, outputFile: message.match(/Output:\s*(\S+)/)?.[1]?.replace(/\.$/, "") }
 }
 
-// Correlate a restart ack to a row fray already holds. The runtime task id is the primary key (both
+// Correlate a restart ack to a row frizz already holds. The runtime task id is the primary key (both
 // the launch ack's `agentId:` and this ack's `resumedAgentId` are that same id); the output path is a
 // second, independent key, since both acks state it verbatim. Two keys because a MISS here mints a
 // duplicate row for a child that is already on the board — the failure mode that costs the most.
@@ -1330,7 +1330,7 @@ function trackCompletions(state: TailState, rec: Record): void {
   //
   // That guard exists because retiring needs a live/retired row to correlate against. Delivery
   // accounting needs no such row: what it tracks is whether the notification's TEXT ever reached the
-  // model, which is true or false regardless of what fray happens to have in its maps. Running it
+  // model, which is true or false regardless of what frizz happens to have in its maps. Running it
   // after the guard would silently skip exactly the notifications that arrive when the maps are empty
   // — which, on a busy orchestrator whose children have all been retired already, is a great many.
   trackReportDelivery(state, rec, raw)
@@ -1421,7 +1421,7 @@ function trackReportDelivery(state: TailState, rec: Record, raw: string): void {
   boundReportMaps(state)
 }
 
-// A repair fray injected is a plain user record, so the notification fold above never sees it. This is
+// A repair frizz injected is a plain user record, so the notification fold above never sees it. This is
 // what makes the repair idempotent across a re-fold without persisting anything — see report-delivery.
 function trackRelayEchoes(state: TailState, rec: Record): void {
   if (!isModelFacingCarrier(rec.type)) return
@@ -1693,7 +1693,7 @@ export function applyRecord(state: TailState, rec: Record): void {
     // Written by /rename (bare /rename auto-generates a slug; /rename <name> sets it). Keep it in a
     // dedicated observation slot only: the rename controller must confirm the readable second record
     // and atomically persist it before any board/file surface changes. Promoting an intermediate or
-    // mismatched record to aiTitle leaked rejected slugs into the UI and paired .fray files.
+    // mismatched record to aiTitle leaked rejected slugs into the UI and paired .frizz files.
     if (typeof rec.customTitle === "string" && rec.customTitle.trim()) {
       state.customTitle = rec.customTitle.trim()
       state.customTitleRevision++
@@ -1705,7 +1705,7 @@ export function applyRecord(state: TailState, rec: Record): void {
   // carrier — see notificationText), so it's checked for EVERY record regardless of type (the helper
   // self-guards on shape + tracked ids).
   trackCompletions(state, rec)
-  // A repair fray injected earlier carries no <task-notification>, so it needs its own pass.
+  // A repair frizz injected earlier carries no <task-notification>, so it needs its own pass.
   trackRelayEchoes(state, rec)
 }
 
@@ -1901,7 +1901,7 @@ export interface Tailer {
   // unknown (never dispatched, or aged out of the retained ring). The router maps undefined → "gone".
   // `outputFormat` tells the reader which schema the file is: absent = Claude JSONL, "codex" = the
   // child's codex rollout (a codex sub-agent is itself a codex thread).
-  // `direct` marks the ONE case fray can address a steer at: an Agent-tool child THIS thread's own
+  // `direct` marks the ONE case frizz can address a steer at: an Agent-tool child THIS thread's own
   // session dispatched and is still tracking live. A background shell, a retired child, and a
   // DESCENDANT (a grandchild, resolved through the sidecar index — its dispatch happened inside
   // another agent's process, so this session's CLI has never heard of its tool_use id) are all
@@ -1920,7 +1920,7 @@ export interface Tailer {
   backgroundShell?(slug: string, id: string): { command?: string; outputFile?: string; state: "running" | "done" } | undefined
   // "Is the process that owned this thread's background ops gone?" — ONE authority for a question three
   // runtimes answer differently, already computed once per tick as `paneDead` (see paneDeadForRow): a
-  // dead tmux pane, a broker whose daemon record fails its pid probe, or a headless row fray stopped.
+  // dead tmux pane, a broker whose daemon record fails its pid probe, or a headless row frizz stopped.
   // Exposed because the TRANSCRIPT producers need it too. `bgShellViews` drops a dead owner's shells
   // from the board, but the ops strip is a UNION of that list and the transcript's own pending
   // background cards, so the board dropping a row merely moves it — the transcript side has to hear the
@@ -2063,7 +2063,7 @@ export function markerDecision(marker: Pick<PermMarker, "decision">): PermDecisi
   return marker.decision === "allow" || marker.decision === "deny" ? marker.decision : "defer"
 }
 
-// The last policy decision fray OBSERVED for a thread, for display. Only allow/deny appear here — a
+// The last policy decision frizz OBSERVED for a thread, for display. Only allow/deny appear here — a
 // deferred request is already fully represented by permPrompt ("Needs you"), so repeating it would be
 // noise. `command` is present for Bash only and is display text, not a re-executable string.
 export interface PermPolicyView {
@@ -2116,7 +2116,7 @@ function defaultReadPermMarker(project: Project): (slug: string) => PermMarker |
 // tmux pane, read from the same discovery record the bridge connects through (a `{daemonPid}` JSON under
 // <stateDir>/claude-broker) plus a signal-0 probe of that pid.
 //
-// This exists because `exited` alone is NOT that answer. `exited` is stamped only when fray DELIBERATELY
+// This exists because `exited` alone is NOT that answer. `exited` is stamped only when frizz DELIBERATELY
 // stops a session, so a daemon that dies any other way — SIGKILL, OOM, an idle-timeout, a crash — leaves
 // the row reading alive forever. Measured over this machine's whole broker corpus 2026-08-02: 276 daemon
 // starts against 223 recorded exits, so ~19% of daemons vanish leaving no breadcrumb at all. That is the
@@ -2295,7 +2295,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   // Claude's context WINDOW, latched onto the fold from the broker event stream. One-way and
   // latching by design: the SDK only names the window when a turn ends, so it must survive the
   // in-between ticks, and it lands in TailState (not a side map) so the durable tail cache carries it
-  // across a fray restart — otherwise every resting Claude thread would lose its readout on reload and
+  // across a frizz restart — otherwise every resting Claude thread would lose its readout on reload and
   // not get it back until its next turn finished. The tokens half needs none of this: it is on disk.
   function applyRuntimeContextWindow(row: SessionRow, state: TailState): void {
     if (!deps.runtimeContextWindow || !isBrokerClaudeRow(row)) return
@@ -2317,7 +2317,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     const doomed: Array<{ entry: SubAgentEntry; task: ClaudeRuntimeTask }> = []
     for (const entry of state.subAgents.values()) {
       // tool_use id first — it is the key BOTH sides mint at dispatch, so it cannot be confused. The
-      // task id is the fallback for a launch ack fray parsed but an SDK build that omits tool_use_id.
+      // task id is the fallback for a launch ack frizz parsed but an SDK build that omits tool_use_id.
       const task = byToolUse.get(entry.toolUseId) ?? (entry.taskId ? byTaskId.get(entry.taskId) : undefined)
       if (!task) continue
       // Backfill the manual-stop correlation key from the structured pairing, so a `TaskStop` on this
@@ -2366,7 +2366,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   // revisited it, so bgShellViews returned [] for all of them: a live CI watcher, correctly tracked by
   // the fold, rendered nowhere (measured 2026-07-29 — 13 threads holding live shell entries, the only
   // one with paneDead=false a legacy tmux row). `exited` is the headless stand-in: for those rows nothing
-  // sniffs tmux to set it, so it is stamped only when fray genuinely stops the session.
+  // sniffs tmux to set it, so it is stamped only when frizz genuinely stops the session.
   //
   // Which makes `exited` a FLOOR, not the whole answer — it knows the deliberate stop and no other death.
   // A BROKER claude row can do better, because its daemon publishes a discovery record naming its pid; an
@@ -2375,7 +2375,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     // A BROKER claude row has a second, honest reading available: its daemon's own discovery record.
     // `exited` covers only the deliberate stop, which is why a daemon killed outright used to leave this
     // false forever — and with it every background shell the dead process owned, rendering as live. See
-    // defaultBrokerDaemonAlive; it fails safe to ALIVE, so this can only ever ADD deaths fray can prove.
+    // defaultBrokerDaemonAlive; it fails safe to ALIVE, so this can only ever ADD deaths frizz can prove.
     if (isBrokerClaudeRow(row)) return row.exited === 1 || !brokerDaemonAlive(row.session_id)
     if (isHeadlessRow(row)) return row.exited === 1
     const binding = adoptionBinding(row)
@@ -2616,7 +2616,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     for (const e of state.subAgents.values()) {
       if (e.kind !== "shell") continue
       const lastActivityAt = entryLastActivity(e)
-      // `stoppable` is only HALF the answer here — "fray holds a provider task handle for this shell".
+      // `stoppable` is only HALF the answer here — "frizz holds a provider task handle for this shell".
       // board.ts ANDs it with the thread's transport before the × is offered (see BgShellView.stoppable).
       // Emitted only when a handle exists, so the row cannot advertise a control during the window
       // between its tool_use (which creates the entry) and its launch ack (which names the task).
@@ -2648,7 +2648,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       id: exec.processId,
       stoppable: true,
       // Codex hands a yielded command's output back only when the MODEL polls it — there is no file
-      // for fray to tail, so the row carries its × and no drill-in rather than opening a drawer that
+      // for frizz to tail, so the row carries its × and no drill-in rather than opening a drawer that
       // could only say "unavailable".
       outputUnavailable: true,
     }))
@@ -2810,7 +2810,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   //   notification lands.</result>
   //
   // That child had RESTED holding five live grandchildren, and its own transcript kept appending two
-  // minutes later. fray retired it on the notification (correctly — that is the only terminal signal it
+  // minutes later. frizz retired it on the notification (correctly — that is the only terminal signal it
   // gets) and the whole branch went dark: the root's row left every surface, and `rootedInAnchor` then
   // dropped its five RUNNING grandchildren too, because a descendant may only hang off a root the thread
   // still tracks. Six rows of live fan-out, invisible under the prompt box — for 107 s in that session,
@@ -2825,7 +2825,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   //
   // `killed` is deliberately excluded. That status means the OPERATOR dismissed the row (the × says
   // "stop tracking this finished operation"), a `TaskStop` ended it, or the owning process died and a
-  // new session swept it — each an explicit "this branch is over", which fray must honour over any
+  // new session swept it — each an explicit "this branch is over", which frizz must honour over any
   // mtime under it. Only the ambiguous terminals (`completed`/`failed`, the ones a resumable rest also
   // emits) keep anchoring.
   //
@@ -2995,7 +2995,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     }
     // A DESCENDANT — a child of a child, of a child, at any depth. Its dispatch is in an ANCESTOR's
     // transcript rather than this thread's, so neither map above can hold it; the flat sidecar index
-    // resolves it by the same tool_use id. Still undefined when nothing matches, so an id fray genuinely
+    // resolves it by the same tool_use id. Still undefined when nothing matches, so an id frizz genuinely
     // cannot place keeps degrading to the drawer's stated "unavailable" — this ADDS a resolution, it
     // never invents one.
     const descendant = descendantSidecar(state, id)
@@ -3029,15 +3029,15 @@ export function createTailer(deps: TailerDeps): Tailer {
   // status "killed" — so it leaves every live surface (banner, counts, completion-hold, sidebar) at
   // once, and onChange() reflects that immediately instead of waiting for the next tick. This is the
   // escape hatch for the ONE residual the `stopped` recovery can't reach: a finished op whose completion
-  // was never recorded while its parent stays alive. It is NOT a process kill — fray tracks these by
+  // was never recorded while its parent stays alive. It is NOT a process kill — frizz tracks these by
   // folding the worker's transcript and does not own the child processes, so a genuinely-still-running
-  // child ends only when its owning pane dies; the × just stops fray showing a phantom. Returns whether
+  // child ends only when its owning pane dies; the × just stops frizz showing a phantom. Returns whether
   // an entry was actually live to dismiss (a no-op for an unknown/already-gone id).
   function dismissOp(slug: string, id: string): boolean {
     const state = states.get(slug)
     if (!state || !registeredStateIsCurrent(state)) return false
     // DURABLE FIRST, and unconditionally — before the in-memory retirement and regardless of whether
-    // anything was live to retire. The in-memory maps do not survive a fray restart, and the op's
+    // anything was live to retire. The in-memory maps do not survive a frizz restart, and the op's
     // dispatch record does; a dismissal that lived only in memory is exactly how a killed shell came
     // back reading "57hr 18m" on the maintainer's board. Recording it for an id that is already gone
     // is harmless (the fold simply never mints it again) and is the honest reading of the click.
@@ -3072,7 +3072,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     return a?.kind === b?.kind && a?.title === b?.title
   }
 
-  // A live PermissionRequest marker (Claude workers with the fray plugin) is an ACTIVE block iff the
+  // A live PermissionRequest marker (Claude workers with the frizz plugin) is an ACTIVE block iff the
   // policy hook DEFERRED it to a human AND its timestamp is newer than the last transcript activity —
   // a resolved request always advances the transcript past it. The caller gates this on
   // turn === "in-flight" (a real block is always mid tool_use) and on the row being non-codex, which
@@ -3084,7 +3084,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     // RETAIN the policy's own decision for display, separately from the block verdict below. This is
     // the only durable record an auto-approval leaves anywhere: Claude Code renders "Allowed by
     // PermissionRequest hook" in the pane but writes NOTHING about an allow to the transcript
-    // (verified 2026-07-25), so without this the dashboard could never say what fray approved or why.
+    // (verified 2026-07-25), so without this the dashboard could never say what frizz approved or why.
     // Retained on the state rather than recomputed per tick, so it survives the turn ending — a
     // decision stays readable after the worker moves on.
     // KNOWN BOUND (documented, not hidden): the hook keeps ONE marker per thread, overwritten by the
@@ -3143,7 +3143,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     void nowMs; void backend
     if (state.foreign) return { permPrompt: false }
     // The MARKER path is all that is left, and it is the one that always worked headlessly: the
-    // cc-worker hook writes a marker into FRAY_PERM_DIR when a tool call is waiting on the operator.
+    // cc-worker hook writes a marker into FRIZZ_PERM_DIR when a tool call is waiting on the operator.
     // Below this there used to be a fallback that captured the tmux pane and matched the TUI's modal
     // chrome by regex — the only way to see a prompt in a pane. There are no panes, and a broker
     // thread's approvals arrive as typed permission requests over the control channel anyway.
@@ -3546,7 +3546,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     const detail = authFailure
       ? "(claude authentication failure — pane content redacted; sign in and retry)"
       : pane.trim() || evidence || "(pane empty / unavailable)"
-    frayLog.error(
+    frizzLog.error(
       "tailer",
       `thread ${row.slug} (session ${row.session_id}): no transcript ${DISCOVERY_GRACE_MS / 1000}s after dispatch — likely a boot failure. ${isHeadlessRow(row) && !pane.trim() && !authFailure ? "" : "Pane:\n"}${detail.slice(0, 4000)}`,
     )
@@ -3738,7 +3738,7 @@ export function createTailer(deps: TailerDeps): Tailer {
           // (verified on both standalone TUIs). Preserve a valid exact launch mode across restart;
           // backfill only unknown legacy rows, or accept a timestamped Codex event from this process
           // generation. Incremental sidecars below still persist genuine live transitions.
-          // An app-server thread is the ONE case where the rollout is not evidence about fray's thread:
+          // An app-server thread is the ONE case where the rollout is not evidence about frizz's thread:
           // the same file is written by any terminal `codex resume` (config default `workspace-write`)
           // and by the app-server's own config-defaulted cold resume. Folding that back over the stored
           // mode does not just mis-DISPLAY the thread — `sandboxFor` reads this column, so the next cold
@@ -3862,7 +3862,7 @@ export function createTailer(deps: TailerDeps): Tailer {
         }
       } else {
         // No pane to sniff, but the "owning process is gone" flag still has to stay CURRENT: it is what
-        // clears a headless thread's background shells when fray stops the session, exactly as a dead
+        // clears a headless thread's background shells when frizz stops the session, exactly as a dead
         // pane clears a tmux thread's. Assigned without the death EDGE — onPaneDeath stamps `exited`
         // and fires the one-shot notify, and for a headless row `exited` is the input here, not the
         // output. Left out, the prime-time reading would latch for the life of the process.
@@ -3870,7 +3870,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       }
 
       // The provider's own report of those ops, folded over the entries the transcript fold tracks:
-      // progress the JSONL does not carry at all, plus terminal statuses that reach fray SECONDS before
+      // progress the JSONL does not carry at all, plus terminal statuses that reach frizz SECONDS before
       // (or, when a notification never lands on disk, INSTEAD of) the prose the fold waits for.
       applyRuntimeTasks(row, state, nowMs)
       applyRuntimeContextWindow(row, state)
@@ -4000,7 +4000,7 @@ export function createTailer(deps: TailerDeps): Tailer {
         overBudgetTicks++
         // Log the first, then decimate: a saturated server must not spend its remaining budget logging.
         if (overBudgetTicks === 1 || overBudgetTicks % 30 === 0) {
-          frayLog.warn(
+          frizzLog.warn(
             "tailer",
             `tick took ${Math.round(elapsed)}ms (poll ${POLL_MS}ms, ${states.size} sessions) — ` +
             `the event loop is blocked for that long, so RPCs and board pushes are delayed (occurrence ${overBudgetTicks})`,
@@ -4024,7 +4024,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   function reportTickFailure(error: unknown): void {
     tickFailures++
     if (tickFailures === 1 || tickFailures % 50 === 0) {
-      frayLog.error("tailer", `tick threw (occurrence ${tickFailures}; the loop keeps running): ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
+      frizzLog.error("tailer", `tick threw (occurrence ${tickFailures}; the loop keeps running): ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
     }
   }
 
@@ -4034,7 +4034,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       timer = null
       // RE-ARM EVEN IF THE TICK THREW. tickWithBudget is try/finally, not try/catch, so an exception
       // out of tick() used to escape a timer callback — which in node means an uncaughtException and,
-      // with no process-level handler anywhere in this server, the whole fray process. The tailer is
+      // with no process-level handler anywhere in this server, the whole frizz process. The tailer is
       // the only source of turn/liveness telemetry: it must degrade to a logged bad tick, never take
       // the server (or its own loop) down with it.
       try { tickWithBudget() } catch (error) { reportTickFailure(error) }
@@ -4110,7 +4110,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     subAgent: subAgentLookup,
     subAgentDescendantTasks,
     backgroundShell: backgroundShellLookup,
-    // Registered rows only. A FOREIGN thread (a maintainer's own terminal) is not fray's to declare
+    // Registered rows only. A FOREIGN thread (a maintainer's own terminal) is not frizz's to declare
     // dead — nothing here owns its process — so it answers false and its cards are left alone.
     ownerGone: (slug) => states.get(slug)?.paneDead ?? false,
     dismissOp,

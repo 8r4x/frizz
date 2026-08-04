@@ -1,19 +1,19 @@
 #!/usr/bin/env node
 // @ts-check
-// PostToolUse hook on the `Agent` tool (fray-worker) — the AUTOMATIC thread↔agent binding, kept
+// PostToolUse hook on the `Agent` tool (frizz-worker) — the AUTOMATIC thread↔agent binding, kept
 // COMPATIBLE with cc's board. When a worker dispatches a helper tagged `THREAD: <slug>` at the top
-// of the prompt, this records `agentId → thread` into `.fray/.agent-bindings.jsonl` in the exact
-// shape cc's board (`bindingsByThread`) reads for per-thread sub-agent liveness — so fray-ui renders
+// of the prompt, this records `agentId → thread` into `.frizz/.agent-bindings.jsonl` in the exact
+// shape cc's board (`bindingsByThread`) reads for per-thread sub-agent liveness — so frizz renders
 // a worker's helper activity the same way the cc board does. An untagged helper writes nothing.
 //
-// GATE: inert unless FRAY_UI_THREAD is set. FAIL-OPEN ABSOLUTELY: any error → exit 0, no output.
+// GATE: inert unless FRIZZ_THREAD is set. FAIL-OPEN ABSOLUTELY: any error → exit 0, no output.
 // A missed binding just means one helper isn't surfaced; a PostToolUse hook must never disturb the turn.
 import { readFileSync } from 'node:fs';
-import { recordBinding, threadFromPrompt } from '../scripts/fray/agent-bindings.mjs';
+import { recordBinding, threadFromPrompt } from '../scripts/frizz/agent-bindings.mjs';
 
 try {
   // WORKER GATE.
-  if (!(process.env.FRAY_UI_THREAD ?? '').trim()) process.exit(0);
+  if (!(process.env.FRIZZ_THREAD ?? '').trim()) process.exit(0);
 
   const input = JSON.parse(readFileSync(0, 'utf8'));
   const dir = process.env.CLAUDE_PROJECT_DIR ?? '.';

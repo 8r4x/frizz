@@ -1,4 +1,4 @@
-// The durable launcher owns the browser-facing port.  A disposable Fray control-plane child binds
+// The durable launcher owns the browser-facing port.  A disposable Frizz control-plane child binds
 // only a private loopback port, which means a browser can still ask the owner to recover it after a
 // crash.  This intentionally contains no source-watch logic: stable and legacy launchers can share it.
 import { request as requestHttp, createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http"
@@ -15,7 +15,7 @@ import {
 } from "./local-origin.ts"
 import { resolveLocalImage } from "./local-image.ts"
 
-export const SUPERVISOR_CONTROL_PREFIX = "/_fray/control"
+export const SUPERVISOR_CONTROL_PREFIX = "/_frizz/control"
 export const SUPERVISOR_RESTART_PATH = `${SUPERVISOR_CONTROL_PREFIX}/restart`
 export const SUPERVISOR_UPDATE_RESTART_PATH = `${SUPERVISOR_CONTROL_PREFIX}/update-restart`
 export const SUPERVISOR_STATUS_PATH = `${SUPERVISOR_CONTROL_PREFIX}/status`
@@ -31,7 +31,7 @@ export interface RestartResult {
 }
 
 export interface RestartSupervisorProxyOptions {
-  /** Public Fray port held for the supervisor's whole lifetime. */
+  /** Public Frizz port held for the supervisor's whole lifetime. */
   port: number
   /** Bind address for the public port. Defaults to loopback; `--host` moves it onto the network. */
   host?: string
@@ -48,19 +48,19 @@ export interface RestartSupervisorProxyOptions {
   /**
    * Is a NEWER artifact actually available right now? Distinct from `updateRestart`, which only says
    * the verb is WIRED — a distinction the UI needs and could not previously make, so a fully current
-   * production Fray still advertised "Update Fray" and reinstalled its own version on click.
+   * production Frizz still advertised "Update Frizz" and reinstalled its own version on click.
    *
    * Must be a CHEAP cached read: this runs on every status poll, so it may never touch the network.
-   * Omitting it means "assume available", which keeps fray-dev (where an update rebuilds from source
+   * Omitting it means "assume available", which keeps frizz-dev (where an update rebuilds from source
    * and is always meaningful) behaving exactly as before.
    */
   updateAvailable?: () => boolean
   /**
-   * Is this Fray a DEVELOPMENT build — launched from a source checkout by `fray-dev` (src/index.ts)
-   * or `pnpm dev` (server/src/dev.ts), rather than the published `frayui` bin (src/production.ts)?
+   * Is this Frizz a DEVELOPMENT build — launched from a source checkout by `frizz-dev` (src/index.ts)
+   * or `pnpm dev` (server/src/dev.ts), rather than the published `frizz` bin (src/production.ts)?
    *
    * It exists because the web client cannot answer this for itself. `import.meta.env.DEV` is a Vite
-   * COMPILE-TIME constant, true only under `vite dev` middleware — and fray-dev's ordinary route
+   * COMPILE-TIME constant, true only under `vite dev` middleware — and frizz-dev's ordinary route
    * builds an immutable artifact and serves the Vite PRODUCTION bundle, where it is statically
    * `false`. So every dev-only affordance gated on it was dead-code eliminated out of the build the
    * maintainer actually runs all day. The launcher is the only thing that truly knows, so it says so
@@ -76,10 +76,10 @@ function responseJson(res: ServerResponse, status: number, value: unknown): void
   res.end(JSON.stringify(value))
 }
 
-function recoveryPage(url: string, detail = "Fray is restarting or unavailable."): string {
+function recoveryPage(url: string, detail = "Frizz is restarting or unavailable."): string {
   // This is deliberately not an auto-refresh page. A broken child must not make a browser spin forever.
   const escaped = url.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;")
-  return `<!doctype html><meta charset="utf-8"><title>Fray recovering</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:3rem;font:16px system-ui;color:#e7e7e7;background:#171717}main{max-width:36rem;padding:1.5rem;border:1px solid #444;border-radius:.75rem;background:#222}a{color:#f7d64a}</style><main><h1>Fray is recovering</h1><p>${detail}</p><p><a href="${escaped}">Try this page again</a></p></main>`
+  return `<!doctype html><meta charset="utf-8"><title>Frizz recovering</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:3rem;font:16px system-ui;color:#e7e7e7;background:#171717}main{max-width:36rem;padding:1.5rem;border:1px solid #444;border-radius:.75rem;background:#222}a{color:#f7d64a}</style><main><h1>Frizz is recovering</h1><p>${detail}</p><p><a href="${escaped}">Try this page again</a></p></main>`
 }
 
 function proxyHeaders(
@@ -88,7 +88,7 @@ function proxyHeaders(
   vouchSameOrigin = false,
 ): Record<string, string | string[] | undefined> {
   const headers = { ...req.headers }
-  // The child retains Fray's strict local-origin policy. Translate public browser authority to the
+  // The child retains Frizz's strict local-origin policy. Translate public browser authority to the
   // private child authority; no external proxy authority is ever trusted.
   headers.host = `127.0.0.1:${childPort}`
   if (typeof headers.origin === "string") headers.origin = `http://127.0.0.1:${childPort}`
@@ -105,13 +105,13 @@ function proxyHeaders(
 }
 
 function isControlRequest(req: IncomingMessage): boolean {
-  const url = new URL(req.url ?? "/", "http://fray.invalid")
+  const url = new URL(req.url ?? "/", "http://frizz.invalid")
   return url.pathname === SUPERVISOR_RESTART_PATH || url.pathname === SUPERVISOR_UPDATE_RESTART_PATH || url.pathname === SUPERVISOR_STATUS_PATH
 }
 
 function isLocalImageRequest(req: IncomingMessage): boolean {
   return (req.method === "GET" || req.method === "HEAD")
-    && new URL(req.url ?? "/", "http://fray.invalid").pathname === "/local-image"
+    && new URL(req.url ?? "/", "http://frizz.invalid").pathname === "/local-image"
 }
 
 export class RestartSupervisorProxy {
@@ -173,7 +173,7 @@ export class RestartSupervisorProxy {
    * Is this an Origin-less request that only LOOKS suspicious because the browser could not send
    * Fetch Metadata to a non-loopback authority? See authoritySendsFetchMetadata.
    *
-   * Fray's missing-Origin rules ask for `Sec-Fetch-Site: same-origin`, which Chrome never sends over
+   * Frizz's missing-Origin rules ask for `Sec-Fetch-Site: same-origin`, which Chrome never sends over
    * plain HTTP to a LAN address — so without this, `--host` serves the shell and then 403s every RPC
    * the app makes. Narrow on purpose: the Host must already be an authority this proxy accepts, there
    * must be no Origin at all (a present one still has to match, and is rejected above if it does not),
@@ -186,7 +186,7 @@ export class RestartSupervisorProxy {
    *
    * What this gives up, stated plainly: on an exposed board a cross-site GET carries no Origin and no
    * Fetch Metadata, so it is indistinguishable from the app's own read and is allowed. The response is
-   * still opaque to the caller (no CORS), Fray's GET procedures are reads, and every mutation is a POST
+   * still opaque to the caller (no CORS), Frizz's GET procedures are reads, and every mutation is a POST
    * — which a browser always stamps with an Origin, and which is therefore still refused.
    */
   private vouchesSameOrigin(req: IncomingMessage): boolean {
@@ -203,7 +203,7 @@ export class RestartSupervisorProxy {
       server.close((error) => error ? rejectClose(error) : resolveClose())
       server.closeAllConnections()
       // An upgraded socket is DETACHED from the http server, so closeAllConnections() cannot see it
-      // and server.close() waits on it forever. Fray always has live WebSockets (the board socket and
+      // and server.close() waits on it forever. Frizz always has live WebSockets (the board socket and
       // every open terminal), so without this the proxy never finishes closing once a browser has
       // connected. Measured: close() hung indefinitely after a single forwarded upgrade.
       for (const socket of this.upgradedSockets) socket.destroy()
@@ -223,12 +223,12 @@ export class RestartSupervisorProxy {
         ? { state: this.state, ...(this.message ? { message: this.message } : {}) }
         : delegated ?? { state: this.state, ...(this.message ? { message: this.message } : {}) }),
       // Never infer this from the generic protocol: legacy/static supervisors can recover a child
-      // but cannot build and promote the canonical Fray artifact.
+      // but cannot build and promote the canonical Frizz artifact.
       updateRestart: typeof this.options.updateRestart === "function",
-      // Sent ONLY when the launcher can actually answer it, so an older client — and fray-dev, which
+      // Sent ONLY when the launcher can actually answer it, so an older client — and frizz-dev, which
       // has no notion of "already current" — keeps today's behaviour on its absence.
       ...(this.options.updateAvailable ? { updateAvailable: this.options.updateAvailable() === true } : {}),
-      // Sent only when TRUE, so a published Fray's payload is byte-identical to what it sends today
+      // Sent only when TRUE, so a published Frizz's payload is byte-identical to what it sends today
       // and an older client is unaffected. Absent therefore means "not a development build".
       ...(this.options.dev ? { dev: true } : {}),
     }
@@ -265,7 +265,7 @@ export class RestartSupervisorProxy {
   }
 
   private async handleControl(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const pathname = new URL(req.url ?? "/", "http://fray.invalid").pathname
+    const pathname = new URL(req.url ?? "/", "http://frizz.invalid").pathname
     const sameOrigin = req.headers["sec-fetch-site"] === "same-origin" || this.vouchesSameOrigin(req)
     const allowMissingOrigin = pathname === SUPERVISOR_STATUS_PATH && req.method === "GET" && sameOrigin
     if (!this.authorityAccepted(req, allowMissingOrigin)) {
@@ -283,7 +283,7 @@ export class RestartSupervisorProxy {
       return
     }
     if (pathname === SUPERVISOR_UPDATE_RESTART_PATH && !this.options.updateRestart) {
-      responseJson(res, 409, { protocol: SUPERVISOR_CONTROL_PROTOCOL, state: "failed", message: "Update & Restart is available only for a stable immutable Fray artifact" })
+      responseJson(res, 409, { protocol: SUPERVISOR_CONTROL_PROTOCOL, state: "failed", message: "Update & Restart is available only for a stable immutable Frizz artifact" })
       return
     }
     if (pathname === SUPERVISOR_UPDATE_RESTART_PATH) {
@@ -307,14 +307,14 @@ export class RestartSupervisorProxy {
       return
     }
 
-    const url = new URL(req.url ?? "/", "http://fray.invalid")
+    const url = new URL(req.url ?? "/", "http://frizz.invalid")
     const result = resolveLocalImage(url.searchParams.get("path") ?? undefined)
     const origin = typeof req.headers.origin === "string"
       ? allowedLocalCorsOrigin(req.headers.origin, this.options.port, this.policy)
       : undefined
     const sharedHeaders = {
       ...(origin ? { "access-control-allow-origin": origin } : {}),
-      "access-control-expose-headers": "x-fray-boot",
+      "access-control-expose-headers": "x-frizz-boot",
       vary: "Origin",
     }
     if (result.status !== 200) {
@@ -366,7 +366,7 @@ export class RestartSupervisorProxy {
     upstream.once("error", () => {
       if (res.headersSent) return res.destroy()
       res.writeHead(503, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" })
-      res.end(recoveryPage(req.url ?? "/", "The Fray application server is unavailable. Use Restart Fray to recover it."))
+      res.end(recoveryPage(req.url ?? "/", "The Frizz application server is unavailable. Use Restart Frizz to recover it."))
     })
     req.pipe(upstream)
   }

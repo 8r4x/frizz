@@ -1,4 +1,4 @@
-import type { BoardSnapshot, ThreadView } from "@fray-ui/shared"
+import type { BoardSnapshot, ThreadView } from "@frizz/shared"
 
 export type ThreadRouteResolution =
   | { kind: "loading" }

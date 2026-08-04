@@ -134,7 +134,7 @@ call what two rounds of guessing will not.
 
 ## Git: land on local `main` — NEVER open a pull request
 
-**This repo does NOT use pull requests. At all. Ever.** This section OVERRIDES fray's default
+**This repo does NOT use pull requests. At all. Ever.** This section OVERRIDES frizz's default
 worktree/branch/PR discipline in full: wherever the base contract tells you to "open a PR and report
 its URL," do the exact opposite — the finished work lands in this machine's local `main`, and it never
 touches GitHub as a PR.

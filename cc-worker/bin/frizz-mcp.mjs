@@ -1,29 +1,29 @@
 #!/usr/bin/env node
 // @ts-check
 /**
- * fray-mcp — THE fray MCP server: one unified, dependency-free MCP stdio server (mounted as `fray`,
- * so its tools are `mcp__fray__<tool>`) carrying every capability fray hands its own WORKERS:
+ * frizz-mcp — THE frizz MCP server: one unified, dependency-free MCP stdio server (mounted as `frizz`,
+ * so its tools are `mcp__frizz__<tool>`) carrying every capability frizz hands its own WORKERS:
  *
- *   spawn_thread     — dispatch a brand-new TOP-LEVEL fray board thread (its own session + scratchpad +
+ *   spawn_thread     — dispatch a brand-new TOP-LEVEL frizz board thread (its own session + scratchpad +
  *                      independent drive — NOT an in-session Agent/Task helper).
- *   recurring_prompt — arm ONE piece of text fray re-sends the caller, at every rest and/or on a clock.
+ *   recurring_prompt — arm ONE piece of text frizz re-sends the caller, at every rest and/or on a clock.
  *   timer            — arm a ONE-OFF prompt for a single instant; a thread may hold many at once.
  *
- * Future worker-facing fray tools join the TOOLS registry below rather than mounting a second server:
+ * Future worker-facing frizz tools join the TOOLS registry below rather than mounting a second server:
  * one server keeps the worker's tool namespace coherent and the server-level pre-approval single.
  *
- * spawn_thread wraps fray's own dispatch RPC: it reads the running server's port from
+ * spawn_thread wraps frizz's own dispatch RPC: it reads the running server's port from
  * `<state-dir>/server.lock` and POSTs `/rpc/dispatch`. The `/rpc` surface has no token auth — only a
  * loopback-origin CSRF gate — so a headerless local POST with `sec-fetch-site: same-origin` (undici
  * sends no Origin) satisfies it.
  *
  * Mounted by the server (dispatch.ts) into the Claude backend via `--mcp-config`. The server passes
- * FRAY_STATE_DIR in this process's env so we can locate server.lock without recomputing the project id.
+ * FRIZZ_STATE_DIR in this process's env so we can locate server.lock without recomputing the project id.
  *
  * Protocol: MCP over stdio = newline-delimited JSON-RPC 2.0. We implement exactly the four methods a
  * client drives (initialize, tools/list, tools/call, ping) plus the initialized notification. Hand-
  * rolled rather than pulling @modelcontextprotocol/sdk: the surface is tiny, it ships as one loose
- * .mjs next to bin/fray (no build/bundle/resolution concerns), and it matches this repo's own
+ * .mjs next to bin/frizz (no build/bundle/resolution concerns), and it matches this repo's own
  * hand-rolled-RPC aesthetic. The server NEVER crashes on a bad tool call: failures come back as an
  * isError tool result so the worker sees a message instead of a dead tool.
  */
@@ -39,11 +39,11 @@ const DISPATCH_TIMEOUT_MS = 30_000
 const SPAWN_THREAD = {
   name: "spawn_thread",
   description:
-    "Spawn a brand-new, separate top-level fray thread — its own board card, session, and scratchpad, " +
+    "Spawn a brand-new, separate top-level frizz thread — its own board card, session, and scratchpad, " +
     "driving INDEPENDENTLY. This is FIRE-AND-FORGET: the new thread reports to the HUMAN on the board via " +
     "its own final message, and its results NEVER come back to you, the caller. It is NOT an in-session " +
     "sub-agent. It returns only the new thread's slug and a ready-to-paste markdown link " +
-    "`[title](/thread/<slug>)` that opens the thread in the fray drawer — put that link in your handoff. " +
+    "`[title](/thread/<slug>)` that opens the thread in the frizz drawer — put that link in your handoff. " +
     "USE IT ONLY for a distinct, self-contained effort that belongs on the board in its own right and whose " +
     "output you do NOT need to read. Do NOT use it for a helper whose result you must COLLECT and fold into " +
     "your own work — a self-review, a verification pass, a research prong, a critic, any collect-back helper: " +
@@ -95,7 +95,7 @@ const SPAWN_THREAD = {
 const RECURRING_PROMPT = {
   name: "recurring_prompt",
   description:
-    "Arm a RECURRING PROMPT on YOUR OWN thread: one piece of text that fray re-sends you, on either or " +
+    "Arm a RECURRING PROMPT on YOUR OWN thread: one piece of text that frizz re-sends you, on either or " +
     "both of two triggers, for as long as it is armed.\n\n" +
     "  stop_hook          — every time you come to REST. Use it to keep a long autonomous effort moving " +
     "without the human driving every step, and to rescue yourself from a wait that may never resolve.\n" +
@@ -106,10 +106,10 @@ const RECURRING_PROMPT = {
     "Set at least one. Setting BOTH is the ordinary case for \"keep this moving\": you are prompted " +
     "whenever you stop, and at least every N seconds even if you never do.\n\n" +
     "USE THIS RATHER THAN `CronCreate` or `ScheduleWakeup`. Those are Claude Code's own in-session " +
-    "schedulers and they CANNOT fire in the runtime fray runs you in: their gate stays shut for as long " +
+    "schedulers and they CANNOT fire in the runtime frizz runs you in: their gate stays shut for as long " +
     "as ANY background task of yours is outstanding, so the moment you are parked behind a background " +
     "shell or a sub-agent — exactly when you most need waking — they go silent. This one is delivered by " +
-    "fray itself and is unaffected.\n\n" +
+    "frizz itself and is unaffected.\n\n" +
     "The text arrives VERBATIM as an ordinary user turn, so write it as an instruction to your future " +
     "self. A thread has AT MOST ONE recurring prompt: calling this again REPLACES it, triggers and all. " +
     "At most one scheduled delivery is ever outstanding and its clock runs from the last one DELIVERED, " +
@@ -152,7 +152,7 @@ const RECURRING_PROMPT = {
   },
 }
 
-// The ONE-OFF TIMER's bounds, mirrored from @fray-ui/shared (this file is dependency-free by design and
+// The ONE-OFF TIMER's bounds, mirrored from @frizz/shared (this file is dependency-free by design and
 // ships as a loose .mjs, so it cannot import them). The server validates the same numbers; these exist so
 // a wrong delay is refused HERE, with an explanation, instead of coming back as an HTTP 400.
 const TIMER_MIN_DELAY_SECONDS = 10
@@ -161,7 +161,7 @@ const TIMER_MAX_DELAY_SECONDS = 30 * 24 * 60 * 60
 const TIMER = {
   name: "timer",
   description:
-    "Set a ONE-OFF timer on YOUR OWN thread: a piece of text fray hands back to you at ONE instant, " +
+    "Set a ONE-OFF timer on YOUR OWN thread: a piece of text frizz hands back to you at ONE instant, " +
     "ONCE. Your own alarm clock.\n\n" +
     "It is `recurring_prompt`'s heartbeat with the repetition taken out, and it shares the property that " +
     "matters: the delivery reaches you MID-TURN — a queued message you read at your next tool boundary — " +
@@ -173,7 +173,7 @@ const TIMER = {
     "USE IT for anything you want to come back to at a specific time: re-check a deploy in ten minutes, " +
     "re-read a slow log at the top of the hour, revisit a decision after a build finishes. USE " +
     "`recurring_prompt` instead when the thing must repeat, and remember that Claude Code's own " +
-    "`CronCreate`/`ScheduleWakeup` cannot fire in the runtime fray runs you in.\n\n" +
+    "`CronCreate`/`ScheduleWakeup` cannot fire in the runtime frizz runs you in.\n\n" +
     "IT IS NOT A WAY TO POLL SOMETHING YOU COULD WAIT ON. If a background shell, a sub-agent or a " +
     "monitor can tell you the moment a thing happens, use that — an alarm every N seconds asking \"is it " +
     "done yet\" is strictly worse than being woken when it is.\n\n" +
@@ -218,8 +218,8 @@ const TIMER = {
 }
 
 // The unified server's tool registry: `tools/list` returns these and `tools/call` routes by name.
-// Adding a worker-facing fray tool = one entry here + one handler in `HANDLERS` — never a second
-// MCP server, so every fray tool stays under the same `mcp__fray__*` namespace and the same
+// Adding a worker-facing frizz tool = one entry here + one handler in `HANDLERS` — never a second
+// MCP server, so every frizz tool stays under the same `mcp__frizz__*` namespace and the same
 // server-level pre-approval the dispatch layer already grants.
 const MIN_INTERVAL_SECONDS = 60
 const MAX_INTERVAL_SECONDS = 24 * 60 * 60
@@ -251,17 +251,17 @@ function replyTool(id, text, isError) {
 }
 
 function serverLockPort() {
-  const lock = process.env.FRAY_SERVER_LOCK
-    || (process.env.FRAY_STATE_DIR ? join(process.env.FRAY_STATE_DIR, "server.lock") : undefined)
-  if (!lock) throw new Error("FRAY_STATE_DIR / FRAY_SERVER_LOCK not set — cannot locate the fray server")
+  const lock = process.env.FRIZZ_SERVER_LOCK
+    || (process.env.FRIZZ_STATE_DIR ? join(process.env.FRIZZ_STATE_DIR, "server.lock") : undefined)
+  if (!lock) throw new Error("FRIZZ_STATE_DIR / FRIZZ_SERVER_LOCK not set — cannot locate the frizz server")
   let parsed
   try {
     parsed = JSON.parse(readFileSync(lock, "utf8"))
   } catch (err) {
-    throw new Error(`could not read the fray server lock at ${lock} (is the server running?): ${err instanceof Error ? err.message : err}`)
+    throw new Error(`could not read the frizz server lock at ${lock} (is the server running?): ${err instanceof Error ? err.message : err}`)
   }
   const port = parsed?.port
-  if (!Number.isInteger(port)) throw new Error(`fray server lock at ${lock} has no valid port`)
+  if (!Number.isInteger(port)) throw new Error(`frizz server lock at ${lock} has no valid port`)
   return port
 }
 
@@ -310,13 +310,13 @@ async function spawnThread(args) {
   if (typeof slug !== "string" || !slug) throw new Error(`dispatch response missing a slug: ${JSON.stringify(payload)?.slice(0, 300)}`)
   const label = typeof body.title === "string" ? body.title : slug
   return (
-    `Spawned a new fray thread \`${slug}\`. It is now on the board driving independently — it reports ` +
+    `Spawned a new frizz thread \`${slug}\`. It is now on the board driving independently — it reports ` +
     `to the human via its own final message, NOT back to you, so do not wait on a result from it.\n\n` +
     `Paste this link to let the human open it in the drawer:\n\n[${label}](/thread/${slug})`
   )
 }
 
-/** POST a fray RPC procedure and return its parsed payload. Shares spawn_thread's transport rules:
+/** POST a frizz RPC procedure and return its parsed payload. Shares spawn_thread's transport rules:
  * the port comes from server.lock and `sec-fetch-site: same-origin` satisfies the loopback gate.
  * @param {string} procedure @param {Record<string, unknown>} body @returns {Promise<any>} */
 async function callRpc(procedure, body) {
@@ -345,17 +345,17 @@ async function callRpc(procedure, body) {
 
 /** Which thread this MCP server belongs to. Stamped into our env at spawn (dispatch.ts for the tmux
  * path, the broker bridge for the SDK path) because the MCP protocol carries no caller identity.
- * FRAY_UI_THREAD is the fallback: every fray worker process is tagged with it, so it is right
+ * FRIZZ_THREAD is the fallback: every frizz worker process is tagged with it, so it is right
  * whenever the env is inherited — but it is not relied upon, hence the explicit var first.
  *
  * This is also the reason a model can never point `recurring_prompt` at someone else's thread: the slug is
  * read from HERE, never from the tool arguments. */
 function threadSlug() {
-  const slug = process.env.FRAY_THREAD_SLUG || process.env.FRAY_UI_THREAD
+  const slug = process.env.FRIZZ_THREAD_SLUG || process.env.FRIZZ_THREAD
   if (!slug) {
     throw new Error(
-      "this fray MCP server was not told which thread it belongs to (no FRAY_THREAD_SLUG), so it cannot " +
-      "arm a recurring prompt for it. This is a fray bug — report it rather than working around it.",
+      "this frizz MCP server was not told which thread it belongs to (no FRIZZ_THREAD_SLUG), so it cannot " +
+      "arm a recurring prompt for it. This is a frizz bug — report it rather than working around it.",
     )
   }
   return slug
@@ -411,7 +411,7 @@ async function recurringPrompt(args) {
       ? "every time you come to rest"
       : `every ${every}, reaching you mid-turn rather than waiting for you to stop`
   return (
-    `Recurring prompt armed — fray will send you this ${when}. It replaces any recurring prompt this ` +
+    `Recurring prompt armed — frizz will send you this ${when}. It replaces any recurring prompt this ` +
     "thread had before.\n\n" +
     "Call this tool again with `action: \"stop\"` once the work it drives is finished — one left armed on " +
     "a finished thread wakes it forever. The human can also edit or switch it off in the thread footer. " +
@@ -509,7 +509,7 @@ async function handle(msg) {
       reply(id, {
         protocolVersion: typeof requested === "string" ? requested : PROTOCOL_FALLBACK,
         capabilities: { tools: {} },
-        serverInfo: { name: "fray", version: "0.1.0" },
+        serverInfo: { name: "frizz", version: "0.1.0" },
       })
       return
     }

@@ -28,7 +28,7 @@ export const QUEUE_WRAP = "[overflow-wrap:anywhere] [&_pre]:whitespace-pre-wrap 
 //      own color, flush with the card's own left padding. It used to be a 10px UPPERCASE eyebrow,
 //      which reads as a metadata tag stuck above the card rather than as the card's headline.
 //   2. The glyph rides the title row at the FAR RIGHT. shadcn puts it in a left gutter and indents
-//      the description to clear it; fray does not, because that indent spends ~24px of every card's
+//      the description to clear it; frizz does not, because that indent spends ~24px of every card's
 //      width on a decoration and leaves the body hanging off the one edge that should be flush
 //      (maintainer, same day: "I don't like how much space there is left padding for the actual
 //      content"). Title, body and actions all start on the card's own x; the glyph is a corner mark.
@@ -39,7 +39,7 @@ export const QUEUE_WRAP = "[overflow-wrap:anywhere] [&_pre]:whitespace-pre-wrap 
 // tone is a two-token swap on the border and the title, never a different card:
 //   neutral   — a statement of fact (done, awaiting, a question)
 //   attention — the agent is BLOCKED on you, answerable only in your external terminal
-//   caution   — fray paused itself and will continue on its own (a usage limit)
+//   caution   — frizz paused itself and will continue on its own (a usage limit)
 //   danger    — something is broken or the action is irreversible (sign-in fault, a destructive gate)
 //
 // Only THREE border colors, though: `caution` keeps the neutral border and says its piece in an amber
@@ -128,7 +128,7 @@ export function CardHead({
 }) {
   return (
     <div className="flex min-w-0 items-start gap-2">
-      {/* The title WRAPS rather than truncating: fray's kinds are short sentences ("Waiting on your
+      {/* The title WRAPS rather than truncating: frizz's kinds are short sentences ("Waiting on your
           answer — in your external terminal"), and the half of one that survives a narrow queue card
           is not the half that carries the meaning. It takes the row's slack, which is what pushes the
           aside and the glyph to the right edge. */}

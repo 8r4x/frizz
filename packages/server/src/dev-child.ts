@@ -1,6 +1,6 @@
 // Disposable dev control-plane child. The long-lived supervisor forks this process and replaces it
 // whenever server/shared/RPC source changes. Claude/Codex workers remain in their independent tmux
-// server; this process owns only Fray's HTTP/Vite/watch/tailer/storage handles.
+// server; this process owns only Frizz's HTTP/Vite/watch/tailer/storage handles.
 import { projectFromLaunchTarget } from "./project.ts"
 import { existsSync } from "node:fs"
 import { join } from "node:path"
@@ -11,23 +11,23 @@ import {
   verifyProjectLaunchDelegate,
 } from "./project-launch.ts"
 import { ShutdownTimeoutError } from "./shutdown.ts"
-import { log as frayLog } from "./logging.ts"
+import { log as frizzLog } from "./logging.ts"
 
 // A control-plane child that dies must leave its reason in the run log, not only on a terminal the
 // launcher may have already repainted past. Its stdio is still inherited, so an uncaught stack would
 // otherwise land on the operator's screen and nowhere durable.
 process.on("uncaughtException", (error) => {
-  frayLog.error("dev-child", `uncaught exception: ${error instanceof Error ? error.stack ?? error.message : error}`)
+  frizzLog.error("dev-child", `uncaught exception: ${error instanceof Error ? error.stack ?? error.message : error}`)
   process.exit(1)
 })
 process.on("unhandledRejection", (reason) => {
-  frayLog.error("dev-child", `unhandled rejection: ${reason instanceof Error ? reason.stack ?? reason.message : reason}`)
+  frizzLog.error("dev-child", `unhandled rejection: ${reason instanceof Error ? reason.stack ?? reason.message : reason}`)
 })
 
-const rawPort = process.env.FRAY_DEV_PORT
+const rawPort = process.env.FRIZZ_DEV_PORT
 const port = Number(rawPort)
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
-  frayLog.error("dev-child", `invalid FRAY_DEV_PORT: ${rawPort ?? "<unset>"}`)
+  frizzLog.error("dev-child", `invalid FRIZZ_DEV_PORT: ${rawPort ?? "<unset>"}`)
   process.exit(1)
 }
 
@@ -55,14 +55,14 @@ try {
   verifyProjectLaunchDelegate(target, launchOwnerToken)
   const { startServer } = await import("./index.ts")
   const project = projectFromLaunchTarget(target)
-  const stableWebDist = process.env.FRAY_STABLE_WEB_DIST
-  const stableArtifact = process.env.FRAY_STABLE_ARTIFACT
+  const stableWebDist = process.env.FRIZZ_STABLE_WEB_DIST
+  const stableArtifact = process.env.FRIZZ_STABLE_ARTIFACT
   if (stableArtifact && !stableWebDist)
-    throw new Error("stable artifact launch is missing FRAY_STABLE_WEB_DIST")
+    throw new Error("stable artifact launch is missing FRIZZ_STABLE_WEB_DIST")
   if (stableWebDist) {
     const required = [
-      ["FRAY_SCRIPTS_DIR", process.env.FRAY_SCRIPTS_DIR, "index.mjs"],
-      ["FRAY_WORKER_PLUGIN_DIR", process.env.FRAY_WORKER_PLUGIN_DIR, ".claude-plugin/plugin.json"],
+      ["FRIZZ_SCRIPTS_DIR", process.env.FRIZZ_SCRIPTS_DIR, "index.mjs"],
+      ["FRIZZ_WORKER_PLUGIN_DIR", process.env.FRIZZ_WORKER_PLUGIN_DIR, ".claude-plugin/plugin.json"],
     ] as const
     if (!existsSync(stableWebDist)) throw new Error("stable artifact launch is missing its verified web directory")
     for (const [name, directory, requiredFile] of required) {
@@ -78,10 +78,10 @@ try {
     ...(stableWebDist ? { webDistDir: stableWebDist } : {}),
     project,
     launchOwnerToken,
-    requestOwnerStop: () => notifySupervisor({ type: "fray-stop-owner", token: launchOwnerToken }),
+    requestOwnerStop: () => notifySupervisor({ type: "frizz-stop-owner", token: launchOwnerToken }),
   })
   notifySupervisor({
-    type: "fray-ready",
+    type: "frizz-ready",
     ...currentProcessGeneration(),
     port: server.port,
     bootId: server.ctx.bootId,
@@ -101,16 +101,16 @@ try {
       // Do not turn that diagnostic into an immediate process exit: doing so repeatedly kills clean
       // late drains and makes the supervisor log a misleading restart storm.
       if (err instanceof ShutdownTimeoutError) {
-        frayLog.warn("dev-child", `shutdown exceeded ${err.timeoutMs}ms; retaining ownership while the drain completes`)
+        frizzLog.warn("dev-child", `shutdown exceeded ${err.timeoutMs}ms; retaining ownership while the drain completes`)
         try {
           await server.shutdownFence.whenSafe()
           process.exit(0)
           return
         } catch (drainError) {
-          frayLog.error("dev-child", `late shutdown drain failed: ${drainError instanceof Error ? drainError.stack ?? drainError.message : drainError}`)
+          frizzLog.error("dev-child", `late shutdown drain failed: ${drainError instanceof Error ? drainError.stack ?? drainError.message : drainError}`)
         }
       }
-      frayLog.error("dev-child", `shutdown failed: ${err instanceof Error ? err.stack ?? err.message : err}`)
+      frizzLog.error("dev-child", `shutdown failed: ${err instanceof Error ? err.stack ?? err.message : err}`)
       process.exit(1)
     }
   }
@@ -122,6 +122,6 @@ try {
   // A crashed/killed supervisor must not leave an unsupervised control plane behind.
   process.once("disconnect", () => void shutdown())
 } catch (err) {
-  frayLog.error("dev-child", `failed to start: ${err instanceof Error ? err.stack ?? err.message : err}`)
+  frizzLog.error("dev-child", `failed to start: ${err instanceof Error ? err.stack ?? err.message : err}`)
   process.exit(1)
 }

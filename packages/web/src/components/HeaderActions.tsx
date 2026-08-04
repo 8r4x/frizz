@@ -1,7 +1,7 @@
 import { useState, type ComponentType } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { ArrowUpRight, ChevronsDownUp, ChevronsUpDown, FileText, Loader2, RotateCcw } from "lucide-react"
-import type { ThreadView } from "@fray-ui/shared"
+import type { ThreadView } from "@frizz/shared"
 import { Tooltip } from "./Tooltip.tsx"
 import { MarkAsButton } from "./MarkAsButton.tsx"
 import { offersRetry } from "../groups.ts"
@@ -15,7 +15,7 @@ export { STALLED_RETRY_MESSAGE } from "../lib/retrySession.ts"
 // header so the two can never drift. Order left→right runs least→most important, so the primary verb
 // sits at the far RIGHT. The verbs SPLIT on kind:
 //   • SESSION (non-foreign): doc/open navigation, plus Retry on exactly the threads `offersRetry`
-//     picks — the STALLED ones (the rail's yellow [!]) and the ones HELD on a usage limit fray will
+//     picks — the STALLED ones (the rail's yellow [!]) and the ones HELD on a usage limit frizz will
 //     auto-resume (the hourglass, offered the same one-click continue). Every surface that renders this
 //     component reads that same derivation, so the verb can never disagree between the card, the header
 //     and the rail. Other lifecycle verbs (Mark as done / Snooze) live in ThreadLifecycleFooter; rename
@@ -36,7 +36,7 @@ export function HeaderActions({
 }: {
   thread: ThreadView
   openHref?: string // present only on queue cards → shows the Open-in-new-tab arrow (a real link)
-  onDoc?: () => void // present only on the thread header → shows the fray-document icon
+  onDoc?: () => void // present only on the thread header → shows the frizz-document icon
   onDone: () => void // legacy Mark-as "done" path (parent-owned mutation)
   onCollapse?: () => void // queue cards → collapse/expand the card body to just its header
   collapsed?: boolean
@@ -59,7 +59,7 @@ export function HeaderActions({
           onClick={onCollapse}
         />
       )}
-      {onDoc && <IconBtn label="Fray document" icon={FileText} size={14} onClick={onDoc} />}
+      {onDoc && <IconBtn label="Frizz document" icon={FileText} size={14} onClick={onDoc} />}
       {/* The arrow is a REAL anchor to the standalone thread page, not a drawer trigger: a plain click
           lands the thread in a new tab immediately (maintainer 2026-08-03), and ⌘/middle-click,
           "copy link address" and the browser's own affordances all work because it is a link. The same

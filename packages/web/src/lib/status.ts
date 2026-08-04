@@ -1,4 +1,4 @@
-import { FrayStatus, type ThreadView } from "@fray-ui/shared"
+import { FrizzStatus, type ThreadView } from "@frizz/shared"
 
 type RecoveryThread = Pick<ThreadView, "kind" | "foreign" | "runtime">
 
@@ -20,8 +20,8 @@ export function canRetry(thread: RecoveryThread): boolean {
 }
 
 // Lifecycle order for status pickers: planning → planned → active → blocked → done → dismissed.
-// This is the shared FrayStatus enum's own declaration order — single-sourced, never re-listed.
-export const STATUS_ORDER: readonly FrayStatus[] = FrayStatus.options
+// This is the shared FrizzStatus enum's own declaration order — single-sourced, never re-listed.
+export const STATUS_ORDER: readonly FrizzStatus[] = FrizzStatus.options
 
 // One HUE per status, shared by the picker dots and the listing chips so the color language is a
 // single vocabulary. Every status must be tellable apart at a dot's glance — an earlier palette

@@ -19,8 +19,8 @@ test("parseThreadTab accepts only the remaining thread surfaces and degrades leg
 })
 
 test("thread tab storage is scoped to both the project and thread slug", () => {
-  assert.equal(threadTabStorageKey("/work/nub", "fix-ci"), "fray-thread-tab:%2Fwork%2Fnub:fix-ci")
-  assert.notEqual(threadTabStorageKey("/work/nub", "fix-ci"), threadTabStorageKey("/work/fray", "fix-ci"))
+  assert.equal(threadTabStorageKey("/work/nub", "fix-ci"), "frizz-thread-tab:%2Fwork%2Fnub:fix-ci")
+  assert.notEqual(threadTabStorageKey("/work/nub", "fix-ci"), threadTabStorageKey("/work/frizz", "fix-ci"))
 })
 
 test("clampThreadTab refuses surfaces the current row cannot own", () => {
@@ -72,5 +72,5 @@ test("legacy terminal intent degrades to Chat", () => {
 
   writeThreadTab(project, slug, "chat")
   assert.equal(readThreadTab(project, slug), "chat", "an explicit Chat selection is persisted")
-  assert.equal(readThreadTab("/work/fray", slug), "chat", "another project never inherits this project's request")
+  assert.equal(readThreadTab("/work/frizz", slug), "chat", "another project never inherits this project's request")
 })

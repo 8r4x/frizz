@@ -152,11 +152,11 @@ test("a headerless table escapes pipes and pads ragged rows", () => {
   assert.match(html, /<tr><td>d<\/td><td>e<\/td><td>f<\/td><\/tr>/)
 })
 
-// stripFrontmatter underpins the thread header's "Fray document" gate (ChatView.ThreadHeader): the
+// stripFrontmatter underpins the thread header's "Frizz document" gate (ChatView.ThreadHeader): the
 // button shows iff `stripFrontmatter(threadBody).trim()` is non-empty. These lock the two invariants
 // that gate relies on — a missing/frontmatter-only doc must reduce to empty (button HIDDEN, no
 // dead-end "No thread file found"), a doc with real body must survive (button SHOWN).
-test("stripFrontmatter: empty input stays empty (missing .fray/<slug>.md → doc button hidden)", () => {
+test("stripFrontmatter: empty input stays empty (missing .frizz/<slug>.md → doc button hidden)", () => {
   assert.equal(stripFrontmatter("").trim(), "")
 })
 

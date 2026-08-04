@@ -1,6 +1,6 @@
 ---
 name: opus-max
-description: fray worker profile — Opus at max effort. Dispatch via subagent_type to pin this model+effort cell for the self-contained task in the prompt.
+description: frizz worker profile — Opus at max effort. Dispatch via subagent_type to pin this model+effort cell for the self-contained task in the prompt.
 model: opus
 effort: max
 ---

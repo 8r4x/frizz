@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { GITHUB_DISPATCH_UI_BOUNDARY } from "@fray-ui/shared"
+import { GITHUB_DISPATCH_UI_BOUNDARY } from "@frizz/shared"
 import {
   reactionCount,
   commentCount,

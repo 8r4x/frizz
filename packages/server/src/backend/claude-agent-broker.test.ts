@@ -120,10 +120,10 @@ test("a pending permission is re-delivered to a client that reconnects (the brok
     c1.client.sendInput({ id: randomUUID(), text: "do the thing" })
     const perm1 = await c1.waitPerm()
     assert.ok(perm1.requestId)
-    // fray "dies" mid-permission — drop the client WITHOUT answering.
+    // frizz "dies" mid-permission — drop the client WITHOUT answering.
     c1.client.close()
     await new Promise((r) => setTimeout(r, 300))
-    // fray "restarts" — a fresh client reconnects to the SAME live broker.
+    // frizz "restarts" — a fresh client reconnects to the SAME live broker.
     const c2 = clientWith(b.socketPath)
     const helloAgain = await new Promise<boolean>((res) => { const t = setTimeout(() => res(false), 5_000); const iv = setInterval(() => { if (c2.cap.hellos.length) { clearInterval(iv); clearTimeout(t); res(true) } }, 50) })
     assert.ok(helloAgain, "reconnected client got a hello")
@@ -153,7 +153,7 @@ test("the broker asks Claude to title the session from the first dispatch prompt
     const titles = rows.filter((row) => row.kind === "session-title")
     assert.equal(titles.length, 1, "exactly one title request")
     assert.equal(titles[0].description, "Fix the login button on mobile", "titled from the dispatch prompt")
-    assert.equal(titles[0].persist, true, "persisted — an unpersisted title never reaches the transcript fray reads")
+    assert.equal(titles[0].persist, true, "persisted — an unpersisted title never reaches the transcript frizz reads")
     c.client.close()
   } finally { await b.close() }
 })

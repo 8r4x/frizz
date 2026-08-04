@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { SetThreadSnoozeInput } from "@fray-ui/shared"
+import { SetThreadSnoozeInput } from "@frizz/shared"
 import {
   AWAITING_FALLBACK_TITLE,
   AWAITING_PARK_BUTTON,

@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
-import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@fray-ui/shared"
+import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@frizz/shared"
 import { TodosView } from "./components/TodosView.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
@@ -56,7 +56,7 @@ function makeThread({ id, title, at, extra }: Seed): ThreadViewModel {
 }
 
 const threads = SEEDS.map(makeThread)
-store.board = { projectDir: "/fixture/fray", threads } as BoardSnapshot
+store.board = { projectDir: "/fixture/frizz", threads } as BoardSnapshot
 
 // Each card pulls its own short transcript; everything else is a benign empty RPC (no real server here).
 // Queries carry their input in the `?input=` query param (GET) — see api/rpc.ts — not a POST body.

@@ -230,23 +230,23 @@ test("options that legitimately start at B are not re-read as question + list", 
 test("a group heading between C and D keeps ALL SIX options answerable", () => {
   const body =
     "Package name — brainstorm.\n\n" +
-    "Thread / loom family (fray = a frayed thread):\n" +
-    "- A. **frayloom** — keeps the lineage\n" +
+    "Thread / loom family (frizz = a frizzed thread):\n" +
+    "- A. **frizzloom** — keeps the lineage\n" +
     "- B. **warp** — the taut loom threads\n" +
-    "- C. **selvage** — the edge that doesn't fray\n\n" +
-    "Melee family (fray = a scrap/brawl of agents):\n" +
+    "- C. **selvage** — the edge that doesn't frizz\n\n" +
+    "Melee family (frizz = a scrap/brawl of agents):\n" +
     "- D. **melee** — a direct synonym\n" +
-    "- E. **fracas** — a noisy fray\n" +
-    "- F. **tussle** — a scrappy fray\n\n" +
-    "Also still open: `frayui`, `frayhq`."
+    "- E. **fracas** — a noisy frizz\n" +
+    "- F. **tussle** — a scrappy frizz\n\n" +
+    "Also still open: `frizz`, `frizzhq`."
   const p = parseQuestionBlock(body, "question")
   assert.deepEqual(p.options.map(optionId), ["A", "B", "C", "D", "E", "F"])
   assert.equal(p.options[3], "D. **melee** — a direct synonym")
   // The heading rides WITH the option it introduces instead of being stranded below the chips.
-  assert.equal(p.optionHeadings?.[3], "Melee family (fray = a scrap/brawl of agents):")
+  assert.equal(p.optionHeadings?.[3], "Melee family (frizz = a scrap/brawl of agents):")
   assert.equal(p.optionHeadings?.[0], undefined)
-  assert.equal(p.contextMd, "Package name — brainstorm.\n\nThread / loom family (fray = a frayed thread):")
-  assert.equal(p.trailingMd, "Also still open: `frayui`, `frayhq`.")
+  assert.equal(p.contextMd, "Package name — brainstorm.\n\nThread / loom family (frizz = a frizzed thread):")
+  assert.equal(p.trailingMd, "Also still open: `frizz`, `frizzhq`.")
 })
 
 test("a SECOND question's list restarts at A, so the run still ends at the first set", () => {

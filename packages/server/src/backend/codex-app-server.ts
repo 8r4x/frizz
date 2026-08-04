@@ -15,7 +15,7 @@ import {
   type InteractionRecord,
   type InteractionRequest as InteractionRequestType,
   type ResolveInteractionInput,
-} from "@fray-ui/shared"
+} from "@frizz/shared"
 import {
   InteractionStoreError,
   type InteractionSessionScope,
@@ -32,8 +32,8 @@ import {
   type CodexAppServerHost,
 } from "./codex-app-server-host.ts"
 import { nativeListenCodexAppServerHost } from "./codex-app-server-native.ts"
-import type { FrayMcp } from "./types.ts"
-import { log as frayLog } from "../logging.ts"
+import type { FrizzMcp } from "./types.ts"
+import { log as frizzLog } from "../logging.ts"
 
 // Foundation-only bridge. It is deliberately not an AgentBackend: no current/default Codex TUI
 // session can accidentally cross this boundary. Context now wires it unconditionally
@@ -41,7 +41,7 @@ import { log as frayLog } from "../logging.ts"
 export const CODEX_APP_SERVER_PROVIDER = "codex-app-server"
 // Opt-in transport switch. Off = the hand-written daemon; on = `codex app-server --listen unix://`.
 // Read at construction, per process, so a restart is all it takes to move a project either way.
-export const CODEX_NATIVE_LISTEN_FLAG = "FRAY_CODEX_NATIVE_LISTEN"
+export const CODEX_NATIVE_LISTEN_FLAG = "FRIZZ_CODEX_NATIVE_LISTEN"
 
 export type CodexHostKind = "native" | "daemon" | "direct"
 
@@ -49,13 +49,13 @@ export type CodexHostKind = "native" | "daemon" | "direct"
  * Which app-server transport a bridge uses.
  *
  * The DEFAULT is the native listener (`codex app-server --listen unix://`): the app-server owns its own
- * socket, so it genuinely outlives every fray process and there is no fray-authored daemon in the middle
+ * socket, so it genuinely outlives every frizz process and there is no frizz-authored daemon in the middle
  * that could die and take the app-server — and every sub-agent turn inside it — down with it. The
- * hand-rolled `--stdio` daemon can only broker survival across a fray restart; across its OWN death
+ * hand-rolled `--stdio` daemon can only broker survival across a frizz restart; across its OWN death
  * (idle expiry, reachability self-collection, a signal, its child crashing) it kills the app-server. It
  * stays the default ONLY on win32, whose named-pipe socket path the native transport does not implement.
  *
- * Overrides: an injected `spawn` is always the direct-child test transport; `FRAY_CODEX_NATIVE_LISTEN`
+ * Overrides: an injected `spawn` is always the direct-child test transport; `FRIZZ_CODEX_NATIVE_LISTEN`
  * forces the choice (`1`/`true` → native where supported, `0`/`false` → the daemon).
  */
 export function selectCodexHostKind(
@@ -102,21 +102,21 @@ export type CodexVersionVerdict =
  *
  * This was exact string equality against the audited version. That is unsafe-CLOSED, and it is the
  * single most dangerous property in the whole Codex integration: `codex` ships a stable release about
- * every two days, fray has no tmux fallback for it (dispatch.ts throws), and `ensureConnected` gates
+ * every two days, frizz has no tmux fallback for it (dispatch.ts throws), and `ensureConnected` gates
  * ALL EIGHT operation entry points — dispatch, follow-up, steer, interrupt, resume, warm-up, settings.
  * So one `npm i -g @openai/codex` turned every Codex thread into a permanent hard failure recoverable
- * only by editing a source constant and rebuilding fray. The drift is continuous: the pin was 0.144.6
+ * only by editing a source constant and rebuilding frizz. The drift is continuous: the pin was 0.144.6
  * on 2026-07-27 with `@openai/codex@0.145.0` already published, and by 2026-07-31 the installed stable
  * was 0.146.0 — which is the re-audit this pin now records.
  *
  * The rule now: a FLOOR that refuses, and a CEILING that only warns.
- *  - BELOW the audited version → refuse. An older binary may genuinely lack params fray sends, and
+ *  - BELOW the audited version → refuse. An older binary may genuinely lack params frizz sends, and
  *    that is the direction where proceeding produces silent misbehaviour.
  *  - AT it → the audited path, unchanged.
  *  - ABOVE it → run, and say so loudly once. Codex's protocol is additive in practice and unknown
- *    fields are ignored, so "newer" is overwhelmingly compatible — and fray already owns a REAL drift
+ *    fields are ignored, so "newer" is overwhelmingly compatible — and frizz already owns a REAL drift
  *    detector that does not depend on guessing from a version number: codex-protocol-conformance.test.ts
- *    asks the INSTALLED binary for its own JSON schema and asserts every param fray sends still exists.
+ *    asks the INSTALLED binary for its own JSON schema and asserts every param frizz sends still exists.
  *    That test, not a string compare, is what should fail when the protocol actually moves.
  *
  * An unparseable version sorts below everything, so it is refused.
@@ -126,19 +126,19 @@ export function codexVersionVerdict(
   audited: string = CODEX_APP_SERVER_SUPPORTED_VERSION,
 ): CodexVersionVerdict {
   if (!received) {
-    return { kind: "refused", message: `Codex app-server did not report a parseable fray/<version> user agent; expected ${audited}` }
+    return { kind: "refused", message: `Codex app-server did not report a parseable frizz/<version> user agent; expected ${audited}` }
   }
   const cmp = compareCodexVersions(received, audited)
   if (cmp === 0) return { kind: "audited" }
   if (cmp < 0) {
     return {
       kind: "refused",
-      message: `Codex app-server ${received} is older than the audited protocol ${audited}. Upgrade codex (\`npm i -g @openai/codex\`) — fray sends parameters this build may not accept.`,
+      message: `Codex app-server ${received} is older than the audited protocol ${audited}. Upgrade codex (\`npm i -g @openai/codex\`) — frizz sends parameters this build may not accept.`,
     }
   }
   return {
     kind: "ahead",
-    message: `Codex app-server ${received} is NEWER than fray's audited protocol ${audited} — running anyway (the protocol is additive and unknown fields are ignored). If Codex threads misbehave, re-audit and re-pin. Run \`npm test -- codex-protocol-conformance\` to check fray's params against this binary's own schema.`,
+    message: `Codex app-server ${received} is NEWER than frizz's audited protocol ${audited} — running anyway (the protocol is additive and unknown fields are ignored). If Codex threads misbehave, re-audit and re-pin. Run \`npm test -- codex-protocol-conformance\` to check frizz's params against this binary's own schema.`,
   }
 }
 
@@ -153,14 +153,14 @@ const PROTOCOL_FINGERPRINT = [
 // The handshake identity. Shared with the daemon host, which performs `initialize` on our behalf and
 // serves the cached response to every later attachment — so the version gate below still reads the
 // REAL app-server userAgent, not something the daemon invented.
-export const CLIENT_INFO = Object.freeze({ name: "fray", title: "Fray", version: "0.0.1" })
+export const CLIENT_INFO = Object.freeze({ name: "frizz", title: "Frizz", version: "0.0.1" })
 export const CLIENT_CAPABILITIES = Object.freeze({
   experimentalApi: true,
   requestAttestation: false,
   mcpServerOpenaiFormElicitation: false,
 })
 // ---- sandbox: the app-server spells the SAME axis two different ways ----
-// `thread/start` and `thread/resume` take the plain `sandbox: SandboxMode` string fray already uses.
+// `thread/start` and `thread/resume` take the plain `sandbox: SandboxMode` string frizz already uses.
 // `thread/settings/update` and `turn/start` take `sandboxPolicy: SandboxPolicy`, a TAGGED OBJECT, and
 // there is NO string shorthand on those methods. Worse, the params structs are not
 // `deny_unknown_fields`: sending the thread-level `sandbox: "danger-full-access"` spelling to
@@ -216,9 +216,9 @@ export function codexSandboxPolicy(mode: CodexSandboxMode): CodexSandboxPolicy {
 }
 
 // The inverse, used to CONFIRM a reported policy against the mode we asked for. Deliberately compares
-// only the variant tag: fray's axis is the mode, and the server is free to normalize the workspaceWrite
+// only the variant tag: frizz's axis is the mode, and the server is free to normalize the workspaceWrite
 // detail fields (e.g. add a writable root of its own) without that meaning our request was refused.
-// `externalSandbox` — a variant fray never requests — maps to undefined so it can never read as a match.
+// `externalSandbox` — a variant frizz never requests — maps to undefined so it can never read as a match.
 export function codexSandboxModeOfPolicy(policy: { type?: unknown } | null | undefined): CodexSandboxMode | undefined {
   switch (policy?.type) {
     case "readOnly": return "read-only"
@@ -228,8 +228,8 @@ export function codexSandboxModeOfPolicy(policy: { type?: unknown } | null | und
   }
 }
 
-// The approval policy fray establishes at `thread/start` (see startDisposableSession) and re-asserts on
-// every `thread/resume`. `never` is the ONLY correct value for a fray worker: nobody is watching the
+// The approval policy frizz establishes at `thread/start` (see startDisposableSession) and re-asserts on
+// every `thread/resume`. `never` is the ONLY correct value for a frizz worker: nobody is watching the
 // pane, so an approval request is not a safety gate — it is a thread that stops working until a human
 // happens to open the dashboard. Under `never` a sandbox-denied action fails back to the model, which
 // can then adapt, say so, or ask the human in its own words; the sandbox stays the actual boundary.
@@ -242,8 +242,8 @@ export function codexSandboxModeOfPolicy(policy: { type?: unknown } | null | und
 // `approvalPolicy: "untrusted"` still reported `"untrusted"` in the `thread/settings/updated` payload
 // after a sandboxPolicy-only update).
 const CODEX_APPROVAL_POLICY = "never"
-// The sandbox a fray-owned codex thread runs under when nothing narrower was explicitly recorded. Every
-// fray-CREATED worker is dispatched at this level (WORKER_DISPATCH_PERMISSION.codex), and a resume that
+// The sandbox a frizz-owned codex thread runs under when nothing narrower was explicitly recorded. Every
+// frizz-CREATED worker is dispatched at this level (WORKER_DISPATCH_PERMISSION.codex), and a resume that
 // cannot find a stated intent must land here rather than fall through to the config.toml default —
 // letting config.toml decide is what downgraded live threads mid-flight.
 const CODEX_DEFAULT_SANDBOX: CodexSandboxMode = "danger-full-access"
@@ -260,7 +260,7 @@ const MAX_STDERR_BYTES = 16 * 1024
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000
 const BRIDGE_DB_SCHEMA_VERSION = 1
 
-// The app-server inherits fray's environment minus fray's own control plane — see worker-env.ts. This
+// The app-server inherits frizz's environment minus frizz's own control plane — see worker-env.ts. This
 // was a ~35-key allowlist until 2026-08-02; it is a denylist now because the curated lists across the
 // codex and claude transports had drifted (this one carried HTTP_PROXY/SSL_CERT_FILE, the claude ones
 // did not, so the same task succeeded or failed by backend) and because neither carried SSH_AUTH_SOCK
@@ -369,15 +369,15 @@ const FileChangeItem = z.object({
   status: z.enum(["inProgress", "completed", "failed", "declined"]),
 }).strict()
 // A model-run shell command, as the app-server reports it on the item stream. Deliberately NOT
-// `.strict()`: this is a large, evolving item type and fray reads three fields off it — adding
+// `.strict()`: this is a large, evolving item type and frizz reads three fields off it — adding
 // `deny_unknown_fields` semantics here would make every codex release that grows the item silently
 // stop reporting background execs.
 //
 // `processId` is the whole reason this schema exists. It is codex's LOGICAL PTY handle (verified live
 // in backend/_live_codex_bgterm.mts: `osPid` came back null every time and the value never equalled a
 // real OS pid), and it is the only thing `thread/backgroundTerminals/terminate` accepts. It appears
-// ONLY on an exec that yielded — the deliberate background handoff — which is exactly the set fray
-// wants, and it is absent from the rollout fray folds, so this stream is the only place to get it
+// ONLY on an exec that yielded — the deliberate background handoff — which is exactly the set frizz
+// wants, and it is absent from the rollout frizz folds, so this stream is the only place to get it
 // (`_live_codex_bgterm_match.mts`: the projected background row carried no handle at all).
 const CommandExecutionItem = z.object({
   type: z.literal("commandExecution"),
@@ -494,7 +494,7 @@ export type CodexAppServerDiagnostic =
   | { event: "connected"; version: string; connectionEpoch: number }
   | { event: "disconnected"; connectionEpoch: number; reason: "exit" | "error" | "closed" | "protocol" }
   | { event: "version-rejected"; expected: string; received: string }
-  // The app-server is NEWER than the audited protocol. Not a failure — fray runs anyway; this is the
+  // The app-server is NEWER than the audited protocol. Not a failure — frizz runs anyway; this is the
   // breadcrumb that says which build was actually driving if something later looks wrong.
   | { event: "version-ahead"; expected: string; received: string }
   | { event: "stderr"; bytes: number; truncated: boolean }
@@ -744,7 +744,7 @@ class JsonlRpcConnection {
       try {
         await this.onRequest(message.method, parsedId.data, message.params)
       } catch (error) {
-        const rpcError = error instanceof RpcProtocolError ? error : new RpcProtocolError(-32603, "Fray could not stage the provider request")
+        const rpcError = error instanceof RpcProtocolError ? error : new RpcProtocolError(-32603, "Frizz could not stage the provider request")
         await this.errorResponse(parsedId.data, rpcError.code, rpcError.message).catch(() => undefined)
       }
       return
@@ -784,7 +784,7 @@ class JsonlRpcConnection {
 }
 
 interface BindingRow {
-  fray_session_id: string
+  frizz_session_id: string
   thread_slug: string
   codex_thread_id: string
   codex_session_id: string
@@ -803,19 +803,19 @@ interface BindingRow {
   auto_resume_count: number
   /**
    * What the app-server is believed to have as this thread's sandbox RIGHT NOW — a cache of observed
-   * server state, not of operator intent (intent lives in fray's own `sessions.permission_mode`). It is
+   * server state, not of operator intent (intent lives in frizz's own `sessions.permission_mode`). It is
    * written only from authoritative reads: the mode we passed to `thread/start`, the `sandbox` the
    * `thread/resume` RESPONSE reports back, and a `thread/settings/updated` notification. NULL means
-   * "unknown" (a row migrated from an older Fray), which makes setSandbox demand a notification rather
+   * "unknown" (a row migrated from an older Frizz), which makes setSandbox demand a notification rather
    * than assume a no-op.
    */
   sandbox: string | null
   /**
-   * The operator's last EXPLICIT sandbox intent for this thread, as issued through fray. Distinct from
+   * The operator's last EXPLICIT sandbox intent for this thread, as issued through frizz. Distinct from
    * `sandbox` (what the server is believed to hold): this one is forward-looking and is what every cold
    * `thread/resume` carries.
    *
-   * It exists because fray's registry cannot be trusted to hold that intent for a codex row. The tailer
+   * It exists because frizz's registry cannot be trusted to hold that intent for a codex row. The tailer
    * writes the ROLLOUT-OBSERVED mode back over `sessions.permission_mode` whenever a permission record
    * lands (tailer.ts, setObservedPermissionIfCurrent) — and since a mid-turn change only takes effect on
    * the NEXT turn, the very next record still describes the OLD policy and reverts the row. Observed live
@@ -827,7 +827,7 @@ interface BindingRow {
 }
 
 const BindingRowSchema = z.object({
-  fray_session_id: Opaque,
+  frizz_session_id: Opaque,
   thread_slug: ThreadSlug,
   codex_thread_id: Opaque,
   codex_session_id: Opaque,
@@ -842,7 +842,7 @@ const BindingRowSchema = z.object({
   updated_at: z.string().datetime(),
   auto_resumed_turn_id: Opaque.nullable(),
   auto_resume_count: z.number().int().nonnegative(),
-  // Bounded string rather than an enum: a value this Fray does not recognise (a newer sandbox mode
+  // Bounded string rather than an enum: a value this Frizz does not recognise (a newer sandbox mode
   // written by a later build) must degrade to "unknown", never poison the row as corrupt.
   sandbox: z.string().max(64).nullable(),
   intended_sandbox: z.string().max(64).nullable(),
@@ -869,8 +869,8 @@ function effectiveResumeSandbox(rawResponse: unknown): CodexSandboxMode | undefi
   return parsed.success ? codexSandboxModeOfPolicy(parsed.data.sandbox) : undefined
 }
 
-function turnKey(row: Pick<BindingRow, "thread_slug" | "fray_session_id" | "connection_epoch">): string {
-  return `${row.thread_slug}\u0000${row.fray_session_id}\u0000${row.connection_epoch}`
+function turnKey(row: Pick<BindingRow, "thread_slug" | "frizz_session_id" | "connection_epoch">): string {
+  return `${row.thread_slug}\u0000${row.frizz_session_id}\u0000${row.connection_epoch}`
 }
 
 export interface CodexAppServerSessionBinding {
@@ -897,10 +897,10 @@ export interface CodexAppServerTurnLiveness {
   /** The bridge is driving a turn for this thread on the CURRENT connection right now. */
   bridgeTurn: boolean
   /**
-   * When fray last took this thread onto a connection. Nothing the rollout wrote BEFORE this instant
+   * When frizz last took this thread onto a connection. Nothing the rollout wrote BEFORE this instant
    * can belong to a live turn — the connection that wrote it is gone. Rollout activity AFTER it means
    * some other writer (a `codex resume` in the operator's own terminal) is driving the thread, which
-   * is a real live turn fray is merely mirroring.
+   * is a real live turn frizz is merely mirroring.
    */
   ownedSince: string
 }
@@ -947,9 +947,9 @@ export interface CodexAppServerBridgeOptions {
   host?: CodexAppServerHost
   /** Where the daemon's record/socket live. Required for the default daemon host. */
   stateDir?: string
-  /** Mounts the unified `fray` MCP server into this project's app-server. Absent ⇒ chrome-devtools
+  /** Mounts the unified `frizz` MCP server into this project's app-server. Absent ⇒ chrome-devtools
    *  only. MCP servers are PROCESS-level, so this is resolved once here rather than per thread. */
-  frayMcp?: FrayMcp
+  frizzMcp?: FrizzMcp
   now?: () => Date
   id?: () => string
   requestTimeoutMs?: number
@@ -960,7 +960,7 @@ export interface CodexAppServerBridgeOptions {
    */
   shouldAutoResume?: (threadSlug: string, sessionId: string) => boolean
   /**
-   * The operator's CURRENT sandbox intent for a thread, read from fray's own registry
+   * The operator's CURRENT sandbox intent for a thread, read from frizz's own registry
    * (`sessions.permission_mode` → codexSandbox()). Consulted on every COLD `thread/resume` so a
    * sandbox the operator changed while the thread was detached actually takes effect — before this
    * existed, `setPermissionMode` wrote the row and nothing ever read it back, so "saved for the next
@@ -973,7 +973,7 @@ export interface CodexAppServerBridgeOptions {
 function bindingFromRow(row: BindingRow): CodexAppServerSessionBinding {
   return {
     threadSlug: row.thread_slug,
-    sessionId: row.fray_session_id,
+    sessionId: row.frizz_session_id,
     codexThreadId: row.codex_thread_id,
     codexSessionId: row.codex_session_id,
     sessionEpoch: row.session_epoch,
@@ -1560,7 +1560,7 @@ const TurnResponse = z.object({ turn: z.object({ id: Opaque }).passthrough() }).
 // turn/steer returns a FLAT { turnId }, unlike turn/start's nested { turn: { id } }.
 const TurnSteerResponse = z.object({ turnId: Opaque }).passthrough()
 // `thread/resume` reports the thread's EFFECTIVE sandbox back as a tagged SandboxPolicy — the one
-// authoritative read of live server state fray gets, and what keeps the binding's sandbox cache honest
+// authoritative read of live server state frizz gets, and what keeps the binding's sandbox cache honest
 // whether the resume was cold (our override applied) or a live rejoin (our override was ignored).
 const ThreadResumeSandbox = z.object({ sandbox: z.object({ type: z.string().max(64) }).passthrough() }).passthrough()
 // GROUND TRUTH on a rejoin: `thread/resume` reports whether a turn is running RIGHT NOW.
@@ -1634,7 +1634,7 @@ function correlatedFileItemKey(threadId: string, turnId: string, itemId: string)
 }
 
 // A cwd is absolute on POSIX when it starts with "/" and on Windows when it carries a drive letter
-// (`C:\\…` or `C:/…`) — the same test `fray-paths.ts` applies to an XDG variable. Checking only for a
+// (`C:\\…` or `C:/…`) — the same test `frizz-paths.ts` applies to an XDG variable. Checking only for a
 // leading slash rejected EVERY Windows path, which failed 41 tests on a real Windows Server 2022 host.
 function isAbsoluteBoundedPath(value: string): boolean {
   if (value.length === 0 || value.length > 8_192) return false
@@ -1675,7 +1675,7 @@ export class CodexAppServerBridge {
   private readonly settingsWaiters = new Map<string, Set<(observed: ObservedThreadSettings | undefined) => void>>()
   private readonly correlatedFileItems = new Map<string, CorrelatedFileItem>()
   // Codex's LIVE background execs, keyed codexThreadId → processId. Folded off the item stream because
-  // nothing else can supply it: the rollout fray reads records the exec but not its `processId`, so the
+  // nothing else can supply it: the rollout frizz reads records the exec but not its `processId`, so the
   // ops-strip row it projects has no handle to address a kill with. This map is what gives a codex
   // shell row an id, and the id it gives is exactly what `backgroundTerminals/terminate` accepts.
   //
@@ -1695,7 +1695,7 @@ export class CodexAppServerBridge {
     this.codexBin = options.codexBin ?? "codex"
     this.timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     // Production hosts the app-server on its OWN unix listener (codex-app-server-native.ts) so it
-    // outlives this runtime with no fray-authored daemon that could kill it — see selectCodexHostKind
+    // outlives this runtime with no frizz-authored daemon that could kill it — see selectCodexHostKind
     // for the per-platform default and the overrides. An injected `spawn` — every unit test and the
     // live harnesses — keeps the historical direct-child behavior, where each connect is a new process.
     const hostKind = selectCodexHostKind(process.env[CODEX_NATIVE_LISTEN_FLAG], process.platform, Boolean(options.spawn))
@@ -1740,7 +1740,7 @@ export class CodexAppServerBridge {
         ) VALUES (1, 0, 0, '');
 
         CREATE TABLE IF NOT EXISTS codex_app_server_session (
-          fray_session_id       TEXT PRIMARY KEY,
+          frizz_session_id       TEXT PRIMARY KEY,
           thread_slug           TEXT NOT NULL UNIQUE,
           codex_thread_id       TEXT NOT NULL UNIQUE,
           codex_session_id      TEXT NOT NULL,
@@ -1776,7 +1776,7 @@ export class CodexAppServerBridge {
     const columns = (table: "codex_app_server_meta" | "codex_app_server_session") => new Set(
       this.db.prepare<[], { name: string }>(`PRAGMA table_info(${table})`).all().map((column) => column.name),
     )
-    // Additive columns for daemon hosting + auto-resume. A database written by an older Fray has the
+    // Additive columns for daemon hosting + auto-resume. A database written by an older Frizz has the
     // tables already, so CREATE TABLE IF NOT EXISTS above is a no-op for it — these ALTERs are what
     // actually migrate it, and they must run before the required-column assertion below.
     const addColumn = (table: "codex_app_server_meta" | "codex_app_server_session", column: string, decl: string): void => {
@@ -1794,7 +1794,7 @@ export class CodexAppServerBridge {
 
     const requiredMeta = ["singleton", "connection_epoch", "capability_revision", "protocol_fingerprint", "daemon_generation"]
     const requiredSession = [
-      "fray_session_id", "thread_slug", "codex_thread_id", "codex_session_id", "session_epoch",
+      "frizz_session_id", "thread_slug", "codex_thread_id", "codex_session_id", "session_epoch",
       "capability_revision", "connection_epoch", "current_turn_id", "cwd", "ephemeral", "state",
       "created_at", "updated_at", "auto_resumed_turn_id", "auto_resume_count", "sandbox", "intended_sandbox",
     ]
@@ -1816,7 +1816,7 @@ export class CodexAppServerBridge {
     }
     // A bridge that has just been constructed holds NO connection, so no binding it inherits from the
     // previous process can still be active. close()/handleDisconnect normally assert that, but a
-    // SIGKILLed fray runs neither — leaving rows claiming `active` at the last epoch, which every
+    // SIGKILLed frizz runs neither — leaving rows claiming `active` at the last epoch, which every
     // ownership check (and the board's liveness read) would take at face value. Reassert the invariant
     // here so the registry is honest before anything reads it. `current_turn_id` is deliberately left
     // in place: detach preserves it for diagnosis, and updateResumedBinding retires it — together with
@@ -1828,8 +1828,8 @@ export class CodexAppServerBridge {
   }
 
   async startDisposableSession(input: StartCodexAppServerSessionInput): Promise<CodexAppServerSessionBinding> {
-    if (!ThreadSlug.safeParse(input.threadSlug).success) throw new Error("invalid Fray thread slug")
-    if (!input.sessionId || input.sessionId.length > 256) throw new Error("invalid Fray session id")
+    if (!ThreadSlug.safeParse(input.threadSlug).success) throw new Error("invalid Frizz thread slug")
+    if (!input.sessionId || input.sessionId.length > 256) throw new Error("invalid Frizz session id")
     if (!isAbsoluteBoundedPath(input.cwd)) throw new Error("Codex app-server cwd must be an absolute bounded path")
     if (input.permissions && input.sandbox) throw new Error("Codex app-server permissions and sandbox are mutually exclusive")
     const startKeys = [`slug:${input.threadSlug}`, `session:${input.sessionId}`]
@@ -1842,7 +1842,7 @@ export class CodexAppServerBridge {
       if (this.bindingForScope(input.threadSlug, input.sessionId)) {
         throw new Error("Codex app-server session is already owned by this bridge")
       }
-      if (this.db.prepare("SELECT 1 FROM codex_app_server_session WHERE thread_slug = ? OR fray_session_id = ?").get(input.threadSlug, input.sessionId)) {
+      if (this.db.prepare("SELECT 1 FROM codex_app_server_session WHERE thread_slug = ? OR frizz_session_id = ?").get(input.threadSlug, input.sessionId)) {
         throw new Error("Codex app-server thread slug or session id is already bound")
       }
 
@@ -1866,7 +1866,7 @@ export class CodexAppServerBridge {
       const at = this.now().toISOString()
       this.db.prepare(`
         INSERT INTO codex_app_server_session (
-          fray_session_id, thread_slug, codex_thread_id, codex_session_id,
+          frizz_session_id, thread_slug, codex_thread_id, codex_session_id,
           session_epoch, capability_revision, connection_epoch, current_turn_id,
           cwd, ephemeral, state, created_at, updated_at, sandbox, intended_sandbox
         ) VALUES (?, ?, ?, ?, 1, ?, ?, NULL, ?, ?, 'active', ?, ?, ?, ?)
@@ -1932,23 +1932,23 @@ export class CodexAppServerBridge {
     codexThreadId: string
     cwd: string
   }): Promise<CodexAppServerSessionBinding> {
-    if (!ThreadSlug.safeParse(input.threadSlug).success) throw new Error("invalid Fray thread slug")
-    if (!input.sessionId || input.sessionId.length > 256) throw new Error("invalid Fray session id")
+    if (!ThreadSlug.safeParse(input.threadSlug).success) throw new Error("invalid Frizz thread slug")
+    if (!input.sessionId || input.sessionId.length > 256) throw new Error("invalid Frizz session id")
     if (!input.codexThreadId || input.codexThreadId.length > 256) throw new Error("invalid Codex rollout id")
     if (!isAbsoluteBoundedPath(input.cwd)) throw new Error("Codex app-server cwd must be an absolute bounded path")
     const releaseOperation = this.beginOperation()
     try {
       const existing = this.bindingForScope(input.threadSlug, input.sessionId)
       if (existing) return bindingFromRow(existing)
-      if (this.db.prepare("SELECT 1 FROM codex_app_server_session WHERE thread_slug = ? OR fray_session_id = ? OR codex_thread_id = ?")
+      if (this.db.prepare("SELECT 1 FROM codex_app_server_session WHERE thread_slug = ? OR frizz_session_id = ? OR codex_thread_id = ?")
         .get(input.threadSlug, input.sessionId, input.codexThreadId)) {
         throw new Error("Codex app-server thread slug, session id, or rollout is already bound")
       }
       const connection = await this.ensureConnected()
-      // A legacy tmux row's sandbox is whatever the CLI was launched with; fray's registry is the
+      // A legacy tmux row's sandbox is whatever the CLI was launched with; frizz's registry is the
       // operator's stated intent, so adoption is the moment the two are unified.
       const adoptionOverride = this.resumeSandboxOverride({
-        thread_slug: input.threadSlug, fray_session_id: input.sessionId, sandbox: null, intended_sandbox: null,
+        thread_slug: input.threadSlug, frizz_session_id: input.sessionId, sandbox: null, intended_sandbox: null,
       })
       const rawResponse = await connection.request("thread/resume", {
         threadId: input.codexThreadId,
@@ -1963,7 +1963,7 @@ export class CodexAppServerBridge {
       const at = this.now().toISOString()
       this.db.prepare(`
         INSERT INTO codex_app_server_session (
-          fray_session_id, thread_slug, codex_thread_id, codex_session_id,
+          frizz_session_id, thread_slug, codex_thread_id, codex_session_id,
           session_epoch, capability_revision, connection_epoch, current_turn_id,
           cwd, ephemeral, state, created_at, updated_at, sandbox, intended_sandbox
         ) VALUES (?, ?, ?, ?, 1, ?, ?, NULL, ?, 0, 'active', ?, ?, ?, ?)
@@ -2020,7 +2020,7 @@ export class CodexAppServerBridge {
         }
         const changed = this.db.prepare(`
           UPDATE codex_app_server_session SET current_turn_id = ?, updated_at = ?
-          WHERE fray_session_id = ? AND thread_slug = ? AND connection_epoch = ? AND state = 'active'
+          WHERE frizz_session_id = ? AND thread_slug = ? AND connection_epoch = ? AND state = 'active'
             AND (current_turn_id IS NULL OR current_turn_id = ?)
         `).run(response.turn.id, this.now().toISOString(), input.sessionId, input.threadSlug, this.connectionEpoch, response.turn.id).changes
         if (changed !== 1) throw new Error("Codex app-server turn ownership changed during start")
@@ -2068,7 +2068,7 @@ export class CodexAppServerBridge {
   //
   // This is a TERMINATOR — for an app-server Codex thread it is the ONLY thing that stops the worker
   // (there is no tmux pane to kill), and since the app-server moved into a detached daemon the turn
-  // outlives the fray runtime, so a stop that did not happen has no backstop. It therefore resolves
+  // outlives the frizz runtime, so a stop that did not happen has no backstop. It therefore resolves
   // only once the stop is PROVED, and never reports one that did not land:
   //
   //   • A definitive server rejection (RpcProtocolError) means the turn reached its own ending in the
@@ -2277,7 +2277,7 @@ export class CodexAppServerBridge {
     const scope = {
       projectId: this.options.projectId,
       threadSlug: row.thread_slug,
-      sessionId: row.fray_session_id,
+      sessionId: row.frizz_session_id,
     }
     for (const pending of this.options.interactions.listPending(scope)) {
       const delivery = this.options.interactions.providerDelivery(scope, pending.id)
@@ -2300,10 +2300,10 @@ export class CodexAppServerBridge {
   }
 
   // Called only from the registry's exact old-session lifecycle event. It is intentionally scoped by
-  // both slug and Fray session id, so replacing/deleting a TUI session cannot touch this bridge. The
+  // both slug and Frizz session id, so replacing/deleting a TUI session cannot touch this bridge. The
   // registry transaction has already terminalized delivery rows and detached any matching binding;
   // this hook removes that binding and terminates the shared child so no native server request can
-  // remain waiting in a process Fray no longer owns.
+  // remain waiting in a process Frizz no longer owns.
   releaseSession(
     threadSlug: string,
     sessionId: string,
@@ -2318,7 +2318,7 @@ export class CodexAppServerBridge {
       this.options.interactions.cancelForSession(threadSlug, sessionId, reason)
       this.db.prepare(`
         DELETE FROM codex_app_server_session
-        WHERE thread_slug = ? AND fray_session_id = ?
+        WHERE thread_slug = ? AND frizz_session_id = ?
       `).run(threadSlug, sessionId)
     } finally {
       if (ownsCurrentProcess) this.disconnectOwnedProcess()
@@ -2352,7 +2352,7 @@ export class CodexAppServerBridge {
     let detachError: unknown
     try {
       if (!this.dbClosed) {
-        // A clean Fray shutdown may later resume a persisted native session, but no binding may stay
+        // A clean Frizz shutdown may later resume a persisted native session, but no binding may stay
         // active against the process being killed. Preserve current_turn_id for witnessed replay/rebind.
         this.db.prepare(`
           UPDATE codex_app_server_session SET state = 'detached', updated_at = ?
@@ -2459,7 +2459,7 @@ export class CodexAppServerBridge {
 
   private bindingForScope(threadSlug: string, sessionId: string): BindingRow | undefined {
     const row = this.db.prepare<[string, string], BindingRow>(`
-      SELECT * FROM codex_app_server_session WHERE thread_slug = ? AND fray_session_id = ?
+      SELECT * FROM codex_app_server_session WHERE thread_slug = ? AND frizz_session_id = ?
     `).get(threadSlug, sessionId)
     return row ? checkedBindingRow(row) : undefined
   }
@@ -2486,7 +2486,7 @@ export class CodexAppServerBridge {
   /**
    * Attach to an app-server and negotiate.
    *
-   * `refork` is the version-skew recovery, and it is the ONLY thing in fray that ever ends a Codex
+   * `refork` is the version-skew recovery, and it is the ONLY thing in frizz that ever ends a Codex
    * daemon's life. The daemon performs `initialize` once and caches the answer for as long as it
    * lives (up to six hours idle, unbounded while a client keeps reattaching). Bump
    * CODEX_APP_SERVER_SUPPORTED_VERSION and Update & Restart — the ordinary upgrade path — and the
@@ -2507,7 +2507,7 @@ export class CodexAppServerBridge {
       env: codexAppServerEnvironment(),
       clientInfo: CLIENT_INFO,
       capabilities: CLIENT_CAPABILITIES,
-      frayMcp: this.options.frayMcp,
+      frizzMcp: this.options.frizzMcp,
     })
     const child = attachment.process
     let connection!: JsonlRpcConnection
@@ -2531,9 +2531,9 @@ export class CodexAppServerBridge {
         capabilities: CLIENT_CAPABILITIES,
       }))
       // Exact 0.144.1 source sets our initialized client name as the originator, yielding
-      // `fray/<package-version> ...`. Do not accept an expected-looking version buried elsewhere in
+      // `frizz/<package-version> ...`. Do not accept an expected-looking version buried elsewhere in
       // an incompatible user agent.
-      const version = initialized.userAgent.match(/^fray\/(\d+\.\d+\.\d+)(?:\s|\()/u)?.[1]
+      const version = initialized.userAgent.match(/^frizz\/(\d+\.\d+\.\d+)(?:\s|\()/u)?.[1]
       handshakeVersion = version
       const verdict = codexVersionVerdict(version)
       // `!version` is already the refused case inside codexVersionVerdict; naming it here too is what
@@ -2557,7 +2557,7 @@ export class CodexAppServerBridge {
         })
         if (version !== aheadVersionWarned) {
           aheadVersionWarned = version
-          frayLog.warn("codex", verdict.message)
+          frizzLog.warn("codex", verdict.message)
         }
       }
       handshaking = false
@@ -2676,16 +2676,16 @@ export class CodexAppServerBridge {
       WHERE state = 'active' OR (state = 'detached' AND current_turn_id IS NOT NULL)
     `).all().map(checkedBindingRow)
     const detach = (row: BindingRow): void => {
-      this.db.prepare("UPDATE codex_app_server_session SET state = 'detached', updated_at = ? WHERE fray_session_id = ?")
-        .run(this.now().toISOString(), row.fray_session_id)
+      this.db.prepare("UPDATE codex_app_server_session SET state = 'detached', updated_at = ? WHERE frizz_session_id = ?")
+        .run(this.now().toISOString(), row.frizz_session_id)
     }
     for (const row of rows) {
       if (row.ephemeral === 1) { detach(row); continue }
       if (sameProcess) {
         this.db.prepare(`
           UPDATE codex_app_server_session SET state = 'active', connection_epoch = ?, updated_at = ?
-          WHERE fray_session_id = ?
-        `).run(this.connectionEpoch, this.now().toISOString(), row.fray_session_id)
+          WHERE frizz_session_id = ?
+        `).run(this.connectionEpoch, this.now().toISOString(), row.frizz_session_id)
         // The TURN survived our restart, but its in-flight approval did not: that request was issued on
         // the client connection we just lost, and its rpc id means nothing on this new socket. Nothing
         // retires those cards on this path — the thread stays bound and never takes the resume branch
@@ -2726,19 +2726,19 @@ export class CodexAppServerBridge {
           this.db.prepare(`
             UPDATE codex_app_server_session SET
               codex_session_id = ?, connection_epoch = ?, state = 'active', updated_at = ?, sandbox = ?
-            WHERE fray_session_id = ?
+            WHERE frizz_session_id = ?
           `).run(
             response.thread.sessionId,
             this.connectionEpoch,
             this.now().toISOString(),
             effectiveResumeSandbox(rawResponse) ?? row.sandbox,
-            row.fray_session_id,
+            row.frizz_session_id,
           )
           continue
         }
         this.updateResumedBinding(row, response.thread.sessionId, effectiveResumeSandbox(rawResponse))
         // Record, don't nudge. Recovery is issued by warmUp() — see autoResumeInterruptedTurns().
-        if (interruptedTurn) this.pendingAutoResume.set(row.fray_session_id, { row, interruptedTurn })
+        if (interruptedTurn) this.pendingAutoResume.set(row.frizz_session_id, { row, interruptedTurn })
       } catch {
         detach(row)
       }
@@ -2751,14 +2751,14 @@ export class CodexAppServerBridge {
   // re-establish its own footing.
   //
   // The sub-agent paragraph is load-bearing. A `spawn_agent` child is a turn INSIDE the same
-  // app-server process, so it died with it — and fray cannot resume it (thread/resume never revives a
+  // app-server process, so it died with it — and frizz cannot resume it (thread/resume never revives a
   // running turn). Recovery of the children is therefore the PARENT model's job, and before this it
   // depended on the model happening to notice: the 2026-07-24 loss ("three had returned, but six did
   // not") only recovered because the model, on its own, thought to re-spawn. Naming the failure mode
   // explicitly makes that re-establishment reliable instead of lucky. `list_agents` is codex's own
   // authoritative snapshot, so it is the correct thing to point at.
   private static readonly RESTART_RECOVERY_NUDGE = [
-    "[fray] Your previous turn was interrupted: the Codex app-server process running it exited (a Fray",
+    "[frizz] Your previous turn was interrupted: the Codex app-server process running it exited (a Frizz",
     "restart or a crash). This was not a decision by you or the human, and nothing you had already done",
     "was rolled back — but any command or edit that was in flight at that moment may not have finished.",
     "Re-check the state of your work before trusting it, then continue from where you left off.",
@@ -2793,19 +2793,19 @@ export class CodexAppServerBridge {
       if (this.closed || this.dbClosed) return
       if (row.auto_resumed_turn_id === interruptedTurn) continue
       if (row.auto_resume_count >= CodexAppServerBridge.MAX_AUTO_RESUMES) continue
-      if (this.options.shouldAutoResume && !this.options.shouldAutoResume(row.thread_slug, row.fray_session_id)) continue
+      if (this.options.shouldAutoResume && !this.options.shouldAutoResume(row.thread_slug, row.frizz_session_id)) continue
       // Re-read: an operator follow-up may have opened a turn between the rebind and here, in which
       // case their message already IS the continuation and a nudge would be noise.
-      const current = this.bindingForScope(row.thread_slug, row.fray_session_id)
+      const current = this.bindingForScope(row.thread_slug, row.frizz_session_id)
       if (!current || current.state !== "active" || current.current_turn_id !== null) continue
       this.db.prepare(`
         UPDATE codex_app_server_session SET auto_resumed_turn_id = ?, auto_resume_count = auto_resume_count + 1, updated_at = ?
-        WHERE fray_session_id = ?
-      `).run(interruptedTurn, this.now().toISOString(), row.fray_session_id)
+        WHERE frizz_session_id = ?
+      `).run(interruptedTurn, this.now().toISOString(), row.frizz_session_id)
       try {
         await this.startTurn({
           threadSlug: row.thread_slug,
-          sessionId: row.fray_session_id,
+          sessionId: row.frizz_session_id,
           text: CodexAppServerBridge.RESTART_RECOVERY_NUDGE,
         })
         this.options.diagnostic?.({ event: "turn-auto-resumed", threadSlug: row.thread_slug, interruptedTurnId: interruptedTurn })
@@ -2825,14 +2825,14 @@ export class CodexAppServerBridge {
   // replay/diagnosis; taking the thread onto a live connection is the edge that retires it.
   private updateResumedBinding(row: BindingRow, codexSessionId: string, effectiveSandbox?: CodexSandboxMode): void {
     if (row.capability_revision !== this.capabilityRevision) {
-      this.options.interactions.cancelForSession(row.thread_slug, row.fray_session_id, "capabilities-changed")
+      this.options.interactions.cancelForSession(row.thread_slug, row.frizz_session_id, "capabilities-changed")
     } else if (row.current_turn_id !== null) {
       // Everything scoped to the dead turn dies with it. An approval still pending for it can never be
       // answered — its response would be written to a connection that no longer exists, and the provider
       // can only re-ask inside a NEW turn (whose logical request id differs by construction), so no
       // rebind can ever reach it. `turn/completed` retires these cards on a normal ending; a turn that
       // died with its connection never sends one, so retire them here on the same grounds.
-      this.options.interactions.cancelForSession(row.thread_slug, row.fray_session_id, "turn-ended")
+      this.options.interactions.cancelForSession(row.thread_slug, row.frizz_session_id, "turn-ended")
     }
     // `sandbox` is taken from the resume RESPONSE, which reports the thread's effective policy — the
     // one read that is right whether our override applied (cold resume from disk) or was ignored (a
@@ -2842,14 +2842,14 @@ export class CodexAppServerBridge {
       UPDATE codex_app_server_session SET
         codex_session_id = ?, capability_revision = ?, connection_epoch = ?, state = 'active',
         current_turn_id = NULL, updated_at = ?, sandbox = ?
-      WHERE fray_session_id = ? AND thread_slug = ? AND codex_thread_id = ?
+      WHERE frizz_session_id = ? AND thread_slug = ? AND codex_thread_id = ?
     `).run(
       codexSessionId,
       this.capabilityRevision,
       this.connectionEpoch,
       this.now().toISOString(),
       effectiveSandbox ?? null,
-      row.fray_session_id,
+      row.frizz_session_id,
       row.thread_slug,
       row.codex_thread_id,
     )
@@ -2867,22 +2867,22 @@ export class CodexAppServerBridge {
    * Sending NOTHING is not an option, and that was the bug. A resume with no override hands the
    * decision to config.toml, whose defaults are `workspace-write` + `on-request` — so a thread
    * dispatched at full access came back sandboxed AND interactive after its app-server died. It then
-   * hit an approval on its next write, and fray's observed-permission writeback recorded the
+   * hit an approval on its next write, and frizz's observed-permission writeback recorded the
    * downgrade as if it were the operator's own choice, making it permanent.
    *
    * The observed `sandbox` cache is deliberately NOT an intent source for the same reason: it records
    * what some process (a terminal `codex resume`, a config default) last did to the SHARED rollout,
-   * never what fray asked for.
+   * never what frizz asked for.
    */
   private resumeSandboxOverride(
-    row: Pick<BindingRow, "thread_slug" | "fray_session_id" | "sandbox" | "intended_sandbox">,
+    row: Pick<BindingRow, "thread_slug" | "frizz_session_id" | "sandbox" | "intended_sandbox">,
   ): { sandbox: CodexSandboxMode; approvalPolicy: string } {
     // `intended_sandbox` wins because it is the only record of an explicit narrowing (setSandbox writes
     // it before the wire call, so it survives a change that could not be delivered). `sandboxFor` is the
-    // registry's stated intent for rows written before that column existed. Everything else is a fray
-    // worker, and a fray worker runs at CODEX_DEFAULT_SANDBOX.
+    // registry's stated intent for rows written before that column existed. Everything else is a frizz
+    // worker, and a frizz worker runs at CODEX_DEFAULT_SANDBOX.
     const intent = (isCodexSandboxMode(row.intended_sandbox) ? row.intended_sandbox : undefined)
-      ?? this.options.sandboxFor?.(row.thread_slug, row.fray_session_id)
+      ?? this.options.sandboxFor?.(row.thread_slug, row.frizz_session_id)
       ?? CODEX_DEFAULT_SANDBOX
     return { sandbox: intent, approvalPolicy: CODEX_APPROVAL_POLICY }
   }
@@ -2903,7 +2903,7 @@ export class CodexAppServerBridge {
    * tells the two apart, and an unknown cache falls to the strict "wait for the notification" branch.
    */
   /**
-   * The live background execs fray is tracking for one thread — the source of its background-shell
+   * The live background execs frizz is tracking for one thread — the source of its background-shell
    * rows. Empty for a thread with none, for a session this bridge does not own, and for the whole
    * lifetime of a codex older than the experimental API (nothing ever emits a `processId`).
    *
@@ -2919,20 +2919,20 @@ export class CodexAppServerBridge {
   }
 
   /**
-   * KILL ONE background exec, and tell the worker fray did.
+   * KILL ONE background exec, and tell the worker frizz did.
    *
-   * `thread/backgroundTerminals/terminate` is gated on `capabilities.experimentalApi`, which fray has
+   * `thread/backgroundTerminals/terminate` is gated on `capabilities.experimentalApi`, which frizz has
    * always sent (CLIENT_CAPABILITIES) — so no handshake change was needed to reach it. Verified live
    * against codex-cli 0.146.0 (backend/_live_codex_bgterm.mts): the call answers `{terminated:true}`,
    * the exec flips to `status:"failed" exitCode:-1`, and the real OS process — a descendant of the
-   * app-server fray spawned — is gone.
+   * app-server frizz spawned — is gone.
    *
    * The NOTICE is not optional politeness. The same probe measured codex's silence: after a terminate,
    * the model's own account was that the command "was running when I returned control … no exit code",
    * because completion in codex is POLLED, never pushed — the `exitCode:-1` goes to the CLIENT and
    * never enters model context. `thread/inject_items` ("Raw Responses API items to append to the
    * thread's model-visible history") is the channel that fixes it, and with the notice injected the
-   * model instead said the command "is stopped and will never report a result, because the Fray
+   * model instead said the command "is stopped and will never report a result, because the Frizz
    * operator explicitly terminated it from the dashboard".
    *
    * A notice that fails to land is REPORTED, never thrown: the process is already dead by then, and
@@ -2942,7 +2942,7 @@ export class CodexAppServerBridge {
     threadSlug: string
     sessionId: string
     processId: string
-    /** What to tell the worker. Absent ⇒ kill silently (nothing in fray asks for that today). */
+    /** What to tell the worker. Absent ⇒ kill silently (nothing in frizz asks for that today). */
     notice?: string
   }): Promise<{ terminated: boolean; noticeFailed: string | null }> {
     const releaseOperation = this.beginOperation()
@@ -3000,7 +3000,7 @@ export class CodexAppServerBridge {
       if (!binding) throw new Error("Codex app-server sandbox change requires a bridge-owned session")
       if (binding.state !== "active" || binding.connection_epoch !== this.connectionEpoch) {
         // A detached thread has to be back on this connection before the server will accept settings
-        // for it. The resume carries fray's intent itself, so this frequently applies the change on
+        // for it. The resume carries frizz's intent itself, so this frequently applies the change on
         // its own — the update below then confirms (or no-ops, which the cache reports honestly).
         await this.resumeOwnedSession(input.threadSlug, input.sessionId)
         binding = this.bindingForScope(input.threadSlug, input.sessionId)
@@ -3009,8 +3009,8 @@ export class CodexAppServerBridge {
       const threadId = binding.codex_thread_id
       // Record the INTENT before the wire call, and independently of whether it lands. Even a change
       // the app-server never confirms must survive to the next cold resume — that is the whole promise
-      // behind "saved for the next resume", and fray's own registry cannot hold it for a codex row.
-      this.db.prepare("UPDATE codex_app_server_session SET intended_sandbox = ?, updated_at = ? WHERE fray_session_id = ? AND thread_slug = ?")
+      // behind "saved for the next resume", and frizz's own registry cannot hold it for a codex row.
+      this.db.prepare("UPDATE codex_app_server_session SET intended_sandbox = ?, updated_at = ? WHERE frizz_session_id = ? AND thread_slug = ?")
         .run(input.sandbox, this.now().toISOString(), input.sessionId, input.threadSlug)
       // Sampled BEFORE the update: whether the operator's change was made against a running turn is
       // what decides the wording, and the turn can end while we wait for the confirmation.
@@ -3082,7 +3082,7 @@ export class CodexAppServerBridge {
   private ownedBinding(threadId: string, turnId: string | null): BindingRow {
     const row = this.bindingForCodexThread(threadId)
     if (!row || row.state !== "active" || row.connection_epoch !== this.connectionEpoch) {
-      throw new RpcProtocolError(-32602, "Codex request is not owned by this Fray bridge connection")
+      throw new RpcProtocolError(-32602, "Codex request is not owned by this Frizz bridge connection")
     }
     if (turnId !== null) {
       if (row.current_turn_id !== null && row.current_turn_id !== turnId) {
@@ -3096,8 +3096,8 @@ export class CodexAppServerBridge {
         // authority; pin it before journaling rather than inventing a client-side id.
         this.db.prepare(`
           UPDATE codex_app_server_session SET current_turn_id = ?, updated_at = ?
-          WHERE fray_session_id = ? AND connection_epoch = ? AND current_turn_id IS NULL
-        `).run(turnId, this.now().toISOString(), row.fray_session_id, this.connectionEpoch)
+          WHERE frizz_session_id = ? AND connection_epoch = ? AND current_turn_id IS NULL
+        `).run(turnId, this.now().toISOString(), row.frizz_session_id, this.connectionEpoch)
         return this.bindingForCodexThread(threadId)!
       }
     }
@@ -3168,7 +3168,7 @@ export class CodexAppServerBridge {
     const binding = this.bindingForCodexThread(item.threadId)
     if (!binding || binding.connection_epoch !== item.connectionEpoch || binding.state !== "active") return false
     const result = this.options.interactions.invalidateProviderRequest(
-      { projectId: this.options.projectId, threadSlug: binding.thread_slug, sessionId: binding.fray_session_id },
+      { projectId: this.options.projectId, threadSlug: binding.thread_slug, sessionId: binding.frizz_session_id },
       item.interactionId,
       reason,
     )
@@ -3210,7 +3210,7 @@ export class CodexAppServerBridge {
       owner: {
         projectId: this.options.projectId,
         threadSlug: row.thread_slug,
-        sessionId: row.fray_session_id,
+        sessionId: row.frizz_session_id,
         turnId,
         itemId,
         sessionEpoch: row.session_epoch,
@@ -3221,7 +3221,7 @@ export class CodexAppServerBridge {
       payload,
       expiresAt,
     })
-    if (!parsed.success) throw new RpcProtocolError(-32602, "Codex request cannot be represented by the Fray interaction protocol")
+    if (!parsed.success) throw new RpcProtocolError(-32602, "Codex request cannot be represented by the Frizz interaction protocol")
     return parsed.data
   }
 
@@ -3286,7 +3286,7 @@ export class CodexAppServerBridge {
       // operations, or diff before Codex asks again. Bind dedupe/reconnect to the exact raw snapshot
       // fingerprint without persisting the raw (potentially secret-bearing) patch in provider context.
       logicalId = logicalRequestId(method, [params.threadId, params.turnId, params.itemId, correlated.snapshotFingerprint])
-      const scope = { projectId: this.options.projectId, threadSlug: row.thread_slug, sessionId: row.fray_session_id }
+      const scope = { projectId: this.options.projectId, threadSlug: row.thread_slug, sessionId: row.frizz_session_id }
       for (const stale of this.options.interactions.listPending(scope)) {
         if (
           stale.provider.kind !== "codex" ||
@@ -3364,7 +3364,7 @@ export class CodexAppServerBridge {
       if (!parsed.success) throw new RpcProtocolError(-32602, "Invalid Codex user-input request")
       const params = parsed.data
       if (params.questions.some((question) => question.isSecret)) {
-        // The exact protocol can carry secret answers, but Fray's durable provider outbox cannot do
+        // The exact protocol can carry secret answers, but Frizz's durable provider outbox cannot do
         // so without retaining plaintext. Keep this capability unavailable until transient encrypted
         // delivery exists; do not render an action that will inevitably fail. Turn interruption is a
         // separate `turn/interrupt` client request, never a fabricated user-input response.
@@ -3399,7 +3399,7 @@ export class CodexAppServerBridge {
       providerContext = { fingerprint: requestFingerprint(params) }
       if (params.mode === "openai/form") {
         // The initialize capability explicitly disables this opaque, vendor-extended form contract.
-        throw new RpcProtocolError(-32601, "OpenAI extended MCP forms are not supported by this Fray bridge")
+        throw new RpcProtocolError(-32601, "OpenAI extended MCP forms are not supported by this Frizz bridge")
       }
       const row = this.ownedBinding(params.threadId, params.turnId)
       const ownerTurnId = params.turnId ?? `mcp-unscoped-${params.threadId}`
@@ -3475,9 +3475,9 @@ export class CodexAppServerBridge {
   // item and a commandExecution is exactly that.
   //
   // Only an exec carrying a `processId` is tracked at all: the app-server sets it on the yielded/PTY
-  // execs and leaves it off ordinary foreground commands, which is the same distinction fray's own
+  // execs and leaves it off ordinary foreground commands, which is the same distinction frizz's own
   // `codexExplicitBackground()` draws in the rollout. So this level lands on the background set
-  // without fray having to classify anything itself.
+  // without frizz having to classify anything itself.
   private foldExecItem(threadId: string, rawItem: unknown, startedAtMs?: number): void {
     const parsed = CommandExecutionItem.safeParse(rawItem)
     if (!parsed.success) return
@@ -3574,11 +3574,11 @@ export class CodexAppServerBridge {
         CODEX_APP_SERVER_PROVIDER,
         this.connectionEpoch,
         parsed.data.requestId,
-        { projectId: this.options.projectId, threadSlug: binding.thread_slug, sessionId: binding.fray_session_id },
+        { projectId: this.options.projectId, threadSlug: binding.thread_slug, sessionId: binding.frizz_session_id },
       )
       if (result && (
         result.interaction.owner.threadSlug !== binding.thread_slug ||
-        result.interaction.owner.sessionId !== binding.fray_session_id
+        result.interaction.owner.sessionId !== binding.frizz_session_id
       )) {
         throw new Error("Codex request acknowledgement crossed an owned session boundary")
       }
@@ -3609,7 +3609,7 @@ export class CodexAppServerBridge {
       if (!binding || binding.connection_epoch !== this.connectionEpoch || binding.state !== "active") return
       if (binding.current_turn_id !== null) {
         // Duplicate notification for the witnessed turn is harmless. A different id must never
-        // overwrite the authority already pinned to this Fray-owned session.
+        // overwrite the authority already pinned to this Frizz-owned session.
         return
       }
       if (!this.pendingTurnStarts.has(turnKey(binding))) return

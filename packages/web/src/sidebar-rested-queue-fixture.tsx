@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
-import type { BoardSnapshot, ThreadView } from "@fray-ui/shared"
+import type { BoardSnapshot, ThreadView } from "@frizz/shared"
 import { Sidebar } from "./components/Sidebar.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
@@ -69,8 +69,8 @@ const restedQueued = {
   awaitingBackground: true,
   sessionId: "aaaaaaaa-bbbb-cccc-dddd-000000000001",
   subAgents: [
-    child("a1", "Audit the parser for edge cases", "fray:opus-high", "2026-07-27T09:05:00.000Z"),
-    child("a2", "Write property tests for the tiers", "fray:sonnet-high", "2026-07-27T09:05:20.000Z"),
+    child("a1", "Audit the parser for edge cases", "frizz:opus-high", "2026-07-27T09:05:00.000Z"),
+    child("a2", "Write property tests for the tiers", "frizz:sonnet-high", "2026-07-27T09:05:20.000Z"),
   ],
   lastActivityAt: "2026-07-27T09:07:00.000Z",
   lastUserAt: "2026-07-27T09:00:00.000Z",
@@ -84,7 +84,7 @@ const ownTurnRunning = {
   runtime: "running",
   needsYou: false,
   sessionId: "aaaaaaaa-bbbb-cccc-dddd-000000000002",
-  subAgents: [child("b1", "Reproduce the nudge on a live tail", "fray:sonnet-medium", "2026-07-27T09:06:00.000Z")],
+  subAgents: [child("b1", "Reproduce the nudge on a live tail", "frizz:sonnet-medium", "2026-07-27T09:06:00.000Z")],
   lastActivityAt: "2026-07-27T09:08:00.000Z",
   lastUserAt: "2026-07-27T09:02:00.000Z",
 } as unknown as ThreadView
@@ -99,7 +99,7 @@ const cookingNotQueued = {
   runtime: "turn-idle",
   needsYou: false,
   sessionId: "aaaaaaaa-bbbb-cccc-dddd-000000000003",
-  subAgents: [child("c1", "Trace every exit the broker can take", "fray:opus-medium", "2026-07-27T09:04:00.000Z")],
+  subAgents: [child("c1", "Trace every exit the broker can take", "frizz:opus-medium", "2026-07-27T09:04:00.000Z")],
   lastActivityAt: "2026-07-27T09:06:30.000Z",
   lastUserAt: "2026-07-27T09:01:00.000Z",
 } as unknown as ThreadView
@@ -136,7 +136,7 @@ const shellOnlyRested = {
 } as unknown as ThreadView
 
 store.board = {
-  projectDir: "/fixture/fray",
+  projectDir: "/fixture/frizz",
   threads: [restedQueued, ownTurnRunning, cookingNotQueued, bareRestedQueued, shellOnlyRested],
   plans: [],
 } as unknown as BoardSnapshot

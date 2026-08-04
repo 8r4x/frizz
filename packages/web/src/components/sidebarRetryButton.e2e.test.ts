@@ -5,7 +5,7 @@ import test from "node:test"
 // follow-up and (b) NOT also navigate the row — two behaviors only a real browser proves: that the
 // button is hidden until hover, that it reveals on hover, that stopPropagation actually keeps the row
 // click from co-firing, and that the real retrySession → showToast → Toaster path runs.
-const baseUrl = process.env.FRAY_SIDEBAR_RETRY_E2E_URL
+const baseUrl = process.env.FRIZZ_SIDEBAR_RETRY_E2E_URL
 
 test("hovering a stalled sidebar row reveals a Retry button that restarts the session in one click", {
   skip: !baseUrl,

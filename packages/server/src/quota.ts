@@ -1,15 +1,15 @@
-import type { QuotaSnapshot, ProviderQuota } from "@fray-ui/shared"
+import type { QuotaSnapshot, ProviderQuota } from "@frizz/shared"
 import { readCodexQuota } from "./backend/codex-quota.ts"
 import { readClaudeQuota } from "./backend/claude-quota.ts"
-import { log as frayLog } from "./logging.ts"
+import { log as frizzLog } from "./logging.ts"
 
 // The polled provider-quota snapshot the sidebar status bar renders. Codex comes from the app-server's
-// live `account/rateLimits/read` (the rollout JSONL fray tails is only its offline fallback, since a
+// live `account/rateLimits/read` (the rollout JSONL frizz tails is only its offline fallback, since a
 // rollout cannot say which account wrote it). Claude delegates to Claude Code's non-interactive
 // `/usage` command so Claude Code owns credential storage, token refresh, endpoint retries, and
 // fallback behavior.
 //
-// FIXTURE SEAM: set FRAY_QUOTA_FIXTURE to one of the named states below to return deterministic data
+// FIXTURE SEAM: set FRIZZ_QUOTA_FIXTURE to one of the named states below to return deterministic data
 // instead of touching the live sources. This lets the UI be exercised (and screenshotted) across all
 // visual states without invoking a real provider CLI or reading real credentials.
 
@@ -64,11 +64,11 @@ async function fixture(name: string): Promise<QuotaSnapshot | undefined> {
 export async function readQuota(opts: { claudeBin?: string; force?: boolean } = {}): Promise<QuotaSnapshot> {
   // The fixture seam is a DEV/QA affordance only — never honor it in a production build, so an env var
   // leaking into a real deploy can't silently paint fabricated quota numbers.
-  const fx = process.env.FRAY_QUOTA_FIXTURE
+  const fx = process.env.FRIZZ_QUOTA_FIXTURE
   if (fx && process.env.NODE_ENV !== "production") {
     const snap = await fixture(fx)
     if (snap) {
-      frayLog.warn("quota", `serving FIXTURE "${fx}" (FRAY_QUOTA_FIXTURE set; dev-only seam)`)
+      frizzLog.warn("quota", `serving FIXTURE "${fx}" (FRIZZ_QUOTA_FIXTURE set; dev-only seam)`)
       return snap
     }
   }

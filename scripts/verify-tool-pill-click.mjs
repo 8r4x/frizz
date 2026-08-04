@@ -9,7 +9,7 @@
 // Driven through the REAL pipeline — JSONL → tailer → transcript projection → ChatView → the real
 // `/thread/<slug>` route — with real mouse clicks at real coordinates, because this is pointer
 // behavior and nothing short of a browser can observe it. The fixture `.html` files in packages/web
-// are NOT servable through the fray server (appType:"custom" sends every path to index.html).
+// are NOT servable through the frizz server (appType:"custom" sends every path to index.html).
 //
 // Every card carries its own in-frame control: a Bash card (already row-clickable before this change)
 // proves the probe can see a toggle at all, so a Read/Edit/Agent failure is about the change and not
@@ -54,7 +54,7 @@ assistant("Reading the disclosure header first.")
 // READ — its header carries a `cursor://` PathLink to the file it read.
 toolCall("t_read", "Read", { file_path: TARGET })
 toolResult("t_read", "export function ToolDisclosureHeader({\n  children,\n  className,\n}: Props) {\n  return createElement(\"div\", …)\n}")
-// EDIT — the diff card, same PathLink treatment in a different header class (.fray-diff-header).
+// EDIT — the diff card, same PathLink treatment in a different header class (.frizz-diff-header).
 toolCall("t_edit", "Edit", {
   file_path: TARGET,
   old_string: '{ className: `${className} w-full text-left`, "data-expanded": expanded }',
@@ -70,17 +70,17 @@ assistant("Dispatching a reviewer over the diff.")
 // half of "unless there's some kind of link within it": a link by behavior, not by tag name.
 toolCall("t_agent", "Agent", {
   prompt: "Read the diff on ToolDisclosureHeader.ts and attack the click guard: name every element in a tool header that owns its own click and would break if the row swallowed it.",
-  subagent_type: "fray:opus-high",
+  subagent_type: "frizz:opus-high",
   description: "Attack the click guard",
 })
 assistant("Waiting on the reviewer.")
 
 writeFileSync(join(logDir, `${SESSION_ID}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
 
-const socket = process.env.FRAY_TMUX_SOCKET ?? `fray-adhoc-${port}`
-const projects = join(home, ".fray", "projects")
+const socket = process.env.FRIZZ_TMUX_SOCKET ?? `frizz-adhoc-${port}`
+const projects = join(home, ".frizz", "projects")
 const db = join(projects, readdirSync(projects)[0], "ui.db")
-const tmuxName = `fray-${SLUG}`
+const tmuxName = `frizz-${SLUG}`
 try { execFileSync("tmux", ["-L", socket, "kill-session", "-t", tmuxName], { stdio: "ignore" }) } catch {}
 try { execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"]) } catch {}
 execFileSync("sqlite3", [db, `DELETE FROM session WHERE slug = '${SLUG}';`])
@@ -106,10 +106,10 @@ const check = (ok, label, detail) => { console.log(`${ok ? "PASS" : "FAIL"}  ${l
 // measuring the drawer's Read card instead of the one under test.
 const CARD_GEOMETRY = (label) => {
   const column = document.querySelectorAll("[data-transcript-column]")[0] ?? document
-  const cards = [...column.querySelectorAll(".fray-bash, .fray-diff")]
-  const card = cards.find((c) => c.querySelector(".fray-bash-label")?.textContent?.trim() === label)
+  const cards = [...column.querySelectorAll(".frizz-bash, .frizz-diff")]
+  const card = cards.find((c) => c.querySelector(".frizz-bash-label")?.textContent?.trim() === label)
   if (!card) return null
-  const header = card.querySelector(".fray-bash-header, .fray-diff-header")
+  const header = card.querySelector(".frizz-bash-header, .frizz-diff-header")
   const left = header.children[0]
   const right = header.children[1]
   const disclosure = header.querySelector("[data-tool-disclosure]") ?? header
@@ -117,7 +117,7 @@ const CARD_GEOMETRY = (label) => {
   const box = (el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, right: r.right, cx: r.x + r.width / 2, cy: r.y + r.height / 2 } }
   return {
     header: box(header),
-    labelBox: box(header.querySelector(".fray-bash-label")),
+    labelBox: box(header.querySelector(".frizz-bash-label")),
     left: box(left),
     right: right ? box(right) : null,
     disclosure: box(disclosure),
@@ -126,7 +126,7 @@ const CARD_GEOMETRY = (label) => {
     // family 2 puts it on the chevron and mirrors it onto the row as data-expanded.
     expanded: (header.getAttribute("data-expanded") ?? header.getAttribute("aria-expanded") ?? disclosure.getAttribute("aria-expanded")) === "true",
     cursor: getComputedStyle(header).cursor,
-    bodyVisible: !!card.querySelector(".fray-bash-body, .fray-diff-body .fray-diff-line"),
+    bodyVisible: !!card.querySelector(".frizz-bash-body, .frizz-diff-body .frizz-diff-line"),
   }
 }
 
@@ -151,19 +151,19 @@ try {
       if (stale) await stale.close()
     }
     await page.goto(`http://127.0.0.1:${port}/thread/${SLUG}`, { waitUntil: "networkidle0" })
-    await page.waitForSelector(".fray-bash", { timeout: 20_000 })
+    await page.waitForSelector(".frizz-bash", { timeout: 20_000 })
     // Ordinary calls fold behind an "N tool calls" band; open every one so all four cards mount.
     for (const toggle of await page.$$('button[aria-label*="tool call"]')) {
       if ((await toggle.evaluate((el) => el.getAttribute("aria-expanded"))) === "false") await toggle.click()
     }
-    await page.waitForFunction(() => [...document.querySelectorAll(".fray-bash-label")].some((l) => l.textContent.trim() === "Agent"), { timeout: 10_000 })
+    await page.waitForFunction(() => [...document.querySelectorAll(".frizz-bash-label")].some((l) => l.textContent.trim() === "Agent"), { timeout: 10_000 })
   }
   await openThread()
 
   const geom = async (label) => page.evaluate(CARD_GEOMETRY, label)
   const clickAt = async (x, y) => { await page.mouse.click(x, y); await new Promise((r) => setTimeout(r, 160)) }
 
-  const seen = await page.evaluate(() => [...document.querySelectorAll(".fray-bash-label")].map((l) => l.textContent.trim()))
+  const seen = await page.evaluate(() => [...document.querySelectorAll(".frizz-bash-label")].map((l) => l.textContent.trim()))
   check(["Read", "Edit", "Bash", "Agent"].every((l) => seen.includes(l)), "the four card families render", JSON.stringify(seen))
 
   // ── 1. the row reads as clickable ────────────────────────────────────────────────────────────────
@@ -215,8 +215,8 @@ try {
   for (const label of ["Read", "Edit", "Agent"]) {
     const body = await page.evaluate((l) => {
       const column = document.querySelectorAll("[data-transcript-column]")[0] ?? document
-      const card = [...column.querySelectorAll(".fray-bash, .fray-diff")].find((c) => c.querySelector(".fray-bash-label")?.textContent?.trim() === l)
-      const el = card?.querySelector(".fray-bash-body, .fray-diff-line")
+      const card = [...column.querySelectorAll(".frizz-bash, .frizz-diff")].find((c) => c.querySelector(".frizz-bash-label")?.textContent?.trim() === l)
+      const el = card?.querySelector(".frizz-bash-body, .frizz-diff-line")
       if (!el) return null
       const r = el.getBoundingClientRect()
       return { cx: r.x + r.width / 2, cy: r.y + r.height / 2, h: r.height }
@@ -231,8 +231,8 @@ try {
   // Its title button is `flex-1`, so if it stretches past its own text there is nothing left to click
   // for "anywhere else" on an Agent card — the one card where the exception could swallow the rule.
   const agentSpan = await page.evaluate(() => {
-    const card = [...document.querySelectorAll(".fray-bash")].find((c) => c.querySelector(".fray-bash-label")?.textContent?.trim() === "Agent")
-    const header = card.querySelector(".fray-bash-header")
+    const card = [...document.querySelectorAll(".frizz-bash")].find((c) => c.querySelector(".frizz-bash-label")?.textContent?.trim() === "Agent")
+    const header = card.querySelector(".frizz-bash-header")
     const btn = header.querySelector('button[aria-label^="Open sub-agent transcript"]')
     const range = document.createRange()
     range.selectNodeContents(btn)
@@ -253,7 +253,7 @@ try {
     // A 26px pill inside a 1400px frame cannot be judged, so crop to the card stack at 2x and let the
     // row's own proportions be readable.
     const strip = await page.evaluate(() => {
-      const cards = [...document.querySelectorAll(".fray-bash, .fray-diff")]
+      const cards = [...document.querySelectorAll(".frizz-bash, .frizz-diff")]
       const boxes = cards.map((c) => c.getBoundingClientRect())
       const x = Math.min(...boxes.map((b) => b.x)), right = Math.max(...boxes.map((b) => b.right))
       const y = Math.min(...boxes.map((b) => b.y)), bottom = Math.max(...boxes.map((b) => b.bottom))

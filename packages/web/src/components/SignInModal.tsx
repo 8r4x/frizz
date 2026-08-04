@@ -2,7 +2,7 @@ import * as RadixDialog from "@radix-ui/react-dialog"
 import { Suspense, lazy, useEffect, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Copy, Check, Loader2 } from "lucide-react"
-import type { AccountLogoutResult, AuthSnapshot, Backend } from "@fray-ui/shared"
+import type { AccountLogoutResult, AuthSnapshot, Backend } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { SIGN_IN_COMMAND, PROVIDER_LABEL } from "../lib/signIn.ts"
@@ -15,7 +15,7 @@ const TerminalPane = lazy(() => import("./TerminalPane.tsx").then((m) => ({ defa
 // classifier flags a rejected credential. The PRIMARY action embeds the provider's own login CLI
 // (`claude auth login`) in a restricted, short-lived terminal (Slice B): the server spawns exactly
 // that argv in a dedicated tmux session addressed by an opaque attempt id, the browser attaches over
-// the existing hardened /term transport, and fray polls the credential state to detect completion.
+// the existing hardened /term transport, and frizz polls the credential state to detect completion.
 // The copyable command remains the fallback when the embedded flow can't start or the user prefers
 // their own terminal. Fails open — the gate only ever reaches here on a positive "signed-out".
 export function SignInModal({
@@ -126,7 +126,7 @@ export function SignInModal({
             <>
               <p className="mb-3 text-[12.5px] leading-relaxed text-muted">
                 This terminal is running <code className="font-mono-keep text-fg/90">{command}</code> —
-                follow its prompts (it may open your browser). Fray detects completion automatically.
+                follow its prompts (it may open your browser). Frizz detects completion automatically.
               </p>
               {/* The restricted account terminal: a global provider sign-in session, NOT a thread —
                   it inherits no project prompt and accepts no other command. */}
@@ -148,7 +148,7 @@ export function SignInModal({
           ) : (
             <>
               <p className="mb-4 text-[12.5px] leading-relaxed text-muted">
-                Fray can't start a {label} thread until you're signed in. Sign in here, or run the
+                Frizz can't start a {label} thread until you're signed in. Sign in here, or run the
                 command in your own terminal and retry:
               </p>
 

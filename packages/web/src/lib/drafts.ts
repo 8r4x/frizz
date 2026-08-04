@@ -5,7 +5,7 @@ import { store } from "../store.ts"
 // Drafts are deliberately session-scoped: they survive React unmounts and a same-tab reload, but never
 // escape this browser tab. Keep this schema tiny and text-only; server records, credentials and secret
 // interaction fields must never enter this cache.
-export const DRAFT_STORAGE_KEY = "fray-drafts:v1"
+export const DRAFT_STORAGE_KEY = "frizz-drafts:v1"
 export const DRAFT_SCHEMA_VERSION = 1
 const MAX_ENTRIES = 80
 const MAX_VALUE_BYTES = 512 * 1024

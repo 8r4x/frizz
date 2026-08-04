@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
-import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@fray-ui/shared"
+import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@frizz/shared"
 import { ThreadView } from "./components/ChatView.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { mergeOptimistic, preserveMessageIdentity } from "./lib/transcript-sync.ts"
@@ -24,7 +24,7 @@ import "./styles.css"
 // so both halves of the fix are under test — the reconciler keeping the page envelope across a slid
 // window, and the transcript holding the reader's anchor across the trim.
 //
-// It deliberately does NOT boot a fray server. The seam it skips (tailer → socket) is not where the bug
+// It deliberately does NOT boot a frizz server. The seam it skips (tailer → socket) is not where the bug
 // lives, and a full stack plus a 300-message first render is what this machine OOM-kills.
 //   ?messages=340   how many messages to seed (must exceed the 300 cap to saturate)
 const params = new URLSearchParams(location.search)
@@ -118,7 +118,7 @@ const thread = {
   lastActivityAt: at(all.length),
 } as unknown as ThreadViewModel
 
-store.board = { projectDir: "/fixture/fray", threads: [thread] } as BoardSnapshot
+store.board = { projectDir: "/fixture/frizz", threads: [thread] } as BoardSnapshot
 store.socketTranscripts = true
 
 // EXACTLY socket.ts `handle("transcript")`: server truth (messages only — a push never carries an

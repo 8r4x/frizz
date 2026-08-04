@@ -96,7 +96,7 @@ test("token-bound health and stop control never expose or accept a forged owner 
 
   const forged = await app.request(`http://127.0.0.1:${port}/control/stop`, {
     method: "POST",
-    headers: { host: `127.0.0.1:${port}`, "x-fray-launch-token": "forged" },
+    headers: { host: `127.0.0.1:${port}`, "x-frizz-launch-token": "forged" },
   })
   assert.equal(forged.status, 403)
   const crossOrigin = await app.request(`http://127.0.0.1:${port}/control/stop`, {
@@ -104,13 +104,13 @@ test("token-bound health and stop control never expose or accept a forged owner 
     headers: {
       host: `127.0.0.1:${port}`,
       origin: `http://localhost:${port}`,
-      "x-fray-launch-token": "owner-capability",
+      "x-frizz-launch-token": "owner-capability",
     },
   })
   assert.equal(crossOrigin.status, 403)
   const accepted = await app.request(`http://127.0.0.1:${port}/control/stop`, {
     method: "POST",
-    headers: { host: `127.0.0.1:${port}`, "x-fray-launch-token": "owner-capability" },
+    headers: { host: `127.0.0.1:${port}`, "x-frizz-launch-token": "owner-capability" },
   })
   assert.equal(accepted.status, 202)
   await new Promise((resolve) => setTimeout(resolve, 35))
@@ -298,7 +298,7 @@ test("HTTP control plane rejects hostile/prefix/port/Host/forwarded origin trick
 })
 
 function fixtures() {
-  const root = mkdtempSync(join(tmpdir(), "fray-img-"))
+  const root = mkdtempSync(join(tmpdir(), "frizz-img-"))
   const img = join(root, "shot.png")
   writeFileSync(img, PNG)
   return { root, img }
@@ -317,7 +317,7 @@ test("allowed: absolute png → 200 with content-type", () => {
 test("unconfined: an image ANYWHERE on disk renders → 200 (no trusted-root gate)", () => {
   // The proxy deliberately renders any readable local image, not just workspace/tmp ones — a
   // screenshot under ~/Desktop, /var/folders, wherever. This is the behavior the maintainer asked for.
-  const outside = mkdtempSync(join(tmpdir(), "fray-anywhere-"))
+  const outside = mkdtempSync(join(tmpdir(), "frizz-anywhere-"))
   const img = join(outside, "anywhere.png")
   writeFileSync(img, PNG)
   assert.equal(resolveLocalImage(img).status, 200)
@@ -360,7 +360,7 @@ test("/local-image route serves an agent screenshot under /tmp end-to-end", asyn
 
 test("/local-visualization binds a directive basename to the owning thread session", async () => {
   const port = 49_234
-  const projectDir = mkdtempSync(join(tmpdir(), "fray-inline-vis-route-"))
+  const projectDir = mkdtempSync(join(tmpdir(), "frizz-inline-vis-route-"))
   const dir = join(projectDir, ".codex", "visualizations", "2026", "07", "22", "session-a")
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, "spend-chart.html"), "<section>bound visualization</section>")
@@ -392,7 +392,7 @@ test("/local-visualization binds a directive basename to the owning thread sessi
 
 test("symlink to a real image resolves and renders → 200; a dangling symlink → 404", () => {
   const { root } = fixtures()
-  const outside = mkdtempSync(join(tmpdir(), "fray-out-"))
+  const outside = mkdtempSync(join(tmpdir(), "frizz-out-"))
   writeFileSync(join(outside, "real.png"), PNG)
   const link = join(root, "link.png")
   symlinkSync(join(outside, "real.png"), link)
@@ -404,7 +404,7 @@ test("symlink to a real image resolves and renders → 200; a dangling symlink �
 
 test("/attach accepts the safe tier, rejects office/extensionless/oversized, and writes a sanitized name", async () => {
   const port = 49_231
-  const stateDir = mkdtempSync(join(tmpdir(), "fray-attach-"))
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-attach-"))
   const app = originTestApp(port, undefined, {}, stateDir)
   const b64 = (s: string) => Buffer.from(s).toString("base64")
   const attach = (body: unknown) =>

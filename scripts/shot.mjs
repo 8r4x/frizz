@@ -1,4 +1,4 @@
-// Headless screenshot + in-page evaluate loop for iterating on the fray-ui UI.
+// Headless screenshot + in-page evaluate loop for iterating on the frizz UI.
 // No chrome-devtools MCP this session, so we drive puppeteer directly (it resolves the cached Chrome
 // under ~/.cache/puppeteer). This is the visual-review loop: screenshot + evaluate_script routines
 // (occlusion/clip/alignment/optical-center) against the live app.

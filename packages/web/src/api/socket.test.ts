@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import type { BoardSnapshot, SocketServerMsg } from "@fray-ui/shared"
+import type { BoardSnapshot, SocketServerMsg } from "@frizz/shared"
 
 type Listener = (event: unknown) => void
 

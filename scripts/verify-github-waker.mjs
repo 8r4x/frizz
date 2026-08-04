@@ -8,7 +8,7 @@ const refs = [
   ["github-waker-544", "nubjs/nub#544"],
   ["github-waker-549", "nubjs/nub#549"],
 ]
-const root = mkdtempSync(join(tmpdir(), "fray-github-waker-"))
+const root = mkdtempSync(join(tmpdir(), "frizz-github-waker-"))
 const storage = createStorage(join(root, "ui.db"))
 const telemetry = new Map()
 const logs = []
@@ -19,7 +19,7 @@ try {
     storage.upsertSession({
       slug,
       session_id: `sid-${slug}`,
-      tmux_name: `fray-${slug}`,
+      tmux_name: `frizz-${slug}`,
       spawned_at: fenceAt,
       last_read_at: null,
       unread: 0,

@@ -1,4 +1,4 @@
-import type { ThreadView } from "@fray-ui/shared"
+import type { ThreadView } from "@frizz/shared"
 import { Tooltip } from "./Tooltip.tsx"
 
 // HOW FULL THE SESSION'S CONTEXT IS — a glanceable donut in the bottom-left of every thread footer
@@ -45,7 +45,7 @@ export function ContextMeter({ thread }: { thread: ThreadView }) {
   const percent = displayPercent(context.tokens, context.window)
   // The arc's own fraction is NOT the floored percent: a 0.4%-full context should still show a hairline
   // of arc rather than a bare ring, and clamping keeps a reading that overshoots its window (a provider
-  // counting a request fray has not seen the window change for) from wrapping past 12 o'clock.
+  // counting a request frizz has not seen the window change for) from wrapping past 12 o'clock.
   const fraction = Math.max(0, Math.min(1, context.tokens / context.window))
   const label = `Context ${percent}% full\n${context.tokens.toLocaleString()} of ${context.window.toLocaleString()} tokens`
   return (

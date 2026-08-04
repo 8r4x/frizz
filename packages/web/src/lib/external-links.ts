@@ -1,4 +1,4 @@
-// Fray normally runs in an ordinary browser tab. External http(s) anchors should therefore stay in
+// Frizz normally runs in an ordinary browser tab. External http(s) anchors should therefore stay in
 // the browser's native click path: target=_blank opens a normal tab synchronously from the user
 // gesture, preserves modifier-key behavior, and cannot be stranded behind an async RPC. Internal
 // links and non-http schemes are left untouched so local navigation remains local.

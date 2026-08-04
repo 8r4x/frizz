@@ -10,7 +10,7 @@ import {
   resolveGitProjectIdentity,
   tryReservePort,
   type GitProjectIdentityScope,
-} from "@fray-ui/server/project-identity";
+} from "@frizz/server/project-identity";
 import {
   defaultProcessPlatformAdapter,
   processGenerationIsStale,
@@ -20,7 +20,7 @@ import {
   type ProjectLaunchOwnerRecord,
   type ProjectLaunchTarget,
   type ProcessPlatformAdapter,
-} from "@fray-ui/server/project-launch";
+} from "@frizz/server/project-launch";
 import {
   ALL_INTERFACES_BIND_HOST,
   bindHostIsExposed,
@@ -28,11 +28,11 @@ import {
   normalizeAllowedHosts,
   normalizeBindHost,
   normalizePublicOrigin,
-} from "@fray-ui/server/local-origin";
-import { readBootProgress } from "@fray-ui/server/boot-progress";
-import { frayPaths, projectStateDir } from "@fray-ui/server/fray-paths";
-import { defaultLogRoot, latestLogPath } from "@fray-ui/server/logging";
-import { DEFAULT_PORT } from "@fray-ui/shared";
+} from "@frizz/server/local-origin";
+import { readBootProgress } from "@frizz/server/boot-progress";
+import { frizzPaths, projectStateDir } from "@frizz/server/frizz-paths";
+import { defaultLogRoot, latestLogPath } from "@frizz/server/logging";
+import { DEFAULT_PORT } from "@frizz/shared";
 
 export { acquireGlobalLaunchLock, pidIsAlive };
 
@@ -61,7 +61,7 @@ export interface CliOptions {
   debug: boolean;
   port?: number;
   /**
-   * Bind address for the public port. Absent means Fray's loopback default; a bare `--host` means
+   * Bind address for the public port. Absent means Frizz's loopback default; a bare `--host` means
    * every interface. Only ever an IP literal — see normalizeBindHost.
    */
   host?: string;
@@ -95,7 +95,7 @@ export interface LauncherStatus {
   artifactDigest?: string;
 }
 
-export interface FrayHealth {
+export interface FrizzHealth {
   ok: true;
   projectId: string;
   projectDir: string;
@@ -103,7 +103,7 @@ export interface FrayHealth {
   ownerProof?: string;
 }
 
-export interface ExpectedFrayHealth {
+export interface ExpectedFrizzHealth {
   projectId: string;
   projectDir: string;
   ownerProof?: string;
@@ -124,7 +124,7 @@ export const FIRST_ARTIFACT_LAUNCH_LOCK_TIMEOUT_MS = 120_000;
  * Does the token after a bare `--host` belong to it?
  *
  * `--host` takes an optional value, and the launcher also takes a positional repository path, so
- * `fray-dev --host ~/code/app` is genuinely ambiguous to a naive "next token wins" parser — it would
+ * `frizz-dev --host ~/code/app` is genuinely ambiguous to a naive "next token wins" parser — it would
  * bind nothing and lose the repo. Every legal value here is an IP literal, so recognising one settles
  * it without a guess: anything else is the operator's repository and `--host` stands for every interface.
  */
@@ -238,13 +238,13 @@ export function parseCliArgs(argv: string[]): CliOptions {
     if (!known.has(arg)) throw new Error(`unknown option: ${arg}`);
   }
   if (args.has("--detach"))
-    throw new Error("--detach is no longer available; fray-dev always runs in the foreground");
+    throw new Error("--detach is no longer available; frizz-dev always runs in the foreground");
   if (args.has("--app") && args.has("--no-app"))
     throw new Error("choose either --app or --no-app");
   return {
     noApp: args.has("--no-app"),
     appMode: args.has("--app"),
-    // Retain the option in the parsed shape for callers, but normal fray-dev is always attached.
+    // Retain the option in the parsed shape for callers, but normal frizz-dev is always attached.
     foreground: true,
     stop: args.has("--stop"),
     status: args.has("--status"),
@@ -262,21 +262,21 @@ export function parseCliArgs(argv: string[]): CliOptions {
 /**
  * Printed whenever `--host` actually puts the board on a network.
  *
- * Fray has no login: reaching the port IS the authorization, and the board runs shell commands as the
+ * Frizz has no login: reaching the port IS the authorization, and the board runs shell commands as the
  * operator. Saying "exposed" alone would understate that by a lot.
  */
 export const EXPOSED_WARNING =
-  "Anyone who can reach this address can run commands on this machine as you. Fray has no login — only do this on a network you trust.";
+  "Anyone who can reach this address can run commands on this machine as you. Frizz has no login — only do this on a network you trust.";
 
 /**
  * Printed whenever `--public-origin` puts the board behind a proxy the operator named.
  *
  * A tunnel usually terminates on the public internet, which is a different and much larger blast
- * radius than a LAN. Fray still has no login of its own, so the authenticator in front is not an
+ * radius than a LAN. Frizz still has no login of its own, so the authenticator in front is not an
  * optional hardening step — it is the entire access control, and saying so is the point of this line.
  */
 export const PUBLIC_ORIGIN_WARNING =
-  "Fray has no login of its own, so whatever sits in front of this origin IS the access control. Require authentication there (Cloudflare Access, Tailscale) — an unauthenticated tunnel lets anyone with the URL run commands on this machine as you.";
+  "Frizz has no login of its own, so whatever sits in front of this origin IS the access control. Require authentication there (Cloudflare Access, Tailscale) — an unauthenticated tunnel lets anyone with the URL run commands on this machine as you.";
 
 export interface BindSelection {
   /** Address the public port binds. Always a literal address `listen()` accepts. */
@@ -290,9 +290,9 @@ export interface BindSelection {
 }
 
 /**
- * Merge `--host` / `--allowed-host` with `FRAY_HOST` / `FRAY_ALLOWED_HOSTS`, flags winning.
+ * Merge `--host` / `--allowed-host` with `FRIZZ_HOST` / `FRIZZ_ALLOWED_HOSTS`, flags winning.
  *
- * The environment variables exist because the people who want this run Fray from a container or a
+ * The environment variables exist because the people who want this run Frizz from a container or a
  * remote box where the launch command is baked into an image or a systemd unit and adding a flag is
  * the awkward part.
  */
@@ -300,15 +300,15 @@ export function resolveBindSelection(
   options: Pick<CliOptions, "host" | "allowedHosts" | "publicOrigin">,
   env: NodeJS.ProcessEnv = process.env
 ): BindSelection {
-  const fromEnv = env.FRAY_HOST?.trim();
+  const fromEnv = env.FRIZZ_HOST?.trim();
   const host = options.host ?? (fromEnv ? normalizeBindHost(fromEnv) : LOOPBACK_BIND_HOST);
   const allowedHosts = normalizeAllowedHosts([
     ...options.allowedHosts,
-    ...(env.FRAY_ALLOWED_HOSTS ? [env.FRAY_ALLOWED_HOSTS] : []),
+    ...(env.FRIZZ_ALLOWED_HOSTS ? [env.FRIZZ_ALLOWED_HOSTS] : []),
   ]);
   // Deliberately independent of `host`: a tunnel runs on this machine and dials the loopback port, so
   // the whole point of naming one is reaching the board from anywhere WITHOUT also putting it on the LAN.
-  const publicOriginRaw = options.publicOrigin ?? env.FRAY_PUBLIC_ORIGIN?.trim();
+  const publicOriginRaw = options.publicOrigin ?? env.FRIZZ_PUBLIC_ORIGIN?.trim();
   const publicOrigin = publicOriginRaw ? normalizePublicOrigin(publicOriginRaw) : undefined;
   return { host, exposed: bindHostIsExposed(host), allowedHosts, ...(publicOrigin ? { publicOrigin } : {}) };
 }
@@ -346,12 +346,12 @@ export function networkUrls(
   return urls;
 }
 
-export function helpText(command = "fray-dev"): string {
-  return `Fray source launcher
+export function helpText(command = "frizz-dev"): string {
+  return `Frizz source launcher
 
 Usage: ${command} [options] [repository]
 
-Run from any Git repository, or pass an explicit repository path. Fray serves a verified immutable
+Run from any Git repository, or pass an explicit repository path. Frizz serves a verified immutable
 artifact for that workspace, selecting or safely building one on first launch, then opens it in your
 default browser; source edits never restart the shared board.
 
@@ -370,21 +370,21 @@ Options:
   -h, --help             show this help
 
 Environment:
-  FRAY_HOST              same as --host
-  FRAY_ALLOWED_HOSTS     same as --allowed-host, comma separated
-  FRAY_PUBLIC_ORIGIN     same as --public-origin
+  FRIZZ_HOST              same as --host
+  FRIZZ_ALLOWED_HOSTS     same as --allowed-host, comma separated
+  FRIZZ_PUBLIC_ORIGIN     same as --public-origin
 
 Commands:
-  build                  build a new immutable candidate from the configured Fray source checkout
+  build                  build a new immutable candidate from the configured Frizz source checkout
   promote <digest>       explicitly select a verified candidate for this workspace
   restart                restart the currently promoted artifact without building
 
---host puts a board that can run shell commands as you on the network, and Fray has no login: anyone
+--host puts a board that can run shell commands as you on the network, and Frizz has no login: anyone
 who reaches the port controls it. Only do this on a network you trust. An IP address works as-is; to
 reach the board by DNS name you must list that name with --allowed-host ("*" allows any).
 
 --public-origin serves the board through a tunnel or reverse proxy without putting it on the LAN
-at all — Fray stays on loopback and the tunnel dials it. Fray still has no login, so require
+at all — Frizz stays on loopback and the tunnel dials it. Frizz still has no login, so require
 authentication at the proxy: with Cloudflare Access, that is the whole of your access control.
 
 An immutable artifact is the default. --dev is the only explicit unsafe source watcher/HMR mode.
@@ -405,7 +405,7 @@ export function resolveWorkspace(
     }).trim();
   } catch {
     throw new Error(
-      `fray-dev must be run inside a Git repository (cwd: ${cwd})`
+      `frizz-dev must be run inside a Git repository (cwd: ${cwd})`
     );
   }
   const identity = resolveGitProjectIdentity(realpathSync(gitRoot), home);
@@ -451,10 +451,10 @@ export function workspaceFromLaunchTarget(
   try {
     root = realpathSync(target.projectDir);
   } catch {
-    throw new Error("pinned Fray workspace is no longer available");
+    throw new Error("pinned Frizz workspace is no longer available");
   }
   if (root !== target.projectDir)
-    throw new Error("pinned Fray workspace path is not canonical");
+    throw new Error("pinned Frizz workspace path is not canonical");
   return {
     root,
     id: target.projectId,
@@ -546,7 +546,7 @@ export function liveWorkspaceOwner(
 }
 
 // A config validation failure deliberately leaves the prior healthy child serving while the durable
-// watcher waits for a corrective edit. Health alone therefore cannot make `fray-dev --status` green: the
+// watcher waits for a corrective edit. Health alone therefore cannot make `frizz-dev --status` green: the
 // supervisor lock is the authoritative signal that the newest generation needs attention.
 export function supervisorNeedsAttention(
   owner: LauncherStatus | null
@@ -590,11 +590,11 @@ export function persistLauncher(
   );
 }
 
-export async function probeFray(
+export async function probeFrizz(
   port: number,
-  expected: ExpectedFrayHealth,
+  expected: ExpectedFrizzHealth,
   fetcher: typeof fetch = fetch
-): Promise<FrayHealth | null> {
+): Promise<FrizzHealth | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 1000);
   timeout.unref?.();
@@ -603,7 +603,7 @@ export async function probeFray(
       signal: controller.signal,
     });
     if (!response.ok) return null;
-    const health = (await response.json()) as Partial<FrayHealth>;
+    const health = (await response.json()) as Partial<FrizzHealth>;
     if (
       health.ok !== true ||
       typeof health.projectId !== "string" ||
@@ -621,7 +621,7 @@ export async function probeFray(
       health.ownerProof !== expected.ownerProof
     )
       return null;
-    return health as FrayHealth;
+    return health as FrizzHealth;
   } catch {
     return null;
   } finally {
@@ -629,20 +629,20 @@ export async function probeFray(
   }
 }
 
-export async function requestFrayStop(
+export async function requestFrizzStop(
   port: number,
-  expected: ExpectedFrayHealth,
+  expected: ExpectedFrizzHealth,
   ownerToken: string,
   fetcher: typeof fetch = fetch
 ): Promise<boolean> {
-  if (!(await probeFray(port, expected, fetcher))) return false;
+  if (!(await probeFrizz(port, expected, fetcher))) return false;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 1_000);
   timeout.unref?.();
   try {
     const response = await fetcher(`http://127.0.0.1:${port}/control/stop`, {
       method: "POST",
-      headers: { "x-fray-launch-token": ownerToken },
+      headers: { "x-frizz-launch-token": ownerToken },
       signal: controller.signal,
     });
     return response.status === 202;
@@ -656,7 +656,7 @@ export async function requestFrayStop(
 export function expectedOwnerHealth(
   target: ProjectLaunchTarget,
   owner: ProjectLaunchOwnerRecord | null
-): ExpectedFrayHealth {
+): ExpectedFrizzHealth {
   return {
     projectId: target.projectId,
     projectDir: target.projectDir,
@@ -712,7 +712,7 @@ function portCandidates(preferred: number | undefined): number[] {
 }
 
 function noFreePortMessage(): string {
-  return `no free Fray development port found in ${DEFAULT_PORT}-${
+  return `no free Frizz development port found in ${DEFAULT_PORT}-${
     DEFAULT_PORT + PORT_SCAN_COUNT - 1
   }`;
 }
@@ -780,7 +780,7 @@ export interface WaitForWorkspaceOptions {
  *
  * WHY THIS IS NOT A FLAT DEADLINE. A launcher spawns the control plane detached and cannot see inside
  * it, so a flat 30s budget silently conflates "something is wrong" with "this board is big and this
- * machine is busy" — and the maintainer's own board hit that every time, printing "Fray did not become
+ * machine is busy" — and the maintainer's own board hit that every time, printing "Frizz did not become
  * healthy" while a perfectly healthy child kept booting behind it. Elapsed time is not evidence of
  * failure; a boot that has STOPPED MAKING PROGRESS is. So when the state dir is known, `timeoutMs` is
  * spent from the last observed progress step rather than from the start, and the failure message names
@@ -788,17 +788,17 @@ export interface WaitForWorkspaceOptions {
  */
 export async function waitForWorkspace(
   port: number,
-  expected: ExpectedFrayHealth,
+  expected: ExpectedFrizzHealth,
   timeoutMs = LAUNCH_TIMEOUT_MS,
   options: WaitForWorkspaceOptions = {}
-): Promise<FrayHealth> {
+): Promise<FrizzHealth> {
   const started = Date.now();
   const hardDeadline = started + (options.hardTimeoutMs ?? LAUNCH_HARD_TIMEOUT_MS);
   let stallDeadline = started + timeoutMs;
   let lastStep = -1;
   let lastPhase: string | undefined;
   for (;;) {
-    const health = await probeFray(port, expected);
+    const health = await probeFrizz(port, expected);
     if (health) return health;
     if (options.stateDir) {
       const progress = readBootProgress(options.stateDir);
@@ -815,8 +815,8 @@ export async function waitForWorkspace(
       const waited = Math.ceil((now - started) / 1000);
       throw new Error(
         lastPhase
-          ? `Fray did not become healthy on port ${port} after ${waited}s; its last reported boot step was "${lastPhase}" and it stopped making progress`
-          : `Fray did not become healthy on port ${port} within ${waited}s`
+          ? `Frizz did not become healthy on port ${port} after ${waited}s; its last reported boot step was "${lastPhase}" and it stopped making progress`
+          : `Frizz did not become healthy on port ${port} within ${waited}s`
       );
     }
     await delay(150);
@@ -824,11 +824,11 @@ export async function waitForWorkspace(
 }
 
 export function sourceWorkspaceDir(env: NodeJS.ProcessEnv = process.env): string {
-  // A durable artifact re-exec runs its deployed CLI from ~/.fray/builds, not this checkout.
+  // A durable artifact re-exec runs its deployed CLI from ~/.frizz/builds, not this checkout.
   // Preserve the original canonical checkout explicitly so Update & Restart continues to build
   // from the source the operator launched, rather than treating the artifact cache as source.
-  return env.FRAY_SOURCE_DIR
-    ? resolve(env.FRAY_SOURCE_DIR)
+  return env.FRIZZ_SOURCE_DIR
+    ? resolve(env.FRIZZ_SOURCE_DIR)
     : resolve(import.meta.dirname, "..");
 }
 
@@ -840,9 +840,9 @@ export function sourceLabel(): string {
  * The tail of this workspace's most recent run log, for a failure message that can show what the
  * server was doing when it gave up.
  *
- * This used to read `<stateDir>/dev.log` — a file Fray has never written since the detached
+ * This used to read `<stateDir>/dev.log` — a file Frizz has never written since the detached
  * supervisor was removed — and had no callers, so the diagnostic it appeared to offer always came
- * back empty. It now reads the run log that `@fray-ui/server/logging` actually produces.
+ * back empty. It now reads the run log that `@frizz/server/logging` actually produces.
  */
 export function logTail(stateDir: string, maxChars = 4000): string {
   try {

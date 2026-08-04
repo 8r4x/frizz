@@ -1,7 +1,7 @@
 // CI test for the two things the Claude broker was missing next to the codex app-server: an EAGER boot
 // reattach (`warmUp`), and a named cause for a daemon death.
 //
-// Driven by the FAKE claude CLI against a REAL forked daemon over a real socket — the fray restart is
+// Driven by the FAKE claude CLI against a REAL forked daemon over a real socket — the frizz restart is
 // simulated the way it actually happens (the bridge's clients go away; the detached daemon does not),
 // so the assertion is about the real reconnect path, not a stand-in for it.
 import { chmodSync, copyFileSync, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs"
@@ -47,11 +47,11 @@ function fakeExe(dir: string, scenario: string): string {
 
 // THE test for warmUp, with its own control in the same run.
 //
-// A tool-permission escalation is raised while fray is DOWN: fray #1 never answers it, then goes away
+// A tool-permission escalation is raised while frizz is DOWN: frizz #1 never answers it, then goes away
 // without touching the daemon. The daemon holds the canUseTool promise and re-delivers it to whoever
 // attaches next — but before warmUp() nothing ever attached, so the card never appeared and the thread
 // sat blocked on a promise nobody could answer until a human sent it a follow-up.
-test("warmUp reattaches a live daemon at boot and routes a permission raised while fray was down", { timeout: 30_000 }, async () => {
+test("warmUp reattaches a live daemon at boot and routes a permission raised while frizz was down", { timeout: 30_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "cbrk-warm-"))
   const exe = fakeExe(dir, "permission")
   const env = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" }
@@ -59,8 +59,8 @@ test("warmUp reattaches a live daemon at boot and routes a permission raised whi
   const slug = "warm-thread"
   const scope = { projectId: "proj-warm", threadSlug: slug, sessionId }
 
-  // fray #1: no dashboard store, and a decision hook that NEVER answers — the escalation is raised and
-  // left hanging, exactly as it would be if fray died between the request and the human seeing it.
+  // frizz #1: no dashboard store, and a decision hook that NEVER answers — the escalation is raised and
+  // left hanging, exactly as it would be if frizz died between the request and the human seeing it.
   let escalations = 0
   const first = createClaudeAgentBrokerBridge({
     stateDir: dir, executablePath: exe, env,
@@ -71,13 +71,13 @@ test("warmUp reattaches a live daemon at boot and routes a permission raised whi
   try {
     await first.spawnDispatch({ threadSlug: slug, sessionId, cwd: dir, prompt: "do the thing", permissionMode: "default" })
     await waitFor(() => escalations > 0)
-    // fray #1 goes away. close() drops the sockets and deliberately leaves the daemon running — that IS
+    // frizz #1 goes away. close() drops the sockets and deliberately leaves the daemon running — that IS
     // the restart, and it is why the broker exists.
     first.close()
     await sleep(300)
-    assert.ok(readBrokerRecord(claudeBrokerRecordPath(dir, sessionId)), "the detached daemon outlived fray #1")
+    assert.ok(readBrokerRecord(claudeBrokerRecordPath(dir, sessionId)), "the detached daemon outlived frizz #1")
 
-    // fray #2 boots. Constructed exactly as context.ts constructs it, ownedSessions included.
+    // frizz #2 boots. Constructed exactly as context.ts constructs it, ownedSessions included.
     second = createClaudeAgentBrokerBridge({
       stateDir: dir, executablePath: exe, env,
       interactions: store, projectId: "proj-warm",
@@ -159,7 +159,7 @@ test("warmUp swallows a throwing resolver and an absent record directory", { tim
 
 // ---- death attribution -------------------------------------------------------------------------
 
-test("a broker records WHY it exited — fray asked for it", { timeout: 15_000 }, async () => {
+test("a broker records WHY it exited — frizz asked for it", { timeout: 15_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "cbrk-exit-"))
   const exe = fakeExe(dir, "basic")
   const sessionId = randomUUID()
@@ -175,7 +175,7 @@ test("a broker records WHY it exited — fray asked for it", { timeout: 15_000 }
     await broker.close()
     const exit = readClaudeBrokerExit(dir, sessionId)
     assert.ok(exit, "the daemon recorded its exit")
-    assert.equal(exit.exit.reason, "fray-requested")
+    assert.equal(exit.exit.reason, "frizz-requested")
     assert.equal(exit.daemonPid, process.pid)
     assert.ok(exit.generation.length > 0, "the record names the generation that died")
   } finally {
@@ -184,7 +184,7 @@ test("a broker records WHY it exited — fray asked for it", { timeout: 15_000 }
   }
 })
 
-// The most common broker death there is: fray's own killBroker, an operator `kill`, an OS shutdown.
+// The most common broker death there is: frizz's own killBroker, an operator `kill`, an OS shutdown.
 // The signal handler exits IMMEDIATELY by design and never reaches shutdown(), so before this it left
 // no trace whatsoever.
 test("a SIGTERMed daemon records signal-SIGTERM, and the bridge reports it", { timeout: 30_000 }, async () => {

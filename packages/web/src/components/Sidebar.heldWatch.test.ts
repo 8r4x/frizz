@@ -3,7 +3,7 @@ import test from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import type { ThreadView } from "@fray-ui/shared"
+import type { ThreadView } from "@frizz/shared"
 import { ThreadRow } from "./Sidebar.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
 
@@ -91,7 +91,7 @@ test("every park that is NOT a watch keeps the hourglass", () => {
 })
 
 test("a usage-limit park keeps the hourglass even when the fence carries a watch", () => {
-  // The limit is what is holding this row — fray auto-resumes it when the window resets — so the mark
+  // The limit is what is holding this row — frizz auto-resumes it when the window resets — so the mark
   // names THAT, not the PR it happened to be watching when the window ran out.
   const html = row({
     runtime: "exited",

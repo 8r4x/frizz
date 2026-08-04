@@ -1,5 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query"
-import type { SocketClientMsg, SocketServerMsg } from "@fray-ui/shared"
+import type { SocketClientMsg, SocketServerMsg } from "@frizz/shared"
 import { store } from "../store.ts"
 import { BoardStream } from "./board-stream.ts"
 import { connectSSE } from "./sse.ts"
@@ -229,7 +229,7 @@ function handle(msg: SocketServerMsg): boolean {
     case "payload-too-large":
       if (msg.channel === "board") {
         if (!store.socketBoardFallback) {
-          console.warn("[fray] live board payload exceeded the socket limit; using SSE", {
+          console.warn("[frizz] live board payload exceeded the socket limit; using SSE", {
             actualBytes: msg.actualBytes,
             maxBytes: msg.maxBytes,
           })
@@ -237,7 +237,7 @@ function handle(msg: SocketServerMsg): boolean {
         fallBackToSSE({ actualBytes: msg.actualBytes, maxBytes: msg.maxBytes })
       } else {
         if (!store.socketTranscriptFallbacks[msg.slug]) {
-          console.warn("[fray] live transcript payload exceeded the socket limit; updates paused", {
+          console.warn("[frizz] live transcript payload exceeded the socket limit; updates paused", {
             slug: msg.slug,
             actualBytes: msg.actualBytes,
             maxBytes: msg.maxBytes,
@@ -252,7 +252,7 @@ function handle(msg: SocketServerMsg): boolean {
       return false
     case "resource-limited":
       if (!store.socketTranscriptFallbacks[msg.slug]) {
-        console.warn("[fray] live transcript read budget reached; updates paused", {
+        console.warn("[frizz] live transcript read budget reached; updates paused", {
           slug: msg.slug,
           scope: msg.scope,
           retryAfterMs: msg.retryAfterMs,

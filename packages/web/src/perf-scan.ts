@@ -3,7 +3,7 @@
 //
 // It answers one question we otherwise can only guess at: when opening a thread drawer, WHICH
 // components render, how many times, and how much of that was avoidable? Results land on
-// `window.__frayScan` for a CDP routine to read back.
+// `window.__frizzScan` for a CDP routine to read back.
 import { scan } from "react-scan"
 
 interface ScanRecord {
@@ -19,7 +19,7 @@ interface ScanRecord {
 
 declare global {
   interface Window {
-    __frayScan?: {
+    __frizzScan?: {
       records: Map<string, ScanRecord>
       reset(): void
       dump(limit?: number): { name: string; count: number; selfTimeMs: number; unnecessary: number; judged: number }[]
@@ -34,7 +34,7 @@ export function installRenderScan(): void {
   if (!new URLSearchParams(window.location.search).has("scan")) return
 
   const records = new Map<string, ScanRecord>()
-  window.__frayScan = {
+  window.__frizzScan = {
     records,
     reset: () => records.clear(),
     dump: (limit = 40) =>

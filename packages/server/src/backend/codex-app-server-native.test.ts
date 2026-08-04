@@ -6,7 +6,7 @@
 //
 // End-to-end proof that the transport actually carries Codex lives in the artifact harnesses
 // (`scripts/verify-artifact-daemon-closure.mjs` and `verify-artifact-restart-survival.mjs`, both run
-// with FRAY_CODEX_NATIVE_LISTEN=1).
+// with FRIZZ_CODEX_NATIVE_LISTEN=1).
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { createServer, type Server } from "node:http"
@@ -37,7 +37,7 @@ interface Fixture {
 }
 
 async function fixture(): Promise<Fixture> {
-  const root = mkdtempSync(join(tmpdir(), "fray-native-host-"))
+  const root = mkdtempSync(join(tmpdir(), "frizz-native-host-"))
   const stateDir = join(root, "state")
   const projectId = randomUUID()
   const socketPath = join(root, "listener.sock")
@@ -155,7 +155,7 @@ test("kill() detaches the attachment and leaves the listener running", async () 
     assert.equal(f.closes, 1, "the WebSocket must be closed")
     assert.equal(exited, true, "a lost attachment surfaces to the bridge as an exit")
     // The listener is untouched — still bound, still discoverable, still reattachable. This is the
-    // property the operator explicitly likes: quitting fray does not stop Codex.
+    // property the operator explicitly likes: quitting frizz does not stop Codex.
     assert.ok(liveNativeRecord(f.stateDir, f.projectId), "the record must survive a detach")
     const again = await nativeListenCodexAppServerHost(hostOptions(f))
     await settle()
@@ -166,7 +166,7 @@ test("kill() detaches the attachment and leaves the listener running", async () 
 })
 
 // ---- lifecycle ownership ---------------------------------------------------------------------------
-// The counterpart to the detach test above: fray must be able to END a listener it can start, or an
+// The counterpart to the detach test above: frizz must be able to END a listener it can start, or an
 // upgraded codex can never displace the process holding this project's socket. The one production
 // teardown is `stopCodexAppServerDaemon` (the bridge's version-skew refork), which cannot tell the
 // transports apart — so it is what this drives, not `killNativeListener` directly.

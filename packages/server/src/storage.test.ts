@@ -25,14 +25,14 @@ function profileHandoff(
 }
 
 function store(): Storage {
-  return createStorage(join(mkdtempSync(join(tmpdir(), "fray-storage-")), "ui.db"))
+  return createStorage(join(mkdtempSync(join(tmpdir(), "frizz-storage-")), "ui.db"))
 }
 
 function row(over: Partial<SessionRow> = {}): SessionRow {
   const result = {
     slug: "t",
     session_id: "sid",
-    tmux_name: "fray-t",
+    tmux_name: "frizz-t",
     spawned_at: "2026-07-01T00:00:00.000Z",
     last_read_at: null,
     unread: 0,
@@ -48,7 +48,7 @@ function row(over: Partial<SessionRow> = {}): SessionRow {
     transcript_id: null,
     ...over,
   }
-  if (over.slug !== undefined && over.tmux_name === undefined) result.tmux_name = `fray-${result.slug}`
+  if (over.slug !== undefined && over.tmux_name === undefined) result.tmux_name = `frizz-${result.slug}`
   return result
 }
 
@@ -60,7 +60,7 @@ test("storage close is idempotent", () => {
 })
 
 test("insertSessionIfAbsent atomically preserves the winner and writes backend identity in one claim", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-storage-claim-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-storage-claim-"))
   const path = join(dir, "ui.db")
   const first = createStorage(path)
   const second = createStorage(path)
@@ -384,7 +384,7 @@ test("observed runtime profiles persist only for the current generation outside 
 })
 
 test("session permission actual/pending values round-trip independently and survive reopen", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-storage-permission-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-storage-permission-"))
   const path = join(dir, "ui.db")
   const s = createStorage(path)
   s.upsertSession(row({ slug: "permissioned", permission_mode: "auto" }))
@@ -410,7 +410,7 @@ test("session permission actual/pending values round-trip independently and surv
 // runtimeControlPending forever — permanently fencing that thread's composer, model, and sandbox
 // controls with nothing left in the product able to clear it. Boot releases it exactly once.
 test("boot releases a stranded 'codex-input' runtime lock left by the retired tmux composer", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-storage-codex-input-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-storage-codex-input-"))
   const path = join(dir, "ui.db")
   const s = createStorage(path)
   s.upsertSession(row({ slug: "stranded" }))
@@ -419,7 +419,7 @@ test("boot releases a stranded 'codex-input' runtime lock left by the retired tm
   s.close()
 
   // Forge the pre-upgrade state directly: 'codex-input' is no longer a RuntimeControlKind, so this is
-  // exactly how a db written by a pre-cutover fray looks on disk.
+  // exactly how a db written by a pre-cutover frizz looks on disk.
   const sqlite = new Database(path)
   sqlite.exec("UPDATE session SET runtime_control = 'codex-input' WHERE slug = 'stranded'")
   sqlite.close()
@@ -434,7 +434,7 @@ test("boot releases a stranded 'codex-input' runtime lock left by the retired tm
 // crash. It can never complete (recovery reads the pane with the Claude composer parser), and the
 // recovery loop would re-block the thread on every tick. Boot abandons it and explains why.
 test("boot abandons a codex row still holding the retired tmux profile handoff", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-storage-codex-profile-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-storage-codex-profile-"))
   const path = join(dir, "ui.db")
   const s = createStorage(path)
   s.upsertSession(row({ slug: "codex-stuck" }))
@@ -466,7 +466,7 @@ test("boot abandons a codex row still holding the retired tmux profile handoff",
 })
 
 test("manual snooze persists exactly across restart, expires atomically, and Archive clears it", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-storage-snooze-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-storage-snooze-"))
   const path = join(dir, "ui.db")
   const exact = "2026-07-14T08:45:12.345Z"
   let s = createStorage(path)
@@ -490,7 +490,7 @@ test("manual snooze persists exactly across restart, expires atomically, and Arc
 })
 
 test("a snooze carrying a prompt outlives its deadline for the waker, and the pair is written/cleared atomically", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-storage-snooze-prompt-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-storage-snooze-prompt-"))
   const path = join(dir, "ui.db")
   const exact = "2026-07-14T08:45:12.345Z"
   let s = createStorage(path)
@@ -635,7 +635,7 @@ test("completeIfCurrent atomically settles one exact runtime generation", () => 
 })
 
 test("explicit thread title: replaces the generated fallback, clears title_auto, and survives reopen/resume", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-storage-title-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-storage-title-"))
   const path = join(dir, "ui.db")
   const s = createStorage(path)
   s.upsertSession(row({ slug: "generated-slug", title: "generated-slug", title_auto: 1 }))
@@ -659,7 +659,7 @@ test("explicit thread title: replaces the generated fallback, clears title_auto,
 })
 
 test("conditional AI title commit cannot overwrite a manual rename or replacement session", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-storage-title-cas-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-storage-title-cas-"))
   const s = createStorage(join(dir, "ui.db"))
   s.upsertSession(row({ slug: "rename-race", session_id: "old-session", title: "Old title", title_auto: 1 }))
   const expected = { sessionId: "old-session", title: "Old title", titleAuto: 1 }
@@ -679,7 +679,7 @@ test("automatic title CAS persists provenance and rejects manual, native-session
   const s = store()
   s.upsertSession(row({
     slug: "codex-title",
-    session_id: "fray-session",
+    session_id: "frizz-session",
     runtime_generation: 3,
     title: "raw initial prompt",
     title_auto: 1,
@@ -687,7 +687,7 @@ test("automatic title CAS persists provenance and rejects manual, native-session
   // Dispatch intentionally writes backend identity through dedicated setters after the shared upsert.
   s.setBackend("codex-title", "codex")
   s.setAgentSession("codex-title", "codex-native")
-  const expected = { sessionId: "fray-session", nativeSessionId: "codex-native", runtimeGeneration: 3 }
+  const expected = { sessionId: "frizz-session", nativeSessionId: "codex-native", runtimeGeneration: 3 }
 
   assert.equal(s.setAutoTitleIfCurrent("codex-title", "Useful generated title", expected), true)
   assert.equal(s.getSession("codex-title")?.title, "Useful generated title")
@@ -720,11 +720,11 @@ test("automatic title CAS persists provenance and rejects manual, native-session
 
 test("a dispatch title a CALLER hard-coded is displayable but replaceable; only a human's locks", () => {
   const s = store()
-  // What the GitHub batch and `mcp__fray__spawn_thread` write: a real-looking name (title_auto 0, so the
+  // What the GitHub batch and `mcp__frizz__spawn_thread` write: a real-looking name (title_auto 0, so the
   // UI never hides it behind a placeholder) that no human chose (title_locked 0).
   s.upsertSession(row({
     slug: "gh-thread",
-    session_id: "fray-session",
+    session_id: "frizz-session",
     runtime_generation: 0,
     title: "Investigate acme/app#391",
     title_auto: 0,
@@ -732,7 +732,7 @@ test("a dispatch title a CALLER hard-coded is displayable but replaceable; only 
   }))
   s.setBackend("gh-thread", "codex")
   s.setAgentSession("gh-thread", "codex-native")
-  const expected = { sessionId: "fray-session", nativeSessionId: "codex-native", runtimeGeneration: 0 }
+  const expected = { sessionId: "frizz-session", nativeSessionId: "codex-native", runtimeGeneration: 0 }
 
   assert.equal(s.setAutoTitleIfCurrent("gh-thread", "Cache key collides on normalized ids", expected), true)
   assert.equal(s.getSession("gh-thread")?.title, "Cache key collides on normalized ids")
@@ -768,7 +768,7 @@ test("a row written without title_locked keeps the pre-split rule: any non-guess
 })
 
 test("the title_locked migration backfills conservatively and its boot repair is idempotent", () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "fray-title-lock-")), "ui.db")
+  const dbPath = join(mkdtempSync(join(tmpdir(), "frizz-title-lock-")), "ui.db")
   const first = createStorage(dbPath)
   first.upsertSession(row({ slug: "named", session_id: "sid-a", title: "Human name", title_auto: 0, title_locked: 1 }))
   first.upsertSession(row({ slug: "guessed", session_id: "sid-b", title: "raw prompt chop", title_auto: 1, title_locked: 0 }))
@@ -802,7 +802,7 @@ test("the title_locked migration backfills conservatively and its boot repair is
 })
 
 test("the one-time repair unlocks titles a dispatch minted, and never a human's rename", () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "fray-title-repair-")), "ui.db")
+  const dbPath = join(mkdtempSync(join(tmpdir(), "frizz-title-repair-")), "ui.db")
   const first = createStorage(dbPath)
   // Slugs as the dispatcher mints them: slugify(title), plus the -2 suffix resolveSlug adds on a
   // collision. `renamed` is the counter-case — a thread the human renamed, so its slug still reads as

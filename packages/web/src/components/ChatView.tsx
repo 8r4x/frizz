@@ -5,8 +5,8 @@ import * as RadixTabs from "@radix-ui/react-tabs"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, ArrowUpRight, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, ShieldCheck, Sparkles, TerminalSquare, X, type LucideIcon } from "lucide-react"
-import { parseRecurringPrompt } from "@fray-ui/shared"
-import type { AwaitingHint, BgShellView, NativeInputRequired as NativeInputRequiredData, PendingAsk, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@fray-ui/shared"
+import { parseRecurringPrompt } from "@frizz/shared"
+import type { AwaitingHint, BgShellView, NativeInputRequired as NativeInputRequiredData, PendingAsk, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBackgroundShellLines, useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
@@ -210,11 +210,11 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
   const thread = threadBySlug(board, slug)
   const running = thread?.runtime === "running" || thread?.runtime === "spawning"
   // Foreign terminals are transcript-only: even if a stale/malformed snapshot happened to carry a
-  // native modal field, never offer a terminal control Fray does not own.
+  // native modal field, never offer a terminal control Frizz does not own.
   const nativeInputRequired = thread?.foreign ? undefined : thread?.nativeInputRequired
   const copyTerminalCommand = useCopyTerminalCommand(slug)
   // The safety-net readout for a session frozen at a native AskUserQuestion — "answer it in your
-  // external terminal". That is the WRONG thing to say once fray OWNS the question: the broker path
+  // external terminal". That is the WRONG thing to say once frizz OWNS the question: the broker path
   // journals the same tool call as an answerable interaction, which renders as the question card just
   // above, and pointing the operator at a terminal while an answerable copy sits on screen is worse
   // than saying nothing. So the net stands down whenever this thread has a pending interaction, and
@@ -433,9 +433,9 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
             ) : running ? (
               <span className="flex items-center gap-2"><Dots /> Session starting…</span>
             ) : canAdoptThread(thread) ? (
-              // A thread fray-ui never originated (pre-existing .fray board): no session, no
+              // A thread frizz never originated (pre-existing .frizz board): no session, no
               // transcript. Cold-adopt it — a fresh worker reads the thread FILE and continues;
-              // per the fray contract the doc, not the conversation, is the durable context.
+              // per the frizz contract the doc, not the conversation, is the durable context.
               // (Session language, not "agent": the thing that attaches IS an agent process, but the
               // UI's thread/session vocabulary keeps "agent" for genuine child sub-agents only.)
               <div className="text-center">
@@ -587,7 +587,7 @@ const READER_GESTURE_MS = 700
 // during it should win the moment it ends.
 const ANCHOR_RESTORE_MS = 250
 
-// Opt-in drift diagnostic: `localStorage["fray.debugScroll"] = "1"`, then reload.
+// Opt-in drift diagnostic: `localStorage["frizz.debugScroll"] = "1"`, then reload.
 //
 // The mid-scroll drift this file works to prevent does NOT reproduce headlessly — a scripted wheel has
 // no momentum, and a seeded transcript has no images or async-settling cards — so a harness that goes
@@ -596,7 +596,7 @@ const ANCHOR_RESTORE_MS = 250
 // moves while the reader is not touching the scroller, and names the pin at that moment, so a live
 // sighting comes with its size and its trigger instead of "it jumped again".
 const DEBUG_SCROLL = (() => {
-  try { return localStorage.getItem("fray.debugScroll") === "1" } catch { return false }
+  try { return localStorage.getItem("frizz.debugScroll") === "1" } catch { return false }
 })()
 
 type TranscriptTransportFallback = ReturnType<typeof useTranscript>["transportFallback"]
@@ -1041,7 +1041,7 @@ function VirtualizedThreadTranscript({
         .find((element) => element.dataset.transcriptRowKey === previous.rowKey && element.dataset.transcriptSticky !== "true")
       if (previous && row) {
         const drift = Math.round(row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - previous.viewportTop)
-        if (Math.abs(drift) > 2) console.warn(`[fray] transcript moved ${drift}px under a still reader — pin=${pinnedRowKeyRef.current ?? "none"} row=${previous.rowKey}`)
+        if (Math.abs(drift) > 2) console.warn(`[frizz] transcript moved ${drift}px under a still reader — pin=${pinnedRowKeyRef.current ?? "none"} row=${previous.rowKey}`)
       }
     }
     // LAST: refresh where the reader is looking. This runs on every commit, every settle and every
@@ -1327,7 +1327,7 @@ export function ThreadHeader({ slug, tab, onStatusApplied, onClose, showReturnTo
     setEditingTitle(false)
     setTitleDraft("")
   }, [slug])
-  // The "Fray document" header affordance opens .fray/<slug>.md (threadBody). Many session threads have
+  // The "Frizz document" header affordance opens .frizz/<slug>.md (threadBody). Many session threads have
   // no such file — their working doc is the scratchpad (the Doc tab) — so the button would dead-end on
   // "No thread file found". Gate it on the doc actually having body content (same stripFrontmatter the
   // drawer renders through), so it shows iff there's a real doc to open. Shares the drawer's cached query
@@ -1524,7 +1524,7 @@ function Tab({ value, label }: { value: ThreadTab; label: string }) {
   )
 }
 
-// The scratchpad doc tab: a session thread's compaction-proof working memory (.fray/threads/<id>/scratch.md),
+// The scratchpad doc tab: a session thread's compaction-proof working memory (.frizz/threads/<id>/scratch.md),
 // rendered read-only as markdown. Refetched on open (a simple query); the worker rewrites the file as
 // it works, so a re-open picks up the latest. Empty when never provisioned.
 function ScratchpadPane({ slug }: { slug: string }) {
@@ -2009,7 +2009,7 @@ type ToolStatus = NonNullable<TranscriptToolCall["status"]>
 // systems, four saturations, two duration formatters and two separators, for eight readings of the same
 // kind (maintainer 2026-07-29: "a bizarre mix of font sizes, color saturations, and capitalization").
 // Worse, the lowercase half also sat 1.0px BELOW the title's cap band, because only the petite-caps half
-// carried `fray-tool-header-caps`'s optical lift.
+// carried `frizz-tool-header-caps`'s optical lift.
 //
 // So the typography, the `·` separator and the optical correction now live HERE, once, and a caller may
 // only choose its WORDS and its TONE. Consistency by construction: a new reading cannot invent a second
@@ -2022,7 +2022,7 @@ function ToolMetaReading({ tone, indicator, label, duration, title }: {
   title: string
 }) {
   return (
-    <span className={`petite-caps fray-tool-header-caps flex shrink-0 items-center gap-1 whitespace-nowrap text-[11.5px] leading-none ${tone}`} title={title} aria-label={title}>
+    <span className={`petite-caps frizz-tool-header-caps flex shrink-0 items-center gap-1 whitespace-nowrap text-[11.5px] leading-none ${tone}`} title={title} aria-label={title}>
       {indicator}
       <span>{[label, duration].filter(Boolean).join(" · ")}</span>
     </span>
@@ -2079,23 +2079,23 @@ function useForegroundRunning(status: ToolStatus | undefined, backgroundState: T
 function ToolLiveMark({ status, backgroundState, liveBackgroundState, startedAt }: { status?: ToolStatus; backgroundState?: TranscriptToolCall["backgroundState"]; liveBackgroundState?: "running" | "stale"; startedAt?: string }) {
   const foregroundRunning = useForegroundRunning(status, backgroundState, startedAt)
   // Precedence follows the READING beside it, exactly: a tracked op's own observed state outranks the
-  // call's pending-ness, so a shell fray watches and finds quiet draws the breathing mark next to the
+  // call's pending-ness, so a shell frizz watches and finds quiet draws the breathing mark next to the
   // word "stale". The old right-hand indicator tested `running || pending-background` first and so
   // pulsed at full brightness beside its own "stale" — the same self-contradiction the agent rows had
   // to unlearn. `pending && background` is the fallback: detached, but no live op correlated to it.
   const mark =
     liveBackgroundState === "running" ? (
-      <span aria-hidden className="fray-live-dot fray-live-dot--shell" data-running-indicator="tool-disclosure" />
+      <span aria-hidden className="frizz-live-dot frizz-live-dot--shell" data-running-indicator="tool-disclosure" />
     ) : liveBackgroundState === "stale" ? (
-      <span aria-hidden className="fray-live-dot-quiet fray-live-dot-quiet--shell" data-running-indicator="tool-quiet" title={CHILD_QUIET_SHELL_TITLE} />
+      <span aria-hidden className="frizz-live-dot-quiet frizz-live-dot-quiet--shell" data-running-indicator="tool-quiet" title={CHILD_QUIET_SHELL_TITLE} />
     ) : hasRunningToolIndicator(status, backgroundState) || foregroundRunning ? (
-      <span aria-hidden className="fray-live-dot fray-live-dot--shell" data-running-indicator="tool-disclosure" />
+      <span aria-hidden className="frizz-live-dot frizz-live-dot--shell" data-running-indicator="tool-disclosure" />
     ) : null
   if (!mark) return null
   // `-mr-1` pulls the label back to roughly the dot↔label gap the child lines use: the header's own
   // gap-2 is tuned for a petite-caps label beside a path, and at full width a 6px dot floated away from
   // the word it qualifies.
-  return <span className="fray-tool-mark -mr-1 flex w-[9px] shrink-0 justify-center">{mark}</span>
+  return <span className="frizz-tool-mark -mr-1 flex w-[9px] shrink-0 justify-center">{mark}</span>
 }
 
 export function ToolStatusMeta({ status, backgroundState, liveBackgroundState, exitCode, durationMs }: { status?: ToolStatus; backgroundState?: TranscriptToolCall["backgroundState"]; liveBackgroundState?: "running" | "stale"; exitCode?: number; durationMs?: number }) {
@@ -2125,7 +2125,7 @@ export function ToolStatusMeta({ status, backgroundState, liveBackgroundState, e
             : [undefined, undefined]
   const duration = durationMs !== undefined ? formatToolDuration(durationMs) : undefined
   const title = [longLabel, duration].filter(Boolean).join(" · ")
-  const tone = status === "failed" ? "fray-tool-failed" : status === "cancelled" ? "text-amber-400" : "text-muted/55"
+  const tone = status === "failed" ? "frizz-tool-failed" : status === "cancelled" ? "text-amber-400" : "text-muted/55"
   return (
     <ToolMetaReading
       tone={tone}
@@ -2181,8 +2181,8 @@ function isFilePath(detail: string): boolean {
   return detail.startsWith("/") && !detail.includes(" ") && !detail.includes("…")
 }
 
-// A header-only tool card: the IDENTICAL bordered card chrome as Bash/Read/Edit/Agent (same .fray-bash
-// container + .fray-bash-header — border, bg, radius, padding, the label↔detail gap, 12.5px mono) but
+// A header-only tool card: the IDENTICAL bordered card chrome as Bash/Read/Edit/Agent (same .frizz-bash
+// container + .frizz-bash-header — border, bg, radius, padding, the label↔detail gap, 12.5px mono) but
 // with NO expandable body, so it drops only the chevron. This is the fallback for every call without a
 // payload — Grep, Glob, a pre-restart command-less Bash / excerpt-less Read, MCP tools, Monitor — the
 // COMMON case pre-restart, so it must be indistinguishable from a real card header. petite-caps label
@@ -2193,11 +2193,11 @@ function ToolCard({ name, detail, count, status, backgroundState, liveBackground
   const short = shownDetail ? shortenTarget(shownDetail) : undefined
   const linkPath = detail && isFilePath(detail) ? detail : undefined
   return (
-    <div className="fray-bash" title={shownDetail}>
-      <div className="fray-bash-header">
+    <div className="frizz-bash" title={shownDetail}>
+      <div className="frizz-bash-header">
         <span className="flex min-w-0 items-center gap-2">
           <ToolLiveMark status={status} backgroundState={backgroundState} liveBackgroundState={liveBackgroundState} startedAt={startedAt} />
-          <span className="petite-caps fray-bash-label shrink-0">{prettyToolName(name)}</span>
+          <span className="petite-caps frizz-bash-label shrink-0">{prettyToolName(name)}</span>
           {short &&
             (linkPath ? (
               // The path link swallows its own click so opening the file doesn't select the card.
@@ -2230,9 +2230,9 @@ function ToolCard({ name, detail, count, status, backgroundState, liveBackground
 function ToolImageCard({ name, detail, outputImage, output, status, durationMs }: { name: string; detail?: string; outputImage: string; output?: string; status?: ToolStatus; durationMs?: number }) {
   const short = detail ? shortenTarget(detail) : undefined
   const header = (
-    <div className="fray-bash-header">
+    <div className="frizz-bash-header">
       <span className="flex min-w-0 items-center gap-2">
-        <span className="petite-caps fray-bash-label shrink-0">{prettyToolName(name)}</span>
+        <span className="petite-caps frizz-bash-label shrink-0">{prettyToolName(name)}</span>
         {short && <span className="min-w-0 truncate text-[11.5px] text-muted" title={detail}>{short}</span>}
       </span>
       <span className="flex shrink-0 items-center gap-2">
@@ -2246,12 +2246,12 @@ function ToolImageCard({ name, detail, outputImage, output, status, durationMs }
           caption would read "9f2c…c1.png" — noise directly under a header that already names the real
           file. Drop it and give the picture the real target as its alt. */}
       <BlockImage path={outputImage} hideCaption altText={short ? `${prettyToolName(name)}: ${short}` : prettyToolName(name)} header={header} />
-      {output && <pre className="fray-bash fray-bash-body fray-bash-output-body mt-1.5">{output}</pre>}
+      {output && <pre className="frizz-bash frizz-bash-body frizz-bash-output-body mt-1.5">{output}</pre>}
     </div>
   )
 }
 
-// A SendUserFile delivery — the worker surfacing files to the human. Same card family (`fray-bash`) and
+// A SendUserFile delivery — the worker surfacing files to the human. Same card family (`frizz-bash`) and
 // header as ToolImageCard so it reads as one of the tool cards, but OPEN by default: seeing the delivered
 // images IS the point. Body: images inline (stacked, via the gated /local-image route), non-image files as
 // openable chips (BlockFile → the gated opener), and the `caption` below in muted prose (capped ~65% wide
@@ -2264,7 +2264,7 @@ function SentFilesCard({ images, files, caption, status, durationMs }: { images:
     files.length ? `${files.length} file${files.length === 1 ? "" : "s"}` : "",
   ].filter(Boolean).join(" · ")
   return (
-    <div className="fray-bash">
+    <div className="frizz-bash">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -2272,10 +2272,10 @@ function SentFilesCard({ images, files, caption, status, durationMs }: { images:
         aria-controls={bodyId}
         aria-expanded={open}
         aria-label={`${open ? "Collapse" : "Expand"} files sent to you${summary ? `: ${summary}` : ""}`}
-        className="fray-bash-header w-full text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-fg/60"
+        className="frizz-bash-header w-full text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-fg/60"
       >
         <span className="flex min-w-0 items-center gap-2">
-          <span className="petite-caps fray-bash-label shrink-0">Sent to you</span>
+          <span className="petite-caps frizz-bash-label shrink-0">Sent to you</span>
           {summary && <span className="min-w-0 truncate text-[11.5px] text-muted">{summary}</span>}
         </span>
         <span className="flex shrink-0 items-center gap-2">
@@ -2348,7 +2348,7 @@ function BashBlock({
   const shownDesc = contextualDetail(desc, undefined, sessionId)
   const expandable = Boolean(command || output)
   return (
-    <div className="fray-bash">
+    <div className="frizz-bash">
       <button
         type="button"
         onClick={() => expandable && setOpen((v) => !v)}
@@ -2356,11 +2356,11 @@ function BashBlock({
         aria-controls={expandable ? bodyId : undefined}
         aria-expanded={expandable ? open : undefined}
         aria-label={`${expandable ? `${open ? "Collapse" : "Expand"} ` : ""}${prettyToolName(name)}${shownDesc ? `: ${shownDesc}` : ""}`}
-        className="fray-bash-header w-full text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-fg/60"
+        className="frizz-bash-header w-full text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-fg/60"
       >
         <span className="flex min-w-0 items-center gap-2">
           <ToolLiveMark status={status} backgroundState={backgroundState} liveBackgroundState={liveBackgroundState} startedAt={startedAt} />
-          <span className="petite-caps fray-bash-label shrink-0">{prettyToolName(name)}</span>
+          <span className="petite-caps frizz-bash-label shrink-0">{prettyToolName(name)}</span>
           <span className="min-w-0 truncate text-[11.5px] text-muted" title={shownDesc}>{shownDesc ?? ""}</span>
         </span>
         <span className="flex shrink-0 items-center gap-2">
@@ -2372,14 +2372,14 @@ function BashBlock({
         <div id={bodyId} hidden={!open}>
           {open && command && (
             <>
-              {inputLabel && <div className="fray-bash-output-label petite-caps">{inputLabel}</div>}
-              <pre className={`fray-bash-body${inputLabel ? " fray-bash-output-body" : ""}${long && !expanded ? " fray-bash-clamp" : ""}`}>{command}</pre>
+              {inputLabel && <div className="frizz-bash-output-label petite-caps">{inputLabel}</div>}
+              <pre className={`frizz-bash-body${inputLabel ? " frizz-bash-output-body" : ""}${long && !expanded ? " frizz-bash-clamp" : ""}`}>{command}</pre>
               {long && (
                 <button
                   type="button"
                   onClick={() => setExpanded((v) => !v)}
                   onMouseDown={(e) => e.preventDefault()}
-                  className="fray-bash-expand petite-caps px-2.5 pb-1.5"
+                  className="frizz-bash-expand petite-caps px-2.5 pb-1.5"
                 >
                   {expanded ? "Collapse" : `Show all ${lineCount} lines`}
                 </button>
@@ -2388,14 +2388,14 @@ function BashBlock({
           )}
           {open && output && (
             <>
-              <div className="fray-bash-output-label petite-caps">output</div>
-              <pre className={`fray-bash-body fray-bash-output-body${outLong && !outExpanded ? " fray-bash-clamp" : ""}`}>{output}</pre>
+              <div className="frizz-bash-output-label petite-caps">output</div>
+              <pre className={`frizz-bash-body frizz-bash-output-body${outLong && !outExpanded ? " frizz-bash-clamp" : ""}`}>{output}</pre>
               {outLong && (
                 <button
                   type="button"
                   onClick={() => setOutExpanded((v) => !v)}
                   onMouseDown={(e) => e.preventDefault()}
-                  className="fray-bash-expand petite-caps px-2.5 pb-1.5"
+                  className="frizz-bash-expand petite-caps px-2.5 pb-1.5"
                 >
                   {outExpanded ? "Collapse" : `Show all ${outLineCount} lines`}
                 </button>
@@ -2412,7 +2412,7 @@ function BashBlock({
 // whose header is the petite-caps "Read" label + the repo-relative path (an editor deep-link when the
 // detail is a plain absolute path). Expanding reveals WHAT was read — the (server-capped) file excerpt
 // in mono, with the same clamp + "Show all N lines" affordance as a long Bash body. Reuses the
-// fray-bash card classes so Bash / Edit / Read read as one system.
+// frizz-bash card classes so Bash / Edit / Read read as one system.
 const READ_MAX_LINES = 16
 function ReadBlock({ detail, read, status, durationMs }: { detail?: string; read: string; status?: ToolStatus; durationMs?: number }) {
   const [open, setOpen] = useState(false)
@@ -2423,16 +2423,16 @@ function ReadBlock({ detail, read, status, durationMs }: { detail?: string; read
   const short = detail ? shortenTarget(detail) : undefined
   const linkPath = detail && isFilePath(detail) ? detail : undefined
   return (
-    <div className="fray-bash">
+    <div className="frizz-bash">
       <ToolDisclosureHeader
-        className="fray-bash-header"
+        className="frizz-bash-header"
         controls={bodyId}
         expanded={open}
         label={`${open ? "Collapse" : "Expand"} Read${detail ? `: ${detail}` : ""}`}
         onToggle={() => setOpen((v) => !v)}
         meta={<ToolStatusMeta status={status} durationMs={durationMs} />}
       >
-        <span className="petite-caps fray-bash-label shrink-0">Read</span>
+        <span className="petite-caps frizz-bash-label shrink-0">Read</span>
         {short &&
           (linkPath ? (
             <span className="min-w-0 truncate">
@@ -2447,13 +2447,13 @@ function ReadBlock({ detail, read, status, durationMs }: { detail?: string; read
       <div id={bodyId} hidden={!open}>
         {open && (
           <>
-            <pre className={`fray-bash-body${long && !expanded ? " fray-bash-clamp" : ""}`}>{read}</pre>
+            <pre className={`frizz-bash-body${long && !expanded ? " frizz-bash-clamp" : ""}`}>{read}</pre>
             {long && (
               <button
                 type="button"
                 onClick={() => setExpanded((v) => !v)}
                 onMouseDown={(e) => e.preventDefault()}
-                className="fray-bash-expand petite-caps px-2.5 pb-1.5"
+                className="frizz-bash-expand petite-caps px-2.5 pb-1.5"
               >
                 {expanded ? "Collapse" : `Show all ${lineCount} lines`}
               </button>
@@ -2582,7 +2582,7 @@ export function AgentBlock({
   // card in the transcript, and the runtime in the right-hand column is what says it ran and stopped.
   const mark =
     running ? (
-      <span aria-hidden className="fray-live-dot fray-live-dot--agent" data-running-indicator="subagent-disclosure" />
+      <span aria-hidden className="frizz-live-dot frizz-live-dot--agent" data-running-indicator="subagent-disclosure" />
     ) : live?.state === "stale" ? (
       <span className={CHILD_STALE_DOT_CLASS} title={CHILD_STALE_TITLE} />
     ) : live?.state === "rested" ? (
@@ -2595,9 +2595,9 @@ export function AgentBlock({
   }
 
   return (
-    <div className="fray-bash">
+    <div className="frizz-bash">
       <ToolDisclosureHeader
-        className="fray-bash-header"
+        className="frizz-bash-header"
         controls={bodyId}
         expanded={open}
         label={`${open ? "Collapse" : "Expand"} Agent dispatch: ${title}`}
@@ -2605,7 +2605,7 @@ export function AgentBlock({
         meta={
           reading && (
             <ToolMetaReading
-              tone={reading.tone === "failed" ? "fray-tool-failed" : "text-muted/55"}
+              tone={reading.tone === "failed" ? "frizz-tool-failed" : "text-muted/55"}
               title={reading.title}
               label={reading.label}
               duration={reading.duration}
@@ -2620,8 +2620,8 @@ export function AgentBlock({
             the label back to roughly the dot↔label gap those lines use: the header's own gap-2 is tuned
             for a petite-caps label beside a path, and at full width a 6px dot floated away from the word
             it qualifies. Same slot, same class, same numbers as a background shell card's mark. */}
-        {mark && <span className="fray-tool-mark -mr-1 flex w-[9px] shrink-0 justify-center">{mark}</span>}
-        <span className="petite-caps fray-bash-label shrink-0">Agent</span>
+        {mark && <span className="frizz-tool-mark -mr-1 flex w-[9px] shrink-0 justify-center">{mark}</span>}
+        <span className="petite-caps frizz-bash-label shrink-0">Agent</span>
         {canDrill ? (
           <button
             type="button"
@@ -2641,21 +2641,21 @@ export function AgentBlock({
       <div id={bodyId} hidden={!open}>
         {open && (
           <>
-            {body && <pre className={`fray-bash-body${long && !expanded ? " fray-bash-clamp" : ""}`}>{body}</pre>}
+            {body && <pre className={`frizz-bash-body${long && !expanded ? " frizz-bash-clamp" : ""}`}>{body}</pre>}
             {long && (
               <button
                 type="button"
                 onClick={() => setExpanded((v) => !v)}
                 onMouseDown={(e) => e.preventDefault()}
-                className="fray-bash-expand petite-caps px-2.5 pb-1.5"
+                className="frizz-bash-expand petite-caps px-2.5 pb-1.5"
               >
                 {expanded ? "Collapse" : `Show all ${lineCount} lines`}
               </button>
             )}
             {output && (
               <>
-                <div className="fray-bash-output-label petite-caps">output</div>
-                <pre className="fray-bash-body fray-bash-output-body">{output}</pre>
+                <div className="frizz-bash-output-label petite-caps">output</div>
+                <pre className="frizz-bash-body frizz-bash-output-body">{output}</pre>
               </>
             )}
           </>
@@ -2730,7 +2730,7 @@ function SendMessageCard({ to, summary, body, type, status, durationMs }: { to?:
   const hasBody = !!body.trim()
   const label = sendMessageVerb(to, type)
   return (
-    <div className="fray-bash">
+    <div className="frizz-bash">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -2738,11 +2738,11 @@ function SendMessageCard({ to, summary, body, type, status, durationMs }: { to?:
         aria-controls={hasBody ? bodyId : undefined}
         aria-expanded={hasBody ? open : undefined}
         aria-label={`${hasBody ? `${open ? "Collapse" : "Expand"} ` : ""}${label}${to ? ` to ${to}` : ""}`}
-        className="fray-bash-header w-full text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-fg/60"
+        className="frizz-bash-header w-full text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-fg/60"
         disabled={!hasBody}
       >
         <span className="flex min-w-0 items-center gap-2">
-          <span className="petite-caps fray-bash-label shrink-0">{label}</span>
+          <span className="petite-caps frizz-bash-label shrink-0">{label}</span>
           {summary && <span className="min-w-0 truncate text-[11.5px] text-muted">{summary}</span>}
         </span>
         <span className="flex shrink-0 items-center gap-2">
@@ -2754,10 +2754,10 @@ function SendMessageCard({ to, summary, body, type, status, durationMs }: { to?:
         <div id={bodyId} hidden={!open}>
           {open && (
             <>
-              {/* Quiet indented body: the border-top + 10px/8px padding mirror .fray-bash-body, but the
+              {/* Quiet indented body: the border-top + 10px/8px padding mirror .frizz-bash-body, but the
                   content is MARKDOWN (md-body — sans, 14px) so a peer message reads like prose, not a code
                   dump. The clamp caps a long body at ~320px until "Show all" expands it. */}
-              <div className={`border-t border-border px-2.5 py-2${long && !expanded ? " fray-bash-clamp" : ""}`}>
+              <div className={`border-t border-border px-2.5 py-2${long && !expanded ? " frizz-bash-clamp" : ""}`}>
                 <div className="md-body" dangerouslySetInnerHTML={inner} />
               </div>
               {long && (
@@ -2765,7 +2765,7 @@ function SendMessageCard({ to, summary, body, type, status, durationMs }: { to?:
                   type="button"
                   onClick={() => setExpanded((v) => !v)}
                   onMouseDown={(e) => e.preventDefault()}
-                  className="fray-bash-expand petite-caps px-2.5 pb-1.5"
+                  className="frizz-bash-expand petite-caps px-2.5 pb-1.5"
                 >
                   {expanded ? "Collapse" : `Show all ${lineCount} lines`}
                 </button>
@@ -2832,7 +2832,7 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
   //  · ThreadSlugContext — the same authorization boundary the fence-card buttons use. A queued bubble
   //    rendered inside a SUB-AGENT's transcript is not this surface's to retract.
   //  · deliveryId — the provider queued the message under that uuid; without it there is nothing to
-  //    address, which is exactly the case for a bubble fray did not send (one typed in the terminal).
+  //    address, which is exactly the case for a bubble frizz did not send (one typed in the terminal).
   //  · the backend — a codex steer has no queue to take anything out of.
   const unqueueSlug = useContext(ThreadSlugContext)
   const unqueueSupported = useUnqueueSupported(unqueueSlug)
@@ -2845,7 +2845,7 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
   // worker would take — and pictured it as a lightning bolt, which meant nothing.
   //
   // Gated on `queued` and a running turn, NOT on deliveryId: this addresses the thread's turn, not one
-  // message, so it works for a queued bubble fray did not itself send.
+  // message, so it works for a queued bubble frizz did not itself send.
   // `queued ? slug : null` is a PERF gate, not a correctness one. Unlike unqueue's scalar (backend,
   // which effectively never changes) this one tracks `runtime`, which flips on every turn boundary —
   // subscribed unconditionally it would re-render every user bubble in the transcript each time a turn
@@ -2899,7 +2899,7 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
     // `self-end` must stay on THIS node: the parent scroll container is a flex column and the bubble's
     // right-justification depends on being its direct child (see the group-container note above the
     // queued-message stack).
-    <div data-fray-msg={sourceId} className="self-end flex flex-col items-end gap-0.5 max-w-[85%]">
+    <div data-frizz-msg={sourceId} className="self-end flex flex-col items-end gap-0.5 max-w-[85%]">
       {/* OFF-WHITE bubble, BLACK text — the human's words POP against the dark page + agent prose. bg-user-bubble
           is a tick less white than bg-fg so it reads as a card. whitespace-pre-wrap is load-bearing: user text
           is verbatim, so its line breaks must survive. Skipped entirely for an attachment-only send, so the
@@ -3058,11 +3058,11 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     const answers = paired !== undefined ? paired : parseAnswersCard(text)
     if (answers) return <AnswersCard answers={answers} queued={m.queued} sourceId={m.sourceId} />
     // A scheduler wake is recorded as a user turn because it is pasted into the worker's composer —
-    // but FRAY wrote it, not the human, so it must not wear the human's off-white right-justified
+    // but FRIZZ wrote it, not the human, so it must not wear the human's off-white right-justified
     // bubble. `m.wake` is the server's own tell (the delivery token it stripped), never a text guess.
     // A recurring prompt (either trigger) is a wake too, but it REPEATS by design — the same
     // paragraph every few minutes on a thread being driven by one — so it collapses to a single line
-    // rather than restating itself in full down the transcript. Parsed from fray's own trailer, defined
+    // rather than restating itself in full down the transcript. Parsed from frizz's own trailer, defined
     // beside the composer that writes it; a non-match falls through to the divider below, so no wake
     // can lose its text to this.
     const recurring = m.wake ? parseRecurringPrompt(text) : undefined
@@ -3189,10 +3189,10 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     )
   }
   // No gap on the container — between-block spacing is entirely the explicit VSpace elements.
-  // `data-fray-msg` stamps this root with the message's own `sourceId`: a stable per-message handle for
+  // `data-frizz-msg` stamps this root with the message's own `sourceId`: a stable per-message handle for
   // an inspector or an e2e selector, distinct from the pagination-anchor attribute (see the anchor test).
   return (
-    <div data-fray-msg={m.sourceId} className="flex flex-col text-[13px] min-w-0">
+    <div data-frizz-msg={m.sourceId} className="flex flex-col text-[13px] min-w-0">
       {withSpacers(blocks)}
     </div>
   )
@@ -3221,7 +3221,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
 // answering questions 9–11 of an earlier ask rendered "1" against a question that reads "9. …".
 function AnswersCard({ answers, queued, sourceId }: { answers: PairedAnswer[]; queued?: boolean; sourceId?: string }) {
   return (
-    <div data-fray-msg={sourceId} data-answers-card className={`self-end flex w-full max-w-[85%] flex-col items-end ${queued ? "opacity-50" : ""}`}>
+    <div data-frizz-msg={sourceId} data-answers-card className={`self-end flex w-full max-w-[85%] flex-col items-end ${queued ? "opacity-50" : ""}`}>
       <div className={`w-full min-w-0 ${BLOCK_RADIUS} rounded-br-sm border border-border-strong bg-elevated p-4`}>
         <CardHead icon={ListChecks} label="Answers" />
         <CardContent>
@@ -3337,11 +3337,11 @@ function visualizationTheme() {
   const root = getComputedStyle(document.documentElement)
   const vars = Object.fromEntries(Object.entries(VIS_THEME_VARIABLES).map(([target, source]) => [target, root.getPropertyValue(source).trim()]))
   vars["--font-size-base"] = getComputedStyle(document.body).fontSize
-  return { type: "fray-inline-vis-theme", colorScheme: root.colorScheme === "light" ? "light" : "dark", vars }
+  return { type: "frizz-inline-vis-theme", colorScheme: root.colorScheme === "light" ? "light" : "dark", vars }
 }
 
 // Codex Visualize emits a thread-local HTML fragment plus this directive. The server resolves the
-// basename against the owning Fray session and wraps it in a CSP; this iframe deliberately omits
+// basename against the owning Frizz session and wraps it in a CSP; this iframe deliberately omits
 // allow-same-origin, forms, popups, downloads, and navigation so fragment scripts never inherit the
 // control plane's authority. A tiny postMessage bridge supplies theme tokens and natural height.
 export function InlineVisualization({ file }: { file: string }) {
@@ -3367,7 +3367,7 @@ export function InlineVisualization({ file }: { file: string }) {
 
   useEffect(() => {
     const receive = (event: MessageEvent) => {
-      if (event.source !== iframeRef.current?.contentWindow || event.data?.type !== "fray-inline-vis-height") return
+      if (event.source !== iframeRef.current?.contentWindow || event.data?.type !== "frizz-inline-vis-height") return
       const next = Number(event.data.height)
       if (Number.isFinite(next)) setHeight(Math.max(80, Math.min(2400, Math.ceil(next))))
     }
@@ -3662,7 +3662,7 @@ function limitResumeClock(unixSeconds: number): string {
 //
 // Deliberately NOT the sign-in card's shape, even though both are provider faults: here the
 // credential is fine and the recovery is TIME, not an action. So the card leads with information —
-// when the window comes back, and that fray will pick the thread up itself — and keeps a manual
+// when the window comes back, and that frizz will pick the thread up itself — and keeps a manual
 // continue as the secondary, for the operator who has capacity elsewhere and doesn't want to wait.
 export function LimitPauseCard({ slug, sessionId, pause }: { slug: string; sessionId: string | undefined; pause: NonNullable<ThreadViewData["limitPause"]> }) {
   const label = PROVIDER_LABEL[pause.backend]
@@ -3688,7 +3688,7 @@ export function LimitPauseCard({ slug, sessionId, pause }: { slug: string; sessi
     <TranscriptCard data-limit-pause tone="caution" icon={Hourglass} label={`Paused by the ${label} ${which}`}>
       {/* The provider's own "You've hit your session limit · resets …" line sits directly above this
           card (unlike an auth error, it is informative, so transcript.ts keeps its bubble). So this
-          card says only what THAT line cannot: what fray is going to do about it. */}
+          card says only what THAT line cannot: what frizz is going to do about it. */}
       <span className={CARD_BODY}>
         {pause.autoResume
           ? pause.resumesAt
@@ -3732,12 +3732,12 @@ export function PermPromptBanner({ onTerminal }: { onTerminal: () => void }) {
   )
 }
 
-// What fray's permission POLICY did on the worker's behalf (cc-worker/hooks/perm-policy.mjs).
+// What frizz's permission POLICY did on the worker's behalf (cc-worker/hooks/perm-policy.mjs).
 //
 // This exists because a policy decision is otherwise INVISIBLE. Nobody was prompted, nothing blocked,
 // and an auto-approval is never written to the transcript — Claude Code renders "Allowed by
 // PermissionRequest hook" in the terminal and stores nothing. Without this the honest description of
-// the feature would be "fray silently approves things for you", which is not a trade anyone should
+// the feature would be "frizz silently approves things for you", which is not a trade anyone should
 // make blind.
 //
 // Weighted by consequence, deliberately. A DENIAL is rare and changes what the worker can do, so it
@@ -3747,7 +3747,7 @@ export function PermPolicyNote({ policy, denies }: { policy: NonNullable<ThreadV
   const what = [policy.tool, policy.command].filter(Boolean).join(": ")
   if (policy.decision === "deny") {
     return (
-      <TranscriptCard tone="caution" icon={AlertTriangle} label="Blocked by fray's permission policy">
+      <TranscriptCard tone="caution" icon={AlertTriangle} label="Blocked by frizz's permission policy">
         {/* The refused command leads on its own line — it is the thing you actually need to see — and
             the reason follows as prose. The reason is the same text the WORKER was given, so it
             already opens with "Refused:"; prefixing it here too read as a stutter. */}
@@ -3775,7 +3775,7 @@ export function PermPolicyNote({ policy, denies }: { policy: NonNullable<ThreadV
 
 // A verified Codex-native modal is also invisible to the rollout, but unlike the legacy boolean
 // permission sniff we know its coarse family. Keep it prominent and explicit about the trust boundary:
-// Fray never copies option/payload detail into Chat and never chooses an answer on the user's behalf.
+// Frizz never copies option/payload detail into Chat and never chooses an answer on the user's behalf.
 export function NativeInputRequiredCard({ input, onTerminal }: { input: NativeInputRequiredData; onTerminal: () => void }) {
   const label =
     input.kind === "tool-approval"
@@ -3791,7 +3791,7 @@ export function NativeInputRequiredCard({ input, onTerminal }: { input: NativeIn
           It stays at the body scale and earns its emphasis from the medium weight and full-strength
           fg, not from a larger size that made this card's copy visibly bigger than every sibling's. */}
       <div className="min-w-0 text-[12px] font-medium leading-5 text-fg">{input.title}</div>
-      <div className="mt-1 text-[12px] leading-5 text-muted">Review and respond in your external terminal. Fray will not choose for you.</div>
+      <div className="mt-1 text-[12px] leading-5 text-muted">Review and respond in your external terminal. Frizz will not choose for you.</div>
       <CardActions>
         <button
           onClick={() => onTerminal()}
@@ -3894,7 +3894,7 @@ export function BackgroundOpsStrip({
           state={s.state}
           density="sheet"
           startedAt={s.startedAt}
-          // Absent until the first poll answers, and permanently absent for a shell whose output fray
+          // Absent until the first poll answers, and permanently absent for a shell whose output frizz
           // cannot read — never a fabricated 0 for a number we do not have.
           counter={s.id ? shellLinesLabel(shellLines.get(s.id)) : undefined}
           counterTitle="Lines of output so far — open the row to read them"
@@ -4148,7 +4148,7 @@ function EventLine({ text, boundary, sourceId }: { text: string; boundary?: Tran
   // line. No flanking dividers: it reads as a subtle annotation, not a section break, and uses the same
   // type scale as the adjacent activity gerund/digest.
   return (
-    <div data-fray-msg={sourceId} className={TRANSCRIPT_META_LABEL_CLASS}>{text}</div>
+    <div data-frizz-msg={sourceId} className={TRANSCRIPT_META_LABEL_CLASS}>{text}</div>
   )
 }
 
@@ -4156,7 +4156,7 @@ function EventLine({ text, boundary, sourceId }: { text: string; boundary?: Tran
 // (Claude's thinking is redacted at every seam, so this is Codex-only). Same regular light-grey line as
 // the tool digest beside it (TRANSCRIPT_META_LABEL_CLASS), content-width, chevron flush-right of the
 // label — so the quiet progress rows read as one family. Collapsed shows just the "Reasoning" label; the
-// whole row toggles to reveal the train of thought as muted markdown in a ruled block. The `.fray-reasoning`
+// whole row toggles to reveal the train of thought as muted markdown in a ruled block. The `.frizz-reasoning`
 // rule below quiets that body (12px/muted, and de-bolds codex's `**step header**` fragments) so an
 // expanded turn reads as a soft aside, never a wall of bold headers competing with the real answer.
 //
@@ -4169,7 +4169,7 @@ function ReasoningBlock({ text, sourceId }: { text: string; sourceId?: string })
   const [open, setOpen] = useState(false)
   const bodyId = useId()
   return (
-    <div data-fray-msg={sourceId} className="flex flex-col">
+    <div data-frizz-msg={sourceId} className="flex flex-col">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -4185,7 +4185,7 @@ function ReasoningBlock({ text, sourceId }: { text: string; sourceId?: string })
         <ChevronRight aria-hidden="true" size={13} className={`size-[1em] shrink-0 -translate-y-[0.088em] transition-transform ${open ? "rotate-90" : ""}`} />
       </button>
       {open && (
-        <div id={bodyId} className="fray-reasoning mt-1.5 ml-[5px] border-l border-border/70 pl-3">
+        <div id={bodyId} className="frizz-reasoning mt-1.5 ml-[5px] border-l border-border/70 pl-3">
           <ProseHtml md={text} wrap />
         </div>
       )}

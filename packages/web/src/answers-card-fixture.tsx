@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import type { TranscriptMessage } from "@fray-ui/shared"
+import type { TranscriptMessage } from "@frizz/shared"
 import { Message } from "./components/ChatView.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import "./styles.css"

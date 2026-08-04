@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { z } from "zod"
-import { query, mutation } from "@fray-ui/rpc/server"
+import { query, mutation } from "@frizz/rpc/server"
 import {
   BoardSnapshot,
   AdoptThreadInput,
@@ -71,10 +71,10 @@ import {
   type ThreadView,
   ThreadSlug,
   isDirectSubAgent,
-} from "@fray-ui/shared"
+} from "@frizz/shared"
 import { needsFreshProcessForLimit, type AppContext } from "./context.ts"
 import { appServerTurnStalled } from "./board.ts"
-import { runThreadUpdate } from "./fray.ts"
+import { runThreadUpdate } from "./frizz.ts"
 import { repairThreadFile } from "./repair.ts"
 import { reopenArchivedThreadForFollowUp, resumeThread, wakeParkedThreadForFollowUp } from "./resume.ts"
 import { appendDelivery, cancelDelivery, deliveryItem, hasDelivery, retireOutstandingDeliveries } from "./delivery-ledger.ts"
@@ -89,7 +89,7 @@ import { openExternalUrl } from "./open-external.ts"
 import { openLocalFile, resolveOpenableFile } from "./local-file.ts"
 import { openableFileRoots } from "./project.ts"
 import { ghInstalled, ghAuthed, ghRepo, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_ISSUE_PROMPT, DEFAULT_PR_PROMPT } from "./github.ts"
-import { slugify, resolveSlug, resolveLegacyThreadFile, scratchpadRelPath, loadWorkerPrompt, scratchpadOrientation, frayConfigBlock } from "./dispatch.ts"
+import { slugify, resolveSlug, resolveLegacyThreadFile, scratchpadRelPath, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock } from "./dispatch.ts"
 import { readCodexModels } from "./backend/codex-models.ts"
 import { codexSandbox } from "./backend/codex.ts"
 import type { CodexSandboxMode } from "./backend/codex-app-server.ts"
@@ -178,9 +178,9 @@ const cachedLivenessTerminator: RegisteredRuntimeTerminator = {
 
 // The other terminator. An app-server Codex thread has NO tmux pane: its worker is a TURN running
 // inside the shared codex app-server, which now lives in a DETACHED daemon that deliberately outlives
-// the fray runtime. Routed through the tmux terminator it takes stopRegisteredRuntime's `unbound`
+// the frizz runtime. Routed through the tmux terminator it takes stopRegisteredRuntime's `unbound`
 // branch, issues `kill-session` for a session that never existed, and reports "stopped" — while the
-// turn keeps running, burning tokens and touching the repo with no fray-side owner and no UI trace.
+// turn keeps running, burning tokens and touching the repo with no frizz-side owner and no UI trace.
 // Before the daemon worked this was masked, because the app-server died with the runtime. `turn/interrupt`
 // over the bridge is the only thing that actually stops it. (Subset of CodexAppServerBridge so the
 // router does not depend on the whole bridge and a test can substitute a stub.)
@@ -201,10 +201,10 @@ export function isAppServerCodexRow(row: Pick<SessionRow, "backend" | "codex_run
 }
 
 // The Claude twin of the codex turn terminator. A broker-backed Claude row also has NO tmux pane: its
-// worker is a Claude session owned by a DETACHED daemon that outlives fray. Routed through the tmux
+// worker is a Claude session owned by a DETACHED daemon that outlives frizz. Routed through the tmux
 // terminator it would take stopRegisteredRuntime's `unbound` branch, `kill-session` a pane that never
 // existed, and report "stopped" while the ownerless daemon keeps running — the same phantom-stop the
-// codex terminator exists to prevent. releaseSession SIGTERMs the daemon by record (even when this fray
+// codex terminator exists to prevent. releaseSession SIGTERMs the daemon by record (even when this frizz
 // process holds no live socket, e.g. after a restart); isDaemonAlive reports whether one was there to
 // stop. (Subset of ClaudeAgentBrokerBridge so the router needn't depend on the whole bridge.)
 export interface ClaudeBrokerTerminator {
@@ -456,15 +456,15 @@ export async function stopAndForgetRegisteredRuntime(
   return forgotten
 }
 
-// The typed RPC surface. Every handler is thin: state mutations go through fray scripts
+// The typed RPC surface. Every handler is thin: state mutations go through frizz scripts
 // (thread files) or tmux (agents), then rebuild the board so a fresh snapshot fans out on SSE.
 export function createRouter(ctx: AppContext) {
-  const frayDir = join(ctx.project.dir, ".fray")
+  const frizzDir = join(ctx.project.dir, ".frizz")
   // Roots for the file-OPEN action + the inline-code path classifier (see openableFileRoots): shared so
   // a path the resolver blesses is exactly a path the open action will accept.
   const openRoots = openableFileRoots(ctx.project)
 
-  // An auto-titled registry row is session-first authority. A same-slug `.fray/<slug>.md` may have
+  // An auto-titled registry row is session-first authority. A same-slug `.frizz/<slug>.md` may have
   // been planted independently and is never a readable or writable extension of that session.
   function isAutoTitledSession(slug: string): boolean {
     return ctx.storage.getSession(slug)?.title_auto === 1
@@ -597,7 +597,7 @@ export function createRouter(ctx: AppContext) {
   //    someone else. (In that run the token did reach the grandchild — because the root model read the
   //    misdelivered steer and chose to relay it down with SendMessage, root → child → grandchild. A
   //    model being helpful is not a transport, and nothing may be built on it.)
-  //  - the child must be RUNNING. `stale` means fray has seen no output for a long while and the
+  //  - the child must be RUNNING. `stale` means frizz has seen no output for a long while and the
   //    completion record was probably missed; addressing a finished child MISDELIVERS to the parent's
   //    main thread rather than failing, so "probably finished" has to be treated as finished.
   //
@@ -624,12 +624,12 @@ export function createRouter(ctx: AppContext) {
     return { sessionId: row.session_id }
   }
 
-  // Can fray END this live op, and if not, why not — for a sub-agent AND for a background shell.
+  // Can frizz END this live op, and if not, why not — for a sub-agent AND for a background shell.
   //
-  // A SHELL used to be refused here categorically: "fray tracks a background shell by reading the
+  // A SHELL used to be refused here categorically: "frizz tracks a background shell by reading the
   // worker's transcript and holds no handle on its process". That was measured wrong. A background
   // `Bash` is a TASK in the very registry `Query.stopTask` addresses — the SDK's own
-  // `backgroundTasks()` says as much ("Bash commands and subagents") — and fray has been recording its
+  // `backgroundTasks()` says as much ("Bash commands and subagents") — and frizz has been recording its
   // task id all along, off the launch ack ("Command running in background with ID: …") and off the
   // `task_started` stream. `backend/_live_shell_stop.mts` drove the production path end to end: the
   // shell's OS process was gone within a second of the stop and the row left the board on its own.
@@ -642,7 +642,7 @@ export function createRouter(ctx: AppContext) {
   // step). Undefined for every other kind of row, so the Claude path below is reached unchanged.
   //
   // It reads the BOARD's live shell list rather than the fold, because that list IS the app-server's
-  // item stream — a codex exec's processId never reaches the rollout fray folds (measured in
+  // item stream — a codex exec's processId never reaches the rollout frizz folds (measured in
   // backend/_live_codex_bgterm_match.mts, where the rollout-projected row carried no handle at all).
   function codexShellTarget(slug: string, id: string): { sessionId: string; processId: string; label: string } | undefined {
     if (!ctx.codexAppServer) return undefined
@@ -653,14 +653,14 @@ export function createRouter(ctx: AppContext) {
     return { sessionId: row.session_id, processId: id, label: shell.label }
   }
 
-  // What the codex worker is told when fray kills one of its background commands. Same sentence as the
+  // What the codex worker is told when frizz kills one of its background commands. Same sentence as the
   // Claude one and for the same measured reason — neither provider tells its agent. Codex's silence is
   // structural: completion there is POLLED, never pushed, so a killed exec's next `wait` reads
   // "Script completed / output:''", which is indistinguishable from a clean finish (verified in
   // backend/_live_codex_bgterm.mts). Delivered through `thread/inject_items`, the one channel that
   // appends to the model's visible history without starting a turn.
   function shellStopNotice(label: string): string {
-    return `[fray] The operator stopped your background command ${JSON.stringify(label)} from the Fray dashboard. It is no longer running and will never report a result — do not wait on it or poll it again.`
+    return `[frizz] The operator stopped your background command ${JSON.stringify(label)} from the Frizz dashboard. It is no longer running and will never report a result — do not wait on it or poll it again.`
   }
 
   // Apply the operator's retirements to a transcript page. Two surfaces render a background op and BOTH
@@ -696,7 +696,7 @@ export function createRouter(ctx: AppContext) {
     if (row.backend === "codex") {
       return blocked(shell
         ? "Codex runs its background commands inside its own process and exposes no way to end one, so this shell can't be stopped from here."
-        : "Codex does not expose per-sub-agent interruption to Fray, so this child can't be stopped from here.")
+        : "Codex does not expose per-sub-agent interruption to Frizz, so this child can't be stopped from here.")
     }
     if (row.claude_runtime !== "broker" || !ctx.claudeBroker) {
       return blocked(`Stopping a ${noun} needs the Claude session broker; this thread runs in a terminal.`)
@@ -712,10 +712,10 @@ export function createRouter(ctx: AppContext) {
   // before it finished, so it never reported back"). Stopping a background SHELL injects NOTHING — the
   // transcript gains not one record — and asked afterwards the model still believed its shell was
   // "presumably still running … I have received no completion notification". A worker left waiting on a
-  // watcher fray already killed is the exact stall the × is meant to end, so fray supplies the missing
+  // watcher frizz already killed is the exact stall the × is meant to end, so frizz supplies the missing
   // notice itself. Shell-only, deliberately: adding one on the sub-agent path would say it twice.
   //
-  // `[fray]` is the established prefix for a machine notice to a worker — transcript.ts NOISE_PREFIXES
+  // `[frizz]` is the established prefix for a machine notice to a worker — transcript.ts NOISE_PREFIXES
   // keeps it out of the human's chat, so this reaches the model without becoming a bubble the operator
   // never typed.
   //
@@ -762,7 +762,7 @@ export function createRouter(ctx: AppContext) {
   //    already-stopped parent.
   //  · A DESCENDANT stop that throws is COUNTED, never swallowed and never fatal. The common cause is
   //    benign — it settled between the sidecar read and the stop — but a genuine failure means live
-  //    work fray failed to end, and the operator has to hear that rather than read "stopped" over it.
+  //    work frizz failed to end, and the operator has to hear that rather than read "stopped" over it.
   //  · The TARGET's stop still throws through to the caller, which is what keeps `stopBackgroundOp`
   //    from retiring a row whose work is still going.
   //  · A SHELL has no subtree — its dispatch leaves no sidecar, so `subAgentDescendantTasks` answers
@@ -801,7 +801,7 @@ export function createRouter(ctx: AppContext) {
 
   // FAILURE ONLY. A successful fan-out is already fully described by `descendantsStopped`, and saying
   // it twice on the wire invites the two to drift; the note exists for the one thing a count cannot
-  // express — a descendant fray asked to stop and could not, which is live work the operator is about
+  // express — a descendant frizz asked to stop and could not, which is live work the operator is about
   // to lose sight of when the row leaves the board. A shell notice that did not land joins it on the
   // same terms: the operator believes the worker was told, and only this says otherwise.
   function subtreeNote(result: { descendantsFailed: number; noticeFailed?: string | null }): string | null {
@@ -1149,7 +1149,7 @@ export function createRouter(ctx: AppContext) {
     //     task id) → the real provider control, `Query.stopTask`, awaited to the daemon's answer. Then
     //     retire, so the row leaves every live surface on this click's own board frame instead of
     //     waiting for the fold. A SHELL additionally gets the notice the provider does not send (see
-    //     noticeShellStopped), so the worker is not left waiting on a watcher fray already killed.
+    //     noticeShellStopped), so the worker is not left waiting on a watcher frizz already killed.
     //  2. The stop THREW → do NOT retire. A failed stop means the child is still working, and hiding
     //     it is exactly the bug above; the row stays and the error reaches the operator.
     //  3. NOT stoppable (a tmux claude thread, a codex thread, a stale/finished op) → retire anyway,
@@ -1249,8 +1249,8 @@ export function createRouter(ctx: AppContext) {
           }
           // Running sub-agents do NOT refuse this. They used to: the completion invariant says an agent
           // runs to its terminal return, and a restart kills the parent's in-memory children. But that
-          // invariant binds fray's OWN initiative — needsFreshProcessForLimit below still declines to
-          // kill a live child when FRAY is the one deciding to restart — and `freshProcess` is not fray
+          // invariant binds frizz's OWN initiative — needsFreshProcessForLimit below still declines to
+          // kill a live child when FRIZZ is the one deciding to restart — and `freshProcess` is not frizz
           // deciding, it is the operator instructing. Refusing it made the recovery verb unavailable in
           // precisely the state that motivates it: a worker wedged behind background work that will not
           // finish (maintainer 2026-08-01: "do not disable the button when there are sub-agents
@@ -1284,7 +1284,7 @@ export function createRouter(ctx: AppContext) {
           const binding = bridge.binding(input.slug, row.session_id)
           // Writer-yield: if the rollout shows an in-flight turn the bridge did NOT start (it has no
           // current turn of its own), someone is driving this thread in their own terminal via
-          // `codex resume`. fray keeps MIRRORING that turn (the tailer follows the same rollout), but it
+          // `codex resume`. frizz keeps MIRRORING that turn (the tailer follows the same rollout), but it
           // must not start/steer a second turn and race two writers. Yield until the external turn rests.
           //
           // "In flight" must mean the rollout is ACTUALLY ADVANCING, not merely that it stopped
@@ -1298,7 +1298,7 @@ export function createRouter(ctx: AppContext) {
           )
           const turnLive = ctx.tailer.get(input.slug)?.turn === "in-flight" && !stalled
           if (turnLive && (!binding || binding.currentTurnId === null)) {
-            throw new Error("This thread is running in your terminal right now — fray is mirroring it live. Wait for that turn to finish, then send your follow-up here.")
+            throw new Error("This thread is running in your terminal right now — frizz is mirroring it live. Wait for that turn to finish, then send your follow-up here.")
           }
           if (!binding || binding.state !== "active") {
             await bridge.resumeOwnedSession(input.slug, row.session_id)
@@ -1316,7 +1316,7 @@ export function createRouter(ctx: AppContext) {
           // opens `enqueued` and can never age into the amber "check the terminal" warning (there is no
           // terminal composer on an app-server thread). Without it the ONLY thing rendering a just-sent
           // codex steer is the client's optimistic bubble, and mergeOptimistic's ghost floor retires
-          // that once the transcript advances 60s past it — measured against fray's own delivery
+          // that once the transcript advances 60s past it — measured against frizz's own delivery
           // records, 8 of 75 codex sends took longer than that to appear in the rollout (steers at 71s,
           // 212s and 4.6h), so the message could vanish from the drawer entirely. The tailer drops the
           // item the moment the rollout materialises the message.
@@ -1344,7 +1344,7 @@ export function createRouter(ctx: AppContext) {
           const appendSystemPrompt = [
             loadWorkerPrompt("claude"),
             scratchpadOrientation(row.session_id, row.plan_path, "claude"),
-            frayConfigBlock(ctx.project.dir),
+            frizzConfigBlock(ctx.project.dir),
           ].filter(Boolean).join("\n\n")
           await bridge.followUp({
             threadSlug: input.slug,
@@ -1361,7 +1361,7 @@ export function createRouter(ctx: AppContext) {
             // The pause card's "Continue now" is the same act as the scheduler's auto-resume, so it
             // needs the same treatment: while the process is still latched on its own 429, delivering
             // into it does nothing at all. Restart it instead — otherwise the button is a no-op and
-            // reads as fray having ignored the click.
+            // reads as frizz having ignored the click.
             //
             // `input.freshProcess` is the operator asking for it OUTRIGHT (the "Restart worker" verb),
             // which the server cannot derive: only the human knows they want the worker back on a newer
@@ -1448,10 +1448,10 @@ export function createRouter(ctx: AppContext) {
     // the words back in the prompt box. The whole value of this is that it is TRUTHFUL: it reports
     // whether the provider actually removed the message, and never claims a retraction it did not get.
     //
-    // Only a broker-backed Claude row can do it, because only there does fray hold a control channel
+    // Only a broker-backed Claude row can do it, because only there does frizz hold a control channel
     // into a queue that still exists. A tmux row's text was typed into Claude Code's own TUI composer
     // and a codex app-server steer went straight into the running turn — in both cases the message has
-    // left every surface fray can address, and the honest answer is "too late", not a silent no-op.
+    // left every surface frizz can address, and the honest answer is "too late", not a silent no-op.
     unqueueFollowUp: mutation({
       input: UnqueueFollowUpInput,
       output: UnqueueFollowUpResult,
@@ -1467,23 +1467,23 @@ export function createRouter(ctx: AppContext) {
         // the message was DELIVERED, which is what it used to say.
         //
         // `cancelled: false` proves exactly one thing: the message is not in the queue any more. The
-        // obvious reading is "the agent picked it up", and that is what happens in every state fray has
+        // obvious reading is "the agent picked it up", and that is what happens in every state frizz has
         // been able to reach. But the SDK documents another: once a batch is dequeued and coalesced,
         // cancelling a member answers false whether its content still runs or the whole batch was
         // dropped. Probed hard for that (_live_sdk_cancel_coalesced.mts) and could not reach it — which
-        // is not the same as proving it absent, so the wording must not depend on the answer. What fray
+        // is not the same as proving it absent, so the wording must not depend on the answer. What frizz
         // knows is that the message left the queue and is beyond its reach; the bubbles it could not
         // retract stay gray rather than flipping to delivered, so an undelivered message keeps LOOKING
         // undelivered whichever reading is true.
-        const tooLate = { unqueued: false, reason: "Too late — that message has already left the queue, so fray can't take it back" }
+        const tooLate = { unqueued: false, reason: "Too late — that message has already left the queue, so frizz can't take it back" }
         const item = deliveryItem(ctx.storage, input.slug, input.deliveryId)
         // Already retracted — a double click, or a second tab clicking the same bubble. Idempotent
         // rather than "too late": the message really is gone, and saying otherwise would be a lie in
         // the dangerous direction.
         if (item?.state === "cancelled") return { unqueued: true }
         // A retired ledger row means the tailer already correlated this send's delivery evidence — the
-        // agent has it. It is also where a deliveryId fray never sent lands, which the UI cannot
-        // produce (every clickable bubble is one fray itself projected from a ledger row).
+        // agent has it. It is also where a deliveryId frizz never sent lands, which the UI cannot
+        // produce (every clickable bubble is one frizz itself projected from a ledger row).
         //
         // The row is also what makes a successful cancel SAFE to perform: without it there is nothing
         // to tombstone, and the orphaned JSONL enqueue bubble would stay on screen — which reads
@@ -1494,7 +1494,7 @@ export function createRouter(ctx: AppContext) {
           sessionId: row.session_id,
           deliveryId: input.deliveryId,
         })
-        // ORDER: tombstone only AFTER the provider confirms. Recording a cancellation fray did not get
+        // ORDER: tombstone only AFTER the provider confirms. Recording a cancellation frizz did not get
         // would hide a message the agent is about to read — the one failure this feature must not have.
         if (!cancelled) return tooLate
         cancelDelivery(ctx.storage, input.slug, input.deliveryId)
@@ -1509,8 +1509,8 @@ export function createRouter(ctx: AppContext) {
     // interrupt does not discard queued input (see the ORDER IS THE CONTRACT note on interruptTurn), so
     // the next turn opens on what is queued — which is exactly what the operator is asking for.
     //
-    // Same gates as unqueueFollowUp, and for the same reason: only a broker-backed Claude row gives fray
-    // a control channel into a live turn. A tmux row and a codex steer have no interrupt fray can send,
+    // Same gates as unqueueFollowUp, and for the same reason: only a broker-backed Claude row gives frizz
+    // a control channel into a live turn. A tmux row and a codex steer have no interrupt frizz can send,
     // and the honest answer is to say so rather than no-op.
     deliverQueuedNow: mutation({
       input: DeliverQueuedNowInput,
@@ -1519,7 +1519,7 @@ export function createRouter(ctx: AppContext) {
         const row = currentOwnedSession(input.slug, input.sessionId)
         if (!row) throw new Error("This thread is no longer the session this tab is looking at")
         if (row.backend !== "claude" || row.claude_runtime !== "broker") {
-          return { interrupted: false, reason: "This thread's runtime can't be interrupted from fray" }
+          return { interrupted: false, reason: "This thread's runtime can't be interrupted from frizz" }
         }
         const bridge = ctx.claudeBroker
         if (!bridge) throw new Error("Claude session broker is unavailable; cannot interrupt this turn")
@@ -1628,7 +1628,7 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // Archive = hide the row (UI flag) AND settle the fray doc: a non-terminal thread gets
+    // Archive = hide the row (UI flag) AND settle the frizz doc: a non-terminal thread gets
     // status: done written to its frontmatter. Respawn/resume un-archives the row.
     archiveThread: mutation({
       input: SlugInput,
@@ -1638,7 +1638,7 @@ export function createRouter(ctx: AppContext) {
         if (!isAutoTitledSession(input.slug) && t && t.status !== "done" && t.status !== "dismissed") {
           await runThreadUpdate(ctx.project.dir, input.slug, ["--status", "done"]).catch(() => {})
         }
-        void ctx.board.rebuild().catch(() => {}) // .fray changed; respond now, snapshot lands via SSE (watcher also fires)
+        void ctx.board.rebuild().catch(() => {}) // .frizz changed; respond now, snapshot lands via SSE (watcher also fires)
       },
     }),
 
@@ -1666,7 +1666,7 @@ export function createRouter(ctx: AppContext) {
 
     // Explicit lifecycle write for session threads: Archive (the done-card button / row action) and
     // Reopen. This is the ONLY writer of state='archived' — the done fence itself mutates nothing
-    // (maintainer-settled). Touches only ui.db; never the .fray legacy files.
+    // (maintainer-settled). Touches only ui.db; never the .frizz legacy files.
     setThreadState: mutation({
       input: z.object({ slug: ThreadSlug, state: z.enum(["open", "archived"]) }).strict(),
       handler: async ({ input }) => {
@@ -1729,7 +1729,7 @@ export function createRouter(ctx: AppContext) {
     // common case (edit a hook or a skill, want the running worker to pick it up) that is far too
     // blunt, and it is exactly what an operator iterating on the worker closure does all day.
     //
-    // Claude-broker threads only. The tmux path has no control channel to ask, and fray's codex
+    // Claude-broker threads only. The tmux path has no control channel to ask, and frizz's codex
     // app-server client speaks no reload method — both surface as a plain refusal rather than a
     // silently-ignored click.
     reloadThreadPlugins: mutation({
@@ -1775,14 +1775,14 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // The WORKER arming its own, from `mcp__fray__recurring_prompt`. Same row the footer panel writes;
+    // The WORKER arming its own, from `mcp__frizz__recurring_prompt`. Same row the footer panel writes;
     // different caller, and therefore a different guard.
     //
     // Unguarded on session/generation ON PURPOSE — see SetOwnThreadRecurringPromptInput. The MCP server
-    // knows only its slug, which fray stamped into its env at spawn and which survives every resume,
+    // knows only its slug, which frizz stamped into its env at spawn and which survives every resume,
     // while the session id underneath it does not. It is not attacker-supplied: a model can choose the
     // TEXT but never the thread, so there is deliberately no slug parameter it could aim elsewhere. One
-    // agent making a DIFFERENT thread loop forever is not a capability fray hands out.
+    // agent making a DIFFERENT thread loop forever is not a capability frizz hands out.
     setOwnThreadRecurringPrompt: mutation({
       input: SetOwnThreadRecurringPromptInput,
       handler: async ({ input }) => {
@@ -1804,7 +1804,7 @@ export function createRouter(ctx: AppContext) {
     }),
 
     // ---- THE WORKER'S ONE-OFF TIMERS (scheduler SOURCE 6) ----------------------------------------
-    // Three mutations, from `mcp__fray__timer`. Same caller as the recurring prompt above and therefore
+    // Three mutations, from `mcp__frizz__timer`. Same caller as the recurring prompt above and therefore
     // the same guard: keyed on the slug alone, because the MCP server keeps its slug across every resume
     // while the session id underneath it bumps.
     //
@@ -1994,11 +1994,11 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // Hard-delete a plan artifact (.fray/plans/*.md). Same secure resolver as planBody gates it, so a
+    // Hard-delete a plan artifact (.frizz/plans/*.md). Same secure resolver as planBody gates it, so a
     // traversal / symlink / indirect target unlinks nothing; an already-gone plan is idempotent. A real
     // filesystem failure re-throws out of deletePlanFile and surfaces as an RPC error. rebuild() (NOT the
     // overlay-only refresh()) recomputes the plans cache so the removed plan drops immediately rather than
-    // only when the .fray watcher's debounced rebuild later catches up.
+    // only when the .frizz watcher's debounced rebuild later catches up.
     planDelete: mutation({
       input: z.object({ path: z.string() }),
       handler: async ({ input }) => {
@@ -2007,7 +2007,7 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // The thread's scratchpad (.fray/threads/<session-id>/scratch.md) — the worker's compaction-proof
+    // The thread's scratchpad (.frizz/threads/<session-id>/scratch.md) — the worker's compaction-proof
     // working memory, rendered as the thread's doc tab. "" when never provisioned / foreign.
     threadScratchpad: query({
       input: SlugInput,
@@ -2026,7 +2026,7 @@ export function createRouter(ctx: AppContext) {
     // Copy only a provider-native resume invocation. The durable session registry is the ownership
     // boundary: board session views are derived from these exact rows, while foreign discoveries and
     // legacy docs have no row. Avoid rebuilding the full board on this latency-sensitive click path.
-    // The command attaches a SECOND provider client and never touches Fray's private tmux pane, so it
+    // The command attaches a SECOND provider client and never touches Frizz's private tmux pane, so it
     // is offered in every runtime state, live too. An absent/replaced row fails closed.
     threadTerminalCommand: query({
       input: SlugInput,
@@ -2034,7 +2034,7 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const row = ctx.storage.getSession(input.slug)
         if (!row) {
-          throw new Error("No Fray-owned terminal session is available for this thread")
+          throw new Error("No Frizz-owned terminal session is available for this thread")
         }
         // A LIVE pane gets an ATTACH, not a resume. `<cli> resume` is not a second view of a running
         // session — it starts a SEPARATE process that replays the transcript — so it structurally
@@ -2050,7 +2050,7 @@ export function createRouter(ctx: AppContext) {
         const backend = row.backend
         if (backend === "claude" || backend === "codex") {
           // Claude pins session_id via --session-id, so its native id IS session_id. Codex mints its OWN
-          // rollout id (agent_session_id), discovered shortly after spawn; the Fray UUID would not resume
+          // rollout id (agent_session_id), discovered shortly after spawn; the Frizz UUID would not resume
           // it, so require the discovered id rather than falling back to session_id.
           const nativeId = backend === "codex" ? row.agent_session_id : (row.agent_session_id ?? row.session_id)
           if (nativeId) {
@@ -2071,7 +2071,7 @@ export function createRouter(ctx: AppContext) {
         return {
           command: null,
           mode: "unavailable" as const,
-          reason: "This Fray-owned thread has no verified provider session available to resume.",
+          reason: "This Frizz-owned thread has no verified provider session available to resume.",
         }
       },
     }),
@@ -2124,11 +2124,11 @@ export function createRouter(ctx: AppContext) {
         assertLegacyMutationAllowed(input.slug)
         await runThreadUpdate(ctx.project.dir, input.slug, ["--status", "done"])
         ctx.storage.markRead(input.slug)
-        void ctx.board.rebuild().catch(() => {}) // .fray changed; respond now, snapshot lands via SSE (watcher also fires)
+        void ctx.board.rebuild().catch(() => {}) // .frizz changed; respond now, snapshot lands via SSE (watcher also fires)
       },
     }),
 
-    // Assign ANY status (the "Mark as <status>" split button): the exact fray status the human picks.
+    // Assign ANY status (the "Mark as <status>" split button): the exact frizz status the human picks.
     // Dismissing also ends the live agent session (same side-effect the Dismiss verb carries).
     setThreadStatus: mutation({
       input: z.object({ slug: ThreadSlug, status: z.enum(["active", "planning", "planned", "needs-human", "blocked", "done", "dismissed"]) }).strict(),
@@ -2147,7 +2147,7 @@ export function createRouter(ctx: AppContext) {
         }
         await runThreadUpdate(ctx.project.dir, input.slug, ["--status", input.status])
         if (input.status === "done" || input.status === "dismissed") ctx.storage.markRead(input.slug)
-        void ctx.board.rebuild().catch(() => {}) // .fray changed; respond now, snapshot lands via SSE (watcher also fires)
+        void ctx.board.rebuild().catch(() => {}) // .frizz changed; respond now, snapshot lands via SSE (watcher also fires)
       },
     }),
 
@@ -2161,8 +2161,8 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const candidate = input.file.match(/^([a-z0-9][a-z0-9-]*)\.md$/)?.[1]
         if (candidate) assertLegacyMutationAllowed(candidate)
-        const { slug } = repairThreadFile(frayDir, input.file)
-        void ctx.board.rebuild().catch(() => {}) // .fray changed; respond now, fresh snapshot fans out on SSE (watcher also fires)
+        const { slug } = repairThreadFile(frizzDir, input.file)
+        void ctx.board.rebuild().catch(() => {}) // .frizz changed; respond now, fresh snapshot fans out on SSE (watcher also fires)
         return { slug }
       },
     }),
@@ -2172,11 +2172,11 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         assertLegacyMutationAllowed(input.slug)
         await runThreadUpdate(ctx.project.dir, input.slug, ["--status", "dismissed"])
-        void ctx.board.rebuild().catch(() => {}) // .fray changed; respond now, snapshot lands via SSE (watcher also fires)
+        void ctx.board.rebuild().catch(() => {}) // .frizz changed; respond now, snapshot lands via SSE (watcher also fires)
       },
     }),
 
-    // Persist a HUMAN display title in Fray's session registry. This deliberately does not inject a
+    // Persist a HUMAN display title in Frizz's session registry. This deliberately does not inject a
     // backend slash command: Codex and Claude expose different rename behavior, the process need not
     // be idle/live, and transcript ai-title records must never be allowed to replace explicit intent.
     renameThread: mutation({
@@ -2247,7 +2247,7 @@ export function createRouter(ctx: AppContext) {
 
     // Provider subscription quota (5h + weekly rate-limit windows) for the sidebar status bar. Codex
     // reads live from the app-server's `account/rateLimits/read`, falling back to the rollout JSONL
-    // fray already tails; Claude delegates to Claude Code's own non-interactive `/usage` command.
+    // frizz already tails; Claude delegates to Claude Code's own non-interactive `/usage` command.
     // Never throws — degrades to per-provider "unavailable".
     quota: query({
       input: z.object({ force: z.boolean().optional() }).strict().optional(),
@@ -2381,7 +2381,7 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // Spin up one fray thread per checked item: hydrate each fresh from gh, template a server-side
+    // Spin up one frizz thread per checked item: hydrate each fresh from gh, template a server-side
     // prompt (single source of truth, unit-tested), then REUSE ctx.dispatcher.dispatch (no new spawn
     // logic). SEQUENTIAL — a burst of 20 concurrent tmux spawns would hammer the box (risk 5). A
     // per-item failure is captured in `failed[]` and never aborts the rest of the batch.
@@ -2400,12 +2400,12 @@ export function createRouter(ctx: AppContext) {
         for (const it of input.items) {
           try {
             // Explicit title skips the fallback-chop so the slug reads investigate-owner-repo-N. RESERVE
-            // the slug here with the SAME predicate dispatch uses (existing .fray file / registry row)
+            // the slug here with the SAME predicate dispatch uses (existing .frizz file / registry row)
             // and pass it EXPLICITLY, so the prompt's THREAD tag equals the real dispatched slug even on
             // a collision (re-dispatch / duplicate items) — otherwise the worker would write a ghost
-            // .fray/<base>.md disjoint from the -2 registry row (resolveSlug is idempotent on a free slug).
+            // .frizz/<base>.md disjoint from the -2 registry row (resolveSlug is idempotent on a free slug).
             const title = `${it.kind === "issue" ? "Investigate" : "Review"} ${repo}#${it.number}`
-            const slug = resolveSlug(frayDir, slugify(title), (s) => ctx.storage.getSession(s) !== undefined)
+            const slug = resolveSlug(frizzDir, slugify(title), (s) => ctx.storage.getSession(s) !== undefined)
             const template = effectiveTemplate(it.kind, it.kind === "issue" ? settings.githubIssuePrompt : settings.githubPrPrompt)
             const hydrated = it.kind === "issue" ? await hydrateIssue(repo, it.number) : await hydratePr(repo, it.number)
             const prompt = renderGithubPrompt(template, repo, hydrated, slug, it.kind)

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import type { AccountLogoutResult, Backend, ThreadView } from "@fray-ui/shared"
+import type { AccountLogoutResult, Backend, ThreadView } from "@frizz/shared"
 import { readAuthSnapshot } from "./auth-status.ts"
 
 const execFileAsync = promisify(execFile)

@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // @ts-check
-// SCRATCHPAD REINFORCEMENT hook (fray-worker) — keeps the ONE per-thread scratchpad
-// (`.fray/threads/<sid>/scratch.md`) written and re-grounded across compaction. Run directly with
+// SCRATCHPAD REINFORCEMENT hook (frizz-worker) — keeps the ONE per-thread scratchpad
+// (`.frizz/threads/<sid>/scratch.md`) written and re-grounded across compaction. Run directly with
 // node (zero deps, max Node compat), mirroring the other hooks in this plugin.
 //
 // WHY THIS EXISTS: compaction is the largest source of context loss in a long session, and the
-// scratchpad is fray's answer to it — but the scratchpad only works if two things happen, and
+// scratchpad is frizz's answer to it — but the scratchpad only works if two things happen, and
 // nothing was enforcing either. It has to be WRITTEN while the work is happening, and it has to be
 // RE-READ after the context is gone. A worker that forgets the first has nothing to recover; one
 // that forgets the second has a recovery it never opens.
@@ -33,7 +33,7 @@
 //
 // THE WRITE SIDE — a staleness nudge on two channels:
 //   UserPromptSubmit — the turn boundary.
-//   PostToolUse      — MID-TURN, and this is the one that matters. A fray worker runs enormous
+//   PostToolUse      — MID-TURN, and this is the one that matters. A frizz worker runs enormous
 //                      autonomous turns (dozens of tool calls between human prompts), so a
 //                      turn-boundary-only nudge can miss an entire session's worth of work and let
 //                      it compact unpersisted. PostToolUse additionalContext was verified live
@@ -57,21 +57,21 @@
 // blocks.
 import { readFileSync, writeFileSync, mkdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
-import { currentSessionId } from '../scripts/fray/config.mjs';
+import { currentSessionId } from '../scripts/frizz/config.mjs';
 
 const SCRATCH_FILE = 'scratch.md';
 
 /** Hard cap on injected characters. The scratchpad is unbounded working memory, so this bounds what
  *  a session start is charged; past the cap we inject the HEAD (a scratchpad's orientation lives at
  *  the top) and say plainly that it was clipped, pointing at the file for the rest. */
-const MAX_INJECT_CHARS = intFromEnv('FRAY_SCRATCHPAD_MAX_CHARS', 12000);
+const MAX_INJECT_CHARS = intFromEnv('FRIZZ_SCRATCHPAD_MAX_CHARS', 12000);
 
 /** Context-token growth since the last scratchpad write that marks it stale. 60k is ~a third of a
  *  200k window and ~6% of a 1M one: frequent enough that the pad is never many turns behind, rare
  *  enough not to be chatter. Also the first-write trigger — an untouched template counts as
  *  unwritten, so the baseline is zero and the first nudge lands once a session has accumulated 60k
  *  tokens actually worth persisting. */
-const STALE_TOKENS = intFromEnv('FRAY_SCRATCHPAD_STALE_TOKENS', 60000);
+const STALE_TOKENS = intFromEnv('FRIZZ_SCRATCHPAD_STALE_TOKENS', 60000);
 
 /** @param {string} name @param {number} fallback */
 function intFromEnv(name, fallback) {
@@ -98,11 +98,11 @@ const via = flagValue('--via') ?? 'plugin';
 // The escape hatch is an env var, not a setting, because it is for a one-off ("this session is doing
 // something where the injection is in the way"), not a project posture. Anything affirmative-looking
 // is ignored: only an explicit off value disables.
-if (/^(off|0|false|no|disabled)$/i.test((process.env.FRAY_SCRATCHPAD_HOOK ?? '').trim())) process.exit(0);
+if (/^(off|0|false|no|disabled)$/i.test((process.env.FRIZZ_SCRATCHPAD_HOOK ?? '').trim())) process.exit(0);
 
-// The repo-local registration defers to the plugin one for fray workers (see --via, and the
-// registration note in DECISIONS.md) so a fray worker never injects twice.
-if (via === 'project' && (process.env.FRAY_UI_THREAD ?? '').trim()) process.exit(0);
+// The repo-local registration defers to the plugin one for frizz workers (see --via, and the
+// registration note in DECISIONS.md) so a frizz worker never injects twice.
+if (via === 'project' && (process.env.FRIZZ_THREAD ?? '').trim()) process.exit(0);
 
 /** @type {{ agent_id?: unknown, agentId?: unknown, source?: string, trigger?: string, session_id?: string, transcript_path?: string }} */
 let input = {};
@@ -118,12 +118,12 @@ if (childId && mode !== 'subagent-start') process.exit(0);
 
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
-// WHICH session keys the pad. On Claude the hook's `session_id` IS fray's thread session id, so the
+// WHICH session keys the pad. On Claude the hook's `session_id` IS frizz's thread session id, so the
 // derived path is correct. On CODEX it is NOT: codex reports its own rollout session id (measured —
 // e.g. `019fb427-93aa-…`, with transcript_path pointing into ~/.codex/sessions), which has nothing to
-// do with `.fray/threads/<fray sessionId>/scratch.md`. Deriving the path there would silently address
+// do with `.frizz/threads/<frizz sessionId>/scratch.md`. Deriving the path there would silently address
 // a pad that does not exist and the worker would look unreinforced for a reason nobody could see. So
-// fray bakes `--session=<fray sessionId>` into the codex hook command, and an explicit value always
+// frizz bakes `--session=<frizz sessionId>` into the codex hook command, and an explicit value always
 // wins over the reported one.
 const explicitSession = flagValue('--session');
 let sid = null;
@@ -135,8 +135,8 @@ try {
 // Without a session id there is no key, and an unkeyed pad would bleed between sessions.
 if (!sid) process.exit(0);
 
-const threadDir = join(projectDir, '.fray', 'threads', sid);
-const relPath = '.fray/threads/' + sid + '/' + SCRATCH_FILE;
+const threadDir = join(projectDir, '.frizz', 'threads', sid);
+const relPath = '.frizz/threads/' + sid + '/' + SCRATCH_FILE;
 const absPath = join(threadDir, SCRATCH_FILE);
 
 // ── mode: subagent-start (Codex child-only merge epilogue) ───────────────────────────────────────
@@ -149,7 +149,7 @@ if (mode === 'subagent-start') {
         'the top-level `/root` worker. Update your own task progress in it as you work rather than ' +
         'leaving the root as its sole writer. Before every edit, re-read the current file, then ' +
         'patch only your scoped task/progress entry while ' +
-        'preserving every other agent’s content. This exact file is Fray coordination state, not a ' +
+        'preserving every other agent’s content. This exact file is Frizz coordination state, not a ' +
         'project deliverable or source edit: a scoped merge is an explicit exception to delegated ' +
         'phrases such as “write only <path>” or “do not modify the repo”; never classify that merge ' +
         'as unauthorized or roll it back. Never delete, truncate, reinitialize, move, or replace the ' +
@@ -162,7 +162,7 @@ if (mode === 'subagent-start') {
   process.exit(0);
 }
 
-// Ensure the directory exists so a first Write lands. fray's dispatcher already provisions this for
+// Ensure the directory exists so a first Write lands. frizz's dispatcher already provisions this for
 // a real thread; this only covers a session that started outside a dispatch.
 try {
   mkdirSync(threadDir, { recursive: true });
@@ -181,7 +181,7 @@ function readPad() {
 }
 
 /** Characters of SUBSTANTIVE content — the pad minus its provisioned skeleton.
- *  fray writes scratch.md up front with an H1, a one-line orientation, section headings and an empty
+ *  frizz writes scratch.md up front with an H1, a one-line orientation, section headings and an empty
  *  task box, so unlike a file that simply does not exist, "present" no longer means "written". This
  *  strips exactly those skeleton shapes and measures what is left. A heuristic on purpose: it only
  *  decides whether to NUDGE, so a wrong call costs one redundant reminder, never correctness.
@@ -243,7 +243,7 @@ if (mode === 'session-start') {
   // auto-compaction at line 20239 and then declared "I'm out of context" / "I'm at the end of this
   // context window" on 13 consecutive turns at fills of 176k-244k, before self-diagnosing at line
   // 20628 — "I've been treating 'low context' as a stopping condition ... and winding down instead of
-  // working." This hook is the only fray text that lands in that exact window, so it is where the
+  // working." This hook is the only frizz text that lands in that exact window, so it is where the
   // preamble gets answered. Kept to two sentences: the re-grounding instruction is the payload.
   const compactedNote =
     input.source === 'compact'
@@ -274,7 +274,7 @@ if (mode === 'session-start') {
       '⟦scratchpad — reground here⟧ Context was just compacted or resumed. Your scratchpad `' +
         relPath + '` is the CANONICAL record of this thread, but it is absent or has nothing ' +
         'substantive in it. That exact path is authoritative: do not search other ' +
-        '`.fray/threads/*/scratch.md` files for a substitute, and do not broadly reload repo docs or ' +
+        '`.frizz/threads/*/scratch.md` files for a substitute, and do not broadly reload repo docs or ' +
         'skills merely to reconstruct context. Recover from the retained compaction summary and any ' +
         'task-specific handoff it directly names, then WRITE this exact pad: the problem, the approach ' +
         'and the approaches you rejected, the decisions the human made, what is verified versus merely ' +

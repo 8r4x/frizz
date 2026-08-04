@@ -1,4 +1,4 @@
-import type { Backend, ThreadProfileOption } from "@fray-ui/shared"
+import type { Backend, ThreadProfileOption } from "@frizz/shared"
 import { readCodexModels } from "./codex-models.ts"
 import { CLAUDE_ULTRACODE, claudeModelSupportsUltracode } from "./claude-effort.ts"
 

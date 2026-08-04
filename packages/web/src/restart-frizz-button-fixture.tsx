@@ -7,12 +7,12 @@ const nativeFetch = window.fetch.bind(window)
 window.fetch = async (input, init) => {
   const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
   const url = new URL(requestUrl, window.location.href)
-  if (url.pathname === "/_fray/control/status") {
+  if (url.pathname === "/_frizz/control/status") {
     return new Response(JSON.stringify({ protocol: 1, state: "ready", updateRestart: true }), {
       headers: { "content-type": "application/json" },
     })
   }
-  if (url.pathname === "/_fray/control/update-restart") {
+  if (url.pathname === "/_frizz/control/update-restart") {
     const requests = Number(window.sessionStorage.getItem("restartFixtureRequests") ?? "0") + 1
     window.sessionStorage.setItem("restartFixtureRequests", String(requests))
     await new Promise((resolve) => window.setTimeout(resolve, 1_000))
@@ -23,7 +23,7 @@ window.fetch = async (input, init) => {
   return nativeFetch(input, init)
 }
 
-const { RestartFrayButton } = await import("./components/RestartFrayButton.tsx")
+const { RestartFrizzButton } = await import("./components/RestartFrizzButton.tsx")
 const { RestartOverlay } = await import("./components/RestartOverlay.tsx")
 
 function Fixture() {
@@ -36,7 +36,7 @@ function Fixture() {
         {/* A focusable background control so QA can prove Tab cannot reach behind the scrim. */}
         <button type="button" data-testid="decoy" className="mb-4 rounded border border-border px-2 py-1">decoy</button>
         {/* Left-aligned, mirroring the real top-left status-bar placement its popover anchors to. */}
-        <div className="w-fit"><RestartFrayButton /></div>
+        <div className="w-fit"><RestartFrizzButton /></div>
       </div>
     </main>
   )

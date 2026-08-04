@@ -9,7 +9,7 @@ import type { AppContext } from "./context.ts"
 import type { BoardManager } from "./board.ts"
 import type { Project } from "./project.ts"
 import type { Tailer } from "./tailer.ts"
-import type { BoardSnapshot } from "@fray-ui/shared"
+import type { BoardSnapshot } from "@frizz/shared"
 import { PROCEDURES } from "../../web/src/api/contract.ts"
 
 // The RUNTIME half of the drift gate (rpc-contract.ts is the type half). It reflects over the REAL
@@ -20,7 +20,7 @@ import { PROCEDURES } from "../../web/src/api/contract.ts"
 // branch where only the tests were run.
 
 function realRouter() {
-  const dir = mkdtempSync(join(tmpdir(), "fray-rpc-contract-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-rpc-contract-"))
   const project: Project = { dir, id: "rpc-contract", name: "test", label: "test", stateDir: dir, cwdSlug: "test" }
   const snapshot: BoardSnapshot = {
     projectDir: dir,
@@ -82,7 +82,7 @@ test("the client's GET/POST table matches each procedure's real query|mutation k
       Object.entries(router).map(([name, proc]) => [name, (proc as { _tag: string })._tag]),
     )
     // A flipped kind is silent until a user clicks: the client would GET a POST-only route and take
-    // Hono's plain-text 404/405, which the transport reports as "Fray server restart required".
+    // Hono's plain-text 404/405, which the transport reports as "Frizz server restart required".
     assert.deepEqual(actual, { ...PROCEDURES }, "query/mutation kind drift between the router and web/src/api/contract.ts")
   } finally {
     cleanup()

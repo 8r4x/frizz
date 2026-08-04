@@ -51,7 +51,7 @@ try {
   await p.waitForSelector(`[data-sidebar-item="${slug}"]`, { timeout: 60_000 })
 
   // Make it STALL: kill the pane out from under the row. deriveRuntime then reads "exited".
-  execFileSync("tmux", ["-L", socket, "kill-session", "-t", `fray-${slug}`], { stdio: "ignore" })
+  execFileSync("tmux", ["-L", socket, "kill-session", "-t", `frizz-${slug}`], { stdio: "ignore" })
   let stalled = null
   for (let i = 0; i < 60; i++) {
     stalled = await p.evaluate(READ_ROW(slug))

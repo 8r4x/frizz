@@ -33,7 +33,7 @@ window.fetch = async (input, init) => {
     ;(window as Window & { __openedLocalPath?: string }).__openedLocalPath =
       JSON.parse((init?.body as string) ?? "{}").path
     return new Response(JSON.stringify({ result: { action: "opened", path: "opened" } }), {
-      headers: { "content-type": "application/json", "x-fray-boot": "attach-fixture" },
+      headers: { "content-type": "application/json", "x-frizz-boot": "attach-fixture" },
     })
   }
   return nativeFetch(input, init)
@@ -49,11 +49,11 @@ window.fetch = async (input, init) => {
 // are seen as their two FALLBACKS (see the PNG note above); the frames themselves need a real stack.
 const message = [
   "Please review these attachments before we start.",
-  "/tmp/fray-att/spec-notes.pdf",
-  "/tmp/fray-att/diagram.png",
-  "/tmp/fray-att/logo.svg",
+  "/tmp/frizz-att/spec-notes.pdf",
+  "/tmp/frizz-att/diagram.png",
+  "/tmp/frizz-att/logo.svg",
   "And the same picture again, written as Markdown rather than as a bare path:",
-  "![the same diagram, via markdown](/tmp/fray-att/diagram.png)",
+  "![the same diagram, via markdown](/tmp/frizz-att/diagram.png)",
   "Here is the file listing I ran:",
   "```",
   "/Users/foo/project/src/main.rs",

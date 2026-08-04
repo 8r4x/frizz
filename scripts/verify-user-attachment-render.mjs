@@ -7,7 +7,7 @@
 //
 // This drives the REAL pipeline for that fix — JSONL → tailer → transcript → ChatView → /local-image —
 // with a simulated worker, and asserts the five shapes that matter, including the two CONTROLS that
-// must not change. A fixture can't cover this: the fray server mounts Vite with appType "custom", so
+// must not change. A fixture can't cover this: the frizz server mounts Vite with appType "custom", so
 // every *.html falls back to index.html and only the real thread route renders a real transcript.
 //
 // Usage: nub scripts/verify-user-attachment-render.mjs --port=4931 --home=/abs/temp-home
@@ -32,7 +32,7 @@ const SESSION_ID = randomUUID()
 const now = new Date().toISOString()
 
 // A real PNG the unconfined /local-image resolver can serve, plus two safe-tier docs for the chips.
-const assets = join(tmpdir(), "fray-user-attachment-verify")
+const assets = join(tmpdir(), "frizz-user-attachment-verify")
 mkdirSync(assets, { recursive: true })
 const SHOT = join(assets, "shot.png")
 const PDF = join(assets, "spec.pdf")
@@ -67,12 +67,12 @@ user("No attachments here — just the ordinary bubble, unchanged.")            
 
 writeFileSync(join(logDir, `${SESSION_ID}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
 
-const socket = process.env.FRAY_TMUX_SOCKET ?? `fray-adhoc-${port}`
-const tmuxName = `fray-${SLUG}`
+const socket = process.env.FRIZZ_TMUX_SOCKET ?? `frizz-adhoc-${port}`
+const tmuxName = `frizz-${SLUG}`
 try { execFileSync("tmux", ["-L", socket, "kill-session", "-t", tmuxName], { stdio: "ignore" }) } catch {}
 try { execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"]) } catch {}
 
-const projects = join(home, ".fray", "projects")
+const projects = join(home, ".frizz", "projects")
 const db = join(projects, readdirSync(projects)[0], "ui.db")
 execFileSync("sqlite3", [db, `DELETE FROM session WHERE slug = '${SLUG}';`])
 execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session

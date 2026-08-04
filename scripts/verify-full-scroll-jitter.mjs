@@ -41,8 +41,8 @@ if (!home || !socket || !url) {
 }
 mkdirSync(shotDir, { recursive: true })
 
-const db = globSync(join(home, ".fray/projects/*/ui.db"))[0]
-if (!db) throw new Error(`no ui.db under ${home}/.fray/projects`)
+const db = globSync(join(home, ".frizz/projects/*/ui.db"))[0]
+if (!db) throw new Error(`no ui.db under ${home}/.frizz/projects`)
 const SLUG = "verify-scroll-jitter"
 const SESSION = "scrljit0-0000-4000-8000-000000000000"
 const jsonlDir = join(home, ".claude", "projects", cwd.replace(/[/.]/g, "-"))
@@ -87,9 +87,9 @@ if (flags.source) {
   }
 }
 writeFileSync(jsonl, seed.map((r) => JSON.stringify(r)).join("\n") + "\n")
-try { execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `fray-${SLUG}`, "sleep 7200"], { stdio: "ignore" }) } catch {}
+try { execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${SLUG}`, "sleep 7200"], { stdio: "ignore" }) } catch {}
 execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode)
-  VALUES ('${SLUG}', '${SESSION}', 'fray-${SLUG}', '${now()}', 'Scroll jitter', 'claude', 'opus', 'high', 'default')`])
+  VALUES ('${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${now()}', 'Scroll jitter', 'claude', 'opus', 'high', 'default')`])
 const api = createRpcClient(url)
 
 let failures = 0

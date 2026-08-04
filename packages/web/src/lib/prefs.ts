@@ -6,7 +6,7 @@ import { DEFAULT_SNOOZE_PRESET, isSnoozePreset, type SnoozePreset } from "./snoo
 // (that's operator dispatch config; this is how one browser likes to render). Seeded synchronously
 // from localStorage so the first paint already reflects the saved choice, then mirrored back on
 // every change. Components read via useSnapshot(prefs).
-const KEY = "fray.prefs.v1"
+const KEY = "frizz.prefs.v1"
 
 // Coerce whatever's stored for `stickyUserMessage` to a boolean. Accepts the current boolean form and
 // the short-lived earlier enum ("off" → false; "compact"/"full" → true); anything else → the fallback.

@@ -15,8 +15,8 @@ import { join } from "node:path"
 import { deletePlanFile, listPlanFiles, resolvePlanFile } from "./plan-files.ts"
 
 function fixture(): { dir: string; plans: string; dispose: () => void } {
-  const dir = mkdtempSync(join(tmpdir(), "fray-plan-files-"))
-  const plans = join(dir, ".fray", "plans")
+  const dir = mkdtempSync(join(tmpdir(), "frizz-plan-files-"))
+  const plans = join(dir, ".frizz", "plans")
   mkdirSync(plans, { recursive: true })
   return { dir, plans, dispose: () => rmSync(dir, { recursive: true, force: true }) }
 }
@@ -28,11 +28,11 @@ test("plan resolver and discovery return one stable direct regular markdown chil
     writeFileSync(join(h.plans, ".hidden.md"), "# hidden\n")
     mkdirSync(join(h.plans, "nested.md"))
 
-    const resolved = resolvePlanFile(h.dir, ".fray/plans/Release plan.md")
+    const resolved = resolvePlanFile(h.dir, ".frizz/plans/Release plan.md")
     assert.equal(resolved?.contents.toString("utf8"), "# Release plan\nbody\n")
-    assert.equal(resolved?.relativePath, ".fray/plans/Release plan.md")
+    assert.equal(resolved?.relativePath, ".frizz/plans/Release plan.md")
     assert.deepEqual(listPlanFiles(h.dir).map((file) => file.relativePath), [
-      ".fray/plans/Release plan.md",
+      ".frizz/plans/Release plan.md",
     ])
   } finally {
     h.dispose()
@@ -44,10 +44,10 @@ test("plan delete removes a direct plan file and is idempotent for an already-go
   try {
     const path = join(h.plans, "Release plan.md")
     writeFileSync(path, "# Release plan\n")
-    assert.equal(deletePlanFile(h.dir, ".fray/plans/Release plan.md"), true)
+    assert.equal(deletePlanFile(h.dir, ".frizz/plans/Release plan.md"), true)
     assert.equal(existsSync(path), false)
     // Already gone: resolver rejects it, so nothing is deleted and it reports false.
-    assert.equal(deletePlanFile(h.dir, ".fray/plans/Release plan.md"), false)
+    assert.equal(deletePlanFile(h.dir, ".frizz/plans/Release plan.md"), false)
   } finally {
     h.dispose()
   }
@@ -62,7 +62,7 @@ test("plan delete re-throws a genuine filesystem failure instead of reporting su
   try {
     writeFileSync(path, "# locked\n")
     chmodSync(h.plans, 0o500) // r-x: cannot unlink children
-    assert.throws(() => deletePlanFile(h.dir, ".fray/plans/locked.md"))
+    assert.throws(() => deletePlanFile(h.dir, ".frizz/plans/locked.md"))
     chmodSync(h.plans, 0o700)
     assert.equal(existsSync(path), true) // the file survived the failed delete
   } finally {
@@ -73,16 +73,16 @@ test("plan delete re-throws a genuine filesystem failure instead of reporting su
 
 test("plan delete refuses traversal, nested, symlinked, and non-string targets", () => {
   const h = fixture()
-  const external = mkdtempSync(join(tmpdir(), "fray-plan-del-external-"))
+  const external = mkdtempSync(join(tmpdir(), "frizz-plan-del-external-"))
   try {
     const outside = join(external, "outside.md")
     writeFileSync(outside, "outside\n")
     symlinkSync(outside, join(h.plans, "linked.md"))
     for (const path of [
       "../safe.md",
-      ".fray/plans/../../secret.md",
-      ".fray/plans/nested/safe.md",
-      ".fray/plans/linked.md",
+      ".frizz/plans/../../secret.md",
+      ".frizz/plans/nested/safe.md",
+      ".frizz/plans/linked.md",
       "/absolute.md",
       undefined,
     ]) {
@@ -102,10 +102,10 @@ test("plan resolver rejects traversal, nested paths, and non-string input before
     writeFileSync(join(h.plans, "safe.md"), "safe\n")
     for (const path of [
       "../safe.md",
-      ".fray/plans/../../secret.md",
-      ".fray/plans/nested/safe.md",
-      ".fray/plans/.hidden.md",
-      ".fray/plans/safe.txt",
+      ".frizz/plans/../../secret.md",
+      ".frizz/plans/nested/safe.md",
+      ".frizz/plans/.hidden.md",
+      ".frizz/plans/safe.txt",
       "/absolute.md",
       undefined,
     ]) {
@@ -118,12 +118,12 @@ test("plan resolver rejects traversal, nested paths, and non-string input before
 
 test("plan resolver and discovery reject a symlinked plans directory and symlinked markdown child", () => {
   const linkedDir = fixture()
-  const external = mkdtempSync(join(tmpdir(), "fray-plan-external-"))
+  const external = mkdtempSync(join(tmpdir(), "frizz-plan-external-"))
   try {
     rmSync(linkedDir.plans, { recursive: true })
     writeFileSync(join(external, "outside.md"), "outside\n")
     symlinkSync(external, linkedDir.plans, "dir")
-    assert.equal(resolvePlanFile(linkedDir.dir, ".fray/plans/outside.md"), null)
+    assert.equal(resolvePlanFile(linkedDir.dir, ".frizz/plans/outside.md"), null)
     assert.deepEqual(listPlanFiles(linkedDir.dir), [])
   } finally {
     linkedDir.dispose()
@@ -135,7 +135,7 @@ test("plan resolver and discovery reject a symlinked plans directory and symlink
   try {
     writeFileSync(target, "outside\n")
     symlinkSync(target, join(linkedFile.plans, "linked.md"))
-    assert.equal(resolvePlanFile(linkedFile.dir, ".fray/plans/linked.md"), null)
+    assert.equal(resolvePlanFile(linkedFile.dir, ".frizz/plans/linked.md"), null)
     assert.deepEqual(listPlanFiles(linkedFile.dir), [])
   } finally {
     linkedFile.dispose()
@@ -147,7 +147,7 @@ test("plan resolver rejects a direct file replacement at the checked-to-open bou
   try {
     const path = join(h.plans, "raced.md")
     writeFileSync(path, "authorized\n")
-    const result = resolvePlanFile(h.dir, ".fray/plans/raced.md", {
+    const result = resolvePlanFile(h.dir, ".frizz/plans/raced.md", {
       afterFileCheck: () => {
         renameSync(path, `${path}.old`)
         writeFileSync(path, "replacement\n")
@@ -163,7 +163,7 @@ test("plan resolver and discovery reject a plans-directory generation swap", () 
   const resolved = fixture()
   try {
     writeFileSync(join(resolved.plans, "raced.md"), "authorized\n")
-    const result = resolvePlanFile(resolved.dir, ".fray/plans/raced.md", {
+    const result = resolvePlanFile(resolved.dir, ".frizz/plans/raced.md", {
       afterDirectoryCheck: () => {
         renameSync(resolved.plans, `${resolved.plans}.old`)
         mkdirSync(resolved.plans)

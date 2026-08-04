@@ -1,4 +1,4 @@
-// Filename → language id, for the highlighter. A small deliberate map: the languages fray agents
+// Filename → language id, for the highlighter. A small deliberate map: the languages frizz agents
 // actually touch, plus a plain fallback. Ported from gent's renderer, trimmed to what the tokenizer
 // (highlight.ts) understands — anything mapping to "text" renders unhighlighted.
 

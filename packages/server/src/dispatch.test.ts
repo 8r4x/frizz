@@ -4,10 +4,10 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
-import { DISPATCH_TASK_BANNER_MARKER } from "@fray-ui/shared"
-import { buildClaudeCommand, loadWorkerPrompt, composePrompt, resolveWorkerPluginDir, scratchpadOrientation, scratchpadContent, workerPluginDir, frayConfigBlock, workerDispatchPermission, WORKER_DISPATCH_PERMISSION } from "./dispatch.ts"
+import { DISPATCH_TASK_BANNER_MARKER } from "@frizz/shared"
+import { buildClaudeCommand, loadWorkerPrompt, composePrompt, resolveWorkerPluginDir, scratchpadOrientation, scratchpadContent, workerPluginDir, frizzConfigBlock, workerDispatchPermission, WORKER_DISPATCH_PERMISSION } from "./dispatch.ts"
 import { parseTranscript } from "./transcript.ts"
-import { CHROME_DEVTOOLS_MCP, FRAY_MCP } from "./backend/types.ts"
+import { CHROME_DEVTOOLS_MCP, FRIZZ_MCP } from "./backend/types.ts"
 
 // ---- Backend-aware worker contract (worker-contract-backend-aware) ----
 // loadWorkerPrompt(kind) delegates to buildWorkerPrompt in workerPrompt.ts (a single compiled-in TS
@@ -42,13 +42,13 @@ test("Claude dispatch supplies the discovered worker plugin via --plugin-dir", (
   assert.deepEqual(argv.slice(argv.indexOf("--plugin-dir"), argv.indexOf("--plugin-dir") + 2), ["--plugin-dir", plugin])
 })
 
-test("Claude dispatch mounts chrome-devtools + the unified fray MCP server and pre-approves both", () => {
+test("Claude dispatch mounts chrome-devtools + the unified frizz MCP server and pre-approves both", () => {
   const argv = buildClaudeCommand({
     sessionId: "mcp-dispatch",
     permissionMode: "auto",
     prompt: "test",
     workerPrompt: "",
-    frayMcp: { scriptPath: "/abs/plugin/bin/fray-mcp.mjs", stateDir: "/home/.fray/projects/pid" },
+    frizzMcp: { scriptPath: "/abs/plugin/bin/frizz-mcp.mjs", stateDir: "/home/.frizz/projects/pid" },
   })
   const cfgRaw = argv[argv.indexOf("--mcp-config") + 1]
   assert.ok(cfgRaw, "argv must carry an inline --mcp-config")
@@ -59,21 +59,21 @@ test("Claude dispatch mounts chrome-devtools + the unified fray MCP server and p
     command: CHROME_DEVTOOLS_MCP.command,
     args: [...CHROME_DEVTOOLS_MCP.args],
   })
-  assert.deepEqual(cfg.mcpServers[FRAY_MCP.name], {
+  assert.deepEqual(cfg.mcpServers[FRIZZ_MCP.name], {
     command: process.execPath, // absolute node path, not bare "node" (worker PATH-independence)
-    args: ["/abs/plugin/bin/fray-mcp.mjs"],
-    env: { FRAY_STATE_DIR: "/home/.fray/projects/pid" },
+    args: ["/abs/plugin/bin/frizz-mcp.mjs"],
+    env: { FRIZZ_STATE_DIR: "/home/.frizz/projects/pid" },
   })
   // Tools are pre-approved so a headless worker never blocks on a permission prompt. One comma-joined
   // EQUALS-form token: --allowedTools is variadic, so a space-separated value could swallow a
   // following positional (the prompt) — the equals form binds exactly one token. BOTH rules are
   // SERVER-level, so a tool added to either server needs no allow-list edit.
-  assert.ok(argv.includes("--allowedTools=mcp__chrome-devtools,mcp__fray"))
+  assert.ok(argv.includes("--allowedTools=mcp__chrome-devtools,mcp__frizz"))
   // The prompt stays the trailing positional (flags never displace it).
   assert.equal(argv[argv.length - 1], "test")
 })
 
-test("Claude dispatch still mounts + pre-approves chrome-devtools when no fray-MCP descriptor is supplied", () => {
+test("Claude dispatch still mounts + pre-approves chrome-devtools when no frizz-MCP descriptor is supplied", () => {
   const argv = buildClaudeCommand({ sessionId: "no-mcp", permissionMode: "auto", prompt: "test", workerPrompt: "" })
   const cfg = JSON.parse(argv[argv.indexOf("--mcp-config") + 1])
   assert.deepEqual(Object.keys(cfg.mcpServers), [CHROME_DEVTOOLS_MCP.name])
@@ -82,74 +82,74 @@ test("Claude dispatch still mounts + pre-approves chrome-devtools when no fray-M
 
 test("Claude worker surfaces share the canonical per-session scratchpad path", () => {
   const sessionId = "scratch-canonical"
-  const canonical = `.fray/threads/${sessionId}/scratch.md`
+  const canonical = `.frizz/threads/${sessionId}/scratch.md`
   assert.match(composePrompt(sessionId, "task", "claude"), new RegExp(canonical.replaceAll("/", "\\/")))
   assert.match(scratchpadOrientation(sessionId, null, "claude"), new RegExp(canonical.replaceAll("/", "\\/")))
-  assert.match(SESSION_SEED, /\.fray\/threads\/.*scratch\.md/)
-  assert.doesNotMatch(SESSION_SEED, /\.fray\/scratch\//)
+  assert.match(SESSION_SEED, /\.frizz\/threads\/.*scratch\.md/)
+  assert.doesNotMatch(SESSION_SEED, /\.frizz\/scratch\//)
 })
 
-// ---- FRAY.md project-config injection (defer-to-project-norms) ----
-// A repo-committed FRAY.md at the project root is injected into the worker SYSTEM prompt under an
-// "overrides fray defaults" header, so a project's own norms win over fray's built-in defaults.
-test("frayConfigBlock: absent FRAY.md injects nothing", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-md-absent-"))
-  assert.equal(frayConfigBlock(dir), "")
+// ---- FRIZZ.md project-config injection (defer-to-project-norms) ----
+// A repo-committed FRIZZ.md at the project root is injected into the worker SYSTEM prompt under an
+// "overrides frizz defaults" header, so a project's own norms win over frizz's built-in defaults.
+test("frizzConfigBlock: absent FRIZZ.md injects nothing", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-md-absent-"))
+  assert.equal(frizzConfigBlock(dir), "")
 })
 
-test("frayConfigBlock: empty/whitespace FRAY.md injects nothing", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-md-empty-"))
-  writeFileSync(join(dir, "FRAY.md"), "\n  \n")
-  assert.equal(frayConfigBlock(dir), "")
+test("frizzConfigBlock: empty/whitespace FRIZZ.md injects nothing", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-md-empty-"))
+  writeFileSync(join(dir, "FRIZZ.md"), "\n  \n")
+  assert.equal(frizzConfigBlock(dir), "")
 })
 
-test("frayConfigBlock: present FRAY.md is wrapped in an overrides-fray-defaults header", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-md-present-"))
+test("frizzConfigBlock: present FRIZZ.md is wrapped in an overrides-frizz-defaults header", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-md-present-"))
   const body = "## Our norms\n- Gates: `pnpm check`\n- Skip adversarial review on small UI diffs."
-  writeFileSync(join(dir, "FRAY.md"), body + "\n")
-  const block = frayConfigBlock(dir)
-  assert.match(block, /PROJECT FRAY CONFIG \(from this repo's FRAY\.md\)/)
-  // Header is scoped to PROCESS defaults and explicitly does NOT relax the fray-mechanical contract —
-  // so a FRAY.md can't contradict the "Defer" section's non-negotiable browser/signal gates.
-  assert.match(block, /OVERRIDE the fray worker PROCESS defaults above/)
-  assert.match(block, /do NOT relax the fray-mechanical contract/)
-  assert.ok(block.includes(body), "the FRAY.md body must be present verbatim")
+  writeFileSync(join(dir, "FRIZZ.md"), body + "\n")
+  const block = frizzConfigBlock(dir)
+  assert.match(block, /PROJECT FRIZZ CONFIG \(from this repo's FRIZZ\.md\)/)
+  // Header is scoped to PROCESS defaults and explicitly does NOT relax the frizz-mechanical contract —
+  // so a FRIZZ.md can't contradict the "Defer" section's non-negotiable browser/signal gates.
+  assert.match(block, /OVERRIDE the frizz worker PROCESS defaults above/)
+  assert.match(block, /do NOT relax the frizz-mechanical contract/)
+  assert.ok(block.includes(body), "the FRIZZ.md body must be present verbatim")
 })
 
-test("frayConfigBlock: an over-cap FRAY.md content is clipped with a truncation marker", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-md-clip-"))
-  writeFileSync(join(dir, "FRAY.md"), "x".repeat(50_000)) // > 12k chars, < 64KB → read then clipped
-  const block = frayConfigBlock(dir)
-  assert.match(block, /\[FRAY\.md truncated\]/)
+test("frizzConfigBlock: an over-cap FRIZZ.md content is clipped with a truncation marker", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-md-clip-"))
+  writeFileSync(join(dir, "FRIZZ.md"), "x".repeat(50_000)) // > 12k chars, < 64KB → read then clipped
+  const block = frizzConfigBlock(dir)
+  assert.match(block, /\[FRIZZ\.md truncated\]/)
   assert.ok(block.length < 20_000, "the injected block must stay within the system-prompt budget")
 })
 
-test("frayConfigBlock: a runaway (>64KB) FRAY.md is rejected unread, not slurped", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-md-runaway-"))
-  writeFileSync(join(dir, "FRAY.md"), "x".repeat(200_000)) // exceeds the read-size guard
-  assert.equal(frayConfigBlock(dir), "")
+test("frizzConfigBlock: a runaway (>64KB) FRIZZ.md is rejected unread, not slurped", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-md-runaway-"))
+  writeFileSync(join(dir, "FRIZZ.md"), "x".repeat(200_000)) // exceeds the read-size guard
+  assert.equal(frizzConfigBlock(dir), "")
 })
 
-test("frayConfigBlock: a non-regular FRAY.md (a directory) injects nothing", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-md-dir-"))
-  mkdirSync(join(dir, "FRAY.md"))
-  assert.equal(frayConfigBlock(dir), "")
+test("frizzConfigBlock: a non-regular FRIZZ.md (a directory) injects nothing", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-md-dir-"))
+  mkdirSync(join(dir, "FRIZZ.md"))
+  assert.equal(frizzConfigBlock(dir), "")
 })
 
-test("frayConfigBlock composes AFTER the worker contract (override position) in the system prompt", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-md-order-"))
-  writeFileSync(join(dir, "FRAY.md"), "PROJECT-NORM-SENTINEL")
-  const sessionId = "fray-md-order"
-  const system = [loadWorkerPrompt("claude"), scratchpadOrientation(sessionId, null, "claude"), frayConfigBlock(dir)]
+test("frizzConfigBlock composes AFTER the worker contract (override position) in the system prompt", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-md-order-"))
+  writeFileSync(join(dir, "FRIZZ.md"), "PROJECT-NORM-SENTINEL")
+  const sessionId = "frizz-md-order"
+  const system = [loadWorkerPrompt("claude"), scratchpadOrientation(sessionId, null, "claude"), frizzConfigBlock(dir)]
     .filter(Boolean)
     .join("\n\n")
   assert.ok(system.indexOf("PROJECT-NORM-SENTINEL") > system.indexOf("Defer to the project's own norms"))
 })
 
 test("artifact worker resolver finds runtime/cc-worker through pnpm's nested module store", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-worker-plugin-resolver-"))
+  const root = mkdtempSync(join(tmpdir(), "frizz-worker-plugin-resolver-"))
   const runtime = join(root, "runtime")
-  const module = join(runtime, "node_modules", ".pnpm", "@fray-ui+server@fixture", "node_modules", "@fray-ui", "server", "src", "dispatch.js")
+  const module = join(runtime, "node_modules", ".pnpm", "@frizz+server@fixture", "node_modules", "@frizz", "server", "src", "dispatch.js")
   const plugin = join(runtime, "cc-worker")
   mkdirSync(dirname(module), { recursive: true })
   mkdirSync(join(plugin, ".claude-plugin"), { recursive: true })
@@ -179,9 +179,9 @@ test("both contracts forbid resting while the instruction still has parts left",
   }
 })
 
-test("loadWorkerPrompt: no unresolved {{FRAY_*}} markers survive in either backend's contract", () => {
-  assert.doesNotMatch(loadWorkerPrompt("claude"), /\{\{FRAY_/)
-  assert.doesNotMatch(loadWorkerPrompt("codex"), /\{\{FRAY_/)
+test("loadWorkerPrompt: no unresolved {{FRIZZ_*}} markers survive in either backend's contract", () => {
+  assert.doesNotMatch(loadWorkerPrompt("claude"), /\{\{FRIZZ_/)
+  assert.doesNotMatch(loadWorkerPrompt("codex"), /\{\{FRIZZ_/)
 })
 
 test("loadWorkerPrompt(claude) carries the Claude-Code-only guidance", () => {
@@ -191,9 +191,9 @@ test("loadWorkerPrompt(claude) carries the Claude-Code-only guidance", () => {
   assert.match(c, /`claude -r`/)
   assert.match(c, /## Sub-agents/)
   assert.match(c, /plain Agent tool \+ `run_in_background: true`/)
-  assert.match(c, /namespaced string `fray:<model>-<effort>`/)
+  assert.match(c, /namespaced string `frizz:<model>-<effort>`/)
   assert.match(c, /the shared blackboard for your sub-agents/)
-  // Claude fray workers have NO fork option (`subagent_type: "fork"` does not resolve); say so
+  // Claude frizz workers have NO fork option (`subagent_type: "fork"` does not resolve); say so
   // explicitly so a worker never blocks hunting for one — the codex fork_context failure mode.
   assert.match(c, /There is NO fork\/inherit option here/)
   assert.match(c, /absence of a fork switch is NOT a blocker to report/)
@@ -206,14 +206,14 @@ test("loadWorkerPrompt(claude) carries the Claude-Code-only guidance", () => {
 
 test("loadWorkerPrompt(codex) OMITS every Claude-Code-only construct a codex worker can't use", () => {
   const c = loadWorkerPrompt("codex")
-  // No Claude session/wake, no Agent tool, no fray profiles, no sub-agent blackboard framing.
+  // No Claude session/wake, no Agent tool, no frizz profiles, no sub-agent blackboard framing.
   assert.doesNotMatch(c, /claude session/)
   assert.doesNotMatch(c, /claude -r/)
   assert.doesNotMatch(c, /## Sub-agents/)
   assert.doesNotMatch(c, /Agent tool/)
   assert.doesNotMatch(c, /run_in_background/)
-  assert.doesNotMatch(c, /fray:<model>-<effort>/)
-  assert.doesNotMatch(c, /fray:opus/)
+  assert.doesNotMatch(c, /frizz:<model>-<effort>/)
+  assert.doesNotMatch(c, /frizz:opus/)
   assert.doesNotMatch(c, /blackboard/)
 })
 
@@ -228,11 +228,11 @@ test("loadWorkerPrompt(codex) carries codex's OWN session/wake + model/effort/sa
   assert.match(c, /### CI\/review monitor selection/)
   assert.match(c, /project-local `AGENTS\.md`/)
   assert.match(c, /terminal event\/exit semantics/)
-  assert.match(c, /never silently shadow it with Fray/)
+  assert.match(c, /never silently shadow it with Frizz/)
   assert.match(c, /persistent `exec_command` \/ `write_stdin` session/)
   assert.match(c, /Luna child is optional\nonly/)
   assert.match(c, /active native spawn tool/)
-  assert.match(c, /configured namespace is `fray`/)
+  assert.match(c, /configured namespace is `frizz`/)
   assert.match(c, /context-fork control/)
   // Both directions must be teachable: fresh for clean-room/adversarial, fork when the child
   // genuinely continues the parent's reasoning. An unset control silently forks EVERYTHING.
@@ -245,7 +245,7 @@ test("loadWorkerPrompt(codex) carries codex's OWN session/wake + model/effort/sa
   assert.match(c, /Before any Sol or xhigh spawn/)
   assert.match(c, /why Terra \+ medium is inadequate/)
   assert.doesNotMatch(c, /do that work INLINE yourself/)
-  // The effort enum must match what fray actually sends codex: codexEffort (backend/codex.ts) passes
+  // The effort enum must match what frizz actually sends codex: codexEffort (backend/codex.ts) passes
   // the complete outer universe through; the selected model gates which levels it accepts.
   assert.match(c, /reasoning effort \(low \/ medium \/ high \/ xhigh \/ max \/ ultra\)/)
   assert.match(c, /read-only/)
@@ -261,14 +261,14 @@ test("loadWorkerPrompt(codex) carries codex's OWN session/wake + model/effort/sa
 test("loadWorkerPrompt(codex) requests exactly one first-output invisible title comment", () => {
   const c = loadWorkerPrompt("codex")
   assert.match(c, /## Thread title signal/)
-  assert.match(c, /<!-- fray title="Fix queue focus" -->/)
+  assert.match(c, /<!-- frizz title="Fix queue focus" -->/)
   assert.match(c, /very FIRST assistant message/)
   assert.match(c, /before any[\s\S]*commentary[\s\S]*tool call/)
   assert.match(c, /3-8 word title/)
   assert.match(c, /strips this comment from visible chat/)
   assert.match(c, /human rename always wins/)
   assert.match(c, /Never use an H1\nfor the title signal/)
-  assert.doesNotMatch(loadWorkerPrompt("claude"), /<!-- fray-title:/)
+  assert.doesNotMatch(loadWorkerPrompt("claude"), /<!-- frizz-title:/)
 })
 
 test("loadWorkerPrompt(codex) never turns an ordinary thread label into unconditional fan-out", () => {
@@ -299,7 +299,7 @@ test("loadWorkerPrompt: the backend-AGNOSTIC core is present in BOTH contracts",
     assert.match(c, /let it run to its terminal return/)
     assert.match(c, /partially applied edits, tests, and owned processes/)
     assert.match(c, /only the affected service, never by stopping a writer/)
-    assert.match(c, /scratchpad is Fray coordination state, not a project deliverable or source edit/)
+    assert.match(c, /scratchpad is Frizz coordination state, not a project deliverable or source edit/)
     assert.match(c, /deliverable paths/)
     assert.match(c, /repository-root files/)
     assert.match(c, /location alone neither permits nor forbids/)
@@ -310,7 +310,7 @@ test("loadWorkerPrompt: the backend-AGNOSTIC core is present in BOTH contracts",
 
 test("awaiting re-entry: every worker-contract surface requires a fresh fence after a follow-up", () => {
   // This is deliberately pinned across the shipped backend contracts (the single source — the former
-  // fray:worker skill copy was deleted; session-seed is a slim pointer, see its own test). A
+  // frizz:worker skill copy was deleted; session-seed is a slim pointer, see its own test). A
   // human turn clears lastFence in the tailer, so merely saying "already parked" cannot restore the
   // state: the worker must make a fresh decision, then repeat a current human/timer fence or re-arm
   // the active backend wait for an automatable condition.
@@ -367,7 +367,7 @@ test("end-state contract: bare rest queues, done checks, awaiting parks human/ti
     // Unlanded code and the live code-change discussion remain INSTANCES of the heuristic.
     assert.match(c, /live code-change discussion/)
     assert.match(c, /PLANNING session whose plan file is FULLY written and PERSISTED/)
-    assert.match(c, /FULLY written and PERSISTED \(`\.fray\/plans\/<topic>\.md`\)/)
+    assert.match(c, /FULLY written and PERSISTED \(`\.frizz\/plans\/<topic>\.md`\)/)
     assert.match(c, /artifact already lives outside the thread, so dismissing the thread loses nothing/)
     // The planning thread type derives the same carve-out where a worker reads its deliverable —
     // codex-only now, since claude's lean contract drops ## Thread types. Claude still carries the
@@ -394,14 +394,14 @@ test("end-state contract: bare rest queues, done checks, awaiting parks human/ti
 })
 
 test("session-seed is a SLIM runtime pointer, not a fourth full contract copy", () => {
-  // The full contract lives ONCE in the system prompt (loadWorkerPrompt) — the on-demand fray:worker
+  // The full contract lives ONCE in the system prompt (loadWorkerPrompt) — the on-demand frizz:worker
   // skill copy was deleted. The SessionStart hook only re-grounds: it points at the system prompt, carries the runtime
   // scratchpad path + a signal-at-rest anchor, and must NOT re-duplicate the re-entry drill or any
   // browser-QA checklist (that duplication is exactly what drifted and what this slim removes).
   assert.match(SESSION_SEED, /lives in your SYSTEM PROMPT/i)
   // The worker-skill copy is GONE — the seed must not tell workers to load a skill that no longer exists.
-  assert.doesNotMatch(SESSION_SEED, /fray:worker/)
-  assert.match(SESSION_SEED, /\.fray\/threads\/.*scratch\.md/)
+  assert.doesNotMatch(SESSION_SEED, /frizz:worker/)
+  assert.match(SESSION_SEED, /\.frizz\/threads\/.*scratch\.md/)
   for (const fence of [/```done/, /```awaiting/, /```question/]) assert.match(SESSION_SEED, fence)
   assert.doesNotMatch(SESSION_SEED, /RUNTIME RELEASE GATE:/)
   assert.doesNotMatch(SESSION_SEED, /never build a bespoke screenshot tool/)
@@ -411,8 +411,8 @@ test("session-seed is a SLIM runtime pointer, not a fourth full contract copy", 
 test("runtime release gate: WIPED — no worker surface carries browser-QA opinionation", () => {
   // The settings-toggled Runtime-release-gate module was deleted (maintainer 2026-08-03: "extremely
   // overfit to our specific requirements inside of this repo. Wipe it entirely."). Browser-QA policy
-  // now belongs to a project's own FRAY.md/CLAUDE.md, which frayConfigBlock injects per repo — never to
-  // every worker Fray dispatches anywhere.
+  // now belongs to a project's own FRIZZ.md/CLAUDE.md, which frizzConfigBlock injects per repo — never to
+  // every worker Frizz dispatches anywhere.
   for (const raw of [loadWorkerPrompt("claude"), loadWorkerPrompt("codex")]) {
     const c = raw.replace(/\s+/g, " ")
     assert.doesNotMatch(c, /Runtime release gate/i)
@@ -479,7 +479,7 @@ test("every scratchpad surface presents the pad as optional and never a substitu
 
 // ---- composePrompt: the system→human handoff carries a loud demarcation banner ----
 
-test("composePrompt puts NOTHING of fray's below the banner — the operator's prompt is the whole tail", () => {
+test("composePrompt puts NOTHING of frizz's below the banner — the operator's prompt is the whole tail", () => {
   const task = "Fix the thing.\n\nWith a second paragraph."
   const composed = composePrompt("sid", task, "claude")
 
@@ -496,7 +496,7 @@ test("composePrompt puts NOTHING of fray's below the banner — the operator's p
   assert.ok(composed.endsWith(`${DISPATCH_TASK_BANNER_MARKER}${task}`))
   assert.equal(composed.indexOf(DISPATCH_TASK_BANNER_MARKER), composed.lastIndexOf(DISPATCH_TASK_BANNER_MARKER))
   assert.ok(!composed.includes("\nTASK:\n"))
-  assert.ok(composed.indexOf("fray system orientation") < banner)
+  assert.ok(composed.indexOf("frizz system orientation") < banner)
 
   // Round-trip through the real parser: the UI's first user message shows exactly the human's words,
   // while the stored text keeps the whole machine-facing prompt the worker actually received.
@@ -543,7 +543,7 @@ test("scratchpadOrientation gives codex a merge-only shared pad; claude keeps it
   assert.match(codex, /never delete, truncate, reinitialize, move, or replace the whole file/)
 
   // The plan line is agnostic and appended for both.
-  assert.match(scratchpadOrientation("sid", ".fray/plans/x.md", "codex"), /PLAN: \.fray\/plans\/x\.md/)
+  assert.match(scratchpadOrientation("sid", ".frizz/plans/x.md", "codex"), /PLAN: \.frizz\/plans\/x\.md/)
 })
 
 // ---- scratchpadContent: the pad skeleton is backend-aware ----
@@ -565,7 +565,7 @@ test("scratchpadContent seeds a flexible shared structure and Obsidian-flavoured
     assert.match(body, /`\[\?\]` blocked \/ needs input/)
     assert.match(body, /re-read before every edit/)
     assert.match(body, /own `### <agent path>` subsection/)
-    assert.match(body, /scoped scratchpad merge is Fray coordination state/)
+    assert.match(body, /scoped scratchpad merge is Frizz coordination state/)
     assert.match(body, /allowed when a delegated task limits its deliverable paths/)
     assert.match(body, /Never delete, truncate, reinitialize, move, or replace the whole file/)
     for (const section of ["Goal", "Task list", "Decisions", "Shared context", "Agent progress", "Verification", "Next action"])

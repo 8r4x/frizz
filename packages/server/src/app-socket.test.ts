@@ -4,7 +4,7 @@ import { createServer, type Server } from "node:http"
 import { once } from "node:events"
 import type { AddressInfo } from "node:net"
 import { WebSocket, type ClientOptions } from "ws"
-import type { BoardSnapshot, SocketServerMsg, TranscriptMessage } from "@fray-ui/shared"
+import type { BoardSnapshot, SocketServerMsg, TranscriptMessage } from "@frizz/shared"
 import { Bus, Emitter } from "./bus.ts"
 import {
   APP_SOCKET_MAX_MESSAGE_BYTES,

@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
-import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage, TranscriptToolCall } from "@fray-ui/shared"
+import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage, TranscriptToolCall } from "@frizz/shared"
 import { TodosView } from "./components/TodosView.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
@@ -27,7 +27,7 @@ import "./styles.css"
 //                           event AFTER it. Regression guard: the question (with answer chips) must stay
 //                           visible — a trailing event must NOT pull it into the collapsed range.
 //   ?variant=bgshells  three background shells launched in three SEPARATE assistant records across the
-//                      collapsed span (the real shape from thread `started-three-fray-in-quick-succession`),
+//                      collapsed span (the real shape from thread `started-three-frizz-in-quick-succession`),
 //                      one of them already finished. Background tasks are lifted out of the collapse and
 //                      render as REAL CARDS — never a `Ran N tool calls` band — with a pulsing blue dot
 //                      while live and NO mark at all once done.
@@ -204,7 +204,7 @@ const dispatches: TranscriptMessage[] = [
   withId(asst("", [tool("Agent", {
     detail: "Audit the queue card's collapse",
     prompt: "Read packages/web/src/components/TodosView.tsx and report every tool state the queue card can drop.",
-    subagentType: "fray:opus-high",
+    subagentType: "frizz:opus-high",
     agentId: LIVE_AGENT_ID,
   })])),
   withId(asst("While that runs, let me read the chat side myself.", [
@@ -214,7 +214,7 @@ const dispatches: TranscriptMessage[] = [
   withId(asst("", [tool("Agent", {
     detail: "Cross-check the sub-agent drawer",
     prompt: "Read packages/web/src/components/SubAgentSheet.tsx and confirm it shares the parent's coalescing.",
-    subagentType: "fray:sonnet-medium",
+    subagentType: "frizz:sonnet-medium",
     agentId: "agent-done-1",
     agentStatus: "completed",
     agentElapsedMs: 214_000,
@@ -319,7 +319,7 @@ const thread: ThreadViewModel = {
   lastActivityAt: new Date().toISOString(),
 } as unknown as ThreadViewModel
 
-store.board = { projectDir: "/fixture/fray", threads: [thread] } as BoardSnapshot
+store.board = { projectDir: "/fixture/frizz", threads: [thread] } as BoardSnapshot
 
 const transcriptPage = { messages, transcriptKey: "fixture-key", hasEarlier: false, historyLoaded: false }
 

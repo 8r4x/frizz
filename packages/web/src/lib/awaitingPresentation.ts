@@ -1,4 +1,4 @@
-import { canonicalSnoozeInstant, isValidAwaitingTimer, type AwaitingHint } from "@fray-ui/shared"
+import { canonicalSnoozeInstant, isValidAwaitingTimer, type AwaitingHint } from "@frizz/shared"
 import { githubRefUrl } from "./githubRef.ts"
 import { formatSnoozeWake } from "./snooze.ts"
 
@@ -92,7 +92,7 @@ export function prWatchRefs(hints: readonly AwaitingHint[]): { ref: string; url:
 }
 
 export function awaitingHintSentence(hints: readonly AwaitingHint[], nowMs = Date.now()): string | null {
-  // A pr-watch hint is an instruction to fray, not additional copy for the human. The card title
+  // A pr-watch hint is an instruction to frizz, not additional copy for the human. The card title
   // already says the watcher is armed and the worker-authored body names the useful status/wake
   // condition; echoing the parsed hint as "Watch owner/repo#N for…" mixed implementation mechanics
   // into that explanation and usually repeated it. Keep the hints intact for the scheduler and park

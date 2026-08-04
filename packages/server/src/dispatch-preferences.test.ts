@@ -42,7 +42,7 @@ test("dispatch preferences infer an old Settings record's Codex backend from the
 })
 
 test("dispatch preferences persist provider-specific selections across a database restart", () => {
-  const path = join(mkdtempSync(join(tmpdir(), "fray-dispatch-preferences-")), "ui.db")
+  const path = join(mkdtempSync(join(tmpdir(), "frizz-dispatch-preferences-")), "ui.db")
   const settings = defaultSettings()
   let storage = createStorage(path)
 
@@ -63,7 +63,7 @@ test("dispatch preferences persist provider-specific selections across a databas
 })
 
 test("a profile cell persists model and effort in one provider-scoped mutation", () => {
-  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "fray-dispatch-profile-")), "ui.db"))
+  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "frizz-dispatch-profile-")), "ui.db"))
   const settings = defaultSettings()
   const next = setDispatchPreference(storage, settings, {
     field: "profile",
@@ -78,7 +78,7 @@ test("a profile cell persists model and effort in one provider-scoped mutation",
 })
 
 test("an invalid saved record degrades in memory and never silently persists a fallback", () => {
-  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "fray-dispatch-preferences-invalid-")), "ui.db"))
+  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "frizz-dispatch-preferences-invalid-")), "ui.db"))
   storage.setSetting("dispatch-preferences.v1", { backend: "codex", codex: { model: "" } })
   const settings = defaultSettings()
   assert.deepEqual(getDispatchPreferences(storage, settings), defaultDispatchPreferences(settings))

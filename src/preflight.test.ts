@@ -70,21 +70,21 @@ test("core launch preflight rejects an old 22.x minor below the floor", () => {
 test("core launch preflight gives an actionable error for a missing executable", () => {
   assert.throws(
     () => assertLaunchPrerequisites({ nodeVersion: "22.13.0", command: (name) => name !== "git" }),
-    /required executable `git` is not available on PATH; Fray identifies a project by its Git repository\. Install git \(`brew install git` on macOS, `apt install git` on Debian\/Ubuntu\) and relaunch Fray/
+    /required executable `git` is not available on PATH; Frizz identifies a project by its Git repository\. Install git \(`brew install git` on macOS, `apt install git` on Debian\/Ubuntu\) and relaunch Frizz/
   );
 });
 
 // The launchers probe for these BEFORE resolving a workspace, which is what makes the diagnosis
 // eager: resolving one execs `git`, which used
 // to report the absence in its own unrelated vocabulary.
-test("the eager executable probe names each missing tool and why Fray wants it", () => {
+test("the eager executable probe names each missing tool and why Frizz wants it", () => {
   assert.throws(
     () => assertRequiredExecutables((name) => name !== "git"),
-    /required executable `git` is not available on PATH; Fray identifies a project by its Git repository\./
+    /required executable `git` is not available on PATH; Frizz identifies a project by its Git repository\./
   );
   assert.throws(
     () => assertRequiredExecutables((name) => name !== "git"),
-    /required executable `git` is not available on PATH; Fray identifies a project/
+    /required executable `git` is not available on PATH; Frizz identifies a project/
   );
   assert.doesNotThrow(() => assertRequiredExecutables(() => true));
 });
@@ -99,7 +99,7 @@ test("the eager executable probe leaves the Node floor to the full prerequisite 
   );
 });
 
-// The floor users are TOLD about and the floor Fray enforces must be the same. They have drifted
+// The floor users are TOLD about and the floor Frizz enforces must be the same. They have drifted
 // twice, in opposite directions: `>=26` against an enforced 22.12 (EBADENGINE about a floor nothing
 // checked), then `>=22.12.0` against a runtime that segfaults there.
 test("the published engines floor is exactly the floor the launcher enforces", () => {
@@ -178,7 +178,7 @@ test("the Node floor covers the Node-API version every native dependency builds 
     if (!ours) continue; // We advertise no release on that line at all, so nothing can load there.
     assert.ok(
       ours.minor >= line.minor,
-      `Fray advertises Node ${ours.major}.${ours.minor}, below the ${line.major}.${line.minor} that ` +
+      `Frizz advertises Node ${ours.major}.${ours.minor}, below the ${line.major}.${line.minor} that ` +
         `Node-API ${highest} requires — a native dependency would crash there, not fail cleanly`
     );
   }
@@ -201,7 +201,7 @@ test("provider readiness disables only the unavailable backend and never require
 });
 
 test("a registry install that skipped node-pty's post-install gets its spawn-helper made executable", () => {
-  // 0o644 is exactly what `npm i frayui` leaves behind under npm 11's allow-scripts gate; every pty
+  // 0o644 is exactly what `npm i frizz` leaves behind under npm 11's allow-scripts gate; every pty
   // spawn fails with `posix_spawnp failed.` until the bit is set.
   const install = ptyInstall(0o100644);
   ensureNativeHelperPermissions(install.options);

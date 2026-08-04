@@ -71,7 +71,7 @@ function connect(label) {
 
 async function initialize(conn) {
   const initialized = await conn.request("initialize", {
-    clientInfo: { name: "fray", title: "Fray", version: "0.0.1" },
+    clientInfo: { name: "frizz", title: "Frizz", version: "0.0.1" },
     capabilities: { experimentalApi: true, requestAttestation: false, mcpServerOpenaiFormElicitation: false },
   })
   conn.notify("initialized")

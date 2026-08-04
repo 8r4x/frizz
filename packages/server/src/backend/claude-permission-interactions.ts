@@ -1,4 +1,4 @@
-// Map a Claude tool-permission request (the SDK's canUseTool escalation) to a fray InteractionStore
+// Map a Claude tool-permission request (the SDK's canUseTool escalation) to a frizz InteractionStore
 // entry, and map the human's decision back to a ClaudePermissionDecision. Under permissionMode "auto"
 // the SDK's model classifier auto-approves the safe/common majority BEFORE canUseTool — so canUseTool
 // fires only for the genuinely risky minority the classifier escalates. Those are exactly the ones that
@@ -16,12 +16,12 @@ import {
   type InteractionField,
   type InteractionRequest as InteractionRequestType,
   type InteractionValues,
-} from "@fray-ui/shared"
+} from "@frizz/shared"
 import { redactCredentialSyntax } from "../credential-redaction.ts"
 import { validatePermissionDecision } from "./claude-agent-sdk-protocol.ts"
 import type { ClaudeJson, ClaudeJsonObject, ClaudePermissionDecision, ClaudePermissionRequest } from "./claude-agent-sdk-protocol.ts"
 
-// The decision IDs the fray web CANONICALIZES for a permission-approval card (typedInteractions.ts
+// The decision IDs the frizz web CANONICALIZES for a permission-approval card (typedInteractions.ts
 // specFor): the security verb is a fixed vocabulary, not provider-chosen, so an unrecognized id renders
 // NO button ("N advertised choices cannot be safely… shown"). `grant-turn` = approve-once, `deny` = deny.
 export const CLAUDE_PERMISSION_DECISIONS = {
@@ -97,7 +97,7 @@ export function buildClaudePermissionInteraction(
     2_000,
   )
   // The input is UNTRUSTED provider text; redact credential syntax and bound it hard before it ever
-  // reaches a card. It is display-only and is never parsed or executed by fray.
+  // reaches a card. It is display-only and is never parsed or executed by frizz.
   const preview = inputPreview(request.input, request.description)
   const parsed = InteractionRequest.safeParse({
     protocolVersion: INTERACTION_PROTOCOL_VERSION,
@@ -191,18 +191,18 @@ const HAS_UNSAFE_TEXT = new RegExp(UNSAFE_TEXT_SOURCE, "u")
 
 // claude 2.1.220's own sentinel for "the operator left notes but picked no option" — its result mapper
 // special-cases this exact string (`if (!f || f === "(notes only)") return true`) so a notes-only answer
-// is not scored as an unadvertised pick. Matching it is what makes fray's free-text box native rather
-// than a fray-shaped approximation.
+// is not scored as an unadvertised pick. Matching it is what makes frizz's free-text box native rather
+// than a frizz-shaped approximation.
 const CLAUDE_NOTES_ONLY = "(notes only)"
 
 const CLAUDE_QUESTION_DECLINED =
-  "The operator did not answer this question from the fray dashboard. Do not ask it again with this tool — " +
+  "The operator did not answer this question from the frizz dashboard. Do not ask it again with this tool — " +
   "decide with the information you already have, or raise it in your final message."
 
-/** A question fray could not represent EXACTLY (see parseClaudeAskUserQuestion). Denied with the fence
+/** A question frizz could not represent EXACTLY (see parseClaudeAskUserQuestion). Denied with the fence
  *  redirect rather than downgraded to an approval card, whose bare allow the model reads as unanswered. */
 export const CLAUDE_ASK_DENY_MESSAGE =
-  "Fray could not render this question as a card. Ask it in your FINAL MESSAGE instead, in a ```question " +
+  "Frizz could not render this question as a card. Ask it in your FINAL MESSAGE instead, in a ```question " +
   "fenced block — context, the question, lettered `- A. …` options, a recommendation — then end your turn. " +
   "The operator answers it from the queue and the reply arrives as your next user message."
 
@@ -411,7 +411,7 @@ export function claudeQuestionDecisionFor(
     // free text rides `annotations[question].notes`, and a notes-only answer takes claude's own
     // NOTES_ONLY sentinel in `answers`. Both are read by the result mapper — the presence of notes
     // is precisely what makes it tell the model to read the answer carefully rather than treating a
-    // matched label as a clean pick. This is why free text is native here and not a fray convention.
+    // matched label as a clean pick. This is why free text is native here and not a frizz convention.
     answers[question.question] = picked === "" ? CLAUDE_NOTES_ONLY : picked
     if (notes !== "") annotations[question.question] = { notes }
   }
@@ -426,6 +426,6 @@ export function claudeQuestionDecisionFor(
   }
   return {
     behavior: "deny",
-    message: "Fray could not return the operator's answer in a form this tool accepts. Ask the question in your final message instead.",
+    message: "Frizz could not return the operator's answer in a form this tool accepts. Ask the question in your final message instead.",
   }
 }

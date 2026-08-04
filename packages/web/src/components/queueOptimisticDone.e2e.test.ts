@@ -3,9 +3,9 @@ import test from "node:test"
 
 // Runtime coverage for the OPTIMISTIC Mark-as-done dismissal. Skipped unless a Vite URL serving the
 // fixtures is provided (same pattern as the other *.e2e.test.ts here): start `vite` in packages/web and
-// set FRAY_QUEUE_OPTIMISTIC_DONE_E2E_URL to its origin. The optimistic-done-fixture delays the
+// set FRIZZ_QUEUE_OPTIMISTIC_DONE_E2E_URL to its origin. The optimistic-done-fixture delays the
 // completeThread RPC 1500ms, so these assertions prove the card leaves the queue BEFORE the RPC resolves.
-const baseUrl = process.env.FRAY_QUEUE_OPTIMISTIC_DONE_E2E_URL
+const baseUrl = process.env.FRIZZ_QUEUE_OPTIMISTIC_DONE_E2E_URL
 
 const SLUG = "auth-refresh"
 const cardSel = (slug: string) => `[data-queue-card-root="${slug}"]`

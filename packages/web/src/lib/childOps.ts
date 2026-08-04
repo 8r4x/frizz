@@ -73,7 +73,7 @@ export function childProgressLabel(toolUses?: number, tokens?: number): string |
 //
 // ZERO is a real reading here and renders as "0 lines", never as nothing. A shell that has printed
 // nothing in twelve minutes is exactly the case this counter exists to expose, and an absent counter
-// would be indistinguishable from "fray cannot read this shell's output" (a codex exec), which is the
+// would be indistinguishable from "frizz cannot read this shell's output" (a codex exec), which is the
 // one situation that genuinely has no number. Compare `childProgressLabel`, where zero really does mean
 // "the provider has not reported yet".
 export function shellLinesLabel(lines: number | undefined): string | undefined {

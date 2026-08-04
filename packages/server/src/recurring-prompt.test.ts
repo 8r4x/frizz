@@ -57,11 +57,11 @@ test("fold: the normalized event path derives ALLDONE from the final text too", 
 })
 
 function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), "fray-stophook-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-stophook-"))
   const storage = createStorage(join(dir, "ui.db"))
   const slug = "stophook-t"
   storage.upsertSession({
-    slug, session_id: "sid", tmux_name: `fray-${slug}`, spawned_at: new Date().toISOString(),
+    slug, session_id: "sid", tmux_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)
@@ -126,7 +126,7 @@ test("storage: a null prompt clears the whole row, and a stale session/generatio
 })
 
 // ---- The worker's own path to the same row ------------------------------------------------------
-// `mcp__fray__recurring_prompt` writes by SLUG ALONE, with no session/generation guard, because the MCP server
+// `mcp__frizz__recurring_prompt` writes by SLUG ALONE, with no session/generation guard, because the MCP server
 // cannot satisfy one: it is spawned with its thread's slug and keeps it across every resume while the
 // session id bumps underneath. These pin that the unguarded path behaves identically to the operator's
 // on everything EXCEPT the guard — same generation semantics, same clear.
@@ -135,7 +135,7 @@ test("storage: the worker path writes by slug alone, across a session change the
   try {
     // A resume: the row now belongs to a new session and generation, exactly as after a restart.
     f.storage.upsertSession({
-      slug: f.slug, session_id: "sid-2", tmux_name: `fray-${f.slug}`, spawned_at: new Date().toISOString(),
+      slug: f.slug, session_id: "sid-2", tmux_name: `frizz-${f.slug}`, spawned_at: new Date().toISOString(),
       last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
       title: f.slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
     } as SessionRow)
@@ -193,11 +193,11 @@ test("storage: the worker path keeps the generation on a re-arm with the SAME te
 const HEARTBEAT_MS = 10 * 60_000
 
 function scheduler(tele: Partial<SessionTelemetry>, opts: { lastFiredAt?: string; now?: () => number } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "fray-hb-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-hb-"))
   const storage = createStorage(join(dir, "ui.db"))
   const slug = "hooked"
   storage.upsertSession({
-    slug, session_id: "sid", tmux_name: `fray-${slug}`, spawned_at: new Date().toISOString(),
+    slug, session_id: "sid", tmux_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)
@@ -294,11 +294,11 @@ function heartbeatScheduler(
   tele: Partial<SessionTelemetry>,
   opts: { intervalMs?: number; armedAt?: string; lastFiredAt?: string; now?: () => number; tailerMiss?: boolean } = {},
 ) {
-  const dir = mkdtempSync(join(tmpdir(), "fray-beat-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-beat-"))
   const storage = createStorage(join(dir, "ui.db"))
   const slug = "beating"
   storage.upsertSession({
-    slug, session_id: "sid", tmux_name: `fray-${slug}`, spawned_at: new Date().toISOString(),
+    slug, session_id: "sid", tmux_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)

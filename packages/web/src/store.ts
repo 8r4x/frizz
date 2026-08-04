@@ -1,6 +1,6 @@
 import { proxy } from "valtio"
-import type { BoardSnapshot, ThreadView, BoardDelta } from "@fray-ui/shared"
-import { applyBoardDelta } from "@fray-ui/shared"
+import type { BoardSnapshot, ThreadView, BoardDelta } from "@frizz/shared"
+import { applyBoardDelta } from "@frizz/shared"
 import { closeDrawerAnimated, focusDrawer } from "./lib/overlays.ts"
 
 // Where a scroll-to-card lands a card's outer border below the viewport top (px). Exported because the
@@ -79,7 +79,7 @@ export const store = proxy({
   // Plans, Archive, Legacy start collapsed. Session-scoped UI state (deliberately not persisted).
   sidebarCollapsed: { active: false, inactive: true, plans: true } as Record<"active" | "inactive" | "plans", boolean>,
   // The SIDE-DRAWER STACK — arbitrary depth. `thread` layers are full thread views (the Open-thread
-  // sheet); `doc` layers are the fray-document markdown; `subagent` and `shell` layers are read-only
+  // sheet); `doc` layers are the frizz-document markdown; `subagent` and `shell` layers are read-only
   // operation drill-ins that overlay a thread. A drill-in within one thread's family
   // (its doc, its sub-agents) stacks OVER the previous layer (higher z, slight inset); any lateral open
   // REPLACES the layers it doesn't stack over (one drawer at a time — see openOrRaiseDrawer). Esc /
@@ -93,7 +93,7 @@ export const store = proxy({
     routed?: boolean // URL/deep-link-created thread: visible on first paint, never an invisible animated backdrop
     subId?: string // subagent/shell: the launch tool_use id (the RPC handle + dedupe key)
     label?: string // subagent: the dispatch description (header title) / plan: the plan title
-    path?: string // plan: the PlanView.path (.fray/plans/*.md) the drawer renders + dispatches from
+    path?: string // plan: the PlanView.path (.frizz/plans/*.md) the drawer renders + dispatches from
     subagentType?: string // subagent: the model+effort cell tag
     startedAt?: string // subagent: ISO8601 dispatch time (drives the header's running elapsed)
     openedAt?: number // bumped when an existing logical layer is focused/reopened
@@ -212,7 +212,7 @@ export function pushBackgroundShellDrawer(slug: string, id: string, opts: { labe
 // card (see scrollToQueueCard below) — every affordance that asks to "show me this thread" obeys the
 // one rule, so nothing can stack a drawer on top of the identical panel. Otherwise routing is by
 // runtime: a thread with NO session ever spawned (runtime "none" — no transcript, the chat drawer
-// would be an empty placeholder) opens its fray DOCUMENT drawer instead — for a Plans-section thread
+// would be an empty placeholder) opens its frizz DOCUMENT drawer instead — for a Plans-section thread
 // the doc IS the substance. Anything with a session (live or exited — exited transcripts are worth
 // seeing) opens the chat drawer. The doc drawer carries the adopt ("Start a session") affordance.
 export function openThread(slug: string): void {
@@ -278,7 +278,7 @@ function flashQueueCard(slug: string, root: HTMLElement): void {
   }, 1100))
 }
 
-// Open a plan artifact (.fray/plans/*.md) as a doc-style drawer layer. `path` is the PlanView.path (the
+// Open a plan artifact (.frizz/plans/*.md) as a doc-style drawer layer. `path` is the PlanView.path (the
 // planBody RPC handle + the dispatch's planPath); `title` is the plan's display title. Deduped on path
 // so a re-click doesn't stack duplicates. Uses the path as the entry `slug` too (a stable key for the
 // layer) — plan layers never resolve a thread, so the slug is only an identity handle here.

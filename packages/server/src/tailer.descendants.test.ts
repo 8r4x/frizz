@@ -7,7 +7,7 @@
 // the sidecar bodies are that run's verbatim, only the ids shortened.
 //
 // The counterpart property matters just as much and is asserted alongside every positive case: an id
-// fray genuinely cannot place must keep returning undefined (the router maps that to "gone", the drawer
+// frizz genuinely cannot place must keep returning undefined (the router maps that to "gone", the drawer
 // states it plainly). This path may add resolutions; it may never invent one.
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -33,7 +33,7 @@ function assistant(content: unknown[]): string {
  * the ROOT session's dir, beside a `agent-<id>.meta.json` sidecar naming its dispatch tool_use id.
  */
 function fixture(runtimeTasks?: readonly ClaudeRuntimeTask[]) {
-  const dir = mkdtempSync(join(tmpdir(), "fray-descendants-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-descendants-"))
   const storage = createStorage(join(dir, "ui.db"))
   const subagents = join(dir, SESSION, "subagents")
   mkdirSync(subagents, { recursive: true })
@@ -57,7 +57,7 @@ function fixture(runtimeTasks?: readonly ClaudeRuntimeTask[]) {
   transcript("aGreat", [assistant([{ type: "text", text: "LEAF-DONE" }])])
 
   storage.upsertSession({
-    slug: SLUG, session_id: SESSION, tmux_name: `fray-${SLUG}`, spawned_at: new Date().toISOString(),
+    slug: SLUG, session_id: SESSION, tmux_name: `frizz-${SLUG}`, spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: SLUG, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   })

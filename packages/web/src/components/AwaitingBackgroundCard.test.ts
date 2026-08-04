@@ -3,7 +3,7 @@ import test from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { AwaitingBackgroundCard, awaitingBackgroundSubject } from "./AwaitingBackgroundCard.tsx"
-import type { ThreadView } from "@fray-ui/shared"
+import type { ThreadView } from "@frizz/shared"
 
 // One card, three surfaces. The two things that can silently go wrong are (a) the sentence claiming a
 // kind of work that isn't actually live, and (b) the snooze leaking onto a surface that must not offer

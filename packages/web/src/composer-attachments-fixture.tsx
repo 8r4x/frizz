@@ -30,14 +30,14 @@ window.fetch = async (input, init) => {
 // tile), each removable.
 const INITIAL = [
   "Please review these attachments before we start on the redesign.",
-  "/tmp/fray-att/hero-mock.png",
-  "/tmp/fray-att/before-after.webp",
-  "/tmp/fray-att/spec-notes.pdf",
-  "/tmp/fray-att/metrics.csv",
+  "/tmp/frizz-att/hero-mock.png",
+  "/tmp/frizz-att/before-after.webp",
+  "/tmp/frizz-att/spec-notes.pdf",
+  "/tmp/frizz-att/metrics.csv",
 ].join("\n")
 
 function Fixture() {
-  const [wide, setWide] = useState("Ship the new dashboard layout.\n/tmp/fray-att/wireframe.png")
+  const [wide, setWide] = useState("Ship the new dashboard layout.\n/tmp/frizz-att/wireframe.png")
   const [narrow, setNarrow] = useState(INITIAL)
   return (
     <div className="min-h-screen bg-bg text-fg flex flex-col items-center gap-10 p-10">

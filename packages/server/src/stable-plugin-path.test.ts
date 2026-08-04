@@ -19,7 +19,7 @@ function plugin(root: string, marker: string): string {
 // ---- ensureSymlink: the four cases, stated one at a time ----------------------------------------
 
 test("ensureSymlink creates a missing link, and is a no-op when it is already correct", () => {
-  const dir = tmp("fray-symlink-")
+  const dir = tmp("frizz-symlink-")
   const target = join(dir, "target")
   mkdirSync(target)
   const link = join(dir, "nested", "current")
@@ -30,7 +30,7 @@ test("ensureSymlink creates a missing link, and is a no-op when it is already co
 })
 
 test("ensureSymlink repoints a link aimed elsewhere — the case the whole design rests on", () => {
-  const dir = tmp("fray-symlink-")
+  const dir = tmp("frizz-symlink-")
   const a = join(dir, "buildA")
   const b = join(dir, "buildB")
   mkdirSync(a); mkdirSync(b)
@@ -44,7 +44,7 @@ test("ensureSymlink repoints a link aimed elsewhere — the case the whole desig
 // A RELATIVE existing link resolves against the link's own directory, never the process cwd. Compare
 // them naively and every call looks stale, so the link is deleted and recreated forever.
 test("ensureSymlink resolves an existing RELATIVE link against its own directory", () => {
-  const dir = tmp("fray-symlink-")
+  const dir = tmp("frizz-symlink-")
   const target = join(dir, "target")
   mkdirSync(target)
   const link = join(dir, "current")
@@ -56,7 +56,7 @@ test("ensureSymlink resolves an existing RELATIVE link against its own directory
 
 // Silently deleting a real directory someone else put at the stable path is data loss, not recovery.
 test("ensureSymlink refuses to replace a real file or directory", () => {
-  const dir = tmp("fray-symlink-")
+  const dir = tmp("frizz-symlink-")
   const target = join(dir, "target")
   mkdirSync(target)
 
@@ -74,7 +74,7 @@ test("ensureSymlink refuses to replace a real file or directory", () => {
 // ---- staging -------------------------------------------------------------------------------------
 
 test("stageStablePluginDir copies the plugin under its version and publishes the stable path", () => {
-  const dir = tmp("fray-stage-")
+  const dir = tmp("frizz-stage-")
   const source = plugin(join(dir, "src"), "v1")
   const home = join(dir, "home")
 
@@ -91,7 +91,7 @@ test("stageStablePluginDir copies the plugin under its version and publishes the
 // The whole point: a worker launched against the stable path can be moved onto a DIFFERENT immutable
 // build without touching either build, which is what makes a live reloadPlugins() meaningful.
 test("staging a second version repoints the stable path without disturbing the first", () => {
-  const dir = tmp("fray-stage-")
+  const dir = tmp("frizz-stage-")
   const home = join(dir, "home")
   const first = stageStablePluginDir({ source: plugin(join(dir, "a"), "old"), version: "0.1.1", home })
   const second = stageStablePluginDir({ source: plugin(join(dir, "b"), "new"), version: "0.1.2", home })
@@ -104,7 +104,7 @@ test("staging a second version repoints the stable path without disturbing the f
 })
 
 test("re-staging the same version is idempotent and leaves the link alone", () => {
-  const dir = tmp("fray-stage-")
+  const dir = tmp("frizz-stage-")
   const home = join(dir, "home")
   const source = plugin(join(dir, "src"), "v1")
 
@@ -116,7 +116,7 @@ test("re-staging the same version is idempotent and leaves the link alone", () =
 
 // Staging leaves no temp directory behind, so a crashed stage cannot masquerade as a staged version.
 test("staging leaves no pending scratch behind", () => {
-  const dir = tmp("fray-stage-")
+  const dir = tmp("frizz-stage-")
   const home = join(dir, "home")
   stageStablePluginDir({ source: plugin(join(dir, "src"), "v1"), version: "0.1.1", home })
   assert.deepEqual(readdirSync(defaultPluginStageRoot(home)).sort(), ["0.1.1"], "only the version directory survives")
@@ -124,7 +124,7 @@ test("staging leaves no pending scratch behind", () => {
 
 // The version becomes a directory name under the user's home; it is never allowed to escape it.
 test("stageStablePluginDir rejects a version that could escape the stage root", () => {
-  const dir = tmp("fray-stage-")
+  const dir = tmp("frizz-stage-")
   const source = plugin(join(dir, "src"), "v1")
   const home = join(dir, "home")
   for (const bad of ["../escape", "a/b", "", ".hidden", "x".repeat(200)]) {

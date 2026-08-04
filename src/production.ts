@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// The registry launcher is intentionally separate from index.ts. `fray-dev` follows mutable
-// checkout source; `fray` runs the package that npm resolved and never turns an npx cache into a
+// The registry launcher is intentionally separate from index.ts. `frizz-dev` follows mutable
+// checkout source; `frizz` runs the package that npm resolved and never turns an npx cache into a
 // deployment directory.
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -16,7 +16,7 @@ import {
   runLogPath,
   setAmbientLogger,
   type Logger,
-} from "@fray-ui/server/logging";
+} from "@frizz/server/logging";
 import {
   acquireGlobalLaunchLock,
   allocatePort,
@@ -26,7 +26,7 @@ import {
   liveWorkspaceOwner,
   networkUrls,
   parseCliArgs,
-  probeFray,
+  probeFrizz,
   readPreferredPort,
   resolveBindSelection,
   resolveWorkspace,
@@ -43,8 +43,8 @@ import {
   projectLaunchTargetFromEnvironment,
   readProjectLaunchOwner,
   tryAcquireProjectLaunchOwner,
-} from "@fray-ui/server/project-launch";
-import { createSupervisorShutdownHandler, startDevSupervisor } from "@fray-ui/server/dev-supervisor";
+} from "@frizz/server/project-launch";
+import { createSupervisorShutdownHandler, startDevSupervisor } from "@frizz/server/dev-supervisor";
 import { handoffToRegistrySuccessor, npmRegistryReleaseAdapter, planRegistryUpdate, PRODUCTION_REEXEC_FLAG } from "./production-update.ts";
 import {
   assertLaunchPrerequisites,
@@ -52,20 +52,20 @@ import {
   ensureNativeHelperPermissions,
 } from "./preflight.ts";
 
-const PACKAGE_NAME = process.env.FRAY_REGISTRY_PACKAGE ?? "frayui";
+const PACKAGE_NAME = process.env.FRIZZ_REGISTRY_PACKAGE ?? "frizz";
 
 /**
  * The version THIS bundle actually is, read from the package.json it ships inside.
  *
  * It used to be `process.env.npm_package_version ?? "0.0.1"`, and npm sets that variable only for
  * lifecycle scripts — NOT when a bin runs through the npx shim, which is how every real user starts
- * Fray. So the launcher reported itself as `0.0.1` forever. Measured end-to-end against the published
- * package: a genuine 0.1.1 install served `artifactDigest: "npm:frayui@0.0.1"`, and still served
+ * Frizz. So the launcher reported itself as `0.0.1` forever. Measured end-to-end against the published
+ * package: a genuine 0.1.1 install served `artifactDigest: "npm:frizz@0.0.1"`, and still served
  * `0.0.1` after updating itself to 0.1.2.
  *
  * That is not cosmetic. `planRegistryUpdate(PACKAGE_NAME, PACKAGE_VERSION, …)` compares this against
  * the registry's latest, so a permanent `0.0.1` makes every version look newer: the "already current"
- * branch below is unreachable, and Update Fray reinstalls-and-restarts even when nothing is stale.
+ * branch below is unreachable, and Update Frizz reinstalls-and-restarts even when nothing is stale.
  *
  * `import.meta.dirname` is the bundle's own directory (`<package>/dist`), the same base `webDist` and
  * `runtimeDir` resolve from below — so this reads the package.json that was published alongside it.
@@ -86,7 +86,7 @@ const rawArgs = process.argv.slice(2);
 const reexec = rawArgs.includes(PRODUCTION_REEXEC_FLAG);
 const args = rawArgs.filter((arg) => arg !== PRODUCTION_REEXEC_FLAG);
 const fail = (error: unknown): never => {
-  console.error(`fray: ${error instanceof Error ? error.message : error}`);
+  console.error(`frizz: ${error instanceof Error ? error.message : error}`);
   process.exit(1);
 };
 
@@ -95,11 +95,11 @@ const options: CliOptions = (() => {
 })();
 if (options.help) {
   console.log(
-    `Fray production launcher
+    `Frizz production launcher
 
 Usage: npx ${PACKAGE_NAME} [options] [repository]
 
-Runs the npm-resolved immutable Fray package, then opens it in your default browser. Use fray-dev
+Runs the npm-resolved immutable Frizz package, then opens it in your default browser. Use frizz-dev
 only for a source checkout.
 
 Options:
@@ -113,16 +113,16 @@ Options:
   -h, --help             show this help
 
 Environment:
-  FRAY_HOST              same as --host
-  FRAY_ALLOWED_HOSTS     same as --allowed-host, comma separated
-  FRAY_PUBLIC_ORIGIN     same as --public-origin
+  FRIZZ_HOST              same as --host
+  FRIZZ_ALLOWED_HOSTS     same as --allowed-host, comma separated
+  FRIZZ_PUBLIC_ORIGIN     same as --public-origin
 
---host puts a board that can run shell commands as you on the network, and Fray has no login: anyone
+--host puts a board that can run shell commands as you on the network, and Frizz has no login: anyone
 who reaches the port controls it. Only do this on a network you trust. An IP address works as-is; to
 reach the board by DNS name you must list that name with --allowed-host ("*" allows any).
 
 --public-origin serves the board through a tunnel or reverse proxy without putting it on the LAN
-at all — Fray stays on loopback and the tunnel dials it. Fray still has no login, so require
+at all — Frizz stays on loopback and the tunnel dials it. Frizz still has no login, so require
 authentication at the proxy: with Cloudflare Access, that is the whole of your access control.`,
   );
   process.exit(0);
@@ -139,7 +139,7 @@ const workspace: Workspace = (() => {
   // and opens this project's database — so a machine missing a tool, or running a Node the database
   // cannot survive, learns it here by name instead of from whichever internal step tripped over it
   // first. The Node floor matters most: on an unsupported release SQLite does not misbehave, it
-  // SEGFAULTS, and a segfault mid-boot is indistinguishable from Fray being broken.
+  // SEGFAULTS, and a segfault mid-boot is indistinguishable from Frizz being broken.
   //
   // `--stop` and `--status` skip the Node floor deliberately: they only read a status file and signal
   // a process, both of which work on any runtime, and they are how someone shuts down a board after
@@ -160,27 +160,27 @@ process.chdir(workspace.root);
 // Every launch leaves a complete record on disk, so a crash is never silent. The forked control-plane
 // child appends to this same file rather than writing to the terminal the readout is repainting.
 const logger: Logger = setAmbientLogger(
-  process.env.FRAY_LOG_FILE
-    ? createLogger({ file: process.env.FRAY_LOG_FILE, owner: false })
+  process.env.FRIZZ_LOG_FILE
+    ? createLogger({ file: process.env.FRIZZ_LOG_FILE, owner: false })
     : createLogger({ file: runLogPath(workspace.stateDir) }),
 );
-const readout = reexec || process.env.FRAY_PRODUCTION_SUPERVISOR === "1"
+const readout = reexec || process.env.FRIZZ_PRODUCTION_SUPERVISOR === "1"
   ? undefined
   : new Readout({ debug: options.debug, version: PACKAGE_VERSION });
-attachTerminalMirror(logger, options.debug || process.env.FRAY_DEBUG === "1");
+attachTerminalMirror(logger, options.debug || process.env.FRIZZ_DEBUG === "1");
 readout?.plan([
   { key: "server", label: "Server" },
   { key: "browser", label: options.noApp ? "Address" : "Browser" },
 ]);
 readout?.begin("server", "starting");
-logger.info("launcher", `frayui ${PACKAGE_VERSION} starting for ${workspace.root}`);
+logger.info("launcher", `frizz ${PACKAGE_VERSION} starting for ${workspace.root}`);
 const target = workspaceLaunchTarget(workspace);
 const expected = expectedOwnerHealth(target, readProjectLaunchOwner(workspace.stateDir));
 
 async function existingPort(): Promise<number | undefined> {
   const owner = liveWorkspaceOwner(workspace.stateDir, target);
   const ports = [owner?.port, readPreferredPort(workspace.stateDir)].filter((value): value is number => !!value);
-  for (const port of new Set(ports)) if (await probeFray(port, expected)) return port;
+  for (const port of new Set(ports)) if (await probeFrizz(port, expected)) return port;
   return undefined;
 }
 
@@ -190,12 +190,12 @@ async function existingPort(): Promise<number | undefined> {
  * dedicated app window, `--no-app` prints the URL and nothing else, and a browser that refuses to
  * open degrades to the URL instead of failing the launch.
  *
- * It printed the URL and stopped there from the day this file was written, so `npx frayui` never
- * opened anything while `fray-dev` always did — the whole divergence the operator hit.
+ * It printed the URL and stopped there from the day this file was written, so `npx frizz` never
+ * opened anything while `frizz-dev` always did — the whole divergence the operator hit.
  */
 async function openOrPrint(port: number, reused: boolean): Promise<void> {
   const url = `http://127.0.0.1:${port}`;
-  logger.info("launcher", `${reused ? "reusing" : "started"} Fray at ${url}`);
+  logger.info("launcher", `${reused ? "reusing" : "started"} Frizz at ${url}`);
   readout?.settle("server", "done", reused ? `already running on port ${port}` : `port ${port}`);
   let browser: string | undefined;
   if (!options.noApp) {
@@ -203,7 +203,7 @@ async function openOrPrint(port: number, reused: boolean): Promise<void> {
     try {
       if (options.appMode) {
         await launchApp(url, { dataPath: join(workspace.stateDir, "browser-profile") });
-        browser = reused ? "focused the Fray app window" : "opened the Fray app window";
+        browser = reused ? "focused the Frizz app window" : "opened the Frizz app window";
       } else {
         await launchBrowserTab(url);
         browser = "opened in your default browser";
@@ -225,7 +225,7 @@ async function openOrPrint(port: number, reused: boolean): Promise<void> {
     ...(publicOrigin ? [PUBLIC_ORIGIN_WARNING] : []),
   ];
   if (!readout) {
-    console.log(`${reused ? "reusing" : "started"} Fray ${PACKAGE_VERSION} for ${workspace.root}`);
+    console.log(`${reused ? "reusing" : "started"} Frizz ${PACKAGE_VERSION} for ${workspace.root}`);
     console.log(url);
     for (const address of network) console.log(address);
     if (publicOrigin) console.log(publicOrigin);
@@ -262,9 +262,9 @@ async function runSupervisor(port: number, token: string): Promise<never> {
   const env = projectLaunchEnvironment(
     {
       ...process.env,
-      FRAY_PRODUCTION_SUPERVISOR: "1",
+      FRIZZ_PRODUCTION_SUPERVISOR: "1",
       ...logEnvironment(logger, options.debug ? "debug" : "info"),
-      ...(options.debug ? { FRAY_DEBUG: "1" } : {}),
+      ...(options.debug ? { FRIZZ_DEBUG: "1" } : {}),
     },
     target,
     owner.token,
@@ -273,14 +273,14 @@ async function runSupervisor(port: number, token: string): Promise<never> {
   // The registry package runs directly from what it ships, so it carries its own runtime closure
   // (staged by scripts/prepare-package.mjs). The server SHELLS OUT to the board parser and every
   // dispatched worker loads the plugin, so both must be pointed at the bundled copies — the
-  // monorepo-relative default in server/src/fray.ts resolves to a non-existent node_modules/board path.
+  // monorepo-relative default in server/src/frizz.ts resolves to a non-existent node_modules/board path.
   const runtimeDir = join(import.meta.dirname, "..", "runtime");
   const scriptsDir = join(runtimeDir, "board");
   const workerPluginDir = join(runtimeDir, "cc-worker");
-  // The published package runs as an esbuild bundle (dist/frayui.js); the server child and the
+  // The published package runs as an esbuild bundle (dist/frizz.js); the server child and the
   // detached daemon are emitted as sibling bundles in the same dist/ by scripts/build-package.mjs.
-  // Resolve the child beside this bundle rather than from @fray-ui/server (whose .ts cannot run
-  // under node_modules). In a source checkout this launcher is never executed — fray-dev uses index.ts.
+  // Resolve the child beside this bundle rather than from @frizz/server (whose .ts cannot run
+  // under node_modules). In a source checkout this launcher is never executed — frizz-dev uses index.ts.
   const childEntry = fileURLToPath(new URL("./dev-child.js", import.meta.url));
   let plannedUpdate: Awaited<ReturnType<typeof planRegistryUpdate>> | undefined;
 
@@ -313,23 +313,23 @@ async function runSupervisor(port: number, token: string): Promise<never> {
     env,
     watch: false,
     childEntry,
-    childEnvironment: () => ({ FRAY_STABLE_WEB_DIST: webDist, FRAY_STABLE_ARTIFACT: `npm:${PACKAGE_NAME}@${PACKAGE_VERSION}`, FRAY_SCRIPTS_DIR: scriptsDir, FRAY_WORKER_PLUGIN_DIR: workerPluginDir }),
+    childEnvironment: () => ({ FRIZZ_STABLE_WEB_DIST: webDist, FRIZZ_STABLE_ARTIFACT: `npm:${PACKAGE_NAME}@${PACKAGE_VERSION}`, FRIZZ_SCRIPTS_DIR: scriptsDir, FRIZZ_WORKER_PLUGIN_DIR: workerPluginDir }),
     updateAvailable: () => updateAvailable,
     updateRestart: async () => {
       try {
         const plan = await planRegistryUpdate(PACKAGE_NAME, PACKAGE_VERSION, npmRegistryReleaseAdapter);
-        if (!plan) { updateAvailable = false; return { state: "failed" as const, message: `Fray ${PACKAGE_VERSION} is already current` }; }
+        if (!plan) { updateAvailable = false; return { state: "failed" as const, message: `Frizz ${PACKAGE_VERSION} is already current` }; }
         plannedUpdate = plan;
         // npm only writes its own cache. The healthy supervisor is deliberately left up until the
         // server has drained its child and proxy immediately before durableReexec below.
-        return { state: "ready" as const, message: `Fray ${plan.latestVersion} will start in a new npm execution cache` };
+        return { state: "ready" as const, message: `Frizz ${plan.latestVersion} will start in a new npm execution cache` };
       } catch (error) {
         return { state: "failed" as const, message: error instanceof Error ? error.message : String(error) };
       }
     },
     durableReexec: async () => {
       const plan = plannedUpdate ?? await planRegistryUpdate(PACKAGE_NAME, PACKAGE_VERSION, npmRegistryReleaseAdapter);
-      if (!plan) throw new Error("Fray is already current");
+      if (!plan) throw new Error("Frizz is already current");
       handoffToRegistrySuccessor(plan, { port, projectDir: workspace.root, cwd: workspace.root, env }, npmRegistryReleaseAdapter);
       // The successor adopts the same tokenized project lease. SQLite, tmux and provider sessions
       // are keyed project resources, so neither process copies, deletes, nor recreates them.
@@ -345,12 +345,12 @@ async function runSupervisor(port: number, token: string): Promise<never> {
       const suffix = logger.file ? `\n  log: ${tildePath(logger.file, homedir())}` : "";
       process.stdout.write(
         code === 0
-          ? `\n  Fray stopped. Agent sessions in tmux keep running.${suffix}\n\n`
-          : `\n  Fray stopped with errors (exit ${code}).${suffix}\n\n`,
+          ? `\n  Frizz stopped. Agent sessions in tmux keep running.${suffix}\n\n`
+          : `\n  Frizz stopped with errors (exit ${code}).${suffix}\n\n`,
       );
       process.exit(code);
     },
-    error: (line) => logger.error("supervisor", line.startsWith("[fray-ui] ") ? line.slice(10) : line),
+    error: (line) => logger.error("supervisor", line.startsWith("[frizz] ") ? line.slice(10) : line),
   });
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
@@ -360,7 +360,7 @@ async function runSupervisor(port: number, token: string): Promise<never> {
 }
 
 try {
-  if (process.env.FRAY_PRODUCTION_SUPERVISOR === "1" || reexec) {
+  if (process.env.FRIZZ_PRODUCTION_SUPERVISOR === "1" || reexec) {
     if (!options.port) throw new Error("internal registry supervisor launch is missing --port");
     const token = projectLaunchOwnerTokenFromEnvironment(process.env);
     if (!token) throw new Error("registry supervisor launch is missing project ownership");
@@ -369,7 +369,7 @@ try {
   const existing = await existingPort();
   if (existing) { await openOrPrint(existing, true); process.exit(0); }
   const claim = tryAcquireProjectLaunchOwner(target, "launcher");
-  if (claim.kind !== "acquired") throw new Error("Fray is starting for this project; retry shortly");
+  if (claim.kind !== "acquired") throw new Error("Frizz is starting for this project; retry shortly");
   let release: (() => void) | undefined = await acquireGlobalLaunchLock();
   let portReservation: (() => void) | undefined;
   try {
@@ -379,13 +379,13 @@ try {
     // The supervisor owns the rest of this process's life (runSupervisor never returns), so start it
     // WITHOUT awaiting and race it against health. Awaiting it directly is what made everything below
     // unreachable: parseCliArgs pins `foreground` to true, so the old `if (options.foreground) await
-    // runSupervisor(...)` always won and a cold `npx frayui` never printed its URL, never opened a
+    // runSupervisor(...)` always won and a cold `npx frizz` never printed its URL, never opened a
     // browser, and never released the lock it took — the detached-spawn branch that used to follow was
     // dead code the day parseCliArgs stopped honouring --detach.
     const running = runSupervisor(port, claim.lease.token);
     // Allocation is the only machine-shared step, so the machine-global lock ends HERE — the port
     // reservation above, not this lock, keeps `port` ours until the child listens. Holding it across
-    // the progress-tracked wait below meant one cold `npx frayui` could sit on it for minutes while
+    // the progress-tracked wait below meant one cold `npx frizz` could sit on it for minutes while
     // every other repository's launcher gave up after a far shorter budget.
     release();
     release = undefined;

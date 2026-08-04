@@ -1,5 +1,5 @@
-import type { ServerEvent } from "@fray-ui/shared"
-import { deltaAction } from "@fray-ui/shared"
+import type { ServerEvent } from "@frizz/shared"
+import { deltaAction } from "@frizz/shared"
 import { store, setBoard, applyDelta, openThread } from "../store.ts"
 import { noteServerBootId } from "./boot.ts"
 
@@ -78,7 +78,7 @@ export function notify(event: Extract<ServerEvent, { type: "notify" }>): void {
   const n = new Notification(event.title, { body: event.body, tag: event.slug })
   n.onclick = () => {
     window.focus()
-    openThread(event.slug) // side drawer: chat, or the fray doc for a never-spawned thread
+    openThread(event.slug) // side drawer: chat, or the frizz doc for a never-spawned thread
     n.close()
   }
 }

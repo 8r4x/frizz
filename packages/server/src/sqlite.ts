@@ -1,4 +1,4 @@
-// Fray's SQLite driver: better-sqlite3's SHAPE, node:sqlite's implementation.
+// Frizz's SQLite driver: better-sqlite3's SHAPE, node:sqlite's implementation.
 //
 // WHY THIS FILE EXISTS. better-sqlite3 is a native addon, and a native addon carries a Node-API floor
 // that moves without warning. Its 13.x prebuild is built with `NAPI_VERSION=10`, which exists only
@@ -9,13 +9,13 @@
 // change under a `pnpm update`.
 //
 // This adapter keeps the ~300 existing `prepare`/`run`/`get`/`all` call sites exactly as they were.
-// It is intentionally NOT a general better-sqlite3 polyfill — it implements the surface Fray actually
+// It is intentionally NOT a general better-sqlite3 polyfill — it implements the surface Frizz actually
 // uses and nothing else, so there is no dead code pretending to be supported.
 //
 // The differences it has to paper over were MEASURED against better-sqlite3 13.0.2, not assumed:
 //   • node:sqlite rejects unknown keys in a named-parameter object; better-sqlite3 ignores them, and
-//     Fray relies on that — it passes whole row objects to statements that bind a subset.
-//   • node:sqlite refuses to bind `undefined`; better-sqlite3 binds NULL, and Fray's row types are
+//     Frizz relies on that — it passes whole row objects to statements that bind a subset.
+//   • node:sqlite refuses to bind `undefined`; better-sqlite3 binds NULL, and Frizz's row types are
 //     full of optional fields.
 //   • node:sqlite binds a MISSING named parameter as NULL instead of throwing. That one is a silent
 //     data-corruption hazard in a persistence layer, so it is re-implemented here rather than lost.
@@ -62,7 +62,7 @@ export type Transaction<A extends any[], R> = ((...args: A) => R) & {
  * A regex over the whole statement would find `@id` inside a string literal or a comment and then
  * demand a binding for it, so this walks the SQL and skips the places an identifier cannot live.
  * SQLite accepts `@name`, `:name` and `$name`; all three are normalized to the bare name, which is
- * how every Fray call site passes them.
+ * how every Frizz call site passes them.
  */
 export function namedParameters(sql: string): string[] {
   const found = new Set<string>()
@@ -146,10 +146,10 @@ class PreparedStatement<Row> implements Statement<Row> {
   /**
    * Build exactly the bindings this statement asks for, and nothing else.
    *
-   * Fray hands whole row objects to statements that bind a subset of their fields, which raw
+   * Frizz hands whole row objects to statements that bind a subset of their fields, which raw
    * node:sqlite rejects with "Unknown named parameter". The obvious fix is
    * `setAllowUnknownNamedParameters(true)` — but that method only exists from Node 23.11, and using it
-   * would have raised Fray's floor above the release that first shipped `node:sqlite` at all, for no
+   * would have raised Frizz's floor above the release that first shipped `node:sqlite` at all, for no
    * reason. Selecting the required names from the bag needs no runtime API, and gets the same result.
    *
    * A name the caller never supplied throws, rather than binding NULL the way node:sqlite would.
@@ -251,7 +251,7 @@ export class Database {
   }
 
   /**
-   * `PRAGMA` with better-sqlite3's calling convention. Fray only ever SETS pragmas (`journal_mode`,
+   * `PRAGMA` with better-sqlite3's calling convention. Frizz only ever SETS pragmas (`journal_mode`,
    * `busy_timeout`, `foreign_keys`) and ignores the result, but returning the rows keeps the shape
    * honest for a read like `pragma("journal_mode")`.
    */
@@ -269,7 +269,7 @@ export class Database {
   /**
    * better-sqlite3's `transaction()`, including the part that is easy to miss: it is RE-ENTRANT.
    * Calling one transaction-wrapped function from inside another must not throw "cannot start a
-   * transaction within a transaction" — better-sqlite3 quietly switches to a SAVEPOINT, and Fray's
+   * transaction within a transaction" — better-sqlite3 quietly switches to a SAVEPOINT, and Frizz's
    * storage layer composes these freely, so the nesting has to survive the port.
    */
   transaction<A extends any[], R>(fn: (...args: A) => R): Transaction<A, R> {
@@ -277,7 +277,7 @@ export class Database {
       // Routed through this.exec(), not the raw driver, so `inTransaction` stays accurate on the
       // Node releases that predate node:sqlite's own `isTransaction` (added in 24).
       const depth = this.#depth
-      const savepoint = `fray_txn_${depth}`
+      const savepoint = `frizz_txn_${depth}`
       this.#depth = depth + 1
       try {
         this.exec(depth === 0 ? `BEGIN ${mode}` : `SAVEPOINT ${savepoint}`)
@@ -310,7 +310,7 @@ export class Database {
     // lost more, which is what made this worth fixing rather than matching.
     //
     // IMMEDIATE takes the write lock up front, so a loser waits out busy_timeout instead of failing.
-    // Every transaction Fray runs without an explicit mode is a write path, and the one genuine
+    // Every transaction Frizz runs without an explicit mode is a write path, and the one genuine
     // read-only snapshot asks for `.deferred()` by name — so nothing pays for a lock it does not need.
     const wrapper = runWith("IMMEDIATE") as Transaction<A, R>
     wrapper.default = wrapper

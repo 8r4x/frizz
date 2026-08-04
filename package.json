@@ -1,19 +1,19 @@
 {
-  "name": "frayui",
+  "name": "frizz",
   "version": "0.1.7",
   "private": false,
   "description": "A local web UI for running many coding agents at once",
-  "keywords": ["fray", "agents", "claude-code", "codex", "orchestration", "dashboard", "ai"],
+  "keywords": ["frizz", "agents", "claude-code", "codex", "orchestration", "dashboard", "ai"],
   "license": "MIT",
   "author": "Colin McDonnell",
-  "homepage": "https://github.com/colinhacks/fray",
-  "repository": { "type": "git", "url": "git+https://github.com/colinhacks/fray.git" },
+  "homepage": "https://github.com/colinhacks/frizz",
+  "repository": { "type": "git", "url": "git+https://github.com/colinhacks/frizz.git" },
   "engines": {
     "node": "^22.13.0 || >=23.4.0"
   },
   "type": "module",
   "bin": {
-    "frayui": "./dist/frayui.js"
+    "frizz": "./dist/frizz.js"
   },
   "files": [
     "dist",
@@ -22,11 +22,11 @@
   ],
   "scripts": {
     "dev": "nub packages/server/src/dev.ts",
-    "fray-dev:install": "nub scripts/install-global-cli.mjs",
-    "fray-dev:check": "nub scripts/install-global-cli.mjs --check",
-    "fray-dev:uninstall": "nub scripts/install-global-cli.mjs --uninstall",
+    "frizz-dev:install": "nub scripts/install-global-cli.mjs",
+    "frizz-dev:check": "nub scripts/install-global-cli.mjs --check",
+    "frizz-dev:uninstall": "nub scripts/install-global-cli.mjs --uninstall",
     "install:global": "nub scripts/install-global-cli.mjs",
-    "typecheck": "tsc -b packages/shared packages/rpc packages/server . && pnpm --filter @fray-ui/web typecheck",
+    "typecheck": "tsc -b packages/shared packages/rpc packages/server . && pnpm --filter @frizz/web typecheck",
     "test": "nub --test --test-force-exit 'board/*.test.mjs' 'scripts/**/*.test.mjs' 'src/**/*.test.ts' 'packages/shared/src/**/*.test.ts' 'packages/server/src/**/*.test.ts' 'packages/web/src/**/*.test.ts'",
     "prepack": "node ./scripts/prepare-package.mjs && node ./scripts/build-package.mjs && node ./scripts/publish-manifest.mjs --strip",
     "postpack": "node ./scripts/publish-manifest.mjs --restore"
@@ -36,8 +36,8 @@
     "node-pty": "^1.1"
   },
   "devDependencies": {
-    "@fray-ui/server": "workspace:*",
-    "@fray-ui/shared": "workspace:*",
+    "@frizz/server": "workspace:*",
+    "@frizz/shared": "workspace:*",
     "@types/node": "^24",
     "esbuild": "^0.25.0",
     "puppeteer": "^25.3.0",
@@ -48,7 +48,7 @@
       "node-pty",
       "@parcel/watcher",
       "esbuild",
-      "@fray-ui/server"
+      "@frizz/server"
     ]
   }
 }

@@ -3,7 +3,7 @@
 // which is the only way to judge that placeholder's left inset optically.
 //
 // Every seeded session is ARCHIVED and has NO live tmux pane, so groups.ts sectionOf() files all of
-// them under "inactive" (Done) and Active stays empty. Plans come from the project's own .fray/plans.
+// them under "inactive" (Done) and Active stays empty. Plans come from the project's own .frizz/plans.
 //
 // Usage: node scripts/seed-empty-active.mjs --home=/abs/temp-home
 import { globSync, mkdirSync, writeFileSync } from "node:fs"
@@ -19,8 +19,8 @@ if (!home) {
   process.exit(1)
 }
 
-const db = globSync(join(home, ".fray/projects/*/ui.db"))[0]
-if (!db) throw new Error(`no ui.db under ${home}/.fray/projects`)
+const db = globSync(join(home, ".frizz/projects/*/ui.db"))[0]
+if (!db) throw new Error(`no ui.db under ${home}/.frizz/projects`)
 const jsonlDir = join(home, ".claude", "projects", cwd.replace(/[/.]/g, "-"))
 mkdirSync(jsonlDir, { recursive: true })
 
@@ -45,7 +45,7 @@ for (const [i, s] of done.entries()) {
   execFileSync("sqlite3", [
     db,
     `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at, archived, state, exited)
-     VALUES ('${s.slug}', '${s.sessionId}', 'fray-${s.slug}', '${at(i)}', '${s.title}', 'claude', 'opus', 'high', 'default', '${at(i + 1)}', 1, 'archived', 1)`,
+     VALUES ('${s.slug}', '${s.sessionId}', 'frizz-${s.slug}', '${at(i)}', '${s.title}', 'claude', 'opus', 'high', 'default', '${at(i + 1)}', 1, 'archived', 1)`,
   ])
   console.log(`seeded ${s.slug} → done`)
 }

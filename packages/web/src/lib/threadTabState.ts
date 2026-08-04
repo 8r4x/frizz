@@ -9,7 +9,7 @@ export interface ScopedThreadTabCapabilities {
   capabilities: ThreadTabCapabilities
 }
 
-const PREFIX = "fray-thread-tab:"
+const PREFIX = "frizz-thread-tab:"
 
 export function parseThreadTab(value: string | null | undefined): PersistedThreadTab | null {
   return value === "chat" || value === "scratch" ? value : null
@@ -37,7 +37,7 @@ export function resolveThreadTabCapabilities(
   return { capabilities: { scratch: false }, authoritative: false }
 }
 
-// sessionStorage is origin-scoped, not project-scoped. Fray commonly reuses the same localhost port
+// sessionStorage is origin-scoped, not project-scoped. Frizz commonly reuses the same localhost port
 // for another repository in the same tab, so the project identity must be part of the key; otherwise
 // a matching slug can inherit Terminal/Doc intent from a different tmux universe.
 export function threadTabStorageKey(projectDir: string, slug: string): string {

@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { useEffect } from "react"
 import { createRoot } from "react-dom/client"
 import { useSnapshot } from "valtio"
-import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@fray-ui/shared"
+import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@frizz/shared"
 import { ThreadView } from "./components/ChatView.tsx"
 import { SubAgentSheet } from "./components/SubAgentSheet.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
@@ -65,7 +65,7 @@ const thread = {
   spawnedAt: AGO(900),
 } as unknown as ThreadViewModel
 
-store.board = { projectDir: "/fixture/fray", threads: [thread] } as BoardSnapshot
+store.board = { projectDir: "/fixture/frizz", threads: [thread] } as BoardSnapshot
 
 const agentCall = (agentId: string, detail: string) => ({
   name: "Agent",

@@ -72,7 +72,7 @@ import type {
   CancelInteractionInput,
   CancelInteractionResult,
   CompletionHold,
-} from "@fray-ui/shared"
+} from "@frizz/shared"
 
 // Per-call transport options — declared here (not in rpc.ts) only because two procedures name it in
 // their signature. It is a CLIENT-side extension: the drift gate compares `Parameters<…>[0]`, so an
@@ -142,19 +142,19 @@ export interface Api {
   // THE RECURRING PROMPT, armed entirely from the footer panel: one text, and up to two triggers
   // (every rest, and/or every N minutes). Text, triggers and cadence travel together — they are one row.
   setThreadRecurringPrompt(input: SetThreadRecurringPromptInput): Promise<void>
-  // The WORKER-facing counterpart, called by `mcp__fray__recurring_prompt` rather than by this client.
+  // The WORKER-facing counterpart, called by `mcp__frizz__recurring_prompt` rather than by this client.
   // Declared here because rpc-contract.ts proves the two procedure NAME SETS are equal — an RPC the
   // client cannot name is one nothing checks the shape of. No browser call site uses it.
   setOwnThreadRecurringPrompt(input: SetOwnThreadRecurringPromptInput): Promise<void>
   // THE SUPERSEDED WORKER PROCEDURES, declared here only so the drift gate can see them. A worker's MCP
-  // server outlives every fray restart, so a session dispatched before the stop hook and the heartbeat
+  // server outlives every frizz restart, so a session dispatched before the stop hook and the heartbeat
   // merged is still POSTing these names; the router aliases them onto the one recurring-prompt row
   // (`applyLegacyWorkerTrigger`). No browser call site uses them, and none should — the gate proves the
   // two procedure NAME SETS are equal, so an alias the client cannot name is an alias nothing checks.
   setOwnThreadStopHook(input: SetOwnThreadStopHookInput): Promise<void>
   setOwnThreadHeartbeat(input: SetOwnThreadHeartbeatInput): Promise<void>
   setThreadHeartbeat(input: SetOwnThreadHeartbeatInput): Promise<void>
-  // THE ONE-OFF TIMERS, called by `mcp__fray__timer` rather than by this client. Declared here for the
+  // THE ONE-OFF TIMERS, called by `mcp__frizz__timer` rather than by this client. Declared here for the
   // same reason as the worker procedures above — the drift gate proves the two procedure NAME SETS are
   // equal, so an RPC the client cannot name is one nothing checks the shape of. All three are mutations
   // because the worker's MCP server POSTs every call; `listOwnThreadTimers` reads nothing and is one
@@ -174,14 +174,14 @@ export interface Api {
   // Hard-delete: drop a stalled/exited phantom's registry row and tombstone its transcript id.
   // Refused for a genuinely live session — archive that one instead.
   forgetThread(input: { slug: string }): Promise<void>
-  // A plan artifact's markdown (.fray/plans/*.md); `path` is a PlanView.path from the board snapshot.
+  // A plan artifact's markdown (.frizz/plans/*.md); `path` is a PlanView.path from the board snapshot.
   planBody(input: { path: string }): Promise<{ markdown: string }>
-  // Hard-delete a plan artifact (.fray/plans/*.md). Secure-resolver gated server-side; idempotent.
+  // Hard-delete a plan artifact (.frizz/plans/*.md). Secure-resolver gated server-side; idempotent.
   planDelete(input: { path: string }): Promise<void>
-  // A session thread's scratchpad (.fray/threads/<session-id>/scratch.md) — read-only doc tab.
+  // A session thread's scratchpad (.frizz/threads/<session-id>/scratch.md) — read-only doc tab.
   threadScratchpad(input: { slug: string }): Promise<{ markdown: string }>
-  // Server-authoritative, shell-safe provider resume command for a registered Fray-owned session.
-  // A live Fray-owned runtime is deliberately unavailable: a second provider client is uncoordinated.
+  // Server-authoritative, shell-safe provider resume command for a registered Frizz-owned session.
+  // A live Frizz-owned runtime is deliberately unavailable: a second provider client is uncoordinated.
   threadTerminalCommand(input: { slug: string }): Promise<{ command: string | null; mode: "attach" | "resume" | "unavailable"; reason: string | null }>
   openExternal(input: { url: string }): Promise<void>
   openLocalFile(input: { path: string; image?: boolean }): Promise<{ action: "opened" | "copy"; path: string }>

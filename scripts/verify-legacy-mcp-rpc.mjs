@@ -1,7 +1,7 @@
 // Verify that a worker's SUPERSEDED MCP server can still arm its recurring prompt against a CURRENT
-// fray server — the exact seam that broke, driven end to end with nothing stubbed.
+// frizz server — the exact seam that broke, driven end to end with nothing stubbed.
 //
-// The bug: a worker's `fray-mcp.mjs` is spawned once, out of the promoted build its session was
+// The bug: a worker's `frizz-mcp.mjs` is spawned once, out of the promoted build its session was
 // dispatched with, and it lives as long as that session — across every server restart. The server
 // meanwhile gets restarted from newer source. Merging the old `stop_hook` + `heartbeat` tools into one
 // `recurring_prompt` renamed the RPC procedure, so every in-flight worker's tool started answering
@@ -9,7 +9,7 @@
 //
 // Testing the pieces would prove nothing here: the router's own tests already pass against the shapes I
 // BELIEVE those builds send. What this script does instead is spawn the REAL old binaries out of
-// `~/.fray/builds/*/runtime/cc-worker/bin/fray-mcp.mjs`, speak their REAL stdio JSON-RPC transport, and
+// `~/.frizz/builds/*/runtime/cc-worker/bin/frizz-mcp.mjs`, speak their REAL stdio JSON-RPC transport, and
 // assert the row a REAL server's REAL sqlite ends up holding. Old client, new server, no mocks.
 //
 // Usage (against a booted adhoc stack — see scripts/adhoc-stack.mjs):
@@ -28,16 +28,16 @@ if (!home) {
   process.exit(1)
 }
 
-const db = globSync(join(home, ".fray/projects/*/ui.db"))[0]
-if (!db) throw new Error(`no ui.db under ${home}/.fray/projects — is the stack booted?`)
-// The MCP server locates the running fray from `<state-dir>/server.lock`, so this must be the sandbox's
+const db = globSync(join(home, ".frizz/projects/*/ui.db"))[0]
+if (!db) throw new Error(`no ui.db under ${home}/.frizz/projects — is the stack booted?`)
+// The MCP server locates the running frizz from `<state-dir>/server.lock`, so this must be the sandbox's
 // project dir, not the maintainer's real one.
 const stateDir = dirname(db)
 
 // Pick the binaries by what they actually CALL rather than by a pinned hash — promoted builds get
 // garbage-collected, and a hash that has aged out would turn this into a silent skip.
 function findBuild(procedure) {
-  for (const script of globSync(join(homedir(), ".fray/builds/*/runtime/cc-worker/bin/fray-mcp.mjs"))) {
+  for (const script of globSync(join(homedir(), ".frizz/builds/*/runtime/cc-worker/bin/frizz-mcp.mjs"))) {
     if (readFileSync(script, "utf8").includes(`callRpc("${procedure}"`)) return script
   }
   return null
@@ -91,11 +91,11 @@ const slug = "legacy-mcp-thread"
 const at = new Date().toISOString()
 sql(
   `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
-   VALUES ('${slug}', '33333333-3333-4333-8333-333333333333', 'fray-${slug}', '${at}', 'Legacy MCP thread', 'claude', 'opus', 'high', 'default', '${at}')`,
+   VALUES ('${slug}', '33333333-3333-4333-8333-333333333333', 'frizz-${slug}', '${at}', 'Legacy MCP thread', 'claude', 'opus', 'high', 'default', '${at}')`,
 )
 
 async function callTool(script, name, args) {
-  const rpc = mcp(script, { FRAY_STATE_DIR: stateDir, FRAY_THREAD_SLUG: slug })
+  const rpc = mcp(script, { FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: slug })
   try {
     await rpc.call("initialize", { protocolVersion: "2025-06-18" })
     const res = await rpc.call("tools/call", { name, arguments: args })

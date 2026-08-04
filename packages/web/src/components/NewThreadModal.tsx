@@ -2,7 +2,7 @@ import * as RadixDialog from "@radix-ui/react-dialog"
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useSnapshot } from "valtio"
 import { useMutation, useQuery } from "@tanstack/react-query"
-import type { Backend, DispatchInput } from "@fray-ui/shared"
+import type { Backend, DispatchInput } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast, store } from "../store.ts"
 import { Composer } from "./Composer.tsx"
@@ -26,7 +26,7 @@ export function DispatchForm({
 }: {
   autoFocus?: boolean
   onDispatched?: () => void
-  // When present, the dispatch carries this plan artifact path (.fray/plans/*.md) so the worker is
+  // When present, the dispatch carries this plan artifact path (.frizz/plans/*.md) so the worker is
   // oriented to the plan and the thread is associated with it.
   planPath?: string
 }) {
@@ -97,7 +97,7 @@ export function DispatchForm({
 
   function submit() {
     if (!prompt.trim() || !resolved) return
-    // `/login` and `/logout` are fray-owned aliases for the typed provider account actions — they
+    // `/login` and `/logout` are frizz-owned aliases for the typed provider account actions — they
     // invoke the sign-in / sign-out flow for the SELECTED backend and never become prompt text.
     const alias = parseAccountAlias(prompt)
     if (alias) {
@@ -232,7 +232,7 @@ export function NewThreadDialog({ onClose }: { onClose: () => void }) {
   const planPath = useSnapshot(store).newThreadPlanPath
   const planName = planPath ? planPath.split("/").pop() : null
   const contentRef = useRef<HTMLDivElement>(null)
-  // Fray opens this dialog by writing store state, not through RadixDialog.Trigger. Capture the real
+  // Frizz opens this dialog by writing store state, not through RadixDialog.Trigger. Capture the real
   // opener during the mount render so close can restore it explicitly (including plan-drawer openers).
   const openerRef = useRef<HTMLElement | null>(
     typeof document !== "undefined" && document.activeElement instanceof HTMLElement ? document.activeElement : null,

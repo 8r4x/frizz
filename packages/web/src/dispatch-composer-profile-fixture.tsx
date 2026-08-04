@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import type { BoardSnapshot, CodexModel, DispatchPreferences, SetDispatchPreferenceInput } from "@fray-ui/shared"
+import type { BoardSnapshot, CodexModel, DispatchPreferences, SetDispatchPreferenceInput } from "@frizz/shared"
 import { DispatchForm } from "./components/NewThreadModal.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
@@ -55,7 +55,7 @@ window.fetch = async (input, init) => {
 }
 
 function json(result: unknown): Response {
-  return new Response(JSON.stringify({ result }), { headers: { "content-type": "application/json", "x-fray-boot": "fixture" } })
+  return new Response(JSON.stringify({ result }), { headers: { "content-type": "application/json", "x-frizz-boot": "fixture" } })
 }
 
 store.board = { projectDir: "/fixture/dispatch-composer" } as BoardSnapshot

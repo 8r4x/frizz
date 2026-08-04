@@ -1,4 +1,4 @@
-// THE question card — the single component every question in fray renders through, whatever produced
+// THE question card — the single component every question in frizz renders through, whatever produced
 // it. There are two producers and one look:
 //
 //   1. a ```question fence in an assistant message (lib/questionBlocks.ts parses the markdown), and

@@ -8,11 +8,11 @@
 // claude-broker-client.ts, but the bridge never supplied a handler — so `{kind:"lifecycle",
 // phase:"crashed", message}`, the single most useful line there is, went nowhere. And the daemon only
 // wrote diagnostics to an ATTACHED client (`if (client) write(...)`, unlike events, which are
-// backlogged), so a crash during a fray restart — exactly when a detached daemon is most likely to
+// backlogged), so a crash during a frizz restart — exactly when a detached daemon is most likely to
 // die unobserved — was guaranteed lost.
 //
-// So the DAEMON owns this file, not fray. A death is precisely when the process may be seconds from
-// gone: an in-memory backlog dies with it and a relay needs a listener that a restarting fray does not
+// So the DAEMON owns this file, not frizz. A death is precisely when the process may be seconds from
+// gone: an in-memory backlog dies with it and a relay needs a listener that a restarting frizz does not
 // have. Writing from inside the daemon is the only version that survives the event it is recording.
 //
 // Deliberately synchronous and best-effort — a logging failure must never perturb the session.
@@ -40,11 +40,11 @@ export interface ClaudeBrokerDiagnosticRecord {
  * The codex daemon has carried this vocabulary since the 2026-07-24 six-sub-agent loss
  * (`app-server-exited-code-*`, `self-collected-*`, `signal-*`, `idle-timeout`); the broker's
  * `shutdown()` wrote nothing at all, so a daemon collected by its 6h idle timer, terminated by a
- * signal, or self-collected for unreachability all vanished identically and fray could only report the
+ * signal, or self-collected for unreachability all vanished identically and frizz could only report the
  * generic "the thread went quiet". These are the named causes, one per exit path in
  * claude-agent-broker.ts:
  *
- *  - `fray-requested`               — RunningBroker.close(); fray asked for it.
+ *  - `frizz-requested`               — RunningBroker.close(); frizz asked for it.
  *  - `signal-SIG*`                  — SIGTERM/SIGINT/SIGHUP, i.e. killBroker or the operator/OS.
  *  - `session-stream-ended`         — the SDK's event stream ended normally (claude exited).
  *  - `session-stream-broken`        — EVENT_ERROR_TOLERANCE consecutive stream errors; genuinely broken.
@@ -55,7 +55,7 @@ export interface ClaudeBrokerDiagnosticRecord {
  *  - `socket-listen-failed`         — the listen() that makes this daemon reachable never succeeded.
  */
 export type ClaudeBrokerExitReason =
-  | "fray-requested"
+  | "frizz-requested"
   | "signal-SIGTERM"
   | "signal-SIGINT"
   | "signal-SIGHUP"

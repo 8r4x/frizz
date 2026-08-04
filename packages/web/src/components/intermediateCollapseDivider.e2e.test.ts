@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-const baseUrl = process.env.FRAY_INTERMEDIATE_COLLAPSE_E2E_URL
+const baseUrl = process.env.FRIZZ_INTERMEDIATE_COLLAPSE_E2E_URL
 
 // The queue card's collapsed intermediate run is a HAIRLINE DIVIDER, not a bordered bar (maintainer
 // 2026-07-31: "turn this into a hairline divider … the expand icon, followed by the number of tool
@@ -18,7 +18,7 @@ const baseUrl = process.env.FRAY_INTERMEDIATE_COLLAPSE_E2E_URL
 //
 // Run it against a plain vite over packages/web:
 //   nubx vite --port 5247 --strictPort --host 127.0.0.1
-//   FRAY_INTERMEDIATE_COLLAPSE_E2E_URL=http://127.0.0.1:5247 nub --test …
+//   FRIZZ_INTERMEDIATE_COLLAPSE_E2E_URL=http://127.0.0.1:5247 nub --test …
 const SEL = '[data-wake-divider="intermediate-summary"]'
 
 const launch = async () => {
@@ -127,7 +127,7 @@ test("the collapsed intermediate run is a hairline divider that names its tool c
     // path must not reclaim them as one batched disclosure either.
     await page.goto(variant("bgshells"), { waitUntil: "networkidle0" })
     await page.waitForSelector(SEL, { timeout: 10_000 })
-    const shells = await page.$$eval(".fray-bash-header", (ns) =>
+    const shells = await page.$$eval(".frizz-bash-header", (ns) =>
       ns.map((n) => (n as HTMLElement).innerText.replace(/\s+/g, " ").trim()),
     )
     assert.deepEqual(
@@ -158,21 +158,21 @@ test("the collapsed intermediate run is a hairline divider that names its tool c
         }),
       )
     assert.deepEqual(
-      await marksIn(".fray-bash-header [data-running-indicator]"),
+      await marksIn(".frizz-bash-header [data-running-indicator]"),
       [{ kind: "tool-disclosure", animated: true }, { kind: "tool-disclosure", animated: true }],
       "the two live shells pulse — and the finished one is not among them",
     )
     assert.deepEqual(
-      await page.$$eval(".fray-bash-header [data-done-indicator], .fray-bash-header .fray-tool-spinner", (ns) => ns.length),
+      await page.$$eval(".frizz-bash-header [data-done-indicator], .frizz-bash-header .frizz-tool-spinner", (ns) => ns.length),
       0,
       "no finished glyph and no spinner may exist on a background card",
     )
     // The finished card's slot is GONE, not merely empty: its label starts flush at the header's left
     // edge, exactly like the settled foreground cards elsewhere in the transcript.
-    const flush = await page.$$eval(".fray-bash-header", (ns) =>
+    const flush = await page.$$eval(".frizz-bash-header", (ns) =>
       ns.map((n) => {
         const left = n.firstElementChild as HTMLElement
-        const label = left.querySelector(".fray-bash-label") as HTMLElement
+        const label = left.querySelector(".frizz-bash-label") as HTMLElement
         return Math.round(label.getBoundingClientRect().left - left.getBoundingClientRect().left)
       }),
     )
@@ -184,7 +184,7 @@ test("the collapsed intermediate run is a hairline divider that names its tool c
     // child pulses; a resolved one draws nothing at all and reads its runtime in words.
     await page.goto(variant("dispatches"), { waitUntil: "networkidle0" })
     await page.waitForSelector(SEL, { timeout: 10_000 })
-    const agentCards = await page.$$eval(".fray-bash-header", (ns) =>
+    const agentCards = await page.$$eval(".frizz-bash-header", (ns) =>
       ns.map((n) => (n as HTMLElement).innerText.replace(/\s+/g, " ").trim()),
     )
     assert.deepEqual(
@@ -193,19 +193,19 @@ test("the collapsed intermediate run is a hairline divider that names its tool c
       `both dispatches keep their card under the divider, got ${agentCards.join(" | ")}`,
     )
     assert.deepEqual(
-      await marksIn(".fray-bash-header [data-running-indicator]"),
+      await marksIn(".frizz-bash-header [data-running-indicator]"),
       [{ kind: "subagent-disclosure", animated: true }],
       "only the running child is marked",
     )
     assert.equal(
-      await page.$$eval(".fray-bash-header [data-done-indicator], .fray-bash-header .fray-tool-spinner", (ns) => ns.length),
+      await page.$$eval(".frizz-bash-header [data-done-indicator], .frizz-bash-header .frizz-tool-spinner", (ns) => ns.length),
       0,
       "a resolved dispatch draws no finished glyph, and nothing spins",
     )
-    const agentFlush = await page.$$eval(".fray-bash-header", (ns) =>
+    const agentFlush = await page.$$eval(".frizz-bash-header", (ns) =>
       ns.map((n) => {
         const left = n.firstElementChild as HTMLElement
-        const label = left.querySelector(".fray-bash-label") as HTMLElement
+        const label = left.querySelector(".frizz-bash-label") as HTMLElement
         return Math.round(label.getBoundingClientRect().left - left.getBoundingClientRect().left)
       }),
     )
@@ -214,7 +214,7 @@ test("the collapsed intermediate run is a hairline divider that names its tool c
 
     // ---- 7. control: nothing intermediate, so no divider at all ----
     await page.goto(variant("single"), { waitUntil: "networkidle0" })
-    await page.waitForFunction(() => document.querySelectorAll("[data-fray-msg]").length > 0, { timeout: 10_000 })
+    await page.waitForFunction(() => document.querySelectorAll("[data-frizz-msg]").length > 0, { timeout: 10_000 })
     assert.equal(
       await page.$$eval(SEL, (n) => n.length),
       0,

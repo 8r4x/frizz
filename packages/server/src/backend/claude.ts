@@ -91,7 +91,7 @@ export function parseClaudeLine(line: string): NormalizedEvent[] {
   if (rec.type === "ai-title" && typeof rec.aiTitle === "string" && rec.aiTitle.trim()) return [{ kind: "title", title: rec.aiTitle.trim() }]
   // Native `/rename` writes an intermediate `custom-title` record. It is deliberately
   // observation-only in the authoritative tailer until the rename controller verifies the
-  // readable replacement, so this normalized view must not promote it into Fray title state.
+  // readable replacement, so this normalized view must not promote it into Frizz title state.
   return []
 }
 
@@ -112,7 +112,7 @@ export function createClaudeBackend(opts: ClaudeBackendOptions): AgentBackend {
         pluginDir: workerPluginDir(),
         workerPrompt: o.workerContract,
         extraSystemPrompt: o.extraSystemPrompt,
-        frayMcp: o.frayMcp,
+        frizzMcp: o.frizzMcp,
       })
       return { argv, env: claudeWorkerEnvironment(), prewrite: [] }
     },
@@ -128,7 +128,7 @@ export function createClaudeBackend(opts: ClaudeBackendOptions): AgentBackend {
         pluginDir: workerPluginDir(),
         workerPrompt: o.workerContract,
         extraSystemPrompt: o.extraSystemPrompt,
-        frayMcp: o.frayMcp,
+        frizzMcp: o.frizzMcp,
       })
       return { argv, env: claudeWorkerEnvironment(), prewrite: [] }
     },

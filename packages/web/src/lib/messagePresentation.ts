@@ -1,4 +1,4 @@
-import type { TranscriptMessage } from "@fray-ui/shared"
+import type { TranscriptMessage } from "@frizz/shared"
 
 // Rendering-only text choice. The server keeps a generated prompt's full `text` for transcript logic
 // and supplies `displayText` only when an exact presentation boundary was validated.

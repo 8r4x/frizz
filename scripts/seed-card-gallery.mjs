@@ -5,7 +5,7 @@
 // Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer
 // reads. Nothing here writes board state directly; the transcript records drive it.
 //
-// Usage: node scripts/seed-card-gallery.mjs --home=/abs/temp-home --socket=fray-adhoc-NNNN-PID
+// Usage: node scripts/seed-card-gallery.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -14,14 +14,14 @@ import { globSync } from "node:fs"
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, socket, cwd = "/Users/colinmcd94/Documents/projects/fray" } = flags
+const { home, socket, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
 if (!home || !socket) {
   console.error("usage: node seed-card-gallery.mjs --home=/abs/temp-home --socket=<tmux-socket>")
   process.exit(1)
 }
 
-const db = globSync(join(home, ".fray/projects/*/ui.db"))[0]
-if (!db) throw new Error(`no ui.db under ${home}/.fray/projects`)
+const db = globSync(join(home, ".frizz/projects/*/ui.db"))[0]
+if (!db) throw new Error(`no ui.db under ${home}/.frizz/projects`)
 const cwdSlug = cwd.replace(/[/.]/g, "-")
 const jsonlDir = join(home, ".claude", "projects", cwdSlug)
 mkdirSync(jsonlDir, { recursive: true })
@@ -85,7 +85,7 @@ const CARDS = [
 
 for (const card of CARDS) {
   const sessionId = `${card.slug}-0000-4000-8000-000000000000`.slice(0, 36)
-  const tmuxName = `fray-${card.slug}`
+  const tmuxName = `frizz-${card.slug}`
   const records = [
     {
       parentUuid: null,

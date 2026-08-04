@@ -11,10 +11,10 @@ import {
 } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { frayPaths } from "./fray-paths.ts"
+import { frizzPaths } from "./frizz-paths.ts"
 
-// ── Structured logging, shared by every Fray process ───────────────────────────────────────────────
-// Fray's readout used to be whatever each subsystem happened to console.log, printed straight to a TTY
+// ── Structured logging, shared by every Frizz process ───────────────────────────────────────────────
+// Frizz's readout used to be whatever each subsystem happened to console.log, printed straight to a TTY
 // that the launcher, the supervisor and the forked control-plane child all wrote to at once. Two
 // consequences, both of which the operator saw every launch: the launcher had to abandon its animated
 // progress line the moment the child started talking (it cannot clear another process' output), and a
@@ -41,27 +41,27 @@ export interface LogRecord {
 }
 
 /** Env carried into forked children so they append to the same file at the same verbosity. */
-export const LOG_FILE_ENV = "FRAY_LOG_FILE"
-export const LOG_LEVEL_ENV = "FRAY_LOG_LEVEL"
+export const LOG_FILE_ENV = "FRIZZ_LOG_FILE"
+export const LOG_LEVEL_ENV = "FRIZZ_LOG_LEVEL"
 /** Operator override, accepting either a directory or an exact `.log` path (wrangler's convention). */
-export const LOG_PATH_ENV = "FRAY_LOG_PATH"
+export const LOG_PATH_ENV = "FRIZZ_LOG_PATH"
 
 /** Both bounds apply: 20 runs is nothing to someone who restarts constantly, 14 days nothing to someone who runs it twice. */
 const RETAINED_RUNS = 20
 const RETAINED_DAYS = 14
-/** Fray's debug feed is chatty; a wedged subsystem must not be able to fill the disk. */
+/** Frizz's debug feed is chatty; a wedged subsystem must not be able to fill the disk. */
 const MAX_LOG_BYTES = 32 * 1024 * 1024
 
 export function defaultLogRoot(stateDir?: string, home = homedir()): string {
-  // Per PROJECT, because Fray serves one board per repository and a merged machine-wide log would
+  // Per PROJECT, because Frizz serves one board per repository and a merged machine-wide log would
   // interleave unrelated boards. Logs live beside the rest of a project's bookkeeping rather than
   // under a second convention imported for this one subsystem.
   //
-  // The fallback root is the STATE root (`fray-paths.ts`), which is `~/.fray` on every install that
-  // has one and the platform's own location on a new machine. This comment used to say fray keeps one
+  // The fallback root is the STATE root (`frizz-paths.ts`), which is `~/.frizz` on every install that
+  // has one and the platform's own location on a new machine. This comment used to say frizz keeps one
   // dotdir on every platform and deliberately ignores XDG; that is no longer true, and the resolver
   // is now the single place that decides.
-  return stateDir ? join(stateDir, "logs") : join(frayPaths({ home }).state, "logs")
+  return stateDir ? join(stateDir, "logs") : join(frizzPaths({ home }).state, "logs")
 }
 
 function runStamp(at: Date): string {
@@ -76,7 +76,7 @@ function runStamp(at: Date): string {
  * The path for THIS run. One file per launch, so "the server just died, here is its log" is an exact
  * path rather than a directory to go rummaging in.
  *
- * `FRAY_LOG_PATH` overrides the location and takes either a directory (a run file is named inside it)
+ * `FRIZZ_LOG_PATH` overrides the location and takes either a directory (a run file is named inside it)
  * or an exact `.log` path, which is what makes CI capture and `--debug > file` painless.
  */
 export function runLogPath(
@@ -86,7 +86,7 @@ export function runLogPath(
   home = homedir(),
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  const name = `fray-${runStamp(at)}-${pid}.log`
+  const name = `frizz-${runStamp(at)}-${pid}.log`
   const override = env[LOG_PATH_ENV]?.trim()
   if (override) return override.endsWith(".log") ? override : join(override, name)
   return join(defaultLogRoot(stateDir, home), name)
@@ -293,14 +293,14 @@ export function formatFeedLine(record: LogRecord): string {
 /**
  * Mirror this logger's records to stderr — the `--debug` view.
  *
- * `enabled` defaults to the FRAY_DEBUG the launcher puts in every child's environment, so a forked
+ * `enabled` defaults to the FRIZZ_DEBUG the launcher puts in every child's environment, so a forked
  * process opts in without being passed `--debug` on a command line it never sees. The launchers
  * install this explicitly; without it their own `setAmbientLogger` call bypassed the environment
  * check and `--debug` showed the parent's records but silently dropped the control plane's.
  */
 export function attachTerminalMirror(
   logger: Logger,
-  enabled = process.env.FRAY_DEBUG === "1",
+  enabled = process.env.FRIZZ_DEBUG === "1",
 ): () => void {
   if (!enabled) return () => {}
   return logger.onRecord((record) => process.stderr.write(`${formatFeedLine(record)}\n`))
@@ -314,14 +314,14 @@ export function ambientLogger(): Logger {
   // `setAmbientLogger` with an explicit path, and they pass it to every child through the
   // environment — so a run is always captured, while merely importing this module (a unit test, a
   // script) writes nothing. Without this, `pnpm test` scattered a file per test process into
-  // ~/.fray/logs and pruned the operator's real history along the way.
+  // ~/.frizz/logs and pruned the operator's real history along the way.
   const logger = createLogger({
     ...(inherited ? { file: inherited, owner: false } : { file: null }),
     ...(level && level in LEVEL_ORDER ? { level } : {}),
   })
   // The whole reason the launcher can repaint is that this process says NOTHING to the shared
   // terminal by default — its records reach the operator through the run log. `--debug` sets
-  // FRAY_DEBUG in the child environment and opens the tap back up.
+  // FRIZZ_DEBUG in the child environment and opens the tap back up.
   attachTerminalMirror(logger)
   ambient = logger
   return ambient
