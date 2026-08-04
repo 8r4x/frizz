@@ -7,9 +7,18 @@
 //   2) STRIP `name`/`team_name` — setting either strands a nested dispatch (its result routes
 //      wrong and never returns cleanly), so scrub both silently.
 //   3) AUTO-APPEND a repo-neutral ORCHESTRATION EPILOGUE so helpers return a useful handoff,
-//      know how to reach their dispatcher mid-flight, and collect a helper of their OWN correctly
-//      — without imposing build, test, git, compilation, or process-lifecycle policy on
-//      arbitrary repos.
+//      know how to reach their dispatcher mid-flight, do NOT fan out a layer of their own unless
+//      their prompt asked for it, and collect a helper correctly when it did — without imposing
+//      build, test, git, compilation, or process-lifecycle policy on arbitrary repos.
+//
+// WHY NESTING IS DEFAULT-OFF (2026-08-04, maintainer's call): the epilogue used to speak about a
+// helper's own helper only in the conditional ("if you dispatch a helper of your own…"), which reads
+// as neutral permission, so a depth-1 child could decompose again purely because it could. A child is
+// already one prong of a fan-out; another layer splits the context its dispatcher assembled and moves
+// the real work further from the board. So the paragraph now LEADS with "do the work yourself unless
+// your prompt says otherwise" and keeps the collection rules for the case where it does. This is a
+// PROMPT-level default, not the hook-level depth-2 DENY rejected on 2026-07-31 as too blunt — an
+// explicit instruction to fan out still dispatches, unmodified.
 //
 // WHY THE NESTED-DISPATCH PARAGRAPH EXISTS (2026-07-31): this hook fires at EVERY depth, but the
 // fray worker contract reaches only the ROOT worker — so its "keep fan-out shallow / a rested agent
@@ -39,7 +48,8 @@ const EPILOGUE = `
 [ORCHESTRATION EPILOGUE — auto-appended by the fray worker dispatch hook] You are a helper sub-agent for a fray-ui worker. Your final message is the handoff: report your outcome/status; what you did; changed files, artifacts, and commit SHA when applicable; verification or evidence and its result; caveats or unresolved work; and the next action when one remains. A bare "done" or progress-only message is not a complete handoff.
 The worker's scratchpad is shared: merge your own scoped progress into it as you work rather than leaving the root as its sole writer. Re-read before every edit and preserve every other agent's content. This exact scratchpad is Fray coordination state, not a project deliverable or source edit: a scoped merge is an explicit exception to delegated phrases such as "write only <path>" or "do not modify the repo"; never classify it as unauthorized or roll it back. Never delete, truncate, reinitialize, move, or replace the whole file. Other project files, including repository-root files, remain governed by your delegated authority; their location alone neither permits nor forbids editing. Do not edit other \`.fray/\` state unless your prompt explicitly asks you to.
 You have an upward channel while you work: \`SendMessage({to: "main", summary: "<5-10 words>", message: "…"})\` delivers to your dispatcher. Use it when the dispatcher acting before you finish could change the outcome—for example, when you hit an unresolved blocker, complete a milestone another task needs, or discover that your instructions should change. Do not use it for routine progress updates.
-If you dispatch a helper of your own, its completion is delivered to you automatically. Never hand-roll a wait loop over a helper's transcript or \`.output\` path to decide whether it finished: that path is a SYMLINK, so \`stat\` without \`-L\` reports the link's own size (the length of its target path, ~150 bytes) and its frozen creation mtime, and the \`"type":"result"\` record is not reliably written — so a helper that is working hard reads as tiny, stale, and dead, and you will discard live work and redo it. Judge a helper only by its completion notification or the text it returns. Give it a \`description\` naming its narrower slice rather than restating your own, so the dispatch tree stays readable.`;
+Do the work yourself: do NOT dispatch sub-agents of your own unless your dispatch prompt explicitly tells you to. You are already one prong of someone else's fan-out, and another layer below you buys little — it splits the context you were handed, buries the real work one level further from whoever reads the tree, and leaves you collecting a handoff instead of doing the task. A slice that feels large is still yours to work through in your own turn.
+If your prompt DOES ask you to dispatch a helper, its completion is delivered to you automatically. Never hand-roll a wait loop over a helper's transcript or \`.output\` path to decide whether it finished: that path is a SYMLINK, so \`stat\` without \`-L\` reports the link's own size (the length of its target path, ~150 bytes) and its frozen creation mtime, and the \`"type":"result"\` record is not reliably written — so a helper that is working hard reads as tiny, stale, and dead, and you will discard live work and redo it. Judge a helper only by its completion notification or the text it returns. Give it a \`description\` naming its narrower slice rather than restating your own, so the dispatch tree stays readable.`;
 
 /** @param {unknown} obj @returns {never} */
 function emit(obj) {

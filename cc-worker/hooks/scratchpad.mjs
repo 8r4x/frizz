@@ -21,7 +21,11 @@
 // can persist progress even if the root later compacts. But an undifferentiated "keep it current"
 // mandate once made a child replace the whole document with its task notes, then DELETE that
 // replacement as a misguided rollback after realizing it had clobbered the root's state. The
-// `subagent-start` mode preserves collaborative writes while requiring merge-only, scoped edits.
+// `subagent-start` mode preserves collaborative writes while requiring merge-only, scoped edits. It
+// also carries the codex half of the default-off nesting rule (2026-08-04): a native child does the
+// work itself and does not `spawn_agent` a layer of its own unless its task said to. SubagentStart is
+// the only structural seam that reaches a native child, the way agent-dispatch.mjs's epilogue is for
+// Claude — the same rule, stated once per backend.
 //
 // THE RE-READ SIDE — injection, not a reminder. On compaction/resume the head of scratch.md is
 // spliced into the context window by the harness, before the model's first token, alongside a
@@ -156,7 +160,12 @@ if (mode === 'subagent-start') {
         'whole file — not even to “clean up” or undo your own mistaken change. Other project files, ' +
         'including files at the repository root, remain governed by your delegated authority; their ' +
         'location alone neither permits nor forbids editing. If the file is absent or you cannot ' +
-        'merge safely, return your state to the parent without writing.',
+        'merge safely, return your state to the parent without writing.\n' +
+        '⟦no fan-out of your own⟧ Do the work yourself: do not spawn agents of your own ' +
+        '(`spawn_agent`) unless the task you were given explicitly tells you to. You are already one ' +
+        'prong of the root worker’s fan-out, and another layer below you splits the context you were ' +
+        'handed and buries the real work further from whoever reads the tree. A slice that feels ' +
+        'large is still yours to work through.',
     },
   }));
   process.exit(0);

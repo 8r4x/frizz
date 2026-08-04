@@ -1008,3 +1008,18 @@ Three removals, one theme — Fray's shipped worker contract states fray MECHANI
 - **`autoResumeOnLimit` — gone; auto-resume is unconditional.** A thread cut off mid-turn by an exhausted subscription window always gets its own "continue" when the window rolls. `ThreadView.limitPause.autoResume` survives on the wire but is now purely a STALENESS verdict (`resolveLimitPause`): a fault old enough that the wake will never arrive stops promising one.
 
 Both settings keys are simply absent from the `Settings` zod object now. The object is non-strict and `getSettings` re-parses `{...defaults, ...stored}`, so an old DB carrying either key has it stripped on read — no migration.
+
+## 2026-08-04: a helper does NOT fan out again unless its prompt said to
+
+Maintainer's call: the prompt a sub-agent receives should tell it to refrain from spinning up sub-agents of its own unless it was explicitly instructed to.
+
+Nesting had never been *encouraged*, but nothing ever told a child not to. The Claude epilogue spoke about a helper's own helper only in the conditional — *"If you dispatch a helper of your own, its completion is delivered to you automatically…"* — which is collection advice that reads as neutral permission, and the 2026-07-31 entry above shows what a child does with permission: it decomposes again because it can. The root worker contract's *"keep fan-out shallow"* line does not help, because it reaches only the root.
+
+The rule now LEADS both child-facing epilogues, with the collection paragraph kept for the case where a prompt does ask for a helper:
+
+- **Claude — `hooks/agent-dispatch.mjs`.** The epilogue's last paragraph opens with *"Do the work yourself: do NOT dispatch sub-agents of your own unless your dispatch prompt explicitly tells you to"*, then names the cost (it splits the context the dispatcher assembled, buries the work further from the board, and leaves the child collecting a handoff instead of doing the task). The old paragraph follows, re-hinged on *"If your prompt DOES ask you to dispatch a helper"*. This hook fires at EVERY depth, so the rule reaches a depth-2 dispatcher without depending on its parent to restate it.
+- **Codex — `hooks/scratchpad.mjs --mode=subagent-start`.** Same rule, named for `spawn_agent`, appended to the `SubagentStart` context as its own `⟦no fan-out of your own⟧` block so it does not blur into the scratchpad merge contract. `SubagentStart` is the only structural seam that reaches a native codex child, exactly as the dispatch epilogue is for Claude.
+
+This is a PROMPT-level default, deliberately NOT the hook-level depth-2 DENY rejected on 2026-07-31 as too blunt: a dispatcher that genuinely wants a prong fanned out says so in the prompt and the child dispatches, unmodified. Also left alone: `workerPrompt.ts` — the root contract already authorizes fan-out *"when work genuinely decomposes"*, and the root is the one agent whose fan-out is wanted.
+
+Pinned by a new test in `agent-dispatch-hook.test.ts` (the lead-with-the-default wording plus the re-hinged conditional) and one in `scratchpad-hook.test.ts` (the codex block).
