@@ -2246,3 +2246,39 @@ test("waitForWorkspace: with no state dir the historical flat deadline is unchan
   const waited = Date.now() - started;
   assert.ok(waited >= 250 && waited < 3_000, `flat deadline honored (waited ${waited}ms)`);
 });
+
+// A rename underneath a still-running fray-era server is the one thing this migration must never do,
+// and `--stop` is precisely the command run while one IS running. Every command resolves a workspace,
+// so the adoption has to hang off OPENING rather than off resolution. Delete with migrate-fray.ts.
+test("only an open adopts a fray-era install; --stop and --status resolve without moving anything", () => {
+  const home = mkdtempSync(join(tmpdir(), "frizz-launcher-migrate-"));
+  const repo = mkdtempSync(join(tmpdir(), "frizz-launcher-migrate-repo-"));
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "t@example.com"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "t"], { cwd: repo });
+    // A fray-era install: the legacy dotdir, and a project tree holding a real scratchpad.
+    mkdirSync(join(home, ".fray"), { recursive: true });
+    mkdirSync(join(repo, ".fray", "threads", "s1"), { recursive: true });
+    writeFileSync(join(repo, ".fray", "threads", "s1", "scratch.md"), "# notes");
+
+    // What `--stop` / `--status` do: resolve, touch nothing.
+    resolveWorkspace(repo, home);
+    assert.equal(existsSync(join(home, ".fray")), true, "the global tree is untouched by a non-open");
+    assert.equal(existsSync(join(home, ".frizz")), false);
+    assert.equal(existsSync(join(repo, ".fray")), true, "the project tree is untouched by a non-open");
+
+    // What a launch does.
+    resolveWorkspace(repo, home, process.env, { migrate: true });
+    assert.equal(existsSync(join(home, ".frizz")), true, "an open adopts the global tree");
+    assert.equal(existsSync(join(home, ".fray")), false);
+    assert.equal(
+      readFileSync(join(repo, ".frizz", "threads", "s1", "scratch.md"), "utf8"),
+      "# notes",
+      "an open adopts the project tree"
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  }
+});

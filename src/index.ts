@@ -156,9 +156,14 @@ try {
     if (interactiveLaunch) assertLaunchPrerequisites();
     else assertRequiredExecutables();
   }
+  // Only an actual OPEN adopts a fray-era install (migrate-fray.ts). `--stop`, `--status`, `restart`,
+  // and the artifact commands all resolve a workspace too, and a rename underneath a still-running
+  // fray-era server is the one thing that must not happen — `--stop` is precisely when one IS running.
   workspace = internal
     ? workspaceFromLaunchTarget(pinned!)
-    : resolveWorkspace(options.repoPath);
+    : resolveWorkspace(options.repoPath, undefined, undefined, {
+        migrate: interactiveLaunch && command !== "build",
+      });
 } catch (error) {
   // Report ONCE — `fail()` prints too, and doing both showed the operator the same sentence twice
   // under two prefixes, which reads like two separate failures.

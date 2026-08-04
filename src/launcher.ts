@@ -395,7 +395,14 @@ An immutable artifact is the default. --dev is the only explicit unsafe source w
 export function resolveWorkspace(
   cwd = process.cwd(),
   home = homedir(),
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  // Adopting a fray-era install belongs to OPENING one, and nothing else (migrate-fray.ts). Every
+  // command resolves a workspace — `--stop` and `--status` included — but only a launch may move the
+  // state tree, because a rename is exactly what a still-running fray-era server must not have done
+  // underneath it: it holds descriptors into `~/.fray`, and any path it resolves afterwards would
+  // recreate the old root beside the new one. Off by default so a new caller cannot migrate by
+  // accident; the launch path opts in.
+  { migrate = false }: { migrate?: boolean } = {}
 ): Workspace {
   let gitRoot: string;
   try {
@@ -409,12 +416,10 @@ export function resolveWorkspace(
       `frizz-dev must be run inside a Git repository (cwd: ${cwd})`
     );
   }
-  // The launcher opens a project before any server does, so a fray-era install gets adopted here
-  // first (migrate-fray.ts). Both calls are idempotent — whichever entry point runs first wins.
-  migrateFrayGlobalRoots({ env, home });
+  if (migrate) migrateFrayGlobalRoots({ env, home });
   const identity = resolveGitProjectIdentity(realpathSync(gitRoot), home);
   const root = identity.root;
-  migrateFrayProjectDir(root);
+  if (migrate) migrateFrayProjectDir(root);
   const id = identity.id;
   const stateDir = projectStateDir(id, home);
   mkdirSync(stateDir, { recursive: true });
