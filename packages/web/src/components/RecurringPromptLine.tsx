@@ -41,7 +41,7 @@ export function RecurringPromptLine({ bump, sourceId }: { bump: RecurringPrompt;
       // different questions: a clock for the scheduled one, a loop for the rest one (which has no clock
       // — it fired because the thread stopped, again). They survived the merge of the two features into
       // one prompt precisely because the trigger is what a reader still cannot infer. The footer's own
-      // glyph is deliberately a THIRD mark, a pulse, because it stands for both at once.
+      // glyph is deliberately a THIRD mark — a heart with a pulse — because it stands for both at once.
       //
       // The rest trigger's was `CircleStop`, and in a wake line that is backwards: this divider exists to
       // say the agent was RE-INVOKED, and a stop button in the transcript reads as the run ending here.

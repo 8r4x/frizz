@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { Activity } from "lucide-react"
+import { HeartPulse } from "lucide-react"
 import {
   RECURRING_PROMPT_MAX,
   ALLDONE_SENTINEL,
@@ -51,21 +51,26 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
           aria-label={live ? "Recurring prompt (on)" : "Recurring prompt"}
           className="flex items-center rounded-md px-0.5 py-0.5 outline-none"
         >
-          {/* A PULSE, and the ONLY surface that says this exists (the rail deliberately carries no mark
-              — see groups.ts).
+          {/* A HEART WITH A PULSE THROUGH IT, and the ONLY surface that says this exists (the rail
+              deliberately carries no mark — see groups.ts).
 
               It was a square-in-a-circle (`CircleStop`) and that was the wrong mark for a reason no
               amount of tooltip could fix: in a strip whose other children are live verbs, a stop
               button reads as one — "it seems like clicking it would cause the entire session to stop"
               (maintainer 2026-08-03). A glyph that looks destructive on the way to a settings panel is
-              worse than no glyph. The pulse says the opposite thing, which is also the true thing:
+              worse than no glyph. A heartbeat says the opposite thing, which is also the true thing:
               something is keeping this thread beating.
+
+              The HEART, not the bare pulse line (`Activity`) this shipped as for an afternoon: the line
+              on its own reads as a metrics sparkline, and it is the enclosing heart that names the mark
+              a HEARTBEAT — this thread has one, which is the entire state the glyph reports (maintainer
+              2026-08-03: "I want it to be the heart icon with the pulse inside").
 
               GREY by default and coloured only while something is actually armed: the footer's left
               cluster is a status strip first, so a control with nothing to report has to read as quiet
               as the empty slot it would otherwise leave. Amber, not the app's accent yellow, so it
               reads as a state rather than the focus motif. */}
-          <Activity size={12} className={live ? "text-amber-400/90" : "text-muted/45 hover:text-muted"} />
+          <HeartPulse size={12} className={live ? "text-amber-400/90" : "text-muted/45 hover:text-muted"} />
         </button>
       </PopoverTrigger>
       <PopoverContent
