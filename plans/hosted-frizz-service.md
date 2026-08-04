@@ -29,7 +29,11 @@ These are the facts the design rests on. Each was checked, not recalled.
 | ⇒ the namespace must be flat: `colin.frizz.sh` | fine now that Frizz is one server per machine |
 | GitHub device flow needs only a **public `client_id`**, no secret | [octokit/auth-oauth-device](https://github.com/octokit/auth-oauth-device.js/) — the CLI can do the whole login itself |
 | Cloudflare Access free tier is **50 seats, then $7/user/mo** | [Access pricing](https://www.cloudflare.com/sase/products/access/) |
-| Cloudflare **prohibits reselling Zero Trust to third parties** without written permission | [Zero Trust service-specific terms](https://www.cloudflare.com/service-specific-terms-zero-trust-services/) |
+| The Zero Trust reselling clause covers **Access, Gateway, RBI, email security, CASB, DLP** — **NOT Tunnel** | [Zero Trust service-specific terms](https://www.cloudflare.com/service-specific-terms-zero-trust-services/), product list read verbatim |
+| The **general** agreement is the real constraint, and it is broader | [Self-Serve Subscription Agreement](https://www.cloudflare.com/terms/) §2.2.1(a) "rent, lease, loan, export, or sell access to the Services to any third party, or sign up for the Services on behalf of a third party"; §2.2.1(j) "use the Services to provide a virtual private network or other similar proxy services" |
+| Non-Enterprise accounts cap at **1,000 tunnels** | [Cloudflare One account limits](https://developers.cloudflare.com/cloudflare-one/account-limits/) — also 100 edge connections per tunnel |
+| **Cloudflare for SaaS** is the sanctioned "extend Cloudflare to your end customers" product | [docs](https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/); Shopify, Webflow, Kinsta, Render ship on it |
+| DO **WebSocket hibernation applies to INCOMING connections** (`ctx.acceptWebSocket()`) | [Durable Objects WebSocket docs](https://developers.cloudflare.com/durable-objects/best-practices/websockets/) — the agent dials in, so this is the right direction |
 | `frizz.sh` is active in the **personal** account | zone `2dc5dbf9a1e0f4acf5641c8cae508591`, account `3eef35e2fc9f974f5b2dfaad9f021bbe` |
 | Frizz has **no authentication of any kind** today | reaching the port is the authorization; `EXPOSED_WARNING` says so |
 | cloudflared's origin-facing contract | port-less `Host`, `x-forwarded-for`, `x-forwarded-proto: https`, `cf-*`; app reads carry no Origin + `sec-fetch-site: same-origin` |
@@ -41,9 +45,9 @@ moment money is involved**, for two independent reasons:
 
 1. **It sets a $7/user/month COGS floor.** Every paying customer consumes an Access seat past the first
    50. If you charge $15, you have given away half your margin before hosting anything.
-2. **It is probably contractually prohibited.** Cloudflare's Zero Trust terms bar reselling the service
-   to third parties absent written permission. A paid product whose access control *is* Cloudflare
-   Access, sold to customers, is squarely the thing that clause describes.
+2. **It is the one place the Zero Trust reselling clause genuinely does bite.** That clause enumerates
+   Access, Gateway, RBI, email security, CASB and DLP — so it says nothing about Tunnel, but a paid
+   product whose access control *is* Cloudflare Access is squarely what it describes.
 
 So: **Frizz grows its own auth layer.** That is a day or two of work, it removes the per-user cost
 entirely, it is portable across tunnels (works for self-hosters on Tailscale or ssh too), and it is
@@ -159,15 +163,71 @@ Validates demand and the whole mechanism.
 Do not skip Stage 1 to get to Stage 2 faster; Stage 2 without it is a public directory of unauthenticated
 shells.
 
-## Go/no-go item to settle before Stage 3
+## The terms question, correctly stated
 
-**Get Cloudflare's written position on this use case.** Building tunnels for paying third parties may be
-"reselling Zero Trust" under their service-specific terms. If they say no, the whole data-plane story
-changes and the economics with it. This is cheap to ask and expensive to discover late — do it before
-writing billing code, not after.
+An earlier draft of this plan said the blocker was the Zero Trust reselling clause. **That was the wrong
+clause.** Cloudflare Tunnel is not one of the enumerated Zero Trust Services, so it does not apply.
+
+The real constraint is the general [Self-Serve Subscription Agreement](https://www.cloudflare.com/terms/),
+which applies to everything:
+
+- **§2.2.1(a)** — no "rent, lease, loan, export, or sell access to the Services to any third party, or
+  sign up for the Services on behalf of a third party."
+- **§2.2.1(j)** — no "use the Services to provide a virtual private network or other similar proxy
+  services."
+
+(j) is the sharp one, and it is aimed squarely at this product's shape. Two consequences worth being
+precise about:
+
+1. **This is not a "Cloudflare Tunnel is disallowed" finding — it is a self-serve-terms finding.** The
+   clause ends where a written agreement begins, and Cloudflare sells exactly that: **Cloudflare for
+   SaaS** exists to extend Cloudflare to a provider's end customers, and Shopify, Webflow, Kinsta and
+   Render are shipping on it. So the path exists; it runs through a sales conversation and an Enterprise
+   agreement, not through self-serve signup. The 1,000-tunnel account cap forces that same conversation
+   at scale anyway, so the two arrive together.
+2. **Building your own tunnel on Workers + Durable Objects does NOT dodge this.** It is still Cloudflare's
+   network, and "providing proxy services" arguably describes a hand-rolled proxy more plainly than it
+   describes using their supported product. Escaping §2.2.1(j) means moving the *data plane* off
+   Cloudflare — which is a much bigger decision than which tunnel library to use.
+
+**What to do about it: do not let it block Stages 0–2.** Self-hosting, the Frizz auth layer, and even a
+free tier where users authenticate with their own GitHub are not "selling access to the Services." Ask
+Cloudflare before Stage 3, when there is a real product to describe and the question is concrete.
 
 Also: move `frizz.sh` out of the personal Cloudflare account before it carries a business. Moving a zone
 between accounts later means removing and re-adding it, with a DNS gap.
+
+## Building the tunnel ourselves
+
+Worth costing, both as leverage in that conversation and as insurance if the answer is no.
+
+**Cloudflare Workers + Durable Objects — no servers, ~1–2 weeks for a credible v1.** One DO per subdomain
+holds a WebSocket the user's agent dials *in* on; the Worker routes `<name>.frizz.sh` to that DO, which
+forwards over the socket. Hibernation applies to incoming sockets, so idle tunnels cost approximately
+nothing and connections survive. No regions, no autoscaling, no machines.
+
+**The hard part is not routing — it is multiplexing.** The board is itself WebSocket-heavy (the board
+socket plus every terminal pane), so you are tunnelling WebSockets *inside* a WebSocket, alongside
+concurrent HTTP. That means your own framing, stream ids, backpressure, and reconnect/resume semantics.
+cloudflared gets this from QUIC streams for free. This is the piece that turns "a weekend" into "a
+fortnight, then a long tail of edge cases," and it is where a DIY tunnel earns its bugs.
+
+**Off Cloudflare, if §2.2.1(j) forces it:**
+
+- **Fly.io** — the best fit for "no infrastructure management" outside Cloudflare. Anycast plus Machines,
+  deploy a container running a small tunnel server (`frp`, `rathole`, or your own). Hosting arbitrary
+  network services *is* their business, so the terms fit naturally. You pay egress, which Cloudflare
+  does not charge you for — that is the real cost of leaving.
+- **ngrok** — they sell embedding into other products, which is the "just buy it" answer and the fastest
+  legitimate path. Public list pricing includes data transfer at $0.10/GB, so it becomes a genuine
+  per-user COGS line; OEM terms need a sales conversation of their own.
+- **A VPS running `frp`/`rathole`** — cheapest and most controllable, and explicitly ruled out: it is
+  infrastructure management.
+
+**The engineering conclusion, which is cheap and worth doing regardless: make the transport pluggable in
+Frizz.** Do not hard-code `cloudflared`. If the tunnel is a strategy behind a small interface, then the
+answer to the terms question — and any later cost or reliability surprise — becomes a swap rather than a
+rewrite. That is a day of design discipline now against a fortnight of migration later.
 
 ## Rejected
 
