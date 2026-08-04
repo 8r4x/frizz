@@ -144,17 +144,61 @@ test("a project's .fray directory is adopted as .frizz, once", () => {
   }
 })
 
-test("a project with no .fray, or one that already has .frizz, is untouched", () => {
+test("a project with no .fray at all is untouched", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-migrate-project-none-"))
   try {
     assert.equal(migrateFrayProjectDir(dir), false)
+    assert.equal(existsSync(join(dir, ".frizz")), false)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
 
-    mkdirSync(join(dir, ".fray"))
-    mkdirSync(join(dir, ".frizz"))
-    writeFileSync(join(dir, ".frizz", "keep"), "real")
-    assert.equal(migrateFrayProjectDir(dir), false)
-    assert.equal(readFileSync(join(dir, ".frizz", "keep"), "utf8"), "real")
-    assert.equal(existsSync(join(dir, ".fray")), true, "the stale tree is left, never merged")
+// THE CASE THAT ACTUALLY HAPPENS. The worker plugin is served out of the repo, so a live worker's
+// scratchpad hook writes `.frizz/threads/<sid>/.scratchpad-state.json` the moment the checkout is
+// rebranded — while the server that dispatched it is still the old build writing to `.fray`. Skipping
+// on "target exists" would strand every real scratchpad in `.fray` behind three bytes of bookkeeping.
+test("a stub .frizz left by a live worker is merged into, not treated as a reason to give up", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-migrate-project-both-"))
+  try {
+    mkdirSync(join(dir, ".fray", "threads", "live"), { recursive: true })
+    writeFileSync(join(dir, ".fray", "threads", "live", "scratch.md"), "# the real notes")
+    writeFileSync(join(dir, ".fray", "threads", "live", ".scratchpad-state.json"), `{"old":true}`)
+    mkdirSync(join(dir, ".fray", "threads", "archived"), { recursive: true })
+    writeFileSync(join(dir, ".fray", "threads", "archived", "scratch.md"), "# older thread")
+    mkdirSync(join(dir, ".fray", "plans"), { recursive: true })
+    writeFileSync(join(dir, ".fray", "plans", "a.md"), "# plan")
+
+    // What the live hook already wrote under the new name.
+    mkdirSync(join(dir, ".frizz", "threads", "live"), { recursive: true })
+    writeFileSync(join(dir, ".frizz", "threads", "live", ".scratchpad-state.json"), `{"new":true}`)
+
+    assert.equal(migrateFrayProjectDir(dir), true)
+
+    assert.equal(readFileSync(join(dir, ".frizz", "threads", "live", "scratch.md"), "utf8"), "# the real notes")
+    assert.equal(readFileSync(join(dir, ".frizz", "threads", "archived", "scratch.md"), "utf8"), "# older thread")
+    assert.equal(readFileSync(join(dir, ".frizz", "plans", "a.md"), "utf8"), "# plan")
+    // Frizz's own copy wins the one genuine collision, and the fray one is never destroyed.
+    assert.equal(readFileSync(join(dir, ".frizz", "threads", "live", ".scratchpad-state.json"), "utf8"), `{"new":true}`)
+    assert.equal(readFileSync(join(dir, ".fray", "threads", "live", ".scratchpad-state.json"), "utf8"), `{"old":true}`)
+    // Everything that did NOT collide is gone from the old tree.
+    assert.equal(existsSync(join(dir, ".fray", "threads", "archived")), false)
+    assert.equal(existsSync(join(dir, ".fray", "plans")), false)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("a fully redundant .fray is folded away completely", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-migrate-project-empty-"))
+  try {
+    mkdirSync(join(dir, ".fray", "threads"), { recursive: true })
+    mkdirSync(join(dir, ".frizz", "threads"), { recursive: true })
+    writeFileSync(join(dir, ".frizz", "threads", "keep"), "real")
+
+    migrateFrayProjectDir(dir)
+    assert.equal(readFileSync(join(dir, ".frizz", "threads", "keep"), "utf8"), "real")
+    assert.equal(existsSync(join(dir, ".fray")), false, "nothing was left behind, so the old tree goes")
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

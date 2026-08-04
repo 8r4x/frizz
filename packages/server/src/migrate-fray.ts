@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, renameSync } from "node:fs"
+import { existsSync, lstatSync, readdirSync, renameSync, rmdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
@@ -103,21 +103,56 @@ export function migrateFrayGlobalRoots(options: MigrateFrayOptions = {}): Move[]
 }
 
 /**
+ * Fold `from` into `to`, entry by entry, without overwriting anything already there.
+ *
+ * Frizz's own copy always wins a collision and the fray one is left exactly where it is — this
+ * migration never destroys a file it cannot prove is redundant. `from` therefore survives whenever
+ * something collided, which is the honest outcome: it still holds content.
+ */
+function mergeInto(from: string, to: string): boolean {
+  let moved = false
+  for (const entry of readdirSync(from, { withFileTypes: true })) {
+    const src = join(from, entry.name)
+    const dst = join(to, entry.name)
+    if (!existsSync(dst)) {
+      renameSync(src, dst)
+      moved = true
+      continue
+    }
+    // Two directories of the same name are the common case (`threads/`, then a live thread's own
+    // `<session-id>/`), and only their leaves actually conflict.
+    if (entry.isDirectory() && lstatSync(dst).isDirectory() && mergeInto(src, dst)) moved = true
+  }
+  try { rmdirSync(from) } catch { /* something collided and stayed behind; leaving it is the point */ }
+  return moved
+}
+
+/**
  * Adopt a project's `.fray/` directory as `.frizz/`.
  *
  * Holds the thread scratchpads and plan files for every thread ever run in this repo, so a project
  * opened after the rename would otherwise show none of them. Only a real directory is adopted — a
  * symlinked `.fray` is refused for the same reason dispatch.ts refuses a symlinked `.frizz`: it would
  * let a repo redirect Frizz's writes outside itself.
+ *
+ * BOTH DIRECTORIES CAN EXIST, and declining in that case would be the bug. The worker plugin is
+ * served to Claude straight out of the repo, so its hooks pick up a rebranded checkout IMMEDIATELY —
+ * while the server that dispatched those workers is still the old build, still writing to `.fray`.
+ * Every repo with a live thread therefore ends up with a stub `.frizz` holding nothing but scratchpad
+ * bookkeeping, sitting next to the real tree. A skip there would strand every scratchpad in `.fray`,
+ * which is precisely the data this function exists to carry across. (Observed on the author's own
+ * repo mid-rebrand: 3 stub thread dirs against 425 real ones.)
  */
 export function migrateFrayProjectDir(projectDir: string): boolean {
   const from = join(projectDir, ".fray")
   const to = join(projectDir, ".frizz")
-  if (existsSync(to)) return false
   try {
     if (!lstatSync(from).isDirectory()) return false
-    renameSync(from, to)
-    return true
+    if (!existsSync(to)) {
+      renameSync(from, to)
+      return true
+    }
+    return lstatSync(to).isDirectory() ? mergeInto(from, to) : false
   } catch {
     return false
   }
