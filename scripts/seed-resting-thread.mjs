@@ -8,8 +8,17 @@
 //   resting-both   — a live sub-agent AND a live background shell (the "and" case)
 //   resting-shell  — a background shell only (must NOT claim a sub-agent)
 //
-// Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a JSONL the tailer reads.
-// Usage: node scripts/seed-resting-thread.mjs --home=/abs/temp-home --socket=fray-adhoc-NNNN-PID
+// A simulated worker is a BROKER row now, not a tmux pane, and both halves of that matter:
+//   • `claude_runtime='broker'` is what makes board.deriveRuntime read the tailer's turn state at all.
+//     Without it the row falls to the pre-cutover branch and reports "exited" — the thread cards as a
+//     stall and no resting card can ever render (this seeder shipped that way until 2026-08-04).
+//   • the tailer drops a thread's background shells the moment their OWNER looks gone
+//     (tailer.bgShellViews → paneDead → defaultBrokerDaemonAlive), and for a broker row "gone" means
+//     an ABSENT broker record. So the seed writes one, pointing at a real live `sleep` it spawns —
+//     a fake pid would be indistinguishable from a dead daemon and the shells would vanish.
+// Usage: node scripts/seed-resting-thread.mjs --home=/abs/temp-home [--cwd=/abs/project]
+import { spawn } from "node:child_process"
+import { createHash } from "node:crypto"
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -17,16 +26,26 @@ import { join } from "node:path"
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, socket, cwd = process.cwd() } = flags
-if (!home || !socket) {
-  console.error("usage: node seed-resting-thread.mjs --home=/abs/temp-home --socket=<tmux-socket>")
+const { home, cwd = process.cwd() } = flags
+if (!home) {
+  console.error("usage: node seed-resting-thread.mjs --home=/abs/temp-home [--cwd=/abs/project]")
   process.exit(1)
 }
 
 const db = globSync(join(home, ".fray/projects/*/ui.db"))[0]
 if (!db) throw new Error(`no ui.db under ${home}/.fray/projects`)
+const stateDir = join(db, "..")
 const jsonlDir = join(home, ".claude", "projects", cwd.replace(/[/.]/g, "-"))
 mkdirSync(jsonlDir, { recursive: true })
+mkdirSync(join(stateDir, "claude-broker"), { recursive: true })
+
+// ONE stand-in daemon for every seeded thread — its only job is to own a pid that answers `kill -0`.
+// Detached + unref'd so this script can exit; the adhoc stack's temp HOME outlives it either way, so
+// kill it by this exact pid when you tear the stack down.
+const daemon = spawn("sleep", ["7200"], { detached: true, stdio: "ignore" })
+daemon.unref()
+const brokerRecordPath = (sessionId) =>
+  join(stateDir, "claude-broker", `${createHash("sha256").update(sessionId).digest("hex").slice(0, 16)}.json`)
 
 const T0 = Date.now() - 25 * 60_000
 const at = (m) => new Date(T0 + m * 60_000).toISOString()
@@ -59,13 +78,12 @@ function seed({ slug, sessionId, title, prompt, dispatches, closing }) {
     assistant("msg_rest", at(2), [{ type: "text", text: closing }], "end_turn"),
   ]
   writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
-  try {
-    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"], { stdio: "ignore" })
-  } catch { /* already up */ }
+  // The stand-in daemon record. `daemonPid` is the only field the liveness probe reads.
+  writeFileSync(brokerRecordPath(sessionId), JSON.stringify({ sessionId, daemonPid: daemon.pid, socketPath: join(stateDir, "claude-broker", `${slug}.sock`) }))
   execFileSync("sqlite3", [
     db,
-    `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
-     VALUES ('${slug}', '${sessionId}', '${tmuxName}', '${at(0)}', '${title}', 'claude', 'opus', 'high', 'default', '${at(2)}')`,
+    `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, claude_runtime, model, effort, permission_mode, rested_at)
+     VALUES ('${slug}', '${sessionId}', '${tmuxName}', '${at(0)}', '${title}', 'claude', 'broker', 'opus', 'high', 'default', '${at(2)}')`,
   ])
   console.log(`seeded ${slug} → ${sessionId}`)
 }

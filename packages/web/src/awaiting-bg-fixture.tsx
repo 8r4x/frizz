@@ -6,28 +6,31 @@ import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
 
-// Browser QA for the AWAITING-BACKGROUND card ON THE QUEUE: a queued thread that came to rest while its
-// OWN dispatched sub-agents are still live and no human ask is outstanding renders the informational
-// banner + the event "Snooze" button (see TodosView.AwaitingBackgroundBanner). ?shells=1 exercises the
-// shell-only wording. snoozeAwaitingBackground is mocked so nothing real is hit; clicking Snooze fades
-// the card out.
+// Browser QA for the resting card ON THE QUEUE: a thread that came to rest while its OWN background work
+// is still live and no human ask is outstanding renders the informational banner + the event "Snooze"
+// button and its explainer (see TodosView.AwaitingBackgroundBanner). snoozeAwaitingBackground is mocked so
+// nothing real is hit; clicking Snooze fades the card out.
 //
-// The SAME card also renders in the drawer and on the full-screen page, WITHOUT the Snooze — that pair is
+// DEFAULT = THE SHELL-ONLY REST, because since 2026-08-04 that is the only shape the server actually puts
+// in the queue: a rest on a live SUB-AGENT is excused from it (board.deriveNeedsYou), so the sub-agent
+// wording below is reachable only in the drawer / full-screen page. `?agents=1` renders it anyway — it is
+// the same component and the same card, and the two voices are worth eyeballing side by side.
+//
+// The SAME card renders in the drawer and on the full-screen page WITHOUT the Snooze — that pair is
 // server-derived (board.awaitingBackground), so it is verified against a real stack rather than here:
 // `nub scripts/seed-resting-thread.mjs --home=… --socket=…` against an adhoc stack seeds a thread at
 // rest with live children, then /thread/<slug> and /thread/<slug>/full show the button-less card.
 
 const SLUG = "awaiting-bg-demo"
-const shellOnly = new URLSearchParams(location.search).get("shells") === "1"
+const shellOnly = new URLSearchParams(location.search).get("agents") !== "1"
+
+const tail = shellOnly
+  ? "Left the dev server and the CI poller running; I'll pick this back up when they report."
+  : "Dispatched two audit sub-agents; I'll fold their findings in when they return."
 
 const messages: TranscriptMessage[] = [
   { role: "user", text: "Refactor the pricing parser and verify it end-to-end.", tools: [], parts: [{ kind: "text", text: "Refactor the pricing parser and verify it end-to-end." }] },
-  {
-    role: "assistant",
-    text: "Dispatched two audit sub-agents; I'll fold their findings in when they return.",
-    tools: [],
-    parts: [{ kind: "text", text: "Dispatched two audit sub-agents; I'll fold their findings in when they return." }],
-  },
+  { role: "assistant", text: tail, tools: [], parts: [{ kind: "text", text: tail }] },
 ]
 
 const thread = {
@@ -58,7 +61,12 @@ const thread = {
     { id: "agent-a", label: "Audit the parser for edge cases", subagentType: "fray:opus-high", startedAt: "2026-07-23T09:05:00.000Z", state: "running" },
     { id: "agent-b", label: "Write property tests for the tiers", subagentType: "fray:sonnet-high", startedAt: "2026-07-23T09:05:20.000Z", state: "running" },
   ],
-  bgShells: shellOnly ? [{ label: "vite dev --host", startedAt: "2026-07-23T09:06:00.000Z", state: "running" }] : [],
+  bgShells: shellOnly
+    ? [
+        { label: "vite dev --host", startedAt: "2026-07-23T09:06:00.000Z", state: "running" },
+        { label: "gh run watch 1842", startedAt: "2026-07-23T09:06:10.000Z", state: "running" },
+      ]
+    : [],
   lastActivityAt: "2026-07-23T09:07:00.000Z",
 } as unknown as ThreadViewModel
 

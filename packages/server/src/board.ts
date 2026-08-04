@@ -243,14 +243,16 @@ function stampStoppableShells(shells: ThreadView["bgShells"], row: SessionRow): 
   return shells.map((shell) => (shell.stoppable ? { ...shell, stoppable: false } : shell))
 }
 
-// The thread's OWN dispatched work is still live — a sub-agent OR a launched background shell. It
-// drives BOTH the awaiting-background card and (since 2026-08-01) the queue excusal in deriveNeedsYou,
-// which is what keeps "in the running band" and "in the queue" mutually exclusive. Until then only the
-// narrower hasLiveBackgroundWork excused a rest, and a shell-only rest stayed a queued handoff.
+// The thread's OWN dispatched work is still live — a sub-agent OR a launched background shell. It drives
+// the resting CARD (deriveAwaitingBackground) and its event-snooze, and deliberately NOT the queue
+// excusal: hasLiveBackgroundWork (sub-agents only) is what excuses a rest from the queue, because a
+// detached shell leaves a thread that is a handoff in substance (see deriveNeedsYou). Shells were folded
+// into the excusal on 2026-08-01 and taken back out on 2026-08-04; the CARD spanned both kinds
+// throughout, which is why the two predicates exist side by side.
 //
-// hasLiveBackgroundWork (sub-agents only) survives for the CRASH bit, where the distinction is real: a
-// dead pane with a child still reading "running" died mid-work, while a dead pane with a shell behind it
-// is just a shell whose owner is gone.
+// hasLiveBackgroundWork also owns the CRASH bit, where the same distinction is real: a dead pane with a
+// child still reading "running" died mid-work, while a dead pane with a shell behind it is just a shell
+// whose owner is gone.
 function hasLiveOwnWork(tele: SessionTelemetry | undefined): boolean {
   return Boolean(
     tele?.subAgents?.some((agent) => isDirectSubAgent(agent) && agent.state === "running") ||
@@ -262,6 +264,10 @@ function hasLiveOwnWork(tele: SessionTelemetry | undefined): boolean {
 // equals the row's rested_at. rested_at only advances when the top-level turn comes to a NEW rest, so
 // any advance — the exact event of a sub-agent/shell returning and the worker acting on it — auto-clears
 // the snooze and re-surfaces the card. No scheduler, no reaper: the snooze expires itself on next rest.
+// That self-clearing IS the promise the card's Snooze button makes to the human ("until one of the
+// background shells completes, in which case the agent will resume automatically" — maintainer
+// 2026-08-04): a Claude/Codex worker is re-invoked by its own completion notification, and the card comes
+// back the moment that turn ends. A shell that never finishes therefore stays snoozed, which is the point.
 function bgSnoozeArmed(row: Pick<SessionRow, "bg_snooze_rested_at" | "rested_at">): boolean {
   return row.bg_snooze_rested_at != null && row.rested_at != null && row.bg_snooze_rested_at === row.rested_at
 }
@@ -362,31 +368,33 @@ export function deriveNeedsYou(
   // (or the pause aged out), the promise is gone and it falls through to the ordinary handoff below,
   // which is the honest place for work only the human will restart.
   if (limitPause?.autoResume) return false
-  // A top-level turn that came to rest while its OWN dispatched work is still running — a SUB-AGENT or
-  // a launched background SHELL — is EXCUSED from the queue for exactly as long as that holds. The rail
-  // already shows it in the Active section's RUNNING band, and the two surfaces must not both claim it
-  // (maintainer 2026-08-01: "if something is listed as currently running, then it should never show up
-  // in the queue"). That invariant is what `groups.inActiveRunningBand` is written against — it bands on
-  // `isActivelyRunning && !needsYou`, so this excusal is the ONLY thing that puts a rested-with-live-work
-  // row in the running band, and nothing can land there carrying a card.
+  // A top-level turn that came to rest while a dispatched SUB-AGENT is still running is EXCUSED from
+  // the queue for exactly as long as that holds. The rail already shows it in the Active section's
+  // RUNNING band, and the two surfaces must not both claim it (maintainer 2026-08-01: "if something is
+  // listed as currently running, then it should never show up in the queue"). That invariant is what
+  // `groups.inActiveRunningBand` is written against — it bands on `isActivelyRunning && !needsYou`, so
+  // this excusal is the ONLY thing that puts a rested-with-live-work row in the running band, and
+  // nothing can land there carrying a card.
   //
-  // SUB-AGENTS were excused first (maintainer 2026-07-30): queueing them made the rail row drop out of
-  // the running band into the rested band and bounce straight back up when the child returned — "there's
-  // too much layout shift as things jump between those two sections … it should only show up in the
-  // queue when it's fully rested and it has no running sub-agents". It is bounded by construction: a
-  // child whose completion signal is lost goes `stale` at the tailer's 15-min ceiling, and only
-  // `running` holds here, so a child that never returns stops excusing its parent.
+  // The reason it is a sub-agent excusal (maintainer 2026-07-30): queueing them made the rail row drop
+  // out of the running band into the rested band and bounce straight back up when the child returned —
+  // "there's too much layout shift as things jump between those two sections … it should only show up
+  // in the queue when it's fully rested and it has no running sub-agents". It is bounded by
+  // construction: a child whose completion signal is lost goes `stale` at the tailer's 15-min ceiling,
+  // and only `running` holds here, so a child that never returns stops excusing its parent.
   //
-  // SHELLS joined on 2026-08-01, and the ordering of the two changes is the whole story. A shell had
-  // been kept queued since 2026-07-22 because it is indistinguishable from a dev server that never exits
-  // (26% of real launches are long-lived servers) and has NO staleness clock, so excusing one would
-  // "spin a finished thread out of the queue forever". The SPINNING half of that is now fixed
-  // independently: a shell-only rest no longer claims motion it doesn't have — it wears the quiet
-  // pulsing dot (groups.sessionIndicatorKind → "background"). What is left is a row sitting calmly at
-  // the top of the rail with a live shell behind it, which is a truthful reading and a more glanceable
-  // one than a card buried in a long queue. And it is not a one-way door: the moment the shell exits or
-  // its pane dies, `hasLiveOwnWork` goes false and the thread re-enters the queue as an ordinary bare
-  // rest. Only a genuinely eternal server keeps its thread out — and that thread genuinely IS running.
+  // A BACKGROUND SHELL DOES NOT EXCUSE, and the round trip is worth recording. Shells joined this
+  // excusal on 2026-08-01 and left it again on 2026-08-04 (maintainer: "if a thread has rested and the
+  // only thing remaining is background shells, we should put it into the queue"). The difference from a
+  // sub-agent is the same one the rail already draws: a child returns and re-invokes its parent within
+  // seconds, so the thread is genuinely mid-flight and there is nothing for the human to do; a shell is
+  // DETACHED — 26% of real launches are servers that never exit, and there is no staleness clock — so a
+  // thread resting behind one has finished its turn in every sense that matters to the operator, and
+  // burying it in the running band means it is never seen again. It is a handoff, so it queues.
+  //
+  // The layout-shift worry that motivated the 2026-08-01 excusal is answered instead by the SNOOZE on
+  // the card (see the branch below): one click parks it until the shell returns and the worker re-rests.
+  // That is the human's call to make per thread, which an unconditional excusal took away from them.
   //
   // A DECLARED FENCE outranks the excusal (hence the `!tele?.lastFence` guard), because a fence is the
   // worker's own statement about why it stopped and it earns its own card: a ```done handoff still
@@ -395,12 +403,17 @@ export function deriveNeedsYou(
   // worker happens to have something running. Such a thread is NOT in the running band either
   // (deriveAwaitingBackground drops any fenced thread, so the client reads it as a rested-band row),
   // which is exactly why it must keep its card — the invariant above cuts both ways.
-  if (excuseLiveOwnWork && runtime !== "exited" && hasLiveOwnWork(tele) && !tele?.lastFence) return false
-  // FENCED, or the CARD asking rather than the queue (excuseLiveOwnWork false). An EXITED parent with
-  // "running" children is a crash, not this card — the runtime!=="exited" guard drops it to the
-  // crash/bare-rest net below (a dead pane's children keep reading "running" until their transcript goes
-  // stale; the parent cannot actually still be waiting on them). A done fence outranks this too: respect
-  // the worker's completion signal (show the done card).
+  if (excuseLiveOwnWork && runtime !== "exited" && hasLiveBackgroundWork(tele) && !tele?.lastFence) return false
+  // THE CARD, AND ITS EVENT-SNOOZE. Three shapes reach here: a SHELL-ONLY rest (the common one since
+  // 2026-08-04 — no fence, no live child, a launched shell still going), a fenced thread with live work
+  // of either kind, and deriveAwaitingBackground asking for the FACT rather than the queue
+  // (excuseLiveOwnWork false, which must never consult the queue-owned snooze — hence the nulled column
+  // at its call site). All three card, and all three honour an armed event-snooze for the current rest.
+  //
+  // An EXITED parent with "running" children is a crash, not this card — the runtime!=="exited" guard
+  // drops it to the crash/bare-rest net below (a dead pane's children keep reading "running" until their
+  // transcript goes stale; the parent cannot actually still be waiting on them). A done fence outranks
+  // this too: respect the worker's completion signal (show the done card).
   if (runtime !== "exited" && hasLiveOwnWork(tele) && tele?.lastFence?.kind !== "done") return !bgSnoozeArmed(row)
   // A final ```done fence is a CHECKED completion handoff: show its success card in the queue until the
   // human explicitly Archives the thread. Like a question, merely viewing it does not resolve it. The
@@ -412,15 +425,16 @@ export function deriveNeedsYou(
 }
 
 // Whether a thread is resting while its own background work is still live — the signal the client keys
-// the awaiting-background card on, in the DRAWER and on the full-screen page. True only when it is at
-// rest (turn-idle) with live own work and NO stronger reason outranks it (a native/typed ask, permission
-// prompt, chat question, or ANY signal fence all render their own card instead). Kept adjacent to
-// deriveNeedsYou and delegating to it so the two never drift.
+// the awaiting-background card on, across all THREE surfaces (the queue card, the drawer and the
+// full-screen page). True only when it is at rest (turn-idle) with live own work and NO stronger reason
+// outranks it (a native/typed ask, permission prompt, chat question, or ANY signal fence all render their
+// own card instead). Kept adjacent to deriveNeedsYou and delegating to it so the two never drift.
 //
-// It no longer has a QUEUE surface, and cannot: since 2026-08-01 every thread this is true of is excused
-// from the queue outright (the running band and the queue are mutually exclusive — see deriveNeedsYou),
-// so the card's two remaining homes are the only places this state is stated in words. That is also why
-// the snooze note below now matters less than it reads: with no queue card there is nothing to snooze.
+// The QUEUE surface is back as of 2026-08-04, for a SHELL-ONLY rest: those threads queue again
+// (deriveNeedsYou excuses live sub-agents only), so the card renders there with its Snooze. A rest on a
+// live sub-agent is still excused from the queue, so for that shape the drawer and the full-screen page
+// remain the only places this state is stated in words — which is why the card must keep rendering
+// without a queue card behind it, and why the snooze below is dropped.
 //
 // The queue's event-Snooze is deliberately NOT inherited (bg_snooze_rested_at is nulled out below).
 // Snoozing is a QUEUE VERB — "stop showing me this card in the queue" — while this flag states a FACT
@@ -432,10 +446,11 @@ export function deriveNeedsYou(
 // when I click it, it opens it in a drawer"). The queue card itself stays hidden regardless, because the
 // queue list gates on needsYou (groups.ts `queued`), which still honours the snooze.
 //
-// SHELL-ONLY is why this went unnoticed: with a live SUB-AGENT the client's own hasLiveOps still reads
-// the thread as running, so a snoozed thread keeps a spinner in the sidebar's running band and stays
-// legibly alive. A background shell deliberately does not count as live work there, so a snoozed
-// shell-only thread fell all the way through to a rested-band row with nothing behind it anywhere.
+// SHELL-ONLY is why this went unnoticed at the time: the client's hasLiveOps then read raw sub-agents,
+// so a snoozed thread with a live child kept its spinner in the running band and stayed legibly alive,
+// while a snoozed shell-only one fell all the way through to a rested-band row with nothing behind it
+// anywhere. hasLiveOps now reads THIS flag, which is what makes a snoozed shell-only rest legible again:
+// no queue card, but a running-band row wearing the pulsing dot until the shell returns.
 export function deriveAwaitingBackground(
   row: SessionRow,
   tele: SessionTelemetry | undefined,

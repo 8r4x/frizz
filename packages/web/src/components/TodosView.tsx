@@ -11,7 +11,7 @@ import { useLiveAnswering } from "../lib/answering.ts"
 import { hasQuestionBlock } from "../lib/questionBlocks.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
 import { Message, NativeInputRequiredCard, PermPolicyNote, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText } from "./ChatView.tsx"
-import { BLOCK_RADIUS, BLOCK_RADIUS_TOP, CARD_PRIMARY_ACTION } from "./TranscriptCard.tsx"
+import { BLOCK_RADIUS, BLOCK_RADIUS_TOP, CARD_ACTION_EXPLAINER, CARD_PRIMARY_ACTION } from "./TranscriptCard.tsx"
 import { AwaitingBackgroundCard } from "./AwaitingBackgroundCard.tsx"
 import { agentCompletionCall } from "../lib/subAgentCompletion.ts"
 import { coalesceToolActivityMessages, isToolActivityException } from "../lib/toolActivity.ts"
@@ -124,8 +124,14 @@ function resumeNativeAnchoring(): void {
 // drawer and the full-screen page render too) plus the one affordance only the queue gets — a one-click
 // event-snooze that hides the card until the work returns (the parent comes to a NEW rest). NO session
 // is stopped — the thread is already at rest and stays alive; the card simply drops out of the queue and
-// re-surfaces on its own when a child returns. Distinct from the footer's wall-clock Snooze (a fixed
-// deadline); this one has no deadline and expires itself on the next rest.
+// re-surfaces on its own when a shell finishes and the worker acts on it. Distinct from the footer's
+// wall-clock Snooze (a fixed deadline); this one has no deadline and expires itself on the next rest.
+//
+// In practice this is the SHELL card's control: a rest on a live sub-agent is excused from the queue
+// outright, so the shape that reaches here is the shell-only rest (board.deriveNeedsYou). Hence the
+// copy names shells rather than the older "until a sub-agent returns".
+const BG_SNOOZE_EXPLAINER = "Removes this from the queue until one of the background shells completes — the agent resumes automatically."
+
 function AwaitingBackgroundBanner({ thread, onSnooze, onSnoozeFailed }: {
   thread: ThreadView
   onSnooze: () => void // optimistically dismiss the card (fade it out now)
@@ -137,7 +143,7 @@ function AwaitingBackgroundBanner({ thread, onSnooze, onSnoozeFailed }: {
     onSnooze() // fade the card immediately, like every other queue dismissal
     rpc
       .snoozeAwaitingBackground({ slug: thread.id, sessionId: thread.sessionId ?? "" })
-      .then(() => showToast("Snoozed until a sub-agent returns"))
+      .then(() => showToast("Snoozed until the background work returns"))
       .catch((error) => {
         onSnoozeFailed() // roll the card back into the queue
         showToast(`Couldn’t snooze: ${(error as Error).message.slice(0, 80)}`)
@@ -148,24 +154,33 @@ function AwaitingBackgroundBanner({ thread, onSnooze, onSnoozeFailed }: {
     <AwaitingBackgroundCard
       thread={thread}
       actions={
-        <button
-          type="button"
-          onClick={snooze}
-          disabled={pending}
-          onMouseDown={(e) => e.preventDefault()}
-          title="Hide this card until a sub-agent returns"
-          // The shared card-action chrome, same as the awaiting card's Snooze it stacks under: parking
-          // is this banner's one verb, and the recessed outline it used to wear read as a disabled
-          // affordance sitting right below an identical white one. Taking CARD_PRIMARY_ACTION rather
-          // than restating it is what keeps the two stacked Snoozes from drifting apart on a corner or
-          // a fill — they had already been hand-copied once.
-          className={`disabled:opacity-45 ${CARD_PRIMARY_ACTION}`}
-        >
-          {/* Measured, not guessed: the icon read 1.58px LOW here. See lib/iconAlign.ts for why box
-              centering leaves a descender-free label's ink high, and why leading-none is not the fix. */}
-          <Hourglass size={12} className={ICON_LABEL_NUDGE} />
-          Snooze
-        </button>
+        // Button FIRST, explainer immediately to its right and centered against it (maintainer
+        // 2026-07-29, and the same shape as the awaiting card's park button this stacks under): the pair
+        // reads as one control with its caption. The explainer is not decoration here — a snooze whose
+        // wake condition is an EVENT rather than a clock is unguessable from the verb alone, and the
+        // maintainer asked for it in as many words (2026-08-04: "the snooze button should indicate that
+        // this will remove the item from the queue until one of the background shells completes").
+        <>
+          <button
+            type="button"
+            onClick={snooze}
+            disabled={pending}
+            onMouseDown={(e) => e.preventDefault()}
+            title={BG_SNOOZE_EXPLAINER}
+            // The shared card-action chrome, same as the awaiting card's Snooze it stacks under: parking
+            // is this banner's one verb, and the recessed outline it used to wear read as a disabled
+            // affordance sitting right below an identical white one. Taking CARD_PRIMARY_ACTION rather
+            // than restating it is what keeps the two stacked Snoozes from drifting apart on a corner or
+            // a fill — they had already been hand-copied once.
+            className={`disabled:opacity-45 ${CARD_PRIMARY_ACTION}`}
+          >
+            {/* Measured, not guessed: the icon read 1.58px LOW here. See lib/iconAlign.ts for why box
+                centering leaves a descender-free label's ink high, and why leading-none is not the fix. */}
+            <Hourglass size={12} className={ICON_LABEL_NUDGE} />
+            Snooze
+          </button>
+          <span className={CARD_ACTION_EXPLAINER}>{BG_SNOOZE_EXPLAINER}</span>
+        </>
       }
     />
   )

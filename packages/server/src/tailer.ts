@@ -2606,9 +2606,10 @@ export function createTailer(deps: TailerDeps): Tailer {
   // A tracked, pane-alive shell is simply "running" — there is no age-based staleness. `run_in_background`
   // cannot tell a CI watcher (ends soon) from a vite dev server (runs forever), so NO clock is a correct
   // clock: an mtime rule falsely killed quiet watchers, and an absolute-age cap would falsely kill
-  // long-lived servers. Crucially none of that can bury a thread anymore — a shell no longer excuses a
-  // rest (hasLiveBackgroundWork / hasLiveOps are sub-agent-only), so this view is now purely cosmetic and
-  // does not need to guess at liveness. It clears on the shell's real terminal signal or on pane death.
+  // long-lived servers. None of that can bury a thread: a shell does not excuse a rest from the queue
+  // (board.deriveNeedsYou reads hasLiveBackgroundWork, which is sub-agent-only), so the worst a
+  // never-clearing entry can do is leave a card saying a shell is running — the thread is queued and in
+  // front of the operator either way. It clears on the shell's real terminal signal or on owner death.
   function bgShellViews(state: TailState): BgShellView[] {
     if (state.subAgents.size === 0 || state.paneDead) return []
     const out: BgShellView[] = []

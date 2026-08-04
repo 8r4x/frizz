@@ -170,34 +170,41 @@ test("sessionIndicatorKind: a rested QUEUED thread is at rest even with live sub
 })
 
 // THE SHELL-ONLY REST — maintainer 2026-08-01: "if a thread has rested but it still has background work
-// going, like background shells, we should keep it in the actively running rail, but we should stop the
-// spinner and put a pulsing blue dot in the middle of the rounded circle shape" — and, decisively,
-// "this should not show up if there are sub-agents". So the two live-work states are told apart rather
-// than merged: a dispatched CHILD will come back and re-invoke the parent (real motion → spinner), a
-// detached SHELL will not (alive but still → dot). A shell-only rest is never excused from the queue,
-// so it is the one row that holds a running-band place while keeping its card.
-test("sessionIndicatorKind: a shell-only rest holds the running band with the dot, and carries NO queue card", () => {
-  // needsYou FALSE is server truth for this state, not an assumption: board.deriveNeedsYou excuses a
-  // rest on live own work outright (maintainer 2026-08-01, "if something is listed as currently running,
-  // then it should never show up in the queue").
-  const shellRest = thread({ kind: "session", state: "open", needsYou: false, runtime: "turn-idle", awaitingBackground: true, bgShells: liveShell })
-  assert.equal(sessionIndicatorKind(shellRest), "background")
-  assert.deepEqual(partitionActive([shellRest]).running.map((t) => t.id), ["t"])
-  assert.equal(queued(shellRest), false, "a row in the running band must never also be a queue card")
+// going, like background shells, we should … stop the spinner and put a pulsing blue dot in the middle
+// of the rounded circle shape" — and, decisively, "this should not show up if there are sub-agents". So
+// the two live-work states are told apart rather than merged: a dispatched CHILD will come back and
+// re-invoke the parent (real motion → spinner), a detached SHELL will not (alive but still → dot).
+//
+// The MARK outlived the BAND. Since 2026-08-04 such a thread QUEUES ("if a thread has rested and the
+// only thing remaining is background shells, we should put it into the queue"), so `needsYou` puts its
+// row below the rule — and the dot stays, because it is what tells that row apart from a bare rest.
+test("sessionIndicatorKind: a queued shell-only rest sits in the rested band and still wears the dot", () => {
+  // needsYou TRUE is server truth for this state, not an assumption: board.deriveNeedsYou excuses a rest
+  // on a live SUB-AGENT only, so a shell-only rest is an ordinary queue handoff again.
+  const shellRest = thread({ kind: "session", state: "open", needsYou: true, runtime: "turn-idle", awaitingBackground: true, bgShells: liveShell })
+  assert.equal(sessionIndicatorKind(shellRest), "background", "the dot outranks the 2026-07-27 queued-rest ellipsis")
+  assert.equal(queued(shellRest), true)
+  assert.deepEqual(partitionActive([shellRest]).rested.map((t) => t.id), ["t"], "a card must have a rested-band row")
+
+  // SNOOZED — the card's own event-Snooze clears needsYou (board.bgSnoozeArmed) while the thread stays
+  // alive. It goes back to the running band wearing the SAME dot: still alive, no longer asking.
+  const snoozed = thread({ ...shellRest, needsYou: false })
+  assert.equal(sessionIndicatorKind(snoozed), "background")
+  assert.deepEqual(partitionActive([snoozed]).running.map((t) => t.id), ["t"])
+  assert.equal(queued(snoozed), false, "a row in the running band must never also be a queue card")
 
   // A LIVE SUB-AGENT OUTRANKS THE SHELL — the dot must not show up for it, however the shell reads.
-  const withChild = thread({ ...shellRest, subAgents: liveSub })
+  const withChild = thread({ ...shellRest, needsYou: false, subAgents: liveSub })
   assert.equal(sessionIndicatorKind(withChild), "working", "a dispatched child is real motion — it spins")
   assert.equal(sessionIndicatorKind(thread({ ...withChild, needsYou: true })), "rest", "…and queued, it is the 2026-07-27 ellipsis, still never the dot")
 
-  // The shell going quiet re-queues it as an ordinary rest, in the queue-ordered band. This is the whole
-  // safety argument for excusing a shell that has no staleness clock: the excusal clears itself.
-  const settled = thread({ ...shellRest, needsYou: true, awaitingBackground: false, bgShells: [] })
+  // The shell going quiet leaves an ordinary rest — same band, the plain ellipsis, still queued.
+  const settled = thread({ ...shellRest, awaitingBackground: false, bgShells: [] })
   assert.equal(sessionIndicatorKind(settled), "rest")
   assert.equal(queued(settled), true)
   assert.deepEqual(partitionActive([settled]).rested.map((t) => t.id), ["t"])
   // An EXITED worker whose shell still reads live is a stall, not a quietly-alive row.
-  assert.equal(sessionIndicatorKind(thread({ ...shellRest, runtime: "exited", needsYou: true })), "stalled")
+  assert.equal(sessionIndicatorKind(thread({ ...shellRest, runtime: "exited" })), "stalled")
 })
 
 // A RECURRING PROMPT IS NOT A RAIL FACT — maintainer 2026-08-02, killing a mark that had shipped hours
@@ -240,7 +247,10 @@ test("partitionActive: NOTHING in the running band has a queue card, and every c
     thread({ ...base, id: "own-turn", runtime: "running", needsYou: false }),
     thread({ ...base, id: "spawning", runtime: "spawning", needsYou: false }),
     thread({ ...base, id: "rested-on-child", runtime: "turn-idle", needsYou: false, awaitingBackground: true, subAgents: liveSub }),
-    thread({ ...base, id: "rested-on-shell", runtime: "turn-idle", needsYou: false, awaitingBackground: true, bgShells: liveShell }),
+    // Shell-only, EVENT-SNOOZED — the one shape that still bands here since shells re-queued on
+    // 2026-08-04. Its unsnoozed twin is `queued-on-shell` below.
+    thread({ ...base, id: "snoozed-on-shell", runtime: "turn-idle", needsYou: false, awaitingBackground: true, bgShells: liveShell }),
+    thread({ ...base, id: "queued-on-shell", runtime: "turn-idle", needsYou: true, awaitingBackground: true, bgShells: liveShell }),
     thread({ ...base, id: "bare-rest", runtime: "turn-idle", needsYou: true }),
     thread({ ...base, id: "asking", runtime: "turn-idle", needsYou: true, pendingQuestion: true }),
     thread({ ...base, id: "stalled", runtime: "exited", needsYou: true }),
@@ -254,8 +264,9 @@ test("partitionActive: NOTHING in the running band has a queue card, and every c
   for (const t of shapes.filter(queued)) {
     assert.ok(rested.some((r) => r.id === t.id), `${t.id} has a queue card but no rested-band row to map it to`)
   }
-  // …and the two rested-with-live-work rows are exactly the ones that made this worth pinning.
-  assert.deepEqual(running.map((t) => t.id), ["own-turn", "spawning", "rested-on-child", "rested-on-shell"])
+  // …and the rested-with-live-work rows are exactly the ones that made this worth pinning: the excused
+  // child and the snoozed shell band on top, while the QUEUED shell sits below the rule with its card.
+  assert.deepEqual(running.map((t) => t.id), ["own-turn", "spawning", "rested-on-child", "snoozed-on-shell"])
 })
 
 // ── THE STALLED/RETRY CONTRACT ────────────────────────────────────────────────────────────────────
@@ -484,10 +495,11 @@ test("partitionActive: splits an ordered Active list into running/rested; queued
   assert.deepEqual(rested.map((t) => t.id), ["rest-old", "spin-ask", "rest-new"])
 })
 
-// LIVE OWN WORK KEEPS THE ROW IN THE RUNNING BAND (maintainer 2026-08-01: "keep it in the actively
-// running rail"), and the server is what puts it there — by excusing it from the queue, which is the
-// same thing. Sub-agent and shell reach the band identically; they differ only in what the row READS as.
-test("partitionActive: a thread cooking on its own background work stays in the running band", () => {
+// LIVE OWN WORK KEEPS THE ROW IN THE RUNNING BAND, and the server is what puts it there — by excusing it
+// from the queue, which is the same thing. A live child is excused outright; a shell-only rest reaches
+// this state only once the human snoozes its card (needsYou false is the shared precondition). They
+// differ only in what the row READS as.
+test("partitionActive: a thread cooking on its own background work, with no card, stays in the running band", () => {
   const at = "2026-07-09T00:00:00.000Z"
   const shellOnly = thread({ id: "shell-only", kind: "session", state: "open", runtime: "turn-idle", needsYou: false, awaitingBackground: true, subAgents: [], bgShells: liveShell, lastUserAt: at })
   const withChild = thread({ id: "with-child", kind: "session", state: "open", runtime: "turn-idle", needsYou: false, awaitingBackground: true, subAgents: [{ id: "a1", label: "c", startedAt: at, state: "running" }], lastUserAt: at })
