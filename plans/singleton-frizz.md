@@ -9,7 +9,7 @@ Design review, 2026-08-04. Prompted by: *"switch frizz over to be a singleton, s
 - **One unified process.** Not a front door proxying to per-project servers. This is a big refactor and that is accepted.
 - **Frizz runs from real root repo directories only.** A worktree is not a project. Worktree management is something the *agent* does inside a project, with prompting; Frizz has no special handling and needs none.
 - **Registration is automatic and silent.** Running the CLI inside a directory registers that path as a project with no approval step.
-- **The port is `9393`**, with `13729` as the fallback target. Four-digit ABAB for memorability; IANA-unassigned, which is the only axis that actually separates candidates. See §5 — no four-digit port is safe from Windows Hyper-V reservations, so the fallback carries all the robustness.
+- **The port is `9393`**, falling back to `19393`. Four-digit ABAB for memorability; IANA-unassigned, which is the only axis that actually separates candidates. See §5 — no four-digit port is safe from Windows Hyper-V reservations, so the fallback carries all the robustness.
 
 ---
 
@@ -197,7 +197,9 @@ It is strictly better than the `6767` it replaces on the only axis that separate
 The fallback has to land in a band the reservations do not reach:
 
 1. Try `9393`.
-2. On `EADDRINUSE`/`EACCES`, jump to **`13729`**. It sits in `10896-24265` — a 13,370-port gap clean on both reported machines, above the highest browser-blocked port (`10080`), and below Linux's ephemeral floor (`32768`). IANA-unassigned, and already vetted against the dev-tool survey and the malware lists when it was briefly the primary candidate.
+2. On `EADDRINUSE`/`EACCES`, jump to **`19393`** — the primary with a `1` in front. It sits in `10896-24265`, a 13,370-port gap clean on both reported machines, above the highest browser-blocked port (`10080`) and below Linux's ephemeral floor (`32768`). Unassigned on TCP and UDP, no tool default, free here.
+
+   The band is 13,000 ports wide, so "clean" picks no winner and the tiebreak is **explicability**: a user staring at `http://localhost:19393` because 9393 was reserved can see at a glance it is the same app on its backup port. An unrelated number tells them nothing, and the fallback is a path people only ever meet while something is already going wrong.
 3. Only then scan incrementally.
 4. Print the URL actually bound, every time.
 
@@ -236,6 +238,6 @@ The fix is the one already used correctly for the broker sockets — hash the st
 
 ## 7. No open questions
 
-Everything is decided: unified process, real root repos only (no worktrees), silent auto-registration, port `9393` with a `13729` fallback, and — as a consequence of the unified process — schedulers stay on for every registered project while tailers and watchers activate on view (§4).
+Everything is decided: unified process, real root repos only (no worktrees), silent auto-registration, port `9393` falling back to `19393`, and — as a consequence of the unified process — schedulers stay on for every registered project while tailers and watchers activate on view (§4).
 
 The one thing to settle with an experiment rather than a decision is **item 1 of §4**: whether N tailers genuinely saturate the event loop. That claim is read from the scheduling logic and its own over-budget warning, not measured, and it is the assumption the whole activation design rests on. Run it before writing the lifecycle code.
