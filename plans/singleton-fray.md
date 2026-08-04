@@ -9,6 +9,7 @@ Design review, 2026-08-04. Prompted by: *"switch fray over to be a singleton, so
 - **One unified process.** Not a front door proxying to per-project servers. This is a big refactor and that is accepted.
 - **Fray runs from real root repo directories only.** A worktree is not a project. Worktree management is something the *agent* does inside a project, with prompting; Fray has no special handling and needs none.
 - **Registration is automatic and silent.** Running the CLI inside a directory registers that path as a project with no approval step.
+- **The port is `6767`.** Chosen for memorability over robustness, knowingly — see §5 for what it costs and the fallback that has to change because of it.
 
 ---
 
@@ -169,26 +170,39 @@ Maintainer preference, and it is the right call — a repeating two-digit pair i
 
 All nine are free on this machine. Every other ABAB in 1024-9999 is IANA-assigned, inside a reported Hyper-V block, or both — the whole `2020`-`4747` run is gone, and `9090` (Prometheus) and `8080` never made it.
 
-**Recommendation: `9797`.** It is the only survivor above the highest Hyper-V block anyone has reported (~9783 in [WSL#5306](https://github.com/microsoft/WSL/issues/5306)), so it carries the least Windows risk of the nine; it is unassigned on TCP *and* UDP; and nothing concrete attaches to it. `7373` and `9393` are equally clean on paper and fine if `9797` reads wrong. Avoid `8484` of the nine — it is MapleStory's port and shows up in Metasploitable walkthroughs.
+Those nine were the technically-cleanest set. `9797` was the recommendation — the only survivor above the highest Hyper-V block anyone has reported (~9783 in [WSL#5306](https://github.com/microsoft/WSL/issues/5306)), unassigned on TCP *and* UDP. It remains the natural **fallback** target (see below). `8484` should be avoided in any case — it is MapleStory's port.
 
 *On the "trojan" hits for these ports:* SEO port-lookup sites print "known security risks, trojans" boilerplate for essentially every port number. That is not signal. The genuine cases look different — `13337` is a documented default for Empire C2, CrackMapExec and gophish, and `23232` is Backdoor.Berbew — and none of the nine is one of those.
 
-### The ones you wanted, and what they actually cost
+### DECIDED: `6767`
 
-| Port | Status |
-| --- | --- |
-| **6767** | IANA `bmc-perf-agent`, **and** inside the reported block `5940-6979`. |
-| **6969** | IANA `acmsoda`, **and** inside `5940-6979`. |
-| **7777** / **8888** | IANA `cbt` / `ddi-tcp-1`; 8888 is also Jupyter's default. |
-| **1337** | IANA `menandmice-dns`. |
+`http://localhost:6767`. Chosen for memorability, with its costs understood and accepted:
 
-`6767` remains a defensible choice if you want it. Its two problems are exactly the two that Vite (`5173`, inside `5014-5618`) and Next.js (`3000`, inside `2164-3363`) already have — a dead enterprise IANA registration and Hyper-V exposure that only materializes on a Windows box whose dynamic port range has been reset. **It is a real option, not a disqualified one**; it trades a little Windows robustness for the number you actually like. The fallback scan covers the failure either way.
+- IANA-registered to `bmc-perf-agent` (BMC Performance Agent, an enterprise monitoring product). Squatting a dead registration, not a live one.
+- Inside a Hyper-V exclusion block reported in WSL#5514.
+
+Both are exactly the posture Vite (`5173`, inside `5014-5618`) and Next.js (`3000`, inside `2164-3363`) already ship with, and the exposure only materializes on a Windows box whose dynamic port range has been reset from its 49152 default. `6969` was the same trade (`acmsoda`, same block); `7777`/`8888`/`1337` are IANA `cbt`/`ddi-tcp-1`/`menandmice-dns`, and 8888 is Jupyter's.
+
+### The fallback has to change, and this is not optional
+
+**A `+1` scan from 6767 does not work.** The reported Hyper-V reservations are 100-port blocks and they run contiguously. `6767` sits inside `6680-6779`, which is part of an unbroken reserved run of **`6380-6979`** — so escaping upward by increment takes **213 attempts**, more than the launcher's current 100-port scan (`PORT_SCAN_COUNT = 100`, `src/launcher.ts:112`). On a machine where 6767 is reserved, today's fallback would burn all 100 candidates *inside the same reservation* and then fail with "no free port" while thousands were free.
+
+So the fallback must **jump out of the block, not walk through it**:
+
+1. Try `6767`.
+2. On `EADDRINUSE`/`EACCES`, jump straight to `9797` — above every reported block, and already vetted clean against IANA, both browser blocklists and the dev-tool survey.
+3. Only then scan incrementally from there.
+4. Print the URL actually bound, every time.
+
+Distinguish the two errors in the message: `EADDRINUSE` means something else is listening and the user can go find it; `EACCES`/WSAEACCES on Windows means an invisible reservation, where `netstat` will show the port free and the honest advice is `netsh int ipv4 show excludedportrange protocol=tcp`. Those need different text — a "port in use" message for a reserved port sends people hunting for a process that does not exist.
 
 **Rejected from the earlier draft:** `3729` (F-R-A-Y on a keypad, but inside `3699-3798` and IANA `fksp-audit`), `4917` (Fray's current default, inside `4914-5013`, and unmemorable), `4242` (inside `4214-4313`; also Posit Package Manager and Orthanc), and the five-digit safe-band picks `13729`/`24729` — correct on every technical axis and rightly rejected as unmemorable, which was the whole brief.
 
-### Fallback behavior
+### Two things the fallback keeps
 
-Keep the existing scan, re-based on the new default, and **say what happened**. Vite and Jupyter both increment to the next free port; Docker fails hard. Increment — a local dev tool that refuses to start because something unrelated holds a port is worse than one that prints a different URL. The launcher's `/health` identity handshake (`ownerProof` = `sha256("fray-project-launch-v2\0" ‖ projectId ‖ projectDir ‖ token)`, checked in `src/launcher.ts:593-630`) already guarantees a fixed port can never *silently* serve the wrong thing — it fails to start instead, which is the correct failure. Keep `--port` and `FRAY_PORT` as explicit-or-fail.
+Degrade, do not refuse. Vite and Jupyter both move to another port; Docker fails hard. A local tool that will not start because something unrelated holds a port is worse than one that prints a different URL — the jump-then-scan above is the same policy, just correct about *where* to jump.
+
+And keep the identity handshake exactly as it is. `/health` returns `ownerProof` = `sha256("fray-project-launch-v2\0" ‖ projectId ‖ projectDir ‖ token)`, and `probeFray` rejects any mismatch (`src/launcher.ts:593-630`). That is what guarantees a well-known port can never *silently* serve the wrong thing — it fails to start instead, which is the right failure. `--port` and `FRAY_PORT` stay explicit-or-fail, with no scan.
 
 ---
 
@@ -213,8 +227,8 @@ Pre-existing and orthogonal to the singleton, but they are the same shared-resou
 
 The fix is the one already used correctly for the broker sockets — hash the state dir into the directory name (`packages/server/src/fray-paths.ts:44-52` documents exactly this rationale: "two accounts cannot collide even in a shared `/tmp`").
 
-## 7. Open question
+## 7. No open questions
 
-Only one left: **the port number** (§5). Recommendation is `9797` from the nine surviving four-digit ABAB candidates; `6767` is available if you accept the same Windows exposure Vite and Next.js already carry.
+Everything is decided: unified process, real root repos only (no worktrees), silent auto-registration, port `6767`, and — as a consequence of the unified process — schedulers stay on for every registered project while tailers and watchers activate on view (§4).
 
-Architecture (unified process), project scope (real root repos, no worktrees), and silent auto-registration are settled — see the decisions at the top. Background-project behavior is settled as a consequence: schedulers stay on for every registered project, tailers and watchers activate on view (§4).
+The one thing to settle with an experiment rather than a decision is **item 1 of §4**: whether N tailers genuinely saturate the event loop. That claim is read from the scheduling logic and its own over-budget warning, not measured, and it is the assumption the whole activation design rests on. Run it before writing the lifecycle code.
