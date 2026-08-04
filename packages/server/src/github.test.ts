@@ -298,13 +298,13 @@ test("the defaults keep every {token} in the trailing metadata block, none in th
     // ONE unwrapped line: the Settings textarea soft-wraps, so a hard newline at some source column
     // would render ragged in the box the user edits it in.
     assert.ok(!instructions.includes("\n"), `${kind}: instruction paragraph is a single unwrapped line`)
-    // ALL SIX tokens live in the block — {body} included, so nobody has to hand-write it to inline the
-    // report text (truncateBody caps it, and the UI boundary keeps the visible bubble compact).
-    for (const token of PROMPT_TOKENS) {
+    // Every token the defaults use lives in the block. {body} is the deliberate exception: the picker
+    // is gated on an installed + authed gh, so the block hands the worker the `gh … view` command
+    // instead of a truncatable copy of the text.
+    for (const token of PROMPT_TOKENS.filter((t) => t !== "body")) {
       assert.ok(metadata.includes(`{${token}}`), `${kind}: metadata block carries {${token}}`)
     }
-    // The block ends on the body, so the substituted report text is the last thing the worker reads.
-    assert.ok(metadata.trimEnd().endsWith("{body}"), `${kind}: metadata block ends with {body}`)
+    assert.ok(!template.includes("{body}"), `${kind}: default must not inline the body`)
   }
 })
 
@@ -313,7 +313,7 @@ test("DEFAULT_ISSUE_PROMPT renders into a real issue prompt (round-trip through 
   assert.ok(p.startsWith("THREAD: investigate-cli-cli-326\n\n"))
   assert.ok(p.includes("Issue #326: Support multiple accounts"))
   assert.ok(p.includes("gh issue view 326 -R cli/cli --comments"))
-  assert.ok(p.trimEnd().endsWith("When I switch accounts the token is wrong.")) // body inlined, last
+  assert.ok(!p.includes("When I switch accounts the token is wrong.")) // body fetched, not inlined
   assert.ok(!p.includes("{repo}") && !p.includes("{n}")) // every token filled
 })
 
@@ -332,7 +332,7 @@ test("DEFAULT_PR_PROMPT renders into a real PR prompt (diff/checks by number)", 
   assert.ok(p.includes("PR #13844: perf(status): O(1) map lookup"))
   assert.ok(p.includes("gh pr diff 13844 -R cli/cli"))
   assert.ok(p.includes("gh pr checks 13844 -R cli/cli"))
-  assert.ok(p.trimEnd().endsWith("Replaces the O(n) scan with a map.")) // description inlined, last
+  assert.ok(!p.includes("Replaces the O(n) scan with a map.")) // description fetched, not inlined
   assert.ok(p.includes("read-only"))
 })
 

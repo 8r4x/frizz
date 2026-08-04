@@ -418,15 +418,16 @@ function labelsLine(labels: string[]): string {
 // these to change the shipped defaults; a user override supersedes at dispatch time.
 //
 // SHAPE, and it is the point of the defaults: ONE concise instruction paragraph carrying NO tokens,
-// then a trailing metadata block that carries ALL SIX of them (including {body}, and the exact `gh`
-// commands, which are the only other place a token appears). Someone tuning the prompt in Settings
-// rewrites the paragraph in plain prose and leaves the block alone — they never have to know the
-// token vocabulary to make the edit they came for. Keep that split when editing: a token that creeps
-// back into the paragraph puts the tags right where the user is typing.
+// then a trailing metadata block that carries all of them, alongside the exact `gh` commands. Someone
+// tuning the prompt in Settings rewrites the paragraph in plain prose and leaves the block alone —
+// they never have to know the token vocabulary to make the edit they came for. Keep that split when
+// editing: a token that creeps back into the paragraph puts the tags right where the user is typing.
 //
-// Inlining {body} means the worker has the report text before its first tool call; truncateBody caps
-// it at 8 KiB with a `gh … view` pointer, so a giant body cannot blow the prompt's arg budget, and the
-// generated UI boundary keeps the visible first bubble compact regardless.
+// {body} is deliberately NOT inlined. The picker that dispatches these prompts is gated on gh being
+// installed AND authed, so the worker can always read the body itself — the block hands it the exact
+// command, which is strictly better than a copy: never truncated, and it picks up the comments in the
+// same call. That also keeps prompt transport small (the task prompt is a CLI arg, not the
+// system-prompt file — see dispatch.ts).
 //
 // The paragraph is ONE unwrapped line on purpose. It is edited in a fixed-width textarea (Settings →
 // Prompts), which soft-wraps: hard newlines at some source column would mix with that wrap and render
@@ -443,10 +444,7 @@ Issue #{n}: {title}
 Repository: {repo}
 URL: {url}
 Labels: {labels}
-Full thread: \`gh issue view {n} -R {repo} --comments\`
-
-Body:
-{body}`
+Body + full thread: \`gh issue view {n} -R {repo} --comments\``
 
 // The PR default: an adversarial review/audit before recommending merge. Read-only.
 export const DEFAULT_PR_PROMPT = `Review this open pull request. This is an AUDIT thread: adversarially verify the change is correct, safe and complete before recommending merge. Read the PR description and discussion first, then read the full diff — the changed files in context, not just the hunks (pipe large output through toon). For each substantive change ask: is it correct? does it handle edges? does it break existing behavior or the public API? are there tests, and do they actually cover the change? Check CI too: pending automation is evidence to report, not a reason to park this audit; if later scope explicitly includes shepherding the PR, keep CI/bot/merge progression active with the backend wait primitive from the worker contract. Then recommend approve / request-changes / needs-discussion with a concise findings list — each concern citing exact file:line in the diff, blocking issues distinguished from nits. Post NOTHING to GitHub (no review, no comment, no approve/merge) unless the human explicitly asks — read-only. Put your review in your FINAL MESSAGE and close with a \`\`\`done\`\`\` fence listing the completed audit/evidence, or a two-option \`\`\`question\`\`\` if you want a go/no-go on posting the review to GitHub.
@@ -459,10 +457,7 @@ URL: {url}
 Labels: {labels}
 Description + discussion: \`gh pr view {n} -R {repo} --comments\`
 Diff: \`gh pr diff {n} -R {repo}\`
-CI: \`gh pr checks {n} -R {repo}\`
-
-Description:
-{body}`
+CI: \`gh pr checks {n} -R {repo}\``
 
 // --- Pure templater (unit-tested seam) ---
 
