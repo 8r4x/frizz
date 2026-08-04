@@ -58,8 +58,18 @@ test("Agent dispatch hook appends the orchestration epilogue exactly once", () =
 // size/mtime it read were the LINK's, frozen forever — declared a live 413KB agent dead, and redid
 // its work. The frizz worker contract never reaches a depth-1 helper, so this epilogue is the only
 // place that can tell it how to collect a helper of its own.
+// Nesting is DEFAULT-OFF. The conditional phrasing this replaced ("if you dispatch a helper of your
+// own…") read as neutral permission, so a helper could fan out again purely because it could.
+test("Agent dispatch hook tells every helper not to fan out unless its prompt asked", () => {
+  const prompt = output(dispatch).updatedInput.prompt as string
+  assert.match(prompt, /do NOT dispatch sub-agents of your own unless your dispatch prompt explicitly tells you to/)
+  assert.match(prompt, /already one prong of someone else's fan-out/)
+  assert.match(prompt, /still yours to work through in your own turn/)
+})
+
 test("Agent dispatch hook tells every helper how to collect a helper of its own", () => {
   const prompt = output(dispatch).updatedInput.prompt as string
+  assert.match(prompt, /If your prompt DOES ask you to dispatch a helper/)
   assert.match(prompt, /completion is delivered to you automatically/)
   assert.match(prompt, /Never hand-roll a wait loop/)
   assert.match(prompt, /SYMLINK/)

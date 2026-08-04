@@ -213,6 +213,22 @@ test("the codex child epilogue permits scoped progress merges but forbids destru
   assert.match(ctx, /location alone neither permits nor forbids editing/)
 })
 
+// SubagentStart is the only structural seam that reaches a native codex child, so it carries the
+// codex half of the default-off nesting rule — agent-dispatch.mjs's epilogue is the Claude half.
+test("the codex child epilogue tells the child not to spawn agents of its own unasked", () => {
+  const dir = newProject()
+  const out = JSON.parse(
+    runHook(dir, [`--session=${SID}`, "--mode=subagent-start"], {
+      session_id: "codex-rollout-id",
+      agent_id: "/root/reviewer",
+      hook_event_name: "SubagentStart",
+    })
+  )
+  const ctx = out.hookSpecificOutput.additionalContext as string
+  assert.match(ctx, /do not spawn agents of your own \(`spawn_agent`\) unless the task you were given explicitly tells you to/)
+  assert.match(ctx, /already one prong of the root worker’s fan-out/)
+})
+
 test("the nudge tracks context GROWTH, not an absolute threshold or wall clock", () => {
   const dir = newProject()
   const stale = { FRIZZ_SCRATCHPAD_STALE_TOKENS: "60000" }

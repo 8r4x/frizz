@@ -15,6 +15,7 @@ import {
   effectiveTemplate,
   DEFAULT_ISSUE_PROMPT,
   DEFAULT_PR_PROMPT,
+  PROMPT_TOKENS,
   type HydratedIssue,
   type HydratedPr,
 } from "./github.ts"
@@ -256,10 +257,10 @@ test("renderGithubPrompt: unknown {placeholder} in the template is left verbatim
 test("DEFAULT_ISSUE_PROMPT: branches on bug vs feature; DEFAULT_PR_PROMPT is the audit template", () => {
   // Issue default instructs classify + both branches.
   assert.ok(/classify/i.test(DEFAULT_ISSUE_PROMPT))
-  assert.ok(DEFAULT_ISSUE_PROMPT.includes("IF BUG:"))
-  assert.ok(DEFAULT_ISSUE_PROMPT.includes("IF FEATURE:"))
-  assert.ok(DEFAULT_ISSUE_PROMPT.includes("REPRODUCE"))
-  assert.ok(DEFAULT_ISSUE_PROMPT.includes("IMPACT"))
+  assert.ok(/if it is a BUG/i.test(DEFAULT_ISSUE_PROMPT))
+  assert.ok(/if it is a FEATURE/i.test(DEFAULT_ISSUE_PROMPT))
+  assert.ok(/reproduce/i.test(DEFAULT_ISSUE_PROMPT))
+  assert.ok(DEFAULT_ISSUE_PROMPT.includes("public API / UX surface"))
   assert.ok(DEFAULT_ISSUE_PROMPT.includes("read-only"))
   // Issue investigations are headed for a fix: NOT a done fence (that reads as complete), but the other
   // fences are the worker's to use — the handback nudges toward a question. Mirrors the contract's
@@ -277,12 +278,34 @@ test("DEFAULT_ISSUE_PROMPT: branches on bug vs feature; DEFAULT_PR_PROMPT is the
   assert.ok(DEFAULT_PR_PROMPT.includes("```done```"))
   assert.ok(!DEFAULT_PR_PROMPT.includes("bare rest"))
   assert.ok(!DEFAULT_PR_PROMPT.includes("THREAD:"))
-  // The body is NOT inlined in the shipped defaults — the worker fetches it via the gh CLI, keeping
-  // prompt transport small (the generated UI boundary separately keeps the visible bubble compact).
-  assert.ok(!DEFAULT_ISSUE_PROMPT.includes("{body}"), "issue default must not inline the body")
-  assert.ok(!DEFAULT_PR_PROMPT.includes("{body}"), "PR default must not inline the body")
   assert.ok(DEFAULT_ISSUE_PROMPT.includes("gh issue view {n} -R {repo}"))
   assert.ok(DEFAULT_PR_PROMPT.includes("gh pr view {n} -R {repo}"))
+})
+
+// The shipped defaults are shaped so a user can rewrite the INSTRUCTIONS without touching the template
+// tags: one prose paragraph carrying no tokens at all, then a trailing metadata block that carries every
+// one of them. This test is the guard on that split — a {token} creeping back up into the paragraph is
+// exactly the regression it exists to catch.
+test("the defaults keep every {token} in the trailing metadata block, none in the instruction paragraph", () => {
+  for (const [kind, template] of [
+    ["issue", DEFAULT_ISSUE_PROMPT],
+    ["pr", DEFAULT_PR_PROMPT],
+  ] as const) {
+    const [instructions, metadata, ...rest] = template.split("\n\n---\n\n")
+    assert.equal(rest.length, 0, `${kind}: exactly one metadata block`)
+    assert.ok(metadata, `${kind}: has a trailing metadata block`)
+    assert.equal(instructions.match(/\{(repo|n|title|url|labels|body)\}/g), null, `${kind}: paragraph is token-free`)
+    // ONE unwrapped line: the Settings textarea soft-wraps, so a hard newline at some source column
+    // would render ragged in the box the user edits it in.
+    assert.ok(!instructions.includes("\n"), `${kind}: instruction paragraph is a single unwrapped line`)
+    // ALL SIX tokens live in the block — {body} included, so nobody has to hand-write it to inline the
+    // report text (truncateBody caps it, and the UI boundary keeps the visible bubble compact).
+    for (const token of PROMPT_TOKENS) {
+      assert.ok(metadata.includes(`{${token}}`), `${kind}: metadata block carries {${token}}`)
+    }
+    // The block ends on the body, so the substituted report text is the last thing the worker reads.
+    assert.ok(metadata.trimEnd().endsWith("{body}"), `${kind}: metadata block ends with {body}`)
+  }
 })
 
 test("DEFAULT_ISSUE_PROMPT renders into a real issue prompt (round-trip through renderGithubPrompt)", () => {
@@ -290,6 +313,7 @@ test("DEFAULT_ISSUE_PROMPT renders into a real issue prompt (round-trip through 
   assert.ok(p.startsWith("THREAD: investigate-cli-cli-326\n\n"))
   assert.ok(p.includes("Issue #326: Support multiple accounts"))
   assert.ok(p.includes("gh issue view 326 -R cli/cli --comments"))
+  assert.ok(p.trimEnd().endsWith("When I switch accounts the token is wrong.")) // body inlined, last
   assert.ok(!p.includes("{repo}") && !p.includes("{n}")) // every token filled
 })
 
@@ -308,6 +332,7 @@ test("DEFAULT_PR_PROMPT renders into a real PR prompt (diff/checks by number)", 
   assert.ok(p.includes("PR #13844: perf(status): O(1) map lookup"))
   assert.ok(p.includes("gh pr diff 13844 -R cli/cli"))
   assert.ok(p.includes("gh pr checks 13844 -R cli/cli"))
+  assert.ok(p.trimEnd().endsWith("Replaces the O(n) scan with a map.")) // description inlined, last
   assert.ok(p.includes("read-only"))
 })
 
